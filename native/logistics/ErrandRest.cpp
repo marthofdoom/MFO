@@ -182,9 +182,12 @@ namespace MFO::Logistics::Errand::Rest {
             bool        done = false, indoors = false, found = false;
             RE::FormID  door = 0, via = 0;   // the EXTERIOR load door; via = the first interior it leads to (depth 2), 0 at depth 1
             int         depth = 0, scanned = 0, hops = 0, hopRefs = 0;   // load doors seen in the loaded grid; first-hop interiors walked + their refs seen
+            RE::FormID  lockedId = 0;   // closed-shop fix: the LOCKED side of the chosen route's door pair (0 = unlocked); an unlocked route always beats a locked one
+            int         lockLevel = 0;
             RE::NiPoint3 pos{};
             Clock::time_point stamp{};
         };
+        std::unordered_map<RE::FormID, Clock::time_point> g_shopDoorRecheck;   // shop place cell -> when its BLOCKED-time lock re-read was requested (ShopDoorLockedNow); guarded by g_mx
         std::unordered_map<RE::FormID, ShopDoorRead>     g_shopDoor;       // shop place cell -> its door read; guarded by g_mx
         std::unordered_set<RE::FormID>                   g_shopDoorAsked;  // shop place cells whose read was queued (one in flight)
         std::unordered_map<RE::FormID, std::string>      g_shopDoorLogged; // shop place cell -> the last verdict logged (a line only when it changes)
@@ -668,11 +671,13 @@ namespace MFO::Logistics::Errand::Rest {
             });
             RE::FormID best = 0;
             float bestD = 1.0e9f;
+            auto* cellOwner = cell->GetOwner();   // GetOwner on a furniture ref skips the cell fallback: an unowned bed in an owned room is that owner's
             for (auto& h : cands) {
                 auto rp = h.get();
                 auto* r = rp.get();
                 if (!r) continue;
                 auto* owner = r->GetOwner();
+                if (!owner) owner = cellOwner;
                 if (owner && owner->GetFormID() != 0x00000007u && owner->GetFormID() != 0x00000014u) continue;   // someone else's bed
                 const float d = r->GetPosition().GetDistance(a_follower->GetPosition());
                 if (d < bestD) { bestD = d; best = r->GetFormID(); }
@@ -1280,7 +1285,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
         g_innFacs.clear();
-        g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear();
+        g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear(); g_shopDoorRecheck.clear();
         g_doorRead.clear(); g_doorAsked.clear(); g_doorDefers.clear(); g_doorLogged.clear();
         g_marksTown = 0;
         g_wasCombat = false;
@@ -1365,7 +1370,8 @@ namespace MFO::Logistics::Errand::Rest {
             else {
                 const auto ppos = pc->GetPosition();
                 float bestD = 1.0e9f;
-                struct Hop { RE::TESObjectCELL* cell = nullptr; RE::FormID door = 0; RE::NiPoint3 pos{}; float d = 0.0f; };
+                constexpr float kLockedPenalty = 1.0e6f;   // a locked route sorts after every unlocked one (a shop with a second, open door is not closed)
+                struct Hop { RE::TESObjectCELL* cell = nullptr; RE::FormID door = 0; RE::NiPoint3 pos{}; float d = 0.0f; RE::FormID lockedId = 0; int lockLevel = 0; };
                 std::unordered_map<RE::FormID, Hop> hops;   // first interior -> the nearest exterior door into it
                 ForEachLoadedRef([&](RE::TESObjectREFR* a_ref) {
                     auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
@@ -1374,11 +1380,14 @@ namespace MFO::Logistics::Errand::Rest {
                     auto lp = tele->teleportData->linkedDoor.get();
                     auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
                     if (!lc || !lc->IsInteriorCell()) return RE::BSContainer::ForEachResult::kContinue;
-                    const float d = a_ref->GetPosition().GetDistance(ppos);
+                    RE::FormID lid = 0;
+                    RE::LOCK_LEVEL lvl = RE::LOCK_LEVEL::kUnlocked;
+                    const bool locked = DoorLocked(a_ref, lp.get(), lid, lvl);
+                    const float d = a_ref->GetPosition().GetDistance(ppos) + (locked ? kLockedPenalty : 0.0f);
                     if (lc->GetFormID() == a_cell) {
-                        if (d < bestD) { bestD = d; dr.found = true; dr.depth = 1; dr.door = a_ref->GetFormID(); dr.via = 0; dr.pos = a_ref->GetPosition(); }
-                    } else if (auto [it, fresh] = hops.try_emplace(lc->GetFormID(), Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d }); !fresh && d < it->second.d) {
-                        it->second = Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d };
+                        if (d < bestD) { bestD = d; dr.found = true; dr.depth = 1; dr.door = a_ref->GetFormID(); dr.via = 0; dr.pos = a_ref->GetPosition(); dr.lockedId = locked ? lid : 0; dr.lockLevel = locked ? static_cast<int>(lvl) : 0; }
+                    } else if (auto [it, fresh] = hops.try_emplace(lc->GetFormID(), Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d, locked ? lid : 0, locked ? static_cast<int>(lvl) : 0 }); !fresh && d < it->second.d) {
+                        it->second = Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d, locked ? lid : 0, locked ? static_cast<int>(lvl) : 0 };
                     }
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
@@ -1387,25 +1396,33 @@ namespace MFO::Logistics::Errand::Rest {
                         if (dr.hops >= 64) break;
                         ++dr.hops;
                         bool leads = false;
+                        RE::FormID innerLid = 0;   // the first-hop interior's own door to the place cell: its lock counts too
+                        RE::LOCK_LEVEL innerLvl = RE::LOCK_LEVEL::kUnlocked;
                         h.cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
                             ++dr.hopRefs;
                             auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
                             if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
                             auto lp = tele->teleportData->linkedDoor.get();
                             auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
-                            if (lc && lc->GetFormID() == a_cell) { leads = true; return RE::BSContainer::ForEachResult::kStop; }
+                            if (lc && lc->GetFormID() == a_cell) { leads = true; DoorLocked(a_ref, lp.get(), innerLid, innerLvl); return RE::BSContainer::ForEachResult::kStop; }
                             return RE::BSContainer::ForEachResult::kContinue;
                         });
-                        if (leads && h.d < bestD) { bestD = h.d; dr.found = true; dr.depth = 2; dr.door = h.door; dr.via = hid; dr.pos = h.pos; }
+                        if (!leads) continue;
+                        const float hd = h.d + (innerLid ? kLockedPenalty : 0.0f);
+                        if (hd < bestD) {
+                            bestD = hd; dr.found = true; dr.depth = 2; dr.door = h.door; dr.via = hid; dr.pos = h.pos;
+                            dr.lockedId = h.lockedId ? h.lockedId : innerLid;
+                            dr.lockLevel = h.lockedId ? h.lockLevel : (innerLid ? static_cast<int>(innerLvl) : 0);
+                        }
                     }
                 }
             }
             const std::string verdict = dr.indoors ? std::string("the player is indoors: no exterior grid to read (unknown)")
                 : !dr.found ? std::format("NO load door in the loaded exterior grid leads to it within two cells ({} load door(s) seen, {} first-hop interior(s) "
                                           "walked, {} reference(s) listed in them)", dr.scanned, dr.hops, dr.hopRefs)
-                : dr.depth == 1 ? std::format("entry door {:08X} in the loaded exterior grid", dr.door)
-                                : std::format("exterior door {:08X} -> interior {:08X} -> this cell (two deep; {} reference(s) listed in {} first-hop interior(s))",
-                                              dr.door, dr.via, dr.hopRefs, dr.hops);
+                : dr.depth == 1 ? std::format("entry door {:08X} in the loaded exterior grid{}", dr.door, dr.lockedId ? std::format(" (LOCKED: door {:08X}, lock level {}: {})", dr.lockedId, dr.lockLevel, LockWord(static_cast<RE::LOCK_LEVEL>(dr.lockLevel))) : std::string())
+                                : std::format("exterior door {:08X} -> interior {:08X} -> this cell (two deep; {} reference(s) listed in {} first-hop interior(s)){}",
+                                              dr.door, dr.via, dr.hopRefs, dr.hops, dr.lockedId ? std::format(" (LOCKED: door {:08X}, lock level {}: {})", dr.lockedId, dr.lockLevel, LockWord(static_cast<RE::LOCK_LEVEL>(dr.lockLevel))) : std::string());
             bool say = false;
             {
                 std::scoped_lock lk(g_mx);
@@ -1419,7 +1436,7 @@ namespace MFO::Logistics::Errand::Rest {
         MainThread::Post(fn);   // ShopDoorFor posts only when the pump is installed: this read never runs off the main thread (crash4)
     }
 
-    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos) {
+    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId, int* a_lockLevel) {
         if (!a_cell) return DoorAnswer::None;
         if (!MainThread::IsInstalled()) {   // no pump = no grid read (never on the worker): the shop is known only through his own cell's doors
             static std::atomic_bool noted{ false };
@@ -1437,10 +1454,70 @@ namespace MFO::Logistics::Errand::Rest {
                 Clock::now() - it->second.stamp <= std::chrono::minutes(5)) {
                 if (!it->second.found) return DoorAnswer::None;
                 a_pos = it->second.pos;
+                if (it->second.lockedId) {   // closed-shop fix: every route into the place is LOCKED = the shop is closed (the caller drops it)
+                    if (a_lockedId) *a_lockedId = it->second.lockedId;
+                    if (a_lockLevel) *a_lockLevel = it->second.lockLevel;
+                    return DoorAnswer::Locked;
+                }
                 return DoorAnswer::Found;
             }
         }
         PostShopDoorRead(a_cell);   // none yet, stale, or read while the player was indoors
         return DoorAnswer::Pending;
+    }
+    const char* LockWordOf(int a_level) { return LockWord(static_cast<RE::LOCK_LEVEL>(a_level)); }
+
+    // A walk to a shop's place ended BLOCKED: is the entry door locked NOW? The cached read is the plan-time one, so a request older than
+    // kRecheckFresh drops it and posts a fresh main-thread read (Pending). Asks inside the window get the SAME verdict (it is not consumed: the
+    // BLOCKED branch and tryPlace both ask in one tick). Unknown = no pump, the player is indoors, or no door was found.
+    LockAnswer ShopDoorLockedNow(RE::FormID a_cell, RE::FormID& a_lockedId, int& a_lockLevel) {
+        if (!a_cell || !MainThread::IsInstalled()) return LockAnswer::Unknown;
+        constexpr auto kRecheckFresh = std::chrono::seconds(30);
+        const auto now = Clock::now();
+        bool post = false;
+        {
+            std::scoped_lock lk(g_mx);
+            const auto rq = g_shopDoorRecheck.find(a_cell);
+            if (rq == g_shopDoorRecheck.end() || now - rq->second > kRecheckFresh) {
+                g_shopDoorRecheck[a_cell] = now;
+                g_shopDoor.erase(a_cell);
+                post = true;
+            } else if (const auto it = g_shopDoor.find(a_cell); it != g_shopDoor.end() && it->second.done && it->second.stamp >= rq->second) {
+                if (it->second.indoors || !it->second.found) return LockAnswer::Unknown;
+                if (it->second.lockedId) { a_lockedId = it->second.lockedId; a_lockLevel = it->second.lockLevel; return LockAnswer::Locked; }
+                return LockAnswer::Open;
+            } else if (it == g_shopDoor.end()) {
+                post = true;   // no read in the cache: PostShopDoorRead's asked-guard keeps one in flight
+            }
+        }
+        if (post) PostShopDoorRead(a_cell);
+        return LockAnswer::Pending;
+    }
+
+    // Follower-side fallback (the player is indoors, so the exterior grid read cannot run): the lock on each side of the load doors to a_destCell
+    // in the FOLLOWER's own loaded cell, read on the worker exactly as LogBlockedDoors does. TRUE = such doors exist and all are locked (id + level out).
+    bool FollowerSideDoorLocked(RE::Actor* a_follower, RE::FormID a_destCell, RE::FormID& a_lockedId, int& a_lockLevel) {
+        auto* cell = a_follower ? a_follower->GetParentCell() : nullptr;
+        if (!cell || !cell->IsAttached() || !a_destCell) return false;
+        std::vector<RE::ObjectRefHandle> doors;
+        cell->ForEachReferenceInRange(a_follower->GetPosition(), kScan, [&](RE::TESObjectREFR* a_ref) {
+            if (doors.size() < 96 && a_ref->extraList.GetByType<RE::ExtraTeleport>()) doors.push_back(a_ref->GetHandle());
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        bool anyOpen = false, anyLocked = false;
+        for (auto& h : doors) {
+            auto dp = h.get();
+            auto* d = dp.get();
+            auto* tele = d ? d->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+            if (!tele || !tele->teleportData) continue;
+            auto lp = tele->teleportData->linkedDoor.get();
+            auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+            if (!lc || lc->GetFormID() != a_destCell) continue;
+            RE::FormID lid = 0;
+            RE::LOCK_LEVEL lvl = RE::LOCK_LEVEL::kUnlocked;
+            if (DoorLocked(d, lp.get(), lid, lvl)) { if (!anyLocked) { a_lockedId = lid; a_lockLevel = static_cast<int>(lvl); } anyLocked = true; }
+            else anyOpen = true;
+        }
+        return anyLocked && !anyOpen;   // a second, open door to the same cell keeps the shop open
     }
 }
