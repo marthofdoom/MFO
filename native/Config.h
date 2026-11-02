@@ -494,6 +494,11 @@ namespace MFO::Config {
     // hands, touches no roster from the sink. bAttackObserve = 1 in
     // Data/SKSE/Plugins/MFO.ini arms the sink and the tick. See Diagnostics.cpp.
     inline std::atomic<bool>  g_attackObserve{ false };
+    // [crime-probe] PASSIVE BOUNTY PROBE (ClickUp 1dfcuabc4dp) -- DEFAULT OFF, INI-only (no MCM face). Once a second
+    // on the main thread it reads the player's violent / non-violent crime gold per faction and, on any
+    // increase, logs the cell, location, faction and every managed follower's state. Read-only: changes
+    // nothing. bCrimeGoldProbe = 1 in Data/SKSE/Plugins/MFO.ini arms it. 1.6.1170 only. See CrimeProbe.cpp.
+    inline std::atomic<bool>  g_crimeGoldProbe{ false };
     // [hb] HEARTBEAT -- DEFAULT ON (one line per 5 s). The sleeper thread prints
     // `[hb] worker ticks=N main drains=M ...` so a freeze names the thread that
     // stopped (a stalled worker freezes ticks, a stalled main freezes drains).

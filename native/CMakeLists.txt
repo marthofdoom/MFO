@@ -33,6 +33,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     FollowerCatchUp.cpp
     Rapport.cpp
     Diagnostics.cpp
+    CrimeProbe.cpp
     Board.cpp
     Board_Progression.cpp
     Board_Click.cpp
