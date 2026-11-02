@@ -739,10 +739,12 @@ namespace MFO::ProgAllocator {
                     st.hmsCumulative[p] = std::isfinite(c)  ? c  : 0.0f;
                 }
                 // RECOMPUTE the held target (never read) — the invariant every
-                // write site maintains: target == max(baseline, baseline+cumul).
+                // write site maintains: target == baseline + cumulative, never below 0.
+                // No baseline floor (ClickUp 1dfcuabc4dv review round 2): the adopted-
+                // total cap stores its cut as a NEGATIVE cumulative (Hms.cpp HOLD).
                 for (int p = 0; p < 3; ++p) {
                     const float tgt = st.hmsBaseline[p] + st.hmsCumulative[p];
-                    st.hmsTarget[p] = (tgt < st.hmsBaseline[p]) ? st.hmsBaseline[p] : tgt;
+                    st.hmsTarget[p] = (tgt < 0.0f) ? 0.0f : tgt;
                 }
                 std::uint32_t bSince = 0, bOff = 0;
                 std::uint8_t  offPool = 0, captured = 0;

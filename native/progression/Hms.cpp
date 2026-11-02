@@ -461,8 +461,9 @@ namespace MFO::ProgAllocator {
             // The class ratio is a LONG-TERM target for the follower's RUNNING-TOTAL
             // base HMS, not a fixed per-level split. Each award nudges the total toward
             // the (skew-adjusted) target ratio, correcting past deviation incl. the
-            // off-ratio pre-enrollment vanilla baseline. Budget is only ever ADDED (a
-            // pool is never reduced below its baseline), so it converges over several
+            // off-ratio pre-enrollment vanilla baseline. The converge only ever ADDS
+            // budget (it never lowers a pool; only the adopted-total cap below can, and
+            // that may take a pool under its baseline), so it converges over several
             // levels and individual levels differ. The SKEW is a SEMI-PERMANENT ratio
             // shift toward the off-class pool: it grows with off-class usage, HOLDS while
             // the off-class gambit keeps firing (== equipped + enabled), and decays once
@@ -547,10 +548,17 @@ namespace MFO::ProgAllocator {
             // total"). REVERSES the 2026-10-01 "adopt, never take back" ruling for the
             // TOTAL only. Every follower with a captured HMS record, whatever its class
             // or list: its held H/M/S total (baseline + cumulative, the total HMS
-            // conserves) never exceeds the PLAYER's total = the player's BASE
-            // Health + Magicka + Stamina read NOW (Followers::GetFollowerHMS, the same
-            // reader the parity credit uses). Re-read on every call, so the cap rises as
-            // the player levels (or falls if something lowers the player's base).
+            // conserves) never exceeds the PLAYER's total. PLAYER'S TOTAL (review round 2,
+            // marth 2026-11-01: neither a temporary dip nor a temporary rise may move it)
+            // = g_playerHmsTotalLast, the player's base Health + Magicka + Stamina SAMPLED
+            // only at stable moments: each player level-up (PollWork, the same sample the
+            // parity credit's playerGain is measured from), persisted in the PRGN header
+            // (v6+, no format change) so a load restores the last level-up's sample
+            // instead of re-reading a possibly dipped or buffed live base. Seeded from
+            // the live base once when no sample exists (fresh install, a v<6 save, the
+            // first poll). Never re-read per poll, so a racemenu round trip, a respec
+            // mod or a script SetAV between level-ups neither cuts nor inflates the cap.
+            // It moves with the player's level-ups. 0 = not sampled yet: the cap waits.
             // WHEN: every RecomputeHMS road that reaches the hold. The first poll after
             // a load is the fix-forward SWEEP of a save above the cap; each award (the
             // converge above already added it) is trimmed back to the cap here.
@@ -560,30 +568,30 @@ namespace MFO::ProgAllocator {
             // shape toward the class. FLOOR: a pool never drops below
             // max(profile share x cap, kHmsCapPoolFloor), and a pool at or under it is
             // not touched. If the floors leave too little to take, the total lands
-            // above the cap and the log says so. The cut comes off the pool's
-            // cumulative first (MFO's own award), then off its baseline (the adopted
-            // base). PRGN layout and version are UNCHANGED: the cap is expressed in
-            // hmsBaseline / hmsCumulative / hmsWithheld. For a follower the engine
+            // above the cap and the log says so. The cut is stored as a NEGATIVE
+            // hmsCumulative (review round 2, marth option b): hmsBaseline stays the
+            // pre-MFO base, so UndoHms (removal from MFO only) still restores the real
+            // vanilla value, and target = baseline + cumulative may now sit BELOW the
+            // baseline. PRGN layout and version are UNCHANGED: the cap is expressed in
+            // hmsCumulative / hmsWithheld. For a follower the engine
             // still levels (not fixedStat) the cut is added to hmsWithheld, which keeps
             // the W invariant (sum of targets + W == the engine's own total), so the
             // engine's next absolute re-slam does not re-measure the cut as an award.
             // INI bHmsCapToPlayerTotal (default ON).
             if (Config::g_hmsCapToPlayerTotal.load()) {
                 constexpr float kHmsCapPoolFloor = 50.0f;   // sane per-pool floor
-                auto* player = RE::PlayerCharacter::GetSingleton();
-                float pTot = 0.0f;
-                for (int p = 0; p < 3; ++p) pTot += Followers::GetFollowerHMS(player, p);
+                const float pTot = g_playerHmsTotalLast;   // the level-up sample (see above)
                 float held[3], tot = 0.0f;
                 for (int p = 0; p < 3; ++p) {
-                    held[p] = std::max(a_st.hmsBaseline[p], a_st.hmsBaseline[p] + a_st.hmsCumulative[p]);
+                    held[p] = a_st.hmsBaseline[p] + a_st.hmsCumulative[p];
                     tot += held[p];
                 }
-                if (!(pTot > 0.0f) || !std::isfinite(pTot)) {
+                if (!std::isfinite(pTot)) {
                     if (!a_st.hmsCapLogged)
-                        spdlog::error("[hms] {:08X} adopted-total cap NOT APPLIED: player base H/M/S total "
-                                      "unreadable ({:.1f})", id, pTot);
+                        spdlog::error("[hms] {:08X} adopted-total cap NOT APPLIED: player H/M/S sample "
+                                      "not finite", id);
                     a_st.hmsCapLogged = true;
-                } else if (tot > pTot + 0.5f) {
+                } else if (pTot > 0.0f && tot > pTot + 0.5f) {
                     const float excess = tot - pTot;
                     float over[3], O = 0.0f;
                     for (int p = 0; p < 3; ++p) {
@@ -597,9 +605,7 @@ namespace MFO::ProgAllocator {
                         for (int p = 0; p < 3; ++p) {
                             const float r = take * (over[p] / O);
                             if (!(r > 0.0f)) continue;
-                            const float fromCum = std::min(r, std::max(0.0f, a_st.hmsCumulative[p]));
-                            a_st.hmsCumulative[p] -= fromCum;
-                            a_st.hmsBaseline[p]   -= (r - fromCum);
+                            a_st.hmsCumulative[p] -= r;   // may go negative; baseline untouched
                             removed += r;
                         }
                         if (!a_st.fixedStat) a_st.hmsWithheld += removed;   // keep the W invariant
@@ -616,7 +622,7 @@ namespace MFO::ProgAllocator {
                     }
                     if (!a_st.hmsCapLogged || budget > 0.0f)
                         spdlog::info("[hms] {:08X} cap detail: removed {:.1f} (H {:.1f} M {:.1f} S {:.1f} over "
-                                     "the class floor) -> baseline H {:.0f} M {:.0f} S {:.0f} + cumulative "
+                                     "the class floor) -> pre-MFO baseline H {:.0f} M {:.0f} S {:.0f} + cumulative "
                                      "H {:.1f} M {:.1f} S {:.1f}{}{}",
                                      id, removed, over[0], over[1], over[2],
                                      a_st.hmsBaseline[0], a_st.hmsBaseline[1], a_st.hmsBaseline[2],
@@ -633,7 +639,12 @@ namespace MFO::ProgAllocator {
             const float heldPrevH = a_st.hmsHeld[0];   // SAVED: what MFO last held (any session)
             for (int p = 0; p < 3; ++p) {
                 float tgt = a_st.hmsBaseline[p] + a_st.hmsCumulative[p];
-                if (tgt < a_st.hmsBaseline[p]) tgt = a_st.hmsBaseline[p];   // floor
+                // No baseline floor any more (review round 2): the adopted-total cap
+                // stores its cut as a NEGATIVE cumulative, so the target may sit below
+                // the pre-MFO baseline. Every other road only ADDS to cumulative, so
+                // without the cap target >= baseline as before. Guard against a
+                // negative base only.
+                if (tgt < 0.0f) tgt = 0.0f;
                 a_st.hmsTarget[p] = tgt;
                 if (tgt != cur[p]) Followers::SetFollowerHMS(a_actor, p, tgt);   // v1.1 API (byte-identical)
                 a_st.hmsHeld[p] = tgt;   // v8: the value the follower now holds by our hold
@@ -768,7 +779,8 @@ namespace MFO::ProgAllocator {
         // as far as it is MFO's OWN. MFO's hold writes the BASE (Followers::SetFollowerHMS),
         // which persists in the save, so it is undone here and not left to a reload. What
         // the hold put on top of the enrollment baseline (hmsBaseline, the pre-MFO base) is
-        // hmsCumulative, and it has two different owners:
+        // hmsCumulative (NEGATIVE where the adopted-total cap cut below the pre-MFO base,
+        // ClickUp 1dfcuabc4dv; hmsBaseline itself is never lowered), and it has two owners:
         //  * a FIXED-STAT follower (fixedStat, or a grant remainder = Phase-3 grant history):
         //    the engine never awards him anything, so the cumulative is MFO's GRANT. Undo =
         //    the base back to hmsBaseline, exactly the pre-MFO value.
