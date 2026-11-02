@@ -6,6 +6,7 @@
 #include "Diagnostics.h"
 #include "Runtime.h"
 #include "logistics/Errand.h"
+#include <mutex>
 
 // See CrimeProbe.h. READ-ONLY EVERYWHERE.
 //
@@ -122,6 +123,79 @@ namespace MFO::CrimeProbe {
         g_lastPostMs.store(nowMs, std::memory_order_relaxed);
         if (g_inFlight.exchange(true, std::memory_order_acq_rel)) return;
         MainThread::Post([]() { Sample(); });
+    }
+
+    // ── FRIENDLY-HIT sink ────────────────────────────────────────────────────
+    // A hit by the player or a managed follower on an NPC that is neither hostile to the player nor in combat with
+    // him is the top bounty candidate (friendly fire on a guard or townsperson in a town fight). The sink reads
+    // only the event's own ids and the FormID mirror (IsTrackedFast), rate-limits per target, and POSTS the engine
+    // reads to the main thread. TESHitEvent (fork RE/T/TESHitEvent.h): target @00, cause @08, source @10 (weapon or
+    // spell FormID), projectile @14. NOTE: the engine state is sampled on the NEXT main frame, so "inCombat" may
+    // already include the reaction to this very hit.
+    namespace {
+        std::mutex                                   g_hitMx;
+        std::unordered_map<RE::FormID, std::int64_t> g_hitLast;   // target -> steady ms of the last logged hit
+        constexpr std::int64_t                       kHitPerTargetMs = 3000;
+
+        void HitOnMain(RE::FormID a_cause, RE::FormID a_target, RE::FormID a_source, RE::FormID a_proj, bool a_causeIsPlayer) {
+            auto* pc  = RE::PlayerCharacter::GetSingleton();
+            auto* tgt = RE::TESForm::LookupByID<RE::Actor>(a_target);
+            auto* cs  = RE::TESForm::LookupByID<RE::Actor>(a_cause);
+            if (!pc || !tgt || !cs || tgt->IsDead()) return;
+            if (tgt->IsHostileToActor(pc)) return;   // hostile to the player: a fair fight, not a bounty candidate
+            const bool inCombat = tgt->IsInCombat();
+            auto       ctgt     = tgt->GetActorRuntimeData().currentCombatTarget.get();
+            if (inCombat && ctgt && ctgt.get() == pc) return;   // already fighting the player
+            const auto* cal  = RE::Calendar::GetSingleton();
+            const auto* cell = pc->GetParentCell();
+            const auto* crimeFac = tgt->GetCrimeFaction();
+            const auto* srcForm  = a_source ? RE::TESForm::LookupByID(a_source) : nullptr;
+            spdlog::info("[crime-probe] FRIENDLY HIT day={:.4f} hour={:.2f} cell='{}' aggressor={:08X} '{}'{} "
+                         "target={:08X} '{}' guard={} crimeFaction={:08X} '{}' source={:08X} '{}' projectile={:08X} "
+                         "targetInCombat={} (sampled next frame)",
+                         cal ? cal->GetDaysPassed() : -1.0f, cal ? cal->GetHour() : -1.0f,
+                         cell ? NameOr(cell->GetName(), "(unnamed)") : "(none)",
+                         a_cause, NameOr(cs->GetName()), a_causeIsPlayer ? " (player)" : " (follower)",
+                         a_target, NameOr(tgt->GetName()), tgt->IsGuard() ? "yes" : "no",
+                         crimeFac ? crimeFac->GetFormID() : 0u, crimeFac ? NameOr(crimeFac->GetName()) : "",
+                         a_source, srcForm ? NameOr(srcForm->GetName()) : "", a_proj, inCombat ? "yes" : "no");
+        }
+
+        class HitSink final : public RE::BSTEventSink<RE::TESHitEvent> {
+        public:
+            static HitSink* GetSingleton() { static HitSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_e, RE::BSTEventSource<RE::TESHitEvent>*) override {
+                if (!a_e || !a_e->target || !a_e->cause) return RE::BSEventNotifyControl::kContinue;
+                if (!Config::g_crimeGoldProbe.load(std::memory_order_relaxed)) return RE::BSEventNotifyControl::kContinue;
+                if (!Runtime::IsVerified1_6_1170()) return RE::BSEventNotifyControl::kContinue;
+                const RE::FormID cause = a_e->cause->GetFormID(), target = a_e->target->GetFormID();
+                if (cause == target || target == 0x14) return RE::BSEventNotifyControl::kContinue;
+                const bool causeIsPlayer = (cause == 0x14);
+                if (!causeIsPlayer && !Followers::IsTrackedFast(cause)) return RE::BSEventNotifyControl::kContinue;
+                if (Followers::IsTrackedFast(target) || !a_e->target->As<RE::Actor>()) return RE::BSEventNotifyControl::kContinue;
+                const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch()).count();
+                {
+                    std::lock_guard lk(g_hitMx);
+                    if (g_hitLast.size() > 256) g_hitLast.clear();
+                    auto [it, fresh] = g_hitLast.try_emplace(target, nowMs);
+                    if (!fresh) {
+                        if (nowMs - it->second < kHitPerTargetMs) return RE::BSEventNotifyControl::kContinue;
+                        it->second = nowMs;
+                    }
+                }
+                const RE::FormID src = a_e->source, proj = a_e->projectile;
+                MainThread::Post([cause, target, src, proj, causeIsPlayer]() { HitOnMain(cause, target, src, proj, causeIsPlayer); });
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
+    void RegisterHitSink() {
+        if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
+            holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
+            spdlog::info("[crime-probe] friendly-hit sink registered (live only while bCrimeGoldProbe = 1)");
+        }
     }
 
 }

@@ -1348,6 +1348,7 @@ namespace MFO::Diagnostics {
         if (holder) {
             holder->AddEventSink<RE::TESSpellCastEvent>(SpellSink::GetSingleton());
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
+            CrimeProbe::RegisterHitSink();   // [crime-probe] passive friendly-hit sink, inert while bCrimeGoldProbe = 0
             if (auto* ui = RE::UI::GetSingleton())
                 ui->AddEventSink<RE::MenuOpenCloseEvent>(MenuSink::GetSingleton());
             Probe::RegisterCrosshairSink();

@@ -13,4 +13,9 @@ namespace MFO::CrimeProbe {
     // main-thread sample (never stacks a second while one is queued). No-op while the INI switch is off.
     void Pulse();
 
+    // Register the passive TESHitEvent sink ([crime-probe] FRIENDLY HIT lines: a hit by the player or a managed
+    // follower on an NPC that is neither hostile to the player nor in combat with him). Once, at kDataLoaded,
+    // from Diagnostics::Install. The sink returns at once while the INI switch is off.
+    void RegisterHitSink();
+
 }
