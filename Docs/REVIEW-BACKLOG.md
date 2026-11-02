@@ -2531,3 +2531,6 @@ Verbatim: "If the follower stands in an exterior cell and the door into the targ
 
 ### MFO-B554 (SEV-5, FIXED 9cf3986, LootScan.cpp gates + TownWalkBarredByLock, against 8b659e0) -- one door scan per candidate, and the log reset depends on a later call
 Verbatim: "Every candidate that reaches the gate and stands in another interior cell triggers a full own-cell door scan (up to 96 handles)." Caching per (cell, tick) removes it. "s_logged is cleared only by a call made while the player is outside a town." Reasoning: bounded by MarkTravelFailed cooldown, cleanup only.
+
+### MFO-B555 (SEV-5, OPEN, logistics/ErrandRest.cpp door predicates, against 9cf3986, Opus review of fix/door-backlog-b549) -- leftovers after the B549..B554 drain
+Verbatim: "either side being player-owned exempts the whole pair" (tighten to the side the walk enters). "the 1 s cache shares an answer across followers in one cell" (two followers more than 4096 u apart can differ for up to 1 s). "The per-visit log set only resets through NoteTown ... With town errands turned off, g_twLogged never resets on a town change." "Loot and LOTD cells read through ShopDoorFor now log as [errand] shop place cell X" (wording only). Reasoning: no crime path, logs and false refusals only.
