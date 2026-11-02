@@ -64,7 +64,10 @@ namespace MFO::Logistics {
             auto ref = loc->data.refHandle.get();
             if (!ref) break;
             if (auto* pc = ref->GetParentCell()) if (const char* n = pc->GetName(); n && *n) return n;
-            if (const char* n = ref->GetDisplayFullName(); n && *n) return n;
+            // The near-reference is usually a WORKSTATION (Whiterun's tanning rack, a forge): its display name is not a shop. Only an ACTOR's name is a
+            // fair place name here; anything else falls through to the chest's cell, then ShopDisplayName's "<vendor>'s stall" (field 2026-11-01).
+            if (ref->As<RE::Actor>())
+                if (const char* n = ref->GetDisplayFullName(); n && *n) return n;
             break;
         }
         default: {   // no place in the PLVD: BuildTownShops places the shop by its merchant chest's cell, so name that cell
