@@ -1631,8 +1631,7 @@ namespace MFO::Board {
         // matching the discipline every other off-serial reader now follows.
         auto activeIds = Followers::ActiveSnapshot();
         const bool inTown = Config::g_townErrands.load() && Logistics::Errand::PlayerInTown();   // follower gold shows only in a town
-        // Town mode (ClickUp 1dfcuabc4dr): a follower who is AWAY (off the roster with an errand running, or still an eligible
-        // follower while the player is in a town) is built through this SAME loop so his gambit editor is complete. He is not
+        // Town mode (ClickUp 1dfcuabc4dr): a follower who is AWAY (off the roster with a town errand running) is built through this SAME loop so his gambit editor is complete. He is not
         // active: no vitals, gold, glyphs, distance or taunt gate, and no inventory / 3D read (the loop below reads none of
         // those for him). What it does read is MFO's own record and the actor's spell list / actor values.
         std::vector<RE::FormID> loopIds(activeIds->begin(), activeIds->end());
@@ -1642,7 +1641,7 @@ namespace MFO::Board {
             if (Followers::IsTrackedFast(id)) continue;
             auto* af = RE::TESForm::LookupByID<RE::Actor>(id);
             if (!af) continue;
-            if (!Logistics::Errand::Describe(id).empty() || (inTown && Followers::IsEligibleFollower(af))) {
+            if (!Logistics::Errand::Describe(id).empty()) {   // away = out on a town errand only (marth); a waiting / dismissed one stays a retained row
                 loopIds.push_back(id);
                 awaySet.insert(id);
             }

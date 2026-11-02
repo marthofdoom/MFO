@@ -88,7 +88,7 @@ namespace MFO::Board {
         // is greyed. Filled on the worker in PublishSnapshot; false for active rows.
         bool          stillFollower = false;
         // ClickUp 1dfcuabc4dr: a RETAINED row that is off the roster only because he is away in town mode: an errand runs
-        // (physical or off-screen) or he is still an eligible follower while the player is in a town. The board keeps
+        // (physical or off-screen). The board keeps
         // listing him (State "On an errand" / "Away"); he is unloaded or elsewhere, so no vitals, no gold, no gambit editing.
         bool          away = false;
         bool          commanded = false;
