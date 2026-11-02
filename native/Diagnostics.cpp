@@ -22,6 +22,7 @@
 #include "logistics/GemRules.h"
 #include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
 #include "logistics/Errand.h"   // town errands: the owner-independent Sweep
+#include "CrimeProbe.h"   // [crime-probe]: passive bounty probe pulse
 
 // Two Win32 symbols, declared by hand. <windows.h> is BANNED outside Board.cpp
 // (it #defines GetObject and hijacks BGSDefaultObjectManager::GetObject<T>,
@@ -917,6 +918,7 @@ namespace MFO::Diagnostics {
                 if (!g_pumpRunning.load() || g_pumpEpoch.load() != a_epoch) break;
 
                 const bool diagTurn = (++wake % kDiagEveryNth) == 0;
+                CrimeProbe::Pulse();   // [crime-probe] default OFF: a flag check, then at most one main-thread Post per second
 
                 // Null-check: on shutdown the interface can be gone while
                 // this thread is still awake.
