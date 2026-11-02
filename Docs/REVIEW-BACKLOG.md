@@ -2522,3 +2522,12 @@ Verbatim: "It reads only load doors within kScan (4096) in his own cell that lea
 
 ### MFO-B551 (SEV-5, OPEN, logistics/Errand.cpp + ErrandRest.cpp, against 0df3d7b..ea67e43) -- small leftovers from the closed-shop review
 Verbatim: "A door that locks inside the 30 s window goes unseen" (mostly covered by the OpenAt hours gate in tryPlace). "The depth-2 check stops at the first matching inner door." "In closedDoorGate the break only leaves the inner loop, so the last matching town wins." "closedDoorGate and the hours gate in tryPlace ignore stopOver's return" (one service tick). "Inn and temple stops park g_parked[r.faction], where r.faction may be 0 or the inn faction." "Future Home stop: the generic branch would close the player's own home (kRequiresKey), so a player-owned exemption will be needed when that lands."
+
+### MFO-B552 (SEV-4, OPEN, logistics/ErrandRest.cpp TownWalkBarredByLock / FollowerSideDoorLocked, against 8b659e0, Opus review of fix/town-walk-locked-doors) -- no exemption for the player's own doors
+Verbatim: "TownWalkBarredByLock treats any locked door the same way. A player-home door stays kRequiresKey after purchase, and a teammate walking into the player's own house is not a crime. So when the player is inside his home and the follower is outside, a loot target in the house is refused." Reasoning: a false refusal with no crime risk. Fix: skip a locked door whose ref owner or cell owner is the player (0x7 / 0x14) or PlayerFaction (0xDB1), inside the shared predicate, so the future errand Home stop (MFO-B551) gets it too.
+
+### MFO-B553 (SEV-4, OPEN, same predicate, against 8b659e0) -- loot and LOTD walks see only own-cell doors (the MFO-B550 limit)
+Verbatim: "If the follower stands in an exterior cell and the door into the target's interior is in the next exterior cell, the predicate returns false and the walk is still declared. That can reproduce the original BLOCKED-at-a-locked-door case." Reasoning: only when a loaded target sits in another interior (player inside, follower outside). Fix with MFO-B550.
+
+### MFO-B554 (SEV-5, OPEN, LootScan.cpp gates + TownWalkBarredByLock, against 8b659e0) -- one door scan per candidate, and the log reset depends on a later call
+Verbatim: "Every candidate that reaches the gate and stands in another interior cell triggers a full own-cell door scan (up to 96 handles)." Caching per (cell, tick) removes it. "s_logged is cleared only by a call made while the player is outside a town." Reasoning: bounded by MarkTravelFailed cooldown, cleanup only.
