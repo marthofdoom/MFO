@@ -15,6 +15,7 @@
 #include "Progression.h"
 #include "Followers.h"   // wave-1 split: IsActiveFollower (below) reads Followers::IsTrackedFast
 #include <mutex>          // g_hmsFireMx (worker-thread fire mirror)
+#include <array>          // HmsFireCounts
 #include <unordered_map>  // g_hmsFiredMask
 #include <vector>
 #include <string>
@@ -133,10 +134,14 @@ namespace MFO::ProgAllocator {
         // HmsTrackBattle (MAIN poll) consumes it. Mutex-guarded map — the same
         // cross-thread per-follower pattern as CombatStyle::g_owned — so it is
         // race-free without reading g_followers off-thread. Runtime-only, never
-        // serialized. The stored byte is a BITMASK of pools fired since the last
-        // consume: bit0=Health, bit1=Magicka, bit2=Stamina.
+        // serialized. The stored value is a per-pool FIRE COUNT since the last
+        // consume, [0]=Health [1]=Magicka [2]=Stamina (saturating). It was a
+        // bitmask; the count is what lets HmsTrackBattle pick the pool with the
+        // MOST usage in a battle (ClickUp 1dfcuabc4dv, marth 2026-11-01). The name
+        // is kept so the erase/clear sites (Verbs.cpp, Allocator.cpp) are untouched.
+        using HmsFireCounts = std::array<std::uint16_t, 3>;
         inline std::mutex g_hmsFireMx;
-        inline std::unordered_map<RE::FormID, std::uint8_t> g_hmsFiredMask;
+        inline std::unordered_map<RE::FormID, HmsFireCounts> g_hmsFiredMask;
 
         // ── cross-module helpers (declared here, defined next to their module) ──
 

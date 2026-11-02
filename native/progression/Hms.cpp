@@ -76,28 +76,43 @@ namespace MFO::ProgAllocator {
         // Gated by the caller on IsInCombat(); we additionally require the
         // weapon to be DRAWN so a sheathed idle loadout is not counted.
 
+        // The pool one hand's object exercises when the follower ATTACKS with it:
+        // 1=Health, 2=Magicka, 3=Stamina, 0 = nothing decisive in that hand (empty).
+        // A spell or scroll (MagicItem) or a staff is Magicka, a bow or crossbow is
+        // Stamina, any other weapon (fists included) is Health.
+        std::uint8_t HmsPoolForHand(RE::TESForm* a_obj) {
+            if (!a_obj) return 0;
+            if (a_obj->As<RE::MagicItem>()) return 2;                   // spell / scroll -> Magicka
+            if (auto* w = a_obj->As<RE::TESObjectWEAP>()) {
+                const auto t = w->GetWeaponType();
+                if (t == RE::WEAPON_TYPE::kStaff) return 2;             // staff -> Magicka
+                if (t == RE::WEAPON_TYPE::kBow || t == RE::WEAPON_TYPE::kCrossbow) return 3;
+                return 1;                                               // melee weapon / fists -> Health
+            }
+            return 0;   // a shield, a torch: not what the attack swings
+        }
+
         // Map a FIRED combat gambit action opcode to the HMS pool it exercises:
         // 0=none/neutral, 1=Health, 2=Magicka, 3=Stamina. Opcode literals are the
         // frozen Vocabulary contract (#10); a cast of ANY delivery -> Magicka.
+        // Applies to every fired action of every managed follower, no class or
+        // follower is special (ClickUp 1dfcuabc4dv, marth 2026-11-01 "Casts count as
+        // magicka use for skew"): an act.attack / act.power_attack is judged by the
+        // ACTING hand, the right hand (the one an attack swings), else the left when
+        // the right holds nothing decisive. A spell or a staff there is Magicka use,
+        // never Health. Empty hands are an unarmed swing, Health.
         std::uint8_t HmsPoolForFire(RE::Actor* a_actor, const std::string& a_op) {
             if (a_op.rfind("act.cast", 0) == 0) return 2;   // cast_self/target/player/spell -> Magicka
             if (a_op == "act.equip_ranged")     return 3;   // ranged role -> Stamina
             if (a_op == "act.equip_melee")      return 1;   // melee role  -> Health
             if (a_op == "act.attack" || a_op == "act.power_attack") {
-                // A generic attack is melee OR bow depending on the drawn weapon.
                 // Engine read; the Scheduler caller is on the worker (engine reads
                 // are fine there, like the rest of its tick).
                 if (a_actor) {
-                    RE::TESForm* hands[2] = { a_actor->GetEquippedObject(false),
-                                             a_actor->GetEquippedObject(true) };
-                    for (auto* h : hands)
-                        if (auto* w = h ? h->As<RE::TESObjectWEAP>() : nullptr) {
-                            const auto t = w->GetWeaponType();
-                            if (t == RE::WEAPON_TYPE::kBow || t == RE::WEAPON_TYPE::kCrossbow)
-                                return 3;   // ranged attack -> Stamina
-                        }
+                    if (const auto r = HmsPoolForHand(a_actor->GetEquippedObject(false))) return r;   // right
+                    if (const auto l = HmsPoolForHand(a_actor->GetEquippedObject(true)))  return l;   // left
                 }
-                return 1;   // melee attack -> Health
+                return 1;   // unarmed attack -> Health
             }
             return 0;   // wait / flee / equip_torch / loot / drink -> neutral
         }
@@ -106,13 +121,48 @@ namespace MFO::ProgAllocator {
             std::scoped_lock lk(g_hmsFireMx);
             g_hmsFiredMask.erase(a_id);
         }
-        std::uint8_t HmsConsumeFiredMask(RE::FormID a_id) {
+        HmsFireCounts HmsConsumeFiredMask(RE::FormID a_id) {
             std::scoped_lock lk(g_hmsFireMx);
             auto it = g_hmsFiredMask.find(a_id);
-            if (it == g_hmsFiredMask.end()) return 0;
-            const std::uint8_t m = it->second;
+            if (it == g_hmsFiredMask.end()) return HmsFireCounts{ 0, 0, 0 };
+            const HmsFireCounts c = it->second;
             g_hmsFiredMask.erase(it);
-            return m;
+            return c;
+        }
+
+        // (A) "Key on enrolled class" (ClickUp 1dfcuabc4dv, marth 2026-11-01). The
+        // H/M/S profile HMS uses, for EVERY follower. An ENROLLED follower whose
+        // class-def resolves (FindClassDef(clsId), the frozen g_classes catalog) is
+        // keyed on THAT class, whatever it is: its declared hmsWeights/primaryPool
+        // when the add-on declared them, else the profile of its declared stance.
+        // So a follower enrolled as a mage is a mage for HMS even while the combat
+        // resolver plays her as an archer. Everyone else (not enrolled, enrolled
+        // without a class, a class-def the loaded add-on no longer has, or a def
+        // with neither weights nor stance) keeps today's key: the resolved combat
+        // stance off the g_mx mirror (Followers::ResolvedClassFast, #74).
+        // a_stance = the stance the profile came from (log only), a_src = which key.
+        bool HmsProfileFor(RE::FormID a_id, const ProgState& a_st, float a_out[3], int& a_primary,
+                           std::uint8_t& a_stance, const char*& a_src) {
+            if (a_st.enrolled && a_st.clsId != 0) {
+                if (const ClassDef* def = FindClassDef(a_st.clsId)) {
+                    const float sum = def->hmsWeights[0] + def->hmsWeights[1] + def->hmsWeights[2];
+                    if (def->hmsWeightsSet && sum > 0.0f) {
+                        for (int p = 0; p < 3; ++p) a_out[p] = def->hmsWeights[p] / sum;
+                        a_primary = static_cast<int>(def->primaryPool);
+                        a_stance  = def->stance;
+                        a_src     = "enrolled";
+                        return true;
+                    }
+                    if (HmsProfile(def->stance, a_out, a_primary)) {
+                        a_stance = def->stance;
+                        a_src    = "enrolled-stance";
+                        return true;
+                    }
+                }
+            }
+            a_stance = Followers::ResolvedClassFast(a_id);
+            a_src    = "resolved";
+            return HmsProfile(a_stance, a_out, a_primary);
         }
 
         // The engine's per-level HMS split between player and NPC, from the GMSTs:
@@ -140,10 +190,11 @@ namespace MFO::ProgAllocator {
         // serialized; the two COUNTS are (v5 block).
         void HmsTrackBattle(RE::Actor* a_actor, ProgState& a_st) {
             float prof[3]; int primary = 0;
-            // The RESOLVED class (Gambit pick, or Auto through THE resolver,
-            // Logistics::ResolveBaseClass), read off the g_mx mirror (#74). No
-            // add-on gate: HMS is core (marth 2026-10-01).
-            if (!HmsProfile(Followers::ResolvedClassFast(a_actor->GetFormID()), prof, primary)) return;
+            // The ENROLLED class for an enrolled follower, else the RESOLVED class
+            // (Gambit pick, or Auto through THE resolver, Logistics::ResolveBaseClass)
+            // off the g_mx mirror (#74). HmsProfileFor (A). No add-on gate: HMS is core.
+            std::uint8_t keyStance = 0; const char* keySrc = "";
+            if (!HmsProfileFor(a_actor->GetFormID(), a_st, prof, primary, keyStance, keySrc)) return;
 
             constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
             const auto now = std::chrono::steady_clock::now();
@@ -161,23 +212,30 @@ namespace MFO::ProgAllocator {
                 HmsClearFiredMask(fid);
                 if (a_st.battlesSinceLevelUp < 0xFFFFFFFFu) ++a_st.battlesSinceLevelUp;
             } else if (!recentCombat && a_st.hmsInBattle) {
+                // falling edge — the battle is over (after the 3s dwell). JUDGE it now,
+                // on everything the follower fired in it.
                 a_st.hmsInBattle = false;
-            }
-
-            if (a_st.hmsInBattle && combatNow && !a_st.hmsBattleOffCounted) {
-                // REAL off-class signal (F3): did the follower's combat gambit
-                // actually FIRE an off-class action this battle? Consume the
-                // worker-published fired-pool bitmask (bit p == pool index p).
-                const std::uint8_t mask = HmsConsumeFiredMask(fid);
-                int offPool = -1;
-                for (int p = 0; p < 3; ++p)
-                    if (p != primary && (mask & (1u << p))) { offPool = p; break; }
-                if (offPool >= 0) {
+                // REAL off-class signal (F3): the worker-published per-pool FIRE COUNTS
+                // of this battle's fired combat gambits. MULTI-POOL RULE (ClickUp
+                // 1dfcuabc4dv, marth 2026-11-01): the pool with the MOST fires in the
+                // battle is the pool the battle exercised. A tie goes to the class
+                // primary pool, then to the lower pool index. The battle counts as
+                // off-class only when that pool is not the primary. No fires at all =
+                // not off-class (the battle still counts in battlesSinceLevelUp).
+                const HmsFireCounts n = HmsConsumeFiredMask(fid);
+                int top = -1; std::uint32_t topN = 0;
+                for (int p = 0; p < 3; ++p) {
+                    if (n[p] == 0) continue;
+                    const bool better = n[p] > topN ||
+                                        (n[p] == topN && p == primary);   // tie -> primary
+                    if (top < 0 || better) { top = p; topN = n[p]; }
+                }
+                if (top >= 0 && top != primary && !a_st.hmsBattleOffCounted) {
                     a_st.hmsBattleOffCounted = true;
                     if (a_st.battlesOffClass < 0xFFFFFFFFu) ++a_st.battlesOffClass;
                     // First off-class pool since the last award wins (stable).
                     if (a_st.offClassPool == 0)
-                        a_st.offClassPool = static_cast<std::uint8_t>(offPool + 1);
+                        a_st.offClassPool = static_cast<std::uint8_t>(top + 1);
                 }
             }
         }
@@ -198,13 +256,18 @@ namespace MFO::ProgAllocator {
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log, float a_grantBudget) {
             if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
             // HMS is CORE (marth 2026-10-01): no add-on gate. The class is the
+            // ENROLLED class for an enrolled follower (A, marth 2026-11-01), else the
             // Gambit-tab pick, or Auto RESOLVED by THE resolver
             // (Logistics::ResolveBaseClass), read off the g_mx mirror because this
             // poll runs on the TRUE main thread, never the live g_followers (#74).
             // The split is the BASE table, refined by an add-on declaration
-            // (HmsProfile).
+            // (HmsProfileFor / HmsProfile).
             const auto id = a_actor->GetFormID();
-            const std::uint8_t stance = Followers::ResolvedClassFast(id);
+            const std::uint8_t resolvedStance = Followers::ResolvedClassFast(id);
+            float prof[3]; int primary = 0;
+            std::uint8_t stance = 0; const char* profSrc = "";
+            const bool haveProfile = HmsProfileFor(id, a_st, prof, primary, stance, profSrc);
+            float diagCapTrim = 0.0f;   // [hms-diag]: points the total cap removed this call
 
             // [hms-diag] once per call (low-frequency: level-up / ~2s drift). Deferred
             // emit so earlyReturn + measured budget reflect the ACTUAL exit path.
@@ -212,18 +275,18 @@ namespace MFO::ProgAllocator {
             float diagBudget = 0.0f;
             auto emitDiag = [&] {
                 spdlog::info("[hms-diag] {:08X} enrolled={} clsId={:08X} "
-                             "resolvedClass={} earlyReturn={} redistribute={:.1f} "
-                             "fixedStat={} grantBudget={:.1f}",
+                             "resolvedClass={} profile={}:{} earlyReturn={} redistribute={:.1f} "
+                             "fixedStat={} grantBudget={:.1f} capTrim={:.1f}",
                              id, a_st.enrolled, a_st.clsId,
-                             static_cast<int>(stance), diagExit, diagBudget,
-                             a_st.fixedStat, a_grantBudget);
+                             static_cast<int>(resolvedStance), profSrc, static_cast<int>(stance),
+                             diagExit, diagBudget, a_st.fixedStat, a_grantBudget, diagCapTrim);
             };
 
-            float prof[3]; int primary = 0;
+            // No profile: not enrolled in a class with one, and the resolved stance is
             // 0 = not resolved yet (the mirror has not seen this follower: first
             // seconds after a load, or a benched follower left on Auto). Nothing is
             // measured, so the window is not judged for fixed-stat (Poll.cpp).
-            if (!HmsProfile(stance, prof, primary)) { diagExit = "noclass"; emitDiag(); return; }
+            if (!haveProfile) { diagExit = "noclass"; emitDiag(); return; }
             if (!a_actor->AsActorValueOwner()) { diagExit = "noavo"; emitDiag(); return; }
 
             // NEVER-PROCESSED ENROLLED BLOCK (review F1, marth 2026-10-01 "Adopt, no
@@ -480,6 +543,90 @@ namespace MFO::ProgAllocator {
                 }
             }
 
+            // ── (C) ADOPTED-TOTAL CAP (ClickUp 1dfcuabc4dv, marth 2026-11-01 "Cap adopted
+            // total"). REVERSES the 2026-10-01 "adopt, never take back" ruling for the
+            // TOTAL only. Every follower with a captured HMS record, whatever its class
+            // or list: its held H/M/S total (baseline + cumulative, the total HMS
+            // conserves) never exceeds the PLAYER's total = the player's BASE
+            // Health + Magicka + Stamina read NOW (Followers::GetFollowerHMS, the same
+            // reader the parity credit uses). Re-read on every call, so the cap rises as
+            // the player levels (or falls if something lowers the player's base).
+            // WHEN: every RecomputeHMS road that reaches the hold. The first poll after
+            // a load is the fix-forward SWEEP of a save above the cap; each award (the
+            // converge above already added it) is trimmed back to the cap here.
+            // HOW: the excess comes off the pools that sit ABOVE their class-profile
+            // target share of the capped total, in proportion to how far above
+            // (the mirror of the converge's deficit share), so the trim also moves the
+            // shape toward the class. FLOOR: a pool never drops below
+            // max(profile share x cap, kHmsCapPoolFloor), and a pool at or under it is
+            // not touched. If the floors leave too little to take, the total lands
+            // above the cap and the log says so. The cut comes off the pool's
+            // cumulative first (MFO's own award), then off its baseline (the adopted
+            // base). PRGN layout and version are UNCHANGED: the cap is expressed in
+            // hmsBaseline / hmsCumulative / hmsWithheld. For a follower the engine
+            // still levels (not fixedStat) the cut is added to hmsWithheld, which keeps
+            // the W invariant (sum of targets + W == the engine's own total), so the
+            // engine's next absolute re-slam does not re-measure the cut as an award.
+            // INI bHmsCapToPlayerTotal (default ON).
+            if (Config::g_hmsCapToPlayerTotal.load()) {
+                constexpr float kHmsCapPoolFloor = 50.0f;   // sane per-pool floor
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                float pTot = 0.0f;
+                for (int p = 0; p < 3; ++p) pTot += Followers::GetFollowerHMS(player, p);
+                float held[3], tot = 0.0f;
+                for (int p = 0; p < 3; ++p) {
+                    held[p] = std::max(a_st.hmsBaseline[p], a_st.hmsBaseline[p] + a_st.hmsCumulative[p]);
+                    tot += held[p];
+                }
+                if (!(pTot > 0.0f) || !std::isfinite(pTot)) {
+                    if (!a_st.hmsCapLogged)
+                        spdlog::error("[hms] {:08X} adopted-total cap NOT APPLIED: player base H/M/S total "
+                                      "unreadable ({:.1f})", id, pTot);
+                    a_st.hmsCapLogged = true;
+                } else if (tot > pTot + 0.5f) {
+                    const float excess = tot - pTot;
+                    float over[3], O = 0.0f;
+                    for (int p = 0; p < 3; ++p) {
+                        const float floorP = std::max(prof[p] * pTot, kHmsCapPoolFloor);
+                        over[p] = std::max(0.0f, held[p] - floorP);
+                        O += over[p];
+                    }
+                    const float take = std::min(excess, O);
+                    float removed = 0.0f;
+                    if (take > 0.0f && O > 0.0f) {
+                        for (int p = 0; p < 3; ++p) {
+                            const float r = take * (over[p] / O);
+                            if (!(r > 0.0f)) continue;
+                            const float fromCum = std::min(r, std::max(0.0f, a_st.hmsCumulative[p]));
+                            a_st.hmsCumulative[p] -= fromCum;
+                            a_st.hmsBaseline[p]   -= (r - fromCum);
+                            removed += r;
+                        }
+                        if (!a_st.fixedStat) a_st.hmsWithheld += removed;   // keep the W invariant
+                    }
+                    diagCapTrim = removed;
+                    const float after = tot - removed;
+                    const char* nm = a_actor->GetName();
+                    if (!a_st.hmsCapLogged) {
+                        spdlog::info("[hms] adopted total capped: {} {:.0f} -> {:.0f} (player {:.0f})",
+                                     (nm && *nm) ? nm : "?", tot, after, pTot);
+                    } else if (budget > 0.0f) {
+                        spdlog::info("[hms] {:08X} award trimmed to the player's total: {:.0f} -> {:.0f} "
+                                     "(player {:.0f})", id, tot, after, pTot);
+                    }
+                    if (!a_st.hmsCapLogged || budget > 0.0f)
+                        spdlog::info("[hms] {:08X} cap detail: removed {:.1f} (H {:.1f} M {:.1f} S {:.1f} over "
+                                     "the class floor) -> baseline H {:.0f} M {:.0f} S {:.0f} + cumulative "
+                                     "H {:.1f} M {:.1f} S {:.1f}{}{}",
+                                     id, removed, over[0], over[1], over[2],
+                                     a_st.hmsBaseline[0], a_st.hmsBaseline[1], a_st.hmsBaseline[2],
+                                     a_st.hmsCumulative[0], a_st.hmsCumulative[1], a_st.hmsCumulative[2],
+                                     a_st.fixedStat ? "" : ", added to withheld",
+                                     (after > pTot + 0.5f) ? " | ABOVE the cap: every pool is at its floor" : "");
+                    a_st.hmsCapLogged = true;
+                }
+            }
+
             // HOLD: target = baseline + cumulative (this REVERTS the engine's raw
             // distribution in cur and grants the reshaped total — net per-follower
             // gain == the measured budget, reshaped to the class profile).
@@ -708,7 +855,8 @@ namespace MFO::ProgAllocator {
         const std::uint8_t pool = HmsPoolForFire(a_actor, a_actionOpcode);
         if (pool == 0) return;                            // neutral action — nothing to record
         std::scoped_lock lk(g_hmsFireMx);
-        g_hmsFiredMask[a_actor->GetFormID()] |= static_cast<std::uint8_t>(1u << (pool - 1));
+        auto& n = g_hmsFiredMask[a_actor->GetFormID()][pool - 1];
+        if (n < 0xFFFFu) ++n;   // saturating per-pool fire count
     }
 
 }

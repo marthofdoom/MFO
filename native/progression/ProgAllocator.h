@@ -346,6 +346,11 @@ namespace MFO::ProgAllocator {
         // keeps its 0x40 retro protection. Cleared the first time RecomputeHMS
         // reaches that check, matched or not. ClearAll drops it with g_prog.
         bool          hmsAdoptArmed{ false };
+        // runtime-only, never serialized (ClickUp 1dfcuabc4dv, marth 2026-11-01 "Cap
+        // adopted total"): the "[hms] adopted total capped" line was logged for this
+        // record this session (the load sweep line is logged once per follower; a
+        // later trim on an award logs its own line). ClearAll drops it with g_prog.
+        bool          hmsCapLogged{ false };
 
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
