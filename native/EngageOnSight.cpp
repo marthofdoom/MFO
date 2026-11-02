@@ -83,9 +83,11 @@ namespace MFO::EngageOnSight {
         constexpr float kStaleFarMargin = 500.0f;
         // An own-OOC follower must stay own-OOC this long, inside party combat, before the in-fight road acts: his own
         // flag flaps false mid-fight on a LoS loss (Scheduler.cpp g_partyCombat doc), and a flap is not "oblivious".
+        // FLOORS: the real thresholds are sized from the follower's actual service period (a_periodSecs = roster size x
+        // the 133 ms pump, one follower per tick): settle = max(floor, 2 periods), gap = 2 periods + kInFightGapFloorSecs.
         constexpr float kInFightSettleSecs = 1.5f;
-        // Two in-fight services further apart than this are not one continuous own-OOC stretch.
-        constexpr float kInFightGapSecs = 1.0f;
+        // Two in-fight services further apart than the gap are not one continuous own-OOC stretch.
+        constexpr float kInFightGapFloorSecs = 0.5f;
 
         struct ProbeResult {
             std::uint32_t seq = 0;                  // the post sequence this answers (g_seq)
@@ -515,6 +517,11 @@ namespace MFO::EngageOnSight {
                 if (a->GetPosition().GetDistance(selfPos) > r.range) continue;  // the reaction distance is from HIM
                 const char* why = "";
                 if (a_inFight && !FightingParty(a)) continue;   // the in-fight road admits ONLY foes fighting the party
+                // ...and only HOSTILE ones: a brawl partner, or a townsperson / ally who turned on the player after a
+                // stray hit, has the player as currentCombatTarget but is not hostile (the brawl rule of
+                // Evaluator.cpp CurrentTargetIfTrackable and Taunt.cpp: hostile to the party or to him). IsEnemy admits
+                // FightingParty before its hostility test, so the in-fight road re-asserts it here.
+                if (a_inFight && !a->IsHostileToActor(pc) && !a->IsHostileToActor(self)) continue;
                 if (!IsEnemy(a, self, pc, why)) { NoteSkip(a, why); continue; }
                 if (!a_inFight && !pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
@@ -619,10 +626,16 @@ namespace MFO::EngageOnSight {
     // sneak, town / inn and confidence gates (which are for starting a NEW fight) do not apply. Commanded / restrained /
     // IgnoreCombat (IsEnemy), ToldToWait, the Wait rule and the retreat cooldown still do. Also releases a standing entry /
     // pin on a far foe when a nearer foe is fighting the party (kStaleFarMargin).
-    static bool ServiceImpl(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence, bool a_inFight) {
+    static bool ServiceImpl(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence, bool a_inFight,
+                            float a_periodSecs = 0.0f) {
         if (!a_f || !a_id) return false;
         const auto now = Clock::now();
         auto& note = g_notes[a_id];
+        // bJoinPartyFights turned OFF while the party is out of combat: release the in-fight pin now, not at the next
+        // in-fight lap (the party-OOC road runs every service).
+        if (!a_inFight && note.pinned && note.pinInFight && !Config::g_joinPartyFights.load() && ReleaseOwnPin(note, a_id))
+            spdlog::info("[engage-on-sight] {} ({:08X}): bJoinPartyFights off -- released the pin it filed",
+                         NameOf(a_f), a_id);
 
         bool       standing       = false;   // in-fight only: he holds a standing entry
         RE::FormID standingTarget = 0;
@@ -694,7 +707,10 @@ namespace MFO::EngageOnSight {
         if (!(a_inFight ? Config::g_joinPartyFights.load() : Config::g_engageOnSight.load())) {
             if (note.pinned && note.pinInFight == a_inFight && ReleaseOwnPin(note, a_id))
                 spdlog::info("[engage-on-sight] {} ({:08X}): {} off -- released the pin it filed",
-                             NameOf(a_f), a_id, a_inFight ? "bJoinPartyFights" : "bEngageOnSight");
+                             NameOf(a_f), a_id,
+                             (!Config::g_joinPartyFights.load() && !Config::g_engageOnSight.load())
+                                 ? "bJoinPartyFights and bEngageOnSight"
+                                 : (a_inFight ? "bJoinPartyFights" : "bEngageOnSight"));
             Status(note, a_f, a_id, "", now);
             return false;
         }
@@ -738,9 +754,9 @@ namespace MFO::EngageOnSight {
         // IN-FIGHT SETTLE: a continuous own-OOC stretch of kInFightSettleSecs inside party combat before acting.
         bool settled = true;
         if (a_inFight) {
-            if (SecsSince(note.lastInFight, now) > kInFightGapSecs) note.oocSince = now;
+            if (SecsSince(note.lastInFight, now) > 2.0f * a_periodSecs + kInFightGapFloorSecs) note.oocSince = now;
             note.lastInFight = now;
-            settled = SecsSince(note.oocSince, now) >= kInFightSettleSecs;
+            settled = SecsSince(note.oocSince, now) >= std::max(kInFightSettleSecs, 2.0f * a_periodSecs);
         }
 
         // 3) THE NEWEST PROBE RESULT (the one answering his last post), once.
@@ -879,8 +895,8 @@ namespace MFO::EngageOnSight {
         return ServiceImpl(a_f, a_id, a_retreatCooling, a_minConfidence, false);
     }
 
-    bool ServiceInFight(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence) {
-        return ServiceImpl(a_f, a_id, a_retreatCooling, a_minConfidence, true);
+    bool ServiceInFight(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence, float a_periodSecs) {
+        return ServiceImpl(a_f, a_id, a_retreatCooling, a_minConfidence, true, a_periodSecs);
     }
 
     void NoteWaitRule(RE::FormID a_id, bool a_waitHolds) {

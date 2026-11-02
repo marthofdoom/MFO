@@ -300,14 +300,24 @@ namespace MFO::Actuation {
                 // follower is NOT in combat (a ch.20 pin on a far foe the engine has not engaged; a Harbinger substrate
                 // is not combat, ABI v26) is no activity: it must not read as satisfied and wall the rules below it
                 // (ClickUp 1dfcuabc4du: the 13:59 far Reaver pin, 84 denied engine picks). TRANSPARENT then.
-                // DEBOUNCED kPinNotInCombatSecs (1 s): the own flag flaps false for a moment mid-fight on a LoS loss, and
-                // a transparent NoOp there would let a lower Attack rule re-pin a different foe (the alternation D3 forbids).
-                // Worker-only map (the combat scan), erased the moment he is in combat or the pin changes.
-                constexpr double kPinNotInCombatSecs = 1.0;
+                // TRANSPARENT ONLY WHERE THE STALE-PIN FIX NEEDS IT (D3): party combat is ON, he is not in combat, and the
+                // pinned foe is NOT itself fighting the party (a stale far pin). A pin on a foe that IS fighting the party
+                // stays OPAQUE "already on that target", so no lower Attack rule can pin a second live target while the
+                // first lives: there is no alternation between two live targets. Plus a DEBOUNCE (the own flag flaps false
+                // mid-fight): the stretch must last 2 x the follower's real service period (roster size x the 133 ms
+                // pump, floor 1 s). Worker-only map (the combat scan), erased when he is in combat or the pin changes.
                 const auto fid = a_follower->GetFormID();
-                if (APMFBridge::InCombat(a_follower)) {
+                bool foeFightsParty = true;
+                {
+                    auto  tp = foe->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+                    auto* t  = tp.get();
+                    foeFightsParty = t && (t->IsPlayerRef() || t->IsPlayerTeammate());
+                }
+                if (APMFBridge::InCombat(a_follower) || !Scheduler::PartyCombat() || foeFightsParty) {
                     s_notInCombatSince.erase(fid);
                 } else {
+                    const double kPinNotInCombatSecs = std::max(
+                        1.0, 2.0 * 0.133 * static_cast<double>(std::max<std::size_t>(1, Followers::g_activeIds.size())));
                     const auto nowT = std::chrono::steady_clock::now();
                     const auto sit  = s_notInCombatSince.emplace(fid, nowT).first;
                     if (std::chrono::duration<double>(nowT - sit->second).count() >= kPinNotInCombatSecs)

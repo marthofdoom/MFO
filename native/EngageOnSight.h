@@ -80,7 +80,9 @@ namespace MFO::EngageOnSight {
     // cooldown / commanded-restrained-IgnoreCombat still do. Also releases a standing ch.21 entry and its pin on a foe
     // more than 500u farther than a nearer sensed foe that is fighting the party. Returns true while an entry is pending
     // or was filed this lap: the caller then skips the OOC logistics road (the combat table still runs).
-    bool ServiceInFight(RE::Actor* a_follower, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence);
+    // a_periodSecs = this follower's real service period (roster size x the 133 ms pump): sizes the settle and gap.
+    bool ServiceInFight(RE::Actor* a_follower, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence,
+                        float a_periodSecs);
 
     // Worker. Called by the logistics table's evaluation (logistics/Service.cpp) with its
     // OUTCOME: true when the scan stopped on a Wait rule (the OPAQUE authored suppress,

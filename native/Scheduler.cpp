@@ -1204,7 +1204,9 @@ namespace MFO::Scheduler {
             const auto& rn = g_retreatNotes[id];
             if (rn.phase == RetreatPhase::None) {
                 const bool cooling = rn.rearmLaps > 0 || now < rn.rearmAt;
-                engagePending = EngageOnSight::ServiceInFight(f, id, cooling, kEngageConfidence);
+                // One follower is serviced per 133 ms pump tick (Diagnostics kPumpMs), so he is seen every N x 133 ms.
+                const float periodSecs = 0.133f * static_cast<float>(std::max<std::size_t>(1, Followers::g_activeIds.size()));
+                engagePending = EngageOnSight::ServiceInFight(f, id, cooling, kEngageConfidence, periodSecs);
             }
         }
 
