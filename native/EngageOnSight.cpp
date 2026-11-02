@@ -157,6 +157,7 @@ namespace MFO::EngageOnSight {
             // none). Released (if Targeting still holds that target) when the entry ends
             // and on the bEngageOnSight kill switch (review of 1c50696).
             RE::FormID        pinned = 0;
+            bool              pinInFight = false;   // that pin was filed by the in-fight road (bJoinPartyFights)
             // The reaction range (ch.21 fval) of the entry filed last: lets Service tell a range drop apart.
             float             engageRange = 0.0f;
         };
@@ -689,10 +690,11 @@ namespace MFO::EngageOnSight {
         // 2) GATES. Off is silent (and releases the pin this gambit filed: the kill
         //    switch; the entry claims are released by the bridge's sweep). Every other
         //    stand-down is a transition line with a STABLE key.
-        if (!Config::g_engageOnSight.load()) {
-            if (note.pinned && ReleaseOwnPin(note, a_id))
-                spdlog::info("[engage-on-sight] {} ({:08X}): bEngageOnSight off -- released the pin it filed",
-                             NameOf(a_f), a_id);
+        // Each road has its own switch (in-fight: bJoinPartyFights, NOT bEngageOnSight), and releases only the pin it filed.
+        if (!(a_inFight ? Config::g_joinPartyFights.load() : Config::g_engageOnSight.load())) {
+            if (note.pinned && note.pinInFight == a_inFight && ReleaseOwnPin(note, a_id))
+                spdlog::info("[engage-on-sight] {} ({:08X}): {} off -- released the pin it filed",
+                             NameOf(a_f), a_id, a_inFight ? "bJoinPartyFights" : "bEngageOnSight");
             Status(note, a_f, a_id, "", now);
             return false;
         }
@@ -815,7 +817,7 @@ namespace MFO::EngageOnSight {
                     Status(note, a_f, a_id, "armed: nearest enemy is in the edge band (beyond 0.9 x range)", now);
                 } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;
-                    switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h, r.range)) {
+                    switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h, r.range, a_inFight)) {
                     case APMFBridge::EntryResult::Filed: {
                         note.engageRange = r.range;
                         // The recipe's second handle: pin the same target (ch.20 waits until the
@@ -826,7 +828,7 @@ namespace MFO::EngageOnSight {
                             const auto o = Targeting::CommandEx(a_id, t->GetHandle());
                             pin = PinOutcomeName(o);
                             if (o == Targeting::CommandOutcome::Changed || o == Targeting::CommandOutcome::Unchanged)
-                                note.pinned = r.chosen;
+                            { note.pinned = r.chosen; note.pinInFight = a_inFight; }
                         }
                         // Preempt logistics the way player combat does: his loot trip ends now.
                         Logistics::ReleaseTravelOnCombat(a_f);

@@ -15,6 +15,11 @@
 namespace MFO::Actuation {
 
     namespace {
+        // Attack verb: since when a follower's unchanged pin has stood while he is NOT in combat (worker-only).
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_notInCombatSince;
+    }
+
+    namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
         // himself. Walks the maintained g_active list (not a world sweep) --
@@ -286,6 +291,7 @@ namespace MFO::Actuation {
             // Attack rule pin a different foe, which this rule then re-picks away from
             // on its next pass -- an alternation D3's opacity exists to prevent.
             const auto cmd = Targeting::CommandEx(a_follower->GetFormID(), a_choice.target);
+            if (cmd != Targeting::CommandOutcome::Unchanged) s_notInCombatSince.erase(a_follower->GetFormID());
             if (cmd == Targeting::CommandOutcome::Suppressed) {
                 return { Result::NoOp, SuppressedText(a_follower, a_choice.target) };
             }
@@ -294,8 +300,19 @@ namespace MFO::Actuation {
                 // follower is NOT in combat (a ch.20 pin on a far foe the engine has not engaged; a Harbinger substrate
                 // is not combat, ABI v26) is no activity: it must not read as satisfied and wall the rules below it
                 // (ClickUp 1dfcuabc4du: the 13:59 far Reaver pin, 84 denied engine picks). TRANSPARENT then.
-                if (!APMFBridge::InCombat(a_follower))
-                    return { Result::NoOp, "pinned, but not in combat (not counted as engaged)", true };
+                // DEBOUNCED kPinNotInCombatSecs (1 s): the own flag flaps false for a moment mid-fight on a LoS loss, and
+                // a transparent NoOp there would let a lower Attack rule re-pin a different foe (the alternation D3 forbids).
+                // Worker-only map (the combat scan), erased the moment he is in combat or the pin changes.
+                constexpr double kPinNotInCombatSecs = 1.0;
+                const auto fid = a_follower->GetFormID();
+                if (APMFBridge::InCombat(a_follower)) {
+                    s_notInCombatSince.erase(fid);
+                } else {
+                    const auto nowT = std::chrono::steady_clock::now();
+                    const auto sit  = s_notInCombatSince.emplace(fid, nowT).first;
+                    if (std::chrono::duration<double>(nowT - sit->second).count() >= kPinNotInCombatSecs)
+                        return { Result::NoOp, "pinned, but not in combat (not counted as engaged)", true };
+                }
                 return { Result::NoOp, "already on that target" };
             }
             // Log the foe's HP% too, so "Foe: Lowest HP -> Attack" is legible in

@@ -534,7 +534,9 @@ namespace MFO::APMFBridge {
     // a_engageRange = APMF_Param::fval, the engage reaction distance from the follower (units): Harbinger
     // drops a not-actively-hostile target beyond it and ends the follower's combat. 0 = none.
     EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle,
-                                   float a_engageRange = 0.0f);
+                                   float a_engageRange = 0.0f, bool a_inFight = false);
+    // (a_inFight: filed by the in-fight road, EngageOnSight::ServiceInFight; the sweep keys its kill switch on
+    // bJoinPartyFights for these and on bEngageOnSight for the rest.)
     // The follower's entry state; *a_outTarget (may be null) = the entry's target. *a_outEndReason (may be
     // null) = the APMF_API::ClaimEndReason read when the end was noticed (kClaimEnd_None while standing, and
     // always below ABI 31).
