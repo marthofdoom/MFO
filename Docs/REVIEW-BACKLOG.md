@@ -2471,3 +2471,9 @@ Reviewer: "A filtered vanilla parent becomes \"no requirement\". The catalog's s
 
 ### MFO-B534 (SEV-4, OPEN, progression/PerkGate.cpp sweep, against d7a790b) -- a perk both stripped and bought keeps costing a point
 Reviewer: "If a perk was recorded as stripped and the player then also bought it through MFO, RestoreNativePerksImpl skips it because it is already on the base. That part is safe: no double add. But the follower keeps paying a point for a perk that is now meant to be native and free, and a respec removes it for good. Edge case."
+
+### MFO-B535 (SEV-4, OPEN, logistics/Errand_internal.h ShopPlaceCellName, against 5c41f7f, Opus review of fix/trade-names) -- a stall vendor's chest in a named holding cell would name the shop after that cell
+Reviewer: "for a stall vendor like Adrianne, the step after the near-ref is the merchant chest's cell FULL. If that chest sits in a holding cell that has a FULL, the shop gets that cell's name instead of \"Adrianne's stall\". Holding cells usually carry only an EDID, so they would pass through to the stall name. This risk existed before the change. The first field run should show whether Adrianne reads as \"Adrianne's stall\"."
+
+### MFO-B536 (SEV-5, OPEN, logistics/Errand_internal.h ShopPlaceCellName, against 5c41f7f) -- a named non-actor near-ref no longer names the shop
+Reviewer: "a non-actor near-ref that has a sensible name (a named activator or marker) no longer contributes its name. That is acceptable under the brief."
