@@ -356,7 +356,7 @@ namespace MFO::Logistics::Errand {
         // None = no such door (or the player is indoors); Pending = the read was posted, ask again on the next plan.
         // Locked (closed-shop fix) = the door was found but every route into the place is LOCKED: a_pos is still set, a_lockedId / a_lockLevel say which side.
         enum class DoorAnswer { Found, None, Pending, Locked };
-        DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId = nullptr, int* a_lockLevel = nullptr);
+        DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId = nullptr, int* a_lockLevel = nullptr, int a_maxFoundAgeSec = 300);   // a_maxFoundAgeSec: a cached Found older than this is re-read (Pending), a cached Locked always stands
         // A walk to a shop's place ended BLOCKED: a fresh main-thread re-read of its entry door's lock. Pending = ask again next tick; Unknown = no read possible.
         enum class LockAnswer { Locked, Open, Pending, Unknown };
         LockAnswer ShopDoorLockedNow(RE::FormID a_cell, RE::FormID& a_lockedId, int& a_lockLevel);

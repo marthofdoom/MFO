@@ -1465,7 +1465,7 @@ namespace MFO::Logistics::Errand::Rest {
         MainThread::Post(fn);   // ShopDoorFor posts only when the pump is installed: this read never runs off the main thread (crash4)
     }
 
-    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId, int* a_lockLevel) {
+    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId, int* a_lockLevel, int a_maxFoundAgeSec) {
         if (!a_cell) return DoorAnswer::None;
         if (!MainThread::IsInstalled()) {   // no pump = no grid read (never on the worker): the shop is known only through his own cell's doors
             static std::atomic_bool noted{ false };
@@ -1488,7 +1488,8 @@ namespace MFO::Logistics::Errand::Rest {
                     if (a_lockLevel) *a_lockLevel = it->second.lockLevel;
                     return DoorAnswer::Locked;
                 }
-                return DoorAnswer::Found;
+                if (Clock::now() - it->second.stamp <= std::chrono::seconds(a_maxFoundAgeSec)) return DoorAnswer::Found;
+                // a Found older than the caller's limit is not trusted (a door may have locked since): fall through to a fresh read. A cached Locked stood above (a delay is safe).
             }
         }
         PostShopDoorRead(a_cell);   // none yet, stale, or read while the player was indoors
@@ -1552,7 +1553,7 @@ namespace MFO::Logistics::Errand::Rest {
             // may know one a cell away. Pending = that read was just posted: the answer is not known yet, the caller skips the leg this tick.
             // None (no door found, or the player is indoors = no exterior grid) keeps the old FALSE.
             RE::NiPoint3 dp{};
-            switch (ShopDoorFor(a_destCell, dp, &a_lockedId, &a_lockLevel)) {
+            switch (ShopDoorFor(a_destCell, dp, &a_lockedId, &a_lockLevel, 30)) {   // a Found older than 30 s is re-read: a walk past a door that locked since would end BLOCKED at it
             case DoorAnswer::Pending: *a_pending = true; return false;
             case DoorAnswer::Locked:  return true;
             default:                  return false;
@@ -1561,7 +1562,7 @@ namespace MFO::Logistics::Errand::Rest {
         return anyLocked && !anyOpen;   // a second, open door to the same cell keeps the shop open
     }
 
-    bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what) {
+    bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what, bool* a_pending) {
         if (!PlayerInTown()) return false;
         auto* destCell = a_dest ? a_dest->GetParentCell() : nullptr;
         auto* ownCell  = a_follower ? a_follower->GetParentCell() : nullptr;
@@ -1580,7 +1581,7 @@ namespace MFO::Logistics::Errand::Rest {
         if (!cached) {
             bool pending = false;
             barred = FollowerSideDoorLocked(a_follower, destCell->GetFormID(), lockedId, lockLevel, &pending);
-            if (pending) return true;   // the exterior door read was just posted: skip the leg this tick (not cached, not logged)
+            if (pending) { if (a_pending) *a_pending = true; return true; }   // the exterior door read was just posted: skip the leg this tick (not cached, not logged, the caller must not mark it failed)
             std::scoped_lock lk(g_twMx);
             if (g_twAns.size() > 64) g_twAns.clear();
             g_twAns[key] = TownWalkAns{ now, barred, lockedId, lockLevel };

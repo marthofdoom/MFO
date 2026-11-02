@@ -54,7 +54,7 @@ namespace MFO::Logistics::Errand {
         // declare a walk of a_follower to a_dest, because the player is in an errand town, a_dest stands in an INTERIOR cell other than the follower's
         // own, and every load door into that cell that the follower can see in his own cell is locked. Logs once per visit per follower and cell.
         // Worker thread (the same own-cell scan as FollowerSideDoorLocked). FALSE for an exterior dest, the same cell, or no door seen.
-        bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what);
+        bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what, bool* a_pending = nullptr);   // a_pending set = TRUE was only "the door read is not back yet": skip this tick, do NOT mark the target failed
     }
     // R3: a short status of this follower's errand for the Board ("Walking to X", "Trading with X", "Off-screen: trading at X",
     // "Heading back"), physical or simulated. EMPTY = no errand. Any thread: it copies under the table mutexes (physical, then
