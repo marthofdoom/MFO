@@ -366,6 +366,7 @@ namespace MFO::Progression {
         int ownerTeammate{ 0 };
         int ownerHostileNull{ 0 };
         int ownerRunOn{ 0 };         // ranks with a run-on-PlayerRef condition (shows whether runOnRef is populated)
+        int inventoryGatedRanks{ 0 };   // ranks made DEAD for a subject inventory test (GetItemCount and kin)
     };
 
     struct Catalog {
@@ -380,6 +381,11 @@ namespace MFO::Progression {
         int scaleEffectiveRanks{ 0 };   // sum over skills (see SkillTree)
         int ownerDemotedRanks{ 0 };
         int aloneGateRanks{ 0 };
+        int inventoryGatedRanks{ 0 };   // sum over skills (see SkillTree)
+        // "Alias twins" (marth): an OFF-tree perk (named by a HasPerk condition, in no tree) with the same name AND
+        // identical perkConditions as an IN-tree rank. Key = the off-tree perk, value = the in-tree rank it stands for.
+        // Built once at load, frozen with the catalog; PerkGate resolves a HasPerk through it.
+        std::unordered_map<RE::FormID, RE::FormID> perkTwin;
     };
 
     // progression/VanillaSmithing.cpp: the vanilla Skyrim.esm Smithing tree for followers.
