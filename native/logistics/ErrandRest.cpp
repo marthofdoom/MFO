@@ -191,6 +191,11 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_map<RE::FormID, ShopDoorRead>     g_shopDoor;       // shop place cell -> its door read; guarded by g_mx
         std::unordered_set<RE::FormID>                   g_shopDoorAsked;  // shop place cells whose read was queued (one in flight)
         std::unordered_map<RE::FormID, std::string>      g_shopDoorLogged; // shop place cell -> the last verdict logged (a line only when it changes)
+        // TownWalkBarredByLock state (own mutex: it never nests with g_mx except NoteTown's clear, g_mx then g_twMx).
+        struct TownWalkAns { Clock::time_point at{}; bool barred = false; RE::FormID lockedId = 0; int lockLevel = 0; };
+        std::mutex                                       g_twMx;
+        std::unordered_map<std::uint64_t, TownWalkAns>   g_twAns;     // (follower cell, dest cell) -> the answer for ~1 s (MFO-B554)
+        std::unordered_set<std::uint64_t>                g_twLogged;  // (follower, dest cell) logged this town visit; cleared on the town change edge (NoteTown)
 
         int GameDay() {
             auto* cal = RE::Calendar::GetSingleton();
@@ -308,7 +313,21 @@ namespace MFO::Logistics::Errand::Rest {
         // A load door is LOCKED when either side of the pair says so (REFR_LOCK via TESObjectREFR::GetLockLevel, the same read Lockpick.cpp
         // uses). Fills the locked door's id and level. Generic: no per-town or per-door knowledge (a temple closed by a quest event reads
         // locked the same way).
+        // A PLAYER-OWNED door is no crime to walk through (MFO-B552): the ref's owner or its cell's owner is the player (actor base 0x7 / ref 0x14) or
+        // PlayerFaction (0xDB1). Either side of the pair owned that way keeps the pair from counting as locked (a purchased house stays kRequiresKey).
+        bool PlayerOwned(RE::TESObjectREFR* a_ref) {
+            if (!a_ref) return false;
+            const auto mine = [](RE::TESForm* a_owner) {
+                if (!a_owner) return false;
+                const auto id = a_owner->GetFormID();
+                return id == 0x7 || id == 0x14 || id == 0xDB1;
+            };
+            if (mine(a_ref->GetOwner())) return true;
+            auto* c = a_ref->GetParentCell();
+            return c && mine(c->GetOwner());
+        }
         bool DoorLocked(RE::TESObjectREFR* a_door, RE::TESObjectREFR* a_linked, RE::FormID& a_id, RE::LOCK_LEVEL& a_lvl) {
+            if (PlayerOwned(a_door) || PlayerOwned(a_linked)) return false;
             for (auto* d : { a_door, a_linked }) {
                 if (!d) continue;
                 const auto l = d->GetLockLevel();
@@ -1074,6 +1093,7 @@ namespace MFO::Logistics::Errand::Rest {
         if (!g_tripDone.empty())
             spdlog::info("[errand] the player's town changed ({:08X} -> {:08X}): {} follower(s)' trip-done mark(s) cleared", g_marksTown, a_townId, g_tripDone.size());
         g_marksTown = a_townId;
+        { std::scoped_lock tw(g_twMx); g_twLogged.clear(); g_twAns.clear(); }   // MFO-B554: the once-per-visit [town-walk] log set resets on the town edge
         Reopen::CarryAndClear();   // F3: the watch belongs to the town visit; what it still lacked is CARRIED to the next town's plan
         g_innFailTrips.clear(); g_innNextTry.clear(); g_innSuppLogged.clear();   // run 4 F1
         g_tripDone.clear();
@@ -1288,6 +1308,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear(); g_shopDoorRecheck.clear();
         g_doorRead.clear(); g_doorAsked.clear(); g_doorDefers.clear(); g_doorLogged.clear();
         g_marksTown = 0;
+        { std::scoped_lock tw(g_twMx); g_twLogged.clear(); g_twAns.clear(); }
         g_wasCombat = false;
         Reopen::ClearAll();
     }
@@ -1396,18 +1417,26 @@ namespace MFO::Logistics::Errand::Rest {
                         if (dr.hops >= 64) break;
                         ++dr.hops;
                         bool leads = false;
-                        RE::FormID innerLid = 0;   // the first-hop interior's own door to the place cell: its lock counts too
+                        RE::FormID innerLid = 0;   // the first-hop interior's own door to the place cell: its lock counts too (only when EVERY such door is locked, MFO-B551)
                         RE::LOCK_LEVEL innerLvl = RE::LOCK_LEVEL::kUnlocked;
+                        bool innerOpen = false;
                         h.cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
                             ++dr.hopRefs;
                             auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
                             if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
                             auto lp = tele->teleportData->linkedDoor.get();
                             auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
-                            if (lc && lc->GetFormID() == a_cell) { leads = true; DoorLocked(a_ref, lp.get(), innerLid, innerLvl); return RE::BSContainer::ForEachResult::kStop; }
+                            if (lc && lc->GetFormID() == a_cell) {
+                                leads = true;
+                                RE::FormID lid2 = 0;
+                                RE::LOCK_LEVEL lvl2 = RE::LOCK_LEVEL::kUnlocked;
+                                if (!DoorLocked(a_ref, lp.get(), lid2, lvl2)) { innerOpen = true; return RE::BSContainer::ForEachResult::kStop; }   // one open inner door opens the route
+                                if (!innerLid) { innerLid = lid2; innerLvl = lvl2; }
+                            }
                             return RE::BSContainer::ForEachResult::kContinue;
                         });
                         if (!leads) continue;
+                        if (innerOpen) innerLid = 0;
                         const float hd = h.d + (innerLid ? kLockedPenalty : 0.0f);
                         if (hd < bestD) {
                             bestD = hd; dr.found = true; dr.depth = 2; dr.door = h.door; dr.via = hid; dr.pos = h.pos;
@@ -1436,7 +1465,7 @@ namespace MFO::Logistics::Errand::Rest {
         MainThread::Post(fn);   // ShopDoorFor posts only when the pump is installed: this read never runs off the main thread (crash4)
     }
 
-    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId, int* a_lockLevel) {
+    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId, int* a_lockLevel, int a_maxFoundAgeSec) {
         if (!a_cell) return DoorAnswer::None;
         if (!MainThread::IsInstalled()) {   // no pump = no grid read (never on the worker): the shop is known only through his own cell's doors
             static std::atomic_bool noted{ false };
@@ -1459,7 +1488,8 @@ namespace MFO::Logistics::Errand::Rest {
                     if (a_lockLevel) *a_lockLevel = it->second.lockLevel;
                     return DoorAnswer::Locked;
                 }
-                return DoorAnswer::Found;
+                if (Clock::now() - it->second.stamp <= std::chrono::seconds(a_maxFoundAgeSec)) return DoorAnswer::Found;
+                // a Found older than the caller's limit is not trusted (a door may have locked since): fall through to a fresh read. A cached Locked stood above (a delay is safe).
             }
         }
         PostShopDoorRead(a_cell);   // none yet, stale, or read while the player was indoors
@@ -1486,8 +1516,8 @@ namespace MFO::Logistics::Errand::Rest {
                 if (it->second.indoors || !it->second.found) return LockAnswer::Unknown;
                 if (it->second.lockedId) { a_lockedId = it->second.lockedId; a_lockLevel = it->second.lockLevel; return LockAnswer::Locked; }
                 return LockAnswer::Open;
-            } else if (it == g_shopDoor.end()) {
-                post = true;   // no read in the cache: PostShopDoorRead's asked-guard keeps one in flight
+            } else {
+                post = true;   // no read in the cache, or a done one OLDER than the request (a read that began before it, MFO-B549): PostShopDoorRead's asked-guard keeps one in flight
             }
         }
         if (post) PostShopDoorRead(a_cell);
@@ -1496,7 +1526,7 @@ namespace MFO::Logistics::Errand::Rest {
 
     // Follower-side fallback (the player is indoors, so the exterior grid read cannot run): the lock on each side of the load doors to a_destCell
     // in the FOLLOWER's own loaded cell, read on the worker exactly as LogBlockedDoors does. TRUE = such doors exist and all are locked (id + level out).
-    bool FollowerSideDoorLocked(RE::Actor* a_follower, RE::FormID a_destCell, RE::FormID& a_lockedId, int& a_lockLevel) {
+    bool FollowerSideDoorLocked(RE::Actor* a_follower, RE::FormID a_destCell, RE::FormID& a_lockedId, int& a_lockLevel, bool* a_pending) {
         auto* cell = a_follower ? a_follower->GetParentCell() : nullptr;
         if (!cell || !cell->IsAttached() || !a_destCell) return false;
         std::vector<RE::ObjectRefHandle> doors;
@@ -1518,23 +1548,49 @@ namespace MFO::Logistics::Errand::Rest {
             if (DoorLocked(d, lp.get(), lid, lvl)) { if (!anyLocked) { a_lockedId = lid; a_lockLevel = static_cast<int>(lvl); } anyLocked = true; }
             else anyOpen = true;
         }
+        if (!anyLocked && !anyOpen && a_pending) {
+            // MFO-B550/B553: no door to a_destCell in his own cell. The cached main-thread exterior read (ShopDoorFor, the same one the shop planning uses)
+            // may know one a cell away. Pending = that read was just posted: the answer is not known yet, the caller skips the leg this tick.
+            // None (no door found, or the player is indoors = no exterior grid) keeps the old FALSE.
+            RE::NiPoint3 dp{};
+            switch (ShopDoorFor(a_destCell, dp, &a_lockedId, &a_lockLevel, 30)) {   // a Found older than 30 s is re-read: a walk past a door that locked since would end BLOCKED at it
+            case DoorAnswer::Pending: *a_pending = true; return false;
+            case DoorAnswer::Locked:  return true;
+            default:                  return false;
+            }
+        }
         return anyLocked && !anyOpen;   // a second, open door to the same cell keeps the shop open
     }
 
-    bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what) {
-        static std::mutex                        s_mx;
-        static std::unordered_set<std::uint64_t> s_logged;   // (follower, dest cell) logged this visit; cleared on the first ask outside a town
-        if (!PlayerInTown()) { std::scoped_lock lk(s_mx); s_logged.clear(); return false; }
+    bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what, bool* a_pending) {
+        if (!PlayerInTown()) return false;
         auto* destCell = a_dest ? a_dest->GetParentCell() : nullptr;
         auto* ownCell  = a_follower ? a_follower->GetParentCell() : nullptr;
         if (!destCell || !ownCell || destCell == ownCell || !destCell->IsInteriorCell()) return false;
+        const auto key = (static_cast<std::uint64_t>(ownCell->GetFormID()) << 32) | destCell->GetFormID();
+        const auto now = Clock::now();
         RE::FormID lockedId = 0;
         int lockLevel = 0;
-        if (!FollowerSideDoorLocked(a_follower, destCell->GetFormID(), lockedId, lockLevel)) return false;
+        bool barred = false, cached = false;
+        {
+            std::scoped_lock lk(g_twMx);   // MFO-B554: one door scan per (follower cell, dest cell) per ~1 s, not one per candidate
+            if (const auto it = g_twAns.find(key); it != g_twAns.end() && now - it->second.at < std::chrono::seconds(1)) {
+                barred = it->second.barred; lockedId = it->second.lockedId; lockLevel = it->second.lockLevel; cached = true;
+            }
+        }
+        if (!cached) {
+            bool pending = false;
+            barred = FollowerSideDoorLocked(a_follower, destCell->GetFormID(), lockedId, lockLevel, &pending);
+            if (pending) { if (a_pending) *a_pending = true; return true; }   // the exterior door read was just posted: skip the leg this tick (not cached, not logged, the caller must not mark it failed)
+            std::scoped_lock lk(g_twMx);
+            if (g_twAns.size() > 64) g_twAns.clear();
+            g_twAns[key] = TownWalkAns{ now, barred, lockedId, lockLevel };
+        }
+        if (!barred) return false;
         bool first = false;
         {
-            std::scoped_lock lk(s_mx);
-            first = s_logged.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | destCell->GetFormID()).second;
+            std::scoped_lock lk(g_twMx);
+            first = g_twLogged.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | destCell->GetFormID()).second;
         }
         if (first)
             spdlog::info("[town-walk] {:08X}: {} {:08X} not declared: every door into its interior cell {:08X} is locked (door {:08X}, {}) and "

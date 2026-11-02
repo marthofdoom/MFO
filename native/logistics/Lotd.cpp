@@ -1522,9 +1522,10 @@ namespace MFO::Lotd {
         }
         const RE::FormID crateId = crate->GetFormID();
         // TOWN DOOR RULE (marth 2026-11-02): no deposit walk into an interior cell whose doors are all locked.
-        if (Logistics::Errand::Rest::TownWalkBarredByLock(a_follower, crate, "deposit crate")) {
+        bool doorPending = false;   // the exterior door read was just posted: retry in a few seconds, not the full fail cooldown
+        if (Logistics::Errand::Rest::TownWalkBarredByLock(a_follower, crate, "deposit crate", &doorPending)) {
             std::scoped_lock lock(g_tripMx);
-            g_followerCooldown[fid] = a_now + kCooldownFail;
+            g_followerCooldown[fid] = a_now + (doorPending ? std::chrono::seconds(3) : kCooldownFail);
             return false;
         }
         // The callbacks run OUTSIDE g_tripMx: ending the excursion goes through the loot
