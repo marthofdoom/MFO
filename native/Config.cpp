@@ -240,6 +240,7 @@ namespace MFO::Config {
             else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
             else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
             else if (a_key == "bHmsRedistribute")   setB(g_hmsRedistribute);
+            else if (a_key == "bHmsCapToPlayerTotal") setB(g_hmsCapToPlayerTotal);
             else if (a_key == "fHmsSkewMax") {
                 // §HMS: the MCM slider stores a PERCENT (0-100); the atomic holds
                 // the FRACTION. Parse + clamp + scale /100 here (not setF, which
@@ -451,6 +452,7 @@ namespace MFO::Config {
             g_templeRealSec      = 12.0f;
             g_hmsRedistribute    = true;    // §HMS class-redistribution master switch -- ON
             g_hmsSkewMaxFrac     = 0.20f;   // §HMS off-class skew ceiling -- 20% (INI stores percent)
+            g_hmsCapToPlayerTotal = true;   // §HMS follower H/M/S total capped at the player's -- ON (features ship on)
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve
             g_merchantPerkBypass = true;    // #21 merchant-perk holder sells outside the vendor filter
             g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)

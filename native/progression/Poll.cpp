@@ -262,7 +262,14 @@ namespace MFO::ProgAllocator {
                                     npcTotal     += st.hmsBaseline[p];
                                     grantedTotal += st.hmsCumulative[p];
                                 }
-                                const bool caughtUp = (playerTotalNow >= npcTotal);
+                                // caughtUp = the player's total has reached the follower's
+                                // whole held total (baseline + cumulative). Identical to the
+                                // old `>= npcTotal` gate whenever cumulative >= 0 (the max()
+                                // below already yields 0 in between); with the adopted-total
+                                // cap's NEGATIVE cumulative (ClickUp 1dfcuabc4dv round 2) the
+                                // old gate froze a capped follower whose pre-MFO baseline is
+                                // above the player. Grant = exactly playerTotal - held total.
+                                const bool caughtUp = (playerTotalNow >= npcTotal + grantedTotal);
                                 if (caughtUp)
                                     grantBudget = std::max(0.0f,
                                         (playerTotalNow - npcTotal) - grantedTotal);

@@ -838,6 +838,13 @@ namespace MFO::Config {
     //     (0-100); Config::ReadFile scales /100 into this fraction.
     inline std::atomic<bool>  g_hmsRedistribute{ true };
     inline std::atomic<float> g_hmsSkewMaxFrac{ 0.20f };
+    //   bHmsCapToPlayerTotal (default ON, INI only, ClickUp 1dfcuabc4dv, marth
+    //     2026-11-01): a follower's held H/M/S TOTAL never exceeds the player's base
+    //     H+M+S total as sampled at each player level-up (never per poll, so a
+    //     temporary dip or rise does not move it); a save above it is swept down on load
+    //     (ProgAllocator::RecomputeHMS, progression/Hms.cpp). OFF = no cap, the
+    //     adopted total is kept as before.
+    inline std::atomic<bool>  g_hmsCapToPlayerTotal{ true };
 
     // #21 SELL-side pricing/bypass (INI-only advanced settings, NO MCM control --
     // deliberately, to avoid toggle-linkage churn). All gated under bEconomy.

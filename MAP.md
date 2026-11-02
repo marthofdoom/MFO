@@ -5637,7 +5637,13 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - **§HMS IS CORE (2026-10-01, ClickUp 86e3dnt7u, marth: "the reshaping is a core feature, enhanced
   by the add on"). SUPERSEDES the Phase 2 "FindClassDef gate" and the Phase 7 "no DLL default" text
   in the bullet below.** HMS (split + skew + player-rate parity + fixed-stat grant + retro) runs for
-  EVERY managed follower with `bHmsRedistribute` on, add-on present or not. (1) **Class** =
+  EVERY managed follower with `bHmsRedistribute` on, add-on present or not. (1) **Class
+  (2026-11-01, ClickUp 1dfcuabc4dv, marth "Key on enrolled class"):** `HmsProfileFor`
+  (`progression/Hms.cpp:144`, used by `HmsTrackBattle` `:191` and `RecomputeHMS` `:256`) keys an
+  ENROLLED follower on the class she is enrolled in, whatever it is: `FindClassDef(clsId)`'s declared
+  `hmsWeights`/`primaryPool`, else `HmsProfile(def->stance)`. A follower enrolled as a Mage is
+  15/80/5 for HMS even while the combat resolver plays her as an archer. Everyone else (not
+  enrolled, no class, a def the loaded add-on lacks) keeps the old key, the combat class
   `Followers::ResolvedClassFast(id)` (`Followers.cpp:564`), the g_mx mirror `PublishActiveMirror`
   (`Followers.cpp:142`, worker) fills from **THE resolver** `Logistics::ResolveBaseClass`
   (`logistics/ClassResolve.cpp:45`): the Gambit pick, or Auto by a weighted vote (gambit table
@@ -5720,11 +5726,16 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `battlesOffClass/battlesSinceLevelUp`; battles counted in `HmsTrackBattle`
   (main-thread combat rising-edge, 3s dwell). **Off-class signal = the REAL fired
   gambit (F3):** the combat scheduler (WORKER) calls `ProgAllocator::NoteCombatFire`
-  on every `Result::Fired` (`Scheduler.cpp` ~:886), mapping the action opcode →
-  pool (cast→Magicka, melee attack/power→Health, bow attack/equip_ranged→Stamina)
-  into a **mutex-guarded per-follower mirror** (`g_hmsFiredMask`, CombatStyle::g_owned
-  pattern); `HmsTrackBattle` consumes the mask (cleared each rising edge), credits a
-  battle off-class when an off-class pool fired. Deliberately NOT reading
+  on every `Result::Fired` (`Scheduler.cpp` ~:2156), mapping the action opcode →
+  pool (cast→Magicka, equip_melee→Health, equip_ranged→Stamina; **attack/power_attack by the
+  ACTING hand, 2026-11-01 marth "Casts count as magicka use for skew"**: `HmsPoolForHand`
+  `progression/Hms.cpp:83` on the right hand, else the left: spell/scroll or staff → Magicka,
+  bow/crossbow → Stamina, any other weapon or bare hands → Health)
+  into a **mutex-guarded per-follower mirror** (`g_hmsFiredMask`, now per-pool FIRE COUNTS
+  `HmsFireCounts`, CombatStyle::g_owned pattern). `HmsTrackBattle` clears it at each rising edge
+  and JUDGES the battle at its FALLING edge (`:215`): **the pool with the most fires wins, a tie
+  goes to the class primary, then the lower index; the battle is off-class only when the winner
+  is not the primary** (it used to be: any off-class fire, lowest index first). Deliberately NOT reading
   worker-written `Gambit.lastFired` off-thread (#4). Counters reset when an award is
   consumed (seed 1 if a battle is in progress). **Knobs live on the MAIN MFO MCM,
   not `g_econ`:** `Config::g_hmsRedistribute` (bHmsRedistribute, default ON, master
@@ -5737,6 +5748,40 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `baseClass`/`earlyReturn`{none|nodef|noprofile|noavo}/`redistribute` budget
   /`fixedStat`/`grantBudget`) — confirms on-deck that a Gambit-Mage follower reads
   `baseClass=3` and reveals which ClassDef the `clsId` resolved to.
+- **§HMS ADOPTED-TOTAL CAP (2026-11-01, ClickUp 1dfcuabc4dv, marth "Cap adopted total";
+  REVERSES the 2026-10-01 "adopt, never take back" for the TOTAL only; NO co-save change, PRGN
+  stays v8).** In `RecomputeHMS` just before the HOLD (`progression/Hms.cpp:546`), on every road
+  that reaches it (so the first poll after a load SWEEPS an old save, and every award is trimmed),
+  for every captured record: held total = Σ (baseline + cumulative) is capped at the PLAYER's
+  total = `g_playerHmsTotalLast` (review round 2, marth: no temporary dip OR rise may move it): the
+  player's base H+M+S SAMPLED only at each player level-up (`progression/Poll.cpp:117`), persisted
+  in the PRGN header (v6+, `progression/Allocator.cpp:446`), seeded from the live base once when no
+  sample exists; never re-read per poll. 0 = not sampled yet, the cap waits. Failure cases: a
+  dip/buff present AT a level-up is held until the next one; a permanent base change between
+  level-ups (a perk, a mod) is not seen until the next level-up.
+  The excess comes off the pools ABOVE `max(profile share × cap, 50)`, in proportion to how far
+  above (mirror of the converge deficit share), as a NEGATIVE `hmsCumulative` (round 2, marth
+  option b): `hmsBaseline` stays the pre-MFO base, the HOLD and the load recompute
+  (`Allocator.cpp:745`) no longer floor the target at the baseline (only at 0), and the Phase-3
+  backfill gate is now `playerTotal >= baseline + cumulative` (identical when cumulative >= 0)
+  so a capped fixed-stat follower is granted exactly P - held total. A pool at or
+  under its floor is untouched; if the floors cannot absorb it, the total stays above and the log
+  says so. Round 3: `UndoHms` FIRST raises every negative-cumulative pool by exactly that amount and
+  takes it out of W, on BOTH roads, so removal from MFO always gives the cut back; and the cap adds
+  to W only with real engine history (`hmsAwardAccum > 0` or W > 0). Not fixed-stat → the cut is ADDED to `hmsWithheld` (keeps `Σ target + W == engine
+  total`, so the engine's next re-slam does not re-measure it). Logs: `[hms] adopted total capped:
+  <name> <old> -> <new> (player <p>)` once per follower per session (runtime `hmsCapLogged`,
+  `ProgAllocator.h:353`), `[hms] <id> award trimmed to the player's total` on later awards, a
+  `cap detail` line with each, and `capTrim=` on `[hms-diag]`. INI `bHmsCapToPlayerTotal`
+  (`Config.h:846`, default 1, INI only). **What breaks:** moving the cap after the HOLD (the
+  hold would write the uncapped total for a poll); skipping the W add for a leveling follower
+  (the next level re-slam re-grants the cut through parity credit); lowering `hmsBaseline` instead
+  of cumulative (`UndoHms`, run ONLY by removal from MFO, `progression/Verbs.cpp:426`
+  `ForgetFollower`, would then restore below vanilla; a plain dismissal touches no stats);
+  re-adding a `tgt < baseline` floor anywhere (it silently undoes the cap); reading the live
+  player base per poll for the cap (a racemenu/respec/SetAV dip cuts a leveling follower for good).
+  **Downgrade:** an MFO build older than this one floors target at the baseline, so it puts the
+  cut back up on its first hold.
 - **§HMS PLAYER-RATE PARITY (PRGN v8, 2026-09-23, marth "fix b (with retroactive
   fix)").** The engine awards a leveling NPC `iAVDhmsLevelUp + fNPCHealthLevelBonus`
   (10+5 = 15) per level against the player's 10; MFO used to pass the 15 through.

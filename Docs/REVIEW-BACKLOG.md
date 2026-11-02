@@ -2495,3 +2495,12 @@ Reviewer: "Poll.cpp:144-146 reads IsTrackedFast and IsTransientDropFast under tw
 
 ### MFO-B542 (SEV-4, OPEN, progression/Poll.cpp, against 3569203) -- the gap between an errand ending and the roster re-adding still reads as benched
 Reviewer: "Between Sim/Errand dropping the record and the next Refresh re-adding him, he reads as benched. The cost is real when it hits: the active branch then gives min(d, lag) with d=0, so the bench-rate loss is never refunded. It needs a level-up inside about one Refresh period." Also SEV-5: "an Auto-class errand follower is not in g_resolvedClass ... so RecomputeHMS returns at \"noclass\". He gets the level but no HMS on that level-up, the same as a benched follower did before."
+
+### MFO-B543 (SEV-4, OPEN, progression/Hms.cpp cap, against 8ce9ca8..711d406, Opus tier-3 reviews of feat/mfo-hms-fix) -- the cap trims against the pure class profile, not the skewed one
+Reviewer: "The cap trims against the pure class profile, not the skewed one (eprof / hmsSkew). The sweep therefore cuts the off-class pool first and wipes the skew that ruling B builds. In normal play a follower at P gains at most what the player gained, so the trim rarely fires after the sweep."
+
+### MFO-B544 (SEV-4, OPEN, progression/Hms.cpp / Poll.cpp cap timing, against 8ce9ca8..711d406) -- a benched follower is swept only when it returns, and the level-up sample can trail one attribute pick
+Reviewer: "A benched follower above the cap keeps his total until he returns, and a record adopted this poll is capped on the next one." "the sample is taken on the GetLevel edge. If a list raises the player's level before the +10 attribute pick, the cap trails by one pick for a whole level, and for a leveling follower that cut stays in W."
+
+### MFO-B545 (SEV-5, OPEN, progression/Hms.cpp, against 8ce9ca8..711d406) -- fractional base AVs, the unreadable path hides the capped line, an older build floors stats back up
+Reviewer: "The fixed-stat cut writes fractional base AVs, while the grant path writes whole points." "The \"unreadable\" error path sets hmsCapLogged, which hides that session's \"adopted total capped\" line." "older builds put the baseline floor back, so stats rise ... This is a stat change only, with no format or co-save corruption."
