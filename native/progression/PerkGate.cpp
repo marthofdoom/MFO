@@ -6,6 +6,7 @@
 // The allocator's contract and design references are at the top of
 // progression/Allocator.cpp.
 #include "PCH.h"
+#include <cstring>   // memcpy (EngineItemTrue)
 #include <cmath>     // std::floor / std::isfinite — not guaranteed via the PCH
 #include "ProgAllocator.h"
 #include "ProgAllocator_internal.h"   // the split family's shared substrate
@@ -94,6 +95,14 @@ namespace MFO::ProgAllocator {
             return false;
         }
 
+        // "Alias twins" (Progression.cpp BuildPerkTwins): the in-tree rank an off-tree perk stands for, or
+        // the perk itself when it has no twin.
+        RE::FormID TwinOf(RE::FormID a_perk) {
+            const auto& m = Progression::Get().perkTwin;
+            const auto it = m.find(a_perk);
+            return it == m.end() ? a_perk : it->second;
+        }
+
         // §5.2b (deck 2026-08-15): a skill perk's own conditions normally
         // reduce to a pure AND-chain of the skill-level gate
         // (GetBaseActorValue-on-self >= N) plus, in some overhauls, HasPerk
@@ -101,24 +110,71 @@ namespace MFO::ProgAllocator {
         // prereq perk has been FILTERED out of the tree, the engine's
         // whole-chain IsTrue locks the node forever even though the skill is
         // met and §5.1's bridging already routed the prerequisite around the
-        // filtered perk. We evaluate that common shape ourselves:
-        //   - GetBaseActorValue-on-self, op >= / >  : real skill gate, enforced.
-        //   - HasPerk <P>, "req" shape (==1 / >=1 / >0): if P is board-
-        //     allocatable it is a real in-tree prereq → enforce ownership; if
-        //     P is filtered/absent → treat as satisfied (§5.1 owns it).
-        // Anything else — an OR group, an exclusion HasPerk (==0), GetLevel, a
-        // quest/faction/global condition, an unhandled opcode — returns
-        // kFallback and the caller runs the engine evaluator UNCHANGED, so no
-        // exotic perk's gating is ever relaxed by guesswork.
+        // filtered perk. We evaluate the common shapes ourselves, item by item,
+        // keeping MFO's own AND/OR grouping:
+        //   - GetBaseActorValue / GetActorValue / GetLevel on self, all six
+        //     comparison operators.
+        //   - HasPerk <P> on self, all six operators. A board-allocatable P (or an
+        //     off-tree ALIAS TWIN of one) is tested by ownership: the rank itself
+        //     or any LATER rank of its chain counts as held, so "HasPerk(rank1) == 0"
+        //     is false for a follower holding rank 2 (GrantRank removes rank K-1,
+        //     the engine's own HasPerk(rank1) would read 0 and let an exclusion
+        //     through). A KNOWN-but-filtered P with a "req" shape is satisfied
+        //     (§5.1 bridges it).
+        // Any OTHER item (a shape we will not guess: quest, faction, global,
+        // GetLevel-on-target, a HasPerk on a perk in no tree...) is handed to the
+        // engine ALONE (EngineItemTrue) and slots into the same grouping. One
+        // exotic item no longer sends the whole perk to the engine.
         // One condition item's truth for THIS follower, tri-stated:
-        //   kTrue/kFalse — we evaluated it; kUnknown — a shape we won't guess
-        //   (the caller then defers the whole perk to the engine).
-        // Handled: GetBaseActorValue/GetActorValue-on-self (>= / >), GetLevel-
-        // on-self counting MFO's progression levels, and HasPerk "req" shape.
-        // A HasPerk on a FILTERED/absent perk is kTrue — the follower can never
-        // hold it, §5.1's bridging already owns that prerequisite, so it must
-        // not lock the node (the Force-of-Nature / Destruction-Mastery case).
+        //   kTrue/kFalse — we evaluated it; kUnknown — the caller asks the engine
+        //   about this ONE item.
         enum class Tri { kTrue, kFalse, kUnknown };
+
+        const char* OpText(RE::CONDITION_ITEM_DATA::OpCode a_op) {
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            switch (a_op) {
+            case Op::kEqualTo:              return "==";
+            case Op::kNotEqualTo:           return "!=";
+            case Op::kGreaterThan:          return ">";
+            case Op::kGreaterThanOrEqualTo: return ">=";
+            case Op::kLessThan:             return "<";
+            case Op::kLessThanOrEqualTo:    return "<=";
+            }
+            return "op?";
+        }
+
+        // Quest / world progress and player misc stats mean the PLAYER's world even when the item is
+        // "run on subject" (marth: "world progress maps player"). Quest stage, quest completion,
+        // quest variable, global value and GetPCMiscStat read global state or the player's stats whatever
+        // ref they are run on, so the engine item is handed the PLAYER as its subject.
+        bool IsWorldProgressFn(RE::FUNCTION_DATA::FunctionID a_fn) {
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            return a_fn == Fn::kGetStage || a_fn == Fn::kGetStageDone || a_fn == Fn::kGetQuestRunning ||
+                   a_fn == Fn::kGetQuestCompleted || a_fn == Fn::kGetQuestVariable ||
+                   a_fn == Fn::kGetGlobalValue || a_fn == Fn::kGetPCMiscStat;
+        }
+
+        // The engine's verdict on ONE item: a stack copy of the item, next = null, isOR cleared, wrapped
+        // in a TESCondition-shaped holder (a TESCondition's only member is the list head, and its
+        // destructor would free the list, so no TESCondition is ever constructed) and run through
+        // TESCondition::IsTrue, the same verified call the whole-list fallback used. The copy is
+        // memcpy'd into raw storage (no constructor) and lives for this call only.
+        bool EngineItemTrue(const RE::TESConditionItem* a_item, RE::Actor* a_actor) {
+            alignas(RE::TESConditionItem) std::byte buf[sizeof(RE::TESConditionItem)];
+            std::memcpy(buf, a_item, sizeof(RE::TESConditionItem));
+            auto* one = reinterpret_cast<RE::TESConditionItem*>(buf);
+            one->next = nullptr;
+            one->data.flags.isOR = false;
+            struct ListHead { RE::TESConditionItem* head; } holder{ one };
+            static_assert(sizeof(ListHead) == sizeof(RE::TESCondition));
+            RE::TESObjectREFR* subject = a_actor;
+            const auto obj = a_item->data.object.get();
+            if (IsWorldProgressFn(a_item->data.functionData.function.get()) &&
+                (obj == RE::CONDITIONITEMOBJECT::kSelf || obj == RE::CONDITIONITEMOBJECT::kTarget))
+                if (auto* pc = RE::PlayerCharacter::GetSingleton()) subject = pc;
+            return reinterpret_cast<const RE::TESCondition*>(&holder)->IsTrue(subject, subject);
+        }
+
         Tri EvalCondItem(const RE::CONDITION_ITEM_DATA& d, RE::Actor* a_actor,
                          RE::TESNPC* a_base, RE::ActorValueOwner* a_avo,
                          std::uint16_t a_progLevel) {
@@ -129,11 +185,17 @@ namespace MFO::ProgAllocator {
                                   ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
                                   : d.comparisonValue.f;
             auto cmp = [&](float lhs) -> Tri {
+                bool r = false;
                 switch (d.flags.opCode) {
-                case Op::kGreaterThan:          return lhs >  rhs ? Tri::kTrue : Tri::kFalse;
-                case Op::kGreaterThanOrEqualTo: return lhs >= rhs ? Tri::kTrue : Tri::kFalse;
-                default: return Tri::kUnknown;   // <, ==, != — unusual on a gate, defer
+                case Op::kEqualTo:              r = lhs == rhs; break;
+                case Op::kNotEqualTo:           r = lhs != rhs; break;
+                case Op::kGreaterThan:          r = lhs >  rhs; break;
+                case Op::kGreaterThanOrEqualTo: r = lhs >= rhs; break;
+                case Op::kLessThan:             r = lhs <  rhs; break;
+                case Op::kLessThanOrEqualTo:    r = lhs <= rhs; break;
+                default: return Tri::kUnknown;
                 }
+                return r ? Tri::kTrue : Tri::kFalse;
             };
             if (fn == Fn::kGetBaseActorValue || fn == Fn::kGetActorValue) {
                 if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf || !a_avo) return Tri::kUnknown;
@@ -148,33 +210,33 @@ namespace MFO::ProgAllocator {
                     static_cast<int>(a_actor->GetLevel()), static_cast<int>(a_progLevel))));
             }
             if (fn == Fn::kHasPerk) {
+                if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return Tri::kUnknown;
+                auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                RE::FormID pid = form ? form->GetFormID() : 0;
+                pid = TwinOf(pid);   // "alias twins": an off-tree copy stands for its in-tree twin
+                if (PerkAllocatableInCatalog(pid))
+                    return cmp(OwnsPerkForm(a_actor, a_base, PerkByID(pid)) ? 1.0f : 0.0f);
+                // Not allocatable: only the "req" shape on a KNOWN-but-filtered perk is decided here.
                 const bool isReqShape =
                     (d.flags.opCode == Op::kEqualTo && rhs == 1.0f) ||
                     (d.flags.opCode == Op::kGreaterThanOrEqualTo && rhs > 0.0f && rhs <= 1.0f) ||
                     (d.flags.opCode == Op::kGreaterThan && rhs >= 0.0f && rhs < 1.0f);
-                if (!isReqShape) return Tri::kUnknown;   // exclusion (==0) / odd shape — defer
-                auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
-                const RE::FormID pid = form ? form->GetFormID() : 0;
-                if (!PerkAllocatableInCatalog(pid)) {
-                    // A KNOWN-but-filtered catalog perk can never be held by a
-                    // follower and §5.1 bridges around it → treat as satisfied
-                    // (the Destruction-Mastery case). But a perk in NO tree at
-                    // all (quest/SPID-granted gate) is genuinely unknown — don't
-                    // grant it; defer to the engine's IsTrue.
-                    return PerkKnownToCatalog(pid) ? Tri::kTrue : Tri::kUnknown;
-                }
-                return OwnsPerkForm(a_actor, a_base, PerkByID(pid)) ? Tri::kTrue : Tri::kFalse;
+                if (!isReqShape) return Tri::kUnknown;   // exclusion / odd shape on a non-catalog perk: the engine decides
+                // A KNOWN-but-filtered catalog perk can never be held by a follower and §5.1
+                // bridges around it, so it is satisfied (the Destruction-Mastery case). A perk
+                // in NO tree (quest/SPID-granted gate) is genuinely unknown: the engine decides.
+                return PerkKnownToCatalog(pid) ? Tri::kTrue : Tri::kUnknown;
             }
-            return Tri::kUnknown;   // GetLevel-on-target / quest / faction / … — don't guess
+            return Tri::kUnknown;
         }
 
         // §5.2 gate over a perk's own conditions, with correct AND/OR grouping:
         // items joined by the isOR flag form a disjunction (the group passes if
-        // ANY member is true); groups are ANDed. Any kUnknown item makes the
-        // whole perk defer (kFallback) so the engine — never guesswork — decides
-        // exotic gating. This is what lets a FILTERED HasPerk (kTrue) unlock a
-        // node whether it stands alone or sits inside an OR group.
-        enum class CondEval { kPass, kFail, kFallback };
+        // ANY member is true); groups are ANDed. A kUnknown item is asked of the
+        // engine ALONE (EngineItemTrue) and joins the same grouping. This is what
+        // lets a FILTERED HasPerk (kTrue) unlock a node whether it stands alone
+        // or sits inside an OR group.
+        enum class CondEval { kPass, kFail };
         CondEval EvalPerkConditions(RE::Actor* a_actor, RE::TESNPC* a_base,
                                     RE::BGSPerk* a_rank, std::uint16_t a_progLevel) {
             auto* avo = a_actor->AsActorValueOwner();
@@ -182,8 +244,8 @@ namespace MFO::ProgAllocator {
             for (auto* it = a_rank->perkConditions.head; it;) {
                 bool groupVal = false;                 // OR accumulator for this group
                 for (;;) {
-                    const Tri t = EvalCondItem(it->data, a_actor, a_base, avo, a_progLevel);
-                    if (t == Tri::kUnknown) return CondEval::kFallback;
+                    Tri t = EvalCondItem(it->data, a_actor, a_base, avo, a_progLevel);
+                    if (t == Tri::kUnknown) t = EngineItemTrue(it, a_actor) ? Tri::kTrue : Tri::kFalse;
                     groupVal = groupVal || (t == Tri::kTrue);
                     const bool orNext = it->data.flags.isOR;   // OR'd with the next item
                     it = it->next;
@@ -202,17 +264,13 @@ namespace MFO::ProgAllocator {
         std::string DumpConditions(RE::BGSPerk* a_rank, RE::Actor* a_actor,
                                    RE::TESNPC* a_base, std::uint16_t a_progLevel) {
             using Fn = RE::FUNCTION_DATA::FunctionID;
-            using Op = RE::CONDITION_ITEM_DATA::OpCode;
             auto* avo = a_actor->AsActorValueOwner();
             std::string out;
             int n = 0;
             for (auto* it = a_rank->perkConditions.head; it && n < 8; it = it->next, ++n) {
                 const auto& d = it->data;
                 const auto fn = d.functionData.function.get();
-                const char* op =
-                    d.flags.opCode == Op::kEqualTo             ? "==" :
-                    d.flags.opCode == Op::kGreaterThan         ? ">"  :
-                    d.flags.opCode == Op::kGreaterThanOrEqualTo ? ">=" : "op?";
+                const char* op = OpText(d.flags.opCode);
                 const float v = d.flags.global
                                     ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
                                     : d.comparisonValue.f;
@@ -231,7 +289,7 @@ namespace MFO::ProgAllocator {
                     out += std::format("GetLevel {} {:g} (have {})", op, v, have);
                 } else if (fn == Fn::kHasPerk) {
                     auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
-                    const RE::FormID pid = form ? form->GetFormID() : 0;
+                    const RE::FormID pid = TwinOf(form ? form->GetFormID() : 0);
                     auto* pp = PerkByID(pid);
                     const char* nm = pp ? pp->GetName() : nullptr;
                     out += std::format("HasPerk({}) {} {:g} [{}, {}]",
@@ -429,15 +487,14 @@ namespace MFO::ProgAllocator {
             }
             const CondEval ce = a_node.vanillaGate ? CondEval::kPass
                                     : EvalPerkConditions(a_actor, a_base, rankForm, a_st.progressionLevel);
-            const bool condPass = (ce == CondEval::kFallback)
-                                      ? rankForm->perkConditions.IsTrue(a_actor, a_actor)
-                                      : (ce == CondEval::kPass);
+            const bool condPass = (ce == CondEval::kPass);
             if (!condPass) {
                 // Name the real blocker. In the §5.2 fail path it is usually a
                 // still-allocatable, unowned condition-prereq — say so — before
                 // falling back to the skill string with the follower's value.
                 std::string detail;
-                for (const auto pid : a_node.condPrereqPerkIDs) {
+                for (const auto rawPid : a_node.condPrereqPerkIDs) {
+                    const auto pid = TwinOf(rawPid);
                     if (!PerkAllocatableInCatalog(pid)) continue;   // filtered — not the blocker
                     if (OwnsAnyRank(a_actor, a_base, a_st, pid))    continue;   // owned — not it
                     auto* pp = PerkByID(pid);

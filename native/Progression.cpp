@@ -10,6 +10,7 @@
 // includes PCH.h only). Do not "fix" this by reverting to the held-perk walk.
 #include "progression/ProgAllocator.h"
 #include <array>     // v1.1 residual #3: the classifier's add-on-declared verdict table
+#include <cstring>          // memcmp (alias twins: condition equality)
 #include <unordered_set>   // 86e3kddjp: the HasPerk-reference index
 
 // The production catalog reader. See Progression.h for the contract;
@@ -594,6 +595,46 @@ namespace MFO::Progression {
             return out;
         }
 
+        // marth ruling "remove inventory gated perks for followers": a rank whose conditions test the
+        // SUBJECT's inventory (GetItemCount, GetKeywordItemCount, GetGold) is a player-pocket perk. A
+        // follower's inventory is the logistics system's business, never a perk gate, so the rank is
+        // not offered. Subject = run on Self (a Target / reference test is some other actor's pocket).
+        bool HasSubjectInventoryTest(RE::BGSPerk* a_rank) {
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            for (auto* it = a_rank->perkConditions.head; it; it = it->next) {
+                const auto fn = it->data.functionData.function.get();
+                if ((fn == Fn::kGetItemCount || fn == Fn::kGetKeywordItemCount || fn == Fn::kGetGold) &&
+                    it->data.object.get() == RE::CONDITIONITEMOBJECT::kSelf)
+                    return true;
+            }
+            return false;
+        }
+
+        // "Alias twins": do two perks carry the identical perkConditions list (item by item: function,
+        // both params, op/OR/global flags, comparison value, run-on object + ref + data id)? An empty
+        // list is never "identical" (it would twin every unconditioned perk of one name).
+        bool SameConditions(RE::BGSPerk* a_a, RE::BGSPerk* a_b) {
+            auto* x = a_a->perkConditions.head;
+            auto* y = a_b->perkConditions.head;
+            if (!x || !y) return false;
+            for (; x && y; x = x->next, y = y->next) {
+                const auto& p = x->data;
+                const auto& q = y->data;
+                if (p.functionData.function.get() != q.functionData.function.get() ||
+                    p.functionData.params[0] != q.functionData.params[0] ||
+                    p.functionData.params[1] != q.functionData.params[1] ||
+                    std::memcmp(&p.flags, &q.flags, sizeof(p.flags)) != 0 ||
+                    p.object.get() != q.object.get() ||
+                    p.dataID != q.dataID ||
+                    p.runOnRef != q.runOnRef)
+                    return false;
+                if (p.flags.global ? p.comparisonValue.g != q.comparisonValue.g
+                                   : p.comparisonValue.f != q.comparisonValue.f)
+                    return false;
+            }
+            return !x && !y;
+        }
+
         // ── the §3 rank classifier ──────────────────────────────────────────
 
         // kAbility is effective by default; "clearly player-gated" means
@@ -910,6 +951,13 @@ namespace MFO::Progression {
                         rank.verdict = Verdict::kDead;
                         Append(why, "fighting-alone gate (GetCombatGroupMemberCount <= 1): never fires while following");
                     }
+                    // marth: inventory-gated ranks are not offered to followers (HasSubjectInventoryTest). The
+                    // vanilla Smithing perks are exempt: ApplyVanillaSmithing owns their gate.
+                    if (!IsVanillaSmithingPerk(rank.perkFormID) && HasSubjectInventoryTest(r)) {
+                        ++a_out.inventoryGatedRanks;
+                        rank.verdict = Verdict::kDead;
+                        Append(why, "inventory-gated, not offered to followers");
+                    }
                     if (rankNo == 0) firstWhy = why;
                     if (rank.verdict < best) best = rank.verdict;   // kEffective < kMarginal < kDead
                     ++a_out.totalRanks;
@@ -1006,6 +1054,53 @@ namespace MFO::Progression {
             }
         }
 
+        // "Alias twins" (marth): an OFF-tree perk named by a HasPerk condition of an in-tree rank, with the
+        // same name AND identical perkConditions as an in-tree rank, stands for that rank: a follower can
+        // never own the off-tree copy (it is in no tree), so PerkGate resolves the HasPerk to the in-tree
+        // twin's ownership. (Stunning Precision needs one record, the tree carries its twin.) Load order
+        // agnostic: found by name + condition equality, never by plugin or FormID. Frozen with the catalog.
+        void BuildPerkTwins() {
+            std::unordered_set<RE::FormID> known;                       // every perk the catalog already knows
+            std::unordered_map<std::string, std::vector<RE::BGSPerk*>> byName;   // in-tree ranks by name
+            for (const auto& tree : g_catalog.skills) {
+                for (const auto& f : tree.filtered) known.insert(f.perkFormID);
+                for (const auto& node : tree.nodes)
+                    for (const auto& r : node.ranks) {
+                        known.insert(r.perkFormID);
+                        if (auto* pk = RE::TESForm::LookupByID<RE::BGSPerk>(r.perkFormID)) {
+                            const std::string nm = NameOf(pk);
+                            if (!nm.empty()) byName[nm].push_back(pk);
+                        }
+                    }
+            }
+            int aliased = 0;
+            for (const auto& tree : g_catalog.skills)
+                for (const auto& node : tree.nodes)
+                    for (const auto& r : node.ranks) {
+                        auto* holder = RE::TESForm::LookupByID<RE::BGSPerk>(r.perkFormID);
+                        if (!holder) continue;
+                        for (auto* it = holder->perkConditions.head; it; it = it->next) {
+                            if (it->data.functionData.function.get() != RE::FUNCTION_DATA::FunctionID::kHasPerk) continue;
+                            auto* off = static_cast<RE::BGSPerk*>(it->data.functionData.params[0]);
+                            if (!off || off->GetFormType() != RE::FormType::Perk) continue;
+                            const RE::FormID oid = off->GetFormID();
+                            if (known.count(oid) || g_catalog.perkTwin.count(oid)) continue;
+                            const std::string nm = NameOf(off);
+                            if (nm.empty()) continue;
+                            auto bn = byName.find(nm);
+                            if (bn == byName.end()) continue;
+                            for (auto* cand : bn->second) {
+                                if (cand == off || !SameConditions(off, cand)) continue;
+                                g_catalog.perkTwin.emplace(oid, cand->GetFormID());
+                                ++aliased;
+                                spdlog::info("[prog] twin: {} {:08X} -> {:08X}", nm, oid, cand->GetFormID());
+                                break;
+                            }
+                        }
+                    }
+            spdlog::info("[prog] alias twins: {} off-tree perk(s) aliased to an in-tree twin", aliased);
+        }
+
         void BuildCatalog() {
             auto* avl = RE::ActorValueList::GetSingleton();
             if (!avl) {
@@ -1026,6 +1121,7 @@ namespace MFO::Progression {
                 g_catalog.stylePromotedRanks += tree.stylePromotedRanks;
                 g_catalog.ownerDemotedRanks  += tree.ownerDemotedRanks;
                 g_catalog.aloneGateRanks     += tree.aloneGateRanks;
+                g_catalog.inventoryGatedRanks += tree.inventoryGatedRanks;
                 g_catalog.scaleEffectiveRanks += tree.scaleEffectiveRanks;
                 ownerDerive += tree.ownerDerive;       ownerUnsupported += tree.ownerUnsupported;
                 ownerCloak  += tree.ownerCloak;        ownerParty += tree.ownerPartyCount;
@@ -1038,6 +1134,9 @@ namespace MFO::Progression {
 
                 g_catalog.skills.push_back(std::move(tree));
             }
+            BuildPerkTwins();   // needs every tree built (the in-tree name index) and the Smithing overlay applied
+            spdlog::info("[prog] inventory-gated census: {} rank(s) filtered (inventory-gated, not offered to followers)",
+                         g_catalog.inventoryGatedRanks);
             // The owner-remap census (P1): ALWAYS one line, zeros included.
             spdlog::info("[prog] owner-remap census: facts by shape (ranks) derive={} unsupported={} runOnPlayerRef={} cloak={} "
                          "partyCount={} teammateTest={} hostileNullParam={} | {} effective rank(s) shown MARGINAL "

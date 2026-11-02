@@ -5398,8 +5398,24 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   - `progression/SkillScale.cpp` (262) = skill points: `BaselineFloor` (`:28`), the §4.2
     `ReconcileSkill` (`:73`), the §6 class weights (`DominantWeaponSkill`/`DominantArmorSkill`
     `:135`/`:143`, `WeightsFor` `:154`) and the §15 auto-scale `RecomputeSkills` (`:193`).
+- **PERK GATE, per-item evaluation + alias twins + inventory filter (2026-11-01, `feat/perk-gate-fix`, ClickUp 1dfcuabc4dt; no co-save or ABI change).**
+  `progression/PerkGate.cpp` `EvalPerkConditions` evaluates a rank's `perkConditions` item by item with MFO's own AND/OR grouping. Self-side items
+  (GetBaseActorValue / GetActorValue / GetLevel on self, HasPerk on self) use `EvalCondItem`, which now supports all six operators (`==, !=, >, >=, <, <=`).
+  Any other item goes to the engine ALONE through `EngineItemTrue`: a stack copy of the item (`next = null`, `isOR` cleared) in a one-member list-head holder
+  reinterpret-cast to `TESCondition` (a `TESCondition` is only its head pointer, and its destructor frees the list, so none is ever constructed) and run
+  through `TESCondition::IsTrue` (the verified row `29888`, the same call the old whole-list fallback made). `TESConditionItem::IsTrue` is NOT called.
+  **HasPerk on a catalog-allocatable perk** compares `OwnsPerkForm` (the rank or any LATER rank of its chain counts as held) against the operator, so
+  `HasPerk(rank1) == 0` is false for a follower holding rank 2 (GrantRank removes rank K-1, the engine would read 0). **Alias twins:**
+  `Progression.cpp` `BuildPerkTwins` (after all trees and the Smithing overlay) maps an off-tree perk named by an in-tree rank's `HasPerk` condition to the
+  in-tree rank with the same name AND identical `perkConditions` (`SameConditions`) in `Catalog::perkTwin`; `PerkGate.cpp` `TwinOf` resolves a HasPerk through
+  it. Logged `[prog] twin: <name> <off-id> -> <in-id>`. **Inventory-gated ranks** (`HasSubjectInventoryTest`: GetItemCount, GetKeywordItemCount, GetGold on Self)
+  are made DEAD at build with the reason "inventory-gated, not offered to followers" (vanilla Smithing perks exempt), counted in `Catalog::inventoryGatedRanks`
+  and the `[prog] inventory-gated census` line; a saved allocation of a node that dies this way is dropped and refunded by the existing load oracle.
+  **World progress** (`IsWorldProgressFn`: GetStage, GetStageDone, GetQuestRunning, GetQuestCompleted, GetQuestVariable, GetGlobalValue, GetPCMiscStat) run on
+  Self/Target is handed the PLAYER as subject. **What breaks:** a HasPerk on a non-Self object is now an engine item, not an ownership test; a twin match
+  needs name AND the full condition list equal; the vanilla Smithing gate (`vanillaGate`) still skips this evaluator entirely.
   - `progression/PerkGate.cpp` (534) = perks: grant plumbing + the condition evaluator
-    (`EvalCondItem` `:122`, `EvalPerkConditions` `:178`, `DumpConditions` `:202`),
+    (`EvalCondItem`, `EvalPerkConditions`, `EngineItemTrue`, `DumpConditions`; see "PERK GATE, per-item evaluation" below),
     `CountNativeTreeRanks` (`:256`), the B′ strip `StripNativePerks` (`:275`) /
     `RestoreNativePerksImpl` (`:312`), the §5 gate `GateNextRank` (`:332`), `GrantRank` (`:440`)
     and the session reapply `ReapplyFollower` (`:475`).
