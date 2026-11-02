@@ -213,9 +213,15 @@ namespace MFO::ProgAllocator {
                 if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return Tri::kUnknown;
                 auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
                 RE::FormID pid = form ? form->GetFormID() : 0;
+                const RE::FormID rawPid = pid;
                 pid = TwinOf(pid);   // "alias twins": an off-tree copy stands for its in-tree twin
-                if (PerkAllocatableInCatalog(pid))
-                    return cmp(OwnsPerkForm(a_actor, a_base, PerkByID(pid)) ? 1.0f : 0.0f);
+                if (PerkAllocatableInCatalog(pid)) {
+                    // Held if EITHER the twin or the raw perk itself is owned (a follower the load order
+                    // gave the off-tree perk natively keeps passing), rank-aware for both.
+                    const bool held = OwnsPerkForm(a_actor, a_base, PerkByID(pid)) ||
+                                      (rawPid != pid && OwnsPerkForm(a_actor, a_base, PerkByID(rawPid)));
+                    return cmp(held ? 1.0f : 0.0f);
+                }
                 // Not allocatable: only the "req" shape on a KNOWN-but-filtered perk is decided here.
                 const bool isReqShape =
                     (d.flags.opCode == Op::kEqualTo && rhs == 1.0f) ||
@@ -289,12 +295,15 @@ namespace MFO::ProgAllocator {
                     out += std::format("GetLevel {} {:g} (have {})", op, v, have);
                 } else if (fn == Fn::kHasPerk) {
                     auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
-                    const RE::FormID pid = TwinOf(form ? form->GetFormID() : 0);
+                    const RE::FormID rawPid = form ? form->GetFormID() : 0;
+                    const RE::FormID pid = TwinOf(rawPid);
                     auto* pp = PerkByID(pid);
                     const char* nm = pp ? pp->GetName() : nullptr;
                     out += std::format("HasPerk({}) {} {:g} [{}, {}]",
                                        nm && *nm ? nm : "?", op, v,
-                                       OwnsPerkForm(a_actor, a_base, pp) ? "owned" : "MISSING",
+                                       (OwnsPerkForm(a_actor, a_base, pp) ||
+                                        (rawPid != pid && OwnsPerkForm(a_actor, a_base, PerkByID(rawPid))))
+                                           ? "owned" : "MISSING",
                                        PerkAllocatableInCatalog(pid) ? "in-tree" : "filtered");
                 } else {
                     out += std::format("fn#{} obj{} {} {:g}", static_cast<int>(fn),
@@ -497,6 +506,7 @@ namespace MFO::ProgAllocator {
                     const auto pid = TwinOf(rawPid);
                     if (!PerkAllocatableInCatalog(pid)) continue;   // filtered — not the blocker
                     if (OwnsAnyRank(a_actor, a_base, a_st, pid))    continue;   // owned — not it
+                    if (rawPid != pid && OwnsAnyRank(a_actor, a_base, a_st, rawPid)) continue;   // raw twin owned natively
                     auto* pp = PerkByID(pid);
                     const char* nm = pp ? pp->GetName() : nullptr;
                     detail = std::format(" (needs perk: {})", nm && *nm ? nm : "prerequisite");
