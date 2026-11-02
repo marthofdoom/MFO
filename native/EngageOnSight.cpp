@@ -75,6 +75,17 @@ namespace MFO::EngageOnSight {
         // held, not-hostile target the moment it is past fval with no debounce, so a fight begun right
         // at the edge would be dropped as soon as anyone moved a few units. A distance margin, not a wait.
         constexpr float kStartRangeMargin = 0.9f;
+        // ENGAGE IN A PARTY FIGHT (ClickUp 1dfcuabc4du). A standing ch.21 entry / ch.20 pin is STALE, and released, when a
+        // nearer foe that is fighting the party exists and the old target stands more than this many units farther from
+        // him. 500u (~7 m): the 2026-11-01 13:59 case filed Auri and Sven on a Reaver 2146u / 2177u away while the foes
+        // that then joined the party fight stood well inside that, and 500u is far above the jitter of two foes in one
+        // melee (no churn between near-equal foes) yet far below the range itself.
+        constexpr float kStaleFarMargin = 500.0f;
+        // An own-OOC follower must stay own-OOC this long, inside party combat, before the in-fight road acts: his own
+        // flag flaps false mid-fight on a LoS loss (Scheduler.cpp g_partyCombat doc), and a flap is not "oblivious".
+        constexpr float kInFightSettleSecs = 1.5f;
+        // Two in-fight services further apart than this are not one continuous own-OOC stretch.
+        constexpr float kInFightGapSecs = 1.0f;
 
         struct ProbeResult {
             std::uint32_t seq = 0;                  // the post sequence this answers (g_seq)
@@ -111,6 +122,7 @@ namespace MFO::EngageOnSight {
             // logged per actor, rate-limited, by IsEnemy's caller: SkipText / NoteSkip.)
             float chosenAggression    = 0.0f;
             bool  chosenUnaggressiveFighting = false;
+            bool  inFight = false;   // the in-fight probe (party-fighting foes only), not the party-OOC one
         };
         std::mutex                                   g_probeMx;
         std::unordered_map<RE::FormID, ProbeResult>  g_probes;   // guarded by g_probeMx
@@ -131,6 +143,10 @@ namespace MFO::EngageOnSight {
             std::uint32_t postedSeq   = 0;          // last probe this follower posted (a g_seq value)
             std::uint32_t consumedSeq = 0;          // last probe result acted on
             Clock::time_point lastPost{};
+            // In-fight road: when the current continuous own-OOC stretch inside party combat began, and the last
+            // in-fight service (a gap over kInFightGapSecs starts a new stretch).
+            Clock::time_point oocSince{};
+            Clock::time_point lastInFight{};
             // Given-up targets -> the postedSeq current when the entry ended. A target
             // leaves this map only when a probe posted AFTER that (seq > value) reports it
             // GONE (ProbeResult::gone).
@@ -462,7 +478,7 @@ namespace MFO::EngageOnSight {
         // thread, §0.30) and the sightline measurement (a physics query, §0.30) both
         // run here. Everything crosses back as FormIDs.
         void RunProbe(RE::FormID a_id, std::uint32_t a_seq, std::uint32_t a_gen, float a_leash, float a_range,
-                      float a_goneRadius, const std::vector<RE::FormID>& a_givenUp) {
+                      float a_goneRadius, const std::vector<RE::FormID>& a_givenUp, bool a_inFight) {
             if (g_gen.load(std::memory_order_relaxed) != a_gen) return;
             auto* self = RE::TESForm::LookupByID<RE::Actor>(a_id);
             auto* pc   = RE::PlayerCharacter::GetSingleton();
@@ -477,11 +493,13 @@ namespace MFO::EngageOnSight {
             const bool pcFighting = pc->IsInCombat();
             ProbeResult r;
             r.seq   = a_seq;
+            r.inFight = a_inFight;
             r.leash = a_leash;
             // REACTION DISTANCE (fEngageOnSightRange, marth 2026-09-26): how far from HIM he
             // spots and charges, capped by the leash. The leash-from-PLAYER test below stays.
             r.range = std::min(a_leash, a_range);
-            r.civilStandDown = !pcFighting && IsCivilised(pc->GetCurrentLocation());
+            // IN-FIGHT probe: joining a fight the party is in, so no town / inn stand-down (it is for starting a new one).
+            r.civilStandDown = !a_inFight && !pcFighting && IsCivilised(pc->GetCurrentLocation());
 
             std::vector<std::pair<float, RE::FormID>> found;
             for (auto& hh : pl->highActorHandles) {
@@ -495,8 +513,9 @@ namespace MFO::EngageOnSight {
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
                 if (a->GetPosition().GetDistance(selfPos) > r.range) continue;  // the reaction distance is from HIM
                 const char* why = "";
+                if (a_inFight && !FightingParty(a)) continue;   // the in-fight road admits ONLY foes fighting the party
                 if (!IsEnemy(a, self, pc, why)) { NoteSkip(a, why); continue; }
-                if (!pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
+                if (!a_inFight && !pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
             }
             std::sort(found.begin(), found.end());
@@ -570,7 +589,7 @@ namespace MFO::EngageOnSight {
             slot = std::move(r);
         }
 
-        void PostProbe(Note& a_note, RE::FormID a_id, float a_leash, Clock::time_point a_now) {
+        void PostProbe(Note& a_note, RE::FormID a_id, float a_leash, Clock::time_point a_now, bool a_inFight) {
             if (SecsSince(a_note.lastPost, a_now) < kProbeFloorSecs) return;
             a_note.lastPost = a_now;
             const std::uint32_t seq = ++g_seq;   // global and monotonic (see g_seq)
@@ -587,17 +606,25 @@ namespace MFO::EngageOnSight {
                 if (!a_note.givenUp.contains(fid)) givenUp.push_back(fid);
             // Capture by value: FormIDs and numbers only (the frame re-resolves).
             const float range = Config::g_engageOnSightRange.load();   // read now (the MCM may change it)
-            MainThread::Post([a_id, seq, gen, a_leash, range, goneRadius, givenUp = std::move(givenUp)]() {
-                RunProbe(a_id, seq, gen, a_leash, range, goneRadius, givenUp);
+            MainThread::Post([a_id, seq, gen, a_leash, range, goneRadius, givenUp = std::move(givenUp), a_inFight]() {
+                RunProbe(a_id, seq, gen, a_leash, range, goneRadius, givenUp, a_inFight);
             });
         }
 
     }
 
-    bool Service(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence) {
+    // a_inFight (ClickUp 1dfcuabc4du): the same gambit run while the PARTY is in combat and HE is not (Scheduler's
+    // party-combat branch). Joins a fight instead of starting one: the probe admits only foes FIGHTING THE PARTY, and the
+    // sneak, town / inn and confidence gates (which are for starting a NEW fight) do not apply. Commanded / restrained /
+    // IgnoreCombat (IsEnemy), ToldToWait, the Wait rule and the retreat cooldown still do. Also releases a standing entry /
+    // pin on a far foe when a nearer foe is fighting the party (kStaleFarMargin).
+    static bool ServiceImpl(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence, bool a_inFight) {
         if (!a_f || !a_id) return false;
         const auto now = Clock::now();
         auto& note = g_notes[a_id];
+
+        bool       standing       = false;   // in-fight only: he holds a standing entry
+        RE::FormID standingTarget = 0;
 
         // 1) HIS ENTRY, if he holds one. Runs whatever the gates say, so an entry the
         //    Harbinger sweep ended is always recorded as given up.
@@ -605,7 +632,11 @@ namespace MFO::EngageOnSight {
             RE::FormID    et     = 0;
             std::uint32_t endWhy = APMF_API::kClaimEnd_None;
             const auto st = APMFBridge::CombatEntryStateOf(a_id, &et, &endWhy);
-            if (st == APMFBridge::EntryState::Standing) return true;   // pending: his lap, no logistics
+            if (st == APMFBridge::EntryState::Standing) {
+                if (!a_inFight) return true;   // pending: his lap, no logistics
+                standing = true;               // in a party fight: kept unless stale (step 3), the gates still apply
+                standingTarget = et;
+            }
             if (st == APMFBridge::EntryState::Ended && APMFBridge::ClaimEndReasonOffered()) {
                 // ABI >= 31 (marth 2026-10-27): Harbinger SAYS why it ended the entry, so nothing is guessed.
                 // A NOT ENGAGED end (past the range, or no path progress) was given up by the bridge sweep the
@@ -681,7 +712,7 @@ namespace MFO::EngageOnSight {
                                     "than ABI 14, or its ch.21 seat refused) -- MFO has no direct road", now);
             return false;
         }
-        if (!Config::g_engageOnSightSneaking.load()) {
+        if (!a_inFight && !Config::g_engageOnSightSneaking.load()) {
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsSneaking()) {
                 Status(note, a_f, a_id, "standing down: you are sneaking (bEngageOnSightSneaking is OFF)", now);
                 return false;
@@ -702,13 +733,22 @@ namespace MFO::EngageOnSight {
             return false;
         }
 
+        // IN-FIGHT SETTLE: a continuous own-OOC stretch of kInFightSettleSecs inside party combat before acting.
+        bool settled = true;
+        if (a_inFight) {
+            if (SecsSince(note.lastInFight, now) > kInFightGapSecs) note.oocSince = now;
+            note.lastInFight = now;
+            settled = SecsSince(note.oocSince, now) >= kInFightSettleSecs;
+        }
+
         // 3) THE NEWEST PROBE RESULT (the one answering his last post), once.
         ProbeResult r;
         bool have = false;
         {
             std::lock_guard lk(g_probeMx);
             if (auto it = g_probes.find(a_id);
-                it != g_probes.end() && it->second.seq == note.postedSeq && it->second.seq > note.consumedSeq) {
+                it != g_probes.end() && it->second.seq == note.postedSeq && it->second.seq > note.consumedSeq &&
+                it->second.inFight == a_inFight) {
                 r    = it->second;
                 have = true;
             }
@@ -728,7 +768,28 @@ namespace MFO::EngageOnSight {
                     ++it;
                 }
             }
-            if (r.civilStandDown) {
+            // STALE FAR ENTRY (in-fight, B): the standing entry / pin names a foe that is more than kStaleFarMargin
+            // farther from him than the nearest sensed foe fighting the party. Release it through the existing paths
+            // (ReleaseOwnPin + ForgetCombatEntry) and fall through to engage the nearer one this lap.
+            if (standing && settled && r.chosen && r.chosen != standingTarget &&
+                !note.givenUp.contains(r.chosen) && !APMFBridge::EngageGivenUp(a_id, r.chosen)) {
+                auto* old = RE::TESForm::LookupByID<RE::Actor>(standingTarget);
+                const float dOld = old ? old->GetPosition().GetDistance(a_f->GetPosition()) : 1.0e9f;
+                if (dOld > r.dSelf + kStaleFarMargin) {
+                    const bool pinCleared = note.pinned == standingTarget && ReleaseOwnPin(note, a_id);
+                    APMFBridge::ForgetCombatEntry(a_id);
+                    spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} ({:.0f}u from him) is stale: {:08X} "
+                                 "({:.0f}u) is fighting the party -- released{}",
+                                 NameOf(a_f), a_id, standingTarget, dOld, r.chosen, r.dSelf,
+                                 pinCleared ? ", its pin released" : "");
+                    standing = false;
+                }
+            }
+            if (standing) {
+                // kept: still the best (or not yet comparable)
+            } else if (!settled) {
+                // flap guard: not yet a continuous own-OOC stretch
+            } else if (r.civilStandDown) {
                 Status(note, a_f, a_id, "standing down: in a town/inn, player not fighting", now);
             } else if (!r.chosen) {
                 if (r.civilSkipped > 0 && r.candidates.empty())
@@ -745,7 +806,7 @@ namespace MFO::EngageOnSight {
                 const int   foes = std::max(1, r.joiners);   // the join estimate, not every enemy in the leash
                 const float conf = Confidence::OfFacing(a_f, foes);
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(r.chosen);
-                if (conf < a_minConfidence) {
+                if (!a_inFight && conf < a_minConfidence) {
                     Status(note, a_f, a_id, "standing down: his in-combat confidence estimate is under the engage "
                                             "bar (he would start a fight only to flee it)", now,
                            fmt::format(" -- estimate {:.2f} against {} foe(s) that would join, bar {:.2f}", conf, foes,
@@ -774,6 +835,12 @@ namespace MFO::EngageOnSight {
                         const std::string basis = r.sensed
                             ? fmt::format("senses={} (detail {:#x})", SenseText(r.senses, r.detail), r.detail)
                             : std::string("sightline=VISIBLE");
+                        if (a_inFight)
+                            spdlog::info("[engage-on-sight] {} ({:08X}) joins the party's fight: {} ({:08X}) {:.0f}u from him "
+                                         "(range {:.0f}u), {}, {} candidate(s); ch.21 entry h={}; ch.20 pin: {}",
+                                         NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.range, basis,
+                                         r.candidates.size(), h, pin);
+                        else
                         spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest {} enemy, "
                                      "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), {} "
                                      "({} measured, {} not sensed/visible, {} sight-deferred), {} candidate(s), {} would join; ch.21 entry "
@@ -802,8 +869,16 @@ namespace MFO::EngageOnSight {
 
         // 4) THE NEXT PROBE. The leash is read here, on the worker, exactly as the loot
         //    leash is (Confidence::LeashRadius -- out of combat it is vitality only).
-        PostProbe(note, a_id, Confidence::LeashRadius(a_f), now);
-        return false;
+        PostProbe(note, a_id, Confidence::LeashRadius(a_f), now, a_inFight);
+        return standing;   // a standing in-fight entry is still his lap (pending), like the party-OOC early return
+    }
+
+    bool Service(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence) {
+        return ServiceImpl(a_f, a_id, a_retreatCooling, a_minConfidence, false);
+    }
+
+    bool ServiceInFight(RE::Actor* a_f, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence) {
+        return ServiceImpl(a_f, a_id, a_retreatCooling, a_minConfidence, true);
     }
 
     void NoteWaitRule(RE::FormID a_id, bool a_waitHolds) {

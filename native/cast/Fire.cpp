@@ -290,6 +290,12 @@ namespace MFO::Actuation {
                 return { Result::NoOp, SuppressedText(a_follower, a_choice.target) };
             }
             if (cmd != Targeting::CommandOutcome::Changed) {
+                // "Already on that target" is the OPAQUE wall of an ongoing Attack ACTIVITY (D3). A pin held while the
+                // follower is NOT in combat (a ch.20 pin on a far foe the engine has not engaged; a Harbinger substrate
+                // is not combat, ABI v26) is no activity: it must not read as satisfied and wall the rules below it
+                // (ClickUp 1dfcuabc4du: the 13:59 far Reaver pin, 84 denied engine picks). TRANSPARENT then.
+                if (!APMFBridge::InCombat(a_follower))
+                    return { Result::NoOp, "pinned, but not in combat (not counted as engaged)", true };
                 return { Result::NoOp, "already on that target" };
             }
             // Log the foe's HP% too, so "Foe: Lowest HP -> Attack" is legible in

@@ -12,6 +12,7 @@
 #include "Packages.h"
 #include "Vocabulary.h"
 #include "logistics/Logistics.h"
+#include "logistics/Errand.h"   // engage in a party fight: not while he is away on a town errand
 #include "State.h"
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
 #include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
@@ -1193,6 +1194,20 @@ namespace MFO::Scheduler {
         // shed's read, so the map needs no lock (#4).
         Logistics::NoteInCombat(id);
 
+        // ENGAGE IN A PARTY FIGHT (ClickUp 1dfcuabc4du): nothing else starts a fight for a follower whose own flag is
+        // false while the party fights, so he stood by ("oblivious"). Same gambit, joining mode (EngageOnSight.h
+        // ServiceInFight). Not while retreating (the retreat's StopCombat is what left him out of combat), not on a
+        // town errand (away), and it adds no action of its own: a pending / filed entry only holds the OOC logistics
+        // road off this lap (engagePending, read by serviceOwnOoc below).
+        bool engagePending = false;
+        if (!ownCombat && !Logistics::Errand::Active(id)) {
+            const auto& rn = g_retreatNotes[id];
+            if (rn.phase == RetreatPhase::None) {
+                const bool cooling = rn.rearmLaps > 0 || now < rn.rearmAt;
+                engagePending = EngageOnSight::ServiceInFight(f, id, cooling, kEngageConfidence);
+            }
+        }
+
         // OWN-OOC INSIDE A PARTY FIGHT: the combat table runs (gate 1), but this
         // follower has no combat controller of his own, so every foe-keyed rule
         // falls through transparently and the OOC service road must still run
@@ -1242,7 +1257,7 @@ namespace MFO::Scheduler {
         // top-up, ReconcileForcedWeapon's bound-weapon / B41 re-send) keep
         // running on those laps as they do in his own combat.
         const auto serviceOwnOoc = [&](bool a_castFacetHeld) {
-            if (ownCombat || a_castFacetHeld) return;
+            if (ownCombat || a_castFacetHeld || engagePending) return;
             if (const auto rec = g_followers.find(id); rec != g_followers.end())
                 Logistics::ServiceFollower(f, rec->second);
         };
