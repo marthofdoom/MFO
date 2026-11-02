@@ -814,6 +814,12 @@ namespace MFO::ProgAllocator {
                                       a_st.hmsGrantRemainder[2] != 0.0f;
             float cur[3];
             for (int p = 0; p < 3; ++p) cur[p] = Followers::GetFollowerHMS(a_actor, p);
+            // engineHistory is read HERE, before the give-back loop lowers W (review round 4):
+            // which part of W the cap put there is not recorded (no PRGN field), so a cut
+            // that never went into W (capToW false) must not erase a real engine history.
+            // The cap only adds to W when W > 0 or an award was tallied, so a W from the
+            // cap always means a real history anyway.
+            const bool engineHistory = a_st.hmsWithheld > 0.0f;
             // THE ADOPTED-TOTAL CAP'S CUT IS ALWAYS GIVEN BACK (ClickUp 1dfcuabc4dv review
             // round 3, marth: removal from MFO restores vanilla). The cap stores its cut as a
             // NEGATIVE cumulative, so before either road below every pool with a negative
@@ -846,7 +852,7 @@ namespace MFO::ProgAllocator {
             // then stopped, e.g. at his level cap) holds engine awards and MFO grants mixed in one
             // cumulative that nothing separates, so he takes the leveling road below: left + logged,
             // never lowered below an engine award he really earned.
-            const bool engineHistory = a_st.hmsWithheld > 0.0f;
+            // (engineHistory is read BEFORE the cap give-back above, see there.)
             if ((!a_st.fixedStat && !grantHistory) || engineHistory) {
                 bool any = false;
                 for (int p = 0; p < 3; ++p) any = any || (a_st.hmsCumulative[p] != 0.0f);
