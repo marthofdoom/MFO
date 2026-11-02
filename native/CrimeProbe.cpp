@@ -62,7 +62,6 @@ namespace MFO::CrimeProbe {
         }
 
         void Sample() {
-            struct Clear { ~Clear() { g_inFlight.store(false, std::memory_order_release); } } clear;
             auto* pc = RE::PlayerCharacter::GetSingleton();
             auto* dh = RE::TESDataHandler::GetSingleton();
             if (!pc || !dh) return;
@@ -103,6 +102,12 @@ namespace MFO::CrimeProbe {
 
     }
 
+    void ResetState() {
+        // g_last is main-thread data: it is reseeded on the main thread when the pump epoch changes (Sample), so it is
+        // NOT touched here (a write from the reset thread could race a Sample).
+        g_inFlight.store(false, std::memory_order_release);
+    }
+
     void Pulse() {
         if (!Config::g_crimeGoldProbe.load(std::memory_order_relaxed)) return;
         if (!Runtime::IsVerified1_6_1170()) {
@@ -122,7 +127,10 @@ namespace MFO::CrimeProbe {
         if (!g_seatOk.load()) return;
         g_lastPostMs.store(nowMs, std::memory_order_relaxed);
         if (g_inFlight.exchange(true, std::memory_order_acq_rel)) return;
-        MainThread::Post([]() { Sample(); });
+        // The token's deleter clears the latch when the lambda is destroyed, whether it ran or MainThread::Clear()
+        // dropped it unrun (load / revert), so the latch can never stick.
+        std::shared_ptr<void> token(nullptr, [](void*) { g_inFlight.store(false, std::memory_order_release); });
+        MainThread::Post([token]() { Sample(); });
     }
 
     // ── FRIENDLY-HIT sink ────────────────────────────────────────────────────

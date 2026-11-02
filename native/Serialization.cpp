@@ -18,6 +18,7 @@
 #include "TradeBridge.h"
 #include "MEOBridge.h"
 #include "MainThread.h"
+#include "CrimeProbe.h"
 #include "SelfStatus.h"   // ResetAllState: drop the poisoned-state mirror
 #include "Probe.h"
 #include "Board.h"
@@ -1045,6 +1046,7 @@ namespace MFO {
         // would re-resolve against the NEXT session's (reused) handle table. Safe
         // now that StopPump halted the worker that feeds the queue (audit).
         MainThread::Clear();
+        CrimeProbe::ResetState();   // [crime-probe]: the dropped Post's latch, belt and braces (the token also clears it)
         SelfStatus::Clear();   // the poisoned-state mirror (gambit conditions): a pre-load answer must not survive the load
         g_followers.clear();
         // ARCHITECTURE §7: revert zeroes EVERYTHING save-scoped. The active
