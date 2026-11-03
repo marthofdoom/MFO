@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.7.5** (see [`VERSION`](VERSION) and the
+**Status: v2.8.0** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -182,6 +182,16 @@ leash and walk-to-loot.
 
 ---
 
+## What is new in 2.8.0
+
+- **Needs Harbinger v0.16.0 (ABI v32) for the bystander hold.** Followers hold a weapon attack or an area spell that would hit a bystander. With an older Harbinger everything else works and the bit is not sent.
+- **Town errands respect locked doors.** A shop behind a locked door is closed for the visit with no retry or teleport past it, and loot and museum walks in a town refuse locked interiors. Doors you own are exempt. Solitude walk times and the inn stop across a reload are fixed, and a shop near a workstation is named by its vendor or stall.
+- **Followers stay on the board while away in town mode,** with the full menu, and the follower menu shows each follower's gold in a town. A follower on an errand keeps leveling with you.
+- **Followers join a fight the party is in** and drop a far pin for a nearer foe (`bJoinPartyFights`, on by default).
+- **Perk checks are truer,** inventory gated perks are not offered to followers, and Health, Magicka and Stamina follow the enrolled class, capped at your own total.
+- **Player conditions open as a popout** in the gambit list.
+- **Debug and safety switches.** `bCrimeGoldProbe` (off) logs bounty rises. `bSubstrateBlockedInTowns` (on) holds animated out of combat casts back in towns until Harbinger fixes the town panic.
+
 ## What is new in 2.7.5
 
 - **Followers use the vanilla Smithing tree on every list,** so book locked Smithing perks (Requiem, LoreRim) can be picked for followers. Their own starting Smithing perks are no longer stripped, and a save that lost them gets them back on load.
@@ -327,7 +337,7 @@ The zip no longer ships `MCM/Settings/MFO.ini`, so updating keeps your MCM setti
   addresses for that version inside the DLL, so you install nothing extra.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
-  This version wants **Harbinger 0.13.1 or newer** (ABI 24): the cast guard, the
+  This version wants **Harbinger 0.13.1 or newer** (ABI 24), and **Harbinger 0.16.0** (ABI 32) for the bystander hold: the cast guard, the
   animated casts, the equip claims, lockpicking and the fight leash all go through
   it. Install the two together. With an older Harbinger MFO still runs, keeps one
   small guard hook of its own and says so in the log. Without Harbinger MFO
