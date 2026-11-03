@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v31, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v32, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 31;
+    inline constexpr std::uint32_t kABIVersion = 32;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -609,6 +609,11 @@ namespace APMF_API {
                                      //       outranks "Engine" on the Cast facet (APMF_Sources.ini). REFUSED
                                      //       (kInvalidHandle, logged): APMF < v21, the player, CheckCast gate not
                                      //       installed, a bad ival / fval, kCastGuard_LineOfFire while unarmed.
+                                     //       ABI v32: kCastGuard_Bystanders (weapon attacks and Self area spells,
+                                     //       bystanders only). Refused while unarmed like kCastGuard_LineOfFire, and
+                                     //       an APMF < v32 refuses the whole claim for the unknown bit: gate on
+                                     //       abiVersion >= 32 before setting it. The weapon holds rank on the
+                                     //       CombatAction facet, the spell holds on the Cast facet.
         kIntent_EquipPreference = 26, // ch.26 PREFER items for this actor's hands IN COMBAT (ABI v22, weighting
                                      //       phase 1). Mode: COMPOSE (the engine's own CalculateScore 0x0C answer
                                      //       is LIFTED, never replaced) + an opt-in DENY (kEquipPref_Force).
@@ -665,7 +670,22 @@ namespace APMF_API {
         kCastGuard_ChannelRight = 1u << 1,  // REFUSE the AI's own CONCENTRATION cast on the right / left HAND caster
         kCastGuard_ChannelLeft  = 1u << 2,  //   (0x0A: start and every channel tick) unless a live kIntent_Cast claim
                                             //   on that hand names that spell. The instant caster is never touched.
-        kCastGuard_All          = 0x7u,
+        kCastGuard_Bystanders   = 1u << 3,  // ABI v32. HOLD what would hit a BYSTANDER: a non-hostile actor that is not
+                                            //   the player, not a player teammate and not commanded by the caster, the
+                                            //   player or a teammate (townsfolk, guards, neutral NPCs). LineOfFire's
+                                            //   meaning is unchanged. Three holds, each measured each frame:
+                                            //   (a) a BOW / CROSSBOW shot (the RangedAttack and AttackFromCover leaves):
+                                            //   a bystander in the open within 80u of the line to the actor's own
+                                            //   combat target. (b) a MELEE swing (Attack, AttackLow, Bash,
+                                            //   SpecialAttack, AttackFromCover): a bystander in the open no farther
+                                            //   from the actor than that target + 48u and within 35 degrees of the
+                                            //   direction to it. (a) and (b) deny the behaviour tree leaf on a fresh
+                                            //   (<= 250 ms) reading only. (c) a SELF delivered spell with a hostile
+                                            //   area effect, or a cloak whose spell is hostile with an area: a
+                                            //   bystander within that area + 64u of the actor (0x0A refuses on a
+                                            //   fresh reading, 0x06 holds unless a fresh reading says clear).
+                                            //   Gate on abiVersion >= 32: an older APMF REFUSES a claim with this bit.
+        kCastGuard_All          = 0xFu,     // every bit this ABI defines (0x7 before ABI v32)
     };
 
     // ── Combat approach flags (kIntent_CombatApproach's param.ival, ABI v19) ────
@@ -1499,7 +1519,8 @@ namespace APMF_API {
     //                                  actor itself is refused; the player is allowed).
     //   fval   kIntent_CombatApproach  ABI v19: R, the radius in game units (REQUIRED, finite, > 0).
     //   ival   kIntent_CombatApproach  ABI v19: a CombatApproachFlags bitmask (0 = end on arrival).
-    //   ival   kIntent_CastGuard       ABI v21: a CastGuardFlags bitmask. fval: the TTL in seconds.
+    //   ival   kIntent_CastGuard       ABI v21: a CastGuardFlags bitmask (kCastGuard_Bystanders: ABI v32).
+    //                                  fval: the TTL in seconds.
     //                                  form / pos are not read.
     //   fval   kIntent_CombatSubstrate ABI v23: the TTL in seconds (0 => INI default; clamped to 15 s).
     //   form   kIntent_Place           ABI v28: the DESTINATION, a REFERENCE or an INTERIOR CELL (REQUIRED).
@@ -2761,6 +2782,9 @@ namespace APMF_API {
         // returns kClaimEnd_None.
         std::uint32_t (*GetClaimEndReason)(Handle handle);
     };
+
+    // ABI v32 (kCastGuard_Bystanders, a CastGuardFlags bit read through the EXISTING RequestEx / Repoint) adds NO
+    // slot: the interface object stays an APMF_API_v31 and `abiVersion` reports 32.
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

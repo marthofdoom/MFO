@@ -19,6 +19,11 @@ namespace MFO::APMFBridge {
 
     namespace {
         constexpr std::uint32_t kGuardMinAbi = 21;   // the ABI that first serves intent 25
+        // kCastGuard_Bystanders (marth 2026-11-02 crime ruling, "Bystanders only"): Harbinger also holds a
+        // weapon attack or a Self area spell that would hit a bystander (not the player, not the party).
+        // It rides bFriendlyFireHold with LineOfFire. An APMF below ABI 32 REFUSES the whole claim for an
+        // unknown bit, so the bit is asked only from ABI 32 up (older: LineOfFire alone, as before).
+        constexpr std::uint32_t kBystandersMinAbi = 32;
 
         // The claim's window. Harbinger bounds it like a cast claim and every Repoint
         // renews it; the service lap repoints far more often than this (one combat
@@ -51,6 +56,7 @@ namespace MFO::APMFBridge {
         std::string BitsName(std::uint32_t a_bits) {
             std::string s;
             if (a_bits & APMF_API::kCastGuard_LineOfFire) s += "LineOfFire";
+            if (a_bits & APMF_API::kCastGuard_Bystanders) s += s.empty() ? "Bystanders" : "+Bystanders";
             if (a_bits & (APMF_API::kCastGuard_ChannelRight | APMF_API::kCastGuard_ChannelLeft))
                 s += s.empty() ? "Channel(R+L)" : "+Channel(R+L)";
             return s.empty() ? "none" : s;
@@ -70,7 +76,10 @@ namespace MFO::APMFBridge {
         {
             std::scoped_lock lock(g_guardMx);
             auto& g = g_guards[a_follower];
-            if (a_lineOfFire) want |= APMF_API::kCastGuard_LineOfFire;
+            if (a_lineOfFire) {
+                want |= APMF_API::kCastGuard_LineOfFire;
+                if (api->abiVersion >= kBystandersMinAbi) want |= APMF_API::kCastGuard_Bystanders;
+            }
             if (a_channelBound) want |= kChannel;
             want &= ~g_refusedBits;   // a guard Harbinger refused this session is not asked again
             h    = g.handle;
@@ -120,9 +129,11 @@ namespace MFO::APMFBridge {
             // Harbinger refuses on configuration (CheckCast gate not installed, the
             // line-of-fire measurement not armed), which a load does not change, so
             // the refused guard is struck for the session and said once. LineOfFire
-            // is struck first when both were asked (it alone has the extra arming
-            // rule), so the channel bound is asked again alone next lap.
-            const std::uint32_t strike = (want & APMF_API::kCastGuard_LineOfFire) ? APMF_API::kCastGuard_LineOfFire : want;
+            // (with Bystanders, which shares its arming rule) is struck first when the
+            // channel bound was asked too, so the channel bound is asked again alone
+            // next lap.
+            constexpr std::uint32_t kArmed = APMF_API::kCastGuard_LineOfFire | APMF_API::kCastGuard_Bystanders;
+            const std::uint32_t strike = (want & kArmed) ? (want & kArmed) : want;
             g_refusedBits |= strike;
             spdlog::error("[cast-guard] Harbinger REFUSED the ch.25 cast guard {} (asked {} for {:08X}) -- {} is "
                           "INACTIVE for this session (APMF's log names why). No MFO hook stands in.",
