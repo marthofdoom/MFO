@@ -98,6 +98,8 @@ namespace MFO::Actuation {
         }
     }
 
+    namespace { constexpr std::uint32_t kTownFixMinAbi = 32; }   // Harbinger 0.16.0: the Spectator fix (same ABI as CastGuard kBystandersMinAbi)
+
     bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable) {
         if (!Config::g_substrateCasts.load()) return false;   // OFF: today's road, byte for byte (nothing else read)
         if (!a_oocTable || !a_follower || !a_spell) return false;
@@ -106,14 +108,32 @@ namespace MFO::Actuation {
 
         const bool other = a_recipient && a_recipient != a_follower;
         const char* why = nullptr;
-        // TEMPORARY WORKAROUND (marth 2026-11-01, ClickUp 1dfcuabc4dn, "Yes, gate in towns"): the substrate is not
-        // requested while the player is in a town, until Harbinger's town-wide panic fix lands. The cast takes the
-        // direct road (this function's false), the same road as the switch OFF / Harbinger refusing. Same town test
-        // as the errands (Errand.cpp PlayerTownId). Logged by NoteDirect (never masked). Remove with the INI key.
-        if (Config::g_substrateBlockedInTowns.load()) {
+        // TOWN HOLD (marth 2026-11-01 workaround, ClickUp 1dfcuabc4dn; marth 2026-11-02 "Unblock, hotfix 2.8.1"):
+        // Harbinger ABI 32 (0.16.0) refuses a held substrate holder at the Spectator gate, which is the town panic fix,
+        // so the hold is now OFF by default. It still applies (a) when the connected Harbinger is below ABI 32 (no fix,
+        // automatic) and (b) when the player sets bSubstrateBlockedInTowns = 1 (opt-in). In a hold the substrate is
+        // not requested while the player is in a town: the cast takes the direct road (this function's false), the same
+        // road as the switch OFF / Harbinger refusing. Same town test as the errands (Errand.cpp PlayerTownId).
+        // Logged by NoteDirect (never masked). The rule in force is logged once.
+        const std::uint32_t abi = APMFBridge::ErrandApiVersion();   // the existing abiVersion accessor (0 = absent)
+        const bool oldHarbinger = abi < kTownFixMinAbi;
+        const bool optIn = Config::g_substrateBlockedInTowns.load();
+        {
+            static std::atomic<bool> s_ruleNoted{ false };
+            if (!s_ruleNoted.exchange(true)) {
+                if (optIn)
+                    spdlog::info("[substrate] town substrate casts: held (bSubstrateBlockedInTowns = 1)");
+                else if (oldHarbinger)
+                    spdlog::info("[substrate] town substrate casts: held (Harbinger ABI {} < {}, no Spectator fix)", abi, kTownFixMinAbi);
+                else
+                    spdlog::info("[substrate] town substrate casts: allowed (Harbinger ABI {})", abi);
+            }
+        }
+        if (optIn || oldHarbinger) {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             if (pc && LocationTypes::TownAnchor(pc->GetCurrentLocation()))
-                why = "the player is in a town and bSubstrateBlockedInTowns is ON (temporary workaround for the town panic, ClickUp 1dfcuabc4dn)";
+                why = optIn ? "the player is in a town and bSubstrateBlockedInTowns is 1 (opt-in hold)"
+                            : "the player is in a town and Harbinger is below ABI 32 (no Spectator fix for the town panic, ClickUp 1dfcuabc4dn)";
         }
         if (why) {
             // fall through to the shared log + direct road below

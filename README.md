@@ -190,7 +190,7 @@ leash and walk-to-loot.
 - **Followers join a fight the party is in** and drop a far pin for a nearer foe (`bJoinPartyFights`, on by default).
 - **Perk checks are truer,** inventory gated perks are not offered to followers, and Health, Magicka and Stamina follow the enrolled class, capped at your own total.
 - **Player conditions open as a popout** in the gambit list.
-- **Debug and safety switches.** `bCrimeGoldProbe` (off) logs bounty rises. `bSubstrateBlockedInTowns` (on) holds animated out of combat casts back in towns until Harbinger fixes the town panic.
+- **Debug and safety switches.** `bCrimeGoldProbe` (off) logs bounty rises. `bSubstrateBlockedInTowns` (off) holds animated out of combat casts back in towns. It is automatic with a Harbinger older than v0.16.0.
 
 ## What is new in 2.7.5
 

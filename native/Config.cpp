@@ -148,7 +148,7 @@ namespace MFO::Config {
             else if (a_key == "iInnFoodStock")      { setI(g_innFoodStock, 0, 20); return; }
             else if (a_key == "iTempleGameMin")     { setI(g_templeGameMin, 1, 240); return; }   // legacy: read, no longer used
             else if (a_key == "fTempleRealSec")     { setF(g_templeRealSec, 1.0f, 600.0f); return; }
-            else if (a_key == "bSubstrateBlockedInTowns") { setB(g_substrateBlockedInTowns); return; }   // TEMP workaround, ClickUp 1dfcuabc4dn
+            else if (a_key == "bSubstrateBlockedInTowns") { setB(g_substrateBlockedInTowns); return; }   // opt-in town hold (ClickUp 1dfcuabc4dn)
             else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default ON
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
@@ -381,7 +381,7 @@ namespace MFO::Config {
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)
             g_substrateCasts     = true;    // default ON (2026-10-26, marth: "once it works, its certainly on"; the field run proved fired casts). OFF = the kill switch, OOC casts take the direct road
-            g_substrateBlockedInTowns = true;   // TEMP workaround default ON (ClickUp 1dfcuabc4dn)
+            g_substrateBlockedInTowns = false;   // default OFF since 2.8.1 (Harbinger ABI 32 fixes the town panic; opt-in hold)
             g_castSource         = 3;
             g_equipToCast        = true;
             g_aiCastGrace        = 3.0f;

@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.8.1 -- Town casts animate again
+
+Needs Harbinger v0.16.0 (ABI v32) for the town fix. With an older Harbinger the old hold stays on by itself.
+
+- **Out of combat casts in towns animate again.** v2.8.0 held substrate casts back in towns as a workaround for the town panic. Harbinger v0.16.0 carries the real fix, so the hold is now off by default and casts in towns use the hand animation like everywhere else.
+- **An older Harbinger keeps the hold automatically.** With Harbinger below ABI 32 the town hold stays on, and the log says so once per session.
+- **`bSubstrateBlockedInTowns = 1` in MFO.ini keeps the hold** for anyone who wants it. The default is now 0.
+
 ## v2.8.0 -- Town trips on the board, fights joined, and a lock gate for town crime
 
 Needs Harbinger v0.16.0 (ABI v32) for the bystander hold. With an older Harbinger everything else works and the bystander bit is not sent.
