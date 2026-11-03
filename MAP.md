@@ -44,6 +44,8 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    than none.
 3. **`native/` only.** `imgui_impl_win32.*` is the only vendored code in
    `native/` — **do not read it.** No `extern/`; ImGui itself comes via vcpkg.
+   The DLL's Windows VERSIONINFO resource is `native/version.rc.in`, expanded by `configure_file` in
+   `native/CMakeLists.txt` from the `project()` VERSION (no manual edit on a version bump).
 4. **When unsure a ripple is real,** entries say "UNVERIFIED — check before
    relying." Treat those as leads, not facts.
 5. 56 real translation units (57 `.cpp` incl. the vendored ImGui backend) + headers; ~52k lines (verified 2026-09-24, after the wave-1 folder split). Startup wiring lives in
