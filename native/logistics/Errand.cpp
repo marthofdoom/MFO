@@ -1363,9 +1363,55 @@ namespace MFO::Logistics::Errand {
             spdlog::warn("[errand] {:08X}: a watched shop opened but the town {:08X} does not resolve -- no new trip", a_follower->GetFormID(), a_townId);
             return false;
         }
-        const std::size_t n = a_plan.stops.size();
+        std::size_t n = a_plan.stops.size();
         const std::string line = a_plan.line;
         std::vector<Stop> stops = a_plan.stops;   // (copy: a failed start leaves the plan, and the watch, intact for the retry)
+        // LOCK GATE (marth's crime ruling: a follower never uses a locked town door). The live-need, late-sell and reopen plans build stops without the
+        // plan-time door gate (TryStart's closedByLock), so every INTERIOR shop stop is read here, once, before the trip starts. Locked = the stop is
+        // dropped and its faction parked; Pending = the main-thread read was just posted, the start is deferred (Reopen::Retry) like a failed start.
+        {
+            const auto fid = a_follower->GetFormID();
+            bool pending = false, droppedAny = false;
+            std::vector<Stop> kept;
+            for (auto& st : stops) {
+                RE::FormID cellId = 0;
+                if (st.kind == StopKind::Shop && st.destForm) {
+                    RE::TESObjectCELL* c = st.destKind == DestKind::Cell ? RE::TESForm::LookupByID<RE::TESObjectCELL>(st.destForm) : nullptr;
+                    if (st.destKind != DestKind::Cell)
+                        if (auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(st.destForm)) c = ref->GetParentCell();
+                    if (c && c->IsInteriorCell()) cellId = c->GetFormID();
+                }
+                if (cellId) {
+                    RE::NiPoint3 dp{};
+                    RE::FormID lockedDoor = 0;
+                    int lockedLevel = 0;
+                    const auto ans = Rest::ShopDoorFor(cellId, dp, &lockedDoor, &lockedLevel, 30);
+                    if (ans == Rest::DoorAnswer::Pending) { pending = true; kept.push_back(std::move(st)); continue; }
+                    if (ans == Rest::DoorAnswer::Locked) {
+                        auto* fac = st.faction ? RE::TESForm::LookupByID<RE::TESFaction>(st.faction) : nullptr;
+                        NoteVendorOnce(st.faction, std::format("shop closed '{}': entry door {:08X} locked ({})", fac ? ShopDisplayName(fac, 0) : st.vendorName, lockedDoor,
+                                                               Rest::LockWordOf(lockedLevel)));
+                        if (st.faction) { std::scoped_lock lk(g_mx); g_parked[st.faction] = a_now + kParkTime; }
+                        droppedAny = true;
+                        continue;
+                    }
+                }
+                kept.push_back(std::move(st));
+            }
+            if (pending || (droppedAny && std::none_of(kept.begin(), kept.end(), [](const Stop& k) { return k.kind == StopKind::Shop; }))) {
+                if (pending) {
+                    Reopen::Retry(fid);   // ask again on the next poll: the entry-door read is in flight
+                    if (!a_plan.lateForms.empty()) Reopen::NoteLate(fid, a_townId, a_plan.lateForms, true);
+                }
+                return false;
+            }
+            if (droppedAny) {
+                for (std::size_t i = 0; i < kept.size(); ++i) kept[i].state = i == 0 ? StopState::Active : StopState::Pending;
+                n = kept.size();
+                a_plan.stops = kept;   // (the dropped stops are not part of the trip that STARTS: Consume / the tried marks see the kept ones)
+            }
+            stops = std::move(kept);
+        }
         if (!StartTrip(a_follower, town, a_now, std::move(stops), line, n)) {
             Reopen::Retry(a_follower->GetFormID());
             if (!a_plan.lateForms.empty()) Reopen::NoteLate(a_follower->GetFormID(), a_townId, a_plan.lateForms, true);   // MISSED SELLS (b): the late items wait for the next try

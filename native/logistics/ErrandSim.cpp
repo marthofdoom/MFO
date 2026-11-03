@@ -73,6 +73,42 @@ namespace MFO::Logistics::Errand::Sim {
         constexpr auto   kRestoreSettle    = std::chrono::seconds(3);
         // R5: the walk back from a stop whose place has no known position (a CELL shop restored from a save), in units.
         constexpr double kUnknownBackUnits = 2000.0;
+        // The same street-walk estimate for the leg between two stops that are not in one space (mirrors ErrandTrip.cpp's kUnknownLegUnits, which is file-local there).
+        constexpr double kUnknownLegUnits = 2000.0;
+
+        // The cell a stop's destination is in (a cell stop: that cell; a vendor / ref: its parent cell). Null = not resolvable (unloaded).
+        RE::TESObjectCELL* StopCell(const Stop& a_s) {
+            if (!a_s.destForm) return nullptr;
+            if (a_s.destKind == DestKind::Cell) return RE::TESForm::LookupByID<RE::TESObjectCELL>(a_s.destForm);
+            auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_s.destForm);
+            return ref ? ref->GetParentCell() : nullptr;
+        }
+        // Do two cells share a space (the same cell, or two exterior cells of one worldspace)? A distance between points in different
+        // spaces is meaningless (an interior coordinate vs an exterior one: the 2026-11-02 Solitude 123904 u / 275 game min estimate).
+        bool SameSpaceCells(RE::TESObjectCELL* a_a, RE::TESObjectCELL* a_b) {
+            if (!a_a || !a_b) return true;   // unresolved (unloaded): keep the straight line, as before
+            if (a_a == a_b) return true;
+            if (a_a->IsInteriorCell() || a_b->IsInteriorCell()) return false;
+            return a_a->GetRuntimeData().worldSpace == a_b->GetRuntimeData().worldSpace;
+        }
+        bool SameSpace(const Stop& a_a, const Stop& a_b) { return SameSpaceCells(StopCell(a_a), StopCell(a_b)); }
+        bool SameSpace(const Stop& a_s, RE::FormID a_cellId) {
+            return SameSpaceCells(StopCell(a_s), a_cellId ? RE::TESForm::LookupByID<RE::TESObjectCELL>(a_cellId) : nullptr);
+        }
+
+        // LOCK GATE (marth's crime ruling: a follower never uses a locked town door). An INTERIOR shop stop he is not already inside is read for its
+        // entry-door lock on the main thread (Rest::ShopDoorLockedNow). 0 = go on (open, unknown, not an interior shop, or he is inside), 1 = the read is
+        // in flight (ask again next tick), 2 = locked (a_door / a_level out).
+        int ShopLockGate(const Stop& a_s, RE::FormID a_lastCell, RE::FormID& a_door, int& a_level) {
+            if (a_s.kind != StopKind::Shop) return 0;
+            auto* c = StopCell(a_s);
+            if (!c || !c->IsInteriorCell() || c->GetFormID() == a_lastCell) return 0;
+            switch (Rest::ShopDoorLockedNow(c->GetFormID(), a_door, a_level)) {
+                case Rest::LockAnswer::Pending: return 1;
+                case Rest::LockAnswer::Locked:  return 2;
+                default:                        return 0;
+            }
+        }
 
         enum class Stage { Out, Trade, Return, Rejoin, Rest };   // R7: Rest = the INN stay off screen (no return leg until the player leaves town)
         const char* StageName(Stage s) {
@@ -218,9 +254,9 @@ namespace MFO::Logistics::Errand::Sim {
             r.dispatched = r.reported = r.tradeAbandoned = false;
             r.hadOrder = true;
             r.firstTryClk = -1.0;
-            const double leg = WalkDays(Trip::LegUnits(prev, s));
+            const double leg = WalkDays(SameSpace(prev, s) ? Trip::LegUnits(prev, s) : kUnknownLegUnits);
             RE::NiPoint3 np;
-            const double back = WalkDays(Trip::PlacePos(s, np) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
+            const double back = WalkDays(Trip::PlacePos(s, np) && SameSpace(s, r.lastCell) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
             r.tArrive = a_days + leg;
             r.tTradeEnd = r.tArrive + WorkDays(r.stops, r.cur);
             r.tReturn = r.tTradeEnd + back;
@@ -254,9 +290,9 @@ namespace MFO::Logistics::Errand::Sim {
             r.tripPurse = -1; r.tripSpent = 0;
             for (const auto& st : r.stops) if (st.order) { r.tripPurse = st.order->purse; break; }
             r.startDays = static_cast<float>(a_days);
-            const double leg = WalkDays(Trip::LegUnits(prev, s));
+            const double leg = WalkDays(SameSpace(prev, s) ? Trip::LegUnits(prev, s) : kUnknownLegUnits);
             RE::NiPoint3 np;
-            const double back = WalkDays(Trip::PlacePos(s, np) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
+            const double back = WalkDays(Trip::PlacePos(s, np) && SameSpace(s, r.lastCell) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
             r.tEnter = a_days;
             r.tArrive = a_days + leg;
             r.tTradeEnd = r.tArrive + WorkDays(r.stops, r.cur);
@@ -468,7 +504,9 @@ namespace MFO::Logistics::Errand::Sim {
             dist = r.lastPos.GetDistance(destPos);
         } else {
             auto* door = r.entryDoor ? RE::TESForm::LookupByID<RE::TESObjectREFR>(r.entryDoor) : nullptr;
-            dist = (door ? r.lastPos.GetDistance(door->GetPosition()) : 0.0) + kInteriorWalk;
+            // Already inside the shop's cell: his position is an interior coordinate, the door an exterior one, so no line between them
+            // exists (the 2026-11-02 Solitude log: 123904 u, 275 game min); the walk is the interior walk alone.
+            dist = alreadyThere ? kInteriorWalk : (door ? r.lastPos.GetDistance(door->GetPosition()) : 0.0) + kInteriorWalk;
         }
         const double walk = WalkDays(dist);
         const double now = GameDays();
@@ -614,7 +652,7 @@ namespace MFO::Logistics::Errand::Sim {
         }
         const bool betweenStops = inTown && r.cur > 0 && r.stage == Stage::Out;
         const bool resumeHere = atShop || (r.restoredPhysical && inTown) || betweenStops;
-        if (resumeHere && !r.dispatched && !r.reported && !r.tradeAbandoned && (tradeLeft || (advanced2c && CurKind(r) != StopKind::Shop)) &&
+        if (resumeHere && !r.dispatched && !r.reported && !r.tradeAbandoned && (tradeLeft || ((advanced2c || betweenStops) && CurKind(r) != StopKind::Shop)) &&
             (r.stage == Stage::Out || r.stage == Stage::Trade)) {
             ResumeInfo ri;
             ri.follower = fid; ri.followerName = r.followerName; ri.vendorName = r.vendorName;
@@ -923,10 +961,28 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.stage == Stage::Rest && CurKind(r) == StopKind::Inn && Config::g_errandInn.load()) {   // F3: a watched shop opened
                 Reopen::Plan plan;
                 if (Reopen::Poll(fid, r.town, &r.lastPos, plan)) {
-                    Retrip(r, plan, days);
-                    Reopen::Consume(fid, plan);   // F2 (review): the opened / restocked shops leave the watch (Retrip moved the stops, plan.keys is intact)
-                    Store(r);
-                    continue;
+                    // The lock gate (see ShopLockGate): a locked shop is dropped from the new trip, a pending door read defers it a tick.
+                    bool pendingDoor = false;
+                    for (auto it = plan.stops.begin(); it != plan.stops.end();) {
+                        RE::FormID door = 0;
+                        int level = 0;
+                        const int g = ShopLockGate(*it, r.lastCell, door, level);
+                        if (g == 1) { pendingDoor = true; ++it; continue; }
+                        if (g == 2) {
+                            spdlog::info("[errand] {:08X} '{}': shop closed '{}': entry door {:08X} locked ({}) -- skipped from the REST_SIM reopen trip", fid, r.followerName,
+                                         it->vendorName, door, Rest::LockWordOf(level));
+                            it = plan.stops.erase(it);
+                            continue;
+                        }
+                        ++it;
+                    }
+                    if (pendingDoor) { Reopen::Retry(fid); Store(r); continue; }   // (the plan is rebuilt by the next Poll)
+                    if (std::any_of(plan.stops.begin(), plan.stops.end(), [](const Stop& k) { return k.kind == StopKind::Shop; })) {
+                        Retrip(r, plan, days);
+                        Reopen::Consume(fid, plan);   // F2 (review): the opened / restocked shops leave the watch (Retrip moved the stops, plan.keys is intact)
+                        Store(r);
+                        continue;
+                    }
                 }
             }
             // F5: a teleport-sized game-clock jump (fast travel / wait / sleep) inside one poll is the player leaving, not the errand running long:
@@ -953,7 +1009,27 @@ namespace MFO::Logistics::Errand::Sim {
             }
 
             // ── the timeline ──
-            if (r.stage == Stage::Out && days >= r.tArrive) {
+            // The OFF SCREEN hand-off of a follower who was NOT already in the shop's cell always runs OUT_SIM first, so this is where he would go in by the
+            // entry door: an interior shop whose door is locked is SKIPPED (never a TRADE_SIM behind a locked door); a pending read waits a tick.
+            bool lockSkipped = false;
+            if (r.stage == Stage::Out && days >= r.tArrive && r.cur < r.stops.size()) {
+                RE::FormID lockedDoor = 0;
+                int lockedLevel = 0;
+                const int g = ShopLockGate(r.stops[r.cur], r.lastCell, lockedDoor, lockedLevel);
+                if (g == 1) { Store(r); continue; }
+                if (g == 2) {
+                    const std::string was = Trip::Label(r.stops, r.cur);
+                    spdlog::info("[errand] {:08X} '{}': shop closed '{}': entry door {:08X} locked ({}) -- {} SKIPPED (sim), no TRADE_SIM", fid, r.followerName,
+                                 r.vendorName, lockedDoor, Rest::LockWordOf(lockedLevel), was);
+                    lockSkipped = true;
+                    if (!AdvanceStop(r, days)) {
+                        r.stage = Stage::Return;
+                        r.tReturn = days + WalkDays(kUnknownBackUnits);
+                        spdlog::info("[errand] {:08X} '{}': RET_SIM -- no stop left after the locked shop, walking back (off screen)", fid, r.followerName);
+                    }
+                }
+            }
+            if (r.stage == Stage::Out && days >= r.tArrive && !lockSkipped) {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
                 if (CurKind(r) == StopKind::Temple) detail::ToastPraying(r.followerName, r.vendorName);   // R7
