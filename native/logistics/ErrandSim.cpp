@@ -963,6 +963,7 @@ namespace MFO::Logistics::Errand::Sim {
                 if (Reopen::Poll(fid, r.town, &r.lastPos, plan)) {
                     // The lock gate (see ShopLockGate): a locked shop is dropped from the new trip, a pending door read defers it a tick.
                     bool pendingDoor = false;
+                    std::vector<RE::FormID> droppedIds;
                     for (auto it = plan.stops.begin(); it != plan.stops.end();) {
                         RE::FormID door = 0;
                         int level = 0;
@@ -971,12 +972,28 @@ namespace MFO::Logistics::Errand::Sim {
                         if (g == 2) {
                             spdlog::info("[errand] {:08X} '{}': shop closed '{}': entry door {:08X} locked ({}) -- skipped from the REST_SIM reopen trip", fid, r.followerName,
                                          it->vendorName, door, Rest::LockWordOf(level));
+                            if (it->order && it->order->vendorKey) droppedIds.push_back(it->order->vendorKey);
+                            if (it->faction) droppedIds.push_back(it->faction);
+                            if (it->vendorActor) droppedIds.push_back(it->vendorActor);
                             it = plan.stops.erase(it);
                             continue;
                         }
                         ++it;
                     }
                     if (pendingDoor) { Reopen::Retry(fid); Store(r); continue; }   // (the plan is rebuilt by the next Poll)
+                    if (!droppedIds.empty()) {   // a shop dropped as locked stays in the watch: Consume sees only the kept stops' keys / buy pairs
+                        std::vector<RE::FormID> keptIds;
+                        for (const auto& k : plan.stops) {
+                            if (k.order && k.order->vendorKey) keptIds.push_back(k.order->vendorKey);
+                            if (k.faction) keptIds.push_back(k.faction);
+                            if (k.vendorActor) keptIds.push_back(k.vendorActor);
+                        }
+                        const auto isDropped = [&](RE::FormID a_id) {
+                            return std::find(droppedIds.begin(), droppedIds.end(), a_id) != droppedIds.end() && std::find(keptIds.begin(), keptIds.end(), a_id) == keptIds.end();
+                        };
+                        std::erase_if(plan.keys, isDropped);
+                        std::erase_if(plan.buyServed, [&](const auto& p) { return isDropped(p.second); });
+                    }
                     if (std::any_of(plan.stops.begin(), plan.stops.end(), [](const Stop& k) { return k.kind == StopKind::Shop; })) {
                         Retrip(r, plan, days);
                         Reopen::Consume(fid, plan);   // F2 (review): the opened / restocked shops leave the watch (Retrip moved the stops, plan.keys is intact)

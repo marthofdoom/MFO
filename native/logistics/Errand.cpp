@@ -1364,7 +1364,7 @@ namespace MFO::Logistics::Errand {
             return false;
         }
         std::size_t n = a_plan.stops.size();
-        const std::string line = a_plan.line;
+        std::string line = a_plan.line;
         std::vector<Stop> stops = a_plan.stops;   // (copy: a failed start leaves the plan, and the watch, intact for the retry)
         // LOCK GATE (marth's crime ruling: a follower never uses a locked town door). The live-need, late-sell and reopen plans build stops without the
         // plan-time door gate (TryStart's closedByLock), so every INTERIOR shop stop is read here, once, before the trip starts. Locked = the stop is
@@ -1372,6 +1372,7 @@ namespace MFO::Logistics::Errand {
         {
             const auto fid = a_follower->GetFormID();
             bool pending = false, droppedAny = false;
+            std::vector<RE::FormID> droppedIds;   // the identities (vendor key, faction, vendor actor) of the stops dropped as locked
             std::vector<Stop> kept;
             for (auto& st : stops) {
                 RE::FormID cellId = 0;
@@ -1393,6 +1394,9 @@ namespace MFO::Logistics::Errand {
                                                                Rest::LockWordOf(lockedLevel)));
                         if (st.faction) { std::scoped_lock lk(g_mx); g_parked[st.faction] = a_now + kParkTime; }
                         droppedAny = true;
+                        if (st.order && st.order->vendorKey) droppedIds.push_back(st.order->vendorKey);
+                        if (st.faction) droppedIds.push_back(st.faction);
+                        if (st.vendorActor) droppedIds.push_back(st.vendorActor);
                         continue;
                     }
                 }
@@ -1408,6 +1412,21 @@ namespace MFO::Logistics::Errand {
             if (droppedAny) {
                 for (std::size_t i = 0; i < kept.size(); ++i) kept[i].state = i == 0 ? StopState::Active : StopState::Pending;
                 n = kept.size();
+                // A shop dropped as locked must not be CONSUMED by the trip that starts without it: cut the watch keys, the missed-buy pairs and the
+                // live-need tried pairs down to the identities of the kept stops (an identity a kept stop also answers to stays).
+                std::vector<RE::FormID> keptIds;
+                for (const auto& k : kept) {
+                    if (k.order && k.order->vendorKey) keptIds.push_back(k.order->vendorKey);
+                    if (k.faction) keptIds.push_back(k.faction);
+                    if (k.vendorActor) keptIds.push_back(k.vendorActor);
+                }
+                const auto isDropped = [&](RE::FormID a_id) {
+                    return std::find(droppedIds.begin(), droppedIds.end(), a_id) != droppedIds.end() && std::find(keptIds.begin(), keptIds.end(), a_id) == keptIds.end();
+                };
+                std::erase_if(a_plan.keys, isDropped);
+                std::erase_if(a_plan.buyServed, [&](const auto& p) { return isDropped(p.second); });
+                std::erase_if(a_plan.liveTried, [&](const auto& p) { return isDropped(p.second); });
+                line += std::format(" | {} stop(s) dropped (locked entry door)", stops.size() - kept.size());
                 a_plan.stops = kept;   // (the dropped stops are not part of the trip that STARTS: Consume / the tried marks see the kept ones)
             }
             stops = std::move(kept);
