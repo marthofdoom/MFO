@@ -1678,7 +1678,10 @@ namespace MFO::APMFBridge {
     // Worker (the Scheduler's party-combat service, every lap). a_lineOfFire =
     // kCastGuard_LineOfFire (bFriendlyFireHold), held steady: MFO's old every-4th-cast
     // decay is GONE (Harbinger holds while a friendly is in the line and re-checks at the
-    // release; a held-count decay would be a ch.25 item). a_channelBound =
+    // release; a held-count decay would be a ch.25 item). With Harbinger at ABI >= 32 the
+    // same switch also asks kCastGuard_Bystanders (weapon attacks and Self area spells are
+    // held while they would hit a bystander, never the player or the party, marth
+    // 2026-11-02). Below ABI 32 that bit is never sent (an older APMF refuses it). a_channelBound =
     // kCastGuard_ChannelRight|Left (iCastControl >= 1 with a gambit concentration spell --
     // the old never-force-YES deny -- or Exact with no cast gambit).
     // Claims (RequestEx, fval 6 s), heartbeats (Repoint renews the window and carries the
