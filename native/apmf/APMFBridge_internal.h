@@ -322,6 +322,10 @@ namespace MFO::APMFBridge {
             // scope (equipAuthFresh false).
             std::uint32_t equipOwned  = APMF_API::kEquipCat_All;
             std::uint32_t equipDenied = 0;
+            // ABI v33 (MFO-B308): the per-item DENY list last SENT on this handle (DeclareEquipDenyItems,
+            // sorted), mirrored for EquipItemDenied (the excluded-weapon heal stands down for a listed item).
+            // Cleared when a handle is minted: a fresh claim carries no list on Harbinger's side.
+            std::vector<RE::FormID> equipDenyItems;
             // ── ch.8 CAST-SELECT GATE-ONLY CLAIM + ITS ALLOW-LIST (ABI v4;
             // fix/mfo-spell-authority-0922). See APMFBridge.h's block doc.
             // `selectHandle` is a gate-only kIntent_SelectSpell claim (param.form

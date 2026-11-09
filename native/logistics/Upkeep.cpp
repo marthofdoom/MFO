@@ -432,23 +432,37 @@ namespace MFO::Logistics {
             // catalog-excluded playable weapon is kept and unequipped once (above). Count the copies so
             // a stack leaves entirely.
             const bool       creature = IsCreatureWeapon(bad);
-            // KEEP BUT NEVER WIELD, ONCE (marth 2026-10-18; review of cae6bb4 SEV-2): a catalog-excluded,
+            // KEEP BUT NEVER WIELD (marth 2026-10-18 / 10-19, review of cae6bb4 SEV-2): a catalog-excluded,
             // NON-quest playable weapon (an artifact / unique) is neither handed over nor sold (Economy never
-            // sells excluded items) -- it just must not be the one he wields. NO road refuses ONE item today:
-            // the ch.17 equip scope is per CATEGORY (owning a hand with no declared weapon would refuse every
-            // weapon -> unarmed), and Harbinger has no item-deny. So this unequips it ONCE per (follower, item)
-            // per session and logs it; the engine may re-wield it and we do NOT chase it (the old poll re-ran
-            // this every ~5 s with a 3D rebuild each time). A real item-deny is an APMF item (tier A).
+            // sells excluded items) -- it just must not be the one he wields.
+            // MFO-B308 FIXED (Harbinger ABI v33): RefreshEquipDeclaration sends these weapons as the ch.17 claim's
+            // per-item DENY list, so Harbinger itself takes a worn one off and refuses every engine equip of it on
+            // him. While that deny stands (EquipItemDenied: sent, and Harbinger enforcing) this heal makes NO equip
+            // op for it. A worn one that is still on means a source the user's sliders rank above MFO put it on,
+            // and Harbinger lets that stand: MFO does not fight it either. Logged once per (follower, item).
+            // INTERIM, kept only where the deny cannot run (Harbinger below ABI 33, observe-only, no claim yet):
+            // it is unequipped ONCE per (follower, item) per session, and the engine may re-wield it (the old poll
+            // re-ran this every ~5 s with a 3D rebuild each time, so it is not chased).
             if (!creature) {
                 bool questBound = false;
                 for (auto& [obj, data] : a_follower->GetInventory())
                     if (obj == bad) { questBound = IsQuestObjectInstance(data.second.get()); break; }
                 if (!questBound) {
+                    const std::uint64_t key = (static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | bad->GetFormID();
+                    if (APMFBridge::EquipItemDenied(a_follower->GetFormID(), bad->GetFormID())) {
+                        static std::unordered_set<std::uint64_t> s_denyLogged;   // worker-only
+                        if (s_denyLogged.insert(key).second)
+                            spdlog::info("[heal] {:08X} excluded '{}' is on Harbinger's never-wield deny -- Harbinger takes "
+                                         "it off and refuses it coming back (kept, never sold), no MFO equip op",
+                                         a_follower->GetFormID(), bad->GetName() ? bad->GetName() : "?");
+                        continue;
+                    }
                     static std::unordered_set<std::uint64_t> s_healedOnce;   // worker-only
-                    if (!s_healedOnce.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | bad->GetFormID()).second)
+                    if (!s_healedOnce.insert(key).second)
                         continue;
                     spdlog::info("[heal] {:08X} excluded '{}' unequipped ONCE (kept, never sold; the engine may re-wield it -- "
-                                 "no item-deny road exists)", a_follower->GetFormID(), bad->GetName() ? bad->GetName() : "?");
+                                 "Harbinger's never-wield deny is not in effect: ABI below 33, observe-only, or no "
+                                 "declaration yet)", a_follower->GetFormID(), bad->GetName() ? bad->GetName() : "?");
                 }
             }
             const RE::FormID folID    = a_follower->GetFormID();

@@ -413,6 +413,9 @@ namespace MFO::Logistics {
                 // APMF ABI v25: the (form, uid) of every entry that names an item INSTANCE (the chosen
                 // ring / amulet copy), sorted, so a changed instance of the same base form re-sends.
                 std::vector<std::pair<RE::FormID, std::uint16_t>> uids;
+                // Harbinger ABI v33 (MFO-B308): the never-wield per-item DENY list, sorted, so a change
+                // (an artifact picked up, sold or handed over) re-sends. Empty below ABI 33.
+                std::vector<RE::FormID> denyItems;
                 bool operator==(const SentDecl&) const = default;
             };
             std::unordered_map<RE::FormID, SentDecl> g_lastDeclared;
@@ -1618,6 +1621,36 @@ namespace MFO::Logistics {
             std::sort(sent.uids.begin(), sent.uids.end());
             sent.owned  = owned;
             sent.denied = denied;
+            // KEEP BUT NEVER WIELD (marth 2026-10-19, MFO-B308): with Harbinger at ABI >= 33 the catalog-excluded,
+            // non-quest playable weapons he carries (artifacts / uniques: never sold, never dropped) go out as the
+            // claim's per-item DENY list. Harbinger then refuses every engine equip of them on him and takes a
+            // worn one off, so the engine can no longer re-wield one (the interim in Upkeep.cpp
+            // HealExcludedWeapon unequipped it once per session and the engine was free to put it back). This is
+            // exactly the set HealExcludedWeapon keeps (a creature weapon is deleted there, a quest-bound one
+            // handed to the player). A form MFO's own declaration names is left OFF the list: Harbinger's deny
+            // would win over MFO's own pick (logged once per follower and item).
+            if (APMFBridge::EquipItemDenySupported()) {
+                static std::unordered_set<std::uint64_t> s_keptOffLogged;   // worker-serial like g_lastDeclared
+                for (auto& [obj, data] : inv) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (!w || !Catalog::IsExcluded(obj->GetFormID()) || IsCreatureWeapon(w)) continue;
+                    if (IsQuestObjectInstance(data.second.get())) continue;   // the heal hands it to the player
+                    const RE::FormID fid = obj->GetFormID();
+                    const bool declared = std::any_of(decl.entries.begin(), decl.entries.end(),
+                                                      [&](const APMF_API::APMF_EquipEntry& e) { return e.form == fid; });
+                    if (declared) {
+                        if (s_keptOffLogged.insert((static_cast<std::uint64_t>(id) << 32) | fid).second)
+                            spdlog::info("[equip-auth] {:08X}: excluded '{}' is in MFO's own declaration -- kept OFF the "
+                                         "never-wield deny (Harbinger's deny would refuse MFO's own pick)",
+                                         id, obj->GetName() ? obj->GetName() : "?");
+                        continue;
+                    }
+                    sent.denyItems.push_back(fid);
+                }
+                std::sort(sent.denyItems.begin(), sent.denyItems.end());
+                sent.denyItems.erase(std::unique(sent.denyItems.begin(), sent.denyItems.end()), sent.denyItems.end());
+            }
             // ... EXCEPT that "unchanged" must not mean "already on his body"
             // (MFO-B63, MFO-B41's shape generalised from the weapon ledger to
             // armor). A declared ARMO that is NOT WORN at this service is a piece
@@ -1664,6 +1697,8 @@ namespace MFO::Logistics {
                 if (!resend) return;
             }
             if (!APMFBridge::DeclareEquipScope(id, owned, denied) ||        // logged in the bridge; retried next refresh
+                (APMFBridge::EquipItemDenySupported() &&                   // ABI v33: the never-wield list (MFO-B308)
+                 !APMFBridge::DeclareEquipDenyItems(id, sent.denyItems)) ||
                 !APMFBridge::DeclareEquipSet(id, decl.entries)) {
                 g_lastDeclared.erase(id);
                 return;
@@ -1671,8 +1706,9 @@ namespace MFO::Logistics {
             g_lastDeclared[id] = std::move(sent);
             g_deferLogged.erase(id);
             g_lastDeclSentAt[id] = std::chrono::steady_clock::now();   // MFO-B63: the drift throttle's clock
-            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] owned={} denied={} ({}{})", id,
-                         decl.entries.size(), decl.names, CategoryNames(owned), CategoryNames(denied),
+            const std::size_t denyN = g_lastDeclared[id].denyItems.size();
+            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] owned={} denied={} never-wield={} ({}{})", id,
+                         decl.entries.size(), decl.names, CategoryNames(owned), CategoryNames(denied), denyN,
                          a_why ? a_why : "?", fresh ? ", new claim" : "");
         }
 

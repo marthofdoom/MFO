@@ -447,18 +447,24 @@ namespace MFO::Actuation {
         }
         w.heldSince = {};
         // A MISS. Which kind decides whether D4 may escalate.
-        // (1) Harbinger's state is PER ACTOR: it describes the item it last scored (info.lastForm). Only a state
-        //     about THE MISSING ITEM classifies this miss (review of e06a54f, SEV-3); another item's Lifted /
-        //     Leading says nothing about why this one is not in its hand.
-        //     KNOWN GAP (re-review of 67722ac, SEV-3): Harbinger's Record overwrites lastForm / state on every
-        //     scoring and a pass scores the declared entries back to back, so with two entries the reported one is
-        //     nearly always the LAST scored and D4 may never classify the other. Said once per episode, never
-        //     masked; the per-entry state read is a Harbinger ABI request (Docs/REVIEW-BACKLOG.md MFO-B262).
-        if (info.lastForm != missForm) {
+        // (1) Only a state about THE MISSING ITEM classifies this miss (review of e06a54f, SEV-3); another item's
+        //     Lifted / Leading says nothing about why this one is not in its hand.
+        //     MFO-B262 FIXED (Harbinger ABI v33): GetEquipPreferenceItemState reads the missing entry's OWN state
+        //     (its form and declared slot), so every entry is classified, not only the last one scored. From here
+        //     on `mstate` / `minfo` describe the missing item.
+        //     Below ABI 33 Harbinger's state is PER ACTOR (the item it last scored, info.lastForm): a pass scores
+        //     the declared entries back to back, so with two entries the reported one is nearly always the LAST
+        //     scored, and a miss of any other entry is not classified. Said once per episode, never masked.
+        std::uint32_t               mstate = state;
+        APMF_API::APMF_EquipPrefInfo minfo = info;
+        if (APMFBridge::EquipPreferenceItemStateSupported()) {
+            mstate = APMFBridge::EquipPreferenceItemState(fid, missForm, missSlot, &minfo);
+        } else if (info.lastForm != missForm) {
             if (!w.unclassifiedLogged) {
                 w.unclassifiedLogged = true;
                 spdlog::info("[equip-pref] {:08X}: miss of '{}' not classified -- Harbinger reports only '{}' "
-                             "(per-actor state); no D4 for it", fid, NameOf(missForm), NameOf(info.lastForm));
+                             "(per-actor state, Harbinger below ABI 33), no D4 for it", fid, NameOf(missForm),
+                             NameOf(info.lastForm));
             }
             w.missSince = {};
             return;
@@ -476,7 +482,7 @@ namespace MFO::Actuation {
                                                                        : (spellIn(false) || spellIn(true));
             if (spell) { w.missSince = {}; return; }
         }
-        switch (state) {
+        switch (mstate) {
         case APMF_API::kEquipPrefState_Lifted:
         case APMF_API::kEquipPrefState_Leading:
             break;   // Harbinger lifted it (or it already leads) and it is still not in its hand: the D4 clock runs
@@ -488,7 +494,7 @@ namespace MFO::Actuation {
                 spdlog::warn("[equip-pref] {:08X}: ANOMALY -- '{}' ({}) is OUTRANKED inside the score seat (withheld={}): "
                              "a source above MFO's Equip priority decides this hand. NO escalation (it would violate "
                              "Harbinger's priority sliders); investigate APMF.log [ch.26] | {}", fid, NameOf(missForm),
-                             handName(missSlot), info.withheld, heldNames());
+                             handName(missSlot), minfo.withheld, heldNames());
             }
             w.missSince = {};
             return;
@@ -507,7 +513,7 @@ namespace MFO::Actuation {
             w.missSince = {};
             return;
         }
-        if (info.msSinceScored > kLiveScoreMs) { w.missSince = {}; return; }   // no live scoring: not a scored miss
+        if (minfo.msSinceScored > kLiveScoreMs) { w.missSince = {}; return; }   // no live scoring: not a scored miss
         if (w.missSince == Clock::time_point{}) w.missSince = now;
         const float missFor = std::chrono::duration<float>(now - w.missSince).count();
         // THE RANGE GATE (WEIGHTING-INVENTORY W1 risk b): the engine's selector skips a top-scored item that is
@@ -538,8 +544,8 @@ namespace MFO::Actuation {
             w.escalatedAt = now;
             spdlog::warn("[equip-pref] {:08X}: ESCALATE to kEquipPref_Force (D4) -- '{}' not in its {} hand for {:.1f} s "
                          "while Harbinger reads {} (engine={:.2f} rival={:.2f} -> {:.2f}); foe {:.0f}u; ch.17 re-placement "
-                         "sent once | {}", fid, NameOf(missForm), handName(missSlot), missFor, StateName(state),
-                         info.lastEngineScore, info.lastRivalScore, info.lastResultScore, tgtDist, heldNames());
+                         "sent once | {}", fid, NameOf(missForm), handName(missSlot), missFor, StateName(mstate),
+                         minfo.lastEngineScore, minfo.lastRivalScore, minfo.lastResultScore, tgtDist, heldNames());
             // The re-placement: Harbinger equips nothing for a preference, so the declared hands go out once more
             // through ch.17 (its equip pass places what he is not wearing). ONCE per episode: this is the bounded
             // replacement of the retired MFO-B41 re-declare loop.
@@ -552,8 +558,8 @@ namespace MFO::Actuation {
             spdlog::error("[equip-pref] {:08X}: FORCED and still missing -- '{}' not in its {} hand {:.1f} s after the "
                           "escalation (state {}, forcedDenies={}, anomalies={}). Not retried (principle 7) | {}", fid,
                           NameOf(missForm), handName(missSlot),
-                          std::chrono::duration<float>(now - w.escalatedAt).count(), StateName(state),
-                          info.forcedDenies, info.forceAnomalies, heldNames());
+                          std::chrono::duration<float>(now - w.escalatedAt).count(), StateName(mstate),
+                          minfo.forcedDenies, minfo.forceAnomalies, heldNames());
         }
     }
 
