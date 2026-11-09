@@ -84,10 +84,10 @@ The single source of truth for ordering. Everything below depends on it.
   runs each VM init).
 - **`kInputLoaded`** (`:263`): `Config::EnsureMcmDefaults()` — seeds the MCM
   store *before* MCM Helper reads it at its own kDataLoaded (bind-on-first-load).
-- **`kDataLoaded`** (`:276`) — the once-per-launch install order (comment
+- **`kDataLoaded`** (`:354`) — the once-per-launch install order (comment
   `:277`): `EnsureMcmDefaults` → `Config::Read` → `Forms::Resolve` →
   `Gait::Apply` → `Catalog::Load` → `Progression::Init` → `ProgAllocator::Init`
-  → `Classes::OnDataLoaded` (class ESL presence + table self-check) → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
+  → `Classes::OnDataLoaded` (`plugin.cpp:409`; class ESL presence + table self-check) → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
   `APMFBridge::Acquire` (APMF cast-select client; null-degrades if APMF absent) →
   `Diagnostics::RefreshFatalModules` (APMF.dll's range for the `[fatal]` line) →
   `Followers::ResolveQuirks` → `MainThread::Install` → `Targeting::InstallHook`
@@ -8490,7 +8490,7 @@ C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at 
   `_MFOClassesManifest` (NOT `_MFOAddonManifest`, or Progression would register the class ESL as a progression add-on).
 - `classes/Classes_internal.h` — `kTable` extern + `detail::DetectManifest/SelfCheck`.
 - `classes/ClassTable.cpp` — the constexpr 35-class table with `static_assert(TableIsConsistent())` (id == index, T1 roots == combatClassOverride
-  1..3, parents are the tier below). Slugs match the review page db doc ids. Default gambits use `Vocab::k*` constants only; a missing opcode
+  1..3, parents are the tier below). Slugs match the review page db doc ids. Default gambits use `Vocab::k*` constants only; hostile cast rows use AUTO (subject 0), never `Subject::Enemy` (rung 0 of `ResolveCastTarget`, ignores the row's foe); enemy-control rows carry `pendingRuling` (saved question 26, C12 must not apply them); a missing opcode
   is a `Todo()` row ("todo.*" + plan card) that is never applied.
 - `classes/Classes.cpp` — accessors, `UnlockSatisfied` (pure; C5 supplies the mastered mask), and the load-time self-check (counts per
   tier 3/9/14/8/1, 6 hybrids, every parent resolves). `static_assert`s pin `CombatStyle::Stance` 1/2/3 = Melee/Ranged/Cast.

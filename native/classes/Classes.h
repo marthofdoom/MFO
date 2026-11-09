@@ -25,8 +25,8 @@
 namespace MFO::Classes {
 
     // 35 classes. The ORDER is the bit index into every mastered/unlocked bitset (C3 will persist those),
-    // so it is a future co-save ABI: append only, never reorder or insert. T1 first, so that the first
-    // three ordinals (1..3 after Auto) line up with State.h combatClassOverride (see RootT1 below).
+    // so it is a future co-save ABI: append only, never reorder or insert. T1 first: the Id ordinals 0..2 are
+    // Melee/Ranged/Mage and T1ForOverride maps State.h combatClassOverride 1..3 (0 = Auto) onto them.
     enum class Id : std::uint8_t {
         // tier 1
         Melee, Ranged, Mage,
@@ -106,6 +106,7 @@ namespace MFO::Classes {
         SpellRole    role;           // cast rows only
         float        cooldownSec;    // 0 = none. NOT applied until card G9 (per-rule cooldown, FLWR v6) exists
         const char*  planCard;       // nullptr = applied; otherwise the card that adds the missing opcode
+        bool         pendingRuling;  // DESIGN-OPEN enemy-control row (saved question 26): C12 must not apply it until ruled
         [[nodiscard]] constexpr bool IsApplied() const { return planCard == nullptr; }
     };
 

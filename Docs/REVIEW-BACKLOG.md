@@ -2552,3 +2552,12 @@ Opus tier-A review of the ABI v33 batch, finding F4 (as relayed by the coordinat
 
 ### MFO-B560 (SEV-4, OPEN, Board.cpp WndProcHook WM_CHAR, against 01c1cc3, Opus review of fix/wndproc-callwindowproc) -- ANSI WM_CHAR fed to AddInputCharacterUTF16 (pre-existing)
 Verbatim: "SetWindowLongPtrA also makes the window ANSI. From then on our thunk, and every proc below it, gets ANSI WM_CHAR. Characters outside the system ANSI code page arrive as '?'. On a CJK code page they arrive as split lead and trail bytes. So AddInputCharacterUTF16(wParam) is wrong for non-ASCII." Fix: "keep the A subclass, and in the WM_CHAR branch convert ANSI to UTF-16 with MultiByteToWideChar(CP_ACP). Buffer a lead byte when IsDBCSLeadByte says so, then convert the pair." Switching to the W API is a marth decision: it would expose later direct-call subclassers (the same crash pattern) to MFO's W proc. Also: MEO and MAO carry the same direct-call `return func(...)` (out of MFO scope, reported to marth).
+
+### MFO-B561 (SEV-4, OPEN, classes/ClassTable.cpp ch.18 column, against bc39bee, Opus review of feat/classes-c1-c2) -- draft ch.18 caps not encoded where the walkthrough is silent
+Verbatim (reviewer, paraphrased by the coordinator): the draft package gave Thief 0.2, Master Thief 0.2 and Templar 0.25 power-share caps; the table leaves them unset because marth's walkthrough rulings do not state them. Reasoning: a design question, not a defect. Ask marth before C8 encodes them.
+
+### MFO-B562 (SEV-4, OPEN, classes/ClassTable.cpp, against bc39bee) -- C2's CSTY-ids-per-stance column and the ch.18 governed-class bits are not in the table
+Verbatim (reviewer): C2 as written lists CSTY ids per stance, and ch.18 needs governed-class bits (Bash / DualWield / Left); neither is in `ClassDef`. Reasoning: both belong with the generator and the packages, so C8 owns them (card amendment: C8 adds the CSTY-ids column and the ch.18 governed-class bits to the table). Nothing reads them before C8.
+
+### MFO-B563 (SEV-5, OPEN, classes/ClassTable.cpp flags, against bc39bee) -- three package-policy leftovers
+Verbatim (reviewer): Ebony Warrior has kDisengage without kSpellRange. Saint has kNearPlayer while the ruling says it "leads vs undead". T1 default gambit sets exist while the ruling says "T1 behaves vanilla". Reasoning: all three are policy for C8 (packages) and C12 (defaults), no behaviour today.

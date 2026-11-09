@@ -15,7 +15,9 @@ namespace MFO::Classes {
     namespace {
         using Vocab::Subject;
         constexpr std::uint8_t kSelf   = static_cast<std::uint8_t>(Subject::Self);
-        constexpr std::uint8_t kEnemy  = static_cast<std::uint8_t>(Subject::Enemy);
+        // Every hostile cast_target row uses kSelf (= AUTO on a cast_target row, Vocabulary.h Subject): Subject::Enemy is
+        // ABSOLUTE rung 0 in ResolveCastTarget (cast/Fire.cpp) and would ignore the foe the row's condition picked,
+        // NoOpping when nothing is commanded (review of bc39bee, SEV-3).
 
         // ── mask helpers ────────────────────────────────────────────────────────────────────────────
         template <class... T> constexpr Mask Ms(T... a_ids) { return (Mask{ 0 } | ... | Bit(a_ids)); }
@@ -40,12 +42,19 @@ namespace MFO::Classes {
         // ── gambit row builders ─────────────────────────────────────────────────────────────────────
         constexpr DefaultGambit G(const char* a_c, const char* a_a, float a_p = 0.0f, SpellRole a_r = SpellRole::None,
                                   std::uint8_t a_s = kSelf, float a_cd = 0.0f) {
-            return { a_c, a_a, a_p, a_s, a_r, a_cd, nullptr };
+            return { a_c, a_a, a_p, a_s, a_r, a_cd, nullptr, false };
+        }
+        // An enemy-control cast row (Paralyze / Fear / TurnUndead). DESIGN-OPEN: enemy-control target (saved question 26);
+        // C12 must not apply until ruled. Since c62d4cf AUTO refuses a nature-undeclared spell and Subject::Enemy ignores the
+        // condition's foe, so neither subject expresses "paralyze THE stronger foe". Conservative default AUTO; pendingRuling
+        // marks the row so C12 skips it. No new subject is invented.
+        constexpr DefaultGambit Ctl(const char* a_c, const char* a_a, float a_p, SpellRole a_r) {
+            return { a_c, a_a, a_p, kSelf, a_r, 0.0f, nullptr, true };
         }
         // A row whose cond or act does not exist yet (never applied). a_card = the build-plan card that adds it.
         constexpr DefaultGambit Todo(const char* a_c, const char* a_a, const char* a_card, float a_p = 0.0f,
                                      SpellRole a_r = SpellRole::None, std::uint8_t a_s = kSelf, float a_cd = 0.0f) {
-            return { a_c, a_a, a_p, a_s, a_r, a_cd, a_card };
+            return { a_c, a_a, a_p, a_s, a_r, a_cd, a_card, false };
         }
 
         // Placeholder opcode names (NOT in Vocabulary.h; the plan card that appends each is the second column).
@@ -79,7 +88,7 @@ namespace MFO::Classes {
         constexpr DefaultGambit kMageG[] = {
             G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.40f, SpellRole::Heal),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kEnemy) };
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf) };
 
         // T2
         constexpr DefaultGambit kKnightG[] = {
@@ -117,13 +126,13 @@ namespace MFO::Classes {
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
         // Trimmed set (marth): fire weakness, nearest enemy, magicka potion.
         constexpr DefaultGambit kEvokerG[] = {
-            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kEnemy),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kEnemy),
+            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kSelf),
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kSelf),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f) };
         constexpr DefaultGambit kConjurerG[] = {
             Todo(kTodoNoSummon, Vocab::kActCastSelf, "G5", 0.0f, SpellRole::Summon),
-            Todo(kTodoFoeHitsMySummon, Vocab::kActCastTarget, "G6", 0.0f, SpellRole::Attack, kEnemy),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kEnemy),
+            Todo(kTodoFoeHitsMySummon, Vocab::kActCastTarget, "G6", 0.0f, SpellRole::Attack, kSelf),
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.25f),
             G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 150.0f) };   // dagger when something is on it
         // Trimmed set (marth): heal player < 50, ally < 50, self < 50, magicka potion, nearest enemy.
@@ -132,15 +141,15 @@ namespace MFO::Classes {
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.50f, SpellRole::Heal),
             G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.50f, SpellRole::Heal),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kEnemy) };
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf) };
         // Trimmed set (marth): paralyze/fear a stronger foe, armor spell up, magicka potion, Destruction nearest.
         // The spell-will-work level skip (G10) is a BASE rule, not a row.
         constexpr DefaultGambit kWarlockG[] = {
-            G(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Paralyze, kEnemy),
-            G(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Fear, kEnemy),
+            Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Paralyze),
+            Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Fear),
             G(Vocab::kCondAlways, Vocab::kActCastSelf, 0.0f, SpellRole::Armor),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kEnemy) };
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kSelf) };
 
         // T3 pure
         constexpr DefaultGambit kGreatKnightG[] = {   // Knight's set + taunt at 3+ foes
@@ -179,36 +188,37 @@ namespace MFO::Classes {
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
         constexpr DefaultGambit kWizardG[] = {        // ward (new design), paralyze stronger foe, Evoker's set
             Todo(kTodoChargeAtMe, Vocab::kActCastSelf, "G11", 0.0f, SpellRole::Ward),
-            G(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Paralyze, kEnemy),
-            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kEnemy),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kEnemy),
+            Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Paralyze),
+            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kSelf),
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kSelf),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f) };
         constexpr DefaultGambit kNecromancerG[] = {   // Conjurer's set + reanimate a corpse
             Todo(kTodoNoSummon, Vocab::kActCastSelf, "G5", 0.0f, SpellRole::Summon),
-            Todo(kTodoCorpse, Vocab::kActCastTarget, "G7", 0.0f, SpellRole::Reanimate, kEnemy),
-            Todo(kTodoFoeHitsMySummon, Vocab::kActCastTarget, "G6", 0.0f, SpellRole::Attack, kEnemy),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kEnemy),
+            Todo(kTodoCorpse, Vocab::kActCastTarget, "G7", 0.0f, SpellRole::Reanimate, kSelf),
+            Todo(kTodoFoeHitsMySummon, Vocab::kActCastTarget, "G6", 0.0f, SpellRole::Attack, kSelf),
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.25f),
             G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 150.0f) };
         constexpr DefaultGambit kPriestG[] = {        // Healer's set, sun / turn undead above the self-heal
             G(Vocab::kCondPlayerHpBelow, Vocab::kActCastPlayer, 0.50f, SpellRole::Heal),
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.50f, SpellRole::Heal),
-            G(Vocab::kCondFoeIsUnholy, Vocab::kActCastTarget, 0.0f, SpellRole::TurnUndead, kEnemy),
+            Ctl(Vocab::kCondFoeIsUnholy, Vocab::kActCastTarget, 0.0f, SpellRole::TurnUndead),
             G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.50f, SpellRole::Heal),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kEnemy) };
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf) };
 
         // T3 hybrids
         constexpr DefaultGambit kSpellswordG[] = {
-            G(Vocab::kCondFoeBeyondRange, Vocab::kActCastTarget, 400.0f, SpellRole::Destruction, kEnemy),
-            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kEnemy),
+            G(Vocab::kCondFoeBeyondRange, Vocab::kActCastTarget, 400.0f, SpellRole::Destruction, kSelf),
+            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kSelf),
             G(Vocab::kCondFoeWithinRange, Vocab::kActAttack, 400.0f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         constexpr DefaultGambit kSorcererG[] = {
             Todo(kTodoNoSummon, Vocab::kActCastSelf, "G5", 0.0f, SpellRole::Summon),
             G(Vocab::kCondAlways, Vocab::kActCastSelf, 0.0f, SpellRole::BoundWeapon),   // a bound weapon must count as melee for equip authority: G17
             G(Vocab::kCondFoeAny, Vocab::kActAttack) };
-        // CHOICE: heal thresholds at the 70% party-healthy mark (marth: "the same 70% party healthy threshold").
+        // CHOICE: the ally heal threshold is the 70% party-healthy mark (marth: "the same 70% party healthy threshold"); the
+        // self-heal row stays at 0.50.
         constexpr DefaultGambit kTemplarG[] = {
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.70f, SpellRole::Heal),
             G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.50f, SpellRole::Heal),
@@ -216,7 +226,7 @@ namespace MFO::Classes {
             G(Vocab::kCondFoeIsUndead, Vocab::kActAttack),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         constexpr DefaultGambit kNightbladeG[] = {
-            G(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Fear, kEnemy),
+            Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Fear),
             G(Vocab::kCondFoeFleeing, Vocab::kActAttack),
             G(Vocab::kCondAlways, Vocab::kActCastSelf, 0.0f, SpellRole::Armor),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
@@ -224,7 +234,7 @@ namespace MFO::Classes {
             G(Vocab::kCondFoeIsCaster, Vocab::kActAttack),
             G(Vocab::kCondFoeIsUndead, Vocab::kActAttack),
             G(Vocab::kCondFoeIsDaedra, Vocab::kActAttack),
-            G(Vocab::kCondFoeWithinRange, Vocab::kActCastTarget, 250.0f, SpellRole::Paralyze, kEnemy),
+            Ctl(Vocab::kCondFoeWithinRange, Vocab::kActCastTarget, 250.0f, SpellRole::Paralyze),
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
         // CHOICE: gambits at the 70% mark like Templar (marth: Scout "gambits at 70%").
         constexpr DefaultGambit kScoutG[] = {
@@ -238,8 +248,8 @@ namespace MFO::Classes {
             Todo(kTodoChargeAtMe, Vocab::kActCastSelf, "G11", 0.0f, SpellRole::Ward),
             G(Vocab::kCondFoeCountAtLeast, Vocab::kActCastSelf, 3.0f, SpellRole::Summon),
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.70f, SpellRole::Heal),
-            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kEnemy),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kEnemy),
+            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kSelf),
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f) };
         // CHOICE: Champion mode rows only; the flurry-vs-many mode switch is card C8/C9 work.
         constexpr DefaultGambit kLivingLegendG[] = {
@@ -257,7 +267,7 @@ namespace MFO::Classes {
             Todo(Vocab::kCondAlways, kTodoSneak, "G1"),
             G(Vocab::kCondFoeLowestHp, Vocab::kActAttack),
             G(Vocab::kCondFoeHpBelow, Vocab::kActPowerAttack, 0.25f, SpellRole::None, kSelf, 10.0f),
-            G(Vocab::kCondFoeCountAtLeast, Vocab::kActCastTarget, 3.0f, SpellRole::Fear, kEnemy),
+            Ctl(Vocab::kCondFoeCountAtLeast, Vocab::kActCastTarget, 3.0f, SpellRole::Fear),
             Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         constexpr DefaultGambit kEbonyWarriorG[] = {
@@ -267,8 +277,8 @@ namespace MFO::Classes {
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.70f, SpellRole::Heal),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         constexpr DefaultGambit kGrandBattlemageG[] = {   // spell before closing, melee inside 400
-            G(Vocab::kCondFoeBeyondRange, Vocab::kActCastTarget, 400.0f, SpellRole::Destruction, kEnemy),
-            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kEnemy),
+            G(Vocab::kCondFoeBeyondRange, Vocab::kActCastTarget, 400.0f, SpellRole::Destruction, kSelf),
+            G(Vocab::kCondFoeWeakFire, Vocab::kActCastTarget, 0.0f, SpellRole::Fire, kSelf),
             G(Vocab::kCondFoeWithinRange, Vocab::kActAttack, 400.0f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         constexpr DefaultGambit kJaqspurG[] = {
@@ -308,7 +318,8 @@ namespace MFO::Classes {
         constexpr RootT1 kRootMelee = 1, kRootRanged = 2, kRootMage = 3;
 
         // ch.18 mixes (marth decisions): Warrior line floor 0.4, Knight cap 0.25, Great Knight 0.20,
-        // Mercenary and Blademaster 0.15, Listener 0.25. Everything else is not declared.
+        // Mercenary and Blademaster 0.15, Listener 0.25. Ebony Warrior carries a 0.20 cap inherited from Great Knight (not a
+        // walkthrough ruling), Living Legend a 0.40 floor. Everything else is not declared.
         //
         // Weapons: T1 vanilla (unrestricted). Shields only Knight, Great Knight, Templar, Ebony Warrior.
         // Passive ids are one per class ("passive.<slug>"); the passive CONTENT is card C6/C7.
@@ -340,10 +351,10 @@ namespace MFO::Classes {
             // ── tier 3, hybrids (armor is free inside every hybrid) ──
             Mk(Id::Spellsword,  "spellsword",  "Spellsword",  3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Evoker)),   kMelee1H2H,           kSpellswordG,  "passive.spellsword",  U, U, kDisSpell, GoIn::BiasHealthMagickaRange),
             Mk(Id::Sorcerer,    "sorcerer",    "Sorcerer",    3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Conjurer)), kMelee1H2H,           kSorcererG,    "passive.sorcerer",    U, U, kDisSpell, GoIn::FullSummonsHighHealth),
-            Mk(Id::Templar,     "templar",     "Templar",     3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Healer)),   kMelee1H2H | kShield, kTemplarG,     "passive.templar",     U, U, kDisSpell, GoIn::PartyHealthyOrNoMagicka, 70),
+            Mk(Id::Templar,     "templar",     "Templar",     3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Healer)),   kMelee1H2H | kShield, kTemplarG,     "passive.templar",     U, U, kDisSpell | kShortLeash, GoIn::PartyHealthyOrNoMagicka, 70),
             Mk(Id::Nightblade,  "nightblade",  "Nightblade",  3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Warlock)),  kMelee1H2H,           kNightbladeG,  "passive.nightblade",  U, U, kDisSpell, GoIn::ControlledFoesOnly),
             Mk(Id::Witchhunter, "witchhunter", "Witchhunter", 3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Warlock)), kArcherSet,     kWitchhunterG, "passive.witchhunter", U, U, kDisSpell, GoIn::Never),
-            Mk(Id::Scout,       "scout",       "Scout",       3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Healer)),  kArcherSet,      kScoutG,       "passive.scout",       U, U, kDisSpell, GoIn::None, 70),
+            Mk(Id::Scout,       "scout",       "Scout",       3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Healer)),  kArcherSet,      kScoutG,       "passive.scout",       U, U, kDisSpell | kNearPlayer, GoIn::None, 70),
             // ── tier 4 ──
             Mk(Id::ArchMage,        "arch-mage",        "Arch-Mage",        4, Line::Mage,   kRootMage,   NOf(Ms(Id::Wizard, Id::Necromancer, Id::Priest), 2),     kMageSet,             kArchMageG,        "passive.arch-mage",        U,     U, kDisSpell),
             Mk(Id::LivingLegend,    "living-legend",    "Living Legend",    4, Line::Melee,  kRootMelee,  Req(Ms(Id::Blademaster, Id::Champion)),                   kMelee1H2H,           kLivingLegendG,    "passive.living-legend",    U,     0.40f, 0),
