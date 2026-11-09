@@ -5,6 +5,17 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.8.2 -- Community Shaders crash fix
+
+Needs Harbinger v0.17.0 (ABI v33) for the never-wield deny. With an older Harbinger everything else works.
+
+- **Fixed a crash with Community Shaders.** The board's window hook called the previous window procedure directly. When another mod (Community Shaders is one) had subclassed the game window with the Unicode API, that handle was not a callable function and the game crashed with an access violation. The hook now dispatches through `CallWindowProcA`, which is the only safe way to call it.
+- **The DLL now carries version info.** Product, company, description and version are embedded in `MFO.dll`, after a Kaspersky false positive on Harbinger. Nothing changes in the game.
+- **Weapon class and magic school picks judge by base skill.** A Fortify One-Handed socket or enchant no longer raises the number the follower picks a class by. On an exact tie the perks the follower owns break it.
+- **Never-wield artifacts are refused by Harbinger.** With Harbinger v0.17.0 the per item equip deny stops the engine from putting a never-wield item in a follower's hand. MFO's own combat weapon pick and best owned weapon pick skip those items too, whatever the loot special items setting says.
+- **Equip preference state is read per entry.** With Harbinger v0.17.0 MFO reads each equip preference entry's own state instead of one answer for the whole follower.
+- **An older Harbinger keeps the old behaviour.** Every new Harbinger call is gated on ABI 33 and newer, and the earlier once-only unequip stays for older versions.
+
 ## v2.8.1 -- Town casts animate again
 
 Needs Harbinger v0.16.0 (ABI v32) for the town fix. With an older Harbinger the old hold stays on by itself.

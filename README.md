@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.8.0** (see [`VERSION`](VERSION) and the
+**Status: v2.8.2** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,14 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.8.2
+
+- **Needs Harbinger v0.17.0 (ABI v33) for the never-wield deny.** With an older Harbinger everything else works.
+- **Fixed a crash with Community Shaders** (and any mod that subclasses the game window with the Unicode API). The board's window hook now dispatches through `CallWindowProcA`.
+- **The DLL carries version info,** after a Kaspersky false positive on Harbinger.
+- **Weapon class and magic school picks judge by base skill,** with owned perks breaking ties.
+- **Never-wield artifacts are refused** by Harbinger's per item equip deny, and MFO's own combat pick skips them. Equip preference state is read per entry.
 
 ## What is new in 2.8.0
 
