@@ -57,7 +57,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (6 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
+| **Co-save (7 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h`, `classes/State.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2`, MCLS `v1` (`Serialization.h`). **MCLS v1 (class update C3, 2026-11-09) is a NEW record (no existing layout touched): the class add-on's per-follower state + stored per-class gambit tables, owned by `classes/State.cpp`; its gambit rows go through `GambitWire::WriteRow/ReadRow`, which is FLWR's row code MOVED VERBATIM out of the FLWR loops (FLWR bytes unchanged) -- a change to that row now changes BOTH records.** ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -121,7 +121,7 @@ The single source of truth for ordering. Everything below depends on it.
 independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
-**Five records (`Serialization.h`), each with its own version + reader:**
+**Seven records (`Serialization.h`), each with its own version + reader** (the list below grew record by record; MCLS is the seventh):
 - **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,134`) — per-follower
   `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`.
   Written `SaveCallback` `Serialization.cpp:86`; read by `LoadCallback` `:569`
@@ -225,6 +225,27 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   guard) and destroys it on its next save (#12, warned). **R7 (inn + temple, 2026-10-19) APPENDED two stop-kind STRING VALUES, `"temple"` and
   `"inn"` (`kErrStopKindOps`, `Serialization.cpp:107`; `SavedStopKind`), with NO layout or version change; a temple/inn stop carries no shop
   (faction/chest 0 is legitimate, the reader's "shop gone" skip applies to shop stops only). A stay is saved as `phys.taking`/`sim.trade` + `kTradeDone`.**
+- **`'MCLS'` / `kClassesVersion=1`** (`Serialization.h:170-171`, class update card C3, 2026-11-09) -- the CLASS ADD-ON's per-follower
+  state. Seventh independent record. Owner `classes/State.cpp` (full byte table + version / compat / ESL-absent rules in its header;
+  `CoSave:411`, `CoLoad:475`, codec `WriteBody:106` / `ReadBody:137`); called from `SaveCallback` (`Serialization.cpp:662`, after PGIV,
+  before ERND), dispatched `:1007`, cleared by `Classes::BeginLoad` at the top of `LoadCallback` (`:935`) and by `Classes::ClearAll` in
+  `ResetAllState` (`:1122`, after `StopPump` `:1088`). Layout v1: header `u32 rowSchema` (the FLWR version of its gambit rows, written
+  = `kSchemaVersion`), `u8 classCount` (35), `u32 followerCount` (<= 4096); per follower `{u32 follower, u8 equipped (Id or 0xFF),
+  classCount x {u32 xp, u8 level}, u64 mastered, u64 unlocked, u16 thiefFights, u16 masterThiefFights, u8 tableCount, per table {u8 classId,
+  u8 rowCount (<= 64), rowCount x FLWR gambit row}}`. **Written only when there is class state.** Unresolvable follower -> entry DROPPED
+  (#8, the FLWR / PGIV precedent); unresolvable spell in a row -> that rule DISABLED (FLWR's rule); over-bound count / short read ->
+  record ABORTED, parsed followers kept. **A header this DLL cannot read (version > 1, rowSchema > kSchemaVersion, classCount > 35) is
+  KEPT VERBATIM and written back unchanged (no on-screen warning: nothing is lost) and every class setter refuses for the session.**
+  **ESL absent / `bClassTree = 0`: the record is still PARSED (it holds no ESL form), held unchanged (setters refuse) and re-written;
+  FormIDs re-resolve for the current load order (marth Q9).** Debug: `bClassCoSaveSelfTest` (INI-only, default 0) runs an in-memory
+  round trip + 5 corrupt variants at every load (`RunSelfTest:318`, `RoundTrip:271`).
+- **`GambitWire` -- THE gambit-row wire encoding** (`Serialization.h:336`, impl `WriteRowT:104` / `ReadRowT:133` + the string helpers
+  `WriteOpT:74` / `ReadOpT:86` in `Serialization.cpp`; card C3). The FLWR row code moved VERBATIM out of the FLWR writer (`:560`) and
+  reader (`:840`) loops into templates over the stream (`SKSE::SerializationInterface` or `CoSaveBuffer`, `Serialization.h:280`, an in-memory
+  body with the SKSE method names), so FLWR and MCLS share ONE row encoding. **What breaks:** a row change (card G9's per-rule cooldown,
+  FLWR v6) MUST be made inside `WriteRowT/ReadRowT`, gated on the version argument, or MCLS's stored tables desync; MCLS passes its own
+  `rowSchema`, so its rows follow FLWR's version automatically. `WriteString/ReadString` are now one-line forwards to `WriteOpT/ReadOpT`
+  (ERND uses them; bytes unchanged).
 
 **ROSTER REMOVAL erases entries, never layout (ClickUp 86e3eewaf, 2026-10-12).** The Follower-tab
 "remove" deletes one follower's FLWR record (`g_followers`, worker), PRGN record (`g_prog`, main,
@@ -259,7 +280,7 @@ and the load window both funnel here. Order is load-bearing:
 `Diagnostics::StopPump()` **first** (`:706`, drains the worker) → `MainThread::Clear`
 → `g_followers.clear()` → `Followers::g_active.clear()` → each subsystem's
 `ClearTransientState`/`ClearAll` (Followers, Scheduler, Logistics, +`ClearStockGear`,
-ProgAllocator, +`PlayerGiven::ClearRecord` (PGIV, `:735`, 86e3faccn), +`Errand::ClearRestorePending` (ERND staged entries, 86e3t1mx7), Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
+ProgAllocator, +`PlayerGiven::ClearRecord` (PGIV, `:735`, 86e3faccn), +`Errand::ClearRestorePending` (ERND staged entries, 86e3t1mx7), +`Classes::ClearAll` (MCLS, class C3, right after PGIV), Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
 Packages `ReleaseAll("revert")` (`:733`), Papyrus, TradeBridge, MEOBridge, Probe, Rapport)
 → `Board::SetHud(false)`. **What breaks:** move any clear out, or run it while the
 pump is live, and you race a worker insert (UB). `Packages::ReleaseAll` here
@@ -8477,12 +8498,12 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 
 ---
 
-## 9. Class add-on — `classes/` (cards C1 + C2, 2026-11-09)
+## 9. Class add-on — `classes/` (cards C1 + C2 + C3, 2026-11-09)
 
 The DLL half of the class tree (`MFO_Classes.esl` = card C7, NOT shipped yet). **Inert unless the ESL is present AND
 `bClassTree = 1`**; then today's three classes (Melee/Ranged/Mage, `State.h` `combatClassOverride`) behave exactly as before.
-C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at kDataLoaded, table counts). No co-save (C3), XP
-(C4), passives (C6) or GUI (C10) yet. Plan: build-plan cards C1..C14, ClickUp 86e3dhbd3.
+C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at kDataLoaded, table counts). C3 adds the `'MCLS'` co-save
+record and its state API, but nothing writes the state yet. No XP (C4), passives (C6) or GUI (C10) yet. Plan: build-plan cards C1..C14, ClickUp 86e3dhbd3.
 
 - `classes/Classes.h` — the ONE public header: `Id` (35 classes, enum order = bit index of every future mastered/unlocked bitset,
   so **append-only**), `ClassDef`, `DefaultGambit`, `UnlockRule`, `Present()/Active()/Strict()`, `Get/FindBySlug/UnlockSatisfied/T1ForOverride`,
@@ -8495,13 +8516,25 @@ C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at 
 - `classes/Classes.cpp` — accessors, `UnlockSatisfied` (pure; C5 supplies the mastered mask), and the load-time self-check (counts per
   tier 3/9/14/8/1, 6 hybrids, every parent resolves). `static_assert`s pin `CombatStyle::Stance` 1/2/3 = Melee/Ranged/Cast.
 - `classes/Presence.cpp` — the manifest scan (the `Progression.cpp` Init precedent) and the `Active()/Strict()` gates.
-- INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`.
-- **Depended-on-by:** nothing yet. Later cards read `kTable` (C3 bitsets, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI).
+- `classes/State.cpp` (card C3) — the per-follower class state (`g_store`, one `g_mx`, callable from ANY thread; never locked across an
+  engine call or a `WriteRecordData`) and its `'MCLS'` v1 co-save record (layout: co-save section 1). API in `Classes.h:170` (`FollowerClasses`,
+  `ClassProgress` {u32 xp POINTS, u8 level}, `kNoClass` 0xFF, `kMaxStoredRows` 64): reads `GetFollower/GetEquipped/GetProgress/GetMastered/
+  GetUnlocked/GetStealthFights/HasStoredTable/GetStoredTable` (copies); writes `SetEquipped/ClearEquipped/SetProgress/SetMastered/SetUnlocked/
+  SetStealthFights/StoreTable/ClearStoredTable` (C4 XP, C5 mastery + switch, C6 carriers read, C12 store / restore / reset, C13 counters).
+  Every write goes through `Mutate:399` and REFUSES (returns false, changes nothing) unless `Writable()` = `Active()` and the loaded record was
+  parsed (not kept verbatim); 0xFF ids are refused (#9). `CoSave/CoLoad/BeginLoad/ClearAll` are called only by `Serialization.cpp`.
+- INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`;
+  `bClassCoSaveSelfTest` (C3 DEBUG, default 0; `Config.h/.cpp`, `MFO.ini`): the MCLS round-trip self-test at every load.
+- **Depended-on-by:** `Serialization.cpp` (the MCLS hooks, C3). Later cards read `kTable` and the C3 state (C4 XP, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI, C12 tables, C13 counters).
 - **What breaks if you change this:** (1) reordering/inserting a class in `Id` re-numbers every persisted mastered/unlocked bit once C3 ships
   (co-save, tier A); (2) renumbering the T1 `rootT1` ordinals breaks the single-source-of-truth with `combatClassOverride` (frozen, `State.h`);
   (3) changing a slug breaks the review page ids and the C7 ESL record names; (4) renaming the manifest suffix without the C7 generator
   strands the ESL as "absent" (the add-on goes silently inert, one info line); (5) making anything here run when `Active()` is false breaks the
-  "bClassTree = 0 / ESL absent = today's three classes exactly" contract.
+  "bClassTree = 0 / ESL absent = today's three classes exactly" contract; (6) **C3 (co-save, tier A):** changing any MCLS v1 field's order /
+  type / count without a version bump and a kept v1 reader (#12); writing a `classCount` other than `kClassCount` or a `rowSchema` other than
+  `kSchemaVersion`; letting a setter mutate while `!Writable()` (the ESL-absent progress would no longer be written back unchanged, and a kept
+  newer blob would disagree with the live state); holding `g_mx` across a `WriteRecordData` or an engine call; changing the FLWR gambit row
+  outside `GambitWire` (desyncs every stored class table).
 
 ---
 
