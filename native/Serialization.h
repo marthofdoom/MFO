@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <cstring>   // std::memcpy: CoSaveBuffer
 
 namespace MFO {
 
@@ -156,6 +157,19 @@ namespace MFO {
     inline constexpr std::uint32_t kRecPlayerGiven     = 'PGIV';
     inline constexpr std::uint32_t kPlayerGivenVersion = 1;
 
+    // Class update card C3 (ClickUp 86e3dhbd3): the CLASS ADD-ON's own record, independent of every other
+    // record (classes/State.cpp owns the layout, bounds, the lock and the full byte table). Per follower: the
+    // equipped class, XP + level for every class, the mastered / unlocked bitsets, the Thief / Master Thief
+    // stealth-entry fight counters, and one stored COMBAT gambit table per class that has one (marth Q8: a
+    // class's setup comes back when he switches back). The gambit rows use the FLWR row encoding (GambitWire
+    // below, the ONE encoding); the record names the FLWR schema version its rows were written at.
+    //   v1 - u32 rowSchema, u8 classCount, u32 followerCount, then per follower the v1 entry (State.cpp).
+    // Written ONLY when there is class state (a save without it carries no MCLS). Kept and re-written whether
+    // the class ESL is loaded or not (marth Q9). A record this DLL cannot parse (a newer version, rowSchema or
+    // classCount) is KEPT VERBATIM and written back unchanged, never skipped.
+    inline constexpr std::uint32_t kRecClasses     = 'MCLS';
+    inline constexpr std::uint32_t kClassesVersion = 1;
+
     // ClickUp 86e3t1mx7 (TOWN R2, design 2.7): a SIXTH independent record -- the town errands in progress
     // (logistics/Errand.h `Saved`). The autosave on every load door makes a save mid-errand the COMMON case;
     // without it a follower saved inside a shop loads inside the shop with nothing bringing him back. Written
@@ -257,5 +271,77 @@ namespace MFO {
     // the user who downgrades and saves never reads the log until the data is
     // already gone. Surfaced at kPostLoadGame.
     bool ConsumeNewerSaveWarning();
+
+    // ── co-save byte buffer (card C3) ────────────────────────────────────────────────────────────────
+    // An in-memory record body with the SAME method names and return shapes as SKSE::SerializationInterface
+    // (WriteRecordData -> bool, ReadRecordData -> bytes read, ResolveFormID -> bool), so one codec reads or
+    // writes either. ResolveFormID forwards to the SKSE interface it was built with, or is the identity when
+    // built without one (the round-trip self-test). Not thread-safe; a local object.
+    class CoSaveBuffer {
+    public:
+        CoSaveBuffer() = default;
+        explicit CoSaveBuffer(const SKSE::SerializationInterface* a_resolver) : _resolver(a_resolver) {}
+
+        bool WriteRecordData(const void* a_buf, std::uint32_t a_length) {
+            if (a_length == 0) return true;
+            if (!a_buf) return false;
+            const auto* p = static_cast<const std::uint8_t*>(a_buf);
+            _bytes.insert(_bytes.end(), p, p + a_length);
+            return true;
+        }
+        template <class T, std::enable_if_t<std::negation_v<std::is_pointer<T>>, int> = 0>
+        bool WriteRecordData(const T& a_v) {
+            return WriteRecordData(std::addressof(a_v), static_cast<std::uint32_t>(sizeof(T)));
+        }
+
+        // Copies min(a_length, remaining) bytes and returns that count (a short read, like SKSE's).
+        std::uint32_t ReadRecordData(void* a_buf, std::uint32_t a_length) {
+            const std::size_t left = _pos < _bytes.size() ? _bytes.size() - _pos : 0;
+            const auto n = static_cast<std::uint32_t>(std::min<std::size_t>(left, a_length));
+            if (n && a_buf) std::memcpy(a_buf, _bytes.data() + _pos, n);
+            _pos += n;
+            return n;
+        }
+        template <class T, std::enable_if_t<std::negation_v<std::is_pointer<T>>, int> = 0>
+        std::uint32_t ReadRecordData(T& a_v) {
+            return ReadRecordData(std::addressof(a_v), static_cast<std::uint32_t>(sizeof(T)));
+        }
+
+        bool ResolveFormID(RE::FormID a_old, RE::FormID& a_new) const {
+            if (_resolver) return _resolver->ResolveFormID(a_old, a_new);
+            a_new = a_old;
+            return true;
+        }
+
+        [[nodiscard]] std::vector<std::uint8_t>&       Bytes() { return _bytes; }
+        [[nodiscard]] const std::vector<std::uint8_t>& Bytes() const { return _bytes; }
+        [[nodiscard]] std::size_t Remaining() const { return _pos < _bytes.size() ? _bytes.size() - _pos : 0; }
+        void Rewind() { _pos = 0; }
+
+    private:
+        std::vector<std::uint8_t>           _bytes;
+        std::size_t                         _pos = 0;
+        const SKSE::SerializationInterface* _resolver = nullptr;
+    };
+
+    struct Gambit;   // State.h
+
+    // ── THE gambit-row wire encoding (FLWR's; card C3 made it callable) ──────────────────────────────
+    // One row, in this order: str condition, f32 conditionParam, u8 subjectSelector, u32 subjectActorForm
+    // (FLWR v3+; a 0xFF id is written as 0, #9), str action, u32 actionParamForm, u8 flags (bit 0 enabled,
+    // bit 1 enabled with an appended subject; see the FLWR v5 notes above). "str" = u32 length (<= 64) + bytes.
+    // FLWR (Serialization.cpp) and MCLS (classes/State.cpp) both call these, so the encoding exists ONCE. A
+    // future FLWR bump that changes the row (card G9's per-rule cooldown) MUST change it HERE, gated on
+    // a_flwrVersion, so MCLS rows follow automatically (MCLS stores the FLWR version it wrote its rows at).
+    namespace GambitWire {
+        inline constexpr std::uint32_t kMaxOpcodeLen = 64;
+        // false = an opcode longer than kMaxOpcodeLen (logged; nothing after it in the row is written).
+        bool WriteRow(SKSE::SerializationInterface& a_out, const Gambit& a_g);
+        bool WriteRow(CoSaveBuffer& a_out, const Gambit& a_g);
+        // false = short read / implausible opcode length (the caller aborts its record). An unresolvable
+        // actionParamForm disables THIS rule with a marker (DESIGN.md 3.3) and sets a_paramUnresolved.
+        bool ReadRow(SKSE::SerializationInterface& a_in, std::uint32_t a_flwrVersion, Gambit& a_g, bool& a_paramUnresolved);
+        bool ReadRow(CoSaveBuffer& a_in, std::uint32_t a_flwrVersion, Gambit& a_g, bool& a_paramUnresolved);
+    }
 
 }
