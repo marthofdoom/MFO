@@ -102,7 +102,7 @@ Written only by a dev build.
 **Why a dev save loads cleanly on a release build** (read from the reader code):
 
 1. *The rule.* The FLWR reader stores the action opcode string verbatim, with no vocabulary check
-   (`ReadFollowersRecord`, `Serialization.cpp` `ReadString(a_intfc, g.actionOpcode)`); only an UNRESOLVABLE
+   (`Serialization.cpp` `GambitWire` `ReadRowT`, `ReadOpT(a_in, g.actionOpcode)`, which `ReadFollowersRecord` calls for every row since class card C3; the MCLS stored tables use the same reader); only an UNRESOLVABLE
    `actionParamForm` disables a rule. A marker made fresh has param 0; one converted from a cast rule keeps
    that rule's spell (resolvable or not, either way harmless: resolvable keeps it as is, unresolvable disables
    the rule). The writer writes the string back verbatim,
