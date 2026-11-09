@@ -1498,7 +1498,7 @@ Raised against `f51c579` (`fix/mfo-offense-1006c`, Opus review MERGE OK), 2026-1
 - **SEV-3 (accepted):** a direct-road lock (no APMF claim to observe) stays fresh until the 6 s `kInFlightHoldCap`, and the waiter clock can stretch a higher rule's wait to about 12 s.
 - **Surfaced at edit time from:** MAP.md "FIELD 1006c OFFENSE FIXES" bullet.
 
-### MFO-B250 (SEV-3, FIXED in SHA_PLACEHOLDER, marth ruled) -- current-AV feedback lock-in in the weapon class and school picks
+### MFO-B250 (SEV-3, FIXED in 5b100b1, marth ruled) -- current-AV feedback lock-in in the weapon class and school picks
 - **Raised:** Opus tier-3 review round 2 of `a015450` (`feat/mfo-gem-relevance`), 2026-10-12. Reviewer's log (verbatim): "SEV-3 current-AV feedback lock-in (ComputeWeaponRoles + TopTwoSchoolMask use GetActorValue; ArmorPrefFor uses base on purpose)."
 - **What it means:** `ComputeWeaponRoles` (logistics/Gear.cpp) picks 1H vs 2H from the CURRENT One-Handed / Two-Handed values and `TopTwoSchoolMask` (logistics/Cast.cpp) the top two schools from the current school values, both including fortify buffs. A socketed Fortify One-Handed (or worn school gear) raises the value it is judged by, so the pick can lock onto whatever is already buffed. The F3 gem direction reuses both answers on purpose (gem choice must agree with gear choice), so it inherits this.
 - **marth's ruling (2026-10-12, Q1):** judge by BASE skill values; perks break ties.
