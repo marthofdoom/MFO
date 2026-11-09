@@ -333,7 +333,12 @@ namespace MFO::Board {
                     if (io.WantTextInput && wParam > 0 && wParam < 0x10000)
                         io.AddInputCharacterUTF16(static_cast<ImWchar16>(wParam));
                 }
-                return func(hWnd, uMsg, wParam, lParam);
+                // Dispatch through CallWindowProcA, never call func directly: when another
+                // mod subclassed the window with the Unicode API first, SetWindowLongPtrA
+                // hands back a WNDPROC HANDLE (a value like 0xFFFF1409), not a function
+                // pointer, and only CallWindowProc can dispatch it (crash report 2026-11-07:
+                // EXCEPTION_ACCESS_VIOLATION at 0x0000FFFF1409 with Community Shaders).
+                return CallWindowProcA(func, hWnd, uMsg, wParam, lParam);
             }
             static inline WNDPROC func;
         };
