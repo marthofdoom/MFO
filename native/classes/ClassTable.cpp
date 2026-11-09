@@ -50,7 +50,7 @@ namespace MFO::Classes {
             return { a_c, a_a, a_p, a_s, a_r, a_cd, nullptr, false };
         }
         // An enemy-control cast row (Paralyze / Fear / TurnUndead). DESIGN-OPEN: enemy-control target (marth ruled AUTO will treat enemy-control spells as hostile; that base change is task 1dfcuabcr0d);
-        // C12 must not apply until ruled. Since c62d4cf AUTO refuses a nature-undeclared spell and Subject::Enemy ignores the
+        // C12 must not apply until 1dfcuabcr0d lands. Since c62d4cf AUTO refuses a nature-undeclared spell and Subject::Enemy ignores the
         // condition's foe, so neither subject expresses "paralyze THE stronger foe". Conservative default AUTO; pendingRuling
         // marks the row so C12 skips it. No new subject is invented.
         constexpr DefaultGambit Ctl(const char* a_c, const char* a_a, float a_p, SpellRole a_r) {
