@@ -23,6 +23,7 @@
 #include "Probe.h"
 #include "Board.h"
 #include "progression/ProgAllocator.h"
+#include "classes/Classes.h"         // class update C3: the 'MCLS' class add-on record
 #include "logistics/PlayerGiven.h"   // 86e3faccn: the 'PGIV' player-given relic record
 #include "logistics/Errand.h"        // 86e3t1mx7 (town R2): the 'ERND' errand record
 #include <cmath>                     // std::isfinite: ERND float ingestion (#11)
@@ -59,34 +60,127 @@ namespace MFO {
         // Bounds. A truncated or hostile record must stop the parse, never
         // fabricate (INVARIANTS.md #11).
         constexpr std::uint32_t kMaxFollowers = 4096;
-        constexpr std::uint32_t kMaxOpcodeLen = 64;
+        constexpr std::uint32_t kMaxOpcodeLen = GambitWire::kMaxOpcodeLen;   // 64 (card C3 moved the value to the header)
         constexpr std::uint16_t kMaxOverrides = 64;
         constexpr std::uint16_t kMaxTutoredV1 = 512;
         constexpr std::uint32_t kMaxStockGear = 512;   // T#69: generous headroom over any real loadout
 
         std::atomic<bool> g_sawNewerSave{ false };   // v1 only, consumed and discarded
 
-        bool WriteString(SKSE::SerializationInterface* a_intfc, const std::string& a_s) {
+        // The ONE opcode-string encoding (u32 length + bytes). Card C3 made the stream a template parameter
+        // (SKSE::SerializationInterface or CoSaveBuffer, same method names) so the MCLS record's gambit rows go
+        // through the same code; the bytes and the log lines are unchanged.
+        template <class W>
+        bool WriteOpT(W& a_out, const std::string& a_s) {
             const auto len = static_cast<std::uint32_t>(a_s.size());
             if (len > kMaxOpcodeLen) {
                 spdlog::error("[cosave] opcode too long ({}), refusing to write: {}", len, a_s);
                 return false;
             }
-            return a_intfc->WriteRecordData(len) &&
-                   (len == 0 || a_intfc->WriteRecordData(a_s.data(), len));
+            return a_out.WriteRecordData(len) &&
+                   (len == 0 || a_out.WriteRecordData(a_s.data(), len));
         }
 
         // Returns false on short read or implausible length -- caller must abort.
-        bool ReadString(SKSE::SerializationInterface* a_intfc, std::string& a_out) {
+        template <class R>
+        bool ReadOpT(R& a_in, std::string& a_out) {
             std::uint32_t len = 0;
-            if (a_intfc->ReadRecordData(len) != sizeof(len)) return false;   // MFO-B309: a 1-3 byte partial read is a short read (#11)
+            if (a_in.ReadRecordData(len) != sizeof(len)) return false;   // MFO-B309: a 1-3 byte partial read is a short read (#11)
             if (len > kMaxOpcodeLen) {
                 spdlog::error("[cosave] opcode length {} exceeds max {} -- aborting read", len, kMaxOpcodeLen);
                 return false;
             }
             a_out.resize(len);
             if (len == 0) return true;
-            return a_intfc->ReadRecordData(a_out.data(), len) == len;
+            return a_in.ReadRecordData(a_out.data(), len) == len;
+        }
+
+        bool WriteString(SKSE::SerializationInterface* a_intfc, const std::string& a_s) { return WriteOpT(*a_intfc, a_s); }
+        bool ReadString(SKSE::SerializationInterface* a_intfc, std::string& a_out) { return ReadOpT(*a_intfc, a_out); }
+
+        // ── one gambit row (GambitWire, Serialization.h). MOVED VERBATIM from the FLWR writer / reader loops
+        // (card C3), which now call it; MCLS calls it for every stored class table. ───────────────────────
+        template <class W>
+        bool WriteRowT(W& a_out, const Gambit& g) {
+            if (!WriteOpT(a_out, g.conditionOpcode)) return false;
+            a_out.WriteRecordData(g.conditionParam);
+            a_out.WriteRecordData(g.subjectSelector);
+            // v3 (#68): the specific-follower cast target, if any.
+            // Runtime (0xFF) actor ids are NEVER persisted
+            // (INVARIANTS #9) -- a summoned/cloned teammate targeted
+            // this session just falls back down the resolution
+            // ladder next load, same shape as an unresolvable
+            // actionParamForm below.
+            const RE::FormID subjActorOut =
+                Followers::IsPersistableID(g.subjectActorForm) ? g.subjectActorForm : 0;
+            a_out.WriteRecordData(subjActorOut);
+            if (!WriteOpT(a_out, g.actionOpcode)) return false;
+            a_out.WriteRecordData(g.actionParamForm);
+            // flags bit 0 = enabled. bit 1 = enabled, for a rule whose subjectSelector is an
+            // APPENDED Vocab::Subject (Enemy / Caster, 2026-10-06), and then bit 0 stays CLEAR:
+            // an older MFO.dll reads only bit 0, so it loads that rule DISABLED rather than
+            // resolving the unknown subject to its player-fallback rung (a curse or a damage
+            // spell aimed at the player). No version bump: the layout is unchanged, and a v6
+            // FLWR would make an older DLL skip (and on its next save destroy) every follower.
+            const bool appendedSubj = Vocab::IsAppendedSubject(g.subjectSelector);
+            const std::uint8_t flags =
+                !g.enabled ? 0u : (appendedSubj ? 2u : 1u);
+            a_out.WriteRecordData(flags);
+            return true;
+        }
+
+        template <class R>
+        bool ReadRowT(R& a_in, std::uint32_t version, Gambit& g, bool& a_paramUnresolved) {
+            a_paramUnresolved = false;
+            if (!ReadOpT(a_in, g.conditionOpcode)) return false;
+            if (!a_in.ReadRecordData(g.conditionParam)) return false;
+            if (!a_in.ReadRecordData(g.subjectSelector)) return false;
+
+            // v3 (#68): STRICTLY version-gated -- a v1/v2 record
+            // never wrote this field, so reading it unconditionally
+            // would consume the next field's bytes and desync the
+            // whole rest of the stream. g.subjectActorForm already
+            // defaults to 0 (Gambit{}), which is exactly "use
+            // subjectSelector instead" -- the pre-#68 behaviour.
+            if (version >= 3) {
+                RE::FormID rawSubjActor = 0;
+                if (!a_in.ReadRecordData(rawSubjActor)) return false;
+                if (rawSubjActor != 0) {
+                    RE::FormID resolvedSubjActor = 0;
+                    if (a_in.ResolveFormID(rawSubjActor, resolvedSubjActor)) {
+                        g.subjectActorForm = resolvedSubjActor;
+                    }
+                    // else: that follower is gone. Leave it 0 --
+                    // DESIGN's ladder falls back to subjectSelector,
+                    // never disables the rule (unlike a missing
+                    // actionParamForm, which has no fallback rung).
+                }
+            }
+
+            if (!ReadOpT(a_in, g.actionOpcode)) return false;
+
+            RE::FormID rawParam = 0;
+            if (!a_in.ReadRecordData(rawParam)) return false;
+            std::uint8_t flags = 0;
+            if (!a_in.ReadRecordData(flags)) return false;
+            // bit 0 OR bit 1 (the appended-subject enabled bit, see the writer). Every
+            // record written before 2026-10-06 holds 0 or 1 here, so it reads unchanged.
+            g.enabled = (flags & 3u) != 0;
+
+            if (rawParam != 0) {
+                RE::FormID resolvedParam = 0;
+                if (a_in.ResolveFormID(rawParam, resolvedParam)) {
+                    g.actionParamForm = resolvedParam;
+                } else {
+                    // DESIGN.md §3.3: disable THIS rule, with a
+                    // marker. Never guess, never drop the whole list.
+                    g.actionParamForm = 0;
+                    g.enabled = false;
+                    g.lastFailReason = "action target missing from load order";
+                    a_paramUnresolved = true;
+                }
+            }
+            return true;
         }
 
         // ── 'ERND' (town R2; layout in Serialization.h) ─────────────────────────────────────────────
@@ -372,6 +466,16 @@ namespace MFO {
         }
     }
 
+    // GambitWire (Serialization.h): the two streams the one row encoding is instantiated for (card C3).
+    bool GambitWire::WriteRow(SKSE::SerializationInterface& a_out, const Gambit& a_g) { return WriteRowT(a_out, a_g); }
+    bool GambitWire::WriteRow(CoSaveBuffer& a_out, const Gambit& a_g) { return WriteRowT(a_out, a_g); }
+    bool GambitWire::ReadRow(SKSE::SerializationInterface& a_in, std::uint32_t a_flwrVersion, Gambit& a_g, bool& a_paramUnresolved) {
+        return ReadRowT(a_in, a_flwrVersion, a_g, a_paramUnresolved);
+    }
+    bool GambitWire::ReadRow(CoSaveBuffer& a_in, std::uint32_t a_flwrVersion, Gambit& a_g, bool& a_paramUnresolved) {
+        return ReadRowT(a_in, a_flwrVersion, a_g, a_paramUnresolved);
+    }
+
     void SaveCallback(SKSE::SerializationInterface* a_intfc) {
         // SEV-1 #3: quiesce the AddTask worker for the whole callback so the
         // count pass (below) and the write pass see the SAME g_followers. Without
@@ -452,8 +556,8 @@ namespace MFO {
                 const auto gambitCount = static_cast<std::uint8_t>(n);
                 a_intfc->WriteRecordData(gambitCount);
                 for (size_t gi = 0; gi < n; ++gi) {
-                    const auto& g = list[gi];
-                    if (!WriteString(a_intfc, g.conditionOpcode)) {
+                    // The row encoding is GambitWire (WriteRowT above, card C3); the bytes are unchanged.
+                    if (!GambitWire::WriteRow(*a_intfc, list[gi])) {
                         // The follower and gambit counts are already written, so
                         // the record is now TRUNCATED and overstates what
                         // follows. The reader will short-read and abort FLWR
@@ -466,36 +570,6 @@ namespace MFO {
                         flwrOk = false;
                         break;
                     }
-                    a_intfc->WriteRecordData(g.conditionParam);
-                    a_intfc->WriteRecordData(g.subjectSelector);
-                    // v3 (#68): the specific-follower cast target, if any.
-                    // Runtime (0xFF) actor ids are NEVER persisted
-                    // (INVARIANTS #9) -- a summoned/cloned teammate targeted
-                    // this session just falls back down the resolution
-                    // ladder next load, same shape as an unresolvable
-                    // actionParamForm below.
-                    const RE::FormID subjActorOut =
-                        Followers::IsPersistableID(g.subjectActorForm) ? g.subjectActorForm : 0;
-                    a_intfc->WriteRecordData(subjActorOut);
-                    if (!WriteString(a_intfc, g.actionOpcode)) {
-                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's FLWR "
-                                      "record is TRUNCATED -- this follower and those after it will "
-                                      "not load; stock-gear/progression/force-hold records are still "
-                                      "written below. Re-save before relying on it.", formID);
-                        flwrOk = false;
-                        break;
-                    }
-                    a_intfc->WriteRecordData(g.actionParamForm);
-                    // flags bit 0 = enabled. bit 1 = enabled, for a rule whose subjectSelector is an
-                    // APPENDED Vocab::Subject (Enemy / Caster, 2026-10-06), and then bit 0 stays CLEAR:
-                    // an older MFO.dll reads only bit 0, so it loads that rule DISABLED rather than
-                    // resolving the unknown subject to its player-fallback rung (a curse or a damage
-                    // spell aimed at the player). No version bump: the layout is unchanged, and a v6
-                    // FLWR would make an older DLL skip (and on its next save destroy) every follower.
-                    const bool appendedSubj = Vocab::IsAppendedSubject(g.subjectSelector);
-                    const std::uint8_t flags =
-                        !g.enabled ? 0u : (appendedSubj ? 2u : 1u);
-                    a_intfc->WriteRecordData(flags);
                 }
                 if (!flwrOk) break;   // out of the table loop
             }
@@ -581,6 +655,11 @@ namespace MFO {
         // isolation contract: the museum relics the player gave a follower or put on
         // him (PlayerGiven owns the layout, bounds and the lock).
         PlayerGiven::CoSave(a_intfc);
+
+        // Class update C3 (kRecClasses/'MCLS') -- an independent record, same isolation contract: the class
+        // add-on's per-follower state (classes/State.cpp owns the layout, bounds and the lock). Written only
+        // when there is class state, and written whether the class ESL is loaded or not (marth Q9).
+        Classes::CoSave(a_intfc);
 
         // 86e3t1mx7 (kRecErrand/'ERND') -- a SIXTH independent record, same isolation
         // contract: the town errands in progress (written only when one exists).
@@ -755,54 +834,11 @@ namespace MFO {
 
                     for (std::uint8_t gi = 0; gi < gambitCount; ++gi) {
                         Gambit g{};
-                        if (!ReadString(a_intfc, g.conditionOpcode)) return;
-                        if (!a_intfc->ReadRecordData(g.conditionParam)) return;
-                        if (!a_intfc->ReadRecordData(g.subjectSelector)) return;
-
-                        // v3 (#68): STRICTLY version-gated -- a v1/v2 record
-                        // never wrote this field, so reading it unconditionally
-                        // would consume the next field's bytes and desync the
-                        // whole rest of the stream. g.subjectActorForm already
-                        // defaults to 0 (Gambit{}), which is exactly "use
-                        // subjectSelector instead" -- the pre-#68 behaviour.
-                        if (version >= 3) {
-                            RE::FormID rawSubjActor = 0;
-                            if (!a_intfc->ReadRecordData(rawSubjActor)) return;
-                            if (rawSubjActor != 0) {
-                                RE::FormID resolvedSubjActor = 0;
-                                if (a_intfc->ResolveFormID(rawSubjActor, resolvedSubjActor)) {
-                                    g.subjectActorForm = resolvedSubjActor;
-                                }
-                                // else: that follower is gone. Leave it 0 --
-                                // DESIGN's ladder falls back to subjectSelector,
-                                // never disables the rule (unlike a missing
-                                // actionParamForm, which has no fallback rung).
-                            }
-                        }
-
-                        if (!ReadString(a_intfc, g.actionOpcode)) return;
-
-                        RE::FormID rawParam = 0;
-                        if (!a_intfc->ReadRecordData(rawParam)) return;
-                        std::uint8_t flags = 0;
-                        if (!a_intfc->ReadRecordData(flags)) return;
-                        // bit 0 OR bit 1 (the appended-subject enabled bit, see the writer). Every
-                        // record written before 2026-10-06 holds 0 or 1 here, so it reads unchanged.
-                        g.enabled = (flags & 3u) != 0;
-
-                        if (rawParam != 0) {
-                            RE::FormID resolvedParam = 0;
-                            if (a_intfc->ResolveFormID(rawParam, resolvedParam)) {
-                                g.actionParamForm = resolvedParam;
-                            } else {
-                                // DESIGN.md §3.3: disable THIS rule, with a
-                                // marker. Never guess, never drop the whole list.
-                                g.actionParamForm = 0;
-                                g.enabled = false;
-                                g.lastFailReason = "action target missing from load order";
-                                ++disabledRules;
-                            }
-                        }
+                        // The row encoding (and its v3 gate and actionParamForm resolve-or-disable)
+                        // is GambitWire (ReadRowT above, card C3); behaviour is unchanged.
+                        bool paramUnresolved = false;
+                        if (!GambitWire::ReadRow(*a_intfc, version, g, paramUnresolved)) return;
+                        if (paramUnresolved) ++disabledRules;
                         // MIGRATION (#35): "Equip torch" moved combat->logistics. A
                         // legacy rule in the COMBAT table (t==0) would now hit the
                         // fail-closed unknown-action path and, since combat has no
@@ -896,6 +932,7 @@ namespace MFO {
         g_followers.clear();
         Logistics::ClearStockGear();   // T#69: defence in depth -- RevertCallback already
                                         // cleared it, same belt-and-braces as g_followers above
+        Classes::BeginLoad();          // class update C3: same belt-and-braces for 'MCLS' (+ the debug round-trip self-test)
         PlayerGiven::ClearRecord();    // 86e3faccn: same belt-and-braces for 'PGIV'
         Logistics::Errand::ClearRestorePending();   // 86e3t1mx7: same belt-and-braces for 'ERND'
 
@@ -961,6 +998,13 @@ namespace MFO {
                     continue;
                 }
                 PlayerGiven::CoLoad(a_intfc, version);
+                continue;
+            }
+            if (type == kRecClasses) {
+                // Class update C3: same independence contract, ONE difference: a version this DLL cannot read is
+                // KEPT VERBATIM and written back unchanged (CoLoad decides, from the record header), never skipped,
+                // so a downgrade does not destroy class progress. Nothing to warn on screen: nothing is lost.
+                Classes::CoLoad(a_intfc, version, length);
                 continue;
             }
             if (type == kRecErrand) {
@@ -1073,6 +1117,9 @@ namespace MFO {
         // writes are PumpTickGate'd; its main-thread recounts were dropped by
         // MainThread::Clear above). A load right after this repopulates it.
         PlayerGiven::ClearRecord();
+        // Class update C3: the 'MCLS' class state (and any record kept verbatim) IS serialized too -- same
+        // contract, after StopPump. A load right after this repopulates it.
+        Classes::ClearAll();
         // 86e3t1mx7 (town R2): the 'ERND' entries a load staged for adoption. Logistics::
         // ClearTransientState above already dropped them with every live errand (Errand::
         // ClearTransientState); kept as its own call beside PGIV so the serialized-record

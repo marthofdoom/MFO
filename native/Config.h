@@ -792,6 +792,10 @@ namespace MFO::Config {
     //     strict adherence to the equipped class; it only means anything while the tree is active. INI-only (no MCM key).
     inline std::atomic<bool>  g_classTree{ true };
     inline std::atomic<bool>  g_classStrict{ true };
+    //   bClassCoSaveSelfTest (class update C3, DEBUG, INI-only, default OFF): at every game load, round-trip a synthetic class
+    //     state (every field, stored gambit tables included) and then the loaded state through the 'MCLS' codec in memory and log
+    //     PASS / FAIL with the first mismatch. Pure memory, writes nothing to the save or the world.
+    inline std::atomic<bool>  g_classCoSaveSelfTest{ false };
     inline std::atomic<int>   g_errandMinSellGold{ 100 };
     inline std::atomic<int>   g_errandMinPurse{ 200 };
     inline std::atomic<float> g_errandSettleSec{ 10.0f };

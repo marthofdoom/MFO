@@ -114,6 +114,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/ClassTable.cpp
     classes/Classes.cpp
     classes/Presence.cpp
+    classes/State.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp
