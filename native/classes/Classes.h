@@ -209,6 +209,9 @@ namespace MFO::Classes {
     void ClearAll();    // ResetAllState, after StopPump
 
     [[nodiscard]] bool Writable();
+    // True ONCE after a load that kept a newer MCLS record verbatim (class progress read-only this session);
+    // plugin.cpp shows the on-screen notice at kPostLoadGame (review F-1).
+    [[nodiscard]] bool ConsumeReadOnlyNotice();
 
     // Reads (copies).
     [[nodiscard]] std::optional<FollowerClasses> GetFollower(RE::FormID a_follower);   // nullopt = no record
@@ -228,6 +231,6 @@ namespace MFO::Classes {
     bool SetMastered(RE::FormID a_follower, Mask a_mastered);
     bool SetUnlocked(RE::FormID a_follower, Mask a_unlocked);
     bool SetStealthFights(RE::FormID a_follower, std::uint16_t a_thief, std::uint16_t a_masterThief);
-    bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows);   // C12: on switching away
+    bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows);   // C12: on switching away; runtime-only fields (uid, last*) are zeroed
     bool ClearStoredTable(RE::FormID a_follower, Id a_class);                          // C12: the reset button
 }

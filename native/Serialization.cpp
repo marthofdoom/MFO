@@ -1003,7 +1003,8 @@ namespace MFO {
             if (type == kRecClasses) {
                 // Class update C3: same independence contract, ONE difference: a version this DLL cannot read is
                 // KEPT VERBATIM and written back unchanged (CoLoad decides, from the record header), never skipped,
-                // so a downgrade does not destroy class progress. Nothing to warn on screen: nothing is lost.
+                // so a downgrade does not destroy class progress. Not g_sawNewerSave (that box says saving destroys data): its own
+                // read-only notice is shown at kPostLoadGame (Classes::ConsumeReadOnlyNotice, plugin.cpp; review F-1).
                 Classes::CoLoad(a_intfc, version, length);
                 continue;
             }

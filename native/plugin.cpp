@@ -490,6 +490,15 @@ namespace {
                     "Its follower data could not be read, and SAVING NOW WILL DESTROY IT.\n\n"
                     "Load an older save, or reinstall the newer MFO before saving.");
             }
+            // Class update C3, review F-1: a kept newer 'MCLS' record makes class progress READ-ONLY this session
+            // (nothing is destroyed: it is written back unchanged). Its own message, because the one above says
+            // saving destroys data, which is not true for MCLS.
+            if (MFO::Classes::ConsumeReadOnlyNotice()) {
+                RE::DebugMessageBox(
+                    "MFO: class progress is read-only this session.\n\n"
+                    "This save's class data is from a newer MFO. It is kept and saved back unchanged, "
+                    "but nothing new is recorded until you update MFO.");
+            }
             MFO::Probe::ReleaseAll();   // nothing the probe did outlives a session
             // F2 (feat/mfo-equip-authority, Fable round 2): a New Game started
             // from a RUNNING session gets no kPreLoadGame, so the kPreLoadGame

@@ -9,8 +9,10 @@
 // ── 'MCLS' v1 BYTE LAYOUT (little-endian, SKSE record body) ─────────────────────────────────────────
 //   header
 //     u32  rowSchema       the FLWR schema version (Serialization.h kSchemaVersion) the gambit rows below
-//                          were written at; written = kSchemaVersion (5 today). Read: 1..kSchemaVersion.
-//     u8   classCount      classes per follower in this record; written = kClassCount (35). Read: 1..35.
+//                          were written at; written = kSchemaVersion (5 today). Read: 1..kSchemaVersion; above ->
+//                          KEPT VERBATIM; 0 -> corrupt, ABORTED (nothing kept).
+//     u8   classCount      classes per follower in this record; written = kClassCount (35). Read: 1..35; above ->
+//                          KEPT VERBATIM; 0 -> corrupt, ABORTED (nothing kept).
 //     u32  followerCount   <= 4096 (#11; more = the record is ABORTED)
 //   per follower (followerCount times)
 //     u32  followerFormID  ResolveFormID; unresolvable -> the entry is consumed and DROPPED (#8)
@@ -37,7 +39,9 @@
 //   * A record this DLL cannot parse -- a version > kClassesVersion, a rowSchema > kSchemaVersion (a newer FLWR
 //     row, e.g. card G9's cooldown) or a classCount > kClassCount -- is KEPT VERBATIM (its version + bytes) and
 //     written back unchanged on every save; the class state is then FROZEN for the session (every setter
-//     refuses), so the kept bytes and the live state can never disagree. Logged loudly once per load.
+//     refuses), so the kept bytes and the live state can never disagree. Logged loudly once per load, and shown ONCE on screen at
+//     kPostLoadGame ("class progress is read-only this session", plugin.cpp via ConsumeReadOnlyNotice; review F-1).
+//     A ZERO rowSchema or classCount is corruption, not "newer": ABORTED, nothing kept (review F-2).
 //     CAVEAT: kept bytes carry the FormIDs as they were at THAT save; if the load order changed meanwhile they
 //     will resolve wrongly when the newer DLL reads them back. Only a parse (this DLL cannot) could fix that.
 //   * Version 0 is no schema: skipped, nothing kept (the ERND / MFO-B309 precedent).
@@ -87,6 +91,9 @@ namespace MFO::Classes {
         std::vector<std::uint8_t> g_keptBytes;
 
         std::atomic<bool> g_loggedInactiveKeep{ false };   // once per SESSION (never reset by a load)
+        // Review F-1: a kept (newer) record makes every setter refuse; the player must SEE that, or XP earned this
+        // session would vanish without a word. Set by CoLoad's keep, consumed once at kPostLoadGame (plugin.cpp).
+        std::atomic<bool> g_readOnlyNotice{ false };
 
         constexpr Mask RosterMask(std::size_t a_n) { return a_n >= 64 ? ~Mask{ 0 } : ((Mask{ 1 } << a_n) - 1); }
 
@@ -142,7 +149,14 @@ namespace MFO::Classes {
                 spdlog::error("[cosave] MCLS: short read on the record header -- ABORTING class state load");
                 return ReadResult::Aborted;
             }
-            if (a_h.rowSchema < 1 || a_h.rowSchema > kSchemaVersion || a_h.classCount < 1 || a_h.classCount > kClassCount)
+            // Review F-2: a ZERO rowSchema or classCount is corruption (no writer ever produced either), not a newer
+            // save: ABORT and keep nothing. Unparseable (kept verbatim) is reserved for values ABOVE this DLL's limits.
+            if (a_h.rowSchema == 0 || a_h.classCount == 0) {
+                spdlog::error("[cosave] MCLS: corrupt header (rowSchema {}, classCount {}) -- ABORTING class state load, nothing kept",
+                              a_h.rowSchema, a_h.classCount);
+                return ReadResult::Aborted;
+            }
+            if (a_h.rowSchema > kSchemaVersion || a_h.classCount > kClassCount)
                 return ReadResult::Unparseable;
             if (a_h.followerCount > kMaxSavedFollowers) {
                 spdlog::error("[cosave] MCLS: implausible follower count {} (max {}) -- ABORTING class state load",
@@ -351,7 +365,8 @@ namespace MFO::Classes {
             if (!RoundTrip(s, "synthetic", &bytes)) return;
 
             // Corrupt variants: each must be refused, never fabricated (#11).
-            spdlog::info("[classes] MCLS self-test: planting 5 corrupt variants -- the reader's ABORTING lines that follow are EXPECTED");
+            constexpr int kVariants = 7;
+            spdlog::info("[classes] MCLS self-test: planting {} corrupt variants -- the reader's ABORTING lines that follow are EXPECTED", kVariants);
             int bad = 0;
             auto expect = [&](std::string_view a_name, std::vector<std::uint8_t> a_b, ReadResult a_want) {
                 CoSaveBuffer rd;
@@ -376,6 +391,12 @@ namespace MFO::Classes {
             }
             expect("follower count over the bound", patch32(bytes, kOffFollowerCount, kMaxSavedFollowers + 1), ReadResult::Aborted);
             expect("newer row schema", patch32(bytes, kOffRowSchema, kSchemaVersion + 1), ReadResult::Unparseable);
+            expect("row schema 0 (corrupt, not newer)", patch32(bytes, kOffRowSchema, 0), ReadResult::Aborted);
+            {
+                auto t = bytes;
+                t[kOffClassCount] = 0;
+                expect("class count 0 (corrupt, not newer)", std::move(t), ReadResult::Aborted);
+            }
             {
                 auto t = bytes;
                 t[kOffClassCount] = static_cast<std::uint8_t>(kClassCount + 1);
@@ -389,7 +410,7 @@ namespace MFO::Classes {
                 expect("table count over the class count", std::move(t), ReadResult::Aborted);
             }
             if (bad == 0)
-                spdlog::info("[classes] MCLS self-test (corrupt variants): PASS -- 5 of 5 refused");
+                spdlog::info("[classes] MCLS self-test (corrupt variants): PASS -- {} of {} refused", kVariants, kVariants);
         }
 
         // A write is allowed only on a live tree with a parsed (not kept) record. Caller holds g_mx.
@@ -427,7 +448,13 @@ namespace MFO::Classes {
                     copy.emplace(fid, fc);
                 }
                 snap = SortedCopy(copy);
-                if (snap.size() > kMaxSavedFollowers) snap.resize(kMaxSavedFollowers);
+                if (snap.size() > kMaxSavedFollowers) {
+                    // Review F-9: the bound drops the HIGHEST FormIDs. Say so -- silent drops are how "the mod ate my
+                    // save" starts (the FLWR truncation warning's rule).
+                    spdlog::warn("[cosave] MCLS: {} follower(s) with class state truncated to {} -- the entries above {:08X} are "
+                                 "NOT saved", snap.size(), kMaxSavedFollowers, snap[kMaxSavedFollowers - 1].first);
+                    snap.resize(kMaxSavedFollowers);
+                }
             }
         }
 
@@ -498,6 +525,7 @@ namespace MFO::Classes {
             g_kept = true;
             g_keptVersion = a_version;
             g_keptBytes = std::move(buf.Bytes());
+            g_readOnlyNotice.store(true);
             spdlog::error("[cosave] CLASS SAVE IS NEWER THAN THIS DLL ({}) -- the record ({} byte(s)) is KEPT VERBATIM and written "
                           "back unchanged on every save; class progress is FROZEN this session. Update MFO to use it.",
                           a_why, g_keptBytes.size());
@@ -542,6 +570,7 @@ namespace MFO::Classes {
 
     void BeginLoad() {
         ClearAll();
+        g_readOnlyNotice.store(false);   // only THIS load's record may raise it
         if (Config::g_classCoSaveSelfTest.load()) RunSelfTest();
     }
 
@@ -553,6 +582,8 @@ namespace MFO::Classes {
         g_keptBytes.clear();
         g_keptBytes.shrink_to_fit();
     }
+
+    bool ConsumeReadOnlyNotice() { return g_readOnlyNotice.exchange(false); }
 
     bool Writable() {
         std::scoped_lock lk(g_mx);
@@ -649,6 +680,15 @@ namespace MFO::Classes {
         for (const auto& g : a_rows)   // the row writer refuses these; refuse at the door instead of at save
             if (g.conditionOpcode.size() > GambitWire::kMaxOpcodeLen || g.actionOpcode.size() > GambitWire::kMaxOpcodeLen)
                 return false;
+        // Review F-7: drop the RUNTIME-ONLY fields (State.h:29 uid, and the display-only lastFired / lastFailReason /
+        // lastFiredAt) so a restored table re-mints its uids (Board.cpp assigns one to every uid == 0 rule) and shows
+        // no stale outcome. The serialized fields are untouched.
+        for (auto& g : a_rows) {
+            g.uid = 0;
+            g.lastFired = false;
+            g.lastFailReason.clear();
+            g.lastFiredAt = {};
+        }
         return Mutate(a_follower, [&](FollowerClasses& fc) { fc.tables[static_cast<std::size_t>(a_class)] = std::move(a_rows); });
     }
 

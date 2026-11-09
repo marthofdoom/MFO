@@ -235,7 +235,9 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   u8 rowCount (<= 64), rowCount x FLWR gambit row}}`. **Written only when there is class state.** Unresolvable follower -> entry DROPPED
   (#8, the FLWR / PGIV precedent); unresolvable spell in a row -> that rule DISABLED (FLWR's rule); over-bound count / short read ->
   record ABORTED, parsed followers kept. **A header this DLL cannot read (version > 1, rowSchema > kSchemaVersion, classCount > 35) is
-  KEPT VERBATIM and written back unchanged (no on-screen warning: nothing is lost) and every class setter refuses for the session.**
+  KEPT VERBATIM and written back unchanged and every class setter refuses for the session; one on-screen box at kPostLoadGame says class
+  progress is read-only (`Classes::ConsumeReadOnlyNotice`, `plugin.cpp`; not the destroy-warning box, nothing is lost). A ZERO rowSchema or
+  classCount is corruption: ABORTED, nothing kept. Backlog: MFO-B567..B571.**
   **ESL absent / `bClassTree = 0`: the record is still PARSED (it holds no ESL form), held unchanged (setters refuse) and re-written;
   FormIDs re-resolve for the current load order (marth Q9).** Debug: `bClassCoSaveSelfTest` (INI-only, default 0) runs an in-memory
   round trip + 5 corrupt variants at every load (`RunSelfTest:318`, `RoundTrip:271`).
@@ -8535,6 +8537,9 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   `kSchemaVersion`; letting a setter mutate while `!Writable()` (the ESL-absent progress would no longer be written back unchanged, and a kept
   newer blob would disagree with the live state); holding `g_mx` across a `WriteRecordData` or an engine call; changing the FLWR gambit row
   outside `GambitWire` (desyncs every stored class table).
+  **Open review findings (read before editing): MFO-B567..B571** (`Docs/REVIEW-BACKLOG.md`, against 2a035b1: kept-record stale FormIDs, combat-only
+  tables, rowSchema stamped from the FLWR version, ESL-absent row disabling, C4 saturating XP). The kept-record notice is shown from `plugin.cpp`
+  kPostLoadGame (`Classes::ConsumeReadOnlyNotice`, right after the newer-save box).
 
 ---
 
