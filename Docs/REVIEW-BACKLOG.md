@@ -21,11 +21,18 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 ## OPEN
 
 ### MFO-B1 — `Loadout::Prepare` has no hand parameter
+- **RESOLVED by `fix/mfo-b1-prepare-hand` (SHA: see the final commit of that branch; round 2 fixed the Opus review's SEV-2/SEV-3).** `Prepare` gains `a_rightHand`; `CastOn` passes it for a right-only offense plan. BuffRoad and the heal repair stay LEFT (their claims are LEFT).
 - **Raised:** Fable review of `bd53a81`+`ed9cbbc`, restated on `625f3b7`. Outside the author's file boundary both times; the author correctly refused to reach for it.
 - **Severity:** SEV-4 (design residual, currently masked by hand-selection order)
 - **Finding:** `Loadout::Prepare` equips into `LeftHandSlot()` unconditionally (`Loadout.cpp:279, :359`) and at cast level 4 `DeselectSpell`s the RIGHT hand's other spell (`:296-298`). With heal-LEFT and offense-RIGHT as the designed steady state, the two fight at the equipment layer: an offense claim's first-lap `Prepare` puts its spell into the LEFT slot on top of an in-flight heal, and a heal's `Prepare` deselects the offense spell from the RIGHT.
 - **Cost recorded at the site as:** "one wasted left-hand equip per offense claim on a weaponless follower" — which Fable judged an understatement once right-first landing became the norm.
 - **Fix shape:** give `Prepare` the target hand. Its own brief; it changes an interface used from several call sites.
+
+### MFO-B1a — residuals from the MFO-B1 review (fix/mfo-b1-prepare-hand)
+- **SEV-3 (separate brief):** `APMFBridge::WeaponHandActive` (apmf/Equip.cpp:65) reports false for a sword in the right hand when a heal holds the left (Read() grips Caster), so `PlanCastHand` yields EitherFree/DualCast and `ResolveCastHand` (cast/Hands.cpp ~:1462-1505) can plan RIGHT over a weapon. `Prepare(a_rightHand)` now refuses (Debounced) as a backstop, but the plan still claims the right hand APMF-side. Fix upstream, not in Loadout.
+- **FIXED (same branch):** the Scheduler H3 release (`Scheduler.cpp:2085`) now calls `Loadout::ReleaseSpell(id, true)`, so a right-hand offense spell MFO equipped is taken back at H3 too. `ReleaseSpell`'s other callers stay LEFT-only.
+- **SEV-4:** right-target "already holding" accepts the spell in either hand (non-heal callers).
+- **SEV-4:** `ReleaseHands` side effects: (a) `g_equipClock` is erased on a right-only release and the grace clock is shared between hands; (b) the right record is erased even when the take-back is skipped (orphan); (c) the left take-back does not guard a right OFFENSE copy of the same spell.
 
 ### MFO-B2 — the F2 preemption residual is structural
 - **Raised:** Fable review of `376d347`+`db56802` (finding 3, SEV-4). Recorded in MAP.md by `1044816`; text verified true by the review of `625f3b7`.

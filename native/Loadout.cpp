@@ -79,6 +79,9 @@ namespace MFO::Loadout {
         // outlive that or the limiter never fires for the followers it matters
         // most for.
         std::unordered_map<RE::FormID, RE::FormID> g_mfoSpell;
+        // The RIGHT hand's twin (MFO-B1): the spell MFO put in the RIGHT hand, kept apart from the left
+        // entry so a heal in the left and an offense spell in the right each stay takeable-back.
+        std::unordered_map<RE::FormID, RE::FormID> g_mfoSpellRight;
 
         // The vanilla EQUP forms, read from Skyrim.esm's DOBJ record (DNAM
         // `LHEQ` -> 0x13F43, `RHEQ` -> 0x13F42) and confirmed against the EQUP
@@ -375,7 +378,7 @@ namespace MFO::Loadout {
     }
 
     Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why,
-                  LeftHandYield a_yieldLeft, bool a_healClaimLive) {
+                  LeftHandYield a_yieldLeft, bool a_healClaimLive, bool a_rightHand) {
         if (!a_actor || !a_spell) { a_why = "no actor or spell"; return Ready::Failed; }
 
         // NEVER grant a spell the follower does not know (INVARIANTS #20,
@@ -394,12 +397,22 @@ namespace MFO::Loadout {
         // with the claim live) prepares the LEFT hand: the copy a second recipient's RIGHT
         // heal holds is not this hand's (review F6 on 9895a53, feat/mfo-perhand-heal), so
         // only the left answers "already holding" for it. Every other caller is unchanged.
-        if (hands.alreadyHolding && (!a_healClaimLive || hands.left == a_spell)) {
+        // MFO-B1: the target hand's own copy answers it for a heal claim (the LEFT's, or for a
+        // RIGHT target the RIGHT's); any other caller is satisfied by the spell in either hand.
+        if (hands.alreadyHolding && (!a_healClaimLive || (a_rightHand ? hands.right : hands.left) == a_spell)) {
             // Spell already in hand: the AI window starts the first time a rule
             // WANTS this cast, not before. try_emplace -- re-arming every tick
             // would mean the window never elapses.
             g_equipClock.try_emplace(id, now);
             return Ready::AlreadyReady;
+        }
+
+        // MFO-B1 (review SEV-2): a RIGHT target never displaces a weapon. Read() reports Grip::Caster whenever
+        // EITHER hand holds a spell, so a heal in the left and a sword in the right reads as Caster and would
+        // reach the Caster branch's EquipSpell: test the right hand's object itself, before any equip.
+        if (a_rightHand && hands.right && hands.right->As<RE::TESObjectWEAP>()) {
+            a_why = "right hand holds a weapon -- not displacing it";
+            return Ready::Debounced;
         }
 
         auto existing = g_debt.find(id);
@@ -425,15 +438,16 @@ namespace MFO::Loadout {
                     // follower holds there (the heal only sat in the RIGHT hand, which reads as Caster). That
                     // weapon is owed back: booked as gear debt, given back when the heal claim ends (Tick).
                     // MFO's own left weapon hold (the yield) is not the follower's gear: no debt for it.
+                    // MFO-B1: a RIGHT target takes neither the left hand's weapon nor its yield.
                     RE::TESBoundObject* healDisplaced = nullptr;
-                    if (a_healClaimLive && hands.left && hands.left != a_spell && hands.left->As<RE::TESObjectWEAP>())
+                    if (!a_rightHand && a_healClaimLive && hands.left && hands.left != a_spell && hands.left->As<RE::TESObjectWEAP>())
                         healDisplaced = hands.left->As<RE::TESBoundObject>();
-                    if (a_yieldLeft) {
+                    if (a_yieldLeft && !a_rightHand) {
                         RE::TESBoundObject* yl = nullptr;
                         RE::TESBoundObject* yr = nullptr;
                         if (a_yieldLeft(a_actor, &yl, &yr) && yl && yl == healDisplaced) healDisplaced = nullptr;
                     }
-                    m->EquipSpell(a_actor, a_spell, LeftHandSlot());
+                    m->EquipSpell(a_actor, a_spell, a_rightHand ? RightHandSlot() : LeftHandSlot());
                     a_actor->DrawWeaponMagicHands(true);
                     if (healDisplaced) {
                         auto& hd = g_debt[id];
@@ -462,14 +476,28 @@ namespace MFO::Loadout {
                     // other hand there would take that category away too.
                     // MFO-B227 F5: not while a RIGHT-hand heal claim names that spell (or its proxy): that
                     // claim IS the right hand's cast (the per-hand heal road's second recipient).
-                    if (castLvl >= 4 && hands.right && hands.right != a_spell) {
-                        const auto rid = hands.right->GetFormID();
-                        const bool rightHealClaim =
-                            APMFBridge::GetHealCastSpell(id, APMFBridge::kApmfHandRight) == rid ||
-                            APMFBridge::GetHealCastProxy(id, APMFBridge::kApmfHandRight) == rid;
-                        if (!rightHealClaim)
-                            if (auto* other = hands.right->As<RE::SpellItem>())
-                                a_actor->DeselectSpell(other);
+                    // MFO-B1: the OTHER hand is the one to neutralize (the target hand just took the gambit
+                    // spell), and never while a claim of ours holds it: a heal claim (or its proxy) on that
+                    // hand, or an offense claim naming that very spell there, IS that hand's cast.
+                    if (castLvl >= 4) {
+                        auto* otherForm = a_rightHand ? hands.left : hands.right;
+                        if (otherForm && otherForm != a_spell) {
+                            const auto oid   = otherForm->GetFormID();
+                            const auto ohand = a_rightHand ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+                            // An offense claim holds that hand only when ITS spell (or proxy) is the one
+                            // in it: this tick's own dual claim fills both slots, and the follower's own
+                            // spell in the other hand must still be deselected (the 2026-09-02 regression).
+                            const auto ohandIdx = a_rightHand ? Actuation::kHandLeft : Actuation::kHandRight;
+                            const bool otherClaim =
+                                APMFBridge::GetHealCastSpell(id, ohand) == oid ||
+                                APMFBridge::GetHealCastProxy(id, ohand) == oid ||
+                                APMFBridge::GetOffenseCastProxy(id, ohand) == oid ||
+                                Actuation::CastLockClaimStamp(id, ohandIdx, oid) !=
+                                    std::chrono::steady_clock::time_point{};
+                            if (!otherClaim)
+                                if (auto* other = otherForm->As<RE::SpellItem>())
+                                    a_actor->DeselectSpell(other);
+                        }
                     }
 
                     g_equipClock.try_emplace(id, now);
@@ -492,6 +520,25 @@ namespace MFO::Loadout {
         if (CoolingDown(id)) {
             a_why = "cast cooling down";
             return Ready::Debounced;
+        }
+
+        // MFO-B1: a RIGHT-hand target. The right hand is free of any weapon by the caller's hand policy
+        // (PlanCastHand / the weapon-hand rule), so nothing is displaced and no gear debt is booked or
+        // consulted: the left hand (a shield, an in-flight heal) is not touched, and the left-hold
+        // yield is not called. A weapon that DID appear in the right (a race with the equip gambit) is
+        // never displaced for a spell: Debounced, retried next lap.
+        if (a_rightHand) {
+            if (hands.grip == Grip::OneHanded || hands.grip == Grip::TwoHanded) {
+                a_why = "right hand holds a weapon -- not displacing it";
+                return Ready::Debounced;
+            }
+            auto* rmgr = RE::ActorEquipManager::GetSingleton();
+            if (!rmgr) { a_why = "no equip manager"; return Ready::Failed; }
+            rmgr->EquipSpell(a_actor, a_spell, RightHandSlot());
+            a_actor->DrawWeaponMagicHands(true);
+            g_equipClock[id] = now;
+            g_mfoSpellRight[id] = a_spell->GetFormID();
+            return Ready::Equipped;
         }
 
         if (hands.grip == Grip::TwoHanded) {
@@ -609,65 +656,97 @@ namespace MFO::Loadout {
         return Ready::Equipped;
     }
 
-    void ReleaseSpell(RE::FormID a_actorID) {
-        const auto it = g_mfoSpell.find(a_actorID);
-        if (it == g_mfoSpell.end()) return;
+    namespace {
+        // Take back the spell MFO recorded for ONE hand (a_right: the RIGHT-hand entry, MFO-B1). The
+        // bookkeeping erase is the caller's; this is the hand read + deselect.
+        void TakeBackHand(RE::FormID a_actorID, RE::FormID a_spellID, bool a_right) {
+            auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+            if (!spell) return;
 
-        // MINIMUM HOLD. Releasing inside the grace would yank the spell before
-        // the window their AI was just promised, and can interrupt a cast
-        // already in flight. It also bounds churn: a condition flickering at
-        // service cadence can cost at most one equip/release per grace period,
-        // where before it could cost one per tick.
-        if (SecondsSinceEquip(a_actorID) < Config::g_aiCastGrace.load()) return;
+            // Only if it is still OUR spell in that hand. Their own AI may have
+            // swapped since, and unequipping a choice they made is not ours to do.
+            //
+            // ON THE MAIN THREAD (animheal phase 2, review F2). Every caller of this
+            // runs on the AddTask job worker (the [cast] SpellSink task, the Scheduler's
+            // H3 release, CastOn's magicka refusals), and DeselectSpell is an equip-
+            // state write -- the #62 off-main-equip class (memory off-main-equip-
+            // invisible-head). The bookkeeping above stays on the worker that owns it;
+            // the hand read and the deselect move to main, where the "still ours"
+            // test is also exact. By FormID, re-resolved there. VR has no pump (Post is
+            // a documented no-op): run it direct there, as before.
+            const RE::FormID spellID = spell->GetFormID();
+            // A RIGHT-hand heal claim naming the SAME spell (a second heal recipient,
+            // feat/mfo-perhand-heal): DeselectSpell names a spell, not a hand, so it is
+            // not proven to leave the right hand's copy alone. Read on the worker.
+            // (MFO-B1: for the RIGHT entry the mirror: a copy in the LEFT is left alone.)
+            const bool rightHealSame =
+                APMFBridge::GetHealCastSpell(a_actorID, APMFBridge::kApmfHandRight) == spellID;
+            auto takeBack = [a_actorID, spellID, rightHealSame, a_right]() {
+                auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
+                // a_right: GetEquippedObject(false) is the right hand, (true) the left.
+                if (!a || !sp || a->GetEquippedObject(!a_right) != sp) return;
+                if (a_right) {
+                    if (a->GetEquippedObject(true) == sp) return;   // skip: the left hand holds a copy
+                } else if (rightHealSame && a->GetEquippedObject(false) == sp) {
+                    return;   // skip: the right heal holds it
+                }
+                a->DeselectSpell(sp);
+                spdlog::debug("[loadout] {:08X} -- {} taken back{}", a_actorID,
+                              sp->GetName() ? sp->GetName() : "?", a_right ? " (right hand)" : "");
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(std::move(takeBack));
+            else                           takeBack();
+        }
 
-        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
-        auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(it->second);
-        g_mfoSpell.erase(it);
-        g_equipClock.erase(a_actorID);
-        if (!actor || !spell) return;
+        // a_left / a_right select which recorded entries to release (MFO-B1: ReleaseSpellIf names ONE spell
+        // and must not take back the other hand's).
+        void ReleaseHands(RE::FormID a_actorID, bool a_left, bool a_right) {
+            const auto itL = g_mfoSpell.find(a_actorID);
+            const auto itR = g_mfoSpellRight.find(a_actorID);
+            const bool haveL = a_left && itL != g_mfoSpell.end();
+            const bool haveR = a_right && itR != g_mfoSpellRight.end();
+            if (!haveL && !haveR) return;
 
-        // Only if it is still OUR spell in that hand. Their own AI may have
-        // swapped since, and unequipping a choice they made is not ours to do.
-        //
-        // ON THE MAIN THREAD (animheal phase 2, review F2). Every caller of this
-        // runs on the AddTask job worker (the [cast] SpellSink task, the Scheduler's
-        // H3 release, CastOn's magicka refusals), and DeselectSpell is an equip-
-        // state write -- the #62 off-main-equip class (memory off-main-equip-
-        // invisible-head). The bookkeeping above stays on the worker that owns it;
-        // the hand read and the deselect move to main, where the "still ours"
-        // test is also exact. By FormID, re-resolved there. VR has no pump (Post is
-        // a documented no-op): run it direct there, as before.
-        const RE::FormID spellID = spell->GetFormID();
-        // A RIGHT-hand heal claim naming the SAME spell (a second heal recipient,
-        // feat/mfo-perhand-heal): DeselectSpell names a spell, not a hand, so it is
-        // not proven to leave the right hand's copy alone. Read on the worker.
-        const bool rightHealSame =
-            APMFBridge::GetHealCastSpell(a_actorID, APMFBridge::kApmfHandRight) == spellID;
-        auto takeBack = [a_actorID, spellID, rightHealSame]() {
-            auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
-            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
-            if (!a || !sp || a->GetEquippedObject(true) != sp) return;
-            if (rightHealSame && a->GetEquippedObject(false) == sp) return;   // skip: the right heal holds it
-            a->DeselectSpell(sp);
-            spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
-                          sp->GetName() ? sp->GetName() : "?");
-        };
-        if (MainThread::IsInstalled()) MainThread::Post(std::move(takeBack));
-        else                           takeBack();
+            // MINIMUM HOLD. Releasing inside the grace would yank the spell before
+            // the window their AI was just promised, and can interrupt a cast
+            // already in flight. It also bounds churn: a condition flickering at
+            // service cadence can cost at most one equip/release per grace period,
+            // where before it could cost one per tick.
+            if (SecondsSinceEquip(a_actorID) < Config::g_aiCastGrace.load()) return;
 
-        // DELIBERATELY NOT restoring displaced gear here.
-        //
-        // A cooldown cycle releases and re-equips every few seconds, so forcing
-        // a shield back each time would equip/unequip it for the whole fight --
-        // exactly the churn §4.5b's deferred restore exists to avoid. The gear
-        // has its own triggers and they are better ones: on the next hit, at
-        // combat end, and on dismissal. This only takes back the SPELL.
+            const RE::FormID leftSpell  = haveL ? itL->second : 0;
+            const RE::FormID rightSpell = haveR ? itR->second : 0;
+            if (haveL) g_mfoSpell.erase(itL);
+            if (haveR) g_mfoSpellRight.erase(itR);
+            g_equipClock.erase(a_actorID);
+            if (leftSpell)  TakeBackHand(a_actorID, leftSpell, false);
+            if (rightSpell) TakeBackHand(a_actorID, rightSpell, true);
+
+            // DELIBERATELY NOT restoring displaced gear here.
+            //
+            // A cooldown cycle releases and re-equips every few seconds, so forcing
+            // a shield back each time would equip/unequip it for the whole fight --
+            // exactly the churn §4.5b's deferred restore exists to avoid. The gear
+            // has its own triggers and they are better ones: on the next hit, at
+            // combat end, and on dismissal. This only takes back the SPELL.
+        }
+    }
+
+    void ReleaseSpell(RE::FormID a_actorID, bool a_includeRight) {
+        // LEFT only unless the caller opts in (MFO-B1 review SEV-3): this runs on every cast fire
+        // (StartCooldown) and a left heal firing must not strip a right offense spell mid-charge.
+        ReleaseHands(a_actorID, true, a_includeRight);
     }
 
     void ReleaseSpellIf(RE::FormID a_actorID, RE::FormID a_spell) {
-        const auto it = g_mfoSpell.find(a_actorID);
-        if (it == g_mfoSpell.end() || a_spell == 0 || it->second != a_spell) return;
-        ReleaseSpell(a_actorID);
+        if (a_spell == 0) return;
+        const auto itL = g_mfoSpell.find(a_actorID);
+        const auto itR = g_mfoSpellRight.find(a_actorID);
+        const bool left  = itL != g_mfoSpell.end() && itL->second == a_spell;
+        const bool right = itR != g_mfoSpellRight.end() && itR->second == a_spell;
+        if (!left && !right) return;
+        ReleaseHands(a_actorID, left, right);
     }
 
     void StartCooldown(RE::FormID a_actorID, bool a_release) {
@@ -890,6 +969,15 @@ namespace MFO::Loadout {
             }
             g_mfoSpell.erase(sp);
         }
+        if (const auto sp = g_mfoSpellRight.find(a_actorID); sp != g_mfoSpellRight.end()) {
+            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_actorID)) {
+                if (auto* s2 = RE::TESForm::LookupByID<RE::SpellItem>(sp->second);
+                    s2 && a->GetEquippedObject(false) == s2 && a->GetEquippedObject(true) != s2) {
+                    a->DeselectSpell(s2);
+                }
+            }
+            g_mfoSpellRight.erase(sp);
+        }
         g_coolUntil.erase(a_actorID);
         if (const int n = RestoreOne(a_actorID, /*a_direct*/ true); n > 0) {   // W1: he leaves MFO, nothing declares for him
             spdlog::info("[loadout] {:08X} left the party -- restored {} item(s)", a_actorID, n);
@@ -962,7 +1050,7 @@ namespace MFO::Loadout {
 
     void ClearTransientState() {
         g_debt.clear(); g_lastStow.clear(); g_equipClock.clear();
-        g_coolUntil.clear(); g_mfoSpell.clear();
+        g_coolUntil.clear(); g_mfoSpell.clear(); g_mfoSpellRight.clear();
     }
 
     int PendingRestores() {

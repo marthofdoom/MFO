@@ -1164,14 +1164,21 @@ namespace MFO::Actuation {
                 commitPreempt();
                 // The LEFT-hand weapon hold yields INSIDE Prepare, right before its
                 // EquipSpell (F1): after Prepare's own refusals, never before them.
-                // Prepare always equips into the LEFT slot, so this is keyed to the
-                // physical hand it takes, not to handPlan.left. Returns whether a
+                // Prepare equips into the LEFT slot (the RIGHT only for a right-only plan, which
+                // runs no yield), so this is keyed to the physical hand it takes, not to
+                // handPlan.left. Returns whether a
                 // hold was released, so Prepare books no gear debt for it (F2).
                 // The heal claim road (review round 2): its own yield (a two-hander /
                 // bow hold ranked below it yields too), and a_healClaimLive when its
                 // claim stands, so an open gear debt does not refuse an EMPTY left hand.
+                // MFO-B1: the hand the claim owns. A RIGHT-only offense plan equips into the RIGHT (the
+                // left hand's heal / shield is left alone, and the left-hold yield is not run); every other
+                // shape (left, dual -- unchanged -- and every heal, whose right-hand case returned above)
+                // is LEFT as before.
+                const bool prepareRight = !healClaim && handPlan.right && !handPlan.left;
                 switch (Loadout::Prepare(a_follower, spell, why, healClaim ? HealYieldLeft : CastYieldLeft,
-                                         healClaim && composed == ComposedCast::TryResult::Claimed)) {
+                                         healClaim && composed == ComposedCast::TryResult::Claimed,
+                                         prepareRight)) {
                 case Loadout::Ready::AlreadyReady:
                 case Loadout::Ready::Equipped: {
                     equipped = true;
@@ -1264,11 +1271,11 @@ namespace MFO::Actuation {
                         // PlanCastHand/handPlan instead (integration/2026-09-06, then
                         // feat/per-hand-cast-slots). NOTE (open item, flagged not
                         // fixed by this pass): `Loadout::Prepare`'s own `EquipSpell`
-                        // call, above, still ALWAYS equips into `LeftHandSlot()`
-                        // unconditionally -- a Right or DualCast claimHand can now
-                        // diverge from the physically-equipped hand, a gap this pass
-                        // did not close (see this branch's own MAP.md/CAST-DELIVERY.md
-                        // entry). concentration = false: this branch never sees one
+                        // call, above, equipped into `LeftHandSlot()`
+                        // unconditionally -- CLOSED for a Right claim by MFO-B1 (a
+                        // right-only plan now passes a_rightHand); a DualCast claimHand
+                        // still equips the LEFT only (see this branch's own
+                        // MAP.md/CAST-DELIVERY.md entry). concentration = false: this branch never sees one
                         // (concentration forked off to ConcentrationCast's direct-force
                         // stream, above, before the equip/ownedCast machinery runs at
                         // all). stopPct = 0: a heal-only concept (a client restore
