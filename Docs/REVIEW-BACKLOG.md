@@ -1803,10 +1803,10 @@ Same review (accepted deviation). "Nothing is lost or minted, because nothing mo
 ### MFO-B303 (SEV-5, OPEN, logistics/Errand.cpp / MAP.md) -- town R1b small edges (raised against 393632c)
 Same review: `Tick` Finishes on "town errands / economy switched off" even for an unloaded follower with no hand-off/recall (~:797, manual toggle only); the at-shop ResumePhysical failure drops the trade instead of resolving to now; MAP.md R1b line refs a few lines stale (tier C).
 
-### MFO-B304 (SEV-4, OPEN, Loadout.cpp) -- ranged: heal-quiet stamping and combat-flag flaps (raised against e63db74)
+### MFO-B304 (SEV-4, DUPLICATE of MFO-B304 (the identical entry below), Loadout.cpp) -- ranged: heal-quiet stamping and combat-flag flaps (raised against e63db74)
 Opus review of `fix/mfo-ranged-approach` @ e63db74. F3: "For the two-hander (bow) debt, `healSeenAt` is stamped only while `HealTakesLeft` is true ... A claim that fired more than 2 s ago and still stands still gets the bow back." F5: "`healQuiet` uses the actor's own `IsInCombat()`, which flaps mid-fight ... A flap tick reads as quiet and gives the bow back."
 
-### MFO-B305 (SEV-4, OPEN, apmf/OffenseApproach.cpp / Evaluator.cpp) -- ranged: dwell tuning; disagreeing selector rules reset each other's clocks (raised against e63db74)
+### MFO-B305 (SEV-4, DUPLICATE of MFO-B305 (the fuller entry below), apmf/OffenseApproach.cpp / Evaluator.cpp) -- ranged: dwell tuning; disagreeing selector rules reset each other's clocks (raised against e63db74)
 Same review. F8: kSightDwellMs 1500 vs 1-2 s field flicker still allows a ~3 s claim/release cycle — tune from field data. F7: "When two own-ray foe rules disagree on the same lap, the occluded rule erases the visible run every lap ... Bounded by `kStaleMs`, death and combat end." Author's round-2 spots: PinnedTarget/CombatEntryStateOf read every PickFoe pass (g_mx, unprofiled); LogChaseCapWaiver static map assumes single-threaded PickFoe.
 
 ### MFO-B304 (SEV-4, OPEN, Loadout.cpp) -- ranged: heal-quiet stamping and combat-flag flaps (raised against e63db74)
@@ -1952,7 +1952,7 @@ Same review. Verbatim: "a multi-stop arrival overwrites the pending entry; harml
 ### MFO-B360 (SEV-4, OPEN, logistics/ErrandShops.cpp) -- town R6: gate subject/target pairing differs from the engine's (raised against f0635350)
 Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "Actor::CalculateCurrentVendorFaction (AE id 37383 @0x14066C250) calls IsTrue(vendorConditions, vendor, vendor) at 0x14066C3C5. With the vendor unloaded, the subject is the player, so a negated subject check can wrongly pass. Suggested fix: use the vendor's persistent ref, from the R4 learned map."
 
-### MFO-B361 (SEV-4, OPEN, logistics/Errand.cpp) -- town R6: type-12 fence with an unloaded vendor not built (raised against f0635350)
+### MFO-B361 (SEV-4, FIXED (Errand.cpp near-self vendor build replaces the default continue; triage 2026-11-08), logistics/Errand.cpp) -- town R6: type-12 fence with an unloaded vendor not built (raised against f0635350)
 Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "The type-12 (near self) fence with an unloaded vendor (Niranye) is not built (Errand.cpp:286 default continue)."
 
 ### MFO-B362 (SEV-5, OPEN, logistics/Errand.cpp) -- town R6: restored or re-planned stops are not re-gated (raised against f0635350)
@@ -1978,10 +1978,10 @@ Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Shared-slot wind
 ### MFO-B352 (SEV-4, OPEN, logistics/Errand.cpp) -- town R7: staying follower keeps the chest counted busy (raised against bfc92b50)
 Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "A staying follower keeps the innkeeper's chest counted as busy. Physical CrowdInto (Errand.cpp:789) counts it for the whole stay; the sim side excludes Rest." MAP.md: "Town phase 2 R7".
 
-### MFO-B353 (SEV-4, OPEN, logistics/Errand.cpp) -- town R7: no temple trip when no shop is open (raised against bfc92b50)
+### MFO-B353 (SEV-4, FIXED (Errand.cpp early return now only when inn errands are off; triage 2026-11-08), logistics/Errand.cpp) -- town R7: no temple trip when no shop is open (raised against bfc92b50)
 Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "No temple trip when no shop is open. TryStart returns early on an empty shop list (Errand.cpp:968), so a diseased follower at night gets no temple visit." MAP.md: "Town phase 2 R7".
 
-### MFO-B354 (SEV-4, OPEN, logistics/ErrandRest.cpp) -- town R7: innkeeper food order is 1.6.1170 only (raised against bfc92b50)
+### MFO-B354 (SEV-4, FIXED (food order verified on 1.6.1170, 1.5.97, 1.7.104 at ErrandRest.cpp:412,473; triage 2026-11-08), logistics/ErrandRest.cpp) -- town R7: innkeeper food order is 1.6.1170 only (raised against bfc92b50)
 Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "The innkeeper food order runs on 1.6.1170 only. This matches the BuildTownShops precedent and does no harm. 1.7.104 is a supported runtime, so a per-runtime path belongs in the backlog." EXTENDED (marth/coordinator): the `ResolveViaData` fallback added in the fix round (innkeeper-faction place + location special refs) is also 1.6.1170-only. MAP.md: "Town phase 2 R7".
 
 ### MFO-B355 (SEV-4, OPEN, logistics/ErrandRest.cpp) -- town R7: FoodWorth bypasses the Synthesis catalog (raised against bfc92b50)
@@ -2047,7 +2047,7 @@ Same review. Verbatim (log): "MFO doesn't check Harbinger has the torch seat -- 
 ### MFO-B390 (SEV-4, OPEN, logistics/Service.cpp early returns) -- torch: a standing declaration outlives a lap with no build outside combat (raised against 68f3841)
 Same review (minor strands of finding A): bLogistics toggled off at runtime, `CannotActReason` (bleedout), and the Scheduler's retreat / EngageOnSight returns all skip `ServiceFollower`'s declaration tail, so a torch declaration built earlier stands until the next build or the first combat lap (`TorchDeclarationDue` ends it there). Not pushed outside combat. MAP: EquipTorch entry.
 
-### MFO-B391 (SEV-4, OPEN, logistics/Upkeep.cpp TorchSeatedReason) -- torch: furnitureIdle check gated to 1.6.1170 only (raised against 7fff38a)
+### MFO-B391 (SEV-4, FIXED (Upkeep.cpp:212-213 FurnitureIdleVerified true on all three runtimes; triage 2026-11-08), logistics/Upkeep.cpp TorchSeatedReason) -- torch: furnitureIdle check gated to 1.6.1170 only (raised against 7fff38a)
 Closing review of feat/mfo-torch-ch17: "widen the furnitureIdle gate to 1.5.97 (proven above) and to 1.7.104 (on H1's instruction-identical note)". Reviewer disassembled SE 38902 @0x1406801d0: `cmp qword [rax+0x228],0; jne <stow>` same as 1.6.1170. The 1.6-only gate is a safe floor (the other three seated signals still apply).
 
 ### MFO-B392 (SEV-4, OPEN, logistics/Upkeep.cpp TorchRuleHolds) -- torch: rules above the torch rule no longer suppress it (raised against 7fff38a)
@@ -2430,7 +2430,7 @@ A 2H-class follower whose perks lead on left-hand weapons gets allowDual = true.
 ### MFO-B520 (SEV-4, OPEN, SelfStatus.cpp, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- poisoned mirror lags a cure
 After a Cure Poison lands, the mirror can still say poisoned for up to about 1 s plus a frame (kRefreshSec).
 
-### MFO-B521 (SEV-5, OPEN, CHANGELOG.md, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- Unreleased header
+### MFO-B521 (SEV-5, FIXED (no Unreleased header in CHANGELOG.md, top section v2.8.1; triage 2026-11-08), CHANGELOG.md, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- Unreleased header
 The '## Unreleased' header needs renaming to the version at the release cut.
 
 ### MFO-B522 (SEV-5, OPEN, Evaluator.cpp FoeIsSummoned, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- IsSummoned per-runtime offset, near redundant
