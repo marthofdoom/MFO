@@ -146,6 +146,7 @@ namespace MFO::Actuation {
                 if (a_daggerMelee && w->GetWeaponType() != RE::WEAPON_TYPE::kOneHandDagger) continue;
                 if (w == a_right && data.first < 2) continue;         // the right hand's only copy
                 if (IsMuseumRelic(a_follower, w)) continue;           // LOTD: carried for the museum (no fallback: the left is optional)
+                if (Logistics::NeverWieldWeapon(w, data.second.get())) continue;   // MFO-B308: keep but never wield
                 const float score = Logistics::CombatWeaponScore(a_roles, w);
                 if (!best || score >= bestScore) { bestScore = score; best = w; }
             }
@@ -492,7 +493,8 @@ namespace MFO::Actuation {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w)) return true;
+                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) &&
+                        !Logistics::NeverWieldWeapon(w, data.second.get())) return true;
                 }
                 return false;
             };
@@ -508,7 +510,8 @@ namespace MFO::Actuation {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) && have.For(w) > 0) return true;
+                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) && have.For(w) > 0 &&
+                        !Logistics::NeverWieldWeapon(w, data.second.get())) return true;
                 }
                 return false;
             };
@@ -630,6 +633,10 @@ namespace MFO::Actuation {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!eligible(w)) continue;   // staff / non-playable / category / mage daggers (above)
+                // KEEP BUT NEVER WIELD (marth 2026-10-19, MFO-B308): a catalog-excluded, non-creature, non-quest
+                // weapon (an artifact) is never the pick, bLootSpecialItems or not. Gated HERE, at the source, so
+                // the declaration never names it and Harbinger's per-item deny (ABI >= 33) always covers it.
+                if (Logistics::NeverWieldWeapon(w, data.second.get())) continue;
                 // `>=` on the float score orders EXACTLY as the old `>=` on the
                 // uint16 damage did when no kind is preferred (last equal wins).
                 const float score = a_ranged ? Logistics::CombatRangedScore(roles, w, ammoOwned)

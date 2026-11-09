@@ -6384,7 +6384,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `logistics/EquipAuthority.cpp` `RefreshEquipDeclaration` builds the list (catalog-excluded, non-creature,
     non-quest WEAPs he carries, minus any form MFO's own declaration names) into `SentDecl::denyItems` (the
     send-on-change key) and sends it between the scope and the set. `logistics/Upkeep.cpp` `HealExcludedWeapon`
-    makes no equip op for a listed item while `EquipItemDenied` is true (Harbinger strips it). What breaks: listing
+    makes no equip op for a listed item while `EquipItemDenied` is true (Harbinger strips it). The SOURCES are
+    gated by the same test, `Logistics::NeverWieldWeapon` (logistics/EquipAuthority.cpp, decl Logistics.h): the
+    combat weapon judge (cast/Equip.cpp pick, off-hand pick, alternative tests) and `EquipBestOwnedWeapon` never
+    choose such a weapon, whatever bLootSpecialItems says, so the declaration never names one. What breaks: listing
     a declared form (Harbinger's deny refuses MFO's own pick), or dropping `denyItems` from the `SentDecl` compare
     (a picked-up artifact would never reach the list).
     **`EquipWeaponEnabled` / `EquipArmorEnabled` (`:152-153`, helper `EquipFacetEnabled` `:121`; Harbinger ABI v29

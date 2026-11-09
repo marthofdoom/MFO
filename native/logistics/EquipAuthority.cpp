@@ -217,6 +217,7 @@ namespace MFO::Logistics {
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || w == a_myWeap || IsCreatureWeapon(w) || w->IsBound()) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (NeverWieldWeapon(w, data.second.get())) continue;   // MFO-B308: never-wield, bLootSpecialItems or not
                 // the combat pick's relic rule (cast/Equip.cpp IsMuseumRelic), so the two agree
                 if (Lotd::HoldFromSale(id, w) && !PlayerGiven::IsPlayerEquipped(id, w->GetFormID())) continue;
                 if (w == leftForm && data.first < 2) continue;           // his only copy is in the left hand
@@ -328,6 +329,11 @@ namespace MFO::Logistics {
         float CombatRangedScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon,
                                 const CombatAmmo& a_ammo) {
             return RangedPickScore(RolesOf(a_style), a_weapon, AmmoOwned{ a_ammo.arrows, a_ammo.bolts });
+        }
+
+        bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry) {
+            if (!a_weapon || !Catalog::IsExcluded(a_weapon->GetFormID()) || IsCreatureWeapon(a_weapon)) return false;
+            return !(a_entry && IsQuestObjectInstance(a_entry));   // a quest-bound one is handed to the player instead
         }
 
         // ── APMF EQUIP AUTHORITY: THE DECLARATION (feat/mfo-equip-authority, 2026-09-15) ──
@@ -1634,8 +1640,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (!w || !Catalog::IsExcluded(obj->GetFormID()) || IsCreatureWeapon(w)) continue;
-                    if (IsQuestObjectInstance(data.second.get())) continue;   // the heal hands it to the player
+                    if (!NeverWieldWeapon(w, data.second.get())) continue;   // the heal hands a quest-bound one over
                     const RE::FormID fid = obj->GetFormID();
                     const bool declared = std::any_of(decl.entries.begin(), decl.entries.end(),
                                                       [&](const APMF_API::APMF_EquipEntry& e) { return e.form == fid; });
