@@ -57,7 +57,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (6 records; a 7th, `MFST`, in DEV builds only, section 9)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
+| **Co-save (6 records; a 7th, `MFST`, in DEV builds only, section 10)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -84,10 +84,10 @@ The single source of truth for ordering. Everything below depends on it.
   runs each VM init).
 - **`kInputLoaded`** (`:263`): `Config::EnsureMcmDefaults()` — seeds the MCM
   store *before* MCM Helper reads it at its own kDataLoaded (bind-on-first-load).
-- **`kDataLoaded`** (`:276`) — the once-per-launch install order (comment
+- **`kDataLoaded`** (`:354`) — the once-per-launch install order (comment
   `:277`): `EnsureMcmDefaults` → `Config::Read` → `Forms::Resolve` →
   `Gait::Apply` → `Catalog::Load` → `Progression::Init` → `ProgAllocator::Init`
-  → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
+  → `Classes::OnDataLoaded` (`plugin.cpp:409`; class ESL presence + table self-check) → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
   `APMFBridge::Acquire` (APMF cast-select client; null-degrades if APMF absent) →
   `Diagnostics::RefreshFatalModules` (APMF.dll's range for the `[fatal]` line) →
   `Followers::ResolveQuirks` → `MainThread::Install` → `Targeting::InstallHook`
@@ -8385,7 +8385,7 @@ equip rules (releases the melee hold -> the engine re-arms the denied bow); gati
 alone (see Fire.cpp's MeleeOnly note).
 
 ### Vocabulary.h — the serialized opcode contract ⚠️
-`kActDevSelftest` ("act.dev_selftest") exists ONLY in a dev build (`#ifdef MFO_DEV_SELFTEST`, section 9); a release build reads it as an unknown action (fail-closed, transparent).
+`kActDevSelftest` ("act.dev_selftest") exists ONLY in a dev build (`#ifdef MFO_DEV_SELFTEST`, section 10); a release build reads it as an unknown action (fail-closed, transparent).
 The gambit opcode **strings are a frozen co-save contract (#10)** — written verbatim
 (`Serialization.cpp:155,179`), read (`:434,459`); there's even a hard literal
 `"act.equip_torch"` (`Serialization.cpp:486`) tracking `kActEquipTorch`
@@ -8477,7 +8477,35 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 
 ---
 
-## 9. Dev-build self-test gambit — `native/selftest/` (ClickUp 1dfcuabcqr7, `feat/mfo-dev-selftest`, 2026-11-09; DEV BUILDS ONLY)
+## 9. Class add-on — `classes/` (cards C1 + C2, 2026-11-09)
+
+The DLL half of the class tree (`MFO_Classes.esl` = card C7, NOT shipped yet). **Inert unless the ESL is present AND
+`bClassTree = 1`**; then today's three classes (Melee/Ranged/Mage, `State.h` `combatClassOverride`) behave exactly as before.
+C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at kDataLoaded, table counts). No co-save (C3), XP
+(C4), passives (C6) or GUI (C10) yet. Plan: build-plan cards C1..C14, ClickUp 86e3dhbd3.
+
+- `classes/Classes.h` — the ONE public header: `Id` (35 classes, enum order = bit index of every future mastered/unlocked bitset,
+  so **append-only**), `ClassDef`, `DefaultGambit`, `UnlockRule`, `Present()/Active()/Strict()`, `Get/FindBySlug/UnlockSatisfied/T1ForOverride`,
+  `OnDataLoaded()`. Declares the PRESENCE CONTRACT for C7: an FLST whose first entry is a keyword with editor-id suffix
+  `_MFOClassesManifest` (NOT `_MFOAddonManifest`, or Progression would register the class ESL as a progression add-on).
+- `classes/Classes_internal.h` — `kTable` extern + `detail::DetectManifest/SelfCheck`.
+- `classes/ClassTable.cpp` — the constexpr 35-class table with `static_assert(TableIsConsistent())` (id == index, T1 roots == combatClassOverride
+  1..3, parents are the tier below). Slugs match the review page db doc ids. Default gambits use `Vocab::k*` constants only; hostile cast rows use AUTO (subject 0), never `Subject::Enemy` (rung 0 of `ResolveCastTarget`, ignores the row's foe); enemy-control rows carry `pendingRuling` (base task 1dfcuabcr0d; also the T1 rows, marth: T1 keeps today's kit; C12 must not apply them); a missing opcode
+  is a `Todo()` row ("todo.*" + plan card) that is never applied.
+- `classes/Classes.cpp` — accessors, `UnlockSatisfied` (pure; C5 supplies the mastered mask), and the load-time self-check (counts per
+  tier 3/9/14/8/1, 6 hybrids, every parent resolves). `static_assert`s pin `CombatStyle::Stance` 1/2/3 = Melee/Ranged/Cast.
+- `classes/Presence.cpp` — the manifest scan (the `Progression.cpp` Init precedent) and the `Active()/Strict()` gates.
+- INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`.
+- **Depended-on-by:** nothing yet. Later cards read `kTable` (C3 bitsets, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI).
+- **What breaks if you change this:** (1) reordering/inserting a class in `Id` re-numbers every persisted mastered/unlocked bit once C3 ships
+  (co-save, tier A); (2) renumbering the T1 `rootT1` ordinals breaks the single-source-of-truth with `combatClassOverride` (frozen, `State.h`);
+  (3) changing a slug breaks the review page ids and the C7 ESL record names; (4) renaming the manifest suffix without the C7 generator
+  strands the ESL as "absent" (the add-on goes silently inert, one info line); (5) making anything here run when `Active()` is false breaks the
+  "bClassTree = 0 / ESL absent = today's three classes exactly" contract.
+
+---
+
+## 10. Dev-build self-test gambit — `native/selftest/` (ClickUp 1dfcuabcqr7, `feat/mfo-dev-selftest`, 2026-11-09; DEV BUILDS ONLY)
 
 **Responsibility.** marth 2026-11-09: a dev-build gambit that runs each pending in-game test once, when its
 situation comes up, logs PASS / FAIL with evidence, never re-runs a complete test, spawns missing test gear
@@ -8556,8 +8584,8 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
   release build.
 - Renaming a test id or `act.dev_selftest`: completed results / saved rules stop matching (#10).
 - Taking `g_mx` around an engine call: the worker and a main-thread closure can deadlock through an engine lock.
-- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B561 (taught spell removed even if learned for real),
-  MFO-B562 (release builds evaluate the marker's WHEN), MFO-B563 (SEV-5 leftovers). Round-1 review of a1c0e6f
+- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B564 (taught spell removed even if learned for real),
+  MFO-B565 (release builds evaluate the marker's WHEN), MFO-B566 (SEV-5 leftovers). Round-1 review of a1c0e6f
   (F1-F4, F7, F8) fixed on the branch.
 
 ---

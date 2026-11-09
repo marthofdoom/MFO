@@ -10,7 +10,7 @@ ClickUp 1dfcuabcqr7. marth 2026-11-09:
 > "the test gambit should also log which tests are still pending"
 
 Code: `native/selftest/` (public header `SelfTest.h`, internal header `SelfTest_internal.h`, `Runner.cpp`,
-`Fixtures.cpp`, `Record.cpp`, `Tests.cpp`). Architecture notes and what breaks: MAP.md "selftest/".
+`Fixtures.cpp`, `Record.cpp`, `Tests.cpp`). Architecture notes and what breaks: MAP.md section 10 "selftest/".
 
 ## 1. Dev builds only
 
@@ -113,7 +113,7 @@ Written only by a dev build.
    opcode as its label (`labelFor` falls back to the opcode string, `Board_internal.h`). The marker is offered
    on the COMBAT table only, whose fall-through is the proven one. On a release build the rule's WHEN cell IS
    evaluated (only a dev build skips the marker), so when it holds the rule takes that harmless transparent
-   fall-through each scan, and the rule keeps using a combat slot (REVIEW-BACKLOG MFO-B562).
+   fall-through each scan, and the rule keeps using a combat slot (REVIEW-BACKLOG MFO-B565).
 2. *The record.* A release LoadCallback has no `kRecSelfTest` branch: `'MFST'` reaches `if (type !=
    kRecFollowers) { warn "unknown record type ... skipped"; continue; }` and `GetNextRecordInfo` seeks past it.
    No byte of any other record moves. The release DLL's next save drops `'MFST'` (#12).
@@ -154,7 +154,7 @@ at or below the saved one does nothing, so the file can stay in place.
 5. Only read what MFO already exposes (or add a minimal read in its own subsystem, in its own brief). Engine
    actions never happen inside a test: a test that needs to make something happen does it through the
    follower's own gambits (its precondition requires them).
-6. Add the row to section 4 and to MAP.md "selftest/".
+6. Add the row to section 4 and to MAP.md section 10 "selftest/".
 
 ## 9. Known limits
 
@@ -163,7 +163,7 @@ at or below the saved one does nothing, so the file can stay in place.
 * `skooma.not_drunk_by_ai` and `bound_bow.fires` walk the follower's inventory every 0.5 s during their run
   (dev build only; the logistics tick does the same walk at 1 s).
 * A spell learned for real DURING the run (the player teaches it, a book) is indistinguishable from the
-  fixture and is removed with it (REVIEW-BACKLOG MFO-B561).
+  fixture and is removed with it (REVIEW-BACKLOG MFO-B564).
 * `bound_bow.fires` registers a passive TESHitEvent sink once (posted to the main thread on the first tick,
   retried every 5 s until live); it stores the last 64 hits whose cause is a tracked follower. A missed shot
   makes no hit, so that test never FAILs on "no shot".
