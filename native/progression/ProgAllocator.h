@@ -562,6 +562,21 @@ namespace MFO::ProgAllocator {
     // no-op when the feature is off or the action is neutral); never serialized.
     void NoteCombatFire(RE::Actor* a_actor, const std::string& a_actionOpcode);
 
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY: the read the self-test `hms.cap_holds` judges by (native/selftest/Tests.cpp,
+    // Docs/SELFTEST.md). PURE READ of g_prog + the same profile / floor math the adopted-total cap uses
+    // (RecomputeHMS, progression/Hms.cpp). MAIN THREAD (g_prog). false = no g_prog record for a_id.
+    struct HmsCapView {
+        bool  captured = false;      // hmsCaptured: the baseline is adopted (the cap only runs on a captured record)
+        bool  fixedStat = false;
+        bool  haveProfile = false;   // RecomputeHMS returns before the cap without one ("noclass")
+        float playerSample = 0.0f;   // g_playerHmsTotalLast: the level-up sample the cap compares against
+        float held[3]{};             // hmsBaseline + hmsCumulative per pool (what MFO holds)
+        float floor[3]{};            // max(profile share x playerSample, 50): the cap's per-pool floor
+    };
+    bool ReadHmsCapView(RE::FormID a_id, HmsCapView& a_out);
+#endif
+
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────
     void CoSaveSave(SKSE::SerializationInterface* a_intfc);
     void CoSaveLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version);

@@ -342,6 +342,7 @@ namespace MFO::SelfTest {
                          "DLL.",
                          Reg().size());
         }
+        RegisterSinks();   // posted once (retried every 5 s until live; a revert can drop the Post)
         const auto now = Clock::now();
         float      dt  = g_last.time_since_epoch().count() != 0
                              ? std::chrono::duration<float>(now - g_last).count()
@@ -405,6 +406,7 @@ namespace MFO::SelfTest {
         g_backoff.clear();
         g_last       = {};
         g_orphanWait = 0.0f;
+        ClearTestState();
         std::lock_guard lk(g_mx);
         g_results.clear();
         g_ledger.clear();

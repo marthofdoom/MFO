@@ -62,10 +62,10 @@ combat table already holds the gambits it watches.
 
 | id | ref | needs | PASS | FAIL | RETRY | timeout |
 |---|---|---|---|---|---|---|
-| `b1.heal_left_offense_right` | MFO-B1 | in combat; enabled combat rules casting a Health heal (`Actuation::HealsHealth`) AND an offensive spell (`ClassifyArchetype` kind Offense) | a sample with a heal spell in the LEFT hand and an offense spell in the RIGHT at once | timeout after a heal reached the left hand but never with the offense right | combat ended first; or timeout with no heal ever in the left hand | 120 s |
-| `skooma.not_drunk_by_ai` | 86e3t1gfq | in combat; an enabled combat cast rule. Fixtures: Skooma x1 (Skyrim.esm `00057A7A`), and 2 Potions of Minor Healing (`0003EADD`) if he carries no health potion | Skooma count never fell, with drink pressure (HP under 50% at some point or a real health potion drunk) after >= 20 s of combat | the Skooma count fell during combat | combat ended without drink pressure | 180 s |
-| `bound_bow.fires` | 86e3t1gfx | in combat; an enabled combat rule casting a bound-BOW spell (shape BoundWeapon, an effect's associated weapon is a bow) | a bound bow in a hand, then the equipped ammo count dropped (an arrow left the quiver) | bow in hand 30 s with no arrow fired; or timeout after the rule fired with no bow | combat ended first; or timeout with the rule never fired (`Gambit::lastFiredAt`) | 90 s |
-| `hms.cap_holds` | 86e3d6dnv | out of combat; `bHmsCapToPlayerTotal` on; the follower in the party 2 minutes this session | follower base H+M+S <= player's + 1, after the reading held still 5 s | above the player's (evidence names the per-pool floor caveat and the `[hms] ... cap detail` line to read) | combat started | 60 s |
+| `b1.heal_left_offense_right` | MFO-B1 | in combat; enabled combat rules casting a Health heal (`Actuation::HealsHealth`) AND an offensive spell (`ClassifyArchetype` kind Offense) | a sample with a heal spell in the LEFT hand and an offense spell in the RIGHT at once | timeout after BOTH halves (heal left, offense right) were each seen but never together | combat ended first; or timeout with either half never seen | 120 s |
+| `skooma.not_drunk_by_ai` | 86e3t1gfq | in combat; an enabled combat cast rule. Fixtures: Skooma x1 (Skyrim.esm `00057A7A`), and 2 Potions of Minor Healing (`0003EADD`) if he carries no health potion | Skooma count never fell, with drink pressure after >= 20 s of combat: a pool SKOOMA'S OWN RECORD restores (its beneficial Value Modifier effects on Health / Magicka / Stamina, read at precondition time; all three if it declares none) under 50% at some point, or a real health potion drunk when Health is one of them | the Skooma count fell during combat | combat ended without that pressure | 180 s |
+| `bound_bow.fires` | 86e3t1gfx | in combat; an enabled combat rule casting a bound-BOW spell (shape BoundWeapon, an effect's associated weapon is a bow); the self-test hit sink live | a bound bow in a hand, then a HIT by a bound bow from this follower (a passive TESHitEvent sink in `Tests.cpp`, cause = the follower, source = a bound bow). The equipped-ammo count is not used (an NPC's bound-arrow decrement is unobserved, and a dismiss removes the arrows too) | the rule FIRED (`Gambit::lastFiredAt`) and no bound bow reached a hand within 15 s | bow in hand 30 s with no hit (a miss, out of range, no LoS, melee range); combat ended first; the rule never fired; the window ended | 90 s |
+| `hms.cap_holds` | 86e3d6dnv | out of combat; `bHmsRedistribute` and `bHmsCapToPlayerTotal` on; a CAPTURED HMS record with a class profile and a player sample (`ProgAllocator::ReadHmsCapView`, dev-only, read on the main thread); the follower in the party 2 minutes this session | the held total (hmsBaseline + hmsCumulative) <= the cap's player sample `g_playerHmsTotalLast` (taken at the last level-up) + 0.5, after two reads 2 s apart agree; or above it with EVERY pool at its floor `max(class share x sample, 50)` (the cap's documented limit) | above the sample with a pool above its floor | combat started; the record gone / uncaptured; no settled read in the window | 60 s |
 
 Skipped on purpose (need engine work MFO does not have yet): ch.18 power deny / floor (no ch.18 ABI in MFO),
 Script-archetype animated casts, substrate OOC timeouts, taunt, the class M0 / H3 / H5 / G7 / G11 probes,
@@ -103,13 +103,17 @@ Written only by a dev build.
 
 1. *The rule.* The FLWR reader stores the action opcode string verbatim, with no vocabulary check
    (`ReadFollowersRecord`, `Serialization.cpp` `ReadString(a_intfc, g.actionOpcode)`); only an UNRESOLVABLE
-   `actionParamForm` disables a rule, and the marker's param is 0. The writer writes the string back verbatim,
+   `actionParamForm` disables a rule. A marker made fresh has param 0; one converted from a cast rule keeps
+   that rule's spell (resolvable or not, either way harmless: resolvable keeps it as is, unresolvable disables
+   the rule). The writer writes the string back verbatim,
    so the rule survives a release session. In the release scan the rule can match; `Actuation::Fire`'s final
    branch returns `{ FailedOther, "unknown action 'act.dev_selftest'", transparent = true }` (`cast/Fire.cpp`),
    and the combat scan falls past every transparent outcome (`Scheduler.cpp`, `if (outcome.transparent) { ...
    start = choice.ruleIndex + 1; continue; }`), so it never walls the rules below. The board shows the raw
    opcode as its label (`labelFor` falls back to the opcode string, `Board_internal.h`). The marker is offered
-   on the COMBAT table only, whose fall-through is the proven one.
+   on the COMBAT table only, whose fall-through is the proven one. On a release build the rule's WHEN cell IS
+   evaluated (only a dev build skips the marker), so when it holds the rule takes that harmless transparent
+   fall-through each scan, and the rule keeps using a combat slot (REVIEW-BACKLOG MFO-B562).
 2. *The record.* A release LoadCallback has no `kRecSelfTest` branch: `'MFST'` reaches `if (type !=
    kRecFollowers) { warn "unknown record type ... skipped"; continue; }` and `GetNextRecordInfo` seeks past it.
    No byte of any other record moves. The release DLL's next save drops `'MFST'` (#12).
@@ -158,5 +162,9 @@ at or below the saved one does nothing, so the file can stay in place.
 * Results are per SAVE (the co-save), not per machine: a new game starts with every test pending.
 * `skooma.not_drunk_by_ai` and `bound_bow.fires` walk the follower's inventory every 0.5 s during their run
   (dev build only; the logistics tick does the same walk at 1 s).
-* A player-taught copy of a fixture spell given DURING the run is indistinguishable from the fixture and is
-  removed with it.
+* A spell learned for real DURING the run (the player teaches it, a book) is indistinguishable from the
+  fixture and is removed with it (REVIEW-BACKLOG MFO-B561).
+* `bound_bow.fires` registers a passive TESHitEvent sink once (posted to the main thread on the first tick,
+  retried every 5 s until live); it stores the last 64 hits whose cause is a tracked follower. A missed shot
+  makes no hit, so that test never FAILs on "no shot".
+* `hms.cap_holds` posts one `ReadHmsCapView` to the main thread per second while it is pending or running.

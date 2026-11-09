@@ -147,9 +147,6 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     imgui_impl_win32.cpp
 )
 
-# Windows VERSIONINFO resource (product metadata; an unsigned DLL with none scores
-# badly with heuristic AV models). Generated from native/version.rc.in using the
-# project() VERSION, so a version bump needs no edit to the template.
 # DEV-BUILD SELF-TEST GAMBIT (ClickUp 1dfcuabcqr7, Docs/SELFTEST.md). OFF for every release. ON compiles
 # native/selftest/ in and defines MFO_DEV_SELFTEST, which exposes the "DEV: run self-tests" action and the
 # 'MFST' co-save record. With it OFF those sources are not compiled and every SelfTest:: call is an empty
@@ -167,6 +164,9 @@ if(MFO_DEV_SELFTEST)
     message(STATUS "MFO: DEV SELF-TEST BUILD (MFO_DEV_SELFTEST=ON) -- not a release DLL")
 endif()
 
+# Windows VERSIONINFO resource (product metadata; an unsigned DLL with none scores
+# badly with heuristic AV models). Generated from native/version.rc.in using the
+# project() VERSION, so a version bump needs no edit to the template.
 if(WIN32 AND MSVC)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in
                    ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)

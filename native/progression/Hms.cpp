@@ -912,4 +912,25 @@ namespace MFO::ProgAllocator {
         if (n < 0xFFFFu) ++n;   // saturating per-pool fire count
     }
 
+#ifdef MFO_DEV_SELFTEST
+    // Dev builds only (ProgAllocator.h). Mirrors the cap block in RecomputeHMS: same profile resolution
+    // (HmsProfileFor), same player sample, same floor constant (kHmsCapPoolFloor = 50 there).
+    bool ReadHmsCapView(RE::FormID a_id, HmsCapView& a_out) {
+        a_out = {};
+        const auto it = g_prog.find(a_id);
+        if (it == g_prog.end()) return false;
+        const auto& st = it->second;
+        a_out.captured     = st.hmsCaptured;
+        a_out.fixedStat    = st.fixedStat;
+        a_out.playerSample = g_playerHmsTotalLast;
+        float prof[3]{}; int primary = 0; std::uint8_t stance = 0; const char* src = "";
+        a_out.haveProfile = HmsProfileFor(a_id, st, prof, primary, stance, src);
+        for (int p = 0; p < 3; ++p) {
+            a_out.held[p]  = st.hmsBaseline[p] + st.hmsCumulative[p];
+            a_out.floor[p] = std::max(prof[p] * a_out.playerSample, 50.0f);
+        }
+        return true;
+    }
+#endif
+
 }

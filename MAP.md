@@ -8496,7 +8496,11 @@ differ from main only by the include and the empty `SelfTest::Tick/CoSave/ClearA
 Ctx / Step / Scratch / FixtureRequest, the `g_mx`-guarded results + ledger + acks; `#error` outside a dev
 build), `Runner.cpp` (pick / fixtures wait / drive / end state machine, pending log, reset INI), `Fixtures.cpp`
 (main-thread add + cleanup), `Record.cpp` (`'MFST'` v1 layout + reader), `Tests.cpp` (`RegisterAll`: the 4
-seeded tests).
+seeded tests, plus their session state: a PASSIVE TESHitEvent sink `ShotSink` on the script event source, the
+bound-bow shot signal, registered by a posted `RegisterSinks` (no hook, no seat), and the posted
+`ProgAllocator::ReadHmsCapView` cache for `hms.cap_holds`). `progression/ProgAllocator.h` + `progression/Hms.cpp`
+gain `HmsCapView` / `ReadHmsCapView` inside `#ifdef MFO_DEV_SELFTEST`: a main-thread pure read of `g_prog`, the
+cap's player sample and its per-pool floors (`HmsProfileFor`, the same 50 floor), nothing else.
 
 **Touch points (each a one-liner or one entry):**
 - `Vocabulary.h`: `kActDevSelftest = "act.dev_selftest"` after `kActTaunt`, in `#ifdef`. Frozen string (#10).
@@ -8552,7 +8556,9 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
   release build.
 - Renaming a test id or `act.dev_selftest`: completed results / saved rules stop matching (#10).
 - Taking `g_mx` around an engine call: the worker and a main-thread closure can deadlock through an engine lock.
-- Open review findings: none yet (new mechanism, tier A).
+- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B561 (taught spell removed even if learned for real),
+  MFO-B562 (release builds evaluate the marker's WHEN), MFO-B563 (SEV-5 leftovers). Round-1 review of a1c0e6f
+  (F1-F4, F7, F8) fixed on the branch.
 
 ---
 

@@ -85,6 +85,10 @@ namespace MFO::SelfTest {
     void                         Register(const TestDef& a_def);
     const std::vector<TestDef>&  Registry();
     void                         RegisterAll();   // Tests.cpp: one Register() per test
+    // Tests.cpp: the tests' own passive sinks (bound_bow.fires' TESHitEvent sink), posted to the main thread;
+    // called every tick, a no-op once live. And the tests' session caches, cleared with ClearAll.
+    void                         RegisterSinks();
+    void                         ClearTestState();
 
     // ── shared read helpers (Runner.cpp) ─────────────────────────────────────────────────────────
     // Count of a_form in a_actor's own inventory (any thread the codebase already walks inventories

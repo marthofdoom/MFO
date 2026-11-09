@@ -5,7 +5,9 @@
 // gambits it watches (the precondition says which, and the pending log prints it), and it judges what those
 // gambits make the engine do. The runner never authors a rule. Reads only (#23): hands, inventory counts,
 // actor values, the spell record classifiers MFO already has (Actuation::HealsHealth / ClassifyArchetype),
-// and Gambit::lastFiredAt (the Scheduler's display stamp).
+// Gambit::lastFiredAt (the Scheduler's display stamp), the dev-only ProgAllocator::ReadHmsCapView (main
+// thread, posted), and a dev-only PASSIVE TESHitEvent sink (ShotSink below: an event sink on the script event
+// source, like CrimeProbe's; no hook, no engine seat).
 //
 // IDS ARE FROZEN once a dev build ships them: they are the 'MFST' result keys (#10).
 
@@ -15,6 +17,10 @@
 #include "Vocabulary.h"
 #include "cast/Actuation.h"
 #include "logistics/Logistics.h"
+#include "MainThread.h"
+#include "progression/ProgAllocator.h"
+
+#include <deque>
 
 namespace MFO::SelfTest {
 
@@ -82,19 +88,42 @@ namespace MFO::SelfTest {
             return Step::Continue();
         }
         Step B1Timeout(Ctx& c) {
-            if (c.s->n[1] == 0)
-                return Step::Retry("no heal reached the left hand in the window (nobody needed healing?); " + c.s->note);
-            return Step::Fail("a heal reached the left hand but never together with the offense spell in the right; " +
-                              c.s->note);
+            // FAIL only when BOTH halves were seen (heal left AND offense right) but never at once; anything
+            // less means the fight never asked for both, which is a RETRY (review F3a, a1c0e6f).
+            if (c.s->n[1] > 0 && c.s->n[2] > 0)
+                return Step::Fail("a heal in the left and an offense spell in the right were each seen, but never "
+                                  "together; " + c.s->note);
+            return Step::Retry("the fight never produced both halves (heal-left and offense-right) in the window; " +
+                               c.s->note);
         }
 
         // ── 86e3t1gfq: Skooma is not drunk by the AI ────────────────────────────────────────────────
         // Test list: a follower with a cast gambit carrying Skooma + real potions in combat: no "CAST
         // Skooma ... AI-fired"; real potions still drunk. The direct evidence is the Skooma count: it must
-        // never fall during the fight. A PASS needs DRINK PRESSURE (HP under 50% at some point, or a real
-        // health potion drunk), otherwise the AI simply had no reason to drink and the run is a RETRY.
+        // never fall during the fight. A PASS needs DRINK PRESSURE on a pool SKOOMA ITSELF RESTORES (read from
+        // its record at precondition time, review F3b): that pool under 50% at some point (or, for Health, a
+        // real health potion drunk). Without pressure the AI had no reason to drink: RETRY.
         // set[0] = { Skooma }, set[1] = { the minor healing potion, only when he had no health potion }.
-        // n[0] start Skooma, n[1] start health potions, n[2] min HP fraction, n[3] max health potions drunk.
+        // n[0] start Skooma, n[1] start health potions, n[2..4] min H / M / S fraction, n[5] max health
+        // potions drunk, n[6] the pool mask (bit 0 H, 1 M, 2 S) Skooma restores (7 = none declared: all).
+        constexpr RE::ActorValue kPoolAV[3] = { RE::ActorValue::kHealth, RE::ActorValue::kMagicka,
+                                                RE::ActorValue::kStamina };
+        constexpr const char*    kPoolName[3] = { "Health", "Magicka", "Stamina" };
+        int SkoomaPools(const RE::AlchemyItem* a_alc, bool& a_declared) {
+            int mask = 0;
+            for (const auto* e : a_alc->effects) {
+                const auto* mgef = e ? e->baseEffect : nullptr;
+                if (!mgef || mgef->IsHostile() || mgef->IsDetrimental()) continue;
+                const auto arch = mgef->data.archetype;
+                if (arch != RE::EffectArchetypes::ArchetypeID::kValueModifier &&
+                    arch != RE::EffectArchetypes::ArchetypeID::kDualValueModifier)
+                    continue;
+                for (int p = 0; p < 3; ++p)
+                    if (mgef->data.primaryAV == kPoolAV[p]) mask |= 1 << p;
+            }
+            a_declared = mask != 0;
+            return mask ? mask : 7;
+        }
         const char* SkoomaPre(Ctx& c) {
             if (!c.inCombat) return "in combat";
             bool castRule = false;
@@ -102,9 +131,13 @@ namespace MFO::SelfTest {
                 if (g.enabled && IsCastOp(g.actionOpcode) && RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm))
                     castRule = true;
             if (!castRule) return "an enabled combat cast rule (the case the Harbinger allow-list covers)";
-            const RE::FormID sk = VanillaForm(kSkoomaLocal);
-            if (!sk || !RE::TESForm::LookupByID<RE::AlchemyItem>(sk)) return "Skyrim.esm Skooma (00057A7A) resolvable";
+            const RE::FormID sk  = VanillaForm(kSkoomaLocal);
+            auto*            alc = sk ? RE::TESForm::LookupByID<RE::AlchemyItem>(sk) : nullptr;
+            if (!alc) return "Skyrim.esm Skooma (00057A7A) resolvable";
             c.s->set[0] = { sk };
+            bool declared = false;
+            c.s->n[6]     = SkoomaPools(alc, declared);
+            c.s->b[2]     = declared;
             if (Logistics::CountPotions(c.follower, RE::ActorValue::kHealth) < 1)
                 if (const RE::FormID hp = VanillaForm(kMinorHealPotionLocal); hp) c.s->set[1] = { hp };
             return nullptr;
@@ -113,12 +146,24 @@ namespace MFO::SelfTest {
             r.items.push_back({ c.s->set[0][0], 1 });
             if (!c.s->set[1].empty()) r.items.push_back({ c.s->set[1][0], 2 });
         }
+        bool SkoomaPressure(const Scratch& s) {
+            const int mask = static_cast<int>(s.n[6]);
+            for (int p = 0; p < 3; ++p)
+                if ((mask & (1 << p)) && s.n[2 + p] < 0.5) return true;
+            return (mask & 1) && s.n[5] > 0;
+        }
         std::string SkoomaNote(const Ctx& c, std::int32_t a_sk) {
-            const auto& s   = *c.s;
-            auto*       alc = RE::TESForm::LookupByID<RE::AlchemyItem>(s.set[0][0]);
-            return std::format("Skooma {:.0f} -> {}, HP min {:.0f}%, real health potions drunk {:.0f}, MFO PotionIsDrug "
-                               "= {}",
-                               s.n[0], a_sk, s.n[2] * 100.0, s.n[3], Logistics::PotionIsDrug(alc) ? "yes" : "no");
+            const auto& s    = *c.s;
+            auto*       alc  = RE::TESForm::LookupByID<RE::AlchemyItem>(s.set[0][0]);
+            const int   mask = static_cast<int>(s.n[6]);
+            std::string pools;
+            for (int p = 0; p < 3; ++p)
+                if (mask & (1 << p)) pools += (pools.empty() ? "" : "/") + std::string(kPoolName[p]);
+            return std::format("Skooma {:.0f} -> {}, watched pools {}{}, min H {:.0f}% M {:.0f}% S {:.0f}%, real health "
+                               "potions drunk {:.0f}, MFO PotionIsDrug = {}",
+                               s.n[0], a_sk, pools, s.b[2] ? " (what its record restores)" : " (its record restores none: all)",
+                               s.n[2] * 100.0, s.n[3] * 100.0, s.n[4] * 100.0, s.n[5],
+                               Logistics::PotionIsDrug(alc) ? "yes" : "no");
         }
         Step SkoomaStep(Ctx& c) {
             auto& s = *c.s;
@@ -128,31 +173,59 @@ namespace MFO::SelfTest {
                 s.b[0] = true;
                 s.n[0] = sk;
                 s.n[1] = hp;
-                s.n[2] = 1.0;
+                s.n[2] = s.n[3] = s.n[4] = 1.0;
             }
-            s.n[2] = std::min<double>(s.n[2], Vocab::HealthPct(c.follower));
-            s.n[3] = std::max<double>(s.n[3], s.n[1] - hp);
+            for (int p = 0; p < 3; ++p) s.n[2 + p] = std::min<double>(s.n[2 + p], Vocab::Pct(c.follower, kPoolAV[p]));
+            s.n[5] = std::max<double>(s.n[5], s.n[1] - hp);
             s.note = SkoomaNote(c, sk);
             if (sk < s.n[0]) return Step::Fail("the Skooma count FELL during combat (the AI drank it): " + s.note);
-            const bool pressure = s.n[2] < 0.5 || s.n[3] > 0;
             if (!c.inCombat) {
-                if (c.elapsed >= 20.0f && pressure) return Step::Pass("Skooma kept through the fight: " + s.note);
-                return Step::Retry(std::format("combat ended after {:.0f}s without drink pressure (needs >= 20 s and HP "
-                                               "under 50% or a potion drunk): {}",
+                if (c.elapsed >= 20.0f && SkoomaPressure(s)) return Step::Pass("Skooma kept through the fight: " + s.note);
+                return Step::Retry(std::format("combat ended after {:.0f}s without drink pressure on a watched pool "
+                                               "(needs >= 20 s and a watched pool under 50%): {}",
                                                c.elapsed, s.note));
             }
             return Step::Continue();
         }
         Step SkoomaTimeout(Ctx& c) {
-            const auto& s = *c.s;
-            if (s.n[2] < 0.5 || s.n[3] > 0) return Step::Pass("Skooma kept through the whole window: " + s.note);
-            return Step::Retry("no drink pressure in the window: " + s.note);
+            if (SkoomaPressure(*c.s)) return Step::Pass("Skooma kept through the whole window: " + c.s->note);
+            return Step::Retry("no drink pressure on a watched pool in the window: " + c.s->note);
         }
 
         // ── 86e3t1gfx: bound bow cast + fired ───────────────────────────────────────────────────────
-        // Test list: "bound-bow gambit in combat ... bow in hand and firing". set[0] = the bound-bow spells
-        // of his combat rules. b[0] = a bound-bow rule FIRED since the start (Gambit::lastFiredAt), b[1] =
-        // the bow reached a hand; n[0] = when, n[1] = ammo form, n[2] = its count then.
+        // Test list: "bound-bow gambit in combat ... bow in hand and firing". THE SHOT SIGNAL IS A HIT
+        // (review F1, a1c0e6f): a TESHitEvent whose cause is this follower and whose source is a bound bow.
+        // The equipped-ammo count is NOT used: an NPC's bound-arrow decrement is unobserved, and a dismiss /
+        // swap removes the arrows too. A miss produces no hit, so "no hit" never FAILs: bow in hand 30 s with
+        // no hit (missed, out of range, no LoS, melee range) is a RETRY. FAIL only when the rule FIRED and no
+        // bound bow reached a hand within 15 s after it.
+        // set[0] = the bound-bow spells of his combat rules. b[0] the rule fired since the start, b[1] the bow
+        // reached a hand; n[0] when (run s), n[1] steady ms when, n[2] when the rule first fired (run s).
+        struct Shot { RE::FormID cause = 0, source = 0, target = 0; double atMs = 0; };
+        std::mutex                g_shotMx;   // leaf lock: the sink and the worker copy under it, nothing else
+        std::deque<Shot>          g_shots;
+        std::atomic<bool>         g_sinkLive{ false };
+        std::atomic<std::int64_t> g_sinkPostedMs{ 0 };
+        double NowMs() {
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+        // PASSIVE (event thread): reads the event's own refs, the FormID mirror (IsTrackedFast, any thread), and
+        // stores ids. Nothing else.
+        class ShotSink final : public RE::BSTEventSink<RE::TESHitEvent> {
+        public:
+            static ShotSink* GetSingleton() { static ShotSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_e, RE::BSTEventSource<RE::TESHitEvent>*) override {
+                if (!a_e || !a_e->cause || !a_e->target) return RE::BSEventNotifyControl::kContinue;
+                const RE::FormID cause = a_e->cause->GetFormID();
+                if (!Followers::IsTrackedFast(cause)) return RE::BSEventNotifyControl::kContinue;
+                Shot sh{ cause, a_e->source, a_e->target->GetFormID(), NowMs() };
+                std::lock_guard lk(g_shotMx);
+                g_shots.push_back(sh);
+                while (g_shots.size() > 64) g_shots.pop_front();
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
         bool SummonsBow(RE::SpellItem* a_sp) {
             if (!a_sp || Actuation::ClassifyArchetype(a_sp).shape != Actuation::SpellShape::BoundWeapon) return false;
             for (const auto* e : a_sp->effects) {
@@ -164,6 +237,7 @@ namespace MFO::SelfTest {
             return false;
         }
         const char* BowPre(Ctx& c) {
+            if (!g_sinkLive.load()) return "the self-test hit sink registered (posted on the first tick)";
             if (!c.inCombat) return "in combat";
             for (const auto& g : c.state->combat()) {
                 if (!g.enabled || !IsCastOp(g.actionOpcode)) continue;
@@ -181,82 +255,174 @@ namespace MFO::SelfTest {
             }
             return nullptr;
         }
+        bool IsBoundBowForm(RE::FormID a_id) {
+            auto* w = a_id ? RE::TESForm::LookupByID<RE::TESObjectWEAP>(a_id) : nullptr;
+            return w && w->IsBound() && w->IsBow();
+        }
         Step BowStep(Ctx& c) {
             auto& s = *c.s;
             for (const auto& g : c.state->combat())
-                if (g.enabled && Has(s.set[0], g.actionParamForm) && g.lastFiredAt >= c.startedAt) s.b[0] = true;
-            auto*      bow  = BoundBowInHand(c.follower);
-            auto*      ammo = c.follower->GetCurrentAmmo();
-            const auto aid  = ammo ? ammo->GetFormID() : 0;
+                if (g.enabled && Has(s.set[0], g.actionParamForm) && g.lastFiredAt >= c.startedAt && !s.b[0]) {
+                    s.b[0] = true;
+                    s.n[2] = c.elapsed;
+                }
+            auto* bow = BoundBowInHand(c.follower);
             if (bow && !s.b[1]) {
                 s.b[1] = true;
                 s.n[0] = c.elapsed;
-                s.n[1] = aid;
-                s.n[2] = aid ? CountItem(c.follower, aid) : -1;
+                s.n[1] = NowMs();
             }
-            if (s.b[1] && aid && static_cast<RE::FormID>(s.n[1]) != aid) {   // ammo (re)equipped after the bow
-                s.n[1] = aid;
-                s.n[2] = CountItem(c.follower, aid);
+            std::vector<Shot> shots;
+            {
+                std::lock_guard lk(g_shotMx);
+                shots.assign(g_shots.begin(), g_shots.end());
             }
-            const std::int32_t cnt = aid ? CountItem(c.follower, aid) : -1;
-            s.note = std::format("rule fired {}, bound bow in hand {}{}, ammo '{}' count {}", s.b[0] ? "yes" : "no",
-                                 s.b[1] ? "yes" : "no", s.b[1] ? std::format(" (since t={:.1f}s)", s.n[0]) : "",
-                                 aid ? FormName(aid) : "none", cnt);
-            if (s.b[1] && aid && cnt >= 0 && cnt < s.n[2])
-                return Step::Pass(std::format("bound bow '{}' fired: {} -> {} '{}'; {}", bow ? FormName(bow->GetFormID()) : "?",
-                                              s.n[2], cnt, FormName(aid), s.note));
-            if (s.b[1] && c.elapsed - s.n[0] > 30.0f)
-                return Step::Fail("a bound bow was in hand for 30 s but no arrow left the quiver; " + s.note);
+            s.note = std::format("rule fired {}, bound bow in hand {}{}", s.b[0] ? "yes" : "no", s.b[1] ? "yes" : "no",
+                                 s.b[1] ? std::format(" (since t={:.1f}s)", s.n[0]) : "");
+            if (s.b[1]) {
+                for (const auto& sh : shots) {
+                    if (sh.cause != c.id || sh.atMs < s.n[1] || !IsBoundBowForm(sh.source)) continue;
+                    return Step::Pass(std::format("a hit by bound bow '{}' on {:08X} '{}' (TESHitEvent, cause = this "
+                                                  "follower); {}",
+                                                  FormName(sh.source), sh.target, FormName(sh.target), s.note));
+                }
+                if (c.elapsed - s.n[0] > 30.0f)
+                    return Step::Retry("a bound bow was in hand 30 s with no hit by it (missed, out of range, no line "
+                                       "of sight, or a melee fight; a hit is the only shot signal this test trusts); " +
+                                       s.note);
+            }
+            if (s.b[0] && !s.b[1] && c.elapsed - s.n[2] > 15.0f)
+                return Step::Fail("the bound-bow rule FIRED but no bound bow reached a hand within 15 s; " + s.note);
             if (!c.inCombat) return Step::Retry("combat ended first; " + s.note);
             return Step::Continue();
         }
         Step BowTimeout(Ctx& c) {
             if (!c.s->b[0]) return Step::Retry("the bound-bow rule never fired (its WHEN never held?); " + c.s->note);
-            return Step::Fail("the bound-bow rule fired but no bound bow reached a hand; " + c.s->note);
+            return Step::Retry("the window ended before a verdict; " + c.s->note);
         }
 
         // ── 86e3d6dnv: HMS adopted-total cap ────────────────────────────────────────────────────────
-        // Test list: "caps fire, follower totals track the player's". With bHmsCapToPlayerTotal on, a
-        // follower's BASE Health+Magicka+Stamina must not sit above the player's (progression/Hms.cpp, the
-        // "adopted total capped" trim; the same Followers::GetFollowerHMS read the cap's player sample
-        // uses). Judged out of combat after the reading has held still for 5 s. n[0] / n[1] = last
-        // follower / player totals, n[2] = when they last changed.
-        float Hms(RE::Actor* a, float (&a_pool)[3]) {
-            float t = 0.0f;
-            for (int p = 0; p < 3; ++p) t += (a_pool[p] = Followers::GetFollowerHMS(a, p));
-            return t;
+        // Test list: "caps fire, follower totals track the player's". Judged on the SAME numbers the cap uses
+        // (review F2, a1c0e6f), read on the main thread by ProgAllocator::ReadHmsCapView: the held total
+        // (hmsBaseline + hmsCumulative) against g_playerHmsTotalLast, the player sample taken at the last
+        // level-up, with the cap's own 0.5 tolerance. Above it with EVERY pool at its floor (the trim's
+        // documented limit, Hms.cpp "ABOVE the cap: every pool is at its floor") is a PASS, never a FAIL.
+        // Precondition: HMS on (bHmsRedistribute) and the cap on, a CAPTURED record with a class profile, a
+        // player sample, the follower 2 minutes in the party. Judged after two reads 2 s apart agree.
+        // n[0] / n[1] last held total / sample, n[2] when they last changed (run s).
+        struct HmsRead { ProgAllocator::HmsCapView v; bool found = false; bool inFlight = false;
+                         std::chrono::steady_clock::time_point at{}; };
+        std::mutex                              g_hmsMx;   // leaf lock
+        std::unordered_map<RE::FormID, HmsRead> g_hms;
+        void RequestHms(RE::FormID a_id) {
+            {
+                std::lock_guard lk(g_hmsMx);
+                auto& r = g_hms[a_id];
+                if (r.inFlight) return;
+                r.inFlight = true;
+            }
+            MainThread::Post([a_id]() {
+                ProgAllocator::HmsCapView v;
+                const bool f = ProgAllocator::ReadHmsCapView(a_id, v);
+                std::lock_guard lk(g_hmsMx);
+                auto& r    = g_hms[a_id];
+                r.v        = v;
+                r.found    = f;
+                r.inFlight = false;
+                r.at       = std::chrono::steady_clock::now();
+            });
+        }
+        // The cached read for a_id if it is no older than a_maxAgeSec and not from before a_notBefore; asks for a
+        // new one (main thread) whenever the cached one is missing or over 1 s old.
+        bool FreshHms(RE::FormID a_id, float a_maxAgeSec, std::chrono::steady_clock::time_point a_notBefore, HmsRead& a_out) {
+            const auto now     = std::chrono::steady_clock::now();
+            bool       have    = false;
+            bool       refresh = true;
+            {
+                std::lock_guard lk(g_hmsMx);
+                if (auto it = g_hms.find(a_id); it != g_hms.end() && it->second.at.time_since_epoch().count() != 0) {
+                    const float age = std::chrono::duration<float>(now - it->second.at).count();
+                    if (it->second.at >= a_notBefore && age <= a_maxAgeSec) {
+                        a_out   = it->second;
+                        have    = true;
+                        refresh = age > 1.0f;
+                    }
+                }
+            }
+            if (refresh) RequestHms(a_id);
+            return have;
         }
         const char* HmsPre(Ctx& c) {
             if (c.inCombat) return "out of combat";
+            if (!Config::g_hmsRedistribute.load()) return "bHmsRedistribute = 1 (HMS is off)";
             if (!Config::g_hmsCapToPlayerTotal.load()) return "bHmsCapToPlayerTotal = 1 (the cap is off)";
             if (c.seenFor < 120.0f) return "the follower in the party for 2 minutes this session (the HMS poll ran)";
             if (c.follower->IsCommandedActor()) return "a real follower, not a summon";
+            HmsRead r;
+            if (!FreshHms(c.id, 5.0f, {}, r)) return "a captured HMS record (reading it)";
+            if (!r.found) return "an HMS record for this follower (none)";
+            if (!r.v.captured) return "a CAPTURED HMS record (not adopted yet)";
+            if (!r.v.haveProfile) return "an HMS class profile (the cap is not reached without one)";
+            if (r.v.playerSample <= 0.0f) return "a player HMS sample (taken at a level-up or the first poll)";
             return nullptr;
         }
         Step HmsStep(Ctx& c) {
             auto& s = *c.s;
             if (c.inCombat) return Step::Retry("combat started before the reading settled");
-            auto* pc = RE::PlayerCharacter::GetSingleton();
-            if (!pc) return Step::Continue();
-            float      fp[3], pp[3];
-            const float ft = Hms(c.follower, fp), pt = Hms(pc, pp);
-            if (!s.b[0] || ft != s.n[0] || pt != s.n[1]) {
+            HmsRead r;
+            if (!FreshHms(c.id, 3.0f, c.startedAt, r)) return Step::Continue();
+            if (!r.found || !r.v.captured) return Step::Retry("the HMS record is gone or no longer captured");
+            const auto& v  = r.v;
+            const float ht = v.held[0] + v.held[1] + v.held[2];
+            float live[3];
+            for (int p = 0; p < 3; ++p) live[p] = Followers::GetFollowerHMS(c.follower, p);
+            if (!s.b[0] || ht != s.n[0] || v.playerSample != s.n[1]) {
                 s.b[0] = true;
-                s.n[0] = ft;
-                s.n[1] = pt;
+                s.n[0] = ht;
+                s.n[1] = v.playerSample;
                 s.n[2] = c.elapsed;
             }
-            s.note = std::format("follower H/M/S {:.0f}/{:.0f}/{:.0f} = {:.0f}, player {:.0f}/{:.0f}/{:.0f} = {:.0f}", fp[0],
-                                 fp[1], fp[2], ft, pp[0], pp[1], pp[2], pt);
-            if (c.elapsed - s.n[2] < 5.0f) return Step::Continue();
-            if (pt <= 0.0f) return Step::Retry("the player's base H/M/S read 0; " + s.note);
-            if (ft <= pt + 1.0f) return Step::Pass("follower total at or under the player's: " + s.note);
-            return Step::Fail(std::format("follower total {:.0f} ABOVE the player's by {:.0f}: {} (the trim stops at the "
-                                          "per-pool floors max(class share x cap, 50): read this follower's '[hms] ... "
-                                          "cap detail' line)",
-                                          ft, ft - pt, s.note));
+            const bool atFloor = v.held[0] <= v.floor[0] + 0.5f && v.held[1] <= v.floor[1] + 0.5f &&
+                                 v.held[2] <= v.floor[2] + 0.5f;
+            s.note = std::format("held H/M/S {:.0f}/{:.0f}/{:.0f} = {:.0f} vs the cap's player sample {:.0f} (last "
+                                 "level-up); floors {:.0f}/{:.0f}/{:.0f}; live base {:.0f}/{:.0f}/{:.0f}; fixedStat {}",
+                                 v.held[0], v.held[1], v.held[2], ht, v.playerSample, v.floor[0], v.floor[1], v.floor[2],
+                                 live[0], live[1], live[2], v.fixedStat ? "yes" : "no");
+            if (c.elapsed - s.n[2] < 2.0f) return Step::Continue();
+            if (ht <= v.playerSample + 0.5f) return Step::Pass("held total at or under the cap: " + s.note);
+            if (atFloor)
+                return Step::Pass("held total above the sample with EVERY pool at its floor (the cap's documented "
+                                  "limit, by design): " + s.note);
+            return Step::Fail(std::format("held total {:.0f} ABOVE the cap's player sample by {:.0f} with a pool above "
+                                          "its floor: {}",
+                                          ht, ht - v.playerSample, s.note));
         }
+        Step HmsTimeout(Ctx& c) { return Step::Retry("no settled HMS read in the window: " + c.s->note); }
 
+    }
+
+    void RegisterSinks() {
+        if (g_sinkLive.load()) return;
+        const auto nowMs = static_cast<std::int64_t>(NowMs());
+        if (nowMs - g_sinkPostedMs.load() < 5000) return;   // one posted try per 5 s (a revert can drop it)
+        g_sinkPostedMs.store(nowMs);
+        MainThread::Post([]() {
+            if (g_sinkLive.load()) return;
+            if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
+                holder->AddEventSink<RE::TESHitEvent>(ShotSink::GetSingleton());
+                g_sinkLive.store(true);
+                spdlog::info("[selftest] passive hit sink registered (bound_bow.fires shot signal)");
+            }
+        });
+    }
+
+    void ClearTestState() {
+        {
+            std::lock_guard lk(g_shotMx);
+            g_shots.clear();
+        }
+        std::lock_guard lk(g_hmsMx);
+        g_hms.clear();
     }
 
     void RegisterAll() {
@@ -265,13 +431,14 @@ namespace MFO::SelfTest {
                    120.0f, B1Pre, B1Fix, B1Step, B1Timeout });
         Register({ "skooma.not_drunk_by_ai", "86e3t1gfq",
                    "in combat + an enabled combat cast rule (Skooma, and 2 minor healing potions if he has no "
-                   "health potion, are added for the run)",
+                   "health potion, are added for the run; pressure = a pool Skooma restores under 50%)",
                    180.0f, SkoomaPre, SkoomaFix, SkoomaStep, SkoomaTimeout });
         Register({ "bound_bow.fires", "86e3t1gfx", "in combat + an enabled combat rule casting a bound-BOW spell",
                    90.0f, BowPre, BowFix, BowStep, BowTimeout });
         Register({ "hms.cap_holds", "86e3d6dnv",
-                   "out of combat, bHmsCapToPlayerTotal on, the follower in the party for 2 minutes",
-                   60.0f, HmsPre, nullptr, HmsStep, nullptr });
+                   "out of combat, bHmsRedistribute + bHmsCapToPlayerTotal on, a captured HMS record with a class "
+                   "profile and a player sample, the follower in the party for 2 minutes",
+                   60.0f, HmsPre, nullptr, HmsStep, HmsTimeout });
     }
 
 }
