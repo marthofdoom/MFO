@@ -110,7 +110,7 @@ namespace MFO::Classes {
         SpellRole    role;           // cast rows only
         float        cooldownSec;    // 0 = none. NOT applied until card G9 (per-rule cooldown, FLWR v6) exists
         const char*  planCard;       // nullptr = applied; otherwise the card that adds the missing opcode
-        bool         pendingRuling;  // DESIGN-OPEN enemy-control row (marth ruled AUTO will treat enemy-control spells as hostile; base task 1dfcuabcr0d) or a T1 row (marth: T1 keeps today's kit, no class default set): C12 must not apply it
+        bool         pendingRuling;  // a T1 row (marth 2026-11-09: T1 keeps today's kit, no class default set): C12 must not apply it. (Enemy-control rows were also flagged until AUTO-hostile landed, 1dfcuabcr0d.)
         [[nodiscard]] constexpr bool IsApplied() const { return planCard == nullptr; }
     };
 

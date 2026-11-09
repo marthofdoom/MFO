@@ -52,8 +52,9 @@ namespace MFO::Actuation {
     //   * delivery not Self,
     //   * and EVERY effect's archetype says nothing about an ally (marth 2026-10-11, MFO-B236 F-G: a mixed
     //     spell with one declared ally-buff effect keeps AUTO's party behaviour): Script (the record defers
-    //     to a Papyrus script), or an enemy-control archetype the record leaves non-hostile (Calm, Frenzy,
-    //     Demoralize, Paralysis, TurnUndead; vanilla Pacify / Calm, whose intent is a foe).
+    //     to a Papyrus script). (Enemy-control archetypes Calm / Frenzy / Demoralize / Paralysis / TurnUndead were
+    //     here until 2026-11-09: marth ruled them hostile, so ClassifySpell now says Offense and they never reach
+    //     this function.)
     // Every other archetype is a DECLARED ally buff and keeps AUTO's party behaviour: Invisibility (Fade
     // Other), Cloak, armor / ward / ValueModifier fortifies, Light, Rally ... (an earlier cut keyed this on
     // the predicted engine row NoRow / Script and so caught Fade Other, a genuine ally buff: a regression).
@@ -71,11 +72,6 @@ namespace MFO::Actuation {
             ++seen;
             switch (mgef->GetArchetype()) {
             case Arch::kScript:
-            case Arch::kCalm:
-            case Arch::kFrenzy:
-            case Arch::kDemoralize:
-            case Arch::kParalysis:
-            case Arch::kTurnUndead:
                 break;
             default:
                 return false;   // one declared effect: the spell's nature is readable

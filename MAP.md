@@ -8513,7 +8513,7 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   `_MFOClassesManifest` (NOT `_MFOAddonManifest`, or Progression would register the class ESL as a progression add-on).
 - `classes/Classes_internal.h` — `kTable` extern + `detail::DetectManifest/SelfCheck`.
 - `classes/ClassTable.cpp` — the constexpr 35-class table with `static_assert(TableIsConsistent())` (id == index, T1 roots == combatClassOverride
-  1..3, parents are the tier below). Slugs match the review page db doc ids. Default gambits use `Vocab::k*` constants only; hostile cast rows use AUTO (subject 0), never `Subject::Enemy` (rung 0 of `ResolveCastTarget`, ignores the row's foe); enemy-control rows carry `pendingRuling` (base task 1dfcuabcr0d; also the T1 rows, marth: T1 keeps today's kit; C12 must not apply them); a missing opcode
+  1..3, parents are the tier below). Slugs match the review page db doc ids. Default gambits use `Vocab::k*` constants only; hostile cast rows use AUTO (subject 0), never `Subject::Enemy` (rung 0 of `ResolveCastTarget`, ignores the row's foe); enemy-control rows are applied (AUTO-hostile, 1dfcuabcr0d: `ClassifySpell` calls Calm / Frenzy / Demoralize / Paralysis / TurnUndead Offense); only the T1 rows carry `pendingRuling` (marth: T1 keeps today's kit; C12 must not apply them); a missing opcode
   is a `Todo()` row ("todo.*" + plan card) that is never applied.
 - `classes/Classes.cpp` — accessors, `UnlockSatisfied` (pure; C5 supplies the mastered mask), and the load-time self-check (counts per
   tier 3/9/14/8/1, 6 hybrids, every parent resolves). `static_assert`s pin `CombatStyle::Stance` 1/2/3 = Melee/Ranged/Cast.
