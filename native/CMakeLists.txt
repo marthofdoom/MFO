@@ -147,6 +147,15 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     imgui_impl_win32.cpp
 )
 
+# Windows VERSIONINFO resource (product metadata; an unsigned DLL with none scores
+# badly with heuristic AV models). Generated from native/version.rc.in using the
+# project() VERSION, so a version bump needs no edit to the template.
+if(WIN32 AND MSVC)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in
+                   ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
+    target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+endif()
+
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h)
 # The vendored backend TU compiles standalone, exactly as vcpkg compiled it:
