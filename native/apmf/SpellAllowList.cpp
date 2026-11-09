@@ -240,7 +240,10 @@ namespace MFO::APMFBridge {
                 // this is the v1.0.32 regression, guarded rather than re-paid for.
                 // A DRUG (any Hostile / Detrimental effect, e.g. Skooma) is NOT named: the engine's
                 // own combat AI would drink it as a "restore" (field 2026-10-17: Sven CAST Skooma,
-                // AI-fired), and a potion left off this list is one Harbinger denies it.
+                // AI-fired). PARTIAL deny: a potion left off this list is denied only while this
+                // ch.8 allow-list claim stands, i.e. for a follower with a cast gambit and APMF cast
+                // control on. A follower with no claim can still be AI-fed a drug; the complete gate
+                // (a potion allowance independent of the cast claim) is a Harbinger follow-up.
                 if (auto* al = obj->As<RE::AlchemyItem>();
                     al && !al->IsFood() && !al->IsPoison() && !Logistics::PotionIsDrug(al))
                     a_potions.push_back(MakePotionCand(al));
