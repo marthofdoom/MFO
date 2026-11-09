@@ -462,9 +462,19 @@ namespace MFO::Logistics {
             // shared by the gambit-driven case AND the carries-but-no-gambit
             // fallback below; neither is a wielded-weapon guess.
             auto*       avo = a_follower->AsActorValueOwner();
-            const float one = avo ? avo->GetActorValue(RE::ActorValue::kOneHanded) : 0.0f;
-            const float two = avo ? avo->GetActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
-            const WepClass bestMeleeSkill = (two > one) ? WepClass::TwoHand : WepClass::OneHand;
+            // BASE skill values (MFO-B250, marth 2026-10-12 Q1: "judge by BASE skill values, perks break
+            // ties"), the same read ArmorPrefFor makes: a Fortify One-Handed socket/enchant must not raise
+            // the value the class was picked by (feedback lock-in). On an EXACT base tie the owned perk
+            // ranks in each tree decide (StyleVotes::skillRanks, mirror copy); still tied -> one-hand.
+            const float one = avo ? avo->GetBaseActorValue(RE::ActorValue::kOneHanded) : 0.0f;
+            const float two = avo ? avo->GetBaseActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
+            bool twoWins = two > one;
+            if (two == one) {
+                const auto sv = StyleVotesFor(a_follower);
+                twoWins = sv.skillRanks[static_cast<int>(RE::ActorValue::kTwoHanded) - static_cast<int>(RE::ActorValue::kOneHanded)] >
+                          sv.skillRanks[0];   // tree index 0 = kOneHanded
+            }
+            const WepClass bestMeleeSkill = twoWins ? WepClass::TwoHand : WepClass::OneHand;
 
             // ONE stable read of the pack: any melee weapon at all, any bow/
             // crossbow, and (for the bow-vs-crossbow call) the ammo/damage

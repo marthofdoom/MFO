@@ -159,14 +159,28 @@ namespace MFO::Logistics {
                 RE::ActorValue::kDestruction, RE::ActorValue::kIllusion,
                 RE::ActorValue::kRestoration,
             };
+            // BASE school values (MFO-B250, marth 2026-10-12 Q1: "judge by BASE skill values, perks break
+            // ties"), the read ArmorPrefFor makes: worn Fortify-school gear must not raise the value a
+            // school was picked by. On an EXACT base tie the owned perk ranks in that school's tree
+            // (StyleVotes::skillRanks, mirror copy) decide; still tied -> the lower bit index, as before.
             float lv[5];
-            for (int i = 0; i < 5; ++i) lv[i] = avo->GetActorValue(kBySchoolBit[i]);
+            int   pr[5]{};
+            bool  anyTie = false;
+            for (int i = 0; i < 5; ++i) lv[i] = avo->GetBaseActorValue(kBySchoolBit[i]);
+            for (int i = 0; i < 5 && !anyTie; ++i)
+                for (int j = i + 1; j < 5; ++j) if (lv[i] == lv[j]) { anyTie = true; break; }
+            if (anyTie) {
+                const auto sv = StyleVotesFor(a_follower);
+                for (int i = 0; i < 5; ++i)
+                    pr[i] = sv.skillRanks[static_cast<int>(kBySchoolBit[i]) - static_cast<int>(RE::ActorValue::kOneHanded)];
+            }
+            auto better = [&](int a, int b) { return lv[a] > lv[b] || (lv[a] == lv[b] && pr[a] > pr[b]); };
             int hi = 0;
-            for (int i = 1; i < 5; ++i) if (lv[i] > lv[hi]) hi = i;
+            for (int i = 1; i < 5; ++i) if (better(i, hi)) hi = i;
             int lo = -1;
             for (int i = 0; i < 5; ++i) {
                 if (i == hi) continue;
-                if (lo < 0 || lv[i] > lv[lo]) lo = i;
+                if (lo < 0 || better(i, lo)) lo = i;
             }
             std::uint8_t mask = static_cast<std::uint8_t>(1u << hi);
             if (lo >= 0) mask |= static_cast<std::uint8_t>(1u << lo);
