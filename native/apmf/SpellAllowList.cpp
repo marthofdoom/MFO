@@ -17,6 +17,7 @@
 #include "Config.h"
 #include "Followers.h"   // g_active.size() -- round-robin-aware expiry sizing (FacetExpiry)
 #include "Loadout.h"     // WeaponHandActive's live-grip read
+#include "logistics/Logistics.h"   // PotionIsDrug: a drug is never named to the engine as a combat potion
 #include "MainThread.h"
 #include "Packages.h"   // kMaxLootSlots -- the ch.19 loot-travel leg table is keyed by loot SLOT
 #include "Rapport.h"
@@ -237,7 +238,11 @@ namespace MFO::APMFBridge {
                 if (auto* sc = obj->As<RE::ScrollItem>()) { add(sc->GetFormID()); continue; }
                 // Combat potions: not food, not poison. See the block doc above --
                 // this is the v1.0.32 regression, guarded rather than re-paid for.
-                if (auto* al = obj->As<RE::AlchemyItem>(); al && !al->IsFood() && !al->IsPoison())
+                // A DRUG (any Hostile / Detrimental effect, e.g. Skooma) is NOT named: the engine's
+                // own combat AI would drink it as a "restore" (field 2026-10-17: Sven CAST Skooma,
+                // AI-fired), and a potion left off this list is one Harbinger denies it.
+                if (auto* al = obj->As<RE::AlchemyItem>();
+                    al && !al->IsFood() && !al->IsPoison() && !Logistics::PotionIsDrug(al))
                     a_potions.push_back(MakePotionCand(al));
             }
             const auto castable = [](const RE::SpellItem* s) {
