@@ -224,6 +224,12 @@ namespace MFO::Actuation {
 
         const auto& op = a_choice.actionOpcode;
 
+#ifdef MFO_DEV_SELFTEST
+        // The dev self-test marker never reaches here (Evaluator skips it); if a future caller hands it in,
+        // it is a transparent no-op, never a wall (native/selftest/Runner.cpp owns the mechanism).
+        if (op == Vocab::kActDevSelftest) return { Result::NoOp, "self-test runner marker", true };
+#endif
+
         if (op == Vocab::kActWait) {
             // Deliberately consumes the tick without acting -- the FFXII
             // "do nothing on purpose" idiom that lets a rule suppress the ones

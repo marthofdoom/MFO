@@ -218,6 +218,15 @@ namespace MFO {
     inline constexpr std::uint32_t kRecErrand     = 'ERND';
     inline constexpr std::uint32_t kErrandVersion = 2;
 
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY (CMake MFO_DEV_SELFTEST; ClickUp 1dfcuabcqr7). The self-test runner's record: completed
+    // results + the fixture ledger. Layout, bounds and rules live with the owner, selftest/Record.cpp. A
+    // EIGHTH independent record (dev builds only; MCLS is the seventh), same isolation contract. Never written by a release build; a release build
+    // that loads a dev save skips it as an unknown record type (LoadCallback) and drops it on its next save.
+    inline constexpr std::uint32_t kRecSelfTest     = 'MFST';
+    inline constexpr std::uint32_t kSelfTestVersion = 1;
+#endif
+
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.
     //

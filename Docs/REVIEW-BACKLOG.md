@@ -2583,3 +2583,16 @@ Verbatim (reviewer, F-6): a stored class row whose actionParamForm does not reso
 
 ### MFO-B571 (SEV-5, OPEN, card C4, against 2a035b1) -- XP addition must saturate
 Verbatim (reviewer, F-8): ClassProgress::xp is u32 with no overflow guard in the store. Reasoning: C4's accrual must use saturating addition (clamp at UINT32_MAX), never a wrapping add.
+
+### MFO-B564 (SEV-4, OPEN, native/selftest/Fixtures.cpp PostFixtureCleanup, against a1c0e6f, Opus tier-3 review of feat/mfo-dev-selftest, F5) -- a taught fixture spell is removed even if it was learned for real during the run
+Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "a taught spell is removed even if it was learned for real during the run." The ledger records "taught" only when the follower lacked the spell at the add, and the cleanup cannot tell a later real learning (player teach, spell book) from the fixture. Dev builds only; deferred under rule 9 (SEV-4, not co-save / threading / ABI, not exercised by the next field cycle's release DLL).
+ID COLLISION (F10, SEV-4, Opus round-2 review against fb4a866): MFO-B564 is also used by the parked `fix/mfo-bound-bows` branch. Whichever of the two merges SECOND renumbers its entry (and its references) to the next free id.
+
+### MFO-B565 (SEV-4, OPEN, native/Evaluator.cpp + a release build's Fire fall-through, against a1c0e6f, same review, F6) -- the marker's WHEN cell is evaluated on release builds
+Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "the WHEN cell is evaluated on release builds (harmless transparent fall-through, uses a combat slot)." Only a dev build skips the marker; a release build evaluates its condition and, when it holds, takes Fire's transparent "unknown action" fall-through each scan. Harmless by the save-compat proof (Docs/SELFTEST.md section 6, which now states it). Deferred under rule 9.
+
+### MFO-B566 (SEV-5, OPEN, native/selftest/, against a1c0e6f, same review) -- leftovers
+Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "spdlog under g_mx" (Runner.cpp ApplyResetIni and Record.cpp CoLoad's commit log while holding the leaf lock; harmless today, spdlog takes no lock the worker or a fixture closure holds, but the leaf-lock rule says no call under it) and "an unresolvable-follower orphan blocks starts with a 30 s error" (a load-orphan whose follower does not resolve keeps blocking every test start and logs an error every 30 s). F7 (the doc's "the marker's param is 0") and F8 (the misplaced CMake comment) were fixed in the review round, not deferred.
+
+### MFO-B572 (SEV-5, OPEN, native/progression/Hms.cpp ReadHmsCapView + the cap block in RecomputeHMS, against fb4a866, Opus round-2 review of feat/mfo-dev-selftest) -- the per-pool floor 50 is mirrored by hand
+Coordinator's paraphrase of the finding (not the reviewer's verbatim text): the dev-only `ReadHmsCapView` repeats the cap's per-pool floor `50.0f` instead of sharing it; a shared constexpr (e.g. lifting `kHmsCapPoolFloor` to namespace scope in Hms.cpp) would keep the self-test's floor test from drifting if the cap's floor changes. Deferred under rule 9 (SEV-5; the release cap is unchanged).
