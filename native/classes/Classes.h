@@ -106,12 +106,13 @@ namespace MFO::Classes {
         SpellRole    role;           // cast rows only
         float        cooldownSec;    // 0 = none. NOT applied until card G9 (per-rule cooldown, FLWR v6) exists
         const char*  planCard;       // nullptr = applied; otherwise the card that adds the missing opcode
-        bool         pendingRuling;  // DESIGN-OPEN enemy-control row (saved question 26): C12 must not apply it until ruled
+        bool         pendingRuling;  // DESIGN-OPEN enemy-control row (marth ruled AUTO will treat enemy-control spells as hostile; base task 1dfcuabcr0d) or a T1 row (marth: T1 keeps today's kit, no class default set): C12 must not apply it
         [[nodiscard]] constexpr bool IsApplied() const { return planCard == nullptr; }
     };
 
-    // Unlock rule: ALL of allOf must be mastered, PLUS needA of poolA, PLUS needB of poolB (the pools are
-    // disjoint from allOf and from each other; the self-check enforces it). Fixed pairs are allOf only.
+    // Unlock rule: ALL of allOf must be mastered, AND at least needA of poolA, AND at least needB of poolB (each constraint is
+    // counted independently, pools may overlap allOf and each other). T2 = its root T1 only; pure T3 = own T2 + one same-line T2;
+    // hybrids = one weapon class + one school class; T4 = fixed pair or N of a set; T5 = 3 distinct T4.
     struct UnlockRule {
         Mask         allOf;
         Mask         poolA;

@@ -27,14 +27,19 @@ namespace MFO::Classes {
                                 Id::Evoker, Id::Conjurer, Id::Healer, Id::Warlock);
         constexpr Mask kT4 = Ms(Id::ArchMage, Id::LivingLegend, Id::Nightingale, Id::Listener,
                                 Id::EbonyWarrior, Id::GrandBattlemage, Id::Jaqspur, Id::Saint);
-        constexpr Mask kMeleeT2 = Ms(Id::Knight, Id::Warrior, Id::Mercenary);   // "Melee means any of Knight, Warrior or Mercenary"
+        constexpr Mask kMeleeT2  = Ms(Id::Knight, Id::Warrior, Id::Mercenary);   // "Melee means any of Knight, Warrior or Mercenary"
+        constexpr Mask kRangedT2 = Ms(Id::Archer, Id::Thief);
+        constexpr Mask kMageT2   = Ms(Id::Evoker, Id::Conjurer, Id::Healer, Id::Warlock);
 
         // ── unlock-rule builders ────────────────────────────────────────────────────────────────────
         constexpr UnlockRule None()                       { return { 0, 0, 0, 0, 0 }; }
         constexpr UnlockRule Req(Mask a_all)              { return { a_all, 0, 0, 0, 0 }; }
-        // Own base/parent mastered PLUS one more mastered class of the same tier (the "at least two of the tier
-        // before" rule for T2 and the pure T3s).
-        constexpr UnlockRule Base(Id a_own, Mask a_tier)  { return { Bit(a_own), a_tier & ~Bit(a_own), 1, 0, 0 }; }
+        // marth 2026-11-09: a T2 needs ONLY its root T1 mastered (T1 is the exception to the 2-masteries rule), see Req().
+        // A pure T3: its own T2 PLUS one more SAME-LINE T2 (poolA holds the whole line, so it needs 2 of it, own included).
+        constexpr UnlockRule SameLine(Id a_own, Mask a_lineT2) { return { Bit(a_own), a_lineT2, 2, 0, 0 }; }
+        // Wizard: one of a_either (Evoker/Warlock) PLUS 2 of the mage line in all, so "Evoker or Warlock, plus another mage T2".
+        // The two pools overlap on purpose: each constraint is counted independently.
+        constexpr UnlockRule NeedTwo(Mask a_either, Mask a_lineT2) { return { 0, a_either, 1, a_lineT2, 2 }; }
         // One weapon class and one school class (hybrids).
         constexpr UnlockRule Pair(Mask a_a, Mask a_b)     { return { 0, a_a, 1, a_b, 1 }; }
         constexpr UnlockRule NOf(Mask a_pool, std::uint8_t a_n) { return { 0, a_pool, a_n, 0, 0 }; }
@@ -44,7 +49,7 @@ namespace MFO::Classes {
                                   std::uint8_t a_s = kSelf, float a_cd = 0.0f) {
             return { a_c, a_a, a_p, a_s, a_r, a_cd, nullptr, false };
         }
-        // An enemy-control cast row (Paralyze / Fear / TurnUndead). DESIGN-OPEN: enemy-control target (saved question 26);
+        // An enemy-control cast row (Paralyze / Fear / TurnUndead). DESIGN-OPEN: enemy-control target (marth ruled AUTO will treat enemy-control spells as hostile; that base change is task 1dfcuabcr0d);
         // C12 must not apply until ruled. Since c62d4cf AUTO refuses a nature-undeclared spell and Subject::Enemy ignores the
         // condition's foe, so neither subject expresses "paralyze THE stronger foe". Conservative default AUTO; pendingRuling
         // marks the row so C12 skips it. No new subject is invented.
@@ -74,21 +79,25 @@ namespace MFO::Classes {
         constexpr std::uint16_t kArcherSet = kOneHand | kBow | kCrossbow;        // "archer can only use 1h" (marth)
         constexpr std::uint16_t kMageSet   = kDagger | kStaff;                   // CHOICE: mages keep a dagger (Conjurer gambit) and staves
 
+        // marth 2026-11-09: T1 keeps today's default kit with NO class default set. The T1 rows below are therefore NOT applied
+        // (pendingRuling = true: C12 must not apply them); they are kept as data only.
+        constexpr DefaultGambit NotApplied(DefaultGambit a_g) { a_g.pendingRuling = true; return a_g; }
+
         // ── default gambit sets (priority order). Pct params are fractions, distances are units. ─────
         // T1 -- vanilla behaviour (marth): the draft's minimal sets.
         constexpr DefaultGambit kMeleeG[] = {
-            G(Vocab::kCondSelfHpBelow, Vocab::kActDrinkHealthPotion, 0.30f),
-            G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack),
-            G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
+            NotApplied(G(Vocab::kCondSelfHpBelow, Vocab::kActDrinkHealthPotion, 0.30f)),
+            NotApplied(G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack)),
+            NotApplied(G(Vocab::kCondFoeAny, Vocab::kActEquipMelee)) };
         constexpr DefaultGambit kRangedG[] = {
-            G(Vocab::kCondSelfOutOfArrows, Vocab::kActEquipMelee, 1.0f),
-            G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 300.0f),
-            G(Vocab::kCondFoeAny, Vocab::kActEquipRanged),
-            G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack) };
+            NotApplied(G(Vocab::kCondSelfOutOfArrows, Vocab::kActEquipMelee, 1.0f)),
+            NotApplied(G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 300.0f)),
+            NotApplied(G(Vocab::kCondFoeAny, Vocab::kActEquipRanged)),
+            NotApplied(G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack)) };
         constexpr DefaultGambit kMageG[] = {
-            G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.40f, SpellRole::Heal),
-            G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf) };
+            NotApplied(G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.40f, SpellRole::Heal)),
+            NotApplied(G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f)),
+            NotApplied(G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf)) };
 
         // T2
         constexpr DefaultGambit kKnightG[] = {
@@ -318,7 +327,8 @@ namespace MFO::Classes {
         constexpr RootT1 kRootMelee = 1, kRootRanged = 2, kRootMage = 3;
 
         // ch.18 mixes (marth decisions): Warrior line floor 0.4, Knight cap 0.25, Great Knight 0.20,
-        // Mercenary and Blademaster 0.15, Listener 0.25. Ebony Warrior carries a 0.20 cap inherited from Great Knight (not a
+        // Mercenary and Blademaster 0.15, Listener 0.25. Thief and Master Thief carry the draft 0.20 cap (marth 2026-11-09). Templar has NO cap on purpose (marth: "a Templar would still swing heavy pretty close to vanilla and more against undead").
+        // TODO(C8): a vs-undead power-attack FLOOR for Templar (the engine split: vanilla-ish power share, higher against undead). Ebony Warrior carries a 0.20 cap inherited from Great Knight (not a
         // walkthrough ruling), Living Legend a 0.40 floor. Everything else is not declared.
         //
         // Weapons: T1 vanilla (unrestricted). Shields only Knight, Great Knight, Templar, Ebony Warrior.
@@ -330,24 +340,24 @@ namespace MFO::Classes {
             Mk(Id::Ranged, "ranged", "Ranged", 1, Line::Ranged, kRootRanged, None(), kUnrestricted, kRangedG, "passive.ranged", U, U, 0),
             Mk(Id::Mage,   "mage",   "Mage",   1, Line::Mage,   kRootMage,   None(), kUnrestricted, kMageG,   "passive.mage",   U, U, kSpellRange),
             // ── tier 2 ──
-            Mk(Id::Knight,    "knight",    "Knight",    2, Line::Melee,  kRootMelee,  Base(Id::Melee, kT1),  kMelee1H2H | kShield, kKnightG,    "passive.knight",    0.25f, U,    kShortLeash),
-            Mk(Id::Warrior,   "warrior",   "Warrior",   2, Line::Melee,  kRootMelee,  Base(Id::Melee, kT1),  kMelee1H2H,           kWarriorG,   "passive.warrior",   U,     0.40f, 0),
-            Mk(Id::Mercenary, "mercenary", "Mercenary", 2, Line::Melee,  kRootMelee,  Base(Id::Melee, kT1),  kMelee1H2H,           kMercenaryG, "passive.mercenary", 0.15f, U,    0),
-            Mk(Id::Archer,    "archer",    "Archer",    2, Line::Ranged, kRootRanged, Base(Id::Ranged, kT1), kArcherSet,           kArcherG,    "passive.archer",    U,     U,    0),
-            Mk(Id::Thief,     "thief",     "Thief",     2, Line::Ranged, kRootRanged, Base(Id::Ranged, kT1), kThiefSet,            kThiefG,     "passive.thief",     U,     U,    kDisengage | kSneakAlways),
-            Mk(Id::Evoker,    "evoker",    "Evoker",    2, Line::Mage,   kRootMage,   Base(Id::Mage, kT1),   kMageSet,             kEvokerG,    "passive.evoker",    U,     U,    kDisSpell),
-            Mk(Id::Conjurer,  "conjurer",  "Conjurer",  2, Line::Mage,   kRootMage,   Base(Id::Mage, kT1),   kMageSet,             kConjurerG,  "passive.conjurer",  U,     U,    kDisSpell),
-            Mk(Id::Healer,    "healer",    "Healer",    2, Line::Mage,   kRootMage,   Base(Id::Mage, kT1),   kMageSet,             kHealerG,    "passive.healer",    U,     U,    kDisSpell | kNearPlayer),
-            Mk(Id::Warlock,   "warlock",   "Warlock",   2, Line::Mage,   kRootMage,   Base(Id::Mage, kT1),   kMageSet,             kWarlockG,   "passive.warlock",   U,     U,    kDisSpell),
+            Mk(Id::Knight,    "knight",    "Knight",    2, Line::Melee,  kRootMelee,  Req(Bit(Id::Melee)) ,  kMelee1H2H | kShield, kKnightG,    "passive.knight",    0.25f, U,    kShortLeash),
+            Mk(Id::Warrior,   "warrior",   "Warrior",   2, Line::Melee,  kRootMelee,  Req(Bit(Id::Melee)) ,  kMelee1H2H,           kWarriorG,   "passive.warrior",   U,     0.40f, 0),
+            Mk(Id::Mercenary, "mercenary", "Mercenary", 2, Line::Melee,  kRootMelee,  Req(Bit(Id::Melee)) ,  kMelee1H2H,           kMercenaryG, "passive.mercenary", 0.15f, U,    0),
+            Mk(Id::Archer,    "archer",    "Archer",    2, Line::Ranged, kRootRanged, Req(Bit(Id::Ranged)) , kArcherSet,           kArcherG,    "passive.archer",    U,     U,    0),
+            Mk(Id::Thief,     "thief",     "Thief",     2, Line::Ranged, kRootRanged, Req(Bit(Id::Ranged)) , kThiefSet,            kThiefG,     "passive.thief",     0.20f, U,    kDisengage | kSneakAlways),
+            Mk(Id::Evoker,    "evoker",    "Evoker",    2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kEvokerG,    "passive.evoker",    U,     U,    kDisSpell),
+            Mk(Id::Conjurer,  "conjurer",  "Conjurer",  2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kConjurerG,  "passive.conjurer",  U,     U,    kDisSpell),
+            Mk(Id::Healer,    "healer",    "Healer",    2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kHealerG,    "passive.healer",    U,     U,    kDisSpell | kNearPlayer),
+            Mk(Id::Warlock,   "warlock",   "Warlock",   2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kWarlockG,   "passive.warlock",   U,     U,    kDisSpell),
             // ── tier 3, pure ──
-            Mk(Id::GreatKnight,  "great-knight", "Great Knight", 3, Line::Melee,  kRootMelee,  Base(Id::Knight, kT2),    kMelee1H2H | kShield, kGreatKnightG,  "passive.great-knight", 0.20f, U,    kShortLeash),
-            Mk(Id::Champion,     "champion",     "Champion",     3, Line::Melee,  kRootMelee,  Base(Id::Warrior, kT2),   kMelee1H2H,           kChampionG,     "passive.champion",     U,     0.40f, 0),
-            Mk(Id::Blademaster,  "blademaster",  "Blademaster",  3, Line::Melee,  kRootMelee,  Base(Id::Mercenary, kT2), kMelee1H2H,           kBlademasterG,  "passive.blademaster",  0.15f, U,    0),
-            Mk(Id::Ranger,       "ranger",       "Ranger",       3, Line::Ranged, kRootRanged, Base(Id::Archer, kT2),    kArcherSet,           kRangerG,       "passive.ranger",       U,     U,    0),
-            Mk(Id::MasterThief,  "master-thief", "Master Thief", 3, Line::Ranged, kRootRanged, Base(Id::Thief, kT2),     kThiefSet,            kMasterThiefG,  "passive.master-thief", U,     U,    kDisengage | kSneakAlways),
-            Mk(Id::Wizard,       "wizard",       "Wizard",       3, Line::Mage,   kRootMage,   Req(Ms(Id::Evoker, Id::Warlock)), kMageSet,    kWizardG,       "passive.wizard",       U,     U,    kDisSpell),
-            Mk(Id::Necromancer,  "necromancer",  "Necromancer",  3, Line::Mage,   kRootMage,   Base(Id::Conjurer, kT2),  kMageSet,             kNecromancerG,  "passive.necromancer",  U,     U,    kDisSpell),
-            Mk(Id::Priest,       "priest",       "Priest",       3, Line::Mage,   kRootMage,   Base(Id::Healer, kT2),    kMageSet,             kPriestG,       "passive.priest",       U,     U,    kDisSpell | kNearPlayer),
+            Mk(Id::GreatKnight,  "great-knight", "Great Knight", 3, Line::Melee,  kRootMelee,  SameLine(Id::Knight, kMeleeT2),    kMelee1H2H | kShield, kGreatKnightG,  "passive.great-knight", 0.20f, U,    kShortLeash),
+            Mk(Id::Champion,     "champion",     "Champion",     3, Line::Melee,  kRootMelee,  SameLine(Id::Warrior, kMeleeT2),   kMelee1H2H,           kChampionG,     "passive.champion",     U,     0.40f, 0),
+            Mk(Id::Blademaster,  "blademaster",  "Blademaster",  3, Line::Melee,  kRootMelee,  SameLine(Id::Mercenary, kMeleeT2), kMelee1H2H,           kBlademasterG,  "passive.blademaster",  0.15f, U,    0),
+            Mk(Id::Ranger,       "ranger",       "Ranger",       3, Line::Ranged, kRootRanged, SameLine(Id::Archer, kRangedT2),    kArcherSet,           kRangerG,       "passive.ranger",       U,     U,    0),
+            Mk(Id::MasterThief,  "master-thief", "Master Thief", 3, Line::Ranged, kRootRanged, SameLine(Id::Thief, kRangedT2),     kThiefSet,            kMasterThiefG,  "passive.master-thief", 0.20f, U,    kDisengage | kSneakAlways),
+            Mk(Id::Wizard,       "wizard",       "Wizard",       3, Line::Mage,   kRootMage,   NeedTwo(Ms(Id::Evoker, Id::Warlock), kMageT2), kMageSet,    kWizardG,       "passive.wizard",       U,     U,    kDisSpell),
+            Mk(Id::Necromancer,  "necromancer",  "Necromancer",  3, Line::Mage,   kRootMage,   SameLine(Id::Conjurer, kMageT2),  kMageSet,             kNecromancerG,  "passive.necromancer",  U,     U,    kDisSpell),
+            Mk(Id::Priest,       "priest",       "Priest",       3, Line::Mage,   kRootMage,   SameLine(Id::Healer, kMageT2),    kMageSet,             kPriestG,       "passive.priest",       U,     U,    kDisSpell | kNearPlayer),
             // ── tier 3, hybrids (armor is free inside every hybrid) ──
             Mk(Id::Spellsword,  "spellsword",  "Spellsword",  3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Evoker)),   kMelee1H2H,           kSpellswordG,  "passive.spellsword",  U, U, kDisSpell, GoIn::BiasHealthMagickaRange),
             Mk(Id::Sorcerer,    "sorcerer",    "Sorcerer",    3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Conjurer)), kMelee1H2H,           kSorcererG,    "passive.sorcerer",    U, U, kDisSpell, GoIn::FullSummonsHighHealth),
