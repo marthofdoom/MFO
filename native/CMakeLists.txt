@@ -71,6 +71,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/BuffRoad.cpp
     cast/SpellSupport.cpp
     cast/Archetype.cpp
+    cast/WillWork.cpp
     cast/SummonProbe.cpp
     cast/Auto.cpp
     cast/Hands.cpp

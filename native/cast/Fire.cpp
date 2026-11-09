@@ -423,6 +423,14 @@ namespace MFO::Actuation {
             // caster, never the player (marth 2026-10-06). Any spell, not only a nature-undeclared one.
             if (!target && static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Enemy)
                 return { Result::NoOp, "target Enemy: no commanded target", true };
+            // G10 (cast/WillWork.cpp): a spell that can never affect this target (level cap, effect conditions)
+            // is passed over, transparently. Unknown (no fresh measurement) does NOT skip and never holds.
+            if (target && target != a_follower)
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam)) {
+                    const WillWorkResult ww = WillWork(a_follower, sp, target);
+                    if (ww.verdict == WillWorkVerdict::No)
+                        return { Result::FailedSkill, "will not work: " + ww.reason, true };
+                }
             // Target "Self" (Subject::Caster) resolved to the follower: CastOn(follower, spell, follower)
             // takes the same road act.cast_self does above (the self road, the hand lock, the bounds); the one
             // difference is a_rangeGate (true here, act.cast_self passes the default), which CastOn reads only

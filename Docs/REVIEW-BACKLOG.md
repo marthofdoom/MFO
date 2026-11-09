@@ -2596,3 +2596,20 @@ Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "spd
 
 ### MFO-B572 (SEV-5, OPEN, native/progression/Hms.cpp ReadHmsCapView + the cap block in RecomputeHMS, against fb4a866, Opus round-2 review of feat/mfo-dev-selftest) -- the per-pool floor 50 is mirrored by hand
 Coordinator's paraphrase of the finding (not the reviewer's verbatim text): the dev-only `ReadHmsCapView` repeats the cap's per-pool floor `50.0f` instead of sharing it; a shared constexpr (e.g. lifting `kHmsCapPoolFloor` to namespace scope in Hms.cpp) would keep the self-test's floor test from drifting if the cap's floor changes. Deferred under rule 9 (SEV-5; the release cap is unchanged).
+### MFO-B580 (SEV-4, OPEN, cast/Fire.cpp G10 wiring, against 48be8b3) -- WillWork is wired only on act.cast_target
+Verbatim (reviewer, relayed): wiring covers only kActCastTarget. Reasoning: the Auto fan-out (Rally is level-capped and not in the nature-undeclared set; mod-flagged hostile control spells) and act.cast_player for condition-gated spells are not checked. Wiring Auto needs cast/Auto.cpp and cast/Archetype.cpp, which feat/auto-control-hostile is changing (shared nature classifier), so the narrowing is recorded, not done. (ID chosen above origin/main's B572 to avoid a collision; renumber on merge.)
+
+### MFO-B581 (SEV-4, OPEN, cast/WillWork.cpp, against 48be8b3) -- time-varying CTDAs cache a false No
+Verbatim (reviewer): time-varying CTDAs cache a false No for the refresh window. Reasoning: the mirror trusts a verdict 6 s and refreshes at 2 s.
+
+### MFO-B582 (SEV-4, OPEN, cast/WillWork.cpp, against 48be8b3) -- a magnitude-0 / kNoMagnitude capped effect gives a false No
+Verbatim (reviewer): a magnitude-0 or kNoMagnitude capped effect gives a false No. Reasoning: the cap is read from effectItem.magnitude unconditionally.
+
+### MFO-B583 (SEV-4, OPEN, cast/WillWork.cpp, against 48be8b3) -- the cap misses dual-cast scale, kPowerAffectsMagnitude and the target's EP41
+Verbatim (reviewer): the magnitude misses the dual-cast scale, kPowerAffectsMagnitude, and the target's EP41 incoming-magnitude entry point.
+
+### MFO-B584 (SEV-5, OPEN, cast/WillWork.cpp, against 48be8b3) -- kReanimate is unreachable
+Verbatim (reviewer): kReanimate is unreachable, the IsSummonSpell branch in Fire.cpp returns first.
+
+### MFO-B585 (SEV-5, OPEN, cast/WillWork.cpp, against 48be8b3) -- the engine's MGEF condition site was not located
+Verbatim (reviewer): the engine's MGEF condition site was not located; the IsTrue(target, caster) order was confirmed from ActiveEffect::EvaluateConditions and vanilla data.
