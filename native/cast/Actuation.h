@@ -485,6 +485,24 @@ namespace MFO::Actuation {
     // never casts, even when a selector named a target (cast/Auto.cpp; Fire, logistics service).
     bool AutoNatureUndeclared(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
+    // G10, "SPELL WILL WORK" (cast/WillWork.cpp). Can a_spell, cast by a_caster, affect a_target at all?
+    //   No      -> the answer is KNOWN: every effect of the spell is blocked on this target (a level cap
+    //              of Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate below the target's level,
+    //              or the effect's own CTDA conditions false for (target, caster), "undead only" or
+    //              "not undead"). `reason` names the first blocked effect. Fire passes the rule over.
+    //   Yes     -> at least one effect can (or the spell carries no gate at all).
+    //   Unknown -> not measured yet / mirror stale / no pump (VR). The caller does NOT skip.
+    // Reads live actor state (TESCondition, the perk entry point), so the measurement runs on the MAIN
+    // thread (MainThread::Post); the worker only reads a mutex-guarded mirror keyed (caster, spell, target).
+    // `Measuring` is Unknown with the first measurement of a GATED spell still in flight (<= 3 s): Fire
+    // holds that one lap transparently so the first cast cannot be wasted. A pure read; never mutates.
+    // WillWorkClassLevelBonus is the hook for class passives that add levels (card C6): returns 0 today.
+    enum class WillWorkVerdict : std::uint8_t { Yes, No, Unknown, Measuring };
+    struct WillWorkResult { WillWorkVerdict verdict = WillWorkVerdict::Unknown; std::string reason; };
+    WillWorkResult WillWork(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target);
+    float WillWorkClassLevelBonus(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect);
+    void  WillWorkClear();   // drops the mirror (tests / load)
+
     // SUMMON LIVENESS (v1.1.1). A conjured familiar/atronach or a reanimated corpse
     // is a separate COMMANDED ACTOR, not a caster-side magic effect, so the OOC
     // cast routes' already-active guards (which read a magic effect on the cast
