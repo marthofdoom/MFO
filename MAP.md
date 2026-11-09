@@ -57,7 +57,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (6 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
+| **Co-save (6 records; a 7th, `MFST`, in DEV builds only, section 9)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -8386,6 +8386,7 @@ equip rules (releases the melee hold -> the engine re-arms the denied bow); gati
 alone (see Fire.cpp's MeleeOnly note).
 
 ### Vocabulary.h — the serialized opcode contract ⚠️
+`kActDevSelftest` ("act.dev_selftest") exists ONLY in a dev build (`#ifdef MFO_DEV_SELFTEST`, section 9); a release build reads it as an unknown action (fail-closed, transparent).
 The gambit opcode **strings are a frozen co-save contract (#10)** — written verbatim
 (`Serialization.cpp:155,179`), read (`:434,459`); there's even a hard literal
 `"act.equip_torch"` (`Serialization.cpp:486`) tracking `kActEquipTorch`
@@ -8474,6 +8475,85 @@ on the main thread specifically so combat-thread hooks only READ settled pointer
 never do a data-handler lookup from those hooks. `EnsurePlayerSetup` (`:96`) grants the
 Field Orders power (idempotent via `HasSpell`) ← `plugin.cpp:356` (kPostLoadGame only,
 after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP retries.
+
+---
+
+## 9. Dev-build self-test gambit — `native/selftest/` (ClickUp 1dfcuabcqr7, `feat/mfo-dev-selftest`, 2026-11-09; DEV BUILDS ONLY)
+
+**Responsibility.** marth 2026-11-09: a dev-build gambit that runs each pending in-game test once, when its
+situation comes up, logs PASS / FAIL with evidence, never re-runs a complete test, spawns missing test gear
+and removes only what it added, and logs which tests are still pending. User doc + how to add a test:
+`Docs/SELFTEST.md`.
+
+**Build gate.** CMake `option(MFO_DEV_SELFTEST ... OFF)` (`native/CMakeLists.txt`) adds `selftest/Runner.cpp`,
+`Fixtures.cpp`, `Record.cpp`, `Tests.cpp` and defines `MFO_DEV_SELFTEST`. CI job `build-dev`
+(`.github/workflows/native.yml`, every push + plain dispatch, skipped for the noinline / noopt proof builds)
+uploads `MFO-dll-DEV-SELFTEST`; the shipped `MFO-dll` is the normal job. With the option OFF: `SelfTest.h`
+gives empty inlines and every other touch point below sits in `#ifdef MFO_DEV_SELFTEST`, so a release DLL has
+no opcode, string, record id or state (proved for the branch by stripping the dev blocks: the shared files then
+differ from main only by the include and the empty `SelfTest::Tick/CoSave/ClearAll` calls).
+
+**Files.** `SelfTest.h` (public: `Tick`, `CoSave`, `CoLoad`, `ClearAll`), `SelfTest_internal.h` (TestDef /
+Ctx / Step / Scratch / FixtureRequest, the `g_mx`-guarded results + ledger + acks; `#error` outside a dev
+build), `Runner.cpp` (pick / fixtures wait / drive / end state machine, pending log, reset INI), `Fixtures.cpp`
+(main-thread add + cleanup), `Record.cpp` (`'MFST'` v1 layout + reader), `Tests.cpp` (`RegisterAll`: the 4
+seeded tests).
+
+**Touch points (each a one-liner or one entry):**
+- `Vocabulary.h`: `kActDevSelftest = "act.dev_selftest"` after `kActTaunt`, in `#ifdef`. Frozen string (#10).
+- `Evaluator.cpp` `Evaluate`: the rule is SKIPPED (`continue` right after `if (!g.enabled)`): a STANDING
+  MARKER, never a scan winner, so it never takes a tick from the gambits the tests watch.
+- `cast/Fire.cpp` `Fire`: defensive transparent NoOp for the marker (unreachable today).
+- `Board_internal.h`: `VocabEntry::devLabel` (dev only; `label()` prefers it, so no `Strings_keys.h` key and
+  no dev text in the translator template) + the `kActsCombat` entry "DEV: run self-tests" (COMBAT table only).
+- `Scheduler.cpp` `Tick`: `SelfTest::Tick()` right after `Taunt::Tick()`, BEFORE the empty-party return (the
+  orphan-fixture cleanup after a load must run even with no party).
+- `Serialization.h`: `kRecSelfTest = 'MFST'`, `kSelfTestVersion = 1` in `#ifdef`. `Serialization.cpp`:
+  `SelfTest::CoSave` last in `SaveCallback`; a `kRecSelfTest` dispatch branch (in `#ifdef`, newer-than guard)
+  before the unknown-type skip; `SelfTest::ClearAll` at the top of `LoadCallback` and in `ResetAllState`
+  after `Errand::ClearRestorePending` (well after `StopPump` / `MainThread::Clear`).
+
+**Mechanism.** A follower runs tests while his COMBAT table holds an ENABLED `act.dev_selftest` rule (WHEN not
+read), he is MFO-enabled and persistable (#9). Per follower ONE test at a time, a test on one follower at a
+time: pick (1 s cadence, registry order, `precondition()` == nullptr, 30 s backoff after a RETRY / ABORT, no
+start while load orphans remain) -> fixtures (`PostFixtureAdd`, ack within 10 s or ABORT at error level) ->
+`step()` every 0.5 s of unpaused run time (paused game = frozen; dt clamped to 0.5 s) -> PASS / FAIL (into
+`g_results`, persisted, `[selftest] PASS|FAIL <id> <evidence>`, then the pending summary) or RETRY / ABORT
+(stays pending) -> `PostFixtureCleanup(token)`. Timeout -> `onTimeout()` or FAIL. A run whose follower leaves
+`g_active`, dies, or loses the rule is ABORTed. After every load / revert the first tick applies
+`Data/SKSE/Plugins/MFO_SelfTest.ini` (`iResetGeneration` above the saved one clears results once,
+`sResetOnly` narrows it) and logs the pending list in detail.
+
+**Threading.** `g_runs` / `g_seen` / `g_pick` / `g_backoff` are WORKER-ONLY, unlocked (#4: worker-serial; the
+save callback pauses the pump; `ClearAll` runs with it stopped). `g_results` / `g_ledger` / `g_acks` /
+`g_resetGeneration` are under `g_mx`, a LEAF lock: no engine call and no other lock is taken under it (worker
+tick, main-thread fixture closures and `CoSave` all copy-then-act). Fixture ENGINE work (AddObjectToContainer,
+RemoveItem, AddSpell, DeselectSpell, RemoveSpell) runs only in `MainThread::Post` closures, and each closure
+writes its ledger change itself, so a save (main thread) never sees an add without its entry or the reverse.
+
+**`'MFST'` v1 (seventh independent record, dev builds only).** `u32 resetGeneration; u32 resultCount
+(<=256) {str id, str verdict "pass"|"fail", u32 follower, lstr evidence (<=1024)}; u32 fixtureCount (<=1024)
+{u32 follower, str kind "item"|"spell", u32 form, i32 added, i32 before, str testId}`. Bounded counts, short
+read aborts this record only, ResolveFormID on every id, an unmappable fixture DROPPED with an error line,
+an unknown verdict dropped (stays pending), an unknown test id KEPT. Loaded ledger entries are ORPHANS (token
+0) that the first tick removes. **Release compatibility:** a release LoadCallback skips `'MFST'` as an unknown
+type (`type != kRecFollowers` -> warn + continue); the FLWR reader keeps `act.dev_selftest` verbatim (no
+vocabulary check, param 0 never disables it); release `Fire` returns `FailedOther` TRANSPARENT ("unknown
+action") and the combat scan falls past it; the board shows the raw opcode. Lost on a release save: results
+and ledger (a mid-test save played on a release DLL keeps its fixture items).
+
+**What breaks.**
+- Letting the marker win the scan (removing the Evaluator skip): it would wall every rule below it in a dev
+  build, and the tests that watch those rules could never pass.
+- Doing a fixture engine call on the worker or outside the closure that records it: a save between the two
+  leaves an item nobody removes, or a ledger entry that removes the follower's own copy.
+- Removing more than `min(added, now - before)` of an item: takes the follower's own stock.
+- Calling `SelfTest::Tick` after the empty-party return: load orphans stay until a follower is in the party.
+- Offering the marker on the LOGISTICS table without re-proving that table's unknown-action fall-through for a
+  release build.
+- Renaming a test id or `act.dev_selftest`: completed results / saved rules stop matching (#10).
+- Taking `g_mx` around an engine call: the worker and a main-thread closure can deadlock through an engine lock.
+- Open review findings: none yet (new mechanism, tier A).
 
 ---
 
