@@ -158,8 +158,15 @@ namespace MFO::Loadout {
     // a_spell. Then an open gear debt no longer refuses a re-equip into an EMPTY
     // left hand (with no two-hander in the right): that equip displaces nothing,
     // so the ledger is left untouched.
+    //
+    // a_rightHand (MFO-B1): the hand the caller's claim owns. false (default) = the LEFT, exactly
+    // as before. true = the RIGHT: the spell is equipped into RightHandSlot(), the left hand (a
+    // shield, an in-flight heal) is neither displaced nor yielded (a_yieldLeft is NOT called), no
+    // gear debt is booked, and exact mode's deselect targets the LEFT hand's spell, never one a
+    // heal / offense claim holds. A weapon in the right hand is never displaced: Debounced.
     Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why,
-                  LeftHandYield a_yieldLeft = nullptr, bool a_healClaimLive = false);
+                  LeftHandYield a_yieldLeft = nullptr, bool a_healClaimLive = false,
+                  bool a_rightHand = false);
 
     // Hand back everything owed to ONE follower -- on dismissal, or when they
     // leave the party still holding MFO's choice.

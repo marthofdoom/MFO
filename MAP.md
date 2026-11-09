@@ -1743,12 +1743,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   no-lock half is now removed rather than left to mislead the next reader. (A first cut only preferred the right once the left was
   already CLAIMED, which never fires in the flow that matters: a standing heal claim makes `leftFree` false
   long before that test is reached, so the opening state — two free unclaimed hands — still took the left.)
-  **KNOWN CONFLICT AT THE EQUIPMENT LAYER, outside this file's boundary and NOT fixed here:**
-  `Loadout::Prepare` equips into `LeftHandSlot()` unconditionally (`Loadout.cpp:279, :359`) and at cast
-  level 4 `DeselectSpell`s the RIGHT hand's other spell (`:296-298`). A RIGHT-hand claim therefore has MFO
-  physically equipping the same spell into the LEFT hand — a wasted equip, and on a follower holding a
-  shield or weapon there, a needless displacement recorded as a restore debt. `Prepare` needs a hand
-  parameter; that is its own brief. `DualCast` may also preempt, but only when BOTH hands are takeable (checked
+  **EQUIPMENT-LAYER CONFLICT, CLOSED by MFO-B1 (`fix/mfo-b1-prepare-hand`):** `Loadout::Prepare` now takes
+  `a_rightHand` (default LEFT, unchanged). `CastOn` passes it for a RIGHT-only offense plan (`!healClaim && handPlan.right && !handPlan.left`):
+  the spell goes into `RightHandSlot()`, the left hand and its yield are untouched, no gear debt; exact-mode deselect now targets
+  the OTHER hand's spell and skips one a heal claim / live offense claim holds. A DualCast plan still equips the LEFT only.
+  Right-hand MFO spells are tracked in `g_mfoSpellRight` (take-back in `ReleaseSpell`/`ReleaseSpellIf`/`Restore`). `DualCast` may also preempt, but only when BOTH hands are takeable (checked
   as a pure predicate before either is committed, so a released claim is never spent for nothing).
     make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the
   claim really is gone, so the pin that named it is VOID: the gate drops those hands' locks

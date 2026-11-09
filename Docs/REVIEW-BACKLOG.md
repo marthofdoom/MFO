@@ -21,6 +21,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 ## OPEN
 
 ### MFO-B1 — `Loadout::Prepare` has no hand parameter
+- **RESOLVED by `fix/mfo-b1-prepare-hand` (SHA recorded below on push).** `Prepare` gains `a_rightHand`; `CastOn` passes it for a right-only offense plan. BuffRoad and the heal repair stay LEFT (their claims are LEFT).
 - **Raised:** Fable review of `bd53a81`+`ed9cbbc`, restated on `625f3b7`. Outside the author's file boundary both times; the author correctly refused to reach for it.
 - **Severity:** SEV-4 (design residual, currently masked by hand-selection order)
 - **Finding:** `Loadout::Prepare` equips into `LeftHandSlot()` unconditionally (`Loadout.cpp:279, :359`) and at cast level 4 `DeselectSpell`s the RIGHT hand's other spell (`:296-298`). With heal-LEFT and offense-RIGHT as the designed steady state, the two fight at the equipment layer: an offense claim's first-lap `Prepare` puts its spell into the LEFT slot on top of an in-flight heal, and a heal's `Prepare` deselects the offense spell from the RIGHT.
