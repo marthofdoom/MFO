@@ -8585,8 +8585,9 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 - Renaming a test id or `act.dev_selftest`: completed results / saved rules stop matching (#10).
 - Taking `g_mx` around an engine call: the worker and a main-thread closure can deadlock through an engine lock.
 - Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B564 (taught spell removed even if learned for real),
-  MFO-B565 (release builds evaluate the marker's WHEN), MFO-B566 (SEV-5 leftovers). Round-1 review of a1c0e6f
-  (F1-F4, F7, F8) fixed on the branch.
+  MFO-B565 (release builds evaluate the marker's WHEN), MFO-B566 (SEV-5 leftovers), MFO-B567 (the floor 50
+  mirrored by hand). Round-1 review of a1c0e6f (F1-F4, F7, F8) and round-2 of fb4a866 (F9 bow bash, F11 live
+  base vs held) fixed on the branch. MFO-B564 collides with the parked fix/mfo-bound-bows (F10): the second to merge renumbers.
 
 ---
 

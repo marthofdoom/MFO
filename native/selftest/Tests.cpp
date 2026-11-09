@@ -20,6 +20,7 @@
 #include "MainThread.h"
 #include "progression/ProgAllocator.h"
 
+#include <cmath>
 #include <deque>
 
 namespace MFO::SelfTest {
@@ -201,7 +202,9 @@ namespace MFO::SelfTest {
         // bound bow reached a hand within 15 s after it.
         // set[0] = the bound-bow spells of his combat rules. b[0] the rule fired since the start, b[1] the bow
         // reached a hand; n[0] when (run s), n[1] steady ms when, n[2] when the rule first fired (run s).
-        struct Shot { RE::FormID cause = 0, source = 0, target = 0; double atMs = 0; };
+        // projectile + bash flag (review F9, fb4a866): a bow BASH also raises TESHitEvent with source = the bow,
+        // projectile 0 and kBashAttack set (fork RE/T/TESHitEvent.h); only a projectile hit that is not a bash is a shot.
+        struct Shot { RE::FormID cause = 0, source = 0, target = 0, projectile = 0; bool bash = false; double atMs = 0; };
         std::mutex                g_shotMx;   // leaf lock: the sink and the worker copy under it, nothing else
         std::deque<Shot>          g_shots;
         std::atomic<bool>         g_sinkLive{ false };
@@ -218,7 +221,8 @@ namespace MFO::SelfTest {
                 if (!a_e || !a_e->cause || !a_e->target) return RE::BSEventNotifyControl::kContinue;
                 const RE::FormID cause = a_e->cause->GetFormID();
                 if (!Followers::IsTrackedFast(cause)) return RE::BSEventNotifyControl::kContinue;
-                Shot sh{ cause, a_e->source, a_e->target->GetFormID(), NowMs() };
+                Shot sh{ cause, a_e->source, a_e->target->GetFormID(), a_e->projectile,
+                         a_e->flags.any(RE::TESHitEvent::Flag::kBashAttack), NowMs() };
                 std::lock_guard lk(g_shotMx);
                 g_shots.push_back(sh);
                 while (g_shots.size() > 64) g_shots.pop_front();
@@ -282,9 +286,11 @@ namespace MFO::SelfTest {
             if (s.b[1]) {
                 for (const auto& sh : shots) {
                     if (sh.cause != c.id || sh.atMs < s.n[1] || !IsBoundBowForm(sh.source)) continue;
-                    return Step::Pass(std::format("a hit by bound bow '{}' on {:08X} '{}' (TESHitEvent, cause = this "
-                                                  "follower); {}",
-                                                  FormName(sh.source), sh.target, FormName(sh.target), s.note));
+                    if (sh.projectile == 0 || sh.bash) continue;   // a bow bash, not a shot (F9)
+                    return Step::Pass(std::format("an ARROW hit by bound bow '{}' on {:08X} '{}' (TESHitEvent, cause = "
+                                                  "this follower, projectile {:08X}, not a bash); {}",
+                                                  FormName(sh.source), sh.target, FormName(sh.target), sh.projectile,
+                                                  s.note));
                 }
                 if (c.elapsed - s.n[0] > 30.0f)
                     return Step::Retry("a bound bow was in hand 30 s with no hit by it (missed, out of range, no line "
@@ -309,7 +315,8 @@ namespace MFO::SelfTest {
         // documented limit, Hms.cpp "ABOVE the cap: every pool is at its floor") is a PASS, never a FAIL.
         // Precondition: HMS on (bHmsRedistribute) and the cap on, a CAPTURED record with a class profile, a
         // player sample, the follower 2 minutes in the party. Judged after two reads 2 s apart agree.
-        // n[0] / n[1] last held total / sample, n[2] when they last changed (run s).
+        // n[0] / n[1] last held total / sample, n[2] when they last changed (run s), n[3..5] last live base H/M/S.
+        // After the settle each pool's LIVE base must sit within 0.5 of its held value (F11).
         struct HmsRead { ProgAllocator::HmsCapView v; bool found = false; bool inFlight = false;
                          std::chrono::steady_clock::time_point at{}; };
         std::mutex                              g_hmsMx;   // leaf lock
@@ -376,11 +383,16 @@ namespace MFO::SelfTest {
             const float ht = v.held[0] + v.held[1] + v.held[2];
             float live[3];
             for (int p = 0; p < 3; ++p) live[p] = Followers::GetFollowerHMS(c.follower, p);
-            if (!s.b[0] || ht != s.n[0] || v.playerSample != s.n[1]) {
+            // The settle window also restarts while the LIVE base moves (still converging, review F11).
+            if (!s.b[0] || ht != s.n[0] || v.playerSample != s.n[1] || live[0] != s.n[3] || live[1] != s.n[4] ||
+                live[2] != s.n[5]) {
                 s.b[0] = true;
                 s.n[0] = ht;
                 s.n[1] = v.playerSample;
                 s.n[2] = c.elapsed;
+                s.n[3] = live[0];
+                s.n[4] = live[1];
+                s.n[5] = live[2];
             }
             const bool atFloor = v.held[0] <= v.floor[0] + 0.5f && v.held[1] <= v.floor[1] + 0.5f &&
                                  v.held[2] <= v.floor[2] + 0.5f;
@@ -389,6 +401,18 @@ namespace MFO::SelfTest {
                                  v.held[0], v.held[1], v.held[2], ht, v.playerSample, v.floor[0], v.floor[1], v.floor[2],
                                  live[0], live[1], live[2], v.fixedStat ? "yes" : "no");
             if (c.elapsed - s.n[2] < 2.0f) return Step::Continue();
+            // F11 (fb4a866): the engine must actually carry what MFO holds. A pool whose live base is more than
+            // 0.5 off its held value after the settle is a FAIL; an unreadable live base (<= 0) is a RETRY.
+            static constexpr const char* kPool[3] = { "Health", "Magicka", "Stamina" };
+            for (int p = 0; p < 3; ++p)
+                if (!(live[p] > 0.0f))
+                    return Step::Retry(std::format("the live base {} read {:.1f} (unreadable); {}", kPool[p], live[p],
+                                                   s.note));
+            for (int p = 0; p < 3; ++p)
+                if (std::fabs(live[p] - v.held[p]) > 0.5f)
+                    return Step::Fail(std::format("live base {} {:.1f} != held {:.1f} (off by {:.1f}) after a 2 s "
+                                                  "settle: the engine does not carry what MFO holds; {}",
+                                                  kPool[p], live[p], v.held[p], live[p] - v.held[p], s.note));
             if (ht <= v.playerSample + 0.5f) return Step::Pass("held total at or under the cap: " + s.note);
             if (atFloor)
                 return Step::Pass("held total above the sample with EVERY pool at its floor (the cap's documented "
