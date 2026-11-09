@@ -2569,6 +2569,21 @@ Verbatim (reviewer): C2 as written lists CSTY ids per stance, and ch.18 needs go
 ### MFO-B563 (SEV-5, OPEN, classes/ClassTable.cpp flags, against bc39bee) -- three package-policy leftovers
 Verbatim (reviewer): Ebony Warrior has kDisengage without kSpellRange. Saint has kNearPlayer while the ruling says it "leads vs undead". T1 default gambit sets exist while the ruling says "T1 behaves vanilla". Reasoning: all three are policy for C8 (packages) and C12 (defaults), no behaviour today.
 
+### MFO-B567 (SEV-4, OPEN, classes/State.cpp kept MCLS record, against 2a035b1) -- stale FormIDs in a kept record
+Verbatim (reviewer, F-3): a record kept verbatim by an older DLL carries the FormIDs of the save it came from. Downgrade -> load-order change -> upgrade, and the newer DLL resolves them against the wrong plugin table. Reasoning: only a parse could re-resolve them and the older DLL cannot parse; the exposure is the stored gambit rows' actionParamForm / subjectActorForm. C12's restore must type-check actionParamForm (a spell for a cast row, and so on) the way the live evaluator does, never trust it.
+
+### MFO-B568 (SEV-4, OPEN, design question for marth, classes/State.cpp, against 2a035b1) -- only the COMBAT table is stored per class
+Verbatim (reviewer, F-4): Q8 says "remember each classes setup"; MCLS v1 stores the combat table only. Reasoning: whether a class's setup includes the logistics table is marth's call; if yes it is a v2 APPEND (a per-table kind byte or a second table list under `if (a_version >= 2)`), no v1 change.
+
+### MFO-B569 (SEV-5, OPEN, classes/State.cpp rowSchema, against 2a035b1) -- rowSchema is stamped from kSchemaVersion
+Verbatim (reviewer, F-5): MCLS's rowSchema is the FLWR record version, so ANY FLWR bump (even one that does not touch the row) makes an older DLL keep MCLS verbatim and freeze class progress. Reasoning: harmless today; note for card G9 (FLWR v6): give the gambit ROW its own encoding version (GambitWire) and stamp that instead.
+
+### MFO-B570 (SEV-5, OPEN, GambitWire ReadRow in MCLS, against 2a035b1) -- unresolved actionParamForm rows disabled while the ESL is absent
+Verbatim (reviewer, F-6): a stored class row whose actionParamForm does not resolve is disabled and zeroed, FLWR's rule, also while the class ESL is absent. Reasoning: today no class row targets an ESL form, so nothing is lost; revisit if MFO_Classes.esl ever ships gambit-targetable forms (they would be zeroed by an ESL-absent session).
+
+### MFO-B571 (SEV-5, OPEN, card C4, against 2a035b1) -- XP addition must saturate
+Verbatim (reviewer, F-8): ClassProgress::xp is u32 with no overflow guard in the store. Reasoning: C4's accrual must use saturating addition (clamp at UINT32_MAX), never a wrapping add.
+
 ### MFO-B564 (SEV-4, OPEN, native/selftest/Fixtures.cpp PostFixtureCleanup, against a1c0e6f, Opus tier-3 review of feat/mfo-dev-selftest, F5) -- a taught fixture spell is removed even if it was learned for real during the run
 Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "a taught spell is removed even if it was learned for real during the run." The ledger records "taught" only when the follower lacked the spell at the add, and the cleanup cannot tell a later real learning (player teach, spell book) from the fixture. Dev builds only; deferred under rule 9 (SEV-4, not co-save / threading / ABI, not exercised by the next field cycle's release DLL).
 ID COLLISION (F10, SEV-4, Opus round-2 review against fb4a866): MFO-B564 is also used by the parked `fix/mfo-bound-bows` branch. Whichever of the two merges SECOND renumbers its entry (and its references) to the next free id.
@@ -2579,5 +2594,5 @@ Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "the
 ### MFO-B566 (SEV-5, OPEN, native/selftest/, against a1c0e6f, same review) -- leftovers
 Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "spdlog under g_mx" (Runner.cpp ApplyResetIni and Record.cpp CoLoad's commit log while holding the leaf lock; harmless today, spdlog takes no lock the worker or a fixture closure holds, but the leaf-lock rule says no call under it) and "an unresolvable-follower orphan blocks starts with a 30 s error" (a load-orphan whose follower does not resolve keeps blocking every test start and logs an error every 30 s). F7 (the doc's "the marker's param is 0") and F8 (the misplaced CMake comment) were fixed in the review round, not deferred.
 
-### MFO-B567 (SEV-5, OPEN, native/progression/Hms.cpp ReadHmsCapView + the cap block in RecomputeHMS, against fb4a866, Opus round-2 review of feat/mfo-dev-selftest) -- the per-pool floor 50 is mirrored by hand
+### MFO-B572 (SEV-5, OPEN, native/progression/Hms.cpp ReadHmsCapView + the cap block in RecomputeHMS, against fb4a866, Opus round-2 review of feat/mfo-dev-selftest) -- the per-pool floor 50 is mirrored by hand
 Coordinator's paraphrase of the finding (not the reviewer's verbatim text): the dev-only `ReadHmsCapView` repeats the cap's per-pool floor `50.0f` instead of sharing it; a shared constexpr (e.g. lifting `kHmsCapPoolFloor` to namespace scope in Hms.cpp) would keep the self-test's floor test from drifting if the cap's floor changes. Deferred under rule 9 (SEV-5; the release cap is unchanged).
