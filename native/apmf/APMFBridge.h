@@ -1088,6 +1088,21 @@ namespace MFO::APMFBridge {
     // the [apmf][equip-obs] verdicts are the readback.
     bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms);
 
+    // ── ABI v33 PER-ITEM EQUIP DENY (MFO-B308, Harbinger ClickUp 86e3t8w23) ──────────
+    // marth 2026-10-19: a catalog-excluded, non-quest playable weapon (an artifact) is "Keep but never
+    // wield". EquipItemDenySupported: the equip authority is supported AND Harbinger is ABI >= 33 (its
+    // APMF_API_v33::SetEquipDenyItems slot exists). Any thread.
+    bool EquipItemDenySupported();
+    // Worker-safe. Send the per-item DENY list (base FormIDs, sorted by the caller) on the standing
+    // ch.17 claim: Harbinger refuses every engine equip of them on the follower and unequips a worn
+    // one. Same guards and logging as DeclareEquipScope (no standing claim -> error, NOT sent). A
+    // list over kMaxEquipDeny is truncated (logged as MFO's composition bug). False = not sent.
+    bool DeclareEquipDenyItems(RE::FormID a_follower, const std::vector<RE::FormID>& a_items);
+    // Worker-safe (g_mx). True when the last list SENT on the follower's standing claim names a_item
+    // and Harbinger ENFORCES (IsEquipAuthorityEnforced: observe-only refuses nothing). False on an
+    // older Harbinger, without a claim, or before the first declaration on a fresh handle.
+    bool EquipItemDenied(RE::FormID a_follower, RE::FormID a_item);
+
     // ── heal-cast facet CLAIM: PER-CAST, TTL-bounded (ch.8b, APMF v5) ───────────
     // MFO's Composed Forced Cast (Docs/SPEC-FORCED-CAST.md) makes a follower cast
     // a spell his AI would not choose -- the canonical case a heal at an ally.
@@ -1889,6 +1904,12 @@ namespace MFO::APMFBridge {
     // Any thread. GetEquipPreferenceState for a_follower; kEquipPrefState_None (out zeroed)
     // below ABI 22. a_out->size is set here.
     std::uint32_t EquipPreferenceState(RE::FormID a_follower, APMF_API::APMF_EquipPrefInfo* a_out);
+    // ABI v33 (MFO-B262): Harbinger's ch.26 state for ONE declared entry (form + its declared slot),
+    // from that item's own scorings. EquipPreferenceItemStateSupported: ABI >= 33. Below it the read
+    // returns kEquipPrefState_None with a_out zeroed (the caller keeps the per-actor read). Any thread.
+    bool          EquipPreferenceItemStateSupported();
+    std::uint32_t EquipPreferenceItemState(RE::FormID a_follower, RE::FormID a_form, std::uint8_t a_slot,
+                                           APMF_API::APMF_EquipPrefInfo* a_out);
     // Worker. D4 escalation: Repoint the claim with (a_force ? kEquipPref_Force : 0). No-op
     // without a live claim or when the bit already matches. Returns true when sent.
     bool SetEquipPreferenceForce(RE::FormID a_follower, bool a_force);

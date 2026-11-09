@@ -44,6 +44,9 @@ namespace MFO::APMFBridge {
         std::mutex                           g_prefMx;
         std::unordered_map<RE::FormID, Pref> g_prefs;   // guarded by g_prefMx
 
+        // ABI v33: GetEquipPreferenceItemState (the per-entry state, MFO-B262).
+        constexpr std::uint32_t kItemStateMinAbi = 33;
+
         const APMF_API::APMF_API_v22* PrefApi() {
             auto* api = g_apmf.load(std::memory_order_relaxed);
             if (!api || api->abiVersion < kPrefMinAbi) return nullptr;
@@ -170,6 +173,24 @@ namespace MFO::APMFBridge {
             a_out->size = sizeof(APMF_API::APMF_EquipPrefInfo);
         }
         return api->GetEquipPreferenceState(a_follower, a_out);
+    }
+
+    bool EquipPreferenceItemStateSupported() {
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= kItemStateMinAbi;
+    }
+
+    std::uint32_t EquipPreferenceItemState(RE::FormID a_follower, RE::FormID a_form, std::uint8_t a_slot,
+                                           APMF_API::APMF_EquipPrefInfo* a_out) {
+        if (a_out) {
+            std::memset(a_out, 0, sizeof(*a_out));
+            a_out->size = sizeof(APMF_API::APMF_EquipPrefInfo);
+        }
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kItemStateMinAbi || a_follower == 0 || a_form == 0)
+            return APMF_API::kEquipPrefState_None;
+        const auto* v33 = reinterpret_cast<const APMF_API::APMF_API_v33*>(api);
+        return v33->GetEquipPreferenceItemState(a_follower, a_form, a_slot, a_out);
     }
 
     bool SetEquipPreferenceForce(RE::FormID a_follower, bool a_force) {

@@ -633,15 +633,17 @@ per concern:
   `ServicePreference` (every in-combat lap, from `ReconcileForcedWeapon`): re-declares a pending placement, sends
   the preference (send-on-change in the bridge), reads `GetEquipPreferenceState`, logs `[equip-pref]` state lines
   (on change, floor 2 s; heartbeat 30 s) and FORCE ANOMALY rises; D4: a miss counts only while the state is
-  Lifted / Leading FOR THE MISSING ITEM (`info.lastForm == missForm`: Harbinger's state is per actor) and the item
+  Lifted / Leading FOR THE MISSING ITEM (MFO-B262 FIXED: with Harbinger ABI >= 33 the state is that entry's own,
+  `EquipPreferenceItemState(fid, missForm, missSlot)`, read into `mstate` / `minfo`; below 33 only when
+  `info.lastForm == missForm`, Harbinger's state being per actor there) and the item
   was scored in the last 3 s, and NOT while a spell sits in the missing item's hand (a cross-category pick: Restore /
   Ward / buff spells are walked first; a re-placement would clobber the AI's heal mid-cast); after `kEscalateAfter` (2 s) it Repoints with
   `kEquipPref_Force` and re-places ONCE through ch.17 (`ResendEquipDeclaration` + `DeclareLedger`), logged WARN;
   Outranked = an ANOMALY (warn, NOT forced: it would violate Harbinger's priority sliders); Unreadable = error,
   not forced; ZeroScore / HandHeld / Declared / None = not a scored miss; a launcher preferred with the foe inside
-  `fMeleeReach` = the engine's range gate, not escalated. KNOWN GAP (MFO-B262): Harbinger's state is per ACTOR (the
-  last item scored), so with two entries D4 may never classify the earlier-scored one; that miss is logged once per
-  episode (`miss of ... not classified`) until a per-entry Harbinger read exists. Forced and still missing 4 s later = one ERROR, no retry.
+  `fMeleeReach` = the engine's range gate, not escalated. Below Harbinger ABI 33 only (MFO-B262, fixed by the v33
+  per-entry read): Harbinger's state is per ACTOR (the last item scored), so with two entries D4 may never classify
+  the earlier-scored one, and that miss is logged once per episode (`miss of ... not classified`). Forced and still missing 4 s later = one ERROR, no retry.
   The force bit comes off after 5 s held, and out of combat. Threading: the watch map is worker-serial (#4).
   **What breaks:** escalating on a non-scored state (ZeroScore would force a bow with no arrows; HandHeld would
   fight MFO's own cast claim, D3); re-placing more than once per episode (that is the retired MFO-B41 loop);
@@ -6377,6 +6379,17 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
     `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
     `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
+    **ABI v33 never-wield deny (MFO-B308, 2026-11-08):** `EquipItemDenySupported` / `DeclareEquipDenyItems` /
+    `EquipItemDenied` (`Owned::equipDenyItems` = the list last sent, cleared on a fresh mint).
+    `logistics/EquipAuthority.cpp` `RefreshEquipDeclaration` builds the list (catalog-excluded, non-creature,
+    non-quest WEAPs he carries, minus any form MFO's own declaration names) into `SentDecl::denyItems` (the
+    send-on-change key) and sends it between the scope and the set. `logistics/Upkeep.cpp` `HealExcludedWeapon`
+    makes no equip op for a listed item while `EquipItemDenied` is true (Harbinger strips it). The SOURCES are
+    gated by the same test, `Logistics::NeverWieldWeapon` (logistics/EquipAuthority.cpp, decl Logistics.h): the
+    combat weapon judge (cast/Equip.cpp pick, off-hand pick, alternative tests) and `EquipBestOwnedWeapon` never
+    choose such a weapon, whatever bLootSpecialItems says, so the declaration never names one. What breaks: listing
+    a declared form (Harbinger's deny refuses MFO's own pick), or dropping `denyItems` from the `SentDecl` compare
+    (a picked-up artifact would never reach the list).
     **`EquipWeaponEnabled` / `EquipArmorEnabled` (`:152-153`, helper `EquipFacetEnabled` `:121`; Harbinger ABI v29
     `GetClientFacetPriority`, ClickUp 1dfcuabbh1e, 2026-10-25):** FALSE only when Harbinger is v29+, the equip
     authority is supported (`EquipAuthoritySupported`; without it MFO equips directly and 0 stops nothing) and MFO's own

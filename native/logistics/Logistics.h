@@ -348,6 +348,11 @@ namespace MFO::Logistics {
     float CombatWeaponScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon);
     // The ranged pick score (WeaponScore plus the has-ammo tier): wraps RangedPickScore.
     float CombatRangedScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon, const CombatAmmo& a_ammo);
+    // KEEP BUT NEVER WIELD (marth 2026-10-19, MFO-B308): a catalog-excluded weapon (an artifact / unique) that is
+    // not a creature weapon and whose inventory entry is not quest-bound (`a_entry` may be null: no quest test).
+    // Never a weapon choice of MFO (the combat judge, the owned-upgrade scan), and the per-item deny list
+    // RefreshEquipDeclaration sends to Harbinger (ABI >= 33). Whatever bLootSpecialItems says. Worker road.
+    bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry);
 
     // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
     // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).

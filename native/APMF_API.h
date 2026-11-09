@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v32, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v33, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 32;
+    inline constexpr std::uint32_t kABIVersion = 33;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -2785,6 +2785,61 @@ namespace APMF_API {
 
     // ABI v32 (kCastGuard_Bystanders, a CastGuardFlags bit read through the EXISTING RequestEx / Repoint) adds NO
     // slot: the interface object stays an APMF_API_v31 and `abiVersion` reports 32.
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v33: ch.17 PER-ITEM EQUIP DENY + ch.26 PER-ENTRY STATE
+    // ═════════════════════════════════════════════════════════════════════════════
+    // Two read-or-declare slots on existing claims. No intent, no APMF_Param field, no new struct.
+    // See Docs/APMF_API-REFERENCE.md#abi-v33-item-deny-and-entry-state
+    //
+    // The bound on one per-item deny list. A client denies the few named items it never wants on the
+    // actor (MFO: the artifacts it keeps but never wields), not a catalogue. An overflow keeps the first
+    // kMaxEquipDeny forms and says so in the log (once per handle per distinct overflow): the forms past
+    // the bound are NOT denied.
+    inline constexpr std::uint32_t kMaxEquipDeny = 16;
+
+    // The v33 interface: APMF_API_v31's members verbatim (prefix EXTENSION, v32 added no slot), then TWO
+    // appended slots. BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 33`
+    // (INVARIANTS #14b). An older APMF has neither slot.
+    struct APMF_API_v33 : APMF_API_v31 {
+        // DENY named items to the actor behind an EXISTING kIntent_EquipAuthority claim (`handle`): "never
+        // equip form X on this actor". `forms` are BASE FormIDs of governed items (ARMO / WEAP / AMMO /
+        // LIGH, any other form is stored and never matches an equip). READ AND COPIED synchronously (a
+        // stack array is fine). `count` is clamped to kMaxEquipDeny (logged). `count == 0` or `forms ==
+        // nullptr` CLEARS the list. Applied on the game thread at the next Drain. Stored on the claim
+        // whether or not it owns the channel (SetEquipScope's non-owning semantics) and riding the SAME
+        // snapshot read as the set and the scope.
+        // WHAT A DENIED ITEM GETS, while the claim owns the channel: exactly what an item in a DENIED
+        // category (APMF_EquipScope::denied) gets, whatever the scope owns.
+        //   * The equip seat refuses every engine equip of it on this actor, from every route (the
+        //     player's menu, a script and the console included), ranked like every ch.17 deny (a source
+        //     the user's sliders rank above the claim keeps its equip). Even if it is in the declared set:
+        //     the deny wins, and declaring a denied item is the client's error.
+        //   * The combat selection seat (0x0F CheckShouldEquip) answers NO for it.
+        //   * The enforce pass UNEQUIPS it when the actor wears it (queued, not forced, main thread), on
+        //     the next declaration event: an applied CHANGE of this list on the owning claim is one, like
+        //     a changed scope. An unchanged re-send fires nothing.
+        // Observe-only (INI or the claim's kEquipAuth_ObserveOnly) logs `would-deny` / `would-unequip`
+        // and refuses nothing. The list is DROPPED with its claim (Release, or Harbinger ending it).
+        // A stale/unknown handle, or a handle on a channel other than kIntent_EquipAuthority, is a silent
+        // no-op (SetEquipSet's discipline). Thread-safe (enqueues).
+        void (*SetEquipDenyItems)(Handle handle, const RE::FormID* forms, std::uint32_t count);
+
+        // What ch.26 last did for ONE preferred item of `actor`: GetEquipPreferenceState, per ENTRY.
+        // `form` is the entry's BASE FormID and `slot` its EquipSlot as declared (kEquipSlot_Right /
+        // kEquipSlot_Left = that hand's scorings only, kEquipSlot_Default = the item's newest scoring in
+        // any hand). Returns an EquipPrefState and, when `out` is non-null and `out->size` covers the v22
+        // layout, fills `*out` in the v22 layout with these meanings: `state`, `lastForm` (== `form`, 0
+        // when it was never scored for this claim), `lastSlot`, the three scores and `msSinceScored`
+        // describe THAT item's newest scoring. `lifts` and `withheld` count THAT item's scorings since the
+        // load (saturating). `ownerHandle`, `flags`, `entryCount`, `forcedDenies` and `forceAnomalies` are
+        // the actor's, exactly as GetEquipPreferenceState reports them. Declared = the winning claim has
+        // not scored this item yet (or does not declare it). Released / None as GetEquipPreferenceState.
+        // Read-only, ANY THREAD (a copy under APMF's own lock, no game call). A throw inside returns
+        // kEquipPrefState_None and writes nothing.
+        std::uint32_t (*GetEquipPreferenceItemState)(RE::FormID actor, RE::FormID form, std::uint32_t slot,
+                                                     APMF_EquipPrefInfo* out);
+    };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

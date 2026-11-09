@@ -205,6 +205,7 @@ namespace MFO::APMFBridge {
         o.equipAuthFresh    = true;
         o.equipOwned        = APMF_API::kEquipCat_All;   // APMF's default on a new claim (v9)
         o.equipDenied       = 0;
+        o.equipDenyItems.clear();                         // ABI v33: a new claim carries no per-item deny
         if (a_outFresh) *a_outFresh = true;
         // mode= is APMF's v8 IsEquipAuthorityEnforced read at claim time (seat
         // installed AND bEquipObserveOnly=0), so a Deck log states observe vs
@@ -283,6 +284,51 @@ namespace MFO::APMFBridge {
         if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) return false;
         if (it->second.equipAuthFresh) return false;   // no declaration out yet: APMF denies nothing
         return (it->second.equipDenied & a_categories) != 0;
+    }
+
+    // ── ABI v33 PER-ITEM EQUIP DENY (MFO-B308) ──────────────────────────────────
+    namespace {
+        constexpr std::uint32_t kItemDenyMinAbi = 33;
+    }
+
+    bool EquipItemDenySupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return EquipAuthoritySupported() && api && api->abiVersion >= kItemDenyMinAbi;
+    }
+
+    bool DeclareEquipDenyItems(RE::FormID a_follower, const std::vector<RE::FormID>& a_items) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || api->abiVersion < kItemDenyMinAbi || !Config::g_apmfEquipAuthority.load())
+            return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) {
+            spdlog::error("[equip-auth] {:08X}: DeclareEquipDenyItems without a standing claim -- "
+                          "ClaimEquipAuthority first (deny list NOT sent)", a_follower);
+            return false;
+        }
+        if (a_items.size() > APMF_API::kMaxEquipDeny)
+            spdlog::error("[equip-auth] {:08X}: never-wield deny list has {} items, over kMaxEquipDeny {} -- "
+                          "truncated, Harbinger does NOT deny the excess (MFO's composition bug)",
+                          a_follower, a_items.size(), APMF_API::kMaxEquipDeny);
+        const std::uint32_t count = a_items.size() > APMF_API::kMaxEquipDeny
+                                      ? APMF_API::kMaxEquipDeny
+                                      : static_cast<std::uint32_t>(a_items.size());
+        // COPIED inside the call (APMF_API.h v33), a_items may die. count 0 CLEARS the list.
+        reinterpret_cast<const APMF_API::APMF_API_v33*>(api)->SetEquipDenyItems(
+            it->second.equipAuthHandle, count ? a_items.data() : nullptr, count);
+        it->second.equipDenyItems.assign(a_items.begin(), a_items.begin() + count);
+        return true;
+    }
+
+    bool EquipItemDenied(RE::FormID a_follower, RE::FormID a_item) {
+        if (a_follower == 0 || a_item == 0 || !EquipItemDenySupported() || !IsEquipAuthorityEnforced()) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) return false;
+        if (it->second.equipAuthFresh) return false;   // no declaration out on this handle yet
+        const auto& v = it->second.equipDenyItems;
+        return std::find(v.begin(), v.end(), a_item) != v.end();
     }
 
     bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms) {
