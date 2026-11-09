@@ -25,6 +25,7 @@
 #include "progression/ProgAllocator.h"
 #include "logistics/PlayerGiven.h"   // 86e3faccn: the 'PGIV' player-given relic record
 #include "logistics/Errand.h"        // 86e3t1mx7 (town R2): the 'ERND' errand record
+#include "selftest/SelfTest.h"       // dev builds only: the 'MFST' self-test record (no-op inlines in release)
 #include <cmath>                     // std::isfinite: ERND float ingestion (#11)
 #include "logistics/GemRules.h"   // revert: clear the looted-gear gem probes
 #include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
@@ -585,6 +586,8 @@ namespace MFO {
         // 86e3t1mx7 (kRecErrand/'ERND') -- a SIXTH independent record, same isolation
         // contract: the town errands in progress (written only when one exists).
         WriteErrandRecord(a_intfc);
+
+        SelfTest::CoSave(a_intfc);   // dev builds only ('MFST', selftest/Record.cpp); an empty inline in release
     }
 
     namespace {
@@ -898,6 +901,7 @@ namespace MFO {
                                         // cleared it, same belt-and-braces as g_followers above
         PlayerGiven::ClearRecord();    // 86e3faccn: same belt-and-braces for 'PGIV'
         Logistics::Errand::ClearRestorePending();   // 86e3t1mx7: same belt-and-braces for 'ERND'
+        SelfTest::ClearAll();                       // dev builds only: same belt-and-braces for 'MFST'
 
         std::uint32_t type = 0, version = 0, length = 0;
         std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
@@ -980,6 +984,22 @@ namespace MFO {
                 ReadErrandRecord(a_intfc, version);
                 continue;
             }
+#ifdef MFO_DEV_SELFTEST
+            if (type == kRecSelfTest) {
+                // Dev builds only (selftest/Record.cpp). Same independence contract: a newer record skips
+                // (never aborts). A RELEASE build has no such branch and meets 'MFST' in the unknown-type
+                // skip just below.
+                if (version > kSelfTestVersion) {
+                    spdlog::error("[cosave] SELF-TEST SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- skipped; it WILL BE "
+                                  "DESTROYED if this DLL saves over this file.",
+                                  version, kSelfTestVersion);
+                    g_sawNewerSave.store(true);
+                    continue;
+                }
+                SelfTest::CoLoad(a_intfc, version);
+                continue;
+            }
+#endif
             if (type != kRecFollowers) {
                 spdlog::warn("[cosave] unknown record type {:08X} -- skipped", type);
                 continue;
@@ -1078,6 +1098,9 @@ namespace MFO {
         // ClearTransientState); kept as its own call beside PGIV so the serialized-record
         // contract reads in one place. A load right after this stages them again.
         Logistics::Errand::ClearRestorePending();
+        // Dev builds only ('MFST'): runs, results and the fixture ledger. No engine call (the world is being
+        // replaced; the save being loaded carries its own ledger). An empty inline in a release build.
+        SelfTest::ClearAll();
         // The equip ledger describes a LIVE loadout. On revert the world is
         // about to be replaced, so there is nothing to give back -- but the
         // ledger must not survive to re-equip gear into the next save (#16).

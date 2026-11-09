@@ -24,6 +24,7 @@
 #include "Taunt.h"         // taunt S2: Taunt::Tick (every pump) / Clear
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
+#include "selftest/SelfTest.h" // dev builds only: the self-test runner tick (an empty inline in release)
 #include <cstring>          // [deadtgt] strcmp on the CannotActReason strings
 #include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
@@ -811,6 +812,8 @@ namespace MFO::Scheduler {
         // duration and the early ends) EVERY pump, before the early returns: a taunt must release the same tick its
         // taunter goes down or the party empties, and none of that is a follower service. Pauses with the game.
         Taunt::Tick();
+        SelfTest::Tick();   // dev builds only (native/selftest/, Docs/SELFTEST.md); before the empty-party return: it also
+                            // removes fixtures a load brought in. An empty inline in a release build.
 
         auto& active = Followers::g_active;
         if (active.empty()) return;

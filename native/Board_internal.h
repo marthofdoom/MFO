@@ -159,7 +159,14 @@ namespace MFO::Board {
     // immutable published table, safe on the render thread.
     struct VocabEntry {
         const char* op; Str::K key; ParamKind kind = ParamKind::None;
+#ifdef MFO_DEV_SELFTEST
+        // Dev-build-only entries carry a literal label and NO translation key (Strings_keys.h / the translator
+        // template stay free of dev text); `key` is then an unused placeholder.
+        const char* devLabel = nullptr;
+        const char* label() const { return devLabel ? devLabel : Str::Get(key); }
+#else
         const char* label() const { return Str::Get(key); }
+#endif
     };
 
     // COMBAT and LOGISTICS have DISTINCT vocabularies. The editor shows the set
@@ -246,6 +253,10 @@ namespace MFO::Board {
         { Vocab::kActTaunt, Str::K::Act_Taunt },   // melee-only: the picker offers it only while a melee weapon is in the right hand
         { Vocab::kActPowerAttack, Str::K::Act_PowerAttack },
         { Vocab::kActFlee, Str::K::Act_Flee },
+#ifdef MFO_DEV_SELFTEST
+        // DEV BUILDS ONLY: the self-test runner's standing marker (native/selftest/, Docs/SELFTEST.md).
+        { Vocab::kActDevSelftest, Str::K::Act_Wait, ParamKind::None, "DEV: run self-tests" },
+#endif
     };
     inline constexpr VocabEntry kCondsLogi[] = {
         { Vocab::kCondAlways, Str::K::Cond_Always,                ParamKind::None    },

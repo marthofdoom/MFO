@@ -221,6 +221,15 @@ namespace MFO::Vocab {
     // FOE, Taunt.cpp). MELEE-ONLY: offered, and run, only while a melee weapon is in the right hand. No param.
     // APPENDED; frozen serialization string (#10).
     inline constexpr const char* kActTaunt = "act.taunt";
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY (CMake MFO_DEV_SELFTEST; ClickUp 1dfcuabcqr7, Docs/SELFTEST.md): "DEV: run self-tests".
+    // A STANDING MARKER, never an action: an enabled combat rule holding it turns the self-test runner
+    // (native/selftest/) on for that follower; the Evaluator skips the rule, so it never takes a tick.
+    // Absent from a release build: there the string is an UNKNOWN action -- the FLWR reader keeps it
+    // verbatim, Fire returns FailedOther TRANSPARENT ("unknown action"), and the combat scan falls past it.
+    // APPENDED; frozen serialization string (#10).
+    inline constexpr const char* kActDevSelftest = "act.dev_selftest";
+#endif
 
     // ── LOGISTICS TABLE (DESIGN §4.8) ───────────────────────────────────────
     // A SEPARATE non-combat table (State::logistics() == tables[1]). It runs on

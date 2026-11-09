@@ -128,3 +128,54 @@ jobs:
           name: MFO-build-info
           path: native/build/buildinfo/build-info.txt
           if-no-files-found: error
+
+  # DEV-BUILD SELF-TEST DLL (ClickUp 1dfcuabcqr7, Docs/SELFTEST.md): the same Release build with
+  # -DMFO_DEV_SELFTEST=ON, its OWN job and its OWN, distinctly named artifact (MFO-dll-DEV-SELFTEST), so
+  # the shipped MFO-dll above is never this DLL and never carries the mechanism. Runs on every push (the
+  # #ifdef'd code would otherwise rot unbuilt) and on a plain dispatch; skipped for the splitcheck proof
+  # builds. NEVER ship this DLL.
+  build-dev:
+    if: ${{ inputs.noinline != true && inputs.noopt != true }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ hashFiles('native/vcpkg.json', 'native/vcpkg-configuration.json') }}
+          restore-keys: vcpkg-
+
+      - name: Configure (dev self-test build)
+        run: cmake --preset release -DMFO_DEV_SELFTEST=ON
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      - name: Build
+        run: cmake --build build/release
+
+      - name: Record the built commit
+        run: |
+          git rev-parse HEAD
+          New-Item -ItemType Directory -Force -Path build/buildinfo | Out-Null
+          $dll = (Get-FileHash -Algorithm SHA256 build/release/MFO.dll).Hash.ToLower()
+          "built=$(git rev-parse HEAD) dev_selftest=true dll_sha256=$dll" | Out-File -FilePath build/buildinfo/build-info.txt -Encoding ascii
+
+      - name: Upload DEV DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: MFO-dll-DEV-SELFTEST
+          path: |
+            native/build/release/MFO.dll
+            native/build/release/MFO.pdb
+            native/build/buildinfo/build-info.txt
+          if-no-files-found: error

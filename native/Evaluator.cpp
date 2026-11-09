@@ -909,6 +909,9 @@ namespace MFO::Eval {
         for (int i = std::max(0, a_startIndex); i < static_cast<int>(list.size()); ++i) {
             const auto& g = list[i];
             if (!g.enabled) continue;
+#ifdef MFO_DEV_SELFTEST
+            if (g.actionOpcode == Vocab::kActDevSelftest) continue;   // dev self-test marker: never a scan winner
+#endif
 
             RE::ActorHandle chosen;
             if (IsFoeSelector(g.conditionOpcode)) {
