@@ -212,6 +212,30 @@ namespace MFO::Actuation {
             // logged here. Fall through to the direct-force stream (degrade).
         }
 
+        // BOUND BOW HAND GATE (86e3t1gfx): a bound bow is two-handed, so it needs BOTH hands. A live cast claim (offense
+        // or heal, a dual-cast heal holds both) on either hand denied a direct bound-bow cast in the field (heal claim
+        // held both hands, 107 magicka wasted). Do not cast this lap; transparent, logged once per 10 s.
+        if (BoundBowSpell(a_spell)) {
+            const bool leftHeld  = APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandLeft) ||
+                                   APMFBridge::IsHealCastActiveOnHand(id, APMFBridge::kApmfHandLeft);
+            const bool rightHeld = APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandRight) ||
+                                   APMFBridge::IsHealCastActiveOnHand(id, APMFBridge::kApmfHandRight) ||
+                                   APMFBridge::IsHealCastDual(id);
+            if (leftHeld || rightHeld) {
+                static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_boundHeldLog;   // worker-serial
+                auto& last = s_boundHeldLog[(static_cast<std::uint64_t>(id) << 32) | spellID];
+                const auto t = std::chrono::steady_clock::now();
+                if (t - last >= std::chrono::seconds(10)) {
+                    last = t;
+                    spdlog::info("[buff] {:08X} {} ({:08X}): bound bow NOT cast this lap -- a live cast claim holds the {} hand(s) "
+                                 "(a bow takes both); no magicka spent, retried next lap", id,
+                                 a_spell->GetName() ? a_spell->GetName() : "?", spellID,
+                                 leftHeld && rightHeld ? "left and right" : leftHeld ? "left" : "right");
+                }
+                return SelfCast::Declined;
+            }
+        }
+
         // EVERYTHING PAST HERE IS THE DIRECT SELF STREAM (CastSpellImmediate, no hand animation). On the combat
         // table that is the residue the field log must name (substrate S1, cast/Unanimated.cpp).
         NoteUnanimatedRoadWhy(a_follower, "self-stream", a_spell, nullptr);

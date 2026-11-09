@@ -2568,3 +2568,6 @@ Verbatim (reviewer): C2 as written lists CSTY ids per stance, and ch.18 needs go
 
 ### MFO-B563 (SEV-5, OPEN, classes/ClassTable.cpp flags, against bc39bee) -- three package-policy leftovers
 Verbatim (reviewer): Ebony Warrior has kDisengage without kSpellRange. Saint has kNearPlayer while the ruling says it "leads vs undead". T1 default gambit sets exist while the ruling says "T1 behaves vanilla". Reasoning: all three are policy for C8 (packages) and C12 (defaults), no behaviour today.
+
+### MFO-B564 (SEV-4, OPEN, cast/BuffRoad.cpp ChooseBuffRoad BoundItem case, against the fix/mfo-bound-bows commit, ClickUp 86e3t1gfx) -- does the claim road work for bound SWORDS?
+Verbatim (coordinator brief): "Bound SWORDS: leave them unchanged on the claim road. Note that 'does the claim road work for bound swords?' is unverified." Reasoning: APMF ctcensus shows the engine builds no BoundItem caster for bows and its combat inventory scores Bound Sword, but no field log proves a bound-sword claim fires and the sword lands in hand. If a sword claim also sits unfired, give kBoundWeapon swords the same direct road (BoundBowSpell generalises). In-game test: cast a bound sword in combat via a gambit and watch for `[buff] ... CLAIM` followed by an observed cast within ~3.5 s.

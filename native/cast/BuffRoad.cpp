@@ -226,6 +226,21 @@ namespace MFO::Actuation {
         return shape == SpellShape::Summon || shape == SpellShape::Reanimate;
     }
 
+    // A BOUND BOW / CROSSBOW spell (MFO ClickUp 86e3t1gfx): any kBoundWeapon effect whose associatedForm is a bow or
+    // crossbow (the same field EquipAuthority's LiveBoundWeapons reads). The engine builds NO BoundItem combat caster
+    // for these (APMF ctcensus "NO caster was built"), so a claim for one never fires.
+    bool BoundBowSpell(RE::SpellItem* a_spell) {
+        if (!a_spell) return false;
+        for (auto* eff : a_spell->effects) {
+            if (!eff || !eff->baseEffect) continue;
+            const auto& d = eff->baseEffect->data;
+            if (d.archetype != RE::EffectSetting::Archetype::kBoundWeapon) continue;
+            auto* w = d.associatedForm ? d.associatedForm->As<RE::TESObjectWEAP>() : nullptr;
+            if (w && (w->IsBow() || w->IsCrossbow())) return true;
+        }
+        return false;
+    }
+
     // The static (spell-record-only) fallbacks of ChooseBuffRoad, shared with the board's spell picker
     // (cast/SpellSupport.cpp) so the two can never disagree. Declared in Actuation.h.
     // A SELF cast of a NON-kSelf, non-placement buff (marth 2026-10-05: "a self cast is valid if its needed, just
@@ -340,6 +355,10 @@ namespace MFO::Actuation {
         // the claim was judged for: the 55-light spam shape. Direct.
         if (const char* why = BuffAmbiguousRowWhy(arch))
             return say(BuffRoad::DirectNoSeat, why);
+        // A documented per-kind road choice, not a fallback: the claim would sit unfired every lap.
+        if (BoundBowSpell(a_spell))
+            return say(BuffRoad::DirectNoSeat, "bound bow: the engine builds no BoundItem caster for bows (ctcensus), "
+                                               "direct road");
         const auto delivery = a_spell->GetDelivery();
         if (!placement) {
             if (const char* why = BuffAimedLightWhy(a_spell, arch))

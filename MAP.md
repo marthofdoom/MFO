@@ -821,6 +821,7 @@ per concern:
   offense spell, no controller, or no Harbinger keeps the fan (labelled). **R5** no code path was removable: a combat summon reaches `CastSummonOnce` only when `ChooseBuffRoad`
   said not-Claim (no controller, ABI < 19, ambiguous row, bCastSelf off, Harbinger absent); it now logs why. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B269..B276 (CastOn.cpp is 1742 lines). **What breaks if you change this:** the sinks' `g_firingRule` gate
   (an OOC caller reaching `UnanimatedWhy` mints/releases heal claims); `GetHealCastTarget`'s self->0 (a self heal claim would look like another recipient and be re-claimed every lap).
+- BOUND BOWS (ClickUp 86e3t1gfx): `BoundBowSpell` (`cast/BuffRoad.cpp:232`) = a kBoundWeapon effect whose associatedForm is a bow / crossbow; `ChooseBuffRoad` answers DirectNoSeat for it (`BuffRoad.cpp:359`, the engine builds no BoundItem caster for bows), and `CastSelfDirect` (`cast/DirectSelf.cpp:215`) declines the direct bound-bow cast, logged, while a live offense / heal claim holds either hand. Bound swords still take the claim road (UNVERIFIED in game, MFO-B564).
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`

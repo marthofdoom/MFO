@@ -569,6 +569,9 @@ namespace MFO::Actuation {
         std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell,
                                                RE::Actor* a_recipient = nullptr);
         bool BuffPlacementSpell(RE::SpellItem* a_spell);
+        // BoundBowSpell: a kBoundWeapon effect whose associatedForm is a bow / crossbow (86e3t1gfx). ChooseBuffRoad answers
+        // DirectNoSeat for it (the engine builds no BoundItem combat caster for bows); CastSelfDirect gates its cast on both hands.
+        bool BoundBowSpell(RE::SpellItem* a_spell);
         // BuffUpTransparent: true when the claim road would take this fire-and-forget buff but it is
         // already up on the recipient (a main-thread-latched read), so CastOn's self / ally fork returns
         // transparent BEFORE commitPreempt (a lower-ranked claim must not be torn down every lap, review F2).
