@@ -30,7 +30,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 
 ### MFO-B1a — residuals from the MFO-B1 review (fix/mfo-b1-prepare-hand)
 - **SEV-3 (separate brief):** `APMFBridge::WeaponHandActive` (apmf/Equip.cpp:65) reports false for a sword in the right hand when a heal holds the left (Read() grips Caster), so `PlanCastHand` yields EitherFree/DualCast and `ResolveCastHand` (cast/Hands.cpp ~:1462-1505) can plan RIGHT over a weapon. `Prepare(a_rightHand)` now refuses (Debounced) as a backstop, but the plan still claims the right hand APMF-side. Fix upstream, not in Loadout.
-- **SEV-3:** the Scheduler H3 release (`Scheduler.cpp:2085`, `Loadout::ReleaseSpell(id)`) is LEFT-only now, so a right-hand offense spell MFO equipped is taken back only by `ReleaseSpellIf`, `Restore` or `ClearTransientState`, not at H3. Needs `ReleaseSpell(id, true)` there (outside the MFO-B1 file boundary).
+- **FIXED (same branch):** the Scheduler H3 release (`Scheduler.cpp:2085`) now calls `Loadout::ReleaseSpell(id, true)`, so a right-hand offense spell MFO equipped is taken back at H3 too. `ReleaseSpell`'s other callers stay LEFT-only.
 - **SEV-4:** right-target "already holding" accepts the spell in either hand (non-heal callers).
 - **SEV-4:** `ReleaseHands` side effects: (a) `g_equipClock` is erased on a right-only release and the grace clock is shared between hands; (b) the right record is erased even when the take-back is skipped (orphan); (c) the left take-back does not guard a right OFFENSE copy of the same spell.
 

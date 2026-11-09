@@ -2082,7 +2082,7 @@ namespace MFO::Scheduler {
         // this tick is kept and driven on by HealSustainLap; its hand(s) are exempt from the release below.
         const unsigned healHeld = Actuation::HealSustainLap(f, matchedCast);
         if (!castSeen) {
-            if (healHeld == 0) Loadout::ReleaseSpell(id);   // a held heal's spell stays in hand
+            if (healHeld == 0) Loadout::ReleaseSpell(id, /*a_includeRight=*/true);   // a held heal's spell stays in hand; MFO-B1: the right-hand offense spell too
             // Crisp release of the APMF offense-cast facet-CLAIM (per-cast, ch.8b
             // kIntent_Cast, PORTED feat/offense-cast-seats off the retired ch.8
             // kIntent_SelectSpell claim this call used to release) the moment no
