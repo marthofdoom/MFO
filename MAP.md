@@ -1746,7 +1746,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **EQUIPMENT-LAYER CONFLICT, CLOSED by MFO-B1 (`fix/mfo-b1-prepare-hand`):** `Loadout::Prepare` now takes
   `a_rightHand` (default LEFT, unchanged). `CastOn` passes it for a RIGHT-only offense plan (`!healClaim && handPlan.right && !handPlan.left`):
   the spell goes into `RightHandSlot()`, the left hand and its yield are untouched, no gear debt; exact-mode deselect now targets
-  the OTHER hand's spell and skips one a heal claim / live offense claim holds. A DualCast plan still equips the LEFT only.
+  the OTHER hand's spell and skips one a heal claim / an offense claim naming that spell holds (`CastLockClaimStamp` / proxy). A right target refuses (Debounced) over a right-hand weapon; `ReleaseSpell(id, a_includeRight=false)` is LEFT-only. A DualCast plan still equips the LEFT only.
   Right-hand MFO spells are tracked in `g_mfoSpellRight` (take-back in `ReleaseSpell`/`ReleaseSpellIf`/`Restore`). `DualCast` may also preempt, but only when BOTH hands are takeable (checked
   as a pure predicate before either is committed, so a released claim is never spent for nothing).
     make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the

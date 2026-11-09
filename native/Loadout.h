@@ -197,7 +197,8 @@ namespace MFO::Loadout {
     // what let one drain ~1000 magicka -- the condition had gone false and the
     // spell was still there. A gambit spell is held only while its rule wants
     // it. No-op when MFO equipped nothing.
-    void ReleaseSpell(RE::FormID a_actorID);
+    // a_includeRight (MFO-B1): also take back the spell MFO put in the RIGHT hand. Default LEFT only.
+    void ReleaseSpell(RE::FormID a_actorID, bool a_includeRight = false);
 
     // Start the cast cooldown for this follower: the spell leaves their hand
     // and does not come back until it expires. Called after ANY gambit cast --

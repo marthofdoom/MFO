@@ -407,6 +407,14 @@ namespace MFO::Loadout {
             return Ready::AlreadyReady;
         }
 
+        // MFO-B1 (review SEV-2): a RIGHT target never displaces a weapon. Read() reports Grip::Caster whenever
+        // EITHER hand holds a spell, so a heal in the left and a sword in the right reads as Caster and would
+        // reach the Caster branch's EquipSpell: test the right hand's object itself, before any equip.
+        if (a_rightHand && hands.right && hands.right->As<RE::TESObjectWEAP>()) {
+            a_why = "right hand holds a weapon -- not displacing it";
+            return Ready::Debounced;
+        }
+
         auto existing = g_debt.find(id);
 
         // Already holding a DIFFERENT spell (alreadyHolding was false above, so
@@ -470,16 +478,22 @@ namespace MFO::Loadout {
                     // claim IS the right hand's cast (the per-hand heal road's second recipient).
                     // MFO-B1: the OTHER hand is the one to neutralize (the target hand just took the gambit
                     // spell), and never while a claim of ours holds it: a heal claim (or its proxy) on that
-                    // hand, or a live offense claim there (IsOwnedCastActiveOnHand), IS that hand's cast.
+                    // hand, or an offense claim naming that very spell there, IS that hand's cast.
                     if (castLvl >= 4) {
                         auto* otherForm = a_rightHand ? hands.left : hands.right;
                         if (otherForm && otherForm != a_spell) {
                             const auto oid   = otherForm->GetFormID();
                             const auto ohand = a_rightHand ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+                            // An offense claim holds that hand only when ITS spell (or proxy) is the one
+                            // in it: this tick's own dual claim fills both slots, and the follower's own
+                            // spell in the other hand must still be deselected (the 2026-09-02 regression).
+                            const auto ohandIdx = a_rightHand ? Actuation::kHandLeft : Actuation::kHandRight;
                             const bool otherClaim =
                                 APMFBridge::GetHealCastSpell(id, ohand) == oid ||
                                 APMFBridge::GetHealCastProxy(id, ohand) == oid ||
-                                APMFBridge::IsOwnedCastActiveOnHand(id, ohand);
+                                APMFBridge::GetOffenseCastProxy(id, ohand) == oid ||
+                                Actuation::CastLockClaimStamp(id, ohandIdx, oid) !=
+                                    std::chrono::steady_clock::time_point{};
                             if (!otherClaim)
                                 if (auto* other = otherForm->As<RE::SpellItem>())
                                     a_actor->DeselectSpell(other);
@@ -719,8 +733,10 @@ namespace MFO::Loadout {
         }
     }
 
-    void ReleaseSpell(RE::FormID a_actorID) {
-        ReleaseHands(a_actorID, true, true);
+    void ReleaseSpell(RE::FormID a_actorID, bool a_includeRight) {
+        // LEFT only unless the caller opts in (MFO-B1 review SEV-3): this runs on every cast fire
+        // (StartCooldown) and a left heal firing must not strip a right offense spell mid-charge.
+        ReleaseHands(a_actorID, true, a_includeRight);
     }
 
     void ReleaseSpellIf(RE::FormID a_actorID, RE::FormID a_spell) {
