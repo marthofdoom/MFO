@@ -84,10 +84,10 @@ The single source of truth for ordering. Everything below depends on it.
   runs each VM init).
 - **`kInputLoaded`** (`:263`): `Config::EnsureMcmDefaults()` — seeds the MCM
   store *before* MCM Helper reads it at its own kDataLoaded (bind-on-first-load).
-- **`kDataLoaded`** (`:276`) — the once-per-launch install order (comment
+- **`kDataLoaded`** (`:354`) — the once-per-launch install order (comment
   `:277`): `EnsureMcmDefaults` → `Config::Read` → `Forms::Resolve` →
   `Gait::Apply` → `Catalog::Load` → `Progression::Init` → `ProgAllocator::Init`
-  → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
+  → `Classes::OnDataLoaded` (`plugin.cpp:409`; class ESL presence + table self-check) → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
   `APMFBridge::Acquire` (APMF cast-select client; null-degrades if APMF absent) →
   `Diagnostics::RefreshFatalModules` (APMF.dll's range for the `[fatal]` line) →
   `Followers::ResolveQuirks` → `MainThread::Install` → `Targeting::InstallHook`
@@ -8473,6 +8473,34 @@ on the main thread specifically so combat-thread hooks only READ settled pointer
 never do a data-handler lookup from those hooks. `EnsurePlayerSetup` (`:96`) grants the
 Field Orders power (idempotent via `HasSpell`) ← `plugin.cpp:356` (kPostLoadGame only,
 after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP retries.
+
+---
+
+## 9. Class add-on — `classes/` (cards C1 + C2, 2026-11-09)
+
+The DLL half of the class tree (`MFO_Classes.esl` = card C7, NOT shipped yet). **Inert unless the ESL is present AND
+`bClassTree = 1`**; then today's three classes (Melee/Ranged/Mage, `State.h` `combatClassOverride`) behave exactly as before.
+C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at kDataLoaded, table counts). No co-save (C3), XP
+(C4), passives (C6) or GUI (C10) yet. Plan: build-plan cards C1..C14, ClickUp 86e3dhbd3.
+
+- `classes/Classes.h` — the ONE public header: `Id` (35 classes, enum order = bit index of every future mastered/unlocked bitset,
+  so **append-only**), `ClassDef`, `DefaultGambit`, `UnlockRule`, `Present()/Active()/Strict()`, `Get/FindBySlug/UnlockSatisfied/T1ForOverride`,
+  `OnDataLoaded()`. Declares the PRESENCE CONTRACT for C7: an FLST whose first entry is a keyword with editor-id suffix
+  `_MFOClassesManifest` (NOT `_MFOAddonManifest`, or Progression would register the class ESL as a progression add-on).
+- `classes/Classes_internal.h` — `kTable` extern + `detail::DetectManifest/SelfCheck`.
+- `classes/ClassTable.cpp` — the constexpr 35-class table with `static_assert(TableIsConsistent())` (id == index, T1 roots == combatClassOverride
+  1..3, parents are the tier below). Slugs match the review page db doc ids. Default gambits use `Vocab::k*` constants only; hostile cast rows use AUTO (subject 0), never `Subject::Enemy` (rung 0 of `ResolveCastTarget`, ignores the row's foe); enemy-control rows carry `pendingRuling` (base task 1dfcuabcr0d; also the T1 rows, marth: T1 keeps today's kit; C12 must not apply them); a missing opcode
+  is a `Todo()` row ("todo.*" + plan card) that is never applied.
+- `classes/Classes.cpp` — accessors, `UnlockSatisfied` (pure; C5 supplies the mastered mask), and the load-time self-check (counts per
+  tier 3/9/14/8/1, 6 hybrids, every parent resolves). `static_assert`s pin `CombatStyle::Stance` 1/2/3 = Melee/Ranged/Cast.
+- `classes/Presence.cpp` — the manifest scan (the `Progression.cpp` Init precedent) and the `Active()/Strict()` gates.
+- INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`.
+- **Depended-on-by:** nothing yet. Later cards read `kTable` (C3 bitsets, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI).
+- **What breaks if you change this:** (1) reordering/inserting a class in `Id` re-numbers every persisted mastered/unlocked bit once C3 ships
+  (co-save, tier A); (2) renumbering the T1 `rootT1` ordinals breaks the single-source-of-truth with `combatClassOverride` (frozen, `State.h`);
+  (3) changing a slug breaks the review page ids and the C7 ESL record names; (4) renaming the manifest suffix without the C7 generator
+  strands the ESL as "absent" (the add-on goes silently inert, one info line); (5) making anything here run when `Active()` is false breaks the
+  "bClassTree = 0 / ESL absent = today's three classes exactly" contract.
 
 ---
 

@@ -131,6 +131,8 @@ namespace MFO::Config {
             else if (a_key == "bProximityTrading")  { setB(g_proximityTrading); return; }   // default OFF; INI-only
             else if (a_key == "bFollowerCatchUp")   { setB(g_followerCatchUp); return; }   // default ON; INI-only
             else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
+            else if (a_key == "bClassTree")         { setB(g_classTree);     return; }   // default ON; INI-only; class add-on tree (classes/)
+            else if (a_key == "bClassStrict")       { setB(g_classStrict);   return; }   // default ON; INI-only; strict adherence (needs the tree)
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
             else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
             else if (a_key == "iFencePerkID")       { setU(g_fencePerkID);                 return; }   // R6: the follower's fence perk (default vanilla 0x00058F79)
@@ -437,6 +439,8 @@ namespace MFO::Config {
             g_followerCatchUp    = true;    // left-behind followers are moved to the player after a world transition -- ON
             g_proximityTrading   = false;   // the pre-town proximity trade -- OFF (marth 2026-10-26), INI-only
             g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
+            g_classTree          = true;    // class add-on tree -- ON (marth 2026-10-27); inert without MFO_Classes.esl
+            g_classStrict        = true;    // strict adherence to the class -- ON with the tree (marth 2026-10-27)
             g_errandMinSellGold  = 100;
             g_errandMinPurse     = 200;
             g_errandSettleSec    = 10.0f;

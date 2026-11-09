@@ -787,6 +787,11 @@ namespace MFO::Config {
     //   bTownToasts: one informational HUD corner line when a follower begins trading at a shop
     //     ("Auri is trading with Niranye."). One-shot per errand, never per tick. OFF by default (marth 2026-10-19); feedback only, drives nothing.
     inline std::atomic<bool>  g_townToasts{ false };
+    //   bClassTree / bClassStrict (class add-on, classes/; marth 2026-10-27): the class TREE is an optional part, ON by default, and
+    //     inert unless the add-on ESL (MFO_Classes.esl) is loaded. OFF (or ESL absent) = today's three classes exactly. bClassStrict =
+    //     strict adherence to the equipped class; it only means anything while the tree is active. INI-only (no MCM key).
+    inline std::atomic<bool>  g_classTree{ true };
+    inline std::atomic<bool>  g_classStrict{ true };
     inline std::atomic<int>   g_errandMinSellGold{ 100 };
     inline std::atomic<int>   g_errandMinPurse{ 200 };
     inline std::atomic<float> g_errandSettleSec{ 10.0f };
