@@ -1781,6 +1781,10 @@ namespace MFO::Scheduler {
                 chain += std::format("{}{}({})", chain.empty() ? "" : ",",
                                      choice.ruleIndex,
                                      satisfiedEquip ? "satisfied" : outcome.reason.c_str());
+                // G10: a skipped rule's "will not work" reason reaches the board (lastFailReason is otherwise written for the stopping rule only).
+                if (outcome.reason.starts_with("will not work:"))
+                    if (auto rr = g_followers.find(id); rr != g_followers.end() && choice.ruleIndex < static_cast<int>(rr->second.combat().size()))
+                        rr->second.combat()[choice.ruleIndex].lastFailReason = outcome.reason;
                 start = choice.ruleIndex + 1;
                 continue;
             }

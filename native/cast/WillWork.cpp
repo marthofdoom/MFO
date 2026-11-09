@@ -2,7 +2,7 @@
 // "Needs to recognize when a spell will never work, that gambit is skipped if it wont work due to the
 // level difference", "Turn undead needs the undead qualifier obviously").
 //
-// WillWork(caster, spell, target) -> {Yes, No(reason), Unknown, Measuring}. A PURE READ: it mutates no actor
+// WillWork(caster, spell, target) -> {Yes, No(reason), Unknown}. A PURE READ: it mutates no actor
 // and no engine state. Two checks, per effect of the spell:
 //   (a) LEVEL CAP. For the level-capped archetypes (Calm, Frenzy, Demoralize/Fear, Rally, Turn Undead,
 //       Reanimate) the effect magnitude IS the highest level it affects. Effective cap = the effect magnitude
@@ -20,10 +20,10 @@
 // THREADING (the SelfStatus mirror shape). TESCondition and the perk entry point read live actor state, so the
 // measurement runs on the MAIN thread, one MainThread::Post per (caster, spell, target) triple. The worker
 // (Fire, on the AddTask job worker) only reads the mutex-guarded mirror. Fresh (<= kTrustSec) answers are
-// served; an older one posts a refresh. While the FIRST answer of a gated spell is in flight (<= kHoldSec) the
-// verdict is Measuring (Fire holds that one lap transparently so the first cast is not wasted); a lost post
-// (a load drops the pump queue) is re-asked after kAskRetrySec and, past kHoldSec, the verdict is Unknown, the
-// rule fires as it did before this card, with ONE loud log line per spell. No pump (VR): Unknown, never a
+// served; an older one posts a refresh. With no fresh answer (never measured, stale, or a lost post, a load drops
+// the pump queue, re-asked after kAskRetrySec) the verdict is Unknown and the rule FIRES as it did before this
+// card, never held (a hold would invert priority across every CTDA-carrying spell), with ONE loud log line per
+// spell. Fire's call is itself the prefetch: the first lap per triple fires unchecked, the verdict is ready for the next. No pump (VR): Unknown, never a
 // worker-side read. The mirror ages out by itself (no co-save, no ResetAllState hook; WillWorkClear exists
 // for a future caller).
 //
@@ -50,12 +50,10 @@ namespace MFO::Actuation {
         // Sizes from the real cadence (principle 9). A follower's cast gambit re-asks on the cast cadence
         // (seconds apart), a target's level never changes and a condition ("is undead") rarely does, so a
         // verdict is trusted for kTrustSec and refreshed in the background once kRefreshSec old. The first
-        // answer of a gated spell arrives within a pump drain (a frame or two); kHoldSec is a generous bound
-        // before the hold gives up and the rule fires as it did before G10.
+        // answer arrives within a pump drain (a frame or two).
         constexpr double kRefreshSec  = 2.0;
         constexpr double kTrustSec    = 6.0;
         constexpr double kAskRetrySec = 1.5;
-        constexpr double kHoldSec     = 3.0;
         constexpr std::size_t kMaxEntries = 256;
 
         struct Key {
@@ -75,7 +73,6 @@ namespace MFO::Actuation {
             std::string       reason;
             Clock::time_point stamp{};      // when it finished (epoch = never measured)
             Clock::time_point asked{};      // when the refresh in flight was posted (epoch = none)
-            Clock::time_point firstAsk{};   // when the unanswered ask streak began (epoch = none)
         };
         std::mutex                                 g_mx;
         std::unordered_map<Key, Entry, KeyHash>    g_cache;
@@ -118,8 +115,12 @@ namespace MFO::Actuation {
                 std::string blocked;
                 if (LevelCapped(base->GetArchetype())) {
                     float cap = e->effectItem.magnitude;
+                    // ARITY IS PER ENTRY POINT: EP 0x1D (kModSpellMagnitude) is (owner, spell, TARGET REF, &value);
+                    // cast/Summon.cpp's EP 0x44 is (owner, spell, &value). Disassembly: 1.6.1170 0x5abe68 / 0x5ac400 /
+                    // 0x5ac414 pass r8=spell, r9=target, [rsp+0x20]=&magnitude (1.5.97 0x53dfa0 the same).
                     RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellMagnitude,
-                                                        a_caster, static_cast<RE::MagicItem*>(a_spell), &cap);
+                                                        a_caster, static_cast<RE::MagicItem*>(a_spell),
+                                                        static_cast<RE::TESObjectREFR*>(a_target), &cap);
                     cap += WillWorkClassLevelBonus(a_caster, a_spell, e);
                     const auto lvl = a_target->GetLevel();
                     if (static_cast<float>(lvl) > cap)
@@ -159,7 +160,6 @@ namespace MFO::Actuation {
                     e.reason   = r.reason;
                     e.stamp    = Clock::now();
                     e.asked    = Clock::time_point{};
-                    e.firstAsk = Clock::time_point{};
                 }
                 if (changed)   // verdict transitions only: a stable pair logs once, not every refresh
                     spdlog::info("[willwork] caster {:08X} spell {:08X} -> target {:08X}: {}{}", a_key.caster,
@@ -178,6 +178,7 @@ namespace MFO::Actuation {
     void WillWorkClear() {
         std::scoped_lock lk(g_mx);
         g_cache.clear();
+        g_loggedUnknown.clear();
     }
 
     WillWorkResult WillWork(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target) {
@@ -203,25 +204,21 @@ namespace MFO::Actuation {
             const bool fresh    = measured && Age(e.stamp, now) <= kTrustSec;
             if (fresh) { out.verdict = e.verdict; out.reason = e.reason; }
             const bool stale    = !measured || Age(e.stamp, now) >= kRefreshSec;
+            // A LOST post: an ask older than kAskRetrySec that never answered (the first lap's ask is not a loss).
+            const bool lost     = !fresh && Set(e.asked) && Age(e.asked, now) >= kAskRetrySec;
             if (stale && (!Set(e.asked) || Age(e.asked, now) >= kAskRetrySec)) {
                 e.asked = now;
-                if (!Set(e.firstAsk)) e.firstAsk = now;
                 ask = true;
             }
-            if (!fresh) {
-                // No usable answer. Hold (Measuring) while the ask streak is young; past kHoldSec the post is
-                // presumed lost and the rule fires as before (Unknown), loudly, once per spell.
-                if (Set(e.firstAsk) && Age(e.firstAsk, now) < kHoldSec) out.verdict = WillWorkVerdict::Measuring;
-                else {
-                    out.verdict = WillWorkVerdict::Unknown;
-                    logUnknown  = g_loggedUnknown.insert(key.spell).second;
-                }
+            if (!fresh) {   // no usable answer: Unknown, the rule fires (loudly, once per spell)
+                out.verdict = WillWorkVerdict::Unknown;
+                logUnknown  = lost && g_loggedUnknown.insert(key.spell).second;
             }
         }
         if (ask) PostMeasure(key);   // outside the mutex: Post takes its own queue lock
         if (logUnknown)
             spdlog::warn("[willwork] spell {:08X}: no fresh measurement for caster {:08X} -> target {:08X}; the rule "
-                         "fires unchecked (logged once per spell)", key.spell, key.caster, key.target);
+                         "fires unchecked (a measurement post was lost; logged once per spell)", key.spell, key.caster, key.target);
         return out;
     }
 

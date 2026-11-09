@@ -494,10 +494,10 @@ namespace MFO::Actuation {
     //   Unknown -> not measured yet / mirror stale / no pump (VR). The caller does NOT skip.
     // Reads live actor state (TESCondition, the perk entry point), so the measurement runs on the MAIN
     // thread (MainThread::Post); the worker only reads a mutex-guarded mirror keyed (caster, spell, target).
-    // `Measuring` is Unknown with the first measurement of a GATED spell still in flight (<= 3 s): Fire
-    // holds that one lap transparently so the first cast cannot be wasted. A pure read; never mutates.
+    // A call is also the prefetch: an unmeasured triple posts its measurement and answers Unknown (fire).
+    // A pure read; never mutates.
     // WillWorkClassLevelBonus is the hook for class passives that add levels (card C6): returns 0 today.
-    enum class WillWorkVerdict : std::uint8_t { Yes, No, Unknown, Measuring };
+    enum class WillWorkVerdict : std::uint8_t { Yes, No, Unknown };
     struct WillWorkResult { WillWorkVerdict verdict = WillWorkVerdict::Unknown; std::string reason; };
     WillWorkResult WillWork(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target);
     float WillWorkClassLevelBonus(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect);
