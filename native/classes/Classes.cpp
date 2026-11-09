@@ -79,7 +79,6 @@ namespace MFO::Classes {
                 }
             }
             const auto& u = d.unlock;
-            if ((u.allOf & u.poolA) || (u.allOf & u.poolB) || (u.poolA & u.poolB)) bad(d, "unlock pools overlap");
             if (std::popcount(u.poolA) < u.needA || std::popcount(u.poolB) < u.needB) bad(d, "unlock needs more than its pool holds");
             if (d.gambitCount == 0 && d.tier > 1) bad(d, "no default gambits");
             for (int g = 0; g < d.gambitCount; ++g) {
