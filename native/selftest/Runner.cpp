@@ -392,7 +392,7 @@ namespace MFO::SelfTest {
         }
 
         void ServiceFollower(RE::Actor* a, RE::FormID a_id, FollowerState& a_st, float a_dt, bool a_blockStarts) {
-            const bool inCombat = a->IsInCombat();
+            bool       inCombat = a->IsInCombat();   // a spawn run may raise it for the grace window below
             auto       it       = g_runs.find(a_id);
             if (it == g_runs.end()) {
                 if (a_blockStarts) return;
