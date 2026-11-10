@@ -443,6 +443,36 @@ namespace MFO::ProgAllocator {
                     spdlog::info("[hms-parity] {:08X} retro-pending award: cap max(credit {:.1f}, "
                                  "award {:.1f} x {:.3f}) = {:.1f}", id, creditBefore, engineAward, ratio, cap);
                 }
+                // ABOVE-PARITY GATE (ClickUp 86e3jw3b4, marth 2026-10-04: "Followers who
+                // join with a higher number get the same treatment as static followers").
+                // A follower whose HELD total already sits at or above the player's total
+                // (he brought pre-MFO engine levels in at the NPC rate) gets the fixed-stat
+                // follower's treatment, adapted to a leveling follower: his gains are
+                // WITHHELD until the player's total catches up, then he tracks it. The
+                // headroom is the very quantity the fixed-stat grant spends
+                // (Poll.cpp: max(0, playerTotal - (baseline + cumulative))), measured
+                // against the same player sample (g_playerHmsTotalLast, the level-up
+                // sample the total cap uses). TOTAL, not per pool: the class profile
+                // shapes the split. Only an award is held back; no stat is lowered here
+                // (the adopted-total cap below is the only road that can lower one).
+                // The held-back points go to hmsWithheld like any parity withhold, so the
+                // W invariant holds and the engine's next re-slam does not re-measure
+                // them. The credit is left as the min() leaves it: once the player is
+                // ahead, the headroom (not the banked credit) bounds each award, so the
+                // total never passes the player's. No sample yet (0) or a bad one: no gate.
+                const float pTotGate = g_playerHmsTotalLast;
+                if (std::isfinite(pTotGate) && pTotGate > 0.0f) {
+                    float heldTot = 0.0f;
+                    for (int p = 0; p < 3; ++p) heldTot += a_st.hmsBaseline[p] + a_st.hmsCumulative[p];
+                    const float headroom = std::max(0.0f, pTotGate - heldTot);
+                    if (headroom < std::min(engineAward, cap)) {
+                        spdlog::info("[hms-parity] {:08X} above player parity: held total {:.0f} vs player {:.0f} "
+                                     "-> headroom {:.1f} (award {:.1f}, credit cap {:.1f}); the rest is withheld "
+                                     "until the player catches up",
+                                     id, heldTot, pTotGate, headroom, engineAward, cap);
+                        cap = headroom;
+                    }
+                }
                 const float applied      = std::min(engineAward, cap);
                 const float withheld     = engineAward - applied;
                 a_st.hmsParityCredit = std::max(0.0f, creditBefore - applied);

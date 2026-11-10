@@ -5832,7 +5832,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `baseClass=3` and reveals which ClassDef the `clsId` resolved to.
 - **§HMS ADOPTED-TOTAL CAP (2026-11-01, ClickUp 1dfcuabc4dv, marth "Cap adopted total";
   REVERSES the 2026-10-01 "adopt, never take back" for the TOTAL only; NO co-save change, PRGN
-  stays v8).** In `RecomputeHMS` just before the HOLD (`progression/Hms.cpp:546`), on every road
+  stays v8).** In `RecomputeHMS` just before the HOLD (`progression/Hms.cpp:577`), on every road
   that reaches it (so the first poll after a load SWEEPS an old save, and every award is trimmed),
   for every captured record: held total = Σ (baseline + cumulative) is capped at the PLAYER's
   total = `g_playerHmsTotalLast` (review round 2, marth: no temporary dip OR rise may move it): the
@@ -5864,6 +5864,28 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   player base per poll for the cap (a racemenu/respec/SetAV dip cuts a leveling follower for good).
   **Downgrade:** an MFO build older than this one floors target at the baseline, so it puts the
   cut back up on its first hold.
+- **§HMS ABOVE-PARITY GATE (2026-11-09, ClickUp 86e3jw3b4, marth 2026-10-04 "Followers who join
+  with a higher number get the same treatment as static followers"; NO co-save change, PRGN stays
+  v8).** Inside the parity block of `RecomputeHMS` (`progression/Hms.cpp:446`, leveling road only,
+  `a_grantBudget <= 0`): the applied award is also capped at the HEADROOM
+  `max(0, g_playerHmsTotalLast - Σ(hmsBaseline + hmsCumulative))`, the same quantity the
+  fixed-stat grant spends (`progression/Poll.cpp` caughtUp/backfill), on the same player sample
+  the total cap uses. PARITY = the player's base H+M+S TOTAL at the last level-up vs the follower's
+  HELD total; never per pool (the class profile shapes the split). So a follower who joins above
+  the player is frozen (every award withheld into `hmsWithheld`, W invariant kept) until the
+  player's total catches up, then tracks it. Nothing is lowered by the gate (only the cap below
+  lowers). No sample (0) or a non-finite one: no gate. The credit is still spent only by what is
+  applied, so it banks while frozen (MFO-B69); the headroom, not the credit, then bounds each
+  award. Log: `[hms-parity] <id> above player parity: held total T vs player P -> headroom H
+  (award A, credit cap C); the rest is withheld until the player catches up`, then the usual
+  `engine award ... applied ... withheld` line. With `bHmsCapToPlayerTotal` ON (default) the cap
+  already sweeps an over-parity total down on load, so the gate mainly replaces the cap's
+  per-award `award trimmed to the player's total` trim, and also holds a follower the cap's
+  50-point pool floors left above the player; with the cap OFF the gate is the only thing that
+  stops such a follower climbing further above the player. **What breaks:** applying the gate on
+  the grant road (the fixed-stat grant is already headroom-sized); reading the live player base
+  instead of the sample (a dip freezes a leveling follower and W keeps the withheld points for
+  good); routing the held-back points anywhere but W (the next re-slam re-measures them).
 - **§HMS PLAYER-RATE PARITY (PRGN v8, 2026-09-23, marth "fix b (with retroactive
   fix)").** The engine awards a leveling NPC `iAVDhmsLevelUp + fNPCHealthLevelBonus`
   (10+5 = 15) per level against the player's 10; MFO used to pass the 15 through.
