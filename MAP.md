@@ -8618,6 +8618,15 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   SetStealthFights/StoreTable/ClearStoredTable` (C4 XP, C5 mastery + switch, C6 carriers read, C12 store / restore / reset, C13 counters).
   Every write goes through `Mutate:399` and REFUSES (returns false, changes nothing) unless `Writable()` = `Active()` and the loaded record was
   parsed (not kept verbatim); 0xFF ids are refused (#9). `CoSave/CoLoad/BeginLoad/ClearAll` are called only by `Serialization.cpp`.
+- `classes/Mastery.cpp` (card C5, `feat/classes-c5-mastery`; declarations in the last block of `Classes.h`) -- NO persisted field, MCLS stays v1.
+  Caps `LevelCap` (T1 10 / T2 15 / T3 20 / T4 25, Dragonborn 0 = no level); `Scale01(level, cap)` = 0.25 + 0.75(level-1)/(cap-1) (pure, for C6, which owns the
+  carriers); `LevelForXp(xp, cumulative thresholds)` (C4 supplies the table: `[i]` = total xp to BE at level i+1, size = cap); `ComputeUnlocked(mastered)` runs every
+  `UnlockRule` of `kTable`; `SetLevelFromXp` (C4 calls it after storing xp: level never drops, mastered bit at the cap, unlocked refreshed, never revoked);
+  `SwitchClass` (C10's free instant switch, refuses a locked class; starts a never-used class at level 1); `PickAutoClass` / `AutoClassFor` (strict adherence:
+  best per-class skill fit among unlocked classes, ties to the higher tier then more skills; writes nothing; nothing calls it yet). Read-then-write helpers are not atomic as a whole:
+  SetLevelFromXp / SwitchClass are each ONE compound State.cpp writer (`ApplyLevel` / `ActivateClass`, one `g_mx` hold; a short or long C4 threshold table is refused loudly);
+  `CoLoad` heals a class at its level cap with the mastered bit clear (only while Active). `PickAutoClass` scores each class by its OWN skills (`kSkillMap` in
+  Mastery.cpp, static_assert-complete; NOT in ClassTable.cpp, which the C7 generator parses). **Open review findings (read before editing): MFO-B625, MFO-B626** (`Docs/REVIEW-BACKLOG.md`).
 - INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`;
   `bClassCoSaveSelfTest` (C3 DEBUG, default 0; `Config.h/.cpp`, `MFO.ini`): the MCLS round-trip self-test at every load.
 - **`MFO_Classes.esl` (card C7, GENERATED, `MFO_GenerateESP.py` `make_classes_esl()`, the block just above `main()`; output `out/MFO_Classes.esl`, no SEQ, no MCM yet):**

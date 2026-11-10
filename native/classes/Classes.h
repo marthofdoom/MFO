@@ -3,6 +3,7 @@
 #include "State.h"   // Gambit: the stored per-class tables (card C3)
 #include <array>
 #include <optional>
+#include <span>
 
 // CLASS ADD-ON (native/classes/): the public face of the class tree. Cards C1 (skeleton, presence,
 // INI toggles) and C2 (the compiled class data model) of the class update. ClickUp 86e3dhbd3.
@@ -233,4 +234,85 @@ namespace MFO::Classes {
     bool SetStealthFights(RE::FormID a_follower, std::uint16_t a_thief, std::uint16_t a_masterThief);
     bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows);   // C12: on switching away; runtime-only fields (uid, last*) are zeroed
     bool ClearStoredTable(RE::FormID a_follower, Id a_class);                          // C12: the reset button
+
+    // ── mastery = card C5 (classes/Mastery.cpp) ───────────────────────────────────────────────────────
+    // Class level 1..cap per class; reaching the cap sets the mastered bit. CAPS BY TIER (marth 2026-11-10): T1 10, T2 15,
+    // T3 20, T4 25. Dragonborn (hidden T5) has NO cap and NO level (LevelCap = 0). NO new persisted field: level lives in
+    // ClassProgress::level, mastered / unlocked in the MCLS bitsets (layout untouched, MCLS stays v1).
+    //
+    // THREADING: the PURE functions (LevelCap, Scale01, LevelForXp, ComputeUnlocked, PickAutoClass) touch no state and are
+    // callable from any thread. SetLevelFromXp (C4, job worker) and SwitchClass (C10, board thread) are each ONE compound
+    // writer in State.cpp (ApplyLevel / ActivateClass): the whole read-decide-write happens under a single hold of the State.cpp
+    // mutex, so a co-save snapshot never sees a half-applied level-up and two writers cannot lose each other's update. AutoClassFor
+    // reads actor values with the same calls ClassResolve.cpp makes (call it where ResolveBaseClass is called). None of these
+    // holds a lock across an engine call.
+    //
+    // RESET NOTE (future "reset class progress"): IsUnlocked takes the stored unlocked bits OR the rule-computed ones, and unlocks
+    // are never revoked, so a reset must clear the stored unlocked (and mastered) bits explicitly, not just level / xp.
+    //
+    // WRITES refuse (return false, change nothing) unless Writable(), which already implies Active(); with the ESL absent
+    // they are inert, and the reads return the empty / no-class answers.
+
+    // The level cap of a class by its tier; 0 for Dragonborn (no cap, no level).
+    [[nodiscard]] std::uint8_t LevelCap(Id a_class);
+
+    // Strong-effect scaling for card C6 (T3 STRONG effect and T4 UNIQUE mechanic; T1/T2 and the T3 smaller effect stay flat):
+    // 0.25 + 0.75 * (level - 1) / (cap - 1), so 0.25 at level 1 and 1.0 at the cap. level <= 0 (never levelled) returns 0;
+    // level > cap is clamped to 1.0; cap <= 1 returns 1.0 for level >= 1. PURE, writes no carrier (C6 owns the carriers).
+    // The mastered-but-unequipped quarter is applied by C6 on top of the FULL value (not of this scale).
+    [[nodiscard]] float Scale01(std::uint32_t a_level, std::uint32_t a_cap);
+
+    // Level from XP, given per-level thresholds. C4 CONTRACT: a_cumulative[i] is the TOTAL class XP (in the same whole points as
+    // ClassProgress::xp) needed to BE at level i+1, ascending (non-decreasing); a_cumulative[0] is normally 0 (level 1 is the
+    // starting level once a class is in use); a_cumulative.size() is the level cap for that class (LevelCap(class) entries,
+    // C4 sizes the curve per tier from the 3 h / 6 h / 10 h targets). Returns the highest level whose threshold a_xp has
+    // reached (1..size); 0 for an empty span. PURE.
+    [[nodiscard]] std::uint8_t LevelForXp(std::uint32_t a_xp, std::span<const std::uint32_t> a_cumulative);
+
+    // The unlocked set that follows from a mastered set: every class whose UnlockRule is satisfied (T1 always, the table's
+    // rules for the rest, Dragonborn included). PURE; an unlock never needs the old unlocked bits.
+    [[nodiscard]] Mask ComputeUnlocked(Mask a_mastered);
+
+    // Is a_class usable by the follower now: its bit is in the stored unlocked set OR the rule holds for the stored mastered
+    // set (so a follower with no record still has the three T1s). false unless Active().
+    [[nodiscard]] bool IsUnlocked(RE::FormID a_follower, Id a_class);
+
+    // C4 -> C5 hook: after C4 has stored new XP with SetProgress, call this with the class's cumulative thresholds. It
+    // recomputes the level (never lowers it), clamps to the cap, sets the mastered bit when the cap is reached (never clears
+    // one), and refreshes the unlocked set from the mastered set, all in ONE State.cpp lock hold (ApplyLevel). Returns true if
+    // anything changed. Dragonborn and a locked class are refused (false), and so is a table whose size is not LevelCap(class)
+    // (logged as an error once per class per session: a short table could never reach mastery).
+    bool SetLevelFromXp(RE::FormID a_follower, Id a_class, std::span<const std::uint32_t> a_cumulative);
+
+    // Free, instant switch between UNLOCKED classes (C10's accessor). A class never used before is started at level 1 (Dragonborn
+    // stays level 0). false if not Writable(), the class is not unlocked, or it is already equipped. Storing / restoring the
+    // per-class gambit table (Q8) is card C12's, not done here.
+    bool SwitchClass(RE::FormID a_follower, Id a_class);
+
+    // The compound writers behind SetLevelFromXp / SwitchClass (State.cpp, one g_mx hold each; false = refused or nothing changed).
+    // ApplyLevel: raise a_class to min(a_level, cap) (never lowers), set mastered at the cap, OR in the rule-computed unlocks.
+    // ActivateClass: if a_class is unlocked and not already equipped, start it at level 1 when never used (Dragonborn stays 0)
+    // and equip it.
+    bool ApplyLevel(RE::FormID a_follower, Id a_class, std::uint8_t a_level);
+    bool ActivateClass(RE::FormID a_follower, Id a_class);
+
+    // The stat inputs the Auto resolver votes on: BASE actor values (a fortify potion cannot flip it), like ClassResolve.cpp.
+    struct StatProfile {
+        float oneHanded = 0, twoHanded = 0, archery = 0;
+        float alteration = 0, conjuration = 0, destruction = 0, illusion = 0, restoration = 0;
+        float sneak = 0, block = 0;
+    };
+    [[nodiscard]] StatProfile ReadStats(RE::Actor* a_actor);   // zeros for nullptr
+
+    // Pick the best-fitting class among a_unlocked from a_stats. Each class has its OWN skill list (Mastery.cpp kSkillMap, up to
+    // three skills, e.g. Healer = Restoration, Templar = melee + Restoration) and its fit is the mean of those skill values.
+    // Highest fit wins; equal fits go to the HIGHER tier, then the class with MORE listed skills (a hybrid that fits as well as a
+    // pure class wins), then the lower Id. Dragonborn is never auto-picked.
+    // nullopt when a_unlocked holds no pickable class. PURE.
+    [[nodiscard]] std::optional<Id> PickAutoClass(const StatProfile& a_stats, Mask a_unlocked);
+
+    // Strict adherence: with Strict() (ESL present, bClassTree = 1, bClassStrict = 1) resolve an Auto follower's class from its
+    // stats among its unlocked classes. nullopt (no opinion, today's three-class behaviour) when not Strict(). Writes nothing:
+    // the caller (when combatClassOverride == 0) decides whether to SwitchClass to it.
+    [[nodiscard]] std::optional<Id> AutoClassFor(RE::FormID a_follower, RE::Actor* a_actor);
 }

@@ -116,6 +116,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/TradePerks.cpp
     classes/ClassTable.cpp
     classes/Classes.cpp
+    classes/Mastery.cpp
     classes/Presence.cpp
     classes/State.cpp
     Loadout.cpp
