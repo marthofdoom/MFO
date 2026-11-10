@@ -73,6 +73,10 @@ REQUIRED = {
     0x833: ('CSTY', "MFO_MeleeStyle",       ['EDID', 'CSGD']),
     0x834: ('CSTY', "MFO_RangedStyle",      ['EDID', 'CSGD']),
     0x916: ('CSTY', "MFO_MeleeSingleStyle", ['EDID', 'CSGD']),   # MeleeStyle twin, DATA 1 (no dual wield)
+    # Spell cost parity (ClickUp 1dfcuabcr0c): the managed-follower marker ability and the kModSpellCost x2 perk.
+    0x917: ('MGEF', "MFO_CostParityMGEF",    ['EDID', 'DATA']),
+    0x918: ('SPEL', "MFO_CostParityAbility", ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    0x919: ('PERK', "MFO_CostParityPerk",    ['EDID', 'DATA', 'PRKE', 'EPFT', 'EPFD', 'PRKF']),
     # LOTD awareness: the detected flag the DLL writes and the MCM hiddenToggle reads.
     0x903: ('GLOB', "MFO_LOTDDetected",     ['EDID', 'FNAM', 'FLTV']),
     # Positional lockpick sounds: SNDR copies the DLL plays at the follower (Lockpick.cpp).
@@ -185,6 +189,7 @@ def parse_subrecords(body):
     check needs it, since setdefault keeps only the first LNAM). Handles no
     compressed records (we emit none) and stops cleanly on truncation."""
     out = {}
+    seq = []
     lnam_count = 0
     i = 0
     while i + 6 <= len(body):
@@ -193,10 +198,12 @@ def parse_subrecords(body):
         if i + 6 + ln > len(body):
             break
         out.setdefault(t, body[i + 6:i + 6 + ln])
+        seq.append((t, body[i + 6:i + 6 + ln]))
         if t == 'LNAM':
             lnam_count += 1
         i += 6 + ln
     out['#LNAM'] = lnam_count
+    out['#SEQ'] = seq        # every subrecord in order, duplicates kept (the PERK entry-point audit needs it)
     return out
 
 
@@ -304,6 +311,38 @@ def audit_one(esp):
                 errors.append(f"0x{local:03X} ({want_edid}): missing required subrecord {s}")
 
     if is_main:
+        # COST PARITY sanity (0x917-0x919): the ability must be SPIT type 4 / castType 0 (constant) and the perk must be
+        # the exact entry-point shape of vanilla PERK 001076FD (Skyrim.esm, kModSpellCost "Multiply Value"): the
+        # subrecord order, entry point 38, function 3, two tabs, PRKC tab 0 then one HasSpell CTDA on the ability,
+        # tab 1 (the spell) not emitted, EPFT 1, EPFD 2.0. A wrong order loads silently as a perk that does nothing.
+        if 0x918 in by_local:
+            spit = by_local[0x918][1].get('SPIT')
+            if spit and len(spit) == 36:
+                stype, ctype = struct.unpack('<I', spit[8:12])[0], struct.unpack('<I', spit[16:20])[0]
+                if stype != 4 or ctype != 0:
+                    errors.append(f"SPEL 0x918: SPIT type {stype} castType {ctype}, expected 4 (Ability) / 0 (Constant)")
+            else:
+                errors.append("SPEL 0x918: SPIT is not 36 bytes")
+        if 0x919 in by_local:
+            seq = by_local[0x919][1].get('#SEQ', [])
+            want = ['EDID', 'DESC', 'DATA', 'PRKE', 'DATA', 'PRKC', 'CTDA', 'EPFT', 'EPFD', 'PRKF']
+            if [t for t, _ in seq] != want:
+                errors.append(f"PERK 0x919: subrecord order {[t for t, _ in seq]}, expected {want}")
+            else:
+                d = [b for _, b in seq]
+                if d[2] != bytes([0, 0, 1, 1, 1]):                errors.append(f"PERK 0x919: header DATA {d[2].hex()}")
+                if d[3] != bytes([2, 0, 0]):                      errors.append(f"PERK 0x919: PRKE {d[3].hex()}, expected 020000")
+                if d[4] != bytes([38, 3, 2]):                     errors.append(f"PERK 0x919: entry DATA {d[4].hex()}, expected 260302 (kModSpellCost, Multiply, 2 tabs)")
+                if d[5] != b'\x00':                              errors.append("PERK 0x919: PRKC must be tab 0 (the perk owner)")
+                if len(d[6]) != 32:                               errors.append(f"PERK 0x919: CTDA is {len(d[6])} bytes, expected 32")
+                else:
+                    fn = struct.unpack('<H', d[6][8:10])[0]
+                    p1 = struct.unpack('<I', d[6][12:16])[0]
+                    if fn != 264 or p1 != (OWN_PREFIX << 24 | 0x918):
+                        errors.append(f"PERK 0x919: CTDA fn {fn} param1 {p1:08X}, expected 264 (HasSpell) on 01000918")
+                if d[7] != b'\x01' or struct.unpack('<f', d[8])[0] != 2.0:
+                    errors.append("PERK 0x919: EPFT/EPFD must be 1 / 2.0")
+
         # SPEL sanity: a lesser power must be SPIT type 3. Type 4 is an Ability,
         # which is passive and never fires a cast event -- the board would never open.
         if 0x801 in by_local:

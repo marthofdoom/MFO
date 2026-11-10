@@ -118,14 +118,22 @@ FID_ERRAND_SANDBOX_0  = OWN | 0x90A   # 0x90A-0x90D
 FID_ERRAND_EAT_0      = OWN | 0x90E   # 0x90E-0x911
 FID_ERRAND_SLEEP_0    = OWN | 0x912   # 0x912-0x915
 ERRAND_WORK_SLOTS     = 4
-NEXT_OBJECT_ID     = 0x917         # first never-used local id (0x916 since R7: the sixteen work packages are always emitted;
+# SPELL COST PARITY (ClickUp 1dfcuabcr0c, marth Q13 2026-11-09): followers pay the engine's NPC skill-cost curve, which on
+# some lists is cheaper than the player's. The DLL doubles the cost of a MANAGED follower's spells through the engine's own
+# kModSpellCost perk step: an ability SPEL (the per-reference marker, Actor::AddSpell / RemoveSpell) that the perk's entry
+# condition tests with HasSpell. native/Forms.h kCostParity* mirrors these three.
+FID_PARITY_MGEF    = OWN | 0x917   # inert constant-effect MGEF the ability carries
+FID_PARITY_SPELL   = OWN | 0x918   # MFO_CostParityAbility: the per-reference marker, held only by a managed follower
+FID_PARITY_PERK    = OWN | 0x919   # MFO_CostParityPerk: kModSpellCost "Multiply Value" 2.0, entry condition HasSpell(0x918)
+PARITY_COST_MULT   = 2.0
+NEXT_OBJECT_ID     = 0x91A         # first never-used local id (0x916 since R7: the sixteen work packages are always emitted;
                                    # was 0x904. 0x836-0x839 = APMF loot-travel packages,
                                    # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
                                    # 0x900-0x902 = P7 travel packages, 0x903 = MFO_LOTDDetected)
                                    # 0x904/0x905 are CLAIMED by the lockpick SNDRs (Forms.h) but only
                                    # emitted once LOCKPICK_SNDR_PENDING is complete; main() then writes
                                    # NEXT_OBJECT_ID_WITH_SNDR into the header.
-NEXT_OBJECT_ID_WITH_SNDR = 0x917
+NEXT_OBJECT_ID_WITH_SNDR = 0x91A
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -340,7 +348,7 @@ def make_mgef():
     body += subrec('MDOB', struct.pack('<I', 0))
     body += subrec('DATA', mgef_inert_self_data()) + subrec('SNDD', b'')
     body += subrec('DNAM', struct.pack('<I', 0))
-    return group('MGEF', record('MGEF', FID_ORDERS_MGEF, 0, body))
+    return group('MGEF', record('MGEF', FID_ORDERS_MGEF, 0, body) + make_parity_mgef())
 
 
 # ── SPEL ────────────────────────────────────────────────────────────────────
@@ -363,7 +371,51 @@ def make_spel():
     body += subrec('SPIT', spit_lesser_power())
     body += subrec('EFID', struct.pack('<I', FID_ORDERS_MGEF))
     body += subrec('EFIT', struct.pack('<fII', 0.0, 0, 0))
-    return group('SPEL', record('SPEL', FID_ORDERS_SPELL, 0, body))
+    return group('SPEL', record('SPEL', FID_ORDERS_SPELL, 0, body) + make_parity_spel())
+
+
+# ── cost parity (MGEF + ability SPEL + PERK) ────────────────────────────────
+def make_parity_mgef():
+    # The Field Orders MGEF's inert data with the casting type CONSTANT (0) an ability's effect carries
+    # (vanilla ability SPEL 0001729A -> MGEF 000EB7EA is constant; the Field Orders one is fire-and-forget).
+    d = bytearray(mgef_inert_self_data())
+    struct.pack_into('<I', d, 80, 0)
+    body = subrec('EDID', zstr("MFO_CostParityMGEF")) + subrec('FULL', zstr(""))
+    body += subrec('MDOB', struct.pack('<I', 0))
+    body += subrec('DATA', bytes(d)) + subrec('SNDD', b'')
+    body += subrec('DNAM', struct.pack('<I', 0))
+    return record('MGEF', FID_PARITY_MGEF, 0, body)
+
+
+def make_parity_spel():
+    # SPIT byte-for-byte the shape of vanilla ability 0001729A: cost 0, flags 0, TYPE 4 (Ability), castType 0 (Constant).
+    body = subrec('EDID', zstr("MFO_CostParityAbility")) + subrec('OBND', b'\x00' * 12)
+    body += subrec('FULL', zstr(""))
+    body += subrec('MDOB', struct.pack('<I', 0))
+    body += subrec('ETYP', struct.pack('<I', 0x00013F44))   # EitherHand, as vanilla ability 0001729A
+    body += subrec('DESC', zstr(""))
+    body += subrec('SPIT', struct.pack('<fIIfIIffI', 0.0, 0, 4, 0.0, 0, 0, 0.0, 0.0, 0))
+    body += subrec('EFID', struct.pack('<I', FID_PARITY_MGEF))
+    body += subrec('EFIT', struct.pack('<fII', 0.0, 0, 0))
+    return record('SPEL', FID_PARITY_SPELL, 0, body)
+
+
+def make_parity_perk():
+    # Shape copied from vanilla PERK 001076FD (MGR21RestorationCost, an Entry Point perk on kModSpellCost):
+    #   DATA 00 00 01 01 01 = trait 0, level 0, numRanks 1, playable 1, hidden 1; PRKE 02 00 00 = entry point type;
+    #   DATA 26 03 02 = entry point 0x26 (kModSpellCost = 38), function 3 (Multiply Value), 2 condition tabs
+    #   (0 = the perk owner, 1 = the spell); PRKC <tab> then that tab's CTDAs (an EMPTY tab is simply not emitted, as all 33 vanilla kModSpellCost perks do); EPFT 01 + EPFD <float>; PRKF.
+    # Tab 0 (the perk owner) carries ONE condition: HasSpell(MFO_CostParityAbility) == 1, so the x2 reaches only a caster
+    # that holds the marker ability. The perk may sit on a SHARED base record; the entry condition is evaluated per caster.
+    ctda = struct.pack('<B3xfHHIIIIi', 0x00, 1.0, 264, 0, FID_PARITY_SPELL, 0, 0, 0, -1)   # fn 264 HasSpell, == 1, subject
+    body = subrec('EDID', zstr("MFO_CostParityPerk")) + subrec('DESC', zstr(""))
+    body += subrec('DATA', bytes([0, 0, 1, 1, 1]))
+    body += subrec('PRKE', bytes([2, 0, 0]))
+    body += subrec('DATA', bytes([38, 3, 2]))
+    body += subrec('PRKC', bytes([0])) + subrec('CTDA', ctda)
+    body += subrec('EPFT', bytes([1])) + subrec('EPFD', struct.pack('<f', PARITY_COST_MULT))
+    body += subrec('PRKF', b'')
+    return group('PERK', record('PERK', FID_PARITY_PERK, 0, body))
 
 
 # ── GLOB ────────────────────────────────────────────────────────────────────
@@ -2068,6 +2120,8 @@ def main():
     # CSTY after PACK -- vanilla's own top-group order (Skyrim.esm: ... QUST,
     # IDLE, PACK, CSTY, LSCR ...), verified by walking the shipped master.
     data += make_csty()
+    # PERK after CSTY (xEdit's TES5 order: ... CSTY ... FLST, PERK ... MOVT, SNDR) and before SNDR.
+    data += make_parity_perk()
     # SNDR after CSTY -- xEdit's TES5 group order (CSTY ... MOVT, SNDR, DUAL, ...).
     data += sndr
 
@@ -2128,6 +2182,9 @@ def main():
     print(f"  KYWD  0x{FID_GRANTED_KYWD & 0xFFF:03X}        MFO_GrantedSpell")
     print(f"  MGEF  0x{FID_ORDERS_MGEF & 0xFFF:03X}        MFO_FieldOrdersMGEF")
     print(f"  SPEL  0x{FID_ORDERS_SPELL & 0xFFF:03X}        MFO_FieldOrdersPower (lesser power)")
+    print(f"  MGEF  0x{FID_PARITY_MGEF & 0xFFF:03X}        MFO_CostParityMGEF (inert, constant)")
+    print(f"  SPEL  0x{FID_PARITY_SPELL & 0xFFF:03X}        MFO_CostParityAbility (ability; the managed-follower marker)")
+    print(f"  PERK  0x{FID_PARITY_PERK & 0xFFF:03X}        MFO_CostParityPerk (kModSpellCost x{PARITY_COST_MULT:g}, entry condition HasSpell 0x918)")
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
     print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (3 aliases: foe carrier/foe target/self carrier, DLL-filled)")
