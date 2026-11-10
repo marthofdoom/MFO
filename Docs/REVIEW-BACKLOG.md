@@ -2644,3 +2644,12 @@ Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
 - B2 (SEV-5): a non-zero cooldown on a row the board does not expose is enforced but invisible; C12 must limit itself to power-attack rows or widen CooldownExposed in the same change.
 - B3 (SEV-5): the "last: cooling down (Ns)" tooltip goes stale after expiry when the rule stops matching (display only, like G10's).
 - B4 (SEV-4, rule-mandated): Board_FieldKit.cpp is 1528 lines -- plan its split as its own round. MAP.md's Serialization.h:289 anchor is off by three (kSchemaVersion is at :292).
+
+### MFO-B602 (SEV-5, OPEN, apmf/Bridge.cpp + cast/CastOn.cpp CanServe adoption, against 6bebdb4, Opus tier-3 review) -- leftovers
+Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
+- Buff route with no recipient: the gate queries target 0 where BuffClaim files the caster in the explicitSelf case; the verdict cannot differ today. Derive the target with ExplicitSelfBuff(spell) for exactness.
+- The composed-heal gate re-derives Try's target / dual / concentration (matches ComposedCast.cpp:358-709 today); expose one shared claim-argument helper from ComposedCast. The gate also runs before Try's Enabled() check (both outcomes are a transparent no-cast).
+- g_lastServeRefusal is never cleared (its sibling is erased at CastOn.cpp:1844 and cleared at :1863); add it to both sites.
+- Comment at CastOn.cpp:64 names a nonexistent LogServeRefusal (the function is HarbingerWouldRefuse).
+- MFO-B2's open list should also name: a claim Harbinger accepts while MFO's cast-facet priority is 0 (offFacets) still displaces the incumbent; and the kServePending_Arbitration bit.
+- Note: CastOn.cpp is 1876 lines (plan its split as its own round); Bridge.cpp 1373.
