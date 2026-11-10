@@ -5524,6 +5524,20 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   - (2026-10-01) `Poll.cpp` `DumpLedgerOnce` (READ-ONLY `[prog] ledger` dump, once per load per follower, keyed on `g_pollGen`) is called at the end of `PollWork`'s per-follower body; it writes nothing.
   - `progression/Poll.cpp` (313) = the level poll: `Unmanaged` (`:37`), `PollWork` (`:72`),
     `PollTick` (`:285`, also drives the board-view refresh).
+  - (2026-11-09, ClickUp 86e3eevgz C0+C1, branch `feat/inherit-perks-census`) **HIDDEN PLAYER-ONLY PERK CENSUS**
+    (`progression/Inherit.cpp`, entry `InheritCensusPoll`, declared in `ProgAllocator_internal.h`, called from the
+    top of `PollWork`). LOG-ONLY: changes nothing in the game, no co-save field. Finds perks the player holds
+    (base TESNPC list + `addedPerks` + `perks`; `standingStonePerks` excluded) that are in no AVIF perk tree
+    (tree set built lazily on the first poll), classifies each (`copy` / `not-copied:no-follower-use` /
+    `player-only` / `script-part`) off the constexpr EP class table (Docs/ENGINE_NOTES.md 0.54,
+    `tools/entrypoint_census/`), and prints `[inherit-census]` lines once per load generation (`g_pollGen`) and
+    once per change of an FNV signature of the three lists. INI `bInheritPerkCensus` (default 1).
+    `ConditionPlayerGated`, `ReadOwnerFacts`, `SameConditions` (+ `OwnerCtx`) moved out of Progression.cpp's
+    anonymous namespace into `MFO::Progression` (declared in `ProgAllocator_internal.h`; bodies unchanged).
+    **What breaks:** reading any of this off the main thread (the static state is PollWork-only); moving the
+    three helpers back into the anonymous namespace (Inherit.cpp stops linking); changing the EP class table
+    without regenerating it from the census tools. A later card (C2) will ADD perks to follower bases: it must
+    follow the research's ledger + `kPreLoadGame` sweep design, not this file.
   - (2026-11-01, ClickUp 1dfcuabc4dq, marth "Errand = in party") **IN THE PARTY for leveling**
     (`Poll.cpp:144-147`): Shared Growth's ACTIVE branch (`min(d, lag)`) is taken when the follower is
     tracked (`IsTrackedFast`) OR on a town errand (`Logistics::Errand::Active`, both its locks are leaves,

@@ -21,6 +21,21 @@
 #include <string>
 #include <string_view>
 
+// Three helpers that live in native/Progression.cpp (namespace MFO::Progression, formerly its
+// anonymous namespace; bodies unchanged, ClickUp 86e3eevgz card C1) and are shared with
+// progression/Inherit.cpp. OwnerCtx moved here with them because ReadOwnerFacts' signature names it.
+namespace MFO::Progression {
+    // CONTEXT of a condition list: kSelf = the Subject IS the perk's owner (an ability effect, an EP
+    // owner tab); kOther = the Subject is a struck/other actor (a cloaked spell, an EP target tab).
+    enum class OwnerCtx : std::uint8_t { kSelf, kOther };
+    // Narrow player-pin: an AND-required GetIsID/GetIsReference Player (0x7/0x14) == literal 1.
+    bool ConditionPlayerGated(const RE::TESCondition& a_cond);
+    // Mechanical read of whose state one condition list names (PerkOwnerFacts, Progression.h).
+    void ReadOwnerFacts(const RE::TESCondition& a_cond, OwnerCtx a_ctx, PerkOwnerFacts& a_out);
+    // Two perks carry the identical perkConditions list (an empty list is never "identical").
+    bool SameConditions(RE::BGSPerk* a_a, RE::BGSPerk* a_b);
+}
+
 namespace MFO::ProgAllocator {
 
         // ── economy — FULLY addon-declared (§18.6 Stage 3) ─────────────────
@@ -375,5 +390,9 @@ namespace MFO::ProgAllocator {
         bool Unmanaged(RE::Actor* a_actor, const char* a_verb);
         void PollTick(int a_gen);
         const char* ClsName(RE::FormID a_id);
+
+        // progression/Inherit.cpp (ClickUp 86e3eevgz C1): the hidden player-only perk CENSUS. Log-only,
+        // MAIN THREAD only (called from PollWork); changes nothing in the game.
+        void InheritCensusPoll(RE::PlayerCharacter* a_player);
 
 }

@@ -1576,6 +1576,11 @@ path `APMFBridge.cpp:346-397` performs no renew), so nothing asks it to. The 6 s
 still hard-expires (`ENGINE_NOTES` §0.45). **Do not describe F2 as done.** F1 and F4
 ARE done.
 
+**2026-11-09, `feat/inherit-perks-census` (NOT merged, ClickUp 86e3eevgz C0+C1):** hidden player-only perk
+census, LOG-ONLY (`[inherit-census]`, INI `bInheritPerkCensus`, default 1). Discovers the perks the player
+holds that are in no actor-value perk tree and classifies them; copies nothing to any follower. C0 commits
+`tools/entrypoint_census/` and the player-only entry-point table (ENGINE_NOTES 0.54). In-game test T1 pending.
+
 ### Next actions
 
 1. Cut the APMF release that carries `ed637fe` + `8daa27f` (both are already on APMF

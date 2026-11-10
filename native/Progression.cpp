@@ -9,6 +9,7 @@
 // only source that means "selected via progression"; headers stay acyclic (progression/ProgAllocator.h
 // includes PCH.h only). Do not "fix" this by reverting to the held-perk walk.
 #include "progression/ProgAllocator.h"
+#include "progression/ProgAllocator_internal.h"   // declarations of ConditionPlayerGated / ReadOwnerFacts / SameConditions (shared with progression/Inherit.cpp)
 #include <array>     // v1.1 residual #3: the classifier's add-on-declared verdict table
 #include <cstring>          // memcmp (alias twins: condition equality)
 #include <unordered_set>   // 86e3kddjp: the HasPerk-reference index
@@ -378,6 +379,8 @@ namespace MFO::Progression {
                 a_out.unarmed = true;
         }
 
+    }   // anonymous namespace -- the next function is shared with progression/Inherit.cpp (declared in ProgAllocator_internal.h)
+
         // The §3 player-gate backstop: an AND-required item hard-requiring
         // the player's identity (GetIsID Player / GetIsReference PlayerRef,
         // == 1) makes the thing it guards inert on a follower. Deliberately
@@ -412,6 +415,8 @@ namespace MFO::Progression {
             return false;
         }
 
+    namespace {
+
         // ── OWNER FACTS off one condition list (PerkOwnerFacts, Progression.h) ──
         // Mechanical read of whose state a condition names, filed beside
         // ReadStyleFacts at every call site. CONTEXT: kSelf = the condition's
@@ -422,11 +427,11 @@ namespace MFO::Progression {
         // and ClassifyRank's caller shows that rank as "part player-only".
         // Pins use the same NARROW shape as ConditionPlayerGated (== literal 1,
         // not OR'd) so a "player OR teammate" group is never read as a pin.
-        enum class OwnerCtx : std::uint8_t { kSelf, kOther };
-
         void NoteRemap(PerkOwnerFacts& a_out, OwnerRemap a_r) {
             if (a_r > a_out.remap) a_out.remap = a_r;
         }
+
+    }   // anonymous namespace -- the next function is shared with progression/Inherit.cpp (declared in ProgAllocator_internal.h)
 
         void ReadOwnerFacts(const RE::TESCondition& a_cond, OwnerCtx a_ctx, PerkOwnerFacts& a_out) {
             using Fn = RE::FUNCTION_DATA::FunctionID;
@@ -490,6 +495,8 @@ namespace MFO::Progression {
                 }
             }
         }
+
+    namespace {
 
         // F1(b): is EVERY effect of this ability behind the fighting-alone gate (on the
         // effect's own list or its MGEF's)? An ability with one ungated effect still fires.
@@ -610,6 +617,8 @@ namespace MFO::Progression {
             return false;
         }
 
+    }   // anonymous namespace -- the next function is shared with progression/Inherit.cpp (declared in ProgAllocator_internal.h)
+
         // "Alias twins": do two perks carry the identical perkConditions list (item by item: function,
         // both params, op/OR/global flags, comparison value, run-on object + ref + data id)? An empty
         // list is never "identical" (it would twin every unconditioned perk of one name).
@@ -634,6 +643,8 @@ namespace MFO::Progression {
             }
             return !x && !y;
         }
+
+    namespace {
 
         // ── the §3 rank classifier ──────────────────────────────────────────
 

@@ -1,0 +1,469 @@
+// progression/Inherit.cpp -- HIDDEN PLAYER-ONLY PERK CENSUS (ClickUp 86e3eevgz, card C1).
+//
+// DISCOVERY + CLASSIFICATION + A LOG, NOTHING ELSE. This file changes NOTHING in the game: it adds no
+// perk to any actor, writes no co-save field, and holds no state the rest of MFO reads. A later card
+// (C2) is the one that copies a perk onto a follower; this one only answers "which perks does the
+// player hold that sit in no ActorValueInfo perk tree, and what would we do with each".
+//
+// THREADING: every engine read here runs on the MAIN THREAD. The only entry, InheritCensusPoll, is
+// called from PollWork (progression/Poll.cpp), which PollTick runs on the MainThread pump. The static
+// state below is read and written only there. No other thread touches it; nothing here locks.
+//
+// DISCOVERY. Tree set = every built-in actor value's AVIF plus every AVIF record in the data, each
+// perkTree walked breadth-first through BGSSkillPerkTreeNode::children, every node perk followed down
+// its BGSPerk::nextPerk chain (the rank forms). Built lazily on the first poll (data is loaded by then;
+// the doc's "at kDataLoaded" without touching plugin.cpp). The player's perks = the union of the base
+// TESNPC perk array, PLAYER_RUNTIME_DATA::addedPerks and ::perks (reached through GetPlayerRuntimeData,
+// which resolves the AE +8 shift; no raw offset). standingStonePerks are EXCLUDED (marth default Q2).
+// A candidate = held by the player, in no tree. Each runtime candidate is confirmed with HasPerk.
+//
+// WHEN. On the first poll of each load generation (g_pollGen, bumped by OnPostLoad: the same per-load
+// guard DumpLedgerOnce uses), then only when a cheap signature (FNV-1a over the perk form ids and
+// ranks of the three lists) changes. At most one census per signature change.
+//
+// CLASSIFICATION (Docs/hidden-perks research section e, defaults decided 2026-11-09 pending Q43-50):
+//   rule 1  every EP entry is player-only by engine code with no follower activity (or never evaluated
+//           by the executable), and the perk has no ability / quest entry  -> "no follower use"
+//   rule 3  every firing part (each EP entry's owner tab, each ability effect) is pinned by the NARROW
+//           Progression::ConditionPlayerGated shape                          -> "player only"
+//   rule 4  a script part: an EP entry with function kAddActivateChoice, an ability whose MGEF is
+//           archetype kScript, or a quest entry                              -> "script part"
+//           (a script ATTACHED to an MGEF through the VM is NOT detected: see the report)
+//   else    "copy" (the verdict a later card would act on; THIS card copies nothing)
+//   Duplicate (rules 0 and 2) is per FOLLOWER, so it is reported as a count over the active, MFO-managed
+//   followers, not folded into the verdict. "Identical" = same entry point + function + function data
+//   (value / spell / text) + identical conditions on every tab. Anything less is not a duplicate.
+//   EP22 is dropped (no follower activity: the skill rides a PlayerCharacter field).
+#include "PCH.h"
+#include "ProgAllocator_internal.h"
+#include "Config.h"
+#include "Followers.h"
+#include <cstring>
+#include <string>
+#include <unordered_set>
+
+namespace MFO::ProgAllocator {
+
+    namespace {
+
+        // ── the executable's entry-point classes (Docs/ENGINE_NOTES.md 0.54, tools/entrypoint_census) ──
+        // kPlayerEngine : every HandleEntryPoint site passes the player singleton as owner (all 3 runtimes)
+        // kPlayerActivity: the engine takes a generic owner but only the player does the activity (EP56)
+        // kAny          : evaluated with any actor as owner once the perk is on that actor
+        // kNever        : no call site on any runtime
+        enum class EpClass : std::uint8_t { kAny, kPlayerEngine, kPlayerActivity, kNever };
+
+        struct EpInfo {
+            EpClass     cls{ EpClass::kAny };
+            const char* use{ nullptr };   // the follower activity that asks this EP, nullptr = none today
+        };
+
+        constexpr std::size_t kEpCount = 92;   // BGSEntryPoint::ENTRY_POINT 0..91
+
+        struct EpTable {
+            EpInfo e[kEpCount];
+            constexpr EpTable() : e{} {
+                // class 1 WITH a follower activity (the activity is the reason to copy)
+                e[8]  = { EpClass::kPlayerEngine, "Pricing" };
+                e[60] = { EpClass::kPlayerEngine, "Pricing" };
+                e[59] = { EpClass::kPlayerEngine, "Lockpick" };
+                e[63] = { EpClass::kPlayerEngine, "Lockpick" };
+                e[65] = { EpClass::kPlayerEngine, "Lockpick" };
+                e[76] = { EpClass::kPlayerEngine, "ErrandSmith" };
+                e[75] = { EpClass::kPlayerEngine, "DualCast" };
+                e[61] = { EpClass::kPlayerEngine, "Steal(future)" };
+                e[9]  = { EpClass::kPlayerEngine, "Loot(future)" };
+                // class 1 with NO follower activity (86/90/16: lockpick extras not consumed today; 22: dropped)
+                for (int i : { 86, 90, 16, 22, 5, 72, 66, 73, 89, 77, 79, 80, 49, 83, 43, 46, 14, 74, 81, 82,
+                               3, 19, 21, 24, 25, 84, 20 })
+                    e[i] = { EpClass::kPlayerEngine, nullptr };
+                // class 2, player-only by activity
+                e[56] = { EpClass::kPlayerActivity, "Steal(future)" };
+                // class 3: never evaluated
+                for (int i : { 13, 44, 45, 62, 64 })
+                    e[i] = { EpClass::kNever, nullptr };
+            }
+        };
+        constexpr EpTable kEp{};
+
+        const char* ClassName(EpClass c) {
+            switch (c) {
+            case EpClass::kPlayerEngine:   return "player-engine";
+            case EpClass::kPlayerActivity: return "player-activity";
+            case EpClass::kNever:          return "never-called";
+            default:                       return "any-actor";
+            }
+        }
+
+        enum class Verdict : std::uint8_t { kCopy, kNoUse, kPlayerOnly, kScript };
+        const char* VerdictName(Verdict v) {
+            switch (v) {
+            case Verdict::kNoUse:      return "not-copied:no-follower-use";
+            case Verdict::kPlayerOnly: return "not-copied:player-only";
+            case Verdict::kScript:     return "not-copied:script-part";
+            default:                   return "copy";
+            }
+        }
+
+        // ── the perk-tree set (built once, main thread) ─────────────────────────────────────────────
+        std::unordered_set<RE::FormID> g_treePerks;
+        bool                           g_treeBuilt = false;
+        std::size_t                    g_treeCount = 0;
+
+        void AddChain(RE::BGSPerk* a_perk, std::unordered_set<RE::FormID>& a_out) {
+            // rank chain: bounded and cycle-guarded like Progression.cpp's BuildSkill walker
+            for (int i = 0; a_perk && i < 16; ++i) {
+                if (!a_out.insert(a_perk->GetFormID()).second) break;
+                a_perk = a_perk->nextPerk;
+            }
+        }
+
+        void WalkTree(RE::BGSSkillPerkTreeNode* a_root, std::unordered_set<RE::FormID>& a_out) {
+            std::vector<RE::BGSSkillPerkTreeNode*>        stack{ a_root };
+            std::unordered_set<RE::BGSSkillPerkTreeNode*> seen;
+            while (!stack.empty() && seen.size() < 100000) {
+                auto* n = stack.back();
+                stack.pop_back();
+                if (!n || !seen.insert(n).second) continue;
+                AddChain(n->perk, a_out);
+                for (auto* c : n->children) stack.push_back(c);
+            }
+        }
+
+        void BuildTreeSet() {
+            g_treeBuilt = true;
+            std::unordered_set<RE::ActorValueInfo*> avifs;
+            std::size_t fromList = 0, fromRecords = 0;
+            if (auto* avl = RE::ActorValueList::GetSingleton()) {
+                for (std::uint32_t av = 0; av < static_cast<std::uint32_t>(RE::ActorValue::kTotal); ++av)
+                    if (auto* info = avl->GetActorValue(static_cast<RE::ActorValue>(av)))
+                        if (avifs.insert(info).second) ++fromList;
+            }
+            if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                for (auto* info : dh->GetFormArray<RE::ActorValueInfo>())
+                    if (info && avifs.insert(info).second) ++fromRecords;
+            }
+            std::size_t trees = 0;
+            for (auto* info : avifs) {
+                if (!info || !info->perkTree) continue;
+                ++trees;
+                WalkTree(info->perkTree, g_treePerks);
+            }
+            g_treeCount = g_treePerks.size();
+            spdlog::info("[inherit-census] tree set: {} perk form(s) from {} tree(s) ({} AVIF via the built-in list + {} more from records)",
+                         g_treeCount, trees, fromList, fromRecords);
+            if (g_treeCount == 0)
+                spdlog::error("[inherit-census] tree set is EMPTY -- every perk the player holds would look hidden; census withheld");
+        }
+
+        // ── the player's perks ──────────────────────────────────────────────────────────────────────
+        enum class Src : std::uint8_t { kBase, kAdded, kRuntime };
+
+        // Visits every (perk, rank, source) in the three lists the census reads. standingStonePerks is
+        // excluded on purpose (marth default Q2: the birthsign choice is not the list's hidden effects).
+        template <class Fn>
+        void ForEachPlayerPerk(RE::PlayerCharacter* a_player, Fn&& a_fn) {
+            if (auto* base = a_player->GetActorBase()) {
+                auto* arr = static_cast<RE::BGSPerkRankArray*>(base);
+                if (arr->perks)
+                    for (std::uint32_t i = 0; i < arr->perkCount; ++i)
+                        if (arr->perks[i].perk) a_fn(arr->perks[i].perk, arr->perks[i].currentRank, Src::kBase);
+            }
+            auto& rd = a_player->GetPlayerRuntimeData();
+            for (auto* r : rd.addedPerks)
+                if (r && r->perk) a_fn(r->perk, r->currentRank, Src::kAdded);
+            for (auto* p : rd.perks)
+                if (p) a_fn(p, static_cast<std::int8_t>(0), Src::kRuntime);
+        }
+
+        std::uint64_t Signature(RE::PlayerCharacter* a_player) {
+            std::uint64_t h = 1469598103934665603ull;   // FNV-1a
+            auto mix = [&h](std::uint64_t v) { h ^= v; h *= 1099511628211ull; };
+            ForEachPlayerPerk(a_player, [&](RE::BGSPerk* p, std::int8_t rank, Src s) {
+                mix(p->GetFormID());
+                mix(static_cast<std::uint8_t>(rank));
+                mix(static_cast<std::uint8_t>(s));
+            });
+            return h;
+        }
+
+        // ── condition + function-data identity (rule 2) ─────────────────────────────────────────────
+        // Same fields as Progression::SameConditions, applied to one condition LIST (an EP entry's tab).
+        // Two EMPTY lists are identical here (an entry with no conditions twins another with none);
+        // SameConditions' "an empty perk-level list is never identical" guards a different question.
+        bool SameCondList(const RE::TESCondition& a_a, const RE::TESCondition& a_b) {
+            auto* x = a_a.head;
+            auto* y = a_b.head;
+            for (; x && y; x = x->next, y = y->next) {
+                const auto& p = x->data;
+                const auto& q = y->data;
+                if (p.functionData.function.get() != q.functionData.function.get() ||
+                    p.functionData.params[0] != q.functionData.params[0] ||
+                    p.functionData.params[1] != q.functionData.params[1] ||
+                    std::memcmp(&p.flags, &q.flags, sizeof(p.flags)) != 0 ||
+                    p.object.get() != q.object.get() ||
+                    p.dataID != q.dataID ||
+                    p.runOnRef != q.runOnRef)
+                    return false;
+                if (p.flags.global ? p.comparisonValue.g != q.comparisonValue.g
+                                   : p.comparisonValue.f != q.comparisonValue.f)
+                    return false;
+            }
+            return !x && !y;
+        }
+
+        std::size_t TabCount(const RE::BGSEntryPointPerkEntry& a_ep) {
+            return std::min<std::size_t>(a_ep.entryData.numArgs, a_ep.conditions.size());
+        }
+
+        // Only the function-data shapes whose payload is readable through a verified member are
+        // comparable; any other shape (two-value, leveled list, activate choice ...) is "not identical".
+        bool SameFuncData(RE::BGSEntryPointFunctionData* a_a, RE::BGSEntryPointFunctionData* a_b) {
+            if (!a_a || !a_b) return a_a == a_b;
+            const auto t = a_a->GetType();
+            if (t != a_b->GetType()) return false;
+            using FT = RE::BGSEntryPointFunctionData::FunctionType;
+            switch (t) {
+            case FT::kOneValue:
+                return static_cast<RE::BGSEntryPointFunctionDataOneValue*>(a_a)->data ==
+                       static_cast<RE::BGSEntryPointFunctionDataOneValue*>(a_b)->data;
+            case FT::kSpellItem:
+                return static_cast<RE::BGSEntryPointFunctionDataSpellItem*>(a_a)->spell ==
+                       static_cast<RE::BGSEntryPointFunctionDataSpellItem*>(a_b)->spell;
+            case FT::kText: {
+                const char* x = static_cast<RE::BGSEntryPointFunctionDataText*>(a_a)->text.c_str();
+                const char* y = static_cast<RE::BGSEntryPointFunctionDataText*>(a_b)->text.c_str();
+                return x && y && std::strcmp(x, y) == 0;
+            }
+            default:
+                return false;
+            }
+        }
+
+        bool TwinEntry(const RE::BGSEntryPointPerkEntry& a_a, const RE::BGSEntryPointPerkEntry& a_b) {
+            if (a_a.entryData.entryPoint.get() != a_b.entryData.entryPoint.get() ||
+                a_a.entryData.function.get() != a_b.entryData.function.get())
+                return false;
+            const auto tabs = TabCount(a_a);
+            if (tabs != TabCount(a_b)) return false;
+            if (!SameFuncData(a_a.functionData, a_b.functionData)) return false;
+            for (std::size_t t = 0; t < tabs; ++t)
+                if (!SameCondList(a_a.conditions[t], a_b.conditions[t])) return false;
+            return true;
+        }
+
+        // ── one candidate's analysis ────────────────────────────────────────────────────────────────
+        struct Analysis {
+            std::vector<RE::BGSEntryPointPerkEntry*> eps;
+            int  abilities    = 0;
+            int  quests       = 0;
+            bool scriptEp     = false;   // an EP entry with kAddActivateChoice
+            bool scriptMgef   = false;   // an ability effect whose MGEF is archetype kScript
+            bool allEpNoUse   = true;    // every EP entry is class-1-no-use or never-called
+            bool allPartsPinned = true;  // every EP owner tab / ability effect is ConditionPlayerGated
+            int  firingParts  = 0;
+            Progression::PerkOwnerFacts owner;
+            Verdict verdict   = Verdict::kCopy;
+            const char* reason = "";
+        };
+
+        bool AbilityPinned(RE::SpellItem* a_spell) {
+            if (!a_spell || a_spell->effects.empty()) return false;
+            for (auto* eff : a_spell->effects) {
+                if (!eff) return false;
+                if (!Progression::ConditionPlayerGated(eff->conditions) &&
+                    !(eff->baseEffect && Progression::ConditionPlayerGated(eff->baseEffect->conditions)))
+                    return false;
+            }
+            return true;
+        }
+
+        void Analyse(RE::BGSPerk* a_perk, Analysis& a) {
+            using EF = RE::BGSEntryPointPerkEntry::EntryData::Function;
+            for (auto* entry : a_perk->perkEntries) {
+                if (!entry) continue;
+                switch (entry->GetType()) {
+                case RE::PERK_ENTRY_TYPE::kEntryPoint: {
+                    auto* ep = static_cast<RE::BGSEntryPointPerkEntry*>(entry);
+                    a.eps.push_back(ep);
+                    const auto idx = static_cast<std::size_t>(ep->entryData.entryPoint.get());
+                    if (ep->entryData.function.get() == EF::kAddActivateChoice) a.scriptEp = true;
+                    const EpInfo info = idx < kEpCount ? kEp.e[idx] : EpInfo{ EpClass::kAny, nullptr };
+                    const bool noUse = (info.cls == EpClass::kPlayerEngine && !info.use) || info.cls == EpClass::kNever;
+                    if (!noUse) a.allEpNoUse = false;
+                    ++a.firingParts;
+                    const auto tabs = TabCount(*ep);
+                    if (tabs == 0 || !Progression::ConditionPlayerGated(ep->conditions[0])) a.allPartsPinned = false;
+                    for (std::size_t t = 0; t < tabs; ++t) {
+                        Progression::PerkOwnerFacts f;
+                        Progression::ReadOwnerFacts(ep->conditions[t],
+                                                    t == 0 ? Progression::OwnerCtx::kSelf : Progression::OwnerCtx::kOther, f);
+                        a.owner.Merge(f);
+                    }
+                    break;
+                }
+                case RE::PERK_ENTRY_TYPE::kAbility: {
+                    auto* ab = static_cast<RE::BGSAbilityPerkEntry*>(entry);
+                    ++a.abilities;
+                    ++a.firingParts;
+                    a.allEpNoUse = false;   // an ability is a live effect on whoever holds it
+                    if (!AbilityPinned(ab->ability)) a.allPartsPinned = false;
+                    if (ab->ability) {
+                        for (auto* eff : ab->ability->effects) {
+                            if (!eff) continue;
+                            Progression::PerkOwnerFacts f;
+                            Progression::ReadOwnerFacts(eff->conditions, Progression::OwnerCtx::kSelf, f);
+                            if (eff->baseEffect) {
+                                Progression::ReadOwnerFacts(eff->baseEffect->conditions, Progression::OwnerCtx::kSelf, f);
+                                if (eff->baseEffect->HasArchetype(RE::EffectSetting::Archetype::kScript)) a.scriptMgef = true;
+                            }
+                            a.owner.Merge(f);
+                        }
+                    }
+                    break;
+                }
+                default:   // kQuest
+                    ++a.quests;
+                    a.allEpNoUse = false;
+                    break;
+                }
+            }
+
+            // rule 1, then rule 3, then rule 4 (the research order); first hit wins
+            if (!a.eps.empty() && a.abilities == 0 && a.quests == 0 && a.allEpNoUse) {
+                a.verdict = Verdict::kNoUse;
+                a.reason  = "every entry point is player-only in the executable with no follower activity (or never evaluated)";
+            } else if (a.firingParts > 0 && a.allPartsPinned) {
+                a.verdict = Verdict::kPlayerOnly;
+                a.reason  = "every firing part is behind an AND-required is-player condition";
+            } else if (a.scriptEp || a.scriptMgef || a.quests > 0) {
+                a.verdict = Verdict::kScript;
+                a.reason  = a.scriptEp ? "entry point function Add Activate Choice carries a script fragment"
+                          : a.scriptMgef ? "an ability effect has a Script archetype"
+                                         : "a quest-stage entry";
+            } else {
+                a.verdict = Verdict::kCopy;
+                a.reason  = "engine evaluates it with any owner, or a followed activity asks for it";
+            }
+        }
+
+        // rules 0 and 2 against ONE follower base: is the candidate already there, or twinned entry by entry?
+        bool DuplicateOn(RE::BGSPerk* a_perk, const Analysis& a, RE::TESNPC* a_base) {
+            auto* arr = static_cast<RE::BGSPerkRankArray*>(a_base);
+            if (!arr->perks) return false;
+            for (std::uint32_t i = 0; i < arr->perkCount; ++i)
+                if (arr->perks[i].perk == a_perk) return true;   // rule 0: same form
+            if (a.eps.empty() || a.abilities > 0 || a.quests > 0) return false;   // rule 2 needs a pure-EP perk
+            for (auto* ep : a.eps) {
+                bool twin = false;
+                for (std::uint32_t i = 0; i < arr->perkCount && !twin; ++i) {
+                    auto* q = arr->perks[i].perk;
+                    if (!q || q == a_perk) continue;
+                    for (auto* qe : q->perkEntries) {
+                        if (!qe || qe->GetType() != RE::PERK_ENTRY_TYPE::kEntryPoint) continue;
+                        if (TwinEntry(*ep, *static_cast<RE::BGSEntryPointPerkEntry*>(qe))) { twin = true; break; }
+                    }
+                }
+                if (!twin) return false;
+            }
+            return true;
+        }
+
+        void AppendEp(std::string& a_s, const RE::BGSEntryPointPerkEntry& a_ep) {
+            const auto idx = static_cast<std::uint32_t>(a_ep.entryData.entryPoint.get());
+            const EpInfo info = idx < kEpCount ? kEp.e[idx] : EpInfo{ EpClass::kAny, nullptr };
+            a_s += std::format(" EP{}:{}[{} use={} fn={}", idx, Progression::EntryPointName(idx),
+                               idx < kEpCount ? ClassName(info.cls) : "unknown-ep", info.use ? info.use : "none",
+                               static_cast<int>(a_ep.entryData.function.get()));
+            if (a_ep.functionData && a_ep.functionData->GetType() == RE::BGSEntryPointFunctionData::FunctionType::kOneValue)
+                a_s += std::format(" val={:g}", static_cast<RE::BGSEntryPointFunctionDataOneValue*>(a_ep.functionData)->data);
+            const auto tabs = TabCount(a_ep);
+            a_s += std::format(" tabs={}", tabs);
+            if (tabs > 0 && Progression::ConditionPlayerGated(a_ep.conditions[0])) a_s += " pinned";
+            a_s += "]";
+        }
+
+        // ── state (main thread only) ────────────────────────────────────────────────────────────────
+        int           g_seenGen = -1;
+        bool          g_haveSig = false;
+        std::uint64_t g_lastSig = 0;
+        constexpr int kMaxCensusLines = 600;
+
+        void RunCensus(RE::PlayerCharacter* a_player, std::uint64_t a_sig) {
+            // the follower bases rules 0/2 compare against: active, MFO-managed, persistable, not summons
+            std::vector<RE::TESNPC*> bases;
+            {
+                const auto snap = Followers::ActiveSnapshot();
+                for (const RE::FormID fid : *snap) {
+                    if (!Followers::IsPersistableID(fid) || !Followers::IsMfoEnabled(fid)) continue;
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    if (!a || a->IsCommandedActor()) continue;
+                    if (auto* b = a->GetActorBase()) bases.push_back(b);
+                }
+            }
+
+            std::vector<RE::BGSPerk*>      held;     // deduped, in discovery order
+            std::unordered_set<RE::FormID> seen;
+            std::size_t nBase = 0, nAdded = 0, nRuntime = 0, unconfirmed = 0, inTree = 0;
+            ForEachPlayerPerk(a_player, [&](RE::BGSPerk* p, std::int8_t, Src s) {
+                (s == Src::kBase ? nBase : s == Src::kAdded ? nAdded : nRuntime)++;
+                if (g_treePerks.count(p->GetFormID())) { ++inTree; return; }
+                if (!seen.insert(p->GetFormID()).second) return;
+                held.push_back(p);
+            });
+            const std::size_t nStone = a_player->GetPlayerRuntimeData().standingStonePerks.size();
+
+            std::size_t counts[4] = {}, playerRef = 0, dupSome = 0, scriptEp = 0, scriptMgef = 0, questParts = 0, hiddenFlag = 0;
+            int lines = 0;
+            for (auto* p : held) {
+                if (!a_player->HasPerk(p)) { ++unconfirmed; continue; }
+                Analysis a;
+                Analyse(p, a);
+                ++counts[static_cast<int>(a.verdict)];
+                const bool pr = a.owner.playerRefRunOn || a.owner.playerRefParam;
+                if (pr) ++playerRef;
+                if (a.scriptEp) ++scriptEp;
+                if (a.scriptMgef) ++scriptMgef;
+                if (a.quests > 0) ++questParts;
+                if (p->data.hidden) ++hiddenFlag;
+                std::size_t dups = 0;
+                for (auto* b : bases) if (DuplicateOn(p, a, b)) ++dups;
+                if (dups) ++dupSome;
+                if (lines >= kMaxCensusLines) continue;
+                ++lines;
+                const char* edid = p->GetFormEditorID();
+                std::string eps;
+                for (auto* ep : a.eps) AppendEp(eps, *ep);
+                spdlog::info("[inherit-census] {:08X} edid='{}' name='{}' hidden={} playable={} verdict={} reason='{}' "
+                             "ep={} ability={} quest={} playerRefRunOn={} playerRefParam={} selfPin={} dupOnFollowers={}/{}{}",
+                             p->GetFormID(), edid ? edid : "", NameOf(p), p->data.hidden ? 1 : 0, p->data.playable ? 1 : 0,
+                             VerdictName(a.verdict), a.reason, a.eps.size(), a.abilities, a.quests,
+                             a.owner.playerRefRunOn ? 1 : 0, a.owner.playerRefParam ? 1 : 0, a.owner.selfPin ? 1 : 0,
+                             dups, bases.size(), eps);
+            }
+            if (lines >= kMaxCensusLines)
+                spdlog::warn("[inherit-census] per-perk lines capped at {} (more candidates exist; the summary counts all)", kMaxCensusLines);
+            spdlog::info("[inherit-census] summary sig={:016X} gen={} player lists base={} added={} runtime={} (standing-stone excluded={}) "
+                         "in-tree={} candidates={} unconfirmed={} | copy={} no-follower-use={} player-only={} script-part={} "
+                         "(activate-choice={} script-mgef={} quest={}) | playerRef={} duplicateOnSomeFollower={} hiddenFlag={} followers={} treeSet={}",
+                         a_sig, g_pollGen, nBase, nAdded, nRuntime, nStone, inTree, held.size(), unconfirmed,
+                         counts[0], counts[1], counts[2], counts[3], scriptEp, scriptMgef, questParts,
+                         playerRef, dupSome, hiddenFlag, bases.size(), g_treeCount);
+        }
+
+    }
+
+    // MAIN THREAD (PollWork). Cheap path every poll: one signature walk over the player's perk lists.
+    void InheritCensusPoll(RE::PlayerCharacter* a_player) {
+        if (!a_player || !Config::g_inheritPerkCensus.load()) return;
+        if (!g_treeBuilt) BuildTreeSet();
+        if (g_treeCount == 0) return;   // already logged loudly; a census against an empty tree set would be noise
+        const auto sig = Signature(a_player);
+        if (g_seenGen == g_pollGen && g_haveSig && sig == g_lastSig) return;
+        g_seenGen = g_pollGen;
+        g_haveSig = true;
+        g_lastSig = sig;
+        RunCensus(a_player, sig);
+    }
+
+}
