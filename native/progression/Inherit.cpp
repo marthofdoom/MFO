@@ -12,14 +12,15 @@
 // DISCOVERY. Tree set = every built-in actor value's AVIF plus every AVIF record in the data, each
 // perkTree walked breadth-first through BGSSkillPerkTreeNode::children, every node perk followed down
 // its BGSPerk::nextPerk chain (the rank forms). Built lazily on the first poll (data is loaded by then;
-// the doc's "at kDataLoaded" without touching plugin.cpp). The player's perks = the union of the base
-// TESNPC perk array, PLAYER_RUNTIME_DATA::addedPerks and ::perks (reached through GetPlayerRuntimeData,
-// which resolves the AE +8 shift; no raw offset). standingStonePerks are EXCLUDED (marth default Q2).
-// A candidate = held by the player, in no tree. Each runtime candidate is confirmed with HasPerk.
+// the doc's "at kDataLoaded" without touching plugin.cpp). The player's perks are found by asking the
+// engine: Actor::HasPerk over every BGSPerk form that is in no tree (PLAYER_RUNTIME_DATA's addedPerks /
+// perks / standingStonePerks are not emitted by this build's multi-runtime CommonLib config, so they are
+// unreachable; see ScanHeld). Standing-stone perks therefore CANNOT be separated (marth default Q2 is
+// not achievable here; reported). A candidate = held by the player, in no tree.
 //
-// WHEN. On the first poll of each load generation (g_pollGen, bumped by OnPostLoad: the same per-load
-// guard DumpLedgerOnce uses), then only when a cheap signature (FNV-1a over the perk form ids and
-// ranks of the three lists) changes. At most one census per signature change.
+// WHEN. A scan runs on the first poll of each load generation (g_pollGen, bumped by OnPostLoad: the same
+// per-load guard DumpLedgerOnce uses), on a player level change, and every ~60 s. It LOGS on the first
+// scan of a generation and afterwards only when the hash of the held set changes.
 //
 // CLASSIFICATION (Docs/hidden-perks research section e, defaults decided 2026-11-09 pending Q43-50):
 //   rule 1  every EP entry is player-only by engine code with no follower activity (or never evaluated
@@ -110,11 +111,13 @@ namespace MFO::ProgAllocator {
         std::unordered_set<RE::FormID> g_treePerks;
         bool                           g_treeBuilt = false;
         std::size_t                    g_treeCount = 0;
+        std::vector<RE::BGSPerk*>      g_treePtrs;   // the same perks as pointers (HasPerk sanity count)
 
         void AddChain(RE::BGSPerk* a_perk, std::unordered_set<RE::FormID>& a_out) {
             // rank chain: bounded and cycle-guarded like Progression.cpp's BuildSkill walker
             for (int i = 0; a_perk && i < 16; ++i) {
                 if (!a_out.insert(a_perk->GetFormID()).second) break;
+                g_treePtrs.push_back(a_perk);
                 a_perk = a_perk->nextPerk;
             }
         }
@@ -158,33 +161,52 @@ namespace MFO::ProgAllocator {
         }
 
         // ── the player's perks ──────────────────────────────────────────────────────────────────────
-        enum class Src : std::uint8_t { kBase, kAdded, kRuntime };
+        // PlayerCharacter::PLAYER_RUNTIME_DATA is EMPTY in this build's CommonLib config (SE+AE+VR all
+        // enabled: the members are only emitted for a single-runtime build), so addedPerks / perks /
+        // standingStonePerks are NOT reachable by name. The census therefore asks the engine instead:
+        // Actor::HasPerk (already used in production, Progression.cpp) over every BGSPerk form that is in no
+        // tree. List-agnostic, no raw offsets. Consequence: the source list of a perk is only known as
+        // "in the player's base record" vs "not in it", and standing-stone perks cannot be told apart.
+        std::vector<RE::BGSPerk*> g_candidates;   // every BGSPerk form NOT in the tree set (built once)
+        bool                      g_candBuilt = false;
+        std::size_t               g_formsSeen = 0;
 
-        // Visits every (perk, rank, source) in the three lists the census reads. standingStonePerks is
-        // excluded on purpose (marth default Q2: the birthsign choice is not the list's hidden effects).
-        template <class Fn>
-        void ForEachPlayerPerk(RE::PlayerCharacter* a_player, Fn&& a_fn) {
-            if (auto* base = a_player->GetActorBase()) {
-                auto* arr = static_cast<RE::BGSPerkRankArray*>(base);
-                if (arr->perks)
-                    for (std::uint32_t i = 0; i < arr->perkCount; ++i)
-                        if (arr->perks[i].perk) a_fn(arr->perks[i].perk, arr->perks[i].currentRank, Src::kBase);
+        void BuildCandidates() {
+            g_candBuilt = true;
+            if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                for (auto* p : dh->GetFormArray<RE::BGSPerk>()) {
+                    if (!p) continue;
+                    ++g_formsSeen;
+                    if (g_treePerks.count(p->GetFormID())) continue;
+                    g_candidates.push_back(p);
+                }
             }
-            auto& rd = a_player->GetPlayerRuntimeData();
-            for (auto* r : rd.addedPerks)
-                if (r && r->perk) a_fn(r->perk, r->currentRank, Src::kAdded);
-            for (auto* p : rd.perks)
-                if (p) a_fn(p, static_cast<std::int8_t>(0), Src::kRuntime);
+            spdlog::info("[inherit-census] candidate forms: {} perk form(s) in the data, {} in no tree", g_formsSeen, g_candidates.size());
         }
 
-        std::uint64_t Signature(RE::PlayerCharacter* a_player) {
+        bool InPlayerBase(RE::PlayerCharacter* a_player, RE::BGSPerk* a_perk) {
+            auto* base = a_player->GetActorBase();
+            auto* arr  = base ? static_cast<RE::BGSPerkRankArray*>(base) : nullptr;
+            if (!arr || !arr->perks) return false;
+            for (std::uint32_t i = 0; i < arr->perkCount; ++i)
+                if (arr->perks[i].perk == a_perk) return true;
+            return false;
+        }
+
+        // The perks the player holds that are in no tree, and a hash of the held set. treeHeld counts the
+        // tree perks the engine says the player holds: a sanity figure (0 on a mid-game character would
+        // mean HasPerk is not answering for the player).
+        std::uint64_t ScanHeld(RE::PlayerCharacter* a_player, std::vector<RE::BGSPerk*>& a_out, std::size_t& a_treeHeld) {
             std::uint64_t h = 1469598103934665603ull;   // FNV-1a
-            auto mix = [&h](std::uint64_t v) { h ^= v; h *= 1099511628211ull; };
-            ForEachPlayerPerk(a_player, [&](RE::BGSPerk* p, std::int8_t rank, Src s) {
-                mix(p->GetFormID());
-                mix(static_cast<std::uint8_t>(rank));
-                mix(static_cast<std::uint8_t>(s));
-            });
+            a_treeHeld = 0;
+            for (auto* p : g_treePtrs)
+                if (a_player->HasPerk(p)) ++a_treeHeld;
+            for (auto* p : g_candidates) {
+                if (!a_player->HasPerk(p)) continue;
+                a_out.push_back(p);
+                h ^= p->GetFormID();
+                h *= 1099511628211ull;
+            }
             return h;
         }
 
@@ -449,9 +471,12 @@ namespace MFO::ProgAllocator {
         int           g_seenGen = -1;
         bool          g_haveSig = false;
         std::uint64_t g_lastSig = 0;
+        std::uint16_t g_lastLevel = 0;
+        int           g_pollsSince = 0;
+        constexpr int kRescanPolls = 30;
         constexpr int kMaxCensusLines = 600;
 
-        void RunCensus(RE::PlayerCharacter* a_player, std::uint64_t a_sig) {
+        void RunCensus(RE::PlayerCharacter* a_player, std::uint64_t a_sig, const std::vector<RE::BGSPerk*>& held, std::size_t treeHeld) {
             // the follower bases rules 0/2 compare against: active, MFO-managed, persistable, not summons
             std::vector<RE::TESNPC*> bases;
             {
@@ -464,21 +489,7 @@ namespace MFO::ProgAllocator {
                 }
             }
 
-            std::vector<RE::BGSPerk*>      held;     // deduped, in discovery order
-            std::unordered_set<RE::FormID> seen;
-            std::unordered_map<RE::FormID, std::uint8_t> srcMask;   // bit0 base, bit1 addedPerks, bit2 perks
-            std::unordered_set<RE::FormID> stone;                   // standingStonePerks (excluded as a source, shown as evidence)
-            for (auto* sp : a_player->GetPlayerRuntimeData().standingStonePerks)
-                if (sp) stone.insert(sp->GetFormID());
-            std::size_t nBase = 0, nAdded = 0, nRuntime = 0, unconfirmed = 0, inTree = 0;
-            ForEachPlayerPerk(a_player, [&](RE::BGSPerk* p, std::int8_t, Src s) {
-                (s == Src::kBase ? nBase : s == Src::kAdded ? nAdded : nRuntime)++;
-                if (g_treePerks.count(p->GetFormID())) { ++inTree; return; }
-                srcMask[p->GetFormID()] |= static_cast<std::uint8_t>(1u << static_cast<unsigned>(s));
-                if (!seen.insert(p->GetFormID()).second) return;
-                held.push_back(p);
-            });
-            const std::size_t nStone = a_player->GetPlayerRuntimeData().standingStonePerks.size();
+            std::size_t unconfirmed = 0;
 
             std::size_t counts[4] = {}, playerRef = 0, dupSome = 0, scriptEp = 0, scriptMgef = 0, questParts = 0, hiddenFlag = 0;
             int lines = 0;
@@ -499,13 +510,9 @@ namespace MFO::ProgAllocator {
                 if (lines >= kMaxCensusLines) continue;
                 ++lines;
                 const char* edid = p->GetFormEditorID();
-                const std::uint8_t sm = srcMask[p->GetFormID()];
-                std::string src;
-                if (sm & 1) src += "base,";
-                if (sm & 2) src += "addedPerks,";
-                if (sm & 4) src += "perks,";
-                if (stone.count(p->GetFormID())) src += "standingStone,";
-                if (!src.empty()) src.pop_back();
+                // CommonLib's player runtime lists are unreachable in this build (see ScanHeld), so the source
+                // is only "in the player's base record" or "not in it" (runtime-added or a standing stone).
+                const char* src = InPlayerBase(a_player, p) ? "base" : "not-in-base(runtime-added or standing-stone)";
                 const char* fullName = p->GetName();
                 RE::BSString descBuf;
                 p->TESDescription::GetDescription(descBuf, p);
@@ -527,27 +534,40 @@ namespace MFO::ProgAllocator {
             }
             if (lines >= kMaxCensusLines)
                 spdlog::warn("[inherit-census] per-perk lines capped at {} (more candidates exist; the summary counts all)", kMaxCensusLines);
-            spdlog::info("[inherit-census] summary sig={:016X} gen={} player lists base={} added={} runtime={} (standing-stone excluded={}) "
-                         "in-tree={} candidates={} unconfirmed={} | copy={} no-follower-use={} player-only={} script-part={} "
-                         "(activate-choice={} script-mgef={} quest={}) | playerRef={} duplicateOnSomeFollower={} hiddenFlag={} followers={} treeSet={}",
-                         a_sig, g_pollGen, nBase, nAdded, nRuntime, nStone, inTree, held.size(), unconfirmed,
+            spdlog::info("[inherit-census] summary sig={:016X} gen={} held-in-no-tree={} (treePerksHeld={} of {}) unconfirmed={} | "
+                         "copy={} no-follower-use={} player-only={} script-part={} "
+                         "(activate-choice={} script-mgef={} quest={}) | playerRef={} duplicateOnSomeFollower={} hiddenFlag={} followers={} "
+                         "candidateForms={} (standing-stone perks are NOT separable in this build)",
+                         a_sig, g_pollGen, held.size(), treeHeld, g_treePtrs.size(), unconfirmed,
                          counts[0], counts[1], counts[2], counts[3], scriptEp, scriptMgef, questParts,
-                         playerRef, dupSome, hiddenFlag, bases.size(), g_treeCount);
+                         playerRef, dupSome, hiddenFlag, bases.size(), g_candidates.size());
         }
 
     }
 
-    // MAIN THREAD (PollWork). Cheap path every poll: one signature walk over the player's perk lists.
+    // MAIN THREAD (PollWork). Cheap path every poll: a counter. A real scan (HasPerk over the candidate
+    // forms) runs on the first poll of each load generation, when the player's level changes, and every
+    // kRescanPolls polls (~60 s at the 2 s poll). It LOGS only on the first scan of a generation or when
+    // the held set's hash changes: once per signature change.
     void InheritCensusPoll(RE::PlayerCharacter* a_player) {
         if (!a_player || !Config::g_inheritPerkCensus.load()) return;
         if (!g_treeBuilt) BuildTreeSet();
         if (g_treeCount == 0) return;   // already logged loudly; a census against an empty tree set would be noise
-        const auto sig = Signature(a_player);
-        if (g_seenGen == g_pollGen && g_haveSig && sig == g_lastSig) return;
+        if (!g_candBuilt) BuildCandidates();
+        const bool newGen = (g_seenGen != g_pollGen);
+        const auto lvl    = a_player->GetLevel();
+        const bool lvlChg = (lvl != g_lastLevel);
+        if (!newGen && !lvlChg && ++g_pollsSince < kRescanPolls) return;
+        g_pollsSince = 0;
+        g_lastLevel  = lvl;
+        std::vector<RE::BGSPerk*> held;
+        std::size_t treeHeld = 0;
+        const auto sig = ScanHeld(a_player, held, treeHeld);
+        if (!newGen && g_haveSig && sig == g_lastSig) return;
         g_seenGen = g_pollGen;
         g_haveSig = true;
         g_lastSig = sig;
-        RunCensus(a_player, sig);
+        RunCensus(a_player, sig, held, treeHeld);
     }
 
 }
