@@ -30,9 +30,11 @@ namespace MFO::Classes {
     // ── ranks (pure) ──────────────────────────────────────────────────────────────────────────────
     std::array<std::uint8_t, kClassCount> CarrierRanks(const FollowerClasses& a_fc) {
         std::array<std::uint8_t, kClassCount> r{};
+        // marth 2026-11-10: classes are ON / OFF PER FOLLOWER; equipped == kNoClass means OFF, so nothing at all applies, mastered
+        // quarters included.
+        if (a_fc.equipped >= kClassCount) return r;
         for (std::size_t c = 0; c < kClassCount; ++c)
             if (((a_fc.mastered >> c) & 1u) && LevelCap(static_cast<Id>(c)) != 0) r[c] = kRankMasteredUnequipped;
-        if (a_fc.equipped >= kClassCount) return r;
         const auto eq = static_cast<Id>(a_fc.equipped);
         if (eq == Id::Dragonborn) {   // no passive and no level of its own: every mastered passive at FULL (its cap)
             for (std::size_t c = 0; c < kClassCount; ++c)
@@ -252,12 +254,14 @@ namespace MFO::Classes {
             if (!a_teardown) LogMissingOnce();
 
             std::array<std::uint8_t, kClassCount> ranks{};
+            bool classesOn = false;   // equipped != kNoClass
             if (!a_teardown)
-                if (auto fc = GetFollower(a_fid)) ranks = CarrierRanks(*fc);
+                if (auto fc = GetFollower(a_fid)) { ranks = CarrierRanks(*fc); classesOn = fc->equipped < kClassCount; }
 
             // 1. perks, ONCE per session per follower (the base mutation is runtime-only; a persisted base would not need it)
             int granted = 0, live = 0;
-            if (!a_teardown) {
+            // Granted only for a follower with classes ON (first class equip): a classes-off follower's base record is not touched.
+            if (classesOn) {
                 Mask have = 0;
                 { std::scoped_lock lk(g_pm); have = g_granted[a_fid]; }
                 for (Id id : kPerkClasses) {

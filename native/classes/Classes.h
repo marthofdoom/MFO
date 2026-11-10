@@ -321,6 +321,7 @@ namespace MFO::Classes {
     // OFF, 1..cap ACTIVE at class level N, kRankMasteredUnequipped = mastered and unequipped (1/4 of the FULL value). CarrierRanks
     // turns a follower's class state into those ranks; the reconcile (main thread) writes them, grants the perks ONCE (TESNPC::AddPerk,
     // a runtime base mutation, so re-granted every session) and adds the Mercenary / Scout ability spells.
+    //   - equipped == kNoClass = classes OFF for that follower (marth 2026-11-10): every rank 0, nothing applies, mastered quarters included;
     //   - the equipped class: rank = its level (clamped to 1..cap; a never-levelled equipped class counts as level 1, MFO-B627);
     //     a MASTERED equipped class is at the cap (full);
     //   - every other mastered class: kRankMasteredUnequipped;
