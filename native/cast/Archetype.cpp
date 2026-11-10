@@ -235,7 +235,13 @@ namespace MFO::Actuation {
             o.delivery   = sp->data.delivery;
             o.casting    = sp->data.castingType;
             o.noDualMods = sp->data.flags.all(RE::SpellItem::SpellFlag::kNoDualCastMods);
-            o.chargeTime = sp->GetChargeTime();   // vfunc 64 (MagicItem.h:97, SpellItem.h:80); log-only field
+            // vfunc 64 (MagicItem.h:97, SpellItem.h:80): for an AUTOCALC spell the engine body (0x1500B0) walks every effect and
+            // dereferences effect->baseEffect with NO null check, so call it only when every baseEffect is non-null; else the raw
+            // SPIT field (chargeRaw, shown as `chargeTime=raw` in the census). Log-only field. IsTwoHanded reads only the equip slot.
+            bool allBase = true;
+            for (auto* e : sp->effects) if (!e || !e->baseEffect) { allBase = false; break; }
+            o.chargeRaw  = !allBase;
+            o.chargeTime = allBase ? sp->GetChargeTime() : sp->data.chargeTime;
             o.range      = sp->data.range;
             o.twoHanded  = sp->IsTwoHanded();
             switch (CasterConsent::ClassifySpell(sp)) {
@@ -548,8 +554,9 @@ namespace MFO::Actuation {
             auto& b = buckets[{ static_cast<int>(a.shape), static_cast<int>(a.row), a.twoHanded }];
             ++b.n;
             if (b.ex.size() < 3)
-                b.ex.push_back(std::format("{} ({:08X}) {}/{} charge={:.2f}s{}", sp->GetName() && *sp->GetName() ? sp->GetName() : "?",
+                b.ex.push_back(std::format("{} ({:08X}) {}/{} charge={:.2f}s{}{}", sp->GetName() && *sp->GetName() ? sp->GetName() : "?",
                                            sp->GetFormID(), DeliveryName(a.delivery), CastingName(a.casting), a.chargeTime,
+                                           a.chargeRaw ? " chargeTime=raw" : "",
                                            a.spawnHazard ? (a.hazardHostile ? " hazard=hostile" : " hazard=benign") : ""));
         }
         std::vector<std::pair<std::tuple<int, int, bool>, const Bucket*>> order;

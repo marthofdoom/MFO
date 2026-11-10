@@ -778,6 +778,7 @@ namespace MFO::Actuation {
         bool         twoHanded    = false;   // SpellItem::IsTwoHanded (equip slot flag 1)
         bool         noDualMods   = false;   // SPIT flag kNoDualCastMods
         float        chargeTime   = 0.0f;    // SPIT chargeTime
+        bool         chargeRaw    = false;   // chargeTime is the raw SPIT field (an effect had a null baseEffect: GetChargeTime would crash)
         float        range        = 0.0f;    // SPIT range
         std::uint32_t area        = 0;       // max EFIT area over effects
         bool         hasProjectile = false;  // any effect names a projectile
