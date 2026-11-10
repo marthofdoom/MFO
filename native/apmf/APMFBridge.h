@@ -625,6 +625,15 @@ namespace MFO::APMFBridge {
     // never claimed when no leash can hold him (principle 7). Read-only; takes g_leashMx.
     bool PursuitLeashStanding(RE::FormID a_follower);
 
+    // ── ch.29 PROJECTILE AIM (ABI v36, kIntent_ProjectileAim): the class miss budget ──────
+    // apmf/AimClaims.cpp (card H5). The pump's sweep files one standing claim per managed
+    // follower of a ranged class (Archer / Scout / Witchhunter / Ranger / Jaqspur) with that
+    // class's budget (Config::g_aimBudget<Class>), re-files on a class change and releases when
+    // the class stops being ranged. ReleaseAimClaim is the dismissal / MFO-off road. No-op when
+    // Harbinger is absent, ABI < 36, the class add-on is inactive, or the seat refused.
+    // Worker-safe; its own mutex (never g_mx).
+    void ReleaseAimClaim(RE::FormID a_follower, const char* a_why);
+
     // ── ch.24 HELD-HEAL APPROACH (ABI v19, kIntent_CombatApproach): apmf/CombatApproach.cpp ──
     // X = the held heal's recipient, R = fHealApproachRadius. One claim per follower; a no-op below
     // ABI 19 / seat refused / recipient blocked this fight. Release: a_hand names the hand whose

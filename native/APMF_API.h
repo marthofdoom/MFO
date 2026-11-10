@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v35, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v36, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 35;
+    inline constexpr std::uint32_t kABIVersion = 36;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -669,6 +669,33 @@ namespace APMF_API {
                                      //       (kInvalidHandle, logged): APMF < v28, not installed, the player,
                                      //       actor 0, form 0, a non-finite pos / yaw, an unknown flag bit.
                                      //       See "ABI v28: PLACE" at the end of this header, Docs/FACETS.md "Place".
+
+        kIntent_ProjectileAim = 29,  // ch.29 PROJECTILE AIM (ABI v36, card H5, marth 2026-11-10). Where this
+                                     //       actor's own weapon shots (arrows, bolts) are LAUNCHED. Mode: a MISS
+                                     //       BUDGET over the actor's last 10 shots. The engine already aims with
+                                     //       lead and ballistics (CombatProjectileAimController); what makes an NPC
+                                     //       miss is two deliberate scatters, the aim controller's random offset
+                                     //       (fCombatRangedAimVariance x fCombatAimProjectileRandomOffset) and the
+                                     //       skill cone at TESObjectWEAP::Fire (fBowNPCSpreadAngle x (1 -
+                                     //       Archery/100)). Harbinger sits at Fire's ONE call to Projectile::Launch
+                                     //       and, for a shot the budget says must land, re-aims the launch at the
+                                     //       engine's OWN unscattered solution (the controller's lead point with
+                                     //       the engine's ballistic lift): both scatters reduced to zero, the
+                                     //       engine's lead, the draw / release animation and the projectile itself
+                                     //       untouched. A shot the budget allows to miss is left exactly as the
+                                     //       engine launched it. Hits are read from TESHitEvent (cause = the actor,
+                                     //       the shot's projectile form, the shot's target); a shot with no such
+                                     //       hit inside [ProjectileAim] fShotWindowSec is a MISS.
+                                     //       Param: ival = the budget, the MOST misses allowed among the last 10
+                                     //       shots: 0 = every shot is corrected (never miss), 1..9 = a shot is
+                                     //       corrected while (misses + shots still in flight) in the window >=
+                                     //       ival, 10 or more = observe only (count, correct nothing). form /
+                                     //       target / pos / fval not read. A STANDING claim: no TTL, ended by
+                                     //       Release. REFUSED (kInvalidHandle, logged) for the player and while the
+                                     //       seat is not installed ([ProjectileAim] bProjectileAim=0, VR, an
+                                     //       unsupported runtime, a failed address row or byte check). Read the
+                                     //       counts with APMF_API_v36::GetProjectileAimState.
+                                     //       See Docs/APMF_API-REFERENCE.md#abi-v36-projectile-aim
     };
 
     // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
@@ -1541,6 +1568,8 @@ namespace APMF_API {
     //                                  cell destination (both in game units).
     //   ival   kIntent_Place           ABI v28: a PlaceFlags bitmask (0 = none).
     //   fval   kIntent_Place           ABI v28: the yaw in radians, read ONLY with kPlace_SetYaw.
+    //   ival   kIntent_ProjectileAim   ABI v36: the miss budget over the last 10 shots (0 = never miss,
+    //                                  1..9 = at most that many, 10+ = observe only). Nothing else read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
@@ -3125,6 +3154,67 @@ namespace APMF_API {
         // snapshot, leaf locks; no game call, no form lookup). The caller is attributed by its own return
         // address, as a claim is, for `offFacets`. A throw inside returns kServe_Failed, nothing written.
         std::uint32_t (*CanServe)(const APMF_ServeQuery* query, APMF_ServeInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v36: ch.29 PROJECTILE AIM (kIntent_ProjectileAim) -- the miss budget
+    // ═════════════════════════════════════════════════════════════════════════════
+    // A client claims kIntent_ProjectileAim on an NPC with RequestEx and param.ival = the budget (see the
+    // Intent's comment). Harbinger's seat is TESObjectWEAP::Fire's one call to Projectile::Launch (AE
+    // 18102+0xE60 / SE 17693+0xE82 / 1.7.104 raw 0x28C450+0xE70). For a corrected shot the launch angles are
+    // recomputed from the actor's own CombatProjectileAimController: its raw lead point (+0x74, the engine's
+    // predicted target position, no random offset) and the engine's ballistic lift (the low-arc angle for the
+    // controller's launch speed and the projectile's gravity x the engine's gravity scale, exactly the solve
+    // the controller runs). Both deliberate scatters (the controller's random offset and the Archery cone) are
+    // reduced to zero for that shot; nothing else about the shot changes. See Docs/FACETS.md "ch.29" and
+    // Docs/APMF_API-REFERENCE.md#abi-v36-projectile-aim.
+
+    // GetProjectileAimState's answer. APPEND-ONLY: never renumber.
+    enum ProjectileAimState : std::uint32_t {
+        kProjectileAimState_None        = 0,   // no winning ch.29 claim on this actor
+        kProjectileAimState_Claimed     = 1,   // a winning claim; no shot of the actor seen at the seat yet
+        kProjectileAimState_Governed    = 2,   // the seat has seen at least one shot of the actor under the claim
+        kProjectileAimState_Unavailable = 3,   // the seat is not installed (every ch.29 claim is refused)
+    };
+
+    // GetProjectileAimState's out-struct. BYTE-SHARED, static_assert-pinned. Set `size` to
+    // sizeof(APMF_ProjectileAimInfo) before the call; a smaller `size` gets the state only, nothing written.
+    // Counters are since the load (saturating). The window is the actor's last 10 RESOLVED shots.
+    struct APMF_ProjectileAimInfo {
+        std::uint32_t size;            // in: sizeof(APMF_ProjectileAimInfo) (80)
+        std::uint32_t state;           // ProjectileAimState (also the return value)
+        Handle        ownerHandle;     // the winning ch.29 claim (kInvalidHandle when none)
+        std::uint32_t budget;          // param.ival as applied (10 = observe only)
+        std::uint32_t shots;           // launches seen at the seat for this actor under a claim
+        std::uint32_t corrected;       // of those, re-aimed by Harbinger
+        std::uint32_t hits;            // shots that hit THEIR target (TESHitEvent)
+        std::uint32_t hitsOther;       // shots that hit another actor (a miss for the budget)
+        std::uint32_t misses;          // shots with no hit inside the window (hitsOther included)
+        std::uint32_t pending;         // shots still in flight (launched, not yet resolved)
+        std::uint32_t windowFill;      // resolved shots in the window (<= 10)
+        std::uint32_t windowMisses;    // of those, misses (hitsOther included)
+        std::uint32_t uncorrectable;   // corrected shots left as the engine launched them (no aim controller for
+                                       //   the weapon, launch speed unknown, target too close): logged
+        std::uint32_t wouldCorrect;    // corrections NOT applied because of observe-only (INI) or budget >= 10
+        std::uint32_t rankStood;       // corrections NOT applied because the Engine source outranks the claim
+        std::uint32_t reserved[5];
+    };
+    static_assert(sizeof(APMF_ProjectileAimInfo) == 80, "APMF_ProjectileAimInfo is 80 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_ProjectileAimInfo, shots) == 16, "APMF_ProjectileAimInfo layout is frozen");
+    static_assert(offsetof(APMF_ProjectileAimInfo, windowFill) == 40, "APMF_ProjectileAimInfo layout is frozen");
+    static_assert(offsetof(APMF_ProjectileAimInfo, reserved) == 60, "APMF_ProjectileAimInfo layout is frozen");
+    inline constexpr std::uint32_t kProjectileAimInfoV36Size = 80;
+
+    // The v36 interface: APMF_API_v35's members verbatim (prefix EXTENSION), then ONE appended slot.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 36` (INVARIANTS #14b). An older
+    // APMF has no slot and refuses kIntent_ProjectileAim (no channel serves it): the client's own degrade
+    // path runs (the engine aims as it always does).
+    struct APMF_API_v36 : APMF_API_v35 {
+        // What ch.29 is doing for `actor`: returns a ProjectileAimState and, when `out` is non-null and
+        // `out->size` >= kProjectileAimInfoV36Size, fills `*out`. Read-only, ANY THREAD (an RCU read and a copy
+        // under APMF's own leaf lock, no game call). A throw inside returns kProjectileAimState_None, nothing
+        // written.
+        std::uint32_t (*GetProjectileAimState)(RE::FormID actor, APMF_ProjectileAimInfo* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
