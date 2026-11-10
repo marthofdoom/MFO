@@ -1,0 +1,3 @@
+# IAUS card I0 (2026-11-10): Scheduler::Tick (the combat scan + reconciliation) moved out of
+# native/Scheduler.cpp into native/scheduler/CombatScan.cpp (see wave1.txt for the format).
+Scheduler.cpp:          Scheduler.cpp scheduler/CombatScan.cpp
