@@ -108,7 +108,7 @@ namespace MFO::Classes {
         float        condParam;      // pct params are fractions [0,1], distances are units, like Gambit::conditionParam
         std::uint8_t subject;        // Vocab::Subject ordinal (0 Self/Auto ... 4 Caster)
         SpellRole    role;           // cast rows only
-        float        cooldownSec;    // 0 = none. Card G9 made it a real row field (Gambit::cooldownTenths, FLWR v6): card C12 applies it with CooldownTenthsFromSec (State.h). Nothing applies class defaults yet
+        float        cooldownSec;    // 0 = none. NOT applied until card G9 (per-rule cooldown, FLWR v6) exists
         const char*  planCard;       // nullptr = applied; otherwise the card that adds the missing opcode
         bool         pendingRuling;  // DESIGN-OPEN enemy-control row (marth ruled AUTO will treat enemy-control spells as hostile; base task 1dfcuabcr0d) or a T1 row (marth: T1 keeps today's kit, no class default set): C12 must not apply it
         [[nodiscard]] constexpr bool IsApplied() const { return planCard == nullptr; }
