@@ -2636,13 +2636,22 @@ Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbati
 - SEV-5: CastOn.cpp:593 comment, the :621 WARN and the :398/:636 reasons plus MAP.md:773-775 still say "pure-Script" for a release that now also covers NoRow.
 - SEV-5: Auto.cpp:666 "no enemies in range" also covers "every foe will-not-work".
 
-### MFO-B610 -- follower spell cost parity leftovers (ClickUp 1dfcuabcr0c, redesigned 2026-11-09 to charge the player-curve cost; raised against the perk design ae6c6bb, carried to the redesign)
-- **SEV-4:** the affordability GATES still use the engine cost (Auto.cpp budget, Summon.cpp gate, CastOn.cpp cost, Service.cpp). A follower whose pool is between E and P passes the gate and the deduct clamps to the pool. Decide whether the gates should read `CostParity::Cost`.
-- **SEV-4:** dual-cast is not modelled: the engine's dual-cast cost is not read, so a dual animated cast is topped up on the single-cast delta.
-- **SEV-5:** a multi-school autocalc spell uses the costliest effect's school for the whole ratio (the engine applies the curve per effect).
-- **SEV-5:** the (caster, spell) direct-bill dedupe window (3 s) could swallow a real animated cast of the same spell right after a direct one.
-- **SEV-5:** `HandleEntryPoint` and `CalculateMagickaCost` run on the worker (as the existing deducts already do), not on main.
-- **SEV-5:** a negative Base GMST gave NaN (FIXED: explicit error + refusal). Perk-design items (marker ability, epoch guard, ex-follower sweep) are gone with the perk.
+### MFO-B610 -- follower spell cost parity leftovers (ClickUp 1dfcuabcr0c, redesigned 2026-11-09 to charge the player-curve cost; carried from the perk design ae6c6bb)
+- **SEV-5:** a negative Base GMST gave NaN (FIXED: explicit error + refusal). The perk-design items (marker ability, epoch guard, ex-follower sweep) are gone with the perk.
+- (The earlier "SEV-5: HandleEntryPoint and CalculateMagickaCost run on the worker" line was FALSE and is withdrawn: review of c0f6b1a, F1, made the animated roads post to the main thread, see MAP.md. The direct roads already run on main.)
+- The gate, dual-cast and multi-school items moved to MFO-B612 / MFO-B614.
+
+### MFO-B612 (SEV-4, OPEN, CostParity gates, against c0f6b1a, Opus review F4) -- the affordability gates read the engine cost
+Verbatim (reviewer, relayed by the coordinator): F4 SEV-4: affordability gates read engine cost E (Auto.cpp:860, Summon.cpp:426, CastOn.cpp:284, Service.cpp:1915/2006, DirectSelf.cpp:370, DirectTarget.cpp:380). With a pool between E and P the cast passes and the clamped deduct makes it cheaper than P. Bounded to the last cast of each pool, and inherent on the animated road.
+
+### MFO-B613 (SEV-4, OPEN, CostParity dedupe stamp, against c0f6b1a, Opus review F5) -- the stamp is written on every Cost() call
+Verbatim (reviewer, relayed by the coordinator): F5 SEV-4: the dedupe stamp is written on every Cost() call even with no cast (Summon.cpp:363 stamps inside the affordability check, then refuses at :364). Field logs show direct CastSpellImmediate raises NO TESSpellCastEvent (16 direct casts, 0 sink lines), so the 3 s window only swallows genuine animated recasts (undercharge).
+
+### MFO-B614 (SEV-4, OPEN, CostParity dual cast / multi-school, against c0f6b1a, Opus review F6)
+Verbatim (reviewer, relayed by the coordinator): F6 SEV-4: dual cast is topped up on the single-cast delta, and a multi-school autocalc spell uses the costliest effect's school while the engine curves each effect.
+
+### MFO-B615 (SEV-5, OPEN, CostParity comments / publication, against c0f6b1a, Opus review F8)
+Verbatim (reviewer, relayed by the coordinator): F8 SEV-5: the comments at CostParity.cpp:40 / CostParity.h:28-29 say the sink event follows a direct cast "ms apart", but the field shows it never fires. g_pc/g_np are published before a relaxed Active() load. LogDue(Key^1u) collisions. Active() ignores an INI re-read. Also kAddRangeToValue perks (random) break the affine probe.
 
 ### MFO-B601 (SEV-4/5, OPEN, G9 per-rule cooldown, against 9b338f1, Opus tier-3 review) -- review leftovers
 Coordinator's paraphrase of the findings (not the reviewer's verbatim text):

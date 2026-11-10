@@ -4,7 +4,7 @@
 #include "Forms.h"
 #include "Config.h"
 #include "Followers.h"
-#include "CostParity.h"
+#include "cast/CostParity.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Board.h"

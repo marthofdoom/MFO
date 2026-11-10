@@ -1,6 +1,6 @@
 #include "PCH.h"
 #include "Diagnostics.h"
-#include "CostParity.h"
+#include "cast/CostParity.h"
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"

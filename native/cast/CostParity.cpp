@@ -2,6 +2,8 @@
 #include "CostParity.h"
 #include "Config.h"
 #include "Followers.h"
+#include "MainThread.h"
+#include "Runtime.h"
 #include "State.h"
 #include <cmath>
 #include <chrono>
@@ -37,7 +39,11 @@ namespace MFO::CostParity {
         };
         std::vector<Channel> g_channels;
 
-        constexpr auto kDedupeWindow = std::chrono::seconds(3);   // a direct bill, then the sink event for the same cast (ms apart)
+        // A direct bill, then a sink event for the same pair inside this window is skipped. (Field logs: direct CastSpellImmediate raises
+        // no TESSpellCastEvent, so in practice this window only ever swallows a genuine animated recast; MFO-B612.)
+        constexpr auto kDedupeWindow = std::chrono::seconds(3);
+        // Tick runs once per Followers::Refresh (kPumpMs 133 x kDiagEveryNth 4 = ~532 ms). One Tick never bills more than 2 periods.
+        constexpr float kMaxBillSec  = 1.1f;
         constexpr auto kLogEvery     = std::chrono::seconds(5);
 
         std::uint64_t Key(RE::FormID c, RE::FormID s) { return (static_cast<std::uint64_t>(c) << 32) | s; }
@@ -121,6 +127,27 @@ namespace MFO::CostParity {
         }
     }
 
+
+    namespace {
+        // MAIN THREAD (MainThread::Post). Re-resolve by FormID, re-check the follower is still tracked, compute P and deduct `a_sec`
+        // seconds of (P - E). `a_sec` 0 = a one-shot (fire-and-forget) top-up of exactly P - E. a_label names the road in the log.
+        void BillOnMain(RE::FormID a_casterID, RE::FormID a_spellID, float a_sec, const char* a_label) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
+            auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+            if (!actor || !spell) return;
+            if (!Followers::IsTrackedFast(a_casterID)) return;   // dismissed between the post and now
+            Parity p;
+            if (!Compute(actor, spell, p)) return;
+            const float delta = p.parity - p.engine;
+            const float spent = Deduct(actor, a_sec > 0.0f ? delta * a_sec : delta);
+            if (LogDue(Key(a_casterID, a_spellID) ^ 0x8000000000000000ull))
+                spdlog::info("[costparity] {:08X} animated {} ({:08X}) {}: skill {:.0f} in {}, player cost {:.2f}, engine cost {:.2f}, "
+                             "delta {:.2f}{} -- topped up {:.2f}", a_casterID, spell->GetName() ? spell->GetName() : "?", a_spellID,
+                             a_label, p.skill, static_cast<int>(p.school), p.parity, p.engine, delta,
+                             a_sec > 0.0f ? std::format("/s x {:.2f}s", a_sec) : std::string(), spent);
+        }
+    }
+
     bool Active() { return g_active.load(std::memory_order_relaxed); }
 
     void Reset() {
@@ -161,6 +188,21 @@ namespace MFO::CostParity {
                           "cost unchanged", pc.base, np.base);
             return;
         }
+        // SEAT SELF-CHECK (the TradePerks.cpp:49-59 pattern): the worker-posted roads call HandleEntryPoint, so refuse on any runtime
+        // whose HandleEntryPoint row did not verify against OUR unpacked executables.
+        if (!Runtime::Known()) {
+            spdlog::error("[costparity] runtime {} is not a supported build ({}) -- INACTIVE, followers pay the engine cost unchanged",
+                          REL::Module::get().version().string("."), Runtime::GateReason());
+            return;
+        }
+        {
+            REL::Relocation<void*> ep{ REL::RelocationID(23073, 23526) };
+            if (!Runtime::SeatVerified(ep.address(), "TradePerks.BGSEntryPoint.HandleEntryPoint")) {
+                spdlog::error("[costparity] seat TradePerks.BGSEntryPoint.HandleEntryPoint did not verify -- INACTIVE, followers pay the "
+                              "engine cost unchanged");
+                return;
+            }
+        }
         g_pc = pc; g_np = np;
         spdlog::info("[costparity] player curve: Base {:.4f} Scale {:.3f} Mult {:.3f}; NPC curve: Base {:.4f} Scale {:.3f} Mult {:.3f}",
                      pc.base, pc.scale, pc.mult, np.base, np.scale, np.mult);
@@ -197,76 +239,69 @@ namespace MFO::CostParity {
 
     void OnObservedCast(RE::FormID a_casterID, RE::FormID a_spellID) {
         if (!Active()) return;
-        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
+        // WORKER bookkeeping only: the managed test, the dedupe stamp and the channel list. Every engine evaluation (Compute =
+        // CalculateMagickaCost + HandleEntryPoint) and the magicka write are posted to the MAIN thread (house rule: the perk entry
+        // point is main-thread only; every other MFO magicka deduct is a main-thread post).
         auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
-        if (!actor || !spell) return;
+        if (!spell) return;
         // Managed = tracked, and MFO not switched off for him. No record (a summon or a runtime follower) counts as managed (Q41).
         if (const auto it = g_followers.find(a_casterID); it != g_followers.end() && !it->second.mfoEnabled) return;
         const auto key = Key(a_casterID, a_spellID);
+        const auto now = Clock::now();
         {
             std::scoped_lock lk(g_mx);
-            if (const auto it = g_directBill.find(key); it != g_directBill.end() && Clock::now() - it->second < kDedupeWindow)
+            if (const auto it = g_directBill.find(key); it != g_directBill.end() && now - it->second < kDedupeWindow)
                 return;   // MFO's direct road already billed this cast
         }
-        Parity p;
-        if (!Compute(actor, spell, p)) return;
-        const float delta = p.parity - p.engine;
-        const bool  conc  = spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
-        if (conc) {
+        if (spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
             std::scoped_lock lk(g_mx);
             for (auto& c : g_channels)
-                if (c.caster == a_casterID && c.spell == a_spellID) { c.lastSeen = Clock::now(); return; }
-            g_channels.push_back({ a_casterID, a_spellID, Clock::now(), Clock::now() });
-            // The channel's first second is billed by the Tick that follows; this line is the start.
-            spdlog::info("[costparity] {:08X} animated {} ({:08X}) concentration: skill {:.0f} in {}, player cost {:.2f}/s, engine "
-                         "cost {:.2f}/s, delta {:.2f}/s -- topping up per second", a_casterID,
-                         spell->GetName() ? spell->GetName() : "?", a_spellID, p.skill, static_cast<int>(p.school),
-                         p.parity, p.engine, delta);
-            return;
+                if (c.caster == a_casterID && c.spell == a_spellID) {
+                    // The same spell opened again (the previous channel may have ended between two Ticks): restart the clocks so the
+                    // idle gap is never billed.
+                    c.paidThrough = now; c.lastSeen = now;
+                    return;
+                }
+            g_channels.push_back({ a_casterID, a_spellID, now, now });
+            return;   // Tick bills it per second from here
         }
-        const float spent = Deduct(actor, delta);
-        spdlog::info("[costparity] {:08X} animated {} ({:08X}): skill {:.0f} in {}, player cost {:.2f}, engine cost {:.2f}, delta "
-                     "{:.2f} -- topped up {:.2f}", a_casterID, spell->GetName() ? spell->GetName() : "?", a_spellID, p.skill,
-                     static_cast<int>(p.school), p.parity, p.engine, delta, spent);
+        MainThread::Post([a_casterID, a_spellID]() { BillOnMain(a_casterID, a_spellID, 0.0f, "fire-and-forget"); });
     }
 
     void Tick() {
-        std::vector<Channel> open;
+        // WORKER. Time bookkeeping only; the liveness read, Compute and the deduct happen in ONE main-thread job per Tick.
+        struct Bill { RE::FormID caster, spell; float sec; };
+        std::vector<Bill> bills;
         {
             std::scoped_lock lk(g_mx);
             if (g_channels.empty()) return;
-            open = g_channels;
-        }
-        const auto now = Clock::now();
-        std::vector<std::pair<RE::FormID, RE::FormID>> ended;
-        std::vector<Channel> kept;
-        for (auto c : open) {
-            auto* actor = RE::TESForm::LookupByID<RE::Actor>(c.caster);
-            auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(c.spell);
-            if (!actor || !spell) { ended.emplace_back(c.caster, c.spell); continue; }
-            const bool live = Channelling(actor, c.spell);
-            if (live) c.lastSeen = now;
-            // Bill up to the last moment the channel was seen alive (a final bill when it has just ended).
-            const float sec = std::max(0.0f, std::chrono::duration<float>(c.lastSeen - c.paidThrough).count());
-            Parity p;
-            if (sec > 0.0f && Compute(actor, spell, p)) {
-                const float spent = Deduct(actor, (p.parity - p.engine) * sec);
-                if (LogDue(Key(c.caster, c.spell) ^ 1u))
-                    spdlog::info("[costparity] {:08X} animated {} ({:08X}) concentration: skill {:.0f}, player cost {:.2f}/s, engine "
-                                 "cost {:.2f}/s, delta {:.2f}/s x {:.2f}s -- topped up {:.2f}", c.caster,
-                                 spell->GetName() ? spell->GetName() : "?", c.spell, p.skill, p.parity, p.engine,
-                                 p.parity - p.engine, sec, spent);
+            const auto now = Clock::now();
+            auto* ui = RE::UI::GetSingleton();
+            const bool paused = !ui || ui->GameIsPaused();   // a menu / the board: the engine charges nothing, neither do we
+            for (auto& c : g_channels) {
+                if (paused) { c.paidThrough = now; continue; }   // drop the paused span instead of billing it afterwards
+                const float sec = std::min(kMaxBillSec,
+                                           std::max(0.0f, std::chrono::duration<float>(now - c.paidThrough).count()));
+                c.paidThrough = now;
+                if (sec > 0.0f) bills.push_back({ c.caster, c.spell, sec });
             }
-            c.paidThrough = c.lastSeen;
-            if (live) kept.push_back(c); else ended.emplace_back(c.caster, c.spell);
         }
-        std::scoped_lock lk(g_mx);
-        for (auto& c : g_channels) {   // fold the bookkeeping back (a channel opened meanwhile is left untouched)
-            for (const auto& k : kept)
-                if (k.caster == c.caster && k.spell == c.spell) { c.paidThrough = k.paidThrough; c.lastSeen = k.lastSeen; }
-        }
-        g_channels.erase(std::remove_if(g_channels.begin(), g_channels.end(), [&](const Channel& c) {
-            for (const auto& e : ended) if (e.first == c.caster && e.second == c.spell) return true;
-            return false; }), g_channels.end());
+        if (bills.empty()) return;
+        MainThread::Post([bills = std::move(bills)]() {
+            std::vector<std::pair<RE::FormID, RE::FormID>> ended;
+            for (const auto& b : bills) {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(b.caster);
+                if (!actor || !Followers::IsTrackedFast(b.caster) || !Channelling(actor, b.spell)) {
+                    ended.emplace_back(b.caster, b.spell);   // gone, dismissed, or no longer channelling: close it, bill nothing for this slice
+                    continue;
+                }
+                BillOnMain(b.caster, b.spell, b.sec, "concentration");
+            }
+            if (ended.empty()) return;
+            std::scoped_lock lk(g_mx);
+            g_channels.erase(std::remove_if(g_channels.begin(), g_channels.end(), [&](const Channel& c) {
+                for (const auto& e : ended) if (e.first == c.caster && e.second == c.spell) return true;
+                return false; }), g_channels.end());
+        });
     }
 }

@@ -14,6 +14,8 @@
 //     P = a * (x * pf / nf) + b   with   x = (E - b) / a      (x = the NPC-curved, pre-perk cost).
 // DIRECT road: the deduct sites charge Cost() = P instead of the engine cost. ANIMATED road: the engine has already charged E;
 // OnObservedCast tops up P - E (a concentration spell per second, Tick). Never below 0 magicka. Only for a follower MFO manages.
+// THREADING: Cost() runs on whatever thread its (main-thread posted) deduct site runs on. OnObservedCast and Tick do worker bookkeeping
+// only; their Compute (CalculateMagickaCost + HandleEntryPoint) and magicka write are MainThread::Post'ed.
 
 namespace MFO::CostParity {
 
@@ -29,11 +31,12 @@ namespace MFO::CostParity {
     // animated top-up does not bill the same cast again.
     float Cost(RE::Actor* a_caster, RE::SpellItem* a_spell);
 
-    // WORKER, inside the SpellSink task's PumpTickGate: the engine's AI-fired road just cast `a_spellID` for `a_casterID`. Tops
-    // up P - E once (fire-and-forget) or opens a per-second channel (concentration). Skips an MFO-billed direct cast.
+    // WORKER, inside the SpellSink task's PumpTickGate: the engine's AI-fired road just cast `a_spellID` for `a_casterID`. Posts a
+    // main-thread top-up of P - E (fire-and-forget) or opens a per-second channel (concentration). Skips an MFO-billed direct cast.
     void OnObservedCast(RE::FormID a_casterID, RE::FormID a_spellID);
 
-    // WORKER (the follower sweep): bills the per-second delta of every open animated channel, closes the ended ones.
+    // WORKER (the follower sweep): once per call posts one main-thread job that bills the per-second delta of every open animated
+    // channel for the elapsed time (capped, none while the game is paused) and closes the ended ones.
     void Tick();
 
     // Forget all per-session memory (kPreLoadGame / revert, via Followers::ClearTransientState).

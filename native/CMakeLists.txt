@@ -30,7 +30,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Forms.cpp
     Config.cpp
     Followers.cpp
-    CostParity.cpp
+    cast/CostParity.cpp
     FollowerCatchUp.cpp
     Rapport.cpp
     Diagnostics.cpp

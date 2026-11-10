@@ -1,6 +1,6 @@
 #include "PCH.h"
 #include "Followers.h"
-#include "CostParity.h"   // ClickUp 1dfcuabcr0c: animated-channel top-up tick + per-session memory
+#include "cast/CostParity.h"   // ClickUp 1dfcuabcr0c: animated-channel top-up tick + per-session memory
 #include "Loadout.h"
 #include "Targeting.h"
 #include "EngageOnSight.h"   // ReleaseHeldState: forget the engage-on-sight entry
