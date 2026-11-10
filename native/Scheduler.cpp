@@ -202,6 +202,9 @@ namespace MFO::Scheduler {
             // number of such samples. The fill needs kRetreatBelowSecs of it AND >= 2 samples.
             double        belowSince   = -1.0;
             std::uint32_t belowSamples = 0;
+            // FLEE HOLD (marth 2026-11-09, Q20): the unpaused service clock when the full-health
+            // release first found the engine's own Flee package still current (< 0 = not holding).
+            double fleeHoldAt = -1.0;
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
         // [retreat-heal] line dedup (3 s per follower).
@@ -462,6 +465,12 @@ namespace MFO::Scheduler {
         // A follower whose last in-combat confidence (fightConf) is already at
         // the floor at arrival gets no STAY at all (released on arrival).
         constexpr double kRetreatStaySecs = 10.0;
+        // FLEE HOLD (marth 2026-11-09, Q20): the full-health release waits while the engine's OWN
+        // Flee package (PACKAGE_PROCEDURE_TYPE::kFlee) is still his current package, then releases.
+        // Bound on the UNPAUSED service clock: he is sampled once per OWN service (N x 133 ms,
+        // N = active roster; ~1.3 s at N = 10), so 20 s is >= 15 samples at N = 10 and still
+        // several at large rosters. Hitting it is logged as a WARN (never a silent release).
+        constexpr double kRetreatFleeHoldSecs = 20.0;
         // NO LIVE FOES (review of 7580bea, SEV-3 threading carve-out): judged
         // from the MAIN-THREAD foe probe (Packages::RetreatPostFoeProbe), posted
         // at most once per own service while he retreats, so its cadence is his
@@ -549,6 +558,7 @@ namespace MFO::Scheduler {
                 note.outOfCombatSeen = false;
                 note.reentries       = 0;
                 note.skipStay        = !inCombat;
+                note.fleeHoldAt      = -1.0;
                 note.fightConf       = inCombat ? Confidence::Of(a_f) : 1.0f;
             }
 
@@ -569,6 +579,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseRetreatReentryDeny(a_id, a_why);   // ch.22 (no-op when none)
                 Packages::RetreatClear(a_why, a_f);
                 note.phase = RetreatPhase::None;
+                note.fleeHoldAt = -1.0;
                 StartRetreatCooldown(note, now);
             };
 
@@ -669,6 +680,33 @@ namespace MFO::Scheduler {
                 }
                 const float hp = Vocab::HealthPct(a_f);
                 if (hp >= Vocab::kHealFull) {
+                    // Worker read of his current package (the same read as the `took` line above).
+                    const auto* curPkg = a_f->GetCurrentPackage();
+                    const bool fleeCurrent = curPkg && curPkg->packData.packType.get() ==
+                                                           RE::PACKAGE_PROCEDURE_TYPE::kFlee;
+                    if (fleeCurrent) {
+                        if (note.fleeHoldAt < 0.0) {
+                            note.fleeHoldAt = g_serviceClock;
+                            spdlog::info("[retreat] {:08X}: fully healed after {:.1f}s of stay but the engine's "
+                                         "Flee package is still current (pkg={:08X}) -- holding until it ends "
+                                         "(bound {:.0f}s)", a_id, stayed, curPkg->GetFormID(), kRetreatFleeHoldSecs);
+                            return true;
+                        }
+                        const double held = g_serviceClock - note.fleeHoldAt;
+                        if (held < kRetreatFleeHoldSecs) return true;
+                        spdlog::warn("[retreat] {:08X}: engine Flee package STILL current after {:.1f}s of flee "
+                                     "hold (bound {:.0f}s) -- releasing anyway (report it)", a_id, held,
+                                     kRetreatFleeHoldSecs);
+                        finish("stay over: healed, flee hold bound");
+                        return true;
+                    }
+                    if (note.fleeHoldAt >= 0.0) {
+                        spdlog::info("[retreat] {:08X}: engine Flee ended after {:.1f}s of flee hold -- fully "
+                                     "healed, released (dPlayer={:.0f})", a_id, g_serviceClock - note.fleeHoldAt,
+                                     a_dPlayer);
+                        finish("stay over: healed, flee ended");
+                        return true;
+                    }
                     spdlog::info("[retreat] {:08X}: stay over after {:.1f}s -- fully healed (dPlayer={:.0f}, "
                                  "engaged foes on last probe={})", a_id, stayed, a_dPlayer, foes.lastCount);
                     finish("stay over: healed");
