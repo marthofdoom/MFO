@@ -23,6 +23,8 @@
 #include "MainThread.h"
 #include "Runtime.h"
 
+#include <cmath>
+
 namespace MFO::SelfTest {
 
     namespace {

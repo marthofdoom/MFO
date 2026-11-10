@@ -152,7 +152,7 @@ namespace MFO::SelfTest {
                 roads |= 1u << static_cast<unsigned>(e.road);
                 sumE += e.engine;
                 sumP += e.applies ? e.parity : e.engine;
-                (e.applies ? anyApply : allApply) = e.applies ? true : false;
+                if (e.applies) anyApply = true; else allApply = false;
             }
             if (cnt == 0) {
                 s.n[0] = pool;
