@@ -152,12 +152,15 @@ namespace MFO::CostParity {
             if (!actor || !spell) return;
             if (!Followers::IsTrackedFast(a_casterID)) return;   // dismissed between the post and now
             Parity p;
-            if (!Compute(actor, spell, p)) {
 #ifdef MFO_DEV_SELFTEST
+            const bool devApplies = Compute(actor, spell, p);
+            if (!devApplies) {
                 DevNote(a_casterID, a_spellID, a_sec > 0.0f ? DevRoad::AnimatedSlice : DevRoad::AnimatedOnce, false, 0.0f, p.engine, 0.0f, a_sec);
-#endif
                 return;
             }
+#else
+            if (!Compute(actor, spell, p)) return;
+#endif
             const float delta = p.parity - p.engine;
             const float spent = Deduct(actor, a_sec > 0.0f ? delta * a_sec : delta);
 #ifdef MFO_DEV_SELFTEST
@@ -251,14 +254,14 @@ namespace MFO::CostParity {
             std::scoped_lock lk(g_mx);
             g_directBill[key] = Clock::now();
         }
-        if (!Compute(a_caster, a_spell, p)) {
 #ifdef MFO_DEV_SELFTEST
+        if (!Compute(a_caster, a_spell, p)) {
             DevNote(a_caster->GetFormID(), a_spell->GetFormID(), DevRoad::Direct, false, 0.0f, engine, 0.0f, 0.0f);
-#endif
             return engine;
         }
-#ifdef MFO_DEV_SELFTEST
         DevNote(a_caster->GetFormID(), a_spell->GetFormID(), DevRoad::Direct, true, p.parity, p.engine, 0.0f, 0.0f);
+#else
+        if (!Compute(a_caster, a_spell, p)) return engine;
 #endif
         if (LogDue(key))
             spdlog::info("[costparity] {:08X} direct {} ({:08X}): skill {:.0f} in {}, player cost {:.2f}, engine cost {:.2f}, "
