@@ -79,9 +79,15 @@ namespace MFO::SelfTest {
             if (hl) s.n[1] += 1;
             if (orr) s.n[2] += 1;
             if (ol) s.n[3] += 1;
-            s.note = std::format("samples {:.0f}: heal-left {:.0f}, offense-right {:.0f}, offense-LEFT {:.0f}; last "
-                                 "L '{}' R '{}'",
-                                 s.n[0], s.n[1], s.n[2], s.n[3], L ? FormName(L) : "empty", R ? FormName(R) : "empty");
+            // MFO-B1a: heal LEFT + a WEAPON in the RIGHT (WeaponHandActive must read true for it; the right
+            // hand is then not planned for a spell, so this shape never reaches heal-left + offense-right).
+            auto* rf = c.follower ? c.follower->GetEquippedObject(false) : nullptr;
+            if (hl && rf && rf->As<RE::TESObjectWEAP>()) s.n[4] += 1;
+            s.note = std::format("samples {:.0f}: heal-left {:.0f}, offense-right {:.0f}, offense-LEFT {:.0f}, "
+                                 "heal-left+weapon-right {:.0f} (MFO-B1a: the weapon must stay, no right claim); "
+                                 "last L '{}' R '{}'",
+                                 s.n[0], s.n[1], s.n[2], s.n[3], s.n[4], L ? FormName(L) : "empty",
+                                 R ? FormName(R) : "empty");
             if (hl && orr)
                 return Step::Pass(std::format("left '{}' + right '{}' held together; {}", FormName(L), FormName(R),
                                               s.note));
