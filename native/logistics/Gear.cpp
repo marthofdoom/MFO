@@ -527,10 +527,15 @@ namespace MFO::Logistics {
             const bool vr    = !MainThread::IsInstalled();
             const char* meleeSrc = "none";
             const char* rangedSrc = "none";
+            // C2b / ruling Q59: with a class equipped (Dragonborn excepted) the class owns the role, so an equip_melee /
+            // equip_ranged gambit no longer adds one on top of it. Classes OFF / add-on absent: false, today's behaviour.
+            const bool classLocked = ClassLocksRoles(a_follower->GetFormID());
+            const bool gambitMelee  = wantsMelee  && !classLocked;
+            const bool gambitRanged = wantsRanged && !classLocked;
             if (!ready && !vr) {
-                if (wantsMelee || carriesMelee) { roles.melee = bestMeleeSkill; meleeSrc = wantsMelee ? "gambit-override" : "carried"; }
-                roles.doRanged = wantsRanged || carriesRanged;
-                if (roles.doRanged) rangedSrc = wantsRanged ? "gambit-override" : "carried";
+                if (gambitMelee || carriesMelee) { roles.melee = bestMeleeSkill; meleeSrc = gambitMelee ? "gambit-override" : "carried"; }
+                roles.doRanged = gambitRanged || carriesRanged;
+                if (roles.doRanged) rangedSrc = gambitRanged ? "gambit-override" : "carried";
             } else {
                 const Progression::StyleVotes rv = ready ? StyleVotesFor(a_follower) : Progression::StyleVotes{};
                 const std::uint8_t cls = EffectiveClassPick(a_follower->GetFormID(), a_state);
@@ -543,8 +548,8 @@ namespace MFO::Logistics {
                     if (mp > 0)                                  { m = true; meleeSrc = "perks"; }
                     if (rv.weapon[7] > 0 || rv.weapon[8] > 0)    { r = true; rangedSrc = "perks"; }
                 }
-                if (wantsMelee  && !m) { m = true; meleeSrc  = "gambit-override"; }
-                if (wantsRanged && !r) { r = true; rangedSrc = "gambit-override"; }
+                if (gambitMelee  && !m) { m = true; meleeSrc  = "gambit-override"; }
+                if (gambitRanged && !r) { r = true; rangedSrc = "gambit-override"; }
                 if (cls == 0 && !m && !r) {
                     // Auto, no gambit and no perk signal: fall back to the base class vote.
                     const std::uint8_t vote = ResolveBaseClass(a_follower, a_state);

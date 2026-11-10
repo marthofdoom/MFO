@@ -41,6 +41,9 @@ namespace MFO::Logistics {
     // combatClassOverride, so classes-OFF and add-on-absent are unchanged. EVERY reader of the pick goes through this; only the
     // Board's Gambit-tab dropdown edits and shows the RAW value. Any thread (takes the Classes g_mx leaf lock). a_fid 0 = raw.
     std::uint8_t EffectiveClassPick(RE::FormID a_fid, const FollowerState& a_state);
+    // C2b / Q59: true when a class is equipped (add-on Active(), Dragonborn EXCLUDED: he stays situational like Auto), so the class
+    // owns the weapon roles and an equip_melee / equip_ranged gambit adds none on top (Gear.cpp ComputeWeaponRoles). false for classes OFF.
+    bool ClassLocksRoles(RE::FormID a_fid);
 
     // ── pure reads (the evaluator's supply conditions) ──────────────────────
 

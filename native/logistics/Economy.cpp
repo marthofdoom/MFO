@@ -869,9 +869,9 @@ namespace MFO::Logistics {
                 // explicit Ranged-class follower with a heal gambit keeps his bow (else sell/loot loop).
                 const bool wantsRangedGambit = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
                 const bool wantsMeleeGambit  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+                const std::uint8_t effPickB24 = EffectiveClassPick(a_follower->GetFormID(), a_state);
                 const bool mageModeB24 = IsCasterFollower(a_state) &&
-                    (EffectiveClassPick(a_follower->GetFormID(), a_state) == 3 ||
-                     (EffectiveClassPick(a_follower->GetFormID(), a_state) == 0 && !wantsMeleeGambit && !wantsRangedGambit));
+                    (effPickB24 == 3 || (effPickB24 == 0 && !wantsMeleeGambit && !wantsRangedGambit));
                 const bool offRoleLauncher = weap && WeaponClassOf(weap->GetWeaponType()) == WepClass::Ranged &&
                     (!keepRoles.doRanged || (mageModeB24 && !wantsRangedGambit) ||
                      !RangedInFamily(weap, keepRoles.wantCrossbow));

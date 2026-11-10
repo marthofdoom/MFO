@@ -2772,3 +2772,10 @@ Reviewer's findings (condensed from the review; full text in scratchpad agentlog
 - F7 SEV-5 (:221-230): parsed once per load; an MCM re-read does not re-apply; say so in INI-REFERENCE and MFO.ini.
 - F8 SEV-5 (MFO.ini:188-200): the release seed INI carries 13 lines for a key the release DLL ignores (labelled DEV BUILD ONLY; optional move).
 - F9 SEV-5 (:240-245): the 60 s WARN timer counts only while Active().
+
+### MFO-B635 (SEV-4/5, OPEN, class pick accessor C2b (Gear.cpp / ClassResolve.cpp / Followers.cpp), against 736c0c3f, Opus review)
+Reviewer's findings (verbatim from the coordinator's relay of the review):
+- F3 SEV-4: the gambit actuation path (Fire.cpp:441-442 -> cast/Equip.cpp:427 EquipWeapon) still equips a carried off-class weapon on a classes-ON follower (a player-given weapon survives F1); belongs to the gambit-reset/picker card or a guard in EquipWeapon.
+- F4 SEV-4: a Dragonborn with a tie or no perks and raw pick Auto behaves fully Auto on every reader (defensible per Q60 "like auto"; recorded as a DECISION).
+- F6 SEV-5: PublishActiveMirror loops dismissed records too, and for a Dragonborn-equipped one DragonbornRoot -> StyleVotesFor inserts a mirror entry and posts a main-thread tally every 10 s (bounded, wasteful).
+- F2 SEV-3 (round 2, NOT fixed in code, deferred by the author): DragonbornRoot is blind without the Progression catalog: Progression.cpp:1442 (TallyStyleVotes no-catalog path, gated on bMeoAwareGems + MEO GemThemeSupported) leaves skillRanks zero. Widening that gate to Classes::Active() would also change the tie-breaks that read skillRanks (Cast.cpp:175 school pick, Gear.cpp:474 1H vs 2H) on classes-Active saves, so it was NOT done; DragonbornRoot logs a once-per-session WARN instead. Needs marth's call (widen the gate and accept those tie-break changes, or give the Dragonborn root its own tally).

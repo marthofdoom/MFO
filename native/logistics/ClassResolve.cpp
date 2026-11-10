@@ -65,7 +65,17 @@ namespace MFO::Logistics {
                            rank(AV::kIllusion), rank(AV::kRestoration) })
             };
             const int best = std::max({ line[0], line[1], line[2] });
-            if (best <= 0) return 0;   // no perks in any line
+            if (best <= 0) {
+                // Loud, once per session: a READY tally with no perks anywhere is also what a build without the Progression catalog
+                // and without MEO gem themes gives (TallyStyleVotes' no-catalog path fills skillRanks only when bMeoAwareGems is on
+                // and MEO supports it), so a Dragonborn follower then silently keeps his raw pick. Not masked (backlog MFO-B635).
+                static std::atomic<bool> s_logged{ false };
+                if (StyleVotesReady(actor) && !s_logged.exchange(true))
+                    spdlog::warn("[classes] Dragonborn root: follower {:08X} has NO owned perk ranks in any weapon line in the style tally "
+                                 "(none owned, or the no-catalog tally is gated off: needs the Progression add-on or bMeoAwareGems + MEO); "
+                                 "keeping his raw pick (once per session)", a_fid);
+                return 0;   // no perks in any line
+            }
             int n = 0, at = 0;
             for (int c = 0; c < 3; ++c) if (line[c] == best) { ++n; at = c; }
             return n == 1 ? static_cast<std::uint8_t>(at + 1) : std::uint8_t{ 0 };   // a tie keeps the raw pick
@@ -83,18 +93,24 @@ namespace MFO::Logistics {
     std::uint8_t EffectiveClassPick(RE::FormID a_fid, const FollowerState& a_state) {
         const std::uint8_t raw = a_state.combatClassOverride;
         if (!a_fid || !Classes::Active()) return raw;
-        const auto fc = Classes::GetFollower(a_fid);
-        if (!fc || fc->equipped >= Classes::kClassCount) return raw;   // kNoClass = classes OFF for him
+        const std::uint8_t equipped = Classes::GetEquipped(a_fid);
+        if (equipped >= Classes::kClassCount) return raw;   // kNoClass = classes OFF for him
 
         // RULING Q59 (CONFIRMED marth 2026-11-10): with classes ON the equipped class beats an older explicit Gambit-tab pick.
         // To flip it, return `raw` here when it is 1..3 (one place; every reader follows).
-        const auto eqId = static_cast<Classes::Id>(fc->equipped);
+        const auto eqId = static_cast<Classes::Id>(equipped);
         std::uint8_t root = Classes::Get(eqId).rootT1;
 
         // RULING Q60 (marth 2026-11-10): Dragonborn (rootT1 0, no fixed root) uses the root of his most-perked weapon line; a tie or no
         // perks falls back to the raw pick. Change DragonbornRoot() only.
         if (eqId == Classes::Id::Dragonborn) root = DragonbornRoot(a_fid);
         return (root >= 1 && root <= 3) ? root : raw;
+    }
+
+    bool ClassLocksRoles(RE::FormID a_fid) {
+        if (!a_fid || !Classes::Active()) return false;
+        const std::uint8_t equipped = Classes::GetEquipped(a_fid);
+        return equipped < Classes::kClassCount && equipped != static_cast<std::uint8_t>(Classes::Id::Dragonborn);
     }
 
     std::uint8_t ResolveBaseClass(RE::Actor* a_actor, const FollowerState& a_state) {
