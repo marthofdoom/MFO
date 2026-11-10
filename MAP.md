@@ -1712,7 +1712,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   took the hand from each other on alternate laps and neither ever charged; and a retargeting rule outranked
   itself. The lap counter, `BeginCastLap` and the `Scheduler` call site that fed it are all gone.
   **The displacement is DEFERRED, never done at resolve time:** `ResolveCastHand` only records
-  `HandPlan::preemptLeft/preemptRight` (`:961`), and `CastOn`'s `commitPreempt` (`:1759`) fires immediately
+  `HandPlan::preemptLeft/preemptRight` (`:961`), and `CastOn`'s `commitPreempt` (`cast/CastOn.cpp:785`) fires immediately
   before the claim it is for — the self fork, the concentration fork, `ClaimOffenseCast`, `ComposedCast::Try`
   and (for the APMF-absent world, where `Loadout::Prepare` IS the claim on the hand) the equip switch. Every
   transparent refusal in between therefore refuses without having touched the incumbent; committing at
@@ -1724,6 +1724,23 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   that no longer exists), clears the lock, and — for a MIRRORED DUAL incumbent (both hands, same
   spell+target+owningRule) — clears BOTH locks, because one APMF handle on two hands has no half-release and
   `HandFree`'s incumbent short-circuit does not consult liveness.
+  **ASK BEFORE DISPLACING (MFO-B2, Harbinger ABI v35 `CanServe`, 2026-11-09).** Where `CastOn` itself names
+  the APMF cast claim a route ends in, it asks `APMFBridge::CanServeCast` (`apmf/Bridge.cpp:666`) with the
+  exact arguments FIRST, via `HarbingerWouldRefuse` (`cast/CastOn.cpp:111`): the buff claim fork
+  (BuffClaim's `ClaimOffenseCast`), the owned offense claim and the composed heal claim (`healClaim` laps only:
+  off the heal road `Try` may answer NotApplicable and the hybrid runs). A Refused verdict returns
+  transparently WITHOUT `commitPreempt` and logs `[apmf] ... Harbinger WOULD REFUSE ...` (own 5 s throttle, never
+  shared with `LogApmfRefusal`'s). `CanServeCast` builds the request through `BuildCastRequestLocked`
+  (`apmf/Bridge.cpp:261`), the builder `EnsureCastClaimLocked` itself uses, and answers for the shape FINALLY
+  filed (the `kCastFlag_OwnLineOfSight` retry, APMF-B269). Unknown (ABI < 35, toggle off, an identical claim
+  standing, a failed query) and Accepted run the route exactly as before.
+  **What breaks:** build the dry-run request anywhere but `BuildCastRequestLocked` and the two shapes drift; gate a
+  route whose claim-vs-direct road is chosen inside its helper and a direct cast that never needs Harbinger is
+  blocked; share the refusal throttle and one line silences the other.
+  **STILL OPEN (MFO-B2, narrowed):** the self fork, the concentration fork and the restoration-direct fork choose
+  claim vs direct INSIDE `CastSelfDirect` / `CastTargetDirect` / `BuffSelfClaim` after the preempt, so they are
+  not asked; and `Loadout::Prepare`, `Declined`, `Held`, Drain-time drops (`ServePending`) and a state change
+  between the dry run and the claim still displace first. The text below is the pre-v35 analysis, still true for those.
   **STRUCTURAL RESIDUAL — deferring the commit NARROWS the window, it does not close it.** Everything that
   can still refuse the asker AFTER `commitPreempt` — `CastSelfDirect` → `Held`/`Declined`, a refused
   `ClaimOffenseCast`, `ComposedCast::Try` → `Held`/`ApmfRefused`, a failed `Loadout::Prepare` — still
@@ -6405,15 +6422,18 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1223) = the CORE: the interface pointer `g_apmf` (`:49`), the floor's ABI gates
+  - **`APMF_API.h` mirror = Harbinger ABI v35** (APMF main `178b8ed`, 2026-11-09, sha256 `711b5da3…ddb5`). v34 (ch.18
+    attack selection, `SetAttackMix`) is mirrored but not consumed; v35 `CanServe` is consumed by `CanServeCast` only.
+  - `apmf/Bridge.cpp` (1373) = the CORE: the interface pointer `g_apmf` (`:49`), the floor's ABI gates
     `kHandBlockFirstAbi`/`kFloorSpellsOnlyAbi` (`:54-55`), the claim map
     `g_mx`/`g_owned` (`:57-58`) + refusal sets, `FacetExpiry` (`:169`), the shared claim helpers
     `EnsureClaimLocked` (`:180`), `ReleaseClaimLocked` (`:206`), `CastHeartbeatInterval` (`:247`),
-    `EnsureCastClaimLocked` (`:286`), the idle-hand floor `ReconcileHandFloorLocked` (`:732`),
-    `Acquire` (`:900`, requests ABI 10) / `Available` (`:940`) / **`SubstrateOnly` / `IsSubstrateAnchor` / `InCombat`
-    (`:976-982`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
-    MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:958`), the expiry sweep
-    `Tick` (`:1016`; it sweeps the ch.27 substrate pairs first, `:1025`) and `ClearTransientState` (`:1216`; clears them, `:1267`).
+    `BuildCastRequestLocked` (`:261`, the ONE kIntent_Cast request builder), `EnsureCastClaimLocked` (`:336`),
+    **`CanServeCast` (`:666`, ABI v35 dry run of the offense / heal cast claim, MFO-B2; Unknown below v35)**, the idle-hand floor `ReconcileHandFloorLocked` (`:838`),
+    `Acquire` (`:1021`, requests ABI 10) / `Available` (`:1061`) / **`SubstrateOnly` / `IsSubstrateAnchor` / `InCombat`
+    (`:1076-1082`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
+    MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:1100`), the expiry sweep
+    `Tick` (`:1116`; it sweeps the ch.27 substrate pairs first, `:1125`) and `ClearTransientState` (`:1316`; clears them, `:1368`).
   - `apmf/Substrate.cpp` (338) = the OUT-OF-COMBAT SUBSTRATE CLIENT (slice S3, ch.27 + ch.8b, ABI v27): the claim pair
     and its state machine. Full entry: "cast/SubstrateRoad.cpp + apmf/Substrate.cpp" in section 2 (before Scheduler).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
