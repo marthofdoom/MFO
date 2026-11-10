@@ -26,6 +26,8 @@
 #include "selftest/SelfTest_internal.h"
 #include "Followers.h"
 #include "Vocabulary.h"
+#include "Config.h"
+#include "classes/Classes.h"
 
 #include <fstream>
 #include <optional>
@@ -118,6 +120,167 @@ namespace MFO::SelfTest {
             if (b == std::string::npos) return {};
             const auto e = a_s.find_last_not_of(" \t\r\n");
             return a_s.substr(b, e - b + 1);
+        }
+
+        // ── CARD C5c: DEV CLASS EQUIP (DEV BUILDS ONLY; Docs/SELFTEST.md "Dev class equip") ───────────────────────────────────
+        // Nothing can equip a class until the board card C10, so this puts followers into classes for field tests of the C6
+        // passive carriers and the H5 miss budgets. [Debug] sDevClassEquip = a comma-separated list of
+        //     <follower>:<class slug>:<level>[:mastered]
+        // where <follower> is the actor ref's FormID: "Plugin.esp|HEXLOCAL" (load-order independent, preferred) or a full
+        // 8-digit hex FormID (this load order only). Applied ONCE per load, per entry, as soon as that follower is a live
+        // managed one and the class add-on is Active(). Only the existing State.cpp writers are used (SetUnlocked,
+        // ActivateClass, ApplyLevel): the dev override is SetUnlocked(old | class bit), which skips the unlock rule so any class
+        // can be tested; `mastered` applies the class cap level (ApplyLevel sets the mastered bit at the cap). This WRITES MCLS
+        // like a real equip, so the save carries it: dev saves only. WORKER-ONLY (called from Tick on the pump worker).
+        struct DevEntry {
+            std::string   raw;
+            std::string   follower;   // as written, for the log
+            RE::FormID    fid      = 0;
+            Classes::Id   cls      = Classes::Id::Melee;
+            std::uint8_t  level    = 1;
+            bool          mastered = false;
+            bool          done     = false;
+        };
+        std::vector<DevEntry> g_devEntries;
+        bool                  g_devParsed         = false;
+        float                 g_devWaited         = 0.0f;
+        bool                  g_devWarnedWait     = false;
+        bool                  g_devWarnedInactive = false;
+
+        std::optional<RE::FormID> DevResolveFollower(const std::string& a_tok) {
+            try {
+                if (const auto bar = a_tok.find('|'); bar != std::string::npos) {
+                    const std::string file  = Trim(a_tok.substr(0, bar));
+                    const auto        local = static_cast<RE::FormID>(std::stoul(Trim(a_tok.substr(bar + 1)), nullptr, 16));
+                    auto*             dh    = RE::TESDataHandler::GetSingleton();
+                    const RE::FormID  id    = (dh && !file.empty()) ? dh->LookupFormID(local, file) : 0;
+                    if (id) return id;
+                    return std::nullopt;
+                }
+                const auto id = static_cast<RE::FormID>(std::stoul(a_tok, nullptr, 16));
+                if (id) return id;
+            } catch (...) {}
+            return std::nullopt;
+        }
+
+        void DevParse(const std::string& a_text) {
+            std::size_t pos = 0;
+            while (pos <= a_text.size()) {
+                auto end = a_text.find(',', pos);
+                if (end == std::string::npos) end = a_text.size();
+                const std::string raw = Trim(a_text.substr(pos, end - pos));
+                pos                   = end + 1;
+                if (raw.empty()) continue;
+                std::vector<std::string> f;
+                for (std::size_t q = 0;;) {
+                    const auto c = raw.find(':', q);
+                    f.push_back(Trim(raw.substr(q, c == std::string::npos ? std::string::npos : c - q)));
+                    if (c == std::string::npos) break;
+                    q = c + 1;
+                }
+                if (f.size() < 3 || f.size() > 4 || (f.size() == 4 && f[3] != "mastered")) {
+                    spdlog::warn("[classes] DEV equip: cannot parse '{}' (want <follower>:<class slug>:<level>[:mastered]) -- skipped", raw);
+                    continue;
+                }
+                DevEntry e;
+                e.raw          = raw;
+                e.follower     = f[0];
+                const auto fid = DevResolveFollower(f[0]);
+                if (!fid) {
+                    spdlog::warn("[classes] DEV equip: unknown follower '{}' in '{}' (want Plugin.esp|HEXLOCAL or a full hex FormID) -- skipped", f[0], raw);
+                    continue;
+                }
+                e.fid = *fid;
+                std::string slug = f[1];
+                for (auto& ch : slug) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                const auto* def = Classes::FindBySlug(slug);
+                if (!def) {
+                    spdlog::warn("[classes] DEV equip: unknown class '{}' in '{}' -- skipped", f[1], raw);
+                    continue;
+                }
+                e.cls = def->id;
+                const std::uint8_t cap = Classes::LevelCap(e.cls);
+                int                lvl = 0;
+                try {
+                    std::size_t used = 0;
+                    lvl              = std::stoi(f[2], &used, 10);
+                    if (used != f[2].size()) lvl = 0;
+                } catch (...) { lvl = 0; }
+                if (cap == 0) {
+                    lvl = 0;   // Dragonborn: no level; the field is accepted and ignored
+                } else if (lvl < 1 || lvl > cap) {
+                    spdlog::warn("[classes] DEV equip: level '{}' in '{}' is not 1..{} for {} -- skipped", f[2], raw,
+                                 static_cast<int>(cap), def->slug);
+                    continue;
+                }
+                e.level    = static_cast<std::uint8_t>(lvl);
+                e.mastered = f.size() == 4;
+                g_devEntries.push_back(std::move(e));
+            }
+        }
+
+        void DevClassEquipTick(float a_dt) {
+            if (!g_devParsed) {
+                std::string text;
+                {
+                    std::lock_guard lk(g_devClassEquipMx);
+                    text = g_devClassEquip;
+                }
+                g_devParsed = true;
+                if (text.empty()) return;
+                DevParse(text);
+                spdlog::warn("[classes] DEV equip (dev build only): {} entr{} queued from [Debug] sDevClassEquip; each applies once this "
+                             "load and writes MCLS (dev saves only)",
+                             g_devEntries.size(), g_devEntries.size() == 1 ? "y" : "ies");
+            }
+            if (g_devEntries.empty()) return;
+            bool pending = false;
+            for (const auto& e : g_devEntries)
+                if (!e.done) { pending = true; break; }
+            if (!pending) return;
+            if (!Classes::Active()) {
+                if (!g_devWarnedInactive) {
+                    g_devWarnedInactive = true;
+                    spdlog::warn("[classes] DEV equip: the class add-on is not Active() (MFO_Classes.esl missing or bClassTree = 0) -- waiting");
+                }
+                return;
+            }
+            g_devWaited += a_dt;
+            for (auto& e : g_devEntries) {
+                if (e.done) continue;
+                RE::NiPointer<RE::Actor> hold;
+                for (const auto& h : Followers::g_active) {
+                    auto p = h.get();
+                    if (p && p->GetFormID() == e.fid && !p->IsDead() && !p->IsDisabled()) { hold = p; break; }
+                }
+                if (!hold || !g_followers.contains(e.fid) || !Followers::IsPersistableID(e.fid)) continue;   // not (yet) a live managed follower
+                e.done = true;
+                const Classes::ClassDef& def = Classes::Get(e.cls);
+                const std::uint8_t       cap = Classes::LevelCap(e.cls);
+                const std::uint8_t       lvl = (e.mastered && cap) ? cap : e.level;
+                bool ok = Classes::SetUnlocked(e.fid, Classes::GetUnlocked(e.fid) | Classes::Bit(e.cls));   // the dev unlock override
+                if (ok) Classes::ActivateClass(e.fid, e.cls);                    // false when already equipped: fine
+                if (ok && cap) Classes::ApplyLevel(e.fid, e.cls, lvl);           // false when nothing changed: fine
+                const auto prog = Classes::GetProgress(e.fid, e.cls);
+                ok = ok && Classes::GetEquipped(e.fid) == static_cast<std::uint8_t>(e.cls) && (!cap || prog.level >= lvl) &&
+                     (!e.mastered || !cap || (Classes::GetMastered(e.fid) & Classes::Bit(e.cls)) != 0);
+                if (ok) {
+                    spdlog::warn("[classes] DEV equip {:08X} ({}) -> {} L{}{} (dev build only)", e.fid, NameOf(hold.get()), def.slug,
+                                 static_cast<int>(prog.level), e.mastered ? " mastered" : "");
+                } else {
+                    spdlog::warn("[classes] DEV equip {:08X} ({}) -> {} REFUSED (a writer refused: class add-on not Writable(), or MCLS kept "
+                                 "read-only) -- '{}'",
+                                 e.fid, NameOf(hold.get()), def.slug, e.raw);
+                }
+            }
+            if (!g_devWarnedWait && g_devWaited > 60.0f) {
+                for (const auto& e : g_devEntries) {
+                    if (e.done) continue;
+                    g_devWarnedWait = true;
+                    spdlog::warn("[classes] DEV equip: {:08X} ('{}') is still not a live managed follower after 60 s -- still waiting", e.fid,
+                                 e.follower);
+                }
+            }
         }
 
         // RESET (Docs/SELFTEST.md "Re-running tests"): Data/SKSE/Plugins/MFO_SelfTest.ini
@@ -378,6 +541,8 @@ namespace MFO::SelfTest {
             PostFixtureCleanup(0, "left by an interrupted test");
         }
 
+        DevClassEquipTick(dt);   // card C5c
+
         std::unordered_set<RE::FormID> live;
         for (const auto& h : Followers::g_active) {
             auto  ptr = h.get();
@@ -406,6 +571,11 @@ namespace MFO::SelfTest {
         g_backoff.clear();
         g_last       = {};
         g_orphanWait = 0.0f;
+        g_devEntries.clear();   // card C5c: applied once per load
+        g_devParsed         = false;
+        g_devWaited         = 0.0f;
+        g_devWarnedWait     = false;
+        g_devWarnedInactive = false;
         ClearTestState();
         std::lock_guard lk(g_mx);
         g_results.clear();

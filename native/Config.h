@@ -813,6 +813,13 @@ namespace MFO::Config {
     //     strict adherence to the equipped class; it only means anything while the tree is active. INI-only (no MCM key).
     inline std::atomic<bool>  g_classTree{ true };
     inline std::atomic<bool>  g_classStrict{ true };
+#ifdef MFO_DEV_SELFTEST
+    //   sDevClassEquip (card C5c, DEV BUILDS ONLY, INI-only, [Debug]): the dev class-equip list, raw text, applied once per load by
+    //     selftest/Runner.cpp (DevClassEquipTick). Written by the config reader (SKSE task / main), read on the pump worker: under
+    //     the mutex. Absent from a release DLL entirely (this member, the key name and the code).
+    inline std::mutex         g_devClassEquipMx;
+    inline std::string        g_devClassEquip;
+#endif
     //   bAimBudget (card H5, 2026-11-10, INI-only, default ON): a managed follower of a RANGED class gets a Harbinger ch.29
     //     projectile-aim claim (ABI v36) whose budget is the MOST misses allowed among his last 10 shots; Harbinger re-aims the
     //     launch at the engine's own unscattered solution when the window is spent (apmf/AimClaims.cpp). Inert without the class

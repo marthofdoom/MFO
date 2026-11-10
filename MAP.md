@@ -8800,6 +8800,8 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 
 ---
 
+**Dev class equip (card C5c, `feat/classes-c5c-dev-equip`).** `Runner.cpp` `DevClassEquipTick` (called from `Tick`, reset in `ClearAll`; worker-only) reads `[Debug] sDevClassEquip` (`Config.h` `g_devClassEquip` + mutex, `Config.cpp` key branch before the TOWN ERRANDS chain, both `#ifdef MFO_DEV_SELFTEST`) and applies each `<follower>:<slug>:<level>[:mastered]` entry once per load through `Classes::SetUnlocked / ActivateClass / ApplyLevel`. Writes MCLS (dev saves only). **What breaks:** renaming those three writers or `FindBySlug` / `LevelCap`; moving the key handler into the release path; the entry separator is a comma because `Config.cpp` ReadFile strips an inline comment at the first `;` or `#`. See `Docs/SELFTEST.md` section 10.
+
 ## Appendix — SKSE registration & sink inventory (the wiring choke points)
 
 | Registration | Site | Notes |
