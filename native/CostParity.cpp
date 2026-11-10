@@ -132,21 +132,45 @@ namespace MFO::CostParity {
                           "followers pay the engine cost unchanged", pcBase, npBase);
             return;
         }
-        const float pc50  = Factor(pcBase, pcScale, pcMult, 50.0f);
-        const float np50  = Factor(npBase, npScale, npMult, 50.0f);
-        const float pc100 = Factor(pcBase, pcScale, pcMult, 100.0f);
-        const float np100 = Factor(npBase, npScale, npMult, 100.0f);
-        spdlog::info("[costparity] cost factor before perks, skill 50: player {:.3f} NPC {:.3f} (NPC pays {:.0f}% of the player); "
-                     "skill 100: player {:.3f} NPC {:.3f} (NPC pays {:.0f}%)",
-                     pc50, np50, pc50 > 0.0f ? 100.0f * np50 / pc50 : 0.0f,
-                     pc100, np100, pc100 > 0.0f ? 100.0f * np100 / pc100 : 0.0f);
-        if (np50 < pc50) {
+        // Marth Q40 (2026-11-09): a managed follower must NEVER pay more than the player. A flat x2 is only that safe if
+        // 2 * NPC(s) <= PC(s) at EVERY skill 0..100, so the sweep runs in steps of 1 over the same clamped Factor the
+        // decision uses (the log's percentages and the decision share one function). The exact per-skill clamp
+        // min(2, PC/NPC) needs a hook on the cost curve (Harbinger, tier A), so a list that fails the sweep stays INACTIVE.
+        constexpr float kEps = 1.0e-4f;   // equality at skill 0 (e.g. NPC 0.5 vs player 1.0) must pass, not trip on rounding
+        int   firstBad = -1;
+        float worst = 0.0f, worstAt = 0.0f;   // largest (2 * NPC) / PC over the sweep, and where
+        for (int sk = 0; sk <= 100; ++sk) {
+            const float pc = Factor(pcBase, pcScale, pcMult, static_cast<float>(sk));
+            const float np = Factor(npBase, npScale, npMult, static_cast<float>(sk));
+            if (2.0f * np > pc + kEps) {
+                if (firstBad < 0) firstBad = sk;
+                const float r = pc > 0.0f ? 2.0f * np / pc : 1.0e9f;
+                if (r > worst) { worst = r; worstAt = static_cast<float>(sk); }
+            }
+        }
+        // The NPC/player ratio at 0 / 25 / 50 / 75 / 100 (the first pair of lines also carry the raw factors).
+        for (const int sk : { 0, 25, 50, 75, 100 }) {
+            const float pc = Factor(pcBase, pcScale, pcMult, static_cast<float>(sk));
+            const float np = Factor(npBase, npScale, npMult, static_cast<float>(sk));
+            spdlog::info("[costparity] skill {:3d}: player factor {:.3f}, NPC factor {:.3f}, NPC pays {:.0f}% of the player, "
+                         "x2 would pay {:.0f}%", sk, pc, np, pc > 0.0f ? 100.0f * np / pc : 0.0f,
+                         pc > 0.0f ? 200.0f * np / pc : 0.0f);
+        }
+        if (firstBad < 0) {
             g_active = true;
-            spdlog::info("[costparity] NPC curve is cheaper than the player's at skill 50 ({:.3f} < {:.3f}) -- ACTIVE: a managed "
-                         "follower's spell costs are doubled by the engine's kModSpellCost perk step", np50, pc50);
+            spdlog::info("[costparity] 2 x NPC <= player at every skill 0..100 -- ACTIVE: a managed follower's spell costs are "
+                         "doubled by the engine's kModSpellCost perk step and never exceed the player's");
         } else {
-            spdlog::info("[costparity] NPC curve not cheaper ({:.3f} >= {:.3f} at skill 50) -- followers pay engine cost unchanged",
-                         np50, pc50);
+            // "below skill N": N is the highest skill at which x2 still exceeds the player, so the exceed band is [firstBad..N-1].
+            int last = firstBad;
+            for (int sk = firstBad; sk <= 100; ++sk) {
+                const float pc = Factor(pcBase, pcScale, pcMult, static_cast<float>(sk));
+                const float np = Factor(npBase, npScale, npMult, static_cast<float>(sk));
+                if (2.0f * np > pc + kEps) last = sk;
+            }
+            spdlog::info("[costparity] x2 would exceed the player's cost below skill {} (worst {:.2f} of the player's at skill {:.0f}; "
+                         "first at skill {}) -- INACTIVE until the Harbinger cost-curve hook (Harbinger cost-curve hook); followers pay "
+                         "the engine cost unchanged", last + 1, worst, worstAt, firstBad);
         }
     }
 
