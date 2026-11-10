@@ -54,6 +54,25 @@
 
 namespace MFO::Actuation {
 
+#ifdef MFO_DEV_SELFTEST
+    namespace {
+        std::mutex g_devBuffMx;   // leaf lock
+        std::unordered_map<RE::FormID, std::pair<std::uint32_t, std::uint32_t>> g_devBuff;   // spell -> { claims filed, casts landed }
+        void DevNoteBuffClaim(RE::FormID a_spell) { std::scoped_lock lk(g_devBuffMx); ++g_devBuff[a_spell].first; }
+        void DevNoteBuffLanded(RE::FormID a_spell) { std::scoped_lock lk(g_devBuffMx); ++g_devBuff[a_spell].second; }
+    }
+    std::uint32_t DevBuffClaimCount(RE::FormID a_spell) {
+        std::scoped_lock lk(g_devBuffMx);
+        const auto it = g_devBuff.find(a_spell);
+        return it == g_devBuff.end() ? 0 : it->second.first;
+    }
+    std::uint32_t DevBuffLandedCount(RE::FormID a_spell) {
+        std::scoped_lock lk(g_devBuffMx);
+        const auto it = g_devBuff.find(a_spell);
+        return it == g_devBuff.end() ? 0 : it->second.second;
+    }
+#endif
+
     namespace {
 
         bool BuffYieldLeft(RE::Actor* a_actor, RE::TESBoundObject** a_left, RE::TESBoundObject** a_right) {
@@ -442,6 +461,9 @@ namespace MFO::Actuation {
         }
         ComposedCast::WatchClaim(id, spellID, APMFBridge::kApmfHandLeft,
                                  APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
+#ifdef MFO_DEV_SELFTEST
+        DevNoteBuffClaim(spellID);
+#endif
         if (RoadLogDue(id, spellID, BuffRoad::Claim)) {
             const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
             spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X} (animated; the engine's own {} caster "
@@ -596,6 +618,9 @@ namespace MFO::Actuation {
             return std::nullopt;
         }
         g_fired[id].insert(sk);   // R3-1: it landed
+#ifdef MFO_DEV_SELFTEST
+        DevNoteBuffLanded(spellID);
+#endif
         spdlog::info("[buff] {:08X} {:08X}: buff is up on {:08X} -- claim released (the cast landed)", id, spellID, rid);
         EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);   // R3-2: a fan series keeps the spell in hand
         return Outcome{ Result::NoOp, "buff already up: claim released", true };

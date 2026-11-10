@@ -225,7 +225,7 @@ namespace MFO {
     // EIGHTH independent record (dev builds only; MCLS is the seventh), same isolation contract. Never written by a release build; a release build
     // that loads a dev save skips it as an unknown record type (LoadCallback) and drops it on its next save.
     inline constexpr std::uint32_t kRecSelfTest     = 'MFST';
-    inline constexpr std::uint32_t kSelfTestVersion = 1;
+    inline constexpr std::uint32_t kSelfTestVersion = 2;
 #endif
 
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY

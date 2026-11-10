@@ -5,6 +5,8 @@
 // "unknown record type ... skipped" and GetNextRecordInfo seeks past it; that DLL's next save drops it
 // (#12: SKSE does not round-trip unread records). Nothing else reads it.
 //
+// LAYOUT v2 = v1 + (a) result verdict "info" (a measurement, complete), (b) fixture kinds "spawn" / "hurt" (self-driving runs),
+// (c) a CLASS RESTORE POINT block appended after the fixtures (version >= 2 only). v1 is read forever.
 // LAYOUT v1 (all little-endian, via SerializationInterface):
 //   u32 resetGeneration                      the MFO_SelfTest.ini iResetGeneration last applied
 //   u32 resultCount (<= kMaxResults)
@@ -12,6 +14,10 @@
 //   u32 fixtureCount (<= kMaxFixtures)
 //     per fixture: u32 follower, str kind ("item" | "spell"), u32 form, i32 added, i32 before, str testId
 //   str  = u32 len (<= kMaxStr) + bytes;  lstr = u32 len (<= kMaxEvidence) + bytes
+//   v2 appends: u32 classSnapCount (<= 64) { u32 follower, u8 hadRecord, u8 equipped, u8 n (= 35, the roster this build wrote),
+//                 n x { u32 xp, u8 level }, u64 mastered, u64 unlocked, u16 thief, u16 masterThief }
+//   a "spawn" fixture's `form` is the spawned REF's runtime FormID, kept RAW (a 0xFF id has no load-order mapping); on load the first
+//   tick deletes it if it still resolves. A "hurt" fixture's `added` is the Health damage x10 and `form` is 0.
 // Strings, never ordinals (#10). Every count bounded and a short read aborts THIS record only (#11). Every
 // FormID passes ResolveFormID; an unresolvable fixture is DROPPED with an error line (it cannot be cleaned:
 // its follower or its form left the load order, #8 / #13). A result whose follower no longer resolves keeps
@@ -27,6 +33,7 @@ namespace MFO::SelfTest {
     namespace {
         constexpr std::uint32_t kMaxResults  = 256;
         constexpr std::uint32_t kMaxFixtures = 1024;
+        constexpr std::uint32_t kMaxSnaps    = 64;
         constexpr std::uint32_t kMaxStr      = 64;
         constexpr std::uint32_t kMaxEvidence = 1024;
 
@@ -53,17 +60,21 @@ namespace MFO::SelfTest {
         std::uint32_t                gen;
         std::map<std::string, Result> results;
         std::vector<Fixture>         ledger;
+        std::vector<ClassSnap>       snaps;
         {
             std::lock_guard lk(g_mx);
             gen     = g_resetGeneration;
             results = g_results;
             ledger  = g_ledger;
+            snaps   = g_classSnaps;
         }
+        std::erase_if(snaps, [](const ClassSnap& s) { return !Followers::IsPersistableID(s.follower); });
+        if (snaps.size() > kMaxSnaps) snaps.resize(kMaxSnaps);
         if (results.size() > kMaxResults) results.erase(std::next(results.begin(), kMaxResults), results.end());
         // #9: never a runtime (0xFF) follower or form. The runner refuses to run on a runtime follower and
         // never adds a runtime form, so this only guards the contract.
         std::erase_if(ledger, [](const Fixture& f) {
-            return !Followers::IsPersistableID(f.follower) || (f.form >> 24) == 0xFF;
+            return !Followers::IsPersistableID(f.follower) || (f.kind != FixtureKind::Spawn && (f.form >> 24) == 0xFF);
         });
         if (ledger.size() > kMaxFixtures) ledger.resize(kMaxFixtures);
 
@@ -76,23 +87,34 @@ namespace MFO::SelfTest {
         for (const auto& [id, r] : results) {
             if (!ok) break;
             const RE::FormID fol = Followers::IsPersistableID(r.follower) ? r.follower : 0;
-            ok = WriteStr(a_intfc, id, kMaxStr) && WriteStr(a_intfc, r.pass ? "pass" : "fail", kMaxStr) &&
+            ok = WriteStr(a_intfc, id, kMaxStr) && WriteStr(a_intfc, r.info ? "info" : (r.pass ? "pass" : "fail"), kMaxStr) &&
                  a_intfc->WriteRecordData(fol) && WriteStr(a_intfc, r.evidence, kMaxEvidence);
         }
         ok = ok && a_intfc->WriteRecordData(static_cast<std::uint32_t>(ledger.size()));
         for (const auto& f : ledger) {
             if (!ok) break;
             ok = a_intfc->WriteRecordData(f.follower) &&
-                 WriteStr(a_intfc, f.kind == FixtureKind::Item ? "item" : "spell", kMaxStr) &&
+                 WriteStr(a_intfc, f.kind == FixtureKind::Item ? "item" : f.kind == FixtureKind::Spell ? "spell"
+                                                                 : f.kind == FixtureKind::Spawn ? "spawn" : "hurt", kMaxStr) &&
                  a_intfc->WriteRecordData(f.form) && a_intfc->WriteRecordData(f.added) &&
                  a_intfc->WriteRecordData(f.before) && WriteStr(a_intfc, f.testId, kMaxStr);
+        }
+        ok = ok && a_intfc->WriteRecordData(static_cast<std::uint32_t>(snaps.size()));
+        for (const auto& sn : snaps) {
+            if (!ok) break;
+            const std::uint8_t had = sn.hadRecord ? 1 : 0, n = 35;
+            ok = a_intfc->WriteRecordData(sn.follower) && a_intfc->WriteRecordData(had) && a_intfc->WriteRecordData(sn.equipped) &&
+                 a_intfc->WriteRecordData(n);
+            for (std::size_t i = 0; ok && i < 35; ++i) ok = a_intfc->WriteRecordData(sn.xp[i]) && a_intfc->WriteRecordData(sn.level[i]);
+            ok = ok && a_intfc->WriteRecordData(sn.mastered) && a_intfc->WriteRecordData(sn.unlocked) && a_intfc->WriteRecordData(sn.thief) &&
+                 a_intfc->WriteRecordData(sn.masterThief);
         }
         if (!ok)
             spdlog::error("[selftest] MFST write FAILED mid-record -- the next load reads what precedes the "
                           "failure and aborts the rest of this record");
         else
-            spdlog::info("[selftest] saved {} result(s), {} fixture ledger entr(ies), reset generation {}, MFST v{}",
-                         results.size(), ledger.size(), gen, kSelfTestVersion);
+            spdlog::info("[selftest] saved {} result(s), {} fixture ledger entr(ies), {} class restore point(s), reset generation {}, MFST v{}",
+                         results.size(), ledger.size(), snaps.size(), gen, kSelfTestVersion);
     }
 
     void CoLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version) {
@@ -103,6 +125,7 @@ namespace MFO::SelfTest {
         std::uint32_t                 gen = 0, nRes = 0, nFix = 0;
         std::map<std::string, Result> results;
         std::vector<Fixture>          ledger;
+        std::vector<ClassSnap>        snaps;
         std::uint32_t                 droppedFix = 0, droppedRes = 0;
 
         auto commit = [&](const char* a_state) {
@@ -110,9 +133,11 @@ namespace MFO::SelfTest {
             g_resetGeneration = gen;
             g_results         = std::move(results);
             g_ledger          = std::move(ledger);
-            spdlog::info("[selftest] loaded MFST v{} ({}): {} result(s), {} fixture ledger entr(ies) to remove, "
+            g_classSnaps      = std::move(snaps);
+            g_classOrphans.store(!g_classSnaps.empty());
+            spdlog::info("[selftest] loaded MFST v{} ({}): {} result(s), {} fixture ledger entr(ies) to remove, {} class restore point(s), "
                          "reset generation {}; dropped {} result(s), {} fixture(s)",
-                         a_version, a_state, g_results.size(), g_ledger.size(), g_resetGeneration, droppedRes,
+                         a_version, a_state, g_results.size(), g_ledger.size(), g_classSnaps.size(), g_resetGeneration, droppedRes,
                          droppedFix);
         };
 
@@ -130,7 +155,7 @@ namespace MFO::SelfTest {
                 commit("aborted mid-results (short read)");
                 return;
             }
-            if (verdict != "pass" && verdict != "fail") {   // #13: an unknown verdict is dropped, never guessed
+            if (verdict != "pass" && verdict != "fail" && verdict != "info") {   // #13: an unknown verdict is dropped, never guessed
                 spdlog::error("[selftest] MFST result '{}' has unknown verdict '{}' -- dropped (stays pending)", id,
                               verdict);
                 ++droppedRes;
@@ -138,7 +163,7 @@ namespace MFO::SelfTest {
             }
             RE::FormID fol = 0;
             if (raw && !a_intfc->ResolveFormID(raw, fol)) fol = 0;
-            results[id] = { verdict == "pass", fol, std::move(ev) };
+            results[id] = { verdict != "fail", fol, std::move(ev), verdict == "info" };
         }
         if (!Rd(a_intfc, nFix)) { commit("no fixture block (short read)"); return; }
         if (nFix > kMaxFixtures) {
@@ -156,9 +181,10 @@ namespace MFO::SelfTest {
                 return;
             }
             RE::FormID fol = 0, form = 0;
-            const bool kindOk = kind == "item" || kind == "spell";
-            if (!kindOk || !a_intfc->ResolveFormID(rawFol, fol) || !a_intfc->ResolveFormID(rawForm, form) ||
-                added <= 0 || added > 100000 || before < 0) {
+            const bool kindOk = kind == "item" || kind == "spell" || kind == "spawn" || kind == "hurt";
+            // a spawn's form is a runtime ref id (raw); a hurt has no form
+            const bool formOk = kind == "spawn" ? (form = rawForm, true) : kind == "hurt" ? true : a_intfc->ResolveFormID(rawForm, form);
+            if (!kindOk || !a_intfc->ResolveFormID(rawFol, fol) || !formOk || added <= 0 || added > 100000 || before < 0) {
                 spdlog::error("[selftest] MFST fixture follower {:08X} kind '{}' form {:08X} x{} (test '{}') cannot "
                               "be mapped -- DROPPED, it will NOT be removed (its follower or form left the load "
                               "order, or the entry is corrupt)",
@@ -166,8 +192,47 @@ namespace MFO::SelfTest {
                 ++droppedFix;
                 continue;
             }
-            ledger.push_back({ 0u, std::move(testId), fol, kind == "item" ? FixtureKind::Item : FixtureKind::Spell,
+            ledger.push_back({ 0u, std::move(testId), fol,
+                               kind == "item" ? FixtureKind::Item : kind == "spell" ? FixtureKind::Spell
+                               : kind == "spawn" ? FixtureKind::Spawn : FixtureKind::Hurt,
                                form, added, before });
+        }
+        if (a_version >= 2) {
+            std::uint32_t nSnap = 0;
+            if (!Rd(a_intfc, nSnap)) { commit("no class block (short read)"); return; }
+            if (nSnap > kMaxSnaps) {
+                spdlog::error("[selftest] MFST class restore-point count {} > {} -- class block aborted", nSnap, kMaxSnaps);
+                commit("aborted at the class restore-point count");
+                return;
+            }
+            for (std::uint32_t i = 0; i < nSnap; ++i) {
+                ClassSnap     sn;
+                RE::FormID    rawFol = 0, fol = 0;
+                std::uint8_t  had = 0, n = 0;
+                if (!Rd(a_intfc, rawFol) || !Rd(a_intfc, had) || !Rd(a_intfc, sn.equipped) || !Rd(a_intfc, n)) {
+                    commit("aborted mid-class-block (short read)");
+                    return;
+                }
+                if (n > 64) { commit("aborted: class count out of range"); return; }
+                bool ok = true;
+                for (std::uint8_t k = 0; ok && k < n; ++k) {
+                    std::uint32_t xp = 0;
+                    std::uint8_t  lv = 0;
+                    ok = Rd(a_intfc, xp) && Rd(a_intfc, lv);
+                    if (ok && k < 35) { sn.xp[k] = xp; sn.level[k] = lv; }
+                }
+                if (!ok || !Rd(a_intfc, sn.mastered) || !Rd(a_intfc, sn.unlocked) || !Rd(a_intfc, sn.thief) || !Rd(a_intfc, sn.masterThief)) {
+                    commit("aborted mid-class-block (short read)");
+                    return;
+                }
+                if (!a_intfc->ResolveFormID(rawFol, fol)) {
+                    spdlog::error("[selftest] MFST class restore point for follower {:08X} cannot be mapped -- DROPPED (his class state may still "
+                                  "hold a test class: check MCLS)", rawFol);
+                    continue;
+                }
+                sn.token = 0; sn.follower = fol; sn.hadRecord = had != 0;
+                snaps.push_back(sn);
+            }
         }
         commit("complete");
     }

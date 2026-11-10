@@ -322,4 +322,20 @@ namespace MFO::Classes {
     void RefreshAllCarriers();
     // Drop the pending set / granted-perk memory and retire the pump (a new generation). ResetAllState / LoadCallback, via ClearAll.
     void ResetCarriers();
+
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY (native/selftest/TestsDrive.cpp class.* tests): a read-back of what the C6 carrier reconcile actually put on
+    // the actor, to compare with CarrierRanks(). MAIN THREAD. resolved = false when the ESL forms are not resolved / the actor does not
+    // resolve. ranks[] are the MFOC_P_<Name> faction ranks as read (absent / negative = 0).
+    struct DevCarrierView {
+        bool          resolved = false;
+        bool          processLive = false;                            // a middle-high process (live perk entries are only counted with one)
+        std::array<std::int32_t, kClassCount> ranks{};
+        bool          mercFull = false, mercQuarter = false, scoutQuarter = false;
+        std::int32_t  scoutLevel = 0;                                  // 1..N = the Scout speed ability present (0 none)
+        std::int32_t  perksOnBase = 0, perksExpected = 0;              // carrier perks on the base NPC / the number of carrier perks
+        std::int32_t  entriesExpected = 0, entriesLive = 0;            // rank-1 entry-point entries the perks declare / found live on the actor
+    };
+    DevCarrierView DevReadCarriers(RE::FormID a_follower);
+#endif
 }

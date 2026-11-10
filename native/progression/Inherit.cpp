@@ -510,6 +510,10 @@ namespace MFO::ProgAllocator {
         int                       g_seenGen    = -1;
         std::size_t               g_treeIdx    = 0;       // tree-perk HasPerk sanity count: once per load generation
         std::size_t               g_treeHeld   = 0;
+#ifdef MFO_DEV_SELFTEST
+        std::atomic<std::uint32_t> g_devSummaries{ 0 };
+        std::atomic<std::int32_t>  g_devTreeHeld{ 0 }, g_devTreeSet{ 0 }, g_devHeldNoTree{ 0 };
+#endif
         bool                      g_treeCounted = false;
         std::size_t               g_candIdx    = 0;
         std::vector<RE::BGSPerk*> g_passHeld;             // HasPerk-found perks so far in the current pass
@@ -604,6 +608,12 @@ namespace MFO::ProgAllocator {
                          a_full ? "full" : "delta", a_sig, g_pollGen, held.size(), viaEngine, viaMgef, added, removed,
                          g_treeHeld, g_treePtrs.size(), counts[0], counts[1], counts[2], counts[3], scriptEp, scriptMgef, questParts,
                          playerRef, dupSome, hiddenFlag, bases.size(), g_candidates.size());
+#ifdef MFO_DEV_SELFTEST
+            g_devSummaries.fetch_add(1);
+            g_devTreeHeld.store(static_cast<std::int32_t>(g_treeHeld));
+            g_devTreeSet.store(static_cast<std::int32_t>(g_treePtrs.size()));
+            g_devHeldNoTree.store(static_cast<std::int32_t>(held.size()));
+#endif
             g_prev.clear();
             for (const auto& h : held) g_prev.push_back(h.perk);
         }
@@ -637,6 +647,9 @@ namespace MFO::ProgAllocator {
             g_seenGen = g_pollGen;
             g_treeIdx = 0; g_treeHeld = 0; g_treeCounted = false; g_candIdx = 0;
             g_passHeld.clear(); g_fullLogged = false; g_haveSig = false; g_prev.clear();
+#ifdef MFO_DEV_SELFTEST
+            g_devSummaries.store(0);
+#endif
         }
         if (!SweepSlice(a_player)) return;
 
@@ -669,5 +682,11 @@ namespace MFO::ProgAllocator {
         g_lastSig    = sig;
         RunCensus(a_player, sig, held, full);
     }
+
+#ifdef MFO_DEV_SELFTEST
+    InheritCensusStats ReadInheritCensusStats() {
+        return { g_devSummaries.load(), g_devTreeHeld.load(), g_devTreeSet.load(), g_devHeldNoTree.load() };
+    }
+#endif
 
 }

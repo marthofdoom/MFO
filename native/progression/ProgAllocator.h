@@ -593,6 +593,13 @@ namespace MFO::ProgAllocator {
         std::uint32_t worstEp        = 0;
     };
     bool ReadPerkEntryView(RE::FormID a_id, PerkEntryView& a_out);
+    // DEV BUILDS ONLY: the counters the self-test `census.hidden_perk_ran` judges by (progression/Inherit.cpp RunCensus: what the
+    // log-only summary line counted). ANY thread (atomics). summaries = full + delta summaries logged since the load.
+    struct InheritCensusStats {
+        std::uint32_t summaries = 0;
+        std::int32_t  treePerksHeld = 0, treeSet = 0, heldNoTree = 0;
+    };
+    InheritCensusStats ReadInheritCensusStats();
 #endif
 
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────

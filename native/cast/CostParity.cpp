@@ -33,6 +33,21 @@ namespace MFO::CostParity {
         // Rate limit for the per-key log line.
         std::unordered_map<std::uint64_t, Clock::time_point> g_lastLog;
 
+#ifdef MFO_DEV_SELFTEST
+        std::vector<DevEvent> g_devEvents;   // guarded by g_mx
+        std::uint32_t         g_devSeq = 0;
+        void DevNote(RE::FormID a_c, RE::FormID a_s, DevRoad a_road, bool a_applies, float a_p, float a_e, float a_spent, float a_sec) {
+            DevEvent e;
+            e.atMs = std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count();
+            e.caster = a_c; e.spell = a_s; e.road = a_road; e.applies = a_applies;
+            e.parity = a_p; e.engine = a_e; e.spent = a_spent; e.sec = a_sec;
+            std::scoped_lock lk(g_mx);
+            e.seq = ++g_devSeq;
+            g_devEvents.push_back(e);
+            if (g_devEvents.size() > 64) g_devEvents.erase(g_devEvents.begin(), g_devEvents.begin() + 32);
+        }
+#endif
+
         struct Channel {
             RE::FormID  caster = 0, spell = 0;
             Clock::time_point paidThrough, lastSeen;
@@ -137,9 +152,17 @@ namespace MFO::CostParity {
             if (!actor || !spell) return;
             if (!Followers::IsTrackedFast(a_casterID)) return;   // dismissed between the post and now
             Parity p;
-            if (!Compute(actor, spell, p)) return;
+            if (!Compute(actor, spell, p)) {
+#ifdef MFO_DEV_SELFTEST
+                DevNote(a_casterID, a_spellID, a_sec > 0.0f ? DevRoad::AnimatedSlice : DevRoad::AnimatedOnce, false, 0.0f, p.engine, 0.0f, a_sec);
+#endif
+                return;
+            }
             const float delta = p.parity - p.engine;
             const float spent = Deduct(actor, a_sec > 0.0f ? delta * a_sec : delta);
+#ifdef MFO_DEV_SELFTEST
+            DevNote(a_casterID, a_spellID, a_sec > 0.0f ? DevRoad::AnimatedSlice : DevRoad::AnimatedOnce, true, p.parity, p.engine, spent, a_sec);
+#endif
             if (LogDue(Key(a_casterID, a_spellID) ^ 0x8000000000000000ull))
                 spdlog::info("[costparity] {:08X} animated {} ({:08X}) {}: skill {:.0f} in {}, player cost {:.2f}, engine cost {:.2f}, "
                              "delta {:.2f}{} -- topped up {:.2f}", a_casterID, spell->GetName() ? spell->GetName() : "?", a_spellID,
@@ -228,7 +251,15 @@ namespace MFO::CostParity {
             std::scoped_lock lk(g_mx);
             g_directBill[key] = Clock::now();
         }
-        if (!Compute(a_caster, a_spell, p)) return engine;
+        if (!Compute(a_caster, a_spell, p)) {
+#ifdef MFO_DEV_SELFTEST
+            DevNote(a_caster->GetFormID(), a_spell->GetFormID(), DevRoad::Direct, false, 0.0f, engine, 0.0f, 0.0f);
+#endif
+            return engine;
+        }
+#ifdef MFO_DEV_SELFTEST
+        DevNote(a_caster->GetFormID(), a_spell->GetFormID(), DevRoad::Direct, true, p.parity, p.engine, 0.0f, 0.0f);
+#endif
         if (LogDue(key))
             spdlog::info("[costparity] {:08X} direct {} ({:08X}): skill {:.0f} in {}, player cost {:.2f}, engine cost {:.2f}, "
                          "delta {:.2f} -- charged the player cost", a_caster->GetFormID(),
@@ -304,4 +335,11 @@ namespace MFO::CostParity {
                 return false; }), g_channels.end());
         });
     }
+
+#ifdef MFO_DEV_SELFTEST
+    std::vector<DevEvent> DevEvents() {
+        std::scoped_lock lk(g_mx);
+        return g_devEvents;
+    }
+#endif
 }

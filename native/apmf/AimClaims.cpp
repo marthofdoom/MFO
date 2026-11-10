@@ -238,4 +238,22 @@ namespace MFO::APMFBridge {
         g_aims.clear();
     }
 
+
+#ifdef MFO_DEV_SELFTEST
+    DevAimInfo DevReadAim(RE::FormID a_follower) {
+        DevAimInfo out;
+        const auto* api = AimApi();
+        if (!api) return out;
+        out.api = true;
+        APMF_API::APMF_ProjectileAimInfo info{};
+        info.size  = sizeof(info);
+        out.state  = api->GetProjectileAimState(a_follower, &info);
+        out.budget = info.budget; out.shots = info.shots; out.corrected = info.corrected; out.hits = info.hits;
+        out.hitsOther = info.hitsOther; out.misses = info.misses; out.pending = info.pending;
+        out.windowFill = info.windowFill; out.windowMisses = info.windowMisses; out.uncorrectable = info.uncorrectable;
+        out.wouldCorrect = info.wouldCorrect; out.rankStood = info.rankStood;
+        return out;
+    }
+#endif
+
 }
