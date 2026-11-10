@@ -8593,14 +8593,14 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   masters ONLY Skyrim.esm (prefix 0x01), touches nothing in MFO.esp (byte-identical). **The generator READS `native/classes/ClassTable.cpp` + `Classes.h`**
   (`load_class_table()`: row regex, Id enum order, `Flag::` bits) and asserts 35 rows / enum order / tier counts 3-9-14-8-1 / slug == passive id / T1 roots, so
   a table edit the parser cannot follow fails the generator (no hand copy). Local ids (add-only): `0x800` manifest KYWD `MFOC_MFOClassesManifest` + `0x801` manifest FLST
-  (entry 0 = that keyword, then the two index FLSTs, then the 4 MCM GLOBs), `0x802` FLST of the 35 passive factions, `0x803` FLST of the 70 class styles,
-  `0x808-0x80A` Marked/Flanked/Guarded KYWDs, `0x810-0x812` marker MGEFs (script-less, Script archetype, delivery Target Actor), `0x820-0x824` GLOBs
+  (entry 0 = that keyword, then the two index FLSTs, then the 4 MCM GLOBs), `0x802` FLST of the 35 passive factions, `0x803` FLST of the 35 per-class style FLSTs (`0x880 + Id`: entry 0 = the mask GLOB `0x8C0 + Id`, then that class's CSTYs in slot-bit order; mask bits 1 melee, 2 melee dual, 4 ranged, 8 cast; **C8 looks styles up through these, never by position**),
+  `0x808-0x80A` Marked/Flanked/Guarded KYWDs, `0x810-0x812` marker MGEFs (script-less, Script archetype, casting/delivery per the vanilla pairing: Marked FF+Contact, Guarded Concentration+Aimed, Flanked FF+Target Actor), `0x820-0x824` GLOBs
   (Version, XpRate 1.0, PriestSunDps 2, SaintHealPerSec 30, SaintUndeadDps 30), `0x830` FACT `MFOC_OffClassWeapon`, `0x831` FACT `MFOC_MarkPending`,
-  `0x840 + Id` FACT `MFOC_P_<Name>` (35), `0x900 + 2*Id (+1 dual)` CSTY `MFOC_Style_<Name>[_Dual]` (70), `0xA00` PERK `MFOC_ReferencePerk` (inert audited
+  `0x840 + Id` FACT `MFOC_P_<Name>` (35), `0x900+` CSTY `MFOC_Style_<Name>_<Melee|MeleeDual|Ranged|Cast>` (95, one per class and USABLE stance, derived from the table's root, allowed-weapon bits and Hybrid line; the dual twin only for melee), `0xA00` PERK `MFOC_ReferencePerk` (inert audited
   shape, never granted). **RANK SPACE** (per-reference faction rank on `MFOC_P_<Name>`): <=0 off; 1..cap active at class level N (caps T1 10 / T2 15 / T3 20 / T4 25);
   **100 = mastered and unequipped (1/4)**; "level >= L" is rank in [L, 99] (`class_rank_conditions`). `class_scale(level, cap)` = 25% at L1 -> 100% at cap. The
   new byte writers (`ctda`, `perk_entry`, `perk_record`; entry points restricted to `PERK_ENTRY_TABS`, vanilla-verified) are what C6 builds the passives on. Class CSTYs:
-  one per class per wield in the stance of its `rootT1` (Dragonborn melee), stance base VERBATIM from `make_csty` (asserted) plus two flag-driven offsets
+  one per class per usable stance (`class_stances`), stance base VERBATIM from `make_csty` (asserted) plus two flag-driven offsets
   (`class_csty_params`, a BASELINE for C8). `tools/audit_esp.py` has a `MFO_Classes.esl` profile (the default run audits all three plugins).
 - **Depended-on-by:** `Serialization.cpp` (the MCLS hooks, C3). Later cards read `kTable` and the C3 state (C4 XP, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI, C12 tables, C13 counters). **`MFO_GenerateESP.py` parses `ClassTable.cpp`/`Classes.h` (C7): keep the `Mk(Id::...)` one-row-per-line shape, the `kRoot*` line and the `Flag::` constants parseable, or the generator stops with a named error.**
 - **What breaks if you change this:** (1) reordering/inserting a class in `Id` re-numbers every persisted mastered/unlocked bit once C3 ships

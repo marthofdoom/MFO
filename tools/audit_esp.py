@@ -173,7 +173,7 @@ PROG_SEQ_EXPECTED = {0x870}
 # MFO_Classes.esl (card C7) -- the class add-on. The DLL (native/classes/Presence.cpp) keys on the
 # manifest keyword's editor-id suffix "_MFOClassesManifest"; everything else is found through the
 # manifest FLST / index FLSTs or, for the C6/C8 cards, by local id. Keep in lockstep with the
-# generator's CGID_* table. 0x840+i = the 35 passive factions, 0x900+2i(+1) = the 70 class CSTYs.
+# generator's CGID_* table. 0x840+i = the 35 passive factions, 0x880+i / 0x8C0+i = the per-class style FLST / mask GLOB, 0x900+ = the CSTYs.
 CLS_REQUIRED = {
     0x800: ('KYWD', "MFOC_MFOClassesManifest", ['EDID']),
     0x801: ('FLST', "MFOC_AddonManifest",      ['EDID', 'LNAM']),
@@ -195,7 +195,6 @@ CLS_REQUIRED = {
     0xA00: ('PERK', "MFOC_ReferencePerk",      ['EDID', 'FULL', 'DESC', 'DATA', 'PRKE', 'EPFT', 'EPFD', 'PRKF']),
 }
 CLS_PASSIVE_COUNT = 35      # FACTs 0x840..0x862, one per class in Id order
-CLS_STYLE_COUNT = 70        # CSTYs 0x900..0x945, [single, dual] per class
 CLS_MANIFEST_ENTRIES = 3 + 4   # keyword + 2 index FLSTs + 4 MCM GLOBs
 
 # basename -> (required table, seq expectations or None [no SEQ file at all])
@@ -363,11 +362,23 @@ def audit_one(esp):
             got = by_local.get(0x840 + i)
             if not got or got[0] != 'FACT' or not got[1].get('EDID', b'').startswith(b'MFOC_P_'):
                 errors.append(f"0x{0x840 + i:03X}: expected a FACT named MFOC_P_*")
-        for i in range(CLS_STYLE_COUNT):
-            got = by_local.get(0x900 + i)
-            if not got or got[0] != 'CSTY' or 'CSGD' not in got[1]:
-                errors.append(f"0x{0x900 + i:03X}: expected a CSTY with CSGD")
-        for local, want in ((0x801, CLS_MANIFEST_ENTRIES), (0x802, CLS_PASSIVE_COUNT), (0x803, CLS_STYLE_COUNT)):
+        # Class styles: every class has a per-class FLST (0x880+i) whose entry[0] is its mask GLOB
+        # (0x8C0+i) and whose remaining entries are CSTYs, one per set mask bit
+        # (1 melee, 2 melee dual, 4 ranged, 8 cast). Every CSTY carries CSGD.
+        for local, (t, subs) in by_local.items():
+            if t == 'CSTY' and 'CSGD' not in subs:
+                errors.append(f"CSTY 0x{local:03X}: no CSGD")
+        for i in range(CLS_PASSIVE_COUNT):
+            fl, gl = by_local.get(0x880 + i), by_local.get(0x8C0 + i)
+            if not fl or fl[0] != 'FLST' or not gl or gl[0] != 'GLOB':
+                errors.append(f"class {i}: missing style FLST 0x{0x880 + i:03X} / mask GLOB 0x{0x8C0 + i:03X}")
+                continue
+            mask = int(struct.unpack('<f', gl[1]['FLTV'][:4])[0])
+            if mask == 0 or mask & ~0xF or (mask & 2 and not mask & 1):
+                errors.append(f"class {i}: style mask {mask} invalid (bits 1/2 melee single/dual, 4 ranged, 8 cast; dual needs melee)")
+            if fl[1].get('#LNAM', 0) != 1 + bin(mask).count('1'):
+                errors.append(f"class {i}: style FLST has {fl[1].get('#LNAM', 0)} entries, mask {mask} wants {1 + bin(mask).count('1')}")
+        for local, want in ((0x801, CLS_MANIFEST_ENTRIES), (0x802, CLS_PASSIVE_COUNT), (0x803, CLS_PASSIVE_COUNT)):
             if local in by_local:
                 n = by_local[local][1].get('#LNAM', 0)
                 if n != want:
