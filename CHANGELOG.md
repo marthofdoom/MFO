@@ -5,6 +5,21 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.9.0 -- Power attack cooldowns, right-hand spells, a "will this work" check and the class add-on groundwork (PRERELEASE)
+
+This is a Deck test prerelease. It needs Harbinger v0.18.0 (ABI v35) for the attack mixes and the CanServe check. With an older Harbinger everything else works, and each new Harbinger call is gated on its ABI.
+
+**One-way save upgrade. Read this before you load a save.** This version writes the follower gambit data in a new layout (FLWR v6, the cooldown on each rule). A save made with 2.9.0 cannot be loaded by an older MFO. If an older MFO loads it and then saves over it, the follower boards are wiped. Keep a copy of your saves from before you try this build, and do not go back to 2.8.2 on a save that 2.9.0 has written.
+
+- **Power attack rules have a cooldown.** Each power attack rule on the board gets a Cooldown cell, set in seconds, so a follower doesn't use the same power attack over and over. The board shows "cooling down" when a rule is skipped for it.
+- **A spell that can't work is skipped.** Before a targeted spell rule fires, MFO checks the target's level cap and the spell's effect conditions. If the spell could never affect that target, the rule is skipped and the board says "will not work" with the reason. If MFO can't tell, the spell fires like before.
+- **AUTO treats control spells as hostile.** Calm, Frenzy, Demoralize, Paralysis and Turn Undead are cast at enemies on AUTO, not at your party. The "will it work" check runs per enemy when AUTO picks its targets.
+- **Followers no longer drink Skooma.** A potion with a harmful effect is not named on the combat potion list, so the game's AI can't pick it in a fight. This holds while that list is in force, and Harbinger will get a proper potion allowance later.
+- **Right-hand spell equips are fixed.** A spell claimed for the right hand only goes into the right hand and never takes a weapon out of the left. Taking a spell back also puts the right hand back the way it was.
+- **Harbinger ABI v35.** MFO mirrors the new API and asks Harbinger's CanServe dry run before it displaces a spell that is already being cast, so a spell that would be refused anyway no longer knocks out the one that was running. Below ABI 35 it behaves as before.
+- **Class add-on groundwork, inert for now.** The 35 class table, the class save record (MCLS) and the settings `bClassTree`, `bClassStrict` and `bClassCoSaveSelfTest` are in, but nothing happens until the class add-on ESL ships. Class progress is kept in the save and written back unchanged while the ESL is absent.
+- **Dev builds only: a self-test gambit.** A separate DEV DLL (not part of the release zip) can run the in-game checks itself and log PASS or FAIL for each. The release DLL doesn't have it.
+
 ## v2.8.2 -- Community Shaders crash fix
 
 Needs Harbinger v0.17.0 (ABI v33) for the never-wield deny. With an older Harbinger everything else works.
