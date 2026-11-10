@@ -23,9 +23,10 @@
 //
 // Every engine write here is one of the three ProgProbe-proven mechanisms —
 // nothing in this file tries an unproven RE:: path:
-//   perks  : TESNPC::AddPerk/RemovePerk + Actor::ApplyPerksFromBase (P1)
+//   perks  : TESNPC::AddPerk/RemovePerk + SetLivePerkRank (PerkGate.cpp; P1 used
+//            Actor::ApplyPerksFromBase, which duplicates entry points: ClickUp 1dfcuabcrqq)
 //   skills : GetBaseActorValue/SetBaseActorValue + the §4.2 reconcile (P2)
-//   reapply: GetPerkIndex-guarded, ApplyPerksFromBase only on change (P3)
+//   reapply: GetPerkIndex-guarded, the re-added perk settled alone (P3)
 //
 // Every log line carries the [prog] tag. Log the ZERO cases too — "found
 // none" and "never ran" must not look the same (INVARIANTS #46).

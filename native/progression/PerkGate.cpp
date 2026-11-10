@@ -810,7 +810,8 @@ namespace MFO::ProgAllocator {
         // rank form, and then SetLivePerkRank for THAT perk only (presence-
         // checked). The engine already applied the rest of the base at the
         // load (Actor::FinishLoadGame); the old ApplyPerksFromBase here put a
-        // second copy of every base entry-point entry on the actor each load. Skills re-reconcile through the same §4.2 path.
+        // second copy of every base entry-point entry on the actor each load.
+        // Skills re-reconcile through the same §4.2 path.
         void ReapplyFollower(RE::Actor* a_actor, ProgState& a_st) {
             auto* base = a_actor->GetActorBase();
             if (!base) return;
