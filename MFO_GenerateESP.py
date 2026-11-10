@@ -20,6 +20,7 @@ Usage:  python3 MFO_GenerateESP.py [out_dir]     (default: ./out)
 """
 
 import json
+import math
 import os
 import re
 import struct
@@ -2078,7 +2079,10 @@ def write_prog_mcm_files(out_dir):
 #              stance), allocated sequentially in class then slot order; look them up through the
 #              per-class FLST, NEVER by position (stances come from the table's weapon bits)
 #   0xA00 PERK MFOC_ReferencePerk (the audited reference shape, NEVER granted)
-# Abilities (SPEL) and the full passive PERK set are card C6's job.
+#   0xA10 + i  PERK MFOC_Passive_<Name> (card C6; only classes with a perk effect; i = Id ordinal)
+#   0xA40-0xA42 MGEF ability effects (stamina, stamina regen, speed)
+#   0xA50-0xA51 SPEL Mercenary full / quarter    0xA60-0xA73 SPEL Scout speed per level 1..20    0xA74 SPEL Scout quarter
+#   0xA80-0xA82 SPEL marker carriers (Marked / Flanked / Guarded)
 OWN_CLS = 0x01000000
 CGID_MANIFEST_KYWD = OWN_CLS | 0x800
 CGID_MANIFEST      = OWN_CLS | 0x801
@@ -2102,7 +2106,20 @@ CGID_STYLE_FLST_BASE = OWN_CLS | 0x880
 CGID_STYLE_MASK_BASE = OWN_CLS | 0x8C0
 CGID_STYLE_BASE    = OWN_CLS | 0x900
 CGID_REFERENCE_PERK = OWN_CLS | 0xA00
-CLS_NEXT_OBJECT_ID = 0xA01
+# Card C6 (passive carriers). Add-only, same ESL-legal 0x800-0xFFF range. The DLL (native/classes/Carriers.cpp)
+# resolves these BY LOCAL ID and type-checks every one at the first reconcile, so keep both in lockstep.
+CGID_PASSIVE_PERK_BASE = OWN_CLS | 0xA10   # + class Id ordinal (0xA10-0xA32); only classes with a perk effect have one
+CGID_AB_STAMINA_MGEF   = OWN_CLS | 0xA40   # ability MGEFs (Peak Value Modifier, Constant, Self)
+CGID_AB_STAMINARATE_MGEF = OWN_CLS | 0xA41
+CGID_AB_SPEED_MGEF     = OWN_CLS | 0xA42
+CGID_MERC_FULL_SPELL   = OWN_CLS | 0xA50   # Mercenary: +40 stamina, +25 regen (full)
+CGID_MERC_QUARTER_SPELL = OWN_CLS | 0xA51  # Mercenary: the rounded quarter
+CGID_SCOUT_SPEED_BASE  = OWN_CLS | 0xA60   # + (level - 1), level 1..20: Scout speed, scaled
+CGID_SCOUT_QUARTER_SPELL = OWN_CLS | 0xA74 # Scout: the mastered-unequipped quarter
+CGID_MARKED_SPELL      = OWN_CLS | 0xA80   # marker carrier SPELs (B619)
+CGID_FLANKED_SPELL     = OWN_CLS | 0xA81
+CGID_GUARDED_SPELL     = OWN_CLS | 0xA82
+CLS_NEXT_OBJECT_ID = 0xA83
 CLS_VERSION_STAMP  = 1.000
 
 # RANK SPACE (marth 11-10: caps T1 10 / T2 15 / T3 20 / T4 25; the T3 strong effect
@@ -2270,6 +2287,9 @@ COND_HAS_PERK           = 448   # param1 = PERK
 COND_HAS_KEYWORD        = 560   # param1 = KYWD (a weapon keyword on a weapon tab, an actor keyword on an actor tab)
 COND_IS_ATTACKING       = 672   # no params (vanilla IDLE BearSleep / PlayerStaggerBow)
 COND_HAS_MAGIC_EFFECT_KEYWORD = 699   # param1 = KYWD carried by an active MGEF (vanilla Detect* MGEFs)
+COND_SPELL_HAS_KEYWORD  = 693   # EPMagic_SpellHasKeyword, param1 = KYWD, on a SPELL tab (AugmentedFlames, Animage, Regeneration)
+COND_SPELL_HAS_SKILL    = 696   # EPMagic_SpellHasSkill, param1 = actor-value index, on a SPELL tab (Animage: 0x15 Illusion)
+COND_IS_UNDEAD          = 715   # no params, on a TARGET tab (Animage, KindredMage, Necromage)
 
 # entry point -> (tab kind for tab 0, tab 1, tab 2). The index is the BGSEntryPoint enum
 # (PROG_ENTRYPOINT_VERDICTS row order): 18 ModSneakAttackMult, 28 ModPowerAttackDamage,
@@ -2287,13 +2307,29 @@ COND_HAS_MAGIC_EFFECT_KEYWORD = 699   # param1 = KYWD carried by an active MGEF 
 # perk_entry REFUSES a condition there (an owner condition can go on the perk-level
 # conditions of perk_record instead). An entry point NOT in this table is REFUSED too.
 PERK_ENTRY_TABS = {
-    18: (None,    'weapon',   None),
+    18: ('owner', 'weapon',   None),
+    27: ('owner', 'weapon'),
     28: ('owner', 'weapon',   None),
     29: ('owner', 'spell',    'target'),
+    30: ('owner', 'spell',    'target'),
+    33: ('owner', None),
     35: ('owner', 'weapon',   'target'),
     36: ('owner', 'attacker', None),
     37: ('owner', 'weapon',   None),
+    38: ('owner', 'spell'),
+    39: ('owner',),
 }
+# Card C6 added 27 / 30 / 33 / 38 / 39 (census of Skyrim.esm 2026-11-09, tab counts from every vanilla entry of the entry point:
+# 27 = 2, 30 = 3, 33 = 2, 38 = 2, 39 = 1; 18 = 3 and 28 = 3 as before):
+#   27  ModPowerAttackStamina  tab1 weapon (WeapType* HasKeyword, FightingStance / ChampionsStance / EagleEye30)
+#   30  ModSpellDuration       tab1 SPELL (funcs 693/696/713), tab2 target (715 / 560)
+#   33  ModIncomingStagger     tab0 owner (func 682 WornHasKeyword, TowerOfStrength)
+#   38  ModSpellCost           tab1 SPELL (funcs 713 x50, 696 x5, 560 x3)
+#   39  ModPercentBlocked      tab0 owner (funcs 569 IsBlocking / 448 HasPerk / 682, ShieldWall*)
+# TAB 0 = OWNER IS INFERRED, NOT CENSUS-PROVEN, for (18, 0), (27, 0), (30, 0) and (38, 0): vanilla never puts a condition on
+# those tabs, but tab 0 is the owner in EVERY entry point where vanilla does condition it (28 29 33 35 36 37 39 41 57, 9 of 9,
+# no counterexample), so a rank condition there is written. If the inference were wrong the faction-rank test would run
+# against the wrong subject and fail CLOSED (the entry never fires), never open; the field test is the effect itself.
 PERK_FUNC_FLOAT = {1: 'Set', 2: 'Add', 3: 'Multiply'}
 
 
@@ -2377,6 +2413,238 @@ def make_reference_perk():
     return perk_record(CGID_REFERENCE_PERK, "MFOC_ReferencePerk", "MFOC Reference Perk",
                        "Byte-shape reference for the class passives. Never granted; neutral magnitudes.",
                        [e1, e2])
+
+
+# ── C6: the passive carriers (PERK per class, ability SPELs, marker SPELs) ──────────────────────
+# ONE perk per class passive, granted ONCE to each managed follower by the DLL (classes/Carriers.cpp).
+# Every effect is gated by the follower's rank in MFOC_P_<class> (RANK SPACE above), written as a
+# condition on the ENTRY's tab 0 (the perk owner). Perk-LEVEL conditions are NOT used: they gate only
+# the perk's availability in the tree UI, never the entries at run time.
+#
+# THE MAGNITUDE ROAD (marth 11-10: the T3 STRONG effect and the T4 UNIQUE scale linearly with class level,
+# 25% at L1 -> 100% at the cap; the mastered-unequipped quarter is of the FULL value). No vanilla entry
+# function reads a level, so a scaled effect is a LADDER: one entry per level, each conditioned on
+# rank == L (two GetFactionRank CTDAs, class_rank_conditions(f, L, L)), carrying class_scale(L, cap) of
+# the full delta, plus ONE entry at rank 100 carrying the quarter. The entries of one effect are
+# pairwise disjoint (levels 1..cap, 100), so exactly one applies and Add / Multiply never stack.
+# A FLAT effect (T1/T2 passive, T3 smaller effect) is two entries: rank [1, 99] full, rank 100 quarter.
+# Entry count per scaled effect = cap + 1 (T3 21, T4 26); per flat effect 2. QUARTER ROUNDING (marth
+# "equipped strength is good, halve passive with rounding"): quarter = round-half-up of 25% of the full
+# delta in whole percentage points (Multiply) or whole levels (Add).
+AV_CONJURATION, AV_DESTRUCTION, AV_ILLUSION, AV_RESTORATION = 19, 20, 21, 22   # ActorValue enum (CommonLibSSE-NG ActorValues.h)
+AV_STAMINA, AV_SPEEDMULT, AV_STAMINARATEMULT = 26, 30, 157
+# Vanilla keywords, each dumped from Skyrim.esm (tools/esp_inspect.py) and used by vanilla conditions.
+KW_WEAP_SWORD, KW_WEAP_WARAXE, KW_WEAP_DAGGER, KW_WEAP_MACE, KW_WEAP_BOW = 0x0001E711, 0x0001E712, 0x0001E713, 0x0001E714, 0x0001E715
+KW_WEAP_WARHAMMER, KW_WEAP_GREATSWORD, KW_WEAP_BATTLEAXE = 0x0006D930, 0x0006D931, 0x0006D932
+KW_MAGIC_SHOUT, KW_MAGIC_RESTORE_HEALTH, KW_ACTOR_DAEDRA = 0x00046B99, 0x0001CEB0, 0x00013797
+KW_SUMMONS = (0x00024823, 0x00024829, 0x0002482A, 0x0002482B, 0x001091CF)   # MagicSummonFire/Frost/Shock/Undead/Familiar
+# (a Crossbow carries WeapTypeBow too: Dawnguard.esm DLC1CrossBowEnhanced KWDA = 0x1E715 0x1E719.)
+
+
+def _or_keywords(kind, fids):
+    """HasKeyword == 1 for any of fids (an OR chain: every CTDA but the last carries the OR bit)."""
+    return [ctda(COND_HAS_KEYWORD, f, '==', 1.0, kind=kind, or_next=(i < len(fids) - 1)) for i, f in enumerate(fids)]
+
+
+def _spell_school(av, no_shout=False):
+    c = [ctda(COND_SPELL_HAS_SKILL, av, '==', 1.0, kind='spell')]
+    if no_shout:   # Animage / KindredMage shape: a shout is not an Illusion spell here
+        c.append(ctda(COND_SPELL_HAS_KEYWORD, KW_MAGIC_SHOUT, '==', 0.0, kind='spell'))
+    return c
+
+
+MELEE_WEAPON_KWS = (KW_WEAP_SWORD, KW_WEAP_WARAXE, KW_WEAP_DAGGER, KW_WEAP_MACE, KW_WEAP_WARHAMMER, KW_WEAP_GREATSWORD, KW_WEAP_BATTLEAXE)
+
+
+def _fx(kind, ep, fn, delta, tabs=None, chance=None):
+    """One effect. kind 'flat' | 'strong'. fn 3 = Multiply (entry value 1 + delta * strength), 2 = Add (delta * strength).
+    chance: Living Legend's auto-block (entry value 0.0 = no damage; the strength scales the GetRandomPercent
+    threshold, in percent, instead of the value)."""
+    return dict(kind=kind, ep=ep, fn=fn, delta=delta, tabs=tabs or {}, chance=chance)
+
+
+# slug -> (perk FULL, [effects]). DESC is generated from CLASS_CARRIER_NOTES. Classes absent here carry NO perk.
+CLASS_PASSIVE_FX = {
+    'knight':       ("Knight passive",       [_fx('flat', 39, 3, +0.15)]),
+    'warrior':      ("Warrior passive",      [_fx('flat', 35, 3, +0.15, {1: _or_keywords('weapon', MELEE_WEAPON_KWS)})]),
+    'archer':       ("Archer passive",       [_fx('flat', 35, 3, +0.15, {1: _or_keywords('weapon', (KW_WEAP_BOW,))})]),
+    'evoker':       ("Evoker passive",       [_fx('flat', 29, 3, +0.15, {1: _spell_school(AV_DESTRUCTION)})]),
+    'conjurer':     ("Conjurer passive",     [_fx('flat', 38, 3, -0.15, {1: _spell_school(AV_CONJURATION)})]),
+    'healer':       ("Healer passive",       [_fx('flat', 38, 3, -0.15, {1: _spell_school(AV_RESTORATION)})]),
+    'warlock':      ("Warlock passive",      [_fx('flat', 29, 2, +8.0, {1: _spell_school(AV_ILLUSION, True)})]),
+    'great-knight': ("Shieldwall",           [_fx('strong', 33, 3, -0.50), _fx('flat', 39, 3, +0.10)]),
+    'champion':     ("Champion passive",     [_fx('strong', 28, 3, +0.20), _fx('flat', 27, 3, -0.10)]),
+    'blademaster':  ("Blademaster passive",  [_fx('strong', 35, 3, +0.15), _fx('flat', 27, 3, -0.10)]),
+    'ranger':       ("Ranger passive",       [_fx('strong', 37, 3, -0.15, {1: _or_keywords('weapon', (KW_WEAP_BOW,))})]),
+    'master-thief': ("Master Thief passive", [_fx('strong', 18, 3, +0.50, {1: _or_keywords('weapon', (KW_WEAP_DAGGER, KW_WEAP_BOW))})]),
+    'wizard':       ("Wizard passive",       [_fx('flat', 38, 3, -0.08)]),
+    'priest':       ("Priest passive",       [_fx('strong', 29, 3, +0.20,
+                                                {1: [ctda(COND_SPELL_HAS_KEYWORD, KW_MAGIC_RESTORE_HEALTH, '==', 1.0, kind='spell')]})]),
+    'spellsword':   ("Spellstrike",          [_fx('flat', 38, 3, -0.10, {1: _spell_school(AV_DESTRUCTION)})]),
+    'sorcerer':     ("Sorcerer passive",     [_fx('strong', 30, 3, +1.00,
+                                                {1: [ctda(COND_SPELL_HAS_KEYWORD, f, '==', 1.0, kind='spell', or_next=(i < len(KW_SUMMONS) - 1))
+                                                     for i, f in enumerate(KW_SUMMONS)]})]),
+    'templar':      ("Templar passive",      [_fx('flat', 38, 3, -0.10, {1: _spell_school(AV_RESTORATION)})]),
+    'nightblade':   ("Nightblade passive",   [_fx('strong', 29, 2, +16.0, {1: _spell_school(AV_ILLUSION, True)})]),
+    'witchhunter':  ("Witchhunter passive",  [_fx('strong', 29, 2, +18.0, {1: _spell_school(AV_ILLUSION, True),
+                                                2: [ctda(COND_IS_UNDEAD, 0, '==', 1.0, kind='target', or_next=True),
+                                                    ctda(COND_HAS_KEYWORD, KW_ACTOR_DAEDRA, '==', 1.0, kind='target')]})]),
+    'scout':        ("Scout passive",        [_fx('flat', 38, 3, -0.15, {1: _spell_school(AV_RESTORATION)})]),
+    'living-legend': ("Living Legend passive", [_fx('strong', 36, 3, 0.0, chance=40.0)]),
+}
+
+# What each class carries, for the perk DESC, the report and the DLL's one-time log. 'real' = a carrier ships;
+# 'missing' = NO road yet (the DLL logs it once, loudly, a documented degrade, never a mask).
+CLASS_CARRIER_NOTES = {
+    'knight': "Blocking stops 15% more damage (ModPercentBlocked x1.15).",
+    'warrior': "Melee weapon damage +15% (ModAttackDamage on the seven melee WeapType keywords).",
+    'mercenary': "Ability spells: +40 stamina, +25% stamina regeneration.",
+    'archer': "Bow and crossbow damage +15% (ModAttackDamage, WeapTypeBow).",
+    'evoker': "Destruction magnitude +15% (ModSpellMagnitude, spell skill Destruction).",
+    'conjurer': "Conjuration spells cost 15% less (ModSpellCost). MISSING: the low chance of being targeted.",
+    'healer': "Restoration spells cost 15% less (ModSpellCost). MISSING: the low chance of being targeted.",
+    'warlock': "Illusion level-capped spells reach 8 levels higher (ModSpellMagnitude Add, like Animage).",
+    'great-knight': "Shieldwall: staggered 50% less (scaled by level) and blocking stops 10% more damage.",
+    'champion': "Power attacks +20% damage (scaled by level) and 10% less power attack stamina.",
+    'blademaster': "+15% weapon damage (scaled by level). PARTIAL: only the power attack stamina cost -10% is carried, not every stamina cost.",
+    'ranger': "+15% armor penetration with bows (ModTargetDamageResistance x0.85, scaled by level).",
+    'master-thief': "Sneak attacks x1.5 with dagger and bow (ModSneakAttackMult, scaled by level).",
+    'wizard': "All spells cost 8% less (ModSpellCost). MISSING: Destruction +20% on a controlled foe (no controlled marker exists).",
+    'priest': "Healing +20% (ModSpellMagnitude on MagicRestoreHealth, scaled by level). MISSING: the sun cloak.",
+    'spellsword': "Spellstrike: Destruction 10% cheaper (NOT gated on a weapon in hand). MISSING: the +10 element damage on melee hits.",
+    'sorcerer': "Summons last twice as long (ModSpellDuration on the MagicSummon* keywords, scaled by level). MISSING: 20% less damage while all summons are out.",
+    'templar': "Restoration 10% cheaper (ModSpellCost). MISSING: the weapon always counting as silver.",
+    'nightblade': "Illusion level-capped spells reach 16 levels higher (scaled by level). MISSING: +15% melee damage on controlled foes.",
+    'witchhunter': "Illusion level-capped spells reach 18 levels higher on undead and Daedra (scaled by level). MISSING: the immunity lift and the on-hit drain.",
+    'scout': "+20% movement speed (ability spells, scaled by level) and Restoration 15% cheaper (ModSpellCost).",
+    'living-legend': "Unique: an incoming hit lands as nothing 40% of the time (scaled by level) while attacking (ModIncomingDamage x0, IsAttacking + GetRandomPercent).",
+}
+
+
+def _quarter(delta, fn):
+    """Round-half-up quarter of a full delta: whole percentage points for Multiply, whole levels for Add."""
+    if fn == 3:
+        return math.copysign(math.floor(abs(delta) * 25.0 + 0.5) / 100.0, delta)
+    return math.copysign(math.floor(abs(delta) * 0.25 + 0.5), delta)
+
+
+def class_effect_entries(fx, faction_fid, cap):
+    """The perk entries of ONE effect (see the road comment above). Returns a list of perk_entry bytes."""
+    out = []
+    def one(lo, hi, strength, quarter):
+        owner = list(class_rank_conditions(faction_fid, lo, hi))
+        if fx['chance'] is not None:    # Living Legend: IsAttacking + a random threshold that carries the strength
+            pct = (math.floor(fx['chance'] * 0.25 + 0.5) if quarter else fx['chance'] * strength)
+            owner += [ctda(COND_IS_ATTACKING, op='==', value=1.0, kind='owner'),
+                      ctda(COND_GET_RANDOM_PERCENT, 0, '<=', float(pct), kind='owner')]
+            value = 0.0
+        else:
+            d = _quarter(fx['delta'], fx['fn']) if quarter else fx['delta'] * strength
+            value = (1.0 + d) if fx['fn'] == 3 else d
+        tabs = {0: owner}
+        tabs.update(fx['tabs'])
+        out.append(perk_entry(fx['ep'], fx['fn'], value, tabs))
+    if fx['kind'] == 'flat':
+        one(1, RANK_ACTIVE_MAX, 1.0, False)
+    else:
+        for lvl in range(1, cap + 1):
+            one(lvl, lvl, class_scale(lvl, cap), False)
+    one(RANK_MASTERED_UNEQUIPPED, RANK_MASTERED_UNEQUIPPED, 0.25, True)
+    return out
+
+
+def make_class_passive_perks(table):
+    """One PERK per class that has a perk effect. FULL = the passive's name, DESC = CLASS_CARRIER_NOTES."""
+    recs, counts = b'', {}
+    by_slug = {r['slug']: r for r in table}
+    for slug in list(CLASS_PASSIVE_FX) + list(CLASS_CARRIER_NOTES):
+        if slug not in by_slug:
+            raise SystemExit(f"C6 carrier plan names class '{slug}', which is not in native/classes/ClassTable.cpp")
+    for slug, (full, fxs) in CLASS_PASSIVE_FX.items():
+        if slug not in CLASS_CARRIER_NOTES:
+            raise SystemExit(f"C6 carrier plan: class '{slug}' has a perk but no CLASS_CARRIER_NOTES entry")
+        row = by_slug[slug]
+        cap = CLASS_LEVEL_CAP[row['tier']]
+        faction = CGID_PASSIVE_BASE + row['idx']
+        entries = [e for fx in fxs for e in class_effect_entries(fx, faction, cap)]
+        counts[slug] = len(entries)
+        recs += perk_record(CGID_PASSIVE_PERK_BASE + row['idx'], "MFOC_Passive_" + cls_edid_name(row), full,
+                            CLASS_CARRIER_NOTES[slug], entries)
+    return recs, counts
+
+
+# ── ability SPELs + marker carrier SPELs ────────────────────────────────────
+def cls_ability_mgef(fid, edid, av):
+    """A Peak Value Modifier MGEF for a Constant-Effect self ability. The vanilla twins are AbFortifyStamina
+    (0x00091F77: flags 0x00208802, archetype 34, AV 26) and AbFortifyStaminaRate (0x00105F21: AV 157); casting
+    type 0 (Constant), delivery 0 (Self). Every other DATA field stays the inert-self base (make_mgef)."""
+    d = bytearray(mgef_inert_self_data())
+    struct.pack_into('<I', d, 0, 0x00208802)
+    struct.pack_into('<I', d, 64, 34)
+    struct.pack_into('<i', d, 68, av)
+    struct.pack_into('<I', d, 80, 0)
+    struct.pack_into('<I', d, 84, 0)
+    body = subrec('EDID', zstr(edid)) + subrec('FULL', zstr("")) + subrec('MDOB', struct.pack('<I', 0))
+    body += subrec('DATA', bytes(d)) + subrec('SNDD', b'') + subrec('DNAM', zstr(""))
+    return record('MGEF', fid, 0, body)
+
+
+FREF_EITHER_HAND = 0x00013F44   # EQUP EitherHand, what every vanilla ability / spell SPEL carries
+
+
+def cls_ability_spel(fid, edid, full, desc, effects):
+    """An Ability SPEL (SPIT type 4, cast type 0 Constant, delivery 0 Self, flags 0x00250001: exactly the vanilla
+    PerkWindWalkerStamina 0x00105F20 bytes). effects = [(mgef_fid, magnitude)]."""
+    body = subrec('EDID', zstr(edid)) + subrec('OBND', b'\x00' * 12) + subrec('FULL', zstr(full))
+    body += subrec('ETYP', struct.pack('<I', FREF_EITHER_HAND)) + subrec('DESC', zstr(desc))
+    body += subrec('SPIT', struct.pack('<fIIfIIffI', 0.0, 0x00250001, 4, 0.0, 0, 0, 0.0, 0.0, 0))
+    for mg, mag in effects:
+        body += subrec('EFID', struct.pack('<I', mg)) + subrec('EFIT', struct.pack('<fII', float(mag), 0, 0))
+    return record('SPEL', fid, 0, body)
+
+
+def cls_marker_spel(fid, edid, full, desc, mgef_fid, casting, delivery, duration):
+    """A carrier SPELL for a marker MGEF (B619). Type 0 Spell, the SAME casting type and delivery as its MGEF
+    (Marked FF + Contact, Flanked FF + Target Actor, Guarded Concentration + Aimed), flags 1 (manual cost), cost 0."""
+    body = subrec('EDID', zstr(edid)) + subrec('OBND', b'\x00' * 12) + subrec('FULL', zstr(full))
+    body += subrec('ETYP', struct.pack('<I', FREF_EITHER_HAND)) + subrec('DESC', zstr(desc))
+    body += subrec('SPIT', struct.pack('<fIIfIIffI', 0.0, 1, 0, 0.0, casting, delivery, 0.0, 0.0, 0))
+    body += subrec('EFID', struct.pack('<I', mgef_fid)) + subrec('EFIT', struct.pack('<fII', 0.0, 0, duration))
+    return record('SPEL', fid, 0, body)
+
+
+MERC_STAMINA, MERC_REGEN = 40.0, 25.0       # full values; the quarter is round-half-up of 25%
+SCOUT_SPEED = 20.0                          # full SpeedMult percent, scaled by class_scale(level, 20)
+
+
+def make_class_abilities():
+    """(MGEF group bytes, SPEL group bytes) for the actor-value carriers: Mercenary (2 spells) and Scout (21)."""
+    mg = (cls_ability_mgef(CGID_AB_STAMINA_MGEF, "MFOC_AbStamina", AV_STAMINA)
+          + cls_ability_mgef(CGID_AB_STAMINARATE_MGEF, "MFOC_AbStaminaRate", AV_STAMINARATEMULT)
+          + cls_ability_mgef(CGID_AB_SPEED_MGEF, "MFOC_AbSpeed", AV_SPEEDMULT))
+    q = lambda v: float(math.floor(v * 0.25 + 0.5))
+    sp = cls_ability_spel(CGID_MERC_FULL_SPELL, "MFOC_Mercenary_Full", "Mercenary passive",
+                          "Mercenary: +40 stamina, +25% stamina regeneration.",
+                          [(CGID_AB_STAMINA_MGEF, MERC_STAMINA), (CGID_AB_STAMINARATE_MGEF, MERC_REGEN)])
+    sp += cls_ability_spel(CGID_MERC_QUARTER_SPELL, "MFOC_Mercenary_Quarter", "Mercenary passive (mastered)",
+                           "Mercenary, mastered: a quarter of the passive.",
+                           [(CGID_AB_STAMINA_MGEF, q(MERC_STAMINA)), (CGID_AB_STAMINARATE_MGEF, q(MERC_REGEN))])
+    for lvl in range(1, CLASS_LEVEL_CAP[3] + 1):
+        mag = round(SCOUT_SPEED * class_scale(lvl, CLASS_LEVEL_CAP[3]), 2)
+        sp += cls_ability_spel(CGID_SCOUT_SPEED_BASE + lvl - 1, f"MFOC_Scout_Speed{lvl:02d}", "Scout passive",
+                               f"Scout, level {lvl}: +{mag:g}% movement speed.", [(CGID_AB_SPEED_MGEF, mag)])
+    sp += cls_ability_spel(CGID_SCOUT_QUARTER_SPELL, "MFOC_Scout_Quarter", "Scout passive (mastered)",
+                           "Scout, mastered: a quarter of the passive.", [(CGID_AB_SPEED_MGEF, q(SCOUT_SPEED))])
+    return mg, sp
+
+
+def make_marker_spells():
+    return (cls_marker_spel(CGID_MARKED_SPELL, "MFOC_MarkedSpell", "Marked", "Carrier for the Marked effect (10 s).",
+                            CGID_MARKED_MGEF, CAST_FF, DELIV_CONTACT, 10)
+            + cls_marker_spel(CGID_FLANKED_SPELL, "MFOC_FlankedSpell", "Flanked", "Carrier for the Flanked effect (5 s).",
+                              CGID_FLANKED_MGEF, CAST_FF, DELIV_TARGET_ACTOR, 5)
+            + cls_marker_spel(CGID_GUARDED_SPELL, "MFOC_GuardedSpell", "Guarded", "Carrier for the Guarded effect (concentration).",
+                              CGID_GUARDED_MGEF, CAST_CONCENTRATION, DELIV_AIMED, 0))
 
 
 # ── FACT / MGEF / CSTY ──────────────────────────────────────────────────────
@@ -2543,6 +2811,7 @@ def make_classes_esl():
                   + kw(CGID_MARKED_KYWD, "MFOC_MarkedKeyword")
                   + kw(CGID_FLANKED_KYWD, "MFOC_FlankedKeyword")
                   + kw(CGID_GUARDED_KYWD, "MFOC_GuardedKeyword"))
+    ability_mgefs, ability_spels = make_class_abilities()
     styles, per_class = make_class_styles(table, flagbits)   # needed now: the mask GLOBs live in the GLOB group
     globs = prog_glob(CGID_VERSION_GLOB, "MFOC_Version", CLS_VERSION_STAMP, 's')
     for fid, edid, value, fnam in CLS_GLOBS:
@@ -2572,7 +2841,9 @@ def make_classes_esl():
                   + cls_marker_mgef(CGID_FLANKED_MGEF, "MFOC_Flanked", "Flanked", CGID_FLANKED_KYWD,
                                     CAST_FF, DELIV_TARGET_ACTOR)
                   + cls_marker_mgef(CGID_GUARDED_MGEF, "MFOC_Guarded", "Guarded", CGID_GUARDED_KYWD,
-                                    CAST_CONCENTRATION, DELIV_AIMED))
+                                    CAST_CONCENTRATION, DELIV_AIMED)
+                  + ability_mgefs)
+    data += group('SPEL', ability_spels + make_marker_spells())   # Skyrim.esm order: MGEF SPEL ... CSTY
     data += group('CSTY', styles)
     flst = prog_flst(CGID_MANIFEST, "MFOC_AddonManifest",
                      [CGID_MANIFEST_KYWD, CGID_FACTION_LIST, CGID_STYLE_LIST]
@@ -2586,7 +2857,10 @@ def make_classes_esl():
         flst += prog_flst(CGID_STYLE_FLST_BASE + row['idx'], "MFOC_ClassStyles_" + cls_edid_name(row),
                           [CGID_STYLE_MASK_BASE + row['idx']] + fids)
     data += group('FLST', flst)
-    data += group('PERK', make_reference_perk())
+    perks, perk_counts = make_class_passive_perks(table)
+    data += group('PERK', make_reference_perk() + perks)
+    print(f"  class passives: {len(perk_counts)} perk(s), {sum(perk_counts.values())} entr(ies); "
+          + ", ".join(f"{k} {v}" for k, v in perk_counts.items()))
     return data
 
 
