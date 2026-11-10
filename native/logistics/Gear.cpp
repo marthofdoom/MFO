@@ -533,7 +533,7 @@ namespace MFO::Logistics {
                 if (roles.doRanged) rangedSrc = wantsRanged ? "gambit-override" : "carried";
             } else {
                 const Progression::StyleVotes rv = ready ? StyleVotesFor(a_follower) : Progression::StyleVotes{};
-                const std::uint8_t cls = a_state.combatClassOverride;
+                const std::uint8_t cls = EffectiveClassPick(a_follower->GetFormID(), a_state);
                 bool m = false, r = false;
                 if (cls == 1)      { m = true; meleeSrc = "class"; }
                 else if (cls == 2) { r = true; rangedSrc = "class"; }
@@ -567,7 +567,7 @@ namespace MFO::Logistics {
                 if (logIt)
                     spdlog::info("[role] {:08X}: melee={} ({}) ranged={} ({}) class={}",
                                  a_follower->GetFormID(), static_cast<int>(roles.melee), meleeSrc,
-                                 roles.doRanged, rangedSrc, static_cast<int>(a_state.combatClassOverride));
+                                 roles.doRanged, rangedSrc, static_cast<int>(EffectiveClassPick(a_follower->GetFormID(), a_state)));
             }
 
             // ── STYLE BY PERKS within the melee class (marth 2026-09-13) ─────

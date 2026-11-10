@@ -3402,6 +3402,16 @@ module. Module layout:
   combat skill, Melee max(1H,2H) / Ranged Archery / Mage max(5 schools) (0.25); (iii) the NPC's
   `TESNPC::npcClass->data.skillWeights`, same grouping (0.15). 0.60 > 0.40, so a gambit table
   naming ONE class always decides. Ties and all-abstain go to the lowest ordinal (Melee).
+  **C2b (2026-11-10):** `EffectiveClassPick(fid, state)` (same file, declared in `Logistics.h`) is THE accessor for the class PICK: classes ON
+  (`Classes::Active()` + equipped != kNoClass) -> his equipped class's `rootT1`, else the raw `combatClassOverride`; Q59 (class beats an older
+  explicit pick) and Q60 (Dragonborn = root of the highest-level mastered T4, tie lower Id, none -> raw; `DragonbornRoot()`) are DEFAULTS in
+  that one function. Readers routed through it (all worker-serial: the per-follower tick on the AddTask worker): `Cast.cpp` `UsesMageClothing`,
+  `Gear.cpp` `ComputeWeaponRoles` (class wins over perks) + its `[role]` log, `LootEquipment.cpp` `BuildEquipmentContext`, `EquipAuthority.cpp`
+  `pureCaster`, `Errand.cpp` College mage gates (x2), `SwapUp.cpp` `ComputeKeepSet`, `Economy.cpp` `BuildBuyThresholds` + `mageModeB24`, `Scheduler.cpp`
+  empty-table stance, `Followers.cpp` `GetBaseClass` (so its callers Scheduler/Equip.cpp/Fire.cpp/Hands.cpp follow) and `PublishActiveMirror`
+  (so `ResolvedClassFast` / HMS follow). RAW readers kept on purpose: `Board_FieldKit.cpp` (edits the pick), `Board.cpp` copies, `Serialization.cpp`.
+  **What breaks:** a NEW reader of `combatClassOverride` must use `EffectiveClassPick`, or a classes-ON follower reads his stale Gambit-tab pick;
+  no combat-thread reader exists (hooks read `ResolvedClassFast`); after a class equip change call `Followers::RepublishActiveMirror()` (C10).
   Consumer: core HMS only (through the `Followers::ResolvedClassFast` mirror). Equipment keeps
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main

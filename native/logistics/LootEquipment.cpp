@@ -58,7 +58,7 @@ namespace MFO::Logistics {
             // Base class (#65 combatClassOverride; 1=Melee 2=Ranged 3=Mage, 0=Auto)
             // read here, BEFORE mageMode, so mageMode can gate on it directly --
             // no circular dependency on the roles derived further down.
-            const std::uint8_t baseClass = a_state ? a_state->combatClassOverride : 0;
+            const std::uint8_t baseClass = a_state ? EffectiveClassPick(a_follower->GetFormID(), *a_state) : 0;
             // THE SILVER SLOT (ClickUp 86e3p2gp9): restock one silver melee weapon when he owns none.
             // marth 2026-10-12: the loot restock follows the gear-buy rule (bEconomy + bEconomyBuyGear).
             ctx.wantSilver    = a_state && Config::g_economy.load() && Config::g_economyBuyGear.load() &&

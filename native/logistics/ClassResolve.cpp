@@ -43,23 +43,50 @@ namespace MFO::Logistics {
             for (int c = 0; c < 3; ++c) if (a_v[c] >= best) a_out[c] = 1.0f / static_cast<float>(n);
         }
 
+        // Q60 default (see EffectiveClassPick): the T1 root of the follower's highest-level mastered T4, lower Id on a tie;
+        // 0 = none mastered (the caller falls back to the raw pick).
+        std::uint8_t DragonbornRoot(const Classes::FollowerClasses& a_fc) {
+            std::uint8_t bestRoot = 0, bestLevel = 0;
+            bool have = false;
+            for (std::size_t i = 0; i < Classes::kClassCount; ++i) {   // ascending Id: a strict > keeps the lower Id on a tie
+                const auto id = static_cast<Classes::Id>(i);
+                const auto& d = Classes::Get(id);
+                if (d.tier != 4 || !(a_fc.mastered & Classes::Bit(id))) continue;
+                const std::uint8_t lvl = a_fc.progress[i].level;
+                if (!have || lvl > bestLevel) { have = true; bestLevel = lvl; bestRoot = d.rootT1; }
+            }
+            return bestRoot;
+        }
+
+    }
+
+    // C2b (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). THE one accessor
+    // every class-pick reader goes through. Classes ON for this follower (add-on Active() and equipped != kNoClass): his
+    // equipped class's root T1 (1..3). Otherwise the raw Gambit-tab pick, UNCHANGED (classes OFF / add-on absent is
+    // byte-for-byte today). The raw combatClassOverride is never written on class equip (it is the persisted classes-OFF pick).
+    // Threading: takes the Classes g_mx (a leaf) via GetFollower, so any thread may call it; worker callers pass the
+    // g_followers record they already hold. No combat-thread reader exists (they read Followers::ResolvedClassFast, whose
+    // mirror PublishActiveMirror builds through ResolveBaseClass below).
+    std::uint8_t EffectiveClassPick(RE::FormID a_fid, const FollowerState& a_state) {
+        const std::uint8_t raw = a_state.combatClassOverride;
+        if (!a_fid || !Classes::Active()) return raw;
+        const auto fc = Classes::GetFollower(a_fid);
+        if (!fc || fc->equipped >= Classes::kClassCount) return raw;   // kNoClass = classes OFF for him
+
+        // RULING Q59 (DEFAULT, pending marth): with classes ON the equipped class beats an older explicit Gambit-tab pick.
+        // To flip it, return `raw` here when it is 1..3 (one place; every reader follows).
+        const auto eqId = static_cast<Classes::Id>(fc->equipped);
+        std::uint8_t root = Classes::Get(eqId).rootT1;
+
+        // RULING Q60 (DEFAULT, pending marth): Dragonborn (rootT1 0, no fixed root) uses the root of his highest-LEVEL MASTERED
+        // T4 class; a level tie goes to the lower Id; no mastered T4 falls back to the raw pick. Change DragonbornRoot() only.
+        if (eqId == Classes::Id::Dragonborn) root = DragonbornRoot(*fc);
+        return (root >= 1 && root <= 3) ? root : raw;
     }
 
     std::uint8_t ResolveBaseClass(RE::Actor* a_actor, const FollowerState& a_state) {
-        if (a_state.combatClassOverride >= 1 && a_state.combatClassOverride <= 3)
-            return a_state.combatClassOverride;   // the player's pick always wins
-
-        // C5b (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). With the class add-on
-        // Active() and a class EQUIPPED (equipped != kNoClass = classes ON for this follower), the Gambit-tab Auto vote below does
-        // not apply: his equipped class's root T1 is the answer. Classes OFF for him, or the add-on absent, falls through to the
-        // vote UNCHANGED. Dragonborn has no fixed root (rootT1 0), so it also falls through (flagged in the C5b report).
-        if (a_actor && Classes::Active()) {
-            const std::uint8_t eq = Classes::GetEquipped(a_actor->GetFormID());
-            if (eq < Classes::kClassCount) {
-                const std::uint8_t root = Classes::Get(static_cast<Classes::Id>(eq)).rootT1;
-                if (root >= 1 && root <= 3) return root;
-            }
-        }
+        if (const std::uint8_t pick = EffectiveClassPick(a_actor ? a_actor->GetFormID() : 0, a_state); pick >= 1 && pick <= 3)
+            return pick;   // the player's pick, or (C2b) his equipped class's root with classes ON: no Auto vote then
 
         float score[3] = { 0.0f, 0.0f, 0.0f };
 

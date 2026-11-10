@@ -100,7 +100,7 @@ namespace MFO::Logistics {
             // helper exists, so the expression is repeated.
             const bool keepWantsMelee   = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
             const bool keepWantsRanged  = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
-            const std::uint8_t keepBaseClass = a_state.combatClassOverride;
+            const std::uint8_t keepBaseClass = EffectiveClassPick(a_follower->GetFormID(), a_state);
             const bool keepBaseCaster     = keepBaseClass == 3;
             const bool keepBaseWeaponUser = keepBaseClass == 1 || keepBaseClass == 2;
             const bool keepMageMode = IsCasterFollower(a_state) &&

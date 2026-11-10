@@ -177,8 +177,10 @@ namespace MFO::Followers {
             // legal to read here.
             std::unordered_map<RE::FormID, std::uint8_t> resolved;
             for (const auto& [id, st] : g_followers) {
-                if (st.combatClassOverride >= 1 && st.combatClassOverride <= 3) {
-                    resolved.emplace(id, st.combatClassOverride);
+                // C2b: the EFFECTIVE pick (classes ON -> his equipped class's root), not the raw Gambit-tab value.
+                const std::uint8_t pick = Logistics::EffectiveClassPick(id, st);
+                if (pick >= 1 && pick <= 3) {
+                    resolved.emplace(id, pick);
                 } else if (std::find(g_activeIds.begin(), g_activeIds.end(), id) != g_activeIds.end()) {
                     if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
                         resolved.emplace(id, Logistics::ResolveBaseClass(a, st));
@@ -818,7 +820,8 @@ namespace MFO::Followers {
 
     std::uint8_t GetBaseClass(RE::FormID a_actorID) {
         const auto it = g_followers.find(a_actorID);
-        return (it != g_followers.end()) ? it->second.combatClassOverride : std::uint8_t{ 0 };
+        // C2b: the EFFECTIVE pick (classes ON -> his equipped class's root). SetBaseClass / the Board still write the RAW value.
+        return (it != g_followers.end()) ? Logistics::EffectiveClassPick(a_actorID, it->second) : std::uint8_t{ 0 };
     }
     std::uint8_t GetBaseClass(RE::Actor* a_actor) {
         return a_actor ? GetBaseClass(a_actor->GetFormID()) : std::uint8_t{ 0 };

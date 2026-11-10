@@ -299,6 +299,12 @@ namespace MFO::Classes {
     // picker (AutoClassFor / PickAutoClass / ReadStats) was removed in card C5b: no class is ever auto-assigned. A follower with
     // classes ON (equipped != kNoClass) skips the Gambit-tab Auto vote in Logistics::ResolveBaseClass and takes his equipped
     // class's rootT1 instead.
+    // C2b: EVERY reader of the class pick (not just the vote) goes through Logistics::EffectiveClassPick (logistics/ClassResolve.cpp):
+    // classes ON -> his equipped class's root T1 (Dragonborn: Q60), else the raw combatClassOverride. The raw value is never written on
+    // class equip. C10 HOOK: after a SwitchClass / ActivateClass / SetEquipped / ClearEquipped and after a bClassTree toggle, call
+    // Followers::RepublishActiveMirror() on the WORKER (the ResolvedClassFast mirror the main-thread HMS poll reads is rebuilt by it;
+    // it is NOT called from State.cpp because it reads g_followers, worker-only). Until then the mirror catches up at the next
+    // Followers::Refresh (its tail republishes). Direct readers on the worker see an equip change at once (no cache).
 
     // ── passive carriers = card C6 (classes/Carriers.cpp) ─────────────────────────────────────────────
     // The ESL's passive PERKS are gated on each follower's rank in the class faction MFOC_P_<Name> (the C7 RANK SPACE): 0 / absent
