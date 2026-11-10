@@ -79,6 +79,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Unanimated.cpp
     cast/SubstrateRoad.cpp
     Scheduler.cpp
+    Cooldowns.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp

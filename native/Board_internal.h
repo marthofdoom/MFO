@@ -43,7 +43,12 @@ namespace MFO::Board {
                                                             // verb rides EditCmd::verbId (an
                                                             // add-on-agnostic int) — EditKind no
                                                             // longer enumerates progression verbs.
-                                         SetHelmetOverride };   // 86e3phy41: per-follower "Wear helmets" (0 Default / 1 Wear / 2 Never)
+                                         SetHelmetOverride,   // 86e3phy41: per-follower "Wear helmets" (0 Default / 1 Wear / 2 Never)
+                                         SetCooldown };       // card G9: c.param = the rule's cooldown in tenths of a second
+    // Card G9 (marth Q7, 2026-11-09: "cooldown on POWER-ATTACK rows only for now"): the actions whose rows show
+    // the cooldown cell. The save field is general (any row may carry one); an edit that moves a row OFF these
+    // actions clears its cooldown (ApplyEdits), so no row is ever paced by a value the board does not show.
+    inline bool CooldownExposed(std::string_view a_actOp) { return a_actOp == Vocab::kActPowerAttack; }
     // v1.1 Phase 6c: the verbs an EditKind::AddonAction can carry. The CARRIER
     // (EditKind/EditCmd) is add-on-agnostic; these ids + the dispatch in
     // ApplyEdits stay progression-shaped until Phase 7/9 routes verbs through

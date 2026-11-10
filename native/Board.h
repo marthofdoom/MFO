@@ -41,6 +41,9 @@ namespace MFO::Board {
         // refuses such a spell at a foe).
         bool         selfDeliveredBuff = false;
         bool        enabled = true;
+        // Card G9: the rule's cooldown, tenths of a second (Gambit::cooldownTenths). Drawn only where
+        // Board::CooldownExposed(actOp) (marth Q7: power-attack rows for now).
+        std::uint16_t cooldownTenths = 0;
         bool        lastFired = false;
         std::string fail;
         // When the rule last fired (flair #9). A plain steady_clock stamp --

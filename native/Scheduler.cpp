@@ -14,6 +14,7 @@
 #include "logistics/Logistics.h"
 #include "logistics/Errand.h"   // engage in a party fight: not while he is away on a town errand
 #include "State.h"
+#include "Cooldowns.h"      // card G9: the per-rule cooldown last-fired store (runtime-only)
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
 #include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
@@ -1716,13 +1717,29 @@ namespace MFO::Scheduler {
                 continue;
             }
 
+            // CARD G9: PER-RULE COOLDOWN (Gambit::cooldownTenths; the last-fired store is Cooldowns.h, runtime-only).
+            // A rule still cooling down is passed over TRANSPARENTLY and never reaches Fire, its reason going to the
+            // chain and to the board the G10 way (the transparent branch below). Actuation-side pacing, the same
+            // shape as the drink / cast cooldowns: the evaluator chose this rule and is not told otherwise (#22).
+            // FailedOther, never NoOp: a transparent NoOp on an equip rule reads as "satisfied" (the H2 claim).
+            // Like the cast cooldown, it runs after H3 above, so a cooling cast rule still holds its loan.
+            std::string coolReason;
+            if (const auto rr = g_followers.find(id);
+                rr != g_followers.end() && choice.ruleIndex < static_cast<int>(rr->second.combat().size())) {
+                const auto& rule = rr->second.combat()[choice.ruleIndex];
+                if (rule.cooldownTenths != 0 && rule.uid != 0)
+                    if (const float left = Cooldowns::Remaining(id, Cooldowns::Kind::Rule, rule.uid, CooldownSec(rule), now);
+                        left > 0.0f)
+                        coolReason = Cooldowns::CoolingReason(left);
+            }
+
             // ── FLAIR #5: RETARGET HESITATION ────────────────────────────────
             // A switch of an existing latch must win twice: first winning
             // service proposes and holds ("sizing up <name>" -- an opaque
             // beat, like the attack latch itself); the second service that
             // proposes the same foe commits. First engagement is exempt (no
             // latch yet), and so is self-defense (foe_attacking_me*).
-            if (op == Vocab::kActAttack && choice.target) {
+            if (coolReason.empty() && op == Vocab::kActAttack && choice.target) {
                 const auto cur = Targeting::Current(id);
                 // Only a LIVE current target earns the hesitation beat. A stale
                 // latch to a DEAD/gone foe must not stall a switch (Opus review:
@@ -1766,7 +1783,9 @@ namespace MFO::Scheduler {
             // direct road (they do not pass through here).
             const bool castOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
                                 op == Vocab::kActCastPlayer;
-            if (castOp && APMFBridge::InCombat(f) && !f->GetActorRuntimeData().combatController)
+            if (!coolReason.empty())
+                outcome = { Actuation::Result::FailedOther, coolReason, true };
+            else if (castOp && APMFBridge::InCombat(f) && !f->GetActorRuntimeData().combatController)
                 outcome = { Actuation::Result::NoOp,
                             "waiting for his combat controller (a combat gambit's cast never takes the direct road)",
                             true };
@@ -1783,9 +1802,13 @@ namespace MFO::Scheduler {
                 if (satisfiedEquip) silverHeld = silverHeld || isSilver;
                 chain += std::format("{}{}({})", chain.empty() ? "" : ",",
                                      choice.ruleIndex,
-                                     satisfiedEquip ? "satisfied" : outcome.reason.c_str());
+                                     satisfiedEquip        ? "satisfied"
+                                     // G9: no countdown in the chain, or its dedup'd log line changes every second
+                                     : !coolReason.empty() ? "cooling down"
+                                                           : outcome.reason.c_str());
                 // G10: a skipped rule's "will not work" reason reaches the board (lastFailReason is otherwise written for the stopping rule only).
-                if (outcome.reason.starts_with("will not work:"))
+                // G9's "cooling down (Ns)" takes the same road.
+                if (outcome.reason.starts_with("will not work:") || outcome.reason.starts_with(Cooldowns::kCoolingPrefix))
                     if (auto rr = g_followers.find(id); rr != g_followers.end() && choice.ruleIndex < static_cast<int>(rr->second.combat().size()))
                         rr->second.combat()[choice.ruleIndex].lastFailReason = outcome.reason;
                 start = choice.ruleIndex + 1;
@@ -2169,6 +2192,10 @@ namespace MFO::Scheduler {
                 rule.lastFired = (outcome.result == Actuation::Result::Fired);
                 rule.lastFailReason = outcome.reason;
                 if (rule.lastFired) rule.lastFiredAt = now;   // flair #9: board pulse
+                // Card G9: a real FIRE starts this rule's cooldown. Not an approach leg (Outcome::approach: the
+                // power attack closing to melee), or the swing it is closing for would be cooled out.
+                if (rule.lastFired && !outcome.approach && rule.cooldownTenths != 0 && rule.uid != 0)
+                    Cooldowns::NoteFired(id, Cooldowns::Kind::Rule, rule.uid, now);
             }
         }
 

@@ -36,6 +36,10 @@ namespace MFO::Actuation {
         // Defaults false so any path that forgets to tag stays a wall -- the
         // pre-fall-through behaviour, safe in direction.
         bool        transparent = false;
+        // Card G9: a Fired outcome that only STARTED the action (the power attack's "closing to melee" leg: the
+        // target latch is committed, the swing has not happened). A per-rule cooldown does not start on it
+        // (Scheduler.cpp), or the swing it was closing for would itself be cooled out. False everywhere else.
+        bool        approach = false;
     };
 
     // Execute a chosen action on a follower. Returns what happened so the
