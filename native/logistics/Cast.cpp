@@ -115,7 +115,7 @@ namespace MFO::Logistics {
         // Worker-serial (logistics service); the dedupe map is mutex-guarded anyway.
         bool UsesMageClothing(const FollowerState& a_state, RE::Actor* a_follower) {
             if (!IsCasterFollower(a_state)) return false;
-            const std::uint8_t cls = a_state.combatClassOverride;
+            const std::uint8_t cls = EffectiveClassPick(a_follower ? a_follower->GetFormID() : 0, a_state);
             bool mage = false;
             const char* why = "";
             if (cls == 3)      { mage = true;  why = "class Mage (explicit) -> mage clothing"; }

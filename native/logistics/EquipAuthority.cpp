@@ -1084,7 +1084,7 @@ namespace MFO::Logistics {
             // (Left), a torch (Light+Left) and a spell (not a governed type) are never
             // refused by it. Economy's worn-shield force-sell keeps its original
             // dual-wield scope (Economy.cpp deniedWorn).
-            const bool pureCaster = a_state.combatClassOverride == 3 && Config::g_mageDaggersOnly.load() &&
+            const bool pureCaster = EffectiveClassPick(a_follower->GetFormID(), a_state) == 3 && Config::g_mageDaggersOnly.load() &&
                                     roles.offHand != 1;
             const bool noShieldUser =
                 (roles.offHand == 2 && Config::g_weaponStyleControl.load()) ||

@@ -1,0 +1,17 @@
+- bound weapons fix (86e3t1gfx) queued until MFO-B1 merges; brief = agentlogs/mfo-bound-weapons.md PROPOSED FIX
+- backlog SEV-5 (7d6cf32 review): drug exclusion also keeps mixed potions with a detrimental side effect from the engine AI (consistent with 10-18); changelog line at next release
+- MFO-B2 Harbinger dry-run: paused for the dev test gambit; resume from agentlogs/apmf-b2-dryrun.md (worktree /tmp/claude-1000/worktrees/apmf-dryrun if it exists)
+- C3 MCLS (Opus, tier A): brief ready, spawn when a slot frees (stopped at launch to hold the 3-agent cap); log agentlogs/classes-c3.md if any
+- On C3 merge: update CLAUDE.md 'five things' #1 record list to FLWR v5 / MSTK v1 / PRGN v8 / FWPN v1 / PGIV v1 / ERND v2 / MCLS v1 (+ MFST v1 dev-only when selftest merges); FLWR row codec now GambitWire shared with MCLS
+- bound bows: branch fix/mfo-bound-bows ca2db45 PARKED pending question 30 (animation ruling); if accepted, resume author a3ff7cd3e2a6ded36 with F1 DualCast plan + F2 bound guard in Loadout stow/EquipBack + Q2 ally-target refusal
+- MFO adoption of CanServe (MFO-B2 MFO half, tier B): mirror APMF_API.h (sha after F2 doc fix), CanServeCast in bridge gated abi>=35; query the shape MFO will FINALLY file (OwnLineOfSight retry, review F4); call before commitPreempt on every claim route in CastOn.cpp; Refused -> transparent, no preempt; pre-check ComposedCast Held; update MFO-B2 backlog to the narrowed residual
+- AUTO control hostile merge MUST include MFO-B580 (wire WillWork into CastAuto hostile fan-out) — rebase feat/auto-control-hostile onto main (G10 merged) and do it in that branch
+- Tailor compat investigation (1dfcuabcrth?): read-only Opus/Sonnet investigation when a slot frees (Harbinger ch.17 attribution of a foreign DLL armor equip + MFO armor re-dress); source at scratchpad/ext-tailor/src (GPL, read only)
+- FABLE PILOT (marth 11-10): H5 aim/miss bundle end to end on Fable at the next free slot; compare file scratchpad/fable-pilot-compare.md
+- NEXT FREE SLOT: Opus tier-B review of fix/retreat-hold-until-flee-ends (code e2a79b2, tip 189fb0e; author ab6fc4fa8edaec926; 5 spots in its report: kFlee via GetCurrentPackage may never show while alias held; kFleeNotCombat; scope = only full-HP STAY release; 20 s bound)
+- C6 carriers: spawn after C5 review verdict (needs Scale01 from feat/classes-c5-mastery). Note for C8: mage-line classes get a melee + dual style twin because kMageSet includes dagger.
+- C5b remove class Auto picker (tier B, effort 1): next free class slot
+- C2b equipped class drives stance in all 7 readers (after C5b)
+- C6b strip passives on dismiss (tier B, effort 1); post-release quick patch Warlock/Nightblade foe-only
+- FABLE potion review+fix (one round): brief scratchpad/brief-fable-potion-review.md; start when potion author done + <=1 other agent running
+- KNOWLEDGE CONSOLIDATION (sonnet-chore, next free slot): fold today's engine facts into Linux-Native-Tools root files (H5 aim solve/Fire/Launch/LaunchData/controller layout per runtime + Archery cone; ValueModifier row alias 0x81DCA0; HandleEntryPoint arity + tab i==arg i; AddToFaction in-place; HasPerk vs ApplyTemporaryPerk/standingStonePerks; EP 0x26 cost curve; 115-site player-only EP census; walls = impact hazards; GetChargeTime null-MGEF deref; PlayerCharacter::Update a_delta = world-time x killcam) from scratchpad agentlogs + Docs/research/2026-11; also copy Harbinger research into APMF Docs/research/2026-11/.

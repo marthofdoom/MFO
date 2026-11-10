@@ -1620,7 +1620,7 @@ namespace MFO::Scheduler {
             // below) before this early-out, so "just make this follower Ranged/
             // Mage" works even with an empty rule table. Auto (0) does nothing --
             // the #64 custom-follower guarantee holds on the empty path too.
-            if (const std::uint8_t ov = it->second.combatClassOverride; ov != 0) {
+            if (const std::uint8_t ov = Logistics::EffectiveClassPick(id, it->second); ov != 0) {
                 const auto forced = static_cast<CombatStyle::Stance>(ov);
                 if (forced == CombatStyle::Stance::Cast) {
                     if (Config::g_castControl.load() > 0) CombatStyle::Want(id, forced);
