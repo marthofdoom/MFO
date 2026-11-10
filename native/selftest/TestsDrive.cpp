@@ -141,7 +141,7 @@ namespace MFO::SelfTest {
                 s.n[3] = NowMs();
                 return Step::Continue();
             }
-            double sumP = 0, sumE = 0, last = 0;
+            double sumP = 0, sumE = 0, last = 0, topDelta = 0, topSpent = 0;
             int    cnt = 0;
             unsigned roads = 0;
             bool   allApply = true, anyApply = false;
@@ -152,6 +152,7 @@ namespace MFO::SelfTest {
                 roads |= 1u << static_cast<unsigned>(e.road);
                 sumE += e.engine;
                 sumP += e.applies ? e.parity : e.engine;
+                if (e.applies && e.road == CostParity::DevRoad::AnimatedOnce) { topDelta += e.parity - e.engine; topSpent += e.spent; }
                 if (e.applies) anyApply = true; else allApply = false;
             }
             if (cnt == 0) {
@@ -171,6 +172,12 @@ namespace MFO::SelfTest {
             const double regen = 0.5 * (NowMs() - s.n[3]) / 1000.0;
             const double tol = 2.0 + 0.1 * sumP + regen;
             if (s.n[2] < sumP + 2.0) return Step::Retry("the pool was too low to tell P from the clamp at 0; " + s.note);
+            // the animated top-up is direct evidence: what the module billed must be P - E
+            if (topDelta > 0.0 && std::fabs(topSpent - topDelta) > 1.0 + 0.1 * topDelta)
+                return Step::Fail(std::format("the animated top-up billed {:.2f} but P - E is {:.2f}; {}", topSpent, topDelta, s.note));
+            if (std::fabs(sumP - sumE) <= tol)
+                return Step::Info(std::format("INDISTINGUISHABLE at this skill: P {:.2f} and E {:.2f} differ by less than the measurement tolerance {:.1f}, so the pool "
+                                              "drop {:.1f} cannot show which cost was charged (not a pass); {}", sumP, sumE, tol, drop, s.note));
             if (std::fabs(drop - sumP) <= tol)
                 return Step::Pass(std::format("magicka fell {:.1f}, expected the player-curve sum {:.1f} (tol {:.1f}); {}", drop, sumP, tol, s.note));
             if (std::fabs(drop - sumE) <= tol && std::fabs(sumP - sumE) > 2 * tol && allApply)
@@ -219,6 +226,9 @@ namespace MFO::SelfTest {
             if (dt < 3.0) return Step::Retry(std::format("the channel lasted only {:.1f}s (needs >= 3 s to read a rate); {}", dt, s.note));
             const double rate = (p1 - s.n[5]) / dt;
             const double tol = std::max(1.0, 0.2 * parity) + 1.0;
+            if (std::fabs(parity - engine) <= tol)
+                return Step::Info(std::format("INDISTINGUISHABLE at this skill: P {:.2f}/s and E {:.2f}/s differ by less than the tolerance {:.2f}/s; drain measured {:.2f}/s "
+                                              "(not a pass); {}", parity, engine, tol, rate, s.note));
             if (std::fabs(rate - parity) <= tol)
                 return Step::Pass(std::format("drain {:.2f}/s over {:.1f}s, expected P {:.2f}/s (tol {:.2f}; engine would be {:.2f}/s); {}", rate, dt, parity, tol, engine, s.note));
             if (std::fabs(rate - engine) <= tol && std::fabs(parity - engine) > 2 * tol)
@@ -357,7 +367,12 @@ namespace MFO::SelfTest {
                 return ApplyClass(id, "living-legend", 3, false, why);
             }
             case 3: Classes::SetMastered(id, 0); return ApplyClass(id, "mercenary", 5, false, why);
-            default: why.clear(); return Classes::ClearEquipped(id);
+            default: {
+                why.clear();
+                const bool ok = Classes::ClearEquipped(id);
+                Followers::RepublishActiveMirror();   // C10 HOOK (Classes.h)
+                return ok;
+            }
             }
         }
         Step CarrierStep(Ctx& c) {
@@ -500,7 +515,7 @@ namespace MFO::SelfTest {
                 std::string why;
                 bool ok = true;
                 Classes::SetMastered(c.id, 0);
-                if (ph == 0) ok = Classes::ClearEquipped(c.id);
+                if (ph == 0) { ok = Classes::ClearEquipped(c.id); Followers::RepublishActiveMirror(); }
                 else ok = ApplyClass(c.id, ph == 1 ? "warlock" : "nightblade", 99, true, why);
                 if (!ok) return Step::Retry(std::format("phase {} could not be set: {}", ph, why));
                 Classes::RefreshCarriers(c.id);
@@ -557,10 +572,13 @@ namespace MFO::SelfTest {
             if (a.state == 3) return Step::Fail("the ch.29 seat is NOT installed on this build ([ProjectileAim] bProjectileAim = 0 or an unsupported runtime): " + s.note);
             if (s.n[1] == 0 && c.elapsed - s.n[0] > 45.0f)
                 return Step::Fail("no ch.29 claim engaged 45 s after the Archer equip (the sweep files one per ranged class follower): " + s.note);
-            if (a.windowFill >= 10 || a.shots >= 12) {
+            if (a.windowFill >= 10) {
+                if (a.budget >= 10)
+                    return Step::Info(std::format("budget {} = observe only (nothing is corrected, so no pass is possible); the window holds {} miss(es); {}", a.budget,
+                                                  a.windowMisses, s.note));
                 if (a.corrected == 0 && a.wouldCorrect == 0)
                     return Step::Fail("10+ shots resolved but Harbinger corrected none and would-correct none (the claim is not governing): " + s.note);
-                if (a.windowMisses <= a.budget || a.budget >= 10)
+                if (a.windowMisses <= a.budget)
                     return Step::Pass(std::format("the last-10 window holds {} miss(es) <= budget {}; {}", a.windowMisses, a.budget, s.note));
                 return Step::Fail(std::format("the last-10 window holds {} misses > budget {}; {}", a.windowMisses, a.budget, s.note));
             }

@@ -45,6 +45,7 @@ namespace MFO::SelfTest {
             ok &= Classes::SetMastered(a_fid, a_snap.mastered);
             ok &= Classes::SetUnlocked(a_fid, a_snap.unlocked);
             ok &= Classes::SetStealthFights(a_fid, a_snap.thief, a_snap.masterThief);
+            Followers::RepublishActiveMirror();   // C10 HOOK (Classes.h): the equip changed; WORKER
             const auto now = Classes::GetFollower(a_fid);
             return ok && now && SameSnap(a_snap, *now);
         }
@@ -229,6 +230,7 @@ namespace MFO::SelfTest {
         if (a_mastered && cap) ok = ok && Classes::SetMastered(a_follower, fc.mastered | Classes::Bit(def->id));
         ok = ok && Classes::SetEquipped(a_follower, def->id);
         const auto now = Classes::GetFollower(a_follower);
+        Followers::RepublishActiveMirror();   // C10 HOOK (Classes.h): the equip changed; WORKER
         ok = ok && now && now->equipped == static_cast<std::uint8_t>(def->id) && now->progress[static_cast<std::size_t>(def->id)].level == lvl;
         if (!ok) { a_why = std::format("a Classes writer refused or the read-back differs for {} L{}", a_slug, static_cast<int>(lvl)); return false; }
         spdlog::info("[selftest] setup {:08X}: TEMP CLASS {} L{}{} applied through the C5c writers (restored when the run ends)", a_follower,

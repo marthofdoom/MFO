@@ -444,6 +444,11 @@ namespace MFO::SelfTest {
                     r.startedAt = now;
                     FixtureRequest req;
                     if (d.fixtures) d.fixtures(c, req);
+                    if (req.spawn.on) {   // ONE spawn-using run at a time, globally: a second waits (this test is tried again next pass)
+                        bool other = false;
+                        for (const auto& [fid, rr] : g_runs) other = other || rr.spawnRun;
+                        if (other) continue;
+                    }
                     r.s = std::move(s);
                     r.spawnRun     = req.spawn.on;
                     r.respawnsLeft = req.spawn.on ? req.spawn.respawns : 0;
@@ -531,7 +536,9 @@ namespace MFO::SelfTest {
                     std::lock_guard lk(g_mx);
                     if (auto k = g_spawnRef.find(r.token); k != g_spawnRef.end()) fid = k->second;
                 }
-                if (auto* h = fid ? RE::TESForm::LookupByID<RE::Actor>(fid) : nullptr; h && !h->IsDead() && !h->IsDisabled()) hostile = h;
+                if (auto* h = fid ? RE::TESForm::LookupByID<RE::Actor>(fid) : nullptr;
+                    h && !h->IsDead() && !h->IsDisabled() && h->GetBaseObject() && h->GetBaseObject()->GetFormID() == VanillaForm(r.req.spawn.baseLocal))
+                    hostile = h;   // identity: the spawned base, not whatever now holds the id
                 // the hostile died while the test still runs: another one (bounded), and a fresh grace while it walks up
                 if (!hostile && r.respawnsLeft > 0 && r.elapsed >= r.graceUntil && r.setupApplied) {
                     --r.respawnsLeft;

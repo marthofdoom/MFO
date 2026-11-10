@@ -52,7 +52,8 @@ namespace MFO::SelfTest {
             if (!foe) { a_note = "PlaceObjectAtMe returned no actor"; return false; }
             {
                 std::lock_guard lk(g_mx);   // ledger first: a failure below still gets the actor deleted
-                g_ledger.push_back({ a_token, a_testId, a_follower->GetFormID(), FixtureKind::Spawn, foe->GetFormID(), 1, 0 });
+                g_ledger.push_back({ a_token, a_testId, a_follower->GetFormID(), FixtureKind::Spawn, foe->GetFormID(), 1,
+                                     static_cast<std::int32_t>(baseId) });   // `before` = the BASE form id: cleanup only deletes an actor that still has it
                 g_spawnRef[a_token] = foe->GetFormID();
             }
             auto pos = a_follower->GetPosition();
@@ -82,6 +83,11 @@ namespace MFO::SelfTest {
             if (!actor) {
                 std::lock_guard lk(g_mx);
                 g_acks[a_token] = { false, std::format("follower {:08X} did not resolve", a_follower), false };
+                return;
+            }
+            if (req.spawn.hurtPct > 0.0f && !actor->IsEssential() && !actor->IsProtected()) {   // never damage a follower who can die of it
+                std::lock_guard lk(g_mx);
+                g_acks[a_token] = { false, "refused, the follower is neither essential nor protected: hurting him for the run could kill him", true };
                 return;
             }
             if (req.spawn.on) {   // SAFETY FIRST: nothing is added when a hostile may not be spawned here (RETRY, not an error)
@@ -166,6 +172,23 @@ namespace MFO::SelfTest {
             std::vector<std::size_t> doneIdx;   // indices into `mine` that are settled (removed or moot)
             for (std::size_t i = 0; i < mine.size(); ++i) {
                 const auto& f     = mine[i];
+                if (f.kind == FixtureKind::Spawn) {   // needs no follower; handled FIRST. A raw runtime id can be reused after a load: check the base.
+                    auto* foe = RE::TESForm::LookupByID<RE::Actor>(f.form);
+                    auto* bo  = foe ? foe->GetBaseObject() : nullptr;
+                    if (!foe || !bo || bo->GetFormID() != static_cast<RE::FormID>(f.before)) {
+                        spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} is gone (or that id now holds something else: base {:08X}, "
+                                     "expected {:08X}) -- nothing deleted", why, f.form, bo ? bo->GetFormID() : 0u, static_cast<RE::FormID>(f.before));
+                    } else {
+                        const std::string nm = foe->GetName() ? foe->GetName() : "?";
+                        foe->StopCombat();
+                        foe->Disable();
+                        foe->SetDelete(true);
+                        spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} '{}' stopped, disabled and marked for deletion (it was {})",
+                                     why, f.form, nm, foe->IsDead() ? "dead" : "alive");
+                    }
+                    doneIdx.push_back(i);
+                    continue;
+                }
                 auto*       actor = RE::TESForm::LookupByID<RE::Actor>(f.follower);
                 if (!actor) {
                     spdlog::error("[selftest] fixture cleanup ({}): follower {:08X} does not resolve -- '{}' "
@@ -203,19 +226,6 @@ namespace MFO::SelfTest {
                     if (avo && heal > 0.0f) avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, heal);
                     spdlog::info("[selftest] fixture removed ({}): {:08X} Health damage the test dealt: gave back {:.0f} of {:.0f} (damage now {:.0f})",
                                  why, f.follower, heal, want, dmg - heal);
-                    doneIdx.push_back(i);
-                } else if (f.kind == FixtureKind::Spawn) {
-                    auto* foe = RE::TESForm::LookupByID<RE::Actor>(f.form);
-                    if (!foe) {
-                        spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} is already gone (cell unloaded / deleted)", why, f.form);
-                    } else {
-                        const std::string nm = foe->GetName() ? foe->GetName() : "?";
-                        foe->StopCombat();
-                        foe->Disable();
-                        foe->SetDelete(true);
-                        spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} '{}' stopped, disabled and marked for deletion "
-                                     "(it was {})", why, f.form, nm, foe->IsDead() ? "dead" : "alive");
-                    }
                     doneIdx.push_back(i);
                 } else {
                     auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(f.form);
