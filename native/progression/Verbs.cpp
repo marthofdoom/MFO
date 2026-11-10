@@ -301,6 +301,7 @@ namespace MFO::ProgAllocator {
         }
 
         int removed = 0;
+        const auto probe = ProbeBefore(a_actor, base, nullptr);
         for (const auto& p : st.perks) {
             auto ref = FindNode(p.nodePerkID);
             RE::BGSPerk* held = nullptr;
@@ -308,11 +309,13 @@ namespace MFO::ProgAllocator {
                 held = PerkByID(ref.node->ranks[p.rank - 1].perkFormID);
             if (!held) held = PerkByID(p.nodePerkID);   // off-catalog: best effort on the node id
             if (held && base->GetPerkIndex(held).has_value()) {
+                const std::uint8_t had = BaseRankOf(base, held);
                 base->RemovePerk(held);
+                SetLivePerkRank(a_actor, held, had, 0);   // §4.1: its live entries go with it (never ApplyPerksFromBase)
                 ++removed;
             }
         }
-        a_actor->ApplyPerksFromBase();   // §4.1: re-settle the actor once
+        ProbeAfter(probe, a_actor, base, "respec");
         st.perks.clear();
         // §17: the refund is AUTOMATIC — clearing the allocs removes the
         // debit and the derived pool rises by exactly the ranks returned.
@@ -402,6 +405,7 @@ namespace MFO::ProgAllocator {
         // back on the base. Known limit, shared with Respec (backlog MFO-B249 F6): an
         // allocated rank form the load order now ALSO grants natively is removed too.
         int removed = 0;
+        const auto probe = ProbeBefore(actor, base, nullptr);
         for (const auto& p : st.perks) {
             auto ref = FindNode(p.nodePerkID);
             RE::BGSPerk* held = nullptr;
@@ -409,13 +413,15 @@ namespace MFO::ProgAllocator {
                 held = PerkByID(ref.node->ranks[p.rank - 1].perkFormID);
             if (!held) held = PerkByID(p.nodePerkID);   // off-catalog: best effort on the node id
             if (held && base->GetPerkIndex(held).has_value()) {
+                const std::uint8_t had = BaseRankOf(base, held);
                 base->RemovePerk(held);
+                SetLivePerkRank(actor, held, had, 0);   // its live entries go with it (never ApplyPerksFromBase)
                 ++removed;
                 spdlog::info("[roster] {:08X}: MFO perk '{}' ({:08X}) removed", a_actorID, NameOf(held),
                              held->GetFormID());
             }
         }
-        if (removed) actor->ApplyPerksFromBase();
+        if (removed) ProbeAfter(probe, actor, base, "forget");
         st.perks.clear();
         if (st.enrolled) RestoreNativePerks(actor);
 

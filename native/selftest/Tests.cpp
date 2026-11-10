@@ -423,6 +423,95 @@ namespace MFO::SelfTest {
         }
         Step HmsTimeout(Ctx& c) { return Step::Retry("no settled HMS read in the window: " + c.s->note); }
 
+        // ── 1dfcuabcrqq: Progression perk entries are never duplicated ──────────────────────────────────
+        // Actor::ApplyPerksFromBase re-applies every base perk with no presence check, and the entry-point
+        // insert never dedupes, so the old MFO grant / reapply / strip / respec paths put a second copy of
+        // every base entry-point entry on the follower each call (one extra per load at least, from the
+        // post-load reapply). Judged by ProgAllocator::ReadPerkEntryView (main thread): every entry-point
+        // entry the base says is live, counted in the follower's live arrays. PASS = none in its array more
+        // than once on two reads 2 s apart; FAIL = any duplicated. Needs an enrolled follower with at least
+        // one MFO-granted rank and a middle-high process, 30 s in the party (the session reapply ran).
+        // n[0] last duplicated, n[1] last epEntries, n[2] when they last changed (run s), n[3] first allocatedRanks.
+        struct PerkRead { ProgAllocator::PerkEntryView v; bool found = false; bool inFlight = false;
+                          std::chrono::steady_clock::time_point at{}; };
+        std::mutex                               g_perkMx;   // leaf lock
+        std::unordered_map<RE::FormID, PerkRead> g_perk;
+        bool FreshPerk(RE::FormID a_id, float a_maxAgeSec, std::chrono::steady_clock::time_point a_notBefore,
+                       PerkRead& a_out) {
+            const auto now     = std::chrono::steady_clock::now();
+            bool       have    = false;
+            bool       refresh = true;
+            bool       post    = false;
+            {
+                std::lock_guard lk(g_perkMx);
+                auto& r = g_perk[a_id];
+                if (r.at.time_since_epoch().count() != 0) {
+                    const float age = std::chrono::duration<float>(now - r.at).count();
+                    if (r.at >= a_notBefore && age <= a_maxAgeSec) {
+                        a_out   = r;
+                        have    = true;
+                        refresh = age > 1.0f;
+                    }
+                }
+                if (refresh && !r.inFlight) {
+                    r.inFlight = true;
+                    post       = true;
+                }
+            }
+            if (post)
+                MainThread::Post([a_id]() {
+                    ProgAllocator::PerkEntryView v;
+                    const bool f = ProgAllocator::ReadPerkEntryView(a_id, v);
+                    std::lock_guard lk(g_perkMx);
+                    auto& r    = g_perk[a_id];
+                    r.v        = v;
+                    r.found    = f;
+                    r.inFlight = false;
+                    r.at       = std::chrono::steady_clock::now();
+                });
+            return have;
+        }
+        std::string PerkNote(const ProgAllocator::PerkEntryView& v) {
+            return std::format("{} entry-point entries on {} base perks, duplicated {} (extra copies {}, max {}x{}), "
+                               "missing {}, MFO-granted ranks {}",
+                               v.epEntries, v.basePerks, v.duplicated, v.extraCopies, v.maxCopies,
+                               v.worstPerk ? std::format(" perk {:08X} ep {}", v.worstPerk, v.worstEp) : std::string(),
+                               v.missing, v.allocatedRanks);
+        }
+        const char* PerkPre(Ctx& c) {
+            if (c.seenFor < 30.0f) return "the follower in the party for 30 s this session (the session reapply ran)";
+            if (c.follower->IsCommandedActor()) return "a real follower, not a summon";
+            PerkRead r;
+            if (!FreshPerk(c.id, 5.0f, {}, r)) return "a Progression record (reading it)";
+            if (!r.found || !r.v.enrolled) return "a follower enrolled in Progression";
+            if (r.v.allocatedRanks < 1) return "at least one perk rank granted by MFO";
+            if (!r.v.process) return "a middle-high process (the follower loaded nearby)";
+            if (r.v.epEntries < 1) return "a base perk with an entry-point entry";
+            return nullptr;
+        }
+        Step PerkStep(Ctx& c) {
+            auto&    s = *c.s;
+            PerkRead r;
+            if (!FreshPerk(c.id, 3.0f, c.startedAt, r)) return Step::Continue();
+            if (!r.found || !r.v.enrolled) return Step::Retry("the Progression record is gone");
+            if (!r.v.process) return Step::Retry("the follower lost his middle-high process (unloaded)");
+            const auto& v = r.v;
+            if (!s.b[0]) s.n[3] = v.allocatedRanks;
+            if (!s.b[0] || v.duplicated != s.n[0] || v.epEntries != s.n[1]) {
+                s.b[0] = true;
+                s.n[0] = v.duplicated;
+                s.n[1] = v.epEntries;
+                s.n[2] = c.elapsed;
+            }
+            s.note = PerkNote(v) + std::format(" (granted ranks at start {:.0f})", s.n[3]);
+            if (v.duplicated > 0)
+                return Step::Fail("a base perk's entry-point entry is live more than once (MFO, or another plugin "
+                                  "calling ApplyPerksFromBase): " + s.note);
+            if (c.elapsed - s.n[2] < 2.0f) return Step::Continue();
+            return Step::Pass("every entry-point entry of the base perks is live at most once: " + s.note);
+        }
+        Step PerkTimeout(Ctx& c) { return Step::Retry("no settled perk-entry read in the window: " + c.s->note); }
+
     }
 
     void RegisterSinks() {
@@ -445,6 +534,10 @@ namespace MFO::SelfTest {
             std::lock_guard lk(g_shotMx);
             g_shots.clear();
         }
+        {
+            std::lock_guard lk(g_perkMx);
+            g_perk.clear();
+        }
         std::lock_guard lk(g_hmsMx);
         g_hms.clear();
     }
@@ -463,6 +556,10 @@ namespace MFO::SelfTest {
                    "out of combat, bHmsRedistribute + bHmsCapToPlayerTotal on, a captured HMS record with a class "
                    "profile and a player sample, the follower in the party for 2 minutes",
                    60.0f, HmsPre, nullptr, HmsStep, HmsTimeout });
+        Register({ "prog.perk_entries_unique", "1dfcuabcrqq",
+                   "a follower enrolled in Progression with at least one MFO-granted rank, loaded nearby, 30 s in "
+                   "the party",
+                   60.0f, PerkPre, nullptr, PerkStep, PerkTimeout });
     }
 
 }

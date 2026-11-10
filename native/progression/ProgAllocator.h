@@ -575,6 +575,23 @@ namespace MFO::ProgAllocator {
         float floor[3]{};            // max(profile share x playerSample, 50): the cap's per-pool floor
     };
     bool ReadHmsCapView(RE::FormID a_id, HmsCapView& a_out);
+    // DEV BUILDS ONLY: the read the self-test `prog.perk_entries_unique` judges by (ClickUp 1dfcuabcrqq).
+    // PURE READ: the g_prog record + a census of the follower's live entry-point entries against his base
+    // perks (progression/PerkGate.cpp CensusBasePerkEntries). MAIN THREAD. false = no g_prog record / actor.
+    struct PerkEntryView {
+        bool          enrolled       = false;
+        int           allocatedRanks = 0;       // MFO-granted ranks on the record
+        bool          process        = false;   // a middle-high process (false = nothing live, nothing counted)
+        int           basePerks      = 0;
+        int           epEntries      = 0;       // entry-point entries the base expects live
+        int           missing        = 0;
+        int           duplicated     = 0;       // entries in their array more than once
+        int           extraCopies    = 0;
+        int           maxCopies      = 0;
+        RE::FormID    worstPerk      = 0;
+        std::uint32_t worstEp        = 0;
+    };
+    bool ReadPerkEntryView(RE::FormID a_id, PerkEntryView& a_out);
 #endif
 
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────

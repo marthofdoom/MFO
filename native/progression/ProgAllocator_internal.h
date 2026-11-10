@@ -303,6 +303,48 @@ namespace MFO::ProgAllocator {
         int UndoSkills(RE::Actor* a_actor, ProgState& a_st);
 
         // Perks (progression/PerkGate.cpp):
+        // LIVE perk-entry settle (ClickUp 1dfcuabcrqq): the ONLY way MFO puts a
+        // base perk change onto the live actor. Never call Actor::ApplyPerksFromBase
+        // (it re-applies every base perk with no presence check and DUPLICATES every
+        // entry-point entry; PerkGate.cpp has the disassembly). MAIN THREAD.
+        struct LivePerkChange {
+            int  removed     = 0;       // entries removed (every live copy of an entry-point entry)
+            int  applied     = 0;       // entries applied
+            int  alreadyLive = 0;       // entry-point entries left alone: already in their array
+            bool noProcess   = false;   // no middle-high process: nothing done (the engine applies the base later)
+        };
+        LivePerkChange SetLivePerkRank(RE::Actor* a_actor, RE::BGSPerk* a_perk,
+                                       std::uint8_t a_oldRank, std::uint8_t a_newRank);
+        // The rank the base holds a_perk at; 0 = not on the base.
+        std::uint8_t BaseRankOf(RE::TESNPC* a_base, RE::BGSPerk* a_perk);
+        // Pure read: every entry-point entry the base says is live, counted in the actor's arrays.
+        struct PerkEntryCensus {
+            bool          process     = false;   // false = no middle-high process, nothing counted
+            int           basePerks   = 0;
+            int           epEntries   = 0;       // entry-point entries the base expects live
+            int           missing     = 0;       // of those, not in their array
+            int           duplicated  = 0;       // of those, in their array more than once
+            int           extraCopies = 0;       // sum of (copies - 1) over the duplicated
+            int           maxCopies   = 0;
+            RE::FormID    worstPerk   = 0;
+            std::uint32_t worstEp     = 0;
+        };
+        PerkEntryCensus CensusBasePerkEntries(RE::Actor* a_actor, RE::TESNPC* a_base);
+        // [perk-probe] passive probe (Config::g_perkEntryProbe, INI bPerkEntryProbe, default OFF):
+        // ProbeBefore at a mutation site, ProbeAfter once it settled. Off = both return at once.
+        struct PerkEntryProbe {
+            bool              on            = false;
+            RE::FormID        actor         = 0;
+            RE::BGSPerk*      perk          = nullptr;   // the perk whose entry is watched
+            RE::BGSPerkEntry* watch         = nullptr;   // its first entry-point entry
+            std::uint32_t     ep            = 0;
+            std::uint32_t     epTotalBefore = 0;
+            std::uint32_t     copiesBefore  = 0;
+            PerkEntryCensus   before;
+        };
+        PerkEntryProbe ProbeBefore(RE::Actor* a_actor, RE::TESNPC* a_base, RE::BGSPerk* a_perk);
+        void           ProbeAfter(const PerkEntryProbe& a_p, RE::Actor* a_actor, RE::TESNPC* a_base,
+                                  const char* a_site);
         int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);

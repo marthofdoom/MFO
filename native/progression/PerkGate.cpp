@@ -313,7 +313,231 @@ namespace MFO::ProgAllocator {
             return out;
         }
 
+        // ── live perk-entry settle (ClickUp 1dfcuabcrqq) ────────────────────
+        // A middle-high process is where entry-point entries live (AIProcess
+        // ->middleHigh +0x288: 92 BSTArrays, one per entry point). Without one
+        // the engine applies nothing (Actor::ApplyPerksFromBase returns at
+        // once, AE 0x715950 `cmp [rcx+8],0`), and the arrays are rebuilt from
+        // the base with the process (Actor::Revert frees them at a load,
+        // Actor::FinishLoadGame re-applies the base). So no process = no-op.
+        bool HasMiddleHigh(RE::Actor* a_actor) {
+            auto* proc = a_actor ? a_actor->GetActorRuntimeData().currentProcess : nullptr;
+            return proc && proc->middleHigh;
+        }
+
+        RE::BGSEntryPointPerkEntry* AsEntryPoint(RE::BGSPerkEntry* a_entry) {
+            return (a_entry && a_entry->GetType() == RE::PERK_ENTRY_TYPE::kEntryPoint)
+                       ? static_cast<RE::BGSEntryPointPerkEntry*>(a_entry)
+                       : nullptr;
+        }
+
+        std::uint32_t EntryPointOf(const RE::BGSEntryPointPerkEntry* a_ep) {
+            return static_cast<std::uint32_t>(a_ep->entryData.entryPoint.get());
+        }
+
+        // Counts one entry point's live array: every entry, and the copies of
+        // one entry pointer. Actor::ForEachPerkEntry (vfunc 0x100) walks
+        // middleHigh+0x288[ep] and calls Visit (slot 0) while it returns
+        // kContinue (AE 0x7158d0, SE 0x681f90; 1.7.104 slot 0x100 = 0x69f9c0).
+        struct EntryCountVisitor final : RE::PerkEntryVisitor {
+            const RE::BGSPerkEntry* want  = nullptr;
+            std::uint32_t           total = 0;
+            std::uint32_t           match = 0;
+            RE::BSContainer::ForEachResult Visit(RE::BGSPerkEntry* a_entry) override {
+                ++total;
+                if (a_entry == want) ++match;
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+        };
+        EntryCountVisitor CountLive(RE::Actor* a_actor, std::uint32_t a_ep, const RE::BGSPerkEntry* a_want) {
+            EntryCountVisitor v;
+            v.want = a_want;
+            if (a_ep < RE::BGSEntryPoint::ENTRY_POINTS::kTotal)
+                a_actor->ForEachPerkEntry(static_cast<RE::BGSEntryPoint::ENTRY_POINT>(a_ep), v);
+            return v;
+        }
+
+        // [perk-probe] session state: the ONE follower it watches, and its line budget.
+        constexpr int           kProbeLines = 64;
+        std::atomic<RE::FormID> g_probeActor{ 0 };
+        std::atomic<int>        g_probeLinesLeft{ kProbeLines };
+
     }
+
+        // Replaces Actor::ApplyPerksFromBase at every MFO site. That call is
+        // NOT a settle: it walks the WHOLE base perk array (TESNPC+0x138) and
+        // queues one BSTaskPool task 0x5F per perk with old rank 0 -> the
+        // base rank (AE 0x715950 -> 0x3909f0 -> 0x656ad0; the handler
+        // 0x659063 calls the rank change 0x390580 with no presence check), and
+        // the entry-point insert (0x38f640 -> 0x7155e0) always inserts (binary
+        // search on priority/rank, comparator 0x390540, no pointer test). So
+        // every call DUPLICATED every entry-point entry of every base perk,
+        // and it never removed anything. Same on SE 1.5.97 and 1.7.104.
+        //
+        // This is the engine's own per-perk rank change (0x390580) for ONE
+        // perk, made presence-checked: an entry whose rank+1 == a_oldRank is
+        // removed (every live copy, so an old duplicate cannot outlive the
+        // perk), else one whose rank+1 == a_newRank is applied, an entry-point
+        // entry only when its pointer is not already in its array. Ability and
+        // quest entries go through ApplyPerkEntry / RemovePerkEntry as the
+        // engine's path does (an ability's AddSpell does not double). The
+        // engine's post-change event (0x391760 / 0x391520) is not sent: it has
+        // no in-binary sink registration. MAIN THREAD.
+        LivePerkChange SetLivePerkRank(RE::Actor* a_actor, RE::BGSPerk* a_perk,
+                                       std::uint8_t a_oldRank, std::uint8_t a_newRank) {
+            LivePerkChange out;
+            if (!a_actor || !a_perk || a_oldRank == a_newRank) return out;
+            if (!HasMiddleHigh(a_actor)) {
+                out.noProcess = true;
+                return out;
+            }
+            for (auto* entry : a_perk->perkEntries) {
+                if (!entry) continue;
+                const unsigned r  = static_cast<unsigned>(entry->header.rank) + 1u;
+                auto*          ep = AsEntryPoint(entry);
+                if (a_oldRank != 0 && r == a_oldRank) {
+                    if (ep) {
+                        const auto copies = CountLive(a_actor, EntryPointOf(ep), entry).match;
+                        for (std::uint32_t i = 0; i < copies; ++i) entry->RemovePerkEntry(a_actor);
+                        out.removed += static_cast<int>(copies);
+                    } else {
+                        entry->RemovePerkEntry(a_actor);
+                        ++out.removed;
+                    }
+                } else if (a_newRank != 0 && r == a_newRank) {
+                    if (ep && CountLive(a_actor, EntryPointOf(ep), entry).match > 0) {
+                        ++out.alreadyLive;
+                        continue;
+                    }
+                    entry->ApplyPerkEntry(a_actor);
+                    ++out.applied;
+                }
+            }
+            return out;
+        }
+
+        // The rank the base holds a_perk at (0 = not on the base).
+        std::uint8_t BaseRankOf(RE::TESNPC* a_base, RE::BGSPerk* a_perk) {
+            if (!a_base || !a_perk) return 0;
+            const auto idx = a_base->GetPerkIndex(a_perk);
+            if (!idx || *idx >= a_base->perkCount) return 0;
+            return static_cast<std::uint8_t>(a_base->perks[*idx].currentRank);
+        }
+
+        // Every entry-point entry the BASE says should be live (entry
+        // rank+1 == the base rank), counted in the actor's arrays. Pure read.
+        PerkEntryCensus CensusBasePerkEntries(RE::Actor* a_actor, RE::TESNPC* a_base) {
+            PerkEntryCensus c;
+            if (!a_actor || !a_base) return c;
+            c.process = HasMiddleHigh(a_actor);
+            if (!c.process) return c;
+            for (std::uint32_t i = 0; i < a_base->perkCount; ++i) {
+                const auto& pr = a_base->perks[i];
+                if (!pr.perk) continue;
+                ++c.basePerks;
+                const unsigned baseRank = static_cast<std::uint8_t>(pr.currentRank);
+                for (auto* entry : pr.perk->perkEntries) {
+                    auto* ep = AsEntryPoint(entry);
+                    if (!ep || static_cast<unsigned>(entry->header.rank) + 1u != baseRank) continue;
+                    ++c.epEntries;
+                    const auto copies = CountLive(a_actor, EntryPointOf(ep), entry).match;
+                    if (copies == 0) ++c.missing;
+                    if (copies > 1) {
+                        ++c.duplicated;
+                        c.extraCopies += static_cast<int>(copies - 1);
+                        if (static_cast<int>(copies) > c.maxCopies) {
+                            c.maxCopies = static_cast<int>(copies);
+                            c.worstPerk = pr.perk->GetFormID();
+                            c.worstEp   = EntryPointOf(ep);
+                        }
+                    }
+                }
+            }
+            return c;
+        }
+
+#ifdef MFO_DEV_SELFTEST
+    // Dev builds only (ProgAllocator.h): the self-test read. Same census the probe prints.
+    bool ReadPerkEntryView(RE::FormID a_id, PerkEntryView& a_out) {
+        a_out = {};
+        const auto it = g_prog.find(a_id);
+        if (it == g_prog.end()) return false;
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
+        auto* base  = actor ? actor->GetActorBase() : nullptr;
+        if (!base) return false;
+        a_out.enrolled       = it->second.enrolled;
+        a_out.allocatedRanks = AllocatedRanks(it->second);
+        const auto c         = CensusBasePerkEntries(actor, base);
+        a_out.process        = c.process;
+        a_out.basePerks      = c.basePerks;
+        a_out.epEntries      = c.epEntries;
+        a_out.missing        = c.missing;
+        a_out.duplicated     = c.duplicated;
+        a_out.extraCopies    = c.extraCopies;
+        a_out.maxCopies      = c.maxCopies;
+        a_out.worstPerk      = c.worstPerk;
+        a_out.worstEp        = c.worstEp;
+        return true;
+    }
+#endif
+
+        // ── [perk-probe] PASSIVE probe (bPerkEntryProbe, INI-only, default OFF) ──
+        // Reads only. Watches the FIRST follower that reaches a perk mutation
+        // site this session; at most kProbeLines lines per session.
+        PerkEntryProbe ProbeBefore(RE::Actor* a_actor, RE::TESNPC* a_base, RE::BGSPerk* a_perk) {
+            PerkEntryProbe p;
+            if (!Config::g_perkEntryProbe.load(std::memory_order_relaxed) || !a_actor || !a_base) return p;
+            if (g_probeLinesLeft.load(std::memory_order_relaxed) <= 0) return p;
+            RE::FormID       expect = 0;
+            const RE::FormID me     = a_actor->GetFormID();
+            if (!g_probeActor.compare_exchange_strong(expect, me) && expect != me) return p;
+            p.on    = true;
+            p.actor = me;
+            // The entry point to watch: the mutated perk's first entry-point
+            // entry, else the first one of any base perk.
+            auto pick = [&p](RE::BGSPerk* a_from) {
+                if (!a_from || p.watch) return;
+                for (auto* e : a_from->perkEntries)
+                    if (auto* ep = AsEntryPoint(e)) {
+                        p.watch = e;
+                        p.perk  = a_from;
+                        p.ep    = EntryPointOf(ep);
+                        return;
+                    }
+            };
+            pick(a_perk);
+            for (std::uint32_t i = 0; i < a_base->perkCount && !p.watch; ++i) pick(a_base->perks[i].perk);
+            if (p.watch) {
+                const auto v    = CountLive(a_actor, p.ep, p.watch);
+                p.epTotalBefore = v.total;
+                p.copiesBefore  = v.match;
+            }
+            p.before = CensusBasePerkEntries(a_actor, a_base);
+            return p;
+        }
+
+        void ProbeAfter(const PerkEntryProbe& a_p, RE::Actor* a_actor, RE::TESNPC* a_base, const char* a_site) {
+            if (!a_p.on || !a_actor || !a_base) return;
+            if (g_probeLinesLeft.fetch_sub(1, std::memory_order_relaxed) <= 0) return;
+            const auto    after = CensusBasePerkEntries(a_actor, a_base);
+            std::uint32_t total = 0, copies = 0;
+            if (a_p.watch) {
+                const auto v = CountLive(a_actor, a_p.ep, a_p.watch);
+                total        = v.total;
+                copies       = v.match;
+            }
+            spdlog::info("[perk-probe] {} {:08X} '{}': ep {} entries {}->{}, perk '{}' ({:08X}) copies {}->{} | "
+                         "base census: duplicated {}->{} (extra copies {}->{}, max {}x{}), missing {}->{}, "
+                         "{} entry-point entries on {} base perks{}",
+                         a_site, a_p.actor, NameOf(a_actor), a_p.ep, a_p.epTotalBefore, total,
+                         a_p.perk ? NameOf(a_p.perk) : "-", a_p.perk ? a_p.perk->GetFormID() : 0u,
+                         a_p.copiesBefore, copies, a_p.before.duplicated, after.duplicated,
+                         a_p.before.extraCopies, after.extraCopies, after.maxCopies,
+                         after.worstPerk ? std::format(" ({:08X} ep {})", after.worstPerk, after.worstEp)
+                                         : std::string(),
+                         a_p.before.missing, after.missing, after.epEntries, after.basePerks,
+                         after.process ? "" : " [no middle-high process: nothing is live]");
+        }
 
         // §17: how many CATALOG-TREE perk ranks the follower already owns —
         // captured ONCE at enrollment as the budget debit. Per node, the
@@ -352,6 +576,7 @@ namespace MFO::ProgAllocator {
         // Non-catalog untouched; an ACTOR-only rank is logged + left. MAIN THREAD.
         int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int stripped = 0;
+            const auto probe = ProbeBefore(a_actor, a_base, nullptr);
             RestoreStrippedVanillaSmithing(a_actor, a_base, a_st);   // fix-forward for saves stripped by an earlier build
             for (const auto& tree : Progression::Get().skills) {
                 for (const auto& node : tree.nodes) {
@@ -369,7 +594,9 @@ namespace MFO::ProgAllocator {
                                              NameOf(perk), rank.perkFormID);
                             continue;
                         }
+                        const std::uint8_t had = BaseRankOf(a_base, perk);
                         a_base->RemovePerk(perk);
+                        SetLivePerkRank(a_actor, perk, had, 0);   // its live entries go with it
                         if (std::find(a_st.strippedPerks.begin(), a_st.strippedPerks.end(), rank.perkFormID)
                                 == a_st.strippedPerks.end() && a_st.strippedPerks.size() < kMaxPerkAllocs)
                             a_st.strippedPerks.push_back(rank.perkFormID);
@@ -380,7 +607,7 @@ namespace MFO::ProgAllocator {
                     }
                 }
             }
-            if (stripped) a_actor->ApplyPerksFromBase();
+            if (stripped) ProbeAfter(probe, a_actor, a_base, "strip");
             a_st.nativeHeld = true;
             // §17 debit = tree ranks STILL natively held (unstrippable), never MFO's.
             a_st.nativeTreePerksAtEnroll = static_cast<std::uint16_t>(
@@ -392,15 +619,17 @@ namespace MFO::ProgAllocator {
         // removal (ForgetFollower, Verbs.cpp).
         int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int restored = 0;
+            const auto probe = ProbeBefore(a_actor, a_base, nullptr);
             for (const auto fid : a_st.strippedPerks) {
                 auto* perk = PerkByID(fid);
                 if (!perk || a_base->GetPerkIndex(perk).has_value()) continue;
                 a_base->AddPerk(perk, 1);
+                SetLivePerkRank(a_actor, perk, 0, 1);
                 ++restored;
                 spdlog::info("[prog] {:08X}: RESTORE native perk '{}' ({:08X}) -- uninstall",
                              a_actor->GetFormID(), NameOf(perk), fid);
             }
-            if (restored) a_actor->ApplyPerksFromBase();
+            if (restored) ProbeAfter(probe, a_actor, a_base, "restore");
             a_st.strippedPerks.clear();
             a_st.nativeHeld = false;
             return restored;
@@ -533,8 +762,9 @@ namespace MFO::ProgAllocator {
 
         // The mutation: rank K replaces rank K−1 on the BASE (the player's
         // own single-highest-rank shape — two ranks of one perk both present
-        // would double-apply their entries), then ApplyPerksFromBase settles
-        // the actor. Main thread only.
+        // would double-apply their entries), then SetLivePerkRank settles the
+        // actor for those two perks only, the way the engine's own rank change
+        // does (rank K-1's entries out, rank K's in). Main thread only.
         bool GrantRank(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st,
                        const Progression::PerkNodeView& a_node, int a_targetRank) {
             const auto& rank = a_node.ranks[static_cast<std::size_t>(a_targetRank - 1)];
@@ -543,12 +773,21 @@ namespace MFO::ProgAllocator {
                 spdlog::error("[prog] grant aborted: rank form {:08X} unresolvable", rank.perkFormID);
                 return false;
             }
+            const auto probe = ProbeBefore(a_actor, a_base, target);
             if (a_targetRank > 1) {
-                if (auto* prev = PerkByID(a_node.ranks[static_cast<std::size_t>(a_targetRank - 2)].perkFormID))
+                if (auto* prev = PerkByID(a_node.ranks[static_cast<std::size_t>(a_targetRank - 2)].perkFormID)) {
+                    const std::uint8_t had = BaseRankOf(a_base, prev);
                     a_base->RemovePerk(prev);
+                    if (had) SetLivePerkRank(a_actor, prev, had, 0);
+                }
             }
             a_base->AddPerk(target, 1);
-            a_actor->ApplyPerksFromBase();
+            const auto live = SetLivePerkRank(a_actor, target, 0, 1);
+            ProbeAfter(probe, a_actor, a_base, "grant");
+            if (live.alreadyLive)
+                spdlog::info("[prog] {:08X} grant: {} entry-point entr{} of {:08X} already live, not re-applied",
+                             a_actor->GetFormID(), live.alreadyLive, live.alreadyLive == 1 ? "y" : "ies",
+                             rank.perkFormID);
 
             auto* alloc = FindAlloc(a_st, a_node.perkFormID);
             if (!alloc) {
@@ -568,14 +807,16 @@ namespace MFO::ProgAllocator {
         // ── the guarded session reapply (P3) ────────────────────────────────
         // Base-form perk mutations are runtime-only; the co-save alloc is the
         // truth, reasserted here: AddPerk only when the base lacks the target
-        // rank form, ApplyPerksFromBase only on change (no doubling — P3's
-        // measured verdict). Skills re-reconcile through the same §4.2 path.
+        // rank form, and then SetLivePerkRank for THAT perk only (presence-
+        // checked). The engine already applied the rest of the base at the
+        // load (Actor::FinishLoadGame); the old ApplyPerksFromBase here put a
+        // second copy of every base entry-point entry on the actor each load. Skills re-reconcile through the same §4.2 path.
         void ReapplyFollower(RE::Actor* a_actor, ProgState& a_st) {
             auto* base = a_actor->GetActorBase();
             if (!base) return;
 
-            int reAdded = 0, present = 0, dropped = 0, nativeDeferred = 0;
-            bool changed = false;
+            int reAdded = 0, present = 0, dropped = 0, nativeDeferred = 0, noProcess = 0;
+            const auto probe = ProbeBefore(a_actor, base, nullptr);
             for (const auto& alloc : a_st.perks) {
                 auto ref = FindNode(alloc.nodePerkID);
                 if (!ref.node || alloc.rank == 0 ||
@@ -614,18 +855,21 @@ namespace MFO::ProgAllocator {
                     continue;
                 }
                 base->AddPerk(target, 1);
+                if (SetLivePerkRank(a_actor, target, 0, 1).noProcess) ++noProcess;
                 ++reAdded;
-                changed = true;
             }
-            if (changed) a_actor->ApplyPerksFromBase();
+            ProbeAfter(probe, a_actor, base, "reapply");
 
             RecomputeSkills(a_actor, a_st, /*log*/ false);
             RecomputeHMS(a_actor, a_st, /*log*/ false);   // §HMS: capture baseline / hold target
 
             spdlog::info("[prog] {:08X} {} reapply: {} perk(s) re-added, {} already on base, "
-                         "{} unresolvable, {} deferred to native ownership — ApplyPerksFromBase {}",
-                         a_actor->GetFormID(), NameOf(a_actor), reAdded, present, dropped,
-                         nativeDeferred, changed ? "called" : "SKIPPED (no change)");
+                         "{} unresolvable, {} deferred to native ownership — live entries applied per "
+                         "perk{}",
+                         a_actor->GetFormID(), NameOf(a_actor), reAdded, present, dropped, nativeDeferred,
+                         noProcess ? std::format(" ({} with no middle-high process: nothing live to apply to; the "
+                                                 "engine rebuilds from the base at its next Load3D)", noProcess)
+                                   : std::string());
             a_st.applied = true;
             PublishReapplyPending();   // EQUIP-SELF-VIOLATIONS: the equip declaration may now build from his perks
         }
