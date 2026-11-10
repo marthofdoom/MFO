@@ -170,3 +170,13 @@ at or below the saved one does nothing, so the file can stay in place.
   makes no hit, so that test never FAILs on "no shot".
 * `hms.cap_holds` posts one `ReadHmsCapView` to the main thread per second while it is pending or running.
 * `prog.perk_entries_unique` posts one `ReadPerkEntryView` to the main thread per second while it is pending or running (a walk of the follower's base perks and one entry-point array per entry).
+
+## 10. Dev class equip (card C5c)
+
+The same dev DLL can put a follower into a class, because nothing else can until the board card C10. It is not a test and has nothing to do with the marker gambit: set `[Debug] sDevClassEquip` in `MFO.ini` (format, example and warnings in `Docs/INI-REFERENCE.md` and the seeded `MFO.ini`). Entries are `<follower>:<class slug>:<level>[:mastered]`, comma separated, follower = `Plugin.esp|HEXLOCAL` or a full hex FormID of the actor ref.
+
+* Runs on the pump worker from `SelfTest::Tick` (`Runner.cpp`, `DevClassEquipTick`), once per entry per game load, as soon as the follower is a live managed follower and `Classes::Active()`. `ClearAll` (every load) re-arms it.
+* Only the existing `classes/State.cpp` writers are used: `SetUnlocked(old | class bit)` (the dev override of the unlock rule), `ActivateClass`, `ApplyLevel` (the cap level for `mastered`). Nothing writes the record raw. The C6 carriers refresh by themselves, as for a real equip.
+* It WRITES MCLS, so a save made afterwards carries the equipped class, levels and unlocks. Dev saves only.
+* Log lines (all WARN): `[classes] DEV equip (dev build only): N entries queued ...`, `[classes] DEV equip <fid> (<name>) -> <slug> L<level>[ mastered] (dev build only)`, plus a WARN for an unparseable entry, unknown follower or class, a bad level, the add-on not active, a follower still not live after 60 s, or a writer refusing.
+* A release DLL has no `sDevClassEquip`, no `DevClassEquipTick` and no `[classes] DEV equip` string (the code, the `Config.h` members and the `Config.cpp` key all sit in `#ifdef MFO_DEV_SELFTEST`).

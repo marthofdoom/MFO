@@ -125,6 +125,15 @@ namespace MFO::Config {
                 }
             };
 
+#ifdef MFO_DEV_SELFTEST
+            // Card C5c (DEV BUILDS ONLY): the dev class-equip list; compiled out of a release DLL, key name included.
+            if (a_key == "sDevClassEquip") {
+                std::lock_guard lk(g_devClassEquipMx);
+                g_devClassEquip = a_val;
+                return;
+            }
+#endif
+
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
             if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
@@ -363,6 +372,9 @@ namespace MFO::Config {
         }
 
         void ResetToDefaults() {
+#ifdef MFO_DEV_SELFTEST
+            { std::lock_guard lk(g_devClassEquipMx); g_devClassEquip.clear(); }   // card C5c
+#endif
             g_allowSummons      = false;
             g_rapportRate       = 2.0f;   // default doubled (marth)
             g_rapportKill       = 1.0f;
