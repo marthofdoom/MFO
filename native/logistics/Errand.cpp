@@ -1582,7 +1582,7 @@ namespace MFO::Logistics::Errand {
         // COLLEGE GATE (as TryStart's): the College of Winterhold's vendors serve a mage follower once the PLAYER has joined it.
         if (auto* dhC = RE::TESDataHandler::GetSingleton(); dhC && town == dhC->LookupForm<RE::BGSLocation>(0x00076F3A, "Skyrim.esm")) {
             auto* colFac = dhC->LookupForm<RE::TESFaction>(0x0001F259, "Skyrim.esm");
-            const bool mage = a_state.combatClassOverride == 3 || IsCasterFollower(a_state) || (Config::g_economyBuyTomes.load() && HasCastGambit(a_state));
+            const bool mage = EffectiveClassPick(a_follower->GetFormID(), a_state) == 3 || IsCasterFollower(a_state) || (Config::g_economyBuyTomes.load() && HasCastGambit(a_state));
             if (!colFac || !pc->IsInFaction(colFac) || !mage) { later(0, true); return false; }
         }
         std::vector<TradeBridge::NeedCat> needs;
@@ -1841,7 +1841,7 @@ namespace MFO::Logistics::Errand {
             // College tree, LocationTypes::TownAnchor), so a follower who is not a mage plans none here: an explicit Mage class pick, a caster
             // (magic loadout + a cast gambit, IsCasterFollower) or a spell-tome wish (bEconomyBuyTomes + a cast gambit, BuildBuyThresholds).
             // The tome gate globals (Economy.cpp UnlockCollegeTomes) still decide which tomes the vendors offer.
-            const bool mage = a_state.combatClassOverride == 3 || IsCasterFollower(a_state) ||
+            const bool mage = EffectiveClassPick(a_follower->GetFormID(), a_state) == 3 || IsCasterFollower(a_state) ||
                               (Config::g_economyBuyTomes.load() && HasCastGambit(a_state));
             if (!mage) {
                 NotPlanning(a_follower, a_now, "the College of Winterhold's vendors serve mage followers only (no Mage class pick, no cast gambit, no spell-tome wish)");

@@ -43,23 +43,79 @@ namespace MFO::Logistics {
             for (int c = 0; c < 3; ++c) if (a_v[c] >= best) a_out[c] = 1.0f / static_cast<float>(n);
         }
 
+        // RULING Q60 (marth 2026-11-10, replaces the first "highest mastered T4" default): a Dragonborn-equipped follower's
+        // root is the root of his MOST-PERKED weapon line: One-/Two-Handed -> 1 Melee, Archery -> 2 Ranged, a magic school ->
+        // 3 Mage, each line scored by its best skill tree's owned perk ranks (grouped as the vote in ResolveBaseClass). Source:
+        // Progression's per-skill owned-rank tally (StyleVotes::skillRanks, the follower's own perks in the engine's skill
+        // trees: list-agnostic), read through the StyleVotesFor mirror (any thread; blank until the first main-thread tally
+        // lands, which reads as "none"). A tie for the top, or no perks in any line, returns 0 = the caller falls back to
+        // the raw pick. The "pickable T4 for combat behaviour" and the situational (flying-dragon bow) switching are NOT here.
+        std::uint8_t DragonbornRoot(RE::FormID a_fid) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+            if (!actor) return 0;
+            const auto sv = StyleVotesFor(actor);
+            auto rank = [&sv](RE::ActorValue a_av) {
+                return sv.skillRanks[static_cast<int>(a_av) - static_cast<int>(RE::ActorValue::kOneHanded)];
+            };
+            using AV = RE::ActorValue;
+            const int line[3] = {
+                std::max(rank(AV::kOneHanded), rank(AV::kTwoHanded)),
+                rank(AV::kArchery),
+                std::max({ rank(AV::kAlteration), rank(AV::kConjuration), rank(AV::kDestruction),
+                           rank(AV::kIllusion), rank(AV::kRestoration) })
+            };
+            const int best = std::max({ line[0], line[1], line[2] });
+            if (best <= 0) {
+                // Loud, once per session: a READY tally with no perks anywhere is also what a build without the Progression catalog
+                // and without MEO gem themes gives (TallyStyleVotes' no-catalog path fills skillRanks only when bMeoAwareGems is on
+                // and MEO supports it), so a Dragonborn follower then silently keeps his raw pick. Not masked (backlog MFO-B635).
+                static std::atomic<bool> s_logged{ false };
+                if (StyleVotesReady(actor) && !s_logged.exchange(true))
+                    spdlog::warn("[classes] Dragonborn root: follower {:08X} has NO owned perk ranks in any weapon line in the style tally "
+                                 "(none owned, or the no-catalog tally is gated off: needs the Progression add-on or bMeoAwareGems + MEO); "
+                                 "keeping his raw pick (once per session)", a_fid);
+                return 0;   // no perks in any line
+            }
+            int n = 0, at = 0;
+            for (int c = 0; c < 3; ++c) if (line[c] == best) { ++n; at = c; }
+            return n == 1 ? static_cast<std::uint8_t>(at + 1) : std::uint8_t{ 0 };   // a tie keeps the raw pick
+        }
+
+    }
+
+    // C2b (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). THE one accessor
+    // every class-pick reader goes through. Classes ON for this follower (add-on Active() and equipped != kNoClass): his
+    // equipped class's root T1 (1..3). Otherwise the raw Gambit-tab pick, UNCHANGED (classes OFF / add-on absent is
+    // byte-for-byte today). The raw combatClassOverride is never written on class equip (it is the persisted classes-OFF pick).
+    // Threading: takes the Classes g_mx (a leaf) via GetFollower, so any thread may call it; worker callers pass the
+    // g_followers record they already hold. No combat-thread reader exists (they read Followers::ResolvedClassFast, whose
+    // mirror PublishActiveMirror builds through ResolveBaseClass below).
+    std::uint8_t EffectiveClassPick(RE::FormID a_fid, const FollowerState& a_state) {
+        const std::uint8_t raw = a_state.combatClassOverride;
+        if (!a_fid || !Classes::Active()) return raw;
+        const std::uint8_t equipped = Classes::GetEquipped(a_fid);
+        if (equipped >= Classes::kClassCount) return raw;   // kNoClass = classes OFF for him
+
+        // RULING Q59 (CONFIRMED marth 2026-11-10): with classes ON the equipped class beats an older explicit Gambit-tab pick.
+        // To flip it, return `raw` here when it is 1..3 (one place; every reader follows).
+        const auto eqId = static_cast<Classes::Id>(equipped);
+        std::uint8_t root = Classes::Get(eqId).rootT1;
+
+        // RULING Q60 (marth 2026-11-10): Dragonborn (rootT1 0, no fixed root) uses the root of his most-perked weapon line; a tie or no
+        // perks falls back to the raw pick. Change DragonbornRoot() only.
+        if (eqId == Classes::Id::Dragonborn) root = DragonbornRoot(a_fid);
+        return (root >= 1 && root <= 3) ? root : raw;
+    }
+
+    bool ClassLocksRoles(RE::FormID a_fid) {
+        if (!a_fid || !Classes::Active()) return false;
+        const std::uint8_t equipped = Classes::GetEquipped(a_fid);
+        return equipped < Classes::kClassCount && equipped != static_cast<std::uint8_t>(Classes::Id::Dragonborn);
     }
 
     std::uint8_t ResolveBaseClass(RE::Actor* a_actor, const FollowerState& a_state) {
-        if (a_state.combatClassOverride >= 1 && a_state.combatClassOverride <= 3)
-            return a_state.combatClassOverride;   // the player's pick always wins
-
-        // C5b (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). With the class add-on
-        // Active() and a class EQUIPPED (equipped != kNoClass = classes ON for this follower), the Gambit-tab Auto vote below does
-        // not apply: his equipped class's root T1 is the answer. Classes OFF for him, or the add-on absent, falls through to the
-        // vote UNCHANGED. Dragonborn has no fixed root (rootT1 0), so it also falls through (flagged in the C5b report).
-        if (a_actor && Classes::Active()) {
-            const std::uint8_t eq = Classes::GetEquipped(a_actor->GetFormID());
-            if (eq < Classes::kClassCount) {
-                const std::uint8_t root = Classes::Get(static_cast<Classes::Id>(eq)).rootT1;
-                if (root >= 1 && root <= 3) return root;
-            }
-        }
+        if (const std::uint8_t pick = EffectiveClassPick(a_actor ? a_actor->GetFormID() : 0, a_state); pick >= 1 && pick <= 3)
+            return pick;   // the player's pick, or (C2b) his equipped class's root with classes ON: no Auto vote then
 
         float score[3] = { 0.0f, 0.0f, 0.0f };
 

@@ -316,7 +316,7 @@ namespace MFO::Logistics {
                 const bool wantsRanged = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
                 const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
                 const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
-                const std::uint8_t baseClass = a_state.combatClassOverride;
+                const std::uint8_t baseClass = EffectiveClassPick(a_follower->GetFormID(), a_state);
                 const bool baseCaster     = baseClass == 3;
                 const bool baseWeaponUser = baseClass == 1 || baseClass == 2;
                 // meleeTargetClass / doRanged mirror the loot judge (weapon role uses
@@ -869,9 +869,9 @@ namespace MFO::Logistics {
                 // explicit Ranged-class follower with a heal gambit keeps his bow (else sell/loot loop).
                 const bool wantsRangedGambit = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
                 const bool wantsMeleeGambit  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+                const std::uint8_t effPickB24 = EffectiveClassPick(a_follower->GetFormID(), a_state);
                 const bool mageModeB24 = IsCasterFollower(a_state) &&
-                    (a_state.combatClassOverride == 3 ||
-                     (a_state.combatClassOverride == 0 && !wantsMeleeGambit && !wantsRangedGambit));
+                    (effPickB24 == 3 || (effPickB24 == 0 && !wantsMeleeGambit && !wantsRangedGambit));
                 const bool offRoleLauncher = weap && WeaponClassOf(weap->GetWeaponType()) == WepClass::Ranged &&
                     (!keepRoles.doRanged || (mageModeB24 && !wantsRangedGambit) ||
                      !RangedInFamily(weap, keepRoles.wantCrossbow));
