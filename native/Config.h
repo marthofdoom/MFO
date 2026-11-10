@@ -430,6 +430,13 @@ namespace MFO::Config {
     // Harbinger absent = today's direct road, byte for byte. Harbinger present but the substrate unavailable = a loud
     // once-per-session error and today's road (marth 2026-10-19 Q4: "shouldn't happen"). Not in the MCM.
     inline std::atomic<bool>  g_substrateCasts{ true };
+    // FOLLOWER SPELL COST PARITY (INI-only bFollowerSpellCostParity, ClickUp 1dfcuabcr0c, marth Q13 2026-11-09: "Cheap option, double it.
+    // Make sure as part of startup that they are cheaper, if they are double their cost"). The engine's skill cost curve has a PLAYER
+    // branch and an NPC branch (fMagicCasterPCSkillCost* vs fMagicCasterSkillCost*); when the NPC curve is the cheaper one at skill
+    // 50 (read from the live GMSTs at kDataLoaded), a managed follower's spell cost is doubled by the engine's own kModSpellCost perk
+    // step (MFO_CostParityPerk, gated by the MFO_CostParityAbility marker). 1 (default) = the check runs and doubles only when the
+    // NPC curve is cheaper; 0 = never, followers pay the engine cost. See CostParity.cpp. Not in the MCM.
+    inline std::atomic<bool>  g_followerSpellCostParity{ true };
     // OPT-IN town hold (marth 2026-11-02 "Unblock, hotfix 2.8.1"; was the 2026-11-01 workaround, ClickUp 1dfcuabc4dn).
     // 1 = while the player is in a town no OOC substrate is requested (casts take the direct road). Default OFF:
     // Harbinger ABI 32 carries the town panic fix. With Harbinger below ABI 32 the hold is automatic whatever this

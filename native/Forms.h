@@ -125,6 +125,12 @@ namespace MFO::Forms {
     inline constexpr RE::FormID kErrandSandbox0  = 0x90A;   // 0x90A-0x90D
     inline constexpr RE::FormID kErrandEat0      = 0x90E;   // 0x90E-0x911
     inline constexpr RE::FormID kErrandSleep0    = 0x912;   // 0x912-0x915
+    // SPELL COST PARITY (ClickUp 1dfcuabcr0c). Mirror MFO_GenerateESP.py FID_PARITY_*. 0x917 is the inert constant-effect
+    // MGEF the ability carries (no DLL pointer); 0x918 is the ability SPEL, the per-reference "managed follower" marker; 0x919
+    // is the PERK (kModSpellCost "Multiply Value" 2.0, entry condition HasSpell(0x918)). A miss disables the feature, loudly.
+    inline constexpr RE::FormID kCostParityMGEF  = 0x917;
+    inline constexpr RE::FormID kCostParitySpell = 0x918;
+    inline constexpr RE::FormID kCostParityPerk  = 0x919;
     inline constexpr int kErrandWorkSlots = 4;
     enum class ErrandWorkKind : int { Activate = 0, Sandbox, Eat, Sleep };
     inline std::array<std::array<RE::TESPackage*, kErrandWorkSlots>, 4> g_errandWork{};   // [kind][slot], filled by Forms::Resolve
@@ -136,6 +142,8 @@ namespace MFO::Forms {
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
+    inline RE::SpellItem*  g_costParityAbility = nullptr;   // 0x918, Forms::Resolve
+    inline RE::BGSPerk*    g_costParityPerk    = nullptr;   // 0x919, Forms::Resolve
 
     // M9. Resolved so the first questions about these records are answered at
     // LOAD, in the log, before any behaviour depends on them: do they exist,
