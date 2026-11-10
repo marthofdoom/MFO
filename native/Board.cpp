@@ -1233,6 +1233,7 @@ namespace MFO::Board {
             v.condOp = g.conditionOpcode; v.actOp = g.actionOpcode;
             v.param  = g.conditionParam;  v.spell = g.actionParamForm;
             v.enabled = g.enabled;        v.lastFired = g.lastFired; v.fail = g.lastFailReason;
+            v.cooldownTenths = g.cooldownTenths;   // card G9
             v.firedAt = g.lastFiredAt;    // flair #9: the row pulse ages this
             if (v.spell) {
                 if (auto* sp = RE::TESForm::LookupByID(v.spell))
@@ -1457,7 +1458,9 @@ namespace MFO::Board {
                 const int tn = (table == 1) ? (int)std::size(kActsLogi)
                                             : (int)std::size(kActsCombat);
                 int n = cycleIdx(tab[i].actionOpcode, t, tn, (int)c.param);
-                tab[i].actionOpcode = t[n].op; break; }
+                tab[i].actionOpcode = t[n].op;
+                if (!CooldownExposed(tab[i].actionOpcode)) tab[i].cooldownTenths = 0;   // card G9: no hidden pacing
+                break; }
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             case EditKind::TeachSpell: {
@@ -1523,7 +1526,11 @@ namespace MFO::Board {
                 const int tn = (table == 1) ? (int)std::size(kActsLogi)
                                             : (int)std::size(kActsCombat);
                 const int n = std::clamp((int)(c.param + 0.5f), 0, tn - 1);
-                tab[i].actionOpcode = t[n].op; break; }
+                tab[i].actionOpcode = t[n].op;
+                // Card G9: a row moved off a cooldown-exposed action loses its cooldown, so it is never paced by
+                // a value its row no longer shows (marth Q7: only power-attack rows show it).
+                if (!CooldownExposed(tab[i].actionOpcode)) tab[i].cooldownTenths = 0;
+                break; }
             // #68: absolute picks from the target popup, same shape as
             // SetCond/SetAct. Self/Player/NearestAlly CLEAR any stale
             // specific-follower pick; a specific follower gets the sentinel
@@ -1536,6 +1543,13 @@ namespace MFO::Board {
             case EditKind::SetSubjectActor:
                 tab[i].subjectActorForm = c.subjectActor;
                 tab[i].subjectSelector  = kSubjectSpecificFollower;
+                break;
+            // Card G9: the cooldown list's pick, tenths of a second. Refused on a row whose action no longer shows
+            // the cell (a stale snapshot: the action changed between the draw and this apply).
+            case EditKind::SetCooldown:
+                if (CooldownExposed(tab[i].actionOpcode))
+                    tab[i].cooldownTenths = static_cast<std::uint16_t>(
+                        std::clamp((int)(c.param + 0.5f), 0, (int)kMaxCooldownTenths));
                 break;
             default: break;
             }

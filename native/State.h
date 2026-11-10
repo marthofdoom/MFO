@@ -39,6 +39,12 @@ namespace MFO {
         // back to 0, never disables the rule (Actuation's ladder keeps going).
         RE::FormID  subjectActorForm = 0;
         bool        enabled = true;
+        // Card G9: the per-rule cooldown in TENTHS OF A SECOND (u16, exact on the wire; 100 = 10 s). 0 = none.
+        // SERIALIZED (FLWR v6, the gambit row, Serialization.h GambitWire), clamped [0, kMaxCooldownTenths] on
+        // read and write. Any row may carry it; the board exposes it on power-attack rows only (marth Q7,
+        // 2026-11-09). The last-fired time it is measured from is NOT here: it is runtime-only, in Cooldowns.h
+        // (the display-only lastFiredAt below is never read by any gate).
+        std::uint16_t cooldownTenths = 0;
 
         // Runtime-only, never serialized (ARCHITECTURE.md §7): display state
         // for the board's per-rule outcome. The evaluator never reads it back
@@ -51,6 +57,16 @@ namespace MFO {
         // (epoch) value reads as "long ago" -> no pulse.
         std::chrono::steady_clock::time_point lastFiredAt{};
     };
+
+    // Card G9: the cooldown bound (600 s) and the seconds -> tenths conversion a class default row's
+    // DefaultGambit::cooldownSec goes through (card C12 applies it; nothing applies class defaults yet).
+    inline constexpr std::uint16_t kMaxCooldownTenths = 6000;
+    inline std::uint16_t CooldownTenthsFromSec(float a_sec) {
+        if (!(a_sec > 0.0f)) return 0;   // also NaN
+        if (a_sec >= kMaxCooldownTenths / 10.0f) return kMaxCooldownTenths;
+        return static_cast<std::uint16_t>(a_sec * 10.0f + 0.5f);
+    }
+    inline float CooldownSec(const Gambit& a_g) { return a_g.cooldownTenths / 10.0f; }
 
     // Package overrides PERSIST THROUGH SAVES (ENGINE_NOTES.md §2.1).
     // An override with no ledger entry is a bug and is logged as one.

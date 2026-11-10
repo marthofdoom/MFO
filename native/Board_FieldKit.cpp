@@ -1149,13 +1149,42 @@ namespace MFO::Board {
                                     }
                                 }
 
-                                // SPELL -- only for cast actions; its own list.
+                                // SPELL -- only for cast actions; its own list. Card G9: on a power-attack row
+                                // (CooldownExposed, marth Q7) this cell is the action's own setting instead, the
+                                // rule's COOLDOWN: one Selectable + a listPopup, so the d-pad / [A] / [B] path is
+                                // the VALUE cell's (pad-first, no slider, no typing).
                                 ImGui::TableNextColumn();
                                 {
                                     const bool isCast = (rv.actOp == Vocab::kActCastSelf ||
                                                          rv.actOp == Vocab::kActCastTarget ||
                                                          rv.actOp == Vocab::kActCastPlayer);
-                                    if (!isCast) {
+                                    if (!isCast && CooldownExposed(rv.actOp)) {
+                                        auto secText = [](int a_tenths) {
+                                            if (a_tenths <= 0) return std::string(Str::Get(Str::K::Gb_CooldownNone));
+                                            const std::string n = (a_tenths % 10) ? std::format("{:.1f}", a_tenths / 10.0f)
+                                                                                  : std::to_string(a_tenths / 10);
+                                            return Str::Fmt(Str::K::Gb_FmtSec, { n });
+                                        };
+                                        const std::string cell = Str::Fmt(Str::K::Gb_CooldownCell, { secText(rv.cooldownTenths) });
+                                        if (Click::Selectable(cell.c_str())) ImGui::OpenPopup("##cooldown");
+                                        track();
+                                        if (!rv.fail.empty() && ImGui::IsItemHovered())
+                                            ImGui::SetTooltip("%s", Str::Fmt(Str::K::Gb_LastFail, { rv.fail }).c_str());
+                                        std::vector<std::pair<int, std::string>> cv;   // tenths, label
+                                        for (int sec : { 0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 45, 60 })
+                                            cv.emplace_back(sec * 10, secText(sec * 10));
+                                        int curCd = 0, best = 1 << 30;
+                                        for (int k = 0; k < (int)cv.size(); ++k) {
+                                            const int d = std::abs(cv[k].first - (int)rv.cooldownTenths);
+                                            if (d < best) { best = d; curCd = k; }
+                                        }
+                                        listPopup("##cooldown", Str::Get(Str::K::Gb_Cooldown), (int)cv.size(),
+                                            [&](int k) { return cv[k].second.c_str(); }, curCd,
+                                            [&](int k) {
+                                                QueueEdit({ EditKind::SetCooldown, sel, selTable,
+                                                            rv.uid, (float)cv[k].first });
+                                            });
+                                    } else if (!isCast) {
                                         ImGui::TextDisabled("-");
                                     } else {
                                         const char* cur = rv.spellName.empty()

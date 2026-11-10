@@ -2575,7 +2575,8 @@ Verbatim (reviewer, F-3): a record kept verbatim by an older DLL carries the For
 ### MFO-B568 (SEV-4, OPEN, design question for marth, classes/State.cpp, against 2a035b1) -- only the COMBAT table is stored per class
 Verbatim (reviewer, F-4): Q8 says "remember each classes setup"; MCLS v1 stores the combat table only. Reasoning: whether a class's setup includes the logistics table is marth's call; if yes it is a v2 APPEND (a per-table kind byte or a second table list under `if (a_version >= 2)`), no v1 change.
 
-### MFO-B569 (SEV-5, OPEN, classes/State.cpp rowSchema, against 2a035b1) -- rowSchema is stamped from kSchemaVersion
+### MFO-B569 (SEV-5, CLOSED by card G9 `feat/g9-rule-cooldown` 2026-11-09, classes/State.cpp rowSchema, against 2a035b1) -- rowSchema is stamped from kSchemaVersion
+Resolution: `GambitWire::kRowSchema` (Serialization.h) = the FLWR version at which the gambit ROW last changed (6, the G9 cooldown), in FLWR's own version numbers. MCLS stamps it and reads 1..kRowSchema; a FLWR bump that does not change the row leaves it alone. Every MCLS written before (rowSchema 5) reads unchanged.
 Verbatim (reviewer, F-5): MCLS's rowSchema is the FLWR record version, so ANY FLWR bump (even one that does not touch the row) makes an older DLL keep MCLS verbatim and freeze class progress. Reasoning: harmless today; note for card G9 (FLWR v6): give the gambit ROW its own encoding version (GambitWire) and stamp that instead.
 
 ### MFO-B570 (SEV-5, OPEN, GambitWire ReadRow in MCLS, against 2a035b1) -- unresolved actionParamForm rows disabled while the ESL is absent

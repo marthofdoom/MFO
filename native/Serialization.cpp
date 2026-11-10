@@ -5,6 +5,7 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Scheduler.h"
+#include "Cooldowns.h"   // card G9: ResetAllState clears the per-rule last-fired store
 #include "logistics/Logistics.h"
 #include "Loadout.h"
 #include "Targeting.h"
@@ -51,6 +52,9 @@
 //     v5  T#78: mfoEnabled (per-follower MFO master switch) added as one u8
 //         right after combatClassOverride. Read gated on version >= 5; an
 //         older record has none (defaults to true -- MFO enabled).
+//     v6  card G9: each gambit row gains u16 cooldownTenths after its flags
+//         byte (GambitWire, Serialization.h). Read gated on version >= 6; an
+//         older row has none (0 = no cooldown). One-way: a v5 DLL skips v6.
 //
 //   #12 Versioned schema; readers kept FOREVER; SKSE does NOT round-trip
 //       unread records, so a downgraded DLL DESTROYS newer ones -> warn loud.
@@ -101,8 +105,15 @@ namespace MFO {
 
         // ── one gambit row (GambitWire, Serialization.h). MOVED VERBATIM from the FLWR writer / reader loops
         // (card C3), which now call it; MCLS calls it for every stored class table. ───────────────────────
+        // a_rowSchema: the row version to write AT. Production always writes GambitWire::kRowSchema (WriteRow);
+        // only the MCLS self-test writes an older row (WriteRowAt, v5) to prove the reader still takes it.
         template <class W>
-        bool WriteRowT(W& a_out, const Gambit& g) {
+        bool WriteRowT(W& a_out, const Gambit& g, std::uint32_t a_rowSchema = GambitWire::kRowSchema) {
+            if (a_rowSchema < 5 || a_rowSchema > GambitWire::kRowSchema) {
+                spdlog::error("[cosave] gambit row writer asked for row schema v{} (supports v5..v{}) -- refused",
+                              a_rowSchema, GambitWire::kRowSchema);
+                return false;
+            }
             if (!WriteOpT(a_out, g.conditionOpcode)) return false;
             a_out.WriteRecordData(g.conditionParam);
             a_out.WriteRecordData(g.subjectSelector);
@@ -127,6 +138,12 @@ namespace MFO {
             const std::uint8_t flags =
                 !g.enabled ? 0u : (appendedSubj ? 2u : 1u);
             a_out.WriteRecordData(flags);
+            // v6 (card G9): the per-rule cooldown, u16 tenths of a second, APPENDED after the flags byte so the
+            // row's v5 prefix is byte-identical. Clamped to kMaxCooldownTenths (600 s) on the way out too.
+            if (a_rowSchema >= 6) {
+                const std::uint16_t cd = (std::min)(g.cooldownTenths, kMaxCooldownTenths);
+                a_out.WriteRecordData(cd);
+            }
             return true;
         }
 
@@ -167,6 +184,20 @@ namespace MFO {
             // bit 0 OR bit 1 (the appended-subject enabled bit, see the writer). Every
             // record written before 2026-10-06 holds 0 or 1 here, so it reads unchanged.
             g.enabled = (flags & 3u) != 0;
+
+            // v6 (card G9): STRICTLY version-gated, the v3 discipline above. A v1-v5 row ends at the flags byte,
+            // so it reads with no cooldown (Gambit{} default 0 = none). #11: clamped at ingestion; an over-bound
+            // value is logged, never fabricated into something else.
+            if (version >= 6) {
+                std::uint16_t cd = 0;
+                if (a_in.ReadRecordData(cd) != sizeof(cd)) return false;   // a 1-byte short read is a short read
+                if (cd > kMaxCooldownTenths) {
+                    spdlog::warn("[cosave] gambit row '{}' -> '{}': cooldown {} tenths over the {} bound -- clamped",
+                                 g.conditionOpcode, g.actionOpcode, cd, kMaxCooldownTenths);
+                    cd = kMaxCooldownTenths;
+                }
+                g.cooldownTenths = cd;
+            }
 
             if (rawParam != 0) {
                 RE::FormID resolvedParam = 0;
@@ -470,6 +501,9 @@ namespace MFO {
     // GambitWire (Serialization.h): the two streams the one row encoding is instantiated for (card C3).
     bool GambitWire::WriteRow(SKSE::SerializationInterface& a_out, const Gambit& a_g) { return WriteRowT(a_out, a_g); }
     bool GambitWire::WriteRow(CoSaveBuffer& a_out, const Gambit& a_g) { return WriteRowT(a_out, a_g); }
+    bool GambitWire::WriteRowAt(CoSaveBuffer& a_out, const Gambit& a_g, std::uint32_t a_rowSchema) {
+        return WriteRowT(a_out, a_g, a_rowSchema);
+    }
     bool GambitWire::ReadRow(SKSE::SerializationInterface& a_in, std::uint32_t a_flwrVersion, Gambit& a_g, bool& a_paramUnresolved) {
         return ReadRowT(a_in, a_flwrVersion, a_g, a_paramUnresolved);
     }
@@ -529,7 +563,7 @@ namespace MFO {
             a_intfc->WriteRecordData(st.combatClassOverride);
             // v5 (T#78): the per-follower MFO master switch, one explicit u8 (0/1)
             // right after combatClassOverride. Written unconditionally at the
-            // current schema (v5); the READ is version-gated so pre-v5 saves
+            // schema (v5+); the READ is version-gated so pre-v5 saves
             // (which never wrote it) never try to consume the byte.
             // (still v5, VALUE-SPACE only, ClickUp 86e3phy41): bits 1-2 carry the per-follower
             // helmet override (0 Default / 1 Wear / 2 Never), ONLY while mfoEnabled is true. An
@@ -557,7 +591,7 @@ namespace MFO {
                 const auto gambitCount = static_cast<std::uint8_t>(n);
                 a_intfc->WriteRecordData(gambitCount);
                 for (size_t gi = 0; gi < n; ++gi) {
-                    // The row encoding is GambitWire (WriteRowT above, card C3); the bytes are unchanged.
+                    // The row encoding is GambitWire (WriteRowT above, card C3); v6 appends the cooldown (card G9).
                     if (!GambitWire::WriteRow(*a_intfc, list[gi])) {
                         // The follower and gambit counts are already written, so
                         // the record is now TRUNCATED and overstates what
@@ -1122,6 +1156,7 @@ namespace MFO {
         Followers::g_active.clear();
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
+        Cooldowns::ClearAll();              // card G9: per-rule last-fired times are runtime-only (a load resets every cooldown)
         Logistics::ClearTransientState();   // logistics cadence clocks + loot LRUs (#22h)
         Logistics::ClearStyleMirror();      // perk-style mirror + its Post in-flight latches (Fable F4)
         // T#69: g_stockGear IS serialized (kRecStock), unlike everything
