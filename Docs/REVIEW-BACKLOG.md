@@ -2713,3 +2713,7 @@ Verbatim (reviewer): The change reaches three callers the brief and docs do not 
 Coordinator's paraphrase (not verbatim):
 - SEV-5: kFleeNotCombat (10) is the CK-authorable Flee procedure and is correctly excluded from the flee hold; add a one-time info line if one is ever seen as the current package during a retreat.
 - SEV-5: the flee hold suppresses the party-OOC table and delays the retreat cooldown for up to 20 s (kRetreatFleeHoldSecs) while the engine Flee wins anyway. By design (marth Q20), noted here.
+
+### MFO-B626 (SEV-5, OPEN, progression/Hms.cpp above-parity gate, against 4e5abfb3, Opus review)
+Verbatim (reviewer): (Hms.cpp:506 and :713-740, a behaviour shift the gate makes common) a frozen follower has `budget` = 0, so the skew block is skipped (no decay, no growth) and the battle-window counters (`battlesSinceLevelUp` / `battlesOffClass`, Hms.cpp:737) are never consumed. They then build up over every frozen level. The first award after the player catches up computes off-class usage over a multi-level window. Before, with the cap ON, `applied` > 0 each level, so the window closed every level. The same shape already existed when credit was 0. The fix would be to close the window on a gate-frozen award, which is a design call.
+(selftest/Tests.cpp ~:310, ProgAllocator.h:574 HmsCapView) no self-test covers the gate. HmsCapView has no headroom field, and the cap-OFF road (where the gate is the only bound) has no test.
