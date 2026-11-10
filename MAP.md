@@ -2506,7 +2506,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   ends on the FIRST of 10 s of UNPAUSED service time (`g_serviceClock`, `:200`, advanced at
   the pause gate only while unpaused, each step capped at 4 x 133 ms) or full health
   (`HealthPct >= Vocab::kHealFull`) — marth 2026-09-25, "about ten seconds, or until fully
-  healed". TRAVEL re-entry
+  healed". FLEE HOLD (marth 2026-11-09, Q20; `Scheduler.cpp` `kRetreatFleeHoldSecs`, `RetreatNote::fleeHoldAt`): the
+  full-health STAY release waits while his current package is the engine's own Flee (`packType == kFlee`, worker read
+  of `GetCurrentPackage()`), bounded 20 s of unpaused service clock, WARN on the bound; reasons "stay over: healed,
+  flee ended" / "...flee hold bound". The engaged / no-live-foes / timeout releases still end it. TRAVEL re-entry
   (an in-combat read after an out-of-combat one — his flag, or
   `Packages::RetreatConsumeStopLanded`) posts exactly one more StopCombat
   (`Packages::RetreatReengage`), never per tick (#22a). FOE PROBE: `ServiceRetreat` posts

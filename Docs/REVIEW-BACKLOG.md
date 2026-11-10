@@ -2708,3 +2708,7 @@ Verbatim (reviewer): The self-test only counts (selftest/Tests.cpp:79-90). The n
 
 ### MFO-B624 (SEV-5, OPEN, docs + Harbinger nicety, against ed548d14, Opus review)
 Verbatim (reviewer): The change reaches three callers the brief and docs do not name. `RightHandIsWeaponHand` -> `WeaponHandExposure` -> `WeaponHandActive` also feeds cast/HealRoad.cpp:475, :891 and :902. The new behaviour there is correct: the heal road's second recipient no longer takes a right hand holding a sword or staff while the left holds a spell, and a standing right-hand heal claim is now released when a weapon appears in the right while the left holds a spell. Worth one line in MAP. Optional SEV-5 nicety for Harbinger: warn when a client's cast claim names a hand that the same client's ch.17 declaration holds with a weapon. That self-conflict is the shape B1a had, and the warning would have surfaced it sooner.
+### MFO-B625 (SEV-5, OPEN, Scheduler.cpp ServiceRetreat flee hold, against fix/retreat-hold-until-flee-ends, Opus review) -- review leftovers
+Coordinator's paraphrase (not verbatim):
+- SEV-5: kFleeNotCombat (10) is the CK-authorable Flee procedure and is correctly excluded from the flee hold; add a one-time info line if one is ever seen as the current package during a retreat.
+- SEV-5: the flee hold suppresses the party-OOC table and delays the retreat cooldown for up to 20 s (kRetreatFleeHoldSecs) while the engine Flee wins anyway. By design (marth Q20), noted here.
