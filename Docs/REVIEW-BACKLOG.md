@@ -559,6 +559,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** `PollWork` credits every enrolled record each player level-up. A fixed-stat or level-capped follower never spends it, so a later award passes in full. Never above the engine's own award.
 - **Why it was NOT fixed:** below the floor. The cap is a ceiling, the credit only lets the engine's own award through.
 - **Fix shape when drained:** skip `st.hmsParityCredit += playerGain` when `st.fixedStat` (and consider a clamp).
+- **Update (2026-11-09, `fix/hms-above-parity`, ClickUp 86e3jw3b4):** the above-parity gate (`progression/Hms.cpp:446`) also caps each applied award at the headroom `max(0, player total - held total)`, so a banked credit can no longer carry a follower past the player's total. A frozen above-parity follower banks credit the same way (left as is, still this entry's call); the over-grant this entry describes is now bounded by the player's total.
 
 ### MFO-B70 -- non-level-up engine changes are now credit-capped
 - **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.
