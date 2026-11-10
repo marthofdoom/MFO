@@ -8596,8 +8596,10 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   carriers); `LevelForXp(xp, cumulative thresholds)` (C4 supplies the table: `[i]` = total xp to BE at level i+1, size = cap); `ComputeUnlocked(mastered)` runs every
   `UnlockRule` of `kTable`; `SetLevelFromXp` (C4 calls it after storing xp: level never drops, mastered bit at the cap, unlocked refreshed, never revoked);
   `SwitchClass` (C10's free instant switch, refuses a locked class; starts a never-used class at level 1); `PickAutoClass` / `AutoClassFor` (strict adherence:
-  best skill-group fit among unlocked classes, ties to the higher tier; writes nothing; nothing calls it yet). Read-then-write helpers are not atomic as a whole:
-  SetLevelFromXp is the C4 job-worker's alone, SwitchClass is one State.cpp write.
+  best per-class skill fit among unlocked classes, ties to the higher tier then more skills; writes nothing; nothing calls it yet). Read-then-write helpers are not atomic as a whole:
+  SetLevelFromXp / SwitchClass are each ONE compound State.cpp writer (`ApplyLevel` / `ActivateClass`, one `g_mx` hold; a short or long C4 threshold table is refused loudly);
+  `CoLoad` heals a class at its level cap with the mastered bit clear (only while Active). `PickAutoClass` scores each class by its OWN skills (`kSkillMap` in
+  Mastery.cpp, static_assert-complete; NOT in ClassTable.cpp, which the C7 generator parses). **Open review findings (read before editing): MFO-B625, MFO-B626** (`Docs/REVIEW-BACKLOG.md`).
 - INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`;
   `bClassCoSaveSelfTest` (C3 DEBUG, default 0; `Config.h/.cpp`, `MFO.ini`): the MCLS round-trip self-test at every load.
 - **Depended-on-by:** `Serialization.cpp` (the MCLS hooks, C3). Later cards read `kTable` and the C3 state (C4 XP, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI, C12 tables, C13 counters).

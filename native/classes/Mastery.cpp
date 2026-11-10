@@ -11,25 +11,78 @@
 namespace MFO::Classes {
 
     namespace {
-        constexpr Mask Roster() { return (Mask{ 1 } << kClassCount) - 1; }
+        // -- per-class skill map (card C5, review F2) --
+        // Kept HERE, not in ClassTable.cpp (the C7 generator parses ClassTable's Mk rows). A class's fit = the mean of its listed
+        // skills' values in the StatProfile; derived from the class identities in the walkthrough decisions (passives, weapons).
+        enum class Sk : std::uint8_t { None, Melee, Block, Archery, Sneak, Alteration, Conjuration, Destruction, Illusion, Restoration, AnySchool };
 
-        // Skill group values of a StatProfile.
-        float MeleeV(const StatProfile& s)  { return std::max(s.oneHanded, s.twoHanded); }
-        float RangedV(const StatProfile& s) { return s.archery; }
-        float MageV(const StatProfile& s) {
-            return std::max({ s.alteration, s.conjuration, s.destruction, s.illusion, s.restoration });
-        }
-        float GroupV(const StatProfile& s, std::uint8_t a_root) {   // a_root: 1 Melee, 2 Ranged, 3 Mage
-            return a_root == 1 ? MeleeV(s) : a_root == 2 ? RangedV(s) : MageV(s);
+        float SkillV(const StatProfile& s, Sk a_sk) {
+            switch (a_sk) {
+                case Sk::Melee:       return std::max(s.oneHanded, s.twoHanded);   // melee 1H / 2H are merged (marth)
+                case Sk::Block:       return s.block;
+                case Sk::Archery:     return s.archery;
+                case Sk::Sneak:       return s.sneak;
+                case Sk::Alteration:  return s.alteration;
+                case Sk::Conjuration: return s.conjuration;
+                case Sk::Destruction: return s.destruction;
+                case Sk::Illusion:    return s.illusion;
+                case Sk::Restoration: return s.restoration;
+                case Sk::AnySchool:   return std::max({ s.alteration, s.conjuration, s.destruction, s.illusion, s.restoration });
+                default:              return 0.0f;
+            }
         }
 
-        // Fit of a class to a profile: the mean of its skill groups. A line class = its own group; a hybrid = its
-        // weapon-side root plus Mage (hybrid = one weapon class + one school class, ClassTable.cpp); rootT1 0 = every group.
-        float Fit(const ClassDef& d, const StatProfile& s) {
-            if (d.line != Line::Hybrid) return GroupV(s, d.rootT1);
-            if (d.rootT1 == 0) return (MeleeV(s) + RangedV(s) + MageV(s)) / 3.0f;
-            if (d.rootT1 == 3) return MageV(s);
-            return (GroupV(s, d.rootT1) + MageV(s)) * 0.5f;
+        struct SkillRow { Id id; std::array<Sk, 3> sk; };
+        constexpr std::uint8_t SkillCount(const SkillRow& r) {
+            std::uint8_t n = 0;
+            for (auto k : r.sk) if (k != Sk::None) ++n;
+            return n;
+        }
+        constexpr SkillRow R(Id a_id, Sk a, Sk b = Sk::None, Sk c = Sk::None) { return { a_id, { a, b, c } }; }
+
+        // In ascending Id order, one row per class except Dragonborn (checked below). Rows marked OPEN are ambiguous in the
+        // walkthrough file and are listed in the C5 report for marth's ruling.
+        constexpr std::array<SkillRow, kClassCount - 1> kSkillMap = { {
+            R(Id::Melee, Sk::Melee), R(Id::Ranged, Sk::Archery), R(Id::Mage, Sk::AnySchool),
+            R(Id::Knight, Sk::Melee, Sk::Block),                      // shield wall
+            R(Id::Warrior, Sk::Melee),                                // OPEN: no skill named beyond "any melee weapon"
+            R(Id::Mercenary, Sk::Melee),                              // OPEN: stamina passive, in-and-out skirmisher, no skill named
+            R(Id::Archer, Sk::Archery),
+            R(Id::Thief, Sk::Sneak, Sk::Archery),                     // OPEN: dagger + bow; sneak-led
+            R(Id::Evoker, Sk::Destruction), R(Id::Conjurer, Sk::Conjuration), R(Id::Healer, Sk::Restoration), R(Id::Warlock, Sk::Illusion),
+            R(Id::GreatKnight, Sk::Melee, Sk::Block),
+            R(Id::Champion, Sk::Melee), R(Id::Blademaster, Sk::Melee),   // OPEN (as Warrior / Mercenary)
+            R(Id::Ranger, Sk::Archery),
+            R(Id::MasterThief, Sk::Sneak, Sk::Archery),               // OPEN (as Thief)
+            R(Id::Wizard, Sk::Destruction, Sk::Illusion),             // OPEN: Destruction on a controlled foe + cheaper spells
+            R(Id::Necromancer, Sk::Conjuration),
+            R(Id::Priest, Sk::Restoration),
+            R(Id::Spellsword, Sk::Melee, Sk::Destruction),            // Evoker side
+            R(Id::Sorcerer, Sk::Melee, Sk::Conjuration),              // Conjurer side
+            R(Id::Templar, Sk::Melee, Sk::Restoration),               // Healer side (shield not weighted)
+            R(Id::Nightblade, Sk::Melee, Sk::Illusion),               // Warlock side
+            R(Id::Witchhunter, Sk::Archery, Sk::Illusion),            // Archer + Warlock
+            R(Id::Scout, Sk::Archery, Sk::Restoration),               // Archer + Healer
+            R(Id::ArchMage, Sk::AnySchool),                           // two of Wizard / Necromancer / Priest: any single school
+            R(Id::LivingLegend, Sk::Melee),
+            R(Id::Nightingale, Sk::Sneak, Sk::Archery, Sk::Illusion), // Master Thief + Witchhunter
+            R(Id::Listener, Sk::Sneak, Sk::Illusion),                 // OPEN: Master Thief + Nightblade, Illusion strong effect
+            R(Id::EbonyWarrior, Sk::Melee, Sk::Block),
+            R(Id::GrandBattlemage, Sk::Melee, Sk::AnySchool),         // power attack releases an off-hand spell
+            R(Id::Jaqspur, Sk::Archery),
+            R(Id::Saint, Sk::Restoration),
+        } };
+        constexpr bool SkillMapIsComplete() {
+            for (std::size_t i = 0; i < kSkillMap.size(); ++i)
+                if (static_cast<std::size_t>(kSkillMap[i].id) != i || SkillCount(kSkillMap[i]) == 0) return false;
+            return static_cast<std::size_t>(Id::Dragonborn) == kSkillMap.size();   // Dragonborn is the last Id and has no row
+        }
+        static_assert(SkillMapIsComplete(), "classes/Mastery.cpp: every non-Dragonborn class needs a skill-map row, in Id order");
+
+        float Fit(const SkillRow& r, const StatProfile& s) {
+            float sum = 0.0f;
+            for (auto k : r.sk) sum += SkillV(s, k);
+            return sum / static_cast<float>(SkillCount(r));
         }
     }
 
@@ -65,7 +118,7 @@ namespace MFO::Classes {
         Mask out = 0;
         for (const auto& d : kTable)
             if (UnlockSatisfied(d, a_mastered)) out |= Bit(d.id);
-        return out & Roster();
+        return out & ((Mask{ 1 } << kClassCount) - 1);
     }
 
     bool IsUnlocked(RE::FormID a_follower, Id a_class) {
@@ -78,44 +131,20 @@ namespace MFO::Classes {
     bool SetLevelFromXp(RE::FormID a_follower, Id a_class, std::span<const std::uint32_t> a_cumulative) {
         if (static_cast<std::size_t>(a_class) >= kClassCount) return false;
         const std::uint8_t cap = LevelCap(a_class);
-        if (cap == 0 || !IsUnlocked(a_follower, a_class)) return false;
-        const auto cur = GetFollower(a_follower).value_or(FollowerClasses{});
-        ClassProgress p = cur.progress[static_cast<std::size_t>(a_class)];
-
-        std::uint8_t lvl = std::min(LevelForXp(p.xp, a_cumulative), cap);
-        if (lvl < p.level) lvl = p.level;   // a level is never taken away
-        bool changed = false;
-        if (lvl != p.level) {
-            p.level = lvl;
-            if (!SetProgress(a_follower, a_class, p)) return false;
-            changed = true;
+        if (cap == 0) return false;
+        if (a_cumulative.size() != cap) {   // a short table could never reach mastery, a long one would be silently cut (F4)
+            static std::atomic<Mask> warned{ 0 };   // once per class per session
+            if (!(warned.fetch_or(Bit(a_class)) & Bit(a_class)))
+                spdlog::error("[classes] SetLevelFromXp({}): threshold table has {} entries, the cap is {} -- REFUSED (the C4 table is wrong)",
+                              Get(a_class).slug, a_cumulative.size(), static_cast<int>(cap));
+            return false;
         }
-        Mask mastered = cur.mastered;
-        if (lvl >= cap && !(mastered & Bit(a_class))) {
-            mastered |= Bit(a_class);
-            if (!SetMastered(a_follower, mastered)) return changed;
-            changed = true;
-            spdlog::info("[classes] {:08X} mastered {} (level {})", a_follower, Get(a_class).slug, static_cast<int>(lvl));
-        }
-        const Mask unlocked = cur.unlocked | ComputeUnlocked(mastered);   // unlocks are never taken away
-        if (unlocked != cur.unlocked) {
-            if (!SetUnlocked(a_follower, unlocked)) return changed;
-            changed = true;
-        }
-        return changed;
+        const auto p = GetProgress(a_follower, a_class);
+        return ApplyLevel(a_follower, a_class, LevelForXp(p.xp, a_cumulative));   // ONE compound write (State.cpp)
     }
 
     bool SwitchClass(RE::FormID a_follower, Id a_class) {
-        if (!Writable() || !IsUnlocked(a_follower, a_class)) return false;
-        if (GetEquipped(a_follower) == static_cast<std::uint8_t>(a_class)) return false;
-        if (LevelCap(a_class) != 0) {
-            ClassProgress p = GetProgress(a_follower, a_class);
-            if (p.level == 0) {
-                p.level = 1;
-                if (!SetProgress(a_follower, a_class, p)) return false;
-            }
-        }
-        return SetEquipped(a_follower, a_class);
+        return ActivateClass(a_follower, a_class);   // unlocked-check + level-1 start + equip in ONE compound write (State.cpp)
     }
 
     StatProfile ReadStats(RE::Actor* a_actor) {
@@ -131,20 +160,24 @@ namespace MFO::Classes {
         s.destruction = avo->GetBaseActorValue(AV::kDestruction);
         s.illusion    = avo->GetBaseActorValue(AV::kIllusion);
         s.restoration = avo->GetBaseActorValue(AV::kRestoration);
+        s.sneak       = avo->GetBaseActorValue(AV::kSneak);
+        s.block       = avo->GetBaseActorValue(AV::kBlock);
         return s;
     }
 
     std::optional<Id> PickAutoClass(const StatProfile& a_stats, Mask a_unlocked) {
         std::optional<Id> best;
         float bestFit = 0.0f;
-        std::uint8_t bestTier = 0;
-        for (const auto& d : kTable) {
-            if (d.id == Id::Dragonborn || !(a_unlocked & Bit(d.id))) continue;
-            const float fit = Fit(d, a_stats);
-            // Strictly better fit, or an equal fit at a higher tier. Table order is ascending Id, so the lower Id wins ties.
-            if (!best || fit > bestFit || (fit == bestFit && d.tier > bestTier)) {
-                best = d.id; bestFit = fit; bestTier = d.tier;
-            }
+        std::uint8_t bestTier = 0, bestN = 0;
+        for (const auto& r : kSkillMap) {
+            if (!(a_unlocked & Bit(r.id))) continue;
+            const float fit = Fit(r, a_stats);
+            const std::uint8_t tier = kTable[static_cast<std::size_t>(r.id)].tier, n = SkillCount(r);
+            // Better fit; else equal fit at a higher tier; else equal tier with more listed skills. Ascending Id order
+            // means the lower Id keeps a full tie.
+            const bool better = !best || fit > bestFit ||
+                (fit == bestFit && (tier > bestTier || (tier == bestTier && n > bestN)));
+            if (better) { best = r.id; bestFit = fit; bestTier = tier; bestN = n; }
         }
         return best;
     }

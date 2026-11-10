@@ -241,11 +241,14 @@ namespace MFO::Classes {
     // ClassProgress::level, mastered / unlocked in the MCLS bitsets (layout untouched, MCLS stays v1).
     //
     // THREADING: the PURE functions (LevelCap, Scale01, LevelForXp, ComputeUnlocked, PickAutoClass) touch no state and are
-    // callable from any thread. The follower functions (SetLevelFromXp, SwitchClass, IsUnlocked, AutoClassFor) go through the
-    // State.cpp accessors, so each single read/write is under its lock, but a function that does read-then-write is NOT atomic
-    // as a whole: the XP writer (C4, job worker) is the ONLY caller of SetLevelFromXp, and the GUI (C10, board thread) only
-    // calls SwitchClass (one write: SetEquipped). AutoClassFor reads actor values with the same calls ClassResolve.cpp makes
-    // (call it where ResolveBaseClass is called). None of these holds a lock across an engine call.
+    // callable from any thread. SetLevelFromXp (C4, job worker) and SwitchClass (C10, board thread) are each ONE compound
+    // writer in State.cpp (ApplyLevel / ActivateClass): the whole read-decide-write happens under a single hold of the State.cpp
+    // mutex, so a co-save snapshot never sees a half-applied level-up and two writers cannot lose each other's update. AutoClassFor
+    // reads actor values with the same calls ClassResolve.cpp makes (call it where ResolveBaseClass is called). None of these
+    // holds a lock across an engine call.
+    //
+    // RESET NOTE (future "reset class progress"): IsUnlocked takes the stored unlocked bits OR the rule-computed ones, and unlocks
+    // are never revoked, so a reset must clear the stored unlocked (and mastered) bits explicitly, not just level / xp.
     //
     // WRITES refuse (return false, change nothing) unless Writable(), which already implies Active(); with the ESL absent
     // they are inert, and the reads return the empty / no-class answers.
@@ -276,8 +279,9 @@ namespace MFO::Classes {
 
     // C4 -> C5 hook: after C4 has stored new XP with SetProgress, call this with the class's cumulative thresholds. It
     // recomputes the level (never lowers it), clamps to the cap, sets the mastered bit when the cap is reached (never clears
-    // one), and refreshes the unlocked set from the mastered set. Returns true if anything changed. Dragonborn and a locked
-    // class are refused (false).
+    // one), and refreshes the unlocked set from the mastered set, all in ONE State.cpp lock hold (ApplyLevel). Returns true if
+    // anything changed. Dragonborn and a locked class are refused (false), and so is a table whose size is not LevelCap(class)
+    // (logged as an error once per class per session: a short table could never reach mastery).
     bool SetLevelFromXp(RE::FormID a_follower, Id a_class, std::span<const std::uint32_t> a_cumulative);
 
     // Free, instant switch between UNLOCKED classes (C10's accessor). A class never used before is started at level 1 (Dragonborn
@@ -285,16 +289,25 @@ namespace MFO::Classes {
     // per-class gambit table (Q8) is card C12's, not done here.
     bool SwitchClass(RE::FormID a_follower, Id a_class);
 
+    // The compound writers behind SetLevelFromXp / SwitchClass (State.cpp, one g_mx hold each; false = refused or nothing changed).
+    // ApplyLevel: raise a_class to min(a_level, cap) (never lowers), set mastered at the cap, OR in the rule-computed unlocks.
+    // ActivateClass: if a_class is unlocked and not already equipped, start it at level 1 when never used (Dragonborn stays 0)
+    // and equip it.
+    bool ApplyLevel(RE::FormID a_follower, Id a_class, std::uint8_t a_level);
+    bool ActivateClass(RE::FormID a_follower, Id a_class);
+
     // The stat inputs the Auto resolver votes on: BASE actor values (a fortify potion cannot flip it), like ClassResolve.cpp.
     struct StatProfile {
         float oneHanded = 0, twoHanded = 0, archery = 0;
         float alteration = 0, conjuration = 0, destruction = 0, illusion = 0, restoration = 0;
+        float sneak = 0, block = 0;
     };
     [[nodiscard]] StatProfile ReadStats(RE::Actor* a_actor);   // zeros for nullptr
 
-    // Pick the best-fitting class among a_unlocked from a_stats. A class's fit is the mean of its skill groups (Melee = better of
-    // 1H / 2H, Ranged = Archery, Mage = best of five schools): a line class uses its own group, a hybrid uses its weapon-side
-    // root plus Mage. Highest fit wins; equal fits go to the HIGHER tier, then the lower Id. Dragonborn is never auto-picked.
+    // Pick the best-fitting class among a_unlocked from a_stats. Each class has its OWN skill list (Mastery.cpp kSkillMap, up to
+    // three skills, e.g. Healer = Restoration, Templar = melee + Restoration) and its fit is the mean of those skill values.
+    // Highest fit wins; equal fits go to the HIGHER tier, then the class with MORE listed skills (a hybrid that fits as well as a
+    // pure class wins), then the lower Id. Dragonborn is never auto-picked.
     // nullopt when a_unlocked holds no pickable class. PURE.
     [[nodiscard]] std::optional<Id> PickAutoClass(const StatProfile& a_stats, Mask a_unlocked);
 

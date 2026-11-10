@@ -2689,3 +2689,9 @@ Coordinator's paraphrase (not verbatim):
 - SEV-5: ProgProbe.cpp:409/:471 (dev bProgProbe, default OFF) still call ApplyPerksFromBase and duplicate when armed; never read a probe run as evidence.
 - SEV-5: the post-change event 0x391760 has no in-binary subscriber; a raw-address plugin listener would no longer see MFO's changes.
 - Unverified by the reviewer: the 1.7.104 addresses (author's only).
+
+### MFO-B625 (SEV-4, OPEN, classes/Mastery.cpp Scale01, against 5d22b760, Opus review of C5)
+Reviewer's finding (F3), as relayed by the coordinator: Scale01 returns 0 for level 0. Dragonborn sits at level 0 / cap 0, so C6 calling Scale01(level, LevelCap(id)) gives Dragonborn zero effect, and a class equipped via SetEquipped directly stays at level 0. C6's contract must say how Dragonborn and level 0 are handled. Reasoning: Dragonborn has no level by ruling (all mastered passives at full), and SwitchClass/ActivateClass now starts a class at level 1, but a direct SetEquipped does not. See MAP.md section 9 (classes/Mastery.cpp).
+
+### MFO-B626 (SEV-5, OPEN, classes/Classes.h, against 5d22b760, Opus review of C5)
+Reviewer's finding, as relayed by the coordinator: any future "reset class progress" must clear the stored unlocked bits explicitly, because IsUnlocked takes stored | computed (unlocks are never revoked). Noted in the Classes.h mastery block (RESET NOTE); no code path resets today.

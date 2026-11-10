@@ -617,6 +617,25 @@ namespace MFO::Classes {
         if (res == ReadResult::Ok && buf.Remaining())
             spdlog::warn("[cosave] MCLS: {} unread byte(s) after the v{} body -- ignored (#11)", buf.Remaining(), a_version);
 
+        // C5 repair (NOT a layout change): a record saved with a class at its level cap but the mastered bit clear (a save that
+        // raced an older writer) is healed here, only while the tree is Active() so an inactive add-on still writes back unchanged
+        // (marth Q9). The unlocked set is refreshed from the repaired mastered set (additive).
+        if (Active()) {
+            int healed = 0;
+            for (auto& [fid, fc] : parsed) {
+                Mask add = 0;
+                for (std::size_t c = 0; c < kClassCount; ++c) {
+                    const std::uint8_t cap = LevelCap(static_cast<Id>(c));
+                    if (cap != 0 && fc.progress[c].level >= cap && !(fc.mastered & (Mask{ 1 } << c))) add |= Mask{ 1 } << c;
+                }
+                if (!add) continue;
+                fc.mastered |= add;
+                fc.unlocked |= ComputeUnlocked(fc.mastered) & RosterMask(kClassCount);
+                ++healed;
+            }
+            if (healed) spdlog::warn("[classes] repaired {} follower record(s): a class at its level cap had no mastered bit", healed);
+        }
+
         const auto loadedCount = parsed.size();
         Snapshot forTest;
         if (Config::g_classCoSaveSelfTest.load()) forTest = SortedCopy(parsed);
@@ -764,5 +783,43 @@ namespace MFO::Classes {
     bool ClearStoredTable(RE::FormID a_follower, Id a_class) {
         if (!ValidId(a_class)) return false;
         return Mutate(a_follower, [&](FollowerClasses& fc) { fc.tables[static_cast<std::size_t>(a_class)].reset(); });
+    }
+
+    // Card C5 compound writers: the whole read-decide-write under ONE g_mx hold, so a CoSave snapshot (main thread) can never
+    // see a level at its cap with mastered clear, and two writers cannot lose each other's update. LevelCap / ComputeUnlocked /
+    // UnlockSatisfied are pure (Mastery.cpp, Classes.cpp); nothing here touches the engine.
+    bool ApplyLevel(RE::FormID a_follower, Id a_class, std::uint8_t a_level) {
+        if (!ValidId(a_class)) return false;
+        const std::uint8_t cap = LevelCap(a_class);
+        if (cap == 0) return false;   // Dragonborn: no level
+        bool changed = false, newlyMastered = false;
+        std::uint8_t finalLevel = 0;
+        const bool ran = Mutate(a_follower, [&](FollowerClasses& fc) {
+            if (!(((fc.unlocked | ComputeUnlocked(fc.mastered)) >> static_cast<unsigned>(a_class)) & 1u)) return;   // locked
+            auto& p = fc.progress[static_cast<std::size_t>(a_class)];
+            const std::uint8_t lvl = std::max<std::uint8_t>(p.level, std::min(a_level, cap));   // a level is never taken away
+            if (lvl != p.level) { p.level = lvl; changed = true; }
+            finalLevel = lvl;
+            if (lvl >= cap && !(fc.mastered & Bit(a_class))) { fc.mastered |= Bit(a_class); changed = newlyMastered = true; }
+            const Mask unlocked = (fc.unlocked | ComputeUnlocked(fc.mastered)) & RosterMask(kClassCount);   // never revoked
+            if (unlocked != fc.unlocked) { fc.unlocked = unlocked; changed = true; }
+        });
+        if (ran && newlyMastered)
+            spdlog::info("[classes] {:08X} mastered {} (level {})", a_follower, Get(a_class).slug, static_cast<int>(finalLevel));
+        return ran && changed;
+    }
+
+    bool ActivateClass(RE::FormID a_follower, Id a_class) {
+        if (!ValidId(a_class)) return false;
+        bool done = false;
+        Mutate(a_follower, [&](FollowerClasses& fc) {
+            if (!(((fc.unlocked | ComputeUnlocked(fc.mastered)) >> static_cast<unsigned>(a_class)) & 1u)) return;   // locked
+            if (fc.equipped == static_cast<std::uint8_t>(a_class)) return;                                          // already it
+            auto& p = fc.progress[static_cast<std::size_t>(a_class)];
+            if (LevelCap(a_class) != 0 && p.level == 0) p.level = 1;   // a class used for the first time starts at level 1
+            fc.equipped = static_cast<std::uint8_t>(a_class);
+            done = true;
+        });
+        return done;
     }
 }
