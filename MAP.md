@@ -3404,8 +3404,8 @@ module. Module layout:
   naming ONE class always decides. Ties and all-abstain go to the lowest ordinal (Melee).
   **C2b (2026-11-10):** `EffectiveClassPick(fid, state)` (same file, declared in `Logistics.h`) is THE accessor for the class PICK: classes ON
   (`Classes::Active()` + equipped != kNoClass) -> his equipped class's `rootT1`, else the raw `combatClassOverride`; Q59 (class beats an older
-  explicit pick) and Q60 (Dragonborn = root of the highest-level mastered T4, tie lower Id, none -> raw; `DragonbornRoot()`) are DEFAULTS in
-  that one function. Readers routed through it (all worker-serial: the per-follower tick on the AddTask worker): `Cast.cpp` `UsesMageClothing`,
+  explicit pick) and Q60 (Dragonborn = root of his most-perked weapon line via `StyleVotesFor().skillRanks`, tie/none -> raw; `DragonbornRoot()`) are in
+  that one function (Q59 confirmed, Q60 per marth 11-10). Readers routed through it (all worker-serial: the per-follower tick on the AddTask worker): `Cast.cpp` `UsesMageClothing`,
   `Gear.cpp` `ComputeWeaponRoles` (class wins over perks) + its `[role]` log, `LootEquipment.cpp` `BuildEquipmentContext`, `EquipAuthority.cpp`
   `pureCaster`, `Errand.cpp` College mage gates (x2), `SwapUp.cpp` `ComputeKeepSet`, `Economy.cpp` `BuildBuyThresholds` + `mageModeB24`, `Scheduler.cpp`
   empty-table stance, `Followers.cpp` `GetBaseClass` (so its callers Scheduler/Equip.cpp/Fire.cpp/Hands.cpp follow) and `PublishActiveMirror`

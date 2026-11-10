@@ -43,19 +43,32 @@ namespace MFO::Logistics {
             for (int c = 0; c < 3; ++c) if (a_v[c] >= best) a_out[c] = 1.0f / static_cast<float>(n);
         }
 
-        // Q60 default (see EffectiveClassPick): the T1 root of the follower's highest-level mastered T4, lower Id on a tie;
-        // 0 = none mastered (the caller falls back to the raw pick).
-        std::uint8_t DragonbornRoot(const Classes::FollowerClasses& a_fc) {
-            std::uint8_t bestRoot = 0, bestLevel = 0;
-            bool have = false;
-            for (std::size_t i = 0; i < Classes::kClassCount; ++i) {   // ascending Id: a strict > keeps the lower Id on a tie
-                const auto id = static_cast<Classes::Id>(i);
-                const auto& d = Classes::Get(id);
-                if (d.tier != 4 || !(a_fc.mastered & Classes::Bit(id))) continue;
-                const std::uint8_t lvl = a_fc.progress[i].level;
-                if (!have || lvl > bestLevel) { have = true; bestLevel = lvl; bestRoot = d.rootT1; }
-            }
-            return bestRoot;
+        // RULING Q60 (marth 2026-11-10, replaces the first "highest mastered T4" default): a Dragonborn-equipped follower's
+        // root is the root of his MOST-PERKED weapon line: One-/Two-Handed -> 1 Melee, Archery -> 2 Ranged, a magic school ->
+        // 3 Mage, each line scored by its best skill tree's owned perk ranks (grouped as the vote in ResolveBaseClass). Source:
+        // Progression's per-skill owned-rank tally (StyleVotes::skillRanks, the follower's own perks in the engine's skill
+        // trees: list-agnostic), read through the StyleVotesFor mirror (any thread; blank until the first main-thread tally
+        // lands, which reads as "none"). A tie for the top, or no perks in any line, returns 0 = the caller falls back to
+        // the raw pick. The "pickable T4 for combat behaviour" and the situational (flying-dragon bow) switching are NOT here.
+        std::uint8_t DragonbornRoot(RE::FormID a_fid) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+            if (!actor) return 0;
+            const auto sv = StyleVotesFor(actor);
+            auto rank = [&sv](RE::ActorValue a_av) {
+                return sv.skillRanks[static_cast<int>(a_av) - static_cast<int>(RE::ActorValue::kOneHanded)];
+            };
+            using AV = RE::ActorValue;
+            const int line[3] = {
+                std::max(rank(AV::kOneHanded), rank(AV::kTwoHanded)),
+                rank(AV::kArchery),
+                std::max({ rank(AV::kAlteration), rank(AV::kConjuration), rank(AV::kDestruction),
+                           rank(AV::kIllusion), rank(AV::kRestoration) })
+            };
+            const int best = std::max({ line[0], line[1], line[2] });
+            if (best <= 0) return 0;   // no perks in any line
+            int n = 0, at = 0;
+            for (int c = 0; c < 3; ++c) if (line[c] == best) { ++n; at = c; }
+            return n == 1 ? static_cast<std::uint8_t>(at + 1) : std::uint8_t{ 0 };   // a tie keeps the raw pick
         }
 
     }
@@ -73,14 +86,14 @@ namespace MFO::Logistics {
         const auto fc = Classes::GetFollower(a_fid);
         if (!fc || fc->equipped >= Classes::kClassCount) return raw;   // kNoClass = classes OFF for him
 
-        // RULING Q59 (DEFAULT, pending marth): with classes ON the equipped class beats an older explicit Gambit-tab pick.
+        // RULING Q59 (CONFIRMED marth 2026-11-10): with classes ON the equipped class beats an older explicit Gambit-tab pick.
         // To flip it, return `raw` here when it is 1..3 (one place; every reader follows).
         const auto eqId = static_cast<Classes::Id>(fc->equipped);
         std::uint8_t root = Classes::Get(eqId).rootT1;
 
-        // RULING Q60 (DEFAULT, pending marth): Dragonborn (rootT1 0, no fixed root) uses the root of his highest-LEVEL MASTERED
-        // T4 class; a level tie goes to the lower Id; no mastered T4 falls back to the raw pick. Change DragonbornRoot() only.
-        if (eqId == Classes::Id::Dragonborn) root = DragonbornRoot(*fc);
+        // RULING Q60 (marth 2026-11-10): Dragonborn (rootT1 0, no fixed root) uses the root of his most-perked weapon line; a tie or no
+        // perks falls back to the raw pick. Change DragonbornRoot() only.
+        if (eqId == Classes::Id::Dragonborn) root = DragonbornRoot(a_fid);
         return (root >= 1 && root <= 3) ? root : raw;
     }
 
