@@ -1,9 +1,9 @@
 // THE SEEDED SELF-TESTS (dev builds only). One Register() call per test in RegisterAll(); how to add one is
 // Docs/SELFTEST.md "Adding a test". Source list: the IN-GAME TEST LIST (ClickUp 1dfcuabcqdm).
 //
-// Every test here RIDES THE FOLLOWER'S OWN BOARD: it starts only when his combat table already holds the
-// gambits it watches (the precondition says which, and the pending log prints it), and it judges what those
-// gambits make the engine do. The runner never authors a rule. Reads only (#23): hands, inventory counts,
+// SELF-DRIVING (2026-11-10): these tests no longer ride the follower's own board. Each fixtures() asks the runner for the TEMP ROWS, the
+// spawned hostile and the spells it needs (Setup.cpp / Fixtures.cpp; all put back afterwards), and judges what those temp rows make the
+// engine do. The new self-driving tests live in TestsDrive.cpp. Reads only (#23): hands, inventory counts,
 // actor values, the spell record classifiers MFO already has (Actuation::HealsHealth / ClassifyArchetype),
 // Gambit::lastFiredAt (the Scheduler's display stamp), the dev-only ProgAllocator::ReadHmsCapView (main
 // thread, posted), and a dev-only PASSIVE TESHitEvent sink (ShotSink below: an event sink on the script event
@@ -19,6 +19,7 @@
 #include "logistics/Logistics.h"
 #include "MainThread.h"
 #include "progression/ProgAllocator.h"
+#include "apmf/APMFBridge.h"
 
 #include <cmath>
 #include <deque>
@@ -55,23 +56,34 @@ namespace MFO::SelfTest {
         // Test list: "right-only offense claim logs Equipped right, no left equip/debt; left heal not
         // displaced". Observable core: the follower holds a heal spell in the LEFT hand and an offensive
         // spell in the RIGHT hand at the same moment. set[0] = heal spells, set[1] = offense spells.
+        constexpr RE::FormID kHealingLocal = 0x00012FCC, kFlamesLocal = 0x00012FCD, kBoundBowLocal = 0x000211ED;
+        bool MeleeInRight(RE::Actor* a) {
+            auto* w = a && a->GetEquippedObject(false) ? a->GetEquippedObject(false)->As<RE::TESObjectWEAP>() : nullptr;
+            return w && !w->IsBow() && !w->IsCrossbow() && !w->IsStaff() && !w->IsBound();
+        }
         const char* B1Pre(Ctx& c) {
-            if (!c.inCombat) return "in combat";
-            for (const auto& g : c.state->combat()) {
-                if (!g.enabled || !IsCastOp(g.actionOpcode)) continue;
-                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm);
-                if (!sp) continue;
-                if (Actuation::HealsHealth(sp)) AddUnique(c.s->set[0], sp->GetFormID());
-                else if (std::string_view(Actuation::ClassifyArchetype(sp).kindName) == "Offense")
-                    AddUnique(c.s->set[1], sp->GetFormID());
-            }
-            if (c.s->set[0].empty()) return "an enabled combat rule casting a Health heal";
-            if (c.s->set[1].empty()) return "an enabled combat rule casting an offensive spell";
+            const RE::FormID h = VanillaForm(kHealingLocal), f = VanillaForm(kFlamesLocal);
+            if (!h || !f) return "the Skyrim.esm Healing / Flames resolvable";
+            c.s->set[0] = { h };
+            c.s->set[1] = { f };
             return nullptr;
         }
-        void B1Fix(Ctx& c, FixtureRequest& r) { SpellsFixture(c, r, 0, 1); }
+        void B1Fix(Ctx& c, FixtureRequest& r) {
+            SpellsFixture(c, r, 0, 1);
+            r.rows.push_back({ Table::Combat, Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.95f, c.s->set[0][0], 0 });
+            r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, c.s->set[1][0], 0 });
+            r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActAttack, 0.0f, 0, 0 });
+            r.spawn.on = true;
+            r.spawn.hurtPct = 40.0f;
+        }
         Step B1Step(Ctx& c) {
             auto&            s  = *c.s;
+            if (!s.b[7]) {
+                s.b[7] = true;
+                if (MeleeInRight(c.follower))
+                    return Step::Info("not applicable to this follower: he wields a one-hander in the right hand, so heal-left + offense-RIGHT cannot arise "
+                                      "(b1a.weapon_stays_right judges that loadout)");
+            }
             const RE::FormID L  = HandForm(c.follower, true);
             const RE::FormID R  = HandForm(c.follower, false);
             const bool       hl = Has(s.set[0], L), orr = Has(s.set[1], R), ol = Has(s.set[1], L);
@@ -132,16 +144,13 @@ namespace MFO::SelfTest {
             return mask ? mask : 7;
         }
         const char* SkoomaPre(Ctx& c) {
-            if (!c.inCombat) return "in combat";
-            bool castRule = false;
-            for (const auto& g : c.state->combat())
-                if (g.enabled && IsCastOp(g.actionOpcode) && RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm))
-                    castRule = true;
-            if (!castRule) return "an enabled combat cast rule (the case the Harbinger allow-list covers)";
             const RE::FormID sk  = VanillaForm(kSkoomaLocal);
             auto*            alc = sk ? RE::TESForm::LookupByID<RE::AlchemyItem>(sk) : nullptr;
             if (!alc) return "Skyrim.esm Skooma (00057A7A) resolvable";
+            const RE::FormID fl = VanillaForm(kFlamesLocal);
+            if (!fl) return "the Skyrim.esm Flames resolvable";
             c.s->set[0] = { sk };
+            c.s->set[2] = { fl };
             bool declared = false;
             c.s->n[6]     = SkoomaPools(alc, declared);
             c.s->b[2]     = declared;
@@ -152,6 +161,12 @@ namespace MFO::SelfTest {
         void SkoomaFix(Ctx& c, FixtureRequest& r) {
             r.items.push_back({ c.s->set[0][0], 1 });
             if (!c.s->set[1].empty()) r.items.push_back({ c.s->set[1][0], 2 });
+            // the case the Harbinger allow-list covers: a follower with a CAST rule in a fight, hurt enough for the AI to want a drink
+            r.spells.push_back(c.s->set[2][0]);
+            r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, c.s->set[2][0], 0 });
+            r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActAttack, 0.0f, 0, 0 });
+            r.spawn.on = true;
+            r.spawn.hurtPct = 60.0f;
         }
         bool SkoomaPressure(const Scratch& s) {
             const int mask = static_cast<int>(s.n[6]);
@@ -248,15 +263,18 @@ namespace MFO::SelfTest {
         }
         const char* BowPre(Ctx& c) {
             if (!g_sinkLive.load()) return "the self-test hit sink registered (posted on the first tick)";
-            if (!c.inCombat) return "in combat";
-            for (const auto& g : c.state->combat()) {
-                if (!g.enabled || !IsCastOp(g.actionOpcode)) continue;
-                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm);
-                if (SummonsBow(sp)) AddUnique(c.s->set[0], sp->GetFormID());
-            }
-            return c.s->set[0].empty() ? "an enabled combat rule casting a bound-BOW spell" : nullptr;
+            const RE::FormID bb = VanillaForm(kBoundBowLocal);
+            auto*            sp = bb ? RE::TESForm::LookupByID<RE::SpellItem>(bb) : nullptr;
+            if (!SummonsBow(sp)) return "the Skyrim.esm Bound Bow (000211ED) resolvable and summoning a bow";
+            c.s->set[0] = { bb };
+            return nullptr;
         }
-        void BowFix(Ctx& c, FixtureRequest& r) { SpellsFixture(c, r, 0, -1); }
+        void BowFix(Ctx& c, FixtureRequest& r) {
+            SpellsFixture(c, r, 0, -1);
+            r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActCastSelf, 0.0f, c.s->set[0][0], 0 });
+            r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActAttack, 0.0f, 0, 0 });
+            r.spawn.on = true;
+        }
         RE::TESObjectWEAP* BoundBowInHand(RE::Actor* a) {
             for (const bool left : { false, true }) {
                 auto* f = a->GetEquippedObject(left);
@@ -477,6 +495,40 @@ namespace MFO::SelfTest {
                 });
             return have;
         }
+        // ── hms.above_parity_gate (e3d15c4 / ClickUp 86e3jw3b4) ─────────────────────────────────────────
+        // A follower whose HELD total already sits at or above the player's gets his level awards WITHHELD until the player catches up. The gate
+        // runs on a level-up edge (Hms.cpp), which the DLL cannot cause, so this test reads the SAME numbers the cap/gate use (ReadHmsCapView):
+        // if the player's sample moved inside the window (a level-up happened), the held total must not exceed the new sample (+0.5) unless every
+        // pool sits at its floor; if nothing moved, the verdict is INFO with the standing numbers (gate armed or not), never a pass by timer.
+        // n[0] sample at start, n[1] held total at start, b[0] init, b[1] armed (held >= sample - 0.5).
+        Step HmsGateStep(Ctx& c) {
+            auto& s = *c.s;
+            if (c.inCombat) return Step::Retry("combat started before the reading settled");
+            HmsRead r;
+            if (!FreshHms(c.id, 3.0f, c.startedAt, r)) return Step::Continue();
+            if (!r.found || !r.v.captured) return Step::Retry("the HMS record is gone or no longer captured");
+            const auto& v  = r.v;
+            const float ht = v.held[0] + v.held[1] + v.held[2];
+            if (!s.b[0]) {
+                s.b[0] = true;
+                s.n[0] = v.playerSample;
+                s.n[1] = ht;
+                s.b[1] = ht >= v.playerSample - 0.5f;
+                return Step::Continue();
+            }
+            s.note = std::format("held total {:.1f} vs player sample {:.1f} (at the start: held {:.1f}, sample {:.1f}); the gate is {} for him", ht, v.playerSample, s.n[1],
+                                 s.n[0], s.b[1] ? "ARMED (he is at or above parity)" : "not armed (he is below parity)");
+            if (v.playerSample == s.n[0]) return Step::Continue();   // no level-up yet
+            bool atFloor = true;
+            for (int p = 0; p < 3; ++p) atFloor = atFloor && v.held[p] <= v.floor[p] + 0.5f;
+            if (ht <= v.playerSample + 0.5f || atFloor)
+                return Step::Pass("a level-up happened in the window and the held total stayed within the player's" + std::string(atFloor ? " (every pool at its floor)" : "") + "; " + s.note);
+            return Step::Fail("a level-up happened in the window and the held total is ABOVE the player's with a pool above its floor; " + s.note);
+        }
+        Step HmsGateTimeout(Ctx& c) {
+            return Step::Info("NOT EXERCISED: the gate runs on a player level-up and none happened in the window (the DLL cannot cause one). Standing state: " + c.s->note);
+        }
+
         std::string PerkNote(const ProgAllocator::PerkEntryView& v) {
             return std::format("{} entry-point entries on {} base perks, duplicated {} (extra copies {}, max {}x{}), "
                                "missing {}, MFO-granted ranks {}",
@@ -544,24 +596,54 @@ namespace MFO::SelfTest {
             std::lock_guard lk(g_perkMx);
             g_perk.clear();
         }
+        ClearDrivenState();
         std::lock_guard lk(g_hmsMx);
         g_hms.clear();
     }
 
+    const std::vector<ManualItem>& ManualItems() {
+        // What a human must look at, with the PASS condition from the in-game test list. Not run, only listed and counted in ALL DONE.
+        static const std::vector<ManualItem> k = {
+            { "retreat.flee_hold", "86e3kcvfk + Harbinger flee", "an engine Flee package cannot be provoked from the DLL without forcing the AI (it needs the engine's own flee decision)",
+              "follower reaches the player at full HP while an engine Flee is current: log '[retreat] ... Flee package is still current ... holding', then 'engine Flee ended after Ns' + release; APMF [obs] current package = FECF983A, dPlayer <= 200 u" },
+            { "visual.animated_casts", "bbf90fd / 1dfcuabbt0p", "an animation is a look", "Oakflesh, Lesser Ward and a Script-archetype spell (Cicero Arcane Pull) are visibly animated casts" },
+            { "visual.frame_hitches", "92604e0", "frame time is a feel on the Deck", "no frame hitch while the hidden-perk census runs (full list once per load)" },
+            { "ch18.power_floor", "1dfcuabcqd9", "attack-rate feel; the DLL has no ch.18 counter exposed", "Warrior 40% power floor: power share ~40%, attack rate not visibly lower; [atk-sel] zeroed / floorStood / powerUnable" },
+            { "taunt.pull", "86e3pyjk2", "failed on the Deck 2026-10-13; needs a foe attacking an ally", "taunt pulls the foe off the ally" },
+            { "substrate.ooc_timeouts", "1dfcuabbnb6", "needs real OOC casting over minutes", "no substrate ttl timeouts without a built cast (Sven, 10 casts)" },
+            { "probe.m0_h3_g11_g7_h5miss", "class M0 / H3 / G11 / G7 / H5-probe", "passive probes that need an observed engine situation (sneak in combat, recentred combat area, charging aimed spell, reanimate corpse pick)", "each probe line present and plausible in the log; report to marth" },
+            { "log.inactive_winner", "86e3t1gfn", "needs the exact inactive-winner situation", "Harbinger 'stands / YIELDS' line naming the credited source + priority" },
+            { "iaus.scroll_probe", "1dfcuabcr8m", "needs a scroll and an observed AI choice", "does the AI use scrolls; can a claim drive one" },
+            { "iaus.exploit_rows", "1dfcuabcr8k", "needs fire-weak and frost-resistant foes", "picks the element the foe is weak to, avoids the resisted one" },
+            { "g10.will_work", "1dfcuabcqe7", "not automated yet (needs a dev counter on the board outcome)", "Calm/Fear/Frenzy above the level cap: 'will not work' on the board; at/below fires; Turn Undead living skips, undead fires" },
+            { "auto.control_target", "1dfcuabcr0d", "not automated yet (needs a dev counter on the AUTO target)", "fear/paralyze row on a stronger foe casts on that foe, never an ally/self/player; one '[classify] ... Offense' per spell" },
+            { "g9.cooldown", "1dfcuabcqe6", "needs a v5 save and a save/reload cycle", "[Debug] bClassCoSaveSelfTest PASS on a real v5 save; 10 s cooldown swings ~every 10 s; survives save + reload (schema v6)" },
+            { "tailor.compat", "1dfcuabcrr7", "only when Tailor is installed; needs its UI", "T1 to T6 of the Tailor test list" },
+            { "magicka.cost_capture", "86e3d6dp0", "needs the tier-C capture line first", "capture numbers match the research curve model" },
+            { "freeze.batch_a", "86e3h87hb", "if it recurs, keep the game frozen and capture stacks", "capture or no recurrence" },
+            { "play.batch8", "86e3ednub", "a normal play session", "no regressions" },
+        };
+        return k;
+    }
+
     void RegisterAll() {
         Register({ "b1.heal_left_offense_right", "MFO-B1",
-                   "in combat + combat rules casting a Health heal AND an offensive spell",
+                   "(self-setup) a caster loadout (no one-hander in the right hand); temp heal + offense rules and a spawned fight",
                    120.0f, B1Pre, B1Fix, B1Step, B1Timeout });
+        RegisterDriven();   // TestsDrive.cpp: cost parity, B1a, buff claim road, class tests, H5, census
         Register({ "skooma.not_drunk_by_ai", "86e3t1gfq",
-                   "in combat + an enabled combat cast rule (Skooma, and 2 minor healing potions if he has no "
-                   "health potion, are added for the run; pressure = a pool Skooma restores under 50%)",
+                   "(self-setup) Skooma, a cast rule, a spawned fight and a hurt follower; 2 minor healing potions are added if he has none (pressure = a pool "
+                   "Skooma restores under 50%)",
                    180.0f, SkoomaPre, SkoomaFix, SkoomaStep, SkoomaTimeout });
-        Register({ "bound_bow.fires", "86e3t1gfx", "in combat + an enabled combat rule casting a bound-BOW spell",
+        Register({ "bound_bow.fires", "86e3t1gfx", "(self-setup) the hit sink live; Bound Bow taught + cast by a temp rule in a spawned fight",
                    90.0f, BowPre, BowFix, BowStep, BowTimeout });
         Register({ "hms.cap_holds", "86e3d6dnv",
                    "out of combat, bHmsRedistribute + bHmsCapToPlayerTotal on, a captured HMS record with a class "
                    "profile and a player sample, the follower in the party for 2 minutes",
                    60.0f, HmsPre, nullptr, HmsStep, HmsTimeout });
+        Register({ "hms.above_parity_gate", "86e3jw3b4 (e3d15c4)",
+                   "out of combat, the same HMS record as hms.cap_holds; judged only when a player level-up happens in the window, else INFO with the standing numbers",
+                   60.0f, HmsPre, nullptr, HmsGateStep, HmsGateTimeout });
         Register({ "prog.perk_entries_unique", "1dfcuabcrqq",
                    "a follower enrolled in Progression with at least one MFO-granted rank, loaded nearby, 30 s in "
                    "the party",

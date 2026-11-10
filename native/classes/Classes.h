@@ -331,6 +331,7 @@ namespace MFO::Classes {
         bool          resolved = false;
         bool          processLive = false;                            // a middle-high process (live perk entries are only counted with one)
         std::array<std::int32_t, kClassCount> ranks{};
+        std::array<bool, kClassCount>         hasFaction{};                  // a MFOC_P_<Name> faction exists for the class (a class without one reads 0)
         bool          mercFull = false, mercQuarter = false, scoutQuarter = false;
         std::int32_t  scoutLevel = 0;                                  // 1..N = the Scout speed ability present (0 none)
         std::int32_t  perksOnBase = 0, perksExpected = 0;              // carrier perks on the base NPC / the number of carrier perks

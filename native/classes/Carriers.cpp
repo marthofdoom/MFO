@@ -396,7 +396,7 @@ namespace MFO::Classes {
         v.resolved    = true;
         v.processLive = HasMiddleHigh(actor);
         for (std::size_t c = 0; c < kClassCount; ++c) {
-            if (auto* f = g_forms.fact[c]) v.ranks[c] = std::max(0, static_cast<int>(actor->GetFactionRank(f, false)));
+            if (auto* f = g_forms.fact[c]) { v.hasFaction[c] = true; v.ranks[c] = std::max(0, static_cast<int>(actor->GetFactionRank(f, false))); }
             if (auto* p = g_forms.perk[c]) {
                 ++v.perksExpected;
                 if (base->GetPerkIndex(p).has_value()) ++v.perksOnBase;

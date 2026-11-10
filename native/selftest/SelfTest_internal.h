@@ -134,6 +134,7 @@ namespace MFO::SelfTest {
     // called every tick, a no-op once live. And the tests' session caches, cleared with ClearAll.
     void                         RegisterSinks();
     void                         ClearTestState();
+    void                         ClearDrivenState();   // TestsDrive.cpp: the driven tests' session caches (called by ClearTestState)
 
     // ── shared read helpers (Runner.cpp) ─────────────────────────────────────────────────────────
     // Count of a_form in a_actor's own inventory (any thread the codebase already walks inventories

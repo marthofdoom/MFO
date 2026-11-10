@@ -170,6 +170,8 @@ if(MFO_DEV_SELFTEST)
         selftest/Fixtures.cpp
         selftest/Record.cpp
         selftest/Tests.cpp
+        selftest/TestsDrive.cpp
+        selftest/Setup.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE MFO_DEV_SELFTEST=1)
     message(STATUS "MFO: DEV SELF-TEST BUILD (MFO_DEV_SELFTEST=ON) -- not a release DLL")
