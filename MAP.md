@@ -5527,7 +5527,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   - (2026-11-09, ClickUp 86e3eevgz C0+C1, branch `feat/inherit-perks-census`) **HIDDEN PLAYER-ONLY PERK CENSUS**
     (`progression/Inherit.cpp`, entry `InheritCensusPoll`, declared in `ProgAllocator_internal.h`, called from the
     top of `PollWork`). LOG-ONLY: changes nothing in the game, no co-save field. Finds perks the player holds
-    (base TESNPC list + `addedPerks` + `perks`; `standingStonePerks` excluded) that are in no AVIF perk tree
+    (asked of the engine with `Actor::HasPerk` over every BGSPerk form: PLAYER_RUNTIME_DATA lists are not emitted in the multi-runtime build; standing-stone perks are NOT separable) that are in no AVIF perk tree
     (tree set built lazily on the first poll), classifies each (`copy` / `not-copied:no-follower-use` /
     `player-only` / `script-part`) off the constexpr EP class table (Docs/ENGINE_NOTES.md 0.54,
     `tools/entrypoint_census/`), and prints `[inherit-census]` lines once per load generation (`g_pollGen`; each line also carries RULE-vs-BONUS evidence: source list, name/desc, entry count, favour/against direction, skill/global/pin conditions) and
