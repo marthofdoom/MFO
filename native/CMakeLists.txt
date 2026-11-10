@@ -82,6 +82,12 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/SubstrateRoad.cpp
     Scheduler.cpp
     Cooldowns.cpp
+    iaus/Curves.cpp
+    iaus/Catalogue.cpp
+    iaus/Score.cpp
+    iaus/Decide.cpp
+    iaus/Explain.cpp
+    iaus/Engine.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp
