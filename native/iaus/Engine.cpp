@@ -13,8 +13,14 @@ namespace MFO::Iaus::Engine {
         // g_followers domain (#4): the scan's worker only, or ResetAllState with the pump drained.
         std::unordered_map<RE::FormID, Mind> g_minds;
         std::unordered_set<RE::FormID>       g_overCapWarned;
+        std::unordered_set<RE::FormID>       g_badFactWarned;
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_budgetWarnedAt;
         std::unordered_map<RE::FormID, std::string> g_lastWalk;   // the last logged fall-past chain (dedupe)
+        // The decision epoch never goes back (review round 1, backlog item 1, fixed here): a Mind created after
+        // Forget / Clear starts above every epoch handed out so far this process, so a surviving rank-carrying lock
+        // (cast lock, heal claim) can never outrank a new decision by an epoch restarting at 0.
+        std::uint32_t g_epochFloor = 0;
+        void Retire(const Mind& m) { g_epochFloor = (std::max)(g_epochFloor, m.epoch); }
 
         // Leaf mutex: the worker publishes, the render thread copies. Never held across an engine call.
         std::mutex                              g_readoutMx;
@@ -53,7 +59,11 @@ namespace MFO::Iaus::Engine {
         }
     }
 
-    Mind& MindFor(RE::FormID a_actor) { return g_minds[a_actor]; }
+    Mind& MindFor(RE::FormID a_actor) {
+        auto [it, fresh] = g_minds.try_emplace(a_actor);
+        if (fresh) it->second.epoch = g_epochFloor;
+        return it->second;
+    }
 
     Decision Decide(RE::FormID a_actor, std::span<const Candidate> a_cands, const Profile& a_p, const Tuning& a_t,
                     const Tick& a_tick, double* a_ms) {
@@ -84,6 +94,12 @@ namespace MFO::Iaus::Engine {
                          "scored (once per session).{}", a_actor, d.generated, a_t.maxCandidates, a_t.maxCandidates,
                          counts);
         }
+        if (d.badFacts && g_badFactWarned.insert(a_actor).second) {
+            const auto& c = a_cands[static_cast<std::size_t>(d.firstBadFact)];
+            spdlog::warn("[iaus] {:08X}: {} candidate(s) VETOED for a NaN/inf fact, first: {} -- a fact reader is "
+                         "broken (once per follower per session; every [iaus] line counts them as BAD-FACTS)",
+                         a_actor, d.badFacts, Label(c));
+        }
         return d;
     }
 
@@ -101,7 +117,8 @@ namespace MFO::Iaus::Engine {
              const Profile& a_p, const Tuning& a_t, const Tick& a_tick, int a_pickedStep,
              std::span<const WalkNote> a_walk, double a_ms, bool a_explain) {
         Mind& m = MindFor(a_actor);
-        Key pick{};   // Idle logs under the default key, so an idle stretch is one line per logRepeatSec
+        Key pick{};   // Idle logs under the default key (the verdict tells it apart from a real attack)
+        const bool fired = a_pickedStep >= 0 && static_cast<std::size_t>(a_pickedStep) < a_d.order.size();
         if (!a_d.order.empty()) {
             const std::size_t s = (a_pickedStep >= 0 && static_cast<std::size_t>(a_pickedStep) < a_d.order.size())
                                       ? static_cast<std::size_t>(a_pickedStep) : 0;
@@ -113,7 +130,7 @@ namespace MFO::Iaus::Engine {
         for (const auto& w : a_walk) walkSig += std::format("{}:{};", w.idx, w.reason);
         auto& lastWalk = g_lastWalk[a_actor];
         const bool newWalk = walkSig != lastWalk;
-        if (!ShouldLog(m, pick, a_tick.in.now, a_t) && !newWalk) return;
+        if (!ShouldLog(m, pick, a_d.verdict, fired, a_tick.in.now, a_t) && !newWalk) return;
         lastWalk = std::move(walkSig);
         spdlog::info("[iaus] {} ({:08X}) {}", a_name, a_actor, FormatDecision(a_d, a_cands, a_t, a_pickedStep, a_walk, a_ms));
         if (!a_explain) return;
@@ -143,7 +160,10 @@ namespace MFO::Iaus::Engine {
     }
 
     void Forget(RE::FormID a_actor) {
-        g_minds.erase(a_actor);
+        if (const auto it = g_minds.find(a_actor); it != g_minds.end()) {
+            Retire(it->second);
+            g_minds.erase(it);
+        }
         g_budgetWarnedAt.erase(a_actor);
         g_lastWalk.erase(a_actor);
         std::scoped_lock lk(g_readoutMx);
@@ -151,8 +171,10 @@ namespace MFO::Iaus::Engine {
     }
 
     void Clear() {
+        for (const auto& kv : g_minds) Retire(kv.second);   // g_epochFloor itself is never reset
         g_minds.clear();
         g_overCapWarned.clear();
+        g_badFactWarned.clear();
         g_budgetWarnedAt.clear();
         g_lastWalk.clear();
         std::scoped_lock lk(g_readoutMx);

@@ -2785,3 +2785,30 @@ Raised against 1a3002f: when the follower had NO MCLS record before a class run,
 
 ### MFO-B638 (SEV-5, OPEN, selftest/Fixtures.cpp + Runner.cpp (dev build only), against 1a3002f, Opus review of self-test v2)
 Raised against 1a3002f: (a) a `hurt` fixture whose `added` (damage x10) exceeds 100000 is DROPPED on load by the shared `added > 100000` bound, so a follower with a huge Health pool loses its give-back entry (the damage then heals by itself); (b) a fixture ack that arrives after its run was finished (late ack) leaves a stale `g_acks` / `g_spawnRef` entry keyed by the dead token until the next ClearAll (bounded, no behavioural effect).
+
+### MFO-B639 (SEV-4, OPEN, iaus/Engine.h Forget / EndDecision threading, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: `Forget` is documented for the "toggle edge or dismissal" but mutates `g_minds` with no lock (Engine.h:59-62). The board toggle runs on the render thread and dismissal on main / Papyrus, so I5/I6 must marshal both to the worker. Reasoning: every Mind access is the g_followers worker domain (#4); a direct call from render or main is a data race on the map. Author round 1 added the worker-only comment at Engine.h; the marshalling itself belongs to I5/I6. (The companion SEV-4 "Forget/Clear reset Mind.epoch to 0" was FIXED in round 1, not backlogged: `g_epochFloor` keeps the epoch monotonic.)
+
+### MFO-B640 (SEV-5, OPEN, iaus/Catalogue.cpp BumpRow, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: `BumpRow` indexes `p.family` / `p.role` unchecked at `kCount` (Catalogue.cpp:109-110). Reasoning: I8 is the only caller and passes table data, so only a data bug reaches it, but an out-of-range index writes past the array.
+
+### MFO-B641 (SEV-5, OPEN, iaus/Score.cpp negative weights, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: a negative profile weight gives comp > 1 and can give a negative score, which breaks prune soundness (Score.cpp:86). Reasoning: `s^w` with w < 0 exceeds 1; the P5 bound assumes every compensated term is <= 1. I8 must validate w >= 0 (or Score must clamp).
+
+### MFO-B642 (SEV-5, OPEN, iaus/Score.cpp kMaxSet, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: `kMaxSet = 24` truncates a longer consideration set silently (Score.cpp:33). Reasoning: the largest set today is 20, so nothing is lost now; a `static_assert` over the set sizes would make a future overflow a compile error.
+
+### MFO-B643 (SEV-5, OPEN, iaus/Decide.cpp Scored::idx width, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: `Scored::idx` is `uint16` while `maxCandidates` is a tunable int (Decide.cpp:95). Reasoning: the default cap is 384; a tuned cap above 65535 would wrap the index.
+
+### MFO-B644 (SEV-5, OPEN, iaus/Decide.cpp d.rolled, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: `d.rolled` is true when the eligible list has more than one entry but SharpPick's own k / floor pool is 1 (Decide.cpp:176). Reasoning: cosmetic, the `[iaus]` line prints a roll that did not choose anything.
+
+### MFO-B645 (SEV-5, OPEN, iaus/Decide.cpp posture stats, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: Posture candidates passed to `Decide` are counted as vetoed in the action stats (Decide.cpp:102). Reasoning: the `veto=` count in the `[iaus]` line is inflated if I6 passes both layers in one span; better a separate counter or a documented "never pass posture here".
+
+### MFO-B646 (SEV-5, OPEN, iaus/Catalogue.cpp KeyOf includes posture, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: `KeyOf` includes `f.posture` for action candidates, so a melee / silver swap resets PowerAttack's cooldown and momentum key. Reasoning: if I4 fills `f.posture` on action candidates (to say which weapon they use), the Cooldowns id and the running key change with the weapon; I4 should leave it None on action candidates or KeyOf should drop it outside the Posture family.
+
+### MFO-B647 (SEV-4, OPEN, iaus Q34 strict reading, against a0745ee6, Opus tier-3 review of I2 round 1)
+Raised against a0745ee6: ruling Q34's last sentence ("only abilities from mastered classes are valid in emergencies") read strictly would also bar ON-class abilities of an unmastered class in an emergency. The author implemented it behind `Tuning::emergencyOnlyMastered`, default OFF. Decision: keep it OFF; the coordinator saves the strict reading as a question for marth.

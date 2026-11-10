@@ -13,11 +13,25 @@ namespace MFO::Iaus::detail {
     // The consideration set of a candidate's family (Scroll resolves through scrollOf). Catalogue.cpp.
     [[nodiscard]] std::span<const Use> SetFor(Family a_family, Family a_scrollOf);
 
-    // The consideration's input x, read from the candidate's facts (and, for Variety / the heal-dependent
-    // vetoes, from the Mind and the tick's best heal score). NaN = NOT APPLICABLE to this candidate: the term is
-    // dropped and not counted in n. Catalogue.cpp.
-    [[nodiscard]] float Input(Cons a_c, const Candidate& a_cand, const Mind& a_m, float a_bestHeal,
-                              const Tuning& a_t);
+    // A consideration's input: `on` is the EXPLICIT applicability test (false = the term does not apply to this
+    // candidate: dropped, not counted in n), x the value when it applies. Not a NaN sentinel (review round 1,
+    // finding 2): a NaN x that DOES apply is a bad fact and vetoes the candidate.
+    struct In {
+        bool  on = true;
+        float x = 0.0f;
+        In() = default;
+        In(float v) : x(v) {}   // NOLINT: implicit on purpose, `return value;` reads as "applies"
+        static In Off() { In i(0.0f); i.on = false; return i; }
+    };
+
+    // The consideration's input, read from the candidate's facts (and, for Variety / the heal-dependent vetoes,
+    // from the Mind and the tick's best heal score). Catalogue.cpp.
+    [[nodiscard]] In Input(Cons a_c, const Candidate& a_cand, const Mind& a_m, float a_bestHeal, const Tuning& a_t);
+
+    // A heal candidate for the best-heal read (CastHeal, or a Scroll whose spell is a heal).
+    [[nodiscard]] inline bool IsHeal(const Candidate& c) {
+        return c.family == Family::CastHeal || (c.family == Family::Scroll && c.scrollOf == Family::CastHeal);
+    }
 
     // Families whose score depends on the tick's best heal (Retreat, DrinkHealth): scored in a second pass.
     [[nodiscard]] inline bool DependsOnHeal(Family f) {
@@ -32,7 +46,6 @@ namespace MFO::Iaus::detail {
         return a_rank < 1 ? 0u : (a_rank > 5 ? 4u : static_cast<std::size_t>(a_rank - 1));
     }
 
-    [[nodiscard]] inline bool IsNA(float x) { return std::isnan(x); }
 
     // classWeight(candidate) = Profile::family[f] x Profile::role[tag] (section 4.9).
     [[nodiscard]] float ClassWeight(const Candidate& a_c, const Profile& a_p);
@@ -45,6 +58,7 @@ namespace MFO::Iaus::detail {
         Cons  vetoBy = Cons::kCount;
         bool  vetoed = false;
         bool  pruned = false;            // P5: stopped once base x partial product fell below a_cutoff
+        bool  badFact = false;           // vetoed because a fact or an input was NaN / inf
     };
     // The section 4 combination for one candidate. a_cutoff > 0 enables the P5 early-out (never with a_terms).
     [[nodiscard]] ScoreOut Score(const Candidate& a_c, const Mind& a_m, const Profile& a_p, const Tuning& a_t,

@@ -84,6 +84,7 @@ namespace MFO::Iaus {
         }
         if (d.vetoed || d.pruned) s += std::format(" veto={} pruned={}", d.vetoed, d.pruned);
         if (d.overCap) s += std::format(" OVER-CAP({} offered)", d.generated);
+        if (d.badFacts) s += std::format(" BAD-FACTS={}", d.badFacts);
         s += std::format(" {:.3f}ms", ms);
         return s;
     }
@@ -95,7 +96,11 @@ namespace MFO::Iaus {
         float focus = 1.0f;
         const float score = ScoreOne(c, m, p, t, rank, bestHeal, &terms, &vetoBy, &focus);
         std::string s = std::format("{} = {:.3f}", Label(c), score);
-        if (score <= 0.0f) s += std::format(" VETO {}", vetoBy == Cons::kCount ? std::string_view("weight") : Name(vetoBy));
+        if (score <= 0.0f) {
+            const bool bad = !FactsFinite(c.f);
+            s += std::format(" VETO {}", bad ? std::string_view("BAD-FACT (NaN/inf)")
+                                             : (vetoBy == Cons::kCount ? std::string_view("weight") : Name(vetoBy)));
+        }
         for (const auto& tm : terms) {
             const Role role = RoleOf(tm.cons);
             if (role == Role::Gate) { if (tm.raw <= 0.0f) s += std::format(" | {} FAIL", Name(tm.cons)); continue; }
@@ -109,10 +114,17 @@ namespace MFO::Iaus {
         return s;
     }
 
-    bool ShouldLog(Mind& m, const Key& pick, double now, const Tuning& t) {
-        if (m.hasLogged && m.logged == pick && now - m.loggedAt < t.logRepeatSec) return false;
+    bool ShouldLog(Mind& m, const Key& pick, Verdict verdict, bool fired, double now, const Tuning& t) {
+        // The verdict and the fired flag are part of the identity (review round 1, finding 5): Act -> Hold on the
+        // same key, a pick -> "none fired", and Idle (whose key is the default Key{}) all log at once.
+        const auto v = static_cast<std::uint8_t>(verdict);
+        if (m.hasLogged && m.logged == pick && m.loggedVerdict == v && m.loggedFired == fired &&
+            now - m.loggedAt < t.logRepeatSec)
+            return false;
         m.hasLogged = true;
         m.logged = pick;
+        m.loggedVerdict = v;
+        m.loggedFired = fired;
         m.loggedAt = now;
         return true;
     }

@@ -330,6 +330,163 @@ namespace {
         }
     }
 
+    // ── Review round 1 (a0745ee6) findings, each reproduced as a check ─────────────────────────────────────
+    Candidate PlainAttack(std::uint32_t id, float ratio, float distOverReach) {
+        Candidate c; c.family = Family::Attack; c.target = id; c.f.reach = 150.0f; c.f.meleeRange = true;
+        c.f.dist = distOverReach * 150.0f; c.f.sight = Sight::Visible; c.f.foeOnMe = true; c.f.foeLevelRatio = ratio;
+        return c;
+    }
+
+    void ReviewRound1() {
+        std::printf("\n=== 8. Review round 1 fixes ===\n");
+        const Tuning& t = DefaultTuning();
+        // F1 (SEV-2): the running candidate must never be pruned; the verdict must not depend on order.
+        {
+            std::vector<Candidate> v;
+            for (int i = 0; i < 7; ++i)
+                v.push_back(PlainAttack(100u + static_cast<std::uint32_t>(i), i == 6 ? 0.3f : 1.4f, 0.33f));
+            Mind m; m.hasRunning = true; m.running = KeyOf(v[6]); m.epoch = 3; m.firedAt = 10.0;
+            const TickIn in = Tick(5, 10.5);
+            const Decision a = Decide(m, v, Profile{}, t, in);
+            std::vector<Candidate> w(v.rbegin(), v.rend());
+            const Decision b = Decide(m, w, Profile{}, t, in);
+            const std::uint32_t fa = S0(a).idx < v.size() ? v[S0(a).idx].target : 0u;
+            const std::uint32_t fb = S0(b).idx < w.size() ? w[S0(b).idx].target : 0u;
+            std::printf("   F1 running-last: verdict=%s first=%u pruned=%zu | running-first: verdict=%s first=%u pruned=%zu\n",
+                        Verdicts[static_cast<int>(a.verdict)], fa, a.pruned, Verdicts[static_cast<int>(b.verdict)], fb,
+                        b.pruned);
+            Check(a.verdict == b.verdict && a.verdict == Verdict::Hold && fa == 106u && fb == 106u,
+                  "F1: running attack inside the window is never pruned; Hold in both candidate orders");
+        }
+        // F1b (finding 9): a candidate under the k-th best by less than tieEps survives the prune and can win the
+        // tie on current target.
+        {
+            const float A = ScoreOne(PlainAttack(200, 1.0f, 0.5f), Mind{}, Profile{}, t, 5, 0, nullptr);
+            float lo = 0.0f, hi = 1.0f, found = -1.0f, ratioFound = 0.0f;
+            for (int it = 0; it < 60; ++it) {   // bisect a current-target foe's level ratio into (A - eps/2, A)
+                const float mid = 0.5f * (lo + hi);
+                Candidate c = PlainAttack(299, mid, 0.5f); c.f.currentTarget = true;
+                const float sc = ScoreOne(c, Mind{}, Profile{}, t, 5, 0, nullptr);
+                if (sc < A && sc > A - t.tieEps * 0.5f) { found = sc; ratioFound = mid; break; }
+                if (sc >= A) hi = mid; else lo = mid;
+            }
+            std::vector<Candidate> v;
+            for (int i = 0; i < 6; ++i) v.push_back(PlainAttack(200u + static_cast<std::uint32_t>(i), 1.0f, 0.5f));
+            Candidate last = PlainAttack(299, ratioFound, 0.5f); last.f.currentTarget = true;
+            v.push_back(last);
+            const Decision d = Decide(Mind{}, v, Profile{}, t, Tick(5));
+            std::printf("   F1b k-th %.4f, current-target foe %.4f (ratio %.3f) scored last -> first %u, pruned %zu\n", A,
+                        found, ratioFound, S0(d).idx < v.size() ? v[S0(d).idx].target : 0u, d.pruned);
+            Check(found > 0.0f && S0(d).idx == 6, "F1b: the tieEps prune slack keeps a tie-cluster winner scored last");
+        }
+        // F2 (SEV-3): a NaN / inf fact VETOES (and is counted), never drops or passes a term.
+        {
+            Candidate h = Heal("Healing", 9, 10, 100, 100, 8, "Ally", 0.2f, false);
+            h.f.recipientHp = NAN;
+            Candidate dk = Drink(Family::DrinkHealth, "Potion", 5, 2, NAN, 1, 1);
+            const Foe foe{ "Foe", 1, 500, 1, 1, true, false, false, false, true, false, false, 0, 0, 0 };
+            Candidate mi = Offense("Firebolt", 7, RoleTag::Fire, 10, 3000, foe, 0, 100, 100);
+            mi.f.magicka = INFINITY;
+            Candidate dn = PlainAttack(3, 1.0f, 0.5f);
+            dn.f.dist = NAN;
+            Candidate mx = Heal("Healing", 9, 1, 100, 100, 8, "Ally", 0.2f, false);
+            mx.f.magicka = INFINITY; mx.f.magickaMax = INFINITY;
+            const float s1 = ScoreOne(h, Mind{}, Profile{}, t, 1, 0, nullptr);
+            const float s2 = ScoreOne(dk, Mind{}, Profile{}, t, 1, 0, nullptr);
+            const float s3 = ScoreOne(mi, Mind{}, Profile{}, t, 1, 0, nullptr);
+            const float s4 = ScoreOne(dn, Mind{}, Profile{}, t, 1, 0, nullptr);
+            const float s5 = ScoreOne(mx, Mind{}, Profile{}, t, 1, 0, nullptr);
+            const std::vector<Candidate> all{ h, dk, mi, dn, mx };
+            const Decision d = Decide(Mind{}, all, Profile{}, t, Tick(1));
+            std::printf("   F2 heal hp=NaN %.3f | drink hp=NaN %.3f | magicka=inf %.3f | dist=NaN %.3f | mp,max=inf %.3f | badFacts=%zu\n",
+                        s1, s2, s3, s4, s5, d.badFacts);
+            std::printf("   %s\n", FormatWhy(h, Mind{}, Profile{}, t, 1, 0).c_str());
+            std::printf("   [iaus] %s\n", FormatDecision(d, all, t, -1, {}, 0.0).c_str());
+            Check(s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0 && d.badFacts == 5 && d.verdict == Verdict::Idle,
+                  "F2: every NaN/inf fact vetoes its candidate and is counted (BAD-FACTS)");
+        }
+        // F3 (SEV-3): outside the window, low rapport is NOT the most stubborn: a normal 5.1 roll over the pool.
+        {
+            const Foe weak{ "Ice Wraith", 0x23ABE, 900, 1.0f, 0.9f, true, false, false, false, true, false, false, -50, 0, 0 };
+            const Foe plain{ "Bandit", 0x3DF21, 500, 0.6f, 1.0f, false, false, false, false, false, false, false, 0, 0, 0 };
+            const std::vector<Candidate> c{ Offense("Flames", 0x12FCD, RoleTag::Fire, 14, 650, plain, 0, 150, 200),
+                                            Offense("Firebolt", 0x12FCD0, RoleTag::Fire, 30, 3000, weak, -50, 150, 200) };
+            const float sf = ScoreOne(c[0], Mind{}, Profile{}, t, 1, 0, nullptr);
+            const float sb = ScoreOne(c[1], Mind{}, Profile{}, t, 1, 0, nullptr);
+            for (const std::uint8_t rk : { std::uint8_t{ 1 }, std::uint8_t{ 3 }, std::uint8_t{ 5 } }) {
+                const int n = 2000;
+                int fbw = 0;
+                for (int e = 0; e < n; ++e) {
+                    Mind m; m.hasRunning = true; m.running = KeyOf(c[0]); m.epoch = static_cast<std::uint32_t>(e);
+                    m.firedAt = 0.0;   // long ago: outside the window
+                    const Decision d = Decide(m, c, Profile{}, t, Tick(rk, 100.0));
+                    if (S0(d).idx == 1) ++fbw;
+                }
+                const Sharpness& sh = t.sharp[rk - 1];
+                const float sfm = sf * t.momentum;
+                const bool inPool = sh.k >= 2 && sfm >= sh.floor * sb - 1e-6f;
+                const float expected = inPool ? 100.0f / (1.0f + std::exp((sfm - sb) / sh.tau)) : 100.0f;
+                const float got = 100.0f * static_cast<float>(fbw) / static_cast<float>(n);
+                std::printf("   F3 rank %u: running Flames %.3f (x1.25 = %.3f) vs Firebolt on fire-weak %.3f -> Firebolt %.1f%% (5.1 predicts %.1f%%)\n",
+                            rk, sf, sfm, sb, got, expected);
+                Check(std::abs(got - expected) < 3.0f && got > 50.0f,
+                      "F3: outside the window the pick follows the 5.1 roll (momentum in S), not a pool hold");
+            }
+        }
+        // F4 (SEV-3): a plain melee attack on the current target clears the act floor with margin, 0.3-1.15x
+        // reach, level ratio 0.3-1.0.
+        {
+            const float reach[] = { 0.3f, 0.5f, 0.7f, 0.9f, 1.0f, 1.15f };
+            std::printf("   F4 plain attack on me, current target [not current target], by reach x level ratio:\n      reach ");
+            for (const float r : reach) std::printf("     %4.2f      ", r);
+            std::printf("\n");
+            float worst = 9.0f;
+            for (const float ratio : { 0.3f, 0.5f, 0.7f, 1.0f }) {
+                std::printf("   ratio %.1f ", ratio);
+                for (const float r : reach) {
+                    Candidate c = PlainAttack(1, ratio, r);
+                    c.f.currentTarget = true;
+                    const float sc = ScoreOne(c, Mind{}, Profile{}, t, 1, 0, nullptr);
+                    c.f.currentTarget = false;
+                    const float sn = ScoreOne(c, Mind{}, Profile{}, t, 1, 0, nullptr);
+                    worst = (std::min)(worst, sc);
+                    std::printf("  %.3f [%.3f]", sc, sn);
+                }
+                std::printf("\n");
+            }
+            Check(worst >= 1.2f * t.actFloor, "F4: worst plain current-target attack >= 1.2 x act floor across the grid");
+            Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) == 0.0f,
+                  "F4: the 1.15x reach gate still vetoes");
+        }
+        // F5 (SEV-4): the log dedupe includes the verdict and the fired flag.
+        {
+            Mind m;
+            const Key k{ Family::Attack, PostureKind::None, 0, 0 };
+            const bool l0 = ShouldLog(m, k, Verdict::Act, true, 1.0, t);
+            const bool l1 = ShouldLog(m, k, Verdict::Act, true, 2.0, t);
+            const bool l2 = ShouldLog(m, k, Verdict::Hold, true, 2.1, t);
+            const bool l3 = ShouldLog(m, k, Verdict::Hold, false, 2.2, t);
+            const bool l4 = ShouldLog(m, Key{}, Verdict::Idle, false, 2.3, t);
+            std::printf("   F5 first %d, repeat %d, Act->Hold %d, fired->none %d, ->Idle(Key{}) %d\n", l0, l1, l2, l3, l4);
+            Check(l0 && !l1 && l2 && l3 && l4, "F5: a verdict or fired change logs at once on the same key");
+        }
+        // F6 (SEV-4): a heal SCROLL counts as a heal for Retreat / the health drink.
+        {
+            Candidate sc = Heal("Scroll of Healing", 0xA44A0, 0, 0, 0, 0, "", 0.2f, false);
+            sc.family = Family::Scroll; sc.scrollOf = Family::CastHeal; sc.f.cost = 0; sc.f.stock = 2;
+            sc.f.magickaMax = 0; sc.f.selfMagicka = 0.5f; sc.f.sight = Sight::None;
+            const Candidate dk = Drink(Family::DrinkHealth, "Potion of Health", 0x3EADE, 1, 0.2f, 1, 1);
+            Candidate fl; fl.family = Family::Retreat; fl.f.selfHp = 0.2f; fl.f.disengageClass = true;
+            const std::vector<Candidate> v{ sc, dk, fl };
+            const Decision d = Decide(Mind{}, v, Profile{}, t, Tick(5));
+            std::printf("   F6 bestHeal %.3f, ranked:", d.bestHeal);
+            for (const auto& r : d.ranked) std::printf(" %s %.3f", Name(v[r.idx].family).data(), r.score);
+            std::printf("\n");
+            Check(d.bestHeal > t.noHealDrink && d.ranked.size() == 1 && v[d.ranked[0].idx].family == Family::Scroll,
+                  "F6: a heal scroll above 0.5 vetoes the health drink and the retreat");
+        }
+    }
+
     void Budget() {
         // Design 1.6's realistic mage: ~90 candidates after pruning. Time Decide over them.
         std::vector<Candidate> c;
@@ -368,6 +525,7 @@ int main() {
     PlayerFocus();
     MomentumAndWindow();
     TiesAndPosture();
+    ReviewRound1();
     Budget();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;

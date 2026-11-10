@@ -82,26 +82,34 @@ namespace MFO::Iaus {
             const Candidate& c = cands[i];
             const bool running = m.hasRunning && KeyOf(c) == m.running;
             const float mom = running ? t.momentum : 1.0f;
-            // P5 cutoff: the act floor, or the keep-th best so far (keep = max(k, maxTries): the walk needs the
-            // top maxTries for its transparent fall-backs, not just the rapport pool).
-            const float cutoff = allowPrune ? (std::max)(t.actFloor, top.Kth()) : 0.0f;
+            // P5 cutoff: the act floor, or the keep-th best so far minus tieEps (keep = max(k, maxTries): the walk
+            // needs the top maxTries for its transparent fall-backs, not just the rapport pool; the tieEps slack
+            // because a tie cluster can promote a candidate just under the k-th by current target or cost). The
+            // RUNNING candidate is never pruned: the commitment window and momentum need its exact score, and a
+            // pruned running decision made the verdict depend on candidate order (review round 1, finding 1).
+            const bool prune = allowPrune && !running;
+            const float cutoff = prune ? (std::max)(t.actFloor, top.Kth() - t.tieEps) : 0.0f;
             const auto o = detail::Score(c, m, p, t, in.rapportRank, bestHeal, mom, cutoff, nullptr);
-            if (o.vetoed) { ++d.vetoed; return; }
+            if (o.vetoed) {
+                ++d.vetoed;
+                if (o.badFact) { ++d.badFacts; if (d.firstBadFact < 0) d.firstBadFact = static_cast<int>(i); }
+                return;
+            }
             if (o.pruned) { ++d.pruned; return; }
             ++d.evaluated;
-            if (c.family == Family::CastHeal) d.bestHeal = (std::max)(d.bestHeal, o.score / mom);
+            if (detail::IsHeal(c)) d.bestHeal = (std::max)(d.bestHeal, o.score / mom);
             if (o.score < t.actFloor) return;
             top.Add(o.score);
             d.ranked.push_back(Scored{ static_cast<std::uint16_t>(i), o.score, o.score / mom, o.focus, running });
         };
 
-        // Pass 1: everything but the heal-dependent families. Heals are never pruned: Retreat and the health
-        // drink read the best heal score, so it must be exact.
+        // Pass 1: everything but the heal-dependent families. Heals (spells and heal scrolls) are never pruned:
+        // Retreat and the health drink read the best heal score, so it must be exact.
         for (std::size_t i = 0; i < lim; ++i) {
             const Family f = cands[i].family;
             if (f == Family::Posture) { ++d.vetoed; continue; }   // posture is DecidePosture's layer
             if (detail::DependsOnHeal(f)) continue;
-            scoreOne(i, 0.0f, f != Family::CastHeal);
+            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]));
         }
         // Pass 2: Retreat, DrinkHealth.
         for (std::size_t i = 0; i < lim; ++i)
@@ -151,33 +159,37 @@ namespace MFO::Iaus {
             return Step{ r[pos].idx, RankOf(e), e, running };
         };
 
+        // Stickiness (design 4.4/4.5, review round 1 finding 3): momentum ALWAYS (it is inside S), plus the
+        // preempt margin INSIDE the commitment window only. Outside the window every tick is a normal 5.1 rapport
+        // pick over the pool; the roll is a pure function of (seed, proposed epoch), so it repeats until a new
+        // decision fires (no dither), and landing on the running candidate simply continues it.
+        const bool inWindow = runPos >= 0 && (in.now - m.firedAt) < in.commitWindowSec;
+        std::vector<std::size_t> eligible;
+        std::vector<float> scores;
+        float bar = -1.0f;
+        if (inWindow) bar = r[static_cast<std::size_t>(runPos)].score * (1.0f + t.preemptMargin);
+        for (std::size_t i = 0; i < pool; ++i) {
+            if (inWindow && (static_cast<int>(i) == runPos || !(r[i].score > bar))) continue;
+            eligible.push_back(i);
+            scores.push_back(r[i].score);
+        }
         std::size_t pick = 0;
-        if (runPos >= 0 && static_cast<std::size_t>(runPos) < pool) {
-            // The running decision is still in the rapport pool: keep it, no new roll (5.1 "rolled once per NEW
-            // decision", so the follower does not dither).
-            pick = static_cast<std::size_t>(runPos);
-        } else {
-            // A new decision. Inside the commitment window (4.5) only a candidate beating the running one by
-            // the preempt margin may take over; with none, the scan holds ("suppressed").
-            const bool inWindow = runPos >= 0 && (in.now - m.firedAt) < in.commitWindowSec;
-            std::vector<std::size_t> eligible;
-            std::vector<float> scores;
-            const float bar = inWindow ? r[static_cast<std::size_t>(runPos)].score * (1.0f + t.preemptMargin) : -1.0f;
-            for (std::size_t i = 0; i < pool; ++i) {
-                if (inWindow && !(r[i].score > bar)) continue;
-                eligible.push_back(i);
-                scores.push_back(r[i].score);
-            }
-            if (eligible.empty()) {
+        if (eligible.empty()) {
+            // Only reachable inside the window: nothing clears the bar. The running decision continues if it is
+            // still the best; otherwise the scan holds ("suppressed", the #26 analogue).
+            if (runPos == 0) {
+                pick = 0;
+            } else {
                 d.verdict = Verdict::Hold;
                 d.order.push_back(stepFor(static_cast<std::size_t>(runPos)));
                 return d;
             }
+        } else {
             d.rolled = scores.size() > 1 && sh.tau > 0.0f;
             d.roll = Unit(in.seed, d.proposedEpoch);
             pick = eligible[SharpPick(scores, sh, d.roll)];
             if (!d.rolled) d.roll = -1.0f;
-            d.newDecision = true;
+            d.newDecision = !r[pick].running;
         }
 
         d.verdict = Verdict::Act;

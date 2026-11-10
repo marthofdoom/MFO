@@ -57,7 +57,10 @@ namespace MFO::Iaus::Engine {
     [[nodiscard]] bool ReadReadout(RE::FormID a_actor, Readout& a_out);
 
     // The running decision ended (combat end) / the IAUS toggle edge or dismissal (design 1.3: no rank from the
-    // old source survives into the new one).
+    // old source survives into the new one). WORKER ONLY, like every Mind access (no lock): the board toggle runs
+    // on the render thread and dismissal on main / Papyrus, so I5/I6 must MARSHAL these to the worker (a queue the
+    // scan drains), never call them from there (REVIEW-BACKLOG MFO-B639). The epoch stays monotonic across Forget
+    // and Clear (a new Mind starts above every epoch handed out so far).
     void EndDecision(RE::FormID a_actor);
     void Forget(RE::FormID a_actor);
 

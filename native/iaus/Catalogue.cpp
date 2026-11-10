@@ -13,8 +13,7 @@
 namespace MFO::Iaus {
 
     namespace {
-        constexpr float kNA = std::numeric_limits<float>::quiet_NaN();
-        float B(bool v) { return v ? 1.0f : 0.0f; }
+                float B(bool v) { return v ? 1.0f : 0.0f; }
         float Clamp(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
         // The distance at which the posture layer's ranged and melee curves cross (design: d/1200). 1200 units
@@ -97,6 +96,15 @@ namespace MFO::Iaus {
                static_cast<std::uint64_t>(k.form);
     }
 
+    bool FactsFinite(const Facts& f) {
+        const float v[] = { f.dist, f.reach, f.foeLevelRatio, f.foeHpPct, f.cost, f.magicka, f.magickaMax,
+                            f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
+                            f.selfMagicka, f.recipientHp, f.combatSec, f.emergency };
+        for (const float x : v)
+            if (!std::isfinite(x)) return false;
+        return !std::isnan(f.sinceFired);   // +inf is the documented "not recently"
+    }
+
     float EmergencyLevel(float worst, const Tuning& t) {
         const float span = t.emergencyHpHigh - t.emergencyHpLow;
         if (!(span > 0.0f)) return worst <= t.emergencyHpLow ? 1.0f : 0.0f;
@@ -123,11 +131,17 @@ namespace MFO::Iaus {
             auto& C = d.curve;
             auto at = [&](Cons c) -> Curve& { return C[static_cast<std::size_t>(c)]; };
 
-            // range: x = distance / the action's reach. doc: Step 0 above 1.15x reach. Melee doc Inv(2) "close
-            // is best"; chosen floor 0.25 because Inv(2) reaches 0 at exactly 1.0x, which would silently move the
-            // doc's 1.15x gate to 1.0x and veto a follower standing at his own weapon reach. Spells doc
-            // Logi(-10, 0.85): ~1 inside half range, 0.5 at 85%, 0.05 at the 1.15x edge.
-            at(Cons::RangeMelee) = VetoAbove(Inv(2.0f, 0.25f), 1.15f);
+            // range: x = distance / the action's reach. doc: Step 0 above 1.15x reach.
+            // Melee: CHOSEN flat 1.0 up to 1.0x reach, then down to 0.8 at the 1.15x gate (review round 1, finding
+            // 4). The doc's Inv(2) "close is best" shaded a plain attack on the current target under the 0.20 act
+            // floor at 0.9-1.15x reach (0.16), so a melee follower at its weapon edge would Idle; and inside the
+            // weapon's reach every distance hits the same, so closeness is not a utility. The 1.0-1.15 band stays a
+            // mild shade (the engine closes the last step itself).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.15f, 0.8f } } };
+                at(Cons::RangeMelee) = VetoAbove(Piece(p), 1.15f);
+            }
+            // Spells doc Logi(-10, 0.85): ~1 inside half range, 0.5 at 85%, 0.05 at the 1.15x edge.
             at(Cons::RangeSpell) = VetoAbove(Logi(-10.0f, 0.85f), 1.15f);
             // los: x = Occluded 0 / Unknown 0.5 / Visible 1 -> doc 0.2 / 0.9 / 1.0 (not 0: the cast guard holds
             // and the engine re-aims).
@@ -389,20 +403,20 @@ namespace MFO::Iaus {
             return (support && c.f.recipientIsPlayer) || c.f.foeOnPlayer || c.f.playerTarget;
         }
 
-        float Input(Cons k, const Candidate& c, const Mind& m, float bestHeal, const Tuning& t) {
+        In Input(Cons k, const Candidate& c, const Mind& m, float bestHeal, const Tuning& t) {
             const Facts& f = c.f;
             const bool melee = f.posture == PostureKind::Melee || f.posture == PostureKind::Silver;
             switch (k) {
-            case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : kNA;
-            case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : kNA;
+            case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
+            case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::Los:
                 switch (f.sight) {
-                case Sight::None:     return kNA;
+                case Sight::None:     return In::Off();
                 case Sight::Visible:  return 1.0f;
                 case Sight::Unknown:  return 0.5f;
                 case Sight::Occluded: return 0.0f;
                 }
-                return kNA;
+                return In::Off();
             case Cons::FoeThreat:     return Clamp(f.foeLevelRatio, 0.0f, 2.0f) / 2.0f;
             case Cons::FoeOnMe:       return B(f.foeOnMe);
             case Cons::FoeOnPlayer:   return B(f.foeOnPlayer);
@@ -412,16 +426,16 @@ namespace MFO::Iaus {
             case Cons::FoeFinish:     return Clamp(f.foeHpPct, 0.0f, 1.0f);
             case Cons::Affordable:
             case Cons::MpReserve:
-                if (!(f.cost > 0.0f) || !(f.magickaMax > 0.0f)) return kNA;
+                if (!(f.cost > 0.0f) || !(f.magickaMax > 0.0f)) return In::Off();
                 return (f.magicka - f.cost) / f.magickaMax;
             case Cons::CooldownHard:
-                if (!(f.hardCooldownSec > 0.0f)) return kNA;
+                if (!(f.hardCooldownSec > 0.0f)) return In::Off();
                 return f.hardCooldownLeft > 0.0f ? 0.0f : 1.0f;
             case Cons::CooldownSoft:
-                if (c.form == 0 || !(t.softCooldownSec > 0.0f)) return kNA;
+                if (c.form == 0 || !(t.softCooldownSec > 0.0f)) return In::Off();
                 return (std::min)(1.0f, (std::max)(0.0f, f.sinceFired) / t.softCooldownSec);
             case Cons::Variety: {
-                if (c.form == 0) return kNA;
+                if (c.form == 0) return In::Off();
                 int same = 0;
                 for (std::uint8_t i = 0; i < m.recentN; ++i)
                     if (m.recent[i] == c.form) ++same;
@@ -431,7 +445,7 @@ namespace MFO::Iaus {
             case Cons::TargetCond:    return f.targetCond == Tri::No ? 0.0f : 1.0f;
             case Cons::AlreadyActive: return B(!f.alreadyActive);
             case Cons::HandFree:      return B(f.handFree);
-            case Cons::SplashSafe:    return f.hasArea ? B(f.splashSafe) : kNA;
+            case Cons::SplashSafe:    return f.hasArea ? B(f.splashSafe) : In::Off();
             case Cons::Exploit:       return f.resist;
             case Cons::ClassFit:
                 // Ruling Q34. On-class: not applicable (no shading), unless the strict reading is on and this is
@@ -439,7 +453,7 @@ namespace MFO::Iaus {
                 // at all; it scores low, and an emergency lifts it (capped).
                 if (f.onClass) {
                     if (t.emergencyOnlyMastered && !f.fromMastered && f.emergency >= t.emergencyStrictAt) return 0.0f;
-                    return kNA;
+                    return In::Off();
                 }
                 if (!f.fromMastered) return 0.0f;
                 return (std::min)(t.offClassCap, t.offClassBase + t.offClassEmergencyLift * Clamp(f.emergency, 0.0f, 1.0f));
@@ -449,7 +463,7 @@ namespace MFO::Iaus {
             case Cons::FoeTaunted:    return B(!f.foeTaunted);
             case Cons::TauntSelfHp:   return f.selfHp;
             case Cons::Unseen:
-                if (f.unseen == Tri::Unknown) return kNA;
+                if (f.unseen == Tri::Unknown) return In::Off();
                 return B(f.unseen == Tri::Yes);
             case Cons::FightStart:    return (std::max)(0.0f, f.combatSec) / 6.0f;
             case Cons::RetreatHp:     return f.selfHp;
@@ -459,29 +473,29 @@ namespace MFO::Iaus {
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
                 if (c.family == Family::DrinkMagicka) return f.selfMagicka;
                 return f.selfHp;
-            case Cons::Stock:         return f.stock < 0 ? kNA : B(f.stock > 0);
+            case Cons::Stock:         return f.stock < 0 ? In::Off() : In(B(f.stock > 0));
             case Cons::NoHealDrink:   return bestHeal > t.noHealDrink ? 0.0f : 1.0f;
             case Cons::PostureRanged:
-                return (f.posture == PostureKind::Bow || f.posture == PostureKind::Staff) ? f.dist / kPostureDist : kNA;
-            case Cons::PostureMelee:  return melee ? f.dist / kPostureDist : kNA;
-            case Cons::Ammo:          return f.posture == PostureKind::Bow ? B(!f.outOfAmmo) : kNA;
-            case Cons::StaffCharge:   return f.posture == PostureKind::Staff ? B(f.staffCharged) : kNA;
-            case Cons::MeleeReach:    return melee ? B(!f.foeOutOfMeleeReach) : kNA;
-            case Cons::Unholy:        return f.posture == PostureKind::Silver ? B(f.foeUnholy) : kNA;
-            case Cons::MundaneVsUnholy: return f.posture == PostureKind::Melee ? B(f.foeUnholy) : kNA;
+                return (f.posture == PostureKind::Bow || f.posture == PostureKind::Staff) ? f.dist / kPostureDist : In::Off();
+            case Cons::PostureMelee:  return melee ? f.dist / kPostureDist : In::Off();
+            case Cons::Ammo:          return f.posture == PostureKind::Bow ? B(!f.outOfAmmo) : In::Off();
+            case Cons::StaffCharge:   return f.posture == PostureKind::Staff ? B(f.staffCharged) : In::Off();
+            case Cons::MeleeReach:    return melee ? B(!f.foeOutOfMeleeReach) : In::Off();
+            case Cons::Unholy:        return f.posture == PostureKind::Silver ? B(f.foeUnholy) : In::Off();
+            case Cons::MundaneVsUnholy: return f.posture == PostureKind::Melee ? B(f.foeUnholy) : In::Off();
             case Cons::ClassWeapon:   return B(f.classAllowsWeapon);
-            case Cons::AreaValue:     return f.hasArea ? (std::max)(0.0f, f.foesInArea) / 3.0f : kNA;
+            case Cons::AreaValue:     return f.hasArea ? (std::max)(0.0f, f.foesInArea) / 3.0f : In::Off();
             case Cons::FoeControlled: return B(!f.foeControlled);
             case Cons::FoeCountControl: return B(f.foeCount >= 2);
             case Cons::HealNeed:      return f.recipientHp;
             case Cons::HealReach:     return f.inHealReach == Tri::No ? 0.0f : 1.0f;
             case Cons::BuffEarly:     return (std::max)(0.0f, f.combatSec) / 20.0f;
-            case Cons::BuffMelee:     return f.meleeBuff ? B(f.recipientInMelee) : kNA;
+            case Cons::BuffMelee:     return f.meleeBuff ? B(f.recipientInMelee) : In::Off();
             case Cons::SummonLive:    return B(!f.liveSummon);
             case Cons::SummonFoes:    return static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f;
             case Cons::WardCaster:    return B(f.casterOnMe);
             case Cons::WardHp:        return f.selfHp;
-            case Cons::ScrollStock:   return f.stock < 0 ? kNA : static_cast<float>(f.stock) / 5.0f;
+            case Cons::ScrollStock:   return f.stock < 0 ? In::Off() : In(static_cast<float>(f.stock) / 5.0f);
             case Cons::ScrollMpLow:   return f.selfMagicka;
             case Cons::FoeEngaged:
                 // One foe has ONE combat target, so on_player / on_me / on_ally are exclusive: coded 1 / 2/3 / 1/3,
@@ -495,7 +509,7 @@ namespace MFO::Iaus {
             case Cons::BoostOutnumbered: return B(f.foeCount > f.partyCount);
             case Cons::kCount:        break;
             }
-            return kNA;
+            return In::Off();
         }
 
     }

@@ -293,6 +293,11 @@ namespace MFO::Iaus {
     // Cooldowns id (Engine): (family, posture, form), NOT the target -- a spell cools down whoever it hit.
     [[nodiscard]] std::uint64_t CooldownId(const Key& a_k);
 
+    // Every float fact is finite (sinceFired may be +inf, "not recently"). A candidate that fails is VETOED by the
+    // scorer and counted in Decision::badFacts: a NaN would otherwise read as a passing or dropped term (review
+    // round 1, finding 2) and a broken reader would look like a working one.
+    [[nodiscard]] bool FactsFinite(const Facts& a_f);
+
     // 0 at or above emergencyHpHigh of the worst party HP pct (self, player, allies), 1 at or below emergencyHpLow.
     [[nodiscard]] float EmergencyLevel(float a_worstPartyHpPct, const Tuning& a_t = DefaultTuning());
 
@@ -311,6 +316,8 @@ namespace MFO::Iaus {
         Key           posture{};
         bool          hasLogged = false;
         Key           logged{};
+        std::uint8_t  loggedVerdict = 0;      // the logged line's verdict and fired flag are part of the dedupe
+        bool          loggedFired = false;
         double        loggedAt = -1.0e300;
         void Clear() { *this = Mind{}; }
     };
@@ -365,12 +372,15 @@ namespace MFO::Iaus {
         std::size_t   vetoed = 0;
         std::size_t   pruned = 0;        // P5 early-out
         bool          overCap = false;   // more than maxCandidates offered (only the first maxCandidates scored)
-        float         bestHeal = 0.0f;
+        std::size_t   badFacts = 0;      // candidates VETOED because a fact was NaN / inf (a reader bug: never masked)
+        int           firstBadFact = -1; // the first such candidate's index, for the adapter's WARN
+        float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score (Retreat and the health drink read it)
         std::uint8_t  rapportRank = 1;
     };
 
     // Score one candidate fully (explain path, harness). a_terms (optional) receives every consideration.
-    // Returns the score before momentum, 0 when vetoed (a_vetoBy set when non-null).
+    // Returns the score before momentum, 0 when vetoed (a_vetoBy set when non-null; Cons::kCount = a zero weight
+    // or a NaN / inf fact, see FactsFinite).
     [[nodiscard]] float ScoreOne(const Candidate& a_c, const Mind& a_m, const Profile& a_p, const Tuning& a_t,
                                  std::uint8_t a_rapportRank, float a_bestHeal, std::vector<Term>* a_terms,
                                  Cons* a_vetoBy = nullptr, float* a_focus = nullptr);
@@ -411,7 +421,8 @@ namespace MFO::Iaus {
                                         const Tuning& a_t, std::uint8_t a_rapportRank, float a_bestHeal);
     [[nodiscard]] std::string Label(const Candidate& a_c);   // "cast_offense Firebolt(0001C789) -> Draugr(0003B547)"
     // On change of the picked key, plus every logRepeatSec while it runs. Writes the pacing into a_m.
-    [[nodiscard]] bool ShouldLog(Mind& a_m, const Key& a_pick, double a_now, const Tuning& a_t);
+    [[nodiscard]] bool ShouldLog(Mind& a_m, const Key& a_pick, Verdict a_verdict, bool a_fired, double a_now,
+                                 const Tuning& a_t);
 
     // The board's "Thinking" readout (I7 renders it). Strings are COPIED so it can cross threads.
     struct Readout {
