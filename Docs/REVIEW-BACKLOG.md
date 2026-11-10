@@ -2689,3 +2689,8 @@ Coordinator's paraphrase (not verbatim):
 - SEV-5: ProgProbe.cpp:409/:471 (dev bProgProbe, default OFF) still call ApplyPerksFromBase and duplicate when armed; never read a probe run as evidence.
 - SEV-5: the post-change event 0x391760 has no in-binary subscriber; a raw-address plugin listener would no longer see MFO's changes.
 - Unverified by the reviewer: the 1.7.104 addresses (author's only).
+
+### MFO-B625 (SEV-5, OPEN, Scheduler.cpp ServiceRetreat flee hold, against fix/retreat-hold-until-flee-ends, Opus review) -- review leftovers
+Coordinator's paraphrase (not verbatim):
+- SEV-5: kFleeNotCombat (10) is the CK-authorable Flee procedure and is correctly excluded from the flee hold; add a one-time info line if one is ever seen as the current package during a retreat.
+- SEV-5: the flee hold suppresses the party-OOC table and delays the retreat cooldown for up to 20 s (kRetreatFleeHoldSecs) while the engine Flee wins anyway. By design (marth Q20), noted here.

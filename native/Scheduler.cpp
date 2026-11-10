@@ -541,6 +541,7 @@ namespace MFO::Scheduler {
                     // is not instant.
                     spdlog::info("[retreat] {:08X}: hold released outside the driver -- cooldown", a_id);
                     note.phase = RetreatPhase::None;
+                    note.fleeHoldAt = -1.0;
                     StartRetreatCooldown(note, now);
                 }
                 return false;
@@ -679,11 +680,11 @@ namespace MFO::Scheduler {
                     return true;
                 }
                 const float hp = Vocab::HealthPct(a_f);
+                // Worker read of his current package (the same read as the `took` line above).
+                const auto* curPkg = a_f->GetCurrentPackage();
+                const bool fleeCurrent = curPkg && curPkg->packData.packType.get() ==
+                                                       RE::PACKAGE_PROCEDURE_TYPE::kFlee;
                 if (hp >= Vocab::kHealFull) {
-                    // Worker read of his current package (the same read as the `took` line above).
-                    const auto* curPkg = a_f->GetCurrentPackage();
-                    const bool fleeCurrent = curPkg && curPkg->packData.packType.get() ==
-                                                           RE::PACKAGE_PROCEDURE_TYPE::kFlee;
                     if (fleeCurrent) {
                         if (note.fleeHoldAt < 0.0) {
                             note.fleeHoldAt = g_serviceClock;
@@ -711,6 +712,32 @@ namespace MFO::Scheduler {
                                  "engaged foes on last probe={})", a_id, stayed, a_dPlayer, foes.lastCount);
                     finish("stay over: healed");
                 } else if (stayed >= kRetreatStaySecs) {
+                    // The time release is gated on the engine Flee too (an HP dip mid-hold must not
+                    // release him with the Flee still current); same bound from the original fleeHoldAt.
+                    if (fleeCurrent) {
+                        if (note.fleeHoldAt < 0.0) {
+                            note.fleeHoldAt = g_serviceClock;
+                            spdlog::info("[retreat] {:08X}: stay time reached after {:.1f}s (health {:.0f}%) but the "
+                                         "engine's Flee package is still current (pkg={:08X}) -- holding until it "
+                                         "ends (bound {:.0f}s)", a_id, stayed, hp * 100.0f, curPkg->GetFormID(),
+                                         kRetreatFleeHoldSecs);
+                            return true;
+                        }
+                        const double held = g_serviceClock - note.fleeHoldAt;
+                        if (held < kRetreatFleeHoldSecs) return true;
+                        spdlog::warn("[retreat] {:08X}: engine Flee package STILL current after {:.1f}s of flee "
+                                     "hold (bound {:.0f}s) -- releasing anyway (report it)", a_id, held,
+                                     kRetreatFleeHoldSecs);
+                        finish("stay over: time, flee hold bound");
+                        return true;
+                    }
+                    if (note.fleeHoldAt >= 0.0) {
+                        spdlog::info("[retreat] {:08X}: engine Flee ended after {:.1f}s of flee hold -- stay time "
+                                     "over (health {:.0f}%), released (dPlayer={:.0f})", a_id,
+                                     g_serviceClock - note.fleeHoldAt, hp * 100.0f, a_dPlayer);
+                        finish("stay over: time, flee ended");
+                        return true;
+                    }
                     spdlog::info("[retreat] {:08X}: stay over after {:.1f}s (unpaused) -- health {:.0f}% "
                                  "(dPlayer={:.0f}, engaged foes on last probe={})", a_id, stayed, hp * 100.0f,
                                  a_dPlayer, foes.lastCount);
@@ -1548,6 +1575,7 @@ namespace MFO::Scheduler {
                     if (Packages::RetreatFill(f)) {
                         Actuation::ReleaseHealClaimForRetreat(f);
                         note.phase           = RetreatPhase::Travel;
+                        note.fleeHoldAt      = -1.0;
                         note.took            = false;
                         note.outOfCombatSeen = false;
                         note.reentries       = 0;
