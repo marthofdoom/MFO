@@ -5530,7 +5530,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     (base TESNPC list + `addedPerks` + `perks`; `standingStonePerks` excluded) that are in no AVIF perk tree
     (tree set built lazily on the first poll), classifies each (`copy` / `not-copied:no-follower-use` /
     `player-only` / `script-part`) off the constexpr EP class table (Docs/ENGINE_NOTES.md 0.54,
-    `tools/entrypoint_census/`), and prints `[inherit-census]` lines once per load generation (`g_pollGen`) and
+    `tools/entrypoint_census/`), and prints `[inherit-census]` lines once per load generation (`g_pollGen`; each line also carries RULE-vs-BONUS evidence: source list, name/desc, entry count, favour/against direction, skill/global/pin conditions) and
     once per change of an FNV signature of the three lists. INI `bInheritPerkCensus` (default 1).
     `ConditionPlayerGated`, `ReadOwnerFacts`, `SameConditions` (+ `OwnerCtx`) moved out of Progression.cpp's
     anonymous namespace into `MFO::Progression` (declared in `ProgAllocator_internal.h`; bodies unchanged).

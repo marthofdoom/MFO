@@ -40,6 +40,7 @@
 #include "Followers.h"
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace MFO::ProgAllocator {
@@ -252,6 +253,45 @@ namespace MFO::ProgAllocator {
             return true;
         }
 
+        // ── EVIDENCE for telling a RULE perk from a BONUS (marth 2026-11-10); logged, never decided on ──
+        // Polarity of an entry point from the OWNER's side: +1 = a higher value helps the owner,
+        // -1 = a lower value helps the owner, 0 = not computable (target-dependent, depends on the
+        // activity, or unknown). A HEURISTIC HINT for reading the census, not a verdict.
+        int Polarity(std::size_t a_ep) {
+            switch (a_ep) {
+            case 0: case 1: case 2: case 6: case 10: case 18: case 21: case 23: case 26: case 28:
+            case 29: case 30: case 34: case 35: case 39: case 40: case 56: case 59: case 60:
+            case 66: case 76: case 77: case 85:
+                return +1;
+            case 8: case 17: case 27: case 33: case 36: case 38: case 41: case 42:
+                return -1;
+            default:
+                return 0;
+            }
+        }
+
+        enum class Dir : std::uint8_t { kUnknown, kFavour, kAgainst };
+        const char* DirName(Dir d) { return d == Dir::kFavour ? "favour" : d == Dir::kAgainst ? "against" : "unknown"; }
+
+        // Only a one-value Multiply (x v) or Add (+ v) has a computable sign of change.
+        Dir EntryDir(const RE::BGSEntryPointPerkEntry& a_ep) {
+            using EF = RE::BGSEntryPointPerkEntry::EntryData::Function;
+            const auto idx = static_cast<std::size_t>(a_ep.entryData.entryPoint.get());
+            const int pol = Polarity(idx);
+            if (pol == 0 || !a_ep.functionData ||
+                a_ep.functionData->GetType() != RE::BGSEntryPointFunctionData::FunctionType::kOneValue)
+                return Dir::kUnknown;
+            const float v = static_cast<RE::BGSEntryPointFunctionDataOneValue*>(a_ep.functionData)->data;
+            float delta = 0.0f;
+            switch (a_ep.entryData.function.get()) {
+            case EF::kMultiplyValue: delta = v - 1.0f; break;
+            case EF::kAddValue:      delta = v; break;
+            default:                 return Dir::kUnknown;
+            }
+            if (delta == 0.0f) return Dir::kUnknown;
+            return ((delta > 0.0f ? +1 : -1) * pol) > 0 ? Dir::kFavour : Dir::kAgainst;
+        }
+
         // ── one candidate's analysis ────────────────────────────────────────────────────────────────
         struct Analysis {
             std::vector<RE::BGSEntryPointPerkEntry*> eps;
@@ -263,6 +303,10 @@ namespace MFO::ProgAllocator {
             bool allPartsPinned = true;  // every EP owner tab / ability effect is ConditionPlayerGated
             int  firingParts  = 0;
             Progression::PerkOwnerFacts owner;
+            bool condSkill    = false;   // a condition reads an actor value (GetActorValue / GetBaseActorValue / ...Percent)
+            bool condGlobal   = false;   // a condition reads a global (GetGlobalValue)
+            bool condAny      = false;   // at least one condition exists
+            int  favour = 0, against = 0, unknownDir = 0;   // per-entry direction tally (EP entries)
             Verdict verdict   = Verdict::kCopy;
             const char* reason = "";
         };
@@ -276,6 +320,16 @@ namespace MFO::ProgAllocator {
                     return false;
             }
             return true;
+        }
+
+        void ScanConds(const RE::TESCondition& a_cond, Analysis& a) {
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            for (auto* it = a_cond.head; it; it = it->next) {
+                a.condAny = true;
+                const auto fn = it->data.functionData.function.get();
+                if (fn == Fn::kGetActorValue || fn == Fn::kGetBaseActorValue || fn == Fn::kGetActorValuePercent) a.condSkill = true;
+                else if (fn == Fn::kGetGlobalValue) a.condGlobal = true;
+            }
         }
 
         void Analyse(RE::BGSPerk* a_perk, Analysis& a) {
@@ -294,7 +348,13 @@ namespace MFO::ProgAllocator {
                     ++a.firingParts;
                     const auto tabs = TabCount(*ep);
                     if (tabs == 0 || !Progression::ConditionPlayerGated(ep->conditions[0])) a.allPartsPinned = false;
+                    switch (EntryDir(*ep)) {
+                    case Dir::kFavour:  ++a.favour; break;
+                    case Dir::kAgainst: ++a.against; break;
+                    default:            ++a.unknownDir; break;
+                    }
                     for (std::size_t t = 0; t < tabs; ++t) {
+                        ScanConds(ep->conditions[t], a);
                         Progression::PerkOwnerFacts f;
                         Progression::ReadOwnerFacts(ep->conditions[t],
                                                     t == 0 ? Progression::OwnerCtx::kSelf : Progression::OwnerCtx::kOther, f);
@@ -312,6 +372,8 @@ namespace MFO::ProgAllocator {
                         for (auto* eff : ab->ability->effects) {
                             if (!eff) continue;
                             Progression::PerkOwnerFacts f;
+                            ScanConds(eff->conditions, a);
+                            if (eff->baseEffect) ScanConds(eff->baseEffect->conditions, a);
                             Progression::ReadOwnerFacts(eff->conditions, Progression::OwnerCtx::kSelf, f);
                             if (eff->baseEffect) {
                                 Progression::ReadOwnerFacts(eff->baseEffect->conditions, Progression::OwnerCtx::kSelf, f);
@@ -378,7 +440,7 @@ namespace MFO::ProgAllocator {
             if (a_ep.functionData && a_ep.functionData->GetType() == RE::BGSEntryPointFunctionData::FunctionType::kOneValue)
                 a_s += std::format(" val={:g}", static_cast<RE::BGSEntryPointFunctionDataOneValue*>(a_ep.functionData)->data);
             const auto tabs = TabCount(a_ep);
-            a_s += std::format(" tabs={}", tabs);
+            a_s += std::format(" dir={} tabs={}", DirName(EntryDir(a_ep)), tabs);
             if (tabs > 0 && Progression::ConditionPlayerGated(a_ep.conditions[0])) a_s += " pinned";
             a_s += "]";
         }
@@ -404,10 +466,15 @@ namespace MFO::ProgAllocator {
 
             std::vector<RE::BGSPerk*>      held;     // deduped, in discovery order
             std::unordered_set<RE::FormID> seen;
+            std::unordered_map<RE::FormID, std::uint8_t> srcMask;   // bit0 base, bit1 addedPerks, bit2 perks
+            std::unordered_set<RE::FormID> stone;                   // standingStonePerks (excluded as a source, shown as evidence)
+            for (auto* sp : a_player->GetPlayerRuntimeData().standingStonePerks)
+                if (sp) stone.insert(sp->GetFormID());
             std::size_t nBase = 0, nAdded = 0, nRuntime = 0, unconfirmed = 0, inTree = 0;
             ForEachPlayerPerk(a_player, [&](RE::BGSPerk* p, std::int8_t, Src s) {
                 (s == Src::kBase ? nBase : s == Src::kAdded ? nAdded : nRuntime)++;
                 if (g_treePerks.count(p->GetFormID())) { ++inTree; return; }
+                srcMask[p->GetFormID()] |= static_cast<std::uint8_t>(1u << static_cast<unsigned>(s));
                 if (!seen.insert(p->GetFormID()).second) return;
                 held.push_back(p);
             });
@@ -432,12 +499,29 @@ namespace MFO::ProgAllocator {
                 if (lines >= kMaxCensusLines) continue;
                 ++lines;
                 const char* edid = p->GetFormEditorID();
+                const std::uint8_t sm = srcMask[p->GetFormID()];
+                std::string src;
+                if (sm & 1) src += "base,";
+                if (sm & 2) src += "addedPerks,";
+                if (sm & 4) src += "perks,";
+                if (stone.count(p->GetFormID())) src += "standingStone,";
+                if (!src.empty()) src.pop_back();
+                const char* fullName = p->GetName();
+                RE::BSString descBuf;
+                p->TESDescription::GetDescription(descBuf, p);
+                const bool hasDesc = descBuf.c_str() && *descBuf.c_str();
                 std::string eps;
                 for (auto* ep : a.eps) AppendEp(eps, *ep);
-                spdlog::info("[inherit-census] {:08X} edid='{}' name='{}' hidden={} playable={} verdict={} reason='{}' "
-                             "ep={} ability={} quest={} playerRefRunOn={} playerRefParam={} selfPin={} dupOnFollowers={}/{}{}",
+                spdlog::info("[inherit-census] {:08X} edid='{}' name='{}' hidden={} playable={} hasName={} hasDesc={} src={} "
+                             "entries={} verdict={} reason='{}' ep={} ability={} quest={} "
+                             "dirFavour={} dirAgainst={} dirUnknown={} condSkill={} condGlobal={} condPlayerPin={} condAny={} "
+                             "playerRefRunOn={} playerRefParam={} selfPin={} dupOnFollowers={}/{}{}",
                              p->GetFormID(), edid ? edid : "", NameOf(p), p->data.hidden ? 1 : 0, p->data.playable ? 1 : 0,
+                             (fullName && *fullName) ? 1 : 0, hasDesc ? 1 : 0, src,
+                             a.eps.size() + static_cast<std::size_t>(a.abilities + a.quests),
                              VerdictName(a.verdict), a.reason, a.eps.size(), a.abilities, a.quests,
+                             a.favour, a.against, a.unknownDir, a.condSkill ? 1 : 0, a.condGlobal ? 1 : 0,
+                             (a.firingParts > 0 && a.allPartsPinned) ? 1 : 0, a.condAny ? 1 : 0,
                              a.owner.playerRefRunOn ? 1 : 0, a.owner.playerRefParam ? 1 : 0, a.owner.selfPin ? 1 : 0,
                              dups, bases.size(), eps);
             }
