@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include <unordered_set>   // g_otherCast -- NOT in the PCH (the v1.0.8/9 CI lesson)
+#include <mutex>           // ClassifySpell control-log dedup
 #include <thread>          // g_mainThread: std::this_thread::get_id (FF world-walk gate)
 #include "CasterConsent.h"
 #include "Config.h"
@@ -32,6 +33,15 @@ namespace MFO::CasterConsent {
     // PUBLIC since the concentration hold: Actuation picks the bounded-stream
     // policy (hostile 1-4s / heal until-topped / utility capped) off the same
     // taxonomy the slider's exemptions use, so the two can never disagree.
+    //
+    // ENEMY-CONTROL ARCHETYPES ARE HOSTILE (marth 2026-11-09, Q26, ClickUp 1dfcuabcr0d: "Let AUTO treat control
+    // spells as hostile"). An effect whose archetype is Calm / Frenzy / Demoralize (fear) / Paralysis / TurnUndead
+    // is an Offense even when the record leaves kHostile / detrimental unset (a modded Pacify, a Calm that the
+    // author did not flag): its only meaning is "do this to a foe". Read from the record's archetype, no spell
+    // list. Rally is NOT in the set (it boosts allies). Script stays a Buff (nature undeclared, SpellNatureUndeclared).
+    // One classifier for everyone (board TARGET picker, AUTO, IAUS, the cast-control slider): so a control spell now
+    // also counts as "harms a foe" for the slider and the hand arbitration, which is what it is. The target
+    // conditions of the spell (undead only, level caps) are the will-work check's job, not this classifier's.
     SpellKind ClassifySpell(RE::MagicItem* a_mi) {
         if (!a_mi) return SpellKind::Offense;
         bool restoresHealth = false;
@@ -40,6 +50,30 @@ namespace MFO::CasterConsent {
             if (!base) continue;
             if (base->IsHostile() || base->IsDetrimental())
                 return SpellKind::Offense;   // harms a target -> offense, whatever else it does
+            using Arch = RE::EffectArchetypes::ArchetypeID;
+            switch (base->GetArchetype()) {
+            case Arch::kCalm:
+            case Arch::kFrenzy:
+            case Arch::kDemoralize:
+            case Arch::kParalysis:
+            case Arch::kTurnUndead: {
+                // The record left it unflagged; the archetype says foe. Once per spell, loud (never silent).
+                static std::mutex                   s_ctlMx;   // leaf lock; callers span the combat, job and main threads
+                static std::unordered_set<RE::FormID> s_ctlLogged;
+                bool first = false;
+                {
+                    std::scoped_lock lk(s_ctlMx);
+                    first = s_ctlLogged.insert(a_mi->GetFormID()).second;
+                }
+                if (first)
+                    spdlog::info("[classify] {} ({:08X}): effect archetype {} is enemy-control but the record does not flag it "
+                                 "hostile -- classified Offense (AUTO targets foes)",
+                                 a_mi->GetName() ? a_mi->GetName() : "?", a_mi->GetFormID(),
+                                 static_cast<int>(base->GetArchetype()));
+                return SpellKind::Offense;
+            }
+            default: break;
+            }
             if (base->data.primaryAV == RE::ActorValue::kHealth)
                 restoresHealth = true;       // beneficial health effect -> a heal
         }

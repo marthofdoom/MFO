@@ -49,12 +49,12 @@ namespace MFO::Classes {
                                   std::uint8_t a_s = kSelf, float a_cd = 0.0f) {
             return { a_c, a_a, a_p, a_s, a_r, a_cd, nullptr, false };
         }
-        // An enemy-control cast row (Paralyze / Fear / TurnUndead). DESIGN-OPEN: enemy-control target (marth ruled AUTO will treat enemy-control spells as hostile; that base change is task 1dfcuabcr0d);
-        // C12 must not apply until 1dfcuabcr0d lands. Since c62d4cf AUTO refuses a nature-undeclared spell and Subject::Enemy ignores the
-        // condition's foe, so neither subject expresses "paralyze THE stronger foe". Conservative default AUTO; pendingRuling
-        // marks the row so C12 skips it. No new subject is invented.
+        // An enemy-control cast row (Paralyze / Fear / TurnUndead). marth 2026-11-09 (Q26, task 1dfcuabcr0d): AUTO treats
+        // enemy-control spells as hostile (ClassifySpell), so a row whose condition picks a foe casts the control spell
+        // on that foe, and a foe that fails the spell's own target conditions falls through (G10 WillWork). These rows
+        // therefore no longer carry pendingRuling; only NotApplied (the T1 rows) does. Subject AUTO, never Subject::Enemy.
         constexpr DefaultGambit Ctl(const char* a_c, const char* a_a, float a_p, SpellRole a_r) {
-            return { a_c, a_a, a_p, kSelf, a_r, 0.0f, nullptr, true };
+            return { a_c, a_a, a_p, kSelf, a_r, 0.0f, nullptr, false };
         }
         // A row whose cond or act does not exist yet (never applied). a_card = the build-plan card that adds it.
         constexpr DefaultGambit Todo(const char* a_c, const char* a_a, const char* a_card, float a_p = 0.0f,
