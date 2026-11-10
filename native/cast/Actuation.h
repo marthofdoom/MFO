@@ -751,7 +751,10 @@ namespace MFO::Actuation {
     // Pure FORM DATA: no engine call, safe on the worker, the main thread and the combat thread.
     enum class SpellShape : std::uint8_t {
         Plain, Constant, Summon, Reanimate, Script, BoundWeapon, Cloak, Ward, Light,
-        Rune, Wall, TLBurst, AimedAoE, Touch, SelfAoE
+        Rune, Wall, TLBurst, AimedAoE, Touch, SelfAoE,
+        // LABELS ADDED BY THE SHAPE CENSUS (C0, log-only): no road reads either. ScriptRider = a Script effect on a
+        // spell whose costliest effect is NOT Script (Script itself now means the costliest effect is Script).
+        ScriptRider, SelfHazard
     };
     // The engine caster type the decoded table predicts (APMF Docs/STATUS.md:135-161). A
     // PREDICTION mirrored from documentation, never read from the engine: NoRow = the table has
@@ -781,6 +784,9 @@ namespace MFO::Actuation {
         bool         hasBarrier   = false;   // ...and it is a barrier type
         bool         hasExplosion = false;
         bool         snapToNavMesh = false;  // any effect kSnapToNavMesh
+        bool         impactHazard = false;   // any effect: impactDataSet (+0x90) has an entry whose BGSImpactData::hazard (+0x80) is set (the Wall label)
+        bool         spawnHazard  = false;   // any effect archetype kSpawnHazard (40)
+        bool         hazardHostile = false;  // ...and the spawned hazard's spell has a hostile effect (read off associatedForm)
         std::uint32_t effectCount = 0;
         const char*   kindName    = "?";    // CasterConsent::ClassifySpell: Offense / Buff / Heal (static literal)
     };
@@ -788,6 +794,9 @@ namespace MFO::Actuation {
     // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
     // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.
     SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0 = false);
+    // C0 spell shape census: classifies every castable SPEL once and logs `[shape-census]` bucket counts. LOG-ONLY.
+    // Call ONCE at kDataLoaded (SKSE main thread); gated by Config::g_spellShapeCensus. Pure form reads.
+    void RunSpellShapeCensus();
     // The board's spell picker (cast/SpellSupport.cpp): true when MFO can cast a_spell only by the
     // UNANIMATED direct fallback decided from the spell RECORD alone (never the fight situation), so the
     // picker hides it. *a_reason (optional) gets a static literal. Pure form data: main-thread safe.

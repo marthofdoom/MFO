@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "Followers.h"
 #include "cast/CostParity.h"
+#include "cast/Actuation.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Board.h"
@@ -409,6 +410,7 @@ namespace {
             MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass
             MFO::ProgAllocator::Init();     // allocator economy + class lists from the addon ESL; inert if absent
             MFO::Classes::OnDataLoaded();   // class add-on ESL presence (logged once) + class table self-check; inert if absent
+            MFO::Actuation::RunSpellShapeCensus();   // C0 [shape-census], log-only, gated by bSpellShapeCensus
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::Logistics::PrimeSilverRules();         // read the live SilverPerk / silver enchantment once ([silver] lines)
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent

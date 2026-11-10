@@ -35,7 +35,11 @@
 //   MagicSystem::Delivery / CastingType (MagicSystem.h:30-47).
 #include "Actuation.h"
 #include "CasterConsent.h"
+#include "Config.h"
 
+#include <algorithm>
+#include <map>
+#include <tuple>
 #include <unordered_set>
 
 namespace MFO::Actuation {
@@ -202,12 +206,36 @@ namespace MFO::Actuation {
             }
         }
 
+        // Wall (C0): the effect's impactDataSet (EffectSetting +0x90) holds an impact-data entry whose
+        // BGSImpactData::hazard (+0x80) is set. Fork: EffectSetting.h:97, BGSImpactDataSet.h:36 (impactMap, +0x28),
+        // BGSImpactData.h:70. Pure reads of loaded records.
+        bool HasImpactHazard(const RE::EffectSetting* b) {
+            auto* set = b->data.impactDataSet;
+            if (!set) return false;
+            for (const auto& kv : set->impactMap)
+                if (kv.second && kv.second->hazard) return true;
+            return false;
+        }
+
+        // SelfHazard (C0): the hazard a kSpawnHazard effect spawns (EffectSetting::associatedForm, +0x08) has a spell
+        // (BGSHazardData::spell, BGSHazard.h data +0x18) with a hostile effect.
+        bool HazardSpellHostile(const RE::EffectSetting* b) {
+            auto* f = b->data.associatedForm;
+            auto* hz = f ? f->As<RE::BGSHazard>() : nullptr;
+            auto* hs = hz ? hz->data.spell : nullptr;
+            if (!hs) return false;
+            for (auto* e : hs->effects)
+                if (e && e->baseEffect && e->baseEffect->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHostile))
+                    return true;
+            return false;
+        }
+
         SpellArchetype Compute(RE::SpellItem* sp, bool a_seat0) {
             SpellArchetype o;
             o.delivery   = sp->data.delivery;
             o.casting    = sp->data.castingType;
             o.noDualMods = sp->data.flags.all(RE::SpellItem::SpellFlag::kNoDualCastMods);
-            o.chargeTime = sp->data.chargeTime;
+            o.chargeTime = sp->GetChargeTime();   // vfunc 64 (MagicItem.h:97, SpellItem.h:80); log-only field
             o.range      = sp->data.range;
             o.twoHanded  = sp->IsTwoHanded();
             switch (CasterConsent::ClassifySpell(sp)) {
@@ -225,6 +253,7 @@ namespace MFO::Actuation {
                  anyCloak = false, anyLight = false, anyWard = false;
             // Per-effect rows, the distinct caster rows, the costliest effect (Effect::cost).
             std::vector<EngineRow> rows;
+            std::vector<Arch>      archs;   // parallel to rows: each counted effect's archetype
             float bestCost = -1.0f;
             std::size_t bestIdx = 0;
             std::string unknownWhy;
@@ -253,6 +282,12 @@ namespace MFO::Actuation {
                 if (r == EngineRow::Unknown && unknownWhy.empty()) unknownWhy = why;
                 if (eff->cost > bestCost) { bestCost = eff->cost; bestIdx = rows.size(); }
                 rows.push_back(r);
+                archs.push_back(a);
+                if (HasImpactHazard(b)) o.impactHazard = true;
+                if (a == Arch::kSpawnHazard) {
+                    o.spawnHazard = true;
+                    if (HazardSpellHostile(b)) o.hazardHostile = true;
+                }
             }
 
             // Combine. STATUS.md:139-141: the spell takes the row of its highest-scoring effect that
@@ -292,15 +327,17 @@ namespace MFO::Actuation {
             if (o.casting == RE::MagicSystem::CastingType::kConstantEffect) o.shape = SpellShape::Constant;
             else if (anySummon)    o.shape = SpellShape::Summon;
             else if (anyReanimate) o.shape = SpellShape::Reanimate;
-            else if (anyScript)    o.shape = SpellShape::Script;
+            else if (anyScript)    o.shape = (!archs.empty() && archs[bestIdx] == Arch::kScript) ? SpellShape::Script
+                                                                                                : SpellShape::ScriptRider;
             else if (anyBound)     o.shape = SpellShape::BoundWeapon;
             else if (anyCloak)     o.shape = SpellShape::Cloak;
             else if (anyWard)      o.shape = SpellShape::Ward;
             else if (anyLight)     o.shape = SpellShape::Light;
+            else if (o.spawnHazard && self)   o.shape = SpellShape::SelfHazard;   // caster-centred hazard (C0 label)
+            else if (o.impactHazard)          o.shape = SpellShape::Wall;         // C0: impact-data hazard, not "TL + concentration"
             else if (o.delivery == D::kTargetLocation) {
-                if (o.casting == RE::MagicSystem::CastingType::kConcentration) o.shape = SpellShape::Wall;
-                else if (o.hasProjectile)                                       o.shape = SpellShape::Rune;
-                else                                                            o.shape = SpellShape::TLBurst;
+                if (o.hasProjectile) o.shape = SpellShape::Rune;
+                else                 o.shape = SpellShape::TLBurst;
             }
             else if (o.delivery == D::kAimed && (o.hasExplosion || o.area > 0)) o.shape = SpellShape::AimedAoE;
             else if (o.delivery == D::kTouch) o.shape = SpellShape::Touch;
@@ -361,6 +398,8 @@ namespace MFO::Actuation {
         case SpellShape::AimedAoE:    return "AimedAoE";
         case SpellShape::Touch:       return "Touch";
         case SpellShape::SelfAoE:     return "SelfAoE";
+        case SpellShape::ScriptRider: return "ScriptRider";
+        case SpellShape::SelfHazard:  return "SelfHazard";
         }
         return "?";
     }
@@ -433,11 +472,12 @@ namespace MFO::Actuation {
             const char* fname = a_follower->GetName() ? a_follower->GetName() : "?";
             spdlog::info("[archetype] {:08X} {} cast \"{}\" ({:08X}): road={} shape={} predicted={} delivery={} "
                          "casting={} kind={} restoration={} twoHanded={} noDualMods={} charge={:.2f}s range={:.0f} "
-                         "area={} projectile={}{} explosion={} snapNav={} effects={}",
+                         "area={} projectile={}{} explosion={} snapNav={} effects={} impactHazard={} spawnHazard={}{}",
                          fid, fname, sname, sid, RoadName(a_road), ShapeName(a.shape), RowText(a),
                          DeliveryName(a.delivery), CastingName(a.casting), a.kindName, a.restoration,
                          a.twoHanded, a.noDualMods, a.chargeTime, a.range, a.area, a.hasProjectile,
-                         a.hasBarrier ? "(barrier)" : "", a.hasExplosion, a.snapToNavMesh, a.effectCount);
+                         a.hasBarrier ? "(barrier)" : "", a.hasExplosion, a.snapToNavMesh, a.effectCount,
+                         a.impactHazard, a.spawnHazard, a.spawnHazard ? (a.hazardHostile ? "(hostile)" : "(benign)") : "");
         }
         if (IsClaimRoad(a_road)) {
             std::lock_guard lk(g_noteMx);
@@ -477,6 +517,58 @@ namespace MFO::Actuation {
         }
         std::lock_guard lk(g_cacheMx);   // renumbered dynamic forms and any edited records start clean
         g_cache.clear();
+    }
+
+    // C0 SPELL SHAPE CENSUS (ClickUp 86e3dmtr1). LOG-ONLY: classifies each castable SPEL through Compute (uncached, so
+    // it does not populate g_cache) and writes bucket counts; no road reads the result. THREADING: called once from
+    // plugin.cpp's kDataLoaded handler (SKSE main thread, records fully loaded); pure form reads, no engine call
+    // besides the vfuncs Compute already uses, no lock held. Rate limit: one line per (shape, row, two-handed) bucket,
+    // largest first, capped at kMaxLines, plus one totals line.
+    void RunSpellShapeCensus() {
+        if (!Config::g_spellShapeCensus.load()) return;
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh) { spdlog::warn("[shape-census] no data handler, census skipped"); return; }
+        struct Bucket { std::uint32_t n = 0; std::vector<std::string> ex; };
+        std::map<std::tuple<int, int, bool>, Bucket> buckets;
+        std::uint32_t total = 0, skipped = 0, wall = 0, selfHaz = 0, scriptRider = 0, tlBurst = 0;
+        for (auto* sp : dh->GetFormArray<RE::SpellItem>()) {
+            if (!sp) continue;
+            // castable spells only: not powers / abilities / diseases / constant effects
+            if (sp->data.spellType != RE::MagicSystem::SpellType::kSpell ||
+                sp->data.castingType == RE::MagicSystem::CastingType::kConstantEffect || sp->effects.empty()) {
+                ++skipped;
+                continue;
+            }
+            const auto a = Compute(sp, /*a_seat0=*/false);
+            ++total;
+            wall        += a.shape == SpellShape::Wall;
+            selfHaz     += a.shape == SpellShape::SelfHazard;
+            scriptRider += a.shape == SpellShape::ScriptRider;
+            tlBurst     += a.shape == SpellShape::TLBurst;
+            auto& b = buckets[{ static_cast<int>(a.shape), static_cast<int>(a.row), a.twoHanded }];
+            ++b.n;
+            if (b.ex.size() < 3)
+                b.ex.push_back(std::format("{} ({:08X}) {}/{} charge={:.2f}s{}", sp->GetName() && *sp->GetName() ? sp->GetName() : "?",
+                                           sp->GetFormID(), DeliveryName(a.delivery), CastingName(a.casting), a.chargeTime,
+                                           a.spawnHazard ? (a.hazardHostile ? " hazard=hostile" : " hazard=benign") : ""));
+        }
+        std::vector<std::pair<std::tuple<int, int, bool>, const Bucket*>> order;
+        for (const auto& [k, v] : buckets) order.emplace_back(k, &v);
+        std::stable_sort(order.begin(), order.end(), [](const auto& l, const auto& r) { return l.second->n > r.second->n; });
+        constexpr std::size_t kMaxLines = 80;
+        std::size_t shown = 0;
+        for (const auto& [k, b] : order) {
+            if (shown++ >= kMaxLines) break;
+            std::string ex;
+            for (const auto& e : b->ex) { if (!ex.empty()) ex += "; "; ex += e; }
+            spdlog::info("[shape-census] shape={} predicted={} twoHanded={} count={} examples: {}",
+                         ShapeName(static_cast<SpellShape>(std::get<0>(k))),
+                         EngineRowName(static_cast<EngineRow>(std::get<1>(k))), std::get<2>(k), b->n, ex);
+        }
+        spdlog::info("[shape-census] total castable={} skipped(non-spell/constant/no effects)={} buckets={}{} wall={} "
+                     "selfHazard={} scriptRider={} tlBurst={} (prediction mirrored from Harbinger docs, log only)",
+                     total, skipped, order.size(), order.size() > kMaxLines ? " (line cap hit)" : "",
+                     wall, selfHaz, scriptRider, tlBurst);
     }
 
 }

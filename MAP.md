@@ -794,6 +794,15 @@ per concern:
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
+  **SHAPE CENSUS (C0, LOG-ONLY):** `RunSpellShapeCensus()` (Archetype.cpp end) is called ONCE from `plugin.cpp` kDataLoaded (SKSE main
+  thread, before `ComputeWeakPotionFloor`), gated by INI `[Debug] bSpellShapeCensus` (default 1, `Config::g_spellShapeCensus`); it runs
+  `Compute` (uncached) over every castable SPEL and logs `[shape-census] shape= predicted= twoHanded= count= examples:` per bucket
+  (max 80 lines) plus a totals line. Shape labels changed (LOG TEXT ONLY, verified: the only shape readers are Summon / Reanimate /
+  Light / BoundWeapon at `BuffRoad.cpp:225,273,334` and `selftest/Tests.cpp:240`, whose precedence in `Compute` is unchanged):
+  Wall = any effect whose `impactDataSet` (+0x90) holds an impact with `hazard` (+0x80) set; `Script` = costliest effect is Script,
+  new `ScriptRider` = a Script effect that is not the costliest; new `SelfHazard` = kSpawnHazard effect on a Self spell (hazard spell
+  hostility printed). `chargeTime` now from `GetChargeTime()`; `[archetype]` gains `impactHazard= spawnHazard=`. **What breaks:** a
+  road that starts reading `SpellShape::Wall` / `ScriptRider` / `SelfHazard` is a behaviour change, not a log fix.
   **ROW ALIAS (fix/spell-row-alias-shape-census, C1):** `LookupAv` also matches every ValueModifier `kRows` entry for archetypes
   4 / 5 / 32 / 34 (`IsVmAlias`; Harbinger `CastClassify.cpp:91-98`), so Oakflesh / Stoneflesh / Dragonhide / wards (archetype 34)
   predict Armor / Ward / Restore instead of NoRow. NOTE the predicted row IS read: `ChooseBuffRoad` (`BuffRoad.cpp:359` switch,
