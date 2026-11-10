@@ -679,6 +679,11 @@ namespace MFO::SelfTest {
     }
 
     void ClearAll() {
+        // The world is being replaced (load / revert): no engine call, no table to edit (g_followers is reset too). The one thing that
+        // OUTLIVES a load is a probe flag switched on in memory: put it back before the runs are forgotten.
+        for (auto& [fid, r] : g_runs) {
+            if (r.setup.probes & kProbeAim) Config::g_aimProbe.store(r.setup.probePrev[0]);
+        }
         g_runs.clear();
         g_seen.clear();
         g_pick.clear();
