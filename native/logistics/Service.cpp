@@ -11,6 +11,7 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
+#include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
@@ -1950,7 +1951,7 @@ namespace MFO::Logistics {
                         Actuation::NoteArchetypeRoad(f, s, Actuation::ArchRoad::Direct);   // [archetype] probe (passive)
                         Actuation::CastBreadcrumb("ooc-cast", f, s, tgtID);   // [cast-call], flushed
                         caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
-                        const float c     = s->CalculateMagickaCost(f);
+                        const float c     = CostParity::Cost(f, s);   // parity: the player-curve cost (CostParity.h)
                         const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
                         if (mavo && spend > 0.0f)
                             mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
@@ -2024,7 +2025,7 @@ namespace MFO::Logistics {
                                 Actuation::NoteArchetypeRoad(f, s, Actuation::ArchRoad::Direct);   // [archetype] probe (passive)
                                 Actuation::CastBreadcrumb("ooc-hostile", f, s, tgtID);   // [cast-call], flushed
                                 caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
-                                const float c     = s->CalculateMagickaCost(f);
+                                const float c     = CostParity::Cost(f, s);   // parity: the player-curve cost (CostParity.h)
                                 const float spend = mavo ? std::min(c, pool) : 0.0f;
                                 if (mavo && spend > 0.0f)
                                     mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,

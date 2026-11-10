@@ -4,6 +4,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include <unordered_set>
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
@@ -186,7 +187,7 @@ namespace MFO::Actuation {
                     if (heal) HealObsNote(caster, target, sp, sp, "AUTO", hpBefore, attach);
                     return;
                 }
-                const float cost  = sp->CalculateMagickaCost(caster);
+                const float cost  = CostParity::Cost(caster, sp);   // parity: the player-curve cost (CostParity.h)
                 // M2: a concentration fan bills a_chargeSec x the per-second cost (1 for
                 // everything else). #6: clamp to the current pool so a deduct never drives
                 // magicka negative (AUTO validates N casts against ONE worker snapshot).

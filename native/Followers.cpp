@@ -1,6 +1,6 @@
 #include "PCH.h"
 #include "Followers.h"
-#include "CostParity.h"   // ClickUp 1dfcuabcr0c: the spell-cost marker ability follows the roster
+#include "CostParity.h"   // ClickUp 1dfcuabcr0c: animated-channel top-up tick + per-session memory
 #include "Loadout.h"
 #include "Targeting.h"
 #include "EngageOnSight.h"   // ReleaseHeldState: forget the engage-on-sight entry
@@ -269,7 +269,7 @@ namespace MFO::Followers {
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();
-        CostParity::Reset();   // the marker ability is saved in the .ess; the next sweep re-checks it per follower
+        CostParity::Reset();   // direct-bill dedupe + open animated channels are per session
         // Keep the off-worker mirror consistent with the just-emptied lists, or
         // IsTrackedFast/ActiveSnapshot would report stale membership across a
         // revert (g_active is cleared by ResetAllState alongside this call).
@@ -487,9 +487,6 @@ namespace MFO::Followers {
         // An out-of-combat substrate cast pair (slice S3, apmf/Substrate.cpp): Harbinger's TTL would end it within
         // seconds, but a dismissed / switched-off follower keeps no MFO claim. Idempotent (no pair -> no-op).
         APMFBridge::ReleaseSubstrateCast(id, "the follower's held state is released (dismissal / MFO off / load window)");
-        // The spell-cost marker ability (CostParity.h): off a follower MFO no longer manages, so he pays the engine cost
-        // again. Full releases only (dismissal, MFO OFF, a transient drop that expired); a movement-only release keeps it.
-        if (!a_movementOnly) CostParity::Sync(id, false);
         // The package (cast) alias -- a longer tail: the alias fill is
         // SERIALIZED INTO THE .ess, so a latch left behind comes back on every
         // future load of every save descended from this one. Evict to the marker.
@@ -711,13 +708,6 @@ namespace MFO::Followers {
                        std::chrono::duration<float>(std::chrono::steady_clock::now() - sit->second.at).count() >= kStateLineS) {
                 LogStateLine(a, id, "30s");
             }
-            // SPELL COST PARITY (CostParity.h): a tracked follower with MFO ON carries the marker ability, so the engine's own
-            // kModSpellCost perk step doubles his spell costs (only when the startup check found the NPC curve cheaper).
-            // Idempotent: a map hit after the first sweep. The OFF-switch and dismissal revoke in ReleaseHeldStateImpl.
-            {
-                const auto rit = g_followers.find(id);
-                CostParity::Sync(id, rit == g_followers.end() || rit->second.mfoEnabled);
-            }
         }
         const bool loading = loadingNow;
         for (const auto id : before) {
@@ -808,6 +798,7 @@ namespace MFO::Followers {
         // sinks / SaveCallback / progression poll -- they never walk g_active.
         PublishActiveMirror();
 
+        CostParity::Tick();        // animated concentration casts: bill the player-cost delta per observed second
         FollowerCatchUp::Poll();   // after a world transition, move a follower the engine left behind (INI bFollowerCatchUp)
 
         // Log the zero case too, or "found none" and "never ran" look the same.

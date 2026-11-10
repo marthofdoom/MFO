@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Diagnostics.h"
+#include "CostParity.h"
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"
@@ -335,6 +336,9 @@ namespace MFO::Diagnostics {
                             //    holder firing the commanded spell, the pop
                             //    releases him a moment later (Packages::Pump).
                             if (form && form->Is(RE::FormType::Spell)) {
+                                // COST PARITY (CostParity.h): the engine has charged its own NPC-curve cost for an AI-fired cast;
+                                // top up to the player-curve cost (skips a cast MFO's direct road billed itself).
+                                CostParity::OnObservedCast(casterID, spellID);
                                 CasterConsent::NoteCast(casterID, spellID);
                                 Packages::NotifyCast(casterID, spellID);
                             }

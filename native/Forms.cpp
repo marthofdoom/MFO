@@ -27,8 +27,6 @@ namespace MFO::Forms {
     bool Resolve() {
         g_fieldOrders = Look<RE::SpellItem>(kFieldOrdersSpell, "MFO_FieldOrdersPower");
         g_grantedKywd = Look<RE::BGSKeyword>(kGrantedKeyword, "MFO_GrantedSpell");
-        g_costParityAbility = Look<RE::SpellItem>(kCostParitySpell, "MFO_CostParityAbility");   // spell cost parity (CostParity.cpp)
-        g_costParityPerk    = Look<RE::BGSPerk>(kCostParityPerk, "MFO_CostParityPerk");
         // v1.1: the addon-manifest sentinel keyword is retired — add-ons self-
         // declare with their OWN keyword (Progression::Init, edid-suffix match).
 

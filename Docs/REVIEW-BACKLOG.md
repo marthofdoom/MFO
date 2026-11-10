@@ -2636,12 +2636,13 @@ Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbati
 - SEV-5: CastOn.cpp:593 comment, the :621 WARN and the :398/:636 reasons plus MAP.md:773-775 still say "pure-Script" for a release that now also covers NoRow.
 - SEV-5: Auto.cpp:666 "no enemies in range" also covers "every foe will-not-work".
 
-### MFO-B610 -- follower spell cost parity leftovers (ClickUp 1dfcuabcr0c, raised against ae6c6bb, Opus tier-3 review, coordinator's paraphrase)
-- **SEV-4:** the startup check compares at ONE point, skill 50. With LoreRim GMSTs a doubled follower pays MORE than the player below skill 50, up to 2x at skill 0. This follows the brief literally; saved as a question for marth.
-- **SEV-4:** summons and recordless runtime followers get x2 (`rit == end` -> want = true in the `Followers::Refresh` Sync call). Saved as a question for marth.
-- **SEV-5:** a negative Base GMST gave NaN and logged "not cheaper" when it should be an explicit error (FIXED in the follow-up commit, an error line and refusal).
-- **SEV-5:** an ex-follower who is never swept keeps an inert ability (the HasSpell gate and the absent perk entry make it harmless).
-- **SEV-5:** posted `CostParity::Apply` closures have no epoch guard.
+### MFO-B610 -- follower spell cost parity leftovers (ClickUp 1dfcuabcr0c, redesigned 2026-11-09 to charge the player-curve cost; raised against the perk design ae6c6bb, carried to the redesign)
+- **SEV-4:** the affordability GATES still use the engine cost (Auto.cpp budget, Summon.cpp gate, CastOn.cpp cost, Service.cpp). A follower whose pool is between E and P passes the gate and the deduct clamps to the pool. Decide whether the gates should read `CostParity::Cost`.
+- **SEV-4:** dual-cast is not modelled: the engine's dual-cast cost is not read, so a dual animated cast is topped up on the single-cast delta.
+- **SEV-5:** a multi-school autocalc spell uses the costliest effect's school for the whole ratio (the engine applies the curve per effect).
+- **SEV-5:** the (caster, spell) direct-bill dedupe window (3 s) could swallow a real animated cast of the same spell right after a direct one.
+- **SEV-5:** `HandleEntryPoint` and `CalculateMagickaCost` run on the worker (as the existing deducts already do), not on main.
+- **SEV-5:** a negative Base GMST gave NaN (FIXED: explicit error + refusal). Perk-design items (marker ability, epoch guard, ex-follower sweep) are gone with the perk.
 
 ### MFO-B601 (SEV-4/5, OPEN, G9 per-rule cooldown, against 9b338f1, Opus tier-3 review) -- review leftovers
 Coordinator's paraphrase of the findings (not the reviewer's verbatim text):

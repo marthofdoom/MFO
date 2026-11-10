@@ -4,6 +4,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
@@ -1802,7 +1803,7 @@ namespace MFO::Actuation {
                     const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                     CastBreadcrumb("legacy-force", f, sp, tid);   // [cast-call], flushed
                     caster->CastSpellImmediate(sp, false, t, 1.0f, false, 0.0f, f);
-                    const float c     = sp->CalculateMagickaCost(f);
+                    const float c     = CostParity::Cost(f, sp);   // parity: the player-curve cost (CostParity.h)
                     const float spend = mavo ? std::min(c, pool) : 0.0f;
                     if (mavo && spend > 0.0f)
                         mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,

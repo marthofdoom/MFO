@@ -1,32 +1,41 @@
 #pragma once
 #include "PCH.h"
 
-// FOLLOWER SPELL COST PARITY (ClickUp 1dfcuabcr0c; marth Q13 2026-11-09: "Cheap option, double it. Make sure as part of
-// startup that they are cheaper, if they are double their cost").
+// FOLLOWER SPELL COST PARITY (ClickUp 1dfcuabcr0c; marth 2026-11-09: "if we know the real cost just charge that, then follower
+// reductions").
 //
-// The engine's skill cost curve (id 26505, called from SpellItem::AdjustCost) has a PLAYER branch and an NPC branch with
-// separate GMSTs, and on some lists the NPC curve is the cheaper one. A follower therefore pays less than the player would.
-// MFO's direct casts and the engine's animated casts both charge the engine's CalculateCost, so the fix has to live in
-// the engine's own cost path, not in MFO's deduct: the kModSpellCost PERK entry point runs AFTER the curve for every
-// road. MFO_CostParityPerk (MFO.esp 0x919) multiplies it by 2.0; its entry condition is HasSpell(MFO_CostParityAbility
-// 0x918), so the x2 reaches only a caster that holds the marker ability. MFO adds the ability (Actor::AddSpell) to a
-// follower it manages and removes it when he is dismissed or switched off on the board.
+// The engine's skill cost curve (id 26505, called from SpellItem::AdjustCost and, for an autocalc spell, per effect) has a
+// PLAYER branch and an NPC branch with separate GMSTs; on some lists the NPC curve is the cheaper one, so a follower pays less
+// than the player would. ParityCost(follower, spell) is what the PLAYER'S curve would have charged, at the FOLLOWER's own
+// skill in the spell's school, then through the follower's OWN kModSpellCost perks (the engine's entry point 0x26, which runs
+// AFTER the curve):
+//     P = perk( playerFactor(skill) * base )        engine E = perk( npcFactor(skill) * base )
+// MFO never needs `base`: the entry point is probed twice to get its affine form perk(v) = a*v + b, so
+//     P = a * (x * pf / nf) + b   with   x = (E - b) / a      (x = the NPC-curved, pre-perk cost).
+// DIRECT road: the deduct sites charge Cost() = P instead of the engine cost. ANIMATED road: the engine has already charged E;
+// OnObservedCast tops up P - E (a concentration spell per second, Tick). Never below 0 magicka. Only for a follower MFO manages.
 
 namespace MFO::CostParity {
 
-    // kDataLoaded, MAIN thread, AFTER Config::Read and Forms::Resolve. Reads the six GMSTs, evaluates both curves, logs the
-    // [costparity] lines, and decides whether the doubling is active for the session.
+    // kDataLoaded, MAIN thread, after Config::Read. Reads the six cost GMSTs, logs both curves and the NPC/player ratio at
+    // skill 0/25/50/75/100.
     void StartupCheck();
 
-    // True when the startup check decided to double (INI on, forms resolved, GMSTs present, NPC curve cheaper at skill 50).
+    // True when the INI is on and the six GMSTs were read.
     bool Active();
 
-    // WORKER (the follower sweep). Declare whether this follower should carry the doubling now (want = Active() and MFO
-    // is enabled for him). Idempotent: the first call per follower per session, and every change, posts one main-thread
-    // job; repeats are a map hit. Never touches a followers list.
-    void Sync(RE::FormID a_actorID, bool a_want);
+    // What the direct-road deduct sites charge for one second (or one cast) of `a_spell` by `a_caster`: P when parity applies to
+    // this follower and spell, else exactly the engine cost. Records that MFO billed this (caster, spell) itself, so the
+    // animated top-up does not bill the same cast again.
+    float Cost(RE::Actor* a_caster, RE::SpellItem* a_spell);
 
-    // Forget the per-session memory (kPreLoadGame / revert, via Followers::ClearTransientState): the ability itself is
-    // saved in the .ess, so the next Sync re-checks it on the main thread.
+    // WORKER, inside the SpellSink task's PumpTickGate: the engine's AI-fired road just cast `a_spellID` for `a_casterID`. Tops
+    // up P - E once (fire-and-forget) or opens a per-second channel (concentration). Skips an MFO-billed direct cast.
+    void OnObservedCast(RE::FormID a_casterID, RE::FormID a_spellID);
+
+    // WORKER (the follower sweep): bills the per-second delta of every open animated channel, closes the ended ones.
+    void Tick();
+
+    // Forget all per-session memory (kPreLoadGame / revert, via Followers::ClearTransientState).
     void Reset();
 }
