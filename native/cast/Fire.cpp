@@ -523,7 +523,7 @@ namespace MFO::Actuation {
                     return { Result::NoOp, SuppressedText(a_follower, a_choice.target) };
                 if (cmd == Targeting::CommandOutcome::Unavailable)
                     return { Result::FailedOther, "target command unavailable", true };
-                return { Result::Fired, std::format("closing to melee on {}", foeName) };
+                return { Result::Fired, std::format("closing to melee on {}", foeName), false, /*approach=*/true };
             }
 
             // IN melee reach -- SWING. Try the anim FIRST and commit the target

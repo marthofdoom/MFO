@@ -8,8 +8,10 @@
 //
 // ── 'MCLS' v1 BYTE LAYOUT (little-endian, SKSE record body) ─────────────────────────────────────────
 //   header
-//     u32  rowSchema       the FLWR schema version (Serialization.h kSchemaVersion) the gambit rows below
-//                          were written at; written = kSchemaVersion (5 today). Read: 1..kSchemaVersion; above ->
+//     u32  rowSchema       the gambit-row version the rows below were written at, in FLWR's version numbers
+//                          (Serialization.h GambitWire::kRowSchema = the FLWR version at which the row last
+//                          changed; card G9 made it its own constant, MFO-B569). Written = kRowSchema (6 since G9;
+//                          a pre-G9 DLL wrote kSchemaVersion = 5, the same value space). Read: 1..kRowSchema; above ->
 //                          KEPT VERBATIM; 0 -> corrupt, ABORTED (nothing kept).
 //     u8   classCount      classes per follower in this record; written = kClassCount (35). Read: 1..35; above ->
 //                          KEPT VERBATIM; 0 -> corrupt, ABORTED (nothing kept).
@@ -28,15 +30,18 @@
 //       u8 rowCount        <= kMaxStoredRows = 64 (more = ABORTED)
 //       rowCount x ROW     the FLWR gambit row, GambitWire::WriteRow / ReadRow at rowSchema (Serialization.h:
 //                          str cond, f32 param, u8 subject, u32 subjectActor, str action, u32 actionParam,
-//                          u8 flags; str = u32 len <= 64 + bytes). An unresolvable actionParam DISABLES that
-//                          rule with a marker, as FLWR does; an unresolvable subjectActor reads as 0.
+//                          u8 flags, then u16 cooldownTenths ONLY when rowSchema >= 6 (card G9); str = u32 len
+//                          <= 64 + bytes). An unresolvable actionParam DISABLES that rule with a marker, as FLWR
+//                          does; an unresolvable subjectActor reads as 0. A rowSchema-5 row (written by a pre-G9
+//                          DLL) ends at its flags byte and reads with cooldown 0; a pre-G9 DLL meets rowSchema 6
+//                          and KEEPS the record verbatim (the rule below), so a downgrade freezes, never loses, it.
 //   Followers are written in ascending FormID order and tables in Id order, so the bytes are deterministic.
 //
 // ── VERSION AND COMPAT RULES ────────────────────────────────────────────────────────────────────────
 //   * Extension is BY VERSION, never by blob size: a v2 APPENDS fields at the end of the per-follower entry,
 //     read under `if (a_version >= 2)`; the v1 reader stays forever (#12). A new class APPENDS an Id (Classes.h
 //     rule): the writer then writes the larger classCount, and an older DLL meets classCount > its kClassCount.
-//   * A record this DLL cannot parse -- a version > kClassesVersion, a rowSchema > kSchemaVersion (a newer FLWR
+//   * A record this DLL cannot parse -- a version > kClassesVersion, a rowSchema > GambitWire::kRowSchema (a newer FLWR
 //     row, e.g. card G9's cooldown) or a classCount > kClassCount -- is KEPT VERBATIM (its version + bytes) and
 //     written back unchanged on every save; the class state is then FROZEN for the session (every setter
 //     refuses), so the kept bytes and the live state can never disagree. Logged loudly once per load, and shown ONCE on screen at
@@ -69,7 +74,7 @@
 #include "Classes_internal.h"
 #include "Config.h"
 #include "Followers.h"       // IsPersistableID (#9)
-#include "Serialization.h"   // kRecClasses / kClassesVersion / kSchemaVersion, CoSaveBuffer, GambitWire
+#include "Serialization.h"   // kRecClasses / kClassesVersion, CoSaveBuffer, GambitWire (+ kRowSchema)
 #include <cstring>
 #include <map>
 
@@ -109,11 +114,13 @@ namespace MFO::Classes {
         enum class ReadResult { Ok, Unparseable, Aborted };
 
         // ── codec (templated on the stream: SKSE::SerializationInterface or CoSaveBuffer) ─────────────
+        // a_rowSchema: production always writes GambitWire::kRowSchema. The self-test alone writes an older row
+        // schema (card G9: v5) into a CoSaveBuffer, to prove the reader takes a pre-G9 record.
         template <class W>
-        bool WriteBody(W& w, const Snapshot& a_snap) {
+        bool WriteBody(W& w, const Snapshot& a_snap, std::uint32_t a_rowSchema = GambitWire::kRowSchema) {
             bool ok = true;
             auto put = [&](const auto& v) { if (!w.WriteRecordData(v)) ok = false; };
-            put(static_cast<std::uint32_t>(kSchemaVersion));   // rowSchema
+            put(a_rowSchema);   // rowSchema
             put(static_cast<std::uint8_t>(kClassCount));
             put(static_cast<std::uint32_t>(a_snap.size()));
             for (const auto& [fid, fc] : a_snap) {
@@ -132,8 +139,15 @@ namespace MFO::Classes {
                     if (!t) continue;
                     put(static_cast<std::uint8_t>(i));
                     put(static_cast<std::uint8_t>(t->size()));   // <= kMaxStoredRows, enforced by StoreTable / the reader
-                    for (const auto& g : *t)
-                        if (!GambitWire::WriteRow(w, g)) return false;
+                    for (const auto& g : *t) {
+                        bool rowOk = false;
+                        if constexpr (std::is_same_v<W, CoSaveBuffer>)
+                            rowOk = a_rowSchema == GambitWire::kRowSchema ? GambitWire::WriteRow(w, g)
+                                                                          : GambitWire::WriteRowAt(w, g, a_rowSchema);
+                        else
+                            rowOk = a_rowSchema == GambitWire::kRowSchema && GambitWire::WriteRow(w, g);
+                        if (!rowOk) return false;
+                    }
                 }
             }
             return ok;
@@ -156,7 +170,7 @@ namespace MFO::Classes {
                               a_h.rowSchema, a_h.classCount);
                 return ReadResult::Aborted;
             }
-            if (a_h.rowSchema > kSchemaVersion || a_h.classCount > kClassCount)
+            if (a_h.rowSchema > GambitWire::kRowSchema || a_h.classCount > kClassCount)
                 return ReadResult::Unparseable;
             if (a_h.followerCount > kMaxSavedFollowers) {
                 spdlog::error("[cosave] MCLS: implausible follower count {} (max {}) -- ABORTING class state load",
@@ -251,17 +265,20 @@ namespace MFO::Classes {
         }
 
         // ── round-trip self-test (bClassCoSaveSelfTest, default OFF) ─────────────────────────────────
-        // A row compares on its SERIALIZED fields only, with the writer's one transform (#9: a 0xFF
-        // subjectActor is written as 0).
-        bool SameRow(const Gambit& a_w, const Gambit& a_r) {
+        // A row compares on its SERIALIZED fields only, with the writer's transforms (#9: a 0xFF subjectActor is
+        // written as 0; card G9: the cooldown is clamped to kMaxCooldownTenths, and a row schema below 6 carries none).
+        bool SameRow(const Gambit& a_w, const Gambit& a_r, std::uint32_t a_rowSchema = GambitWire::kRowSchema) {
             const RE::FormID expActor = Followers::IsPersistableID(a_w.subjectActorForm) ? a_w.subjectActorForm : 0;
+            const std::uint16_t expCd = a_rowSchema >= 6 ? (std::min)(a_w.cooldownTenths, kMaxCooldownTenths) : 0;
             return a_w.conditionOpcode == a_r.conditionOpcode && a_w.actionOpcode == a_r.actionOpcode &&
                    std::memcmp(&a_w.conditionParam, &a_r.conditionParam, sizeof(float)) == 0 &&
                    a_w.subjectSelector == a_r.subjectSelector && expActor == a_r.subjectActorForm &&
-                   a_w.actionParamForm == a_r.actionParamForm && a_w.enabled == a_r.enabled;
+                   a_w.actionParamForm == a_r.actionParamForm && a_w.enabled == a_r.enabled &&
+                   expCd == a_r.cooldownTenths;
         }
 
-        std::string FirstMismatch(const FollowerClasses& a, const FollowerClasses& b) {
+        std::string FirstMismatch(const FollowerClasses& a, const FollowerClasses& b,
+                                  std::uint32_t a_rowSchema = GambitWire::kRowSchema) {
             if (a.equipped != b.equipped) return "equipped";
             for (std::size_t c = 0; c < kClassCount; ++c)
                 if (!(a.progress[c] == b.progress[c])) return std::format("progress[{}]", Get(static_cast<Id>(c)).slug);
@@ -275,7 +292,7 @@ namespace MFO::Classes {
                 if (!ta) continue;
                 if (ta->size() != tb->size()) return std::format("table[{}] row count", Get(static_cast<Id>(c)).slug);
                 for (std::size_t k = 0; k < ta->size(); ++k)
-                    if (!SameRow((*ta)[k], (*tb)[k])) return std::format("table[{}] row {}", Get(static_cast<Id>(c)).slug, k);
+                    if (!SameRow((*ta)[k], (*tb)[k], a_rowSchema)) return std::format("table[{}] row {}", Get(static_cast<Id>(c)).slug, k);
             }
             return {};
         }
@@ -313,7 +330,7 @@ namespace MFO::Classes {
         }
 
         Gambit Row(std::string a_cond, std::string a_act, float a_param, std::uint8_t a_subj, RE::FormID a_subjActor,
-                   RE::FormID a_actParam, bool a_enabled) {
+                   RE::FormID a_actParam, bool a_enabled, std::uint16_t a_cooldownTenths = 0) {
             Gambit g{};
             g.conditionOpcode = std::move(a_cond);
             g.actionOpcode = std::move(a_act);
@@ -322,12 +339,15 @@ namespace MFO::Classes {
             g.subjectActorForm = a_subjActor;
             g.actionParamForm = a_actParam;
             g.enabled = a_enabled;
+            g.cooldownTenths = a_cooldownTenths;
             return g;
         }
 
         // The synthetic state covers every field and every bound: all 35 classes' progress, full and partial
         // masks, both counters at 0 / max, an engaged EMPTY table, a full kMaxStoredRows table, a 64-byte
-        // opcode, an appended-subject row, a disabled row, a 0xFF subject actor (written as 0), and the last Id.
+        // opcode, an appended-subject row, a disabled row, a 0xFF subject actor (written as 0), the last Id, and
+        // (card G9) cooldowns at 0 / 10 s / the 600 s bound / over the bound (written clamped), then the same state
+        // written at rowSchema 5 (pre-G9) must read back with every cooldown 0.
         // Then five corrupt variants of the bytes must be refused the right way.
         void RunSelfTest() {
             Snapshot s;
@@ -344,6 +364,10 @@ namespace MFO::Classes {
                 Row("cond.self_hp_below", "act.drink_health", 0.5f, 0, 0, 0x00039BE5, true),
                 Row("cond.enemy_any", "act.cast_spell", 0.0f, 3 /*Enemy, appended*/, 0xFF000801 /*runtime -> 0*/, 0x00012FCD, true),
                 Row("cond.always", "act.wait", 0.0f, 0, 0, 0, false),
+                // card G9: a 10 s power-attack cooldown, the 600 s bound, and an over-bound value (written clamped)
+                Row("cond.foe_blocking", "act.power_attack", 0.0f, 0, 0, 0, true, 100),
+                Row("cond.foe_stronger_than_me", "act.power_attack", 0.0f, 0, 0, 0, true, kMaxCooldownTenths),
+                Row("cond.foe_blocking", "act.power_attack", 0.0f, 0, 0, 0, false, 0xFFFF),
             };
             a.tables[static_cast<std::size_t>(Id::Mage)] = std::vector<Gambit>{};   // engaged and empty
             a.tables[static_cast<std::size_t>(Id::Dragonborn)] = std::vector<Gambit>{
@@ -352,7 +376,8 @@ namespace MFO::Classes {
             std::vector<Gambit> full;
             for (std::size_t k = 0; k < kMaxStoredRows; ++k)
                 full.push_back(Row("cond.ally_hp_below", "act.cast_spell", static_cast<float>(k) / 64.0f,
-                                   static_cast<std::uint8_t>(k % 3), 0x00000014 + static_cast<RE::FormID>(k), 0, (k & 1) == 0));
+                                   static_cast<std::uint8_t>(k % 3), 0x00000014 + static_cast<RE::FormID>(k), 0, (k & 1) == 0,
+                                   static_cast<std::uint16_t>((k * 97u) % (kMaxCooldownTenths + 1u))));
             a.tables[static_cast<std::size_t>(Id::Warrior)] = std::move(full);
             s.emplace_back(0x00013BBB, std::move(a));
 
@@ -363,6 +388,50 @@ namespace MFO::Classes {
 
             std::vector<std::uint8_t> bytes;
             if (!RoundTrip(s, "synthetic", &bytes)) return;
+
+            // Card G9 (FLWR v6): the SAME state written as a pre-G9 DLL wrote it (rowSchema 5: no cooldown field)
+            // must read back Ok with every row's cooldown 0, consume exactly its bytes, and be exactly 2 bytes per
+            // row shorter than the v6 write. Re-written by this DLL it is a valid v6 record (the RoundTrip above
+            // proves v6 -> v6; this proves v5 -> parse).
+            {
+                std::size_t rowCount = 0;
+                for (const auto& [fid, fc] : s)
+                    for (const auto& t : fc.tables)
+                        if (t) rowCount += t->size();
+                CoSaveBuffer v5;
+                if (!WriteBody(v5, s, 5)) {
+                    spdlog::error("[classes] MCLS self-test (rows v5): FAIL -- the v5 row writer refused");
+                    return;
+                }
+                const std::size_t expect5 = bytes.size() - 2 * rowCount;
+                CoSaveBuffer rd;
+                rd.Bytes() = v5.Bytes();
+                std::unordered_map<RE::FormID, FollowerClasses> back;
+                LoadStats st{};
+                Header h{};
+                const auto res = ReadBody(rd, kClassesVersion, back, st, h);
+                std::string why;
+                if (v5.Bytes().size() != expect5)
+                    why = std::format("{} bytes, expected {} (v6 {} - 2 x {} rows)", v5.Bytes().size(), expect5, bytes.size(), rowCount);
+                else if (res != ReadResult::Ok || h.rowSchema != 5)
+                    why = std::format("read result {} at rowSchema {}", static_cast<int>(res), h.rowSchema);
+                else if (rd.Remaining())
+                    why = std::format("{} trailing byte(s)", rd.Remaining());
+                else if (back.size() != s.size())
+                    why = std::format("{} follower(s) written, {} read", s.size(), back.size());
+                else
+                    for (const auto& [fid, fc] : s) {
+                        const auto it = back.find(fid);
+                        if (it == back.end()) { why = std::format("{:08X} missing", fid); break; }
+                        if (auto m = FirstMismatch(fc, it->second, 5); !m.empty()) { why = std::format("{:08X}: {} differs", fid, m); break; }
+                    }
+                if (!why.empty()) {
+                    spdlog::error("[classes] MCLS self-test (rows v5): FAIL -- {}", why);
+                    return;
+                }
+                spdlog::info("[classes] MCLS self-test (rows v5, pre-G9): PASS -- {} row(s) read with cooldown 0, {} byte(s) = v6 - 2 x rows",
+                             rowCount, expect5);
+            }
 
             // Corrupt variants: each must be refused, never fabricated (#11).
             constexpr int kVariants = 7;
@@ -390,7 +459,7 @@ namespace MFO::Classes {
                 expect("truncated by one byte", std::move(t), ReadResult::Aborted);
             }
             expect("follower count over the bound", patch32(bytes, kOffFollowerCount, kMaxSavedFollowers + 1), ReadResult::Aborted);
-            expect("newer row schema", patch32(bytes, kOffRowSchema, kSchemaVersion + 1), ReadResult::Unparseable);
+            expect("newer row schema", patch32(bytes, kOffRowSchema, GambitWire::kRowSchema + 1), ReadResult::Unparseable);
             expect("row schema 0 (corrupt, not newer)", patch32(bytes, kOffRowSchema, 0), ReadResult::Aborted);
             {
                 auto t = bytes;
@@ -491,7 +560,7 @@ namespace MFO::Classes {
         for (const auto& [fid, fc] : snap)
             for (const auto& t : fc.tables) if (t) ++tables;
         spdlog::info("[cosave] saved class state for {} follower(s) ({} stored table(s), {} byte(s)), schema v{} rows v{}{}",
-                     snap.size(), tables, buf.Bytes().size(), kClassesVersion, kSchemaVersion,
+                     snap.size(), tables, buf.Bytes().size(), kClassesVersion, GambitWire::kRowSchema,
                      skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) id(s)", skippedRuntime) : std::string{});
         if (!Active() && !g_loggedInactiveKeep.exchange(true))
             spdlog::info("[classes] class add-on inactive ({}) -- class progress for {} follower(s) KEPT and written back unchanged "
@@ -542,7 +611,7 @@ namespace MFO::Classes {
         if (res == ReadResult::Unparseable) {
             buf.Rewind();
             keep(std::format("rows v{} / {} classes, this DLL reads rows v1..v{} / {} classes", h.rowSchema, h.classCount,
-                             kSchemaVersion, kClassCount));
+                             GambitWire::kRowSchema, kClassCount));
             return;
         }
         if (res == ReadResult::Ok && buf.Remaining())

@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.8.2** (see [`VERSION`](VERSION) and the
+**Status: v2.9.0 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,16 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.9.0 (Deck test prerelease)
+
+- **Needs Harbinger v0.18.0 (ABI v35)** for the attack mixes and CanServe. With an older Harbinger everything else works.
+- **One-way save upgrade.** Saves made with 2.9.0 (FLWR v6) cannot be loaded by an older MFO, and an older MFO that saves over them wipes the follower boards. Keep a backup of your saves.
+- **Power attack rules have a cooldown** (a Cooldown cell on the board).
+- **A targeted spell rule is skipped when it can't work** (level cap or effect conditions), and AUTO treats control spells as hostile.
+- **Followers no longer drink Skooma** in a fight, and right-hand spell equips no longer displace a weapon.
+- **MFO uses Harbinger's CanServe dry run** before it displaces a spell that is being cast.
+- **Class add-on groundwork** (35 classes, MCLS save record), inert until its ESL ships. A DEV build with a self-test gambit exists for testing.
 
 ## What is new in 2.8.2
 

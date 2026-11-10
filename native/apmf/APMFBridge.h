@@ -327,6 +327,24 @@ namespace MFO::APMFBridge {
     // call site already satisfies by construction.
     bool OffenseCastClaimSupported();
 
+    // ── ABI v35 CLAIM DRY RUN (MFO-B2): "would Harbinger refuse this cast claim right now?" ──
+    // Worker-safe (takes g_mx briefly; Harbinger's CanServe is read-only and callable from any thread the
+    // real call is). Asks about EXACTLY the APMF_CastRequest ClaimOffenseCast (a_heal false) or ClaimHealCast
+    // (a_heal true, a_healDual = its a_dual) would file with these arguments, through the SAME builder, and
+    // about the shape it would FINALLY file (the kCastFlag_OwnLineOfSight retry: refused with the bit, the
+    // retry's answer is the answer). Files nothing. Used BEFORE commitPreempt (cast/CastOn.cpp) so a claim
+    // Harbinger would refuse never displaces the incumbent.
+    //   Refused  -- the claim call would return false now (Harbinger refused); *a_why names the refusal.
+    //   Accepted -- every call-time check passes (what Drain decides later is NOT covered: APMF_API.h
+    //               ServePending; MFO-B2's residual).
+    //   Unknown  -- not asked: Harbinger absent or ABI < 35, the claim call's own toggle / argument early
+    //               returns (it would not file), an identical claim already stands on that slot (the real
+    //               call files nothing new), or CanServe failed (logged once). The caller proceeds as before.
+    enum class ServeAnswer : std::uint8_t { Unknown, Accepted, Refused };
+    ServeAnswer CanServeCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                             std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct,
+                             bool a_heal, bool a_healDual, std::string* a_why);
+
     // Does the resolved Harbinger carry the BUFF / SUMMON / ROWLESS cast seats (0x06 / 0x07 / 0x0A / 0x0D on
     // the Ward, Summon, Cloak, Light, Invisibility, BoundItem, Armor and Script casters; ally buff aim,
     // summon / reanimate native placement, Script-row service of a rowless spell)? There is NO capability

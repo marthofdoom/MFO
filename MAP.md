@@ -57,7 +57,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (7 records; an 8th, `MFST`, in DEV builds only, section 10)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h`, `classes/State.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2`, MCLS `v1` (`Serialization.h`). **MCLS v1 (class update C3, 2026-11-09) is a NEW record (no existing layout touched): the class add-on's per-follower state + stored per-class gambit tables, owned by `classes/State.cpp`; its gambit rows go through `GambitWire::WriteRow/ReadRow`, which is FLWR's row code MOVED VERBATIM out of the FLWR loops (FLWR bytes unchanged) -- a change to that row now changes BOTH records.** ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
+| **Co-save (7 records; an 8th, `MFST`, in DEV builds only, section 10)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h`, `classes/State.cpp` | FLWR `v6`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2`, MCLS `v1` (`Serialization.h`). **FLWR v6 (card G9, 2026-11-09) APPENDS `u16 cooldownTenths` to the END of every gambit ROW (after the flags byte, `if(version>=6)`, clamped <= 6000), inside `GambitWire`, so MCLS rows carry it too; v1-v5 byte-identical, pre-v6 rows read cooldown 0. ONE-WAY: a v5 DLL skips a v6 FLWR whole (on-screen newer-save warning) and destroys every board on its next save; it KEEPS a v6-row MCLS verbatim (class state frozen, not lost). Rows version separately as `GambitWire::kRowSchema` (MFO-B569 closed).** **MCLS v1 (class update C3, 2026-11-09) is a NEW record (no existing layout touched): the class add-on's per-follower state + stored per-class gambit tables, owned by `classes/State.cpp`; its gambit rows go through `GambitWire::WriteRow/ReadRow`, which is FLWR's row code MOVED VERBATIM out of the FLWR loops (FLWR bytes unchanged) -- a change to that row now changes BOTH records.** ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -122,8 +122,9 @@ independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
 **Seven records (`Serialization.h`), each with its own version + reader** (the list below grew record by record; MCLS is the seventh):
-- **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,134`) — per-follower
-  `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`.
+- **`'FLWR'` / `kSchemaVersion=6`** (`Serialization.h:289`) — per-follower
+  `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`; each table row is the
+  `GambitWire` row (v6 appends the per-rule `cooldownTenths`, card G9).
   Written `SaveCallback` `Serialization.cpp:86`; read by `LoadCallback` `:569`
   dispatching into the per-record helper `ReadFollowersRecord` `:351` (a short
   read/implausible count aborts THAT record only and the loop continues to
@@ -230,23 +231,26 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   `CoSave:411`, `CoLoad:475`, codec `WriteBody:106` / `ReadBody:137`); called from `SaveCallback` (`Serialization.cpp:662`, after PGIV,
   before ERND), dispatched `:1007`, cleared by `Classes::BeginLoad` at the top of `LoadCallback` (`:935`) and by `Classes::ClearAll` in
   `ResetAllState` (`:1122`, after `StopPump` `:1088`). Layout v1: header `u32 rowSchema` (the FLWR version of its gambit rows, written
-  = `kSchemaVersion`), `u8 classCount` (35), `u32 followerCount` (<= 4096); per follower `{u32 follower, u8 equipped (Id or 0xFF),
+  = `GambitWire::kRowSchema`, 6 since card G9; a pre-G9 DLL wrote 5), `u8 classCount` (35), `u32 followerCount` (<= 4096); per follower `{u32 follower, u8 equipped (Id or 0xFF),
   classCount x {u32 xp, u8 level}, u64 mastered, u64 unlocked, u16 thiefFights, u16 masterThiefFights, u8 tableCount, per table {u8 classId,
   u8 rowCount (<= 64), rowCount x FLWR gambit row}}`. **Written only when there is class state.** Unresolvable follower -> entry DROPPED
   (#8, the FLWR / PGIV precedent); unresolvable spell in a row -> that rule DISABLED (FLWR's rule); over-bound count / short read ->
-  record ABORTED, parsed followers kept. **A header this DLL cannot read (version > 1, rowSchema > kSchemaVersion, classCount > 35) is
+  record ABORTED, parsed followers kept. **A header this DLL cannot read (version > 1, rowSchema > kRowSchema, classCount > 35) is
   KEPT VERBATIM and written back unchanged and every class setter refuses for the session; one on-screen box at kPostLoadGame says class
   progress is read-only (`Classes::ConsumeReadOnlyNotice`, `plugin.cpp`; not the destroy-warning box, nothing is lost). A ZERO rowSchema or
   classCount is corruption: ABORTED, nothing kept. Backlog: MFO-B567..B571.**
   **ESL absent / `bClassTree = 0`: the record is still PARSED (it holds no ESL form), held unchanged (setters refuse) and re-written;
   FormIDs re-resolve for the current load order (marth Q9).** Debug: `bClassCoSaveSelfTest` (INI-only, default 0) runs an in-memory
-  round trip + 5 corrupt variants at every load (`RunSelfTest:318`, `RoundTrip:271`).
+  round trip + 7 corrupt variants at every load (`RunSelfTest`, `RoundTrip`), plus (card G9) cooldown rows (0 / 10 s / the 600 s bound /
+  over it, written clamped) and the same state written at rowSchema 5 (`GambitWire::WriteRowAt`, self-test only) read back with cooldown 0.
 - **`GambitWire` -- THE gambit-row wire encoding** (`Serialization.h:336`, impl `WriteRowT:104` / `ReadRowT:133` + the string helpers
   `WriteOpT:74` / `ReadOpT:86` in `Serialization.cpp`; card C3). The FLWR row code moved VERBATIM out of the FLWR writer (`:560`) and
   reader (`:840`) loops into templates over the stream (`SKSE::SerializationInterface` or `CoSaveBuffer`, `Serialization.h:280`, an in-memory
-  body with the SKSE method names), so FLWR and MCLS share ONE row encoding. **What breaks:** a row change (card G9's per-rule cooldown,
-  FLWR v6) MUST be made inside `WriteRowT/ReadRowT`, gated on the version argument, or MCLS's stored tables desync; MCLS passes its own
-  `rowSchema`, so its rows follow FLWR's version automatically. `WriteString/ReadString` are now one-line forwards to `WriteOpT/ReadOpT`
+  body with the SKSE method names), so FLWR and MCLS share ONE row encoding. Card G9 (FLWR v6) appended `u16 cooldownTenths` after the
+  flags byte there. **What breaks:** a row change MUST be made inside `WriteRowT/ReadRowT`, gated on the version argument, AND bump
+  `GambitWire::kRowSchema` (`Serialization.h`, "the FLWR version at which the row last changed") to the new `kSchemaVersion`, or MCLS's
+  stored tables desync; a FLWR bump that does NOT touch the row must leave `kRowSchema` alone (that is MFO-B569's fix: an older DLL then
+  still parses MCLS). MCLS stamps `kRowSchema` and passes its stored `rowSchema` to the reader. `WriteString/ReadString` are now one-line forwards to `WriteOpT/ReadOpT`
   (ERND uses them; bytes unchanged).
 
 **ROSTER REMOVAL erases entries, never layout (ClickUp 86e3eewaf, 2026-10-12).** The Follower-tab
@@ -1708,7 +1712,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   took the hand from each other on alternate laps and neither ever charged; and a retargeting rule outranked
   itself. The lap counter, `BeginCastLap` and the `Scheduler` call site that fed it are all gone.
   **The displacement is DEFERRED, never done at resolve time:** `ResolveCastHand` only records
-  `HandPlan::preemptLeft/preemptRight` (`:961`), and `CastOn`'s `commitPreempt` (`:1759`) fires immediately
+  `HandPlan::preemptLeft/preemptRight` (`:961`), and `CastOn`'s `commitPreempt` (`cast/CastOn.cpp:785`) fires immediately
   before the claim it is for — the self fork, the concentration fork, `ClaimOffenseCast`, `ComposedCast::Try`
   and (for the APMF-absent world, where `Loadout::Prepare` IS the claim on the hand) the equip switch. Every
   transparent refusal in between therefore refuses without having touched the incumbent; committing at
@@ -1720,6 +1724,23 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   that no longer exists), clears the lock, and — for a MIRRORED DUAL incumbent (both hands, same
   spell+target+owningRule) — clears BOTH locks, because one APMF handle on two hands has no half-release and
   `HandFree`'s incumbent short-circuit does not consult liveness.
+  **ASK BEFORE DISPLACING (MFO-B2, Harbinger ABI v35 `CanServe`, 2026-11-09).** Where `CastOn` itself names
+  the APMF cast claim a route ends in, it asks `APMFBridge::CanServeCast` (`apmf/Bridge.cpp:666`) with the
+  exact arguments FIRST, via `HarbingerWouldRefuse` (`cast/CastOn.cpp:111`): the buff claim fork
+  (BuffClaim's `ClaimOffenseCast`), the owned offense claim and the composed heal claim (`healClaim` laps only:
+  off the heal road `Try` may answer NotApplicable and the hybrid runs). A Refused verdict returns
+  transparently WITHOUT `commitPreempt` and logs `[apmf] ... Harbinger WOULD REFUSE ...` (own 5 s throttle, never
+  shared with `LogApmfRefusal`'s). `CanServeCast` builds the request through `BuildCastRequestLocked`
+  (`apmf/Bridge.cpp:261`), the builder `EnsureCastClaimLocked` itself uses, and answers for the shape FINALLY
+  filed (the `kCastFlag_OwnLineOfSight` retry, APMF-B269). Unknown (ABI < 35, toggle off, an identical claim
+  standing, a failed query) and Accepted run the route exactly as before.
+  **What breaks:** build the dry-run request anywhere but `BuildCastRequestLocked` and the two shapes drift; gate a
+  route whose claim-vs-direct road is chosen inside its helper and a direct cast that never needs Harbinger is
+  blocked; share the refusal throttle and one line silences the other.
+  **STILL OPEN (MFO-B2, narrowed):** the self fork, the concentration fork and the restoration-direct fork choose
+  claim vs direct INSIDE `CastSelfDirect` / `CastTargetDirect` / `BuffSelfClaim` after the preempt, so they are
+  not asked; and `Loadout::Prepare`, `Declined`, `Held`, Drain-time drops (`ServePending`) and a state change
+  between the dry run and the claim still displace first. The text below is the pre-v35 analysis, still true for those.
   **STRUCTURAL RESIDUAL — deferring the commit NARROWS the window, it does not close it.** Everything that
   can still refuse the asker AFTER `commitPreempt` — `CastSelfDirect` → `Held`/`Declined`, a refused
   `ClaimOffenseCast`, `ComposedCast::Try` → `Held`/`ApmfRefused`, a failed `Loadout::Prepare` — still
@@ -2294,6 +2315,16 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) a
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
 first, runs the combat table while the PARTY fights and the logistics table when
 it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worker.
+- **PER-RULE COOLDOWN (card G9, ClickUp 1dfcuabcqe6, 2026-11-09).** `Gambit::cooldownTenths` (State.h, serialized FLWR v6) +
+  `Cooldowns.h/.cpp` (NEW: the runtime-only last-fired store, key (actor, `Kind::Rule`, rule uid), own mutex, `ClearAll` in
+  `ResetAllState` after `StopPump`; built to be shared with IAUS card I2). In the combat scan, right after the cannot-act skip and before
+  the retarget hesitation, a matched rule still cooling is passed over TRANSPARENTLY as `{FailedOther, "cooling down (Ns)", true}`
+  (never NoOp: a transparent NoOp on an equip reads as "satisfied"), the reason going to the chain and to `lastFailReason` through the
+  G10 skip line. The cooldown STARTS in the post-scan bookkeeping when the rule `Fired` and `!Outcome::approach` (cast/Actuation.h; set
+  only by the power attack's "closing to melee" Fired in cast/Fire.cpp, so the closing leg does not cool out its own swing). NOT wired:
+  the logistics scans (logistics/Service.cpp, LootScan.cpp) and the retreat self-heal road (`Scheduler.cpp` ~:1437) ignore a cooldown;
+  no row there can get one from the board today. **What breaks:** reading the store inside `Eval::Evaluate` (#22: it is actuation-side
+  pacing); stamping on a NEW multi-leg Fired without setting `approach`; a rule with uid 0 (pre-first-publish) has no cooldown.
 - **CAN-ACT (`fix/mfo-can-act`, 2026-09-29; the cast/ "CAN-ACT" entry has the whole mechanism).** Right
   after `Confidence::NoteHealth` the service calls `Actuation::NoteLifeState` (the `[bleed]` line) and
   reads `CannotActReason` once (`:783`); the combat scan passes each rule over transparently at `:1326`
@@ -5897,6 +5928,13 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
 ### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
+**Rule cooldown cell (card G9, 2026-11-09, marth Q7 "power-attack rows only for now"):** `Board_internal.h` `CooldownExposed(actOp)`
+(= `act.power_attack`) decides where it shows. On such a row the SPELL column cell (`Board_FieldKit.cpp`, the SPELL block) is
+"Cooldown N s" + `listPopup("##cooldown")` (0..60 s presets; d-pad / [A] / [B] like the VALUE cell) queueing `EditKind::SetCooldown`
+(appended); its hover tooltip shows `lastFailReason` ("cooling down (Ns)"). `ApplyEdits` (`Board.cpp`) applies it only while the row is
+still exposed and CLEARS the cooldown on `SetAct` / `CycleAct` to an unexposed action, so no row is paced by a value it does not show.
+`RuleView::cooldownTenths` is filled in `FillRuleViews`. New string keys `Gb_Cooldown`, `Gb_CooldownCell`, `Gb_CooldownNone`,
+`Gb_FmtSec` (template regenerated). `Board_FieldKit.cpp` is now past 1500 lines: a split is due as its OWN round.
 **Remove from roster (2026-10-12, ClickUp 86e3eewaf):** the Followers table's 9th column (`Board_FieldKit.cpp`,
 `Fk_ColRoster`) holds a `remove` button per row: GREYED by style alpha (not `BeginDisabled`, so gamepad nav can
 still focus it and read the why-tooltip) for an active row or a retained row with `FollowerRow::stillFollower`
@@ -6384,15 +6422,18 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1223) = the CORE: the interface pointer `g_apmf` (`:49`), the floor's ABI gates
+  - **`APMF_API.h` mirror = Harbinger ABI v35** (APMF main `178b8ed`, 2026-11-09, sha256 `711b5da3…ddb5`). v34 (ch.18
+    attack selection, `SetAttackMix`) is mirrored but not consumed; v35 `CanServe` is consumed by `CanServeCast` only.
+  - `apmf/Bridge.cpp` (1373) = the CORE: the interface pointer `g_apmf` (`:49`), the floor's ABI gates
     `kHandBlockFirstAbi`/`kFloorSpellsOnlyAbi` (`:54-55`), the claim map
     `g_mx`/`g_owned` (`:57-58`) + refusal sets, `FacetExpiry` (`:169`), the shared claim helpers
     `EnsureClaimLocked` (`:180`), `ReleaseClaimLocked` (`:206`), `CastHeartbeatInterval` (`:247`),
-    `EnsureCastClaimLocked` (`:286`), the idle-hand floor `ReconcileHandFloorLocked` (`:732`),
-    `Acquire` (`:900`, requests ABI 10) / `Available` (`:940`) / **`SubstrateOnly` / `IsSubstrateAnchor` / `InCombat`
-    (`:976-982`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
-    MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:958`), the expiry sweep
-    `Tick` (`:1016`; it sweeps the ch.27 substrate pairs first, `:1025`) and `ClearTransientState` (`:1216`; clears them, `:1267`).
+    `BuildCastRequestLocked` (`:261`, the ONE kIntent_Cast request builder), `EnsureCastClaimLocked` (`:336`),
+    **`CanServeCast` (`:666`, ABI v35 dry run of the offense / heal cast claim, MFO-B2; Unknown below v35)**, the idle-hand floor `ReconcileHandFloorLocked` (`:838`),
+    `Acquire` (`:1021`, requests ABI 10) / `Available` (`:1061`) / **`SubstrateOnly` / `IsSubstrateAnchor` / `InCombat`
+    (`:1076-1082`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
+    MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:1100`), the expiry sweep
+    `Tick` (`:1116`; it sweeps the ch.27 substrate pairs first, `:1125`) and `ClearTransientState` (`:1316`; clears them, `:1368`).
   - `apmf/Substrate.cpp` (338) = the OUT-OF-COMBAT SUBSTRATE CLIENT (slice S3, ch.27 + ch.8b, ABI v27): the claim pair
     and its state machine. Full entry: "cast/SubstrateRoad.cpp + apmf/Substrate.cpp" in section 2 (before Scheduler).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,

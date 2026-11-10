@@ -61,9 +61,14 @@ namespace MFO::Actuation {
 
         // True = this exact (follower, spell, target) was already logged inside the
         // window, so the caller stays quiet. Otherwise stamps it and returns false.
+        // MFO-B2: the ABI v35 dry-run refusal (LogServeRefusal) has its OWN map, so a dry-run line never
+        // silences the real refusal's error line for the same pair (or the other way round).
+        std::unordered_map<RE::FormID, std::vector<ApmfRefusalLog>> g_lastServeRefusal;
+
         bool ApmfRefusalThrottled(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
-                                  std::chrono::steady_clock::time_point a_now) {
-            auto& keys = g_lastApmfRefusal[a_follower];
+                                  std::chrono::steady_clock::time_point a_now,
+                                  std::unordered_map<RE::FormID, std::vector<ApmfRefusalLog>>& a_map = g_lastApmfRefusal) {
+            auto& keys = a_map[a_follower];
             // Sweep expired entries first -- they carry no information and this is
             // what keeps the vector small without an unbounded-growth guard.
             std::erase_if(keys, [&](const ApmfRefusalLog& e) {
@@ -94,6 +99,29 @@ namespace MFO::Actuation {
                           "{} hand. APMF is the COMMITTED route: NOT falling back to the legacy "
                           "hybrid, this cast does NOT happen this tick. Fix the refusal in APMF.",
                           a_follower, a_what, a_spell, a_target, a_hand);
+        }
+
+        // ── MFO-B2: ASK BEFORE DISPLACING (Harbinger ABI v35 CanServe) ──────────────
+        // True = Harbinger would REFUSE the cast claim this route is about to make (APMFBridge::CanServeCast:
+        // the exact request the claim call would file, the OwnLineOfSight retry included). The caller then
+        // returns transparently WITHOUT commitPreempt: the incumbent keeps its hand, and nothing is cast, which
+        // is what the refused claim would have left anyway minus the displacement. Logged rate-limited per
+        // (follower, spell, target). Accepted / Unknown (Harbinger < v35, absent, toggle off, an identical claim
+        // standing, a dry run that could not answer) return false: the route runs exactly as before.
+        bool HarbingerWouldRefuse(RE::FormID a_follower, const char* a_what, RE::FormID a_spell,
+                                  RE::FormID a_target, std::int32_t a_apmfHand, bool a_conc,
+                                  std::uint32_t a_stopPct, bool a_heal, bool a_healDual, const char* a_hand) {
+            std::string why;
+            if (APMFBridge::CanServeCast(a_follower, a_spell, a_target, a_apmfHand, a_conc, a_stopPct,
+                                         a_heal, a_healDual, &why) != APMFBridge::ServeAnswer::Refused)
+                return false;
+            if (!ApmfRefusalThrottled(a_follower, a_spell, a_target, std::chrono::steady_clock::now(),
+                                      g_lastServeRefusal))
+                spdlog::warn("[apmf] {:08X} Harbinger WOULD REFUSE the {} claim (ABI v35 dry run) -- spell {:08X}, "
+                             "target {:08X}, {} hand: {}. The incumbent is NOT displaced; this cast does NOT "
+                             "happen this tick (MFO-B2).",
+                             a_follower, a_what, a_spell, a_target, a_hand, why);
+            return true;
         }
 
         // Prepare's LeftHandYield callbacks (plain function pointers, Loadout.h). The
@@ -846,6 +874,14 @@ namespace MFO::Actuation {
                 ChooseBuffRoad(a_follower, spell, /*a_log=*/true, buffRecip) == BuffRoad::Claim) {
                 if (BuffUpTransparent(a_follower, spell, buffRecip))   // before the preempt, like the self fork
                     return { Result::NoOp, "buff already up on its recipient (or its read is pending)", true };
+                // MFO-B2: BuffClaim's ClaimOffenseCast (cast/BuffRoad.cpp): LEFT, stopPct 0, the recipient as
+                // target (buffRecip is never the caster here; with no recipient, a placement spell, BuffClaim
+                // files 0 or the caster -- neither sets OwnLineOfSight, so the verdict is the same).
+                if (HarbingerWouldRefuse(id, "buff cast", spell->GetFormID(),
+                                         buffRecip ? buffRecip->GetFormID() : 0, APMFBridge::kApmfHandLeft,
+                                         spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
+                                         /*stopPct=*/0, /*heal=*/false, /*healDual=*/false, "left"))
+                    return { Result::FailedOther, "Harbinger would refuse the buff claim (incumbent kept)", true };
                 commitPreempt();   // the claim happens inside BuffClaim
                 if (BuffClaim(a_follower, spell, buffRecip) == SelfCast::Applied) {
                     lockHands(a_spellID, lockTargetKey);
@@ -1051,6 +1087,14 @@ namespace MFO::Actuation {
                         (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
                         handPlan.left                     ? APMFBridge::kApmfHandLeft :
                                                              APMFBridge::kApmfHandRight;
+                    // MFO-B2: the same arguments as the ClaimOffenseCast below, asked first.
+                    if (HarbingerWouldRefuse(a_follower->GetFormID(), "offense-cast", spell->GetFormID(),
+                                             a_target->GetFormID(), claimHand, /*conc=*/false, /*stopPct=*/0,
+                                             /*heal=*/false, /*healDual=*/false,
+                                             handPlan.left && handPlan.right ? "dual"
+                                                 : handPlan.left             ? "left"
+                                                                             : "right"))
+                        return { Result::FailedSkill, "Harbinger would refuse the cast claim (incumbent kept)", true };
                     commitPreempt();
                     NoteArchetypeRoad(a_follower, spell, ArchRoad::OwnedClaim);   // [archetype] probe (passive)
                     ownedClaimHeld =
@@ -1103,6 +1147,29 @@ namespace MFO::Actuation {
                     // stopPct = 0 (stop at full restoration): no per-gambit numeric
                     // threshold is in scope here, matching every ComposedCast::Try call
                     // site except CastAuto's own (CAST-DELIVERY.md's STOP-PERCENT note).
+                    //
+                    // MFO-B2: on the heal claim road (healClaim: Try claims, never NotApplicable short of the
+                    // kill-switch race) ask first with the ClaimHealCast arguments Try derives
+                    // (ComposedCast.cpp Try: target 0 for a Self-delivery self heal, else the caster / the
+                    // recipient; the hand; dual on the left when asked or already dual; concentration by type).
+                    // Off the heal road Try may answer NotApplicable and the hybrid below runs, so no gate there.
+                    if (healClaim) {
+                        const RE::FormID hFid    = a_follower->GetFormID();
+                        const RE::FormID hSpell  = spell->GetFormID();
+                        const RE::FormID tgt     = a_target == a_follower
+                            ? (spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf ? 0 : hFid)
+                            : a_target->GetFormID();
+                        const std::int32_t hHand = healHand == kHandRight ? APMFBridge::kApmfHandRight
+                                                                          : APMFBridge::kApmfHandLeft;
+                        const bool hDual = hHand == APMFBridge::kApmfHandLeft &&
+                                           (healDual || APMFBridge::IsHealCastDual(hFid, hSpell));
+                        if (HarbingerWouldRefuse(hFid, "heal-cast", hSpell, tgt, hHand,
+                                                 spell->GetCastingType() ==
+                                                     RE::MagicSystem::CastingType::kConcentration,
+                                                 /*stopPct=*/0, /*heal=*/true, hDual,
+                                                 healHand == kHandRight ? "right" : "left"))
+                            return { Result::FailedSkill, "Harbinger would refuse the heal claim (incumbent kept)", true };
+                    }
                     commitPreempt();
                     NoteArchetypeRoad(a_follower, spell, ArchRoad::HealClaim);   // [archetype] probe (passive)
                     composed = ComposedCast::Try(a_follower, spell, a_target,

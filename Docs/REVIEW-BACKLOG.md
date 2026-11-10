@@ -39,6 +39,13 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Severity:** SEV-4
 - **Finding:** `commitPreempt` fires immediately before the claim, but the refusal sites all sit AFTER it — `CastSelfDirect` -> `Held`/`Declined` (`Actuation_Direct.cpp:888/892/938`), `ClaimOffenseCast` refused, `ComposedCast::Try` -> `Held`/`ApmfRefused`, `Loadout::Prepare` failed. A deterministic refusal still displaces the incumbent and still yields lap-rate churn for that shape. Only `Try`'s `Held` is pre-checkable (pure MFO state).
 - **Reviewer's reasoning for deferral:** not fixable in general without an APMF dry-run / "can you serve this?" query. Recorded so the next reader does not assume F2 is closed.
+- **NARROWED (`feat/mfo-b2-canserve`, 2026-11-09, Harbinger ABI v35 `CanServe`, APMF `178b8ed`):** the dry run now exists and is asked BEFORE `commitPreempt` wherever `CastOn` itself names the claim: the buff claim fork, the owned offense `ClaimOffenseCast` and the composed heal `ComposedCast::Try` (`healClaim` laps). `APMFBridge::CanServeCast` asks about the exact `APMF_CastRequest` (`BuildCastRequestLocked`, the builder `EnsureCastClaimLocked` uses) and about the shape FINALLY filed (the `kCastFlag_OwnLineOfSight` no-sight-line retry: APMF-B269). On Refused the route returns transparently, nothing is displaced, `[apmf] ... Harbinger WOULD REFUSE ...` is logged (5 s per follower/spell/target). Below ABI 35, or Unknown / Accepted, nothing changed. For MFO's cast shapes Harbinger's call-time refusals are `NoDrain`, `NoChannel` and OwnLineOfSight-not-armed (the last removed by the retry), so in practice the gate fires when the arbiter seat is refused or the cast channel is off.
+- **STILL OPEN (the residual, SEV-4):**
+  - **Routes whose road is chosen inside a helper, after the preempt:** the self fork (`CastSelfDirect`: heal claim, self-buff claim, concentration claim, or the direct stream), the concentration fork (`ConcentrationCast` -> `CastSelfDirect` / `CastTargetDirect`) and the restoration-direct fork (`CastTargetDirect`). A `CastOn`-side gate would have to copy `ChooseHealRoad` / `ChooseBuffRoad` and the concentration-claim predicate, or it would block a direct-road cast that never needs Harbinger. Closing these needs the helper to receive the preempt (deferred to its own claim point) or a pure road query: its own brief.
+  - **`Loadout::Prepare` failing** (an MFO equip step), **`Declined`** (cast paths not verified, magicka, reserve, the OOC heal wait) inside the helpers.
+  - **`Held`: deliberately NOT pre-checked.** Not pure (`RefreshHealCastClaim` heartbeats the claim; the in-flight hold writes `inFlightHoldSince`), and `PreemptHand` -> `ComposedCast::EndHand` clears the incumbent's watch slot, so a Held asked before the preempt would see the very incumbent the preempt ends and would HOLD where today's code preempts and claims (inverting rule rank). A Held that survives a preempt needs an incumbent heal watch that is not the displaced lock's spell: rare and bounded.
+  - **Drain-time drops** (`ServePending`: actor not loaded, the dual vs single hand collision lost at Drain, `kCastFlag_FromPackage`, the channel's Engage checks): accepted, then dropped, after the displacement.
+  - **A change of state between the dry run and the claim** (sight-line disarming, the arbiter seat, a claim coming or going): the race the real call already has.
 
 ### MFO-B3 — right-first hand selection fails toward RIGHT when `bWeaponStyleControl` is OFF
 - **DRAINED** (`fix/mfo-bucket3`, 2026-10-11): the Auto (0) hybrid is covered by `Followers::HasEnabledEquipWeaponGambit` (enabled act.equip_melee/ranged combat rule). Earlier NARROWED note follows. (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged). STILL OPEN: an Auto (0) hybrid with the switch off; reading its equip gambits needs a new read-only `Followers` accessor (no new plumbing taken in a small-fix round).
@@ -2575,7 +2582,8 @@ Verbatim (reviewer, F-3): a record kept verbatim by an older DLL carries the For
 ### MFO-B568 (SEV-4, OPEN, design question for marth, classes/State.cpp, against 2a035b1) -- only the COMBAT table is stored per class
 Verbatim (reviewer, F-4): Q8 says "remember each classes setup"; MCLS v1 stores the combat table only. Reasoning: whether a class's setup includes the logistics table is marth's call; if yes it is a v2 APPEND (a per-table kind byte or a second table list under `if (a_version >= 2)`), no v1 change.
 
-### MFO-B569 (SEV-5, OPEN, classes/State.cpp rowSchema, against 2a035b1) -- rowSchema is stamped from kSchemaVersion
+### MFO-B569 (SEV-5, CLOSED by card G9 `feat/g9-rule-cooldown` 2026-11-09, classes/State.cpp rowSchema, against 2a035b1) -- rowSchema is stamped from kSchemaVersion
+Resolution: `GambitWire::kRowSchema` (Serialization.h) = the FLWR version at which the gambit ROW last changed (6, the G9 cooldown), in FLWR's own version numbers. MCLS stamps it and reads 1..kRowSchema; a FLWR bump that does not change the row leaves it alone. Every MCLS written before (rowSchema 5) reads unchanged.
 Verbatim (reviewer, F-5): MCLS's rowSchema is the FLWR record version, so ANY FLWR bump (even one that does not touch the row) makes an older DLL keep MCLS verbatim and freeze class progress. Reasoning: harmless today; note for card G9 (FLWR v6): give the gambit ROW its own encoding version (GambitWire) and stamp that instead.
 
 ### MFO-B570 (SEV-5, OPEN, GambitWire ReadRow in MCLS, against 2a035b1) -- unresolved actionParamForm rows disabled while the ESL is absent
@@ -2634,3 +2642,21 @@ Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbati
 - **SEV-5:** a negative Base GMST gave NaN and logged "not cheaper" when it should be an explicit error (FIXED in the follow-up commit, an error line and refusal).
 - **SEV-5:** an ex-follower who is never swept keeps an inert ability (the HasSpell gate and the absent perk entry make it harmless).
 - **SEV-5:** posted `CostParity::Apply` closures have no epoch guard.
+
+### MFO-B601 (SEV-4/5, OPEN, G9 per-rule cooldown, against 9b338f1, Opus tier-3 review) -- review leftovers
+Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
+- C1 (SEV-4, co-save, field): the v5->v6 load path has no executed proof (the MCLS "rows v5" self-test runs only with bClassCoSaveSelfTest=1; CI never runs it). Deck: load a real v5 save with the switch on, expect "MCLS self-test (rows v5, pre-G9): PASS" and an FLWR summary matching the previous session; then save + reload (v6->v6). On the in-game test list.
+- C2 (SEV-4, co-save, release): every v6 save is unreadable to a v5 DLL even with no cooldown set, and that DLL wipes every board on its next save. The release carrying G9 must say so plainly (CHANGELOG + Nexus). Optional design alternative saved for marth (question 39): write FLWR v5 while every row's cooldown is 0.
+- B1 (SEV-5): a cooling EQUIP row would not set equipHeld (force-hold releases while cooling); only matters once CooldownExposed widens or C12/IAUS write cooldowns to other rows.
+- B2 (SEV-5): a non-zero cooldown on a row the board does not expose is enforced but invisible; C12 must limit itself to power-attack rows or widen CooldownExposed in the same change.
+- B3 (SEV-5): the "last: cooling down (Ns)" tooltip goes stale after expiry when the rule stops matching (display only, like G10's).
+- B4 (SEV-4, rule-mandated): Board_FieldKit.cpp is 1528 lines -- plan its split as its own round. MAP.md's Serialization.h:289 anchor is off by three (kSchemaVersion is at :292).
+
+### MFO-B602 (SEV-5, OPEN, apmf/Bridge.cpp + cast/CastOn.cpp CanServe adoption, against 6bebdb4, Opus tier-3 review) -- leftovers
+Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
+- Buff route with no recipient: the gate queries target 0 where BuffClaim files the caster in the explicitSelf case; the verdict cannot differ today. Derive the target with ExplicitSelfBuff(spell) for exactness.
+- The composed-heal gate re-derives Try's target / dual / concentration (matches ComposedCast.cpp:358-709 today); expose one shared claim-argument helper from ComposedCast. The gate also runs before Try's Enabled() check (both outcomes are a transparent no-cast).
+- g_lastServeRefusal is never cleared (its sibling is erased at CastOn.cpp:1844 and cleared at :1863); add it to both sites.
+- Comment at CastOn.cpp:64 names a nonexistent LogServeRefusal (the function is HarbingerWouldRefuse).
+- MFO-B2's open list should also name: a claim Harbinger accepts while MFO's cast-facet priority is 0 (offFacets) still displaces the incumbent; and the kServePending_Arbitration bit.
+- Note: CastOn.cpp is 1876 lines (plan its split as its own round); Bridge.cpp 1373.

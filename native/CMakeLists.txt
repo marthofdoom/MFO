@@ -18,7 +18,7 @@
 # beats guessing their type at runtime (Requiem-proof).
 cmake_minimum_required(VERSION 3.21)
 
-project(MFO VERSION 2.8.2 LANGUAGES CXX)
+project(MFO VERSION 2.9.0 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
@@ -80,6 +80,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Unanimated.cpp
     cast/SubstrateRoad.cpp
     Scheduler.cpp
+    Cooldowns.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp

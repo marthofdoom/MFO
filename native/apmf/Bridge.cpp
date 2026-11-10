@@ -253,6 +253,56 @@ namespace MFO::APMFBridge {
         }
     }
 
+    namespace {
+        // THE ONE kIntent_Cast REQUEST BUILDER (MFO-B2, ABI v35). Moved verbatim out of EnsureCastClaimLocked so
+        // the real RequestCast and the CanServeCast dry run (below) cannot build two different shapes.
+        // `ownLos` reports whether kCastFlag_OwnLineOfSight was set (the caller's no-sight-line retry keys on it).
+        // Pure: reads the api's abiVersion and LosSupported() only. Caller holds g_mx.
+        APMF_API::APMF_CastRequest BuildCastRequestLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
+                                                          RE::FormID wantSpell, RE::FormID wantTarget,
+                                                          std::int32_t wantHand, bool wantConc,
+                                                          std::uint32_t wantStopPct, bool wantDenyOnly,
+                                                          bool wantFullFloor, bool& ownLos) {
+            APMF_API::APMF_CastRequest req{};
+            req.spell  = wantSpell;
+            req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
+            req.target = wantTarget;
+            // kCastFlag_DualCast and kCastFlag_LeftHand are mutually exclusive (APMF_API.h:
+            // "do NOT set kCastFlag_LeftHand alongside it") -- kApmfHandDualCast (Loadout::
+            // HandPick::DualCast, via HandFor above) claims BOTH hands and never also sets
+            // the single-hand hint. Anything else (kApmfHandRight, or bare 0) is the RIGHT
+            // hint -- APMF's own default when kCastFlag_LeftHand is unset (APMF_API.h).
+            const bool wantDual = (wantHand == kApmfHandDualCast);
+            // F10: kCastFlag_DenyHandOnly is ORTHOGONAL to the hand hint and rides
+            // ALONGSIDE it -- the floor stands on exactly the hand
+            // kCastFlag_LeftHand selects (APMF_API.h). It is never combined with
+            // kCastFlag_DualCast: a floor is by construction the ONE hand the
+            // driving claim leaves free, and a dual claim leaves none (see
+            // ReconcileHandFloorLocked, which never asks for a dual floor).
+            req.flags  = (wantDual                    ? APMF_API::kCastFlag_DualCast :
+                          wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
+                         (wantConc     ? APMF_API::kCastFlag_Concentration : 0u) |
+                         (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
+                         // ABI v20: every MFO floor is a SPELLS-ONLY reservation (see
+                         // ReconcileHandFloorLocked's WEAPONS note): a one-hander stays in the hand.
+                         // ...EXCEPT the launcher user's FULL right floor (Owned::archerFloor), which must refuse
+                         // the melee weapon the engine would otherwise put there.
+                         (wantDenyOnly && !wantFullFloor && api->abiVersion >= kFloorSpellsOnlyAbi
+                              ? APMF_API::kCastFlag_FloorSpellsOnly : 0u) |
+                         APMF_API::MakeStopPct(wantStopPct);
+            req.ttlMs  = kHealCastTtlMs;
+            // HARBINGER OWN LINE OF SIGHT (ABI v18, APMF_API.h kCastFlag_OwnLineOfSight): for a claim
+            // aimed at ANOTHER actor (not self, not a deny-only floor) Harbinger's seat 0x06 answers
+            // YES only while its own ray to the target is VISIBLE, so the claim is never cast into a
+            // wall. RequestCast only (req.target set). MFO's own Sightline gating at the cast sites
+            // stays for this field cycle. Below v18 the bit is not set and nothing changes.
+            ownLos = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
+                                api->abiVersion >= 18 && LosSupported();
+            if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
+            return req;
+        }
+    }
+
         // kIntent_Cast create-or-refresh (kIntent_Cast/RequestCast, ch.8b) -- SHARED
         // by both ClaimHealCast and ClaimOffenseCast (renamed from
         // EnsureHealClaimLocked, feat/offense-cast-seats, 2026-09-05: the function
@@ -512,42 +562,13 @@ namespace MFO::APMFBridge {
                 }
             }
             if (c.handle != APMF_API::kInvalidHandle) { api->Release(c.handle); c.handle = APMF_API::kInvalidHandle; }
-            APMF_API::APMF_CastRequest req{};
-            req.spell  = wantSpell;
-            req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
-            req.target = wantTarget;
-            // kCastFlag_DualCast and kCastFlag_LeftHand are mutually exclusive (APMF_API.h:
-            // "do NOT set kCastFlag_LeftHand alongside it") -- kApmfHandDualCast (Loadout::
-            // HandPick::DualCast, via HandFor above) claims BOTH hands and never also sets
-            // the single-hand hint. Anything else (kApmfHandRight, or bare 0) is the RIGHT
-            // hint -- APMF's own default when kCastFlag_LeftHand is unset (APMF_API.h).
-            const bool wantDual = (wantHand == kApmfHandDualCast);
-            // F10: kCastFlag_DenyHandOnly is ORTHOGONAL to the hand hint and rides
-            // ALONGSIDE it -- the floor stands on exactly the hand
-            // kCastFlag_LeftHand selects (APMF_API.h). It is never combined with
-            // kCastFlag_DualCast: a floor is by construction the ONE hand the
-            // driving claim leaves free, and a dual claim leaves none (see
-            // ReconcileHandFloorLocked, which never asks for a dual floor).
-            req.flags  = (wantDual                    ? APMF_API::kCastFlag_DualCast :
-                          wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
-                         (wantConc     ? APMF_API::kCastFlag_Concentration : 0u) |
-                         (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
-                         // ABI v20: every MFO floor is a SPELLS-ONLY reservation (see
-                         // ReconcileHandFloorLocked's WEAPONS note): a one-hander stays in the hand.
-                         // ...EXCEPT the launcher user's FULL right floor (Owned::archerFloor), which must refuse
-                         // the melee weapon the engine would otherwise put there.
-                         (wantDenyOnly && !wantFullFloor && api->abiVersion >= kFloorSpellsOnlyAbi
-                              ? APMF_API::kCastFlag_FloorSpellsOnly : 0u) |
-                         APMF_API::MakeStopPct(wantStopPct);
-            req.ttlMs  = kHealCastTtlMs;
-            // HARBINGER OWN LINE OF SIGHT (ABI v18, APMF_API.h kCastFlag_OwnLineOfSight): for a claim
-            // aimed at ANOTHER actor (not self, not a deny-only floor) Harbinger's seat 0x06 answers
-            // YES only while its own ray to the target is VISIBLE, so the claim is never cast into a
-            // wall. RequestCast only (req.target set). MFO's own Sightline gating at the cast sites
-            // stays for this field cycle. Below v18 the bit is not set and nothing changes.
-            const bool ownLos = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
-                                api->abiVersion >= 18 && LosSupported();
-            if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
+            // The request is built by BuildCastRequestLocked (above), the ONE builder the ABI v35 dry run
+            // (CanServeCast, MFO-B2) shares, so the shape it asks about is the shape filed here.
+            bool ownLos = false;
+            APMF_API::APMF_CastRequest req = BuildCastRequestLocked(api, follower, wantSpell, wantTarget, wantHand,
+                                                                    wantConc, wantStopPct, wantDenyOnly,
+                                                                    wantFullFloor, ownLos);
+            const bool wantDual = (wantHand == kApmfHandDualCast);   // the [cfc] log below
             c.handle = api->RequestCast(follower, kOwnBasis, &req);
             if (ownLos && c.handle == APMF_API::kInvalidHandle) {
                 // LosSupported() already probed the service as armed, so this is only a RACE (it
@@ -634,6 +655,85 @@ namespace MFO::APMFBridge {
                 c = CastClaim{};
             }
         }
+
+    // ── ABI v35 CLAIM DRY RUN FOR THE CAST CLAIMS (MFO-B2) ─────────────────────────
+    // See APMFBridge.h. Asks Harbinger's CanServe about EXACTLY the APMF_CastRequest ClaimOffenseCast /
+    // ClaimHealCast would file now (BuildCastRequestLocked, the builder EnsureCastClaimLocked uses), and about
+    // the shape it would FINALLY file: with kCastFlag_OwnLineOfSight set and refused, the real call retries
+    // without it, so the retry's answer is the answer (APMF-B269). Files nothing, logs nothing (the caller
+    // logs a Refused verdict); a kServe_Failed answer is logged once per session here, never treated as a
+    // refusal (Unknown: the caller proceeds as it did before v35).
+    ServeAnswer CanServeCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                             std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct,
+                             bool a_heal, bool a_healDual, std::string* a_why) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        // The claim calls' own non-arbitration early returns (ClaimOffenseCast / ClaimHealCast): a claim that
+        // would not be asked for at all is not Harbinger's answer to give.
+        if (!api || a_follower == 0 || a_spell == 0 || api->abiVersion < 5 ||
+            !(a_heal ? Config::g_healAnimPackage.load() : Config::g_apmfCast.load()))
+            return ServeAnswer::Unknown;
+        if (api->abiVersion < 35) return ServeAnswer::Unknown;   // no CanServe slot below v35
+        auto* v5  = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
+        auto* v35 = reinterpret_cast<const APMF_API::APMF_API_v35*>(api);
+        // The hand the claim call hands EnsureCastClaimLocked: a dual heal is kApmfHandDualCast in the LEFT heal
+        // slot (ClaimHealCast); a dual offense is kApmfHandDualCast in offense slot 0 (ClaimOffenseCast).
+        const std::int32_t hand = (a_heal && a_healDual) ? kApmfHandDualCast : a_hand;
+        const std::size_t  slot = (hand == kApmfHandLeft || hand == kApmfHandDualCast) ? 0u : 1u;
+        std::scoped_lock lock(g_mx);
+        // EnsureCastClaimLocked's UNCHANGED fast path: an identical claim already stands on that slot, so the
+        // real call files no new request (it renews, or re-requests only if Harbinger expired it). No question
+        // to ask: Unknown, the caller proceeds as before.
+        if (const auto it = g_owned.find(a_follower); it != g_owned.end()) {
+            const CastClaim& c = a_heal ? it->second.heal[slot] : it->second.offense[slot];
+            if (c.handle != APMF_API::kInvalidHandle && c.spell == a_spell && c.target == a_target &&
+                c.hand == hand && c.conc == a_concentration && c.stopPct == a_stopPct &&
+                !c.denyOnly && !c.fullFloor)
+                return ServeAnswer::Unknown;
+        }
+        bool ownLos = false;
+        APMF_API::APMF_CastRequest req = BuildCastRequestLocked(v5, a_follower, a_spell, a_target, hand,
+                                                                a_concentration, a_stopPct,
+                                                                /*wantDenyOnly=*/false, /*wantFullFloor=*/false,
+                                                                ownLos);
+        const auto ask = [&](APMF_API::APMF_ServeInfo& a_info) {
+            APMF_API::APMF_ServeQuery q{};
+            q.size  = sizeof(APMF_API::APMF_ServeQuery);
+            q.call  = APMF_API::kServeCall_RequestCast;
+            q.actor = a_follower;
+            q.basis = kOwnBasis;
+            q.cast  = &req;
+            a_info      = APMF_API::APMF_ServeInfo{};
+            a_info.size = sizeof(APMF_API::APMF_ServeInfo);
+            return v35->CanServe(&q, &a_info);
+        };
+        APMF_API::APMF_ServeInfo info{};
+        std::uint32_t verdict = ask(info);
+        if (ownLos && verdict == APMF_API::kServe_Refused) {
+            // The real call's no-sight-line retry (EnsureCastClaimLocked): the shape finally filed.
+            req.flags &= ~APMF_API::kCastFlag_OwnLineOfSight;
+            verdict = ask(info);
+        }
+        switch (verdict) {
+        case APMF_API::kServe_Accepted:
+            return ServeAnswer::Accepted;
+        case APMF_API::kServe_Refused:
+            if (a_why) {
+                info.why[sizeof(info.why) - 1] = '\0';
+                *a_why = std::format("refusal {}: {}", info.refusal, info.why);
+            }
+            return ServeAnswer::Refused;
+        default: {
+            // kServe_Failed (or a verdict this MFO does not know): the dry run could not answer. Logged, never
+            // read as a refusal; the claim is made as before and Harbinger's real answer stands.
+            static std::atomic<bool> s_warned{ false };
+            if (!s_warned.exchange(true))
+                spdlog::warn("[apmf] {:08X} CanServe (ABI v35) could not answer for cast spell {:08X} (verdict {}): "
+                             "the claim is made without a dry run. Logged once per session.",
+                             a_follower, a_spell, verdict);
+            return ServeAnswer::Unknown;
+        }
+        }
+    }
 
     namespace {
         // ── THE IDLE-HAND FLOOR, DERIVED (F10, 2026-09-08) ──────────────────────

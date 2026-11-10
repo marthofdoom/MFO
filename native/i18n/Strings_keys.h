@@ -103,6 +103,10 @@ MFO_STR(Gb_WhenRow,         "When {1}", 1)   // {1}=the condition label
 MFO_STR(Gb_DoRow,           "-> {1}", 1)     // {1}=the action label
 MFO_STR(Gb_FmtPct,          "{1}%", 1)       // a percent value, {1}=the number
 MFO_STR(Gb_FmtDist,         "{1}u", 1)       // a distance value in game units, {1}=the number
+MFO_STR(Gb_Cooldown,        "Cooldown", 0)   // title of the per-rule cooldown list (power-attack rows)
+MFO_STR(Gb_CooldownCell,    "Cooldown {1}", 1)   // the rule-row cell on a power-attack row, {1}=Gb_FmtSec or Gb_CooldownNone
+MFO_STR(Gb_CooldownNone,    "none", 0)       // no cooldown on this rule
+MFO_STR(Gb_FmtSec,          "{1} s", 1)      // a time in seconds, {1}=the number
 MFO_STR(Gb_PickSpell,       "(pick spell)", 0)
 MFO_STR(Gb_LastFail,        "last: {1}", 1)   // tooltip, {1}=why the last cast failed
 MFO_STR(Gb_NoSpells,        "No spells known, no spellbooks carried", 0)

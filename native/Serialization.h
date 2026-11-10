@@ -162,7 +162,8 @@ namespace MFO {
     // equipped class, XP + level for every class, the mastered / unlocked bitsets, the Thief / Master Thief
     // stealth-entry fight counters, and one stored COMBAT gambit table per class that has one (marth Q8: a
     // class's setup comes back when he switches back). The gambit rows use the FLWR row encoding (GambitWire
-    // below, the ONE encoding); the record names the FLWR schema version its rows were written at.
+    // below, the ONE encoding); the record names the row version its rows were written at (GambitWire::kRowSchema,
+    // in FLWR version numbers; card G9).
     //   v1 - u32 rowSchema, u8 classCount, u32 followerCount, then per follower the v1 entry (State.cpp).
     // Written ONLY when there is class state (a save without it carries no MCLS). Kept and re-written whether
     // the class ESL is loaded or not (marth Q9). A record this DLL cannot parse (a newer version, rowSchema or
@@ -263,13 +264,32 @@ namespace MFO {
     //        Every earlier record holds 0 or 1 and reads unchanged. Cost: a follower saved with
     //        MFO switched off for him loses his override (it reads back as Default). A round trip
     //        through an older DLL drops every override (it writes 0/1).
+    //   v6 - card G9 (ClickUp 1dfcuabcqe6, 2026-11-09): each gambit ROW gains u16 cooldownTenths (the per-rule
+    //        cooldown in tenths of a second, 0 = none, clamped [0, 6000] = 600 s on read and write), APPENDED
+    //        after the row's flags byte, so a row's v5 prefix is byte-identical. Read ONLY when version >= 6; a
+    //        v1-v5 row has none (0 = no cooldown). Nothing else in FLWR changed (the per-follower fields, incl.
+    //        the mfoEnabled byte and its bits, are untouched). Encoding is u16 TENTHS, not f32 seconds: exact,
+    //        no NaN / negative / denormal to police, and a byte-identical re-write.
+    //        DOWNGRADE IS ONE-WAY (#12): a v5 DLL skips a v6 FLWR WHOLE (its `version > kSchemaVersion` guard,
+    //        on-screen newer-save warning) and DESTROYS every follower's board on its next save. A trailing
+    //        field cannot be "ignored" by an older reader: the rows sit mid-record, inside per-follower entries.
+    //        MCLS (classes/State.cpp) stores its rows at rowSchema = GambitWire::kRowSchema (6): a v6 DLL reads 1..6
+    //        (a v5 class row ends at its flags byte); a v5 DLL meets rowSchema 6 and KEEPS that MCLS VERBATIM,
+    //        class state frozen for the session (its documented "newer row" path), so class progress survives a
+    //        downgrade where FLWR does not.
+    //        ROW VERSION (decided 2026-11-09, closes review MFO-B569): GambitWire::kRowSchema (below) = the FLWR
+    //        version at which the ROW last changed (6 now). Same number space as FLWR, so no mapping and no new
+    //        on-disk concept: every row gate is `version >= N`, so a row read at a later FLWR version that did not
+    //        touch the row reads identically. MCLS stamps kRowSchema, not kSchemaVersion, so a FUTURE FLWR bump
+    //        that leaves the row alone no longer makes an older DLL freeze class state it could parse. Every MCLS
+    //        record written so far (rowSchema 5 = kSchemaVersion 5 = that DLL's row) reads exactly as before.
     //
     // The v1 block was briefly deleted WITHOUT a bump, on the reasoning that no
     // save had ever held an MFO record. True at the time; it stopped being true
     // the moment saving with the mod active was planned. Bumped to v2 with a v1
     // reader that consumes and discards the tutored block -- because "no save
     // has it yet" is a fact with an expiry date, and a version number is not.
-    inline constexpr std::uint32_t kSchemaVersion = 5;
+    inline constexpr std::uint32_t kSchemaVersion = 6;
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc);
     void LoadCallback(SKSE::SerializationInterface* a_intfc);
@@ -338,15 +358,24 @@ namespace MFO {
     // ── THE gambit-row wire encoding (FLWR's; card C3 made it callable) ──────────────────────────────
     // One row, in this order: str condition, f32 conditionParam, u8 subjectSelector, u32 subjectActorForm
     // (FLWR v3+; a 0xFF id is written as 0, #9), str action, u32 actionParamForm, u8 flags (bit 0 enabled,
-    // bit 1 enabled with an appended subject; see the FLWR v5 notes above). "str" = u32 length (<= 64) + bytes.
+    // bit 1 enabled with an appended subject; see the FLWR v5 notes above), u16 cooldownTenths (FLWR v6+, card
+    // G9; clamped <= 6000). "str" = u32 length (<= 64) + bytes.
     // FLWR (Serialization.cpp) and MCLS (classes/State.cpp) both call these, so the encoding exists ONCE. A
-    // future FLWR bump that changes the row (card G9's per-rule cooldown) MUST change it HERE, gated on
-    // a_flwrVersion, so MCLS rows follow automatically (MCLS stores the FLWR version it wrote its rows at).
+    // FLWR bump that changes the row MUST change it HERE, gated on a_flwrVersion, so MCLS rows follow
+    // automatically (MCLS stores the FLWR version it wrote its rows at). Card G9 (v6, the cooldown) did exactly that.
     namespace GambitWire {
         inline constexpr std::uint32_t kMaxOpcodeLen = 64;
+        // The FLWR version at which the row encoding last changed (FLWR v6 notes above; MFO-B569). BUMP IT to the
+        // new kSchemaVersion in the same change as any FLWR bump that changes the row, never otherwise. MCLS
+        // stamps it as its rowSchema and reads rowSchema 1..kRowSchema; the writers write rows at it.
+        inline constexpr std::uint32_t kRowSchema = 6;
+        static_assert(kRowSchema <= kSchemaVersion, "a row cannot be newer than the FLWR record that carries it");
         // false = an opcode longer than kMaxOpcodeLen (logged; nothing after it in the row is written).
         bool WriteRow(SKSE::SerializationInterface& a_out, const Gambit& a_g);
         bool WriteRow(CoSaveBuffer& a_out, const Gambit& a_g);
+        // SELF-TEST ONLY (the MCLS round trip, bClassCoSaveSelfTest): the row as FLWR v<a_rowSchema> wrote it, so the
+        // reader's older-row path is proven against real bytes. Supports v5..kRowSchema; anything else -> false.
+        bool WriteRowAt(CoSaveBuffer& a_out, const Gambit& a_g, std::uint32_t a_rowSchema);
         // false = short read / implausible opcode length (the caller aborts its record). An unresolvable
         // actionParamForm disables THIS rule with a marker (DESIGN.md 3.3) and sets a_paramUnresolved.
         bool ReadRow(SKSE::SerializationInterface& a_in, std::uint32_t a_flwrVersion, Gambit& a_g, bool& a_paramUnresolved);
