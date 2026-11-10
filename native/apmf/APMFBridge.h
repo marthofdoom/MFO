@@ -1944,4 +1944,15 @@ namespace MFO::APMFBridge {
     bool EquipPreferenceForced(RE::FormID a_follower);
     // kPreLoadGame / revert teardown (ClearTransientState): release every ch.26 handle.
     void ClearEquipPreferences();
+
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY (native/selftest/TestsDrive.cpp aim.h5_miss_budget): one APMF GetProjectileAimState read for a follower (the
+    // counters the [aim] probe logs). api = Harbinger ABI >= 36 present; any thread (the call is APMF's own RCU read).
+    struct DevAimInfo {
+        bool          api = false;
+        std::uint32_t state = 0, budget = 0, shots = 0, corrected = 0, hits = 0, hitsOther = 0, misses = 0, pending = 0;
+        std::uint32_t windowFill = 0, windowMisses = 0, uncorrectable = 0, wouldCorrect = 0, rankStood = 0;
+    };
+    DevAimInfo DevReadAim(RE::FormID a_follower);
+#endif
 }

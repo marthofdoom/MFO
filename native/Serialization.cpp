@@ -578,7 +578,20 @@ namespace MFO {
             const auto tableCount = static_cast<std::uint8_t>(MFO::Table::kCount);
             a_intfc->WriteRecordData(tableCount);
             for (std::uint8_t t = 0; t < tableCount; ++t) {
+#ifdef MFO_DEV_SELFTEST
+                // DEV BUILDS ONLY: a row the self-test runner inserted for a run in progress is NEVER written (Docs/SELFTEST.md "Mid-run
+                // saves"): the writer sees the table without them, the count below is of the rows written, the layout is unchanged.
+                std::vector<Gambit> devKept;
+                const std::vector<Gambit>* devList = &st.tables[t];
+                if (SelfTest::HasRunRows(formID)) {
+                    for (const auto& g : st.tables[t])
+                        if (!SelfTest::IsRunRow(formID, g.uid)) devKept.push_back(g);
+                    devList = &devKept;
+                }
+                const auto& list = *devList;
+#else
                 const auto& list = st.tables[t];
+#endif
                 // Clamp the COUNT and the LOOP together. Casting the count to
                 // u8 while writing the whole list desyncs the stream at 256
                 // entries -- everything after it becomes garbage.

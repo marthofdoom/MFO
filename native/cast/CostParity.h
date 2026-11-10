@@ -41,4 +41,19 @@ namespace MFO::CostParity {
 
     // Forget all per-session memory (kPreLoadGame / revert, via Followers::ClearTransientState).
     void Reset();
+
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY (native/selftest/TestsDrive.cpp, costparity.* tests): the last billing events this module made, the
+    // log-equivalent internal counter the self-test judges by. A COPY under the leaf lock, ANY thread; newest last.
+    enum class DevRoad : std::uint8_t { Direct, AnimatedOnce, AnimatedSlice };
+    struct DevEvent {
+        std::uint32_t seq = 0;
+        double        atMs = 0.0;       // steady clock, ms
+        RE::FormID    caster = 0, spell = 0;
+        DevRoad       road = DevRoad::Direct;
+        bool          applies = false;  // parity applied (P > E); false = the engine cost stood, nothing was added
+        float         parity = 0.0f, engine = 0.0f, spent = 0.0f, sec = 0.0f;
+    };
+    std::vector<DevEvent> DevEvents();
+#endif
 }

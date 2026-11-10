@@ -38,6 +38,11 @@ namespace MFO::SelfTest {
     // carries its own ledger.
     void ClearAll();
 
+    // SaveCallback (main thread, pump paused), FLWR writer: rows a RUNNING self-test inserted into a follower's tables are skipped
+    // so a save made mid-run never carries them (Docs/SELFTEST.md "Mid-run saves"). Leaf-locked reads.
+    bool HasRunRows(RE::FormID a_follower);
+    bool IsRunRow(RE::FormID a_follower, std::uint32_t a_uid);
+
 #else
 
     inline void Tick() {}

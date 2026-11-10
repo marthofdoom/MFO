@@ -530,6 +530,10 @@ namespace MFO::Actuation {
     // plugin.cpp's kDataLoaded handler (SKSE main thread, records fully loaded); pure form reads, no engine call
     // besides the vfuncs Compute already uses, no lock held. Rate limit: one line per (shape, row, two-handed) bucket,
     // largest first, capped at kMaxLines, plus one totals line.
+#ifdef MFO_DEV_SELFTEST
+    namespace { DevShapeCensusStats g_devCensus; }
+    DevShapeCensusStats DevShapeCensus() { return g_devCensus; }
+#endif
     void RunSpellShapeCensus() {
         if (!Config::g_spellShapeCensus.load()) return;
         auto* dh = RE::TESDataHandler::GetSingleton();
@@ -572,6 +576,9 @@ namespace MFO::Actuation {
                          ShapeName(static_cast<SpellShape>(std::get<0>(k))),
                          EngineRowName(static_cast<EngineRow>(std::get<1>(k))), std::get<2>(k), b->n, ex);
         }
+#ifdef MFO_DEV_SELFTEST
+        g_devCensus = { true, total, skipped, static_cast<std::uint32_t>(order.size()), wall, selfHaz, scriptRider };
+#endif
         spdlog::info("[shape-census] total castable={} skipped(non-spell/constant/no effects)={} buckets={}{} wall={} "
                      "selfHazard={} scriptRider={} tlBurst={} (prediction mirrored from Harbinger docs, log only)",
                      total, skipped, order.size(), order.size() > kMaxLines ? " (line cap hit)" : "",

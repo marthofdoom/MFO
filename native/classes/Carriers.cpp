@@ -384,4 +384,42 @@ namespace MFO::Classes {
         g_pending.clear();
         g_granted.clear();
     }
+
+#ifdef MFO_DEV_SELFTEST
+    DevCarrierView DevReadCarriers(RE::FormID a_follower) {
+        DevCarrierView v;
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+        auto* base  = actor ? actor->GetActorBase() : nullptr;
+        if (!base) return v;
+        if (!g_forms.resolved) Resolve();
+        if (!g_forms.ok) return v;
+        v.resolved    = true;
+        v.processLive = HasMiddleHigh(actor);
+        for (std::size_t c = 0; c < kClassCount; ++c) {
+            if (auto* f = g_forms.fact[c]) { v.hasFaction[c] = true; v.ranks[c] = std::max(0, static_cast<int>(actor->GetFactionRank(f, false))); }
+            if (auto* p = g_forms.perk[c]) {
+                ++v.perksExpected;
+                if (base->GetPerkIndex(p).has_value()) ++v.perksOnBase;
+                if (!v.processLive || !base->GetPerkIndex(p).has_value()) continue;
+                for (auto* entry : p->perkEntries) {
+                    if (!entry || static_cast<unsigned>(entry->header.rank) + 1u != 1u || entry->GetType() != RE::PERK_ENTRY_TYPE::kEntryPoint) continue;
+                    auto* ep = static_cast<RE::BGSEntryPointPerkEntry*>(entry);
+                    const auto point = static_cast<std::uint32_t>(ep->entryData.entryPoint.get());
+                    if (point >= RE::BGSEntryPoint::ENTRY_POINTS::kTotal) continue;
+                    ++v.entriesExpected;
+                    CountVisitor cv;
+                    cv.want = entry;
+                    actor->ForEachPerkEntry(static_cast<RE::BGSEntryPoint::ENTRY_POINT>(point), cv);
+                    if (cv.match > 0) ++v.entriesLive;
+                }
+            }
+        }
+        v.mercFull     = g_forms.mercFull && actor->HasSpell(g_forms.mercFull);
+        v.mercQuarter  = g_forms.mercQuarter && actor->HasSpell(g_forms.mercQuarter);
+        v.scoutQuarter = g_forms.scoutQuarter && actor->HasSpell(g_forms.scoutQuarter);
+        for (int l = 0; l < kScoutLevels; ++l)
+            if (g_forms.scout[static_cast<std::size_t>(l)] && actor->HasSpell(g_forms.scout[static_cast<std::size_t>(l)])) v.scoutLevel = l + 1;
+        return v;
+    }
+#endif
 }
