@@ -2689,3 +2689,16 @@ Coordinator's paraphrase (not verbatim):
 - SEV-5: ProgProbe.cpp:409/:471 (dev bProgProbe, default OFF) still call ApplyPerksFromBase and duplicate when armed; never read a probe run as evidence.
 - SEV-5: the post-change event 0x391760 has no in-binary subscriber; a raw-address plugin listener would no longer see MFO's changes.
 - Unverified by the reviewer: the 1.7.104 addresses (author's only).
+
+### MFO-B619 (SEV-4, OPEN, MFO_GenerateESP.py make_classes_esl / MFO_Classes.esl, against ee36630d, Opus review of C7; owner C6 / H-MARK)
+- The marker MGEFs (MFOC_Marked, MFOC_Flanked, MFOC_Guarded) have no carrier SPEL yet, so `HasMagicEffectKeyword` on the reference perk (and any C6 passive that tests a marker) cannot be satisfied until C6 or H-MARK adds a SPEL that carries them. The SPEL must use the same casting type and delivery as its MGEF (Marked FF + Contact, Guarded Concentration + Aimed, Flanked FF + Target Actor).
+
+### MFO-B620 (SEV-5, OPEN, MFO_GenerateESP.py class add-on block, against ee36630d, Opus review of C7)
+- The consistency checks in `load_class_table` / `make_class_styles` are `assert` statements, which `python -O` strips; use explicit raises.
+- The `kRoot*` / `kDisSpell` regexes raise AttributeError (not a named error) when ClassTable.cpp changes shape.
+- The manifest FLST leaves out MFOC_Version (0x820); the marker MGEFs, the flag factions (MFOC_OffClassWeapon, MFOC_MarkPending) and the reference perk are reachable only by local id.
+- The TES4 HEDR record count is the house constant 100, not the real count.
+
+### MFO-B621 (SEV-5, process notes, against ee36630d, Opus review of C7)
+- `tools/audit_esp.py` was edited without being named in the brief (accepted, additive).
+- The manual CI dispatch (`gh workflow run native.yml`) compiled an unchanged DLL and proves nothing for a generator-only diff. Do not dispatch CI for a generator-only change again; GitHub's API is rate-limited.

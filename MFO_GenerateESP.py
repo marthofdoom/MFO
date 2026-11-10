@@ -21,6 +21,7 @@ Usage:  python3 MFO_GenerateESP.py [out_dir]     (default: ./out)
 
 import json
 import os
+import re
 import struct
 import sys
 from io import BytesIO
@@ -2047,6 +2048,548 @@ def write_prog_mcm_files(out_dir):
     return cdir
 
 
+# ── MFO_Classes.esl — the CLASS add-on (card C7, class update, ClickUp 86e3dhbd3) ──
+# A SEPARATE, OPTIONAL, self-contained ESL like MFO_Progression.esl: it masters
+# ONLY Skyrim.esm (own-form prefix 0x01), declares itself with its OWN manifest
+# keyword (edid suffix "_MFOClassesManifest", Classes.h PRESENCE CONTRACT), and
+# touches NOTHING in MFO.esp (which stays byte-identical). Forms.h FormIDs stay
+# frozen: every id below is this add-on's own local id. Absent = the DLL's class
+# tree is inert (native/classes/Presence.cpp).
+#
+# THE CLASS TABLE IS READ FROM THE DLL'S SOURCE (ONE source of truth, no 35-row
+# hand copy): native/classes/ClassTable.cpp (rows) + native/classes/Classes.h
+# (the Id enum order and the Flag:: bit values). load_class_table() parses them
+# and ASSERTS the result (35 rows, enum order == row order, tier counts, slug ==
+# passive id, T1 roots 1..3) so a table edit that the parser cannot follow fails
+# the generator loudly instead of shipping a stale ESL.
+#
+# LOCAL ID PLAN (ESL-legal 0x800-0xFFF; ADD ONLY, never renumber):
+#   0x800 KYWD manifest join key      0x801 FLST manifest (entry[0] = 0x800)
+#   0x802 FLST passive factions (35, in class-table order = the Id bit index)
+#   0x803 FLST class styles index: the 35 per-class style FLSTs in class-Id order
+#   0x880 + i  FLST MFOC_ClassStyles_<Name>: [mask GLOB, that class's CSTYs in slot-bit order]
+#   0x8C0 + i  GLOB MFOC_StyleMask_<Name>: bitmask 1 melee, 2 melee dual, 4 ranged, 8 cast
+#   0x808-0x80A KYWD Marked/Flanked/Guarded (carried by the three marker MGEFs)
+#   0x810-0x812 MGEF MFOC_Marked / MFOC_Flanked / MFOC_Guarded
+#   0x820-0x824 GLOB Version, XpRate, PriestSunDps, SaintHealPerSec, SaintUndeadDps
+#   0x830 FACT MFOC_OffClassWeapon     0x831 FACT MFOC_MarkPending
+#   0x840 + i  FACT MFOC_P_<Name> (i = class Id ordinal 0..34 -> 0x840-0x862)
+#   0x900 +    CSTY MFOC_Style_<Name>_<Melee|MeleeDual|Ranged|Cast>, one per (class, usable
+#              stance), allocated sequentially in class then slot order; look them up through the
+#              per-class FLST, NEVER by position (stances come from the table's weapon bits)
+#   0xA00 PERK MFOC_ReferencePerk (the audited reference shape, NEVER granted)
+# Abilities (SPEL) and the full passive PERK set are card C6's job.
+OWN_CLS = 0x01000000
+CGID_MANIFEST_KYWD = OWN_CLS | 0x800
+CGID_MANIFEST      = OWN_CLS | 0x801
+CGID_FACTION_LIST  = OWN_CLS | 0x802
+CGID_STYLE_LIST    = OWN_CLS | 0x803
+CGID_MARKED_KYWD   = OWN_CLS | 0x808
+CGID_FLANKED_KYWD  = OWN_CLS | 0x809
+CGID_GUARDED_KYWD  = OWN_CLS | 0x80A
+CGID_MARKED_MGEF   = OWN_CLS | 0x810
+CGID_FLANKED_MGEF  = OWN_CLS | 0x811
+CGID_GUARDED_MGEF  = OWN_CLS | 0x812
+CGID_VERSION_GLOB  = OWN_CLS | 0x820
+CGID_XP_RATE_GLOB  = OWN_CLS | 0x821
+CGID_PRIEST_SUN    = OWN_CLS | 0x822
+CGID_SAINT_HEAL    = OWN_CLS | 0x823
+CGID_SAINT_UNDEAD  = OWN_CLS | 0x824
+CGID_OFFCLASS_FACT = OWN_CLS | 0x830
+CGID_MARKPEND_FACT = OWN_CLS | 0x831
+CGID_PASSIVE_BASE  = OWN_CLS | 0x840
+CGID_STYLE_FLST_BASE = OWN_CLS | 0x880
+CGID_STYLE_MASK_BASE = OWN_CLS | 0x8C0
+CGID_STYLE_BASE    = OWN_CLS | 0x900
+CGID_REFERENCE_PERK = OWN_CLS | 0xA00
+CLS_NEXT_OBJECT_ID = 0xA01
+CLS_VERSION_STAMP  = 1.000
+
+# RANK SPACE (marth 11-10: caps T1 10 / T2 15 / T3 20 / T4 25; the T3 strong effect
+# and the T4 unique scale linearly 25% at L1 -> 100% at the cap; a mastered-but-
+# unequipped passive keeps 1/4 of the FULL value). Each MFOC_P_<class> faction
+# carries ONE per-reference rank (SetFactionRank; a faction needs NO RNAM rank
+# titles for a rank to be readable, the vanilla follower factions declare none):
+#   rank <= 0 / not a member  OFF
+#   rank 1..cap               ACTIVE at class level N: the equipped class, or a
+#                             T4 parent held at full (its level is then the cap)
+#   rank 100                  MASTERED AND UNEQUIPPED = 1/4 of the full value
+# 100 sits above every cap (max 25) and inside the signed-byte rank range (<=127),
+# so "active at level >= L" is the two-sided GetFactionRank in [L, 99]: the 100
+# marker never satisfies a level test by accident. The per-level magnitude
+# carrier (one entry reading the level, or a ladder of entries) is C6's decision.
+CLASS_LEVEL_CAP = {1: 10, 2: 15, 3: 20, 4: 25, 5: 25}   # T5 (Dragonborn) has no passive: 25 is a placeholder ceiling
+RANK_OFF = 0
+RANK_ACTIVE_MAX = 99
+RANK_MASTERED_UNEQUIPPED = 100
+SCALE_FLOOR = 0.25        # strong-effect fraction at class level 1
+MASTERED_FRACTION = 0.25  # mastered-unequipped fraction of the full value
+
+
+def class_scale(level, cap):
+    """Linear 25% at L1 -> 100% at the cap (marth 11-10). Reference formula for
+    C6; the generator itself only needs the rank space above."""
+    assert 1 <= level <= cap and cap > 1
+    return SCALE_FLOOR + (1.0 - SCALE_FLOOR) * (level - 1) / (cap - 1)
+
+
+# ── the class table, parsed from the DLL source ────────────────────────────
+CLS_SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "native", "classes")
+CLS_TIER_COUNTS = {1: 3, 2: 9, 3: 14, 4: 8, 5: 1}   # 35 classes (Classes.h static_assert)
+
+
+def _cls_source():
+    with open(os.path.join(CLS_SRC_DIR, "Classes.h"), encoding='utf-8') as f:
+        hdr = f.read()
+    with open(os.path.join(CLS_SRC_DIR, "ClassTable.cpp"), encoding='utf-8') as f:
+        src = f.read()
+    return hdr, src
+
+
+def _cls_named_bits(text, ns):
+    """{'kName': value} for 'inline constexpr std::uint16_t kName = 1 << N;' lines inside
+    'namespace <ns> { ... }' of Classes.h."""
+    m = re.search(r'namespace ' + ns + r'\s*\{(.*?)\n\s*\}', text, re.S)
+    if not m:
+        raise SystemExit(f"load_class_table: Classes.h has no 'namespace {ns}' block")
+    return {n: 1 << int(b) for n, b in
+            re.findall(r'inline constexpr std::uint16_t (k\w+)\s*=\s*1 << (\d+);', m.group(1))}
+
+
+def class_flag_bits():
+    """{'kShortLeash': 1, ...} from the Flag:: namespace of Classes.h."""
+    hdr, _src = _cls_source()
+    return _cls_named_bits(hdr, 'Flag')
+
+
+def _split_top(text):
+    """Split on commas at paren depth 0 (outside quotes)."""
+    out, depth, cur, q = [], 0, '', False
+    for ch in text:
+        if ch == '"':
+            q = not q
+        if not q:
+            if ch in '(<[{':
+                depth += 1
+            elif ch in ')>]}':
+                depth -= 1
+            elif ch == ',' and depth == 0:
+                out.append(cur.strip())
+                cur = ''
+                continue
+        cur += ch
+    out.append(cur.strip())
+    return out
+
+
+def load_class_table():
+    """[{'idx','id','slug','name','tier','line','root','weapons','passive','flags'}]
+    in class-Id order, parsed from native/classes/{Classes.h,ClassTable.cpp}."""
+    hdr, src = _cls_source()
+
+    def fail(msg):
+        raise SystemExit("load_class_table: " + msg)
+
+    # Id enum order == the bit index into every mastered/unlocked bitset.
+    m = re.search(r'enum class Id[^{]*\{(.*?)\bkCount\b', hdr, re.S)
+    enum_ids = re.findall(r'[A-Za-z_]\w*', re.sub(r'//[^\n]*', '', m.group(1)))
+    names = dict(_cls_named_bits(hdr, 'Flag'))
+    names.update(_cls_named_bits(hdr, 'Weapon'))
+    rm = re.search(r'constexpr RootT1 kRootMelee = (\d+), kRootRanged = (\d+), kRootMage = (\d+);', src)
+    names.update(zip(('kRootMelee', 'kRootRanged', 'kRootMage'), map(int, rm.groups())))
+    # Named flag/weapon-set aliases the cpp defines (kDisSpell, kMelee1H2H, kThiefSet, ...).
+    aliases = dict(re.findall(r'constexpr std::uint16_t (k\w+)\s*=\s*([^;]+);', src))
+
+    def value(expr, seen=()):
+        v = 0
+        for tok in (t.strip() for t in expr.split('|')):
+            if tok.isdigit():
+                v |= int(tok)
+            elif tok in names:
+                v |= names[tok]
+            elif tok in aliases and tok not in seen:
+                v |= value(aliases[tok], seen + (tok,))
+            else:
+                fail(f"unknown flag/weapon token '{tok}' in ClassTable.cpp")
+        return v
+
+    rows = []
+    for line in src.splitlines():
+        if not line.lstrip().startswith('Mk(Id::'):
+            continue
+        body = line.strip()[len('Mk('):]
+        end = body.rfind(')')
+        a = _split_top(body[:end])
+        if len(a) < 13 or not a[0].startswith('Id::') or not a[4].startswith('Line::'):
+            fail(f"cannot parse a class row: {line.strip()[:90]}")
+        rows.append({'id': a[0][4:], 'slug': a[1].strip('"'), 'name': a[2].strip('"'), 'tier': int(a[3]),
+                     'line': a[4][6:], 'root': value(a[5]), 'weapons': value(a[7]),
+                     'passive': a[9].strip('"'), 'flags': value(a[12])})
+    # Consistency checks: a table edit the parser cannot follow must fail HERE.
+    assert len(rows) == 35 and len(enum_ids) == 35, \
+        f"class table: {len(rows)} rows / {len(enum_ids)} Id enumerators, expected 35 / 35"
+    for i, (row, eid) in enumerate(zip(rows, enum_ids)):
+        row['idx'] = i
+        assert row['id'] == eid, f"class row {i}: Mk(Id::{row['id']}) but the Id enum has {eid} at {i}"
+        assert row['passive'] == 'passive.' + row['slug'], f"class {row['slug']}: passive id {row['passive']}"
+        if row['tier'] == 1:
+            assert row['root'] == i + 1, f"T1 class {row['slug']}: root {row['root']} != combatClassOverride {i + 1}"
+    counts = {t: sum(1 for r in rows if r['tier'] == t) for t in CLS_TIER_COUNTS}
+    assert counts == CLS_TIER_COUNTS, f"class table tier counts {counts}, expected {CLS_TIER_COUNTS}"
+    assert rows[-1]['id'] == 'Dragonborn' and rows[-1]['root'] == 0
+    assert len({cls_edid_name(r) for r in rows}) == 35, "class EDID names collide"
+    return rows
+
+
+def cls_edid_name(row):
+    """Display name -> an EDID-safe PascalCase word ('Arch-Mage' -> 'ArchMage')."""
+    return re.sub(r'[^A-Za-z0-9]', '', row['name'])
+
+
+# ── CTDA + PERK writer (the NEW byte shape; C6 builds every passive on it) ──
+# SHAPES VERIFIED against Skyrim.esm (tools/esp_inspect.py dumps + a census of all
+# 375 PERK records, 2026-11-09), never from a format doc:
+#   PERK = EDID, FULL, DESC, CTDA* (perk-level), DATA(5: trait,level,ranks,playable,
+#          hidden), then per ENTRY: PRKE(3: type 2=entry point, rank, priority),
+#          DATA(3: entry point, function, tab count), [PRKC(tab idx) CTDA+]*,
+#          EPFT(1: 1=float), EPFD(float), PRKF(empty).
+#   CTDA = 32 bytes: u8 type(op bits 0x20/0x40/0x80; 0x01 = OR with the next, 0x04 =
+#          use-global), 3 pad, f32 value, u16 function, 2 pad, u32 param1, u32
+#          param2, u32 runOn (0 = Subject), u32 reference, u32 param3 (0xFFFFFFFF
+#          as vanilla writes it).
+#   The tab index is the entry point's evaluation context and its MEANING DIFFERS PER
+#   ENTRY POINT (vanilla census of every condition on tabs of the six EPs below,
+#   2026-11-09; see PERK_ENTRY_TABS): e.g. tab 1 is the WEAPON for EP 18/28/35/37, the
+#   SPELL for EP 29, the ATTACKER actor for EP 36; tab 2 is the TARGET for EP 29/35.
+CTDA_OPS = {'==': 0x00, '!=': 0x20, '>': 0x40, '>=': 0x60, '<': 0x80, '<=': 0xA0}
+# Condition function ids (CommonLibSSE-NG TESCondition.h FunctionID, mit-3.7 fork),
+# EACH ALSO FOUND in vanilla Skyrim.esm CTDA records (census 2026-11-09):
+COND_GET_FACTION_RANK   = 73    # param1 = FACT
+COND_GET_RANDOM_PERCENT = 77    # vanilla uses '<=' N.0 (NN01Perk: a0 .. 25.0)
+COND_HAS_PERK           = 448   # param1 = PERK
+COND_HAS_KEYWORD        = 560   # param1 = KYWD (a weapon keyword on a weapon tab, an actor keyword on an actor tab)
+COND_IS_ATTACKING       = 672   # no params (vanilla IDLE BearSleep / PlayerStaggerBow)
+COND_HAS_MAGIC_EFFECT_KEYWORD = 699   # param1 = KYWD carried by an active MGEF (vanilla Detect* MGEFs)
+
+# entry point -> (tab kind for tab 0, tab 1, tab 2). The index is the BGSEntryPoint enum
+# (PROG_ENTRYPOINT_VERDICTS row order): 18 ModSneakAttackMult, 28 ModPowerAttackDamage,
+# 29 ModSpellMagnitude, 35 ModAttackDamage, 36 ModIncomingDamage, 37
+# ModTargetDamageResistance. Float-valued entries (EPFT 1; functions 1 Set / 2 Add /
+# 3 Multiply), tab count 3 in vanilla. A tab kind is recorded ONLY where vanilla
+# conditions on that tab prove it (the keyword / function census of Skyrim.esm):
+#   18  tab1 weapon (WeapTypeBow / WeapTypeDagger HasKeyword)
+#   28  tab0 owner (func 697), tab1 weapon (WeapType*)
+#   29  tab0 owner (HasPerk), tab1 SPELL (MagicAlch* keywords, func 693/713/696), tab2 target (ActorType*, IsUndead)
+#   35  tab0 owner (funcs 448/80/72/597/697), tab1 weapon (WeapType*), tab2 target (races/ids)
+#   36  tab0 owner (funcs 682/640/14/77), tab1 ATTACKER actor (PlayerKeyword, ActorTypeDragon)
+#   37  tab0 owner (HasPerk), tab1 weapon (WeapTypeWarhammer / Mace)
+# None = vanilla never conditions that tab in the census, so the meaning is UNVERIFIED and
+# perk_entry REFUSES a condition there (an owner condition can go on the perk-level
+# conditions of perk_record instead). An entry point NOT in this table is REFUSED too.
+PERK_ENTRY_TABS = {
+    18: (None,    'weapon',   None),
+    28: ('owner', 'weapon',   None),
+    29: ('owner', 'spell',    'target'),
+    35: ('owner', 'weapon',   'target'),
+    36: ('owner', 'attacker', None),
+    37: ('owner', 'weapon',   None),
+}
+PERK_FUNC_FLOAT = {1: 'Set', 2: 'Add', 3: 'Multiply'}
+
+
+class Cond(bytes):
+    """A CTDA subrecord that remembers which tab KIND it was written for."""
+    kind = None
+
+
+def ctda(func, param1=0, op='==', value=1.0, kind=None, or_next=False, use_global=False, run_on=0, param2=0, ref=0):
+    """One 32-byte CTDA subrecord (see the shape comment above). `kind` ('owner',
+    'weapon', 'spell', 'target', 'attacker') is REQUIRED: perk_entry refuses a
+    condition whose kind does not match the tab it is placed on."""
+    assert kind in ('owner', 'weapon', 'spell', 'target', 'attacker'), f"ctda: condition kind {kind!r} not declared"
+    typ = CTDA_OPS[op] | (0x01 if or_next else 0) | (0x04 if use_global else 0)
+    c = Cond(subrec('CTDA', struct.pack('<B3xfH2xIIIII', typ, float(value), func, param1, param2, run_on, ref, 0xFFFFFFFF)))
+    c.kind = kind
+    return c
+
+
+def class_rank_conditions(faction_fid, lo=1, hi=RANK_ACTIVE_MAX):
+    """AND-pair on the perk OWNER: the follower's rank in faction_fid is in [lo, hi]. The
+    default (1..99) means 'ACTIVE at any class level'; (L, 99) means 'level >= L';
+    (100, 100) means 'mastered, unequipped'."""
+    assert RANK_OFF < lo <= hi <= RANK_MASTERED_UNEQUIPPED
+    return [ctda(COND_GET_FACTION_RANK, faction_fid, '>=', lo, kind='owner'),
+            ctda(COND_GET_FACTION_RANK, faction_fid, '<=', hi, kind='owner')]
+
+
+def perk_entry(entry_point, function, value, tab_conditions=None, priority=0, rank=0):
+    """One entry-point entry. tab_conditions = {tab index: [ctda(...), ...]}; tabs with no
+    conditions are omitted exactly as vanilla omits them. A condition on a tab whose kind
+    is unverified (None) or differs from the condition's declared kind is REFUSED."""
+    assert entry_point in PERK_ENTRY_TABS, \
+        f"entry point {entry_point}: no vanilla-verified tab kinds (PERK_ENTRY_TABS); dump a vanilla perk using it first"
+    assert function in PERK_FUNC_FLOAT, f"function {function}: only float Set/Add/Multiply are verified"
+    kinds = PERK_ENTRY_TABS[entry_point]
+    tabs = tab_conditions or {}
+    assert all(0 <= t < len(kinds) for t in tabs), f"tab out of range for entry point {entry_point}"
+    out = subrec('PRKE', struct.pack('<BBB', 2, rank, priority))
+    out += subrec('DATA', struct.pack('<BBB', entry_point, function, len(kinds)))
+    for t in sorted(tabs):
+        assert tabs[t], f"tab {t} has no conditions"
+        for c in tabs[t]:
+            assert kinds[t] is not None, \
+                f"entry point {entry_point} tab {t}: meaning unverified in vanilla, no condition allowed"
+            assert getattr(c, 'kind', None) == kinds[t], \
+                f"entry point {entry_point} tab {t} is the {kinds[t]} tab but the condition is for the {getattr(c, 'kind', None)}"
+        out += subrec('PRKC', struct.pack('<B', t)) + b''.join(tabs[t])
+    out += subrec('EPFT', struct.pack('<B', 1)) + subrec('EPFD', struct.pack('<f', float(value)))
+    return out + subrec('PRKF', b'')
+
+
+def perk_record(fid, edid, full, desc, entries, perk_conditions=None):
+    """A PERK. DATA = trait 0, level 0, ranks 1, playable 1, hidden 0 (the exact
+    bytes crReduceDamage075 / Overdraw00 carry). FULL/DESC are inline zstrings
+    (this plugin is not localized, the MESG precedent)."""
+    body = subrec('EDID', zstr(edid)) + subrec('FULL', zstr(full)) + subrec('DESC', zstr(desc))
+    body += b''.join(perk_conditions or [])
+    body += subrec('DATA', struct.pack('<BBBBB', 0, 0, 1, 1, 0))
+    body += b''.join(entries)
+    return record('PERK', fid, 0, body)
+
+
+def make_reference_perk():
+    """The ONE audited sample (MFOC_ReferencePerk). It exercises every condition
+    kind C6 needs: faction rank (active range and the mastered marker), IsAttacking,
+    HasKeyword on the weapon tab, HasMagicEffectKeyword on the target tab, and
+    GetRandomPercent. Every magnitude is the NEUTRAL 1.0 and the perk is never
+    granted, so it is inert by construction: a byte-shape reference for the audit,
+    not a passive."""
+    knight = CGID_PASSIVE_BASE + 3          # MFOC_P_Knight (Id ordinal 3), a real faction
+    e1 = perk_entry(35, 3, 1.0, {
+        0: class_rank_conditions(knight) + [ctda(COND_IS_ATTACKING, op='==', value=1.0, kind='owner')],
+        1: [ctda(COND_HAS_KEYWORD, 0x0001E715, '==', 1.0, kind='weapon')],       # WeapTypeBow (Skyrim.esm)
+        2: [ctda(COND_HAS_MAGIC_EFFECT_KEYWORD, CGID_MARKED_KYWD, '==', 1.0, kind='target')],   # target carries the Marked effect
+    })
+    e2 = perk_entry(36, 3, 1.0, {
+        0: class_rank_conditions(knight, RANK_MASTERED_UNEQUIPPED, RANK_MASTERED_UNEQUIPPED)
+           + [ctda(COND_GET_RANDOM_PERCENT, 0, '<=', 25.0, kind='owner')],
+    })
+    return perk_record(CGID_REFERENCE_PERK, "MFOC_ReferencePerk", "MFOC Reference Perk",
+                       "Byte-shape reference for the class passives. Never granted; neutral magnitudes.",
+                       [e1, e2])
+
+
+# ── FACT / MGEF / CSTY ──────────────────────────────────────────────────────
+def cls_fact(fid, edid):
+    """A marker faction: EDID, DATA (flags 0), CRVA. Shape = vanilla form-version-44
+    FACT (EDID DATA CRVA, CRVA 20 bytes '01 01' then zeros, as 926 vanilla records)."""
+    body = subrec('EDID', zstr(edid)) + subrec('DATA', struct.pack('<I', 0))
+    body += subrec('CRVA', bytes([1, 1]) + b'\x00' * 18)
+    return record('FACT', fid, 0, body)
+
+
+CAST_FF, CAST_CONCENTRATION = 1, 2          # MGEF DATA casting type (offset 80)
+DELIV_CONTACT, DELIV_AIMED, DELIV_TARGET_ACTOR = 1, 2, 3   # MGEF DATA delivery (offset 84)
+
+
+def cls_marker_mgef(fid, edid, full, kywd_fid, casting, delivery):
+    """A SCRIPT-LESS marker MGEF: Script archetype, no VMAD, hidden in the UI,
+    carrying one keyword (so a perk can test HasMagicEffectKeyword). DATA is the
+    152-byte layout of make_mgef (mgef_inert_self_data) with the casting type and
+    delivery set per marker (see the callers for the vanilla precedent each follows).
+    Order = vanilla EDID FULL MDOB KSIZ KWDA DATA SNDD DNAM. DNAM is an inline
+    zstring (non-localized plugin). Any SPEL carrying one must use the SAME casting
+    type and delivery (vanilla pairs them on both records)."""
+    d = bytearray(mgef_inert_self_data())
+    struct.pack_into('<I', d, 80, casting)
+    struct.pack_into('<I', d, 84, delivery)
+    body = subrec('EDID', zstr(edid)) + subrec('FULL', zstr(full)) + subrec('MDOB', struct.pack('<I', 0))
+    body += subrec('KSIZ', struct.pack('<I', 1)) + subrec('KWDA', struct.pack('<I', kywd_fid))
+    body += subrec('DATA', bytes(d)) + subrec('SNDD', b'') + subrec('DNAM', zstr(""))
+    return record('MGEF', fid, 0, body)
+
+
+# Class CSTY bases: the MFO stance styles, VERBATIM (make_csty). Asserted against
+# make_csty's own bytes in make_class_styles, so a retune there fails here.
+CLS_CSCR = {1: bytes.fromhex('48e13a3f3d0ad73ecdcc4c3ecdcc4c3e'),    # csHumanMeleeLvl1
+            2: bytes.fromhex('6666e63e6666263fcdcc4c3ecdcc4c3e'),    # csHumanMissile
+            3: bytes.fromhex('9a99993e0000003fcdcc4c3ecdcc4c3e')}    # csHumanMagic
+CLS_CSGD = {1: (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0),
+            2: (1.0, 0.5, 1.0, 0.1, 0.1, 10.0, 1.0, 0.1, 0.1, 0.5),
+            3: (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2)}
+
+
+def class_csty_params(stance, flags, flagbits):
+    """(csgd tuple, cscr bytes) for a class: the stance base plus TWO small,
+    table-driven positioning offsets. C7 BASELINE, not tuning: C8 / the field
+    retune these (xEdit-editable, one record per class per wield).
+      Flag.kShortLeash (the wall classes)  circle -0.10, fallback -0.15  (hold the line)
+      Flag.kDisengage  (Thief + mage line) fallback +0.15; non-melee also avoidThreat +0.20."""
+    csgd = list(CLS_CSGD[stance])
+    circle, fallback, flank, stalk = struct.unpack('<4f', CLS_CSCR[stance])
+    if flags & flagbits['kShortLeash']:
+        circle, fallback = max(0.0, circle - 0.10), max(0.0, fallback - 0.15)
+    if flags & flagbits['kDisengage']:
+        fallback = min(1.0, fallback + 0.15)
+        if stance != 1:
+            csgd[9] = min(1.0, csgd[9] + 0.20)
+    return tuple(csgd), struct.pack('<4f', circle, fallback, flank, stalk)
+
+
+def class_weapon_bits():
+    """{'kDagger': 1, ...} from the Weapon:: namespace of Classes.h."""
+    hdr, _src = _cls_source()
+    return _cls_named_bits(hdr, 'Weapon')
+
+
+# STYLE SLOTS: a class's styles are looked up through its OWN FLST, never by position in
+# a global run (card C8 consumes this; the DLL must not hard-code CSTY ids).
+#   MFOC_ClassStyles          (0x803)  35 entries, the per-class FLSTs in class-Id order
+#   MFOC_ClassStyles_<Name>   (0x880+Id) entry[0] = GLOB MFOC_StyleMask_<Name> (0x8C0+Id),
+#                              entry[1..] = that class's CSTYs in ASCENDING SLOT-BIT order,
+#                              exactly the slots the GLOB's bitmask names:
+#                              1 = melee single-wield, 2 = melee DUAL twin (kAllowDualWielding),
+#                              4 = ranged, 8 = cast. The mask GLOB's value is read at runtime
+#                              (GLOB values persist, editor-ids do not); popcount(mask) ==
+#                              entries - 1 (tools/audit_esp.py checks it).
+STYLE_SLOT_MELEE, STYLE_SLOT_MELEE_DUAL, STYLE_SLOT_RANGED, STYLE_SLOT_CAST = 1, 2, 4, 8
+
+
+def class_stances(row, wb):
+    """The stances (1 melee, 2 ranged, 3 cast) a class can actually use, DERIVED from its
+    table data, never hand-picked:
+      - its root stance (State.h combatClassOverride; T1 and the pure lines), plus
+      - every stance its ALLOWED-WEAPON bits can reach (dagger / 1H / 2H -> melee, bow /
+        crossbow -> ranged, staff -> cast; kUnrestricted adds nothing, T1 keeps its root), plus
+      - cast for every hybrid (Line::Hybrid: weapon side + school), plus
+      - all three when the class has NO fixed root (Dragonborn)."""
+    st = set()
+    if row['root']:
+        st.add(row['root'])
+    w = row['weapons']
+    if not (w & wb['kUnrestricted']):
+        if w & (wb['kDagger'] | wb['kOneHand'] | wb['kTwoHand']):
+            st.add(1)
+        if w & (wb['kBow'] | wb['kCrossbow']):
+            st.add(2)
+        if w & wb['kStaff']:
+            st.add(3)
+    if row['line'] == 'Hybrid':
+        st.add(3)
+    if row['root'] == 0:
+        st |= {1, 2, 3}
+    return sorted(st)
+
+
+def make_class_styles(table, flagbits):
+    """CSTY records, one per (class, usable stance); a DUAL twin (DATA 1|4) only for the
+    MELEE stance, where kAllowDualWielding matters. Returns (CSTY records, {idx: (mask,
+    [fids in slot-bit order])}); CSTY ids are allocated sequentially from CGID_STYLE_BASE."""
+    mfo = make_csty()
+    for edid, fid, stance, df in (("MFO_MeleeStyle", FID_MELEE_STYLE, 1, 1 | 4),
+                                  ("MFO_MeleeSingleStyle", FID_MELEE_SINGLE_STYLE, 1, 1),
+                                  ("MFO_RangedStyle", FID_RANGED_STYLE, 2, 1),
+                                  ("MFO_CastStyle", FID_CAST_STYLE, 3, 1)):
+        assert _csty_record(edid, fid, CLS_CSGD[stance], CLS_CSCR[stance], df) in mfo, \
+            f"class CSTY base for {edid} drifted from make_csty -- update CLS_CSGD/CLS_CSCR with it"
+    wb = class_weapon_bits()
+    body, per_class, nxt = b'', {}, CGID_STYLE_BASE
+    for row in table:
+        nm = cls_edid_name(row)
+        mask, fids = 0, []
+        for stance in class_stances(row, wb):
+            csgd, cscr = class_csty_params(stance, row['flags'], flagbits)
+            variants = ([(STYLE_SLOT_MELEE, "Melee", 1), (STYLE_SLOT_MELEE_DUAL, "MeleeDual", 1 | 4)]
+                        if stance == 1 else
+                        [(STYLE_SLOT_RANGED, "Ranged", 1)] if stance == 2 else [(STYLE_SLOT_CAST, "Cast", 1)])
+            for slot, label, df in variants:
+                body += _csty_record(f"MFOC_Style_{nm}_{label}", nxt, csgd, cscr, data_flags=df)
+                mask |= slot
+                fids.append(nxt)
+                nxt += 1
+        per_class[row['idx']] = (mask, fids)
+    assert nxt <= OWN_CLS | 0xA00, "class CSTY run overran the 0xA00 perk id"
+    return body, per_class
+
+
+def make_classes_tes4():
+    # Same header as make_prog_tes4: ONE master (Skyrim.esm), ESL flag 0x200.
+    hedr = struct.pack('<f', 1.70) + struct.pack('<I', 100) + struct.pack('<I', CLS_NEXT_OBJECT_ID)
+    body = subrec('HEDR', hedr) + subrec('CNAM', zstr("marth"))
+    body += subrec('SNAM', zstr("MFO class add-on (optional; detected at runtime)"))
+    body += subrec('MAST', zstr("Skyrim.esm")) + subrec('DATA', struct.pack('<Q', 0))
+    return record('TES4', 0, 0x00000200, body)
+
+
+# (fid, edid, default, FNAM). The MCM-tunable values the plan names (C4 XP rate,
+# C11 /s values). The editor-id is the contract (matched by suffix like the
+# economy GLOBs). Defaults: XP rate 1.0 (a multiplier on the sized curve), Priest
+# sun 2/s, Saint +30 HP/s to allies and 30/s on undead (class-walkthrough ruling).
+CLS_GLOBS = [
+    (CGID_XP_RATE_GLOB, "MFOC_XpRate",          1.0,  'f'),
+    (CGID_PRIEST_SUN,   "MFOC_PriestSunDps",    2.0,  'f'),
+    (CGID_SAINT_HEAL,   "MFOC_SaintHealPerSec", 30.0, 'f'),
+    (CGID_SAINT_UNDEAD, "MFOC_SaintUndeadDps",  30.0, 'f'),
+]
+
+
+def make_classes_esl():
+    table = load_class_table()
+    flagbits = class_flag_bits()
+    data = make_classes_tes4()
+    # Top-group order = Skyrim.esm's (walked 2026-11-09): KYWD GLOB FACT MGEF CSTY FLST PERK.
+    kw = lambda fid, edid: record('KYWD', fid, 0, subrec('EDID', zstr(edid)) + subrec('CNAM', struct.pack('<I', 0)))
+    data += group('KYWD', kw(CGID_MANIFEST_KYWD, "MFOC_MFOClassesManifest")
+                  + kw(CGID_MARKED_KYWD, "MFOC_MarkedKeyword")
+                  + kw(CGID_FLANKED_KYWD, "MFOC_FlankedKeyword")
+                  + kw(CGID_GUARDED_KYWD, "MFOC_GuardedKeyword"))
+    styles, per_class = make_class_styles(table, flagbits)   # needed now: the mask GLOBs live in the GLOB group
+    globs = prog_glob(CGID_VERSION_GLOB, "MFOC_Version", CLS_VERSION_STAMP, 's')
+    for fid, edid, value, fnam in CLS_GLOBS:
+        globs += prog_glob(fid, edid, value, fnam)
+    for row in table:
+        globs += prog_glob(CGID_STYLE_MASK_BASE + row['idx'], "MFOC_StyleMask_" + cls_edid_name(row),
+                           float(per_class[row['idx']][0]), 's')
+    data += group('GLOB', globs)
+    facts = cls_fact(CGID_OFFCLASS_FACT, "MFOC_OffClassWeapon") + cls_fact(CGID_MARKPEND_FACT, "MFOC_MarkPending")
+    faction_fids = []
+    for row in table:
+        fid = CGID_PASSIVE_BASE + row['idx']
+        faction_fids.append(fid)
+        facts += cls_fact(fid, "MFOC_P_" + cls_edid_name(row))
+    data += group('FACT', facts)
+    # Casting type + delivery follow the VANILLA pairing (census of Skyrim.esm 2026-11-09, SPEL and
+    # MGEF carry the same pair):
+    #  - Marked  = Fire-and-Forget + Contact: every ApplyCombatHitSpell (entry point 52) spell, 4/4,
+    #    is FF + Contact on both records, and a mark is applied by the marker-holder's hit.
+    #  - Guarded = Concentration + Aimed: every cloak-applied spell (MGEF archetype Cloak), 13/13
+    #    SPELs and 18 MGEFs, is Concentration + Aimed; Guarded is the ally-side aura effect.
+    #  - Flanked = Fire-and-Forget + Target Actor: it is set by a DLL cast (CastSpellImmediate onto
+    #    the foe, no hit or aura road), and FF + Target Actor is a delivery vanilla Script-archetype
+    #    MGEFs use (3 of them).
+    data += group('MGEF', cls_marker_mgef(CGID_MARKED_MGEF, "MFOC_Marked", "Marked", CGID_MARKED_KYWD,
+                                          CAST_FF, DELIV_CONTACT)
+                  + cls_marker_mgef(CGID_FLANKED_MGEF, "MFOC_Flanked", "Flanked", CGID_FLANKED_KYWD,
+                                    CAST_FF, DELIV_TARGET_ACTOR)
+                  + cls_marker_mgef(CGID_GUARDED_MGEF, "MFOC_Guarded", "Guarded", CGID_GUARDED_KYWD,
+                                    CAST_CONCENTRATION, DELIV_AIMED))
+    data += group('CSTY', styles)
+    flst = prog_flst(CGID_MANIFEST, "MFOC_AddonManifest",
+                     [CGID_MANIFEST_KYWD, CGID_FACTION_LIST, CGID_STYLE_LIST]
+                     + [fid for fid, _e, _v, _f in CLS_GLOBS])
+    flst += prog_flst(CGID_FACTION_LIST, "MFOC_PassiveFactions", faction_fids)
+    # Per-class style lookup (see the STYLE SLOTS comment): entry[0] the mask GLOB, then the CSTYs.
+    flst += prog_flst(CGID_STYLE_LIST, "MFOC_ClassStyles",
+                      [CGID_STYLE_FLST_BASE + row['idx'] for row in table])
+    for row in table:
+        mask, fids = per_class[row['idx']]
+        flst += prog_flst(CGID_STYLE_FLST_BASE + row['idx'], "MFOC_ClassStyles_" + cls_edid_name(row),
+                          [CGID_STYLE_MASK_BASE + row['idx']] + fids)
+    data += group('FLST', flst)
+    data += group('PERK', make_reference_perk())
+    return data
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "out"
     os.makedirs(out_dir, exist_ok=True)
@@ -2091,6 +2634,13 @@ def main():
     with open(prog_esp_path, 'wb') as f:
         f.write(make_progression_esl(esl=False))
 
+    # The class add-on (card C7) — a third SEPARATE optional plugin. No quests, so
+    # no SEQ and no MCM files here (the class MCM is card C11).
+    cls_path = os.path.join(out_dir, "MFO_Classes.esl")
+    cls_data = make_classes_esl()
+    with open(cls_path, 'wb') as f:
+        f.write(cls_data)
+
     # The addon's own MCM config (ModSetting economy sliders) — everything the
     # tab needs ships with the ESL; MFO.esp / MFO.dll stay ignorant of it.
     prog_mcm_dir = write_prog_mcm_files(out_dir)
@@ -2120,6 +2670,7 @@ def main():
     print(f"Written: {seq_path} (5 start-game-enabled quests: MCM, Command, Loot, Retreat, Trade)")
     print(f"Written: {prog_path} ({len(prog_data):,} bytes) — optional progression addon")
     print(f"Written: {prog_seq_path} (1 start-game-enabled quest: MFOP MCM)")
+    print(f"Written: {cls_path} ({len(cls_data):,} bytes) — optional class add-on (35 passive FACTs, per-stance class CSTYs, 3 marker MGEFs, 1 reference PERK)")
     print(f"Written: {prog_mcm_dir}/config.json + settings.ini "
           f"({len(PROG_MCM_SLIDERS)} ModSetting economy sliders)")
     print()
