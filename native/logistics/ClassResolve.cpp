@@ -14,6 +14,7 @@
 // Lives in logistics because the gambit-table reads it reuses (TableHasAction,
 // HasCastGambit) are logistics helpers.
 #include "Logistics_internal.h"
+#include "classes/Classes.h"   // class add-on: Active(), GetEquipped(), Get().rootT1 (C5b: no Auto when classes are ON)
 
 namespace MFO::Logistics {
 
@@ -47,6 +48,18 @@ namespace MFO::Logistics {
     std::uint8_t ResolveBaseClass(RE::Actor* a_actor, const FollowerState& a_state) {
         if (a_state.combatClassOverride >= 1 && a_state.combatClassOverride <= 3)
             return a_state.combatClassOverride;   // the player's pick always wins
+
+        // C5b (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). With the class add-on
+        // Active() and a class EQUIPPED (equipped != kNoClass = classes ON for this follower), the Gambit-tab Auto vote below does
+        // not apply: his equipped class's root T1 is the answer. Classes OFF for him, or the add-on absent, falls through to the
+        // vote UNCHANGED. Dragonborn has no fixed root (rootT1 0), so it also falls through (flagged in the C5b report).
+        if (a_actor && Classes::Active()) {
+            const std::uint8_t eq = Classes::GetEquipped(a_actor->GetFormID());
+            if (eq < Classes::kClassCount) {
+                const std::uint8_t root = Classes::Get(static_cast<Classes::Id>(eq)).rootT1;
+                if (root >= 1 && root <= 3) return root;
+            }
+        }
 
         float score[3] = { 0.0f, 0.0f, 0.0f };
 
