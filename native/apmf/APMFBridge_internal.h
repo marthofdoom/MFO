@@ -420,6 +420,9 @@ namespace MFO::APMFBridge {
         void ClearCastGuards();       // apmf/CastGuard.cpp: ch.25 guards, released at kPreLoadGame / revert
         void SweepPursuitLeashes();
         void ClearPursuitLeashes();
+        // ch.29 projectile-aim claim table (apmf/AimClaims.cpp, card H5): own mutex g_aimMx, same call shape.
+        void SweepAimClaims();
+        void ClearAimClaims();
         // ch.24 held-heal approach table (apmf/CombatApproach.cpp): own mutex, same call shape.
         void SweepHealApproaches();
         void ClearHealApproaches();

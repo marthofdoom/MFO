@@ -813,6 +813,18 @@ namespace MFO::Config {
     //     strict adherence to the equipped class; it only means anything while the tree is active. INI-only (no MCM key).
     inline std::atomic<bool>  g_classTree{ true };
     inline std::atomic<bool>  g_classStrict{ true };
+    //   bAimBudget (card H5, 2026-11-10, INI-only, default ON): a managed follower of a RANGED class gets a Harbinger ch.29
+    //     projectile-aim claim (ABI v36) whose budget is the MOST misses allowed among his last 10 shots; Harbinger re-aims the
+    //     launch at the engine's own unscattered solution when the window is spent (apmf/AimClaims.cpp). Inert without the class
+    //     add-on ESL, without Harbinger >= 0.19.0, or when its seat refused. iAimBudget<Class> = the per-class budget, 0..10
+    //     (0 = never miss, 10 = observe only). bAimProbe (default OFF): one "[aim]" state line per claimed follower every 30 s.
+    inline std::atomic<bool>  g_aimBudget{ true };
+    inline std::atomic<int>   g_aimBudgetArcher{ 5 };
+    inline std::atomic<int>   g_aimBudgetScout{ 4 };
+    inline std::atomic<int>   g_aimBudgetWitchhunter{ 4 };
+    inline std::atomic<int>   g_aimBudgetRanger{ 3 };
+    inline std::atomic<int>   g_aimBudgetJaqspur{ 1 };
+    inline std::atomic<bool>  g_aimProbe{ false };
     //   bClassCoSaveSelfTest (class update C3, DEBUG, INI-only, default OFF): at every game load, round-trip a synthetic class
     //     state (every field, stored gambit tables included) and then the loaded state through the 'MCLS' codec in memory and log
     //     PASS / FAIL with the first mismatch. Pure memory, writes nothing to the save or the world.

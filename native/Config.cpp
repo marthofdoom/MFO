@@ -133,6 +133,13 @@ namespace MFO::Config {
             else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
             else if (a_key == "bClassTree")         { setB(g_classTree);     return; }   // default ON; INI-only; class add-on tree (classes/)
             else if (a_key == "bClassStrict")       { setB(g_classStrict);   return; }   // default ON; INI-only; strict adherence (needs the tree)
+            else if (a_key == "bAimBudget")         { setB(g_aimBudget);     return; }   // default ON; INI-only; card H5 ch.29 miss budgets for ranged classes
+            else if (a_key == "iAimBudgetArcher")   { setI(g_aimBudgetArcher, 0, 10);      return; }   // misses allowed in 10 (0 = never, 10 = observe)
+            else if (a_key == "iAimBudgetScout")    { setI(g_aimBudgetScout, 0, 10);       return; }
+            else if (a_key == "iAimBudgetWitchhunter") { setI(g_aimBudgetWitchhunter, 0, 10); return; }
+            else if (a_key == "iAimBudgetRanger")   { setI(g_aimBudgetRanger, 0, 10);      return; }   // marth 2026-11-10: at most 3
+            else if (a_key == "iAimBudgetJaqspur")  { setI(g_aimBudgetJaqspur, 0, 10);     return; }   // marth 2026-11-10: at most 1 (0 ok)
+            else if (a_key == "bAimProbe")          { setB(g_aimProbe);      return; }   // default OFF; INI-only; "[aim]" state line / 30 s
             else if (a_key == "bClassCoSaveSelfTest") { setB(g_classCoSaveSelfTest); return; }   // default OFF; INI-only DEBUG; MCLS round-trip self-test at load
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
             else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
@@ -450,6 +457,13 @@ namespace MFO::Config {
             g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
             g_classTree          = true;    // class add-on tree -- ON (marth 2026-10-27); inert without MFO_Classes.esl
             g_classStrict        = true;    // strict adherence to the class -- ON with the tree (marth 2026-10-27)
+            g_aimBudget          = true;    // card H5 ch.29 miss budgets -- ON (inert without the ESL / Harbinger >= 0.19.0)
+            g_aimBudgetArcher    = 5;       //   Archer: detection + correction, no fixed guarantee (marth 2026-11-10)
+            g_aimBudgetScout     = 4;
+            g_aimBudgetWitchhunter = 4;
+            g_aimBudgetRanger    = 3;       //   marth 2026-11-10: at most 3 misses in 10
+            g_aimBudgetJaqspur   = 1;       //   marth 2026-11-10: at most 1 in 10 (never-miss accepted: set 0)
+            g_aimProbe           = false;   // [aim] passive state probe -- OFF everywhere by default
             g_classCoSaveSelfTest = false;  // class update C3 debug: MCLS round-trip self-test at load -- OFF
             g_errandMinSellGold  = 100;
             g_errandMinPurse     = 200;

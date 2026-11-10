@@ -502,6 +502,7 @@ namespace MFO::Followers {
         // runtime-only claims, released so neither outlives him. Idempotent no-ops when none.
         APMFBridge::ReleaseRetreatReentryDeny(id, "dismissed");
         APMFBridge::ReleasePursuitLeash(id, "dismissed");
+        APMFBridge::ReleaseAimClaim(id, "dismissed");   // ch.29 class miss budget (card H5)
         APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         APMFBridge::ReleaseOffenseApproach(id, "dismissed", true);   // ch.24 offense approach
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
