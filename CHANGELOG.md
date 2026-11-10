@@ -5,6 +5,22 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.10.0 -- Perk duplication fix, follower spell cost, animated wards and the first ranged miss budgets (PRERELEASE)
+
+This is a Deck test prerelease. It needs Harbinger v0.19.0 (ABI v36) for the ranged miss budgets. With an older Harbinger everything else works, and each new Harbinger call is gated on its ABI.
+
+**Save note, carried over from 2.9.0.** The follower gambit data is written in the FLWR v6 layout (the cooldown on each rule), which 2.9.0 introduced. A save written by 2.9.0 or this build cannot be loaded by an older MFO, and an older MFO that saves over it wipes the follower boards. This build adds no new co-save layout. Keep a copy of your saves from before you try it.
+
+- **Progression no longer duplicates perks.** The game's own "apply the base perks" call was being run after every grant, every load and every strip or respec, and the game never checks whether an entry-point perk is already there. Each load gave an enrolled follower a second copy of every entry-point perk. MFO now changes only the perk that changed, and a removed perk stops working at once. Loads start clean, so no save needs fixing. This is also the candidate hotfix for the Progression add-on.
+- **Follower spell cost matches yours.** A managed follower pays what your own skill cost curve would charge at his skill in the spell's school, and then his own cost perks apply. A direct cast charges it, and an animated cast is topped up by the difference. Setting: `bFollowerSpellCostParity` (default on).
+- **The hand planner sees a sword in the right hand.** With a heal spell in the left hand and a sword in the right, a rule no longer plans the right hand for an offense cast over the sword.
+- **A retreat at full health holds until the game's Flee ends.** A follower who reaches you healed no longer drops the hold while his Flee package is still running. The wait is bounded at 20 seconds and logs loudly if it hits the bound.
+- **Followers who join above your HMS total gain nothing until you catch up.** A leveling follower's Health, Magicka and Stamina award is also capped at the gap to your total. Nothing is ever lowered by this.
+- **Oakflesh, wards, frost and shock spells take the animated road.** MFO now files these under the same engine row as the game does, so they are claimed and animated instead of being cast direct.
+- **Ranged miss budgets per class (needs Harbinger 0.19.0 and the class add-on).** A follower of a ranged class gets a budget over his last 10 shots: Archer 5, Scout 4, Witchhunter 4, Ranger 3, Jaqspur 1. When the budget is spent, Harbinger aims that shot at the game's own unscattered solution. Settings: `bAimBudget`, `iAimBudget*` and the log-only `bAimProbe`.
+- **Class add-on groundwork continues, still inert and not for players yet.** The add-on ESL generator (`MFO_Classes.esl`), class level caps by tier (T1 10, T2 15, T3 20, T4 25), free class switching, a strict Auto picker and the passive carriers (21 class passives, two ability spells, three marker spells, a per-follower ON/OFF) are in. Nothing happens without the add-on ESL.
+- **Two log-only censuses.** One counts every castable spell by shape and logs it at load (`bSpellShapeCensus`). One lists hidden perks that only the player has (`bInheritPerkCensus`). They change nothing in game.
+
 ## v2.9.0 -- Power attack cooldowns, right-hand spells, a "will this work" check and the class add-on groundwork (PRERELEASE)
 
 This is a Deck test prerelease. It needs Harbinger v0.18.0 (ABI v35) for the attack mixes and the CanServe check. With an older Harbinger everything else works, and each new Harbinger call is gated on its ABI.

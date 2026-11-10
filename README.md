@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.9.0 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
+**Status: v2.10.0 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,17 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.10.0 (Deck test prerelease)
+
+- **Needs Harbinger v0.19.0 (ABI v36)** for the ranged miss budgets. With an older Harbinger everything else works.
+- **Progression no longer duplicates entry-point perks** on load, grant, strip or respec.
+- **Follower spell cost follows your cost curve** at his skill, then his own cost perks (`bFollowerSpellCostParity`).
+- **Hand planner, retreat and HMS fixes:** a sword in the right hand is seen while the left holds a spell, a full health retreat waits for the game's Flee to end, and a follower who joins above your HMS total gains nothing until you catch up.
+- **Oakflesh, wards, frost and shock spells are animated** (engine row alias).
+- **Ranged miss budgets per class** through Harbinger ch.29 (needs the class add-on).
+- **Class add-on groundwork continues** (ESL generator, mastery caps, passive carriers), inert until its ESL ships. Two log-only censuses were added.
+- The one-way save note from 2.9.0 (FLWR v6) still applies.
 
 ## What is new in 2.9.0 (Deck test prerelease)
 
