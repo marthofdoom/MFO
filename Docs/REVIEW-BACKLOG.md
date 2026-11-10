@@ -2691,7 +2691,7 @@ Coordinator's paraphrase (not verbatim):
 - SEV-5: the post-change event 0x391760 has no in-binary subscriber; a raw-address plugin listener would no longer see MFO's changes.
 - Unverified by the reviewer: the 1.7.104 addresses (author's only).
 
-### MFO-B619 (SEV-4, OPEN, MFO_GenerateESP.py make_classes_esl / MFO_Classes.esl, against ee36630d, Opus review of C7; owner C6 / H-MARK)
+### MFO-B619 (SEV-4, CLOSED by card C6 `feat/classes-c6-carriers`: the three marker carrier SPELs 0xA80-0xA82 ship with the same casting type and delivery as their MGEFs; no passive tests a marker yet, H-MARK will, MFO_GenerateESP.py make_classes_esl / MFO_Classes.esl, against ee36630d, Opus review of C7; owner C6 / H-MARK)
 - The marker MGEFs (MFOC_Marked, MFOC_Flanked, MFOC_Guarded) have no carrier SPEL yet, so `HasMagicEffectKeyword` on the reference perk (and any C6 passive that tests a marker) cannot be satisfied until C6 or H-MARK adds a SPEL that carries them. The SPEL must use the same casting type and delivery as its MGEF (Marked FF + Contact, Guarded Concentration + Aimed, Flanked FF + Target Actor).
 
 ### MFO-B620 (SEV-5, OPEN, MFO_GenerateESP.py class add-on block, against ee36630d, Opus review of C7)
@@ -2717,7 +2717,7 @@ Coordinator's paraphrase (not verbatim):
 ### MFO-B626 (SEV-5, OPEN, progression/Hms.cpp above-parity gate, against 4e5abfb3, Opus review)
 Verbatim (reviewer): (Hms.cpp:506 and :713-740, a behaviour shift the gate makes common) a frozen follower has `budget` = 0, so the skew block is skipped (no decay, no growth) and the battle-window counters (`battlesSinceLevelUp` / `battlesOffClass`, Hms.cpp:737) are never consumed. They then build up over every frozen level. The first award after the player catches up computes off-class usage over a multi-level window. Before, with the cap ON, `applied` > 0 each level, so the window closed every level. The same shape already existed when credit was 0. The fix would be to close the window on a gate-frozen award, which is a design call.
 (selftest/Tests.cpp ~:310, ProgAllocator.h:574 HmsCapView) no self-test covers the gate. HmsCapView has no headroom field, and the cap-OFF road (where the gate is the only bound) has no test.
-### MFO-B627 (SEV-4, OPEN, classes/Mastery.cpp Scale01, against 5d22b760, Opus review of C5)
+### MFO-B627 (SEV-4, ANSWERED by card C6: `CarrierRanks` never calls Scale01; an equipped class at level 0 counts as level 1, Dragonborn puts every mastered class at its cap; the ESL ladder indexes the level directly. classes/Mastery.cpp Scale01, against 5d22b760, Opus review of C5)
 Reviewer's finding (F3), as relayed by the coordinator: Scale01 returns 0 for level 0. Dragonborn sits at level 0 / cap 0, so C6 calling Scale01(level, LevelCap(id)) gives Dragonborn zero effect, and a class equipped via SetEquipped directly stays at level 0. C6's contract must say how Dragonborn and level 0 are handled. Reasoning: Dragonborn has no level by ruling (all mastered passives at full), and SwitchClass/ActivateClass now starts a class at level 1, but a direct SetEquipped does not. See MAP.md section 9 (classes/Mastery.cpp).
 
 ### MFO-B628 (SEV-5, OPEN, classes/Classes.h, against 5d22b760, Opus review of C5)
@@ -2728,3 +2728,10 @@ Verbatim (reviewer):
 - R3 SEV-4 (Mastery.cpp kSkillMap and PickAutoClass): `AnySchool` rows (Mage, Arch-Mage, and the school half of Grand Battlemage) score the follower's best school, so they tie exactly with every single-school row of the same tier and skill count. Example: a Restoration-led follower with both Arch-Mage and Saint unlocked gets Arch-Mage, because both rows score Restoration, are T4 with one skill, and the lower `Id` wins. Same in kind for Grand Battlemage against any same-tier melee hybrid with that school. Suggested fix: make `AnySchool` lose ties, or ask marth for the Arch-Mage row as part of the OPEN-row ruling (Q42).
 - R1 SEV-5 (State.cpp:791/812 through `Mutate`'s `g_store[a_fid]`): a write refused because the class is locked still creates an all-default `FollowerClasses` entry, which is then saved. Harmless (default == no entry); a find-first lambda or a no-create Mutate would avoid it.
 - R2 SEV-5 (State.cpp:620-637): the load repair refreshes `unlocked` only when it adds a mastered bit, so a record saved with only the unlocked set stale is not refreshed at load. Limited impact: every reader combines stored and computed bits, and no shipped build had the old writer.
+
+### MFO-C6-1 (SEV-4, OPEN, classes/Carriers.cpp + generator, against the C6 commit, author's own list for the Opus review)
+- Entry-point tab 0 = owner is INFERRED, not census-proven, for entry points 18, 27, 30 and 38 (vanilla never conditions that tab; it is the owner in 9 of 9 entry points where it does). A wrong inference fails CLOSED (the faction test runs on the wrong subject, the entry never fires). Field-verify one effect per entry point (Master Thief sneak multiplier, Champion PA stamina, Sorcerer summon duration, Conjurer / Healer cost).
+- `Actor::AddToFaction(faction, rank)` on an existing runtime member is assumed to update the rank (the Carriers read-back logs a mismatch loudly, once); it has no earlier use in MFO and is not a `VerifiedAddresses.h` row.
+- Spellsword's Destruction cost cut is not gated on a weapon in hand (ruling says "with a weapon in hand"); Sorcerer's summon duration covers the Atronach / Undead / Familiar keywords only (a Dremora Lord has no MagicSummon* keyword); Warlock / Nightblade / Witchhunter add levels to ALL level-capped Illusion magnitudes except shouts (as Animage does).
+- A follower who is not 3D-loaded for 600 retries (~20 min) is dropped from the pump until his next class change or the next load.
+
