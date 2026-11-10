@@ -21,7 +21,7 @@ Checks:
   8. SEQ lists the start-game-enabled non-run-once quests (MFO.esp only)
 
 Usage:  python3 tools/audit_esp.py [out/MFO.esp] [out/MFO_Progression.esl ...]
-        (no args = audit both emitted plugins)
+        (no args = audit all emitted plugins)
 """
 
 import os
@@ -42,6 +42,7 @@ ESL_LO, ESL_HI = 0x800, 0xFFF
 EXPECTED_MASTERS = {
     "MFO.esp":              ["Skyrim.esm"],
     "MFO_Progression.esl":  ["Skyrim.esm"],
+    "MFO_Classes.esl":      ["Skyrim.esm"],
 }
 
 # What native/ hardcodes. Keep in lockstep with MFO_GenerateESP.py AND with the
@@ -169,10 +170,39 @@ PROG_REQUIRED = {
 # (SEQ/MFO_Progression.seq) — same rule as the main plugin's SEQ_EXPECTED.
 PROG_SEQ_EXPECTED = {0x870}
 
+# MFO_Classes.esl (card C7) -- the class add-on. The DLL (native/classes/Presence.cpp) keys on the
+# manifest keyword's editor-id suffix "_MFOClassesManifest"; everything else is found through the
+# manifest FLST / index FLSTs or, for the C6/C8 cards, by local id. Keep in lockstep with the
+# generator's CGID_* table. 0x840+i = the 35 passive factions, 0x900+2i(+1) = the 70 class CSTYs.
+CLS_REQUIRED = {
+    0x800: ('KYWD', "MFOC_MFOClassesManifest", ['EDID']),
+    0x801: ('FLST', "MFOC_AddonManifest",      ['EDID', 'LNAM']),
+    0x802: ('FLST', "MFOC_PassiveFactions",    ['EDID', 'LNAM']),
+    0x803: ('FLST', "MFOC_ClassStyles",        ['EDID', 'LNAM']),
+    0x808: ('KYWD', "MFOC_MarkedKeyword",      ['EDID']),
+    0x809: ('KYWD', "MFOC_FlankedKeyword",     ['EDID']),
+    0x80A: ('KYWD', "MFOC_GuardedKeyword",     ['EDID']),
+    0x810: ('MGEF', "MFOC_Marked",             ['EDID', 'KSIZ', 'KWDA', 'DATA']),
+    0x811: ('MGEF', "MFOC_Flanked",            ['EDID', 'KSIZ', 'KWDA', 'DATA']),
+    0x812: ('MGEF', "MFOC_Guarded",            ['EDID', 'KSIZ', 'KWDA', 'DATA']),
+    0x820: ('GLOB', "MFOC_Version",            ['EDID', 'FNAM', 'FLTV']),
+    0x821: ('GLOB', "MFOC_XpRate",             ['EDID', 'FNAM', 'FLTV']),
+    0x822: ('GLOB', "MFOC_PriestSunDps",       ['EDID', 'FNAM', 'FLTV']),
+    0x823: ('GLOB', "MFOC_SaintHealPerSec",    ['EDID', 'FNAM', 'FLTV']),
+    0x824: ('GLOB', "MFOC_SaintUndeadDps",     ['EDID', 'FNAM', 'FLTV']),
+    0x830: ('FACT', "MFOC_OffClassWeapon",     ['EDID', 'DATA', 'CRVA']),
+    0x831: ('FACT', "MFOC_MarkPending",        ['EDID', 'DATA', 'CRVA']),
+    0xA00: ('PERK', "MFOC_ReferencePerk",      ['EDID', 'FULL', 'DESC', 'DATA', 'PRKE', 'EPFT', 'EPFD', 'PRKF']),
+}
+CLS_PASSIVE_COUNT = 35      # FACTs 0x840..0x862, one per class in Id order
+CLS_STYLE_COUNT = 70        # CSTYs 0x900..0x945, [single, dual] per class
+CLS_MANIFEST_ENTRIES = 3 + 4   # keyword + 2 index FLSTs + 4 MCM GLOBs
+
 # basename -> (required table, seq expectations or None [no SEQ file at all])
 PROFILES = {
     "MFO.esp":             (REQUIRED, SEQ_EXPECTED),
     "MFO_Progression.esl": (PROG_REQUIRED, PROG_SEQ_EXPECTED),
+    "MFO_Classes.esl":     (CLS_REQUIRED, None),
 }
 
 GRUP_HDR = 24
@@ -326,6 +356,35 @@ def audit_one(esp):
                                   f"(kIgnoreCombat 0x00100000 | preferred-speed 0x2000)")
                 if pkdt[6] != 2:
                     errors.append(f"PACK 0x831: PKDT byte6 (preferredSpeed) {pkdt[6]}, expected 2 (Run)")
+    elif base == "MFO_Classes.esl":
+        # Class add-on: the passive factions / class styles come in fixed id runs, and the
+        # manifest + index FLSTs must carry exactly the entries the generator wrote.
+        for i in range(CLS_PASSIVE_COUNT):
+            got = by_local.get(0x840 + i)
+            if not got or got[0] != 'FACT' or not got[1].get('EDID', b'').startswith(b'MFOC_P_'):
+                errors.append(f"0x{0x840 + i:03X}: expected a FACT named MFOC_P_*")
+        for i in range(CLS_STYLE_COUNT):
+            got = by_local.get(0x900 + i)
+            if not got or got[0] != 'CSTY' or 'CSGD' not in got[1]:
+                errors.append(f"0x{0x900 + i:03X}: expected a CSTY with CSGD")
+        for local, want in ((0x801, CLS_MANIFEST_ENTRIES), (0x802, CLS_PASSIVE_COUNT), (0x803, CLS_STYLE_COUNT)):
+            if local in by_local:
+                n = by_local[local][1].get('#LNAM', 0)
+                if n != want:
+                    errors.append(f"FLST 0x{local:03X} has {n} LNAM entr(ies), expected {want}")
+        # Marker MGEF: Script archetype (DATA offset 64 == 1), no VMAD (script-less).
+        for local in (0x810, 0x811, 0x812):
+            if local in by_local:
+                subs = by_local[local][1]
+                d = subs.get('DATA', b'')
+                if len(d) != 152 or struct.unpack('<I', d[64:68])[0] != 1:
+                    errors.append(f"MGEF 0x{local:03X}: DATA is not the 152-byte Script-archetype layout")
+                if 'VMAD' in subs:
+                    errors.append(f"MGEF 0x{local:03X}: carries a VMAD, markers must be script-less")
+        if 0x820 in by_local:
+            fltv = by_local[0x820][1].get('FLTV')
+            if not fltv or struct.unpack('<f', fltv[:4])[0] <= 0.0:
+                errors.append("GLOB 0x820 MFOC_Version FLTV must be a positive stamp")
     else:
         # Progression addon: the DLL keys DETECTION on MFOP_Version resolving
         # with a non-zero record default (§10). A zero stamp would read as
@@ -426,6 +485,7 @@ def main():
     targets = sys.argv[1:] if len(sys.argv) > 1 else [
         os.path.join(ROOT, "out", "MFO.esp"),
         os.path.join(ROOT, "out", "MFO_Progression.esl"),
+        os.path.join(ROOT, "out", "MFO_Classes.esl"),
     ]
     rc = 0
     for esp in targets:

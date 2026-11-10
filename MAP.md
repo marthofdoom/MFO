@@ -8564,7 +8564,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 
 ## 9. Class add-on — `classes/` (cards C1 + C2 + C3, 2026-11-09)
 
-The DLL half of the class tree (`MFO_Classes.esl` = card C7, NOT shipped yet). **Inert unless the ESL is present AND
+The DLL half of the class tree (`MFO_Classes.esl` = card C7, generated since feat/classes-c7-esl, NOT packaged for release yet: C16). **Inert unless the ESL is present AND
 `bClassTree = 1`**; then today's three classes (Melee/Ranged/Mage, `State.h` `combatClassOverride`) behave exactly as before.
 C1+C2 change NO runtime behaviour beyond two log lines (`[classes]` presence at kDataLoaded, table counts). C3 adds the `'MCLS'` co-save
 record and its state API, but nothing writes the state yet. No XP (C4), passives (C6) or GUI (C10) yet. Plan: build-plan cards C1..C14, ClickUp 86e3dhbd3.
@@ -8589,7 +8589,20 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   parsed (not kept verbatim); 0xFF ids are refused (#9). `CoSave/CoLoad/BeginLoad/ClearAll` are called only by `Serialization.cpp`.
 - INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`;
   `bClassCoSaveSelfTest` (C3 DEBUG, default 0; `Config.h/.cpp`, `MFO.ini`): the MCLS round-trip self-test at every load.
-- **Depended-on-by:** `Serialization.cpp` (the MCLS hooks, C3). Later cards read `kTable` and the C3 state (C4 XP, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI, C12 tables, C13 counters).
+- **`MFO_Classes.esl` (card C7, GENERATED, `MFO_GenerateESP.py` `make_classes_esl()`, the block just above `main()`; output `out/MFO_Classes.esl`, no SEQ, no MCM yet):**
+  masters ONLY Skyrim.esm (prefix 0x01), touches nothing in MFO.esp (byte-identical). **The generator READS `native/classes/ClassTable.cpp` + `Classes.h`**
+  (`load_class_table()`: row regex, Id enum order, `Flag::` bits) and asserts 35 rows / enum order / tier counts 3-9-14-8-1 / slug == passive id / T1 roots, so
+  a table edit the parser cannot follow fails the generator (no hand copy). Local ids (add-only): `0x800` manifest KYWD `MFOC_MFOClassesManifest` + `0x801` manifest FLST
+  (entry 0 = that keyword, then the two index FLSTs, then the 4 MCM GLOBs), `0x802` FLST of the 35 passive factions, `0x803` FLST of the 70 class styles,
+  `0x808-0x80A` Marked/Flanked/Guarded KYWDs, `0x810-0x812` marker MGEFs (script-less, Script archetype, delivery Target Actor), `0x820-0x824` GLOBs
+  (Version, XpRate 1.0, PriestSunDps 2, SaintHealPerSec 30, SaintUndeadDps 30), `0x830` FACT `MFOC_OffClassWeapon`, `0x831` FACT `MFOC_MarkPending`,
+  `0x840 + Id` FACT `MFOC_P_<Name>` (35), `0x900 + 2*Id (+1 dual)` CSTY `MFOC_Style_<Name>[_Dual]` (70), `0xA00` PERK `MFOC_ReferencePerk` (inert audited
+  shape, never granted). **RANK SPACE** (per-reference faction rank on `MFOC_P_<Name>`): <=0 off; 1..cap active at class level N (caps T1 10 / T2 15 / T3 20 / T4 25);
+  **100 = mastered and unequipped (1/4)**; "level >= L" is rank in [L, 99] (`class_rank_conditions`). `class_scale(level, cap)` = 25% at L1 -> 100% at cap. The
+  new byte writers (`ctda`, `perk_entry`, `perk_record`; entry points restricted to `PERK_ENTRY_TABS`, vanilla-verified) are what C6 builds the passives on. Class CSTYs:
+  one per class per wield in the stance of its `rootT1` (Dragonborn melee), stance base VERBATIM from `make_csty` (asserted) plus two flag-driven offsets
+  (`class_csty_params`, a BASELINE for C8). `tools/audit_esp.py` has a `MFO_Classes.esl` profile (the default run audits all three plugins).
+- **Depended-on-by:** `Serialization.cpp` (the MCLS hooks, C3). Later cards read `kTable` and the C3 state (C4 XP, C5 mastery, C6 carriers, C7 generator codegen, C8/C9 packages, C10 GUI, C12 tables, C13 counters). **`MFO_GenerateESP.py` parses `ClassTable.cpp`/`Classes.h` (C7): keep the `Mk(Id::...)` one-row-per-line shape, the `kRoot*` line and the `Flag::` constants parseable, or the generator stops with a named error.**
 - **What breaks if you change this:** (1) reordering/inserting a class in `Id` re-numbers every persisted mastered/unlocked bit once C3 ships
   (co-save, tier A); (2) renumbering the T1 `rootT1` ordinals breaks the single-source-of-truth with `combatClassOverride` (frozen, `State.h`);
   (3) changing a slug breaks the review page ids and the C7 ESL record names; (4) renaming the manifest suffix without the C7 generator
