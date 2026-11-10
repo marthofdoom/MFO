@@ -2760,3 +2760,15 @@ Numbered B631 because B630 is the latest on main when this was written; renumber
 Verbatim (reviewer):
 - SEV-4: `:inactive` effect perks are counted in `held` and described as "applies it", but the engine has removed them at that moment (34092 at 0x5AE813-0x5AE889: RemoveTemporaryPerk when bit 16 applied and bit 18 kDispelled or bit 15 kInactive is set; apply only when bit 15/16/17 clear). Fix with a summary count of inactive-only perks and a reworded comment.
 - SEV-5: The MFO.ini comment still says "whenever the player's perk lists change". It is close enough, but could say "a continuous sweep; full list once per load, then added/removed".
+
+### MFO-B634 (SEV-4/5, OPEN, selftest/Runner.cpp DevClassEquip (dev build only), against 29bc2488, Opus review of C5c)
+Reviewer's findings (condensed from the review; full text in scratchpad agentlogs/review-c5c.md):
+- F1 SEV-4 (Runner.cpp:153-156): the local id is passed to LookupFormID unmasked and with no range check; an ESL ref written as X.esl|FE012ABC, a local over 0xFFF on a light file, or an ESP ref with its load-order byte resolves to a garbage FormID and only warns "still not a live managed follower after 60 s". Reject local > 0xFFFFFF, and > 0xFFF when the file is light, with the parse WARN.
+- F2 SEV-4 (:154/:161): std::stoul does not check the whole token was consumed; do as the level field does (used != size).
+- F3 SEV-4 (:248): a full-hex FormID in the 0xFF range or any id IsPersistableID refuses waits forever under the misleading WARN; refuse at parse.
+- F4 SEV-4 (:256-266): Dragonborn with :mastered logs " mastered" and "L0" though no mastered bit is set (cap 0); reject at parse or drop from the log.
+- F5 SEV-5 (:254): SetUnlocked(GetUnlocked|Bit) takes two g_mx holds; a concurrent unlock (C10 later) could be lost. Not worth a compound writer before C10.
+- F6 SEV-5 (:248): mfoEnabled-off followers still get the class (deliberate); note it in SELFTEST.md section 10.
+- F7 SEV-5 (:221-230): parsed once per load; an MCM re-read does not re-apply; say so in INI-REFERENCE and MFO.ini.
+- F8 SEV-5 (MFO.ini:188-200): the release seed INI carries 13 lines for a key the release DLL ignores (labelled DEV BUILD ONLY; optional move).
+- F9 SEV-5 (:240-245): the 60 s WARN timer counts only while Active().
