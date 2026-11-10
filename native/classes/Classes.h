@@ -315,4 +315,27 @@ namespace MFO::Classes {
     // stats among its unlocked classes. nullopt (no opinion, today's three-class behaviour) when not Strict(). Writes nothing:
     // the caller (when combatClassOverride == 0) decides whether to SwitchClass to it.
     [[nodiscard]] std::optional<Id> AutoClassFor(RE::FormID a_follower, RE::Actor* a_actor);
+
+    // ── passive carriers = card C6 (classes/Carriers.cpp) ─────────────────────────────────────────────
+    // The ESL's passive PERKS are gated on each follower's rank in the class faction MFOC_P_<Name> (the C7 RANK SPACE): 0 / absent
+    // OFF, 1..cap ACTIVE at class level N, kRankMasteredUnequipped = mastered and unequipped (1/4 of the FULL value). CarrierRanks
+    // turns a follower's class state into those ranks; the reconcile (main thread) writes them, grants the perks ONCE (TESNPC::AddPerk,
+    // a runtime base mutation, so re-granted every session) and adds the Mercenary / Scout ability spells.
+    //   - equipped == kNoClass = classes OFF for that follower (marth 2026-11-10): every rank 0, nothing applies, mastered quarters included;
+    //   - the equipped class: rank = its level (clamped to 1..cap; a never-levelled equipped class counts as level 1, MFO-B627);
+    //     a MASTERED equipped class is at the cap (full);
+    //   - every other mastered class: kRankMasteredUnequipped;
+    //   - a T4 equipped: its T3 parents (mastered members of its unlock rule, first `need` in Id order for an N-of pool) at the cap = full;
+    //   - Dragonborn equipped (no passive, no level): EVERY mastered class at its cap = full (marth: all mastered passives at full).
+    // The same passive is one faction, so it can never double (max rank wins by construction).
+    inline constexpr std::uint8_t kRankMasteredUnequipped = 100;
+    [[nodiscard]] std::array<std::uint8_t, kClassCount> CarrierRanks(const FollowerClasses& a_fc);   // PURE
+
+    // Queue a carrier re-apply for one follower / every stored follower. ANY thread (they only queue; the engine work runs on the
+    // MAIN thread through MainThread::Post, retried until the actor is loaded). No-ops unless the class ESL is Present(); with the
+    // ESL present but bClassTree = 0 the pass REMOVES the carrier abilities and zeroes the ranks instead (teardown).
+    void RefreshCarriers(RE::FormID a_follower);
+    void RefreshAllCarriers();
+    // Drop the pending set / granted-perk memory and retire the pump (a new generation). ResetAllState / LoadCallback, via ClearAll.
+    void ResetCarriers();
 }

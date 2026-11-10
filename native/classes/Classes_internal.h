@@ -18,5 +18,11 @@ namespace MFO::Classes {
         // Load-time table self-check (Classes.cpp): logs counts per tier and verifies every parent
         // resolves. Returns the number of defects found (0 = clean); every defect is logged loudly.
         int SelfCheck();
+        // The plugin file the manifest came from ("MFO_Classes.esl"), empty before OnDataLoaded / when absent (Presence.cpp).
+        // Card C6 resolves its carrier forms by local id in this file.
+        std::string_view AddonFileName();
+        // Every follower with a stored class record (State.cpp; a copy taken under g_mx). Card C6 re-applies the carriers to all of
+        // them after a load.
+        std::vector<RE::FormID> StoredFollowerIds();
     }
 }

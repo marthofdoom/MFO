@@ -193,7 +193,25 @@ CLS_REQUIRED = {
     0x830: ('FACT', "MFOC_OffClassWeapon",     ['EDID', 'DATA', 'CRVA']),
     0x831: ('FACT', "MFOC_MarkPending",        ['EDID', 'DATA', 'CRVA']),
     0xA00: ('PERK', "MFOC_ReferencePerk",      ['EDID', 'FULL', 'DESC', 'DATA', 'PRKE', 'EPFT', 'EPFD', 'PRKF']),
+    # Card C6 carriers (the DLL, classes/Carriers.cpp, resolves these by local id and type-checks them).
+    0xA40: ('MGEF', "MFOC_AbStamina",          ['EDID', 'DATA']),
+    0xA41: ('MGEF', "MFOC_AbStaminaRate",      ['EDID', 'DATA']),
+    0xA42: ('MGEF', "MFOC_AbSpeed",            ['EDID', 'DATA']),
+    0xA50: ('SPEL', "MFOC_Mercenary_Full",     ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    0xA51: ('SPEL', "MFOC_Mercenary_Quarter",  ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    0xA74: ('SPEL', "MFOC_Scout_Quarter",      ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    0xA80: ('SPEL', "MFOC_MarkedSpell",        ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    0xA81: ('SPEL', "MFOC_FlankedSpell",       ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    0xA82: ('SPEL', "MFOC_GuardedSpell",       ['EDID', 'SPIT', 'EFID', 'EFIT']),
 }
+# Card C6 audit tables. Ability SPELs: 0xA50/0xA51 Mercenary, 0xA60-0xA73 Scout speed per level 1..20, 0xA74 Scout quarter.
+CLS_ABILITY_SPELLS = [0xA50, 0xA51] + list(range(0xA60, 0xA74)) + [0xA74]
+CLS_ABILITY_MGEF_AV = {0xA40: 26, 0xA41: 157, 0xA42: 30}     # Stamina, StaminaRateMult, SpeedMult (ActorValues.h)
+CLS_MARKER_SPELLS = {0xA80: 0x810, 0xA81: 0x811, 0xA82: 0x812}   # carrier SPEL -> its MGEF (same casting type + delivery)
+# Entry points whose tab kinds are proven (or, for tab 0, inferred) in the generator's PERK_ENTRY_TABS -> tab count.
+CLS_PERK_EP_TABS = {18: 3, 27: 2, 28: 3, 29: 3, 30: 3, 33: 2, 35: 3, 36: 3, 37: 3, 38: 2, 39: 1}
+CLS_PERK_FUNCS = {73, 77, 448, 560, 672, 693, 696, 715}       # every condition function a class perk may use (all seen in vanilla)
+CLS_PERK_BASE, CLS_PASSIVE_FACT_BASE = 0xA10, 0x840
 CLS_PASSIVE_COUNT = 35      # FACTs 0x840..0x862, one per class in Id order
 CLS_MANIFEST_ENTRIES = 3 + 4   # keyword + 2 index FLSTs + 4 MCM GLOBs
 
@@ -226,6 +244,20 @@ def parse_subrecords(body):
             lnam_count += 1
         i += 6 + ln
     out['#LNAM'] = lnam_count
+    out['#BODY'] = body
+    return out
+
+
+def ordered_subrecords(body):
+    """[(type, bytes)] in file order (repeats kept): the class PERK audit needs the PRKE / PRKC / CTDA sequence."""
+    out, i = [], 0
+    while i + 6 <= len(body):
+        t = body[i:i + 4].decode('ascii', 'replace')
+        ln = struct.unpack('<H', body[i + 4:i + 6])[0]
+        if i + 6 + ln > len(body):
+            break
+        out.append((t, body[i + 6:i + 6 + ln]))
+        i += 6 + ln
     return out
 
 
@@ -250,6 +282,129 @@ def walk(data):
 
     _walk(data, 0, len(data))
     return recs
+
+
+def audit_class_carriers(by_local, errors):
+    """Card C6: the ability MGEF / SPEL shapes, the marker carrier SPELs, and every class passive PERK."""
+    for local, av in CLS_ABILITY_MGEF_AV.items():
+        got = by_local.get(local)
+        if not got or got[0] != 'MGEF':
+            continue   # the REQUIRED check already reported it
+        d = got[1].get('DATA', b'')
+        if len(d) != 152:
+            errors.append(f"MGEF 0x{local:03X}: DATA is {len(d)} bytes, expected 152")
+            continue
+        arch, mav = struct.unpack('<Ii', d[64:72])
+        cast, deliv = struct.unpack('<II', d[80:88])
+        if (arch, mav, cast, deliv) != (34, av, 0, 0):
+            errors.append(f"MGEF 0x{local:03X}: archetype {arch} AV {mav} casting {cast} delivery {deliv}, expected "
+                          f"Peak Value Modifier (34), AV {av}, Constant (0), Self (0)")
+        if 'VMAD' in got[1]:
+            errors.append(f"MGEF 0x{local:03X}: carries a VMAD, ability effects must be script-less")
+    for local in CLS_ABILITY_SPELLS:
+        got = by_local.get(local)
+        if not got or got[0] != 'SPEL':
+            errors.append(f"ability SPEL 0x{local:03X} missing")
+            continue
+        spit = got[1].get('SPIT', b'')
+        if len(spit) != 36 or struct.unpack('<IIIfII', spit[:24])[1:3] != (0x00250001, 4) or struct.unpack('<II', spit[16:24]) != (0, 0):
+            errors.append(f"SPEL 0x{local:03X}: SPIT is not the vanilla Ability shape (flags 0x00250001, type 4, Constant, Self)")
+        body = got[1].get('#BODY', b'')
+        efids = [struct.unpack('<I', d)[0] & 0xFFFFFF for t, d in ordered_subrecords(body) if t == 'EFID']
+        if not efids or any(e not in CLS_ABILITY_MGEF_AV for e in efids):
+            errors.append(f"SPEL 0x{local:03X}: EFID {[hex(e) for e in efids]} is not one of the ability MGEFs")
+    for local, mg in CLS_MARKER_SPELLS.items():
+        sp, ef = by_local.get(local), by_local.get(mg)
+        if not sp or not ef or sp[0] != 'SPEL' or ef[0] != 'MGEF':
+            continue
+        spit, d = sp[1].get('SPIT', b''), ef[1].get('DATA', b'')
+        if len(spit) != 36 or len(d) != 152:
+            errors.append(f"SPEL 0x{local:03X}: bad SPIT / carried MGEF DATA length")
+            continue
+        s_type = struct.unpack('<I', spit[8:12])[0]
+        s_cast, s_deliv = struct.unpack('<II', spit[16:24])
+        m_cast, m_deliv = struct.unpack('<II', d[80:88])
+        if s_type != 0 or (s_cast, s_deliv) != (m_cast, m_deliv):
+            errors.append(f"SPEL 0x{local:03X}: type {s_type} casting/delivery {(s_cast, s_deliv)} must be a Spell with its MGEF's {(m_cast, m_deliv)}")
+    nperks = 0
+    for i in range(CLS_PASSIVE_COUNT):
+        got = by_local.get(CLS_PERK_BASE + i)
+        if not got:
+            continue
+        nperks += 1
+        local = CLS_PERK_BASE + i
+        if got[0] != 'PERK':
+            errors.append(f"0x{local:03X}: expected a PERK, found {got[0]}")
+            continue
+        faction = CLS_PASSIVE_FACT_BASE + i
+        subs = ordered_subrecords(got[1].get('#BODY', b''))
+        types = [t for t, _ in subs]
+        if 'PRKE' not in types or 'CTDA' in types[:types.index('PRKE')]:
+            errors.append(f"PERK 0x{local:03X}: a perk-LEVEL CTDA (before the first PRKE) or no entries; perk-level conditions are never "
+                          f"evaluated at run time, every gate must sit on an entry's tab 0")
+            continue
+        data = [d for t, d in subs if t == 'DATA']
+        if not data or data[0] != bytes([0, 0, 1, 1, 0]):
+            errors.append(f"PERK 0x{local:03X}: first DATA is not trait 0 / level 0 / ranks 1 / playable 1 / hidden 0")
+        # walk the entries
+        entry, entries = None, []
+        for t, d in subs:
+            if t == 'PRKE':
+                entry = {'prke': d, 'data': None, 'tabs': {}, 'cur': None, 'eft': None, 'epfd': None}
+                entries.append(entry)
+            elif entry is None:
+                continue
+            elif t == 'DATA' and len(d) == 3 and entry['data'] is None:
+                entry['data'] = d
+            elif t == 'PRKC':
+                entry['cur'] = d[0]
+                entry['tabs'].setdefault(d[0], [])
+            elif t == 'CTDA':
+                if entry['cur'] is None or len(d) != 32:
+                    errors.append(f"PERK 0x{local:03X}: a CTDA outside a PRKC tab, or not 32 bytes")
+                else:
+                    entry['tabs'][entry['cur']].append(d)
+            elif t == 'EPFT':
+                entry['eft'] = d
+            elif t == 'EPFD':
+                entry['epfd'] = d
+        if not entries:
+            errors.append(f"PERK 0x{local:03X}: no entries")
+        for n, e in enumerate(entries):
+            where = f"PERK 0x{local:03X} entry {n}"
+            if e['prke'] != bytes([2, 0, 0]):
+                errors.append(f"{where}: PRKE {e['prke'].hex()} is not (entry point, rank 0, priority 0)")
+            if not e['data']:
+                errors.append(f"{where}: no DATA")
+                continue
+            ep, fn, ntabs = e['data']
+            if CLS_PERK_EP_TABS.get(ep) != ntabs:
+                errors.append(f"{where}: entry point {ep} with {ntabs} tab(s) is not in the verified table {CLS_PERK_EP_TABS}")
+            if fn not in (1, 2, 3):
+                errors.append(f"{where}: function {fn} is not float Set / Add / Multiply")
+            if e['eft'] != b'\x01' or not e['epfd'] or len(e['epfd']) != 4:
+                errors.append(f"{where}: EPFT / EPFD is not a float value")
+            for tab, conds in e['tabs'].items():
+                if tab >= ntabs:
+                    errors.append(f"{where}: tab {tab} >= tab count {ntabs}")
+                for c in conds:
+                    func = struct.unpack('<H', c[8:10])[0]
+                    if func not in CLS_PERK_FUNCS:
+                        errors.append(f"{where}: condition function {func} is not one of {sorted(CLS_PERK_FUNCS)}")
+            ranks = []
+            for c in e['tabs'].get(0, []):
+                typ, val = c[0], struct.unpack('<f', c[4:8])[0]
+                func, p1 = struct.unpack('<H', c[8:10])[0], struct.unpack('<I', c[12:16])[0]
+                if func == 73:
+                    if (p1 & 0xFFFFFF) != faction or p1 >> 24 != 1:
+                        errors.append(f"{where}: rank condition names faction 0x{p1:08X}, expected the class's own 0x{faction:03X}")
+                    ranks.append((typ & 0xE0, val))
+            lo = [v for o, v in ranks if o == 0x60]
+            hi = [v for o, v in ranks if o == 0xA0]
+            if len(ranks) != 2 or len(lo) != 1 or len(hi) != 1 or not (1 <= lo[0] <= hi[0] <= 100):
+                errors.append(f"{where}: tab 0 must carry exactly the rank range pair (>= lo, <= hi) with 1 <= lo <= hi <= 100, found {ranks}")
+    if nperks == 0:
+        errors.append("no class passive PERK (0xA10..0xA32) found")
 
 
 def audit_one(esp):
@@ -396,6 +551,7 @@ def audit_one(esp):
             fltv = by_local[0x820][1].get('FLTV')
             if not fltv or struct.unpack('<f', fltv[:4])[0] <= 0.0:
                 errors.append("GLOB 0x820 MFOC_Version FLTV must be a positive stamp")
+        audit_class_carriers(by_local, errors)
     else:
         # Progression addon: the DLL keys DETECTION on MFOP_Version resolving
         # with a non-zero record default (§10). A zero stamp would read as
