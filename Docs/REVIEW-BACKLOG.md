@@ -2702,3 +2702,9 @@ Coordinator's paraphrase (not verbatim):
 ### MFO-B621 (SEV-5, process notes, against ee36630d, Opus review of C7)
 - `tools/audit_esp.py` was edited without being named in the brief (accepted, additive).
 - The manual CI dispatch (`gh workflow run native.yml`) compiled an unchanged DLL and proves nothing for a generator-only diff. Do not dispatch CI for a generator-only change again; GitHub's API is rate-limited.
+
+### MFO-B623 (SEV-4, OPEN, selftest b1, against ed548d14, Opus review) -- the heal-left + weapon-right sample only counts
+Verbatim (reviewer): The self-test only counts (selftest/Tests.cpp:79-90). The new counter `s.n[4]` (the array is `n[8]`, SelfTest_internal.h:40, so it is in bounds) records heal-left + weapon-right samples but never fails. A real check would fail the step if a right-hand cast claim or lock is live during such a sample (`ClaimLiveOnHand(fid, kHandRight)`, or a right `g_castLock` spell). Field evidence still comes from the log, so this does not need to land in this round.
+
+### MFO-B624 (SEV-5, OPEN, docs + Harbinger nicety, against ed548d14, Opus review)
+Verbatim (reviewer): The change reaches three callers the brief and docs do not name. `RightHandIsWeaponHand` -> `WeaponHandExposure` -> `WeaponHandActive` also feeds cast/HealRoad.cpp:475, :891 and :902. The new behaviour there is correct: the heal road's second recipient no longer takes a right hand holding a sword or staff while the left holds a spell, and a standing right-hand heal claim is now released when a weapon appears in the right while the left holds a spell. Worth one line in MAP. Optional SEV-5 nicety for Harbinger: warn when a client's cast claim names a hand that the same client's ch.17 declaration holds with a weapon. That self-conflict is the shape B1a had, and the warning would have surfaced it sooner.
