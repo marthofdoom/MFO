@@ -2723,8 +2723,9 @@ Reviewer's finding (F3), as relayed by the coordinator: Scale01 returns 0 for le
 ### MFO-B628 (SEV-5, OPEN, classes/Classes.h, against 5d22b760, Opus review of C5)
 Reviewer's finding, as relayed by the coordinator: any future "reset class progress" must clear the stored unlocked bits explicitly, because IsUnlocked takes stored | computed (unlocks are never revoked). Noted in the Classes.h mastery block (RESET NOTE); no code path resets today.
 
-### MFO-B629 (SEV-4/5, OPEN, classes C5 fix round, against 8f298c48, Opus re-review)
+### MFO-B629 (SEV-4/5, OPEN except R3 which is MOOT, classes C5 fix round, against 8f298c48, Opus re-review)
 Verbatim (reviewer):
+- R3 MOOT / WITHDRAWN (card C5b, marth 2026-11-10 "Auto is disabled per follower when classes are enabled on that follower"): the C5 class picker (kSkillMap, PickAutoClass, AnySchool tie-break) was removed, so there is nothing left to tie-break. Original text kept below.
 - R3 SEV-4 (Mastery.cpp kSkillMap and PickAutoClass): `AnySchool` rows (Mage, Arch-Mage, and the school half of Grand Battlemage) score the follower's best school, so they tie exactly with every single-school row of the same tier and skill count. Example: a Restoration-led follower with both Arch-Mage and Saint unlocked gets Arch-Mage, because both rows score Restoration, are T4 with one skill, and the lower `Id` wins. Same in kind for Grand Battlemage against any same-tier melee hybrid with that school. Suggested fix: make `AnySchool` lose ties, or ask marth for the Arch-Mage row as part of the OPEN-row ruling (Q42).
 - R1 SEV-5 (State.cpp:791/812 through `Mutate`'s `g_store[a_fid]`): a write refused because the class is locked still creates an all-default `FollowerClasses` entry, which is then saved. Harmless (default == no entry); a find-first lambda or a no-create Mutate would avoid it.
 - R2 SEV-5 (State.cpp:620-637): the load repair refreshes `unlocked` only when it adds a mastered bit, so a record saved with only the unlocked set stale is not refreshed at load. Limited impact: every reader combines stored and computed bits, and no shipped build had the old writer.

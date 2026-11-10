@@ -240,11 +240,10 @@ namespace MFO::Classes {
     // T3 20, T4 25. Dragonborn (hidden T5) has NO cap and NO level (LevelCap = 0). NO new persisted field: level lives in
     // ClassProgress::level, mastered / unlocked in the MCLS bitsets (layout untouched, MCLS stays v1).
     //
-    // THREADING: the PURE functions (LevelCap, Scale01, LevelForXp, ComputeUnlocked, PickAutoClass) touch no state and are
+    // THREADING: the PURE functions (LevelCap, Scale01, LevelForXp, ComputeUnlocked) touch no state and are
     // callable from any thread. SetLevelFromXp (C4, job worker) and SwitchClass (C10, board thread) are each ONE compound
     // writer in State.cpp (ApplyLevel / ActivateClass): the whole read-decide-write happens under a single hold of the State.cpp
-    // mutex, so a co-save snapshot never sees a half-applied level-up and two writers cannot lose each other's update. AutoClassFor
-    // reads actor values with the same calls ClassResolve.cpp makes (call it where ResolveBaseClass is called). None of these
+    // mutex, so a co-save snapshot never sees a half-applied level-up and two writers cannot lose each other's update. None of these
     // holds a lock across an engine call.
     //
     // RESET NOTE (future "reset class progress"): IsUnlocked takes the stored unlocked bits OR the rule-computed ones, and unlocks
@@ -296,25 +295,10 @@ namespace MFO::Classes {
     bool ApplyLevel(RE::FormID a_follower, Id a_class, std::uint8_t a_level);
     bool ActivateClass(RE::FormID a_follower, Id a_class);
 
-    // The stat inputs the Auto resolver votes on: BASE actor values (a fortify potion cannot flip it), like ClassResolve.cpp.
-    struct StatProfile {
-        float oneHanded = 0, twoHanded = 0, archery = 0;
-        float alteration = 0, conjuration = 0, destruction = 0, illusion = 0, restoration = 0;
-        float sneak = 0, block = 0;
-    };
-    [[nodiscard]] StatProfile ReadStats(RE::Actor* a_actor);   // zeros for nullptr
-
-    // Pick the best-fitting class among a_unlocked from a_stats. Each class has its OWN skill list (Mastery.cpp kSkillMap, up to
-    // three skills, e.g. Healer = Restoration, Templar = melee + Restoration) and its fit is the mean of those skill values.
-    // Highest fit wins; equal fits go to the HIGHER tier, then the class with MORE listed skills (a hybrid that fits as well as a
-    // pure class wins), then the lower Id. Dragonborn is never auto-picked.
-    // nullopt when a_unlocked holds no pickable class. PURE.
-    [[nodiscard]] std::optional<Id> PickAutoClass(const StatProfile& a_stats, Mask a_unlocked);
-
-    // Strict adherence: with Strict() (ESL present, bClassTree = 1, bClassStrict = 1) resolve an Auto follower's class from its
-    // stats among its unlocked classes. nullopt (no opinion, today's three-class behaviour) when not Strict(). Writes nothing:
-    // the caller (when combatClassOverride == 0) decides whether to SwitchClass to it.
-    [[nodiscard]] std::optional<Id> AutoClassFor(RE::FormID a_follower, RE::Actor* a_actor);
+    // NO class Auto (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). The C5 stat-based
+    // picker (AutoClassFor / PickAutoClass / ReadStats) was removed in card C5b: no class is ever auto-assigned. A follower with
+    // classes ON (equipped != kNoClass) skips the Gambit-tab Auto vote in Logistics::ResolveBaseClass and takes his equipped
+    // class's rootT1 instead.
 
     // ── passive carriers = card C6 (classes/Carriers.cpp) ─────────────────────────────────────────────
     // The ESL's passive PERKS are gated on each follower's rank in the class faction MFOC_P_<Name> (the C7 RANK SPACE): 0 / absent
