@@ -14,6 +14,7 @@ namespace MFO::Iaus::Engine {
         std::unordered_map<RE::FormID, Mind> g_minds;
         std::unordered_set<RE::FormID>       g_overCapWarned;
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_budgetWarnedAt;
+        std::unordered_map<RE::FormID, std::string> g_lastWalk;   // the last logged fall-past chain (dedupe)
 
         // Leaf mutex: the worker publishes, the render thread copies. Never held across an engine call.
         std::mutex                              g_readoutMx;
@@ -106,8 +107,14 @@ namespace MFO::Iaus::Engine {
                                       ? static_cast<std::size_t>(a_pickedStep) : 0;
             pick = KeyOf(a_cands[a_d.order[s].idx]);
         }
-        // A fall-past is always logged (a decline is never silent, design 6); otherwise on change / every N s.
-        if (!ShouldLog(m, pick, a_tick.in.now, a_t) && a_walk.empty()) return;
+        // A NEW fall-past chain is always logged (a decline is never silent, design 6); a repeat of the same chain
+        // waits for the pick's own pacing (on change / every logRepeatSec), like the [eval] chain's dedupe.
+        std::string walkSig;
+        for (const auto& w : a_walk) walkSig += std::format("{}:{};", w.idx, w.reason);
+        auto& lastWalk = g_lastWalk[a_actor];
+        const bool newWalk = walkSig != lastWalk;
+        if (!ShouldLog(m, pick, a_tick.in.now, a_t) && !newWalk) return;
+        lastWalk = std::move(walkSig);
         spdlog::info("[iaus] {} ({:08X}) {}", a_name, a_actor, FormatDecision(a_d, a_cands, a_t, a_pickedStep, a_walk, a_ms));
         if (!a_explain) return;
         std::size_t n = 0;
@@ -138,6 +145,7 @@ namespace MFO::Iaus::Engine {
     void Forget(RE::FormID a_actor) {
         g_minds.erase(a_actor);
         g_budgetWarnedAt.erase(a_actor);
+        g_lastWalk.erase(a_actor);
         std::scoped_lock lk(g_readoutMx);
         g_readouts.erase(a_actor);
     }
@@ -146,6 +154,7 @@ namespace MFO::Iaus::Engine {
         g_minds.clear();
         g_overCapWarned.clear();
         g_budgetWarnedAt.clear();
+        g_lastWalk.clear();
         std::scoped_lock lk(g_readoutMx);
         g_readouts.clear();
     }
