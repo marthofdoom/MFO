@@ -223,8 +223,8 @@ namespace MFO::SelfTest {
             if (!g_devParsed) {
                 std::string text;
                 {
-                    std::lock_guard lk(g_devClassEquipMx);
-                    text = g_devClassEquip;
+                    std::lock_guard lk(Config::g_devClassEquipMx);
+                    text = Config::g_devClassEquip;
                 }
                 g_devParsed = true;
                 if (text.empty()) return;
