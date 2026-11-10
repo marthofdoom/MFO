@@ -488,9 +488,14 @@ namespace MFO::Classes {
         template <class F>
         bool Mutate(RE::FormID a_fid, F&& a_f) {
             if (a_fid == 0 || !Followers::IsPersistableID(a_fid)) return false;   // #9
-            std::scoped_lock lk(g_mx);
-            if (!WritableLocked()) return false;
-            a_f(g_store[a_fid]);
+            {
+                std::scoped_lock lk(g_mx);
+                if (!WritableLocked()) return false;
+                a_f(g_store[a_fid]);
+            }
+            // Card C6: the carriers follow the state (equip / level / mastery). Outside g_mx: RefreshCarriers only queues work
+            // for the main thread (its own mutex), never an engine call here.
+            RefreshCarriers(a_fid);
             return true;
         }
 
@@ -654,6 +659,7 @@ namespace MFO::Classes {
                      h.classCount, st.tables, st.rows, st.droppedFollower, st.disabledRules, st.collisions, st.badEquipped,
                      st.maskedBits, Active() ? "" : " -- add-on inactive: held unchanged (marth Q9)");
         if (!forTest.empty()) RoundTrip(forTest, "loaded state");
+        RefreshAllCarriers();   // card C6: re-apply the carriers to every stored follower once the world is up (queued, main thread)
     }
 
     void BeginLoad() {
@@ -663,12 +669,24 @@ namespace MFO::Classes {
     }
 
     void ClearAll() {
+        {
+            std::scoped_lock lk(g_mx);
+            g_store.clear();
+            g_kept = false;
+            g_keptVersion = 0;
+            g_keptBytes.clear();
+            g_keptBytes.shrink_to_fit();
+        }
+        ResetCarriers();   // card C6: the pending set, the granted-perk memory and the pump generation are save-scoped too
+    }
+
+    std::vector<RE::FormID> detail::StoredFollowerIds() {
         std::scoped_lock lk(g_mx);
-        g_store.clear();
-        g_kept = false;
-        g_keptVersion = 0;
-        g_keptBytes.clear();
-        g_keptBytes.shrink_to_fit();
+        std::vector<RE::FormID> out;
+        out.reserve(g_store.size());
+        for (const auto& [fid, fc] : g_store) out.push_back(fid);
+        std::sort(out.begin(), out.end());
+        return out;
     }
 
     bool ConsumeReadOnlyNotice() { return g_readOnlyNotice.exchange(false); }
