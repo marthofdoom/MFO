@@ -67,8 +67,12 @@ namespace MFO::APMFBridge {
         // Live read FIRST -- cheap, and correct even when APMF is absent (a
         // legacy-hybrid follower with a sword out is still weapon-active with
         // no equip-gambit claim in the picture at all).
-        const auto grip = Loadout::Read(a_follower, nullptr).grip;
-        if (grip == Loadout::Grip::OneHanded || grip == Loadout::Grip::TwoHanded) return true;
+        const auto hands = Loadout::Read(a_follower, nullptr);
+        if (hands.grip == Loadout::Grip::OneHanded || hands.grip == Loadout::Grip::TwoHanded) return true;
+        // MFO-B1a: Read() grips Caster whenever EITHER hand holds a spell, so a heal in the LEFT and a
+        // sword in the RIGHT never reaches the grip test above. Test the RIGHT-hand object itself (the
+        // same TESObjectWEAP test Prepare's right-target backstop makes). Plain equipped-object read.
+        if (hands.right && hands.right->As<RE::TESObjectWEAP>()) return true;
         // Momentarily-empty-handed race guard: an equip gambit holding a live
         // force-equip claim will reassert the weapon shortly even though the
         // hand reads free THIS tick (the deck-proven failure this exists to

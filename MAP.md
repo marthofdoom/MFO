@@ -7324,7 +7324,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   2026-09-06) — the canonical "does a weapon own this hand" signal for cast
   hand-selection: `Loadout::Read(follower, nullptr).grip` (a weapon equipped
   RIGHT NOW) OR `IsEquipmentClaimActive` (an equip gambit about to reassert
-  one — the race the HAND FIX above closes). Works with or without APMF
+  one — the race the HAND FIX above closes). **MFO-B1a:** the live half is the grip OR the RIGHT-hand
+  object itself being a `TESObjectWEAP` (`Read()` grips `Caster` when EITHER hand holds a spell, so heal LEFT +
+  sword RIGHT used to read false). Works with or without APMF
   present (the `Read()` half needs no claim). Not yet called from this
   file's own `ClaimHealCast` (heal's hand is unconditional, see above); the
   intended consumer is a future offense hand-claim.
