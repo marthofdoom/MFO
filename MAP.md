@@ -8626,7 +8626,7 @@ record and its state API, but nothing writes the state yet. No XP (C4), passives
   best per-class skill fit among unlocked classes, ties to the higher tier then more skills; writes nothing; nothing calls it yet). Read-then-write helpers are not atomic as a whole:
   SetLevelFromXp / SwitchClass are each ONE compound State.cpp writer (`ApplyLevel` / `ActivateClass`, one `g_mx` hold; a short or long C4 threshold table is refused loudly);
   `CoLoad` heals a class at its level cap with the mastered bit clear (only while Active). `PickAutoClass` scores each class by its OWN skills (`kSkillMap` in
-  Mastery.cpp, static_assert-complete; NOT in ClassTable.cpp, which the C7 generator parses). **Open review findings (read before editing): MFO-B625, MFO-B626** (`Docs/REVIEW-BACKLOG.md`).
+  Mastery.cpp, static_assert-complete; NOT in ClassTable.cpp, which the C7 generator parses). **Open review findings (read before editing): MFO-B627, MFO-B628, MFO-B629** (`Docs/REVIEW-BACKLOG.md`).
 - INI (INI-only, no MCM key): `bClassTree` (default 1), `bClassStrict` (default 1) in `Config.h/.cpp`, `MFO.ini`, `Docs/INI-REFERENCE.md`;
   `bClassCoSaveSelfTest` (C3 DEBUG, default 0; `Config.h/.cpp`, `MFO.ini`): the MCLS round-trip self-test at every load.
 - **`MFO_Classes.esl` (card C7, GENERATED, `MFO_GenerateESP.py` `make_classes_esl()`, the block just above `main()`; output `out/MFO_Classes.esl`, no SEQ, no MCM yet):**
