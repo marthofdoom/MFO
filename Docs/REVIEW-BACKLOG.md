@@ -2621,3 +2621,9 @@ Verbatim (reviewer): the engine's MGEF condition site was not located; the IsTru
 - **SEV-5:** MFO's control set (Calm, Frenzy, Demoralize, Paralysis, TurnUndead; no Stagger) differs from Harbinger's self-flip refusal set (which includes Stagger). Document it.
 - **SEV-5:** the ClassifySpell comment names IAUS as a reader before any IAUS code exists.
 - **SEV-5:** a theoretical `std::bad_alloc` inside the set insert in the combat-thread hook.
+
+Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbatim):
+- SEV-4: MFO's NoRow is wider than truly rowless. kRows has no Absorb / DualValueModifier / PeakValueModifier / AccumulateMagnitude rows, though the engine files those under ValueModifier rows (APMF STATUS.md:690). A fire-and-forget hostile Absorb/DVM spell is predicted NoRow, so a transient 4 s no-start now trips the never-fired release and holds it off for the fight (loud WARN, transparent). Fix: mirror Harbinger's alias rows in Archetype.cpp or exclude those archetypes from the NoRow arm.
+- SEV-4: the WillWork mirror (256 entries) can thrash in big fights now that AUTO adds followers x gated spells x foes. At the cap the sweep falls back to g_cache.clear(), so every triple reads Unknown (fires unchecked) and re-posts. Never a wrong No. Fix: kMaxEntries 1024 or evict-oldest; PostMeasure's insert also ignores the cap.
+- SEV-5: CastOn.cpp:593 comment, the :621 WARN and the :398/:636 reasons plus MAP.md:773-775 still say "pure-Script" for a release that now also covers NoRow.
+- SEV-5: Auto.cpp:666 "no enemies in range" also covers "every foe will-not-work".
