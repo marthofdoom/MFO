@@ -1476,7 +1476,7 @@ Raised against e8ba5a0 (`feat/mfo-held-heal-approach`, Opus review FIX FIRST; F1
 ### MFO-B233 -- Self-flip proxy has no capability signal (cast/BuffRoad.cpp)
 Raised against 2f48f5c (`feat/mfo-self-proxy-aimed-touch`, Opus review MERGE), 2026-10-06.
 - **DECIDED (coordinator): no ABI bump.** Released Harbinger 0.10.0 is ABI 17, below MFO's ABI >= 19 gate, and every future release contains the self-flip proxy (APMF main 46f4ce1). Only unreleased dev builds between d8bb76d and 46f4ce1 fall in the gap, and BuffRoad's never-fired / fired-but-never-landed releases (MFO-B232 R2-1) bound that loudly.
-- **SEV-3 (F1, open, needs its own brief):** MFO's beneficial filter is looser than Harbinger's self-flip gate. `CasterConsent::ClassifySpell` (CasterConsent.cpp:35) rejects only `IsHostile() || IsDetrimental()` effects; Harbinger also refuses unflagged Calm / Frenzy / Demoralize / Paralysis / Stagger archetypes (Pacify, MS08KematuParalysis, MG08 Ancano / Tolfdir). Such a spell reaches Claim in MFO (falls to NoRow); Harbinger then logs "NO self-flip proxy; the seats aim the original form at the caster", which never fires per APMF-B39 and is caught by the never-fired release. Still safer than the old DirectNoSeat force-cast onto the caster. Fix in ClassifySpell (also feeds the slider and AUTO's beneficial-to-party choice), NOT in ExplicitSelfBuff (declining there would send it back to the direct self cast).
+- **SEV-3 (F1, RESOLVED 2026-11-09 for Calm / Frenzy / Demoralize / Paralysis (and TurnUndead) by `feat/auto-control-hostile`: ClassifySpell calls them Offense; unflagged Stagger remains OPEN):** MFO's beneficial filter is looser than Harbinger's self-flip gate. `CasterConsent::ClassifySpell` (CasterConsent.cpp:35) rejects only `IsHostile() || IsDetrimental()` effects; Harbinger also refuses unflagged Calm / Frenzy / Demoralize / Paralysis / Stagger archetypes (Pacify, MS08KematuParalysis, MG08 Ancano / Tolfdir). Such a spell reaches Claim in MFO (falls to NoRow); Harbinger then logs "NO self-flip proxy; the seats aim the original form at the caster", which never fires per APMF-B39 and is caught by the never-fired release. Still safer than the old DirectNoSeat force-cast onto the caster. Fix in ClassifySpell (also feeds the slider and AUTO's beneficial-to-party choice), NOT in ExplicitSelfBuff (declining there would send it back to the direct self cast).
 - SEV-4: the BuffRoad.cpp comment "a hostile spell is never a Buff kind" holds only for flagged effects.
 
 - FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- 0 'NO self-flip proxy' lines, so no refusal was seen, but the capability signal itself was not exercised; needed: a self-flip cast on a runtime or spell where the proxy is unavailable.
@@ -2596,7 +2596,7 @@ Coordinator's paraphrase of the finding (not the reviewer's verbatim text): "spd
 
 ### MFO-B572 (SEV-5, OPEN, native/progression/Hms.cpp ReadHmsCapView + the cap block in RecomputeHMS, against fb4a866, Opus round-2 review of feat/mfo-dev-selftest) -- the per-pool floor 50 is mirrored by hand
 Coordinator's paraphrase of the finding (not the reviewer's verbatim text): the dev-only `ReadHmsCapView` repeats the cap's per-pool floor `50.0f` instead of sharing it; a shared constexpr (e.g. lifting `kHmsCapPoolFloor` to namespace scope in Hms.cpp) would keep the self-test's floor test from drifting if the cap's floor changes. Deferred under rule 9 (SEV-5; the release cap is unchanged).
-### MFO-B580 (SEV-4, OPEN, cast/Fire.cpp G10 wiring, against 48be8b3) -- WillWork is wired only on act.cast_target
+### MFO-B580 (SEV-3 per the reviewer; RESOLVED for the Auto fan-out on feat/auto-control-hostile: `HostileAutoFoes` calls `WillWork`, a No drops the foe, Unknown keeps it; act.cast_player remains unchecked) (was SEV-4, OPEN, cast/Fire.cpp G10 wiring, against 48be8b3) -- WillWork is wired only on act.cast_target
 Verbatim (reviewer, relayed): wiring covers only kActCastTarget. Reasoning: the Auto fan-out (Rally is level-capped and not in the nature-undeclared set; mod-flagged hostile control spells) and act.cast_player for condition-gated spells are not checked. Wiring Auto needs cast/Auto.cpp and cast/Archetype.cpp, which feat/auto-control-hostile is changing (shared nature classifier), so the narrowing is recorded, not done. (ID chosen above origin/main's B572 to avoid a collision; renumber on merge.)
 
 ### MFO-B581 (SEV-4, OPEN, cast/WillWork.cpp, against 48be8b3) -- time-varying CTDAs cache a false No
@@ -2613,3 +2613,11 @@ Verbatim (reviewer): kReanimate is unreachable, the IsSummonSpell branch in Fire
 
 ### MFO-B585 (SEV-5, OPEN, cast/WillWork.cpp, against 48be8b3) -- the engine's MGEF condition site was not located
 Verbatim (reviewer): the engine's MGEF condition site was not located; the IsTrue(target, caster) order was confirmed from ActiveEffect::EvaluateConditions and vanilla data.
+
+### MFO-B600 -- auto-control-hostile review leftovers (raised against bbe0fd6, Opus review)
+- **SEV-4:** AUTO re-picks an already-controlled foe. `ShouldApplyTo` (cast/Auto.cpp:271-281) returns true for any hostile spell with no damage component (`dotRate <= 0` -> always recast), so a second foe never gets controlled while the first is still held.
+- **SEV-5:** the `[classify]` log (CasterConsent.cpp ClassifySpell) fires per effect in record order, so a mixed spell can log "unflagged" for an effect that sits before a flagged hostile one. Use a hostile-first pass.
+- **SEV-5:** the log's dedup is keyed on FormID (dynamic FF spells recycle ids) and is never cleared on load.
+- **SEV-5:** MFO's control set (Calm, Frenzy, Demoralize, Paralysis, TurnUndead; no Stagger) differs from Harbinger's self-flip refusal set (which includes Stagger). Document it.
+- **SEV-5:** the ClassifySpell comment names IAUS as a reader before any IAUS code exists.
+- **SEV-5:** a theoretical `std::bad_alloc` inside the set insert in the combat-thread hook.

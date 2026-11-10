@@ -58,7 +58,8 @@ namespace MFO::Actuation {
     // Every other archetype is a DECLARED ally buff and keeps AUTO's party behaviour: Invisibility (Fade
     // Other), Cloak, armor / ward / ValueModifier fortifies, Light, Rally ... (an earlier cut keyed this on
     // the predicted engine row NoRow / Script and so caught Fade Other, a genuine ally buff: a regression).
-    // ClassifySpell and its enum are untouched. Pure form data: any thread.
+    // The SpellKind enum is untouched; ClassifySpell itself now calls an unflagged enemy-control archetype Offense
+    // (2026-11-09), which is why only Script remains below. Pure form data: any thread.
     bool SpellNatureUndeclared(RE::SpellItem* a_spell) {
         if (!a_spell || a_spell->effects.empty()) return false;
         if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return false;

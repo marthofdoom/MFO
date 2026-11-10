@@ -594,7 +594,7 @@ namespace MFO::Actuation {
                 // offense claim keeps its own bounds.
                 if (offenseSpell && a_target && (handPlan.left || handPlan.right)) {
                     const auto arch = ClassifyArchetype(spell);
-                    if (arch.row == EngineRow::Script && !arch.rowApprox) {
+                    if ((arch.row == EngineRow::Script || arch.row == EngineRow::NoRow) && !arch.rowApprox) {
                         const std::size_t hands[2] = { kHandLeft, kHandRight };
                         const bool        planned[2] = { handPlan.left, handPlan.right };
                         bool              stale = true;

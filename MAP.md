@@ -819,11 +819,11 @@ per concern:
   (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
   suffixed " (unsupported)". Picker only: AUTO and casting untouched.
   `SpellNatureUndeclared(SpellItem*)` (same file `:60`, `cast/Actuation.h`): a Buff-kind, non-placement, non-Self-delivery spell where
-  EVERY effect archetype is Script or enemy-control (Calm / Frenzy / Demoralize / Paralysis / TurnUndead; marth 2026-10-11: one declared
+  EVERY effect archetype is Script (the enemy-control archetypes are Offense since 2026-11-09, see below; marth 2026-10-11: one declared
   effect keeps AUTO, MFO-B236 F-G), i.e. its record does not say
   who it is for (Apocalypse leech curses, vanilla Pacify / Calm). Every other archetype (Invisibility = Fade Other, Cloak, fortifies,
   Light, Rally ...) is a declared ally buff and keeps AUTO's party behaviour (the first cut keyed on the predicted row NoRow / Script and
-  caught Fade Other: fixed 2026-10-06). `ClassifySpell` and its enum are untouched. Readers: `CastAuto` (NoOp + one `[auto]` WARN per
+  caught Fade Other: fixed 2026-10-06). `ClassifySpell`'s enum is untouched but ClassifySpell now returns Offense for an unflagged Calm / Frenzy / Demoralize / Paralysis / TurnUndead effect (2026-11-09, `CasterConsent.cpp:35`, one `[classify]` info line per spell), so those never reach this function; only Script is undeclared. Readers: `CastAuto` (NoOp + one `[auto]` WARN per
   follower+spell, never self) and Board (list hint + AUTO target label, keys `Gb_SpellNatureHint` / `Gb_SubjAutoUndeclared`). CastOn does
   NOT read it (the earlier Enemy retarget is gone): the TARGET picker's "Enemy (gambit target)" subject (`Vocab::Subject::Enemy`,
   `CommandedEnemy`) names the commanded foe for ANY spell, and a foe SELECTOR condition names its own foe. WHAT BREAKS: widening the
@@ -2880,7 +2880,7 @@ them clobbers unrelated engine vtables).
   pointer; unrecognized vtable returns benign.
 - **§0.29 guard:** reads the actor via `a_cc->attackerHandle` (0x28) ONLY, never
   `cachedAttacker`; static_asserts pin `attackerHandle==0x28 && <0x68` (`:333,336`).
-- `ClassifySpell` (PUBLIC, `:34`) → the cast family (`cast/CastOn.cpp:314,679,758`, `cast/Direct.cpp` / `DirectSelf.cpp` / `DirectTarget.cpp`, `cast/Auto.cpp`). `Want` (`CasterConsent.cpp:1148`) →
+- `ClassifySpell` (PUBLIC, `:34`; ARCHETYPE RULE 2026-11-09, ClickUp 1dfcuabcr0d: an effect of archetype Calm / Frenzy / Demoralize / Paralysis / TurnUndead is Offense even when unflagged hostile, logged once per spell as `[classify]`; Rally and Stagger are not in the set; the target conditions are G10's `WillWork`, which `HostileAutoFoes` in `cast/Auto.cpp` now calls per foe) → the cast family (`cast/CastOn.cpp:314,679,758`, `cast/Direct.cpp` / `DirectSelf.cpp` / `DirectTarget.cpp`, `cast/Auto.cpp`). `Want` (`CasterConsent.cpp:1148`) →
   `cast/CastOn.cpp:801,1130`, `cast/Roads.cpp:223,274`. `WantedSpell` (`CasterConsent.cpp:1142`) → `Scheduler.cpp:1102` +
   `CombatStyle.cpp:341` (the equip gate's one exemption). `ClearTransientState`
   (`:1267`) → `Serialization.cpp:718`. (`NoteCooldown` is GONE — see "NO CAST

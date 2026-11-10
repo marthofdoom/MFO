@@ -237,7 +237,7 @@ namespace MFO::Actuation {
     // (feat/apmf-self-delivery-proxy, no ABI bump) mints a kSelf copy of the spell for a claim whose target is
     // the claimant's own FormID, so no ray is aimed at the shooter. A kTargetLocation non-placement spell
     // stays direct (rune-shaped, batch D); a FLAGGED hostile / detrimental spell is never a Buff kind (CasterConsent::ClassifySpell tests the
-    // effect flags only; an unflagged Calm / Frenzy / Demoralize / Paralysis archetype can still classify Buff: MFO-B233 F1).
+    // effect flags only; an unflagged Calm / Frenzy / Demoralize / Paralysis / TurnUndead archetype is Offense too since 2026-11-09, ClassifySpell; an unflagged Stagger still classifies Buff: MFO-B233 F1).
     bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
         return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
                a_spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&   // keeps the Task-1 target-0 claim

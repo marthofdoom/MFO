@@ -789,8 +789,8 @@ namespace MFO::Actuation {
     // picker hides it. *a_reason (optional) gets a static literal. Pure form data: main-thread safe.
     bool CastRoadUnsupported(RE::SpellItem* a_spell, const char** a_reason = nullptr);
     // True when the spell's nature (for an enemy / an ally / self) cannot be read from its record: a Buff-kind,
-    // non-placement, non-Self-delivery spell with at least one Script or enemy-control (Calm / Frenzy /
-    // Demoralize / Paralysis / TurnUndead) effect archetype. AUTO does not cast it (cast/Auto.cpp) and the
+    // non-placement, non-Self-delivery spell whose EVERY effect is archetype Script (enemy-control archetypes
+    // Calm / Frenzy / Demoralize / Paralysis / TurnUndead are Offense since 2026-11-09, ClassifySpell). AUTO does not cast it (cast/Auto.cpp) and the
     // board marks it. Pure form data.
     bool SpellNatureUndeclared(RE::SpellItem* a_spell);
     // True for a Buff-kind, non-placement, Self-delivery spell (Inferno). CastOn refuses it at a hostile

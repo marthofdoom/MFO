@@ -318,7 +318,12 @@ namespace MFO::Actuation {
                     if (selfPos.GetDistance(foe->GetPosition()) > radius) continue;
                     // F2/F3/F4: only a foe this cast will actually affect. Filtering here (worker, foe ptr still
                     // valid) means an all-covered set NoOps transparently in the callers.
-                    if (ShouldApplyTo(foe, a_spell, true)) out.push_back(foe->GetFormID());
+                    if (!ShouldApplyTo(foe, a_spell, true)) continue;
+                    // G10 (cast/WillWork.cpp, MFO-B580): a foe the spell can never affect (level cap, undead-only
+                    // conditions) is not a target. Unknown (not measured yet) keeps the foe, as Fire's rule does;
+                    // the call is also the prefetch.
+                    if (WillWork(a_follower, a_spell, foe).verdict == WillWorkVerdict::No) continue;
+                    out.push_back(foe->GetFormID());
                 }
             }
             return out;
