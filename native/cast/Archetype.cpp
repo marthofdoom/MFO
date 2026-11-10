@@ -127,6 +127,16 @@ namespace MFO::Actuation {
             }
         }
 
+        // The engine's lookup-map builder (AE 0x81DCA0 / SE 0x7816C0 / 1.7.104 0x833190) files every
+        // ValueModifier row ALSO under archetypes 4 (Absorb), 5 (DualValueModifier), 32
+        // (AccumulateMagnitude) and 34 (PeakValueModifier); Harbinger CastClassify.cpp:91-98 (APMF-B59 (e)).
+        // Oakflesh / Stoneflesh / Dragonhide / wards / frost / shock cloaks-as-resist are archetype 34.
+        // All four are AV-keyed (AvKeyed above), so the aliased row keeps its AV requirement.
+        bool IsVmAlias(Arch a) {
+            return a == Arch::kAbsorb || a == Arch::kDualValueModifier ||
+                   a == Arch::kAccumulateMagnitude || a == Arch::kPeakValueModifier;
+        }
+
         enum class Hit : std::uint8_t { Miss, Unsure, Match };
 
         struct Lookup { Hit hit = Hit::Miss; EngineRow caster = EngineRow::NoRow; const char* why = ""; };
@@ -134,7 +144,7 @@ namespace MFO::Actuation {
         Lookup LookupAv(Arch a, int av, bool self, bool hostile) {
             Lookup out;
             for (const auto& r : kRows) {
-                if (r.arch != a) continue;
+                if (r.arch != a && !(r.arch == Arch::kValueModifier && IsVmAlias(a))) continue;
                 if (AvKeyed(a) && r.av != av) continue;
                 bool selfOk = (r.self == Req::Any) || ((r.self == Req::Yes) == self);
                 bool hostOk = (r.hostile == Req::Any) || ((r.hostile == Req::Yes) == hostile);

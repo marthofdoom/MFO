@@ -794,6 +794,11 @@ per concern:
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
+  **ROW ALIAS (fix/spell-row-alias-shape-census, C1):** `LookupAv` also matches every ValueModifier `kRows` entry for archetypes
+  4 / 5 / 32 / 34 (`IsVmAlias`; Harbinger `CastClassify.cpp:91-98`), so Oakflesh / Stoneflesh / Dragonhide / wards (archetype 34)
+  predict Armor / Ward / Restore instead of NoRow. NOTE the predicted row IS read: `ChooseBuffRoad` (`BuffRoad.cpp:359` switch,
+  `BuffAmbiguousRowWhy`), `CastOn.cpp:626` Script/NoRow never-fired bound. An Absorb (4) Health spell now predicts Offensive, no longer
+  NoRow, so it leaves the `CastOn.cpp:626` bound.
 - `cast/HealRoad.cpp` (~1170; 569 at feat/mfo-perhand-heal 2026-10-05, line numbers below are from then; the 2026-10-12 archer dual-cast block `ArcherHealPlan` sits just above `HealRoadLap`) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
   below: `HealRoadLap` (`:429`), `HealHandClaimed` (`:396`), `HealHandEnded` (`:361`), `HealHandsReconcile` (`:384`),
   `HealRefreshGate` (`:529`), `RightHealRule` (`:539`, the equip side's right-hand rank read, honours the re-stream gap),
