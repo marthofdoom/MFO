@@ -8,7 +8,8 @@
 // WHAT THIS IS: the engine-mutating half of the progression addon. It
 // consumes Progression's frozen catalog (component 1 — never rewritten here)
 // and drives the three field-proven mechanisms from the ProgProbe build:
-//   P1  TESNPC::AddPerk(perk, rank) + Actor::ApplyPerksFromBase()  (perks)
+//   P1  TESNPC::AddPerk(perk, rank) + a per-perk live settle      (perks; never
+//       Actor::ApplyPerksFromBase, which duplicates entry points: 1dfcuabcrqq)
 //   P2  SetBaseActorValue + the §4.2 reconcile                     (skills)
 //   P3  GetPerkIndex-guarded reapply at kPostLoadGame              (no doubling)
 //
@@ -423,7 +424,7 @@ namespace MFO::ProgAllocator {
     // B′ UNINSTALL / safe-removal restore (marth 2026-09-13: "a clean restore
     // when it's uninstalled"). Puts every native catalog perk MFO stripped from
     // this enrolled follower (ProgState::strippedPerks, PRGN v7) back on the
-    // base TESNPC, settles the actor (ApplyPerksFromBase) and CLEARS the record
+    // base TESNPC, settles the actor (SetLivePerkRank, per perk) and CLEARS the record
     // (nativeHeld=false). MFO's own grants are untouched (Respec / ForgetFollower
     // remove those). Called by ForgetFollower (the Follower-tab roster removal,
     // ClickUp 86e3eewaf + 86e3940zh). Base perk edits are not written to the
@@ -575,6 +576,23 @@ namespace MFO::ProgAllocator {
         float floor[3]{};            // max(profile share x playerSample, 50): the cap's per-pool floor
     };
     bool ReadHmsCapView(RE::FormID a_id, HmsCapView& a_out);
+    // DEV BUILDS ONLY: the read the self-test `prog.perk_entries_unique` judges by (ClickUp 1dfcuabcrqq).
+    // PURE READ: the g_prog record + a census of the follower's live entry-point entries against his base
+    // perks (progression/PerkGate.cpp CensusBasePerkEntries). MAIN THREAD. false = no g_prog record / actor.
+    struct PerkEntryView {
+        bool          enrolled       = false;
+        int           allocatedRanks = 0;       // MFO-granted ranks on the record
+        bool          process        = false;   // a middle-high process (false = nothing live, nothing counted)
+        int           basePerks      = 0;
+        int           epEntries      = 0;       // entry-point entries the base expects live
+        int           missing        = 0;
+        int           duplicated     = 0;       // entries in their array more than once
+        int           extraCopies    = 0;
+        int           maxCopies      = 0;
+        RE::FormID    worstPerk      = 0;
+        std::uint32_t worstEp        = 0;
+    };
+    bool ReadPerkEntryView(RE::FormID a_id, PerkEntryView& a_out);
 #endif
 
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────

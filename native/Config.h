@@ -504,6 +504,12 @@ namespace MFO::Config {
     // increase, logs the cell, location, faction and every managed follower's state. Read-only: changes
     // nothing. bCrimeGoldProbe = 1 in Data/SKSE/Plugins/MFO.ini arms it. 1.6.1170 only. See CrimeProbe.cpp.
     inline std::atomic<bool>  g_crimeGoldProbe{ false };
+    // [perk-probe] PASSIVE PERK-ENTRY PROBE (ClickUp 1dfcuabcrqq) -- DEFAULT OFF, INI-only (no MCM face). At each
+    // Progression perk change (grant, reapply, strip, restore, respec, roster removal) it counts, for ONE follower
+    // (the first to reach such a site this session), the live entries of one entry point before and after, plus a
+    // census of every base perk's entry-point entries (duplicated / missing). Read-only, at most 64 lines a session.
+    // bPerkEntryProbe = 1 in Data/SKSE/Plugins/MFO.ini arms it. See progression/PerkGate.cpp.
+    inline std::atomic<bool>  g_perkEntryProbe{ false };
     // [hb] HEARTBEAT -- DEFAULT ON (one line per 5 s). The sleeper thread prints
     // `[hb] worker ticks=N main drains=M ...` so a freeze names the thread that
     // stopped (a stalled worker freezes ticks, a stalled main freezes drains).

@@ -2653,3 +2653,12 @@ Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
 - Comment at CastOn.cpp:64 names a nonexistent LogServeRefusal (the function is HarbingerWouldRefuse).
 - MFO-B2's open list should also name: a claim Harbinger accepts while MFO's cast-facet priority is 0 (offFacets) still displaces the incumbent; and the kServePending_Arbitration bit.
 - Note: CastOn.cpp is 1876 lines (plan its split as its own round); Bridge.cpp 1373.
+
+### MFO-B611 (SEV-4/5, OPEN, progression/PerkGate.cpp SetLivePerkRank, against 8bbb53d, Opus tier-3 review) -- review leftovers
+Coordinator's paraphrase (not verbatim):
+- SEV-4: removal takes EVERY live copy of an entry pointer and apply is skipped while any copy is live, so another source holding the same perk (a magic effect's perk-to-apply, a temporary perk) can lose or lend its copy; recovers at the next Load3D. Rare (only catalog-tree perks are mutated).
+- SEV-4 (pre-existing, not a regression): an engine task 0x5F queued by FinishLoadGame/Load3D before MFO strips or respecs perk P can re-apply P after the removal until the next Load3D.
+- SEV-5: the self-test asserts "no duplicates" only; add a removal-leaves-0-copies and missing==0 check (regression test for the never-removed-live bug).
+- SEV-5: ProgProbe.cpp:409/:471 (dev bProgProbe, default OFF) still call ApplyPerksFromBase and duplicate when armed; never read a probe run as evidence.
+- SEV-5: the post-change event 0x391760 has no in-binary subscriber; a raw-address plugin listener would no longer see MFO's changes.
+- Unverified by the reviewer: the 1.7.104 addresses (author's only).

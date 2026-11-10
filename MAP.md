@@ -5443,7 +5443,7 @@ exactly this); with the catalog unbuilt (addon absent) every vote is 0 → the w
 perk-style decision is INERT and equipment behaves exactly as before.
 
 ### native/progression/ — Allocator / SkillScale / PerkGate / BoardViews / Poll / Harness / Verbs / Hms / Manifest + ProgAllocator.h / ProgAllocator_internal.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
-The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
+The engine-mutating half: writes perks (`AddPerk/RemovePerk` on the base + `SetLivePerkRank` for the live actor)
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: `ProgAllocator.cpp` + `_Hms` + `_Manifest`, the
@@ -5476,6 +5476,26 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   **World progress** (`IsWorldProgressFn`: GetStage, GetStageDone, GetQuestRunning, GetQuestCompleted, GetQuestVariable, GetGlobalValue, GetPCMiscStat) run on
   Self/Target is handed the PLAYER as subject. **What breaks:** a HasPerk on a non-Self object is now an engine item, not an ownership test; a twin match
   needs name AND the full condition list equal; the vanilla Smithing gate (`vanillaGate`) still skips this evaluator entirely.
+  - **LIVE PERK-ENTRY SETTLE (2026-11-09, `fix/progression-perk-dup`, ClickUp 1dfcuabcrqq; no co-save or ABI change).**
+    MFO NEVER calls `Actor::ApplyPerksFromBase` any more (the dev-only `ProgProbe.cpp` experiment, `bProgProbe`,
+    still does). That call walks the WHOLE base perk array and re-applies every perk with old rank 0 and no
+    presence check, and the entry-point insert never dedupes, so each call DUPLICATED every entry-point entry of
+    every base perk (AE: vfunc 0x101 `0x68ceb0` -> `0x715950` -> task 0x5F -> rank change `0x390580`; insert
+    `0x7155e0`, comparator `0x390540`; same shape on SE 1.5.97 and 1.7.104; addresses in the `SetLivePerkRank`
+    comment). The engine itself always CLEARS the arrays first (`Load3D` / `Set3D` call `0x7159a0` right before
+    it; `Revert` frees them at a load and `FinishLoadGame` re-applies). In its place
+    `SetLivePerkRank(actor, perk, oldRank, newRank)` (`PerkGate.cpp`) does the engine's per-perk rank change for
+    ONE perk, presence-checked: old-rank entries out (every live copy), new-rank entries in (an entry-point entry
+    only when its pointer is not in its array). Sites: `GrantRank` (rank K-1 out, rank K in), `ReapplyFollower`
+    (the re-added rank only), `StripNativePerks` (the stripped perk's live entries now go, before they stayed
+    live until the next 3D load), `RestoreNativePerksImpl`, `Respec` and `ForgetFollower` (`Verbs.cpp`, removed
+    perks' entries go now). No middle-high process = no-op (as the old call). `BaseRankOf` reads the base rank
+    before a removal. `CensusBasePerkEntries` (pure read) counts every base perk's expected entry-point entries
+    live / missing / duplicated; the PASSIVE `[perk-probe]` (`Config::g_perkEntryProbe`, INI `bPerkEntryProbe`,
+    default OFF, one follower, 64 lines a session) logs it before/after each site; the dev self-test
+    `prog.perk_entries_unique` judges by it. **What breaks:** a new `ApplyPerksFromBase` call anywhere in MFO
+    re-creates the duplication; a base perk edit without a matching `SetLivePerkRank` leaves the live actor out
+    of step until his next `Load3D`; `SetLivePerkRank` must stay main-thread (it is what the engine's task does).
   - `progression/PerkGate.cpp` (534) = perks: grant plumbing + the condition evaluator
     (`EvalCondItem`, `EvalPerkConditions`, `EngineItemTrue`, `DumpConditions`; see "PERK GATE, per-item evaluation" below),
     `CountNativeTreeRanks` (`:256`), the B′ strip `StripNativePerks` (`:275`) /
@@ -8603,12 +8623,15 @@ differ from main only by the include and the empty `SelfTest::Tick/CoSave/ClearA
 **Files.** `SelfTest.h` (public: `Tick`, `CoSave`, `CoLoad`, `ClearAll`), `SelfTest_internal.h` (TestDef /
 Ctx / Step / Scratch / FixtureRequest, the `g_mx`-guarded results + ledger + acks; `#error` outside a dev
 build), `Runner.cpp` (pick / fixtures wait / drive / end state machine, pending log, reset INI), `Fixtures.cpp`
-(main-thread add + cleanup), `Record.cpp` (`'MFST'` v1 layout + reader), `Tests.cpp` (`RegisterAll`: the 4
+(main-thread add + cleanup), `Record.cpp` (`'MFST'` v1 layout + reader), `Tests.cpp` (`RegisterAll`: the 5
 seeded tests, plus their session state: a PASSIVE TESHitEvent sink `ShotSink` on the script event source, the
 bound-bow shot signal, registered by a posted `RegisterSinks` (no hook, no seat), and the posted
-`ProgAllocator::ReadHmsCapView` cache for `hms.cap_holds`). `progression/ProgAllocator.h` + `progression/Hms.cpp`
+`ProgAllocator::ReadHmsCapView` cache for `hms.cap_holds`, and the `ReadPerkEntryView` cache for
+`prog.perk_entries_unique`). `progression/ProgAllocator.h` + `progression/Hms.cpp`
 gain `HmsCapView` / `ReadHmsCapView` inside `#ifdef MFO_DEV_SELFTEST`: a main-thread pure read of `g_prog`, the
 cap's player sample and its per-pool floors (`HmsProfileFor`, the same 50 floor), nothing else.
+`progression/ProgAllocator.h` + `progression/PerkGate.cpp` gain `PerkEntryView` / `ReadPerkEntryView` the same way
+(the `g_prog` record + `CensusBasePerkEntries`, a pure read).
 
 **Touch points (each a one-liner or one entry):**
 - `Vocabulary.h`: `kActDevSelftest = "act.dev_selftest"` after `kActTaunt`, in `#ifdef`. Frozen string (#10).
