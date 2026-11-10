@@ -22,7 +22,7 @@ marth 2026-11-10 (v2, this document):
 3. **Add ONE rule to ONE follower:** open the board on him, **Combat** page, add a rule, set **DO** to **"DEV: run self-tests"**, keep it enabled. The WHEN cell is not read.
 4. **Play normally or just stand around.** Stand somewhere quiet and open (a field, a road): **not in a town, inn or house** (it refuses there), nobody essential or friendly nearby. Each pending test sets itself up, runs, judges, cleans up and logs. Do not open menus for long (a paused game freezes the run).
 5. **Read the result:** `grep '\[selftest\]' MFO.log`. The last line when everything is judged is
-   `[selftest] ALL DONE: PASS n, FAIL n, MANUAL n (ids), INFO n`.
+   `[selftest] ALL DONE: PASS n, FAIL n, MANUAL n (ids), INFO n`. If some test is waiting on an input the runner cannot supply (no class add-on, no second ally, no Harbinger), the same line is printed as `ALL RUNNABLE DONE: ... | BLOCKED n: <id> (needs ...)` once everything else is judged.
    The log also lists, after each load and after each completion, which tests are still pending and why, and one `MANUAL` line per thing a human has to look at, with the exact thing to look at.
 
 To run them again: `Data/SKSE/Plugins/MFO_SelfTest.ini`, section 7.

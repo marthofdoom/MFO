@@ -77,6 +77,10 @@ namespace MFO::SelfTest {
         Clock::time_point                                      g_last{};
         float                                                  g_orphanWait = 0.0f;
         float                                                  g_classWait = 0.0f;
+        // The last precondition answer per test id ("" = it could start): a pending test whose input is missing (the class add-on, a second
+        // ally, Harbinger) must not keep the final line from ever printing. WORKER-ONLY.
+        std::map<std::string, std::string>                     g_lastPre;
+        bool                                                   g_blockedAnnounced = false;
 
         constexpr float kPickEverySec   = 1.0f;
         constexpr float kStepEverySec   = 0.5f;
@@ -133,11 +137,23 @@ namespace MFO::SelfTest {
                 for (const auto& m : ManualItems())
                     spdlog::info("[selftest]   MANUAL {} ({}): the DLL cannot judge it ({}). LOOK AT: {}", m.id, m.ref, m.why, m.look);
             }
+            std::string manual;
+            for (const auto& m : ManualItems()) manual += (manual.empty() ? "" : ", ") + std::string(m.id);
             if (pending.empty()) {
-                std::string manual;
-                for (const auto& m : ManualItems()) manual += (manual.empty() ? "" : ", ") + std::string(m.id);
                 spdlog::info("[selftest] ALL DONE: PASS {}, FAIL {}, MANUAL {} ({}), INFO {}", pass, fail, ManualItems().size(),
                              manual.empty() ? "none" : manual, info);
+            } else {
+                // every pending test is waiting on an input the runner cannot supply (its last precondition answer): say so, once
+                std::string blocked;
+                bool        all = true;
+                for (const auto* d : pending) {
+                    const auto it = g_lastPre.find(d->id);
+                    if (it == g_lastPre.end() || it->second.empty()) { all = false; break; }
+                    blocked += (blocked.empty() ? "" : "; ") + std::string(d->id) + " (needs " + it->second + ")";
+                }
+                if (all)
+                    spdlog::info("[selftest] ALL RUNNABLE DONE: PASS {}, FAIL {}, MANUAL {} ({}), INFO {} | BLOCKED {}: {}", pass, fail,
+                                 ManualItems().size(), manual.empty() ? "none" : manual, info, pending.size(), blocked);
             }
         }
 
@@ -387,6 +403,7 @@ namespace MFO::SelfTest {
                 g_spawnRef.erase(a_run.token);
             }
             PostFixtureCleanup(a_run.token, d->id);
+            g_blockedAnnounced = false;
             if (done) LogPending(std::format("after {}", d->id).c_str(), false);
             else g_backoff[{ a_id, d->id }] = Clock::now() + a_backoff;
         }
@@ -416,7 +433,10 @@ namespace MFO::SelfTest {
                     }
                     Scratch s;
                     Ctx     c{ a, a_id, &a_st, inCombat, 0.0f, d.timeoutSec, now, g_seen[a_id], &s };
-                    if (d.precondition && d.precondition(c)) continue;
+                    const char* why = d.precondition ? d.precondition(c) : nullptr;
+                    g_lastPre[d.id] = why ? why : "";
+                    if (why) continue;
+                    g_blockedAnnounced = false;
 
                     Run r;
                     r.def       = &d;
@@ -443,6 +463,22 @@ namespace MFO::SelfTest {
                     }
                     g_runs.emplace(a_id, std::move(r));
                     return;
+                }
+                if (!g_blockedAnnounced) {   // nothing started this pass: if every pending test is blocked on a missing input, say so once
+                    bool anyPending = false, allBlocked = true;
+                    {
+                        std::lock_guard lk(g_mx);
+                        for (const auto& d : Reg()) {
+                            if (g_results.contains(d.id)) continue;
+                            anyPending = true;
+                            const auto it = g_lastPre.find(d.id);
+                            if (it == g_lastPre.end() || it->second.empty()) allBlocked = false;
+                        }
+                    }
+                    if (anyPending && allBlocked && g_runs.empty()) {
+                        g_blockedAnnounced = true;
+                        LogPending("every pending test is blocked", true);
+                    }
                 }
                 return;
             }
@@ -650,6 +686,8 @@ namespace MFO::SelfTest {
         g_last       = {};
         g_orphanWait = 0.0f;
         g_classWait  = 0.0f;
+        g_lastPre.clear();
+        g_blockedAnnounced = false;
         g_devEntries.clear();   // card C5c: applied once per load
         g_devParsed         = false;
         g_devWaited         = 0.0f;
