@@ -20,3 +20,7 @@ Every research round's results are kept here (marth 2026-11-10: "every research 
 | hidden-perks-research.md | player-only entry points census (115 HandleEntryPoint sites) |
 | tailor-compat-report.md | Tailor outfit mod compatibility diagnosis |
 | fable-pilot-compare.md | Fable vs Opus tier-A pilot numbers |
+| open-questions-for-marth.md | every saved question + its answer (Q1-Q61) |
+| in-game-test-list.md | the in-game test list (mirrors ClickUp 1dfcuabcqdm) |
+| stagger-schedule.md, pending-queue.md | work queues + prerelease batch counters |
+| brief-fable-potion-review.md | queued Fable review brief (Harbinger potion allowance) |
