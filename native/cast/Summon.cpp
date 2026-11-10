@@ -3,6 +3,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
@@ -359,7 +360,7 @@ namespace MFO::Actuation {
             auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
             auto* avo    = f->AsActorValueOwner();
             const float pool = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-            const float cost = sp->CalculateMagickaCost(f);
+            const float cost = CostParity::Cost(f, sp);   // parity: the player-curve cost (CostParity.h)
             if (!caster || (avo && pool < cost)) {
                 setVerdict(SummonVerdict::Failed);
                 spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): not cast -- {}",

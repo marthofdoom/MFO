@@ -2636,6 +2636,33 @@ Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbati
 - SEV-5: CastOn.cpp:593 comment, the :621 WARN and the :398/:636 reasons plus MAP.md:773-775 still say "pure-Script" for a release that now also covers NoRow.
 - SEV-5: Auto.cpp:666 "no enemies in range" also covers "every foe will-not-work".
 
+### MFO-B610 -- follower spell cost parity leftovers (ClickUp 1dfcuabcr0c, redesigned 2026-11-09 to charge the player-curve cost; carried from the perk design ae6c6bb)
+- **SEV-5:** a negative Base GMST gave NaN (FIXED: explicit error + refusal). The perk-design items (marker ability, epoch guard, ex-follower sweep) are gone with the perk.
+- (The earlier "SEV-5: HandleEntryPoint and CalculateMagickaCost run on the worker" line was FALSE and is withdrawn: review of c0f6b1a, F1, made the animated roads post to the main thread, see MAP.md. The direct roads already run on main.)
+- The gate, dual-cast and multi-school items moved to MFO-B612 / MFO-B614.
+
+### MFO-B612 (SEV-4, OPEN, CostParity gates, against c0f6b1a, Opus review F4) -- the affordability gates read the engine cost
+Verbatim (reviewer, relayed by the coordinator): F4 SEV-4: affordability gates read engine cost E (Auto.cpp:860, Summon.cpp:426, CastOn.cpp:284, Service.cpp:1915/2006, DirectSelf.cpp:370, DirectTarget.cpp:380). With a pool between E and P the cast passes and the clamped deduct makes it cheaper than P. Bounded to the last cast of each pool, and inherent on the animated road.
+
+### MFO-B613 (SEV-4, OPEN, CostParity dedupe stamp, against c0f6b1a, Opus review F5) -- the stamp is written on every Cost() call
+Verbatim (reviewer, relayed by the coordinator): F5 SEV-4: the dedupe stamp is written on every Cost() call even with no cast (Summon.cpp:363 stamps inside the affordability check, then refuses at :364). Field logs show direct CastSpellImmediate raises NO TESSpellCastEvent (16 direct casts, 0 sink lines), so the 3 s window only swallows genuine animated recasts (undercharge).
+Reviewer's remedy (from the original F5 text): since direct casts raise no sink event, the window guards nothing real and could be cut to well under a second, or the stamp could move to after the actual deduct.
+
+### MFO-B614 (SEV-4, OPEN, CostParity dual cast / multi-school, against c0f6b1a, Opus review F6)
+Verbatim (reviewer, relayed by the coordinator): F6 SEV-4: dual cast is topped up on the single-cast delta, and a multi-school autocalc spell uses the costliest effect's school while the engine curves each effect. Reviewer's reasoning: both only shift the approximation (CalculateCost's per-effect loop calls 0x1401434D0).
+
+### MFO-B615 (SEV-5, OPEN, CostParity comments / publication, against c0f6b1a, Opus review F8)
+Verbatim (reviewer, relayed by the coordinator): F8 SEV-5: the comments at CostParity.cpp:40 / CostParity.h:28-29 say the sink event follows a direct cast "ms apart", but the field shows it never fires. g_pc/g_np are published before a relaxed Active() load. LogDue(Key^1u) collisions. Active() ignores an INI re-read. Also kAddRangeToValue perks (random) break the affine probe.
+
+### MFO-B616 (SEV-4, OPEN, CostParity channel close, against 1dc1c9b, Opus re-review N1) -- the Tick job can close a channel that was just reopened
+Verbatim (reviewer): The erase at :301-304 removes by (caster, spell) on a single sample where `Channelling()` is false. If the follower recasts the same concentration spell between the worker posting and the main job running, the record `OnObservedCast` just reset (:262) is erased. The same happens if the new channel is still in state 4 (Casting), before it reaches state 6. Field data shows up to ~300 ms in state 4. Effect: that whole channel goes unbilled. It is an undercharge only, so it is not a correctness or safety issue. The window existed before the fix; the post widens it slightly. Fix later: a generation counter or `paidThrough` check before erasing, or close only after two consecutive misses.
+
+### MFO-B617 (SEV-4, OPEN, include rule, against 1dc1c9b, Opus re-review N2) -- logistics includes a cast/ internal header
+Verbatim (reviewer): logistics/Service.cpp:14 includes `cast/CostParity.h`. CLAUDE.md says another subsystem may include only that subsystem's one public header, and no other non-cast file includes any cast/ header except `cast/Actuation.h`. The root files (Followers, Diagnostics, plugin) are not subsystems yet, so only Service.cpp breaks the rule. Fix: re-export through `cast/Actuation.h`, or record an explicit exception in MAP.md.
+
+### MFO-B618 (SEV-5, OPEN, CostParity leftovers, against 1dc1c9b, Opus re-review N3)
+Verbatim (reviewer): The `Deduct` comment at :108 still says "WORKER"; it now runs only on main. `BillOnMain` re-checks tracking but not `mfoEnabled` (the worker checked that at observe time, :248). A post-sized window, negligible.
+
 ### MFO-B601 (SEV-4/5, OPEN, G9 per-rule cooldown, against 9b338f1, Opus tier-3 review) -- review leftovers
 Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
 - C1 (SEV-4, co-save, field): the v5->v6 load path has no executed proof (the MCLS "rows v5" self-test runs only with bClassCoSaveSelfTest=1; CI never runs it). Deck: load a real v5 save with the switch on, expect "MCLS self-test (rows v5, pre-G9): PASS" and an FLWR summary matching the previous session; then save + reload (v6->v6). On the in-game test list.

@@ -9,6 +9,7 @@
 // (2026-09-24), then cut again by the Direct.cpp split (2026-09-29, MFO-B152): pure
 // moves, proven function by function with tools/splitcheck.
 #include "Direct_internal.h"
+#include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
@@ -320,7 +321,7 @@ namespace MFO::Actuation {
                 auto* avo = caster->AsActorValueOwner();
                 if (!avo) return;
                 const float before = avo->GetActorValue(RE::ActorValue::kMagicka);
-                const float cost   = sp->CalculateMagickaCost(caster);
+                const float cost   = CostParity::Cost(caster, sp);   // parity: the player-curve cost (CostParity.h)
                 const float spend  = std::clamp(cost * a_sec, 0.0f, std::max(0.0f, before));
                 if (spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
@@ -426,7 +427,7 @@ namespace MFO::Actuation {
                     if (heal) HealObsNote(a, a, sp, sp, "direct self", hpBefore, attach);
                     return;
                 }
-                const float cost  = sp->CalculateMagickaCost(a);
+                const float cost  = CostParity::Cost(a, sp);   // parity: the player-curve cost (CostParity.h)
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO/self validate cost against ONE worker snapshot).
                 // CHARGE FOR TIME: a_chargeSec seconds of the per-second cost.
@@ -626,7 +627,7 @@ namespace MFO::Actuation {
                 // than the flag -- this is left EXACTLY as-is and flagged for a field A/B.
                 // CHARGE FOR TIME: a_chargeSec seconds of the per-second cost
                 // (BeatChargeSec, worker-side); #6: clamped, never negative.
-                const float cost  = sp->CalculateMagickaCost(caster);
+                const float cost  = CostParity::Cost(caster, sp);   // parity: the player-curve cost (CostParity.h)
                 const float spend = avo ? std::clamp(cost * a_chargeSec, 0.0f, std::max(0.0f, before)) : 0.0f;
                 if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,

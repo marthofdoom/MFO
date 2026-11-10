@@ -152,6 +152,7 @@ namespace MFO::Config {
             else if (a_key == "iTempleGameMin")     { setI(g_templeGameMin, 1, 240); return; }   // legacy: read, no longer used
             else if (a_key == "fTempleRealSec")     { setF(g_templeRealSec, 1.0f, 600.0f); return; }
             else if (a_key == "bSubstrateBlockedInTowns") { setB(g_substrateBlockedInTowns); return; }   // opt-in town hold (ClickUp 1dfcuabc4dn)
+            else if (a_key == "bFollowerSpellCostParity") { setB(g_followerSpellCostParity); return; }   // cost parity (CostParity.cpp), INI-only, default ON
             else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default ON
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
@@ -384,6 +385,7 @@ namespace MFO::Config {
             g_weighWeapons       = false;   // default OFF: MFO equips weapons directly (weighting is parked, batch D)
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)
+            g_followerSpellCostParity = true;   // default ON (marth 2026-11-09); only charges where the player's curve is the costlier one
             g_substrateCasts     = true;    // default ON (2026-10-26, marth: "once it works, its certainly on"; the field run proved fired casts). OFF = the kill switch, OOC casts take the direct road
             g_substrateBlockedInTowns = false;   // default OFF since 2.8.1 (Harbinger ABI 32 fixes the town panic; opt-in hold)
             g_castSource         = 3;

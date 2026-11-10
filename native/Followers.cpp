@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Followers.h"
+#include "cast/CostParity.h"   // ClickUp 1dfcuabcr0c: animated-channel top-up tick + per-session memory
 #include "Loadout.h"
 #include "Targeting.h"
 #include "EngageOnSight.h"   // ReleaseHeldState: forget the engage-on-sight entry
@@ -268,6 +269,7 @@ namespace MFO::Followers {
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();
+        CostParity::Reset();   // direct-bill dedupe + open animated channels are per session
         // Keep the off-worker mirror consistent with the just-emptied lists, or
         // IsTrackedFast/ActiveSnapshot would report stale membership across a
         // revert (g_active is cleared by ResetAllState alongside this call).
@@ -796,6 +798,7 @@ namespace MFO::Followers {
         // sinks / SaveCallback / progression poll -- they never walk g_active.
         PublishActiveMirror();
 
+        CostParity::Tick();        // animated concentration casts: bill the player-cost delta per observed second
         FollowerCatchUp::Poll();   // after a world transition, move a follower the engine left behind (INI bFollowerCatchUp)
 
         // Log the zero case too, or "found none" and "never ran" look the same.

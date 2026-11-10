@@ -4,6 +4,7 @@
 #include "Forms.h"
 #include "Config.h"
 #include "Followers.h"
+#include "cast/CostParity.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Board.h"
@@ -370,6 +371,7 @@ namespace {
                          MFO::Config::g_cstyReassert.load() ? "ON" : "OFF",
                          MFO::Config::g_cstyReassertKey.load());
             MFO::Forms::Resolve();          // then forms
+            MFO::CostParity::StartupCheck();   // follower spell cost parity: GMST curves compared once, after Config + Forms
             {
                 // THE RUNTIME PATHS IN FORCE, in one line, so a deck log proves
                 // which paths are live (feat/mfo-1.5.97-pass, 2026-09-15). The
