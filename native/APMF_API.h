@@ -53,6 +53,7 @@
 //
 // ── Threading ──
 // Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx/SetEquipScope
+// (and ABI v34's SetAttackMix, which copies its APMF_AttackMix the same way)
 // are SAFE FROM ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
 // SetSpellAllowList/SetEquipSet/SetEquipSetEx — a copy of the forms/entries array; for
 // SetEquipScope — a copy of the APMF_EquipScope) and enqueue the
@@ -89,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v33, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v35, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 33;
+    inline constexpr std::uint32_t kABIVersion = 35;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -277,11 +278,23 @@ namespace APMF_API {
                                      //       EQUIPS; APMF_API_v8::IsEquipAuthorityEnforced tells
                                      //       observe from enforce for an accepted claim.
 
-        // 18 is DELIBERATELY SKIPPED, not free. A design that is NOT YET ON MAIN
-        // reserves ch.18 for the NPC attack-selection facet; nothing has been
-        // authored for it. Leaving the number unused costs nothing and keeps intent
-        // numbers and channel numbers aligned for every channel that exists.
-        // History: Docs/APMF_API-HISTORY.md#intent-18
+        kIntent_AttackSelection = 18,  // ch.18 ATTACK SELECTION (ABI v34, marth 2026-10-27 / 2026-11-09;
+                                     //       reserved for it since ABI v9, Docs/APMF_API-HISTORY.md#intent-18).
+                                     //       Which attack ENTRY the NPC's own combat AI starts: not whether it
+                                     //       attacks (ch.7), not with what (ch.15 / 17 / 26), not at whom (ch.6 /
+                                     //       20). Mode: DENY ONLY. The client declares attack CLASSES (AttackClass,
+                                     //       read off each entry's own ATKD flags, never a move name) with
+                                     //       APMF_API_v34::SetAttackMix; Harbinger gives a denied class weight 0 in
+                                     //       the engine's own weighted draw (StartAttack's weight call, the #17a
+                                     //       amendment of 2026-11-09), so the AI draws among the rest. It never adds
+                                     //       a move, never touches a class the client did not declare, and never
+                                     //       leaves a roll with no undenied attack the engine would draw (the floor
+                                     //       rule: the engine's weights then stand for that roll, logged). A STANDING
+                                     //       claim: no TTL, ended by Release. Param: none read (pass nullptr or a
+                                     //       zero param). REFUSED (kInvalidHandle) for the player and while the seat
+                                     //       is not installed ([AttackSelect] bAttackSelect=0, VR, an unsupported
+                                     //       runtime, a failed address row or byte check).
+                                     //       See Docs/APMF_API-REFERENCE.md#abi-v34-attack-selection
 
         kIntent_Travel        = 19,  // ch.19 WALK this actor to a destination (ABI v10, marth
                                      //       2026-09-22). Mode: the framework MOVES the actor,
@@ -2839,6 +2852,279 @@ namespace APMF_API {
         // kEquipPrefState_None and writes nothing.
         std::uint32_t (*GetEquipPreferenceItemState)(RE::FormID actor, RE::FormID form, std::uint32_t slot,
                                                      APMF_EquipPrefInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v34: ch.18 ATTACK SELECTION (kIntent_AttackSelection)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // A client claims kIntent_AttackSelection on an NPC (Request / RequestEx, no param) and DECLARES, with
+    // SetAttackMix, which attack CLASSES it governs and which of those the AI may not draw. Harbinger enforces
+    // the declaration at the one point where the engine weighs each candidate attack of a roll (StartAttack's
+    // weight call; Docs/INVARIANTS.md #17a, amended 2026-11-09): a denied candidate gets weight 0, every other
+    // candidate keeps the engine's own weight, and the engine's own weighted draw picks among them. DENY ONLY.
+    // See Docs/APMF_API-REFERENCE.md#abi-v34-attack-selection and Docs/FACETS.md "ch.18".
+    //
+    // THE CLASSES are read off each attack entry's own ATKD flags (bit 1 bash, bit 2 power, bit 3 left; the
+    // flags every attack record carries, vanilla and modded alike), so they need no move names and nothing
+    // list-specific. Every entry is in exactly ONE class:
+    //   Normal     not bash, not power, not left (a right-hand / two-handed normal attack)
+    //   Power      power, not bash, not left
+    //   Bash       bash, not power
+    //   BashPower  bash and power
+    //   Left       left, not bash (a left-hand attack, normal or power: the engine keeps these in their own
+    //              hand context, so they are their own class)
+    //   DualWield  RESERVED. No ATKD flag marks a dual-wield attack, so Harbinger cannot classify one without a
+    //              move name. A mix that names it has the bit masked off (logged once per handle).
+    // APPEND-ONLY: never renumber.
+    enum AttackClass : std::uint32_t {
+        kAtkClass_Normal    = 1u << 0,
+        kAtkClass_Power     = 1u << 1,
+        kAtkClass_Bash      = 1u << 2,
+        kAtkClass_BashPower = 1u << 3,
+        kAtkClass_Left      = 1u << 4,
+        kAtkClass_DualWield = 1u << 5,   // RESERVED (see above): masked off, never governed
+        kAtkClass_All       = 0x1F,      // every class Harbinger can classify (DualWield excluded)
+    };
+
+    // APMF_AttackMix::flags. APPEND-ONLY.
+    enum AttackMixFlags : std::uint32_t {
+        kAtkMix_ObserveOnly = 1u << 0,   // count and log what WOULD be denied; deny nothing
+    };
+
+    // The declaration. BYTE-SHARED with clients, static_assert-pinned below. Zero-initialise it, set `size` to
+    // sizeof(APMF_AttackMix), and fill what you declare.
+    //   governed       the classes this claim governs (AttackClass bits). A class NOT in it is never touched:
+    //                  its entries keep the engine's weight whatever else is declared.
+    //   denied         a subset of governed: the classes the AI may not draw while the claim stands. Bits
+    //                  outside governed are masked off (logged once per handle).
+    //   powerShareMax  a CEILING on the actor's power share, in (0, 1]. 0 or any negative value (-1) =
+    //                  undeclared, so a zero-initialised mix has no share rule (a 0 ceiling is `denied |= Power`). The share is
+    //                  Power / (Power + Normal) over the actor's last `window` started Power-or-Normal attacks.
+    //                  While it is ABOVE the ceiling, Power is denied (a temporary deny). Requires Power in
+    //                  governed, else ignored (logged).
+    //   powerShareMin  a FLOOR on the same share, in (0, 1]. 0 or any negative value (-1) = undeclared. While the
+    //                  share is BELOW it, Normal is denied (a temporary deny: the only deny-only way to get more
+    //                  power attacks).
+    //                  Requires Normal in governed, else ignored (logged). A floor above the ceiling ignores
+    //                  BOTH (logged).
+    //                  Neither share deny engages before the window is full (`window` recorded starts).
+    //   window         how many started Power-or-Normal attacks the share is measured over. 0 = 8; clamped to
+    //                  [4, 32] (logged).
+    //   flags          AttackMixFlags.
+    //   reserved       zero.
+    // THE STAMINA RULE (marth 2026-11-09, "a regular attack must fire when stamina isnt allowing power"). EVERY
+    // Normal deny, declared or the share floor's, is lifted for a roll in which no undenied Power entry would
+    // be drawn: none passes the engine's own reach / cooldown / stamina tests with a weight above 0.
+    // THE FLOOR RULE (marth 2026-11-09, "Allow 1 in circumstances it is required"). A deny that would leave the
+    // roll with NO undenied entry the engine would draw (of the entries its hand / bash context gathered, the
+    // ones passing the engine's own per-entry tests with a weight above 0) is NOT applied for that roll: the
+    // engine's weights stand, and Harbinger logs it (rate-limited) and counts it (floorStood). The draw then
+    // always has a candidate. After each draw the engine runs its own chance roll on the picked weight, the
+    // angle test and a check; a failure erases the pick and the engine DRAWS AGAIN among the rest, and the roll
+    // fails only when every candidate has failed. A deny removes candidates from that chain, so a failed roll
+    // is MORE likely while a deny holds and the actor may attack less often (e.g. a power-share floor that
+    // leaves only Power entries). RANKING: a deny stands only while the
+    // claim outranks the Engine source on the CombatAction facet (the Harbinger page / APMF_Sources.ini); a
+    // tie or an Engine above the claim lets the engine's weight stand (rankStood).
+    struct APMF_AttackMix {
+        std::uint32_t size;            // sizeof(APMF_AttackMix) (48); a smaller value is refused (logged)
+        std::uint32_t governed;        // AttackClass
+        std::uint32_t denied;          // AttackClass, subset of governed
+        float         powerShareMax;   // (0, 1]; 0 or negative = undeclared
+        float         powerShareMin;   // (0, 1]; 0 or negative = undeclared
+        std::uint32_t window;          // 0 = 8, clamped to [4, 32]
+        std::uint32_t flags;           // AttackMixFlags
+        std::uint32_t reserved[5];     // zero
+    };
+    static_assert(sizeof(APMF_AttackMix) == 48, "APMF_AttackMix is 48 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_AttackMix, powerShareMax) == 12, "APMF_AttackMix layout is frozen");
+    static_assert(offsetof(APMF_AttackMix, window) == 20, "APMF_AttackMix layout is frozen");
+    static_assert(offsetof(APMF_AttackMix, reserved) == 28, "APMF_AttackMix layout is frozen");
+
+    // GetAttackMixState's answer. APPEND-ONLY: never renumber.
+    enum AttackMixState : std::uint32_t {
+        kAttackMixState_None        = 0,   // no winning ch.18 claim with a declaration on this actor
+        kAttackMixState_Declared    = 1,   // a winning claim with a declaration; no governed candidate weighed yet
+        kAttackMixState_Governed    = 2,   // the seat has weighed at least one governed candidate for the claim
+        kAttackMixState_Unavailable = 3,   // the seat is not installed (every ch.18 claim is refused)
+    };
+
+    // GetAttackMixState's out-struct. BYTE-SHARED, static_assert-pinned. Set `size` to sizeof(APMF_AttackMixInfo)
+    // before the call; a smaller `size` gets the state only, nothing written.
+    struct APMF_AttackMixInfo {
+        std::uint32_t    size;            // in: sizeof(APMF_AttackMixInfo) (80)
+        std::uint32_t    state;           // AttackMixState (also the return value)
+        Handle           ownerHandle;     // the winning ch.18 claim (kInvalidHandle when none)
+        std::uint32_t    governed;        // the declaration as APPLIED (after masking)
+        std::uint32_t    denied;          //   "
+        std::uint32_t    activeDeny;      // the classes denied at the newest governed candidate (static + share)
+        float            powerShareMax;   // as applied (-1 = undeclared or ignored)
+        float            powerShareMin;   //   "
+        std::uint32_t    window;          // as applied
+        std::uint32_t    windowFill;      // Power-or-Normal starts recorded for the actor (saturates at window)
+        std::uint32_t    windowPower;     // of those, Power
+        std::uint32_t    windowNormal;    // of those, Normal
+        float            powerShare;      // windowPower / windowFill once the window is full, else -1
+        std::uint32_t    zeroed;          // candidate weights Harbinger set to 0 (since the load, saturating)
+        std::uint32_t    floorStood;      // ROLLS whose denies were NOT applied because of the floor rule
+        std::uint32_t    rankStood;       // denies NOT applied because the Engine source outranks the claim
+        std::uint32_t    wouldDeny;       // denies NOT applied because of observe-only (INI or kAtkMix_ObserveOnly)
+        std::uint32_t    reserved[3];
+    };
+    static_assert(sizeof(APMF_AttackMixInfo) == 80, "APMF_AttackMixInfo is 80 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_AttackMixInfo, powerShare) == 48, "APMF_AttackMixInfo layout is frozen");
+    static_assert(offsetof(APMF_AttackMixInfo, reserved) == 68, "APMF_AttackMixInfo layout is frozen");
+
+    // The v34 interface: APMF_API_v33's members verbatim (prefix EXTENSION), then TWO appended slots.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 34` (INVARIANTS #14b). An older
+    // APMF has neither slot and refuses kIntent_AttackSelection (no channel serves it): the client's own
+    // degrade path runs.
+    struct APMF_API_v34 : APMF_API_v33 {
+        // DECLARE the attack mix of an EXISTING kIntent_AttackSelection claim (`handle`). `mix` is READ AND
+        // COPIED synchronously (a stack temporary is fine). nullptr CLEARS the declaration (the claim then
+        // governs nothing until it declares again). A re-declaration replaces the previous one; the actor's
+        // window of started attacks is kept (it is a fact about the actor, not about the declaration). Stored
+        // whether or not the claim owns the channel (SetEquipScope's non-owning semantics). A stale / unknown
+        // handle, or a handle on another intent, is a silent no-op. Thread-safe.
+        void (*SetAttackMix)(Handle handle, const APMF_AttackMix* mix);
+
+        // What ch.18 is doing for `actor`: returns an AttackMixState and, when `out` is non-null and
+        // `out->size` covers APMF_AttackMixInfo, fills it. Read-only, ANY THREAD (an RCU read and a copy under
+        // APMF's own leaf lock, no game call). A throw inside returns kAttackMixState_None, nothing written.
+        std::uint32_t (*GetAttackMixState)(RE::FormID actor, APMF_AttackMixInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v35: THE CLAIM DRY RUN ("can you serve this?", CanServe)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // Ask whether a RequestEx / Request / RequestCast with these EXACT arguments would be REFUSED right now,
+    // and why, WITHOUT filing anything: no handle is allocated, nothing is queued, attributed, posted or
+    // logged, and no once-per-session refusal log is used up. The answer comes from the SAME checks the real
+    // call runs (one code path in APMF, the real call's refusal sites with a "report, do not file" switch), so
+    // the two cannot disagree for the state they read. A client uses it to keep an incumbent it would
+    // otherwise displace for a request that is then refused. See Docs/APMF_API-REFERENCE.md#abi-v35-can-serve
+    //
+    // WHAT IS CHECKED is every check the real call makes BEFORE it returns: the runtime / arbiter-seat gate,
+    // whether a channel serves the intent, each intent's own seat-installed / service-armed gate, the param /
+    // flags / basis rules, the player rules, a position cast's cast-facet ownership, kIntent_Place's rules. A
+    // verdict is about the state at the moment of the call: a service that arms or disarms (line of sight)
+    // or a cast claim that comes or goes can change it before the real call.
+    // WHAT IS NOT CHECKED is what the game thread decides AFTER the call returned a handle (the next Drain or
+    // a one-shot's game-thread step). Those are never guessed: `pending` names which of them still apply to
+    // this request's shape (ServePending).
+    // PRIORITY 0 IS NOT A REFUSAL. A claim filed by a client whose priority on a facet is 0 ("off", the
+    // Harbinger page / APMF_Sources.ini) is accepted and then never outranks anything there. `offFacets`
+    // reports it.
+
+    // What the real call would do. APPEND-ONLY: never renumber.
+    enum ServeVerdict : std::uint32_t {
+        kServe_Failed   = 0,   // the query could not be answered (null / short query, unknown `call`, a throw)
+        kServe_Refused  = 1,   // the call would return kInvalidHandle now and file nothing (`refusal`, `why`)
+        kServe_Accepted = 2,   // every check the call makes passes: it would return a handle now. `pending`
+                               //   names what the game thread still decides afterwards
+    };
+
+    // Which check refused. APPEND-ONLY: never renumber.
+    enum ServeRefusal : std::uint32_t {
+        kServeRefusal_None         = 0,
+        kServeRefusal_NoDrain      = 1,   // unsupported runtime or the 0xAD arbiter seat refused: nothing would
+                                          //   ever drain a claim (every claim is refused, all session)
+        kServeRefusal_NoChannel    = 2,   // no channel serves the intent (kIntent_None, an intent this APMF
+                                          //   does not know, a channel switched off)
+        kServeRefusal_NotInstalled = 3,   // the intent's seat / channel / service is not installed or armed
+        kServeRefusal_BadRequest   = 4,   // the param, flags or basis break the intent's rules (`why` says which)
+        kServeRefusal_Player       = 5,   // the intent serves NPCs only and the actor is the player
+        kServeRefusal_FacetOwned   = 6,   // a position cast (kCastFlag_AtPosition): the actor's cast facet is
+                                          //   owned by a claim that outranks this basis
+        kServeRefusal_IntentRule   = 7,   // the intent's own rule set refused (kIntent_CastGuard,
+                                          //   kIntent_CombatSubstrate, kIntent_AttackSelection,
+                                          //   kIntent_EquipPreference): `why` names the rule, which may be
+                                          //   "not installed"
+    };
+
+    // What the game thread still decides after a kServe_Accepted call returned its handle (never guessed).
+    // APPEND-ONLY: never reuse a bit.
+    enum ServePending : std::uint32_t {
+        kServePending_ActorLoaded       = 1u << 0,   // the claim is applied at the next Drain, which drops it
+                                                     //   (IsClaimLive never true) if the actor is not found /
+                                                     //   loaded then. Every claim
+        kServePending_Arbitration       = 1u << 1,   // the claim may not OWN its channel: a higher basis or an
+                                                     //   earlier equal one wins. Not a refusal (IsClaimLive is
+                                                     //   true). Every claim
+        kServePending_CastHandCollision = 1u << 2,   // kIntent_Cast, driving: a dual-cast vs single-hand
+                                                     //   collision with a standing claim on the actor is
+                                                     //   arbitrated by basis at Drain and the loser is DROPPED
+        kServePending_CastFromPackage   = 1u << 3,   // kCastFlag_FromPackage: the spell is read off the package at
+                                                     //   Drain; a package with none is DROPPED
+        kServePending_OneShot           = 1u << 4,   // a one-shot that is never a claim (kCastFlag_AtPosition,
+                                                     //   kIntent_Place): its game-thread step decides the rest
+                                                     //   (GetPlaceState for a placement)
+        kServePending_PlaceRoom         = 1u << 5,   // kIntent_Place: the real call also refuses when the
+                                                     //   placement records are full (not checked: the check
+                                                     //   frees finished records)
+        kServePending_ChannelEngage     = 1u << 6,   // the channel's own game-thread checks when the claim engages
+                                                     //   (a form lookup: a target or anchor that is not a loaded
+                                                     //   actor, a destination that does not resolve, ...) may end
+                                                     //   or idle it, logged there. Every claim
+    };
+
+    // Which call the query describes. APPEND-ONLY: never renumber.
+    enum ServeCall : std::uint32_t {
+        kServeCall_RequestEx   = 0,   // RequestEx(actor, intent, basis, param); Request is param == nullptr
+        kServeCall_RequestCast = 1,   // RequestCast(actor, basis, cast); `intent` and `param` are not read
+    };
+
+    // CanServe's input: the arguments of the call to test. EXACT LAYOUT (byte-shared): 40 bytes. Zero-
+    // initialise it and set `size` = sizeof(APMF_ServeQuery); a smaller size is kServe_Failed. The pointed-to
+    // param / cast request is READ synchronously and never retained, as by the real call.
+    struct APMF_ServeQuery {
+        std::uint32_t           size;       // +0   sizeof(APMF_ServeQuery) (40)
+        std::uint32_t           call;       // +4   ServeCall
+        RE::FormID              actor;      // +8
+        std::uint32_t           intent;     // +12  Intent (kServeCall_RequestEx only)
+        float                   basis;      // +16
+        std::uint32_t           reserved;   // +20  zero
+        const APMF_Param*       param;      // +24  RequestEx's param (nullptr = none, as Request)
+        const APMF_CastRequest* cast;       // +32  RequestCast's req (nullptr = none)
+    };
+    static_assert(sizeof(APMF_ServeQuery) == 40, "APMF_ServeQuery is 40 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_ServeQuery, basis) == 16, "APMF_ServeQuery layout is frozen");
+    static_assert(offsetof(APMF_ServeQuery, param) == 24, "APMF_ServeQuery layout is frozen");
+    static_assert(offsetof(APMF_ServeQuery, cast) == 32, "APMF_ServeQuery layout is frozen");
+
+    // CanServe's output. EXACT LAYOUT (byte-shared): 128 bytes. The CALLER sets `size` = sizeof(APMF_ServeInfo);
+    // APMF fills it when `size` >= kServeInfoV35Size (128, never changes) and writes nothing into a smaller
+    // struct (the verdict is still returned). A LARGER struct (a later ABI's, with fields past +128): APMF writes
+    // the first 128 bytes it knows and leaves the tail untouched, and `size` is echoed back as passed, so it does
+    // NOT say how much was filled. Such a caller zero-initialises the whole struct and reads a tail field only when
+    // the running APMF's abiVersion is the one that added it.
+    struct APMF_ServeInfo {
+        std::uint32_t size;          // +0   in: sizeof(APMF_ServeInfo) (128)
+        std::uint32_t verdict;       // +4   ServeVerdict (also the return value)
+        std::uint32_t refusal;       // +8   ServeRefusal (kServeRefusal_None unless kServe_Refused)
+        std::uint32_t pending;       // +12  ServePending bits (kServe_Accepted only, else 0)
+        std::uint32_t facets;        // +16  (1u << ClientFacet) the mask a filed claim of this intent would be
+                                     //      booked under; kCore for an intent with no specific facet, including
+                                     //      one refused NoChannel (unknown / unserved), so it is no proof of service
+        std::uint32_t offFacets;     // +20  those of `facets` on which the CALLER's priority is 0 (off)
+        char          why[96];       // +24  the refusal's reason, NUL-terminated, truncated to fit ("" if none)
+        std::uint32_t reserved[2];   // +120
+    };
+    static_assert(sizeof(APMF_ServeInfo) == 128, "APMF_ServeInfo is 128 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_ServeInfo, why) == 24, "APMF_ServeInfo layout is frozen");
+    static_assert(offsetof(APMF_ServeInfo, reserved) == 120, "APMF_ServeInfo layout is frozen");
+    inline constexpr std::uint32_t kServeInfoV35Size = 128;
+
+    // The v35 interface: APMF_API_v34's members verbatim (prefix EXTENSION), then ONE appended slot.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 35` (INVARIANTS #14b). An older
+    // APMF has no dry run: the client files the request and reads the handle, as before.
+    struct APMF_API_v35 : APMF_API_v34 {
+        // Would the call `query` describes be refused right now? Returns a ServeVerdict and, when `out` is
+        // non-null and `out->size` >= kServeInfoV35Size, fills `*out`. Files NOTHING (see the block above).
+        // Callable from ANY thread the real call may be made from; read-only (atomics, the published RCU
+        // snapshot, leaf locks; no game call, no form lookup). The caller is attributed by its own return
+        // address, as a claim is, for `offFacets`. A throw inside returns kServe_Failed, nothing written.
+        std::uint32_t (*CanServe)(const APMF_ServeQuery* query, APMF_ServeInfo* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
