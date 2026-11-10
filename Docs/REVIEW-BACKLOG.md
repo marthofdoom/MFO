@@ -2628,3 +2628,12 @@ Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbati
 - SEV-4: the WillWork mirror (256 entries) can thrash in big fights now that AUTO adds followers x gated spells x foes. At the cap the sweep falls back to g_cache.clear(), so every triple reads Unknown (fires unchecked) and re-posts. Never a wrong No. Fix: kMaxEntries 1024 or evict-oldest; PostMeasure's insert also ignores the cap.
 - SEV-5: CastOn.cpp:593 comment, the :621 WARN and the :398/:636 reasons plus MAP.md:773-775 still say "pure-Script" for a release that now also covers NoRow.
 - SEV-5: Auto.cpp:666 "no enemies in range" also covers "every foe will-not-work".
+
+### MFO-B601 (SEV-4/5, OPEN, G9 per-rule cooldown, against 9b338f1, Opus tier-3 review) -- review leftovers
+Coordinator's paraphrase of the findings (not the reviewer's verbatim text):
+- C1 (SEV-4, co-save, field): the v5->v6 load path has no executed proof (the MCLS "rows v5" self-test runs only with bClassCoSaveSelfTest=1; CI never runs it). Deck: load a real v5 save with the switch on, expect "MCLS self-test (rows v5, pre-G9): PASS" and an FLWR summary matching the previous session; then save + reload (v6->v6). On the in-game test list.
+- C2 (SEV-4, co-save, release): every v6 save is unreadable to a v5 DLL even with no cooldown set, and that DLL wipes every board on its next save. The release carrying G9 must say so plainly (CHANGELOG + Nexus). Optional design alternative saved for marth (question 39): write FLWR v5 while every row's cooldown is 0.
+- B1 (SEV-5): a cooling EQUIP row would not set equipHeld (force-hold releases while cooling); only matters once CooldownExposed widens or C12/IAUS write cooldowns to other rows.
+- B2 (SEV-5): a non-zero cooldown on a row the board does not expose is enforced but invisible; C12 must limit itself to power-attack rows or widen CooldownExposed in the same change.
+- B3 (SEV-5): the "last: cooling down (Ns)" tooltip goes stale after expiry when the rule stops matching (display only, like G10's).
+- B4 (SEV-4, rule-mandated): Board_FieldKit.cpp is 1528 lines -- plan its split as its own round. MAP.md's Serialization.h:289 anchor is off by three (kSchemaVersion is at :292).
