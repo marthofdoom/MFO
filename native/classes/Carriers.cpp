@@ -14,7 +14,7 @@
 //
 // THREADING. RefreshCarriers / RefreshAllCarriers / ResetCarriers are callable from ANY thread and only touch g_pm (the pending set, the
 // granted-perk memory, the pump generation); g_pm is NEVER held across an engine call. All actor / form work runs in PumpTick on the
-// MAIN thread (MainThread::Post), which retries a follower whose actor is not loaded (every kRetryFrames frames, kMaxTries times). A
+// MAIN thread (MainThread::Post), which retries a follower whose Actor form or base NPC does not resolve (every kRetryFrames frames, kMaxTries times). A
 // revert retires the pump by bumping g_gen (ResetCarriers via Classes::ClearAll), the Allocator poll-chain precedent.
 //
 // MISSING CARRIERS are logged once per session, loudly, naming the facet (kMissing). They are a documented degrade, not a mask: the
@@ -95,7 +95,7 @@ namespace MFO::Classes {
             { "Sorcerer", "20% less damage taken while all summons are out: no 'all summons out' condition exists" },
             { "Templar", "weapon always counts as silver: the silver bonus road on NPCs is unverified" },
             { "Nightblade", "+15% melee damage on controlled foes: no 'controlled' marker is defined or applied" },
-            { "Witchhunter", "Illusion immunity of undead / Daedra is not lifted (spell target conditions) and the on-hit stamina / speed drain has no hit-spell road" },
+            { "Witchhunter", "Illusion bonus on CASTER targets (ruling: undead, Daedra AND casters; no vanilla-census-proven 'target is a spellcaster' condition), the Illusion immunity lift of undead / Daedra (spell target conditions), and the on-hit stamina / speed drain (no hit-spell road)" },
             { "Master Thief", "half-sneak-attack flanking rule (a DLL rule, card C13/C9, not a perk effect)" },
             { "Ranger", "the Mark gambit unlock (cards C12 / H-MARK)" },
             { "Blademaster", "all stamina costs -10%: only the power-attack stamina cost is carried (entry point 27)" },
@@ -222,7 +222,7 @@ namespace MFO::Classes {
 
         // ── pending set + pump (any thread to queue, main thread to run) ────────────────────────────
         constexpr int kRetryFrames = 120;    // ~2 s at 60 fps between attempts on a follower that is not loaded
-        constexpr int kMaxTries    = 600;    // ~20 min, then the follower waits for its next state change or the next load
+        constexpr int kMaxTries    = 600;    // ~20 min, then a WARN and the follower waits for its next state change or the next load
         struct Item { int tries = 0; int wait = 0; };
         std::mutex g_pm;
         std::unordered_map<RE::FormID, Item> g_pending;
@@ -246,7 +246,9 @@ namespace MFO::Classes {
 
         Result Reconcile(RE::FormID a_fid, bool a_teardown) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
-            if (!actor || !actor->Is3DLoaded()) return Result::NotReady;
+            // No 3D needed: AddPerk is an array edit, AddToFaction / AddSpell work on an unloaded persistent ref, and ApplyLive no-ops
+            // without a process (the engine applies the base's perks when the process is built, PerkGate.cpp contract).
+            if (!actor) return Result::NotReady;
             auto* base = actor->GetActorBase();
             if (!base) return Result::NotReady;
             if (!g_forms.resolved) Resolve();
@@ -338,7 +340,8 @@ namespace MFO::Classes {
                 if (r == Result::Done) { g_pending.erase(it); continue; }
                 it->second.wait = kRetryFrames;
                 if (++it->second.tries > kMaxTries) {
-                    spdlog::info("[classes] carriers {:08X}: actor not loaded after {} tries, waiting for its next class change or the next load", fid, kMaxTries);
+                    spdlog::warn("[classes] carriers {:08X}: DROPPED after {} tries -- no Actor form (or no base NPC) resolves for this id; "
+                                 "its class passives wait for its next class change or the next load", fid, kMaxTries);
                     g_pending.erase(it);
                 }
             }

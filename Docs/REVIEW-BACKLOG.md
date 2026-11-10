@@ -2729,9 +2729,15 @@ Verbatim (reviewer):
 - R1 SEV-5 (State.cpp:791/812 through `Mutate`'s `g_store[a_fid]`): a write refused because the class is locked still creates an all-default `FollowerClasses` entry, which is then saved. Harmless (default == no entry); a find-first lambda or a no-create Mutate would avoid it.
 - R2 SEV-5 (State.cpp:620-637): the load repair refreshes `unlocked` only when it adds a mastered bit, so a record saved with only the unlocked set stale is not refreshed at load. Limited impact: every reader combines stored and computed bits, and no shipped build had the old writer.
 
-### MFO-C6-1 (SEV-4, OPEN, classes/Carriers.cpp + generator, against the C6 commit, author's own list for the Opus review)
-- Entry-point tab 0 = owner is INFERRED, not census-proven, for entry points 18, 27, 30 and 38 (vanilla never conditions that tab; it is the owner in 9 of 9 entry points where it does). A wrong inference fails CLOSED (the faction test runs on the wrong subject, the entry never fires). Field-verify one effect per entry point (Master Thief sneak multiplier, Champion PA stamina, Sorcerer summon duration, Conjurer / Healer cost).
-- `Actor::AddToFaction(faction, rank)` on an existing runtime member is assumed to update the rank (the Carriers read-back logs a mismatch loudly, once); it has no earlier use in MFO and is not a `VerifiedAddresses.h` row.
-- Spellsword's Destruction cost cut is not gated on a weapon in hand (ruling says "with a weapon in hand"); Sorcerer's summon duration covers the Atronach / Undead / Familiar keywords only (a Dremora Lord has no MagicSummon* keyword); Warlock / Nightblade / Witchhunter add levels to ALL level-capped Illusion magnitudes except shouts (as Animage does).
-- A follower who is not 3D-loaded for 600 retries (~20 min) is dropped from the pump until his next class change or the next load.
-
+### MFO-B631 (SEV-4 and below, OPEN, classes/Carriers.cpp + generator, against 2d4ec4a2, Opus tier-3 review of C6)
+Fixed in the review round (not open): SEV-2 `Is3DLoaded` gate removed from the reconcile (Carriers.cpp `Reconcile`; a drop after 600 tries is now a WARN naming the reason); SEV-3 Witchhunter's "casters" facet added to `kMissing`.
+Reviewer's findings, verbatim from the coordinator's message:
+- SEV-4: the CoLoad newer-save keep path (State.cpp :607/:619) never calls RefreshAllCarriers, so the frozen state is applied half-way.
+- SEV-4: Spellsword cost cut not gated on a weapon, though a road exists (GetEquippedItemType on owner tab 0).
+- SEV-4: Living Legend x0 ModIncomingDamage is negation, not a block (stagger, enchant and poison still apply), so record it as partial.
+- SEV-4: Mutate (State.cpp:498) queues a reconcile on EVERY write incl. XP: once C4 accrues XP each grant costs a main-thread reconcile, so refresh only on equipped/level/mastered/unlocked changes (C4 must fix this before wiring XP).
+- SEV-5: GetRandomPercent <= 40*s gives 41% at full (use <).
+- SEV-3-field: Scout speed: SpeedMult changes may not apply until movement speed is recomputed (inventory/carry-weight change). Field check first; if it shows, nudge CarryWeight after Add/RemoveSpell.
+OPEN, deliberately NOT done (coordinator said stop rather than guess): Warlock / Nightblade "+N levels" have no target tab, so the bonus also lands on ally Illusion buffs (Courage, Rally, Call to Arms). Vanilla Animage restricts by race (ActorTypeAnimal), not by hostility; no vanilla-census-proven "target is hostile to the owner" function exists on the target tab (GetInFaction 71 is proven there only with quest factions, 715 IsUndead and 560 HasKeyword only with keywords), so a PlayerFaction test would be a guess. Needs a ruling or a proven road.
+Corrected earlier author note: Sorcerer's summon-duration keyword list DOES cover the Dremora Lord (SummonDremoraLord MGEF 0x0010DDED carries MagicSummonShock 0x2482A).
+Author's list, still true: the AddToFaction in-place update and tab i == argument i are now PROVEN by the review (HandleEntryPoint 0x385F30, BGSEntryPointPerkEntry vfunc 0 0x38F010; AddToFaction 0x68B310 on 1.6.1170, 0x5F8430 on 1.5.97); Warlock/Nightblade/Witchhunter add to all non-shout Illusion magnitudes; a T4 with an N-of pool picks the first N mastered T3 parents in Id order (ruling silent).
