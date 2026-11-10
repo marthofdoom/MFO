@@ -516,6 +516,11 @@ namespace MFO::Config {
     // census of every base perk's entry-point entries (duplicated / missing). Read-only, at most 64 lines a session.
     // bPerkEntryProbe = 1 in Data/SKSE/Plugins/MFO.ini arms it. See progression/PerkGate.cpp.
     inline std::atomic<bool>  g_perkEntryProbe{ false };
+    // [inherit-census] hidden player-only perk census (ClickUp 86e3eevgz, card C1) -- DEFAULT ON, LOG-ONLY, INI-only
+    // ([Debug] bInheritPerkCensus). Lists the perks the player holds that sit in no ActorValueInfo perk tree, with a
+    // classification per perk, on load and on a change of the player's perk lists. Changes nothing in the game.
+    // See progression/Inherit.cpp.
+    inline std::atomic<bool>  g_inheritPerkCensus{ true };
     // [hb] HEARTBEAT -- DEFAULT ON (one line per 5 s). The sleeper thread prints
     // `[hb] worker ticks=N main drains=M ...` so a freeze names the thread that
     // stopped (a stalled worker freezes ticks, a stalled main freezes drains).

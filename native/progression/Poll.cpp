@@ -72,6 +72,7 @@ namespace MFO::ProgAllocator {
         void PollWork() {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player) return;
+            InheritCensusPoll(player);   // ClickUp 86e3eevgz C1: log-only hidden-perk census (progression/Inherit.cpp)
             const auto pl = player->GetLevel();
             if (g_lastPlayerLevel == 0) g_lastPlayerLevel = pl;   // first observation, no retro-grant
             const int d = static_cast<int>(pl) - static_cast<int>(g_lastPlayerLevel);

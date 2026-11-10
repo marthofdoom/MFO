@@ -2746,3 +2746,16 @@ Reviewer's findings, verbatim from the coordinator's message:
 OPEN, deliberately NOT done (coordinator said stop rather than guess): Warlock / Nightblade "+N levels" have no target tab, so the bonus also lands on ally Illusion buffs (Courage, Rally, Call to Arms). Vanilla Animage restricts by race (ActorTypeAnimal), not by hostility; no vanilla-census-proven "target is hostile to the owner" function exists on the target tab (GetInFaction 71 is proven there only with quest factions, 715 IsUndead and 560 HasKeyword only with keywords), so a PlayerFaction test would be a guess. Needs a ruling or a proven road.
 Corrected earlier author note: Sorcerer's summon-duration keyword list DOES cover the Dremora Lord (SummonDremoraLord MGEF 0x0010DDED carries MagicSummonShock 0x2482A).
 Author's list, still true: the AddToFaction in-place update and tab i == argument i are now PROVEN by the review (HandleEntryPoint 0x385F30, BGSEntryPointPerkEntry vfunc 0 0x38F010; AddToFaction 0x68B310 on 1.6.1170, 0x5F8430 on 1.5.97); Warlock/Nightblade/Witchhunter add to all non-shout Illusion magnitudes; a T4 with an N-of pool picks the first N mastered T3 parents in Id order (ruling silent).
+### MFO-B632 (SEV-4/5, OPEN, progression/Inherit.cpp hidden-perk census C1, against 2e0764a, Opus review)
+Numbered B631 because B630 is the latest on main when this was written; renumber at merge if main has moved. Verbatim (reviewer, as relayed by the coordinator):
+- SEV-4 script-detection gaps: VM-attached scripts on non-Script MGEFs are not detected; EP 51/52/53/67/69 SelectSpell spells are not walked; the VirtualMachine::attachedScripts road is unverified.
+- SEV-4 the helper declarations (ConditionPlayerGated, ReadOwnerFacts, SameConditions, OwnerCtx) live in ProgAllocator_internal.h, whose natural home is Progression.h (layering only).
+- SEV-5 RunCensus re-calls HasPerk (unconfirmed is always 0). [Removed in the fix round that followed: the re-call is gone because an effect-applied perk is never a HasPerk hit.]
+- SEV-5 MAP still says "FNV signature of the three lists". [Reworded in the fix round.]
+- SEV-5 an AddActivateChoice perk shows no-follower-use with no scriptEp field.
+- SEV-5 SameCondList duplicates SameConditions (drift risk).
+
+### MFO-B633 (SEV-4/5, OPEN, progression/Inherit.cpp census fix round, against 3e6d1c2, Opus re-check)
+Verbatim (reviewer):
+- SEV-4: `:inactive` effect perks are counted in `held` and described as "applies it", but the engine has removed them at that moment (34092 at 0x5AE813-0x5AE889: RemoveTemporaryPerk when bit 16 applied and bit 18 kDispelled or bit 15 kInactive is set; apply only when bit 15/16/17 clear). Fix with a summary count of inactive-only perks and a reworded comment.
+- SEV-5: The MFO.ini comment still says "whenever the player's perk lists change". It is close enough, but could say "a continuous sweep; full list once per load, then added/removed".

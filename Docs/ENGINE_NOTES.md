@@ -2604,6 +2604,51 @@ CommonLib's structs compile to these same offsets (static_asserts beside each re
 
 So an entry is `{ TESNPC* npc; FormID ref; u32 pad; BGSLocation* editorLoc; }`. **The fork's `RE::UniqueNPCData` declares +0x00 as `Actor*`: wrong type, right offset** (principle 6). A reader must take it as a `TESForm*` and `As<TESNPC>()`, never as an Actor. Vanilla data (Skyrim.esm, `tools/esp_inspect.py`): `WinterholdCollegeLocation` 00076F3A lists Drevis, Colette, Faralda, Phinis (refs in Hall of Countenance 0001380F, editor location the Dormitory 0001EB74), Tolfdir (Hall of Attainment 000CAB91) and Urag (Arcanaeum 00013810); `WhiterunLocation` lists Farengar (Dragonsreach).
 
+### 0.54 Which perk entry points the executable applies only to the player (HandleEntryPoint call-site census, 2026-11-09, disassembly of all three builds)
+
+**Method.** `BGSEntryPoint::HandleEntryPoint` (fork `BGSEntryPoint.h:112`, `RELOCATION_ID(23073, 23526)`) is at 1.6.1170 `0x385F30`, 1.5.97 `0x32ECE0`, 1.7.104 `0x38CFF0`; not a thunk, no thunks. Every `call/jmp rel32` to it was found, the holding function taken from `.pdata`, and the function disassembled up to the call while tracking `ecx` (entry point) and `rdx` (perk owner). An owner loaded straight from the PlayerCharacter singleton (`Offsets.h:457` `RELOCATION_ID(517014, 403521)`: AE `0x31874F8`; 1.7.104 `0x3230778`, derived from the EP59 lockpick site `0x94EB79`) is "owner = player". Seven sites pass the entry point in a register; all were resolved by hand. `Actor::HasPerkEntries` (vfunc 0xFF, +0x7F8) and `ForEachPerkEntry` (0x100, +0x800) have only 3 indirect call sites on 1.6.1170 (two inside HandleEntryPoint, one EP18 check), so HandleEntryPoint is the only road for entry-point effects. Tooling: `tools/entrypoint_census/`.
+
+**Counts.** 1.6.1170: 115 call sites. 1.7.104: 115, identical classification. 1.5.97: 109 (differs only in site counts for EP 6/10/12/46/82/83/84, inlining). No EP changes class between runtimes. The engine's EP table (AE `0x1FF6110`) is zero-filled in the image and built by a static initializer, so the condition-argument count (arity) comes from the call-site argument setup, per EP.
+
+**Class 1: player-only BY ENGINE CODE** (every site passes the player singleton as owner, all three runtimes). "Function" is the AE Address Library id of the holder.
+
+| EP | Name | AE site | Function (AE id), context | Cond args |
+|---|---|---|---|---|
+| 8 / 60 | ModBuyPrices / ModSellPrices | 0x8EAFCA / 0x8EAFE5 | 50945 BarterMenu | 1 (vendor ref) |
+| 59 | ModLockpickSweetSpot | 0x9381E5 | 51964 LockpickingMenu | 1 (lock ref) |
+| 63 | SetLockpickStartingArc | 0x9382A7 | 51964 | 0 |
+| 65 | MakeLockpicksUnbreakable | 0x938D72 | 51975 pick damage | 0 |
+| 86 | ModLockpickingCrimeChance | 0x939AE9 | 51981 | 1 (lock ref) |
+| 90 | ModLockpickingKeyRewardChance | 0x938807 | 51968 | 1 |
+| 16 | IgnoreBrokenLock | 0x17B793 | 12402 | 0 |
+| 61 | CanPickpocketEquippedItem | 0x8FEBC0 (register-passed `mov ecx,0x3D`) | pickpocket item filter | 2 |
+| 75 | CanDualCastSpell | 0x6C3F4A, 0x6C415D (register-passed `lea ecx,[rax+0x4B]`, rax = 0; owner = player) | magic caster | 1 (spell) |
+| 22 | ModSkillUse | 0x77AFB8 | 41561 PlayerSkills | 0 visible; the skill is passed through `PlayerCharacter+0xAF4`, written just before the call |
+| 5 | AdjustBookSkillPoints | 0x27AB7F | 17842 skill book read | 0 |
+| 9 | AddLeveledListOnDeath | 0x697B61 | 37896 death handler, gated `killer == player && victim != player` | 2 |
+| 72 | ModInitialIngredientEffectsLearned | 0x6C2B34 (register-passed) | eating, gated actor == global id 401069 and form type INGR | 1 |
+| 76 | ModTemperingHealth | 0x90BA85 | 51360 smithing | 1 (item) |
+| 66 / 73 / 89 | AlchemyEffectiveness / PurifyAlchemyIngredients / PotionsCreated | 0x906EE7, 0x906F66 / 0x90336D / 0x909B98 | 51289 / 51239 / 51354 alchemy | 0 / 0 / 1 |
+| 77 / 79 / 80 | EnchantmentPower / SoulGemEnchanting / NumberAppliedEnchantmentsAllowed | 0x906A47 / 0x9113C4 / 0x90519D | 51283 / 51449 / 51242 enchanting | 2 / 2 / 0 |
+| 49 | ModSoulGemRecharge | 0x92DD88, 0x92E0E9 | 51858 / 51859 | 1 |
+| 83 | ModPoisonDoseCount | 0x7367DD | 40482 apply poison | 2 |
+| 43 / 46 | ModPlayerIntimidation / ModBribeAmount | 0x675BC8 / 0x67595F, 0x675ACC | 37500 / 37498-37499 speech | 1 |
+| 14 / 74 / 81 | Activate / FilterActivation / SetActivateLabel | 0x757B91 / 0x4031AD, 0x744F5C / 0x744FC7 | 41003 / 26127, 40621 activation | 2 / - / - |
+| 82 | ModShoutOK | 0x7455EC, 0x745863 | 40628 / 40631 | 0 |
+| 3 / 19 | MineExplodeChance / ModMaxPlaceableMines | 0x7EE160 / 0x41AEBF | 44217 / 26521 | 1 / 0 |
+| 21 | ModRecoverArrowChance | 0x7DF990 | 44031 (the player's arrows only) | 0 |
+| 24 / 25 | TelekinesisDamageMult / TelekinesisDamage | 0x5D75E8 / 0x7DB719 | 35052 / 44005 | 0 / 1 |
+| 84 | ShouldApplyPlacedItem | 0x8FC555, 0x8FDB84 | 51141 / 51151 | 2 |
+| 20 | ModBowZoom | 0x733051 (PlayerCharacter-only vfunc 173), 0x7B9454 | player camera | - |
+
+**EP22.** The call is `HandleEntryPoint(22, player, &v)` right after `mov [player+0xAF4], skill`. The perk conditions find "which skill" through that player field, so a follower evaluation cannot supply it without writing the player's field.
+
+**Class 2: applies to ANY actor** (generic owner; the engine applies it once the perk is on the actor): 0 CalculateWeaponDamage, 1/2 crit chance and damage, 4 AdjustLimbDamage, 6 ModRecoveredHealth (AV-indexed table at 0x6B2124), 7 GetShouldAttack, 10 GetMaxCarryWeight (2 generic sites + 1 player site), 11/12 addiction, 15 IgnoreRunningDuringDetection, 17/18 enemy crit / sneak attack mult, 23 TK distance, 26 bash damage, 27 power-attack stamina (one generic site + PlayerCharacter vfunc 173), 28 power-attack damage, 29/30 spell magnitude/duration (the player-owned sites at 51900/51905 are only ItemCard description text), 31/32 weights, 33/34 stagger, 35-42 attack/incoming damage, resist, spell cost, block, deflect, incoming spell magnitude/duration, 47/48/57 detection, 50 sweep, 51/52/53/67/69 apply-spell EPs, 54/55 graph var / cast sound, 56 ModPickpocketChance (owner is the thief argument; only the player pickpockets in vanilla, so player-only by activity), 58 falling, 68 commanded-actor limit, 70 magic slowdown, 71 ward absorb, 78 soul to weapon, 85 ModArmorRating, 87 ingredients harvested, 88 spell range, 91 mount.
+
+**Class 3: never evaluated by the executable** (no immediate site on any runtime): 13 ModPositiveChemDuration, 44 ModPlayerReputation, 45 ModFavorPoints, 62 ModLockpickLevelAllowed, 64 SetProgressionPicking. Every register-passed site resolves to a known EP except two data-driven dispatchers (`0x38766E` reads the EP from a data byte; `0x6B2124` maps an actor value to an EP, sentinel 0x5C).
+
+EP7 and EP52 are generic despite a player compare elsewhere in the function. This is class data for `progression/Inherit.cpp`; a new runtime regenerates it with the tools above and diffs it.
+
 ## 1. Actor control — Tier A primitives
 
 **Status: PROVEN (sibling).** Each has a working call site in shipped code.

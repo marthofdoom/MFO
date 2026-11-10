@@ -50,6 +50,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     progression/PerkGate.cpp
     progression/BoardViews.cpp
     progression/Poll.cpp
+    progression/Inherit.cpp
     progression/Harness.cpp
     progression/Verbs.cpp
     progression/Hms.cpp

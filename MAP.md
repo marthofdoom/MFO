@@ -5538,6 +5538,28 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   - (2026-10-01) `Poll.cpp` `DumpLedgerOnce` (READ-ONLY `[prog] ledger` dump, once per load per follower, keyed on `g_pollGen`) is called at the end of `PollWork`'s per-follower body; it writes nothing.
   - `progression/Poll.cpp` (313) = the level poll: `Unmanaged` (`:37`), `PollWork` (`:72`),
     `PollTick` (`:285`, also drives the board-view refresh).
+  - (2026-11-09, ClickUp 86e3eevgz C0+C1, branch `feat/inherit-perks-census`) **HIDDEN PLAYER-ONLY PERK CENSUS**
+    (`progression/Inherit.cpp`, entry `InheritCensusPoll`, declared in `ProgAllocator_internal.h`, called from the
+    top of `PollWork`). LOG-ONLY: changes nothing in the game, no co-save field. Finds perks the player holds
+    that are in no AVIF perk tree (tree set built lazily on the first poll) by TWO engine roads, and ONLY those:
+    (a) `Actor::HasPerk` over every BGSPerk form in no tree (base record + addedPerks; PLAYER_RUNTIME_DATA is
+    empty in the multi-runtime build, so the lists are unreachable by name), swept in slices of 250 calls per
+    poll; (b) the active-effect list, for every non-dispelled effect whose MGEF has a "Perk to Apply"
+    (`EffectSetting::data.perk`; written by ApplyTemporaryPerk into standingStonePerks, which HasPerk never
+    reads: standing stones, racial / SPID abilities, Requiem-style rule abilities). A perk granted any other way
+    is not seen, and standing stones are not separable. Each perk is classified (`copy` / `not-copied:no-follower-use` /
+    `player-only` / `script-part`) off the constexpr EP class table (Docs/ENGINE_NOTES.md 0.54,
+    `tools/entrypoint_census/`). Logs `[inherit-census]`: a FULL list on the first completed pass of each load
+    generation (`g_pollGen`), then only ADDED / REMOVED perks when the FNV hash of the held set changes. Each line
+    carries rule-vs-bonus evidence (src road, name/desc, entries, favour/against, skill/global/pin/playerish
+    conditions). INI `bInheritPerkCensus` (default 1).
+    `ConditionPlayerGated`, `ReadOwnerFacts`, `SameConditions` (+ `OwnerCtx`) moved out of Progression.cpp's
+    anonymous namespace into `MFO::Progression` (declared in `ProgAllocator_internal.h`; bodies unchanged).
+    Open findings: Docs/REVIEW-BACKLOG.md MFO-B632, MFO-B633.
+    **What breaks:** reading any of this off the main thread (the static state is PollWork-only); moving the
+    three helpers back into the anonymous namespace (Inherit.cpp stops linking); changing the EP class table
+    without regenerating it from the census tools. A later card (C2) will ADD perks to follower bases: it must
+    follow the research's ledger + `kPreLoadGame` sweep design, not this file.
   - (2026-11-01, ClickUp 1dfcuabc4dq, marth "Errand = in party") **IN THE PARTY for leveling**
     (`Poll.cpp:144-147`): Shared Growth's ACTIVE branch (`min(d, lag)`) is taken when the follower is
     tracked (`IsTrackedFast`) OR on a town errand (`Logistics::Errand::Active`, both its locks are leaves,
