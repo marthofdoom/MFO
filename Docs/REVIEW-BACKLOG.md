@@ -2627,3 +2627,10 @@ Round-2 additions (Opus review of cf567a3, coordinator's paraphrase, not verbati
 - SEV-4: the WillWork mirror (256 entries) can thrash in big fights now that AUTO adds followers x gated spells x foes. At the cap the sweep falls back to g_cache.clear(), so every triple reads Unknown (fires unchecked) and re-posts. Never a wrong No. Fix: kMaxEntries 1024 or evict-oldest; PostMeasure's insert also ignores the cap.
 - SEV-5: CastOn.cpp:593 comment, the :621 WARN and the :398/:636 reasons plus MAP.md:773-775 still say "pure-Script" for a release that now also covers NoRow.
 - SEV-5: Auto.cpp:666 "no enemies in range" also covers "every foe will-not-work".
+
+### MFO-B610 -- follower spell cost parity leftovers (ClickUp 1dfcuabcr0c, raised against ae6c6bb, Opus tier-3 review, coordinator's paraphrase)
+- **SEV-4:** the startup check compares at ONE point, skill 50. With LoreRim GMSTs a doubled follower pays MORE than the player below skill 50, up to 2x at skill 0. This follows the brief literally; saved as a question for marth.
+- **SEV-4:** summons and recordless runtime followers get x2 (`rit == end` -> want = true in the `Followers::Refresh` Sync call). Saved as a question for marth.
+- **SEV-5:** a negative Base GMST gave NaN and logged "not cheaper" when it should be an explicit error (FIXED in the follow-up commit, an error line and refusal).
+- **SEV-5:** an ex-follower who is never swept keeps an inert ability (the HasSpell gate and the absent perk entry make it harmless).
+- **SEV-5:** posted `CostParity::Apply` closures have no epoch guard.

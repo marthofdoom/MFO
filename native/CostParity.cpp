@@ -22,6 +22,28 @@ namespace MFO::CostParity {
             return f < 0.0f ? 0.0f : f;
         }
 
+        // Counts the kModSpellCost entries the actor currently carries, and how many of them are the parity perk's own
+        // entries (pointer identity against perk->perkEntries). ForEachPerkEntry is Actor vfunc 0x100;
+        // PerkEntryVisitor::Visit returns BSContainer::ForEachResult (kContinue = keep walking).
+        struct CostEntryCounts { int all = 0; int ours = 0; };
+        struct CostEntryVisitor : RE::PerkEntryVisitor {
+            const RE::BGSPerk* perk;
+            CostEntryCounts    n;
+            explicit CostEntryVisitor(const RE::BGSPerk* a_perk) : perk(a_perk) {}
+            RE::BSContainer::ForEachResult Visit(RE::BGSPerkEntry* a_entry) override {
+                ++n.all;
+                for (auto* e : perk->perkEntries) {
+                    if (e == a_entry) { ++n.ours; break; }
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+        };
+        CostEntryCounts CountCostEntries(RE::Actor* a_actor, const RE::BGSPerk* a_perk) {
+            CostEntryVisitor v(a_perk);
+            a_actor->ForEachPerkEntry(RE::BGSEntryPoint::ENTRY_POINTS::kModSpellCost, v);
+            return v.n;
+        }
+
         // MAIN thread. Bring one follower to the desired state. Returns false if the actor did not resolve (retry later).
         bool Apply(RE::FormID a_id, bool a_want) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
@@ -32,16 +54,28 @@ namespace MFO::CostParity {
                 if (!actor->HasSpell(ab)) actor->AddSpell(ab);
                 // The perk may sit on a SHARED base record (a generic NPC); AddPerk is runtime-only (never saved), so it is
                 // re-added each session. Its entry condition is HasSpell(ability), evaluated per caster, so a sibling who
-                // shares the base and holds no ability pays nothing extra. ApplyPerksFromBase settles THIS actor (the
-                // same shape as the progression allocator, progression/Allocator.cpp).
+                // shares the base and holds no ability pays nothing extra.
+                // Actor::ApplyPerksFromBase is NOT called: it is not idempotent (Opus tier-3 review of ae6c6bb, disassembly AE
+                // 1.6.1170: vtable slot 0x101 -> AIProcess 0x715950 queues one task per base perk, the handler applies every
+                // entry with no "already applied" check, the entry-point insert 0x7155e0 never dedupes), so it would re-apply
+                // EVERY entry-point perk of the follower. The engine applies base perks on later process inits. Instead only
+                // OUR perk's entries are applied here, and only when the actor does not already carry them.
                 auto* base = actor->GetActorBase();
-                if (base) {
-                    if (!base->GetPerkIndex(perk).has_value()) base->AddPerk(perk, 1);
-                    actor->ApplyPerksFromBase();
+                if (base && !base->GetPerkIndex(perk).has_value()) base->AddPerk(perk, 1);
+                const auto before = CountCostEntries(actor, perk);
+                if (before.ours == 0) {
+                    for (auto* entry : perk->perkEntries) {
+                        if (entry && entry->header.rank == 0) entry->ApplyPerkEntry(actor);
+                    }
                 }
+                const auto after = CountCostEntries(actor, perk);
+                spdlog::info("[costparity] {:08X} kModSpellCost entries on the actor: before {} ({} ours), after {} ({} ours) -- "
+                             "exactly 1 ours expected", a_id, before.all, before.ours, after.all, after.ours);
                 spdlog::info("[costparity] {:08X} {} -- spell costs x2 (marker ability {:08X} on)", a_id,
                              actor->GetName(), ab->GetFormID());
             } else if (actor->HasSpell(ab)) {
+                // The perk entry is LEFT on the actor: with the ability gone its HasSpell gate is false, so it is inert, and
+                // RemovePerkEntry / a base RemovePerk on a possibly shared base is riskier than an inert entry.
                 actor->RemoveSpell(ab);
                 spdlog::info("[costparity] {:08X} {} -- marker ability removed, engine cost unchanged", a_id, actor->GetName());
             }
@@ -93,6 +127,11 @@ namespace MFO::CostParity {
         }
         spdlog::info("[costparity] player curve: Base {:.4f} Scale {:.3f} Mult {:.3f}; NPC curve: Base {:.4f} Scale {:.3f} Mult {:.3f}",
                      pcBase, pcScale, pcMult, npBase, npScale, npMult);
+        if (!std::isfinite(pcBase * 50.0f) || !std::isfinite(npBase * 50.0f) || pcBase < 0.0f || npBase < 0.0f) {
+            spdlog::error("[costparity] a Base GMST is negative or not finite (player {}, NPC {}) -- the curves cannot be compared; "
+                          "followers pay the engine cost unchanged", pcBase, npBase);
+            return;
+        }
         const float pc50  = Factor(pcBase, pcScale, pcMult, 50.0f);
         const float np50  = Factor(npBase, npScale, npMult, 50.0f);
         const float pc100 = Factor(pcBase, pcScale, pcMult, 100.0f);
