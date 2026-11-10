@@ -521,6 +521,10 @@ namespace MFO::Config {
     // stopped (a stalled worker freezes ticks, a stalled main freezes drains).
     // INI-only (no MCM face), [Debug] bHeartbeat. See Diagnostics.cpp.
     inline std::atomic<bool>  g_heartbeat{ true };
+    // SPELL SHAPE CENSUS ([Debug] bSpellShapeCensus, INI-only, default ON; ClickUp 86e3dmtr1 C0). Once at kDataLoaded
+    // (SKSE main thread) every castable SPEL is classified and the per-(shape, predicted row, two-handed) counts are
+    // written as `[shape-census]` lines. LOG-ONLY: no road reads the result. See cast/Archetype.cpp RunSpellShapeCensus.
+    inline std::atomic<bool>  g_spellShapeCensus{ true };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };
