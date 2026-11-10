@@ -76,3 +76,34 @@ No sessions for a while. Every item here is tagged `needs-session` in ClickUp wi
 - C6 extra: a follower left waiting in ANOTHER cell at load must still get his passives when he rejoins (no "dropped" line). Scout +20% speed: check it applies at once, not only after he loots something (reviewer SEV-3-field).
 - C6: Warlock/Nightblade bonus must not apply to ally buffs (Courage/Rally) after the target gate fix.
 - Deck check: Warlock/Nightblade with Courage/Rally/Call to Arms: how much stronger do the buffs get? (marth Q58: quick patch after release if very strong)
+
+## ADDENDUM 2026-11-10: next session = LoreRim on this PC (ClickUp 1dfcuabcqdm due 2026-11-11)
+
+### ONE RUN COVERS MOST OF THE LIST: the self-driving dev self-test (main 2b0b91a, DEV DLL)
+Setup (Docs/SELFTEST.md): DEV MFO.dll + .pdb in LoreRim mods/MFO, Harbinger main (ch.30), MFO_Classes.esl on, bClassTree=1, bAimBudget=1. One follower, Combat page rule DO "DEV: run self-tests". Stand somewhere open and quiet (no town/inn/house, nobody friendly near). Prefer an ESSENTIAL/protected follower: the hurt-% tests refuse (RETRY) otherwise.
+Read: `grep '\[selftest\]' MFO.log`. End line `ALL DONE: PASS n, FAIL n, MANUAL n (ids), INFO n` (or `ALL RUNNABLE DONE ... BLOCKED n` with one follower: the ally-buff test needs a 2nd ally).
+
+| self-test id | covers list item |
+|---|---|
+| b1.heal_left_offense_right, b1a.weapon_stays_right | MFO-B1, MFO-B1a |
+| costparity.fireforget, costparity.concentration | Spell cost parity |
+| buff.animated_claim_road, census.shape_ran | Spell-row alias + shape census |
+| class.c6_carriers, class.scout_speed | C6 passive carriers, Scout speed |
+| aim.h5_miss_budget | H5 projectile aim (budget) |
+| class.ally_buff_strength | Q58 Warlock/Nightblade ally-buff strength (INFO) |
+| skooma.not_drunk_by_ai | Skooma (86e3t1gfq) |
+| bound_bow.fires | Bound weapons (86e3t1gfx), bow half |
+| hms.cap_holds, hms.above_parity_gate | HMS (86e3d6dnv), above-parity gate (needs a level-up in the window) |
+| prog.perk_entries_unique | perk-dup (c3018f1) |
+| census.hidden_perk_ran | Hidden-perk census (then BRING THE LIST TO MARTH) |
+
+### Still MANUAL after the self-test (look by hand)
+retreat.flee_hold, visual.animated_casts, visual.frame_hitches, ch18.power_floor, taunt.pull, substrate.ooc_timeouts, probe M0/H3/G11/G7 + H5 hit/miss probe, log.inactive_winner, iaus.scroll_probe, iaus.exploit_rows, g10.will_work, auto.control_target, g9.cooldown, tailor.compat, magicka.cost_capture, freeze.batch_a, play.batch8.
+
+### NEW: Harbinger ch.30 potion allowance (APMF main 599346f; the MFO adoption card is next)
+- Install line for ch.30 with every row verified; 1.7.104 refused by name.
+- A claimed follower with Skooma refused: the AI never selects it (0x0F seat) and never drinks it (DrinkPotion 0x10F seat); real potions still drunk.
+- Player drinking from the menu is unaffected; a console/script drink on that follower STANDS (Q61 default allow); a QUEUED script drink is refused (known hole APMF-B258, logged loudly).
+
+### Saved question
+- Q61 (still OPEN): should scripts/console still make a "no drugs" follower drink? Default kept: allow.
