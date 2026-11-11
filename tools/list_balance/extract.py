@@ -92,9 +92,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--list', required=True); ap.add_argument('--profile', required=True)
     ap.add_argument('--data', action='append', default=[]); ap.add_argument('--out'); ap.add_argument('--name')
+    ap.add_argument('--vanilla', action='store_true', help='only the five base ESMs of this install (name Vanilla)')
     a = ap.parse_args()
-    name = a.name or os.path.basename(a.list.rstrip('/'))
+    name = a.name or ('Vanilla' if a.vanilla else os.path.basename(a.list.rstrip('/')))
     order, where = find_plugins(a.list, a.profile, a.data)
+    if a.vanilla: order = order[:5]
     win = {}; missing = []
     for pl in order:
         p = where.get(pl.lower())

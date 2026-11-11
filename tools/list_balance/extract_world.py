@@ -90,10 +90,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--list', required=True); ap.add_argument('--profile', required=True)
     ap.add_argument('--data', action='append', default=[]); ap.add_argument('--out'); ap.add_argument('--name')
+    ap.add_argument('--vanilla', action='store_true', help='only the five base ESMs of this install (the unmodded reference set, name Vanilla)')
     ap.add_argument('--selfcheck', action='store_true', help='print the vanilla layout self-check rows and exit 1 on a miss')
     a = ap.parse_args()
     name = a.name or os.path.basename(a.list.rstrip('/'))
     order, where = find_plugins(a.list, a.profile, a.data)
+    if a.vanilla: order = order[:5]; name = a.name or 'Vanilla'
     win = {}; cellw = {}; achrw = {}; missing = 0; t0 = time.time()
     for pl in order:
         p = where.get(pl.lower())
@@ -151,7 +153,7 @@ def main():
                 if m:
                     cur = dict(mag=0.0, area=0, dur=0, hostile=bool(m['fl'] & 1), detrimental=bool(m['fl'] & 4), recover=bool(m['fl'] & 2),
                                school=m['school'], resist=m['resist'], minSkill=m['minSkill'], archetype=m['arch'], av=m['av'],
-                               baseCost=m['baseCost'], kw=m['kw'], conds=0)
+                               baseCost=m['baseCost'], kw=m['kw'], ed=m['edid'], conds=0)
                     out.append(cur)
             elif t == 'EFIT' and cur is not None and len(d) >= 12: cur['mag'], cur['area'], cur['dur'] = f32(d, 0), u32(d, 4), u32(d, 8)
             elif t == 'CTDA' and cur is not None: cur['conds'] += 1
@@ -223,11 +225,11 @@ def main():
         atk = []   # ATKD: damageMult f32 @0, chance f32 @4, spell @8, flags u32 @12 (0x4 power), angle @16, strikeAngle @20, stagger @24, type @28, knockdown @32, recovery @36, staminaMult @40
         for t, dd in subs:
             if t == 'ATKD' and len(dd) >= 44: atk.append([round(f32(dd, 0), 3), round(f32(dd, 4), 3), u32(dd, 12), round(f32(dd, 24), 3), round(f32(dd, 36), 3), round(f32(dd, 40), 3)])
-        return dict(edid=edid(subs), playable=bool(u32(d, 32) & 1), flags=u32(d, 32), hp=f32(d, 36), mp=f32(d, 40), sp=f32(d, 44),
+        return dict(edid=edid(subs), playable=bool(u32(d, 32) & 1), flags=u32(d, 32), boosts=[[d[i * 2], d[i * 2 + 1]] for i in range(7) if d[i * 2] < 0x80 and d[i * 2 + 1]], hp=f32(d, 36), mp=f32(d, 40), sp=f32(d, 44),
                     mass=f32(d, 52), size=u32(d, 64), hpRegen=f32(d, 84), mpRegen=f32(d, 88), spRegen=f32(d, 92),
                     unarmedDmg=f32(d, 96), unarmedReach=f32(d, 100), run=run, walk=walk, movt=mt,
                     skinAR=armor_rating_of_skin(key, u32(skin, 0)) if skin and len(skin) >= 4 else 0.0,
-                    kw=[x for x in kwlist(key, subs) if x.startswith('ActorType') or x in ('ImmuneParalysis', 'MagicNoReanimate')],
+                    kw=[x for x in kwlist(key, subs) if x],
                     spells=[s for s in (spel_ref(key(u32(dd, 0))) for dd in subsall(subs, 'SPLO') if len(dd) >= 4) if s >= 0],
                     attacks=atk)
 
@@ -249,7 +251,7 @@ def main():
         return dict(edid=edid(subs), value=u32(d, 0), weight=f32(d, 4), dmg=u16(d, 8), anim=n[0], speed=f32(n, 4), reach=f32(n, 8),
                     flags=u16(n, 12), flags2=u32(n, 40), minRange=f32(n, 28), maxRange=f32(n, 32), skill=i32(n, 76), stagger=f32(n, 96),
                     crit=u16(cr, 0) if cr and len(cr) >= 2 else 0, ench=sub(subs, 'EITM') is not None, silver='WeapMaterialSilver' in kws,
-                    playable=not (u16(n, 12) & 0x80) and not (fl & 0x4), kw=[x for x in kws if x.startswith('WeapType')])
+                    playable=not (u16(n, 12) & 0x80) and not (fl & 0x4), kw=[x for x in kws if x])
 
     def b_armo(k):
         key, fl, subs = by['ARMO'][k]; n = sub(subs, 'DNAM'); b2 = sub(subs, 'BOD2'); bt = sub(subs, 'BODT'); d = sub(subs, 'DATA')
@@ -257,12 +259,12 @@ def main():
         typ = u32(b2, 4) if b2 and len(b2) >= 8 else u32(bt, 8) if bt and len(bt) >= 12 else 2
         kws = kwlist(key, subs)
         return dict(edid=edid(subs), ar=i32(n, 0) / 100.0 if n and len(n) >= 4 else 0.0, slots=slots, type=typ, value=i32(d, 0) if d and len(d) >= 8 else 0,
-                    shield='ArmorShield' in kws, ench=sub(subs, 'EITM') is not None, playable=not (fl & 0x4))
+                    shield='ArmorShield' in kws, ench=sub(subs, 'EITM') is not None, playable=not (fl & 0x4), kw=[x for x in kws if x])
 
     def b_ammo(k):
         key, fl, subs = by['AMMO'][k]; d = sub(subs, 'DATA')
         if d is None or len(d) < 16: return None
-        return dict(edid=edid(subs), dmg=f32(d, 8), bolt=not (u32(d, 4) & 0x4), value=u32(d, 12))
+        return dict(edid=edid(subs), dmg=f32(d, 8), bolt=not (u32(d, 4) & 0x4), value=u32(d, 12), kw=[x for x in kwlist(key, subs) if x])
 
     def item_ref(k):
         if k in by.get('WEAP', {}): return ['w', idx('weap', k, b_weap)]
@@ -299,13 +301,24 @@ def main():
         fact_x[k] = {key(u32(d, 0)): u32(d, 8) for d in subsall(subs, 'XNAM') if len(d) >= 12}
     player_enemies = {f for f, r in fact_x.get(PLAYER_FACTION, {}).items() if r == 1}
 
+    KW_FN = (560, 682, 693, 699, 722, 596, 660, 501)
+
+    def any_edid(k):
+        for sg in ('WEAP', 'ARMO', 'NPC_', 'SPEL', 'RACE', 'AMMO', 'ENCH', 'MGEF', 'KYWD'):
+            if k in by.get(sg, {}): return edid(by[sg][k][2])
+        return '?'
+
     def b_perk(k):
         key, fl, subs = by['PERK'][k]; out = dict(edid=edid(subs), conds=[], entries=[], playable=False, ranks=1)
         cur = None; tab = 0; seen_data = False
 
         def ctda(d):
-            p1 = u32(d, 12); r = kw.get(key(p1)) if (p1 >> 24) <= 0xFE and p1 > 0x800 else None
-            return [u16(d, 8), r if r else p1, u32(d, 16), d[0] >> 5, round(f32(d, 4), 4), d[0] & 1, tab]
+            fn = u16(d, 8); p1 = u32(d, 12); r = p1
+            if fn in KW_FN: r = kw.get(key(p1), '?')
+            elif fn == 448: r = perk_ref(key(p1))
+            elif fn == 214: r = (mgef.get(key(p1)) or {}).get('edid', '?')
+            elif fn in (72, 182, 69, 264, 570): r = any_edid(key(p1))
+            return [fn, r, u32(d, 16), d[0] >> 5, round(f32(d, 4), 4), d[0] & 1, tab]
         for t, d in subs:
             if t == 'PRKE' and len(d) >= 3: cur = dict(type=d[0], rank=d[1], conds=[]); tab = 0
             elif t == 'PRKF':
@@ -396,6 +409,7 @@ def main():
         return dict(edid=own['base']['edid'], flags=own['base']['flags'], tpl=tpl, tflags=own['tflags'] if tpl else 0,
                     level=s['level'], cmin=s['cmin'], cmax=s['cmax'], pcMult=s['pcMult'], autocalc=s['autocalc'],
                     hpOff=s['hpOff'], mpOff=s['mpOff'], spOff=s['spOff'], speed=s['speed'], skills=s.get('skills'), skillOff=s.get('skillOff'),
+                    hpD=s.get('hpD', 0), mpD=s.get('mpD', 0), spD=s.get('spD', 0),
                     race=idx('race', rk, b_race) if rk in by.get('RACE', {}) else -1,
                     clas=idx('clas', s['clas'], b_clas) if s['clas'] in by.get('CLAS', {}) else -1,
                     csty=idx('csty', own['ai']['csty'], b_csty) if own['ai']['csty'] in by.get('CSTY', {}) else -1,
@@ -403,7 +417,7 @@ def main():
                     spells=[x for x in (spel_ref(sk) for sk in own['spells']['spells']) if x >= 0],
                     perks=[x for x in (perk_ref(pk) for pk in own['spells']['perks']) if x >= 0],
                     items=[x + [c] for x, c in ((item_ref(ik), c) for ik, c in own['inv']['items']) if x], outfit=outfit_items(own['inv']['outfit']),
-                    kw=[x for x in own['kw'] if x.startswith('ActorType') or x == 'ImmuneParalysis'])
+                    kw=[x for x in own['kw'] if x])
 
     hmemo = {}
 
@@ -487,6 +501,7 @@ def main():
         d = sub(subs, 'DATA')
         if d and len(d) >= 36 and u32(d, 32) & 1: idx('race', k, b_race)   # playable races (followers)
     # every playable perk (the follower's tree) plus those NPCs carry (already indexed)
+    for k in by.get('CLAS', {}): idx('clas', k, b_clas)
     for k, (key, fl, subs) in by.get('PERK', {}).items(): idx('perk', k, b_perk)
     for r in rows['perk']:
         if r and 'next' in r: r['next'] = tabs['perk'].get(r['next'], -1)
