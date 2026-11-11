@@ -86,7 +86,7 @@ namespace Sim {
         long noCandTicks = 0, candTicks = 0, idleCand = 0, reachTicks = 0, idleReach = 0, taunts = 0, tauntRedundant = 0, tauntFail = 0;
         double dSum = 0, dMax = 0; long dN = 0;
         // absolute outcomes
-        bool   won = false, lost = false, playerDied = false; double dur = 0, firstKill = -1;
+        bool   won = false, lost = false, playerDied = false; double dur = 0, firstKill = -1; long foesFaced = 0;
         long   downs = 0, partyDowns = 0;
         double dmgDone = 0, dmgTaken = 0, partyDmgTaken = 0, playerDmgTaken = 0, healDone = 0;
         double mpSum = 0, hpSum = 0, spSum = 0; long resN = 0; double mpDrySec = 0;

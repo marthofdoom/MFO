@@ -4,6 +4,7 @@
 // world built from the installed list's own records and game settings (tools/list_balance: extract_world.py ->
 // compile_world.py -> ~/.cache/mfo-list-balance/<list>.sim.json). List data is TEST INPUT only; nothing in native/
 // reads it. Models, sources and proof levels: Docs/research/2026-11/iaus-sim-v2.md.
+#include "iaus_sim/Results.h"
 #include "iaus_sim/Scenarios.h"
 
 #include <atomic>
@@ -17,10 +18,11 @@ namespace {
 
     struct Agg {   // a cell's tallies, summed
         Tally s; long fights = 0, wins = 0, losses = 0, playerDeaths = 0, forced = 0, timeouts = 0;
-        double durSum = 0, firstKillSum = 0; long firstKillN = 0; double uSum = 0, pMinSum = 0, mpLateSum = 0; long mpLateN = 0;
+        double durSum = 0, firstKillSum = 0; long firstKillN = 0; double uSum = 0, pMinSum = 0, mpLateSum = 0; long mpLateN = 0, fightsWithDown = 0, foes = 0;
         void Add(const Tally& t, bool forcedBracket) {
             ++fights; wins += t.won; losses += t.lost; playerDeaths += t.playerDied; forced += forcedBracket; timeouts += !t.won && !t.lost; durSum += t.dur;
             if (t.firstKill >= 0) { firstKillSum += t.firstKill; ++firstKillN; }
+            fightsWithDown += t.downs > 0; foes += t.foesFaced;
             pMinSum += t.playerMinHp; if (t.mpAtLate >= 0) { mpLateSum += t.mpAtLate; ++mpLateN; }
 #define S(f) s.f += t.f
             S(ticks); S(idle); S(hold); S(act); S(fired); S(switches); S(badFacts); S(invalid); S(postureSwaps);
@@ -74,6 +76,7 @@ namespace {
         m["peel.s"] = s.peelN ? s.peelSum / double(s.peelN) : -1; m["press%"] = 100.0 * s.playerPressureSec / secs;
         m["prio%"] = pct(double(s.killOrderGood), double(s.killOrderGood + s.killOrderBad)); m["waste%"] = pct(double(s.wastedCasts), double(s.fired));
         m["tsw/min"] = double(s.tgtSwitches) / mins; m["dwh/f"] = double(s.deathsWithHeal) / n; m["tntDown%"] = pct(double(s.tauntThenDown), double(s.taunts));
+        m["down%"] = 100.0 * double(a.fightsWithDown) / n; m["takenPerFoe"] = a.foes ? s.dmgTaken / double(a.foes) : -1;
         m["U"] = a.uSum / n; m["pMinHp%"] = 100.0 * a.pMinSum / n; m["mpAtLate%"] = a.mpLateN ? 100.0 * a.mpLateSum / double(a.mpLateN) : -1; m["splashHits/f"] = double(s.splashAllyHits) / n;
         m["ctlFocus%"] = pct(double(s.hitsOnControlled), double(s.hitsWhileCtl)); m["retreat%"] = 100.0 * s.retreatSec / secs;
         m["wwDecl/min"] = double(s.wwDeclined) / mins; m["ext/f"] = double(s.extActions) / n; m["scroll/f"] = double(s.scrollsUsed) / n; m["move%"] = 100.0 * s.moveOrderSec / secs;
@@ -82,16 +85,17 @@ namespace {
     }
 
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
-    int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace) {
+    int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out) {
         const std::vector<Scenario> all = AllScenarios(); std::vector<const Scenario*> pick;
         for (const Scenario& s : all) if (which == "all" || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
-        struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; };
+        struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; };
         std::vector<Res> res(pick.size()); std::atomic<int> next{ 0 }; std::mutex mx; const int jobs = static_cast<int>(pick.size()) * fights;
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int si = job / fights, f = job % fights;
             Rng R; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
             FightSpec fs = pick[static_cast<std::size_t>(si)]->make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5;
+            { std::scoped_lock lk(mx); res[static_cast<std::size_t>(si)].cls = fs.cls->name; }
             Fight F = BuildFight(D, fs, t1); F.g10Sticky = g10Sticky; Fight G = F;
             if (trace == f) { std::scoped_lock lk(mx); std::printf("\nTRACE %s fight %d (%s)\n", pick[static_cast<std::size_t>(si)]->name, f, oracle ? "oracle arm" : "IAUS arm");
                 for (const Body& x : F.b) std::printf("   %-10s id %-4u L%-2d hp %.0f mp %.0f sp %.0f  AR %.0f  melee %s %.0f  ranged %.0f  spells %zu  run %.0f\n", x.c.name.c_str(), x.c.id, x.c.level, x.c.hp, x.c.mp, x.c.sp, x.spec->ar, x.spec->melee.name.c_str(), WeaponDamage(D.rules, *x.spec, x.spec->melee, false), x.spec->ranged.Has() ? WeaponDamage(D.rules, *x.spec, x.spec->ranged, false) : 0.0f, x.ctl >= 0 ? F.ctl[static_cast<std::size_t>(x.ctl)].build->spells.size() : x.spec->spells.size(), x.spec->run);
@@ -108,6 +112,7 @@ namespace {
         std::printf("\nSCENARIOS (%d fights each, ranks I..V in turn)%s\n", fights, oracle ? "  IAUS | ORACLE (rollout search)" : "");
         for (std::size_t i = 0; i < pick.size(); ++i) {
             const Scenario& sc = *pick[i]; const auto mi = Metrics(res[i].iaus); const auto mo = Metrics(res[i].orc); bad += res[i].iaus.s.badFacts; inv += res[i].iaus.s.invalid;
+            { ScenarioRow sr; sr.name = sc.name; sr.cls = res[i].cls; sr.iausU = mi.at("U"); sr.metrics = mi; if (oracle) { sr.hasOracle = true; sr.oracleU = mo.at("U"); sr.gap = sr.oracleU - sr.iausU; sr.oracleMetrics = mo; } out.scen.push_back(std::move(sr)); }
             std::printf("\n%-18s %s\n", sc.name, sc.what);
             std::string keys = sc.metrics; std::size_t p = 0;
             std::printf("  %-8s", "");
@@ -131,7 +136,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label; bool noJson = false;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -149,17 +154,22 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--scenario") && i + 1 < argc) scenario = argv[++i];
         else if (!std::strcmp(argv[i], "--oracle")) oracle = true;
         else if (!std::strcmp(argv[i], "--no-ext")) oc.ext = false;
+        else if (!std::strcmp(argv[i], "--json") && i + 1 < argc) jsonPath = argv[++i];
+        else if (!std::strcmp(argv[i], "--no-json")) noJson = true;
+        else if (!std::strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) oc.K = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) oc.H = std::atof(argv[++i]);
-        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S]]]\n"); return 2; } }
+        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text]\n"); return 2; } }
     const Data D = listPath ? LoadData(listPath) : BuiltinData();
     const std::vector<SimClass> allClasses = legacy ? LegacyClasses() : RealClasses(mech);
     const std::vector<SimClass> t1(allClasses.begin(), allClasses.begin() + 3);
     if (printClasses) { PrintClassTable(allClasses); return 0; }
+    Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.label = label;
     if (!scenario.empty()) {
         std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
-        return RunScenarios(D, allClasses, scenario, seed, fights, trace >= 0 ? 1 : threads, oracle, oc, g10Sticky, trace); }
+        if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
+        const int rc = RunScenarios(D, allClasses, scenario, seed, fights, trace >= 0 ? 1 : threads, oracle, oc, g10Sticky, trace, R); if (!noJson) R.Write(jsonPath); return rc; }
     std::vector<SimClass> classes;   // --classes a,b,c narrows the cells (slugs)
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
     if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
@@ -192,7 +202,9 @@ int main(int argc, char** argv) {
 
     std::map<std::string, std::map<std::string, double>> all; long totalBad = 0, totalInvalid = 0;
     for (int c = 0; c < nc; ++c) for (int b = 0; b < kNB; ++b) { const Agg& A = cell[static_cast<std::size_t>(c * kNB + b)];
-        all[classes[static_cast<std::size_t>(c)].name + "|" + kBrackets[b].name] = Metrics(A); totalBad += A.s.badFacts; totalInvalid += A.s.invalid; }
+        all[classes[static_cast<std::size_t>(c)].name + "|" + kBrackets[b].name] = Metrics(A); totalBad += A.s.badFacts; totalInvalid += A.s.invalid;
+        { const SimClass& sc = classes[static_cast<std::size_t>(c)]; ResultRow rr; rr.cls = sc.name; rr.line = sc.line; rr.tier = sc.tier; rr.planned = sc.planned; rr.bracket = kBrackets[b].name; rr.fights = A.fights; rr.metrics = Metrics(A); R.rows.push_back(std::move(rr)); } }
+    if (!noJson) R.Write(jsonPath);
     auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? 0.0 : i->second; };
     std::printf("\nDECISIONS\n%-20s %5s %5s %5s %6s %6s %5s %5s %5s %4s %4s %5s %5s %5s  decisions (%% of deciding time)\n", "class|bracket", "idle", "hold", "sw/m", "heal.s", "heal%", "noHC%", "holdL", "iC%", "iR%", "inv", "dec.us", "tnt/m", "tR%");
     for (auto& kv : all) { auto& m = kv.second;

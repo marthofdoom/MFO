@@ -8,6 +8,7 @@ namespace Sim {
     // ── a class cell: the gate the generator reads, the kit the class may carry, its I8 profile ──────────
     struct SimClass {
         std::string name;
+        std::string line = "Melee";   // the class table's line: Melee / Ranged / Mage / Hybrid
         Cls   fam = Cls::Melee;
         ClassGate gate;
         KitChoice kit;
@@ -25,7 +26,7 @@ namespace Sim {
     inline std::vector<SimClass> LegacyClasses() {
         auto kit = [](bool oneH, bool dagger, bool bow, bool staff, bool shield, bool heavy, bool light) { KitChoice k; k.oneHand = oneH; k.dagger = dagger; k.bow = bow; k.staff = staff; k.shield = shield; k.heavy = heavy; k.light = light; return k; };
         std::vector<SimClass> v;
-        auto add = [&](const char* n, Cls f, ClassGate g, KitChoice k, int tier) { SimClass c; c.name = n; c.fam = f; c.gate = g; c.kit = k; c.tier = tier; v.push_back(std::move(c)); };
+        auto add = [&](const char* n, Cls f, ClassGate g, KitChoice k, int tier) { SimClass c; c.name = n; c.fam = f; c.line = f == Cls::Melee ? "Melee" : f == Cls::Ranged ? "Ranged" : "Mage"; c.gate = g; c.kit = k; c.tier = tier; v.push_back(std::move(c)); };
         const KitChoice km = kit(true, false, false, false, false, true, false), kr = kit(false, true, true, false, false, false, true), kg = kit(false, true, false, true, false, false, false);
         add("melee", Cls::Melee, MkGate(true, false, false, false, false, true, true, true, true), km, 1);
         add("ranged", Cls::Ranged, MkGate(true, false, false, false, false, true, true, true, true), kr, 1);
@@ -132,7 +133,8 @@ namespace Sim {
             for (Body& x : F.b) if (x.role == Role::Foe) { auto sp = std::make_shared<ActorSpec>(*x.spec); sp->hp *= k; x.spec = sp; x.c.hpMax *= k; x.c.hp *= k; x.dmgScale = k; }
             for (Spawn& s : F.late) { auto sp = std::make_shared<ActorSpec>(*s.spec); sp->hp *= k; s.spec = sp; s.dmgScale = k; }
         }
-        for (const Body& x : F.b) if (x.role == Role::Foe) F.foeHpTotal += x.c.hpMax;
+        for (const Body& x : F.b) if (x.role == Role::Foe) { F.foeHpTotal += x.c.hpMax; ++F.t.foesFaced; }
+        F.t.foesFaced += static_cast<long>(F.late.size());
         for (const Spawn& s : F.late) F.foeHpTotal += s.spec->hp;
         F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
         { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH; }

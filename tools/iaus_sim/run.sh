@@ -19,4 +19,7 @@ if [[ -z "${SIM_NOBUILD:-}" ]]; then
         "$ROOT/native/classes/ClassTable.cpp" "$ROOT/tools/iaus_sim/RealClasses.cpp" \
         "$ROOT/tools/iaus_sim/sim.cpp" -o "$OUT"
 fi
+# the results file (Results.h) records where the run came from
+export SIM_BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+export SIM_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
 exec "$OUT" "$@"

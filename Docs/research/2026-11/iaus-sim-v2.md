@@ -405,3 +405,34 @@ must search the same full set.
 - Dynamic Follower Scaling in LoreRim (`ReductionPerFollower = 20`, `Mode = 1`): what does it scale, and is it part of
   the intended follower balance on that list?
 - More to come from the class playstyle pass.
+
+## 15. Results file (for the dashboard, `tools/iaus_dash`)
+
+Every run writes one JSON file: `--json <path>`, default `~/.cache/mfo-iaus-sim/runs/<run_id>.json` (cache only, never
+committed). `--no-json` turns it off, `--label "<what changed>"` names the run. Writer: `tools/iaus_sim/Results.h`.
+
+Schema 1 (stable: fields are added, never renamed):
+
+```
+{ "schema": 1, "run_id": "YYYYMMDD-HHMMSS-<short>", "time": "<ISO>", "branch": "...", "sha": "<git short sha>",
+  "list": "Vanilla|Tuxborn|LoreRim|builtin", "seed": N, "fights_per_cell": N, "label": "...",
+  "oracle": { "k": N, "horizon_s": N, "kind": "none | rollout over IAUS, catalogue actions | rollout over IAUS, extended action set" },
+  "classes": [ { "class": "<ClassTable slug>", "tier": N, "line": "Melee|Ranged|Mage|Hybrid", "planned": false,
+                 "bracket": "natural|balanced|weak|strong1|strong2|mixed-boss", "rank": "all", "fights": N,
+                 "metrics": { ... }, "action_mix": { "<family>": percent of deciding time } } ],
+  "scenarios": [ { "name": "...", "class": "...", "iaus_u": x, "oracle_u": x|null, "gap": x|null,
+                   "metrics": { ... IAUS ... }, "oracle_metrics": { ... } } ],
+  "rulings": [ { "id", "text", "class", "metric", "op", "target", "value", "pass" } ],     (natural bracket rows)
+  "gaps": [ { "id": "G1", "family", "class", "desc", "scenario", "delta_u": x|null, "status": "open|closing|closed|limit" } ] }
+```
+
+Fixed metric keys (the sim's own names are written beside them): `idle_pct`, `idle_cand_pct`, `hold_pct`,
+`hold_low_pct`, `switches_per_min`, `target_switch_per_min`, `heal_latency_s`, `healed_pct`, `overheal_pct`,
+`double_heal_pct`, `overkill_pct`, `mp_at_boss_pct`, `melee_share_pct` (share of the time he is up that his body spends
+in a melee swing), `taunt_per_min`, `power_per_min`, `follower_death_pct` (fights in which he went down),
+`player_death_pct`, `ttk_s` (time to the first kill), `damage_taken_per_foe`, `bad_facts`, `invalid`,
+`decide_us_mean`, `decide_us_max`. Added: `utility`, `win_pct`, `fight_s`, `splash_ally_hits_per_fight`.
+
+Rulings checked today (`Results.h Rulings()`): R-MAGE-MELEE-T1 (`mage` melee_share_pct <= 5), R-MAGE-MELEE-T2+
+(pure mage line, tier 2 and up, <= 3), R-NO-SPLASH (0 ally hits per fight), R-BAD-FACTS, R-INVALID, R-BUDGET
+(decide_us_max <= 500). More are added with the class playstyles.

@@ -67,6 +67,7 @@ namespace Sim {
         for (const C::ClassDef& d : C::kTable) {
             SimClass c; c.name = std::string(d.slug); c.tier = d.tier;
             const bool hybrid = d.line == C::Line::Hybrid;
+            c.line = d.line == C::Line::Melee ? "Melee" : d.line == C::Line::Ranged ? "Ranged" : d.line == C::Line::Mage ? "Mage" : "Hybrid";
             c.fam = d.line == C::Line::Melee ? Cls::Melee : d.line == C::Line::Ranged ? Cls::Ranged : d.line == C::Line::Mage ? Cls::Mage
                   : d.rootT1 == 2 ? Cls::Ranged : d.rootT1 == 3 ? Cls::Mage : Cls::Melee;
             ClassGate& g = c.gate; g.resolved = true; g.treeOn = true; g.strict = false;
