@@ -38,6 +38,10 @@ namespace Sim {
         return v;
     }
 
+    // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp). mechProfiles: the I8 mechanical profile.
+    std::vector<SimClass> RealClasses(bool mechProfiles);
+    void PrintClassTable(const std::vector<SimClass>& v);
+
     struct Bracket { const char* name; float lo, hi; bool boss; };
     // natural = the list's encounters as placed, no filter. The others are strength-ratio bands (StrengthRatio below).
     inline constexpr Bracket kBrackets[] = { { "natural", 0.0f, 1e9f, false }, { "balanced", 0.6f, 1.25f, false }, { "weak", 0.0f, 0.6f, false }, { "strong1", 1.25f, 2.0f, false },

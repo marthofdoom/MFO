@@ -153,6 +153,7 @@ namespace Sim {
 
     struct KitChoice {         // what the class row lets him carry (from the real class table: SimClass)
         bool oneHand = true, twoHand = false, dagger = false, bow = false, crossbow = false, staff = false, shield = false, heavy = true, light = false;
+        float mageBlend = 0;   // hybrids: this share of his class weights is the mage row's (MODEL)
     };
 
     struct FollowerBuild {
@@ -170,7 +171,11 @@ namespace Sim {
 
     inline FollowerBuild BuildFollower(const Data& D, Cls fam, const KitChoice& kc, const ClassGate& gate, int level, Rng& R, bool withKit = true) {
         FollowerBuild fb; ActorSpec& a = fb.spec; const Rules& r = D.rules;
-        const FRace& rc = D.races[static_cast<std::size_t>(R.I(0, static_cast<int>(D.races.size()) - 1))]; const FClass& c = D.cls[static_cast<int>(fam)];
+        const FRace& rc = D.races[static_cast<std::size_t>(R.I(0, static_cast<int>(D.races.size()) - 1))]; FClass c = D.cls[static_cast<int>(fam)];
+        if (kc.mageBlend > 0) { const FClass& m = D.cls[2]; auto norm = [](const FClass& k) { float s = 0; for (float w : k.skillW) s += w; return std::max(1.0f, s); };
+            const float ns = norm(c), nm = norm(m), th = std::max(1.0f, c.hW + c.mW + c.sW), tm = std::max(1.0f, m.hW + m.mW + m.sW), q = kc.mageBlend;
+            for (std::size_t i = 0; i < 18; ++i) c.skillW[i] = (1 - q) * c.skillW[i] / ns + q * m.skillW[i] / nm;
+            c.hW = (1 - q) * c.hW / th + q * m.hW / tm; c.mW = (1 - q) * c.mW / th + q * m.mW / tm; c.sW = (1 - q) * c.sW / th + q * m.sW / tm; }
         a.name = "Follower"; a.race = rc.edid; a.level = level; const float L1 = static_cast<float>(level - 1), tot = std::max(1.0f, c.hW + c.mW + c.sW);
         a.hp = rc.hp + L1 * (r.hpPerLevel + r.hmsPerLevel * c.hW / tot); a.mp = rc.mp + L1 * r.hmsPerLevel * c.mW / tot; a.sp = rc.sp + L1 * r.hmsPerLevel * c.sW / tot;
         a.hpR = rc.hpR; a.mpR = rc.mpR; a.spR = rc.spR; a.unarmed = rc.unarmed; a.run = rc.run > 40 ? rc.run : 370; a.mass = rc.mass > 0 ? rc.mass : 1;

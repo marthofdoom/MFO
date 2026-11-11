@@ -80,7 +80,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = false, engineCasts = true, g10Sticky = false;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = false, engineCasts = true, g10Sticky = false, legacy = false, mech = false, printClasses = false; std::string only;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -91,11 +91,18 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--taunt-visible")) tauntVisible = true;
         else if (!std::strcmp(argv[i], "--no-engine-casts")) engineCasts = false;
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
-        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts]\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); }
+        else if (!std::strcmp(argv[i], "--profiles") && i + 1 < argc) mech = !std::strcmp(argv[++i], "mech");
+        else if (!std::strcmp(argv[i], "--print-classes")) printClasses = true;
+        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes]\n"); return 2; } }
     const Data D = listPath ? LoadData(listPath) : BuiltinData();
-    const std::vector<SimClass> classes = LegacyClasses();
-    const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
-    std::printf("IAUS SIM v2  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d\n", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts));
+    const std::vector<SimClass> allClasses = legacy ? LegacyClasses() : RealClasses(mech);
+    const std::vector<SimClass> t1(allClasses.begin(), allClasses.begin() + 3);
+    if (printClasses) { PrintClassTable(allClasses); return 0; }
+    std::vector<SimClass> classes;   // --classes a,b,c narrows the cells (slugs)
+    for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
+    if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
+    std::printf("IAUS SIM v2  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s\n", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default");
     std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d\n",
                 D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown);
     const Rules& r = D.rules;
