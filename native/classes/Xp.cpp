@@ -14,7 +14,8 @@
 // The exponent 1.3 makes each level a little dearer than the one before, so a level means more play time higher up the line.
 // fClassXpRate (MCM) multiplies every award, so 1.0 is the sized pace and 2.0 halves the hours.
 //
-// THREADING. Pending credit lives in g_pending under g_mx (a LEAF mutex: nothing is called while it is held). Writers:
+// THREADING. Pending credit lives in g_pending under g_mx (a TRUE LEAF mutex: nothing is called while it is held -- not even
+// HasClass (State.cpp g_mx); callers filter by HasClass BEFORE taking it). Writers:
 //   XpOnDeath        job worker, inside Rapport's gated death task (PumpTickGate held by the caller)
 //   XpNoteHeal       main thread (the HealObs verdict closure)
 //   XpOnPartyFightEnd job worker (the Scheduler's party-out-of-combat teardown), plus one MainThread::Post for the summon read
@@ -24,10 +25,13 @@
 #include "Followers.h"
 #include "MainThread.h"
 #include "cast/Actuation.h"   // LiveCommandedActors (cast/Summon.cpp): the summon-uptime read
+#include <atomic>
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace MFO::Classes {
 
@@ -64,6 +68,10 @@ namespace MFO::Classes {
         std::unordered_map<RE::FormID, Pending>   g_pending;
         std::unordered_map<RE::FormID, Clock::time_point> g_lastLog;   // the award line's rate limit
         Clock::time_point                         g_lastPartyKill{};   // when the party last killed a hostile (any follower)
+        std::unordered_map<RE::FormID, Clock::time_point> g_lastAward; // when each follower was last paid (a heal-only win needs a kill after it)
+        // Party combat mirror (CombatScan's edge, XpNotePartyCombat): a heal counts only while the party is in combat, so an
+        // out-of-combat top-up can never open a pending that the next party-OOC service would pay as a fight.
+        std::atomic<bool>                         g_partyLive{ false };
         constexpr double kXpLogEverySec = 2.0;   // one [classes] XP line per follower per this long (awards are once per fight anyway)
 
         double Since(Clock::time_point a_t, Clock::time_point a_now) { return std::chrono::duration<double>(a_now - a_t).count(); }
@@ -78,6 +86,51 @@ namespace MFO::Classes {
             auto& p = g_pending[a_fid];
             if (p.firstAt.time_since_epoch().count() == 0) p.firstAt = a_now;
             return p;
+        }
+
+
+        // ── the party-fight enemy test (SEV-2 of the review of a5e3a4e) ─────────────────────────────────────────
+        // IsHostileToActor(player) alone drops aggression-0 territorial creatures (Requiem / LoreRim skeevers, wolves, bears) and
+        // provoked neutrals. This mirrors EngageOnSight's ENEMY TEST (EngageOnSight.cpp:348-375 IsEnemy, with IsTerritorial :353
+        // and the faction stand-in ReactionOf :326, all file-local there, so the same engine reads are repeated here in the same
+        // order): a victim counts when it was FIGHTING THE PARTY (currentCombatTarget the player or a teammate), or the engine says
+        // it is hostile to the player or to the killer, or it is TERRITORIAL; a crime-faction victim counts only when it was
+        // fighting the party. Not copied: the confidence / skip-list / restrained terms (they decide whether to START a fight;
+        // this decides whether a fight that ended in a kill was against an enemy). A teammate / commanded-by-party victim never.
+        RE::FIGHT_REACTION ReactionOf(RE::Actor* a_from, RE::Actor* a_to) {
+            std::vector<const RE::TESForm*> toFactions;
+            a_to->VisitFactions([&](RE::TESFaction* f, std::int8_t r) { if (f && r >= 0) toFactions.push_back(f); return false; });
+            bool enemy = false, ally = false;
+            a_from->VisitFactions([&](RE::TESFaction* f, std::int8_t r) {
+                if (!f || r < 0) return false;
+                for (const auto* g : f->reactions) {
+                    if (!g || std::find(toFactions.begin(), toFactions.end(), g->form) == toFactions.end()) continue;
+                    if (g->fightReaction == RE::FIGHT_REACTION::kEnemy) enemy = true;
+                    else if (g->fightReaction == RE::FIGHT_REACTION::kAlly || g->fightReaction == RE::FIGHT_REACTION::kFriend) ally = true;
+                }
+                return false;
+            });
+            return ally ? RE::FIGHT_REACTION::kAlly : enemy ? RE::FIGHT_REACTION::kEnemy : RE::FIGHT_REACTION::kNeutral;
+        }
+
+        bool IsPartyEnemy(RE::Actor* a_victim, RE::Actor* a_killer, RE::Actor* a_pc) {
+            if (a_victim->IsCommandedActor()) {
+                auto cmd = a_victim->GetCommandingActor();   // HOLD the NiPointer
+                if (cmd && (cmd->IsPlayerRef() || cmd->IsPlayerTeammate())) return false;
+            }
+            auto tp = a_victim->GetActorRuntimeData().currentCombatTarget.get();   // HOLD (EngageOnSight FightingParty)
+            auto* t = tp.get();
+            if (t && (t->IsPlayerRef() || t->IsPlayerTeammate())) return true;   // fighting the party: counts, whatever else it is
+            if (a_victim->GetCrimeFaction()) return false;
+            if (a_victim->IsHostileToActor(a_pc) || (a_killer && a_killer != a_pc && a_victim->IsHostileToActor(a_killer))) return true;
+            // territorial (EngageOnSight IsTerritorial): aggression 0 + aggro-radius behaviour + an attack radius + not allied to either
+            auto* avo = a_victim->AsActorValueOwner();
+            if (avo && avo->GetActorValue(RE::ActorValue::kAggression) != 0.0f) return false;
+            const auto* base = a_victim->GetActorBase();
+            if (!base || !base->aiData.aggroRadiusBehaviour) return false;
+            if (!base->aiData.aggroRadius[RE::ACTOR_AGGRO_RADIUS::kWarnAndAttack] && !base->aiData.aggroRadius[RE::ACTOR_AGGRO_RADIUS::kAttack])
+                return false;
+            return ReactionOf(a_victim, a_pc) != RE::FIGHT_REACTION::kAlly && (!a_killer || ReactionOf(a_victim, a_killer) != RE::FIGHT_REACTION::kAlly);
         }
 
         struct Curves {
@@ -114,7 +167,12 @@ namespace MFO::Classes {
         g_pending.clear();
         g_lastLog.clear();
         g_lastPartyKill = {};
+        g_lastAward.clear();
+        g_partyLive.store(false, std::memory_order_relaxed);
     }
+
+    // WORKER (CombatScan's party-combat edge).
+    void XpNotePartyCombat(bool a_inCombat) { g_partyLive.store(a_inCombat, std::memory_order_relaxed); }
 
     // WORKER, inside Rapport's gated death task. Who gets credit: the follower who killed (or whose commanded summon killed),
     // and every other follower who was in combat within the shared grace (an assist). The PLAYER'S kill and the player's summons'
@@ -124,12 +182,13 @@ namespace MFO::Classes {
         if (!Active() || !a_victim || !a_killer) return;
         if (a_victim->IsPlayerRef() || a_victim->IsPlayerTeammate()) return;
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || !a_victim->IsHostileToActor(player)) return;
+        if (!player) return;
 
         RE::Actor* credited = a_killer;
         if (credited->IsCommandedActor()) {
             if (auto cmd = credited->GetCommandingActor(); cmd) credited = cmd.get();   // a summon's kill is its master's
         }
+        if (!IsPartyEnemy(a_victim, credited, player)) return;
         const bool killerIsPlayer = credited->IsPlayerRef();
         const RE::FormID killerFid = credited->GetFormID();
         const bool killerIsOurs = !killerIsPlayer && Followers::IsTracked(killerFid);
@@ -140,17 +199,18 @@ namespace MFO::Classes {
         const float grace = Config::g_sharedCombatGrace.load();
         const auto now = Clock::now();
         int kills = 0, assists = 0;
-        std::scoped_lock lk(g_mx);
-        g_lastPartyKill = now;
+        // Build the credit list FIRST (HasClass takes State.cpp's g_mx), then take Xp's leaf mutex for the writes only.
+        std::vector<std::pair<RE::FormID, bool>> credit;   // (follower, true = kill / false = assist)
         for (const RE::FormID fid : *snap) {
             if (fid == 0 || !HasClass(fid)) continue;
-            if (killerIsOurs && fid == killerFid) {
-                ++Touch(fid, now).kills;
-                ++kills;
-            } else if (Followers::SecondsSinceCombat(fid) <= grace) {
-                ++Touch(fid, now).assists;
-                ++assists;
-            }
+            if (killerIsOurs && fid == killerFid) credit.emplace_back(fid, true);
+            else if (Followers::SecondsSinceCombat(fid) <= grace) credit.emplace_back(fid, false);
+        }
+        std::scoped_lock lk(g_mx);
+        g_lastPartyKill = now;
+        for (const auto& [fid, isKill] : credit) {
+            if (isKill) { ++Touch(fid, now).kills; ++kills; }
+            else        { ++Touch(fid, now).assists; ++assists; }
         }
         spdlog::debug("[classes] XP feed: hostile {:08X} died to {:08X} -- {} kill credit(s), {} assist(s)",
                       a_victim->GetFormID(), killerFid, kills, assists);
@@ -158,7 +218,7 @@ namespace MFO::Classes {
 
     // MAIN thread, the HealObs verdict (a heal that RAISED the recipient's health).
     void XpNoteHeal(RE::FormID a_caster, RE::FormID a_target) {
-        if (!Active() || a_caster == 0 || !HasClass(a_caster)) return;
+        if (!Active() || a_caster == 0 || !g_partyLive.load(std::memory_order_relaxed) || !HasClass(a_caster)) return;   // OOC heals never count
         const auto now = Clock::now();
         std::scoped_lock lk(g_mx);
         auto& p = Touch(a_caster, now);
@@ -209,12 +269,17 @@ namespace MFO::Classes {
 
         bool won = (p.kills + p.assists) > 0;
         if (!won) {
+            // A heal-only follower shares a win the party scored. After his last award that needs a party kill AFTER it (no
+            // lookback: a late heal verdict must never be paid as a second fight); before any award, the lookback applies.
             std::scoped_lock lk(g_mx);
-            won = g_lastPartyKill.time_since_epoch().count() != 0 &&
-                  g_lastPartyKill >= p.firstAt - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kWonLookbackSec));
+            const auto la = g_lastAward.find(a_follower);
+            if (g_lastPartyKill.time_since_epoch().count() != 0) {
+                if (la != g_lastAward.end()) won = g_lastPartyKill > la->second;
+                else won = g_lastPartyKill >= p.firstAt - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kWonLookbackSec));
+            }
         }
-        // NOT WIPED: the player alive and at least one follower alive. A reload follows a wipe, so this mostly guards the
-        // edge where the player went down as the last foe did.
+        // NOT WIPED: the player is alive. (The follower side is not tested: a reload follows a wipe, and he is being paid here
+        // from his own service tick, so this mostly guards the edge where the player went down as the last foe did. MFO-B752.)
         bool wiped = true;
         if (auto* pl = RE::PlayerCharacter::GetSingleton(); pl && !pl->IsDead()) wiped = false;
         if (wiped) { spdlog::info("[classes] XP {:08X}: fight over with the party down -- no award", a_follower); return; }
@@ -246,6 +311,7 @@ namespace MFO::Classes {
         bool logIt = false;
         {
             std::scoped_lock lk(g_mx);
+            g_lastAward[a_follower] = now;
             auto& last = g_lastLog[a_follower];
             if (last.time_since_epoch().count() == 0 || Since(last, now) >= kXpLogEverySec) { last = now; logIt = true; }
         }

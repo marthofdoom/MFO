@@ -3014,3 +3014,9 @@ The disabled Gambits-tab "Class:" button shows the raw combatClassOverride name 
 
 ### MFO-B725 (SEV-5, OPEN, Board_Classes.cpp, against da493fe, same review)
 The Classes tab has no reserved footer, so with long trees the footer hint scrolls out of view.
+
+### MFO-B752 (SEV-5, FIXED-IN-PLACE comment, classes/Xp.cpp "not wiped" test, against a5e3a4e, Opus review of feat/class-xp-mcm)
+"The 'not wiped' test checks only the player (Xp.cpp:218-220) but the comment says 'and at least one follower alive'." Reasoning: the paying follower is serviced on his own tick so he is alive by construction; the comment was fixed to say the test is the player only. No code change.
+
+### MFO-B753 (SEV-5, FIXED-IN-PLACE comment, Config.h bClassTree / bClassStrict, against a5e3a4e, same review)
+"Config.h still says bClassTree/bClassStrict are 'INI-only (no MCM key)'." Reasoning: card C11 gave both a key in the class add-on's own MCM; the comment was corrected. No code change.

@@ -345,7 +345,8 @@ namespace MFO::Classes {
     // CombatScan's party-out-of-combat teardown); XpNoteHeal = the main thread (HealObs verdict); all state is under Xp.cpp's
     // leaf mutex. The award itself (AwardXp) runs on the thread that ends the fight (the worker).
     void XpOnDeath(RE::Actor* a_victim, RE::Actor* a_killer);
-    void XpNoteHeal(RE::FormID a_caster, RE::FormID a_target);
+    void XpNoteHeal(RE::FormID a_caster, RE::FormID a_target);   // counts only while XpNotePartyCombat(true) is the last edge
+    void XpNotePartyCombat(bool a_inCombat);   // WORKER: CombatScan's party-combat edge (a lock-free mirror for the heal gate)
     void XpOnPartyFightEnd(RE::FormID a_follower);   // idempotent: every party-out-of-combat service calls it, it acts once per fight
 
     // Card C11 (classes/Auras.cpp): re-apply the MCM /s values to the aura ability effects after an MCM change. Any thread (it

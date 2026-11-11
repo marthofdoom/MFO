@@ -203,7 +203,10 @@ CLS_REQUIRED = {
     0xA80: ('SPEL', "MFOC_MarkedSpell",        ['EDID', 'SPIT', 'EFID', 'EFIT']),
     0xA81: ('SPEL', "MFOC_FlankedSpell",       ['EDID', 'SPIT', 'EFID', 'EFIT']),
     0xA82: ('SPEL', "MFOC_GuardedSpell",       ['EDID', 'SPIT', 'EFID', 'EFIT']),
+    # Card C11: the add-on's own MCM Helper quest (start-game-enabled, NOT run-once, script MFOC_MCM) -- listed in SEQ/MFO_Classes.seq.
+    0xA83: ('QUST', "MFOC_MCMQuest",           ['EDID', 'DNAM', 'VMAD']),
 }
+CLS_SEQ_EXPECTED = {0xA83}
 # Card C6 audit tables. Ability SPELs: 0xA50/0xA51 Mercenary, 0xA60-0xA73 Scout speed per level 1..20, 0xA74 Scout quarter.
 CLS_ABILITY_SPELLS = [0xA50, 0xA51] + list(range(0xA60, 0xA74)) + [0xA74]
 CLS_ABILITY_MGEF_AV = {0xA40: 26, 0xA41: 157, 0xA42: 30}     # Stamina, StaminaRateMult, SpeedMult (ActorValues.h)
@@ -219,7 +222,7 @@ CLS_MANIFEST_ENTRIES = 3 + 4   # keyword + 2 index FLSTs + 4 MCM GLOBs
 PROFILES = {
     "MFO.esp":             (REQUIRED, SEQ_EXPECTED),
     "MFO_Progression.esl": (PROG_REQUIRED, PROG_SEQ_EXPECTED),
-    "MFO_Classes.esl":     (CLS_REQUIRED, None),
+    "MFO_Classes.esl":     (CLS_REQUIRED, CLS_SEQ_EXPECTED),
 }
 
 GRUP_HDR = 24

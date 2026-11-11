@@ -854,7 +854,7 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_townToasts{ false };
     //   bClassTree / bClassStrict (class add-on, classes/; marth 2026-10-27): the class TREE is an optional part, ON by default, and
     //     inert unless the add-on ESL (MFO_Classes.esl) is loaded. OFF (or ESL absent) = today's three classes exactly. bClassStrict =
-    //     strict adherence to the equipped class; it only means anything while the tree is active. INI-only (no MCM key).
+    //     strict adherence to the equipped class; it only means anything while the tree is active. Both have an MCM key in the add-on's own MCM (MFO_Classes, card C11).
     inline std::atomic<bool>  g_classTree{ true };
     inline std::atomic<bool>  g_classStrict{ true };
     //   fClassXpRate / bClassInfo / fPriestSunPerSec / fSaintHealPerSec / fSaintUndeadPerSec (class add-on MCM, card C4 / C11,
