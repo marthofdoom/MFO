@@ -2344,10 +2344,37 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) a
   spdlog under g_subMx) before editing. B310 (MFO's own CheckStartCast soft deny still runs under a substrate
   controller, bounded by the 2-lap OOC teardown) can deny a substrate cast in the first two OOC services after a fight.
 
-### Scheduler.cpp / Scheduler.h — the tick / combat scan
-Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
+### Scheduler.cpp / scheduler/CombatScan.cpp / Scheduler.h — the tick / combat scan
+Round-robin one follower per 133 ms tick (`kTickInterval` `scheduler/Scheduler_internal.h:24`), pumps packages
 first, runs the combat table while the PARTY fights and the logistics table when
 it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worker.
+- **FILE LAYOUT (IAUS card I0, 2026-11-10, `refactor/iaus-i0-combatscan`: a pure TU split; linecheck PASS, no-optimizer
+  splitcheck proof identical, ONE /O2 function (`ServiceRetreat`) differs by instruction order only and is allow-listed
+  (`tools/splitcheck/allow/iaus-i0.txt`, why: `Docs/research/2026-11/iaus-i0-split.md`); TU map `tools/splitcheck/tumaps/iaus-i0.txt`).** Three files, one namespace `MFO::Scheduler`:
+  - **`native/scheduler/CombatScan.cpp`** = the whole `Scheduler::Tick` (`:101`) plus the two reconciliation helpers only it
+    uses, file-local: `MeleeClampDwell` (`:50`), `EquipRangeUndecidable` (`:81`). Inside `Tick`: `Packages::Pump` `:126`, the
+    party-OOC branch `if (!g_partyCombat)` `:368`, `serviceOwnOoc` `:581`, the empty-table return `:868`, the suppression
+    window (`g_recent`) `:915`, **the COMBAT SCAN loop `for (int start = 0; ; )` `:956`**, **the RECONCILIATION `:1174-1461`**
+    (`condKnownFalse` `:1190`, `ReconcileSilver` `:1390`, `ReconcileForcedWeapon` `:1391`, `HealSustainLap` `:1430`, the
+    `!castSeen` release `:1431`), the outcome bookkeeping `switch (outcome.result)` `:1526`. The scan is a span INSIDE `Tick`,
+    not a function of its own, which is why the whole function moved: a split moves whole functions (anything else is an
+    extraction refactor the split tools cannot prove). Giving the scan its own function is IAUS card I1's `ChoiceSource` work.
+  - **`native/Scheduler.cpp`** = the service helpers `Tick` calls, now external linkage with prototypes in the internal header:
+    `StallProbe` `:36`, `DeadTgtEnd` `:115`, `DeadTgtService` `:125`, `StartRetreatCooldown` `:160`, `ServiceRetreat` `:178`,
+    `ServiceLeashWithReachHold` `:405`; the still file-local `[deadtgt]` state (`g_deadTgt` `:81`, `DeadTgtReason` `:85`,
+    `DeadTgtCasting` `:95`); and the public API: `ClearTransientState` `:455`, `LastTickMs` / `TicksThisSession` /
+    `ServiceClock` / `PartyCombat` `:486-489`, `ReachHoldSlack` `:491`.
+  - **`native/scheduler/Scheduler_internal.h`** = the state both TUs share, every variable `inline` (ONE instance, never a
+    per-TU copy): `g_lastServiced` `:34`, `Recent` / `g_recent` `:39/:51`, `g_meleeClampTrueAt` `:69`, `g_proposedTarget` `:78`,
+    `RetreatNote` / `g_retreatNotes` `:100/:139`, `g_serviceClock` `:150`, `g_partyCombat` (and its doc) `:189`, `StallSample`
+    `:208`, `g_reachHold` `:231`, the retreat dials from `kRetreatConfidence` `:238`. Only the two Scheduler TUs include it.
+  - **Older cites.** A `Scheduler.cpp:NNN` cite elsewhere in this map or in a code comment predates the split (and most had
+    drifted before it). Anything it names inside `Tick` is now in `scheduler/CombatScan.cpp`: grep the symbol.
+  - **What breaks:** a new variable both TUs use goes in the internal header as `inline` (a `static` or anonymous-namespace definition there is one copy
+    PER TU, i.e. a silent state split). `ClearTransientState` must clear every
+    map the header declares (it does today; a new map needs its line there). Threading is unchanged by the move: each item keeps the rule its
+    own comment states (worker-only, #4; `g_lastTickMs` / `g_ticks` are the atomics other threads read). `CombatScan.cpp` is 1622 lines, past the ~1500 plan mark: the next
+    brief that edits it proposes its split.
 - **PER-RULE COOLDOWN (card G9, ClickUp 1dfcuabcqe6, 2026-11-09).** `Gambit::cooldownTenths` (State.h, serialized FLWR v6) +
   `Cooldowns.h/.cpp` (NEW: the runtime-only last-fired store, key (actor, `Kind::Rule`, rule uid), own mutex, `ClearAll` in
   `ResetAllState` after `StopPump`; built to be shared with IAUS card I2). In the combat scan, right after the cannot-act skip and before
@@ -8884,6 +8911,16 @@ the scan integration is I6, the board is I7, the class profiles are I8. **NOT se
     `g_active`, targets, race keyword, resists, Sightline cache, `Targeting::Current`, `CombatSense`, `Logistics::IsUnholy`; the
     book through `SpellBook::Read`; G10 through `Actuation::WillWork` for last lap's top-6 pairs only), `Build` `:271` (Gather +
     GateFor + Generate), `NoteDecision` `:279`, `CombatEnded` / `Forget` / `Clear` `:290`, the fight clock (`kFightGapSec` `:42`).
+  - **I4 review fix round (`fix/iaus-i4-review`, 2026-11-10; F1 + F2, both SEV-3).** F1: the heal `alreadyActive` fact now
+    sees EVERY heal road. `Gather` fills `Snapshot::liveStreams` from `Actuation::SelfStreamLive` (new, `cast/DirectSelf.cpp`:
+    the `g_selfCast` registry, where a self heal's direct stream lives), `Actuation::TargetStreamLive` (`g_targetCast`) and
+    `Actuation::HealClaimLive` (new, `cast/DirectSelf.cpp`: a standing Harbinger heal claim on either hand, the same
+    `APMFBridge::GetHealCastSpell` / `GetHealCastTarget` reads Evaluator's PickAlly makes; recipient 0 = himself). All three are
+    declared in `cast/Actuation.h` beside `TargetStreamLive`, worker-serial pure reads. F2: `SpellEntry::areaUnits` is
+    `Prune::BlastUnits` = the LARGER of the EFIT area (feet x 64/3) and the explosion radius of the effect (`MGEF data.explosion`)
+    or of its projectile (`BGSProjectile data.explosionType`), `BGSExplosion data.radius` in units. PASSIVE PROBES, one line per
+    form per session: `[spellbook] area probe: ...` (EFIT area vs explosion radius) and `[spellbook] staff probe: ...`
+    (AV Right/LeftItemCharge, ExtraCharge, EAMT, CalculateMagickaCost; backlog MFO-B656).
   - Outside `iaus/`: `logistics/Sinks.cpp:182` (the ONE `TESContainerChangedEvent` sink calls `SpellBook::OnContainerChanged`),
     `native/CMakeLists.txt` (three sources). The harness builds `Generate.cpp` too (section 8 of its output).
 
@@ -8912,6 +8949,9 @@ group's read lock covers ONLY the handle copy; `ChaseRadius` and the bridge read
   unloaded follower (it would read as "he knows no spells": `PostRefresh` publishes nothing then); removing the generation check
   in `PostRefresh` (a pre-load book would land in the next session); shortening `kTrustSec` under `kRefreshSec + kAskRetrySec`
   (a live fight would lose its book between refreshes, principle 9).
+- I4 `areaUnits` must never be the EFIT area alone (review F2): an aimed blast's damage radius is its explosion's, and an
+  under-sized radius lets a blast that reaches an ally pass `splash_safe` (marth: never splash the party). Any new heal road
+  must also be read into `Snapshot::liveStreams` (review F1), or its running heal scores as not active and is re-picked.
 - I4 pure layer: `Snapshot.h`, `Prune.h`, `Generate.*` must stay free of RE:: types and engine calls (the harness and the
   simulator build them on the host; `tools/iaus_harness/run.sh` fails if they do not). Candidate names are `string_view`s INTO
   the Snapshot, which is why `Candidates::Set` cannot be copied or moved. A fact a family does not read stays at its default,

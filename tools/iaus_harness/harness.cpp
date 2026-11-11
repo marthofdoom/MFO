@@ -702,6 +702,41 @@ namespace {
             if (c.form == 0x1C789) { sawArea = c.f.hasArea && c.f.foesInArea >= 1.0f; if (!c.f.splashSafe) sawUnsafe = true; }
         Check(sawArea && sawUnsafe, "an area spell counts the foes in its area and is splash-unsafe near the player");
 
+        // I4 review F2: the blast radius is the larger of the EFIT area and the explosion radius, and it is what
+        // splash_safe and foes-in-area measure with.
+        Check(Prune::BlastUnits(15.0f, 600.0f) == 600.0f && Prune::BlastUnits(15.0f, 0.0f) == Prune::AreaUnits(15.0f) &&
+              Prune::BlastUnits(15.0f, NAN) == Prune::AreaUnits(15.0f) && Prune::BlastUnits(0.0f, 0.0f) == 0.0f,
+              "F2: blast = max(EFIT area in units, explosion radius); a broken explosion read falls back to the area");
+        auto blast = [&](float units, bool* unsafe, float* inArea) {
+            Snapshot b = MageFight(); b.self.mp = 200;
+            b.allies[0].x = 600.0f + 400.0f; b.allies[0].y = 0;      // the player, 400 units behind the nearest foe
+            for (auto& e : b.book.entries) if (e.form == 0x1C789) e.areaUnits = units;
+            *unsafe = false; *inArea = 0.0f;
+            for (const auto& c : Generate(b, mage, t).actions)
+                if (c.form == 0x1C789 && c.target == 0x3B500) { *unsafe = !c.f.splashSafe; *inArea = c.f.foesInArea; }
+        };
+        bool unsafeSmall = true, unsafeBig = false; float inSmall = 0, inBig = 0;
+        blast(Prune::BlastUnits(5.0f, 0.0f), &unsafeSmall, &inSmall);      // EFIT 5 ft alone: about 107 units
+        blast(Prune::BlastUnits(5.0f, 500.0f), &unsafeBig, &inBig);       // with a 500-unit explosion
+        std::printf("   F2 5 ft EFIT alone: splash-unsafe %d, foes in area %.0f | with a 500-unit explosion: %d, %.0f\n",
+                    unsafeSmall ? 1 : 0, inSmall, unsafeBig ? 1 : 0, inBig);
+        Check(!unsafeSmall && unsafeBig, "F2: an ally 400 units from the target is safe from 107 units, NOT from a 500-unit explosion");
+        Check(inSmall == 1.0f && inBig == 4.0f, "F2: foes in area follows the blast radius (1 foe at 107 units, 4 at 500)");
+
+        // I4 review F1: a heal already running on ANY road (self stream, target stream, a Harbinger claim) arrives
+        // as a liveStreams note; target 0 = himself.
+        Snapshot run = MageFight();
+        run.liveStreams = { { 0x12FCC, 0u, Tri::Yes }, { 0x12FD2, 0x14u, Tri::Yes } };
+        bool selfActive = false, playerActive = false, otherIdle = true;
+        for (const auto& c : Generate(run, mage, t).actions) {
+            if (c.family != Family::CastHeal) continue;
+            if (c.form == 0x12FCC && c.target == 0) selfActive = c.f.alreadyActive;
+            else if (c.form == 0x12FD2 && c.target == 0x14) playerActive = c.f.alreadyActive;
+            else if (c.f.alreadyActive) otherIdle = false;
+        }
+        Check(selfActive && playerActive && otherIdle,
+              "F1: a running self heal (target 0) and a running ally heal read already-active; other pairs do not");
+
         // The pure rules on their own.
         Prune::NatureIn n;
         n.kind = Prune::Kind::Buff; n.scriptCostliest = true;

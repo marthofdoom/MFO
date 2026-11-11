@@ -11,7 +11,7 @@
 //   * combat table only, gated on IsInCombat (§4.8: the tables never interleave)
 //     -- since 2026-09-21 gated on PARTY combat (player, any managed follower,
 //     or the [sense] foe tally), never on the follower's own flag: see the
-//     g_partyCombat doc in Scheduler.cpp for why (the Jesper freeze / the
+//     g_partyCombat doc in scheduler/Scheduler_internal.h for why (the Jesper freeze / the
 //     Cicero hold teardown)
 //   * NO jitter, NO urgency tiers, NO distance LOD, NO logistics table
 //

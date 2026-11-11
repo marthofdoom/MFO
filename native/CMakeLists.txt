@@ -81,6 +81,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Unanimated.cpp
     cast/SubstrateRoad.cpp
     Scheduler.cpp
+    scheduler/CombatScan.cpp
     Cooldowns.cpp
     iaus/Curves.cpp
     iaus/Catalogue.cpp

@@ -405,4 +405,20 @@ namespace MFO::Actuation {
         for (const auto id : done) g_selfCast.erase(id);
     }
 
+    // See Actuation.h (I4 review F1). The registry entry IS the direct self road's footprint.
+    bool SelfStreamLive(RE::FormID a_follower, RE::FormID a_spell) {
+        const auto it = g_selfCast.find(a_follower);
+        return it != g_selfCast.end() && it->second.spell == a_spell;
+    }
+
+    // See Actuation.h (I4 review F1). A self claim's target reads 0, so "0 or himself" both mean self.
+    bool HealClaimLive(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_recipient) {
+        if (a_follower == 0 || a_spell == 0) return false;
+        const RE::FormID want = a_recipient == a_follower ? 0 : a_recipient;
+        for (const std::int32_t h : { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight })
+            if (APMFBridge::GetHealCastSpell(a_follower, h) == a_spell && APMFBridge::GetHealCastTarget(a_follower, h) == want)
+                return true;
+        return false;
+    }
+
 }

@@ -184,5 +184,13 @@ namespace MFO::Iaus::Prune {
     [[nodiscard]] inline float AreaUnits(float a_areaFeet) {
         return (std::isfinite(a_areaFeet) && a_areaFeet > 0.0f) ? a_areaFeet * kUnitsPerFoot : 0.0f;
     }
+    // The radius the never-splash rule and foes-in-area read (I4 review F2): the LARGER of the EFIT area and the
+    // explosion radius of the spell's effect / projectile (BGSExplosion radius, already in units). The explosion
+    // is what actually deals the area damage of an aimed blast and can exceed the EFIT area; an under-sized
+    // radius would let a blast that reaches an ally pass as splash-safe. A broken read counts as 0, never as NaN.
+    [[nodiscard]] inline float BlastUnits(float a_areaFeet, float a_explosionUnits) {
+        const float ex = (std::isfinite(a_explosionUnits) && a_explosionUnits > 0.0f) ? a_explosionUnits : 0.0f;
+        return (std::max)(AreaUnits(a_areaFeet), ex);
+    }
 
 }
