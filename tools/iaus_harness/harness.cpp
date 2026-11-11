@@ -967,6 +967,63 @@ void SharedTauntPowerRules() {
 }
 
 namespace {
+    // card G2 Layer 1: the hold row and the blow from stealth (iaus/Generate.cpp Holds, Cons::HoldStill / BoostStrike).
+    void HideHold() {
+        std::printf("\n== G2 Layer 1: hold while hidden, strike the unaware foe in reach ==\n");
+        const Tuning& t = DefaultTuning();
+        ClassGate warrior; warrior.resolved = true; warrior.powerAttack = true;
+        const auto make = [&](float dist, Tri detects, bool sneaking) {
+            Snapshot s;
+            s.self = Actor("Thief", 0x14F01, 180, 200, 0, 0);
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, dist, 0) };
+            s.foes[0].detectsMe = detects;
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+            s.selfSneaking = sneaking;
+            return s;
+        };
+        const auto count = [](const Generated& g, Family f) {
+            int n = 0;
+            for (const Candidate& c : g.actions) if (c.family == f) ++n;
+            return n;
+        };
+        const auto score = [&](const Generated& g, Family f) {
+            for (const Candidate& c : g.actions)
+                if (c.family == f) return ScoreOne(c, Mind{}, Profile{}, t, 1, 0, nullptr);
+            return -1.0f;
+        };
+        {   // default Snapshot (not sneaking, detection unknown): nothing changes, no hold candidate
+            const Generated g = Generate(make(150, Tri::Unknown, false), warrior, t);
+            Check(count(g, Family::Sneak) == 0 && count(g, Family::Attack) == 1, "G2: not sneaking / detection unknown -> no hold row, the attack stays");
+        }
+        {   // hidden, foe far: hold stands, the attack on the unaware foe out of reach is not named
+            const Generated g = Generate(make(900, Tri::No, true), warrior, t);
+            Check(count(g, Family::Sneak) == 1 && count(g, Family::Attack) == 0, "G2: hidden and the foe out of reach -> the hold row, no chase");
+            Check(score(g, Family::Sneak) > 0.0f, "G2: the hold row scores above 0 while no blow is ready");
+        }
+        {   // hidden, foe in reach: the hold row is gated to 0 and the attack carries the strike boost
+            const Generated g = Generate(make(150, Tri::No, true), warrior, t);
+            const float hold = score(g, Family::Sneak), atk = score(g, Family::Attack);
+            const Generated plain = Generate(make(150, Tri::Yes, true), warrior, t);
+            Check(hold == 0.0f && atk > 0.0f, "G2: a blow from stealth is ready -> the hold row yields (score 0), the attack stands");
+            Check(count(plain, Family::Sneak) == 0 && atk > score(plain, Family::Attack), "G2: the attack on an unaware foe outscores the same attack on a foe that sees him");
+        }
+        {   // one foe sees him: seen, no hold
+            Snapshot s = make(900, Tri::No, true);
+            s.foes.push_back(Actor("Archer", 0x3B611, 100, 100, 700, 0));
+            s.foes[1].detectsMe = Tri::Yes;
+            const Generated g = Generate(s, warrior, t);
+            Check(count(g, Family::Sneak) == 0, "G2: one foe detects him -> no hold row");
+        }
+        {   // a caster posture never holds
+            Snapshot s = make(900, Tri::No, true);
+            s.drawn = PostureKind::None;
+            const Generated g = Generate(s, warrior, t);
+            Check(count(g, Family::Sneak) == 0, "G2: no weapon drawn -> no hold row");
+        }
+    }
+
     // marth Q93 keep-current-attack hold, review round 2: a melee swing reads the ENGINE ray, so its hold is bounded by the
     // engine ray's occlusion age, never by the own ray's. Diverges the two rays (own Visible, engine Occluded).
     void OcclusionHoldBound() {
@@ -1109,6 +1166,7 @@ int main() {
     ReachLearning();
     EngineFillRules();
     OcclusionHoldBound();
+    HideHold();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

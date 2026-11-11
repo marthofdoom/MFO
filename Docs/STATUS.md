@@ -1591,6 +1591,8 @@ census, LOG-ONLY (`[inherit-census]`, INI `bInheritPerkCensus`, default 1). Disc
 holds that are in no actor-value perk tree and classifies them; copies nothing to any follower. C0 commits
 `tools/entrypoint_census/` and the player-only entry-point table (ENGINE_NOTES 0.54). In-game test T1 pending.
 
+**2026-11-11, `feat/g2-hide-layer1` (NOT merged, NOT field-run, card G2 Layer 1):** hide-when-unseen with NO engine seat. The foe's own combat-group record of the follower is READ (`iaus/Hide.cpp`) into the IAUS gather; a Sneak-family hold row and a blow-from-stealth boost use it; passive `[stealth-probe]` lines (INI `[Debug] bStealthProbe`, default 0) log the follower's detection inputs (P1), each foe's view of him (P2) and every sneak hit with the Q87 per-weapon aggregate (P3). `bSneakInCombat` stays default OFF, so none of it acts in combat until the P1 field check flips it. In-game steps: `Docs/research/2026-11/class-build-plan.md` card G2.
+
 ### Next actions
 
 1. Cut the APMF release that carries `ed637fe` + `8daa27f` (both are already on APMF
