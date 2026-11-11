@@ -191,5 +191,13 @@ Needs BOTH DLLs from those branches. A follower with a shield (or any melee weap
 - PASS = STARTED and HIT lines with `bash=true` in the probe line, and it looks like a bash. Anything else: send both logs, change nothing.
 - Then turn both probe switches OFF again.
 
+### NEW: give ground, Harbinger ch.24 on a point (APMF `feat/approach-point` + MFO `feat/iaus-combat-move`, pending review; iaus-sim-v2.md 29.6)
+- NOT TESTABLE YET: the step is chosen from the follower's seconds to live, which the engine-side estimate fill (the next card) provides. Run this entry only on a build that has that fill.
+- Setup: `MFO.ini [Debug] bIausGroundRoad=1`, Sentient AI ON for an archer or a mage follower, a melee brute on him.
+- MFO.log: `[ground] <id> '<name>': step back from <foe> ... to x,y,z (R 150, h=..)`, then within 2.5 s `[ground] <id>: step back h=.. over: arrived (the area carried the bound N time(s) ...)`. N must be above 0.
+- APMF.log: `[ch.24] 0x.. combat-approach claim ENGAGED: close to within 150 of the POINT x,y,z`.
+- By eye: does he back off while still fighting, or turn his back and walk? Does he get stuck against a wall?
+- FAIL lines to send: `the engine never carried the bound`, `another ch.24 claim owns him`, `ENGINE DROPPED`.
+
 ### Saved question
 - Q61 (still OPEN): should scripts/console still make a "no drugs" follower drink? Default kept: allow.

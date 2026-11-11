@@ -782,6 +782,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleasePursuitLeash(id, "combat ended");   // ch.23: the in-combat leash ends with the fight
                 APMFBridge::ReleaseHealApproach(id, "combat ended", APMFBridge::kApproachAnyHand, true);   // ch.24: and the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "combat ended", true);   // ch.24 offense approach
+                APMFBridge::ReleaseGroundStep(id, "combat ended");              // ch.24 step back (a point claim)
                 g_reachHold.erase(id);   // fix/mfo-unreachable-flyer: and its reach hold (no line: the fight is over)
 
                 // v1.0.30: the cast-control latch dies with the fight. The [cast]
@@ -1116,6 +1117,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleasePursuitLeash(id, "retreating");   // ch.23: the retreat has its own road
                 APMFBridge::ReleaseHealApproach(id, "retreating");   // ch.24: so does the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "retreating");
+                APMFBridge::ReleaseGroundStep(id, "retreating");
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating
@@ -1310,6 +1312,7 @@ namespace MFO::Scheduler {
         // ([Debug] bCombatMoveProbe, default OFF: a bash every 6 s while his combat target is in melee reach).
         APMFBridge::PollCombatMove(id);
         APMFBridge::CombatMoveProbeTick(f);
+        APMFBridge::ServiceGroundStep(id);   // Harbinger ch.24 on a point: end a step back that is over (one outcome line)
         TableSource table(f, id);
         std::optional<IausSource> iaus;
         if (iausOn) iaus.emplace(f, id, iausRapport);

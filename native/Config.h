@@ -542,6 +542,10 @@ namespace MFO::Config {
     // follower on Sentient AI the Bash family is generated (Snapshot::bashRoad) while Harbinger serves ABI v38, and a
     // chosen bash is sent through apmf/CombatMove.cpp. Read by iaus/Candidates.cpp on the worker.
     inline std::atomic<bool>  g_iausBashRoad{ false };
+    // IAUS GIVE-GROUND ROAD ([Debug] bIausGroundRoad, INI-only, default OFF until the field run proves the road). 1 = for
+    // a follower on Sentient AI the GiveGround family is generated (Snapshot::groundRoad) while Harbinger serves ABI v39,
+    // and a chosen step back is filed through apmf/GroundApproach.cpp. Read by iaus/Candidates.cpp on the worker.
+    inline std::atomic<bool>  g_iausGroundRoad{ false };
     // IAUS AVAILABLE ([General] bIausAvailable, MCM "Combat & Casting", default ON; marth Q71). The global gate over
     // the per-follower IAUS combat switch (FollowerState::iausCombat, default OFF). 0 = no follower runs the IAUS
     // source whatever his bit says; the bit is KEPT (co-save untouched), so turning this back on restores each

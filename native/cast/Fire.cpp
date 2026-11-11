@@ -559,6 +559,20 @@ namespace MFO::Actuation {
             return { Result::Fired, std::format("bash requested -> {} (h={})", foe->GetName() ? foe->GetName() : "?", h) };
         }
 
+        if (op == Vocab::kActGiveGround) {
+            // GIVE GROUND (Harbinger ch.24 on a point, ABI v39). MFO declares the point (straight away from the chosen foe);
+            // the engine's own return-to-area movement walks him there while he keeps fighting. Transparent when no step can
+            // be filed (no road, a held-heal approach stands, a step already stands): nothing was mutated.
+            auto ptr = a_choice.target.get();
+            auto* foe = ptr.get();
+            if (!foe || foe->IsDead()) return { Result::FailedOther, "chosen foe no longer resolves", true };
+            if (!APMFBridge::GroundStepSupported())
+                return { Result::FailedOther, "no give-ground road (Harbinger absent or older than ABI 39)", true };
+            if (!APMFBridge::RequestGroundStep(a_follower, foe))
+                return { Result::FailedSkill, "give ground: no step filed (a heal approach or a step stands, or refused)", true };
+            return { Result::Fired, std::format("giving ground from {}", foe->GetName() ? foe->GetName() : "?") };
+        }
+
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
         // available here so a survival gambit ("Self HP < 30% -> Drink health
         // potion") can fire mid-fight. Logistics::DrinkPotion is cooldown-gated

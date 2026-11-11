@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v38, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v39, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 38;
+    inline constexpr std::uint32_t kABIVersion = 39;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -560,7 +560,8 @@ namespace APMF_API {
                                      //       an Actor or any loaded reference; the player is allowed;
                                      //       0 or the actor itself refused); fval = R, game units
                                      //       (REQUIRED, finite, > 0); ival = CombatApproachFlags.
-                                     //       form / pos are not read.
+                                     //       form is not read. pos is read ONLY with kApproach_Point
+                                     //       (ABI v39): X is then that world point and target must be 0.
                                      //
                                      //       WHAT IT DOES. The engine's combat tree runs two parallel
                                      //       halves, Movement and Action. The Movement half keeps the
@@ -781,6 +782,21 @@ namespace APMF_API {
                                     //   the actor stays within R of X (moving tactically inside it)
                                     //   until the client releases it or another end condition fires.
                                     //   Without it the claim ENDS on arrival (kApproachState_Arrived).
+        kApproach_Point = 1u << 1,  // ABI v39. The centre is a WORLD POINT, param.pos, instead of a reference:
+                                    //   "give ground to there". param.target MUST be 0 with this bit (so an APMF
+                                    //   older than v39, which does not know the bit, REFUSES the claim for its
+                                    //   missing target and never walks the actor to something else). The point is
+                                    //   in the actor's own cell space as of the first update after the claim
+                                    //   applies; an actor that later leaves that space ends the claim
+                                    //   (kApproachState_TargetLost). param.fval is R as before; (0,0,0) is a legal
+                                    //   point (the bit, not the value, says the field is in use). Everything else
+                                    //   of ch.24 is unchanged: the actor fights the whole way, a package's hold
+                                    //   position and a ch.23 leash still win, ARRIVAL ends the claim unless
+                                    //   kApproach_Hold, and a point the engine cannot path to ends it as
+                                    //   kApproachState_EngineDropped (the engine's own failed return, said out
+                                    //   loud). Harbinger does not test the point: choosing a reachable one is
+                                    //   the client's. GetCombatApproachState reports target 0 and the distance
+                                    //   to the point. REFUSED at the call: a non-finite pos, a non-zero target.
     };
 
     // ── Travel flags (kIntent_Travel's param.ival, ABI v10) ─────────────────────
@@ -1604,6 +1620,8 @@ namespace APMF_API {
     //                                  actor itself is refused; the player is allowed).
     //   fval   kIntent_CombatApproach  ABI v19: R, the radius in game units (REQUIRED, finite, > 0).
     //   ival   kIntent_CombatApproach  ABI v19: a CombatApproachFlags bitmask (0 = end on arrival).
+    //   pos    kIntent_CombatApproach  ABI v39: the centre, a WORLD POINT, read ONLY with kApproach_Point
+    //                                  (target must then be 0).
     //   ival   kIntent_CastGuard       ABI v21: a CastGuardFlags bitmask (kCastGuard_Bystanders: ABI v32).
     //                                  fval: the TTL in seconds.
     //                                  form / pos are not read.
@@ -2359,7 +2377,8 @@ namespace APMF_API {
                                           //   point within R of X. Resumes when the geometry allows it.
         kApproachState_Arrived     = 7,   // ENDED: the engine reports the actor inside R of X (no Hold flag)
         kApproachState_TargetLost  = 8,   // ENDED: X is gone, dead, disabled, unloaded, in another cell
-                                          //   space, or was never a loaded reference
+                                          //   space, or was never a loaded reference. A kApproach_Point
+                                          //   claim (ABI v39): the actor left the point's cell space
         kApproachState_CombatEnded = 9,   // ENDED: the actor left combat after the bound was applied
         kApproachState_EngineDropped = 10,// ENDED: the engine stopped updating the bound for 3 s while the
                                           //   actor was in combat -- its own path back to X failed (it

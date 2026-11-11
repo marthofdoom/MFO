@@ -1334,3 +1334,40 @@ power attack its full damage. Saved as a question, not changed here.
   (ch.7 Offense, plus the release) is its own Harbinger amendment and round. The lab gain to weigh it against is
   +0.43 J (26.1).
 - 1.7.104. Both rows verify there. The road was not read on that build, so it refuses by name.
+
+### 29.6 Design B built: give ground through ch.24 on a point (Harbinger `feat/approach-point`, ABI v39)
+
+Harbinger: one flag bit, `kApproach_Point`. The centre of the ch.24 bound is `param.pos` and `param.target` must be 0.
+The recon of 26.3 held: the seats only ever apply a point (`Entry::want`), so the change is the sweep's source of X,
+the end condition restated for a point (the actor left the point's cell space), and the call-time refusals. No new
+seat, no new address row, no struct, no slot. An older Harbinger refuses the claim for its missing target, so the
+bit is safe to send.
+
+MFO: `apmf/GroundApproach.cpp`. The point is 400 units straight away from the foe, R 150, the claim ends on arrival
+and never outlives 2.5 s. `Vocab::kActGiveGround` (IAUS-only), its executor in `cast/Fire.cpp`, `Family::GiveGround`
+mapped in `scheduler/IausSource.cpp`, `Snapshot::groundRoad` = Harbinger ABI 39 AND `[Debug] bIausGroundRoad`
+(default OFF).
+
+Two things 26.3 asked for that this round does NOT do, said plainly:
+- **No navmesh check of the point.** MFO declares the point by geometry only. A point the engine cannot path to makes
+  the engine's own return fail: Harbinger ends that as EngineDropped after 3 s, and MFO releases first at 2.5 s with
+  "the engine never carried the bound" when that is the case. Nothing is retried. A pre-check wants Harbinger's
+  space query (main thread only) and is open.
+- **No facing.** How he moves to a point behind him while a foe is on him is the engine's. He may turn and walk.
+  That is the first thing to look at in the field.
+
+**It cannot fire in the game yet.** GroundNeed reads the follower's seconds to live (`selfTtl`, `threatTtl`), which
+come from the damage estimates the engine side does not fill yet (the fill card, next). Until then the need is 0 and
+the family is never chosen: the road is built and inert. The same holds for half of Bash: BashNeed is 1.0 only for a
+foe that is charging a spell (`Combatant::casting`, unfilled), and 0.4 for a foe on him, which is filled today.
+
+To look at in game once the estimates are filled (`bIausGroundRoad=1`, Sentient AI on an archer or a mage with a brute on him): `[ground] ... step
+back from ...` then `[ground] ... over: arrived (the area carried the bound N time(s) ...)` with N above 0, and by eye
+whether the step reads as backing off or as turning his back.
+
+### 29.7 Lab numbers to hold the field against
+
+From 26.1 (40 fights, the same weight on every list): give ground + bash +0.39 J in the mean and ahead in all six
+runs, block + bash +0.31, all three +0.37. The oracle earns +30 to +46 U on the scenarios these roads were built for
+with the same actions, so the remaining gap is the TIMING inputs, which is lab work on the considerations.
+

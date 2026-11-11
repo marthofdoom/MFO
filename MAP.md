@@ -8974,6 +8974,18 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   tables need it. MFO must judge reach BEFORE asking: Harbinger measures the foe, it never aims. A ch.7 Offense deny of
   MFO's own on that follower refuses the bash (`OffenseDenied`): release the deny first, do not expect it to pass.
   `native/APMF_API.h` is the byte-shared mirror (md5 must equal Harbinger's).
+- **THE GIVE-GROUND ROAD (`feat/iaus-combat-move`, 2026-11-11; Harbinger ch.24 `kApproach_Point`, ABI v39; doc section 29.6).**
+  `apmf/GroundApproach.cpp` (NEW): `GroundStepSupported` (ABI >= 39), `RequestGroundStep(follower, foe)` (a ch.24 claim with
+  `kApproach_Point`, target 0, the point 400 units straight away from the foe, R 150, ends on arrival),
+  `ServiceGroundStep` (once per combat service in `scheduler/CombatScan.cpp`: releases after 2.5 s, on Harbinger's own
+  end, or when another ch.24 claim owns him; ONE outcome line), `ReleaseGroundStep` (combat end, retreat, dismissal,
+  the source toggle: beside every `ReleaseOffenseApproach`). `Vocab::kActGiveGround` (`act.give_ground`) is IAUS-ONLY like
+  `act.bash`. `Snapshot::groundRoad` = `[Debug] bIausGroundRoad` (default OFF) AND `GroundStepSupported()`. **What
+  breaks:** ONE ch.24 claim per follower: a held-heal approach outranks a step (never filed while it stands), and all
+  three MFO ch.24 clients file at `kOwnBasis`, so the EARLIER claim keeps the channel in Harbinger: a new ch.24 client
+  must say where it stands in that order. Never send a target with `kApproach_Point` (an older Harbinger would walk him
+  to that target instead). The point is not navmesh-checked by MFO: a point the engine cannot path to costs the step's
+  2.5 s and is logged, it is not retried.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

@@ -507,6 +507,7 @@ namespace MFO::Followers {
         APMFBridge::ReleaseAimClaim(id, "dismissed");   // ch.29 class miss budget (card H5)
         APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         APMFBridge::ReleaseOffenseApproach(id, "dismissed", true);   // ch.24 offense approach
+        APMFBridge::ReleaseGroundStep(id, "dismissed");              // ch.24 step back (a point claim)
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
         // serialized tail), but a dismissed follower's live heal-cast claim +
         // MFO-executed-cast bound must be released so neither outlives him. Both

@@ -1830,6 +1830,18 @@ namespace MFO::APMFBridge {
     std::uint32_t RequestBash(RE::FormID a_follower, RE::FormID a_foe, bool a_power);
     void          PollCombatMove(RE::FormID a_follower);
     void          CombatMoveProbeTick(RE::Actor* a_follower);
+    // ── GIVE GROUND (Harbinger ch.24 on a POINT, ABI v39, kApproach_Point) -- apmf/GroundApproach.cpp ─────────────────
+    // A short ch.24 claim whose centre is a point 400 units straight away from a_foe: the engine's own return-to-area
+    // movement walks the follower there while he keeps fighting. GroundStepSupported: APMF present AND abiVersion >= 39.
+    // RequestGroundStep: false when no road, a held-heal approach stands (it outranks a step), a step already stands, he
+    // is on top of the foe, or Harbinger refused at the call. ServiceGroundStep (once per combat service): releases the
+    // step when Harbinger ended it (arrived, dropped, ...), when another ch.24 claim owns him, or after 2.5 s, and writes
+    // ONE outcome line. ReleaseGroundStep: combat end / retreat / dismissal / the source toggle. Worker road; own leaf
+    // mutex, never g_mx; nothing is saved.
+    bool GroundStepSupported();
+    bool RequestGroundStep(RE::Actor* a_follower, RE::Actor* a_foe);
+    void ServiceGroundStep(RE::FormID a_follower);
+    void ReleaseGroundStep(RE::FormID a_follower, const char* a_why);
     // ── TOWN ERRAND WORK (TOWN PHASE 2 R7: inn + temple) -- apmf/ErrandWork.cpp ───────────────────────────────────────
     // The ch.9 package-offer claim of an errand's WORK (Forms.h MFO_ErrandActivate / Sandbox / Eat / Sleep, one record per kind
     // per follower slot): the shrine Activate, the inn's Sandbox (sit / stay), the Eat meal, the Sleep bed. MFO declares the work and its
