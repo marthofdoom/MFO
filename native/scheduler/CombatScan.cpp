@@ -700,8 +700,8 @@ namespace MFO::Scheduler {
         // IAUS CARD I6 -- THE COMBAT SOURCE. A follower whose FLWR bit 3 (FollowerState::iausCombat) is set is
         // served by the IAUS source below instead of his gambit table; with the bit clear NOTHING here differs
         // from the table-only scan. The toggle EDGE (either direction, the MFO master switch included) stands the
-        // running decision down first, on this worker, so no lock, claim or latch of the old source survives it.
-        const bool iausOn = it->second.mfoEnabled && it->second.iausCombat;
+        // running decision down first (bIausAvailable going 0 is the same edge), on this worker, so no lock, claim or latch of the old source survives it.
+        const bool iausOn = it->second.mfoEnabled && it->second.iausCombat && Config::g_iausAvailable.load();   // bIausAvailable: global gate, the bit is kept
         const std::uint8_t iausRapport = it->second.rank;
         IausToggleEdge(f, id, iausOn);
         if (!it->second.mfoEnabled) {

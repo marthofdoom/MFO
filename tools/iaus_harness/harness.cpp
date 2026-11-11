@@ -686,6 +686,32 @@ namespace {
         bool pairsOk = pairs.size() <= 6;
         for (const auto& p : pairs) if (p.spell != 0x12FCD && p.spell != 0x4DEE8) pairsOk = false;
         Check(pairsOk && !pairs.empty(), "G10: at most 6 (spell, target) pairs, offense / control only");
+        {   // D1: a refused pair stays on the ask list although the next decision does not rank it
+            const SpellTarget A{ 0x100, 0x200 }, B{ 0x101, 0x200 }, C{ 0x102, 0x201 };
+            std::vector<AskedPair> asked = NextAskList({}, std::vector<SpellTarget>{ A, B }, 10.0, 6.0);
+            Check(asked.size() == 2 && !asked[0].refused && !asked[1].refused, "G10 ask list: a new pair starts unanswered");
+            asked[0].refused = true; asked[0].lastNo = 10.5;   // Gather: A answered No, B answered Yes
+            asked = NextAskList(asked, std::vector<SpellTarget>{ B }, 10.6, 6.0);   // the decision ranks only B (A is vetoed)
+            Check(asked.size() == 2 && asked[0].pair == B && asked[1].pair == A && asked[1].refused,
+                  "G10 ask list: a pair answered No stays on the list when the decision stops ranking it (D1)");
+            asked[1].lastNo = 12.0;   // still No on the next lap: re-stamped
+            asked = NextAskList(asked, std::vector<SpellTarget>{ B, C }, 12.1, 6.0);
+            Check(asked.size() == 3 && asked[2].pair == A && asked[2].lastNo == 12.0, "G10 ask list: a standing refusal is carried with its stamp");
+            asked = NextAskList(asked, std::vector<SpellTarget>{ A, B }, 13.0, 6.0);   // ranked again (an Unknown lap): the stamp survives
+            Check(asked.size() == 2 && asked[0].pair == A && asked[0].refused && asked[0].lastNo == 12.0, "G10 ask list: a refused pair that is ranked again keeps its refusal");
+            asked[0].refused = false;   // Gather: A now answers Yes
+            asked = NextAskList(asked, std::vector<SpellTarget>{ B }, 13.1, 6.0);
+            Check(asked.size() == 1 && asked[0].pair == B, "G10 ask list: a Yes clears the refusal");
+            std::vector<AskedPair> old{ { A, true, 1.0 } };
+            Check(NextAskList(old, std::vector<SpellTarget>{}, 7.5, 6.0).empty() && NextAskList(old, std::vector<SpellTarget>{}, 6.9, 6.0).size() == 1,
+                  "G10 ask list: a refusal lapses once its last No is older than the keep time, not before");
+            std::vector<AskedPair> many; for (std::uint32_t i = 0; i < 40; ++i) many.push_back({ { 0x300 + i, 0x200 }, true, 20.0 + 0.01 * i });
+            const auto capped = NextAskList(many, std::vector<SpellTarget>{ A, B }, 21.0, 6.0, 8);
+            Check(capped.size() == 8 && capped[0].pair == A && capped[1].pair == B && capped[2].pair.spell == 0x300 + 39,
+                  "G10 ask list: capped, the top pairs first, then the newest refusals");
+            const AskedPair nan{ A, true, NAN };
+            Check(NextAskList(std::vector<AskedPair>{ nan }, std::vector<SpellTarget>{}, 5.0, 6.0).empty(), "G10 ask list: a NaN stamp is not a live refusal");
+        }
 
         // A broken read must not become a broken fact, and an unreadable follower generates nothing.
         Snapshot bad = MageFight();

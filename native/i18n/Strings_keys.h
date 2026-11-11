@@ -91,6 +91,7 @@ MFO_STR(Gb_IausBtn,         "IAUS combat: {1}", 1)   // {1}=On / Off. The per-fo
 MFO_STR(Gb_IausOn,          "On", 0)
 MFO_STR(Gb_IausOff,         "Off", 0)
 MFO_STR(Gb_TipIaus,         "On: this follower scores every action he could take in a fight and picks the best one, instead of walking his combat gambits in order. His combat gambits are not used while this is on. Off by default. The switch is saved with the follower.", 0)
+MFO_STR(Gb_TipIausOff,      "IAUS combat is turned off for all followers in the MCM (Combat & Casting). His own choice is kept and comes back when it is turned on again.", 0)
 MFO_STR(Gb_IausThinkTitle,  "Thinking", 0)   // header of the IAUS decision panel
 MFO_STR(Gb_IausThinkNone,   "No decision yet. This fills in during a fight.", 0)
 MFO_STR(Gb_IausThinkStale,  "Last decision, {1} s ago (not in a fight now)", 1)

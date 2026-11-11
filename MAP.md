@@ -2408,6 +2408,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
     meet through the logistics walk (table-only, rank = its row index), which never casts while `castSeen` holds the facet
     and, under IAUS, also not while a heal stands (`castSeen || (iaus && healHeld)`, heal-to-full). Same-lap IAUS candidates
     share one rank (`RankOf(proposedEpoch)`): the one that took the hand first keeps it until it fires or its lock lapses.
+    **`bIausAvailable` (marth Q71, `[General]`, MCM Combat & Casting, `Config::g_iausAvailable`, default ON) is ANDed into `iausOn` in `Tick` (`CombatScan.cpp`, the `IausToggleEdge` site), so switching it off stands a running follower down through the existing edge; the per-follower bit is kept (no co-save change). `Board_FieldKit.cpp` greys `###iausbtn` (tooltip `Gb_TipIausOff`) and skips `DrawIausThinking` while it is off.**
     `bIausExplain` (card I7, INI-only `[Debug]`, `Config::g_iausExplain`, default OFF) now gates the `[iaus-why]` lines (the dtor's
     `Engine::Log` call). NOT wired: a staff equip road (a winning staff posture issues no order and says so).
   - **`native/Scheduler.cpp`** = the service helpers `Tick` calls, now external linkage with prototypes in the internal header:
@@ -8969,8 +8970,13 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
     flight across a Clear is dropped). Cadence constants `:30-32` (refresh 5 s, re-ask 3 s, trust 15 s). `[spellbook]` log lines.
   - `iaus/Candidates.h/.cpp` — the engine GATHER, worker: `Gather` `:99` (the Evaluator's own reads: pools, the combat-group walk,
     `g_active`, targets, race keyword, resists, Sightline cache, `Targeting::Current`, `CombatSense`, `Logistics::IsUnholy`; the
-    book through `SpellBook::Read`; G10 through `Actuation::WillWork` for last lap's top-6 pairs only), `Build` `:271` (Gather +
-    GateFor + Generate), `NoteDecision` `:279`, `CombatEnded` / `Forget` / `Clear` `:290`, the fight clock (`kFightGapSec` `:42`).
+    book through `SpellBook::Read`; G10 through `Actuation::WillWork` for the ASK LIST: last lap's top-6 pairs plus every pair
+    still refused), `Build` `:292` (Gather + GateFor + Generate), `NoteDecision` `:300`, `CombatEnded` / `Forget` / `Clear` `:305`,
+    the fight clock (`kFightGapSec` `:42`). **G10 ask list (`fix/iaus-d1-willwork`, sim finding D1):** `Generate.h` `AskedPair` /
+    `NextAskList` (pure, `Generate.cpp:371`) keeps a pair answered No on the list while its last No is younger than
+    `kRefusedKeepSec` (`Candidates.cpp:51`, 6 s = cast/WillWork's trust window); Gather re-stamps the No each lap. Before, a
+    refused pair was vetoed, so not ranked, so not asked, so Unknown (which passes) every second lap. Do not shorten the keep
+    time under the lap gap (133 ms x party), and never turn an Unknown answer into a veto (G10: Unknown passes).
   - **I4 review fix round (`fix/iaus-i4-review`, 2026-11-10; F1 + F2, both SEV-3).** F1: the heal `alreadyActive` fact now
     sees EVERY heal road. `Gather` fills `Snapshot::liveStreams` from `Actuation::SelfStreamLive` (new, `cast/DirectSelf.cpp`:
     the `g_selfCast` registry, where a self heal's direct stream lives), `Actuation::TargetStreamLive` (`g_targetCast`) and
