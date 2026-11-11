@@ -1434,6 +1434,15 @@ namespace MFO::Board {
                 continue;
             }
 
+            // IAUS card I7: the per-follower "IAUS combat" switch (FLWR bit 3). A per-FOLLOWER edit keyed on c.fid like
+            // the two above, applied here on the ApplyEdits worker that owns g_followers (#4). It ONLY flips the bool:
+            // the toggle EDGE (stand the running decision down, either direction) is detected by the scan itself
+            // (Scheduler::IausToggleEdge, worker), so nothing from the old source survives (design 1.3).
+            if (c.kind == EditKind::SetIausCombat) {
+                it->second.iausCombat = (c.param > 0.5f);
+                continue;
+            }
+
             // Resolve by IDENTITY, not index (#31). A command whose rule is
             // gone -- deleted, reseeded -- is dropped, never misapplied.
             int i = -1;
@@ -1738,6 +1747,7 @@ namespace MFO::Board {
                 r.combatClassOverride = it->second.combatClassOverride;
                 r.mfoEnabled     = it->second.mfoEnabled;   // T#78
                 r.helmetOverride = it->second.helmetOverride;   // 86e3phy41
+                r.iausCombat     = it->second.iausCombat;       // IAUS card I7
                 r.combatRules    = static_cast<std::uint8_t>(it->second.combat().size());
                 r.logisticsRules = static_cast<std::uint8_t>(it->second.logistics().size());
                 r.combatSlots    = SlotsForRank(it->second.rank, Table::Combat);
@@ -1865,6 +1875,7 @@ namespace MFO::Board {
             r.combatClassOverride = st.combatClassOverride;
             r.mfoEnabled     = st.mfoEnabled;   // T#78
             r.helmetOverride = st.helmetOverride;   // 86e3phy41
+            r.iausCombat     = st.iausCombat;       // IAUS card I7
             r.combatRules    = static_cast<std::uint8_t>(st.combat().size());
             r.logisticsRules = static_cast<std::uint8_t>(st.logistics().size());
             r.combatSlots    = SlotsForRank(st.rank, Table::Combat);

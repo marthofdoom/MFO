@@ -2890,3 +2890,9 @@ If a beneficial cast's handle dies between MakeChoice and Fire, it falls to Play
 The in-image check relies on Precision's interfaces being append-only. A future Precision that grants V2 with a different slot 8 would still pass; the call is probe-only today. Optionally log the slot offset against +0x117fe0 (it already prints it).
 
 Closed in code by I6 (merge of feat/iaus-i6-full): MFO-B651 (Q67 no re-anchor), B657 (Q63 tree-OFF gate), B658 (Invalidate after Fired), B661 (explosion-only area), B667 (decided, MAP §2 "THE IAUS SOURCE"); B639 marshalling done (IausSweep / IausToggleEdge on the worker).
+
+### MFO-B673 (SEV-4, OPEN, Board_Iaus.cpp kStaleSec, against cad75de, Opus review of I7, F1)
+The 3 s stale threshold is a flat expiry, not sized from the cadence (principle 9). A follower's readout refreshes once per own service = N x 133 ms (N = active roster incl. summons, Scheduler_internal.h:303). At about 23+ actors a live fight shows "Last decision, N s ago (not in a fight now)". Display-only. Fix: ~3 laps x N x 133 ms with a 3 s floor, or an in-combat flag in the Readout.
+
+### MFO-B674 (SEV-5, OPEN, iaus Explain/MakeReadout, against cad75de, F2)
+The panel row shows s.score from Decide, but the breakdown terms come from FormatWhy -> ScoreOne with fixed extras (1.0, 0.0) on the post-Decide Mind, so momentum/roll folded into s.score is not in the terms. The [iaus-why] line has the same property. Note or fix with I8's profile pass.

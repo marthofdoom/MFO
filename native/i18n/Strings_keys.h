@@ -87,6 +87,18 @@ MFO_STR(Gb_HelmDefaultOn,   "Default (on)", 0)   // follows the MCM "Wear helmet
 MFO_STR(Gb_HelmDefaultOff,  "Default (off)", 0)  // follows the MCM "Wear helmets" switch, which is off
 MFO_STR(Gb_HelmWear,        "Wear", 0)           // this follower always wears helmets
 MFO_STR(Gb_HelmNever,       "Never", 0)          // this follower never wears helmets
+MFO_STR(Gb_IausBtn,         "IAUS combat: {1}", 1)   // {1}=On / Off. The per-follower IAUS combat switch (Gambits tab, next to Helmets)
+MFO_STR(Gb_IausOn,          "On", 0)
+MFO_STR(Gb_IausOff,         "Off", 0)
+MFO_STR(Gb_TipIaus,         "On: this follower scores every action he could take in a fight and picks the best one, instead of walking his combat gambits in order. His combat gambits are not used while this is on. Off by default. The switch is saved with the follower.", 0)
+MFO_STR(Gb_IausThinkTitle,  "Thinking", 0)   // header of the IAUS decision panel
+MFO_STR(Gb_IausThinkNone,   "No decision yet. This fills in during a fight.", 0)
+MFO_STR(Gb_IausThinkStale,  "Last decision, {1} s ago (not in a fight now)", 1)
+MFO_STR(Gb_IausThinkNote,   "His combat gambits below are not used while IAUS combat is on.", 0)
+MFO_STR(Gb_IausThinkDoing,  "Doing: {1}", 1)   // {1}=the winning action
+MFO_STR(Gb_IausThinkHold,   "Keeping his current action: {1}", 1)   // {1}=the action he is committed to
+MFO_STR(Gb_IausThinkIdle,   "Nothing scores above {1}, so he is left to his own AI.", 1)   // {1}=the act floor
+MFO_STR(Gb_IausThinkRank,   "Rapport rank {1}, {2} s on this action", 2)
 MFO_STR(Gb_When,            "When (target / condition)", 0)   // column header and list title
 MFO_STR(Gb_Value,           "Value", 0)    // column header and list title
 MFO_STR(Gb_Do,              "Do (action)", 0)   // column header and list title

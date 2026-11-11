@@ -530,6 +530,10 @@ namespace MFO::Config {
     // (SKSE main thread) every castable SPEL is classified and the per-(shape, predicted row, two-handed) counts are
     // written as `[shape-census]` lines. LOG-ONLY: no road reads the result. See cast/Archetype.cpp RunSpellShapeCensus.
     inline std::atomic<bool>  g_spellShapeCensus{ true };
+    // IAUS EXPLAIN ([Debug] bIausExplain, INI-only, default OFF; IAUS card I7). 1 = the combat IAUS source writes
+    // one `[iaus-why]` line per top-3 candidate (every consideration's input and value) after each `[iaus]` line.
+    // LOG-ONLY: the board's Thinking panel does not read it. Read by scheduler/IausSource.cpp on the worker.
+    inline std::atomic<bool>  g_iausExplain{ false };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };

@@ -155,7 +155,7 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   older DLL read a switched-off follower as ON; giving bit 4 a meaning needs its own card (a save written by a
   DLL that reads it must still load here as "ignored"); a NEW reader of this byte must go through `Decode`, never
   re-derive the bits. A follower saved with MFO off for him, or a round trip through an older DLL, drops the
-  toggle (he comes back on gambits). **NOBODY READS `iausCombat` YET** (I6 consumes it, I7 is the board control);
+  toggle (he comes back on gambits). **`iausCombat` is read by the scan (I6) and WRITTEN by the board's "IAUS combat" button (I7, `EditKind::SetIausCombat`, `Board.cpp` ApplyEdits, worker domain, no co-save change);**
   the G9 v6 row (`GambitWire`) and MCLS (`classes/State.cpp`) do not touch this byte. Note:
   `Docs/research/2026-11/iaus-i5-toggle.md`.
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
@@ -2408,8 +2408,8 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
     meet through the logistics walk (table-only, rank = its row index), which never casts while `castSeen` holds the facet
     and, under IAUS, also not while a heal stands (`castSeen || (iaus && healHeld)`, heal-to-full). Same-lap IAUS candidates
     share one rank (`RankOf(proposedEpoch)`): the one that took the hand first keeps it until it fires or its lock lapses.
-    NOT wired: `bIausExplain` (Config key, card I7), a staff equip road (a winning staff posture issues no order and says so),
-    any writer of `iausCombat` (card I7's board toggle).
+    `bIausExplain` (card I7, INI-only `[Debug]`, `Config::g_iausExplain`, default OFF) now gates the `[iaus-why]` lines (the dtor's
+    `Engine::Log` call). NOT wired: a staff equip road (a winning staff posture issues no order and says so).
   - **`native/Scheduler.cpp`** = the service helpers `Tick` calls, now external linkage with prototypes in the internal header:
     `StallProbe` `:36`, `DeadTgtEnd` `:115`, `DeadTgtService` `:125`, `StartRetreatCooldown` `:160`, `ServiceRetreat` `:178`,
     `ServiceLeashWithReachHold` `:405`; the still file-local `[deadtgt]` state (`g_deadTgt` `:81`, `DeadTgtReason` `:85`,
@@ -6119,6 +6119,8 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
 ### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
+
+**IAUS CARD I7 (`feat/iaus-i7-board`; note `Docs/research/2026-11/iaus-i7.md`).** Gambits tab header: a third SmallButton `###iausbtn` after Helmets (`Board_FieldKit.cpp`, greyed on the Logistics page) queues `EditKind::SetIausCombat` (`Board_internal.h`); `ApplyEdits` (`Board.cpp`) flips `FollowerState::iausCombat` on the worker that owns `g_followers` (the FIRST writer of FLWR bit 3; the toggle EDGE is `Scheduler::IausToggleEdge`, not here). `FollowerRow::iausCombat` (`Board.h`) is the snapshot mirror (both PublishSnapshot fill sites). The "Thinking" panel is `DrawIausThinking` (`Board_Iaus.cpp`, new TU), drawn under the page separator on the Combat page when the follower's switch is on: plain text, no focusable. It reads `Iaus::Engine::ReadReadout(id, out, &age)` (the worker publishes a `Readout` copy per IAUS service lap under a leaf mutex; `Forget` erases it, so the toggle edge clears the panel); `Readout::Row::why` (the `FormatWhy` body, filled by `MakeReadout`, optional `Profile*` for card I8) carries the consideration breakdown. A readout older than 3 s is labelled stale. WHAT BREAKS: `MakeReadout` scores 3 extra `FormatWhy` strings per publish (worker, per lap); I8 must pass its profile to `MakeReadout` (`scheduler/IausSource.cpp`) or the panel's breakdown uses the uncustomised catalogue.
 **Rule cooldown cell (card G9, 2026-11-09, marth Q7 "power-attack rows only for now"):** `Board_internal.h` `CooldownExposed(actOp)`
 (= `act.power_attack`) decides where it shows. On such a row the SPELL column cell (`Board_FieldKit.cpp`, the SPELL block) is
 "Cooldown N s" + `listPopup("##cooldown")` (0..60 s presets; d-pad / [A] / [B] like the VALUE cell) queueing `EditKind::SetCooldown`
@@ -8942,6 +8944,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   last lap; true on a change = the toggle edge), `Dismiss` `:191` (Forget + drop the note), `Paced` `:197` (log pacing).
 - Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
 - Offline combat SIMULATOR v2 (host-only, never in the DLL; `feat/iaus-sim-v2`): `tools/iaus_sim/run.sh [--list <list>.sim.json] [--scenario all --oracle] [--mode table|iaus] [--set / --opt]` drives the real `Generate` + `Decide` inside a 30 Hz world built from the installed list's own records (`tools/list_balance/extract_world.py` -> `compile_world.py` -> `~/.cache/mfo-list-balance/`, test input only, never committed, native/ never reads it), with all 35 classes from the real `classes/ClassTable.cpp`, a rollout oracle, 17 intelligence scenarios, table mode and one results JSON per run. Everything (record layouts, the model table with proof levels, calibration, the gap ledger, phase 2, class packages and default rows) is in `Docs/research/2026-11/iaus-sim-v2.md`. After ANY change to the pure layers run it and `tools/iaus_harness/run.sh`.
+- IAUS sim DASHBOARD (host-only, stdlib curses, never in the DLL): `tools/iaus_dash/dash.py [--runs DIR] [--report [--run ID] [--compare ID]] [--json-check FILE]` views the simulator's per-run JSON (schema v1) per class, with rulings, scenario gaps, gap ledger and trends; `tools/iaus_dash/test.sh` checks the non-interactive modes on synthetic fixtures. README there has the keys + schema.
   `native/iaus/` except Engine.*.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE

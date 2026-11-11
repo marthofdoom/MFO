@@ -461,7 +461,7 @@ namespace MFO::Iaus {
 
     // The board's "Thinking" readout (I7 renders it). Strings are COPIED so it can cross threads.
     struct Readout {
-        struct Row { std::string label; float score = 0.0f; };
+        struct Row { std::string label; float score = 0.0f; std::string why; };   // why = the FormatWhy body, no tag
         std::array<Row, 3> top{};
         std::uint8_t topN = 0;
         std::string  pick;
@@ -471,6 +471,6 @@ namespace MFO::Iaus {
         Verdict      verdict = Verdict::Idle;
     };
     [[nodiscard]] Readout MakeReadout(const Decision& a_d, std::span<const Candidate> a_cands, const Mind& a_m,
-                                      const Tuning& a_t, double a_now);
+                                      const Tuning& a_t, double a_now, const Profile* a_p = nullptr);
 
 }
