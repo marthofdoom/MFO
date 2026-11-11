@@ -107,6 +107,7 @@ namespace MFO::Iaus {
         RangeTaunt,         // the taunt's reach: inside it every distance is the same (a shout, not an aimed cast)
         MortalTaunt,        // multiplier (<= 1): a follower who dies for good does not pull a foe he cannot outlast
         BoostMortalDanger,  // multiplier: a follower who dies for good backs off / drinks sooner
+        PostureTrade,       // the melee category: seconds he lives at the damage coming in (do not draw steel to trade with a brute)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -200,6 +201,9 @@ namespace MFO::Iaus {
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
         float rowlessTauntCooldownSec = 30.0f;   // ruling Q69 (marth 2026-11-11): a taunt has a 30 s cooldown
+        // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
+        // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
+        float kiteDistance = 0.0f;
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -310,6 +314,9 @@ namespace MFO::Iaus {
         float controlSec = 0.0f;          // control cast: seconds the effect holds the foe (SpellEntry::controlSec); 0 = not measured
         float castsWanted = -1.0f;        // magicka potion: casts of his best spell the fight still asks for; < 0 = unknown
         bool  mortal = false;             // Snapshot::mortal
+        float meleeThreatDist = kInf;     // retreat: distance of the nearest foe that targets him and has to close to hurt; +inf = none
+        bool  rangedDrawn = false;        // retreat: a bow, crossbow or staff is in his hands (he fights at range)
+        float threatTtl = kInf;           // retreat: seconds he would live with every foe that targets him on him (Estimate::ThreatOn)
     };
 
     struct Candidate {

@@ -121,6 +121,7 @@ namespace MFO::Iaus {
         bool  fleeing = false;
         bool  blocking = false;
         bool  caster = false;               // a spell in either hand right now
+        bool  rangedWeapon = false;         // a bow or crossbow in hand right now (it does not have to close to hurt)
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
         bool  taunted = false;              // already under this follower's taunt

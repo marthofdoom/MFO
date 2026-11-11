@@ -39,11 +39,37 @@ namespace MFO::Iaus::Estimate {
         return hit * rate * (1.0f - armor);
     }
 
-    // Health per second a_who is losing: what the foes that target him deal, and never less than what was observed.
-    [[nodiscard]] inline float IncomingOn(const Snapshot& a_s, const Combatant& a_who) {
+    // A foe that has to close to hurt (no bow, no spell in hand) counts as hitting a_who only inside this distance of
+    // him: two swing reaches, about one second of closing. A brute that targets him from 15 m away is a THREAT (ThreatOn),
+    // not damage coming in.
+    [[nodiscard]] inline float StrikeDistance(const Snapshot& a_s) {
+        return 2.0f * (std::max)(150.0f, std::isfinite(a_s.meleeReach) ? a_s.meleeReach : 200.0f);
+    }
+    [[nodiscard]] inline bool MustClose(const Combatant& a_f) { return !a_f.rangedWeapon && !a_f.caster && !a_f.hitIsMagic; }
+    [[nodiscard]] inline float Apart(const Combatant& a_a, const Combatant& a_b) {
+        const float dx = a_a.x - a_b.x, dy = a_a.y - a_b.y, dz = a_a.z - a_b.z;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return std::isfinite(d) ? d : 1.0e9f;
+    }
+
+    // Health per second a_who would be losing with every foe that targets him ON him (whatever the distance).
+    [[nodiscard]] inline float ThreatOn(const Snapshot& a_s, const Combatant& a_who) {
         float sum = 0.0f;
         for (const Combatant& f : a_s.foes)
             if (f.targetId != 0 && f.targetId == a_who.id && !f.paralysed && !f.fleeing) sum += Dps(f, a_who);
+        return sum;
+    }
+
+    // Health per second a_who is losing NOW: the foes that target him and can reach him, and never less than what was
+    // observed.
+    [[nodiscard]] inline float IncomingOn(const Snapshot& a_s, const Combatant& a_who) {
+        float sum = 0.0f;
+        const float strike = StrikeDistance(a_s);
+        for (const Combatant& f : a_s.foes) {
+            if (f.targetId == 0 || f.targetId != a_who.id || f.paralysed || f.fleeing) continue;
+            if (MustClose(f) && Apart(f, a_who) > strike) continue;
+            sum += Dps(f, a_who);
+        }
         return (std::max)(sum, Pos(a_who.lossPerSec));
     }
 

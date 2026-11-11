@@ -135,6 +135,11 @@ namespace MFO::Iaus {
             if (x.g.disengage && x.foeCount > 0) {
                 Candidate c = x.Make(Family::Retreat, nullptr);
                 c.f.disengageClass = true;
+                c.f.rangedDrawn = ranged;
+                c.f.threatTtl = Estimate::Ttl(s.self.hp, Estimate::ThreatOn(s, s.self));
+                for (const Combatant& f : s.foes)   // the nearest foe on him that has to close to hurt him
+                    if (f.targetId != 0 && f.targetId == s.self.id && !f.caster && !f.rangedWeapon && !f.paralysed && !f.fleeing && std::isfinite(f.dist))
+                        c.f.meleeThreatDist = (std::min)(c.f.meleeThreatDist, (std::max)(0.0f, f.dist));
                 x.Push(std::move(c));
             }
         }

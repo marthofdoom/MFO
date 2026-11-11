@@ -70,7 +70,7 @@ namespace MFO::Iaus {
             "caster", "downed", "outnumbered",
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
-            "control_worth", "magicka_buys", "range", "mortal", "mortal_danger",
+            "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -111,7 +111,7 @@ namespace MFO::Iaus {
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
         return !std::isnan(f.sinceFired) && !std::isnan(f.selfTtl) && !std::isnan(f.tauntTtl) && !std::isnan(f.playerTtl) &&
-               !std::isnan(f.recipientTtl);
+               !std::isnan(f.recipientTtl) && !std::isnan(f.meleeThreatDist) && !std::isnan(f.threatTtl);
     }
 
     float EmergencyLevel(float worst, const Tuning& t) {
@@ -324,6 +324,10 @@ namespace MFO::Iaus {
             }
             // mortal danger (retreat, health potion): x1.5 for a follower who dies for good. His life is not a resource.
             at(Cons::BoostMortalDanger) = Bin(1.0f, 1.5f);
+            // trade (the melee weapon category): x = seconds he lives at the damage coming in / 10. Ten seconds and more
+            // 1.0, two seconds 0.44: a follower who cannot trade blows does not put the bow away because the foe came near.
+            // Not applicable while nothing is known to be hitting him.
+            at(Cons::PostureTrade) = Lin(0.7f, 0.3f);
             // control worth: x = min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). Ten seconds on a fresh foe
             // 1.0; a 2 s stagger-length hold 0.36; a long hold on a foe at a quarter health 0.66. A hold is worth the blows
             // it stops and the free blows it gives, and both need the foe to live through it. Never 0.
@@ -384,6 +388,7 @@ namespace MFO::Iaus {
             constexpr U kPosture[] = {
                 { Cons::PostureRanged, 1 }, { Cons::PostureMelee, 1 }, { Cons::Ammo, 1 }, { Cons::StaffCharge, 1 },
                 { Cons::MeleeReach, 1 }, { Cons::Unholy, 1 }, { Cons::MundaneVsUnholy, 1 }, { Cons::ClassWeapon, 1 },
+                { Cons::PostureTrade, 1 },
             };
             constexpr U kOffense[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -604,7 +609,13 @@ namespace MFO::Iaus {
                 const float hp = Clamp(f.selfHp, 0.0f, 1.0f);
                 const float byHp = hp <= 0.30f ? 1.0f - hp * hp * hp : 0.0f;
                 const float byTtl = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f;
-                return (std::max)(byHp, byTtl);
+                // KITE: he fights at range and a foe that has to close is nearly on him. Distance alone is not danger (a
+                // skeever is no reason to stop shooting): it counts by how little he could afford the trade, 0 when he would
+                // live 20 s and more with the foes that target him on him, all of it under 8 s. Unknown = no kite.
+                float byKite = 0.0f;
+                if (t.kiteDistance > 0.0f && f.rangedDrawn && std::isfinite(f.meleeThreatDist) && std::isfinite(f.threatTtl))
+                    byKite = Clamp(1.0f - f.meleeThreatDist / t.kiteDistance, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f);
+                return (std::max)((std::max)(byHp, byTtl), byKite);
             }
             case Cons::HealSize:
                 if (!(f.expHeal > 0.0f)) return In::Off();
@@ -617,6 +628,9 @@ namespace MFO::Iaus {
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             case Cons::HealClaimed:         return B(f.recipientBeingHealed);
             case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::PostureTrade:
+                if (!melee || !std::isfinite(f.selfTtl)) return In::Off();
+                return Clamp(f.selfTtl / 10.0f, 0.0f, 1.0f);
             case Cons::MortalTaunt:
                 if (!f.mortal || !std::isfinite(f.tauntTtl)) return In::Off();
                 return Clamp(f.tauntTtl / 12.0f, 0.0f, 1.0f);
