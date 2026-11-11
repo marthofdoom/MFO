@@ -133,6 +133,9 @@ namespace MFO::Iaus {
         bool  unholy = false;               // what the load order's silver hits
         bool  taunted = false;              // already under a live taunt (any taunter)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
+        // G2 Layer 1 (iaus/Hide.h): the FOE's combat group's record of the follower. Yes = a live, positive detect level;
+        // No = absent / lost / detect level <= 0 (hidden from this foe); Unknown = the foe has no group (and every actor that is not a foe).
+        Tri   detectsMe = Tri::Unknown;
         // Estimates (iaus/Estimate.h). 0 = not measured, which every reader treats as unknown.
         float hit = 0.0f;                   // physical damage of ONE weapon hit before the target's armor
         float hitsPerSec = 0.0f;            // the engine's rate model: weapon speed x fCombatDPS(Melee|Bow)SpeedMult
@@ -166,6 +169,7 @@ namespace MFO::Iaus {
                                     // inside the chase cap). The top-5 cut is the generator's (pure).
         std::vector<Combatant> allies;   // the player (isPlayer) and the active followers other than the follower
         std::uint32_t playerId = 0;
+        bool  selfSneaking = false;   // G2 Layer 1: Actor::IsSneaking() on the follower this lap (the stance, however it got held)
         std::uint32_t currentTargetId = 0;   // Targeting::Current, else his engine combat target
         std::uint32_t playerTargetId = 0;    // the player's combat target (design fact 8)
 

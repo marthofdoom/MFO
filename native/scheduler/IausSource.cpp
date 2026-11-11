@@ -254,7 +254,9 @@ namespace MFO::Scheduler {
             }
             break;
         }
-        case Family::Sneak:        c.actionOpcode = Vocab::kActSneak; break;   // card G1 (apmf/SneakClaims.cpp), no generator emits it yet
+        // G2 Layer 1: the generated Sneak candidate is the HOLD row (iaus/Generate.cpp Holds): he already sneaks (G1's stance claim
+        // holds that), the row names nothing so he neither attacks nor casts. Wait is the opaque do-nothing idiom (cast/Fire.cpp).
+        case Family::Sneak:        c.actionOpcode = Vocab::kActWait; break;
         case Family::Posture:
         case Family::Scroll:
         case Family::Exploit:

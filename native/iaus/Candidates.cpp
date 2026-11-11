@@ -12,6 +12,7 @@
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
 #include "iaus/Fills.h"
+#include "iaus/Hide.h"
 #include "iaus/SpellBook.h"
 #include "logistics/Logistics.h"
 
@@ -143,6 +144,8 @@ namespace MFO::Iaus::Candidates {
         Fills::Pass fills;
         fills.Unit(s.self, a_self, Fills::Role::Self);
         s.playerId = player ? player->GetFormID() : 0;
+        s.selfSneaking = a_self->IsSneaking();   // G2 Layer 1: the stance flag, an actor-state bit (no engine call)
+        const std::uint32_t selfHandle = a_self->GetHandle().native_handle();
 
         // ── the fight clock ──────────────────────────────────────────────────────────────────────────────
         {
@@ -246,6 +249,9 @@ namespace MFO::Iaus::Candidates {
             u.unholy = Logistics::IsUnholy(foe);
             u.taunted = Taunt::IsPinned(fid);   // card I6 (R1): the Taunt module's own live pin by ANY taunter (Q69), not an engine read
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
+            // G2 Layer 1: the foe's OWN group's record of him (iaus/Hide.h). The follower's group lock above is released, so this
+            // read lock is taken alone and nothing is nested (the TauntProbe.cpp ServiceP2 shape).
+            u.detectsMe = Hide::Verdict(Hide::Read(foe, selfHandle));
             u.sight       = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Own));
             u.sightEngine = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Engine));
             const float holdSec = DefaultTuning().occlusionHoldSec;   // the log line only: Gather has no Tuning
@@ -357,12 +363,12 @@ namespace MFO::Iaus::Candidates {
         const auto& g = a_set.gen;
         const auto n = [&](Family f) { return g.perFamily[static_cast<std::size_t>(f)]; };
         return std::format("foes {}/{} | attack {} power {} taunt {} retreat {} drink {}/{}/{} posture {} | offense {} "
-                           "control {} heal {} buff {} summon {} ward {} | dropped cost {} class {} hand {} target {} | "
+                           "control {} heal {} buff {} summon {} ward {} hold {} | dropped cost {} class {} hand {} target {} | "
                            "book {} emergency {:.2f}{}",
                            g.foesKept, g.foesSeen, n(Family::Attack), n(Family::PowerAttack), n(Family::Taunt),
                            n(Family::Retreat), n(Family::DrinkHealth), n(Family::DrinkStamina), n(Family::DrinkMagicka),
                            n(Family::Posture), n(Family::CastOffense), n(Family::CastControl), n(Family::CastHeal),
-                           n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), g.droppedCost,
+                           n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), n(Family::Sneak), g.droppedCost,
                            g.droppedClass, g.droppedHand, g.droppedTarget, a_set.snap.hasBook ? "yes" : "NO",
                            g.emergency, g.selfUnreadable ? " SELF-UNREADABLE" : "");
     }

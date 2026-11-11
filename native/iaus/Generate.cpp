@@ -42,6 +42,20 @@ namespace MFO::Iaus {
             float selfIncoming = 0.0f;
             float selfTtl = kInf;
             float playerTtl = kInf;
+            // G2 Layer 1 (iaus/Hide.h): hidden from every listed foe while he sneaks (Yes), seen by one (No), or not known.
+            Tri  unseen = Tri::Unknown;
+            bool hold = false;          // the hold row stands: unseen Yes, a weapon posture
+            bool strikeReady = false;   // some unaware foe is in reach (melee) or in sight (bow): the blow from stealth is ready
+            // An unaware foe he could strike now. Melee: inside the swing reach and not airborne beyond it; bow: in the
+            // follower's own ray and inside the chase cap. A caster's posture (None / Staff) never holds or strikes.
+            [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const {
+                if (a_foe.detectsMe != Tri::No || !std::isfinite(a_foe.dist)) return false;
+                if (s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver)
+                    return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                if (s.drawn == PostureKind::Bow)
+                    return a_foe.sight == Sight::Visible && a_foe.dist <= (std::max)(0.0f, Finite(s.chaseCap, 0.0f));
+                return false;
+            }
 
             void Push(Candidate&& a_c) {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
@@ -65,6 +79,9 @@ namespace MFO::Iaus {
                 f.selfTtl = selfTtl;
                 f.playerTtl = playerTtl;
                 f.mortal = s.mortal;
+                f.selfSneaking = s.selfSneaking;
+                f.unseen = unseen;
+                f.strikeReady = strikeReady;
             }
             void Foe(Facts& f, const Combatant& a_foe, bool a_ownRay) const {
                 f.dist = (std::max)(0.0f, Finite(a_foe.dist, 0.0f));
@@ -85,6 +102,7 @@ namespace MFO::Iaus {
                 f.foeTaunted = a_foe.taunted;
                 f.foeOutOfMeleeReach = a_foe.outOfMeleeReach;
                 f.foeUnholy = a_foe.unholy;
+                f.foeUnaware = a_foe.detectsMe == Tri::No ? Tri::Yes : (a_foe.detectsMe == Tri::Yes ? Tri::No : Tri::Unknown);
             }
             Candidate Make(Family a_f, const Combatant* a_target) const {
                 Candidate c;
@@ -101,8 +119,11 @@ namespace MFO::Iaus {
             const bool ranged = s.drawn == PostureKind::Bow || s.drawn == PostureKind::Staff;
             const bool melee  = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver;
             for (const Combatant* foe : x.top) {
+                // G2 Layer 1: while the hold row stands (he sneaks, no listed foe detects him) a blow is named only on a foe he
+                // can strike now. An unaware foe still out of reach is waited for, not chased: the chase is the noise.
+                const bool holdsOff = x.hold && foe->detectsMe == Tri::No && !x.StrikeReady(*foe);
                 // Today's reach gate: a melee-only follower never names a foe airborne out of his swing.
-                if (!(s.meleeOnly && foe->outOfMeleeReach)) {
+                if (!holdsOff && !(s.meleeOnly && foe->outOfMeleeReach)) {
                     Candidate c = x.Make(Family::Attack, foe);
                     x.Foe(c.f, *foe, ranged);
                     c.role = ranged ? RoleTag::Ranged : RoleTag::Melee;
@@ -111,7 +132,7 @@ namespace MFO::Iaus {
                     c.f.reach = (std::max)(0.0f, Finite(ranged ? s.chaseCap : s.meleeReach, 0.0f));
                     x.Push(std::move(c));
                 }
-                if (x.g.powerAttack && melee && !foe->outOfMeleeReach) {
+                if (!holdsOff && x.g.powerAttack && melee && !foe->outOfMeleeReach) {
                     Candidate c = x.Make(Family::PowerAttack, foe);
                     x.Foe(c.f, *foe, false);
                     c.role = RoleTag::Melee;
@@ -150,6 +171,16 @@ namespace MFO::Iaus {
                         c.f.meleeThreatDist = (std::min)(c.f.meleeThreatDist, (std::max)(0.0f, f.dist));
                 x.Push(std::move(c));
             }
+        }
+
+        // ── G2 Layer 1: the hold row (Family::Sneak). He sneaks and no listed foe's group detects him: stay still and quiet
+        // (no attack, no cast, no chase; MFO names nothing, the Wait idiom). It stands only while no blow from stealth is ready
+        // (Cons::HoldStill gates it to 0 the moment one is); then the Attack / Power attack on that foe carry Cons::BoostStrike
+        // and the engine's own sneak attack does the damage. No actor value is written anywhere.
+        void Holds(Ctx& x) {
+            if (!x.hold) return;
+            Candidate c = x.Make(Family::Sneak, nullptr);
+            x.Push(std::move(c));
         }
 
         // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
@@ -517,7 +548,22 @@ namespace MFO::Iaus {
         out.foesSeen = foes.size();
         out.foesKept = x.top.size();
 
+        // G2 Layer 1: hidden from every listed foe? (one detected foe = seen; one unknown = not known; none sneaking = not hidden)
+        if (!foes.empty()) {
+            bool anyYes = false, anyUnknown = false;
+            for (const Combatant* f : foes) {
+                if (f->detectsMe == Tri::Yes) anyYes = true;
+                else if (f->detectsMe == Tri::Unknown) anyUnknown = true;
+            }
+            x.unseen = anyYes ? Tri::No : (anyUnknown ? Tri::Unknown : (a_s.selfSneaking ? Tri::Yes : Tri::No));
+        }
+        x.hold = x.unseen == Tri::Yes && (a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver || a_s.drawn == PostureKind::Bow);
+        if (x.hold)
+            for (const Combatant* f : foes)
+                if (x.StrikeReady(*f)) { x.strikeReady = true; break; }
+
         Swings(x);
+        Holds(x);
         Regroups(x);
         Guards(x);
         if (a_s.hasBook) {
