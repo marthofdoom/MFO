@@ -8953,12 +8953,40 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   Sentient AI with no further wiring: set A2 as `DefaultTuning()` (more power attacks and control casts, fewer magicka
   potions), `Cons::TauntChance` (a taunt scaled by its level-rule chance: about 44 percent lower on a foe 2 levels up),
   `Cons::RangeTaunt` in place of RangeSpell in the taunt set, `Cons::BoostControlled` x1.3 on a PARALYSED foe only
-  (`Facts::foeHelpless`; `foeControlled` = paralysed or fleeing stays the control-cast gate), DamageValue 0 for a
-  no-damage spell. `Decision::bestHeal` is the best heal's score OVER its action weight, and `Tuning::noHealDrink` /
+  (`Facts::foeHelpless`; `foeControlled` = paralysed or fleeing stays the control-cast gate). `Decision::bestHeal` is the best heal's score OVER its action weight, and `Tuning::noHealDrink` /
   `noHealRetreat` (0.4167 / 0.25) compare against that: retune a heal weight freely, never these two with it. NOT live:
   the road families (Regroup / GiveGround / Block / Bash behind `Snapshot::*Road`, `IausSource.cpp` answers "no action
-  road"), `Tuning::kiteDistance`, and every consideration whose fact the engine side does not fill yet (the estimates,
+  road" for Regroup and Block; Bash and GiveGround have executors behind their own switches, next bullets),
+  `Tuning::kiteDistance`, DamageValue scoring a no-damage spell 0 against his best (not live until the engine side fills
+  spell damage, B688), and every consideration whose fact the engine side does not fill yet (the estimates,
   `mortal`, `swinging`, `casting`, `controlSec`, `castsWanted`): those read Off. Measured effects: doc section 28.1.
+- **THE BASH ROAD (`feat/iaus-combat-move`, 2026-11-11; Harbinger ch.31 `kIntent_CombatMove`, ABI v38; doc section 29).**
+  `apmf/CombatMove.cpp` (NEW): `CombatMoveSupported` (ABI >= 38), `RequestBash(follower, foe, power)` (a one-shot through
+  `RequestEx`, never a claim), `PollCombatMove` (writes the asynchronous outcome to the log ONCE per move: STARTED /
+  REFUSED / FAILED, then HIT or no hit; own leaf mutex, never `g_mx`), `CombatMoveProbeTick` (the dev probe, `[Debug]
+  bCombatMoveProbe`, default OFF: a bash every 6 s while his combat target is in melee reach). Both are called once per
+  combat service of a follower in `scheduler/CombatScan.cpp`, just before the choice source is built. `Vocab::kActBash`
+  (`act.bash`) is IAUS-ONLY: produced by `scheduler/IausSource.cpp` for `Family::Bash`, executed in `cast/Fire.cpp`
+  (foe alive and inside `g_meleeReach` NOW, else transparent; no closing leg), in NO board table or class row, never
+  serialized. `Snapshot::bashRoad` (`iaus/Candidates.cpp`) = `[Debug] bIausBashRoad` (default OFF until the field proves
+  the road) AND `CombatMoveSupported()`. **What breaks:** never replace the Harbinger request with
+  `NotifyAnimationGraph("bashStart")`: the engine sets attack data and the Bash attack state only on its action road
+  (Harbinger `core/CombatMove.h`). If `act.bash` ever joins the row vocabulary its string freezes (#10) and the board
+  tables need it. MFO must judge reach BEFORE asking: Harbinger measures the foe, it never aims. A ch.7 Offense deny of
+  MFO's own on that follower refuses the bash (`OffenseDenied`): release the deny first, do not expect it to pass.
+  `native/APMF_API.h` is the byte-shared mirror (md5 must equal Harbinger's).
+- **THE GIVE-GROUND ROAD (`feat/iaus-combat-move`, 2026-11-11; Harbinger ch.24 `kApproach_Point`, ABI v39; doc section 29.6).**
+  `apmf/GroundApproach.cpp` (NEW): `GroundStepSupported` (ABI >= 39), `RequestGroundStep(follower, foe)` (a ch.24 claim with
+  `kApproach_Point`, target 0, the point 400 units straight away from the foe, R 150, ends on arrival),
+  `ServiceGroundStep` (once per combat service in `scheduler/CombatScan.cpp`: releases after 2.5 s, on Harbinger's own
+  end, or when another ch.24 claim owns him; ONE outcome line), `ReleaseGroundStep` (combat end, retreat, dismissal,
+  the source toggle: beside every `ReleaseOffenseApproach`). `Vocab::kActGiveGround` (`act.give_ground`) is IAUS-ONLY like
+  `act.bash`. `Snapshot::groundRoad` = `[Debug] bIausGroundRoad` (default OFF) AND `GroundStepSupported()`. **What
+  breaks:** ONE ch.24 claim per follower: a held-heal approach outranks a step (never filed while it stands), and all
+  three MFO ch.24 clients file at `kOwnBasis`, so the EARLIER claim keeps the channel in Harbinger: a new ch.24 client
+  must say where it stands in that order. Never send a target with `kApproach_Point` (an older Harbinger would walk him
+  to that target instead). The point is not navmesh-checked by MFO: a point the engine cannot path to costs the step's
+  2.5 s and is logged, it is not retried.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.
