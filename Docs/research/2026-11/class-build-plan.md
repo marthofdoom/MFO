@@ -471,6 +471,29 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   gamepad navigation (family rule). The tab hides when the add-on is absent. The 86e3dhaba toggle shows the class, level
   and XP in the combat GUI (OFF by default; the INI key name is frozen once shipped).
 - Tier B, effort 4.
+- **STATUS 2026-11-11: BUILT on `feat/class-gui` (on top of `feat/mcls-v2`; NOT merged, NOT field-run).** The tab half only; the 86e3dhaba
+  combat-GUI toggle (class, level, XP in the combat GUI) is NOT built (no combat-GUI surface to hang it on; a later card).
+  - `native/Board_Classes.cpp`: the Classes tab (shown only while `Classes::Active()`), T1 roots with their T2 children, T3/T4 as
+    unlocked rows or greyed locked rows with the reason, T5 only once unlocked; level / cap bar (caps from `Classes::LevelCap`),
+    raw XP, mastered mark, equipped highlight, passive "full" / "1/4" label. There is no per-level XP curve yet (card C4), so the
+    bar is level over cap, not XP inside the level. Actions: Equip / Switch, "Classes off", "Reset to class defaults" (in-page
+    confirm popup; greyed for tier 3+, which ships no default set). Actions queue `EditKind::ClassAction`; `ApplyEdits` runs them on
+    the g_followers worker (`ApplyClassEdit`).
+  - C5b: the Gambits-tab `Class:` pick is disabled (with a tooltip) for a follower with a class equipped.
+  - In-game check (DEV or release build, `MFO_Classes.esl` loaded, `bClassTree = 1`):
+    1. Open the board. A `Classes` tab sits after Gambits (and after the Progression tab when that add-on is loaded). With the ESL
+       absent or `bClassTree = 0` the tab is absent.
+    2. Pad: View/Back cycles onto the tab, L1/R1 switches follower, d-pad walks the rows and buttons, A presses, B closes the
+       confirm popup first and the board second.
+    3. A follower with no class shows "No class equipped". Melee / Ranged / Mage are unlocked; locked T2+ rows are grey and say what
+       to master. Press Equip on a T1: the row highlights, "Class:" header shows it, `[classes] board equip ... defaults` in MFO.log,
+       and the Gambits-tab `Class:` button is greyed with a tooltip.
+    4. Equip a T2 (cheat the unlock or master the T1): his combat table becomes that class's defaults. Edit a rule, press Switch to
+       another class and back: the edit is still there (per-class memory).
+    5. "Reset to class defaults": a confirm popup opens focused on Cancel; Reset restores the default rows; B or Cancel changes nothing.
+       It is greyed on a tier 3+ class.
+    6. "Classes off": the class clears, the Gambits-tab `Class:` button works again, his pre-class tables are back.
+    7. Save, reload: the equipped class and levels are the same.
 
 **C11. MCM: tree toggle, strict adherence, XP rate, class-info toggle, every /s value**
 - What: the add-on MCM (the `prog_mcm_config` `:1990` precedent, MCM Helper schema rules: `minMcmVersion`, enums inside

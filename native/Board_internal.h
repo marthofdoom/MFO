@@ -21,6 +21,8 @@
 #include <mutex>
 #include <vector>
 
+namespace MFO { struct FollowerState; }   // State.h
+
 namespace MFO::Board {
 
     // ── EDIT COMMAND QUEUE ──────────────────────────────────────────────────
@@ -45,7 +47,8 @@ namespace MFO::Board {
                                                             // longer enumerates progression verbs.
                                          SetHelmetOverride,   // 86e3phy41: per-follower "Wear helmets" (0 Default / 1 Wear / 2 Never)
                                          SetCooldown,         // card G9: c.param = the rule's cooldown in tenths of a second
-                                         SetIausCombat };     // IAUS card I7: per-follower "IAUS combat" switch (c.param > 0.5 = on)
+                                         SetIausCombat,       // IAUS card I7: per-follower "IAUS combat" switch (c.param > 0.5 = on)
+                                         ClassAction };       // class card C10: EditCmd::verbId = ClassVerb, c.param = the class Id ordinal (Equip)
     // Card G9 (marth Q7, 2026-11-09: "cooldown on POWER-ATTACK rows only for now"): the actions whose rows show
     // the cooldown cell. The save field is general (any row may carry one); an edit that moves a row OFF these
     // actions clears its cooldown (ApplyEdits), so no row is ever paced by a value the board does not show.
@@ -58,6 +61,8 @@ namespace MFO::Board {
     // (manual toggle 0/1 | AV ordinal) — the {verbId, follower, arg-union} shape.
     enum class AddonVerb : int { SetClass = 0, AllocPerk, Respec,
                                  SetManual, ApplySkillPoint };
+    // Class card C10: the verbs an EditKind::ClassAction carries. Applied on the ApplyEdits worker (Board_Classes.cpp).
+    enum class ClassVerb : int { Equip = 0, Unequip, Reset };
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
@@ -383,6 +388,15 @@ namespace MFO::Board {
                             ImGuiTabItemFlags tabSelFlags, ImGuiIO& io,
                             const MenuSkin& skin, bool r1Ready,
                             int& s_tab, bool& pickerDrawnThisFrame);
+
+    // ── THE CLASSES TAB (class card C10, Board_Classes.cpp) ─────────────────────────────────────────
+    // DrawClassesTab: RENDER THREAD, inside DrawFieldKit's tab bar; draws nothing unless a_active (Classes::Active()). Reads class
+    // state through the thread-safe Classes:: accessors and mutates NOTHING: every action queues EditKind::ClassAction.
+    // ApplyClassEdit: WORKER (ApplyEdits, the thread that owns g_followers); runs Classes::EquipClass / UnequipClass /
+    // ResetClassTables, which are worker-only.
+    void DrawClassesTab(const Snapshot& snap, bool a_active, int a_tabIdx, ImGuiTabItemFlags a_tabSelFlags,
+                        const MenuSkin& a_skin, bool a_r1Ready, int& s_tab, bool& a_pickerDrawn);
+    void ApplyClassEdit(const EditCmd& a_cmd, FollowerState& a_st);
 
     // ── THE IAUS "THINKING" PANEL (IAUS card I7, Board_Iaus.cpp) ────────────────────────────────────────
     // Read-only: the follower's last IAUS decision and why (top candidates with scores and the consideration

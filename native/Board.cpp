@@ -1374,6 +1374,9 @@ namespace MFO::Board {
 
             auto it = g_followers.find(c.fid);
             if (it == g_followers.end()) continue;
+            // Class card C10: equip / classes off / reset. This drain is the worker that owns g_followers, which is what the
+            // worker-only Classes::EquipClass family needs (Board_Classes.cpp).
+            if (c.kind == EditKind::ClassAction) { ApplyClassEdit(c, it->second); continue; }
             const int table = std::clamp(c.table, 0, 1);
             auto& tab = it->second.tables[table];
 

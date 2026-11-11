@@ -40,6 +40,7 @@
 #include "MainThread.h"
 #include "Vocabulary.h"
 #include "Scheduler.h"
+#include "classes/Classes.h"
 #include "Diagnostics.h"
 
 namespace MFO::Board {
@@ -415,7 +416,10 @@ namespace MFO::Board {
             for (const auto& t : snap.boardTabs)
                 if (t.active) ++hostedBoardTabs;
             const bool progActive = hostedBoardTabs > 0;
-            const int kTabCount = progActive ? 3 : 2;   // Followers, Gambits[, hosted tab]
+            // Class card C10: the Classes tab exists only while the class tree is live; its index follows the hosted tab's.
+            const bool classesActive = Classes::Active();
+            const int classesTabIdx = progActive ? 3 : 2;
+            const int kTabCount = (progActive ? 3 : 2) + (classesActive ? 1 : 0);   // Followers, Gambits[, hosted tab][, Classes]
             if (s_tab >= kTabCount) s_tab = 0;   // the addon vanished under a stale pick
             // Gated like everything else: never while an item is being tweaked or
             // a picker popup is open.
@@ -727,7 +731,14 @@ namespace MFO::Board {
                         {
                             const int curClass = std::clamp<int>(who->combatClassOverride, 0, 3);
                             std::string cl = Str::Fmt(Str::K::Gb_ClassBtn, { ClassName(curClass) }) + "###classbtn";
+                            // Class card C10 / C5b: while a class is equipped it sets his stance (the raw pick is ignored), so the
+                            // per-follower Auto / Melee / Ranged / Mage pick is turned off for him.
+                            const bool classOn = Classes::Active() && Classes::GetEquipped(who->id) != Classes::kNoClass;
+                            ImGui::BeginDisabled(classOn);
                             if (Click::SmallButton(cl.c_str())) ImGui::OpenPopup("##class");
+                            ImGui::EndDisabled();
+                            if (classOn && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip("%s", Str::Get(Str::K::Cl_TipClassPick));
                         }
                         ImGui::SameLine();
                         // 86e3phy41: the per-follower "Wear helmets" override trigger, the class
@@ -1471,6 +1482,11 @@ namespace MFO::Board {
                 // split) — DrawProgressionTab draws the hosted tab in place.
                 DrawProgressionTab(snap, progActive, tabSel(2), io, skin,
                                    r1Ready, s_tab, pickerDrawnThisFrame);
+
+                // ── THE CLASSES TAB (class card C10) ────────────────────
+                // Body in Board_Classes.cpp. Read-only draw; actions queue EditKind::ClassAction.
+                DrawClassesTab(snap, classesActive, classesTabIdx, tabSel(classesTabIdx), skin,
+                               r1Ready, s_tab, pickerDrawnThisFrame);
 
                 ImGui::EndTabBar();
             }
