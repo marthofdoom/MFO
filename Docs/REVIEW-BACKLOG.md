@@ -2925,7 +2925,7 @@ MAP.md Taunt TauntedBy/Busy line refs stale (~407/413), IsPinned has none; TAUNT
 Estimate.h add/add conflict with feat/iaus-sim-v2: resolve by taking sim-v2's file.
 
 
-### MFO-B684 (SEV-3, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
+### MFO-B684 (SEV-3, FIXED on feat/iaus-engine-fills: SpellEntry::measured + the bestOn filters, harness EngineFillRules; was OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 (before the engine fill card) iaus Generate bestOn (DamageValue denominator) takes every kept affordable offense spell without the per-candidate filters (off-class Q34, hand held P1, undeadOnly vs living, reach), so a strong undead-only spell shrinks offense scores vs every living foe. Also Snapshot uses 0 for "not measured" and "measured 0": the fill needs a per-entry measured flag (DamageValue input 0 gives 0.30, not a veto).
 
 ### MFO-B685 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
@@ -2934,7 +2934,7 @@ MAP.md lacks Estimate.h, Reach.h, the new Snapshot/Facts fields, the four new fa
 ### MFO-B686 (SEV-5, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 four Cons named "need" (ambiguous [iaus-why]); -Wconversion at harness.cpp:917-923; Guards() loops foes with every road off.
 
-### MFO-B687 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
+### MFO-B687 (SEV-4, FIXED on feat/iaus-engine-fills: Fills.cpp LearnReach leaves meleeReach at fMeleeReach while the learner is unknown; was OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 (Reach wiring card) an unknown Reach learner returns Gate()==0, which makes RangeMelee not applicable (power attack from any distance): wiring must fall back to fMeleeReach while !Known().
 
 ### MFO-B688 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)

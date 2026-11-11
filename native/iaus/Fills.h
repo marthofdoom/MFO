@@ -16,6 +16,8 @@
 // next to what really happened before it may move a score:
 //   [Debug] bIausFillProbe = 1    -> `[iaus-fill]` lines (rate-limited). Nothing is written into the Snapshot.
 //   [Debug] bIausFill<Input> = 1  -> that one input is written. All default OFF (Config.h).
+//   [Debug] bIausReachLearn = 1   -> Snapshot::meleeReach is the swing reach LEARNED from his own hits and misses
+//                                    (ruling Q68, iaus/Reach.h); fMeleeReach while the learner knows nothing (MFO-B687).
 // With every key OFF this module does nothing: no read, no map entry, no line.
 //
 // NO NEW ENGINE ADDRESS. Everything here is an actor-value read, a record field, a GMST, an ActorState bit field or the
@@ -55,7 +57,8 @@ namespace MFO::Iaus::Fills {
         [[nodiscard]] bool Armed() const { return m_armed; }
         // Measure a_actor and write the switched-on inputs into a_u. a_u's id / pools / position are already filled.
         void Unit(Combatant& a_u, RE::Actor* a_actor, Role a_role);
-        // Snapshot::mortal, then the probe lines of this lap (unit lines, the hits whose target this lap sampled).
+        // Snapshot::mortal, the learned swing reach, then the probe lines of this lap (unit lines, the hits whose
+        // target this lap sampled).
         void Finish(Snapshot& a_s, RE::Actor* a_self);
 
         struct Est {   // what was measured for one actor this lap (kept for the probe whatever the switches say)
@@ -76,9 +79,10 @@ namespace MFO::Iaus::Fills {
 
     private:
         bool m_armed = false, m_probe = false, m_armor = false, m_hit = false, m_loss = false, m_swing = false,
-             m_casting = false, m_mortal = false;
+             m_casting = false, m_mortal = false, m_reach = false;
         double m_now = 0.0;
         std::vector<Est> m_est;
+        void LearnReach(Snapshot& a_s, RE::Actor* a_self);
     };
 
     // MAIN THREAD. One spell or scroll: its health damage, healing and control seconds from the effect records, the

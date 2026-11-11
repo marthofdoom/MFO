@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Followers.h"
 #include "Runtime.h"
+#include "iaus/Reach.h"
 
 #include <algorithm>
 #include <atomic>
@@ -101,26 +102,59 @@ namespace MFO::Iaus::Fills {
         std::uint32_t         g_hitOverflow = 0;   // under g_hitMx
         std::uint32_t         g_hitAged = 0;       // WORKER
 
+        // ── ruling Q68: the hits a FOLLOWER caused, newest last (under g_hitMx). A ring, so nothing has to drain it:
+        // the swing that reads it asks "did he hit his target since this swing began". Sized from the cadence
+        // (principle 9): ten followers at one blow a second over a 1.3 s lap are 13 records between two reads.
+        struct Caused { double t = 0.0; RE::FormID cause = 0, target = 0, source = 0; std::uint8_t flags = 0; };
+        constexpr std::size_t kCausedCap = 64;
+        Caused      g_caused[kCausedCap]{};
+        std::size_t g_causedHead = 0;
+
+        // The follower's swing in the air and his learners (WORKER domain, #4).
+        // A swing is OPENED on the lap his attack state enters Draw / Swing and RESOLVED on the first lap it has left
+        // them (the hit frame is behind him then, and TESHitEvent is sent from the hit itself), or after kSwingCapSec
+        // (a chain of swings the laps never saw apart). Sized from the cadence: a lap is 133 ms x party, a swing is
+        // 0.5 - 1.2 s from its start to the hit.
+        constexpr double kSwingCapSec = 2.5;
+        struct ReachState {
+            bool   open = false;
+            double t0 = 0.0, windowStart = 0.0;
+            float  dist = 0.0f;
+            RE::FormID target = 0, weapon = 0;
+            bool   wasSwinging = false;
+            double lastLap = 0.0;
+        };
+        std::unordered_map<RE::FormID, ReachState>         g_reach;   // by follower
+        std::unordered_map<std::uint64_t, Reach::Learner>  g_learn;   // by (follower, weapon): runtime only (Q68)
+        Bucket g_swingLines{ 6.0, 6.0, 3.0 };
+
         class HitSink final : public RE::BSTEventSink<RE::TESHitEvent> {
         public:
             static HitSink* GetSingleton() { static HitSink s; return &s; }
             RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_ev, RE::BSTEventSource<RE::TESHitEvent>*) override {
-                if (!On(Config::g_iausFillProbe) || !a_ev || !a_ev->target) return RE::BSEventNotifyControl::kContinue;
+                const bool probe = On(Config::g_iausFillProbe);
+                if ((!probe && !On(Config::g_iausReachLearn)) || !a_ev || !a_ev->target) return RE::BSEventNotifyControl::kContinue;
                 auto* target = a_ev->target->As<RE::Actor>();
                 if (!target) return RE::BSEventNotifyControl::kContinue;
                 HitRec r;
                 r.target = target->GetFormID();
                 r.cause  = a_ev->cause ? a_ev->cause->GetFormID() : 0;
                 // A follower hit something or was hit (the any-thread FormID mirror, #74; never the live lists).
-                if (!Followers::IsTrackedFast(r.target) && !(r.cause != 0 && Followers::IsTrackedFast(r.cause)))
-                    return RE::BSEventNotifyControl::kContinue;
+                const bool byFollower = r.cause != 0 && Followers::IsTrackedFast(r.cause);
+                if (!byFollower && !Followers::IsTrackedFast(r.target)) return RE::BSEventNotifyControl::kContinue;
                 r.t          = NowSec();
                 r.source     = a_ev->source;
                 r.projectile = a_ev->projectile;
                 r.flags      = static_cast<std::uint8_t>(a_ev->flags.underlying());
-                if (auto* avo = target->AsActorValueOwner()) r.hpEvt = avo->GetActorValue(AV::kHealth);
+                if (probe)
+                    if (auto* avo = target->AsActorValueOwner()) r.hpEvt = avo->GetActorValue(AV::kHealth);
                 r.thread = static_cast<std::uint32_t>(::GetCurrentThreadId());
                 std::scoped_lock lk(g_hitMx);
+                if (byFollower) {
+                    g_caused[g_causedHead] = Caused{ r.t, r.cause, r.target, r.source, r.flags };
+                    g_causedHead = (g_causedHead + 1) % kCausedCap;
+                }
+                if (!probe) return RE::BSEventNotifyControl::kContinue;   // the probe's list is drained only by the probe
                 if (g_hits.size() >= kHitCap) { ++g_hitOverflow; return RE::BSEventNotifyControl::kContinue; }
                 g_hits.push_back(r);
                 return RE::BSEventNotifyControl::kContinue;
@@ -294,10 +328,11 @@ namespace MFO::Iaus::Fills {
             spdlog::error("[iaus-fill] GMST NOT FOUND:{} -- every estimate that needs one stays unmeasured (0), nothing is guessed",
                           missing);
         spdlog::info("[iaus-fill] probe {} (bIausFillProbe) | inputs written: armor={} hit={} loss={} swing={} casting={} spells={} "
-                     "mortal={} (bIausFill<Input>, all default OFF) | spell magnitude perks (EP 0x1D): {} | main thread {}",
+                     "mortal={} (bIausFill<Input>, all default OFF) learned reach={} (bIausReachLearn) | spell magnitude perks "
+                     "(EP 0x1D): {} | main thread {}",
                      On(Config::g_iausFillProbe) ? "ON" : "off", On(Config::g_iausFillArmor), On(Config::g_iausFillHit),
                      On(Config::g_iausFillLoss), On(Config::g_iausFillSwing), On(Config::g_iausFillCasting),
-                     On(Config::g_iausFillSpells), On(Config::g_iausFillMortal),
+                     On(Config::g_iausFillSpells), On(Config::g_iausFillMortal), On(Config::g_iausReachLearn),
                      g_epOk.load(std::memory_order_relaxed) ? "row verified" : "REFUSED (record magnitudes only)",
                      ::GetCurrentThreadId());
     }
@@ -305,7 +340,7 @@ namespace MFO::Iaus::Fills {
     void RegisterHitSink() {
         if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
-            spdlog::info("[iaus-fill] hit sink registered (live only while bIausFillProbe = 1)");
+            spdlog::info("[iaus-fill] hit sink registered (live only while bIausFillProbe = 1 or bIausReachLearn = 1)");
         }
     }
 
@@ -317,7 +352,8 @@ namespace MFO::Iaus::Fills {
         m_swing   = On(Config::g_iausFillSwing);
         m_casting = On(Config::g_iausFillCasting);
         m_mortal  = On(Config::g_iausFillMortal);
-        m_armed   = m_probe || m_armor || m_hit || m_loss || m_swing || m_casting || m_mortal;
+        m_reach   = On(Config::g_iausReachLearn);
+        m_armed   = m_probe || m_armor || m_hit || m_loss || m_swing || m_casting || m_mortal || m_reach;
         if (m_armed) m_now = NowSec();
     }
 
@@ -433,6 +469,7 @@ namespace MFO::Iaus::Fills {
                 }
             }
         }
+        if (m_probe || m_reach) LearnReach(a_s, a_self);
         if (!m_probe) return;
 
         // ── one unit line per actor per kUnitLogSec ──────────────────────────────────────────────────────────────
@@ -505,6 +542,89 @@ namespace MFO::Iaus::Fills {
         }
     }
 
+    // RULING Q68 (marth 2026-11-11): the swing reach is learned per weapon from what hit and what missed. This is the
+    // engine feed of iaus/Reach.h: ONE outcome per swing of HIS melee weapon at his engine combat target.
+    //   hit   = a TESHitEvent he caused on that target with that weapon since the swing began (a blocked hit reached);
+    //   miss  = the swing ended with no hit of his on anything;
+    //   a hit on someone else only = no outcome (it says nothing about the distance to his target).
+    // The distance is centre to centre at the lap the swing was first seen, the same measure the swing gate compares
+    // (Facts::dist against Facts::reach). ONE learner per (follower, weapon): plain swings and power attacks share it,
+    // because a missed swing does not say which it was (the hit's power flag is in the line, so a field log shows whether
+    // they need two). Bare hands are not learned (no weapon to key on). Runtime only, emptied on a load.
+    void Pass::LearnReach(Snapshot& a_s, RE::Actor* a_self) {
+        const Est* me = nullptr;
+        for (const Est& e : m_est)
+            if (e.id == a_s.self.id) { me = &e; break; }
+        if (!me) return;
+        ReachState& rs = g_reach[a_s.self.id];
+        const bool  melee = !me->magic && !me->ranged && me->src != 0;
+        const auto  keyOf = [&](RE::FormID a_weapon) { return (static_cast<std::uint64_t>(a_s.self.id) << 32) | a_weapon; };
+
+        // 1. the open swing has landed or gone by: one outcome
+        if (rs.open && (!me->swinging || m_now - rs.t0 > kSwingCapSec)) {
+            rs.open = false;
+            bool hit = false, other = false;
+            std::uint8_t flags = 0;
+            {
+                std::scoped_lock lk(g_hitMx);
+                for (const Caused& c : g_caused) {
+                    if (c.cause != a_s.self.id || c.t < rs.windowStart || c.source != rs.weapon) continue;
+                    if (c.target == rs.target) { hit = true; flags = c.flags; }
+                    else other = true;
+                }
+            }
+            auto it = g_learn.find(keyOf(rs.weapon));
+            if (it != g_learn.end() && (hit || !other)) {
+                Reach::Learner& L = it->second;
+                const float before = L.Value();
+                L.Observe(rs.dist, hit);
+                if (m_probe && g_swingLines.Take(m_now))
+                    spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: {}{} | learned reach {:.0f} -> "
+                                 "{:.0f} (start {:.0f}, gate {:.0f}, {} hits {} misses) | gates the power attack: {}",
+                                 a_s.self.name, a_s.self.id, rs.weapon, rs.dist, rs.target, hit ? "HIT" : "miss",
+                                 hit ? std::format(" (power={} blocked={})", (flags & 1) != 0, (flags & 8) != 0) : std::string(),
+                                 before, L.Value(), L.start, L.Gate(), L.hits, L.misses, m_reach ? "yes" : "no (bIausReachLearn=0)");
+            } else if (m_probe && g_swingLines.Take(m_now)) {
+                spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: hit someone else only, no outcome",
+                             a_s.self.name, a_s.self.id, rs.weapon, rs.dist, rs.target);
+            }
+        }
+
+        // 2. a new swing begins this lap (he was not swinging at the last one)
+        if (!rs.open && melee && me->swinging && !rs.wasSwinging) {
+            RE::FormID target = 0;
+            if (auto tp = a_self->GetActorRuntimeData().currentCombatTarget.get(); tp) target = tp->GetFormID();
+            for (const Combatant& f : a_s.foes) {
+                if (f.id != target || !std::isfinite(f.dist) || !(f.dist > 0.0f)) continue;
+                // The learner starts at fMeleeReach (Snapshot::meleeReach before any override). Precision's capsule
+                // length is a weapon LENGTH from the hand, not a centre-to-centre reach, so it is not a start value
+                // (Docs/research/2026-11/iaus-i6.md "Precision reach").
+                if (g_learn.size() > 512) g_learn.clear();   // a bound, never reached by a real party
+                Reach::Learner& L = g_learn[keyOf(me->src)];
+                if (!L.Known()) L.Reset(Config::g_meleeReach.load(std::memory_order_relaxed));
+                rs.open   = true;
+                rs.t0     = m_now;
+                // The swing began after the last lap saw him not swinging, so a hit since then belongs to it.
+                rs.windowStart = (rs.lastLap > 0.0 && m_now - rs.lastLap < kSwingCapSec) ? rs.lastLap : m_now - 0.5;
+                rs.dist   = f.dist;
+                rs.target = target;
+                rs.weapon = me->src;
+                break;
+            }
+        }
+        rs.wasSwinging = me->swinging;
+        rs.lastLap     = m_now;
+
+        // 3. the swing gate's reach: the learned value for the weapon in his hand. No learner yet (he has not swung it)
+        // or nothing learnable: Snapshot::meleeReach stays fMeleeReach (MFO-B687: an unknown learner's Gate() is 0,
+        // which would switch the range test off).
+        if (m_reach && melee)
+            if (auto it = g_learn.find(keyOf(me->src)); it != g_learn.end() && it->second.Known()) {
+                const float gate = it->second.Gate();
+                if (std::isfinite(gate) && gate > 0.0f) a_s.meleeReach = gate;
+            }
+    }
+
     void MeasureSpell(RE::Actor* a_caster, RE::SpellItem* a_spell, SpellEntry& a_e, std::string& a_probe,
                       std::uint32_t& a_probeKey) {
         a_probe.clear();
@@ -567,9 +687,13 @@ namespace MFO::Iaus::Fills {
         g_mortalLogged.clear();
         g_pruned = 0.0;
         g_hitAged = 0;
+        g_reach.clear();
+        g_learn.clear();   // Q68: runtime only. FormIDs are save-scoped (a dynamic weapon's id is reused across saves)
         std::scoped_lock lk(g_hitMx);
         g_hits.clear();
         g_hitOverflow = 0;
+        for (auto& c : g_caused) c = Caused{};
+        g_causedHead = 0;
     }
 
 }

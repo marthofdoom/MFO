@@ -217,6 +217,7 @@ namespace MFO::Config {
             else if (a_key == "bIausFillCasting")   setB(g_iausFillCasting);
             else if (a_key == "bIausFillSpells")    setB(g_iausFillSpells);
             else if (a_key == "bIausFillMortal")    setB(g_iausFillMortal);
+            else if (a_key == "bIausReachLearn")    setB(g_iausReachLearn);   // ruling Q68: the learned swing reach gates the power attack, INI-only, default OFF
             else if (a_key == "bSpellShapeCensus")  setB(g_spellShapeCensus); // [shape-census] load-time spell shape counts, INI-only, default ON
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bProgCatalogDump")   setB(g_progCatalogDump);  // catalog census dump, dev-only
@@ -446,6 +447,7 @@ namespace MFO::Config {
             g_iausFillCasting    = false;
             g_iausFillSpells     = false;
             g_iausFillMortal     = false;
+            g_iausReachLearn     = false;   // ruling Q68: the learned swing reach -- OFF until its [iaus-fill] swing lines are field-proven
             g_heartbeat          = true;    // [hb] 5 s liveness line -- ON (1 line / 5 s; names the stopped thread on a freeze)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default
