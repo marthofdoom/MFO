@@ -36,8 +36,15 @@ tools/iaus_sim/run.sh [--list ~/.cache/mfo-list-balance/LoreRim.sim.json] [--see
                       [--baseline out] [--compare base] [--taunt-hidden] [--no-engine-casts] [--g10-sticky]
                       [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes]
                       [--scenario all|name,name [--oracle --oracle-k 8 --oracle-h 150] [--trace N]]
+                      [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]
 python3 -I tools/iaus_sim/calib_logs.py        # real fight shapes out of _evidence/*/MFO.log
 ```
+
+Tuning flags: `--classes slug,slug` also scopes the headline J and the `--opt` objective to those classes (the HEADLINE
+line then ends `covers=...`; `--opt-class` still wins if both are given). `--opt-fights N` sets the fights per scenario
+of each search evaluation (default `--fights`). `--seeds a,b,c` runs the headline J once per seed and prints each, then
+the mean and standard error (no full tables); with `--opt` the objective is the mean over those seeds. Seed noise is
+about +-8 J at 60 fights, so a small keep rule needs several seeds. Single `--seed` runs are unchanged.
 
 Three data sets exist: `Vanilla` (the five base ESMs of the Tuxborn install), `Tuxborn` (SimonRim) and `LoreRim`
 (Requiem). With no `--list` the sim runs its BUILT-IN fixture set: Skyrim.esm's game-setting values plus a small

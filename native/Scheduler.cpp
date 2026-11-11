@@ -462,6 +462,7 @@ namespace MFO::Scheduler {
         g_outOfCombatTicks.clear();
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
+        g_partyOffAt = -1.0e300; g_partyOffDeferLogged = false;
         g_partyCombatNoted.clear();
         g_substrateNoted.clear();
         g_anchorLeakNoted.clear();
@@ -487,6 +488,16 @@ namespace MFO::Scheduler {
     std::uint32_t TicksThisSession() { return g_ticks.load(); }
     double        ServiceClock()     { return g_serviceClock; }   // worker-only (#4), like its writer
     bool PartyCombat() { return g_partyCombat; }   // worker-only, like g_partyCombat itself
+    bool PartyCombatSettling() {   // worker-only, like g_partyCombat itself
+        if (g_partyCombat || g_serviceClock - g_partyOffAt >= kOocCastDebounceSecs) return false;
+        if (!g_partyOffDeferLogged) {
+            g_partyOffDeferLogged = true;
+            spdlog::info("[sched] out-of-combat casts held {:.0f} s after party combat went OFF (now {:.1f} s in): "
+                         "a substrate open right at the edge leaks Harbinger's anchor while foes are still around",
+                         kOocCastDebounceSecs, g_serviceClock - g_partyOffAt);
+        }
+        return true;
+    }
 
     float ReachHoldSlack(RE::FormID a_follower) {                 // worker-only (#4), like g_reachHold
         return g_reachHold.contains(a_follower) ? -CombatSense::kReachHoldBand : 0.0f;

@@ -60,6 +60,11 @@ namespace Sim {
                 k.targetIsAlly = tg && tg->Party() && tg->c.id != self.c.id && tg->role != Role::Player;
                 k.paralysed = F.now < o.ctrlUntil; k.fleeing = F.now < o.fleeUntil; k.blocking = F.now < o.blockUntil;
                 k.sight = F.Sees(self, o) ? Sight::Visible : Sight::Occluded; k.sightEngine = k.sight;
+                // One ray model in the sim (sightEngine = sight), so one age serves both bases. The 1 ms floor is the
+                // native NoteOcclusion's: 0 means untracked, which takes no hold.
+                if (k.sight == Sight::Occluded) k.occludedSec = (std::max)(1.0e-3f, static_cast<float>(F.now - c.occSince.try_emplace(k.id, F.now).first->second));
+                else c.occSince.erase(k.id);
+                k.occludedSecEngine = k.occludedSec;
                 k.resists.clear(); for (int av : elems) k.resists.push_back({ av, F.ResistOf(o, av) });
                 if (F.estimates) FillEstimate(F, o, k);
                 sn.foes.push_back(std::move(k));

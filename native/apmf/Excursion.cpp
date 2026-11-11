@@ -232,7 +232,14 @@ namespace MFO::APMFBridge {
                          follower, p.target, p.handle, p.everLive ? "was live" : "never seen live",
                          ClaimEndReasonName(why));
             // A NOT ENGAGED end gives the target up NOW, on whatever lap noticed it (PinTarget then refuses it).
-            if (IsNotEngagedEnd(why)) RecordEngageGiveUp(follower, p.target, why, "ch.20 pin", 0.0f);
+            // marth 2026-11-11 (first IAUS field run): Harbinger's anomaly labels (arrived-not-fighting, no-path-progress)
+            // were BOTH wrong for the calm Orc Hunter, so the give-up also keys on the foe's STATE, never on the label:
+            // any held-engagement end (reasons 1..6, ARRIVED IDLE among them) on a foe that is calm (not fighting the
+            // party, not hostile to it) is given up, recorded as calm so its first fight or hostility lifts it. ARRIVED
+            // IDLE on a foe that IS fighting the party (an archer shooting from where it stands) gives nothing up.
+            const bool held = why != APMF_API::kClaimEnd_None && why < APMF_API::kClaimEnd_OwnerDead;
+            const bool calm = held && TargetCalmNow(follower, p.target);
+            if (IsNotEngagedEnd(why) || calm) RecordEngageGiveUp(follower, p.target, why, "ch.20 pin", 0.0f, calm);
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger
             // already released, and it FIFO-cancels one still pending in APMF's queue,
             // so a false "never live" judgement can never leave an ORPHAN claim that
@@ -354,6 +361,11 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         auto it = g_pins.find(a_follower);
         if (it == g_pins.end()) return;
+        // Read the end reason BEFORE the Release (review round 2, NO PATH PROGRESS re-pin): MFO's release can come
+        // ~20 ms after Harbinger's end, before any sweep noticed it, and erasing the record unread swallowed the
+        // give-up. g_mx is held, as PinEndedLocked requires. A live (or not yet drained) claim answers "not ended"
+        // and is released below as before. A handle exists only from an ABI >= kPinMinAbi APMF.
+        if (api && api->abiVersion >= kPinMinAbi) PinEndedLocked(api, a_follower, it->second);
         if (api && it->second.handle != APMF_API::kInvalidHandle) api->Release(it->second.handle);
         spdlog::info("[target-pin] {:08X}: release (target {:08X}{})", a_follower, it->second.target,
                      it->second.ended ? ", already ended by Harbinger" : "");

@@ -338,7 +338,7 @@ namespace MFO::Iaus::SpellBook {
                     continue;
                 }
                 if (auto* ammo = obj->As<RE::TESAmmo>()) {
-                    (ammo->IsBolt() ? book->kit.bolts : book->kit.arrows) += data.first;
+                    (Logistics::AmmoIsBolt(ammo) ? book->kit.bolts : book->kit.arrows) += data.first;
                     continue;
                 }
                 if (auto* alc = obj->As<RE::AlchemyItem>()) {
@@ -416,12 +416,14 @@ namespace MFO::Iaus::SpellBook {
     ClassGate GateFor(RE::FormID a_follower) {
         namespace W = Classes::Weapon;
         ClassGate g;
-        g.treeOn = Classes::Active();
+        const std::uint8_t eq = Classes::Active() ? Classes::GetEquipped(a_follower) : Classes::kNoClass;
+        // Classes are on/off PER FOLLOWER: no equipped class means classes are OFF for this follower, so the
+        // open (Q63) branch applies, as in ClassResolve / Carriers (field 2026-11: Auri, no class, lost all 35 spells).
+        g.treeOn = Classes::Active() && eq < Classes::kClassCount;
         g.strict = Classes::Strict();
         const Classes::ClassDef* def = nullptr;
         Classes::Mask mastered = 0;
         if (g.treeOn) {
-            const std::uint8_t eq = Classes::GetEquipped(a_follower);
             if (eq != Classes::kNoClass && eq < Classes::kClassCount) def = &Classes::Get(static_cast<Classes::Id>(eq));
             mastered = Classes::GetMastered(a_follower);
         }
