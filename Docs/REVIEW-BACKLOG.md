@@ -2960,3 +2960,6 @@ Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale 
 
 ### MFO-B694 (SEV-5, OPEN, IAUS classes lab tools/iaus_sim, against 62f67b1, Opus review of feat/iaus-classes)
 "Possible invalid JSON in the gap ledger. Results.h writes each class gap row with an unconditional comma prefix. That is invalid JSON if GapRows() is ever empty. It is not empty today." Reasoning: Lab-only results formatting.
+
+### MFO-B695 (SEV-4, OPEN, selftest/Setup.cpp SpawnUnsafeReason mount skip, against 7e095eb, Opus review of fix/selftest-spawn-guard)
+"an unridden follower horse still blocks the spawn. The player's horse is skipped even when nobody is riding it (QLastRiddenMount). A follower's horse is only skipped while the follower is on it (GetMountedBy rider is party). A dismounted follower horse within 3500 units that is protected or non-hostile still refuses." Engine limit: Actor slot 0x114 returns a null handle, only PlayerCharacter overrides it, so no follower has a last-ridden mount. Dev-build only. The refusal line now names the horse, so it diagnoses in one field cycle.

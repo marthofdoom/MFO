@@ -359,7 +359,7 @@ namespace MFO::SelfTest {
             using Classes::Id;
             switch (i) {
             case 0: Classes::SetMastered(id, 0); return ApplyClass(id, "warrior", 7, false, why);
-            case 1: Classes::SetMastered(id, Classes::Bit(Id::Warrior) | Classes::Bit(Id::Knight)); return ApplyClass(id, "knight", 3, false, why);
+            case 1: Classes::SetMastered(id, Classes::Bit(Id::Warrior)); return ApplyClass(id, "knight", 3, false, why);
             case 2: {
                 Classes::Mask m = 0;
                 for (int k = static_cast<int>(Id::GreatKnight); k <= static_cast<int>(Id::Scout); ++k) m |= Classes::Bit(static_cast<Id>(k));
@@ -409,7 +409,7 @@ namespace MFO::SelfTest {
             auto rk = [&](Classes::Id id) { return v.ranks[static_cast<std::size_t>(id)]; };
             if (i == 0 && rk(Classes::Id::Warrior) != 7) expectFail = "Warrior L7 must read rank 7";
             if (i == 1 && (rk(Classes::Id::Warrior) != Classes::kRankMasteredUnequipped || rk(Classes::Id::Knight) != 3))
-                expectFail = "mastered Warrior must read 100 (quarter) with Knight L3 equipped";
+                expectFail = std::format("mastered Warrior must read 100 (quarter) with Knight L3 equipped: read warrior {} knight {}", rk(Classes::Id::Warrior), rk(Classes::Id::Knight));
             if (i == 2 && topCapRanks < 2) expectFail = std::format("a T4 must lift its two T3 parents to the cap (20): {} found", topCapRanks);
             if (i == 3 && !v.mercFull) expectFail = "equipped Mercenary must carry the full ability spell";
             if (i == 4) {
