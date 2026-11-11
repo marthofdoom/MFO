@@ -130,8 +130,10 @@ namespace MFO::Iaus {
     }
 
     Readout MakeReadout(const Decision& d, std::span<const Candidate> cands, const Mind& m, const Tuning& t,
-                        double now) {
+                        double now, const Profile* p) {
         Readout r;
+        static const Profile kDefault;   // uncustomised catalogue: what the scan scores with until card I8
+        const Profile& prof = p ? *p : kDefault;
         r.rapportRank = d.rapportRank;
         r.actFloor = t.actFloor;
         r.verdict = d.verdict;
@@ -139,6 +141,7 @@ namespace MFO::Iaus {
             if (r.topN >= r.top.size()) break;
             r.top[r.topN].label = Label(cands[s.idx]);
             r.top[r.topN].score = s.score;
+            r.top[r.topN].why = FormatWhy(cands[s.idx], m, prof, t, d.rapportRank, d.bestHeal);
             ++r.topN;
         }
         if (!d.order.empty()) r.pick = Label(cands[d.order.front().idx]);

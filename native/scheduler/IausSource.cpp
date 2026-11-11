@@ -162,10 +162,10 @@ namespace MFO::Scheduler {
         if (!m_built) return;
         const Iaus::Tuning& T = Iaus::DefaultTuning();
         const char* name = m_self && m_self->GetName() ? m_self->GetName() : "?";
-        // The [iaus] line (on change, plus every logRepeatSec; a NEW fall-past chain always). bIausExplain is card
-        // I7's MCM key (Config is outside this card), so the [iaus-why] lines stay off here.
+        // The [iaus] line (on change, plus every logRepeatSec; a NEW fall-past chain always). bIausExplain
+        // (INI-only, card I7) adds the [iaus-why] per-candidate lines.
         Iaus::Engine::Log(m_id, name, m_d, m_set.gen.actions, DefaultProfile(), T, m_tick, m_pickedStep, m_notes, m_ms,
-                          /*a_explain=*/false);
+                          /*a_explain=*/Config::g_iausExplain.load());
         // What was generated: the only view of the candidate set, rate-limited.
         if (Iaus::Engine::Paced(m_id, kChanDescribe, kDescribeSec, m_tick)) {
             std::string posture = "none wanted";

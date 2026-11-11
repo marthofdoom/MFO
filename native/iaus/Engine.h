@@ -58,7 +58,9 @@ namespace MFO::Iaus::Engine {
 
     // The board's "Thinking" panel (card I7).
     void Publish(RE::FormID a_actor, Readout a_r);
-    [[nodiscard]] bool ReadReadout(RE::FormID a_actor, Readout& a_out);
+    // RENDER THREAD (or any): copies the last published readout under the leaf mutex. a_ageSec = seconds since the
+    // worker published it (the panel greys a readout older than a few ticks: a fight that ended leaves the last one).
+    [[nodiscard]] bool ReadReadout(RE::FormID a_actor, Readout& a_out, double* a_ageSec = nullptr);
 
     // The running decision ended (combat end) / the IAUS toggle edge or dismissal (design 1.3: no rank from the
     // old source survives into the new one). WORKER ONLY, like every Mind access (no lock): the board toggle runs
