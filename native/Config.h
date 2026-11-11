@@ -352,6 +352,11 @@ namespace MFO::Config {
     // animation, no engine write, not in the MCM.
     inline std::atomic<bool>  g_tauntProbe{ false };
 
+    // STEALTH PROBE P1-P3 ([Debug] bStealthProbe, INI-only, default OFF; card G2, Docs/research/2026-11/g2-hide-design.md section 3).
+    // PASSIVE: rate-limited [stealth-probe] self / seen / hit / q87 lines (StealthProbe.cpp). The follower's detection inputs, each
+    // foe's group record of him, and every sneak hit with the expected multiplier. No claim, no engine write, not in the MCM.
+    inline std::atomic<bool>  g_stealthProbe{ false };
+
     // TAUNT MASTER SWITCH (INI-only [Taunt] bTaunt, ClickUp 86e3pyjk2). Default OFF: marth 2026-10-13, Taunt failed its
     // field test, so a Taunt gambit is skipped (Taunt::Fire, transparent) this release. The release-time cleanup
     // (Taunt::Clear / Tick / ClearTauntClaims) runs regardless. Not in the MCM.
@@ -570,8 +575,8 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_iausGroundRoad{ false };
     // IAUS HIDE ROAD ([Debug] bIausHideRoad, INI-only, default OFF until a field run proves the drive, principle 5).
     // 1 = for a SNEAK-CLASS follower on Sentient AI (class tree ON) whom a foe has found, Concealment.cpp picks a point no
-    // listed foe can see (MFO's own rays, main thread) and the Disengage family is generated (Snapshot::hideRoad /
-    // hidePoint) while Harbinger serves ABI v39; a chosen run goes through apmf/Disengage.cpp (card H3), then the G1
+    // listed foe can see (MFO's own rays, main thread) and the Disengage family is generated (Snapshot::concealRoad /
+    // concealPoint) while Harbinger serves ABI v39; a chosen run goes through apmf/Disengage.cpp (card H3), then the G1
     // stance claim. Read by iaus/Candidates.cpp on the worker.
     inline std::atomic<bool>  g_iausHideRoad{ false };
     // IAUS AVAILABLE ([General] bIausAvailable, MCM "Combat & Casting", default ON; marth Q71). The global gate over

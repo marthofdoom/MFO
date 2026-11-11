@@ -77,6 +77,7 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
+            "strike", "hold",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -89,11 +90,11 @@ namespace MFO::Iaus {
         case Cons::HandFree: case Cons::SplashSafe: case Cons::FoeTaunted: case Cons::Unseen:
         case Cons::NoHealRetreat: case Cons::DisengageClass: case Cons::Stock: case Cons::NoHealDrink:
         case Cons::Ammo: case Cons::StaffCharge: case Cons::MeleeReach: case Cons::ClassWeapon:
-        case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive:
+        case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive: case Cons::HoldStill:
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
-        case Cons::MortalTaunt: case Cons::BoostMortalDanger:
+        case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -209,7 +210,8 @@ namespace MFO::Iaus {
             at(Cons::FoeStronger) = Bin(0.7f, 1.0f);      // doc
             at(Cons::FoeTaunted) = Bin(0.0f, 1.0f);       // gate: already taunted
             at(Cons::TauntSelfHp) = Logi(10.0f, 0.45f);   // doc: a hurt tank stops pulling aggro
-            at(Cons::Unseen) = Bin(0.0f, 1.0f);           // gate once H-DETECT exists (Unknown = not applicable)
+            at(Cons::Unseen) = Bin(0.0f, 1.0f);           // gate: the hold row stands only while every listed foe's group record says he is not detected (Unknown = not applicable)
+            at(Cons::HoldStill) = Bin(0.0f, 1.0f);        // gate: the hold row yields to the blow from stealth the moment one is ready
             at(Cons::FightStart) = Inv(1.0f);             // doc: x = combat seconds / 6, an opener only
             at(Cons::RetreatHp) = VetoAbove(Inv(3.0f), 0.30f);   // doc: only below 30% HP
             at(Cons::NoHealRetreat) = Bin(0.0f, 1.0f);    // gate, threshold Tuning::noHealRetreat (doc 0.3)
@@ -330,6 +332,11 @@ namespace MFO::Iaus {
             }
             // mortal danger (retreat, health potion): x1.5 for a follower who dies for good. His life is not a resource.
             at(Cons::BoostMortalDanger) = Bin(1.0f, 1.5f);
+            // blow from stealth (G2 Layer 1): x1.5 on an Attack / Power attack at a foe whose group does not detect him while he
+            // sneaks. CHOSEN, not measured: the engine multiplies the damage itself (weapon game setting x perk entry 18, a
+            // factor 1.5 to 3 and more), so this is only the nudge that makes him take the unaware foe before an aware one. I9
+            // tunes it from the [stealth-probe] hit/q87 lines.
+            at(Cons::BoostStrike) = Bin(1.0f, 1.5f);
             // trade (the melee weapon category): x = seconds he lives at the damage coming in / 10. Ten seconds and more
             // 1.0, two seconds 0.44: a follower who cannot trade blows does not put the bow away because the foe came near.
             // Not applicable while nothing is known to be hitting him.
@@ -396,14 +403,14 @@ namespace MFO::Iaus {
                 { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
-                { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 }, { Cons::BoostControlled, 1 },
+                { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 }, { Cons::BoostControlled, 1 }, { Cons::BoostStrike, 1 },
             };
             constexpr U kPowerAttack[] = {
                 { Cons::RangeMelee, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
                 { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
-                { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 }, { Cons::BoostControlled, 1 },
+                { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 }, { Cons::BoostControlled, 1 }, { Cons::BoostStrike, 1 },
             };
             constexpr U kTaunt[] = {
                 { Cons::RangeTaunt, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
@@ -415,7 +422,7 @@ namespace MFO::Iaus {
             constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
-            constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
+            constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::HoldStill, 1 }, { Cons::ClassFit, 1 } };   // G2 Layer 1: the hold row (Generate.cpp Holds)
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
@@ -600,6 +607,8 @@ namespace MFO::Iaus {
             case Cons::Unseen:
                 if (f.unseen == Tri::Unknown) return In::Off();
                 return B(f.unseen == Tri::Yes);
+            case Cons::HoldStill:     return c.family == Family::Sneak ? B(!f.strikeReady) : In::Off();
+            case Cons::BoostStrike:   return B(f.selfSneaking && f.foeUnaware == Tri::Yes);
             case Cons::FightStart:    return (std::max)(0.0f, f.combatSec) / 6.0f;
             case Cons::RetreatHp:     return f.selfHp;
             case Cons::NoHealRetreat: return bestHeal > t.noHealRetreat ? 0.0f : 1.0f;

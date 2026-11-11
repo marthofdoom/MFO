@@ -33,6 +33,7 @@
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "TauntProbe.h"    // taunt S0 passive probes (bTauntProbe)
+#include "StealthProbe.h"  // G2 stealth probe P1-P3 (bStealthProbe)
 #include "Taunt.h"         // taunt S2: Taunt::Tick (every pump) / Clear
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
@@ -980,6 +981,7 @@ namespace MFO::Scheduler {
         else           StallProbe(f, id);
         DeadTgtService(f, id, ownCombat);   // [deadtgt]: passive, ClickUp 86e3eb078
         TauntProbe::Service(f, id, ownCombat);   // [taunt-probe]: passive, gated by bTauntProbe (ClickUp 86e3g6duw)
+        StealthProbe::Service(f, id, ownCombat); // [stealth-probe]: passive, gated by bStealthProbe (card G2)
         APMFBridge::ReleaseOffenseCastOnDeadTarget(id);   // ClickUp 86e3eb078: a dead target ends the channel at once
 
         // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for
@@ -1125,6 +1127,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseOffenseApproach(id, "retreating");
                 APMFBridge::ReleaseGroundStep(id, "retreating");
                 Concealment::Release(id, "retreating");   // card G3: the retreat has its own road
+                APMFBridge::ReleaseHideHold(id, "retreating");       // G2: no movement block over the retreat travel
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating

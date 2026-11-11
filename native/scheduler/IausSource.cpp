@@ -130,6 +130,7 @@ namespace MFO::Scheduler {
             // The IAUS memory: the running decision, the G10 want list, the fight clock.
             Iaus::Engine::Forget(a_id);
             Iaus::Candidates::Forget(a_id);
+            APMFBridge::ReleaseHideHold(a_id, a_why);   // G2 hold row: ch.1 + ch.7 belong to the old source's decision
         }
 
     }
@@ -228,7 +229,7 @@ namespace MFO::Scheduler {
         case Family::Taunt:        c.actionOpcode = Vocab::kActTaunt; break;
         case Family::Bash:         c.actionOpcode = Vocab::kActBash; break;    // Harbinger ch.31 (generated only behind Snapshot::bashRoad)
         case Family::GiveGround:   c.actionOpcode = Vocab::kActGiveGround; break;   // Harbinger ch.24 on a point (Snapshot::groundRoad)
-        case Family::Disengage:    c.actionOpcode = Vocab::kActDisengage; break;    // card G3 (Concealment.cpp; Snapshot::hideRoad)
+        case Family::Disengage:    c.actionOpcode = Vocab::kActDisengage; break;    // card G3 (Concealment.cpp; Snapshot::concealRoad)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
@@ -257,7 +258,9 @@ namespace MFO::Scheduler {
             }
             break;
         }
-        case Family::Sneak:        c.actionOpcode = Vocab::kActSneak; break;   // card G1 (apmf/SneakClaims.cpp), no generator emits it yet
+        // G2 Layer 1: the generated Sneak candidate is the HOLD row (iaus/Generate.cpp Holds): he already sneaks (G1's stance claim
+        // holds that), the row names nothing so he neither attacks nor casts. Wait is the opaque do-nothing idiom (cast/Fire.cpp).
+        case Family::Sneak:        c.actionOpcode = Vocab::kActWait; break;
         case Family::Posture:
         case Family::Scroll:
         case Family::Exploit:
@@ -275,12 +278,20 @@ namespace MFO::Scheduler {
         if (g_followers.find(m_id) == g_followers.end()) return false;   // the record is gone: the scan keeps its last choice
         while (const Item* it = Current()) {
             std::string whyNot;
-            if (MakeChoice(*it, a_out, whyNot)) return true;
+            if (MakeChoice(*it, a_out, whyNot)) {
+                // G2 hold row (apmf/HideClaims.cpp): the claim follows the item the scan is about to fire, BEFORE it fires. The hold
+                // row files ch.1 + ch.7; every other pick releases both first, so the ch.7 deny never eats a blow from stealth,
+                // a reveal or another family winning. A posture item leaves the claim as it is (it fires nothing the deny covers).
+                if (!it->posture)
+                    APMFBridge::ServiceHideHold(m_self, m_set.gen.actions[m_d.order[it->idx].idx].family == Family::Sneak);
+                return true;
+            }
             if (!it->posture) m_notes.push_back({ m_d.order[it->idx].idx, std::move(whyNot) });
             ++m_pos;
         }
         a_out = Eval::Choice{};   // rank -1: no more candidates
         a_out.source = Eval::Source::Iaus;
+        APMFBridge::ServiceHideHold(m_self, false);   // nothing picked this lap: no hold
         return true;
     }
 
@@ -381,6 +392,7 @@ namespace MFO::Scheduler {
 
     void IausCombatEnded(RE::FormID a_id) {
         Iaus::Engine::EndDecision(a_id);
+        APMFBridge::ReleaseHideHold(a_id, "combat ended");
         Iaus::Candidates::CombatEnded(a_id);
     }
 

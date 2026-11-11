@@ -23,6 +23,7 @@
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "TauntProbe.h"    // taunt S0 passive probes (bTauntProbe)
+#include "StealthProbe.h"  // G2 stealth probe P1-P3 (bStealthProbe)
 #include "Taunt.h"         // taunt S2: Taunt::Tick (every pump) / Clear
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
@@ -469,6 +470,7 @@ namespace MFO::Scheduler {
         g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_deadTgt.clear();                      // [deadtgt] windows are session state
         TauntProbe::Reset();                    // [taunt-probe] samples are session state
+        StealthProbe::Reset();                  // [stealth-probe] samples, pending hits and the q87 aggregate are session state
         Taunt::Clear();                         // taunt attempts + pinned foes: logged "load", claims released
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note

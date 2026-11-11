@@ -61,7 +61,7 @@ namespace MFO::Iaus {
         Block,        // raise the guard against a swing that is coming (needs the Harbinger leaf promote: Snapshot::blockRoad)
         Bash,         // bash a foe in reach, first of all one that is charging a spell (same road: Snapshot::bashRoad)
         Disengage,    // card G3: a sneak class a foe has found runs to a point no foe can see and crouches there (the H3
-                      // disengage drive, Concealment.cpp). Generated only behind Snapshot::hideRoad with a point known
+                      // disengage drive, Concealment.cpp). Generated only behind Snapshot::concealRoad with a point known
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -121,6 +121,8 @@ namespace MFO::Iaus {
         GroundNeed,         // give ground: he is being beaten by something he cannot trade with, or it is closing on a ranged fighter
         BlockNeed,          // block: a foe's swing at him is in the air, and how much it matters
         BashNeed,           // bash: the foe is charging a spell (an interrupt), else it is on him
+        BoostStrike,        // multiplier: a weapon blow on a foe that does not detect him while he sneaks (G2 Layer 1: the engine's own sneak attack)
+        HoldStill,          // gate: the hold row (G2 Layer 1) stands only while no blow from stealth is ready
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -320,7 +322,10 @@ namespace MFO::Iaus {
         int   partyCount = 1;
         bool  liveSummon = false;
         bool  casterOnMe = false;         // a hostile caster targets me (G11 refines to "charging at me")
-        Tri   unseen = Tri::Unknown;      // no foe has me in sight (H-DETECT, M2)
+        Tri   unseen = Tri::Unknown;      // no foe has me in sight (G2 Layer 1: he sneaks and every listed foe's group record says he is not detected)
+        bool  selfSneaking = false;       // Snapshot::selfSneaking
+        Tri   foeUnaware = Tri::Unknown;  // THIS candidate's foe does not detect him (Combatant::detectsMe == No -> Yes)
+        bool  strikeReady = false;        // the hold row: a blow from stealth is ready now (an unaware foe in reach / in sight)
         bool  disengageClass = false;     // Flag::kDisengage
         // posture
         PostureKind posture = PostureKind::None;

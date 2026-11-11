@@ -650,6 +650,19 @@ namespace MFO::APMFBridge {
     void        NoteSneakRuleStands(RE::FormID a_follower, SneakTable a_table);
     void        NoteSneakTableLap(RE::FormID a_follower, SneakTable a_table, bool a_ownCombat);
     void        ReleaseSneak(RE::FormID a_follower, const char* a_why);
+    // True while the follower holds G1's ch.3 stance claim (a handle stands). G2 reads it: with bSneakInCombat off the claim is
+    // released in combat, so "his sneak is MFO's" and "bSneakInCombat or this" is the gate for the hold row. Worker-safe.
+    bool        SneakClaimHeld(RE::FormID a_follower);
+
+    // ── G2 Layer 1 HOLD ROW (apmf/HideClaims.cpp): ch.1 kIntent_MovementBlock + ch.7 kIntent_CombatAction (Offense | Cast) ──
+    // HideHoldSupported: Harbinger (ABI >= 6) is present; false = the hold row is not generated at all (logged once, never a
+    // stand-in). ServiceHideHold: once per IAUS lap, want = true only when the picked step is the hold row; files both claims
+    // (re-files one Harbinger ended), want = false releases both. ReleaseHideHold: dismissal / stand-down / combat end.
+    // Worker-safe, own leaf mutex (never g_mx). Everything else that ends the hold is the sweep (his combat ended, not
+    // sneaking, G1's claim gone, gone / dead / unloaded, the IAUS stopped asking) and ClearHideClaims (a load).
+    bool HideHoldSupported();
+    void ServiceHideHold(RE::Actor* a_follower, bool a_want);
+    void ReleaseHideHold(RE::FormID a_follower, const char* a_why);
 
     // ── ch.24 HELD-HEAL APPROACH (ABI v19, kIntent_CombatApproach): apmf/CombatApproach.cpp ──
     // X = the held heal's recipient, R = fHealApproachRadius. One claim per follower; a no-op below

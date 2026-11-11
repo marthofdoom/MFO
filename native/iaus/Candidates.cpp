@@ -14,6 +14,7 @@
 #include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
 #include "iaus/Disengage.h"
 #include "iaus/Fills.h"
+#include "iaus/Hide.h"
 #include "iaus/SpellBook.h"
 #include "logistics/Logistics.h"
 
@@ -145,6 +146,12 @@ namespace MFO::Iaus::Candidates {
         Fills::Pass fills;
         fills.Unit(s.self, a_self, Fills::Role::Self);
         s.playerId = player ? player->GetFormID() : 0;
+        // G2 Layer 1: the stance flag, an actor-state bit (no engine call), counted only when the sneak is MFO's: bSneakInCombat on or
+        // G1's ch.3 claim live. With the defaults an engine-forced sneak mid-fight changes nothing (identical to main).
+        s.selfSneaking = a_self->IsSneaking() && (Config::g_sneakInCombat.load(std::memory_order_relaxed) ||
+                                                  APMFBridge::SneakClaimHeld(selfID));
+        s.hideRoad     = s.selfSneaking && APMFBridge::HideHoldSupported();   // asked only while it could matter (logs the absence once)
+        const std::uint32_t selfHandle = a_self->GetHandle().native_handle();
 
         // ── the fight clock ──────────────────────────────────────────────────────────────────────────────
         {
@@ -248,6 +255,9 @@ namespace MFO::Iaus::Candidates {
             u.unholy = Logistics::IsUnholy(foe);
             u.taunted = Taunt::IsPinned(fid);   // card I6 (R1): the Taunt module's own live pin by ANY taunter (Q69), not an engine read
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
+            // G2 Layer 1: the foe's OWN group's record of him (iaus/Hide.h). The follower's group lock above is released, so this
+            // read lock is taken alone and nothing is nested (the TauntProbe.cpp ServiceP2 shape).
+            u.detectsMe = Hide::Verdict(Hide::Read(foe, selfHandle));
             u.sight       = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Own));
             u.sightEngine = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Engine));
             const float holdSec = DefaultTuning().occlusionHoldSec;   // the log line only: Gather has no Tuning
@@ -335,14 +345,14 @@ namespace MFO::Iaus::Candidates {
         a_out.gate = SpellBook::GateFor(a_out.snap.self.id);
         // Card G3: the hide run exists only while its road does, and a point is asked for only when the generator could
         // use one (a sneak class that may disengage, found by a foe). The pick itself runs on the main thread, spread
-        // over frames (Concealment.cpp); `hidePoint` is true once a fresh answer is in.
-        a_out.snap.hideRoad  = Concealment::RoadOpen();
-        a_out.snap.hidePoint = false;
-        if (a_out.snap.hideRoad && a_out.gate.sneakClass && a_out.gate.disengage && Disengage::Found(a_out.snap)) {
+        // over frames (Concealment.cpp); `concealPoint` is true once a fresh answer is in.
+        a_out.snap.concealRoad  = Concealment::RoadOpen();
+        a_out.snap.concealPoint = false;
+        if (a_out.snap.concealRoad && a_out.gate.sneakClass && a_out.gate.disengage && Disengage::Found(a_out.snap)) {
             std::vector<RE::FormID> foes;
             foes.reserve(a_out.snap.foes.size());
             for (const auto& f : a_out.snap.foes) foes.push_back(f.id);
-            a_out.snap.hidePoint = Concealment::Prepare(a_follower, foes);
+            a_out.snap.concealPoint = Concealment::Prepare(a_follower, foes);
         }
         a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
         return true;
@@ -370,12 +380,12 @@ namespace MFO::Iaus::Candidates {
         const auto& g = a_set.gen;
         const auto n = [&](Family f) { return g.perFamily[static_cast<std::size_t>(f)]; };
         return std::format("foes {}/{} | attack {} power {} taunt {} retreat {} drink {}/{}/{} posture {} | offense {} "
-                           "control {} heal {} buff {} summon {} ward {} | dropped cost {} class {} hand {} target {} | "
+                           "control {} heal {} buff {} summon {} ward {} hold {} | dropped cost {} class {} hand {} target {} | "
                            "book {} emergency {:.2f}{}",
                            g.foesKept, g.foesSeen, n(Family::Attack), n(Family::PowerAttack), n(Family::Taunt),
                            n(Family::Retreat), n(Family::DrinkHealth), n(Family::DrinkStamina), n(Family::DrinkMagicka),
                            n(Family::Posture), n(Family::CastOffense), n(Family::CastControl), n(Family::CastHeal),
-                           n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), g.droppedCost,
+                           n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), n(Family::Sneak), g.droppedCost,
                            g.droppedClass, g.droppedHand, g.droppedTarget, a_set.snap.hasBook ? "yes" : "NO",
                            g.emergency, g.selfUnreadable ? " SELF-UNREADABLE" : "");
     }
