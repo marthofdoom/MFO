@@ -11,5 +11,5 @@
 #include <utility>
 #include <vector>
 
-namespace RE { using FormID = std::uint32_t; class Actor; }
+namespace RE { using FormID = std::uint32_t; class Actor; class TESCombatStyle; class BGSListForm; }
 namespace SKSE { class SerializationInterface; }

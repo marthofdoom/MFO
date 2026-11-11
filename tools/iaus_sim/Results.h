@@ -167,7 +167,7 @@ namespace Sim {
     struct Results {
         std::string runId, list, label, oracleKind = "none"; std::uint64_t seed = 1; int fights = 0, oracleK = 0; double oracleH = 0;
         std::vector<ResultRow> rows; std::vector<ScenarioRow> scen;
-        std::string mode = "iaus"; bool hasJ = false; double jVal = 0, jScen = 0, jNat = 0;
+        std::string mode = "iaus"; bool hasJ = false; double jVal = 0, jScen = 0, jNat = 0; int jFights = 0; std::string jCovers = "all classes";   // the headline's scope (B712): which classes the objective covered and the fights per scenario
         bool hasOracleJ = false; double oracleJ = 0, oracleJScen = 0, oracleJNat = 0; int oracleFights = 0; std::string oracleOver;   // the headline: J = half scenario + half natural-bracket utility, in this run's mode
         void Write(std::string path) const {
             namespace fs = std::filesystem;
@@ -176,7 +176,7 @@ namespace Sim {
             std::error_code ec; fs::create_directories(fs::path(path).parent_path(), ec);
             const char* br = std::getenv("SIM_BRANCH"); const char* sha = std::getenv("SIM_SHA");
             std::string j = "{\"schema\":1,\"run_id\":" + JsonOut::Str(id) + ",\"time\":" + JsonOut::Str(IsoNow()) + ",\"branch\":" + JsonOut::Str(br ? br : "") + ",\"sha\":" + JsonOut::Str(sha ? sha : "")
-                          + ",\"list\":" + JsonOut::Str(list) + ",\"seed\":" + std::to_string(seed) + ",\"fights_per_cell\":" + std::to_string(fights) + ",\"label\":" + JsonOut::Str(label) + ",\"mode\":" + JsonOut::Str(mode) + ",\"headline\":{\"j\":" + (hasJ ? JsonOut::Num(jVal) : "null") + ",\"j_scenarios\":" + (hasJ ? JsonOut::Num(jScen) : "null") + ",\"j_natural\":" + (hasJ ? JsonOut::Num(jNat) : "null") + ",\"oracle_j\":" + (hasOracleJ ? JsonOut::Num(oracleJ) : "null") + ",\"oracle_j_scenarios\":" + (hasOracleJ ? JsonOut::Num(oracleJScen) : "null") + ",\"oracle_j_natural\":" + (hasOracleJ ? JsonOut::Num(oracleJNat) : "null") + ",\"oracle_fights\":" + std::to_string(oracleFights) + ",\"oracle_over\":" + JsonOut::Str(oracleOver) + "}"
+                          + ",\"list\":" + JsonOut::Str(list) + ",\"seed\":" + std::to_string(seed) + ",\"fights_per_cell\":" + std::to_string(fights) + ",\"label\":" + JsonOut::Str(label) + ",\"mode\":" + JsonOut::Str(mode) + ",\"headline\":{\"covers\":" + JsonOut::Str(jCovers) + ",\"fights\":" + std::to_string(jFights) + ",\"j\":" + (hasJ ? JsonOut::Num(jVal) : "null") + ",\"j_scenarios\":" + (hasJ ? JsonOut::Num(jScen) : "null") + ",\"j_natural\":" + (hasJ ? JsonOut::Num(jNat) : "null") + ",\"oracle_j\":" + (hasOracleJ ? JsonOut::Num(oracleJ) : "null") + ",\"oracle_j_scenarios\":" + (hasOracleJ ? JsonOut::Num(oracleJScen) : "null") + ",\"oracle_j_natural\":" + (hasOracleJ ? JsonOut::Num(oracleJNat) : "null") + ",\"oracle_fights\":" + std::to_string(oracleFights) + ",\"oracle_over\":" + JsonOut::Str(oracleOver) + "}"
                           + ",\"oracle\":{\"k\":" + std::to_string(oracleK) + ",\"horizon_s\":" + JsonOut::Num(oracleH) + ",\"kind\":" + JsonOut::Str(oracleKind) + "},\n\"classes\":[";
             for (std::size_t i = 0; i < rows.size(); ++i) { const ResultRow& r = rows[i]; std::map<std::string, double> mix, met;
                 for (const auto& kv : SchemaMetrics(r.metrics)) { if (kv.first.rfind("a.", 0) == 0) mix[kv.first.substr(2)] = kv.second; else met[kv.first] = kv.second; }

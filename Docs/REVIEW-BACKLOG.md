@@ -2973,19 +2973,19 @@ Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale 
 
 ### MFO-B698 (SEV-5, OPEN, classes/ClassTable.cpp todo.* rows, against a31f154, same review)
 "The card's always-true default row for the four sneak classes is not in the diff (ClassTable untouched)." The class rows still use todo.act.sneak, todo.cond.self_no_summon, todo.cond.foe_attacking_my_summon: the class defaults card wires them.
-### MFO-B710 (SEV-4, OPEN, IAUS sim tool tools/iaus_sim/sim.cpp, against a6844761, Opus review of fix/iaus-sim-tool)
+### MFO-B710 (SEV-4, FIXED @46213a0 on fix/iaus-sim-backlog, IAUS sim tool tools/iaus_sim/sim.cpp, against a6844761, Opus review of fix/iaus-sim-tool)
 "`--seeds` headline always runs 24 fights and does not say so. `--seeds 1,2 --fights 60` gives exactly the `--fights`-less result, and the HEADLINE line has no fight count." Reasoning: consistent with the single-seed headline (also 24). The real 60-fight measurement today is `--opt <p> --opt-passes 0 --opt-fights 60 --seeds ...`. Drain before the Fable tuning round.
 
-### MFO-B711 (SEV-4, OPEN, IAUS sim tool, against a6844761, same review)
+### MFO-B711 (SEV-4, FIXED @46213a0 on fix/iaus-sim-backlog, IAUS sim tool, against a6844761, same review)
 "`covers=` prints what was asked for, not which classes were matched. `--classes mage,mgae --seeds 1,2,3` silently covers only mage but prints covers=mage,mgae. `--classes mgae --opt ...` runs the whole search at J=0.000 with no error." Reasoning: operator typo guard; drain before the tuning round.
 
-### MFO-B712 (SEV-4, OPEN, IAUS sim tool, against a6844761, same review)
+### MFO-B712 (SEV-4, FIXED @46213a0 on fix/iaus-sim-backlog, IAUS sim tool, against a6844761, same review)
 "The JSON `headline.j` is now scoped, but no field records the scope. A `--classes X` results file cannot be told apart from an all-class one; a later --compare or archive diff would read a scope change as a tuning delta. The oracle headline is scoped too but prints no covers=." Reasoning: results provenance; drain before the tuning round.
 
-### MFO-B713 (SEV-4, OPEN, IAUS sim tool, against a6844761, same review)
+### MFO-B713 (SEV-4, FIXED @46213a0 on fix/iaus-sim-backlog, IAUS sim tool, against a6844761, same review)
 "`--opt-rows` and `--opt-prefix` silently ignore `--seeds` and `--opt-fights`. They call Objective(seed, fights) directly." Reasoning: latent, the tune scripts do not pass these flags today.
 
-### MFO-B714 (SEV-5, OPEN, IAUS sim tool, against a6844761, same review)
+### MFO-B714 (SEV-5, FIXED @46213a0 on fix/iaus-sim-backlog, IAUS sim tool, against a6844761, same review)
 Notes: scoped scenario seed uses the filtered-list index (unbiased and paired, but not equal to the all-class slice; keeping the original index i would fix it); `--seeds` n=1 prints se=0.00 instead of n/a; `--seeds ,` silently ignored; the printed SE is between-seed SE of absolute J, looser than the paired-difference noise a keep decision needs; `--classes X` and `--opt-class X` are different objectives (0.5/0.5 natural only vs 0.35/0.65 over 3 brackets), the doc could say so.
 
 ### MFO-B699 (SEV-4, OPEN, iaus/Candidates.cpp NoteOcclusion, against 24a1dbb, Opus review of fix/iaus-field-1)
@@ -3051,3 +3051,15 @@ The old "no owner on this path, or form missing -> stance disabled ..." comment 
 
 ### MFO-B751 (SEV-5, OPEN, C8 author's spots, against 2628beb, same review)
 Accepted as documented: fClassLeashMult 0.5 is a tunable guess (floored at fLeashMin; field tunes it); dead followers are released on the not-managed path with the 30 s backoff for an ended claim; Harbinger absent = silent mix sweep (matches AimClaims); Dragonborn with no picked T4 uses its own tier-5 package; Templar vs-undead power floor not built (needs a conditional facet) and Ebony Warrior inherits 0.20 (not ruled).
+
+### MFO-B755 (SEV-3, OPEN, tools/iaus_sim headline fights, against a2e7336, Opus review of fix/iaus-sim-backlog)
+`hf = fightsGiven ? fights : 24` also changes the normal (non-`--seeds`) full-run headline J: before, it was always 24 fights; now `--fights N` computes it at N. The count is printed and in JSON (headline.fights), but `--compare` against an archived baseline made at another fight count would read the change as a J delta (unchecked whether --compare looks at headline.fights). Fix: back to 24 for non-`--seeds` runs, or make --compare refuse when headline fights/covers differ. The Fable tuning round must RE-BASELINE before tuning.
+
+### MFO-B756 (SEV-4, OPEN, tools/iaus_sim JSON oracle_over, against a2e7336, same review)
+B712 incomplete: the JSON records covers and fights for the main J, but oracle_over has no covers field for the oracle headline (only the printed oracle line gained covers=).
+
+### MFO-B757 (SEV-5, OPEN, tools/iaus_sim jCovers, against a2e7336, same review)
+jCovers defaults to "all classes" even when hasJ is false (JSON can claim coverage for a J that was not computed), and fights is then 0. Cosmetic.
+
+### MFO-B758 (SEV-5, OPEN, B714 notes, against a2e7336, same review)
+The B714 notes on paired-difference SE and on --classes vs --opt-class being different objectives are handled only in iaus-sim-v2.md; the backlog marks the whole of B714 FIXED.
