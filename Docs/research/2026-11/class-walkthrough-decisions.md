@@ -246,3 +246,9 @@ Source draft: class-perks-packages.md. Each ruling here OVERRIDES the draft.
 - Q60 Dragonborn root: not answered; provisional default stays (root of his highest-level mastered T4). Ask again with C10.
 - Q60 Dragonborn (marth 2026-11-10, verbatim): "It is a pickable t4 for combat behaviour, and It uses the most perked weapon as main, but also like auto should the player want a bow for flying dragons or something."
   => Dragonborn's COMBAT BEHAVIOUR (package/CSTY/attack mix) is a player-picked T4 (any mastered T4). His MAIN weapon kind = his most-perked weapon line; but he switches situationally like Auto (e.g. a bow vs flying dragons). Storage of the picked T4 needs a new MCLS field (MCLS v2 card). Stance root for C2b = the root of his most-perked weapon line (1H/2H -> melee, archery -> ranged, a school -> mage) when no T4 is picked.
+
+## IAUS mage melee (marth 2026-11-10, after the sim's cost-fixed run: T1 mage attack 21-42% of fired actions)
+"A T1 mage should almost never melee, and even less often pure mages up the tree."
+- Target for I8 (T1 Mage profile): attack is a last resort, near 0% of fired actions while any affordable cast, drink-magicka, staff or posture option exists. Sim acceptance: mage `attack=` share in the low single digits across brackets.
+- Pure-mage classes higher in the tree (T2+ line Mage, not hybrids) melee even less than T1. Hybrids (one weapon class + one school) are not covered by this rule.
+- Do not get there by removing the attack candidate (attacks are additive, never removed): weight it down in the class profile so a mage reaches for magicka, staff or retreat first.
