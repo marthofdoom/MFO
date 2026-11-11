@@ -80,7 +80,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = false, engineCasts = true;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = false, engineCasts = true, g10Sticky = false;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--baseline") && i + 1 < argc) outBase = argv[++i];
         else if (!std::strcmp(argv[i], "--taunt-visible")) tauntVisible = true;
         else if (!std::strcmp(argv[i], "--no-engine-casts")) engineCasts = false;
+        else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
         else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts]\n"); return 2; } }
     const Data D = listPath ? LoadData(listPath) : BuiltinData();
     const std::vector<SimClass> classes = LegacyClasses();
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
             for (int rk = 1; rk <= 5; ++rk) for (int f = 0; f < fights; ++f) {
                 Rng R; R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(b) * 104729 + std::uint64_t(rk) * 15485863ULL + std::uint64_t(f) * 32452843ULL);
                 bool forced = false; Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], rk, kBrackets[b], R, t1, &forced);
-                F.tauntVisible = tauntVisible; F.engineCasts = engineCasts;
+                F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.g10Sticky = g10Sticky;
                 IausPolicy P; P.timeIt = true; RunFight(F, P);
                 A.Add(F.t, forced); RA[rk - 1].Add(F.t, forced);
             }

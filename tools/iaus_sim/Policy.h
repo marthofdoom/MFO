@@ -59,7 +59,7 @@ namespace Sim {
         // a heal of his own in flight: the hand it stands on is held, and the stream is live on its recipient
         if (self.act == Act::Cast && self.hitAt >= 0) { const SimSpell* s = F.SpellOf(self, self.actSpell);
             if (s && s->e.nature == Prune::Nature::Heal) { sn.handBusyLeft = sn.handBusyRight = true; sn.liveStreams.push_back({ s->e.form, self.actTarget == self.c.id ? 0u : self.actTarget, Tri::Yes }); } }
-        for (const SpellTarget& w : c.wants) {   // G10: only the pairs the last decision ranked on top have an answer
+        for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
             const Body* d = F.Find(w.target); if (!d) continue;
             for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWork(c.build->spells[i], *d) });
         }
@@ -152,6 +152,7 @@ namespace Sim {
             if (timeIt && subj) { const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count(); t.dSum += us; t.dMax = std::max(t.dMax, us); ++t.dN; }
             const Decision& d = sv.d; const auto& acts = sv.g.actions;
             c.wants = TopSpellPairs(d, acts);
+            if (F.g10Sticky) for (const SpellTarget& w : c.wants) if (std::find(c.asked.begin(), c.asked.end(), w) == c.asked.end()) c.asked.push_back(w);
             if (subj) Account(F, c, x, sv);
             // posture layer
             if (!sv.g.postures.empty() && x.hitAt < 0 && !(x.actIaus && F.now < x.actEnd) && F.now >= x.staggerUntil) {

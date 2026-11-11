@@ -32,9 +32,9 @@ namespace Sim {
         static constexpr float swap = 1.3f;            // sheathe + draw the other category
         static constexpr float taunt = 1.2f;           // the taunt idle
         static constexpr float staggerSec = 1.1f, bashStagger = 0.8f, recoil = 0.6f;
-        static constexpr float thinkMin = 0.15f, thinkMax = 0.85f;   // the engine AI's pause between attacks, / offensive mult
+        static constexpr float thinkMin = 0.05f, thinkMax = 0.45f;   // the engine AI pause between attacks, / offensive mult. CALIBRATED: field hit cadence p50 1.21 s (calib_logs.py)
         static constexpr float arrowSpeed = 3600.0f, spellSpeed = 2400.0f;
-        static constexpr float downSec = 10.0f;        // bleedout before a follower stands again
+        static constexpr float downSec = 9.5f;         // bleedout before a follower stands again. CALIBRATED: field p50 9.5 s (n=50)
         static constexpr float tauntChance = 0.7f, tauntDur = 10.0f;
         static constexpr float retreatSec = 2.0f;
         static constexpr float aimMiss = 0.12f;        // an aimed projectile at a moving target
@@ -118,6 +118,7 @@ namespace Sim {
         PostureKind drawn = PostureKind::None;
         std::map<std::uint64_t, double> firedAt;   // the Cooldowns store (Kind::IausAction): CooldownId -> last fired
         std::vector<SpellTarget> wants;            // G10: the pairs the last decision ranked on top
+        std::vector<SpellTarget> asked;            // every pair ever asked (--g10-sticky: the answers are remembered)
         std::uint32_t steer = 0;                   // act.attack's target for the engine AI
         std::uint8_t rank = 3; std::uint64_t seed = 0; double window = 1.5;
         float potH = 100, potM = 100, potS = 100;
@@ -137,7 +138,7 @@ namespace Sim {
         std::vector<Shot> shots;
         double now = 0, nextPump = 0, maxSec = 150;
         int rr = 0;
-        bool tauntVisible = false, engineCasts = true, over = false;
+        bool tauntVisible = false, engineCasts = true, g10Sticky = false, over = false;
         Tally t;
         std::uint32_t nextId = 1;
         double lastTauntBy0 = -1e9;   // the subject's last landed taunt (taunt-then-down tally)
