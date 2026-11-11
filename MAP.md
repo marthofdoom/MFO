@@ -8953,11 +8953,12 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   Sentient AI with no further wiring: set A2 as `DefaultTuning()` (more power attacks and control casts, fewer magicka
   potions), `Cons::TauntChance` (a taunt scaled by its level-rule chance: about 44 percent lower on a foe 2 levels up),
   `Cons::RangeTaunt` in place of RangeSpell in the taunt set, `Cons::BoostControlled` x1.3 on a PARALYSED foe only
-  (`Facts::foeHelpless`; `foeControlled` = paralysed or fleeing stays the control-cast gate), DamageValue 0 for a
-  no-damage spell. `Decision::bestHeal` is the best heal's score OVER its action weight, and `Tuning::noHealDrink` /
+  (`Facts::foeHelpless`; `foeControlled` = paralysed or fleeing stays the control-cast gate). `Decision::bestHeal` is the best heal's score OVER its action weight, and `Tuning::noHealDrink` /
   `noHealRetreat` (0.4167 / 0.25) compare against that: retune a heal weight freely, never these two with it. NOT live:
   the road families (Regroup / GiveGround / Block / Bash behind `Snapshot::*Road`, `IausSource.cpp` answers "no action
-  road"), `Tuning::kiteDistance`, and every consideration whose fact the engine side does not fill yet (the estimates,
+  road" for Regroup and Block; Bash and GiveGround have executors behind their own switches, next bullets),
+  `Tuning::kiteDistance`, DamageValue scoring a no-damage spell 0 against his best (not live until the engine side fills
+  spell damage, B688), and every consideration whose fact the engine side does not fill yet (the estimates,
   `mortal`, `swinging`, `casting`, `controlSec`, `castsWanted`): those read Off. Measured effects: doc section 28.1.
 - **THE BASH ROAD (`feat/iaus-combat-move`, 2026-11-11; Harbinger ch.31 `kIntent_CombatMove`, ABI v38; doc section 29).**
   `apmf/CombatMove.cpp` (NEW): `CombatMoveSupported` (ABI >= 38), `RequestBash(follower, foe, power)` (a one-shot through
