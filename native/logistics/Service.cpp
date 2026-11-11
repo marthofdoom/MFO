@@ -377,8 +377,8 @@ namespace MFO::Logistics {
         const auto healRuleMatches = [&]() -> bool {
             for (int start = 0;;) {
                 const auto c = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
-                if (c.ruleIndex < 0) return false;
-                start = c.ruleIndex + 1;
+                if (c.rank < 0) return false;
+                start = c.rank + 1;
                 const auto& op = c.actionOpcode;
                 if (op == Vocab::kActDrinkHealthPotion) {
                     if (CountPotions(a_follower, RE::ActorValue::kHealth) > 0) return true;
@@ -1484,13 +1484,13 @@ namespace MFO::Logistics {
         const bool restrictFree = (pass == 0);
         for (int start = 0; ; ) {
             const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
-            if (choice.ruleIndex < 0) break;          // nothing (more) matched
+            if (choice.rank < 0) break;          // nothing (more) matched
             const auto& op = choice.actionOpcode;
-            fired = choice.ruleIndex;
+            fired = choice.rank;
             label = op;
 
             if (restrictFree && IsDibsTierLootOp(op)) {
-                start = choice.ruleIndex + 1; continue;   // dibs-tier: defer to pass 1
+                start = choice.rank + 1; continue;   // dibs-tier: defer to pass 1
             }
 
             if      (op == Vocab::kActDrinkHealthPotion)  acted = DrinkBest(a_follower, RE::ActorValue::kHealth);
@@ -1552,11 +1552,11 @@ namespace MFO::Logistics {
                 // cast rule runs until the pair has closed; loot / drink / torch rules still do. Always false with
                 // bSubstrateCasts OFF (no pair is ever filed).
                 if (APMFBridge::SubstrateCastPending(id)) {
-                    start = choice.ruleIndex + 1; continue;
+                    start = choice.rank + 1; continue;
                 }
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
-                    start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
+                    start = choice.rank + 1; continue;   // unknown spell -> next rule
                 }
                 // SUMMON SPAM GUARD (v1.1.1). A conjured/reanimated creature is a
                 // COMMANDED ACTOR, not a caster-side magic effect, so every already-
@@ -1573,15 +1573,15 @@ namespace MFO::Logistics {
                 // transparent result (the cast itself is decided on the main thread),
                 // so the scan always continues to the next rule.
                 if (Actuation::IsSummonSpell(sp)) {
-                    if (Actuation::CastSummonOnce(a_follower, sp, choice.ruleIndex, "logistics", op)
+                    if (Actuation::CastSummonOnce(a_follower, sp, choice.rank, "logistics", op)
                             .result == Actuation::Result::Fired) {
                         acted = true;
                         break;
                     }
-                    start = choice.ruleIndex + 1; continue;
+                    start = choice.rank + 1; continue;
                 }
                 if (Actuation::CasterHasLiveSummon(a_follower, sp)) {
-                    start = choice.ruleIndex + 1; continue;
+                    start = choice.rank + 1; continue;
                 }
                 // Resolve the EFFECT target: self, the player, or the current foe.
                 RE::Actor* tgt = a_follower;
@@ -1601,7 +1601,7 @@ namespace MFO::Logistics {
                     if (choice.subjectActorForm == 0 &&
                         static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Self &&
                         Actuation::AutoNatureUndeclared(a_follower, sp)) {
-                        start = choice.ruleIndex + 1; continue;
+                        start = choice.rank + 1; continue;
                     }
                     const bool autoPick =
                         choice.subjectActorForm == 0 &&
@@ -1611,7 +1611,7 @@ namespace MFO::Logistics {
                         acted = (Actuation::CastAuto(a_follower, sp->GetFormID()).result ==
                                  Actuation::Result::Fired);
                         if (acted) break;
-                        start = choice.ruleIndex + 1; continue;
+                        start = choice.rank + 1; continue;
                     }
                     // Target Enemy / Self (appended Vocab::Subject) are ABSOLUTE: they override a selector's
                     // pick, so they always take the ladder (its rung 0). Enemy with no commanded foe -> nullptr
@@ -1632,10 +1632,10 @@ namespace MFO::Logistics {
                         // player fallback rung is safe, never a hostile self-cast.
                         bool castFallbackPlayer = false;
                         tgt = Actuation::ResolveCastTarget(a_follower, choice, castFallbackPlayer);
-                        if (!tgt) { start = choice.ruleIndex + 1; continue; }   // unresolvable -> next rule
+                        if (!tgt) { start = choice.rank + 1; continue; }   // unresolvable -> next rule
                     }
                 }
-                if (!tgt) { start = choice.ruleIndex + 1; continue; }
+                if (!tgt) { start = choice.rank + 1; continue; }
                 const bool conc = sp->GetCastingType() ==
                                   RE::MagicSystem::CastingType::kConcentration;
                 // FORCED SELF-CAST (SPEC-self-cast-forced): a bCastSelf-armed SELF
@@ -1677,7 +1677,7 @@ namespace MFO::Logistics {
                         // legibly rather than direct-apply behind bCastSelf's back.
                         spdlog::info("[cast] {:08X} self concentration {:08X} skipped -- "
                                      "needs bCastSelf", id, sp->GetFormID());
-                        start = choice.ruleIndex + 1; continue;
+                        start = choice.rank + 1; continue;
                     }
                     // Same SEV-3 seed as the FF-at-foe branch below: CastTargetDirect's
                     // offense gate reads Sightline::Check (Actuation_Direct), and OOC
@@ -1740,7 +1740,7 @@ namespace MFO::Logistics {
                                          id, heldSpel, tgt->GetFormID(),
                                          ComposedCast::HeldOffBy(id, heldSpel));
                         }
-                        start = choice.ruleIndex + 1; continue;
+                        start = choice.rank + 1; continue;
                     }
                     if (r == Actuation::SelfCast::Applied) {
                         // F1 label fix: CastTargetDirect's Applied return can mean
@@ -1800,7 +1800,7 @@ namespace MFO::Logistics {
                     // rule (Held is handled with its own log above, same fall-through).
                     // NEVER the FF direct-apply below (a per-second effect there
                     // has no bounded channel and would stick, the old stuck-ward bug).
-                    start = choice.ruleIndex + 1; continue;
+                    start = choice.rank + 1; continue;
                 }
 
                 // ── FIRE-AND-FORGET from here down (concentration handled above) ──
@@ -1838,7 +1838,7 @@ namespace MFO::Logistics {
                     auto* ei   = sp->GetCostliestEffectItem();
                     auto* mgef = ei ? ei->baseEffect : nullptr;
                     if (auto* mt = tgt->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
-                        start = choice.ruleIndex + 1; continue;
+                        start = choice.rank + 1; continue;
                     }
                 }
                 // Pace per (follower, SPELL) -- keying on the follower alone would
@@ -1852,7 +1852,7 @@ namespace MFO::Logistics {
                 // window would starve those re-fires and tear the channel down.
                 if (!selfPkg)
                     if (auto it = g_logiCastUntil.find(castKey); it != g_logiCastUntil.end() && now < it->second) {
-                        start = choice.ruleIndex + 1; continue;   // within this spell's window
+                        start = choice.rank + 1; continue;   // within this spell's window
                     }
                 // THE SUBSTRATE ROAD (bSubstrateCasts, substrate round R3 = slice S3; cast/SubstrateRoad.cpp): the
                 // self and the immediate branches below file a Harbinger ch.27 substrate + a ch.8b claim instead, so
@@ -1866,7 +1866,7 @@ namespace MFO::Logistics {
                                                   selfPkg ? "ooc-self" : "ooc-immediate")
                     : Actuation::SubstrateTry::NotTaken;
                 if (subRoad == Actuation::SubstrateTry::Skipped || subRoad == Actuation::SubstrateTry::Refused) {
-                    start = choice.ruleIndex + 1; continue;
+                    start = choice.rank + 1; continue;
                 }
                 if (subRoad == Actuation::SubstrateTry::Filed) {
                     acted = true;   // the pair is filed (road=substrate-claim): this tick's action
@@ -1894,7 +1894,7 @@ namespace MFO::Logistics {
                         // slot, so NOTHING was claimed or applied -- ComposedCast
                         // logs the [cfc] hold line itself) -- all TRANSPARENT: fall
                         // through to let the rules below run this tick.
-                        start = choice.ruleIndex + 1; continue;
+                        start = choice.rank + 1; continue;
                     }
                 } else if (immediate) {
                     // FIRE-AND-FORGET beneficial direct-apply (self-gate-off / player /
@@ -1915,7 +1915,7 @@ namespace MFO::Logistics {
                     const float cost = sp->CalculateMagickaCost(a_follower);
                     auto* avo = a_follower->AsActorValueOwner();
                     if (avo && avo->GetActorValue(RE::ActorValue::kMagicka) < cost) {
-                        start = choice.ruleIndex + 1; continue;   // can't afford it
+                        start = choice.rank + 1; continue;   // can't afford it
                     }
                     // NORMAL REACH FOR A HEAL on someone else (fix/mfo-can-act, marth
                     // 2026-09-29): as far as the player's own cast of the spell, with
@@ -1923,7 +1923,7 @@ namespace MFO::Logistics {
                     if (tgt != a_follower && Actuation::HealsHealth(sp)) {
                         Sightline::Want(id, { tgt->GetFormID() }, Sightline::Basis::Own);
                         if (!Actuation::HealInReach(a_follower, tgt, sp)) {
-                            start = choice.ruleIndex + 1; continue;
+                            start = choice.rank + 1; continue;
                         }
                     }
                     // onMain: false on the VR inline fallback below, where doCast runs on
@@ -2072,8 +2072,8 @@ namespace MFO::Logistics {
                 // Unknown / non-logistics opcode: skip PAST it so a stray rule
                 // cannot shadow the rest (does not fall through to a real action).
                 spdlog::info("[logistics] {:08X} rule {} has non-logistics action '{}' -- skipped",
-                             id, choice.ruleIndex, op);
-                start = choice.ruleIndex + 1;
+                             id, choice.rank, op);
+                start = choice.rank + 1;
                 continue;
             }
 
@@ -2083,7 +2083,7 @@ namespace MFO::Logistics {
             if (acted && IsLootOp(op)) MarkJustLooted(id, now);
 
             if (acted) break;                  // did something real -> done this tick
-            start = choice.ruleIndex + 1;      // matched but no-op -> try the next rule
+            start = choice.rank + 1;      // matched but no-op -> try the next rule
         }
         }   // end pass loop (no-dibs-first loot ordering)
 

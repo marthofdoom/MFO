@@ -8,8 +8,17 @@
 
 namespace MFO::Eval {
 
+    // WHO produced a Choice (IAUS card I1, design 1.3). Runtime only, never serialized. Today every
+    // Choice is Table: the IAUS source (card I6) is the second value. Append-only.
+    enum class Source : std::uint8_t { Table = 0, Iaus = 1 };
+
     struct Choice {
-        int         ruleIndex = -1;    // -1 = no rule matched
+        // ORDER + IDENTITY of the choice (was `ruleIndex`, card I1). Lower outranks. -1 = no choice
+        // (Scheduler::Rank::kNone). For a Table choice it IS the row index in the table that was scanned
+        // (Scheduler::Rank::OfTableRow), so every table-side index read stays exact; an IAUS choice carries
+        // Iaus::RankOf(epoch) instead, which is never a row index (only the table source indexes rows).
+        int         rank = -1;
+        Source      source = Source::Table;
         std::string actionOpcode;
         RE::FormID  actionParam = 0;
         std::uint8_t subject = 0;
@@ -42,7 +51,7 @@ namespace MFO::Eval {
     // Foe selectors only ever appear in the combat table; out of combat they
     // find no combat group and fall through harmlessly, so no special-casing.
     //
-    // Returns ruleIndex == -1 when nothing matched: the caller then makes NO
+    // Returns rank == -1 when nothing matched: the caller then makes NO
     // engine call at all (§4.4's do-nothing guarantee).
     //
     // a_startIndex lets BOTH callers resume the scan past a rule that matched
