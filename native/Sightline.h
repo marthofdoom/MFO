@@ -102,6 +102,17 @@ namespace MFO::Sightline {
     // runs there anyway) and when either actor is unresolvable, dead or unloaded.
     Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis = Basis::Engine);
 
+    // MAIN THREAD ONLY. CAN a_viewer SEE THE POINT a_point? (card G3, the concealment pick, Concealment.cpp.)
+    // The same own ray as Basis::Own (the viewer's eye, the havok world of the viewer's cell, the viewer's own capsule
+    // skipped), cast at THREE heights of a body of a_bodyHeight CROUCHED at the point: just off the ground, its torso
+    // and its head (0.35 and 0.65 of the standing height). ANY clear ray = Seen; every ray stopped = Hidden.
+    // Geometry only: no view cone, no light, no detection formula (a viewer facing away still "sees" the point,
+    // because he can turn). Unavailable = the ray could not run (no cell, no havok world, an unloaded viewer): the
+    // caller must NOT read that as hidden. Nothing is cached and nothing is written. Each call is at most 3 picks
+    // under the world's read lock (as Measure); the caller bounds how many it makes per frame.
+    enum class PointSight : std::uint8_t { Hidden, Seen, Unavailable };
+    PointSight PointSeenNow(RE::Actor* a_viewer, const RE::NiPoint3& a_point, float a_bodyHeight);
+
     // LINE OF FIRE (concentration streams). True when the PLAYER or any
     // active teammate -- other than the caster and the intended target --
     // stands within ~a body's width of the caster->target segment. Pure

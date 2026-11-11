@@ -2,6 +2,7 @@
 // Standard headers only: tools/iaus_harness/run.sh builds this file with the host compiler.
 #include "iaus/Generate.h"
 
+#include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
 
 #include <algorithm>
@@ -173,6 +174,14 @@ namespace MFO::Iaus {
                 c.f.meleeThreatDist = c.f.dist;
                 c.f.threatTtl = Estimate::Ttl(s.self.hp, Estimate::ThreatOn(s, s.self));
                 c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.groundCooldownSec, 0.0f));
+                x.Push(std::move(c));
+            }
+            // Card G3: a sneak class a foe has found runs to a point no foe can see and crouches there. Generated only when
+            // the road is open AND Concealment already knows such a point, so a chosen run can start at once.
+            if (s.hideRoad && s.hidePoint && x.g.sneakClass && x.g.disengage && Disengage::Found(s)) {
+                Candidate c = x.Make(Family::Disengage, nullptr);
+                c.f.disengageClass = true;
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.disengageCooldownSec, 0.0f));
                 x.Push(std::move(c));
             }
             if (s.blockRoad && melee && swingOn) {

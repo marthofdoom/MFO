@@ -45,6 +45,7 @@ namespace MFO::Iaus {
         case Family::GiveGround:   return "give_ground";
         case Family::Block:        return "block";
         case Family::Bash:         return "bash";
+        case Family::Disengage:    return "disengage";
         case Family::kCount:       break;
         }
         return "?";
@@ -373,6 +374,7 @@ namespace MFO::Iaus {
             aw(Family::CastOffense, 1.769f); aw(Family::CastControl, 3.6f); aw(Family::CastHeal, 2.4f);
             aw(Family::CastBuff, 0.7f);    aw(Family::CastSummon, 0.9f);   aw(Family::CastWard, 0.8f);
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
+            aw(Family::Disengage, 1.0f);   // card G3, chosen (not from the search): gated by its generator, paced by its hard cooldown
             aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
@@ -409,6 +411,7 @@ namespace MFO::Iaus {
                 { Cons::TauntSurvive, 1.995f },   /* set A2 */ { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
             };
             constexpr U kGiveGround[] = { { Cons::GroundNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kDisengage[] = { { Cons::DisengageClass, 1 }, { Cons::CooldownHard, 1 } };   // card G3
             constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
@@ -510,6 +513,7 @@ namespace MFO::Iaus {
             case Family::GiveGround:   return kGiveGround;
             case Family::Block:        return kBlock;
             case Family::Bash:         return kBash;
+            case Family::Disengage:    return kDisengage;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;

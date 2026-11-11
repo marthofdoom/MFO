@@ -568,6 +568,12 @@ namespace MFO::Config {
     // a follower on Sentient AI the GiveGround family is generated (Snapshot::groundRoad) while Harbinger serves ABI v39,
     // and a chosen step back is filed through apmf/GroundApproach.cpp. Read by iaus/Candidates.cpp on the worker.
     inline std::atomic<bool>  g_iausGroundRoad{ false };
+    // IAUS HIDE ROAD ([Debug] bIausHideRoad, INI-only, default OFF until a field run proves the drive, principle 5).
+    // 1 = for a SNEAK-CLASS follower on Sentient AI (class tree ON) whom a foe has found, Concealment.cpp picks a point no
+    // listed foe can see (MFO's own rays, main thread) and the Disengage family is generated (Snapshot::hideRoad /
+    // hidePoint) while Harbinger serves ABI v39; a chosen run goes through apmf/Disengage.cpp (card H3), then the G1
+    // stance claim. Read by iaus/Candidates.cpp on the worker.
+    inline std::atomic<bool>  g_iausHideRoad{ false };
     // IAUS AVAILABLE ([General] bIausAvailable, MCM "Combat & Casting", default ON; marth Q71). The global gate over
     // the per-follower IAUS combat switch (FollowerState::iausCombat, default OFF). 0 = no follower runs the IAUS
     // source whatever his bit says; the bit is KEPT (co-save untouched), so turning this back on restores each

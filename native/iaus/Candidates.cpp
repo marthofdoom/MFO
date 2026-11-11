@@ -11,6 +11,8 @@
 #include "Vocabulary.h"
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
+#include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
+#include "iaus/Disengage.h"
 #include "iaus/Fills.h"
 #include "iaus/SpellBook.h"
 #include "logistics/Logistics.h"
@@ -331,6 +333,17 @@ namespace MFO::Iaus::Candidates {
         a_out.gen = Generated{};
         if (!Gather(a_follower, a_out.snap)) return false;
         a_out.gate = SpellBook::GateFor(a_out.snap.self.id);
+        // Card G3: the hide run exists only while its road does, and a point is asked for only when the generator could
+        // use one (a sneak class that may disengage, found by a foe). The pick itself runs on the main thread, spread
+        // over frames (Concealment.cpp); `hidePoint` is true once a fresh answer is in.
+        a_out.snap.hideRoad  = Concealment::RoadOpen();
+        a_out.snap.hidePoint = false;
+        if (a_out.snap.hideRoad && a_out.gate.sneakClass && a_out.gate.disengage && Disengage::Found(a_out.snap)) {
+            std::vector<RE::FormID> foes;
+            foes.reserve(a_out.snap.foes.size());
+            for (const auto& f : a_out.snap.foes) foes.push_back(f.id);
+            a_out.snap.hidePoint = Concealment::Prepare(a_follower, foes);
+        }
         a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
         return true;
     }

@@ -12,6 +12,7 @@
 #include "Targeting.h"
 #include "Vocabulary.h"
 #include "apmf/APMFBridge.h"
+#include "Concealment.h"   // card G3: the hide run is released with the running decision
 #include "cast/Actuation.h"
 #include "iaus/SpellBook.h"
 
@@ -117,6 +118,7 @@ namespace MFO::Scheduler {
             APMFBridge::ReleaseHealApproach(a_id, a_why);
             APMFBridge::ReleaseOffenseApproach(a_id, a_why);
             APMFBridge::ReleaseGroundStep(a_id, a_why);
+            Concealment::Release(a_id, a_why);   // card G3: a hide run and its drive
             // The WEAPON stays in his hand, but its hold's RANK is the old source's (review F1): a table row index
             // would outrank every IAUS heal on the left hand. Unranked until the new source's equip stamps its own.
             Actuation::UnrankForcedHold(a_id);
@@ -226,6 +228,7 @@ namespace MFO::Scheduler {
         case Family::Taunt:        c.actionOpcode = Vocab::kActTaunt; break;
         case Family::Bash:         c.actionOpcode = Vocab::kActBash; break;    // Harbinger ch.31 (generated only behind Snapshot::bashRoad)
         case Family::GiveGround:   c.actionOpcode = Vocab::kActGiveGround; break;   // Harbinger ch.24 on a point (Snapshot::groundRoad)
+        case Family::Disengage:    c.actionOpcode = Vocab::kActDisengage; break;    // card G3 (Concealment.cpp; Snapshot::hideRoad)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;

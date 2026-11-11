@@ -60,6 +60,8 @@ namespace MFO::Iaus {
                       // area: Snapshot::groundRoad). Lab only until that road exists
         Block,        // raise the guard against a swing that is coming (needs the Harbinger leaf promote: Snapshot::blockRoad)
         Bash,         // bash a foe in reach, first of all one that is charging a spell (same road: Snapshot::bashRoad)
+        Disengage,    // card G3: a sneak class a foe has found runs to a point no foe can see and crouches there (the H3
+                      // disengage drive, Concealment.cpp). Generated only behind Snapshot::hideRoad with a point known
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -229,6 +231,8 @@ namespace MFO::Iaus {
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;
         float groundCooldownSec = 3.0f;          // give ground: one step, then look again
+        float disengageCooldownSec = 25.0f;      // card G3: one hide run, then fight from where he is for a while (the run and
+                                                 // its 12 s hold are over well inside it; not from the search)
         float blockCooldownSec = 2.0f;
         float blockBase = 0.0f;                  // BlockNeed for a swing in the air when he is in no danger. 0 = he blocks only what is
                                                  // killing him (the lab: 0.5 lost on LoreRim, 0 holds on every list)

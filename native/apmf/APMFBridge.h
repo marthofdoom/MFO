@@ -1859,6 +1859,29 @@ namespace MFO::APMFBridge {
     bool RequestGroundStep(RE::Actor* a_follower, RE::Actor* a_foe);
     void ServiceGroundStep(RE::FormID a_follower);
     void ReleaseGroundStep(RE::FormID a_follower, const char* a_why);
+    // ── THE DISENGAGE DRIVE (class plan card H3; Harbinger ch.24 on a POINT with the hold bit + ch.7 Offense deny) --
+    // apmf/Disengage.cpp. He RUNS to a declared point mid-fight (the engine's own Return To Combat Area, at its run speed)
+    // and stays inside R of it until released. DisengageSupported: APMF present AND abiVersion >= 39. RequestDisengage:
+    // nullptr = both claims filed (the Offense deny is optional and its refusal is only a warning); otherwise why nothing
+    // was filed (no road, a held-heal approach stands, a drive already stands, Harbinger refused the point). It releases
+    // the offense approach and the give-ground step first (one ch.24 claim per follower). ServiceDisengage (once per combat
+    // service): None = no drive; Running; Arrived = the engine reports him inside the bound (the claims stay until
+    // ReleaseDisengage); Failed = Harbinger ended it or it never owned the channel (a_why says which; the caller releases).
+    // Facing is NOT claimed and not known (Harbinger's "[ch.24] GAIT PROBE" lines answer it in the field); the drive does
+    // not depend on it. Worker road; own leaf mutex, never g_mx; nothing is saved.
+    enum class DisengageState : std::uint8_t { None, Running, Arrived, Failed };
+    bool           DisengageSupported();
+    bool           DisengageStands(RE::FormID a_follower);
+    const char*    RequestDisengage(RE::Actor* a_follower, const RE::NiPoint3& a_point, float a_radius, bool a_denyOffense);
+    DisengageState ServiceDisengage(RE::FormID a_follower, std::string& a_why);
+    void           ReleaseDisengage(RE::FormID a_follower, const char* a_why);
+    void           ClearDisengage();   // revert / load (pump drained)
+    // Harbinger's FindEmptySpace space query (ABI v11), MAIN THREAD ONLY (it casts rays): a standable, empty point
+    // a_distance units from the reference a_origin along a_heading (radians, 0 = +Y, clockwise), a wall on the way
+    // shortening the walk. True = a_out is that ground point. False = no point (a_status is the APMF_API::QueryStatus;
+    // kQuery_Unsupported also when Harbinger is absent or older than ABI 11).
+    bool FindStandPoint(RE::FormID a_origin, float a_heading, float a_distance, float a_clearance, RE::NiPoint3& a_out,
+                        std::uint32_t& a_status);
     // ── TOWN ERRAND WORK (TOWN PHASE 2 R7: inn + temple) -- apmf/ErrandWork.cpp ───────────────────────────────────────
     // The ch.9 package-offer claim of an errand's WORK (Forms.h MFO_ErrandActivate / Sandbox / Eat / Sleep, one record per kind
     // per follower slot): the shrine Activate, the inn's Sandbox (sit / stay), the Eat meal, the Sleep bed. MFO declares the work and its

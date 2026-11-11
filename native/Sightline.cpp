@@ -334,6 +334,56 @@ namespace MFO::Sightline {
         });
     }
 
+    // Card G3 (Concealment.cpp). MAIN THREAD ONLY. The picks are CustomRay's: the same filter, the same world lock.
+    PointSight PointSeenNow(RE::Actor* a_viewer, const RE::NiPoint3& a_point, float a_bodyHeight) {
+        if (!Runtime::Known() || !a_viewer || a_viewer->IsDead() || !a_viewer->Is3DLoaded()) return PointSight::Unavailable;
+        auto* cell = a_viewer->GetParentCell();
+        if (!cell) return PointSight::Unavailable;
+        auto* world = cell->GetbhkWorld();
+        if (!world) return PointSight::Unavailable;
+        std::uint32_t viewerFilter = 0;
+        if (auto* cc = a_viewer->GetCharController()) cc->GetCollisionFilterInfo(viewerFilter);
+        const std::uint32_t rayFilter = ((viewerFilter >> 16) << 16) | static_cast<std::uint32_t>(RE::COL_LAYER::kCharController);
+        RE::NiPoint3 eye{}, dir{};
+        a_viewer->GetEyeVector(eye, dir, false);
+        const float h = a_bodyHeight > 1.0f ? a_bodyHeight : 120.0f;
+        const RE::NiPoint3 samples[3] = {
+            { a_point.x, a_point.y, a_point.z + 16.0f },       // just off the ground
+            { a_point.x, a_point.y, a_point.z + h * 0.35f },   // a crouched torso
+            { a_point.x, a_point.y, a_point.z + h * 0.65f },   // a crouched head
+        };
+        const float scale = RE::bhkWorld::GetWorldScale();
+        RE::BSReadLockGuard lock(world->worldLock);
+        for (const auto& pt : samples) {
+            // A BODY IS NOT COVER. The ray's layer collides with other actors' capsules (the follower himself often
+            // stands between the viewer and a point behind him). A hit on an actor's body is passed through: the ray
+            // goes on from 8 units past it, at most three times; a fourth body in a row reads as Seen (no wall was found).
+            RE::NiPoint3 from = eye;
+            bool         wall = false;
+            for (int pass = 0; pass < 4; ++pass) {
+                const RE::NiPoint3 seg = pt - from;
+                const float        len = seg.Length();
+                if (len <= 8.0f) break;
+                RE::bhkPickData pick;
+                pick.rayInput.from = from * scale;
+                pick.rayInput.to   = pt * scale;
+                pick.rayInput.enableShapeCollectionFilter = false;
+                pick.rayInput.filterInfo = rayFilter;
+                world->PickObject(pick);
+                if (!pick.rayOutput.HasHit()) break;   // nothing (more) between the eye and that part of him
+                const auto layer = pick.rayOutput.rootCollidable->GetCollisionLayer();
+                const bool body  = layer == RE::COL_LAYER::kCharController || layer == RE::COL_LAYER::kBiped ||
+                                   layer == RE::COL_LAYER::kBipedNoCC || layer == RE::COL_LAYER::kDeadBip;
+                if (!body) { wall = true; break; }
+                const float f = pick.rayOutput.hitFraction + 8.0f / len;
+                if (!(f < 1.0f)) break;                // the body stands at the point itself
+                from = { from.x + seg.x * f, from.y + seg.y * f, from.z + seg.z * f };
+            }
+            if (!wall) return PointSight::Seen;
+        }
+        return PointSight::Hidden;
+    }
+
     Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis) {
         if (!a_viewer || !a_target || !Runtime::Known()) return Verdict::Unknown;   // G1: exact builds only (was VR-only)
         if (a_basis == Basis::Own) {   // Harbinger's stored verdict (the first ask reads Unknown: fail-open)

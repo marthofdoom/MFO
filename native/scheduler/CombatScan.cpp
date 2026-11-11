@@ -26,6 +26,7 @@
 #include "State.h"
 #include "Cooldowns.h"      // card G9: the per-rule cooldown last-fired store (runtime-only)
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
+#include "Concealment.h"  // card G3: the hide run (serviced before the rule scan; released with the fight)
 #include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
@@ -787,6 +788,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseHealApproach(id, "combat ended", APMFBridge::kApproachAnyHand, true);   // ch.24: and the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "combat ended", true);   // ch.24 offense approach
                 APMFBridge::ReleaseGroundStep(id, "combat ended");              // ch.24 step back (a point claim)
+                Concealment::Release(id, "combat ended");                       // card G3: a hide run and its drive
                 g_reachHold.erase(id);   // fix/mfo-unreachable-flyer: and its reach hold (no line: the fight is over)
 
                 // v1.0.30: the cast-control latch dies with the fight. The [cast]
@@ -1122,6 +1124,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseHealApproach(id, "retreating");   // ch.24: so does the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "retreating");
                 APMFBridge::ReleaseGroundStep(id, "retreating");
+                Concealment::Release(id, "retreating");   // card G3: the retreat has its own road
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating
@@ -1319,6 +1322,13 @@ namespace MFO::Scheduler {
         APMFBridge::PollCombatMove(id);
         APMFBridge::CombatMoveProbeTick(f);
         APMFBridge::ServiceGroundStep(id);   // Harbinger ch.24 on a point: end a step back that is over (one outcome line)
+        // Card G3 (Concealment.cpp): a hide run holds him (running to the point, or the bounded hold at it). No rule scan
+        // this lap, as in a retreat: a cast or an attack named now would fight the run's own Offense deny. No own-OOC
+        // logistics either (a loot walk armed under the run would fight it for the same body).
+        if (Concealment::Service(f)) {
+            g_lastTickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            return;
+        }
         TableSource table(f, id);
         std::optional<IausSource> iaus;
         if (iausOn) iaus.emplace(f, id, iausRapport);
