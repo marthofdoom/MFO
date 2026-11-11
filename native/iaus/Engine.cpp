@@ -132,6 +132,12 @@ namespace MFO::Iaus::Engine {
         Cooldowns::NoteFired(a_actor, CdOf(a_c).kind, CdOf(a_c).id, a_tick.tp);
     }
 
+    void NoteDisengageEnded(RE::FormID a_actor) {
+        Candidate c;
+        c.family = Family::Disengage;
+        Cooldowns::NoteFired(a_actor, CdOf(c).kind, CdOf(c).id, std::chrono::steady_clock::now());
+    }
+
     void Log(RE::FormID a_actor, std::string_view a_name, const Decision& a_d, std::span<const Candidate> a_cands,
              const Profile& a_p, const Tuning& a_t, const Tick& a_tick, int a_pickedStep,
              std::span<const WalkNote> a_walk, double a_ms, bool a_explain) {

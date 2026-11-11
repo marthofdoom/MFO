@@ -653,6 +653,12 @@ namespace MFO::APMFBridge {
     // True while the follower holds G1's ch.3 stance claim (a handle stands). G2 reads it: with bSneakInCombat off the claim is
     // released in combat, so "his sneak is MFO's" and "bSneakInCombat or this" is the gate for the hold row. Worker-safe.
     bool        SneakClaimHeld(RE::FormID a_follower);
+    // Card G3 (Concealment): the hide run and the G2 hold after it OWN the stance. HoldSneakForHide files the claim if none stands
+    // and marks it hide-held: the in-combat refusal (bSneakInCombat off) and the table-lap aging do not apply to this owner.
+    // nullptr = held; otherwise why not (the caller logs it). ReleaseSneakHide drops the mark and the claim unless a table rule
+    // also wants it. Both: AddTask worker. Idempotent.
+    const char* HoldSneakForHide(RE::Actor* a_follower);
+    void        ReleaseSneakHide(RE::FormID a_follower, const char* a_why);
 
     // ── G2 Layer 1 HOLD ROW (apmf/HideClaims.cpp): ch.1 kIntent_MovementBlock + ch.7 kIntent_CombatAction (Offense | Cast) ──
     // HideHoldSupported: Harbinger (ABI >= 6) is present; false = the hold row is not generated at all (logged once, never a

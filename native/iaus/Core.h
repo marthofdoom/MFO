@@ -123,6 +123,9 @@ namespace MFO::Iaus {
         BashNeed,           // bash: the foe is charging a spell (an interrupt), else it is on him
         BoostStrike,        // multiplier: a weapon blow on a foe that does not detect him while he sneaks (G2 Layer 1: the engine's own sneak attack)
         HoldStill,          // gate: the hold row (G2 Layer 1) stands only while no blow from stealth is ready
+        DisengageNeed,      // disengage (card G3): a sneak class = the share of the foes that have found him; any other class = the
+                            // retreat's own RetreatDanger (low health under threat)
+        BoostFleeHeal,      // multiplier: a heal or a health potion for HIMSELF while a non-sneak flee runs (heal as soon as possible)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -327,6 +330,9 @@ namespace MFO::Iaus {
         Tri   foeUnaware = Tri::Unknown;  // THIS candidate's foe does not detect him (Combatant::detectsMe == No -> Yes)
         bool  strikeReady = false;        // the hold row: a blow from stealth is ready now (an unaware foe in reach / in sight)
         bool  disengageClass = false;     // Flag::kDisengage
+        bool  disengageFlee = false;      // disengage: a non-sneak flee (need = RetreatDanger) rather than a hide run (need = detectShare)
+        float detectShare = 0.0f;         // disengage (hide run): the share of the counted foes whose group record says they have him
+        bool  fleeHeal = false;           // a non-sneak flee runs and this heal / health potion is for himself (BoostFleeHeal)
         // posture
         PostureKind posture = PostureKind::None;
         bool  postureCurrent = false;     // this category is what is drawn now ("keep")

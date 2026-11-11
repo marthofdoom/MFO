@@ -16,7 +16,7 @@
 // EngineDropped (3 s, a warning there) and reads Failed here.
 // PRECEDENCE (one ch.24 claim per follower, every MFO client files at kOwnBasis, the EARLIER claim keeps the channel):
 // a held-heal approach outranks a disengage (never filed while it stands). The offense approach and the give-ground
-// step are released first, so this claim owns. A claim that still never owns reads Failed after 700 ms.
+// step are released once Harbinger has ACCEPTED this request (never before), so this claim owns. A claim that still never owns reads Failed after 700 ms.
 // Also here: FindStandPoint, the one wrapper of Harbinger's FindEmptySpace space query (ABI v11, MAIN THREAD ONLY).
 // Threads: Request / Service / Release on the pump's AddTask worker; own mutex g_disengageMx, a leaf: nothing is called
 // under it. The one nesting is APMFBridge::ClearTransientState (g_mx -> g_disengageMx, as its siblings); this file never
@@ -95,10 +95,6 @@ namespace MFO::APMFBridge {
             std::scoped_lock lk(g_disengageMx);
             if (g_drives.contains(id)) return "a disengage already stands";
         }
-        // One ch.24 claim per follower: ours must be the standing one.
-        ReleaseOffenseApproach(id, "disengaging");
-        ReleaseGroundStep(id, "disengaging");
-
         APMF_API::APMF_Param prm{};
         prm.ival = static_cast<std::int32_t>(APMF_API::kApproach_Point | APMF_API::kApproach_Hold);   // target stays 0
         prm.fval = a_radius;
@@ -108,6 +104,11 @@ namespace MFO::APMFBridge {
         Drive d;
         d.approach = api->RequestEx(id, APMF_API::kIntent_CombatApproach, kOwnBasis, &prm);
         if (d.approach == APMF_API::kInvalidHandle) return "Harbinger refused the point approach at the call (its log says why)";
+        // ACCEPTED. Only now does anything of his change: one ch.24 claim per follower, ours must be the standing one, so the
+        // offense approach and the give-ground step end here (a refused request above leaves them exactly as they were, which
+        // is what keeps cast/Fire.cpp's "transparent" answer true).
+        ReleaseOffenseApproach(id, "disengaging");
+        ReleaseGroundStep(id, "disengaging");
         if (a_denyOffense) {
             APMF_API::APMF_Param deny{};
             deny.ival = static_cast<std::int32_t>(APMF_API::kCombatActionCat_Offense);

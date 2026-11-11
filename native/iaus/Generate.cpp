@@ -48,6 +48,7 @@ namespace MFO::Iaus {
             bool hold = false;          // the hold row stands: unseen Yes, a weapon posture
             bool strikeReady = false;   // some unaware foe is in reach (melee) or in sight (bow): the blow from stealth is ready
             bool holdQuiet = false;     // hold && !strikeReady: nothing LOUD is generated (no taunt, no cast whose sound the engine emits)
+            bool fleeRun = false;       // card G3: a non-sneak flee run stands: no offense is generated, his own heals are boosted
             // An unaware foe he could strike now. Melee: inside the swing reach and not airborne beyond it; bow: in the
             // follower's own ray and inside the chase cap. A caster's posture (None / Staff) never holds or strikes.
             [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const {
@@ -118,6 +119,7 @@ namespace MFO::Iaus {
         // ── attack / power attack / taunt / retreat ──────────────────────────────────────────────────────
         void Swings(Ctx& x) {
             const Snapshot& s = x.s;
+            if (x.fleeRun) return;   // card G3: during the flee he heals, he does not swing, shout or start another retreat
             const bool ranged = s.drawn == PostureKind::Bow || s.drawn == PostureKind::Staff;
             const bool melee  = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver;
             for (const Combatant* foe : x.top) {
@@ -188,7 +190,7 @@ namespace MFO::Iaus {
         // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
         void Guards(Ctx& x) {
             const Snapshot& s = x.s;
-            if (x.foeCount == 0) return;
+            if (x.foeCount == 0 || x.fleeRun) return;   // card G3: no guard, bash or second disengage during the flee
             const bool ranged = s.drawn == PostureKind::Bow || s.drawn == PostureKind::Staff;
             const bool melee  = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver;
             const float strike = Estimate::StrikeDistance(s);
@@ -208,13 +210,29 @@ namespace MFO::Iaus {
                 c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.groundCooldownSec, 0.0f));
                 x.Push(std::move(c));
             }
-            // Card G3: a sneak class a foe has found runs to a point no foe can see and crouches there. Generated only when
-            // the road is open AND Concealment already knows such a point, so a chosen run can start at once.
-            if (s.concealRoad && s.concealPoint && x.g.sneakClass && x.g.disengage && Disengage::Found(s)) {
-                Candidate c = x.Make(Family::Disengage, nullptr);
-                c.f.disengageClass = true;
-                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.disengageCooldownSec, 0.0f));
-                x.Push(std::move(c));
+            // Card G3 (marth 2026-11-11: "the main purpose is to become hidden, and it simply doubles as a version of flee").
+            // Generated only when the road is open AND Concealment already knows a point, so a chosen run can start at once.
+            //   * A SNEAK class (kSneakAlways + kDisengage) that a foe has found: run to a point no foe sees, crouch, and the
+            //     run ENDS the moment the engine says nobody detects him (Concealment::Service); G2's hold row takes over.
+            //   * ANY OTHER class with kDisengage, class tree ON (never with the tree off): a FLEE to a point away from the foes
+            //     when he is hurt (at or under the retreat's own health line) and a foe is on him. Healing is boosted while it runs.
+            if (s.concealRoad && s.concealPoint && !s.fleeRun) {
+                const bool hide = x.g.sneakClass && x.g.disengage && Disengage::Found(s);
+                const bool flee = !x.g.sneakClass && x.g.treeOn && x.g.disengage && x.selfHp <= Disengage::kFleeHealthLine &&
+                                  Disengage::Threatened(s);
+                if (hide || flee) {
+                    Candidate c = x.Make(Family::Disengage, nullptr);
+                    c.f.disengageClass = true;
+                    c.f.disengageFlee = !hide;
+                    c.f.detectShare = Disengage::DetectShare(s);
+                    c.f.rangedDrawn = ranged;
+                    c.f.threatTtl = Estimate::Ttl(s.self.hp, Estimate::ThreatOn(s, s.self));
+                    for (const Combatant& f : s.foes)   // RetreatDanger's kite term reads the same two facts the Retreat family fills
+                        if (f.targetId != 0 && f.targetId == s.self.id && !f.caster && !f.rangedWeapon && !f.paralysed && !f.fleeing && std::isfinite(f.dist))
+                            c.f.meleeThreatDist = (std::min)(c.f.meleeThreatDist, (std::max)(0.0f, f.dist));
+                    c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.disengageCooldownSec, 0.0f));
+                    x.Push(std::move(c));
+                }
             }
             if (s.blockRoad && melee && swingOn) {
                 Candidate c = x.Make(Family::Block, swingOn);
@@ -239,7 +257,7 @@ namespace MFO::Iaus {
         // ── regroup: close on the player or a healer while fighting (Harbinger ch.24). Only once the road exists. ──
         void Regroups(Ctx& x) {
             const Snapshot& s = x.s;
-            if (!s.regroupRoad || x.foeCount == 0) return;
+            if (!s.regroupRoad || x.foeCount == 0 || x.fleeRun) return;
             for (const Combatant& a : s.allies) {
                 if (!Readable(a) || a.downed || !(a.isPlayer || a.healer)) continue;
                 Candidate c = x.Make(Family::Regroup, &a);
@@ -268,6 +286,7 @@ namespace MFO::Iaus {
                 if (a_stock <= 0) return;
                 Candidate c = x.Make(a_f, nullptr);
                 c.f.stock = a_stock;
+                c.f.fleeHeal = x.fleeRun && a_f == Family::DrinkHealth;   // card G3: a health potion while he flees is drunk first
                 x.Push(std::move(c));
             };
             drink(Family::DrinkHealth, k.potionsHealth);
@@ -418,6 +437,7 @@ namespace MFO::Iaus {
                 switch (e.nature) {
                 case Prune::Nature::Offense:
                 case Prune::Nature::Control: {
+                    if (x.fleeRun) break;   // card G3: no offense while he flees
                     // Reach: Touch = a swing's reach; a Self-delivered blast reaches its own area; else the aimed
                     // reach (0 = the record gives none: range is then not applicable).
                     const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.areaUnits : e.reach);
@@ -476,6 +496,7 @@ namespace MFO::Iaus {
                         c.f.inHealReach = Tri::Yes;
                         c.f.sight = self ? Sight::None : r->sight;
                         c.f.recipientHp = hp;
+                        c.f.fleeHeal = heal && self && x.fleeRun;   // card G3: his own heal while he flees is cast first
                         c.f.recipientIsPlayer = r->isPlayer;
                         c.f.recipientDowned = r->downed;
                         if (heal) {
@@ -526,6 +547,7 @@ namespace MFO::Iaus {
         x.selfMp = Pct(a_s.self.mp, a_s.self.mpMax);
         x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
         x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
+        x.fleeRun = a_s.fleeRun;
         for (const Combatant& a : a_s.allies)
             if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }
 

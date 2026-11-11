@@ -657,6 +657,8 @@ namespace MFO::Scheduler {
             Actuation::ReleaseForcedWeapon(f);
             g_meleeClampTrueAt.erase(id);   // T#76 hysteresis dwell dies with the follower
             DeadTgtEnd(id, "follower down/disabled", 0);   // [deadtgt]: never leave a window open across a death
+            Concealment::Release(id, "follower down/disabled");          // card G3: a hide run, its drive and the stance hold (review of 1f59152, SEV-5)
+            APMFBridge::ReleaseHideHold(id, "follower down/disabled");   // G2 hold row: no movement block over a corpse
             return;
         }
 

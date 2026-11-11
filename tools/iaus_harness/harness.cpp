@@ -10,6 +10,7 @@
 #include "iaus/Estimate.h"
 #include "iaus/Reach.h"      // ruling Q68: the learned swing reach
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
+#include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 
 #include <algorithm>
 #include <chrono>
@@ -1181,6 +1182,114 @@ namespace {
     }
 }
 
+namespace {
+    // card G3 (rulings 2026-11-11): the Disengage gate (concealRoad / concealPoint / sneakClass / Found), the sneak hide's need, the
+    // non-sneak FLEE (tree ON, hurt, a foe on him) and its pacing (no offense generated, his own heals boosted).
+    void DisengageRules() {
+        std::printf("\n== G3: the disengage gate, the hide need, the non-sneak flee ==\n");
+        const Tuning& t = DefaultTuning();
+        ClassGate thief; thief.resolved = true; thief.treeOn = true; thief.disengage = true; thief.sneakClass = true;
+        ClassGate fighter; fighter.resolved = true; fighter.treeOn = true; fighter.disengage = true;
+        const auto make = [&](float hp, Tri detects, bool onMe) {
+            Snapshot s;
+            s.self = Actor("Follower", 0x14F01, hp, 200, 0, 0);
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, 400, 0) };
+            s.foes[0].detectsMe = detects;
+            if (onMe) s.foes[0].targetId = 0x14F01;
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+            s.concealRoad = true; s.concealPoint = true;
+            return s;
+        };
+        const auto count = [](const Generated& g, Family f) {
+            int n = 0;
+            for (const Candidate& c : g.actions) if (c.family == f) ++n;
+            return n;
+        };
+        const auto find = [](const Generated& g, Family f) -> const Candidate* {
+            for (const Candidate& c : g.actions) if (c.family == f) return &c;
+            return nullptr;
+        };
+        // ---- the seam: Found reads G2's verdict, nothing else ----
+        {
+            Snapshot s = make(180, Tri::Yes, false);
+            Check(Disengage::Found(s), "G3: a foe whose group record has him (detectsMe Yes) -> Found, though it targets someone else");
+            s.foes[0].detectsMe = Tri::No;
+            Check(!Disengage::Found(s), "G3: detectsMe No -> not found");
+            s.foes[0].detectsMe = Tri::Unknown; s.foes[0].targetId = 0x14F01;
+            Check(!Disengage::Found(s), "G3: detectsMe Unknown is not found, even when the foe targets him (the old target reading is gone)");
+            s.foes[0].detectsMe = Tri::Yes; s.foes[0].paralysed = true;
+            Check(!Disengage::Found(s), "G3: a paralysed foe does not count");
+        }
+        // ---- the hide run (a sneak class) ----
+        {
+            const Generated g = Generate(make(180, Tri::Yes, false), thief, t);
+            const Candidate* d = find(g, Family::Disengage);
+            Check(d && !d->f.disengageFlee && ScoreOne(*d, Mind{}, Profile{}, t, 1, 0, nullptr) > 0.0f, "G3: sneak class + road + point + found -> a hide Disengage that scores above 0");
+            Snapshot a = make(180, Tri::Yes, false); a.concealRoad = false;
+            Check(count(Generate(a, thief, t), Family::Disengage) == 0, "G3: no road (switch off / Harbinger absent) -> no Disengage");
+            Snapshot b = make(180, Tri::Yes, false); b.concealPoint = false;
+            Check(count(Generate(b, thief, t), Family::Disengage) == 0, "G3: no fresh point -> no Disengage");
+            Check(count(Generate(make(180, Tri::No, false), thief, t), Family::Disengage) == 0, "G3: no foe has found him -> no hide run");
+            Check(count(Generate(make(180, Tri::Yes, false), fighter, t), Family::Disengage) == 0, "G3: a non-sneak class at full health is never sent to hide");
+            Candidate cd = *d; cd.f.hardCooldownLeft = 10.0f;
+            Check(ScoreOne(cd, Mind{}, Profile{}, t, 1, 0, nullptr) == 0.0f, "G3: the hard cooldown (counted from the run's END) vetoes it");
+            // need = the share of the counted foes that have found him
+            Snapshot two = make(180, Tri::Yes, false);
+            two.foes.push_back(Actor("Archer", 0x3B611, 100, 100, 700, 0)); two.foes[1].detectsMe = Tri::No;
+            const Candidate* d2 = find(Generate(two, thief, t), Family::Disengage);
+            Check(d2 && d2->f.detectShare == 0.5f && ScoreOne(*d2, Mind{}, Profile{}, t, 1, 0, nullptr) < ScoreOne(*d, Mind{}, Profile{}, t, 1, 0, nullptr),
+                  "G3: one of two foes has found him -> half the need, a lower score than all of them");
+            ClassGate noDis = thief; noDis.disengage = false;
+            Check(count(Generate(make(180, Tri::Yes, false), noDis, t), Family::Disengage) == 0, "G3: a sneak class without kDisengage never hides");
+        }
+        // ---- the flee (a non-sneak class): hurt AND a foe on him, class tree ON only ----
+        {
+            const Generated g = Generate(make(50, Tri::Unknown, true), fighter, t);   // 25% of 200
+            const Candidate* d = find(g, Family::Disengage);
+            Check(d && d->f.disengageFlee && ScoreOne(*d, Mind{}, Profile{}, t, 1, 0, nullptr) > 0.0f, "G3: non-sneak, hurt under the retreat line, a foe on him -> a flee Disengage that scores above 0");
+            Check(count(Generate(make(120, Tri::Unknown, true), fighter, t), Family::Disengage) == 0, "G3: 60% health -> no flee (it matters only under the retreat's health line)");
+            Check(count(Generate(make(50, Tri::Unknown, false), fighter, t), Family::Disengage) == 0, "G3: hurt but no foe on him -> no flee");
+            ClassGate treeOff = fighter; treeOff.treeOn = false;
+            Check(count(Generate(make(50, Tri::Unknown, true), treeOff, t), Family::Disengage) == 0, "G3 MB3: class tree OFF -> no flee (and no hide run: sneakClass is false then)");
+            Check(count(Generate(make(50, Tri::Unknown, true), thief, t), Family::Disengage) == 0, "G3: a sneak class that no foe has found does not flee, however hurt (it hides, or fights)");
+            Candidate hiCd = *d; hiCd.f.selfHp = 0.9f;
+            Check(ScoreOne(hiCd, Mind{}, Profile{}, t, 1, 0, nullptr) == 0.0f, "G3: the flee's need is RetreatDanger: nothing at 90% health");
+        }
+        // ---- pacing while the flee runs ----
+        {
+            Snapshot s = make(50, Tri::Unknown, true);
+            s.book.kit.potionsHealth = 2;
+            s.self.mp = 100; s.self.mpMax = 100;
+            s.book.entries = { Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 2000, Prune::kAvResistFire) };
+            const Generated before = Generate(s, fighter, t);
+            Check(count(before, Family::Attack) > 0 && count(before, Family::CastOffense) > 0, "G3: before the flee, offense is generated");
+            const float drinkBefore = [&] { const Candidate* c = find(before, Family::DrinkHealth); return c ? ScoreOne(*c, Mind{}, Profile{}, t, 1, 0, nullptr) : -1.0f; }();
+            s.fleeRun = true;
+            const Generated during = Generate(s, fighter, t);
+            Check(count(during, Family::Attack) == 0 && count(during, Family::PowerAttack) == 0 && count(during, Family::CastOffense) == 0 &&
+                      count(during, Family::Taunt) == 0 && count(during, Family::Retreat) == 0 && count(during, Family::Disengage) == 0,
+                  "G3: while the flee runs no attack, power attack, offense cast, taunt, retreat or second disengage is generated");
+            const Candidate* dr = find(during, Family::DrinkHealth);
+            const float drinkDuring = dr ? ScoreOne(*dr, Mind{}, Profile{}, t, 1, 0, nullptr) : -1.0f;
+            Check(dr && dr->f.fleeHeal && drinkBefore > 0.0f && drinkDuring > drinkBefore, "G3: a health potion is boosted while he flees (heal as soon as possible)");
+            ClassGate treeOffGate = fighter; treeOffGate.treeOn = false;
+            Check(count(Generate(s, treeOffGate, t), Family::Disengage) == 0, "G3: no second flee while one runs");
+        }
+        // ---- a heal cast for himself is boosted, a heal for another is not ----
+        {
+            Snapshot s = make(50, Tri::Unknown, true);
+            s.self.mp = 100; s.self.mpMax = 100;
+            s.book.entries = { Spell("Healing", 0x12FD0, Prune::Nature::Heal, 40, 0, -1) };
+            s.fleeRun = true;
+            const Generated g = Generate(s, fighter, t);
+            const Candidate* h = find(g, Family::CastHeal);
+            Check(h && h->f.fleeHeal, "G3: a heal cast on himself carries the flee boost");
+        }
+    }
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -1197,6 +1306,7 @@ int main() {
     EngineFillRules();
     OcclusionHoldBound();
     HideHold();
+    DisengageRules();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }
