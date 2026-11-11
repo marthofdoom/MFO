@@ -66,6 +66,40 @@ MFO_STR(Fk_RemoveConfirm,   "This deletes all MFO data for {1}, including progre
 MFO_STR(Fk_RemoveYes,       "Remove", 0)   // the confirm button
 MFO_STR(Fk_RemoveNo,        "Cancel", 0)
 
+// == Classes tab ==
+MFO_STR(Cl_Tab,             "Classes", 0)
+MFO_STR(Cl_NoFollower,      "No active follower. Recruit one to give him a class.", 0)
+MFO_STR(Cl_Off,             "No class equipped. His gambits are his own. Equip one below.", 0)
+MFO_STR(Cl_Current,         "Class: {1}", 1)   // {1}=the equipped class name
+MFO_STR(Cl_Note,            "Switching is free and instant between unlocked classes. Each class remembers its own gambit tables. A class is mastered at its level cap.", 0)
+MFO_STR(Cl_Tier,            "Tier {1}", 1)   // {1}=1..5, a section heading
+MFO_STR(Cl_ColClass,        "Class", 0)
+MFO_STR(Cl_ColLevel,        "Level", 0)
+MFO_STR(Cl_ColState,        "State", 0)
+MFO_STR(Cl_Level,           "Lv {1}/{2}", 2)   // {1}=level, {2}=level cap
+MFO_STR(Cl_LevelNone,       "no level", 0)   // Dragonborn has no level
+MFO_STR(Cl_Xp,              "{1} XP", 1)   // {1}=class XP points
+MFO_STR(Cl_Equipped,        "Equipped", 0)
+MFO_STR(Cl_Mastered,        "Mastered", 0)
+MFO_STR(Cl_PassiveFull,     "passive: full", 0)
+MFO_STR(Cl_PassiveQuarter,  "passive: 1/4", 0)
+MFO_STR(Cl_Locked,          "Locked", 0)
+MFO_STR(Cl_Unlocked,        "Unlocked", 0)
+MFO_STR(Cl_ReqAll,          "Needs mastery of: {1}", 1)   // {1}=comma list of class names
+MFO_STR(Cl_ReqNOf,          "{1} of: {2}", 2)   // {1}=how many, {2}=comma list of class names
+MFO_STR(Cl_Equip,           "Equip", 0)
+MFO_STR(Cl_Switch,          "Switch", 0)
+MFO_STR(Cl_Unequip,         "Classes off", 0)   // takes the class off this follower
+MFO_STR(Cl_TipUnequip,      "Take his class off. His own gambit tables from before he had a class come back.", 0)
+MFO_STR(Cl_Reset,           "Reset to class defaults", 0)
+MFO_STR(Cl_TipResetNone,    "This class ships no default gambit set yet, so there is nothing to reset to.", 0)
+MFO_STR(Cl_ResetTitle,      "Reset gambits", 0)
+MFO_STR(Cl_ResetBody,       "{1}'s combat gambits go back to the {2} defaults. Edits to this class's combat table are lost.", 2)   // {1}=follower, {2}=class
+MFO_STR(Cl_ResetYes,        "Reset", 0)   // the confirm button
+MFO_STR(Cl_ResetNo,         "Cancel", 0)
+MFO_STR(Cl_TipReadOnly,     "The class save is read-only this session (it came from a newer version of the mod), so classes cannot be changed.", 0)
+MFO_STR(Cl_TipClassPick,    "Turned off while a class is equipped: the class sets his stance (see the Classes tab).", 0)
+
 // == Gambits tab ==
 MFO_STR(Gb_Tab,             "Gambits", 0)
 MFO_STR(Gb_NoFollower,      "No active follower. Recruit one to edit gambits.", 0)
