@@ -23,6 +23,7 @@
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
+#include "iaus/SpellBook.h"   // OnContainerChanged: the IAUS mirror's dirty mark (card I4)
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
@@ -178,6 +179,7 @@ namespace MFO::Logistics {
             RE::BSEventNotifyControl ProcessEvent(const RE::TESContainerChangedEvent* a_event,
                                                   RE::BSTEventSource<RE::TESContainerChangedEvent>*) override {
                 if (!a_event) return RE::BSEventNotifyControl::kContinue;
+                Iaus::SpellBook::OnContainerChanged(a_event->oldContainer, a_event->newContainer);   // card I4: mark the IAUS mirror dirty (a leaf-mutex map lookup, no engine call)
                 PlayerGiven::OnContainerChanged(*a_event);   // batch L: player -> follower record (own gate)
                 InvProbe(*a_event);                          // passive [inv-probe], before the logistics gate
                 // Logistics off -> the waiver map is never read, so do no work.

@@ -2,11 +2,12 @@
 // RUN: tools/iaus_harness/run.sh   (host g++ or CXX=clang++; builds only the pure core + this file, exit code =
 // number of failed checks). Not part of the CMake/CI build: the DLL never links it.
 //
-// Builds ONLY the pure core files (Curves, Catalogue, Score, Decide, Explain) with a host compiler: no CommonLib,
+// Builds ONLY the pure files (Curves, Catalogue, Score, Decide, Explain, Generate) with a host compiler: no CommonLib,
 // no engine, no PCH. Each scenario hand-builds the facts I4 will read in game, runs Decide, and prints the ranked
 // list with every consideration ([iaus-why] format), so a curve change can be judged before a field cycle. The
 // CHECKs at the end assert the properties the design promises; the exit code is the number that failed.
 #include "iaus/Core.h"
+#include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 
 #include <algorithm>
 #include <chrono>
@@ -515,6 +516,210 @@ namespace {
                     c.size(), ev, pr, us);
         Check(us < 500.0, "under fIausBudgetMs = 0.5 ms on the host");
     }
+
+    // ── 8. Candidate generation (card I4): the PURE layer, from a hand-built Snapshot ───────────────────────
+    // iaus/Generate.cpp is the code the game runs; the engine side only fills the Snapshot. This is also the
+    // proof that the pure layer links on the host (the combat simulator card builds on exactly this).
+    SpellEntry Spell(const char* name, std::uint32_t id, Prune::Nature n, float cost, float reach = 2000.0f,
+                     int resistAv = -1) {
+        SpellEntry e;
+        e.name = name; e.form = id; e.nature = n; e.cost = cost; e.reach = reach; e.resistAv = resistAv;
+        e.role = Prune::RoleOf(n, resistAv);
+        return e;
+    }
+    Combatant Actor(const char* name, std::uint32_t id, float hp, float hpMax, float x, float y, int level = 10) {
+        Combatant u;
+        u.name = name; u.id = id; u.hp = hp; u.hpMax = hpMax; u.mp = 50; u.mpMax = 50; u.sp = 80; u.spMax = 100;
+        u.x = x; u.y = y; u.dist = std::sqrt(x * x + y * y); u.level = level; u.sight = Sight::Visible;
+        u.sightEngine = Sight::Visible;
+        return u;
+    }
+    Snapshot MageFight() {
+        Snapshot s;
+        s.self = Actor("Mage", 0x14F00, 180, 200, 0, 0);
+        s.self.mp = 100; s.self.mpMax = 200;
+        s.playerId = 0x14;
+        Combatant pc = Actor("Player", 0x14, 50, 100, 300, 0); pc.isPlayer = true;
+        Combatant lydia = Actor("Lydia", 0xA2C94, 100, 100, 250, 250);
+        s.allies = { pc, lydia };
+        for (int i = 0; i < 7; ++i) {
+            Combatant f = Actor("Draugr", 0x3B500u + static_cast<std::uint32_t>(i), 80, 100, 600.0f + 150.0f * static_cast<float>(i), 0);
+            f.undead = i < 2;
+            f.resists = { { Prune::kAvResistFire, i == 0 ? -50.0f : 0.0f } };
+            if (i == 3) f.targetId = 0x14;
+            s.foes.push_back(f);
+        }
+        s.foes.push_back(Actor("Unloaded", 0x3B5FF, 0, 0, 500, 0));   // maxima read 0: must be skipped
+        s.currentTargetId = 0x3B500;
+        s.hasBook = true;
+        auto& b = s.book.entries;
+        b.push_back(Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 2000, Prune::kAvResistFire));
+        SpellEntry ball = Spell("Fireball", 0x1C789, Prune::Nature::Offense, 150, 2000, Prune::kAvResistFire);
+        ball.areaUnits = Prune::AreaUnits(15);
+        b.push_back(ball);                                                         // 150 > 100 magicka: P2
+        SpellEntry rune = Spell("Fire Rune", 0x5DB90, Prune::Nature::Offense, 30);
+        rune.drop = Prune::Drop::Placement; b.push_back(rune);                     // never generated
+        SpellEntry odd = Spell("Strange Script", 0xFE000801, Prune::Nature::Unknown, 10);
+        odd.drop = Prune::Drop::UnknownNature; b.push_back(odd);                   // nature unknown
+        SpellEntry turn = Spell("Turn Undead", 0x4DEE8, Prune::Nature::Control, 30);
+        turn.undeadOnly = true; b.push_back(turn);
+        SpellEntry heal = Spell("Healing", 0x12FCC, Prune::Nature::Heal, 20, 0);
+        heal.selfDelivery = true; b.push_back(heal);
+        b.push_back(Spell("Heal Other", 0x12FD2, Prune::Nature::Heal, 60, 1000));
+        SpellEntry oak = Spell("Oakflesh", 0x5AD5C, Prune::Nature::Buff, 30, 0);
+        oak.selfDelivery = true; oak.meleeBuff = true; oak.activeOn = { 0x14F00 }; b.push_back(oak);   // already on him
+        b.push_back(Spell("Flame Atronach", 0x204C3, Prune::Nature::Summon, 80, 0));
+        b.push_back(Spell("Lesser Ward", 0x13018, Prune::Nature::Ward, 10, 0));
+        SpellEntry scroll = Spell("Scroll of Fireball", 0xA44C5, Prune::Nature::Offense, 0);
+        scroll.source = SpellSource::Scroll; scroll.count = 2; b.push_back(scroll);   // S3: in the book, no candidate
+        s.book.kit.potionsHealth = 2; s.book.kit.potionsMagicka = 1;
+        s.book.kit.melee = true; s.book.kit.staff = true; s.book.kit.staffCharged = true;
+        s.book.kit.bow = true;   // no arrows
+        s.drawn = PostureKind::None;
+        s.combatSec = 3.0f;
+        return s;
+    }
+    std::size_t CountFam(const Generated& g, Family f) { return g.perFamily[static_cast<std::size_t>(f)]; }
+
+    void Generation() {
+        std::printf("\n=== 8. Candidate generation from a hand-built snapshot (card I4, pure layer) ===\n");
+        const Tuning& t = DefaultTuning();
+        ClassGate mage; mage.resolved = true; mage.spellsOnClass = true;
+
+        const Snapshot s = MageFight();
+        const Generated g = Generate(s, mage, t);
+        std::printf("   foes %zu/%zu, actions %zu, postures %zu, emergency %.2f (worst party HP %.0f%%)\n", g.foesKept,
+                    g.foesSeen, g.actions.size(), g.postures.size(), g.emergency, g.worstPartyHp * 100.0f);
+        for (std::size_t f = 0; f < kFamilies; ++f)
+            if (g.perFamily[f]) std::printf("   %-14s %u\n", std::string(Name(static_cast<Family>(f))).c_str(), g.perFamily[f]);
+
+        Check(g.foesSeen == 7 && g.foesKept == 5, "P3: the unreadable foe is skipped and 7 foes are cut to the top 5");
+        Check(CountFam(g, Family::CastOffense) == 5, "Firebolt x 5 foes; Fireball (cost 150 > 100 magicka) dropped by P2");
+        Check(g.droppedCost == 1, "exactly one spell dropped as unaffordable");
+        bool finite = true, hostileOnParty = false, dropped = false, healOnFoe = false, turnOk = true, scrollUsed = false;
+        for (const auto& c : g.actions) {
+            if (!FactsFinite(c.f)) finite = false;
+            const bool isFoe = c.target >= 0x3B500 && c.target <= 0x3B5FF;
+            if ((c.family == Family::CastOffense || c.family == Family::CastControl || c.family == Family::Attack) && !isFoe)
+                hostileOnParty = true;
+            if ((c.family == Family::CastHeal || c.family == Family::CastBuff) && isFoe) healOnFoe = true;
+            if (c.form == 0x5DB90 || c.form == 0xFE000801 || c.target == 0x3B5FF) dropped = true;
+            if (c.form == 0xA44C5 || c.family == Family::Scroll) scrollUsed = true;
+            if (c.form == 0x4DEE8 && !(c.target == 0x3B500 || c.target == 0x3B501)) turnOk = false;
+            if (c.form == 0x4DEE8 && c.f.targetCond != Tri::Yes) turnOk = false;
+        }
+        for (const auto& c : g.postures) if (!FactsFinite(c.f)) finite = false;
+        Check(finite, "every generated candidate passes FactsFinite");
+        Check(!hostileOnParty && !healOnFoe, "hostile actions only name foes; heals and buffs never name a foe");
+        Check(!dropped, "never generated: the rune, the unknown-nature spell, the unreadable foe");
+        Check(!scrollUsed, "a carried scroll is in the book but is no candidate (card S3)");
+        Check(CountFam(g, Family::CastControl) == 2 && turnOk, "Turn Undead only on the two undead foes, target_cond = Yes");
+        // Healing (self only): he is at 90%. Heal Other: himself and the player (50%); Lydia is full.
+        Check(CountFam(g, Family::CastHeal) == 3, "heals: hurt recipients only, a self-delivery heal on himself only");
+        Check(CountFam(g, Family::CastBuff) == 0, "Oakflesh already active on him: no buff candidate");
+        Check(CountFam(g, Family::CastSummon) == 1 && CountFam(g, Family::CastWard) == 1, "one summon, one ward");
+        Check(CountFam(g, Family::DrinkHealth) == 1 && CountFam(g, Family::DrinkMagicka) == 1 &&
+              CountFam(g, Family::DrinkStamina) == 0, "drinks: only the stocked ones (P2)");
+        Check(CountFam(g, Family::PowerAttack) == 0 && CountFam(g, Family::Taunt) == 0 &&
+              CountFam(g, Family::Retreat) == 0, "no power attack / taunt / retreat without the class row");
+        Check(CountFam(g, Family::Sneak) == 0 && CountFam(g, Family::Exploit) == 0, "sneak and exploit are never generated");
+        bool bowNoAmmo = false, staffSeen = false, keyZero = true;
+        for (const auto& c : g.postures) {
+            if (c.f.posture == PostureKind::Bow && c.f.outOfAmmo) bowNoAmmo = true;
+            if (c.f.posture == PostureKind::Staff && c.f.staffCharged) staffSeen = true;
+            if (c.target != 0 || c.form != 0) keyZero = false;
+        }
+        Check(g.postures.size() == 3 && bowNoAmmo && staffSeen && keyZero,
+              "postures: melee, bow (out of ammo), staff (charged); the posture key's target stays 0");
+
+        // The scorer takes them as they are.
+        TickIn in; in.now = 100.0; in.rapportRank = 5;
+        const Decision d = Decide(Mind{}, g.actions, Profile{}, t, in);
+        const int post = DecidePosture(Mind{}, g.postures, Profile{}, t, 5);
+        std::printf("   Decide: %s, %zu ranked, bad facts %zu, first = %s | posture pick = %s\n",
+                    Verdicts[static_cast<int>(d.verdict)], d.ranked.size(), d.badFacts,
+                    d.order.empty() ? "-" : Label(g.actions[d.order[0].idx]).c_str(),
+                    post >= 0 ? std::string(Name(g.postures[static_cast<std::size_t>(post)].f.posture)).c_str() : "-");
+        Check(d.badFacts == 0 && !d.ranked.empty(), "Decide scores the generated set with no bad facts");
+        Check(post < 0 || g.postures[static_cast<std::size_t>(post)].f.posture != PostureKind::Bow,
+              "the posture layer never picks the bow with no ammunition");
+        const auto pairs = TopSpellPairs(d, g.actions);
+        bool pairsOk = pairs.size() <= 6;
+        for (const auto& p : pairs) if (p.spell != 0x12FCD && p.spell != 0x4DEE8) pairsOk = false;
+        Check(pairsOk && !pairs.empty(), "G10: at most 6 (spell, target) pairs, offense / control only");
+
+        // A broken read must not become a broken fact, and an unreadable follower generates nothing.
+        Snapshot bad = MageFight();
+        bad.self.mp = NAN; bad.foes[0].dist = NAN; bad.foes[1].level = 0; bad.self.level = 0; bad.combatSec = NAN;
+        bad.foes[2].resists = { { Prune::kAvResistFire, NAN } }; bad.allies[0].x = NAN;
+        const Generated gb = Generate(bad, mage, t);
+        bool finiteB = true;
+        for (const auto& c : gb.actions) if (!FactsFinite(c.f)) finiteB = false;
+        for (const auto& c : gb.postures) if (!FactsFinite(c.f)) finiteB = false;
+        Check(finiteB && !gb.actions.empty(), "NaN pools, distances, resists and a 0 level still give finite facts");
+        Check(CountFam(gb, Family::CastOffense) == 0 && CountFam(gb, Family::CastSummon) == 0,
+              "an unreadable magicka pool drops every priced spell (never a guess)");
+        Snapshot gone = MageFight(); gone.self.hpMax = 0;
+        const Generated gg = Generate(gone, mage, t);
+        Check(gg.selfUnreadable && gg.actions.empty() && gg.postures.empty(), "follower maxima of 0 (unloaded): nothing generated");
+        Snapshot noBook = MageFight(); noBook.hasBook = false;
+        const Generated gn = Generate(noBook, mage, t);
+        Check(gn.actions.size() == 5 && gn.postures.empty(), "no fresh SpellBook: attacks only (no cast, drink or posture)");
+
+        // Class gates (rulings Q34, G16).
+        ClassGate warrior; warrior.resolved = true; warrior.spellsOnClass = false; warrior.powerAttack = true;
+        warrior.powerCooldownSec = 10.0f; warrior.taunt = true; warrior.disengage = true;
+        Snapshot ws = MageFight(); ws.drawn = PostureKind::Melee; ws.meleeInRightHand = true; ws.tauntEnabled = true;
+        ws.tauntReach = 1024.0f;
+        const Generated gw = Generate(ws, warrior, t);
+        Check(CountFam(gw, Family::CastOffense) + CountFam(gw, Family::CastHeal) + CountFam(gw, Family::CastSummon) == 0 &&
+              gw.droppedClass > 0, "Q34: an off-class spell with no mastered casting class is no candidate");
+        Check(CountFam(gw, Family::PowerAttack) == 5 && CountFam(gw, Family::Taunt) == 1 && CountFam(gw, Family::Retreat) == 1,
+              "class rows open power attack (melee drawn), taunt (the foe on the player) and retreat");
+        bool cd = true;
+        for (const auto& c : gw.actions) if (c.family == Family::PowerAttack && c.f.hardCooldownSec != 10.0f) cd = false;
+        Check(cd, "the power attack carries the class row's 10 s hard cooldown");
+        warrior.spellsFromMastered = true;
+        const Generated gm = Generate(ws, warrior, t);
+        bool flagged = CountFam(gm, Family::CastHeal) > 0;
+        for (const auto& c : gm.actions)
+            if (c.form != 0 && (c.f.onClass || !c.f.fromMastered)) flagged = false;
+        Check(flagged, "Q34: with a mastered casting class the spells are candidates, marked off-class / from-mastered");
+        ClassGate strict = mage; strict.strict = true; strict.weaponBow = false; strict.weaponCrossbow = false;
+        bool bowBarred = false, meleeOk = false;
+        for (const auto& c : Generate(s, strict, t).postures) {
+            if (c.f.posture == PostureKind::Bow && !c.f.classAllowsWeapon) bowBarred = true;
+            if (c.f.posture == PostureKind::Melee && c.f.classAllowsWeapon) meleeOk = true;
+        }
+        Check(bowBarred && meleeOk, "strict adherence: a category outside the class weapon set is marked not allowed");
+        Snapshot held = MageFight(); held.handBusyLeft = true; held.book.entries[0].twoHanded = true;
+        const Generated gh = Generate(held, mage, t);
+        Check(CountFam(gh, Family::CastOffense) == 0 && gh.droppedHand == 1 && CountFam(gh, Family::CastHeal) == 3,
+              "a heal standing on one hand drops a two-hander (P1); one-handed spells keep the other hand");
+        Snapshot splash = MageFight(); splash.self.mp = 200; splash.allies[0].x = 650; splash.allies[0].y = 0;
+        bool sawUnsafe = false, sawArea = false;
+        for (const auto& c : Generate(splash, mage, t).actions)
+            if (c.form == 0x1C789) { sawArea = c.f.hasArea && c.f.foesInArea >= 1.0f; if (!c.f.splashSafe) sawUnsafe = true; }
+        Check(sawArea && sawUnsafe, "an area spell counts the foes in its area and is splash-unsafe near the player");
+
+        // The pure rules on their own.
+        Prune::NatureIn n;
+        n.kind = Prune::Kind::Buff; n.scriptCostliest = true;
+        Check(Prune::ClassifyNature(n) == Prune::Nature::Unknown, "a Buff-kind spell whose costliest effect is Script: nature unknown");
+        n.kind = Prune::Kind::Offense;
+        Check(Prune::ClassifyNature(n) == Prune::Nature::Offense, "a record-hostile spell stays offense beside a Script effect");
+        n = {}; n.kind = Prune::Kind::Offense; n.control = true;
+        Check(Prune::ClassifyNature(n) == Prune::Nature::Control, "a control archetype is control even when flagged hostile");
+        n = {}; n.kind = Prune::Kind::Offense; n.selfCloak = true;
+        Check(Prune::ClassifyNature(n) == Prune::Nature::Buff, "a self cloak is a buff on himself");
+        Check(Prune::RoleOf(Prune::Nature::Offense, Prune::kAvResistFrost) == RoleTag::Frost &&
+              Prune::RoleOf(Prune::Nature::Offense, -1) == RoleTag::OtherDamage, "element -> role tag");
+        Check(Prune::SafeRatio(1.0f, 0.0f, 0.5f) == 0.5f && Prune::SafeRatio(NAN, 2.0f, 0.5f) == 0.5f, "SafeRatio guards 0 and NaN");
+        std::vector<Prune::FoeIn> fs(3);
+        fs[0].id = 3; fs[0].dist = 100; fs[1].id = 2; fs[1].dist = 3000; fs[1].onPlayer = true; fs[2].id = 1; fs[2].dist = 100;
+        const auto top = Prune::TopFoes(fs, 2);
+        Check(top.size() == 2 && top[0] == 1 && top[1] == 2, "relevance: a foe on the player outranks a near one; ties go to the lower id");
+    }
 }
 
 int main() {
@@ -527,6 +732,7 @@ int main() {
     TiesAndPosture();
     ReviewRound1();
     Budget();
+    Generation();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

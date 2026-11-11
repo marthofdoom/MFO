@@ -1,0 +1,409 @@
+// iaus/SpellBook.cpp -- the per-follower main-thread mirror (contract and threading in iaus/SpellBook.h). Card I4.
+#include "iaus/SpellBook.h"
+
+#include "CasterConsent.h"
+#include "Followers.h"
+#include "MainThread.h"
+#include "Vocabulary.h"
+#include "cast/Actuation.h"
+#include "logistics/Logistics.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <format>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace MFO::Iaus::SpellBook {
+
+    namespace {
+
+        using Clock = std::chrono::steady_clock;
+
+        // Sized from the real cadence (principle 9). An IAUS follower reads his book once per service lap
+        // (133 ms x party, about 0.5 s for four). Design 1.5: refresh every 5 s in combat. A lost refresh (a load
+        // drops the pump's queue, MainThread::Clear) is re-asked after 3 s, so it can never wedge. The book is
+        // trusted for 15 s = three missed refreshes; past that Read answers "no book" (and asks), so a fight that
+        // starts minutes after the last one never runs on the old fight's stock and effect reads.
+        constexpr double kRefreshSec  = 5.0;
+        constexpr double kAskRetrySec = 3.0;
+        constexpr double kTrustSec    = 15.0;
+
+        struct Slot {
+            std::shared_ptr<const Book> book;      // immutable once published
+            Clock::time_point stamp{};             // when the last MAIN-thread measurement finished (epoch = never)
+            Clock::time_point asked{};             // when the refresh in flight was posted (epoch = none)
+            std::uint32_t     dirtySeq = 0;        // bumped by Invalidate / OnContainerChanged
+            std::uint32_t     cleanSeq = 0;        // the dirtySeq the published book was measured at
+            std::string       sig;                 // the last logged composition (log dedupe)
+        };
+
+        std::mutex                           g_mx;        // LEAF: map and ledger access only
+        std::unordered_map<RE::FormID, Slot> g_books;
+        std::unordered_set<RE::FormID>       g_dropLogged;   // once per spell per session
+        std::uint32_t                        g_gen = 0;      // bumped by Clear: a pre-Clear refresh is dropped
+
+        double Age(const Clock::time_point& a_then, const Clock::time_point& a_now) {
+            return std::chrono::duration<double>(a_now - a_then).count();
+        }
+
+        struct SpellVisitor final : RE::Actor::ForEachSpellVisitor {
+            std::vector<RE::SpellItem*> out;
+            RE::BSContainer::ForEachResult Visit(RE::SpellItem* a_spell) override {
+                if (a_spell && std::find(out.begin(), out.end(), a_spell) == out.end()) out.push_back(a_spell);
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+        };
+
+        // MAIN THREAD: a live (not dispelled, not inactive) effect of a_spell on a_actor (SelfStatus's walk).
+        bool EffectLive(RE::Actor* a_actor, const RE::MagicItem* a_spell) {
+            auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            auto* list = mt ? mt->GetActiveEffectList() : nullptr;
+            if (!list) return false;
+            for (auto* ae : *list) {
+                if (!ae || ae->spell != a_spell) continue;
+                if (ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled)) continue;
+                return true;
+            }
+            return false;
+        }
+
+        // MAIN THREAD. One spell or scroll record -> its entry. The NATURE is cast/'s classifiers' answer fed to
+        // Prune::ClassifyNature; nothing here re-derives hostile / heal / buff.
+        Entry MakeEntry(RE::Actor* a_actor, RE::SpellItem* a_sp, Source a_source, const ClassGate& a_gate,
+                        const std::vector<RE::Actor*>& a_party) {
+            using Arch = RE::EffectArchetypes::ArchetypeID;
+            Entry e;
+            e.form   = a_sp->GetFormID();
+            e.source = a_source;
+            e.name   = a_sp->GetName() ? a_sp->GetName() : "?";
+
+            const Actuation::SpellArchetype arch = Actuation::ClassifyArchetype(a_sp);
+            const auto delivery = a_sp->GetDelivery();
+            e.selfDelivery  = delivery == RE::MagicSystem::Delivery::kSelf;
+            e.touch         = delivery == RE::MagicSystem::Delivery::kTouch;
+            e.twoHanded     = arch.twoHanded;
+            e.concentration = arch.casting == RE::MagicSystem::CastingType::kConcentration;
+
+            Prune::NatureIn in;
+            switch (CasterConsent::ClassifySpell(a_sp)) {
+            case CasterConsent::SpellKind::Offense: in.kind = Prune::Kind::Offense; break;
+            case CasterConsent::SpellKind::Heal:    in.kind = Prune::Kind::Heal; break;
+            case CasterConsent::SpellKind::Buff:    in.kind = Prune::Kind::Buff; break;
+            }
+            float costliestHostile = -1.0f;
+            for (auto* eff : a_sp->effects) {
+                auto* base = eff ? eff->baseEffect : nullptr;
+                if (!base) continue;
+                switch (base->GetArchetype()) {
+                case Arch::kTurnUndead: e.undeadOnly = true; [[fallthrough]];
+                case Arch::kCalm:
+                case Arch::kFrenzy:
+                case Arch::kDemoralize:
+                case Arch::kParalysis:  in.control = true; break;
+                default: break;
+                }
+                // The element (design fact 7, section 3.1 exploit): the COSTLIEST hostile effect's resist AV.
+                if ((base->IsHostile() || base->IsDetrimental()) && eff->cost > costliestHostile) {
+                    costliestHostile = eff->cost;
+                    const auto rv = base->data.resistVariable;
+                    e.resistAv = rv == RE::ActorValue::kNone ? -1 : static_cast<int>(rv);
+                }
+            }
+            in.summon           = Actuation::IsSummonSpell(a_sp);
+            in.reanimate        = arch.shape == Actuation::SpellShape::Reanimate;
+            in.ward             = arch.shape == Actuation::SpellShape::Ward;
+            in.selfCloak        = arch.shape == Actuation::SpellShape::Cloak && e.selfDelivery;
+            in.scriptCostliest  = arch.shape == Actuation::SpellShape::Script;
+            in.natureUndeclared = Actuation::SpellNatureUndeclared(a_sp);
+            e.nature = Prune::ClassifyNature(in);
+            e.role   = Prune::RoleOf(e.nature, e.resistAv);
+            if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) e.resistAv = -1;
+
+            Prune::StaticIn st;
+            st.castable = a_source == Source::Spell
+                              ? Vocab::IsCastableSpell(a_sp)
+                              : a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
+            // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
+            st.roadUnsupported = a_source == Source::Spell && Actuation::CastRoadUnsupported(a_sp);
+            st.targetLocation  = delivery == RE::MagicSystem::Delivery::kTargetLocation ||
+                                 arch.shape == Actuation::SpellShape::Rune ||
+                                 arch.shape == Actuation::SpellShape::Wall ||
+                                 arch.shape == Actuation::SpellShape::TLBurst;
+            st.nature = e.nature;
+            e.drop    = Prune::StaticDrop(st);
+
+            e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
+                          arch.shape == Actuation::SpellShape::Cloak;
+            e.areaUnits = Prune::AreaUnits(static_cast<float>(arch.area));
+            // The aimed reach (spell range, else projectile range; Self / Touch = Heal Other's reach, which is
+            // what a heal or buff placed on an ally needs). "No cap of its own" is a huge number there: 0 here.
+            const float reach = Actuation::HealReach(a_sp);
+            e.reach = (std::isfinite(reach) && reach > 0.0f && reach < 1.0e8f) ? reach : 0.0f;
+            if (a_source == Source::Spell) {
+                const float cost = a_sp->CalculateMagickaCost(a_actor);
+                e.cost = (std::isfinite(cost) && cost > 0.0f) ? cost : 0.0f;
+            }
+            e.onClass      = a_source == Source::Scroll ? a_gate.scrollUser : a_gate.spellsOnClass;
+            e.fromMastered = a_gate.spellsFromMastered;
+            if (e.nature == Prune::Nature::Summon) e.liveSummon = Actuation::CasterHasLiveSummon(a_actor, a_sp);
+            if (e.drop == Prune::Drop::Keep &&
+                (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward))
+                for (auto* p : a_party)
+                    if (EffectLive(p, a_sp)) e.activeOn.push_back(p->GetFormID());
+            return e;
+        }
+
+        // MAIN THREAD. The current charge of one carried staff stack. An EQUIPPED staff's live charge is the
+        // actor value of its hand; an unequipped one carries it in ExtraCharge, and a stack with no ExtraCharge
+        // has never been used (full: the record's EAMT).
+        float StaffCharge(RE::Actor* a_actor, RE::TESObjectWEAP* a_staff, const RE::InventoryEntryData* a_entry) {
+            auto* avo = a_actor->AsActorValueOwner();
+            if (avo && a_actor->GetEquippedObject(false) == a_staff)
+                return avo->GetActorValue(RE::ActorValue::kRightItemCharge);
+            if (avo && a_actor->GetEquippedObject(true) == a_staff)
+                return avo->GetActorValue(RE::ActorValue::kLeftItemCharge);
+            if (a_entry && a_entry->extraLists)
+                for (auto* xl : *a_entry->extraLists)
+                    if (auto* xc = xl ? xl->GetByType<RE::ExtraCharge>() : nullptr) return xc->charge;
+            return static_cast<float>(a_staff->amountofEnchantment);
+        }
+
+        std::string Signature(const Book& a_b) {
+            int n[7]{};
+            int scrolls = 0, staves = 0, dropped = 0;
+            for (const auto& e : a_b.entries) {
+                if (e.source == Source::Scroll) { scrolls += e.count; continue; }
+                if (e.source == Source::Staff) { staves += e.count; continue; }
+                if (e.drop != Prune::Drop::Keep) { ++dropped; continue; }
+                ++n[static_cast<int>(e.nature)];
+            }
+            const auto& k = a_b.kit;
+            return std::format("spells offense={} control={} heal={} buff={} summon={} ward={} not-candidates={} | "
+                               "scrolls={} staves={}{} | potions H{} S{} M{} | carries melee={} silver={} bow={} "
+                               "crossbow={} arrows={} bolts={}",
+                               n[1], n[2], n[3], n[4], n[5], n[6], dropped, scrolls, staves,
+                               k.staff ? (k.staffCharged ? " (charged)" : " (EMPTY)") : "",
+                               k.potionsHealth, k.potionsStamina, k.potionsMagicka, k.melee ? 1 : 0, k.silver ? 1 : 0,
+                               k.bow ? 1 : 0, k.crossbow ? 1 : 0, k.arrows, k.bolts);
+        }
+
+        // MAIN THREAD ONLY.
+        std::shared_ptr<const Book> Measure(RE::Actor* a_actor) {
+            auto book = std::make_shared<Book>();
+            const RE::FormID  fid  = a_actor->GetFormID();
+            const ClassGate   gate = GateFor(fid);
+
+            // The party as the buff "already active" mirror sees it: himself, the player, the active followers.
+            std::vector<RE::Actor*> party;
+            const auto addParty = [&](RE::Actor* a) {
+                if (a && a->Is3DLoaded() && !a->IsDead() && std::find(party.begin(), party.end(), a) == party.end())
+                    party.push_back(a);
+            };
+            addParty(a_actor);
+            addParty(RE::PlayerCharacter::GetSingleton());
+            if (const auto snap = Followers::ActiveSnapshot())
+                for (const RE::FormID id : *snap) addParty(RE::TESForm::LookupByID<RE::Actor>(id));
+
+            SpellVisitor vis;
+            a_actor->VisitSpells(vis);
+            for (auto* sp : vis.out) {
+                if (!Vocab::IsCastableSpell(sp)) continue;   // abilities, powers, constant effects: never an entry
+                book->entries.push_back(MakeEntry(a_actor, sp, Source::Spell, gate, party));
+            }
+
+            std::vector<Entry> scrolls, staves;
+            for (auto& [obj, data] : a_actor->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                    if (w->IsStaff()) {
+                        Entry e;
+                        e.form   = w->GetFormID();
+                        e.source = Source::Staff;
+                        e.name   = w->GetName() ? w->GetName() : "?";
+                        e.count  = data.first;
+                        e.onClass = !gate.strict || gate.weaponStaff;
+                        e.fromMastered = false;
+                        auto* ench = w->formEnchanting;
+                        const float charge = StaffCharge(a_actor, w, data.second.get());
+                        const float per    = ench ? ench->CalculateMagickaCost(a_actor) : 0.0f;
+                        e.charge  = std::isfinite(charge) ? charge : 0.0f;
+                        e.charged = ench && e.charge > 0.0f && (!std::isfinite(per) || e.charge >= per);
+                        book->kit.staff = true;
+                        if (e.charged) book->kit.staffCharged = true;
+                        staves.push_back(std::move(e));
+                    } else if (w->IsBow()) {
+                        book->kit.bow = true;
+                    } else if (w->IsCrossbow()) {
+                        book->kit.crossbow = true;
+                    } else if (w->IsMelee()) {
+                        book->kit.melee = true;
+                        if (Logistics::IsSilverMeleeWeapon(w)) book->kit.silver = true;
+                    }
+                    continue;
+                }
+                if (auto* sc = obj->As<RE::ScrollItem>()) {
+                    Entry e = MakeEntry(a_actor, sc, Source::Scroll, gate, party);
+                    e.count = data.first;
+                    scrolls.push_back(std::move(e));
+                    continue;
+                }
+                if (auto* ammo = obj->As<RE::TESAmmo>()) {
+                    (ammo->IsBolt() ? book->kit.bolts : book->kit.arrows) += data.first;
+                    continue;
+                }
+                if (auto* alc = obj->As<RE::AlchemyItem>()) {
+                    // The SAME test Logistics::CountPotions makes (the drink executors' stock read).
+                    switch (Logistics::PotionRestores(alc)) {
+                    case RE::ActorValue::kHealth:  book->kit.potionsHealth += data.first; break;
+                    case RE::ActorValue::kStamina: book->kit.potionsStamina += data.first; break;
+                    case RE::ActorValue::kMagicka: book->kit.potionsMagicka += data.first; break;
+                    default: break;
+                    }
+                }
+            }
+            for (auto& e : scrolls) book->entries.push_back(std::move(e));
+            for (auto& e : staves) book->entries.push_back(std::move(e));
+            return book;
+        }
+
+        void PostRefresh(RE::FormID a_fid, std::uint32_t a_gen, std::uint32_t a_dirtySeq) {
+            MainThread::Post([a_fid, a_gen, a_dirtySeq]() {
+                // A LOADED follower only: an unloaded one has no readable lists. No book is published then (the
+                // slot's ask stamp ages out and the next Read asks again), never an empty book that would read
+                // as "he knows no spells".
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+                std::shared_ptr<const Book> book;
+                if (actor && actor->Is3DLoaded() && !actor->IsDead()) book = Measure(actor);
+
+                std::string sig;
+                std::vector<std::string> drops;
+                bool logSig = false;
+                if (book) sig = Signature(*book);
+                {
+                    std::scoped_lock lk(g_mx);
+                    if (a_gen != g_gen) return;   // Clear ran while this was queued or running: drop it
+                    auto& s = g_books[a_fid];
+                    s.asked = Clock::time_point{};
+                    if (!book) return;
+                    s.book     = book;
+                    s.stamp    = Clock::now();
+                    s.cleanSeq = a_dirtySeq;
+                    if (s.sig != sig) { s.sig = sig; logSig = true; }
+                    for (const auto& e : book->entries)
+                        if (e.source == Source::Spell && e.drop != Prune::Drop::Keep && g_dropLogged.insert(e.form).second)
+                            drops.push_back(std::format("{} ({:08X}): nature={} -- no IAUS candidate: {}", e.name,
+                                                        e.form, NatureName(e.nature), Prune::DropName(e.drop)));
+                }
+                // Logged OUTSIDE the leaf mutex.
+                const char* name = actor->GetName() ? actor->GetName() : "?";
+                if (logSig) spdlog::info("[spellbook] {} ({:08X}): {}", name, a_fid, sig);
+                for (const auto& d : drops) spdlog::info("[spellbook] {}", d);
+            });
+        }
+
+    }
+
+    const char* NatureName(Prune::Nature a_n) {
+        switch (a_n) {
+        case Prune::Nature::Unknown: return "unknown";
+        case Prune::Nature::Offense: return "offense";
+        case Prune::Nature::Control: return "control";
+        case Prune::Nature::Heal:    return "heal";
+        case Prune::Nature::Buff:    return "buff";
+        case Prune::Nature::Summon:  return "summon";
+        case Prune::Nature::Ward:    return "ward";
+        }
+        return "?";
+    }
+
+    bool CastingClass(const Classes::ClassDef& a_def) {
+        return a_def.line == Classes::Line::Mage || a_def.line == Classes::Line::Hybrid;
+    }
+
+    ClassGate GateFor(RE::FormID a_follower) {
+        namespace W = Classes::Weapon;
+        ClassGate g;
+        g.treeOn = Classes::Active();
+        g.strict = Classes::Strict();
+        const Classes::ClassDef* def = nullptr;
+        Classes::Mask mastered = 0;
+        if (g.treeOn) {
+            const std::uint8_t eq = Classes::GetEquipped(a_follower);
+            if (eq != Classes::kNoClass && eq < Classes::kClassCount) def = &Classes::Get(static_cast<Classes::Id>(eq));
+            mastered = Classes::GetMastered(a_follower);
+        }
+        if (!def) def = Classes::T1ForOverride(Followers::ResolvedClassFast(a_follower));
+        if (!def) return g;   // not resolved yet: nothing is class-gated (the defaults)
+        g.resolved = true;
+
+        g.spellsOnClass = CastingClass(*def);
+        for (std::size_t i = 0; i < Classes::kClassCount; ++i) {
+            const auto id = static_cast<Classes::Id>(i);
+            if ((mastered & Classes::Bit(id)) != 0 && CastingClass(Classes::Get(id))) { g.spellsFromMastered = true; break; }
+        }
+        g.scrollUser = g.spellsOnClass;
+        const bool any = (def->weapons & W::kUnrestricted) != 0;
+        g.weaponMelee    = any || (def->weapons & (W::kDagger | W::kOneHand | W::kTwoHand)) != 0;
+        g.weaponBow      = any || (def->weapons & W::kBow) != 0;
+        g.weaponCrossbow = any || (def->weapons & W::kCrossbow) != 0;
+        g.weaponStaff    = any || (def->weapons & W::kStaff) != 0;
+        g.disengage   = (def->flags & Classes::Flag::kDisengage) != 0;
+        g.powerAttack = def->powerShareMax != Classes::kShareUnset || def->powerShareMin != Classes::kShareUnset;
+        for (std::size_t i = 0; i < def->gambitCount; ++i) {
+            const auto& row = def->gambits[i];
+            if (!row.act) continue;
+            const std::string_view act{ row.act };
+            if (act == Vocab::kActPowerAttack) {
+                g.powerAttack = true;
+                g.powerCooldownSec = (std::max)(g.powerCooldownSec, row.cooldownSec);
+            } else if (act == Vocab::kActTaunt) {
+                g.taunt = true;
+            }
+        }
+        return g;
+    }
+
+    std::shared_ptr<const Book> Read(RE::Actor* a_follower) {
+        if (!a_follower || !MainThread::IsInstalled()) return nullptr;   // VR: no pump, no book (see the header)
+        const RE::FormID fid = a_follower->GetFormID();
+        const auto       now = Clock::now();
+        std::shared_ptr<const Book> out;
+        bool          ask = false;
+        std::uint32_t gen = 0, seq = 0;
+        {
+            std::scoped_lock lk(g_mx);
+            auto& s = g_books[fid];
+            const bool measured = s.book && s.stamp.time_since_epoch().count() != 0;
+            if (measured && Age(s.stamp, now) <= kTrustSec) out = s.book;
+            const bool stale    = !measured || Age(s.stamp, now) >= kRefreshSec || s.dirtySeq != s.cleanSeq;
+            const bool inFlight = s.asked.time_since_epoch().count() != 0 && Age(s.asked, now) < kAskRetrySec;
+            if (stale && !inFlight) { s.asked = now; ask = true; gen = g_gen; seq = s.dirtySeq; }
+        }
+        if (ask) PostRefresh(fid, gen, seq);   // outside the mutex: Post takes its own queue lock
+        return out;
+    }
+
+    void Invalidate(RE::FormID a_follower) {
+        if (a_follower == 0) return;
+        std::scoped_lock lk(g_mx);
+        if (auto it = g_books.find(a_follower); it != g_books.end()) ++it->second.dirtySeq;
+    }
+
+    void OnContainerChanged(RE::FormID a_old, RE::FormID a_new) {
+        std::scoped_lock lk(g_mx);
+        if (g_books.empty()) return;
+        if (auto it = g_books.find(a_old); a_old != 0 && it != g_books.end()) ++it->second.dirtySeq;
+        if (auto it = g_books.find(a_new); a_new != 0 && it != g_books.end()) ++it->second.dirtySeq;
+    }
+
+    void Clear() {
+        std::scoped_lock lk(g_mx);
+        ++g_gen;
+        g_books.clear();
+        g_dropLogged.clear();
+    }
+
+}
