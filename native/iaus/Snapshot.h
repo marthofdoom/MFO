@@ -143,6 +143,7 @@ namespace MFO::Iaus {
         bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
+        float occludedSec = 0.0f;           // seconds the OWN ray has been Occluded without a break (0 = not; Tuning::occlusionHoldSec)
         std::vector<std::pair<int, float>> resists;   // (resist actor value, its value) for the book's elements
         [[nodiscard]] float Resist(int a_av) const {
             for (const auto& r : resists)

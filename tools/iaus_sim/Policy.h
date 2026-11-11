@@ -60,6 +60,8 @@ namespace Sim {
                 k.targetIsAlly = tg && tg->Party() && tg->c.id != self.c.id && tg->role != Role::Player;
                 k.paralysed = F.now < o.ctrlUntil; k.fleeing = F.now < o.fleeUntil; k.blocking = F.now < o.blockUntil;
                 k.sight = F.Sees(self, o) ? Sight::Visible : Sight::Occluded; k.sightEngine = k.sight;
+                if (k.sight == Sight::Occluded) k.occludedSec = static_cast<float>(F.now - c.occSince.try_emplace(k.id, F.now).first->second);
+                else c.occSince.erase(k.id);
                 k.resists.clear(); for (int av : elems) k.resists.push_back({ av, F.ResistOf(o, av) });
                 if (F.estimates) FillEstimate(F, o, k);
                 sn.foes.push_back(std::move(k));

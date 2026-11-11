@@ -407,6 +407,9 @@ namespace MFO::APMFBridge {
         void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road,
                                 float range);   // range = the ch.21 engage range (fval), 0 for a pin
         void ClearEngageGiveUps();
+        // True when the target is neither fighting the party nor hostile to it (the calm foe a held engagement
+        // cannot make fight). Any thread, takes no MFO lock, reads actor state only.
+        bool TargetCalmNow(RE::FormID follower, RE::FormID target);
         // ch.22 re-entry deny table (apmf/ReentryDeny.cpp) and ch.23 pursuit leash table
         // (apmf/PursuitLeash.cpp): each has its OWN mutex. The sweeps are called by Tick()
         // BEFORE it takes g_mx (the deny sweep posts the retreat's StopCombat); the clears by

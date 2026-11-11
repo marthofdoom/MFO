@@ -53,6 +53,26 @@ namespace MFO::Iaus::Candidates {
 
         double NowSec() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
 
+        // Occlusion age per (self, foe), for the keep-current-attack hold (Tuning::occlusionHoldSec, marth Q93).
+        // Worker only (the gather runs on the serial pump job). Returns seconds occluded without a break, 0 = not.
+        // The hold's expiry is logged once per occlusion, for the foe he is on.
+        float NoteOcclusion(RE::FormID a_self, RE::FormID a_foe, bool a_occluded, bool a_current, float a_holdSec) {
+            struct Rec { std::chrono::steady_clock::time_point since; bool logged = false; };
+            static std::unordered_map<std::uint64_t, Rec> g_occ;
+            const std::uint64_t key = (static_cast<std::uint64_t>(a_self) << 32) | a_foe;
+            if (!a_occluded) { g_occ.erase(key); return 0.0f; }
+            if (g_occ.size() > 512) g_occ.clear();
+            const auto now = std::chrono::steady_clock::now();
+            auto [it, fresh] = g_occ.try_emplace(key, Rec{ now, false });
+            const float sec = std::chrono::duration<float>(now - it->second.since).count();
+            if (a_current && !it->second.logged && sec >= a_holdSec) {
+                it->second.logged = true;
+                spdlog::info("[iaus] {:08X}: keep-current-attack hold on {:08X} EXPIRED, occluded {:.1f} s (hold {:.1f} s)",
+                             a_self, a_foe, sec, a_holdSec);
+            }
+            return (std::max)(sec, 1.0e-3f);
+        }
+
         Sight ToSight(Sightline::Verdict a_v) {
             switch (a_v) {
             case Sightline::Verdict::Visible:  return Sight::Visible;
@@ -226,6 +246,7 @@ namespace MFO::Iaus::Candidates {
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
             u.sight       = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Own));
             u.sightEngine = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Engine));
+            u.occludedSec = NoteOcclusion(selfID, fid, u.sight == Sight::Occluded, fid == s.currentTargetId, a_t.occlusionHoldSec);
             if (avo)
                 for (const int av : resistAvs) {
                     const float r = avo->GetActorValue(static_cast<RE::ActorValue>(av));

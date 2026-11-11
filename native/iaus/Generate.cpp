@@ -69,6 +69,7 @@ namespace MFO::Iaus {
             void Foe(Facts& f, const Combatant& a_foe, bool a_ownRay) const {
                 f.dist = (std::max)(0.0f, Finite(a_foe.dist, 0.0f));
                 f.sight = a_ownRay ? a_foe.sight : a_foe.sightEngine;
+                f.occludedSec = Finite(a_foe.occludedSec, 0.0f);
                 f.foeLevelRatio = SafeRatio(static_cast<float>(a_foe.level), static_cast<float>(s.self.level), 1.0f);
                 f.foeHpPct = Pct(a_foe.hp, a_foe.hpMax);
                 f.foeCaster = a_foe.caster;

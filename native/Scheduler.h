@@ -50,5 +50,8 @@ namespace MFO::Scheduler {
     // table gates on. WORKER ONLY (plain bool written by Scheduler::Tick, read by Loadout::Tick on the
     // same serial pump job).
     bool PartyCombat();
+    // True for kOocCastDebounceSecs (5 s of the unpaused service clock) after party combat went OFF. Out-of-combat
+    // substrate casts wait it out. WORKER ONLY, logs the deferral once per window.
+    bool PartyCombatSettling();
 
 }

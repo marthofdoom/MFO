@@ -423,6 +423,12 @@ namespace MFO::APMFBridge {
                          : std::string());
     }
 
+    bool TargetCalmNow(RE::FormID follower, RE::FormID target) {
+        auto* t = RE::TESForm::LookupByID<RE::Actor>(target);
+        if (!t || t->IsDead() || t->IsDisabled()) return false;
+        return !FightingPartyNow(t) && !HostileToPartyNow(t, RE::TESForm::LookupByID<RE::Actor>(follower));
+    }
+
     void ClearEngageGiveUps() {
         std::scoped_lock lk(g_giveUpMx);
         g_giveUps.clear();

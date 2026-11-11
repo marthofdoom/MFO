@@ -538,7 +538,13 @@ namespace MFO::Iaus {
                 case Sight::None:     return In::Off();
                 case Sight::Visible:  return 1.0f;
                 case Sight::Unknown:  return 0.5f;
-                case Sight::Occluded: return 0.0f;
+                case Sight::Occluded:
+                    // KEEP THE CURRENT ATTACK (marth Q93): a running attack on the foe he is already on is not
+                    // dropped by a short occlusion. Bounded by Tuning::occlusionHoldSec.
+                    if ((c.family == Family::Attack || c.family == Family::PowerAttack) && f.currentTarget &&
+                        t.occlusionHoldSec > 0.0f && f.occludedSec < t.occlusionHoldSec)
+                        return 1.0f;
+                    return 0.0f;
                 }
                 return In::Off();
             case Cons::FoeThreat:     return Clamp(f.foeLevelRatio, 0.0f, 2.0f) / 2.0f;

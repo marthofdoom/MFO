@@ -188,6 +188,14 @@ namespace MFO::Scheduler {
         // (recomputed every tick) but reset on revert so a stale ON cannot log
         // a phantom OFF transition in the next world.
         inline bool g_partyCombat = false;
+        // g_serviceClock when party combat last went OFF (-1e300 = never). Out-of-combat casts that open the
+        // Harbinger substrate wait kOocCastDebounceSecs after it (field 2026-11: an ooc-auto substrate open
+        // 0 ms after "party combat OFF" while foes were still around became an anchor leak). Reset on revert.
+        inline double g_partyOffAt = -1.0e300;
+        inline bool   g_partyOffDeferLogged = false;   // the deferral is logged once per window
+        // 5 s: the service clock advances once per pump lap (kPumpMs 133) and the combat edge is sampled every
+        // lap, so the window is ~37 laps, longer than the 1.4 s the field showed party combat to flap back ON.
+        inline constexpr double kOocCastDebounceSecs = 5.0;
         // Once-per-fight latch for the "party combat, own combat=0 -- combat
         // table live" line: inserted on the first own-OOC party-combat service,
         // erased with the other per-fight state in the party-OOC branch.

@@ -14,6 +14,7 @@
 #include "iaus_sim/Load.h"
 
 #include "iaus/Reach.h"
+#include <unordered_map>
 #include "iaus_sim/Playstyles.h"
 
 namespace Sim {
@@ -160,6 +161,7 @@ namespace Sim {
                  kRoleParalyze, kRoleFear, kRoleCalm, kRoleReanimate, kRoleTurnUndead };
 
     struct Ctl {   // one follower with a decision layer (IAUS, or his gambit table)
+        mutable std::unordered_map<std::uint32_t, double> occSince;   // foe id -> when its occlusion began (the keep-current-attack hold)
         int   body = -1;
         Cls   fam = Cls::Melee;
         ClassGate gate;
