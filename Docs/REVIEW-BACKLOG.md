@@ -2810,5 +2810,18 @@ Raised against a0745ee6: Posture candidates passed to `Decide` are counted as ve
 ### MFO-B646 (SEV-5, OPEN, iaus/Catalogue.cpp KeyOf includes posture, against a0745ee6, Opus tier-3 review of I2 round 1)
 Raised against a0745ee6: `KeyOf` includes `f.posture` for action candidates, so a melee / silver swap resets PowerAttack's cooldown and momentum key. Reasoning: if I4 fills `f.posture` on action candidates (to say which weapon they use), the Cooldowns id and the running key change with the weapon; I4 should leave it None on action candidates or KeyOf should drop it outside the Posture family.
 
-### MFO-B647 (SEV-4, OPEN, iaus Q34 strict reading, against a0745ee6, Opus tier-3 review of I2 round 1)
+### MFO-B647 (SEV-4, CLOSED by marth Q62, iaus Q34 strict reading, against a0745ee6, Opus tier-3 review of I2 round 1)
 Raised against a0745ee6: ruling Q34's last sentence ("only abilities from mastered classes are valid in emergencies") read strictly would also bar ON-class abilities of an unmastered class in an emergency. The author implemented it behind `Tuning::emergencyOnlyMastered`, default OFF. Decision: keep it OFF; the coordinator saves the strict reading as a question for marth.
+**Resolved 2026-11-10:** marth answered Q62 "own class stays valid", so OFF is the ruling. Closed.
+
+### MFO-B648 (SEV-5, OPEN, iaus/Catalogue.cpp cosmetics, against a167d994, Opus tier-3 review of I2 round 2)
+Catalogue.cpp:16: an odd indent on `float B(bool)`, and `<limits>` is probably unused now. Cosmetic.
+
+### MFO-B649 (SEV-5, OPEN, iaus DecidePosture bad facts, against a167d994, Opus tier-3 review of I2 round 2)
+DecidePosture: a posture candidate with a bad fact is vetoed silently. It is not counted in badFacts and no WARN fires, because only Decide's scoreOne counts them.
+
+### MFO-B650 (SEV-5, OPEN, iaus/Score.cpp inf from an input calc, against a167d994, Opus tier-3 review of I2 round 2)
+The input-calculation check catches NaN but not inf. No current input can produce inf from finite facts, so nothing is reachable today.
+
+### MFO-B651 (SEV-4, OPEN, iaus window anchor, for I9 tuning, against a167d994, Opus tier-3 review of I2 round 2)
+The window re-anchors on every Fired (design §4.5, same as #26), so a decision that keeps firing needs about 1.56x its base score to be replaced, at every rank; the rapport roll only acts when a decision lapses or changes. Within the design, not a defect. I9 option: anchor at decidedAt instead, or lower fIausPreemptMargin. I4 brief note from the same review: never leave a stale or garbage value in a Facts field the family does not read, because FactsFinite vetoes the whole candidate.
