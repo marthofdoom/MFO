@@ -237,7 +237,7 @@ namespace MFO::Logistics {
         const auto& list = a_state.logistics();
         for (int i = 0; i < static_cast<int>(list.size()); ++i) {
             if (!list[i].enabled || list[i].actionOpcode != Vocab::kActEquipTorch) continue;
-            if (Eval::Evaluate(a_follower, a_state, Table::Logistics, i).ruleIndex == i) return true;
+            if (Eval::Evaluate(a_follower, a_state, Table::Logistics, i).rank == i) return true;
         }
         return false;
     }

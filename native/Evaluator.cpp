@@ -979,7 +979,7 @@ namespace MFO::Eval {
                 chosen = player->GetHandle();
 
             // First true condition wins; nothing below is evaluated (§4.3).
-            out.ruleIndex    = i;
+            out.rank         = i;   // Scheduler::Rank::OfTableRow(i); source stays Table
             out.actionOpcode = g.actionOpcode;
             out.actionParam  = g.actionParamForm;
             out.subject      = g.subjectSelector;
@@ -989,7 +989,7 @@ namespace MFO::Eval {
             out.conditionParam  = g.conditionParam;
             return out;
         }
-        return out;   // ruleIndex == -1 -> caller does nothing
+        return out;   // rank == -1 -> caller does nothing
     }
 
 }

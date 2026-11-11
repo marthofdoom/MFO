@@ -997,7 +997,7 @@ namespace MFO::Logistics {
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : a_follower->GetPosition();
             for (int start = 0; ; ) {
                 const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
-                if (choice.ruleIndex < 0) break;
+                if (choice.rank < 0) break;
                 const auto& op = choice.actionOpcode;
                 Category cat = Category::Gold; RE::ActorValue want = RE::ActorValue::kNone;
                 bool isLoot = true;
@@ -1026,7 +1026,7 @@ namespace MFO::Logistics {
                     // the excursion linger revisits it once the claim releases.
                     if (!TierReleased(cat, a_corpse, playerPos, a_now)) {
                         if (a_leftWaiting) *a_leftWaiting = true;
-                        start = choice.ruleIndex + 1;
+                        start = choice.rank + 1;
                         continue;
                     }
                     // Equipment moves ONE piece per call (§4.3's shape) while the
@@ -1043,7 +1043,7 @@ namespace MFO::Logistics {
                     int guard = (cat == Category::Equipment) ? 10 : 1;
                     while (guard-- > 0 && LootHere(a_follower, a_corpse, cat, want)) moved = true;
                 }
-                start = choice.ruleIndex + 1;
+                start = choice.rank + 1;
             }
             // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot ... whats needed for town errand smithing"): both take roads
             // (the arm's-reach drain and the excursion arrival) come through here, and they only evaluate loot gambits, so the smithing
@@ -1072,10 +1072,10 @@ namespace MFO::Logistics {
             const bool restrictFree = (pass == 0);
             for (int start = 0; ; ) {
                 const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
-                if (choice.ruleIndex < 0) break;
+                if (choice.rank < 0) break;
                 const auto& op = choice.actionOpcode;
                 if (restrictFree && IsDibsTierLootOp(op)) {
-                    start = choice.ruleIndex + 1; continue;   // dibs-tier: defer to pass 1
+                    start = choice.rank + 1; continue;   // dibs-tier: defer to pass 1
                 }
                 bool acted = false, isLoot = true;
                 if      (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows,  a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
@@ -1099,7 +1099,7 @@ namespace MFO::Logistics {
                                                          // pass 1 can't override the user's stop.
                 else isLoot = false;
                 if (isLoot && acted) return true;
-                start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
+                start = choice.rank + 1;   // skip non-loot / no-op, try next
             }
             }
             // TOWN PHASE 2 R8: the smithing want list's materials ride the same leg boundaries, gambit or not (Service.cpp has the

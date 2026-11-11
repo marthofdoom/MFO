@@ -190,7 +190,7 @@ namespace MFO::Actuation {
         // No rule matched -> NO ENGINE CALL AT ALL. Not a no-op command, not a
         // neutral order: nothing (§4.4's do-nothing guarantee, which is what
         // makes an MFO follower byte-identical to a vanilla one when idle).
-        if (!a_follower || a_choice.ruleIndex < 0) return { Result::NoOp, {} };
+        if (!a_follower || a_choice.rank < 0) return { Result::NoOp, {} };
 
         // RANK, CARRIED FROM THE ONE PLACE THAT KNOWS IT. The gambit list order IS
         // the priority order (marth 2026-09-08), and the evaluator has just handed
@@ -213,7 +213,7 @@ namespace MFO::Actuation {
         struct FiringScope {
             ~FiringScope() { g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f; }
         } firingScope;
-        g_firingRule = a_choice.ruleIndex;
+        g_firingRule = a_choice.rank;
         // Only an ALLY selector's param is an ally-HP threshold. Every other
         // condition's param means something else entirely, so it must never be
         // read as one -- kCondAllyHpBelow is the only ally selector that carries a
@@ -361,7 +361,7 @@ namespace MFO::Actuation {
                 // Every other answer is the direct one-shot below, ChooseBuffRoad naming why on a [buff] line.
                 if (Config::g_castSelf.load() && ChooseBuffRoad(a_follower, sp) == BuffRoad::Claim)
                     return CastOn(a_follower, a_choice.actionParam, a_follower);
-                return CastSummonOnce(a_follower, sp, a_choice.ruleIndex, "combat", op);
+                return CastSummonOnce(a_follower, sp, a_choice.rank, "combat", op);
             }
             if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
                 sp && CasterHasLiveSummon(a_follower, sp)) {

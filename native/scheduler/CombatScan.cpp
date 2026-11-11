@@ -8,6 +8,7 @@
 #include "PCH.h"
 #include "Scheduler.h"
 #include "scheduler/Scheduler_internal.h"
+#include "scheduler/ChoiceSource.h"   // IAUS card I1: the combat scan reads its choices through the seam
 #include "Evaluator.h"
 #include "cast/Actuation.h"
 #include "Followers.h"
@@ -94,6 +95,358 @@ namespace MFO::Scheduler {
             const bool targetUsable = tgt && !tgt->IsDead() && !tgt->IsDisabled() && tgt->IsHostileToActor(a_self);
             if (targetUsable) return false;            // the rule measured a real target: its truth is real
             return CombatSense::FoeCount(a_self) > 0;  // no target, foes remain -> undecidable
+        }
+
+        // THE TABLE SOURCE (IAUS card I1): the gambit table behind the ChoiceSource seam. Each method is a row
+        // read the pre-I1 scan made inline on `ruleIndex`, moved here with the same guards; rank IS the row
+        // index for a table choice (Rank::OfTableRow). Docs/research/2026-11/iaus-i1-seam.md lists every read.
+        class TableSource final : public ChoiceSource {
+        public:
+            TableSource(RE::Actor* a_self, RE::FormID a_id) : m_self(a_self), m_id(a_id) {}
+
+            [[nodiscard]] Eval::Source Kind() const override { return Eval::Source::Table; }
+
+            bool Next(Eval::Choice& a_out) override {
+                const auto rec = g_followers.find(m_id);
+                if (rec == g_followers.end()) return false;
+                a_out = Eval::Evaluate(m_self, rec->second, Table::Combat, m_start);
+                return true;
+            }
+
+            void Reject(const Eval::Choice& a_choice) override { m_start = Rank::NextTableRow(a_choice.rank); }
+
+            // #11: re-anchor the positional suppression window to the fired rule's IDENTITY. Suppression is
+            // positional (INVARIANTS #26), but the anchor is the rule that FIRED, not a frozen index -- a board
+            // Del/Move during the window shifts every index, so a stored index would suppress the wrong rule.
+            // Re-resolve the fired uid to its CURRENT index each tick; if the rule was deleted, the window is void.
+            [[nodiscard]] int SuppressionAnchor(bool a_inWindow, int a_firedRank,
+                                                std::uint32_t a_firedIdentity) const override {
+                int anchor = a_firedRank;   // fallback for a pre-#11 (uid==0) entry
+                if (a_inWindow && a_firedIdentity != 0) {
+                    anchor = Rank::kNone;
+                    if (const auto rr = g_followers.find(m_id); rr != g_followers.end()) {
+                        const auto& tbl = rr->second.combat();
+                        for (int i = 0; i < static_cast<int>(tbl.size()); ++i)
+                            if (tbl[i].uid == a_firedIdentity) { anchor = Rank::OfTableRow(i); break; }
+                    }
+                }
+                return anchor;
+            }
+
+            [[nodiscard]] std::uint32_t FiredIdentity(const Eval::Choice& a_choice) const override {
+                if (const Gambit* rule = Row(a_choice)) return rule->uid;
+                return 0;
+            }
+
+            [[nodiscard]] std::string CoolingReason(const Eval::Choice& a_choice,
+                                                    std::chrono::steady_clock::time_point a_now) const override {
+                std::string coolReason;
+                if (const Gambit* rule = Row(a_choice))
+                    if (rule->cooldownTenths != 0 && rule->uid != 0)
+                        if (const float left = Cooldowns::Remaining(m_id, Cooldowns::Kind::Rule, rule->uid, CooldownSec(*rule), a_now);
+                            left > 0.0f)
+                            coolReason = Cooldowns::CoolingReason(left);
+                return coolReason;
+            }
+
+            [[nodiscard]] bool HesitationExempt(const Eval::Choice& a_choice) const override {
+                const Gambit* rule = Row(a_choice);
+                if (!rule) return false;
+                const auto& cop = rule->conditionOpcode;
+                return cop == Vocab::kCondFoeAttackingMe ||
+                       cop == Vocab::kCondFoeAttackingMeMelee ||
+                       cop == Vocab::kCondFoeAttackingMeRanged;
+            }
+
+            void NoteSkipReason(const Eval::Choice& a_choice, const std::string& a_reason) override {
+                if (Gambit* rule = Row(a_choice)) rule->lastFailReason = a_reason;
+            }
+
+            void Record(const Eval::Choice& a_choice, const Actuation::Outcome& a_outcome,
+                        std::chrono::steady_clock::time_point a_now) override {
+                if (Gambit* rule = Row(a_choice)) {
+                    // Display only -- the evaluator never reads these back (#22).
+                    rule->lastFired = (a_outcome.result == Actuation::Result::Fired);
+                    rule->lastFailReason = a_outcome.reason;
+                    if (rule->lastFired) rule->lastFiredAt = a_now;   // flair #9: board pulse
+                    // Card G9: a real FIRE starts this rule's cooldown. Not an approach leg (Outcome::approach: the
+                    // power attack closing to melee), or the swing it is closing for would be cooled out.
+                    if (rule->lastFired && !a_outcome.approach && rule->cooldownTenths != 0 && rule->uid != 0)
+                        Cooldowns::NoteFired(m_id, Cooldowns::Kind::Rule, rule->uid, a_now);
+                }
+            }
+
+            // POSITIONAL (Fable SEV-2 2026-08-17): Eval returns the FIRST match from index 0, so EVERY row above
+            // the stop was evaluated this lap and did not hold.
+            [[nodiscard]] bool EquipEvaluatedAboveStop(const Eval::Choice& a_stop) const override {
+                if (const auto r2 = g_followers.find(m_id); r2 != g_followers.end()) {
+                    const auto& rules = r2->second.combat();
+                    const int stopIdx = Rank::TableStop(a_stop.rank, static_cast<int>(rules.size()));
+                    for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i) {
+                        const auto& aop = rules[i].actionOpcode;
+                        if (aop == Vocab::kActEquipMelee || aop == Vocab::kActEquipRanged) return true;
+                    }
+                }
+                return false;
+            }
+
+            [[nodiscard]] bool SilverEvaluatedAboveStop(const Eval::Choice& a_stop) const override {
+                if (const auto r2 = g_followers.find(m_id); r2 != g_followers.end()) {
+                    const auto& rules = r2->second.combat();
+                    const int stopIdx = Rank::TableStop(a_stop.rank, static_cast<int>(rules.size()));
+                    for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
+                        if (rules[i].actionOpcode == Vocab::kActEquipSilver) return true;
+                }
+                return false;
+            }
+
+            [[nodiscard]] bool UnholySilverEvaluated(const Eval::Choice& a_stop) const override {
+                if (const auto r4 = g_followers.find(m_id); r4 != g_followers.end()) {
+                    const auto& rules = r4->second.combat();
+                    const int stopIdx = Rank::TableStop(a_stop.rank, static_cast<int>(rules.size()));
+                    for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
+                        if (rules[i].actionOpcode == Vocab::kActEquipSilver &&
+                            rules[i].conditionOpcode == Vocab::kCondFoeIsUnholy) return true;
+                }
+                return false;
+            }
+
+            [[nodiscard]] bool EquipRangeUndecidable(RE::Actor* a_self, const Eval::Choice& a_stop) const override {
+                if (const auto r3 = g_followers.find(m_id); r3 != g_followers.end()) {
+                    const auto& rules = r3->second.combat();
+                    const int stopIdx = Rank::TableStop(a_stop.rank, static_cast<int>(rules.size()));
+                    return ::MFO::Scheduler::EquipRangeUndecidable(a_self, rules, stopIdx);   // the free helper above
+                }
+                return false;
+            }
+
+        private:
+            // The row a table choice names, or nullptr (no choice, record gone, or the row no longer exists).
+            [[nodiscard]] Gambit* Row(const Eval::Choice& a_choice) const {
+                if (!Rank::IsChoice(a_choice.rank)) return nullptr;
+                const auto rr = g_followers.find(m_id);
+                if (rr == g_followers.end() || a_choice.rank >= static_cast<int>(rr->second.combat().size())) return nullptr;
+                return &rr->second.combat()[a_choice.rank];
+            }
+
+            RE::Actor* m_self;
+            RE::FormID m_id;
+            int        m_start = 0;   // Evaluate's a_startIndex: the walk resumes past a rejected row
+        };
+
+        // ONE LAP'S WALK of the combat scan (card I1 gave it its own function). Its outputs, read by the
+        // reconciliation and the bookkeeping in Tick:
+        struct ScanOut {
+            bool castSeen   = false;   // H3: some cast rule's condition held this tick
+            std::vector<int> matchedCast;   // the cast rules whose condition held this tick (incl. suppressed / cannot-act): HealSustainLap's "the rule is still asking"
+            int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
+            int  wantStance = 0;       // combat-style ownership: the equip stance that won
+            // T#76: the equip gambit's CONDITION held this tick (0=none,1=melee,
+            // 2=ranged). Drives the force-hold / stance-clamp release lifecycle.
+            // Superset of wantStance: like castSeen (H3) it is ALSO set when the
+            // suppression window stops the scan AT the equip rule -- so the ticks
+            // right after an equip fires (its own window) do NOT read as "condition
+            // false" and yank the weapon. equipHeld == 0 after the scan == the
+            // condition went false / was superseded -> release both holds.
+            int  equipHeld  = 0;
+            // SILVER (ClickUp 86e3p2gp9): the act.equip_silver rule's condition held this tick (same
+            // four sites as equipHeld). It is a melee equip for everything above (category 1), and its
+            // own switch-back to the main weapon reads this (Actuation::ReconcileSilver, below).
+            bool silverHeld = false;
+            bool stopped    = false;   // scan ended on a Fired / opaque hold
+            bool suppressed = false;   // scan stopped at the suppression window
+            std::string chain;         // 1.4: skip-chain, e.g. "0(no potion),2(satisfied)"
+            Eval::Choice choice;
+            Actuation::Outcome outcome;
+        };
+
+        // The walk itself: try the source's choices in order until one produces a REAL outcome (THE COMBAT SCAN
+        // in Tick says why). Same gates, same order, same chain text as before I1; only the row reads went to a_src.
+        void Scan(ChoiceSource& a_src, RE::Actor* f, RE::FormID id, std::chrono::steady_clock::time_point now,
+                  const char* cannotAct, bool windowActive, int firedRuleNow, ScanOut& a_out) {
+            auto& castSeen = a_out.castSeen;
+            auto& matchedCast = a_out.matchedCast;
+            auto& handClaim = a_out.handClaim;
+            auto& wantStance = a_out.wantStance;
+            auto& equipHeld = a_out.equipHeld;
+            auto& silverHeld = a_out.silverHeld;
+            auto& stopped = a_out.stopped;
+            auto& suppressed = a_out.suppressed;
+            auto& chain = a_out.chain;
+            auto& choice = a_out.choice;
+            auto& outcome = a_out.outcome;
+
+            for (;;) {
+                // The source re-finds the record each pass (INVARIANTS #2): a transparent
+                // outcome may still have dispatched engine events (a failing cast
+                // self-releases the spell), so never hold an iterator across one.
+                if (!a_src.Next(choice)) break;           // the record is gone: the last choice stands
+                if (!Rank::IsChoice(choice.rank)) break;  // nothing (more) matched
+
+                const auto& op = choice.actionOpcode;
+                // A SUMMON rule is not a cast channel (fix/mfo-summon-oneshot): it holds
+                // no hand and no claim, so it must not keep the H3 cast loan alive
+                // (castSeen) or be passed as castFacetHeld to the OOC service.
+                const bool isCast  = (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                                      op == Vocab::kActCastPlayer) &&
+                                     !Actuation::IsSummonSpell(
+                                         RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam));
+                const bool isSilver = op == Vocab::kActEquipSilver;   // a melee equip (category 1) everywhere below
+                const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged || isSilver;
+
+                // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --
+                // and it survives the scan unchanged: during a window the scan
+                // stops COLD when the next candidate reaches the fired rule's
+                // index; it never scans past it. Rules ABOVE the fired rule are
+                // still tried first (transparent ones fall through as usual), so a
+                // dying follower's rule-1 heal preempts exactly as before.
+                if (Rank::StopsAtAnchor(windowActive, choice.rank, firedRuleNow)) {
+                    if (isCast) { castSeen = true; matchedCast.push_back(choice.rank); }   // its condition held: keep the loan (H3)
+                    // T#76: same shape for the equip force-hold -- the equip rule's
+                    // condition held this tick (that is why Evaluate returned it),
+                    // the scan just stopped at it inside its own suppression window.
+                    // Keep the force-hold; do NOT read this as "condition false".
+                    if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                    silverHeld = silverHeld || isSilver;
+                    suppressed = true;
+                    break;
+                }
+
+                // H2 -- THE HAND CLAIM. A satisfied equip rule above has already
+                // decided this tick's weapon category; a lower CONTRADICTORY equip
+                // is skipped WITHOUT firing, whatever its condition says. This is
+                // first-match-wins applied to the hand as a resource -- without it
+                // the fall-through would re-manufacture the melee<->ranged thrash
+                // in mixed packs (D4). Per marth (§7.2) the claim binds only
+                // equip-vs-equip: a cast rule below still fires (its off-hand
+                // borrow is a loan, not a contradiction -- spellsword lists work).
+                // Per-scan state only; nothing persists across ticks (#22).
+                if (isEquip && handClaim != 0) {
+                    const int cat = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                    if (cat != handClaim) {
+                        chain += std::format("{}{}(hand claimed)",
+                                             chain.empty() ? "" : ",", choice.rank);
+                        a_src.Reject(choice);
+                        continue;
+                    }
+                }
+
+                // H3: the condition of a cast rule held this tick -- whether it
+                // now fires, waits out its grace, sits debounced, or fails (the
+                // failure paths self-release internally). Only a tick where NO
+                // cast condition held releases the loan, after the loop.
+                if (isCast) { castSeen = true; matchedCast.push_back(choice.rank); }
+
+                // HE CANNOT ACT (fix/mfo-can-act): bleeding out, down, knocked down,
+                // paralysed or in a kill move. The rule is passed over TRANSPARENTLY and
+                // never reaches Fire -- no cast, drink, latch or swing. Its condition DID
+                // hold, so it is treated like the suppression-window stop above: a cast
+                // rule keeps the loan (castSeen, set just above), an equip rule keeps its
+                // hold (equipHeld), so a knockdown does not strip a weapon or a claim that
+                // his next standing lap needs. The skip-chain line is deduped, so a stable
+                // down logs once.
+                if (cannotAct) {
+                    if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                    silverHeld = silverHeld || isSilver;
+                    chain += std::format("{}{}(cannot act: {})", chain.empty() ? "" : ",",
+                                         choice.rank, cannotAct);
+                    a_src.Reject(choice);
+                    continue;
+                }
+
+                // CARD G9: PER-RULE COOLDOWN (Gambit::cooldownTenths; the last-fired store is Cooldowns.h, runtime-only).
+                // A rule still cooling down is passed over TRANSPARENTLY and never reaches Fire, its reason going to the
+                // chain and to the board the G10 way (the transparent branch below). Actuation-side pacing, the same
+                // shape as the drink / cast cooldowns: the evaluator chose this rule and is not told otherwise (#22).
+                // FailedOther, never NoOp: a transparent NoOp on an equip rule reads as "satisfied" (the H2 claim).
+                // Like the cast cooldown, it runs after H3 above, so a cooling cast rule still holds its loan.
+                const std::string coolReason = a_src.CoolingReason(choice, now);
+
+                // ── FLAIR #5: RETARGET HESITATION ────────────────────────────────
+                // A switch of an existing latch must win twice: first winning
+                // service proposes and holds ("sizing up <name>" -- an opaque
+                // beat, like the attack latch itself); the second service that
+                // proposes the same foe commits. First engagement is exempt (no
+                // latch yet), and so is self-defense (foe_attacking_me*).
+                if (coolReason.empty() && op == Vocab::kActAttack && choice.target) {
+                    const auto cur = Targeting::Current(id);
+                    // Only a LIVE current target earns the hesitation beat. A stale
+                    // latch to a DEAD/gone foe must not stall a switch (Opus review:
+                    // an oscillating winner + a dead latch would leave the follower
+                    // stuck on a corpse, never re-engaging) -- resolve it, and if it
+                    // is not a living actor, commit the switch immediately below.
+                    auto curPtr = cur.get();
+                    auto* curActor = curPtr.get();
+                    const bool curLive = curActor && !curActor->IsDead() && !curActor->IsDisabled();
+                    if (curLive && !(cur == choice.target)) {
+                        const bool exempt = a_src.HesitationExempt(choice);   // self-defence (foe_attacking_me*)
+                        if (!exempt) {
+                            auto& prop = g_proposedTarget[id];
+                            if (!(prop == choice.target)) {
+                                prop = choice.target;
+                                auto tp = choice.target.get();
+                                outcome = { Actuation::Result::NoOp,
+                                            std::format("sizing up {}",
+                                                        tp && tp->GetName() ? tp->GetName() : "?") };
+                                stopped = true;   // opaque: consumes the tick, once
+                                break;
+                            }
+                            g_proposedTarget.erase(id);   // won twice -> commit below
+                        }
+                    } else {
+                        g_proposedTarget.erase(id);       // first latch / same foe
+                    }
+                }
+
+                // COMBAT-START TIMING (field 2026-10-06 14:25:25, marth: "Its only in combat gambits, so him casting
+                // it out of combat is a timing issue"): a combat-table cast whose follower is in combat by MFO's own
+                // reckoning but whose combat controller is not up yet must WAIT, transparently, never take the
+                // out-of-combat direct / fan road (unanimated, all targets at once). Once the controller is up the
+                // normal animated claim road applies. Logistics' OOC casts and the retreat self-heal keep their
+                // direct road (they do not pass through here).
+                const bool castOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                                    op == Vocab::kActCastPlayer;
+                if (!coolReason.empty())
+                    outcome = { Actuation::Result::FailedOther, coolReason, true };
+                else if (castOp && APMFBridge::InCombat(f) && !f->GetActorRuntimeData().combatController)
+                    outcome = { Actuation::Result::NoOp,
+                                "waiting for his combat controller (a combat gambit's cast never takes the direct road)",
+                                true };
+                else
+                    outcome = Actuation::Fire(f, choice);
+
+                if (outcome.transparent) {
+                    // A satisfied equip (transparent NoOp on an equip action) is
+                    // the H2 claim; every other transparent outcome just records
+                    // its reason in the chain and the scan moves on.
+                    const bool satisfiedEquip =
+                        isEquip && outcome.result == Actuation::Result::NoOp;
+                    if (satisfiedEquip) handClaim = wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                    if (satisfiedEquip) silverHeld = silverHeld || isSilver;
+                    chain += std::format("{}{}({})", chain.empty() ? "" : ",",
+                                         choice.rank,
+                                         satisfiedEquip        ? "satisfied"
+                                         // G9: no countdown in the chain, or its dedup'd log line changes every second
+                                         : !coolReason.empty() ? "cooling down"
+                                                               : outcome.reason.c_str());
+                    // G10: a skipped rule's "will not work" reason reaches the board (lastFailReason is otherwise written for the stopping rule only).
+                    // G9's "cooling down (Ns)" takes the same road.
+                    if (outcome.reason.starts_with("will not work:") || outcome.reason.starts_with(Cooldowns::kCoolingPrefix))
+                        a_src.NoteSkipReason(choice, outcome.reason);
+                    a_src.Reject(choice);
+                    continue;
+                }
+
+                // A FIRED equip is the winning stance too (the satisfied case above
+                // handles an already-correct hand; this is the real swap).
+                if (isEquip && outcome.result == Actuation::Result::Fired) {
+                    wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                    silverHeld = silverHeld || isSilver;
+                }
+
+                stopped = true;                    // Fired or opaque hold -> done
+                break;
+            }
         }
 
     }
@@ -748,12 +1101,12 @@ namespace MFO::Scheduler {
                 // retreat travel is untouched and nothing is left for a later StopCombat to
                 // cut. Before it lands, nothing runs (a claim minted now would be cut by it).
                 if (!APMFBridge::InCombat(f) && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
-                    for (int start = 0; ; ) {
-                        const auto rec = g_followers.find(id);
-                        if (rec == g_followers.end()) break;
-                        const Eval::Choice sc = Eval::Evaluate(f, rec->second, Table::Combat, start);
-                        if (sc.ruleIndex < 0) break;
-                        start = sc.ruleIndex + 1;
+                    TableSource retreatTable(f, id);   // the combat TABLE, by name (card I1; IAUS: card I6 decides)
+                    for (;;) {
+                        Eval::Choice sc;
+                        if (!retreatTable.Next(sc)) break;
+                        if (!Rank::IsChoice(sc.rank)) break;
+                        retreatTable.Reject(sc);
                         // act.cast_self, or a cast_target row whose TARGET is "Self" (Subject::Caster,
                         // 2026-10-06): the same self road (Fire -> CastOn(f, spell, f)), self by definition.
                         const bool selfRule =
@@ -773,7 +1126,7 @@ namespace MFO::Scheduler {
                         if (now - last > std::chrono::seconds(3)) {
                             last = now;
                             spdlog::info("[retreat-heal] {:08X}: self-heal rule {} (spell {:08X}) while retreating: {}",
-                                         id, sc.ruleIndex, sc.actionParam, o.reason);
+                                         id, sc.rank, sc.actionParam, o.reason);
                         }
                         break;
                     }
@@ -914,234 +1267,25 @@ namespace MFO::Scheduler {
         // cast-grace wait -- those legitimately occupy the tick).
         auto& recent = g_recent[id];
         const bool inWindow = now < recent.until;
-        // #11: re-anchor the positional suppression window to the fired rule's
-        // IDENTITY. Suppression is positional (INVARIANTS #26), but the anchor is
-        // the rule that FIRED, not a frozen index -- a board Del/Move during the
-        // window shifts every index, so a stored index would suppress the wrong
-        // rule. Re-resolve the fired uid to its CURRENT index each tick; if the
-        // rule was deleted, the window is void.
-        int firedRuleNow = recent.firedRule;   // fallback for a pre-#11 (uid==0) entry
-        if (inWindow && recent.firedUID != 0) {
-            firedRuleNow = -1;
-            if (const auto rr = g_followers.find(id); rr != g_followers.end()) {
-                const auto& tbl = rr->second.combat();
-                for (int i = 0; i < static_cast<int>(tbl.size()); ++i)
-                    if (tbl[i].uid == recent.firedUID) { firedRuleNow = i; break; }
-            }
-        }
-        const bool windowActive = inWindow && firedRuleNow >= 0;
+        // #11: the window's anchor is the fired decision's IDENTITY, re-resolved to its
+        // CURRENT rank each tick by the source (TableSource::SuppressionAnchor).
+        TableSource table(f, id);   // card I6 picks the IAUS source here for an iausCombat follower
+        ChoiceSource& src = table;
+        const int firedRuleNow = src.SuppressionAnchor(inWindow, recent.firedRule, recent.firedUID);
+        const bool windowActive = Rank::WindowActive(inWindow, firedRuleNow);
 
-        bool castSeen   = false;   // H3: some cast rule's condition held this tick
-        std::vector<int> matchedCast;   // the cast rules whose condition held this tick (incl. suppressed / cannot-act): HealSustainLap's "the rule is still asking"
-        int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
-        int  wantStance = 0;       // combat-style ownership: the equip stance that won
-        // T#76: the equip gambit's CONDITION held this tick (0=none,1=melee,
-        // 2=ranged). Drives the force-hold / stance-clamp release lifecycle.
-        // Superset of wantStance: like castSeen (H3) it is ALSO set when the
-        // suppression window stops the scan AT the equip rule -- so the ticks
-        // right after an equip fires (its own window) do NOT read as "condition
-        // false" and yank the weapon. equipHeld == 0 after the scan == the
-        // condition went false / was superseded -> release both holds.
-        int  equipHeld  = 0;
-        // SILVER (ClickUp 86e3p2gp9): the act.equip_silver rule's condition held this tick (same
-        // four sites as equipHeld). It is a melee equip for everything above (category 1), and its
-        // own switch-back to the main weapon reads this (Actuation::ReconcileSilver, below).
-        bool silverHeld = false;
-        bool stopped    = false;   // scan ended on a Fired / opaque hold
-        bool suppressed = false;   // scan stopped at the suppression window
-        std::string chain;         // 1.4: skip-chain, e.g. "0(no potion),2(satisfied)"
-        Eval::Choice choice;
-        Actuation::Outcome outcome;
-
-        for (int start = 0; ; ) {
-            // Re-find the record each pass (INVARIANTS #2): a transparent
-            // outcome may still have dispatched engine events (a failing cast
-            // self-releases the spell), so never hold an iterator across one.
-            const auto rec = g_followers.find(id);
-            if (rec == g_followers.end()) break;
-
-            choice = Eval::Evaluate(f, rec->second, Table::Combat, start);
-            if (choice.ruleIndex < 0) break;          // nothing (more) matched
-
-            const auto& op = choice.actionOpcode;
-            // A SUMMON rule is not a cast channel (fix/mfo-summon-oneshot): it holds
-            // no hand and no claim, so it must not keep the H3 cast loan alive
-            // (castSeen) or be passed as castFacetHeld to the OOC service.
-            const bool isCast  = (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
-                                  op == Vocab::kActCastPlayer) &&
-                                 !Actuation::IsSummonSpell(
-                                     RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam));
-            const bool isSilver = op == Vocab::kActEquipSilver;   // a melee equip (category 1) everywhere below
-            const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged || isSilver;
-
-            // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --
-            // and it survives the scan unchanged: during a window the scan
-            // stops COLD when the next candidate reaches the fired rule's
-            // index; it never scans past it. Rules ABOVE the fired rule are
-            // still tried first (transparent ones fall through as usual), so a
-            // dying follower's rule-1 heal preempts exactly as before.
-            if (windowActive && choice.ruleIndex >= firedRuleNow) {
-                if (isCast) { castSeen = true; matchedCast.push_back(choice.ruleIndex); }   // its condition held: keep the loan (H3)
-                // T#76: same shape for the equip force-hold -- the equip rule's
-                // condition held this tick (that is why Evaluate returned it),
-                // the scan just stopped at it inside its own suppression window.
-                // Keep the force-hold; do NOT read this as "condition false".
-                if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
-                silverHeld = silverHeld || isSilver;
-                suppressed = true;
-                break;
-            }
-
-            // H2 -- THE HAND CLAIM. A satisfied equip rule above has already
-            // decided this tick's weapon category; a lower CONTRADICTORY equip
-            // is skipped WITHOUT firing, whatever its condition says. This is
-            // first-match-wins applied to the hand as a resource -- without it
-            // the fall-through would re-manufacture the melee<->ranged thrash
-            // in mixed packs (D4). Per marth (§7.2) the claim binds only
-            // equip-vs-equip: a cast rule below still fires (its off-hand
-            // borrow is a loan, not a contradiction -- spellsword lists work).
-            // Per-scan state only; nothing persists across ticks (#22).
-            if (isEquip && handClaim != 0) {
-                const int cat = (op == Vocab::kActEquipRanged) ? 2 : 1;
-                if (cat != handClaim) {
-                    chain += std::format("{}{}(hand claimed)",
-                                         chain.empty() ? "" : ",", choice.ruleIndex);
-                    start = choice.ruleIndex + 1;
-                    continue;
-                }
-            }
-
-            // H3: the condition of a cast rule held this tick -- whether it
-            // now fires, waits out its grace, sits debounced, or fails (the
-            // failure paths self-release internally). Only a tick where NO
-            // cast condition held releases the loan, after the loop.
-            if (isCast) { castSeen = true; matchedCast.push_back(choice.ruleIndex); }
-
-            // HE CANNOT ACT (fix/mfo-can-act): bleeding out, down, knocked down,
-            // paralysed or in a kill move. The rule is passed over TRANSPARENTLY and
-            // never reaches Fire -- no cast, drink, latch or swing. Its condition DID
-            // hold, so it is treated like the suppression-window stop above: a cast
-            // rule keeps the loan (castSeen, set just above), an equip rule keeps its
-            // hold (equipHeld), so a knockdown does not strip a weapon or a claim that
-            // his next standing lap needs. The skip-chain line is deduped, so a stable
-            // down logs once.
-            if (cannotAct) {
-                if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
-                silverHeld = silverHeld || isSilver;
-                chain += std::format("{}{}(cannot act: {})", chain.empty() ? "" : ",",
-                                     choice.ruleIndex, cannotAct);
-                start = choice.ruleIndex + 1;
-                continue;
-            }
-
-            // CARD G9: PER-RULE COOLDOWN (Gambit::cooldownTenths; the last-fired store is Cooldowns.h, runtime-only).
-            // A rule still cooling down is passed over TRANSPARENTLY and never reaches Fire, its reason going to the
-            // chain and to the board the G10 way (the transparent branch below). Actuation-side pacing, the same
-            // shape as the drink / cast cooldowns: the evaluator chose this rule and is not told otherwise (#22).
-            // FailedOther, never NoOp: a transparent NoOp on an equip rule reads as "satisfied" (the H2 claim).
-            // Like the cast cooldown, it runs after H3 above, so a cooling cast rule still holds its loan.
-            std::string coolReason;
-            if (const auto rr = g_followers.find(id);
-                rr != g_followers.end() && choice.ruleIndex < static_cast<int>(rr->second.combat().size())) {
-                const auto& rule = rr->second.combat()[choice.ruleIndex];
-                if (rule.cooldownTenths != 0 && rule.uid != 0)
-                    if (const float left = Cooldowns::Remaining(id, Cooldowns::Kind::Rule, rule.uid, CooldownSec(rule), now);
-                        left > 0.0f)
-                        coolReason = Cooldowns::CoolingReason(left);
-            }
-
-            // ── FLAIR #5: RETARGET HESITATION ────────────────────────────────
-            // A switch of an existing latch must win twice: first winning
-            // service proposes and holds ("sizing up <name>" -- an opaque
-            // beat, like the attack latch itself); the second service that
-            // proposes the same foe commits. First engagement is exempt (no
-            // latch yet), and so is self-defense (foe_attacking_me*).
-            if (coolReason.empty() && op == Vocab::kActAttack && choice.target) {
-                const auto cur = Targeting::Current(id);
-                // Only a LIVE current target earns the hesitation beat. A stale
-                // latch to a DEAD/gone foe must not stall a switch (Opus review:
-                // an oscillating winner + a dead latch would leave the follower
-                // stuck on a corpse, never re-engaging) -- resolve it, and if it
-                // is not a living actor, commit the switch immediately below.
-                auto curPtr = cur.get();
-                auto* curActor = curPtr.get();
-                const bool curLive = curActor && !curActor->IsDead() && !curActor->IsDisabled();
-                if (curLive && !(cur == choice.target)) {
-                    bool exempt = false;
-                    if (choice.ruleIndex < static_cast<int>(rec->second.combat().size())) {
-                        const auto& cop = rec->second.combat()[choice.ruleIndex].conditionOpcode;
-                        exempt = cop == Vocab::kCondFoeAttackingMe ||
-                                 cop == Vocab::kCondFoeAttackingMeMelee ||
-                                 cop == Vocab::kCondFoeAttackingMeRanged;
-                    }
-                    if (!exempt) {
-                        auto& prop = g_proposedTarget[id];
-                        if (!(prop == choice.target)) {
-                            prop = choice.target;
-                            auto tp = choice.target.get();
-                            outcome = { Actuation::Result::NoOp,
-                                        std::format("sizing up {}",
-                                                    tp && tp->GetName() ? tp->GetName() : "?") };
-                            stopped = true;   // opaque: consumes the tick, once
-                            break;
-                        }
-                        g_proposedTarget.erase(id);   // won twice -> commit below
-                    }
-                } else {
-                    g_proposedTarget.erase(id);       // first latch / same foe
-                }
-            }
-
-            // COMBAT-START TIMING (field 2026-10-06 14:25:25, marth: "Its only in combat gambits, so him casting
-            // it out of combat is a timing issue"): a combat-table cast whose follower is in combat by MFO's own
-            // reckoning but whose combat controller is not up yet must WAIT, transparently, never take the
-            // out-of-combat direct / fan road (unanimated, all targets at once). Once the controller is up the
-            // normal animated claim road applies. Logistics' OOC casts and the retreat self-heal keep their
-            // direct road (they do not pass through here).
-            const bool castOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
-                                op == Vocab::kActCastPlayer;
-            if (!coolReason.empty())
-                outcome = { Actuation::Result::FailedOther, coolReason, true };
-            else if (castOp && APMFBridge::InCombat(f) && !f->GetActorRuntimeData().combatController)
-                outcome = { Actuation::Result::NoOp,
-                            "waiting for his combat controller (a combat gambit's cast never takes the direct road)",
-                            true };
-            else
-                outcome = Actuation::Fire(f, choice);
-
-            if (outcome.transparent) {
-                // A satisfied equip (transparent NoOp on an equip action) is
-                // the H2 claim; every other transparent outcome just records
-                // its reason in the chain and the scan moves on.
-                const bool satisfiedEquip =
-                    isEquip && outcome.result == Actuation::Result::NoOp;
-                if (satisfiedEquip) handClaim = wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
-                if (satisfiedEquip) silverHeld = silverHeld || isSilver;
-                chain += std::format("{}{}({})", chain.empty() ? "" : ",",
-                                     choice.ruleIndex,
-                                     satisfiedEquip        ? "satisfied"
-                                     // G9: no countdown in the chain, or its dedup'd log line changes every second
-                                     : !coolReason.empty() ? "cooling down"
-                                                           : outcome.reason.c_str());
-                // G10: a skipped rule's "will not work" reason reaches the board (lastFailReason is otherwise written for the stopping rule only).
-                // G9's "cooling down (Ns)" takes the same road.
-                if (outcome.reason.starts_with("will not work:") || outcome.reason.starts_with(Cooldowns::kCoolingPrefix))
-                    if (auto rr = g_followers.find(id); rr != g_followers.end() && choice.ruleIndex < static_cast<int>(rr->second.combat().size()))
-                        rr->second.combat()[choice.ruleIndex].lastFailReason = outcome.reason;
-                start = choice.ruleIndex + 1;
-                continue;
-            }
-
-            // A FIRED equip is the winning stance too (the satisfied case above
-            // handles an already-correct hand; this is the real swap).
-            if (isEquip && outcome.result == Actuation::Result::Fired) {
-                wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
-                silverHeld = silverHeld || isSilver;
-            }
-
-            stopped = true;                    // Fired or opaque hold -> done
-            break;
-        }
+        ScanOut scan;
+        Scan(src, f, id, now, cannotAct, windowActive, firedRuleNow, scan);
+        auto& castSeen = scan.castSeen;
+        auto& matchedCast = scan.matchedCast;
+        auto& wantStance = scan.wantStance;
+        auto& equipHeld = scan.equipHeld;
+        auto& silverHeld = scan.silverHeld;
+        auto& stopped = scan.stopped;
+        auto& suppressed = scan.suppressed;
+        auto& chain = scan.chain;
+        auto& choice = scan.choice;
+        auto& outcome = scan.outcome;
 
         // COMBAT-STYLE OWNERSHIP. The actual combatStyle write happens on the
         // combat thread (CombatStyle::ApplyTick from the UpdateCombat hook); this
@@ -1190,21 +1334,10 @@ namespace MFO::Scheduler {
         const bool condKnownFalse = !stopped && !suppressed;
         bool equipCondKnownFalse = condKnownFalse;
         if (!equipCondKnownFalse && equipHeld == 0) {
-            // Stop index: where the scan halted, or past-end if nothing matched
-            // (choice.ruleIndex < 0 -> the whole list was evaluated).
-            if (const auto r2 = g_followers.find(id); r2 != g_followers.end()) {
-                const auto& rules = r2->second.combat();
-                const int stopIdx = (choice.ruleIndex < 0)
-                                        ? static_cast<int>(rules.size())
-                                        : choice.ruleIndex;
-                for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i) {
-                    const auto& aop = rules[i].actionOpcode;
-                    if (aop == Vocab::kActEquipMelee || aop == Vocab::kActEquipRanged) {
-                        equipCondKnownFalse = true;   // evaluated above the stop, did not hold
-                        break;
-                    }
-                }
-            }
+            // Stop: where the scan halted, or past-end if nothing matched
+            // (choice.rank < 0 -> the whole list was evaluated).
+            if (src.EquipEvaluatedAboveStop(choice))
+                equipCondKnownFalse = true;   // evaluated above the stop, did not hold
         }
         // SILVER (ClickUp 86e3p2gp9): the silver rule's OWN truth, by the same two ways -- the scan
         // ran to completion, or an act.equip_silver rule sat above the stop and did not hold. Its
@@ -1214,12 +1347,7 @@ namespace MFO::Scheduler {
         // act.equip_melee rule below it, whose hold must survive its unknown laps as before.
         bool silverKnownFalse = !silverHeld && condKnownFalse;
         if (!silverHeld && !silverKnownFalse) {
-            if (const auto r2 = g_followers.find(id); r2 != g_followers.end()) {
-                const auto& rules = r2->second.combat();
-                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
-                for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
-                    if (rules[i].actionOpcode == Vocab::kActEquipSilver) { silverKnownFalse = true; break; }
-            }
+            if (src.SilverEvaluatedAboveStop(choice)) silverKnownFalse = true;
         }
         // "Foe targeted: Unholy" is target-relative like the range conditions: with no usable
         // currentCombatTarget the Evaluator returns empty, which is UNKNOWN, not false, while the
@@ -1229,16 +1357,9 @@ namespace MFO::Scheduler {
         // the current target is unusable (Eval::CurrentTargetIfTrackable, PickFoe's own gates), and
         // CombatSense::FoeCount > 0. A genuinely empty group still reads false and releases.
         if (silverKnownFalse && !silverHeld) {
-            if (const auto r4 = g_followers.find(id); r4 != g_followers.end()) {
-                const auto& rules = r4->second.combat();
-                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
-                bool unholyRuleEvaluated = false;
-                for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
-                    if (rules[i].actionOpcode == Vocab::kActEquipSilver &&
-                        rules[i].conditionOpcode == Vocab::kCondFoeIsUnholy) { unholyRuleEvaluated = true; break; }
-                if (unholyRuleEvaluated && !Eval::CurrentTargetIfTrackable(f) && CombatSense::FoeCount(f) > 0)
-                    silverKnownFalse = false;
-            }
+            const bool unholyRuleEvaluated = src.UnholySilverEvaluated(choice);
+            if (unholyRuleEvaluated && !Eval::CurrentTargetIfTrackable(f) && CombatSense::FoeCount(f) > 0)
+                silverKnownFalse = false;
         }
         // MFO-B55 FIX: a "known false" that came from a target-relative equip
         // rule reading a NULL / dead / non-hostile currentCombatTarget while the
@@ -1247,11 +1368,7 @@ namespace MFO::Scheduler {
         // field log shows the hold being kept on an engine-side null, not silence.
         bool equipRangeUndecidable = false;
         if (equipCondKnownFalse && equipHeld == 0) {
-            if (const auto r3 = g_followers.find(id); r3 != g_followers.end()) {
-                const auto& rules = r3->second.combat();
-                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
-                equipRangeUndecidable = EquipRangeUndecidable(f, rules, stopIdx);
-            }
+            equipRangeUndecidable = src.EquipRangeUndecidable(f, choice);
             if (equipRangeUndecidable) {
                 equipCondKnownFalse = false;
                 if (g_equipRangeUndecidableNoted.insert(id).second)
@@ -1499,22 +1616,10 @@ namespace MFO::Scheduler {
             return;
         }
 
-        // Re-find rather than reuse an iterator: Fire() dispatches engine
+        // The source re-finds rather than reusing an iterator: Fire() dispatches engine
         // events synchronously, and INVARIANTS #2 says re-find live records by
         // key at act time instead of holding one across an engine call.
-        if (auto rec = g_followers.find(id); rec != g_followers.end()) {
-            if (choice.ruleIndex < static_cast<int>(rec->second.combat().size())) {
-                // Display only -- the evaluator never reads these back (#22).
-                auto& rule = rec->second.combat()[choice.ruleIndex];
-                rule.lastFired = (outcome.result == Actuation::Result::Fired);
-                rule.lastFailReason = outcome.reason;
-                if (rule.lastFired) rule.lastFiredAt = now;   // flair #9: board pulse
-                // Card G9: a real FIRE starts this rule's cooldown. Not an approach leg (Outcome::approach: the
-                // power attack closing to melee), or the swing it is closing for would be cooled out.
-                if (rule.lastFired && !outcome.approach && rule.cooldownTenths != 0 && rule.uid != 0)
-                    Cooldowns::NoteFired(id, Cooldowns::Kind::Rule, rule.uid, now);
-            }
-        }
+        src.Record(choice, outcome, now);
 
         // §HMS (F3): a FIRED combat gambit is the REAL off-class-usage signal.
         // Publish the action's exercised pool into ProgAllocator's race-free
@@ -1536,13 +1641,10 @@ namespace MFO::Scheduler {
             recent.until = now + std::chrono::milliseconds(static_cast<int>(
                 Config::g_suppressWindow.load() * 1000.0f *
                 (0.88f + 0.24f * Temperament(id))));
-            recent.firedRule = choice.ruleIndex;
+            recent.firedRule = choice.rank;
             // #11: record the fired rule's IDENTITY so the next tick's window
             // re-anchors to its current index after any board edit.
-            recent.firedUID = 0;
-            if (const auto fr = g_followers.find(id); fr != g_followers.end() &&
-                choice.ruleIndex < static_cast<int>(fr->second.combat().size()))
-                recent.firedUID = fr->second.combat()[choice.ruleIndex].uid;
+            recent.firedUID = src.FiredIdentity(choice);
             recent.failRule  = -1;
             recent.failReason.clear();
             recent.lastChain.clear();
@@ -1550,10 +1652,10 @@ namespace MFO::Scheduler {
             // line carries the whole story; otherwise the classic fired line.
             if (chain.empty()) {
                 spdlog::info("[eval] {} ({:08X}) fired rule {} ({})",
-                             name, id, choice.ruleIndex, choice.actionOpcode);
+                             name, id, choice.rank, choice.actionOpcode);
             } else {
                 spdlog::info("[eval] {} ({:08X}) rules {} skipped -> rule {} fired ({})",
-                             name, id, chain, choice.ruleIndex, choice.actionOpcode);
+                             name, id, chain, choice.rank, choice.actionOpcode);
             }
             break;
 
@@ -1566,15 +1668,15 @@ namespace MFO::Scheduler {
             // both a frame cost and a flood that drowns the signal (#22j).
             // (Post-H1, failures are transparent and rarely terminate the
             // scan; this case remains for any opaque wall left by design.)
-            if (recent.failRule != choice.ruleIndex || recent.failReason != outcome.reason) {
-                recent.failRule   = choice.ruleIndex;
+            if (recent.failRule != choice.rank || recent.failReason != outcome.reason) {
+                recent.failRule   = choice.rank;
                 recent.failReason = outcome.reason;
                 if (chain.empty()) {
                     spdlog::info("[eval] {} ({:08X}) rule {} ({}) did NOT fire: {}",
-                                 name, id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                                 name, id, choice.rank, choice.actionOpcode, outcome.reason);
                 } else {
                     spdlog::info("[eval] {} ({:08X}) rules {} skipped -> rule {} ({}) did NOT fire: {}",
-                                 name, id, chain, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                                 name, id, chain, choice.rank, choice.actionOpcode, outcome.reason);
                 }
             }
             break;
@@ -1593,15 +1695,15 @@ namespace MFO::Scheduler {
             // Reasonless NoOps (act.wait, no rule matched) stay quiet -- those
             // really are nothing.
             if (!outcome.reason.empty() &&
-                (recent.failRule != choice.ruleIndex || recent.failReason != outcome.reason)) {
-                recent.failRule   = choice.ruleIndex;
+                (recent.failRule != choice.rank || recent.failReason != outcome.reason)) {
+                recent.failRule   = choice.rank;
                 recent.failReason = outcome.reason;
                 if (chain.empty()) {
                     spdlog::info("[eval] {} ({:08X}) rule {} ({}) held off: {}",
-                                 name, id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                                 name, id, choice.rank, choice.actionOpcode, outcome.reason);
                 } else {
                     spdlog::info("[eval] {} ({:08X}) rules {} skipped -> rule {} ({}) held off: {}",
-                                 name, id, chain, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                                 name, id, chain, choice.rank, choice.actionOpcode, outcome.reason);
                 }
             }
             break;
