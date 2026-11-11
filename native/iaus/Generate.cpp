@@ -58,6 +58,7 @@ namespace MFO::Iaus {
                 f.emergency = out.emergency;
                 f.selfTtl = selfTtl;
                 f.playerTtl = playerTtl;
+                f.mortal = s.mortal;
             }
             void Foe(Facts& f, const Combatant& a_foe, bool a_ownRay) const {
                 f.dist = (std::max)(0.0f, Finite(a_foe.dist, 0.0f));

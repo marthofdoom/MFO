@@ -169,6 +169,9 @@ namespace MFO::Iaus {
         bool  handBusyRight = false;
         bool  scrollRoad = false;         // card S3: a scroll can be READ as a cast (the actuation exists). false (today):
                                           // scrolls stay in the book and no scroll candidate is made
+        bool  mortal = false;             // he dies FOR GOOD at 0 health (no bleedout he recovers from: not essential, not
+                                          // protected, the list lets followers die). false = he goes down and stands up, or
+                                          // it is not known. A mortal follower weighs his own life far more.
         bool  tauntEnabled = false;       // the taunt feature switch
         bool  tauntBusy = false;          // his taunt attempt is in flight or a foe is still pinned to him: act.taunt
                                           // refuses (Taunt::Fire), so no taunt candidate is made (card I6)

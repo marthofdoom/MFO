@@ -46,6 +46,14 @@ namespace Sim {
     // fMeleeReach 200, as on main), 1 = cold (every fight starts at 200), 2 = warm (the session's earlier swings are replayed
     // into the learner first: 20 outcomes around the weapon's true reach with 4% noise). The game's learner lives for the session.
     inline int g_learnReach = 2;
+    // MODEL, UNPROVEN: a calmed foe that the party damages fights again (the common in-game reading: one free blow, then he is
+    // back). false = the first model (a Calm holds for its whole duration whatever happens), kept for comparison (--calm-holds).
+    inline bool g_calmBreaks = true;
+    // FOLLOWER DEATH (marth 2026-11-10: "Lorerim by default has follower death. I personally have mine turned off"). false (the
+    // default, his setup and the one the field calibration comes from): a follower at 0 health goes down and stands up after
+    // TM::downSec. true (--follower-death): he is dead for good, and Utility counts that death three times a down (MODEL).
+    // g_mortalKnown: the snapshot tells IAUS which of the two it is (Snapshot::mortal); --mortal-blind hides it.
+    inline bool g_followerDeath = false, g_mortalKnown = true;
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
@@ -74,6 +82,7 @@ namespace Sim {
         bool  rangedMode = false, casterMode = false;
         double airUntil = 0, groundUntil = 0;   // dragons
         float armorBuff = 0;
+        bool  calmed = false;            // held by a Calm (not a paralysis): a blow from the party ends it when g_calmBreaks
         float poise = 0, poiseMax = 0;   // Chocolate Poise meter (0 max = the list has no poise mod)
         float dmgScale = 1;              // scenario strength scaling of a foe's damage (Setup.h targetRatio)
         std::string tag;                 // scenario role ("healer", "archer", "boss" ...)
@@ -239,12 +248,14 @@ namespace Sim {
             } else if (x.role == Role::Player) { x.alive = false; t.playerDied = true; }
             else {
                 x.c.downed = true; x.downUntil = now + TM::downSec; x.c.hp = 0; x.act = Act::None; x.hitAt = -1; x.actEnd = now; ++t.partyDowns;
+                if (g_followerDeath) { x.alive = false; x.downUntil = 1e18; t.partyDowns += 2; }   // dead for good: three downs' worth in Utility
                 if (x.ctl == 0) { ++t.downs; if (now - lastTauntBy0 < 8.0) ++t.tauntThenDown; }
             }
             (void)by;
         }
         // returns the health actually removed
         float Hurt(Body& x, float dmg, Body* by, bool fromIaus = false) {
+            if (g_calmBreaks && x.calmed && by && by->Party() && dmg > 0.0f && now < x.ctrlUntil) { x.ctrlUntil = now; x.calmed = false; }
             if (!x.alive || x.c.downed || dmg <= 0) return 0;
             const float before = x.c.hp; x.c.hp -= dmg; x.regenAt[0] = now + D->rules.delayHp; x.recentDmg += dmg;
             const float dealt = std::min(before, dmg);
@@ -349,7 +360,7 @@ namespace Sim {
                 if (a.ctl == 0) { ++t.ctrlCasts; if (!works) ++t.ctrlFails; if (Controlled(d)) ++t.ctrlOnControlled; }
                 if (works) { const double until = now + std::clamp<double>(s.ctrlDur, 1.0, 60.0);
                     if (s.ctrlPar) { d.ctrlUntil = until; d.c.paralysed = true; d.act = Act::None; d.hitAt = -1; }
-                    else if (s.ctrlCalm) { d.ctrlUntil = until; d.act = Act::None; d.hitAt = -1; }
+                    else if (s.ctrlCalm) { d.ctrlUntil = until; d.calmed = true; d.act = Act::None; d.hitAt = -1; }
                     else if (s.ctrlFrenzy) d.frenzyUntil = until;
                     else { d.fleeUntil = until; d.c.fleeing = true; } }
             }

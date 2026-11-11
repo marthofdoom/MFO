@@ -82,6 +82,7 @@ namespace Sim {
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
         if (g_learnReach && c.reach[0].Known()) sn.meleeReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
+        sn.mortal = g_followerDeath && g_mortalKnown;
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
@@ -194,7 +195,7 @@ namespace Sim {
                 std::fprintf(F.trace, "%7.2f  WHY %s: %zu candidates, %zu ranked, verdict %d, best heal %.3f\n", F.now, x.c.name.c_str(), sv.g.actions.size(), sv.d.ranked.size(), static_cast<int>(sv.d.verdict), sv.d.bestHeal);
                 for (std::size_t i = 0; i < sv.d.ranked.size() && i < 3; ++i) std::fprintf(F.trace, "           #%zu %s\n", i + 1, FormatWhy(sv.g.actions[sv.d.ranked[i].idx], c.mind, c.profile, *T, c.rank, sv.d.bestHeal).c_str());
                 if (F.now < 0.3) for (const SpellEntry& e : sv.sn.book.entries) std::fprintf(F.trace, "           book %-40s nature %d drop %d cost %.0f reach %.0f self %d conc %d heal %.0f dmg %.0f src %d n %d\n", e.name.c_str(), static_cast<int>(e.nature), static_cast<int>(e.drop), e.cost, e.reach, e.selfDelivery, e.concentration, e.heal, e.damage, static_cast<int>(e.source), e.count);
-                for (const Candidate& k : sv.g.actions) if (k.family == Family::CastHeal) std::fprintf(F.trace, "           heal %s\n", FormatWhy(k, c.mind, c.profile, *T, c.rank, sv.d.bestHeal).c_str());
+                for (const Candidate& k : sv.g.actions) if (k.family == Family::CastHeal || k.family == Family::Taunt || k.family == Family::PowerAttack || k.family == Family::Retreat) std::fprintf(F.trace, "           also %s\n", FormatWhy(k, c.mind, c.profile, *T, c.rank, sv.d.bestHeal).c_str());
             }
             if (timeIt && subj) { const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count(); t.dSum += us; t.dMax = std::max(t.dMax, us); ++t.dN; }
             const Decision& d = sv.d; const auto& acts = sv.g.actions;

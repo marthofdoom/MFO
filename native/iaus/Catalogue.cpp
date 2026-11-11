@@ -70,7 +70,7 @@ namespace MFO::Iaus {
             "caster", "downed", "outnumbered",
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
-            "control_worth", "magicka_buys",
+            "control_worth", "magicka_buys", "range", "mortal", "mortal_danger",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -87,6 +87,7 @@ namespace MFO::Iaus {
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
+        case Cons::MortalTaunt: case Cons::BoostMortalDanger:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -310,6 +311,19 @@ namespace MFO::Iaus {
                 at(Cons::HealUrgency) = Piece(p);
             }
 
+            // taunt range: x = distance / the taunt's reach. Flat inside, vetoed beyond 1.15 x (the same outer edge the aimed
+            // curve had, so no taunt that was a candidate stops being one): the taunt is a call, it lands the same at 5 m
+            // and at 1 m. (The aimed-spell curve shaded a taunt at 90% of its reach to 0.38.)
+            at(Cons::RangeTaunt) = VetoAbove(Lin(0.0f, 1.0f), 1.15f);
+            // mortal taunt (a multiplier, applies only to a follower who dies for good): x = seconds he would live with this
+            // foe on him / 12. Under 3 s the taunt is all but refused (x0.15), 6 s x0.6, 12 s and more x1. For a follower
+            // who stands up again the survive term alone decides, as before.
+            {
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 0.15f }, { 0.25f, 0.15f }, { 0.5f, 0.6f }, { 1.0f, 1.0f } } };
+                at(Cons::MortalTaunt) = Piece(p);
+            }
+            // mortal danger (retreat, health potion): x1.5 for a follower who dies for good. His life is not a resource.
+            at(Cons::BoostMortalDanger) = Bin(1.0f, 1.5f);
             // control worth: x = min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). Ten seconds on a fresh foe
             // 1.0; a 2 s stagger-length hold 0.36; a long hold on a foe at a quarter health 0.66. A hold is worth the blows
             // it stops and the free blows it gives, and both need the foe to live through it. Never 0.
@@ -356,14 +370,15 @@ namespace MFO::Iaus {
                 { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 }, { Cons::BoostControlled, 1 },
             };
             constexpr U kTaunt[] = {
-                { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
+                { Cons::RangeTaunt, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
                 { Cons::TauntSelfHp, 1 }, { Cons::FoeTaunted, 1 }, { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
-                { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 },
+                { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
             };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
-            constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 } };
+            constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
+                { Cons::BoostMortalDanger, 1 },
             };
             constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 } };
             constexpr U kPosture[] = {
@@ -474,6 +489,7 @@ namespace MFO::Iaus {
             switch (k) {
             case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : In::Off();
+            case Cons::RangeTaunt:    return (f.reach > 0.0f && c.family == Family::Taunt) ? f.dist / f.reach : In::Off();
             case Cons::Los:
                 switch (f.sight) {
                 case Sight::None:     return In::Off();
@@ -573,8 +589,10 @@ namespace MFO::Iaus {
             case Cons::BoostDowned:   return B(f.recipientDowned);
             case Cons::BoostOutnumbered: return B(f.foeCount > f.partyCount);
             case Cons::DamageValue:
-                if (!(f.expDamage > 0.0f) || !(f.bestDamage > 0.0f)) return In::Off();
-                return Clamp(f.expDamage / f.bestDamage, 0.0f, 1.0f);
+                // Not applicable only while NOTHING he can cast has a measured damage on this target. Once his best is known,
+                // a spell that does no damage (a noise, a debuff) is 0 against it: unmeasured must not read as "as good as any".
+                if (!(f.bestDamage > 0.0f)) return In::Off();
+                return Clamp((std::max)(0.0f, f.expDamage) / f.bestDamage, 0.0f, 1.0f);
             case Cons::Overkill:
                 if (!(f.expDamage > 0.0f) || !(f.foeHealth > 0.0f)) return In::Off();
                 return Clamp(f.foeHealth / f.expDamage, 0.0f, 1.0f);
@@ -599,6 +617,10 @@ namespace MFO::Iaus {
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             case Cons::HealClaimed:         return B(f.recipientBeingHealed);
             case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::MortalTaunt:
+                if (!f.mortal || !std::isfinite(f.tauntTtl)) return In::Off();
+                return Clamp(f.tauntTtl / 12.0f, 0.0f, 1.0f);
+            case Cons::BoostMortalDanger: return B(f.mortal);
             case Cons::ControlWorth:
                 if (!(f.controlSec > 0.0f)) return In::Off();
                 return Clamp(f.controlSec / 10.0f, 0.0f, 1.0f) * (0.4f + 0.6f * Clamp(f.foeHpPct, 0.0f, 1.0f));

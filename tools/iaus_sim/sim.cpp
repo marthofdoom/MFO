@@ -305,6 +305,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-engine-casts")) engineCasts = false;
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
         else if (!std::strcmp(argv[i], "--no-estimates")) estimates = false;
+        else if (!std::strcmp(argv[i], "--calm-holds")) g_calmBreaks = false;
+        else if (!std::strcmp(argv[i], "--follower-death")) g_followerDeath = true;   // a follower at 0 health is dead for good (LoreRim's default)
+        else if (!std::strcmp(argv[i], "--mortal-blind")) g_mortalKnown = false;       // ... and IAUS is not told (Snapshot::mortal stays false)   // the first control model: a Calm is never broken by a blow
         else if (!std::strcmp(argv[i], "--reach") && i + 1 < argc) { const char* v = argv[++i]; g_learnReach = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "cold") ? 1 : 2; }   // ruling Q68: off | cold | warm (default)
         else if (!std::strcmp(argv[i], "--scroll-road")) scrollRoad = true;
         else if (!std::strcmp(argv[i], "--mode") && i + 1 < argc) g_tableMode = !std::strcmp(argv[++i], "table");

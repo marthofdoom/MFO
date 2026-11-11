@@ -166,7 +166,7 @@ namespace Sim {
             // the options: IAUS's ranked list first, then the best-looking candidate of every family it did not rank, postures, the extended set, idle
             const auto& acts = sv.g.actions; std::vector<Opt> opt;
             auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; Opt o; o.k = k;
-                if (k->family == Family::PowerAttack && c.gate.powerCooldownSec > 0.0f && k->f.hardCooldownLeft > 0.0f) return;   /* ruling Q7: the class row cooldown binds a person too */
+                if (k->f.hardCooldownSec > 0.0f && k->f.hardCooldownLeft > 0.0f) return;   /* rulings Q7 / Q69 / Q73: a hard cooldown (the power attack's, the taunt's 30 s) binds a person too */
                 if (allowed && !allowed(c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
             const Candidate* iausPick = nullptr;
             if (sv.d.verdict != Verdict::Idle && !sv.d.order.empty() && sv.d.order[0].idx < acts.size()) iausPick = &acts[sv.d.order[0].idx];

@@ -104,6 +104,9 @@ namespace MFO::Iaus {
         HealUrgency,        // seconds the recipient has left at the damage he is taking
         ControlWorth,       // how long this control holds the foe, and how much of the foe is left to hold
         MagickaBuys,        // magicka potion: the casts the fight still asks of him
+        RangeTaunt,         // the taunt's reach: inside it every distance is the same (a shout, not an aimed cast)
+        MortalTaunt,        // multiplier (<= 1): a follower who dies for good does not pull a foe he cannot outlast
+        BoostMortalDanger,  // multiplier: a follower who dies for good backs off / drinks sooner
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -306,6 +309,7 @@ namespace MFO::Iaus {
         bool  recipientBeingHealed = false;   // another party member's heal is in flight on the recipient
         float controlSec = 0.0f;          // control cast: seconds the effect holds the foe (SpellEntry::controlSec); 0 = not measured
         float castsWanted = -1.0f;        // magicka potion: casts of his best spell the fight still asks for; < 0 = unknown
+        bool  mortal = false;             // Snapshot::mortal
     };
 
     struct Candidate {
