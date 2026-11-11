@@ -33,7 +33,9 @@ python3 -I tools/list_balance/extract.py       --list /mnt/gaming/modlists/LoreR
 python3 -I tools/list_balance/compile_world.py --name LoreRim
 # Tuxborn: --profile "Tuxborn - Deck" --data "Game Root/Data".  Vanilla reference set: add --vanilla to both extractors (name Vanilla).
 tools/iaus_sim/run.sh [--list ~/.cache/mfo-list-balance/LoreRim.sim.json] [--seed N] [--fights N] [--threads N]
-                      [--baseline out] [--compare base] [--taunt-visible] [--no-engine-casts] [--g10-sticky]
+                      [--baseline out] [--compare base] [--taunt-hidden] [--no-engine-casts] [--g10-sticky]
+                      [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes]
+                      [--scenario all|name,name [--oracle --oracle-k 8 --oracle-h 150] [--trace N]]
 python3 -I tools/iaus_sim/calib_logs.py        # real fight shapes out of _evidence/*/MFO.log
 ```
 
@@ -167,7 +169,7 @@ value fitted to field logs), MODEL (a documented approximation), UNPROVEN (shape
 | 26 | Regen | max x rate percent x combat mult per second, paused for fDamaged*RegenDelay after a loss. Magicka and stamina use fCombat*RegenRateMult. Health uses 0.7 | GMSTs. Health in combat: Skyrim.esm sets the GMST to 0, yet the player does regenerate in combat, so the actor value CombatHealthRegenMult (0.7) is assumed to rule | PROVEN magicka / stamina, UNPROVEN health |
 | 27 | Power attack stamina | (fStaminaAttackWeaponBase + weapon weight x fStaminaAttackWeaponMult) x fPowerAttackStaminaPenalty. Normal attacks are free | GMSTs. Weapon weight is not carried through compile_world yet (8 assumed) | DATA, small gap |
 | 28 | Bleedout | a follower at 0 health is down 9.5 s, then stands at fBleedoutDefault of his health. The player model dies | field logs: p50 9.5 s, mean 13.1 s, n = 50 | CALIBRATED |
-| 29 | Taunt | one attempt, 70 percent, pins the foe 10 s | v1 values, not checked against Taunt.cpp yet | MODEL |
+| 29 | Taunt | one attempt, 70 percent, pins the foe 15 s. No new taunt while one is in flight or holds a foe | `Config` fTauntDuration default 15 s, `Snapshot::tauntBusy` (I6). The 70 percent is a model value | PROVEN duration, MODEL chance |
 | 30 | Summon | a level-scaled atronach (60 + 12 x level health) for the spell's duration | none | MODEL |
 | 31 | Player model | a T1 kit run by the same engine-AI model, 4 potions (drinks at 35 percent health), takes fDiffMultHPToPCN | none | MODEL |
 | 32 | Follower kit | weapon / armor / potion ladders of the list's playable unenchanted gear sorted by value, position = (level - 1) / 45 x 0.75 | records (DATA), the ladder rule MODEL | DATA + MODEL |
@@ -240,8 +242,161 @@ under one second per list on 8 cores.
 - Animation data (hkx annotations) for the swing table instead of the calibrated constants.
 - The sim's own "incoming damage percent per second" and fight-span distribution, for the open rows of section 5.
 
-## 9. Intelligence scenarios, the oracle, the gap ledger
+## 9. The lab: utility, the expert oracle, the scenarios
 
-To be filled as phase 1 completes: the named scenarios with their scored metrics, the expert oracle and the
-"humanlike" criterion, every class from the real class table, and the GAP LEDGER (id, class, family, missing input or
-behaviour, evidence, closing action or proven limit, status).
+### 9.1 Utility U (0 to 100), one objective for every policy
+
+`Oracle.h Utility()`. Player dead: `10 x share of foe health removed`. Otherwise:
+`50 x share of foe health removed + 15 x (1 - duration / 150 s) on a win + 15 x player health share
++ 10 x (1 - follower downs per follower, capped at 1) + 5 x mean follower health share
++ 5 x resources left (half magicka share, half potions left)`.
+It says what a skilled player wants: win, fast, the player and the party healthy, nobody down, resources kept.
+
+### 9.2 The expert oracle
+
+A rollout search with full information and no time budget over the same world. At each decision of a free follower:
+1. options = IAUS's ranked candidates, plus the best-looking unranked candidate per family (weakest foe, the foe on the
+   player, a caster, the most hurt recipient), plus every other weapon category, plus "let his own AI run". At most 16.
+2. each option is applied in a copy of the fight and HELD (2.5 s for a target, the action's length for the rest),
+3. the copy runs to the horizon with IAUS for everyone, over K random streams shared by all options,
+4. the option with the best mean U is taken. The action he is on wins a tie within 0.3 U.
+
+Settings used for the tables: K = 8, horizon = the whole fight (`--oracle-k 8 --oracle-h 150`). Cost: 17 scenarios x 20
+fights in 82 s on 8 cores. With a 10 s horizon the oracle was NOT an upper bound (mage-dragon -4.4, double-heal -11.2).
+At full horizon it is at or above IAUS on all 17 scenarios.
+
+**What this oracle is not yet.** It is a one-step improvement over IAUS (the rollouts play IAUS), and it only uses the
+actions the catalogue generates today. So the gaps below are a FLOOR. Open: an iterated oracle (rollouts over the
+previous oracle), and the full action set (scrolls, staves, deliberate repositioning, block, bash, shouts).
+
+Every decision where IAUS's own pick differs from the oracle's by 1 U or more is logged and clustered by
+`IAUS family -> oracle family`, with the mean facts of both picks (foe health, on the player, caster, resist,
+recipient health, distance). `--scenario <name> --oracle` prints the top five clusters per scenario.
+
+### 9.3 Scenarios (`--scenario all|name,name`)
+
+Each scenario's foes come from the list's own records by role (draugr, troll, frost atronach, dragon, bandit, archer,
+healer, mage) and fall back to the fixtures. Health and damage are then scaled so the strength ratio lands on the
+scenario's target: a scenario must be winnable by good play on every list.
+
+| Scenario | Class | What a skilled player does | Primary metric |
+|---|---|---|---|
+| tank3 | warrior | the player tanks three draugr: kill one at a time | U, player damage taken |
+| mage-dragon | evoker | range, the weak element, no waste while it flies | U |
+| bandit-pack | archer | three bandits and an archer: the archer first if reachable | prio% |
+| focus-healer | archer | kill the healer first | prio% |
+| interrupt | warrior | stagger a caster before the release | intr% |
+| weakness | evoker | troll (weak to fire) and frost atronach (immune to frost) | immune%, resisted%, weak% |
+| predictive-heal | healer | a boss on the player: heal by what is coming | player dead %, player min health |
+| peel | mercenary | two foes on a squishy player | press%, peel.s |
+| overkill | evoker | five weak wolves: no big spell on a dying wolf | overkill% |
+| double-heal | healer + healer | one heals, the other fights | dblheal% |
+| mp-budget | evoker | four grunts, a boss at 25 s | mpAtLate% |
+| splash | evoker | the player in the middle of four foes | splash hits per fight |
+| control-setup | warrior + evoker | an ally paralyses: hit the helpless one | ctlFocus% |
+| kite | thief | a brute he cannot trade with | damage taken per second |
+| knight-boss | knight | a far stronger foe on the player, no healer | U, taunt-then-down % |
+| knight-boss-healer | knight + healer | the same with a healer | U |
+| hurt-knight | knight | knight at 30 percent, player at 20 with a foe on him | player dead % |
+
+### 9.4 Baseline: IAUS on main 3e21e0c against the oracle (built-in set, 20 fights each)
+
+| Scenario | U IAUS | U oracle | gap | what differs |
+|---|---|---|---|---|
+| hurt-knight | 20.5 | 54.2 | +36.8 | player dies 80 percent with IAUS, 35 with the oracle |
+| knight-boss-healer | 71.8 | 87.8 | +11.9 | downs 0.75 vs 0.30, taunts 1.8 vs 4.3 per minute |
+| kite | 5.9 | 16.7 | +11.7 | damage taken 15.2 vs 9.5 per second, retreat 7 vs 16 percent of the time |
+| knight-boss | 66.1 | 75.0 | +10.6 | player dead 10 vs 0 percent |
+| double-heal | 86.2 | 84.3 | +6.0 | double heals 21 vs 8 percent of heal casts |
+| predictive-heal | 86.1 | 91.1 | +5.1 | |
+| splash | 90.4 | 93.5 | +3.5 | fight 18 vs 13 s |
+| control-setup | 88.3 | 91.8 | +3.5 | |
+| mp-budget | 88.0 | 91.4 | +3.0 | magicka at the boss 66 vs 81 percent |
+| tank3 | 89.5 | 91.6 | +2.7 | |
+| peel | 89.9 | 92.0 | +2.6 | |
+| weakness | 91.8 | 93.8 | +1.9 | |
+| mage-dragon | 70.9 | 67.2 | +1.4 | |
+| overkill | 95.6 | 97.3 | +1.3 | overkill 24 vs 5 percent of his damage |
+| interrupt | 90.6 | 91.3 | +1.2 | interrupts 6 vs 11 percent of foe casts |
+| focus-healer | 89.3 | 89.8 | +0.4 | healer killed first in 20 vs 83 percent of fights |
+| bandit-pack | 90.9 | 90.3 | +0.2 | |
+| MEAN | | | +6.1 | |
+
+(U columns are from the K = 6, 30 s run. The gap column is the K = 8 full horizon run. Both are in the session
+scratchpad as `sim2/sc_6_30.txt` and `sim2/sc_8_150.txt`. To be re-run and unified once the oracle is final.)
+
+## 10. Enemy AI outside the records (LoreRim and Tuxborn)
+
+`tools/list_balance/inventory_ai_mods.py --list <list> --profile <profile>` lists every enabled mod with an SKSE DLL or
+behaviour files and writes `<list>.aimods.json`. LoreRim: 3961 enabled mods, 348 with a DLL or behaviour files, 108
+match a combat hint. Tuxborn: 1371, 120, 21.
+
+| List | Mod | What it changes (source) | In the sim |
+|---|---|---|---|
+| LoreRim | Aggro Management in Skyrim (`SmartNPCTargetSelector.dll`) | NPC target choice by a hate table. `SmartTargetingNPC.ini`: fBaseThreat 5, fSwitchThreshold 0.15, fHateHalfLife 30, fTauntBonus 1000, fExecutionerThreshold 0.30, fExecutionerBonus 500, fBashHateBonus 50, fSummonHateBonus 300, fKillTransferBonus 500, ranges 800 / 2000 / 3000 | NOT YET. Next: hate-based targeting as a per-list Brain parameter (values DATA, semantics MODEL from the key names) |
+| LoreRim | Dynamic Follower Scaling (`FollowerScaling.dll`) | `ReductionPerFollower = 20`, `Mode = 1`. No documentation found in the mod folder. A Nexus comment describes the mod as reducing follower damage by a percentage | NOT modelled. Semantics unproven. It directly scales follower damage, so it matters for absolute numbers |
+| LoreRim | Chocolate Poise | a poise meter replaces the stagger rule. `ChocolatePoise.ini`: StaggerMode 1, Health BaseMult 25, ArmorMult 0.02, RegenRate 0.05, Damage Melee 1.0, Bow 0.5, Creature 2.0, Unarmed 2.5, ToPC 0.8, ToNPC 1.2, WeightContribution 1.4 | NOT modelled (the formula is not in the INI) |
+| LoreRim | Modern Stagger Lock | stagger magnitudes 0 / 0.5 / 0.75 / 1.0 | not modelled |
+| LoreRim | SCAR 2 | NPC attack combos | not modelled (attack chains would raise hits per engagement) |
+| LoreRim | Ultimate NPC Dodging | NPCs dodge. The INI is empty (defaults) | not modelled |
+| LoreRim | Precision, Precision Creatures | weapon reach from collision | reach stays the record formula |
+| LoreRim | Project Gap Close | NPC sprint attacks and gap closing | not modelled |
+| LoreRim | Combat Pathing Revolution | sets fCombatFallbackChanceMin/Max 0 / 0.75, fCombatCircleChanceMin/Max 0.15 / 0.95 at runtime | not modelled (circling and fallback are not in the Brain) |
+| LoreRim | Comprehensive Attack Rate Patch | attack speed formula fix | not modelled |
+| LoreRim, Tuxborn | NPCs Learn to Aim | aim and release by skill: bow 1.0 / 1.0, crossbow 0.85 / 7.0, spell 1.15 / 0.85, staff 0.85 / 1.15 | not modelled (the sim's miss chance is a constant) |
+| LoreRim | Ultimate Animated Potions NG | potions are animated | the 1.2 s drink is a MODEL value |
+| LoreRim, Tuxborn | Spell Perk Item Distributor | 139 / 108 `_DISTR.ini` files hand spells, perks and items to NPCs at runtime | NOT modelled. Enemy kits in the sim are the records' only |
+| Tuxborn | Blade and Blunt (`BladeAndBlunt.dll`) | bZeroAllWeaponStagger, bArmorRatingScalingEnabled, injuries at 10 / 25 / 50 percent | not modelled. Its record-level changes (game settings, perks) ARE read |
+
+Honest summary: the record half of each list's enemy AI is in the sim (combat styles, AI data, stats, spells, perks
+without conditions). The DLL half is inventoried and not yet modelled. The first one to model is LoreRim's hate-based
+targeting, because it changes who the enemies attack, which is what taunt, peel and tank decisions are about.
+
+## 11. Classes
+
+The sim's class cells are the game's own 35 rows: `RealClasses.cpp` compiles `native/classes/ClassTable.cpp` on the
+host. `--print-classes` prints the gate and kit of each. `--classes slug,slug` narrows a run. `--classes legacy` keeps
+the eight hand-written v1 cells.
+
+Still to do here: the "human expert playstyle" of each class from `class-build-plan.md`,
+`class-walkthrough-decisions.md` and the Q1 to Q69 rulings, the planned classes as "planned" cells, and the per-class
+gap rows.
+
+First readings of the class table against the catalogue (to be confirmed, then asked):
+- No hybrid class has a power attack (no power share, no power row), so "paralyse, then power attack" cannot be done
+  by one follower. The control-setup scenario therefore pairs a warrior with an evoker.
+- T1 Melee and T1 Ranged have no power attack, taunt or retreat with the tree on (no default rows).
+
+## 12. GAP LEDGER
+
+Status: open = evidence exists, no design yet. Priority by oracle gap.
+
+| id | Class | Family | Missing input or behaviour | Evidence | Closing action, or proven limit | Status |
+|---|---|---|---|---|---|---|
+| G1 | knight line | taunt | no survivability term (effective health against that foe's damage, a healer in the party, potions) and no sacrifice term (the protected ally is about to die) | hurt-knight +36.8, knight-boss +10.6, knight-boss-healer +11.9 | new considerations from the I8 damage estimate | open |
+| G2 | all | retreat, movement | he does not back off when outmatched | kite +11.7: damage taken 15.2 vs 9.5 per second | retreat scored by incoming damage against his health. Deliberate repositioning (section 13) | open |
+| G3 | healers | heal | reactive and wasteful: 40 to 60 percent overheal in random fights (mage lines, natural bracket) | random brackets, predictive-heal +5.1 | heal need by predicted incoming damage and by the heal's size against the missing health | open |
+| G4 | healers | heal | two followers heal the same target at once | double-heal: 21 vs 8 percent of heal casts | a party claim on (recipient, heal) visible to the other followers | open |
+| G5 | casters | cast offense | no overkill term | overkill: 24 vs 5 percent of his damage wasted | expected damage against the target's remaining health | open |
+| G6 | casters | all casts | no magicka budget across the fight | mp-budget: 66 vs 81 percent magicka when the boss arrives | reserve by the foes still to come and their strength | open |
+| G7 | all | attack target | no value for killing the healer or the archer first | focus-healer: healer first in 20 vs 83 percent | a foe role term (heals others, ranged, caster) and time-to-kill ordering | open |
+| G8 | mage lines | attack | melee share of body time 3 to 19 percent | BODY table, LoreRim natural | ruling: a T1 mage almost never melees | open |
+| G9 | all | attack target | target switches 8 to 12 per minute | field logs: 2.1 pins per minute (p50) | target momentum | open, the sim's engine targeting may add to it |
+| G10 | casters | cast control | a refused (spell, target) pair comes back every second lap | D1, section 7 | keep the answers (native fix) | open |
+| G11 | casters | cast offense | area casts reach allies in 11 to 33 percent of area casts in random fights (v1 run before the I6 merge) | INTELLIGENCE table | to re-measure after I6's payload rule | to verify |
+
+## 13. The full action set (road audit, to do)
+
+A skilled player uses everything the follower can do. For each of these the ledger needs the existing road (an MFO
+actuation, a Harbinger facet, an engine call MFO already makes), then a candidate family and its considerations, or a
+design, or a proven limit: scrolls (scroll use is off in Generate, card S3), staves as their own action with charge
+awareness (B656 / B662: staff charge has never been observed), deliberate repositioning (step back, kite, flank, get
+line of sight, leave a blast or make one splash-safe, body-block for the player, retreat to the healer, close to melee
+on purpose), shouts, powers, dual casting, blocking, bashing, sprint, sneak, potions beyond the three drinks. The oracle
+must search the same full set.
+
+## 14. Questions for marth (not guessed)
+
+- Dynamic Follower Scaling in LoreRim (`ReductionPerFollower = 20`, `Mode = 1`): what does it scale, and is it part of
+  the intended follower balance on that list?
+- More to come from the class playstyle pass.
