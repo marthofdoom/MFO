@@ -150,6 +150,7 @@ namespace Sim {
         double now = 0, nextPump = 0, maxSec = 150;
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
+        bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
         Tally t;
         std::uint32_t nextId = 1;

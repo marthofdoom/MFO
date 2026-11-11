@@ -165,6 +165,8 @@ namespace MFO::Iaus {
         bool  meleeOnly = false;          // Actuation::MeleeOnly (the reach gate's subject)
         bool  handBusyLeft = false;       // a heal stands on that hand (design 1.3: never preempted)
         bool  handBusyRight = false;
+        bool  scrollRoad = false;         // card S3: a scroll can be READ as a cast (the actuation exists). false (today):
+                                          // scrolls stay in the book and no scroll candidate is made
         bool  tauntEnabled = false;       // the taunt feature switch
         bool  tauntBusy = false;          // his taunt attempt is in flight or a foe is still pinned to him: act.taunt
                                           // refuses (Taunt::Fire), so no taunt candidate is made (card I6)

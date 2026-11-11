@@ -204,12 +204,18 @@ namespace MFO::Iaus {
                 if (f->caster && f->targetId != 0 && f->targetId == s.self.id) { casterOnMe = true; break; }
 
             for (const SpellEntry& e : s.book.entries) {
-                if (e.source != SpellSource::Spell) continue;        // scrolls: card S3. Staves: the posture layer.
+                if (e.source == SpellSource::Staff) continue;        // staves: the posture layer
+                // Scrolls (card S3): a candidate only once a scroll can be read as a cast (Snapshot::scrollRoad), for a
+                // scroll user (ruling Q36), with one in stock. Offense / control / heal / buff only (the scroll sets).
+                const bool scroll = e.source == SpellSource::Scroll;
+                if (scroll && !(s.scrollRoad && x.g.scrollUser && e.count > 0)) continue;
+                if (scroll && (e.nature == Prune::Nature::Summon || e.nature == Prune::Nature::Ward)) continue;
                 if (e.drop != Prune::Drop::Keep) continue;           // P1 + "never generated"
                 const Family fam = Prune::FamilyOf(e.nature);
                 if (fam == Family::kCount) continue;
-                // Ruling Q34: an off-class spell is a candidate ONLY when a mastered class grants it.
-                if (!onClass && !fromMastered) { ++x.out.droppedClass; continue; }
+                // Ruling Q34: an off-class spell is a candidate ONLY when a mastered class grants it. (A scroll is
+                // Q36's: the scroll-user gate above.)
+                if (!scroll && !onClass && !fromMastered) { ++x.out.droppedClass; continue; }
                 // P1: a two-hander needs both hands; while a heal stands on one it is not a candidate.
                 if (e.twoHanded ? anyBusy : bothBusy) { ++x.out.droppedHand; continue; }
                 // P2: cost over the pool drops every pair of this spell. An unreadable pool drops a priced spell.
@@ -217,13 +223,17 @@ namespace MFO::Iaus {
                 if (priced && (!poolOk || !Prune::Affordable(e.cost, pool))) { ++x.out.droppedCost; continue; }
 
                 const auto base = [&](const Combatant* a_target) {
-                    Candidate c = x.Make(fam, a_target);
+                    Candidate c = x.Make(scroll ? Family::Scroll : fam, a_target);
+                    if (scroll) {
+                        c.scrollOf = fam == Family::CastHeal || fam == Family::CastBuff ? fam : Family::CastOffense;
+                        c.f.stock = e.count;
+                    }
                     c.role = e.role;
                     c.form = e.form;
                     c.formName = e.name;
                     if (priced) { c.f.cost = e.cost; c.f.magicka = pool; c.f.magickaMax = s.self.mpMax; }
                     c.f.handFree = true;   // the P1 test above already dropped a held hand
-                    c.f.onClass = onClass;
+                    c.f.onClass = scroll ? true : onClass;
                     c.f.fromMastered = fromMastered;
                     return c;
                 };

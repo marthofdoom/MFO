@@ -79,7 +79,7 @@ namespace Sim {
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
-        sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now);
+        sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
         // a heal of his own in flight: the hand it stands on is held, and the stream is live on its recipient
@@ -109,7 +109,7 @@ namespace Sim {
     inline Fired Fire(Fight& F, int ci, const Candidate& k) {
         Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; Tally& t = F.t; const bool subj = ci == 0;
         const Family fam = k.family; Body* tg = k.target ? F.Find(k.target) : nullptr;
-        const bool hostile = fam == Family::Attack || fam == Family::PowerAttack || fam == Family::Taunt || fam == Family::CastOffense || fam == Family::CastControl;
+        const bool hostile = fam == Family::Attack || fam == Family::PowerAttack || fam == Family::Taunt || fam == Family::CastOffense || fam == Family::CastControl || (fam == Family::Scroll && k.scrollOf == Family::CastOffense);
         if (hostile && (!tg || !Fight::Up(*tg) || tg->Party())) return Fired::Invalid;
         const bool bodyHeld = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd);
         auto peel = [&]() { if (subj && tg && c.pressureSince >= 0 && tg->c.targetId == F.b[0].c.id) { t.peelSum += F.now - c.pressureSince; ++t.peelN; c.pressureSince = -2; } };
@@ -138,11 +138,13 @@ namespace Sim {
             if (n <= 0) return Fired::Invalid;
             if (bodyHeld) return Fired::Declined;
             --n; take(Act::Drink, TM::drink, TM::drinkAt); x.actSpell = fam == Family::DrinkHealth ? 0 : fam == Family::DrinkMagicka ? 1 : 2; return Fired::Yes; }
+        case Family::Scroll:
         case Family::CastOffense: case Family::CastControl: case Family::CastHeal: case Family::CastBuff: case Family::CastSummon: case Family::CastWard: {
             int si = -1; for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == k.form) si = static_cast<int>(i);
             if (si < 0) return Fired::Invalid;
             const SpellEntry& e = c.book.entries[static_cast<std::size_t>(si)]; const SimSpell& s = c.build->spells[static_cast<std::size_t>(si)];
-            if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
+            if (fam == Family::Scroll) { if (e.source != SpellSource::Scroll || e.count <= 0 || !c.gate.scrollUser) return Fired::Invalid; }
+            else if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
             if (bodyHeld) return Fired::Declined;
             const std::uint32_t target = hostile ? tg->c.id : (k.target ? k.target : x.c.id);
             if (hostile) {   // cast/Fire.cpp:430: a spell that can never affect this target is passed over, transparently, once the mirror has a verdict
@@ -151,7 +153,7 @@ namespace Sim {
                 else if (F.WillWork(s, *tg) == Tri::No) { if (subj) ++t.wwDeclined; return Fired::Declined; }
             }
             if (subj) {
-                if (fam == Family::CastOffense && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
+                if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
                 if (fam == Family::CastHeal) { const Body* r = F.Find(target);
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
                     (void)r; }
@@ -167,8 +169,12 @@ namespace Sim {
         virtual void Serve(Fight& F, int ci) = 0;
     };
 
+    // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
+    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
+    inline void (*&ProfileHook())(Profile&) { static void (*h)(Profile&) = nullptr; return h; }   // weight overrides for every follower (Tune.h)
+
     struct IausPolicy : Policy {
-        const Tuning* T = &DefaultTuning();
+        const Tuning* T = ActiveTuning();
         bool timeIt = false;
         // Decide for the served follower and act on it. `forced` (oracle): fire this candidate instead of the decision's.
         void Serve(Fight& F, int ci) override { Served sv; ServeWith(F, ci, sv); }
