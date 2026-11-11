@@ -463,7 +463,10 @@ namespace MFO::Actuation {
         NoteUnanimatedRoadWhy(a_follower, "summon-oneshot", a_spell, nullptr);
         // SUBSTRATE S3: decided HERE on the worker (ChooseBuffRoad is worker-serial), only for the out-of-combat
         // table (g_firingRule == kNoRule); the main thread files the pair. false = today's road, unchanged.
-        const bool substrate = SubstrateRoadFor(a_follower, a_spell, a_follower, g_firingRule == kNoRule);
+        bool held = false;
+        const bool substrate = SubstrateRoadFor(a_follower, a_spell, a_follower, g_firingRule == kNoRule, held);
+        if (held)   // party combat on or settling (worker-only state, read HERE, never on main): not cast this lap
+            return { Result::NoOp, "summon held: party combat on or settling (substrate road)", true };
         MainThread::Post([id, spellID, a_rule, table = std::string(a_table ? a_table : "?"),
                           target = std::string(a_target), substrate] {
             SummonOnMain(id, spellID, a_rule, table, target, substrate);

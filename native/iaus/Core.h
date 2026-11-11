@@ -217,6 +217,13 @@ namespace MFO::Iaus {
         // 12-20 times a minute. One taunt ATTEMPT is one idle play plus a roll, and a hit already blocks the next
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
+        // KEEP THE CURRENT ATTACK UNDER OCCLUSION (marth Q93): the attack / power attack on the foe he is ALREADY on
+        // keeps its los term (Visible) while the foe has been occluded for less than this. A new pick or another foe
+        // takes the full occluded penalty. Sized from the real cadence: a service lap is one round-robin turn
+        // (party size x 133 ms, about 0.3-1 s) and the sight line is re-measured per lap, so 4 s is about 4-12 laps,
+        // long enough to ride out a pillar or a doorframe and short enough that a real hide-and-seek re-picks.
+        // 0 = off. Tunable in the sim.
+        float occlusionHoldSec = 4.0f;
         float rowlessTauntCooldownSec = kTauntCooldownSec;   // marth Q69: 30 s, the executor's own cooldown
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
@@ -257,6 +264,7 @@ namespace MFO::Iaus {
         float reach = 0.0f;               // <= 0: range not applicable (self actions)
         bool  meleeRange = false;         // true: melee range curve, false: spell / ranged curve
         Sight sight = Sight::None;
+        float occludedSec = 0.0f;         // how long the ray this candidate reads (sight) has been Occluded (0 = not, or not tracked)
         // the foe
         float foeLevelRatio = 1.0f;       // foe level / self level
         float foeHpPct = 1.0f;

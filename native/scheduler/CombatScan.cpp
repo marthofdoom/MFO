@@ -602,6 +602,7 @@ namespace MFO::Scheduler {
             const bool party = player || followersFighting > 0 || foes > 0;
             if (party != g_partyCombat) {
                 g_partyCombat = party;
+                if (!party) { g_partyOffAt = g_serviceClock; g_partyOffDeferLogged = false; }
                 spdlog::info("[sched] party combat {} (player={} followers={} foes={} substrate-only={})",
                              party ? "ON" : "OFF", player ? 1 : 0, followersFighting, foes, substrate);
             }

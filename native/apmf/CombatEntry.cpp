@@ -387,7 +387,7 @@ namespace MFO::APMFBridge {
     }
 
     void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road,
-                            float range) {
+                            float range, bool calm) {
         if (follower == 0 || target == 0) return;
         auto* t = RE::TESForm::LookupByID<RE::Actor>(target);
         if (!t || t->IsDead() || t->IsDisabled()) return;   // nothing left to give up
@@ -396,8 +396,10 @@ namespace MFO::APMFBridge {
         g.target   = target;
         g.pos      = t->GetPosition();
         g.reason   = reason;
-        g.fighting = FightingPartyNow(t);
-        g.hostile  = HostileToPartyNow(t, f);
+        // A calm give-up is recorded as calm (the state that decided it), never as a second read that could see an
+        // edge in between: a foe given up calm lifts the moment it fights the party or turns hostile.
+        g.fighting = !calm && FightingPartyNow(t);
+        g.hostile  = !calm && HostileToPartyNow(t, f);
         g.dist     = f ? f->GetPosition().GetDistance(g.pos) : -1.0f;
         g.range    = range > 0.0f ? range : 0.0f;
         {
@@ -408,6 +410,7 @@ namespace MFO::APMFBridge {
             if (const auto it = std::find_if(v.begin(), v.end(), [&](const GiveUp& o) { return o.target == target; });
                 it != v.end()) {
                 if (it->range <= 0.0f && g.range > 0.0f) it->range = g.range;
+                if (calm) it->fighting = it->hostile = false;   // calm now: a later engagement is a rising edge
                 return;
             }
             if (v.size() >= kGiveUpMaxPerFollower) v.erase(v.begin());
@@ -421,6 +424,12 @@ namespace MFO::APMFBridge {
                      (reason == APMF_API::kClaimEnd_NotEngaged && g.range > 0.0f)
                          ? fmt::format(" or comes back inside the {:.0f}u engage range", g.range)
                          : std::string());
+    }
+
+    bool TargetCalmNow(RE::FormID follower, RE::FormID target) {
+        auto* t = RE::TESForm::LookupByID<RE::Actor>(target);
+        if (!t || t->IsDead() || t->IsDisabled()) return false;
+        return !FightingPartyNow(t) && !HostileToPartyNow(t, RE::TESForm::LookupByID<RE::Actor>(follower));
     }
 
     void ClearEngageGiveUps() {
