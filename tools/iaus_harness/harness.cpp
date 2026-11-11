@@ -966,6 +966,94 @@ void SharedTauntPowerRules() {
           "Q73: two power-attack candidates that differ per (posture, form) share the one follower slot");
 }
 
+namespace {
+    // MFO-B684 (the engine-fill card): the best-damage denominator applies the candidate's own filters, and an
+    // UNMEASURED spell is "not known", never "does nothing".
+    void EngineFillRules() {
+        std::printf("\n== B684: measured flags and the best-damage denominator ==\n");
+        const Tuning& t = DefaultTuning();
+        ClassGate mage; mage.resolved = true; mage.spellsOnClass = true;
+        const auto measured = [](SpellEntry e, float dmg) { e.damage = dmg; e.measured = true; return e; };
+        const auto build = [&](bool a_handBusy) {
+            Snapshot s;
+            s.self = Actor("Mage", 0x14F00, 180, 200, 0, 0); s.self.mp = 400; s.self.mpMax = 400;
+            s.playerId = 0x14;
+            Combatant bandit = Actor("Bandit", 0x3B600, 100, 100, 600, 0);
+            Combatant draugr = Actor("Draugr", 0x3B601, 100, 100, 0, 600); draugr.undead = true;
+            s.foes = { bandit, draugr };
+            s.currentTargetId = bandit.id; s.hasBook = true; s.combatSec = 3.0f; s.handBusyLeft = a_handBusy;
+            auto& b = s.book.entries;
+            b.push_back(measured(Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 40), 25.0f));
+            SpellEntry sun = measured(Spell("Sun Fire", 0x2003B, Prune::Nature::Offense, 40), 80.0f); sun.undeadOnly = true; b.push_back(sun);
+            b.push_back(measured(Spell("Noise", 0x2003C, Prune::Nature::Offense, 10), 0.0f));
+            SpellEntry mystery = Spell("Mystery", 0x2003D, Prune::Nature::Offense, 10); mystery.damage = 500.0f; b.push_back(mystery);   // NOT measured
+            b.push_back(measured(Spell("Short Bolt", 0x2003E, Prune::Nature::Offense, 40, 300.0f), 60.0f));   // foes at 600 > 1.15 x 300
+            SpellEntry big = measured(Spell("Two-Hand Blast", 0x2003F, Prune::Nature::Offense, 40), 100.0f); big.twoHanded = true; b.push_back(big);
+            return s;
+        };
+        const auto find = [](const Generated& g, std::uint32_t form, std::uint32_t target) -> const Candidate* {
+            for (const Candidate& c : g.actions)
+                if (c.form == form && c.target == target) return &c;
+            return nullptr;
+        };
+        {
+            const Snapshot s = build(true);   // a heal stands on one hand: the two-hander is no candidate
+            const Generated g = Generate(s, mage, t);
+            const Candidate* boltLiving = find(g, 0x12FCD, 0x3B600);
+            const Candidate* boltUndead = find(g, 0x12FCD, 0x3B601);
+            const Candidate* noise = find(g, 0x2003C, 0x3B600);
+            const Candidate* mystery = find(g, 0x2003D, 0x3B600);
+            Check(boltLiving && boltLiving->f.bestDamage == 25.0f,
+                  "B684: on a living foe the best is Firebolt (undead-only, out-of-reach, held-hand and unmeasured spells do not count)");
+            Check(boltUndead && boltUndead->f.bestDamage == 80.0f, "B684: on the undead foe the undead-only spell is the best");
+            Check(noise && noise->f.expDamage == 0.0f && mystery && mystery->f.expDamage < 0.0f,
+                  "B684: a measured 0 is 0, an unmeasured spell is 'not known' (< 0)");
+            if (noise && mystery && boltLiving) {
+                const float sNoise = ScoreOne(*noise, Mind{}, Profile{}, t, 1, 0, nullptr);
+                const float sMystery = ScoreOne(*mystery, Mind{}, Profile{}, t, 1, 0, nullptr);
+                Check(sMystery > sNoise && sNoise > 0.0f, "B684: the unmeasured spell is not scored down, the no-damage spell is (and is not vetoed)");
+            }
+        }
+        {
+            const Snapshot s = build(false);   // both hands free: the two-hander counts
+            const Generated g = Generate(s, mage, t);
+            const Candidate* bolt = find(g, 0x12FCD, 0x3B600);
+            Check(bolt && bolt->f.bestDamage == 100.0f, "B684: with both hands free the two-handed spell is his best");
+        }
+        {
+            Snapshot s = build(false);
+            for (auto& e : s.book.entries) e.measured = false;   // the fill has not run (today's game)
+            const Generated g = Generate(s, mage, t);
+            bool allOff = true;
+            for (const Candidate& c : g.actions)
+                if (c.family == Family::CastOffense && (c.f.bestDamage != 0.0f || c.f.expDamage >= 0.0f)) allOff = false;
+            Check(allOff, "B684: with nothing measured no damage fact is set (the considerations read 'off')");
+        }
+        {
+            // Review F5 (rulings Q68 / Q70): the learned swing reach gates the swings he times, nothing else.
+            ClassGate warrior; warrior.resolved = true; warrior.powerAttack = true;
+            Snapshot s;
+            s.self = Actor("Warrior", 0x14F01, 180, 200, 0, 0);
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, 190, 0) };
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+            const auto reachOf = [&](Family f) {
+                const Generated g = Generate(s, warrior, t);
+                for (const Candidate& c : g.actions)
+                    if (c.family == f) return c.f.reach;
+                return -1.0f;
+            };
+            const bool unknownOk = reachOf(Family::PowerAttack) == 200.0f;
+            s.swingReach = 150.0f;
+            Check(unknownOk && reachOf(Family::PowerAttack) == 150.0f,
+                  "F5 / B687: the power attack reads the learned swing reach, and fMeleeReach while nothing is learned");
+            Check(reachOf(Family::Attack) == 200.0f && Estimate::StrikeDistance(s) == 400.0f,
+                  "F5: the attack and the strike distance keep fMeleeReach whatever was learned");
+        }
+    }
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -979,6 +1067,7 @@ int main() {
     Generation();
     SharedTauntPowerRules();
     ReachLearning();
+    EngineFillRules();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

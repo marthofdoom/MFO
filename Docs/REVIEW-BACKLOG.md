@@ -2925,7 +2925,7 @@ MAP.md Taunt TauntedBy/Busy line refs stale (~407/413), IsPinned has none; TAUNT
 Estimate.h add/add conflict with feat/iaus-sim-v2: resolve by taking sim-v2's file.
 
 
-### MFO-B684 (SEV-3, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
+### MFO-B684 (SEV-3, FIXED on feat/iaus-engine-fills: SpellEntry::measured + the bestOn filters, harness EngineFillRules; was OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 (before the engine fill card) iaus Generate bestOn (DamageValue denominator) takes every kept affordable offense spell without the per-candidate filters (off-class Q34, hand held P1, undeadOnly vs living, reach), so a strong undead-only spell shrinks offense scores vs every living foe. Also Snapshot uses 0 for "not measured" and "measured 0": the fill needs a per-entry measured flag (DamageValue input 0 gives 0.30, not a veto).
 
 ### MFO-B685 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
@@ -2934,7 +2934,7 @@ MAP.md lacks Estimate.h, Reach.h, the new Snapshot/Facts fields, the four new fa
 ### MFO-B686 (SEV-5, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 four Cons named "need" (ambiguous [iaus-why]); -Wconversion at harness.cpp:917-923; Guards() loops foes with every road off.
 
-### MFO-B687 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
+### MFO-B687 (SEV-4, FIXED on feat/iaus-engine-fills: Fills.cpp LearnReach leaves meleeReach at fMeleeReach while the learner is unknown; was OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 (Reach wiring card) an unknown Reach learner returns Gate()==0, which makes RangeMelee not applicable (power attack from any distance): wiring must fall back to fMeleeReach while !Known().
 
 ### MFO-B688 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
@@ -2943,5 +2943,11 @@ MAP.md §11 lists 'DamageValue 0 for a no-damage spell' as LIVE; it is not live 
 
 ### MFO-B689 (SEV-5, OPEN, apmf/CombatMove.cpp g_last + apmf/GroundApproach.cpp g_steps, against 694df41, Opus tier-3 review of feat/iaus-combat-move)
 Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale step drains in 700 ms with one log line). Clear in ResetAllState with the next touch.
+
+### MFO-B690 (SEV-5, OPEN, iaus/Fills.cpp F2 indirect-spell test, against 7684dc3, Opus re-check of feat/iaus-engine-fills)
+"an Offense spell is "indirect" if any one of its effects is Script, Cloak, SpawnHazard or EnhanceWeapon. Modded destruction spells often carry a Script effect next to a direct health ValueModifier, so those also go unmeasured and lose their readable direct damage." Errs safe (unmeasured, as before the fills, never a wrong 0). Refine: indirect only when no direct Damage effect is present.
+
+### MFO-B691 (SEV-5, OPEN, iaus/Fills.cpp F1 srcLeft, against 7684dc3, same re-check)
+"when he dual-wields the same weapon form in both hands, lw == w, so srcLeft stays 0 and left-hand hits count as right-hand hits." Informational: same weapon, same reach, so the reach evidence is still valid.
 
 ### Harbinger-side backlog from the same review (recorded here for the MFO adoption; APMF entries in APMF Docs): F1-3 HitSeen matches the engine's own bash within 2.5 s; F1-4 the combat move does not yield to an active ch.8 cast claim; F1-5 kAtkLeft is the charge bit; F2-2 pointSpace bound at the first sweep; probe Post per melee hit while [Probe] bCombatMove is on.

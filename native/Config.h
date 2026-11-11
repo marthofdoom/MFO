@@ -534,6 +534,28 @@ namespace MFO::Config {
     // one `[iaus-why]` line per top-3 candidate (every consideration's input and value) after each `[iaus]` line.
     // LOG-ONLY: the board's Thinking panel does not read it. Read by scheduler/IausSource.cpp on the worker.
     inline std::atomic<bool>  g_iausExplain{ false };
+    // IAUS ENGINE FILLS ([Debug], INI-only, ALL default OFF; iaus/Fills.h, Docs/research/2026-11/iaus-engine-fills.md).
+    // The phase-2 considerations read measured inputs (how hard a foe hits, armor, what a spell does, who is mid-swing).
+    // The engine side that measures them is PROBE FIRST (principle 5):
+    //   bIausFillProbe = 1  -> every input is measured and LOGGED (`[iaus-fill]` lines, rate-limited) next to what really
+    //                          happened (the health a hit took). It changes no score.
+    //   bIausFill<Input> = 1 -> that ONE input is also written into the Snapshot, so the considerations that read it go
+    //                          live. Each stays OFF until a field log has shown its `[iaus-fill]` numbers are right.
+    // Read on the worker (iaus/Candidates.cpp Gather), on the main thread (iaus/SpellBook.cpp Measure) and in the hit
+    // sink (any thread): plain atomic loads.
+    inline std::atomic<bool>  g_iausFillProbe{ false };
+    inline std::atomic<bool>  g_iausFillArmor{ false };     // Combatant::armor, magicResist
+    inline std::atomic<bool>  g_iausFillHit{ false };       // Combatant::hit, hitsPerSec, hitIsMagic, rangedWeapon
+    inline std::atomic<bool>  g_iausFillLoss{ false };      // Combatant::lossPerSec
+    inline std::atomic<bool>  g_iausFillSwing{ false };     // Combatant::swinging
+    inline std::atomic<bool>  g_iausFillCasting{ false };   // Combatant::casting
+    inline std::atomic<bool>  g_iausFillSpells{ false };    // SpellEntry::damage, heal, controlSec, measured
+    inline std::atomic<bool>  g_iausFillMortal{ false };    // Snapshot::mortal
+    // [Debug] bIausReachLearn (INI-only, default OFF; ruling Q68). 1 = Snapshot::swingReach (the swing gate of the
+    // power attack and the bash, nothing else) is the reach LEARNED from his own hits and misses with the weapon in his
+    // hand (iaus/Reach.h), fMeleeReach until the learner has a value (MFO-B687). The learner itself runs, and logs `[iaus-fill] swing`, with this key
+    // OR bIausFillProbe on.
+    inline std::atomic<bool>  g_iausReachLearn{ false };
     // COMBAT MOVE PROBE ([Debug] bCombatMoveProbe, INI-only, default OFF; Harbinger ch.31, ABI v38). 1 = a follower in
     // combat whose combat target is inside melee reach asks Harbinger for a BASH every 6 s, whatever his gambits or
     // Sentient AI would do. DEV-ONLY: it proves the road (apmf/CombatMove.cpp CombatMoveProbeTick), nothing ships on it.

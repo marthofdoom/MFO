@@ -77,12 +77,12 @@ namespace Sim {
             SpellEntry& e = sn.book.entries[i]; e.activeOn.clear();
             for (const auto& pr : c.active[i]) if (pr.second > F.now) e.activeOn.push_back(pr.first);
             e.liveSummon = c.summonUntil[i] > F.now;
-            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; }
+            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; e.measured = true; }
         }
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
-        if (g_learnReach && c.reach[0].Known()) sn.meleeReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
+        if (g_learnReach && c.reach[0].Known()) sn.swingReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
         sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad; sn.groundRoad = g_groundRoad; sn.blockRoad = g_blockRoad; sn.bashRoad = g_bashRoad;
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)

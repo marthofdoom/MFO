@@ -8,6 +8,7 @@
 #include "PrecisionBridge.h"   // card I6 (marth Q64): the measured weapon length, main thread
 #include "Vocabulary.h"
 #include "cast/Actuation.h"
+#include "iaus/Fills.h"
 #include "logistics/Logistics.h"
 
 #include <algorithm>
@@ -187,6 +188,16 @@ namespace MFO::Iaus::SpellBook {
                 (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward))
                 for (auto* p : a_party)
                     if (EffectLive(p, a_sp)) e.activeOn.push_back(p->GetFormID());
+            // The engine fills (iaus/Fills.h): what one cast does to health, probe first, written only with
+            // [Debug] bIausFillSpells = 1. With both keys off it returns at once.
+            if (e.drop == Prune::Drop::Keep &&
+                (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control || e.nature == Prune::Nature::Heal)) {
+                std::string line;
+                std::uint32_t key = 0;
+                Fills::MeasureSpell(a_actor, a_sp, e, line, key);
+                // The ledger key mixes follower, spell and "the perks ran", so each logs once per session.
+                if (!line.empty()) a_probes.emplace_back(e.form ^ (a_actor->GetFormID() * 0x9E3779B1u) ^ key, std::move(line));
+            }
             return e;
         }
 
