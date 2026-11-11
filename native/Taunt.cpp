@@ -381,6 +381,20 @@ namespace MFO::Taunt {
         return false;
     }
 
+    bool TauntedBy(RE::FormID a_foe, RE::FormID a_taunter) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_active.find(a_foe);
+        return it != g_active.end() && it->second.taunterId == a_taunter;
+    }
+
+    bool Busy(RE::FormID a_taunter) {
+        std::scoped_lock lk(g_mx);
+        if (g_attempts.contains(a_taunter)) return true;
+        for (const auto& [fid, act] : g_active)
+            if (act.taunterId == a_taunter) return true;
+        return false;
+    }
+
     bool MeleeInRightHand(RE::Actor* a_actor) {
         if (!a_actor) return false;
         const int rt = ItemType(a_actor, false);

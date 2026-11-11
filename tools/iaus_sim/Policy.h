@@ -56,6 +56,8 @@ namespace Sim {
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now);
+        // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
+        if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
         // a heal of his own in flight: the hand it stands on is held, and the stream is live on its recipient
         if (self.act == Act::Cast && self.hitAt >= 0) { const SimSpell* s = F.SpellOf(self, self.actSpell);
             if (s && s->e.nature == Prune::Nature::Heal) { sn.handBusyLeft = sn.handBusyRight = true; sn.liveStreams.push_back({ s->e.form, self.actTarget == self.c.id ? 0u : self.actTarget, Tri::Yes }); } }

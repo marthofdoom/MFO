@@ -274,7 +274,11 @@ namespace MFO::Actuation {
                 anyBound     |= a == Arch::kBoundWeapon;
                 anyCloak     |= a == Arch::kCloak;
                 anyLight     |= a == Arch::kLight;
-                anyWard      |= a == Arch::kValueModifier && b->data.primaryAV == AV::kWardPower;
+                // A WARD is any value-modifier-family effect on WardPower (IAUS card I6, sim review F2). Real list
+                // wards are kAccumulateMagnitude (32) on kWardPower; this test read kValueModifier only, so the
+                // shape never came out Ward. The engine-row table already matches them through the same alias
+                // (LookupAv: `r.arch == kValueModifier && IsVmAlias(a)`), so the row and the shape agree again.
+                anyWard      |= (a == Arch::kValueModifier || IsVmAlias(a)) && b->data.primaryAV == AV::kWardPower;
                 o.anyHostile |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHostile);
                 o.snapToNavMesh |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kSnapToNavMesh);
                 o.area = std::max(o.area, eff->effectItem.area);

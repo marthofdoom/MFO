@@ -2873,3 +2873,20 @@ CombatScan.cpp is 1724 lines, past the ~1500 plan-a-split line. The next brief t
 
 ### MFO-B667 (SEV-4, OPEN, I6 obligation, cast/Fire.cpp:216 g_firingRule, against 7ba469c, Opus tier-3 review of I1)
 g_firingRule = a_choice.rank feeds the rank-preemption cast lock (sentinel kNoRule = INT_MAX). An IAUS rank (>= 1000, up to 1e9) still reads as ranked, but a table rank (0-254) always outranks an IAUS rank there. I6 must decide whether that cross-source comparison is what it wants and write it down.
+
+### MFO-B668 (SEV-4, OPEN, iaus posture under VR / no fresh book, against 71359dd, Opus tier-3 review of I6, F3)
+In VR, or whenever the spell book is never fresh, the posture is always unknown. An inherited weapon hold then lasts until combat ends and no posture order is ever issued. Bounded; document it in MAP §11.
+
+### MFO-B669 (SEV-5, OPEN, iaus/SpellBook.cpp:418-427 scrollUser, against 71359dd, F4)
+With the class tree OFF, scrollUser is still keyed to class. Inert today (Scroll has no road), but it contradicts Q63 once one exists.
+
+### MFO-B670 (SEV-5, OPEN, iaus/Prune.h BlastUnits, against 71359dd, F5)
+BlastUnits still takes the max with a cosmetic explosion radius when the EFIT area is > 0. B661 is fixed only for area 0. Pre-existing behaviour.
+
+### MFO-B671 (SEV-5, OPEN, IAUS beneficial cast subject, against 71359dd, F6)
+If a beneficial cast's handle dies between MakeChoice and Fire, it falls to Player, which can spend a heal on a full-health player. The window is within one lap.
+
+### MFO-B672 (SEV-5, info, PrecisionBridge in-image check, against 71359dd, F7)
+The in-image check relies on Precision's interfaces being append-only. A future Precision that grants V2 with a different slot 8 would still pass; the call is probe-only today. Optionally log the slot offset against +0x117fe0 (it already prints it).
+
+Closed in code by I6 (merge of feat/iaus-i6-full): MFO-B651 (Q67 no re-anchor), B657 (Q63 tree-OFF gate), B658 (Invalidate after Fired), B661 (explosion-only area), B667 (decided, MAP §2 "THE IAUS SOURCE"); B639 marshalling done (IausSweep / IausToggleEdge on the worker).

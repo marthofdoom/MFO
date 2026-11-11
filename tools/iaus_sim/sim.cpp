@@ -129,7 +129,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = false, engineCasts = true, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -138,6 +138,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--compare") && i + 1 < argc) cmp = argv[++i];
         else if (!std::strcmp(argv[i], "--baseline") && i + 1 < argc) outBase = argv[++i];
         else if (!std::strcmp(argv[i], "--taunt-visible")) tauntVisible = true;
+        else if (!std::strcmp(argv[i], "--taunt-hidden")) tauntVisible = false;
         else if (!std::strcmp(argv[i], "--no-engine-casts")) engineCasts = false;
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
         else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); }

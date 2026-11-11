@@ -217,13 +217,15 @@ namespace Sim {
                 else if (av == kAvMagicka) out.mpDmg += static_cast<float>(mag);
                 else if (av == kAvStamina) out.spDmg += static_cast<float>(mag);
             }
+            // card I6: the ward shape is cast/Archetype.cpp anyWard (a ValueModifier-family effect on WardPower: archetypes 0 / 4 / 5 / 32 / 34)
+            if (av == kAvWardPower && (arch == kArValueMod || arch == kArAbsorb || arch == kArDualValueMod || arch == 32 || arch == kArPeakValueMod)) ward = true;
             if (!host && !detr && (arch == kArValueMod || arch == kArPeakValueMod)) {
-                if (av == kAvWardPower) ward = true;
+                if (av == kAvWardPower) {}
                 else if (av == kAvHealth) { heal = true; if (d > 1.0 && !conc) { out.hot += static_cast<float>(mag); out.hotDur = std::max(out.hotDur, static_cast<float>(std::min(d, 30.0))); } else out.heal += static_cast<float>(mag); }
                 else if (av == kAvDamageResist) { out.armor += static_cast<float>(mag); out.buffDur = std::max(out.buffDur, static_cast<float>(d)); e.meleeBuff = true; }
                 else if (av >= kAvPoisonResist && av <= kAvResistMagic) { out.resistBuff = static_cast<float>(mag); out.resistBuffAv = av; out.buffDur = std::max(out.buffDur, static_cast<float>(d)); }
             }
-            e.areaUnits = std::max(e.areaUnits, Prune::BlastUnits(static_cast<float>(x["area"].num()), 0.0f));
+            e.areaUnits = std::max(e.areaUnits, Prune::BlastUnits(static_cast<float>(x["area"].num()), 0.0f, false));
             out.buffDur = std::max(out.buffDur, static_cast<float>(d));
         }
         if (reanimate) { e.drop = Prune::Drop::UnknownNature; out.reanimate = true; }

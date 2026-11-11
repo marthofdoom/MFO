@@ -79,7 +79,7 @@ namespace Sim {
     inline SimSpell Fx(const char* n, Prune::Nature na, int school, int resistAv, float cost, float dmg, float heal, float areaFt, float cast = 0.5f, int tier = 0) {
         SimSpell s; s.e.name = n; s.e.nature = na; s.e.resistAv = resistAv; s.e.role = Prune::RoleOf(na, resistAv); s.e.cost = cost; s.cost0 = cost; s.school = school; s.skillReq = tier;
         s.e.selfDelivery = na == Prune::Nature::Buff || na == Prune::Nature::Summon; s.e.reach = s.e.selfDelivery ? 0.0f : 4096.0f; s.dmg = dmg; s.heal = heal; s.castSec = cast;
-        s.e.areaUnits = Prune::BlastUnits(areaFt, 0.0f); s.element = resistAv == kAvResistFire ? "fire" : resistAv == kAvResistFrost ? "frost" : resistAv == kAvResistShock ? "shock" : "";
+        s.e.areaUnits = Prune::BlastUnits(areaFt, 0.0f, false); s.element = resistAv == kAvResistFire ? "fire" : resistAv == kAvResistFrost ? "frost" : resistAv == kAvResistShock ? "shock" : "";
         s.summon = na == Prune::Nature::Summon; s.ctrl = na == Prune::Nature::Control; return s;
     }
 
@@ -222,7 +222,7 @@ namespace Sim {
         for (const SimSpell& s : D.spells) if (static_cast<float>(s.skillReq) <= (s.school >= 0 ? a.Skill(s.school) : 15.0f) + 10 && costOf(s) <= a.mp * 0.7f) afford.push_back(&s);
         if (afford.empty()) for (const SimSpell& s : D.spells) afford.push_back(&s);
         if (fam == Cls::Mage && casts) {
-            for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control }) {
+            for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control, Prune::Nature::Ward }) {   // a ward too when the list has one (card I6)
                 std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == nat) cnd.push_back(s);
                 if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]);
             }

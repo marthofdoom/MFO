@@ -11,7 +11,7 @@
 // "10 s power-attack cooldown" is one store in both modes, card G9), the per-follower Mind map, the [iaus] /
 // [iaus-why] log lines, the fIausBudgetMs warning, and the board readout under a leaf mutex.
 //
-// NOBODY CALLS IT YET. Card I6 wires it into the combat scan and wires Clear() into ResetAllState.
+// CALLED BY the scan's IAUS source (scheduler/IausSource.cpp, card I6); Clear() runs in ResetAllState.
 //
 // THREADING:
 //   - Minds (MindFor, NoteFired, EndDecision, Forget, Decide, Log): the g_followers domain (#4) -- the AddTask job
@@ -42,8 +42,12 @@ namespace MFO::Iaus::Engine {
     [[nodiscard]] Decision Decide(RE::FormID a_actor, std::span<const Candidate> a_cands, const Profile& a_p,
                                   const Tuning& a_t, const Tick& a_tick, double* a_ms = nullptr);
 
-    // Actuation::Fire returned FIRED for a_step: the Mind (OnFired) and the Cooldowns store.
-    void NoteFired(RE::FormID a_actor, const Candidate& a_c, const Step& a_step, const Tick& a_tick);
+    // Actuation::Fire returned FIRED for a_step: the Mind (OnFired) and the Cooldowns store. a_startCooldown = false
+    // (card I6) adopts the decision WITHOUT stamping the store: an approach leg (the power attack closing to melee,
+    // Outcome::approach, the G9 rule) and an attack the scan found already latched are the decision in effect, not
+    // a new use of the action.
+    void NoteFired(RE::FormID a_actor, const Candidate& a_c, const Step& a_step, const Tick& a_tick,
+                   bool a_startCooldown = true);
     void NotePostureFired(RE::FormID a_actor, const Candidate& a_c, const Tick& a_tick);
 
     // The [iaus] line (on change, plus every logRepeatSec while it runs) and, when a_explain (bIausExplain), one
@@ -63,6 +67,17 @@ namespace MFO::Iaus::Engine {
     // and Clear (a new Mind starts above every epoch handed out so far).
     void EndDecision(RE::FormID a_actor);
     void Forget(RE::FormID a_actor);
+
+    // ── Card I6: what the scan's IAUS branch keeps per follower (WORKER ONLY, cleared by Clear) ───────────────
+    // Which source served a_actor on his last own service. Returns true when it CHANGED (the toggle edge); the
+    // first sight of a follower is not a change. Forget does not drop the note (the edge back must be seen).
+    bool NoteSource(RE::FormID a_actor, bool a_iaus);
+    // Every follower with a source note (the scan's sweep for followers that left the party).
+    [[nodiscard]] std::vector<RE::FormID> Noted();
+    // Forget + drop the source note: the follower left the party or lost his record.
+    void Dismiss(RE::FormID a_actor);
+    // Log pacing for the passive lines: true at most once per a_sec per (actor, channel).
+    [[nodiscard]] bool Paced(RE::FormID a_actor, std::uint8_t a_channel, double a_sec, const Tick& a_tick);
 
     // ResetAllState, after StopPump: every Mind, every readout, the once-per-session warning flags.
     void Clear();

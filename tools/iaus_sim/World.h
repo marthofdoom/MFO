@@ -35,7 +35,7 @@ namespace Sim {
         static constexpr float thinkMin = 0.05f, thinkMax = 0.45f;   // the engine AI pause between attacks, / offensive mult. CALIBRATED: field hit cadence p50 1.21 s (calib_logs.py)
         static constexpr float arrowSpeed = 3600.0f, spellSpeed = 2400.0f;
         static constexpr float downSec = 9.5f;         // bleedout before a follower stands again. CALIBRATED: field p50 9.5 s (n=50)
-        static constexpr float tauntChance = 0.7f, tauntDur = 10.0f;
+        static constexpr float tauntChance = 0.7f, tauntDur = 15.0f;   // duration: Config fTauntDuration default 15 s (PROVEN, code); the chance is MODEL
         static constexpr float retreatSec = 2.0f;
         static constexpr float aimMiss = 0.12f;        // an aimed projectile at a moving target
     };
@@ -146,7 +146,7 @@ namespace Sim {
         float foeHpTotal = 0;                      // every foe's full health, late ones included (Utility)
         double now = 0, nextPump = 0, maxSec = 150;
         int rr = 0;
-        bool tauntVisible = false, engineCasts = true, g10Sticky = false, over = false;
+        bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;   // card I6: the game fills Combatant::taunted
         Tally t;
         std::uint32_t nextId = 1;
         std::FILE* trace = nullptr;   // --trace: one line per event (never set in a rollout copy)

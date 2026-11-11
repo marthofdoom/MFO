@@ -188,9 +188,17 @@ namespace MFO::Iaus::Prune {
     // explosion radius of the spell's effect / projectile (BGSExplosion radius, already in units). The explosion
     // is what actually deals the area damage of an aimed blast and can exceed the EFIT area; an under-sized
     // radius would let a blast that reaches an ally pass as splash-safe. A broken read counts as 0, never as NaN.
-    [[nodiscard]] inline float BlastUnits(float a_areaFeet, float a_explosionUnits) {
+    //
+    // MFO-B661 (card I6): the explosion may only ENLARGE a spell that already has an EFIT area, or count on its own
+    // when it CARRIES A PAYLOAD (a_explosionPayload: BGSExplosion damage > 0 or an enchantment). A bolt's cosmetic
+    // impact explosion (no damage, no enchantment, EFIT area 0) gives the spell NO area: otherwise SplashSafe
+    // would veto every cast at a foe a melee ally stands beside. a_explosionUnits is the largest radius among the
+    // spell's explosions; a_explosionPayload says whether ANY of them carries a payload.
+    [[nodiscard]] inline float BlastUnits(float a_areaFeet, float a_explosionUnits, bool a_explosionPayload) {
+        const float area = AreaUnits(a_areaFeet);
         const float ex = (std::isfinite(a_explosionUnits) && a_explosionUnits > 0.0f) ? a_explosionUnits : 0.0f;
-        return (std::max)(AreaUnits(a_areaFeet), ex);
+        if (!(area > 0.0f) && !a_explosionPayload) return 0.0f;
+        return (std::max)(area, ex);
     }
 
 }

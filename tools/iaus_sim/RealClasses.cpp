@@ -85,7 +85,7 @@ namespace Sim {
                 const auto& row = d.gambits[i]; if (!row.act) continue;
                 const std::string_view act{ row.act };
                 if (act == V::kActPowerAttack) { g.powerAttack = true; g.powerCooldownSec = std::max(g.powerCooldownSec, row.cooldownSec); }
-                else if (act == V::kActTaunt) g.taunt = true;
+                else if (act == V::kActTaunt) { g.taunt = true; g.tauntCooldownSec = std::max(g.tauntCooldownSec, row.cooldownSec); }
                 if (row.IsApplied() && !row.pendingRuling) { if (mechProfiles) Bump(c.profile, row, idx, applied); ++idx; }
             }
             // the kit the class row lets him carry (unrestricted T1 rows keep today's kit by line)

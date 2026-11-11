@@ -16,6 +16,8 @@ namespace MFO::Iaus::Engine {
         std::unordered_set<RE::FormID>       g_badFactWarned;
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_budgetWarnedAt;
         std::unordered_map<RE::FormID, std::string> g_lastWalk;   // the last logged fall-past chain (dedupe)
+        std::unordered_map<RE::FormID, bool> g_source;            // card I6: true = IAUS served his last lap
+        std::unordered_map<std::uint64_t, double> g_paced;        // card I6: (actor, channel) -> last logged (seconds)
         // The decision epoch never goes back (review round 1, backlog item 1, fixed here): a Mind created after
         // Forget / Clear starts above every epoch handed out so far this process, so a surviving rank-carrying lock
         // (cast lock, heal claim) can never outrank a new decision by an epoch restarting at 0.
@@ -103,9 +105,11 @@ namespace MFO::Iaus::Engine {
         return d;
     }
 
-    void NoteFired(RE::FormID a_actor, const Candidate& a_c, const Step& a_step, const Tick& a_tick) {
+    void NoteFired(RE::FormID a_actor, const Candidate& a_c, const Step& a_step, const Tick& a_tick,
+                   bool a_startCooldown) {
         OnFired(MindFor(a_actor), a_c, a_step, a_tick.in.now);
-        Cooldowns::NoteFired(a_actor, Cooldowns::Kind::IausAction, CooldownId(KeyOf(a_c)), a_tick.tp);
+        if (a_startCooldown)
+            Cooldowns::NoteFired(a_actor, Cooldowns::Kind::IausAction, CooldownId(KeyOf(a_c)), a_tick.tp);
     }
 
     void NotePostureFired(RE::FormID a_actor, const Candidate& a_c, const Tick& a_tick) {
@@ -170,9 +174,39 @@ namespace MFO::Iaus::Engine {
         g_readouts.erase(a_actor);
     }
 
+    bool NoteSource(RE::FormID a_actor, bool a_iaus) {
+        auto [it, fresh] = g_source.try_emplace(a_actor, a_iaus);
+        if (fresh || it->second == a_iaus) return false;
+        it->second = a_iaus;
+        return true;
+    }
+
+    std::vector<RE::FormID> Noted() {
+        std::vector<RE::FormID> out;
+        out.reserve(g_source.size());
+        for (const auto& kv : g_source) out.push_back(kv.first);
+        return out;
+    }
+
+    void Dismiss(RE::FormID a_actor) {
+        Forget(a_actor);
+        g_source.erase(a_actor);
+        for (std::uint64_t ch = 0; ch < 8; ++ch) g_paced.erase((static_cast<std::uint64_t>(a_actor) << 8) | ch);
+    }
+
+    bool Paced(RE::FormID a_actor, std::uint8_t a_channel, double a_sec, const Tick& a_tick) {
+        const std::uint64_t key = (static_cast<std::uint64_t>(a_actor) << 8) | (a_channel & 7u);
+        auto [it, fresh] = g_paced.try_emplace(key, a_tick.in.now);
+        if (!fresh && a_tick.in.now - it->second < a_sec) return false;
+        it->second = a_tick.in.now;
+        return true;
+    }
+
     void Clear() {
         for (const auto& kv : g_minds) Retire(kv.second);   // g_epochFloor itself is never reset
         g_minds.clear();
+        g_source.clear();
+        g_paced.clear();
         g_overCapWarned.clear();
         g_badFactWarned.clear();
         g_budgetWarnedAt.clear();
