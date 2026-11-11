@@ -2896,3 +2896,12 @@ The 3 s stale threshold is a flat expiry, not sized from the cadence (principle 
 
 ### MFO-B674 (SEV-5, OPEN, iaus Explain/MakeReadout, against cad75de, F2)
 The panel row shows s.score from Decide, but the breakdown terms come from FormatWhy -> ScoreOne with fixed extras (1.0, 0.0) on the post-Decide Mind, so momentum/roll folded into s.score is not in the terms. The [iaus-why] line has the same property. Note or fix with I8's profile pass.
+
+### MFO-B675 (SEV-4, OPEN, iaus/Candidates.cpp ask cap 24 vs cast/WillWork.cpp kMaxEntries 256, against 0c70d81, Opus review of D1, F1)
+The per-follower ask cap of 24 raises the WillWork shared mirror's worst case for a ten-follower party from ~60 to ~240 keys. When the cache is full and every entry is within trust, WillWork.cpp:196-200 runs g_cache.clear(): every follower's verdict goes Unknown for a lap plus a re-measure post burst. Degrades to the old behaviour (Unknown passes, Fire refuses at fire time). Fix: cap ~12, raise kMaxEntries, or document the coupling in both files.
+
+### MFO-B676 (SEV-5, OPEN, iaus/Generate.h NextAskList doc, against 0c70d81, F2)
+"never a top pair" (dropped for the cap) holds only while |top| <= cap (6 <= 24 today); nothing asserts it. Add a static_assert or note.
+
+### MFO-B677 (SEV-5, OPEN, iaus/Candidates.cpp kRefusedKeepSec comment, against 0c70d81, F3)
+The 6 s keep is timed from Gather's stamp, not the mirror's measurement time, so the list can hold a pair up to ~6 s after the mirror's No expired (extra Unknown asks only). Comment wording.
