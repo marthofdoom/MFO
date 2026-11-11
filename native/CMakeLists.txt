@@ -95,6 +95,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Generate.cpp
     iaus/SpellBook.cpp
     iaus/Candidates.cpp
+    iaus/Fills.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp

@@ -47,6 +47,12 @@ namespace MFO::Iaus {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
                 (a_c.family == Family::Posture ? out.postures : out.actions).push_back(std::move(a_c));
             }
+            // The reach of a swing he times himself (PowerAttack, Bash): the learned one when there is one (ruling Q68),
+            // else fMeleeReach (MFO-B687). No other family reads the learned value (Q70).
+            [[nodiscard]] float SwingReach() const {
+                const float learned = Finite(s.swingReach, 0.0f);
+                return (std::max)(0.0f, learned > 0.0f ? learned : Finite(s.meleeReach, 0.0f));
+            }
             // What every family may read about the follower and the fight.
             void Common(Facts& f) const {
                 f.selfHp = selfHp;
@@ -109,7 +115,7 @@ namespace MFO::Iaus {
                     x.Foe(c.f, *foe, false);
                     c.role = RoleTag::Melee;
                     c.f.meleeRange = true;
-                    c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                    c.f.reach = x.SwingReach();
                     // The class row's cooldown; a class with no declared one (and the tree OFF, marth Q63) gets the
                     // tuning floor, so "any follower may power attack" is never "every lap".
                     const float rowCd = (std::max)(0.0f, Finite(x.g.powerCooldownSec, 0.0f));
@@ -181,7 +187,7 @@ namespace MFO::Iaus {
                     x.Foe(c.f, *foe, false);
                     c.role = RoleTag::Melee;
                     c.f.meleeRange = true;
-                    c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                    c.f.reach = x.SwingReach();
                     c.f.foeCasting = foe->casting;
                     c.f.foeSwinging = foe->swinging;
                     c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.bashCooldownSec, 0.0f));
@@ -231,6 +237,7 @@ namespace MFO::Iaus {
                 float bestDmg = 0.0f, bestHeal = 0.0f;
                 for (const SpellEntry& e : x.s.book.entries) {
                     if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                    if (!e.measured) continue;   // MFO-B684: an unmeasured entry says nothing
                     if (e.nature == Prune::Nature::Offense) bestDmg = (std::max)(bestDmg, Estimate::Pos(e.damage));
                     else if (e.nature == Prune::Nature::Heal) bestHeal = (std::max)(bestHeal, Estimate::Pos(e.heal));
                 }
@@ -309,13 +316,26 @@ namespace MFO::Iaus {
 
             // His best castable offense spell on each kept foe (DamageValue's denominator), ONCE per tick: one pass over
             // the book per foe, not one per (spell, foe) pair.
+            // MFO-B684: "castable" means the SAME tests the candidate loop below makes for that spell on that foe (class
+            // Q34, hand P1, cost P2, its own target rule, a blast with no area) plus the reach the range curve vetoes at.
+            // Without them a strong undead-only or out-of-reach spell shrank every offense score against a foe it can
+            // never be cast on.
+            constexpr float kRangeVeto = 1.15f;   // Cons::RangeSpell and RangeMelee veto above 1.15 x the reach (Catalogue.cpp)
             std::vector<float> bestOn(x.top.size(), 0.0f);
             for (const SpellEntry& o : s.book.entries) {
                 if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Offense) continue;
-                if (!(o.damage > 0.0f)) continue;
+                if (!o.measured || !(o.damage > 0.0f)) continue;
+                if (!onClass && !fromMastered) continue;
+                if (o.twoHanded ? anyBusy : bothBusy) continue;
                 if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
-                for (std::size_t ti = 0; ti < x.top.size(); ++ti)
-                    bestOn[ti] = (std::max)(bestOn[ti], Estimate::SpellOn(o, *x.top[ti]));
+                if (o.selfDelivery && !(o.areaUnits > 0.0f)) continue;
+                const float oReach = (std::max)(0.0f, Finite(o.touch ? s.meleeReach : (o.selfDelivery ? o.areaUnits : o.reach), 0.0f));
+                for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
+                    const Combatant& foe = *x.top[ti];
+                    if (o.undeadOnly && !foe.undead) continue;
+                    if (oReach > 0.0f && Finite(foe.dist, 0.0f) > oReach * kRangeVeto) continue;
+                    bestOn[ti] = (std::max)(bestOn[ti], Estimate::SpellOn(o, foe));
+                }
             }
             for (const SpellEntry& e : s.book.entries) {
                 if (e.source == SpellSource::Staff) continue;        // staves: the posture layer
@@ -368,10 +388,10 @@ namespace MFO::Iaus {
                         c.f.reach = (std::max)(0.0f, Finite(reach, 0.0f));
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
-                        if (e.nature == Prune::Nature::Control) c.f.controlSec = Estimate::Pos(e.controlSec);
+                        if (e.nature == Prune::Nature::Control && e.measured) c.f.controlSec = Estimate::Pos(e.controlSec);
                         if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
                         if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
-                            c.f.expDamage = Estimate::SpellOn(e, *foe);
+                            c.f.expDamage = e.measured ? Estimate::SpellOn(e, *foe) : -1.0f;   // < 0: not measured (MFO-B684)
                             c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
                             c.f.bestDamage = bestOn[ti];
                         }
@@ -416,7 +436,7 @@ namespace MFO::Iaus {
                         c.f.recipientIsPlayer = r->isPlayer;
                         c.f.recipientDowned = r->downed;
                         if (heal) {
-                            c.f.expHeal = Estimate::Pos(e.heal);
+                            c.f.expHeal = e.measured ? Estimate::Pos(e.heal) : 0.0f;
                             c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
                             c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
                             c.f.recipientBeingHealed = r->beingHealed;

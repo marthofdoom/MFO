@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "Followers.h"
 #include "cast/CostParity.h"
+#include "iaus/Fills.h"
 #include "cast/Actuation.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
@@ -373,6 +374,7 @@ namespace {
                          MFO::Config::g_cstyReassertKey.load());
             MFO::Forms::Resolve();          // then forms
             MFO::CostParity::StartupCheck();   // follower spell cost parity: GMST curves compared once, after Config + Forms
+            MFO::Iaus::Fills::StartupCheck();  // IAUS engine fills: the damage GMSTs + the entry-point row, [iaus-fill] status line
             {
                 // THE RUNTIME PATHS IN FORCE, in one line, so a deck log proves
                 // which paths are live (feat/mfo-1.5.97-pass, 2026-09-15). The

@@ -91,7 +91,7 @@ namespace MFO::Iaus::Estimate {
     // What one cast of a_e does to a_to's health: damage x (1 - element resist) x (1 - magic resist); 0 at 100 points
     // of either (the engine's own rule). 0 = the spell's damage was not measured.
     [[nodiscard]] inline float SpellOn(const SpellEntry& a_e, const Combatant& a_to) {
-        const float dmg = Pos(a_e.damage);
+        const float dmg = a_e.measured ? Pos(a_e.damage) : 0.0f;
         if (!(dmg > 0.0f)) return 0.0f;
         const float el = a_e.resistAv >= 0 ? a_to.Resist(a_e.resistAv) : 0.0f;
         const float mr = std::isfinite(a_to.magicResist) ? a_to.magicResist : 0.0f;
