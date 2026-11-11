@@ -26,8 +26,9 @@
 // The spell pick is the only engine read: Actor::VisitSpells and CalculateMagickaCost read state the main thread
 // mutates (the iaus/SpellBook.h rule), so it runs in ONE MainThread::Post, and its result goes back to the worker in an
 // AddTask body under Diagnostics::PumpTickGate (the logistics/PlayerGiven.cpp Queue pattern), so a write queued before
-// a load or revert never lands after it. MainThread::Clear drops a pending post on revert. On VR (no main-thread
-// pump) the pick does not run: the cast rows stay disabled, logged once. A documented degrade, not a mask.
+// a load or revert never lands after it (the pump epoch changed); a body that meets the pump PAUSED for a save is
+// queued again (LandPicks). MainThread::Clear drops a pending post on revert. On VR (no main-thread pump) the pick does
+// not run: the cast rows stay disabled, logged once. A documented degrade, not a mask.
 //
 // KNOWN WINDOW: a save taken in the one or two frames between laying the rows down and the pick landing stores those
 // cast rows disabled with no spell. They load that way and stay for the player to fill; nothing re-picks after a load.
@@ -236,6 +237,58 @@ namespace MFO::Classes {
             return a_act == Vocab::kActCastSelf || a_act == Vocab::kActCastTarget || a_act == Vocab::kActCastPlayer;
         }
 
+        // Write the picks into the follower's live combat table. The write runs in an AddTask body under
+        // Diagnostics::PumpTickGate (the worker domain that owns g_followers). The gate also refuses while the pump is
+        // PAUSED for a save: then the epoch is unchanged and the write is tried again on a later FRAME (through
+        // MainThread::Post; kLandTries frames bounds it and the give-up is an ERROR line, never silent). A changed epoch
+        // is a load or a revert: that table is gone, and so is this write.
+        constexpr int kLandTries = 600;
+        void LandPicks(RE::FormID a_follower, Id a_class, std::uint64_t a_epoch, std::vector<Pick> a_picks, int a_triesLeft) {
+            SKSE::GetTaskInterface()->AddTask([a_follower, a_class, a_epoch, a_triesLeft, picks = std::move(a_picks)]() mutable {
+                {
+                    Diagnostics::PumpTickGate gate(a_epoch);
+                    if (gate) {
+                        const auto it = g_followers.find(a_follower);
+                        if (it == g_followers.end()) return;
+                        for (const auto& p : picks) {
+                            Gambit* row = nullptr;
+                            for (auto& g : it->second.combat())
+                                if (g.uid == p.uid) { row = &g; break; }
+                            // The row must still be the one laid down: a cast row with no spell, still disabled. Anything
+                            // else means the player (or a class switch) got there first, and his choice stands.
+                            if (!row || row->actionParamForm != 0 || row->enabled || !IsCastAct(row->actionOpcode)) {
+                                spdlog::info("[classes] {:08X} ({}): the {} row changed before its spell pick landed -- left as it is",
+                                             a_follower, Get(a_class).slug, RoleName(p.role));
+                                continue;
+                            }
+                            if (p.spell == 0) {
+                                spdlog::warn("[classes] {:08X} ({}): knows no {} spell -- the default row '{}' -> '{}' stays DISABLED "
+                                             "with no spell (pick one on the board)", a_follower, Get(a_class).slug, RoleName(p.role),
+                                             row->conditionOpcode, row->actionOpcode);
+                                continue;
+                            }
+                            row->actionParamForm = p.spell;
+                            row->enabled = true;
+                            spdlog::info("[classes] {:08X} ({}): default row '{}' -> '{}' [{}] casts {:08X}", a_follower,
+                                         Get(a_class).slug, row->conditionOpcode, row->actionOpcode, RoleName(p.role), p.spell);
+                        }
+                        return;
+                    }
+                }
+                if (Diagnostics::CurrentPumpEpoch() != a_epoch) return;   // a load / revert came between: that table is gone
+                if (a_triesLeft <= 0) {
+                    spdlog::error("[classes] {:08X} ({}): the pump stayed paused for {} tries -- {} default cast row(s) stay DISABLED "
+                                  "with no spell (pick the spells on the board)", a_follower, Get(a_class).slug, kLandTries, picks.size());
+                    return;
+                }
+                // Paused for a save. Come back through the main-thread pump, which drains once per FRAME (an AddTask queued
+                // from inside an AddTask body may run again in the same drain, and would burn every try at once).
+                MainThread::Post([a_follower, a_class, a_epoch, a_triesLeft, picks = std::move(picks)]() mutable {
+                    LandPicks(a_follower, a_class, a_epoch, std::move(picks), a_triesLeft - 1);
+                });
+            });
+        }
+
         // WORKER. Ask the main thread for the spells of the role rows just laid down (a_wants is never empty here).
         void PostPick(RE::FormID a_follower, Id a_class, std::vector<Want> a_wants) {
             if (!MainThread::IsInstalled()) {
@@ -253,35 +306,7 @@ namespace MFO::Classes {
                                  "disabled with no spell", a_follower, Get(a_class).slug, wants.size());
                     return;
                 }
-                auto picks = PickSpells(actor, wants);
-                SKSE::GetTaskInterface()->AddTask([a_follower, a_class, epoch, picks = std::move(picks)]() {
-                    Diagnostics::PumpTickGate gate(epoch);
-                    if (!gate) return;   // a load / revert came between: that table is gone
-                    const auto it = g_followers.find(a_follower);
-                    if (it == g_followers.end()) return;
-                    for (const auto& p : picks) {
-                        Gambit* row = nullptr;
-                        for (auto& g : it->second.combat())
-                            if (g.uid == p.uid) { row = &g; break; }
-                        // The row must still be the one laid down: a cast row with no spell, still disabled. Anything else
-                        // means the player (or a class switch) got there first, and his choice stands.
-                        if (!row || row->actionParamForm != 0 || row->enabled || !IsCastAct(row->actionOpcode)) {
-                            spdlog::info("[classes] {:08X} ({}): the {} row changed before its spell pick landed -- left as it is",
-                                         a_follower, Get(a_class).slug, RoleName(p.role));
-                            continue;
-                        }
-                        if (p.spell == 0) {
-                            spdlog::warn("[classes] {:08X} ({}): knows no {} spell -- the default row '{}' -> '{}' stays DISABLED with no "
-                                         "spell (pick one on the board)", a_follower, Get(a_class).slug, RoleName(p.role),
-                                         row->conditionOpcode, row->actionOpcode);
-                            continue;
-                        }
-                        row->actionParamForm = p.spell;
-                        row->enabled = true;
-                        spdlog::info("[classes] {:08X} ({}): default row '{}' -> '{}' [{}] casts {:08X}", a_follower, Get(a_class).slug,
-                                     row->conditionOpcode, row->actionOpcode, RoleName(p.role), p.spell);
-                    }
-                });
+                LandPicks(a_follower, a_class, epoch, PickSpells(actor, wants), kLandTries);
             });
         }
 
