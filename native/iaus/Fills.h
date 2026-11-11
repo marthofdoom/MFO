@@ -16,9 +16,12 @@
 // next to what really happened before it may move a score:
 //   [Debug] bIausFillProbe = 1    -> `[iaus-fill]` lines (rate-limited). Nothing is written into the Snapshot.
 //   [Debug] bIausFill<Input> = 1  -> that one input is written. All default OFF (Config.h).
-//   [Debug] bIausReachLearn = 1   -> Snapshot::meleeReach is the swing reach LEARNED from his own hits and misses
-//                                    (ruling Q68, iaus/Reach.h); fMeleeReach while the learner knows nothing (MFO-B687).
-// With every key OFF this module does nothing: no read, no map entry, no line.
+//   [Debug] bIausReachLearn = 1   -> Snapshot::swingReach (read by PowerAttack and Bash only) is the swing reach
+//                                    LEARNED from his own hits and misses (ruling Q68, iaus/Reach.h); 0 while the
+//                                    learner knows nothing, and those families then read fMeleeReach (MFO-B687).
+// With every key OFF: StartupCheck still resolves the GMST pointers and the entry-point row once at load and logs its
+// status lines (gmst, switches, plus the sink's registration line). After that the module does nothing per tick: the
+// gather's Pass is unarmed (no read, no map entry, no line), MeasureSpell returns at once, the sink returns at once.
 //
 // NO NEW ENGINE ADDRESS. Everything here is an actor-value read, a record field, a GMST, an ActorState bit field or the
 // actor's own magicCasters[] (the plain loads cast/Hands.cpp CastInFlightOnHand already makes on this worker). The one
@@ -29,7 +32,10 @@
 //   * the weapon's tempering, the ammunition's damage, the attack data's damage multiplier (a power attack) and the
 //     attacker's perk entry points on a weapon hit (they need the main thread and, for the core formula, a new id row);
 //   * the armor base factor sum (Actor vtable 0xE7: a lazy cache WRITE, main thread only) and the target's perks;
-//   * the element resist of a foe's spell, a spell's duration perks (EP 0x1E), dual casting.
+//   * the weapon's own resist value (weaponData.resistance) and, for a poison-type spell, the poison-resist swap;
+//   * the element resist of a foe's spell, a spell's duration perks (EP 0x1E), dual casting, spell cost reductions.
+// A FOE'S SPELL RATE (ruling Q86) is an estimate from his magicka, its regen in combat, the spell's record cost and its
+// charge time. It is never a rate measured per actor.
 // The `[iaus-fill] hit` line is what shows how much those cost: it prints the estimate next to the health the hit took.
 //
 // THREADING.
@@ -57,7 +63,7 @@ namespace MFO::Iaus::Fills {
         [[nodiscard]] bool Armed() const { return m_armed; }
         // Measure a_actor and write the switched-on inputs into a_u. a_u's id / pools / position are already filled.
         void Unit(Combatant& a_u, RE::Actor* a_actor, Role a_role);
-        // Snapshot::mortal, the learned swing reach, then the probe lines of this lap (unit lines, the hits whose
+        // Snapshot::mortal, the learned swing reach (Snapshot::swingReach), then the probe lines of this lap (unit lines, the hits whose
         // target this lap sampled).
         void Finish(Snapshot& a_s, RE::Actor* a_self);
 
@@ -68,6 +74,7 @@ namespace MFO::Iaus::Fills {
             bool  magic = false, ranged = false, swinging = false, casting = false;
             float dr = 0.0f, armor = 0.0f, magicResist = 0.0f, loss = 0.0f;
             std::uint32_t src = 0;      // the weapon / spell / staff the hit estimate is for
+            std::uint32_t srcLeft = 0;  // a second melee weapon in the left hand (0 = none)
             int   skillAv = -1;
             float skill = 0.0f;
             const char* kind = "none";  // weapon | spell | staff | unarmed | none

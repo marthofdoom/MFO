@@ -190,6 +190,9 @@ namespace MFO::Iaus {
                                           // refuses (Taunt::Fire), so no taunt candidate is made (card I6)
         float tauntReach = 0.0f;
         float meleeReach = 200.0f;        // fMeleeReach
+        float swingReach = 0.0f;          // ruling Q68: the reach LEARNED for the weapon in his hand (iaus/Reach.h Gate()).
+                                          // Read by the swing families ONLY (PowerAttack, Bash). 0 = not learned: they
+                                          // read meleeReach. Everything else always reads meleeReach (Q70).
         float chaseCap = 4096.0f;         // Confidence::ChaseRadius
         float combatSec = 0.0f;           // seconds since this fight started for him
 

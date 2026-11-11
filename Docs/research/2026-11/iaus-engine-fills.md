@@ -16,7 +16,9 @@ Nothing here has been watched running yet. So every input ships in two steps:
 2. **Switch.** Each input has its own `[Debug]` key, default OFF. A key goes ON only after a field log shows that
    input's lines are right (section 4 says what "right" means for each).
 
-With every key off the module reads nothing, keeps no state and logs one status line at load.
+With every key off the module still does one thing at load: `StartupCheck` resolves the GMST pointers and the
+entry-point row and logs its status lines (the GMST values, the switch states, and the sink's registration line).
+After that it does nothing per tick: no read, no state, no line.
 
 ## 2. The inputs
 
@@ -27,7 +29,7 @@ With every key off the module reads nothing, keeps no state and logs one status 
 | `Combatant::hit`, weapon | `bIausFillHit` | `weapon damage x fDamageWeaponMult x skillMul + kMeleeDamage` (bows add nothing), `skillMul = fDamageSkillMin + (Max - Min) x skill / 100`, the PC pair for the player (2.1, the core formula) | worker | tempering, the arrow or bolt, the attack data's multiplier, every perk entry point |
 | `Combatant::hit`, spell or staff in hand | `bIausFillHit` | the record health damage of the spell (or the staff's enchantment), `hitIsMagic = true` | worker | the caster's perks, the element resist |
 | `Combatant::hit`, bare hands or a creature | `bIausFillHit` | the race's unarmed damage plus `kUnarmedDamage` | worker | NOT decoded from the engine. An estimate the hit line must prove |
-| `Combatant::hitsPerSec` | `bIausFillHit` | weapon: `speed x fCombatDPSMeleeSpeedMult` or `x fCombatDPSBowSpeedMult` (2.4, the engine's own AI model). Spell: `1 / (charge time + 1.0 s)`, a stream 1 per second | worker | the 1.0 s is a guess. The `cast-start` line prints the real seconds between two casts |
+| `Combatant::hitsPerSec` | `bIausFillHit` | weapon: `speed x fCombatDPSMeleeSpeedMult` or `x fCombatDPSBowSpeedMult` (2.4, the engine's own AI model). Spell: ruling Q86, below | worker | spell cost reductions (skill, perks) |
 | `Combatant::rangedWeapon` | `bIausFillHit` | a bow or crossbow in the right hand | worker | |
 | `Combatant::lossPerSec` | `bIausFillLoss` | health lost between two laps, weighted over 2 s (the lab's window) | worker | |
 | `Combatant::swinging` | `bIausFillSwing` | `ActorState` attack state is Draw or Swing, with a melee weapon | worker | a lap is 133 ms x party, so a short swing can fall between two laps |
@@ -36,11 +38,31 @@ With every key off the module reads nothing, keeps no state and logs one status 
 | `SpellEntry::controlSec` | `bIausFillSpells` | the longest Paralysis, Calm, Demoralize, Frenzy or TurnUndead duration | main | duration perks |
 | `SpellEntry::measured` | `bIausFillSpells` | true once the three above were written (MFO-B684) | main | |
 | `Snapshot::mortal` | `bIausFillMortal` | not essential and not protected (the reference's own flags) | worker | whether the LIST lets a follower die another way (Q77) |
-| `Snapshot::meleeReach`, learned | `bIausReachLearn` | ruling Q68, section 3 | worker | |
+| `Snapshot::swingReach` | `bIausReachLearn` | ruling Q68, section 3. Read by PowerAttack and Bash only | worker | |
 
 `selfTtl`, `threatTtl`, `tauntTtl`, `recipientTtl` are not filled here. The pure layer (`Estimate.h`) derives them
 from `hit`, `hitsPerSec`, `armor` and `lossPerSec`. So GroundNeed, BlockNeed and the retreat terms go live with
 `bIausFillHit` plus `bIausFillArmor`, and BashNeed with `bIausFillCasting`.
+
+### A foe's spell rate (ruling Q86)
+
+marth: "no, it's IAUS weighted based on magicka, damage, etc." A foe's spell threat is not a cast rate measured
+per actor. It is estimated from what can be read:
+
+- what the spell does: its record health damage (`hit`)
+- what it costs: the record cost of its effects (no skill or perk reduction)
+- the magicka he has, and what he regains in combat: `max magicka x kMagickaRate% x kMagickaRateMult% x
+  fCombatMagickaRegenRateMult`
+- its charge time
+
+Casts per second is the smaller of what the charge time allows (`1 / charge`, a stream counts one second of
+damage per second) and what his magicka pays for over the next 10 s (`(magicka + regen x 10) / cost / 10`), and
+never above 1. A staff spends its own charge, so only the charge-time bound applies. A foe out of magicka is
+therefore a small threat, and a foe with a deep pool and a cheap spell is a large one.
+
+The two constants (the 10 s horizon, the ceiling of one cast a second) are model constants, in `Fills.cpp`.
+The `cast-start` line still prints the seconds since his last cast start. That is for reading the log only. The
+rate is never taken from it.
 
 Not filled by this card: `Combatant::beingHealed` (it needs a "heal in flight on him by anyone" query in `cast/`,
 a different subsystem, its own small card) and `Combatant::healer` (only the regroup road reads it, and that road
@@ -74,8 +96,16 @@ stay 0 ("not measured") and logs an error. Nothing falls back to a vanilla defau
 - MISS: the swing ended and he hit nothing.
 - A hit on someone else only gives no outcome.
 - One learner per (follower, weapon). It starts at `fMeleeReach`. Runtime only, emptied on a load.
-- With `bIausReachLearn = 1` the snapshot's `meleeReach` is the learner's `Gate()`. With no learner yet it stays
-  `fMeleeReach` (MFO-B687).
+- A swing is resolved only after he has been out of Draw and Swing for 0.3 s, or swings again, or after 2.5 s.
+  The hit event can arrive after the lap that saw the state change. The next swing's window starts no earlier
+  than that resolution, so a late hit is never credited to the swing after it (review F4).
+- A dual wielder: a hit on his target by the LEFT-hand weapon gives no outcome (review F1). The attack state
+  does not say which hand swung and the learner is the right-hand weapon's. His misses stay ambiguous the same
+  way and count for the right-hand weapon.
+- With `bIausReachLearn = 1` the learner's `Gate()` goes into `Snapshot::swingReach`, which only the swing
+  families read: PowerAttack and Bash (review F5, rulings Q68 and Q70). `Snapshot::meleeReach` is never changed,
+  so the attack's target naming, touch spells, the melee-buff test and the strike distance keep `fMeleeReach`.
+  With no learner yet `swingReach` is 0 and the swing families read `fMeleeReach` (MFO-B687).
 
 Known limits, on purpose:
 - Plain swings and power attacks share one learner. A missed swing does not say which it was. The hit's power
@@ -95,10 +125,10 @@ for him then.
 | `[iaus-fill] gmst ...` | once at load | read it first on a Requiem list: `fArmorScalingFactor`, `fMaxArmorRating`, `fDamageSkillMin/Max` |
 | `[iaus-fill] unit <name> ...` | each actor in a fight, once per 10 s | sanity: a hit above 0 for every armed foe, armor between 0 and the cap |
 | `[iaus-fill] hit A -> B ... took X ... estimate Y ratio R` | every hit a follower deals or takes (3 lines a second at most) | `bIausFillHit` + `bIausFillArmor`: the ratio for plain weapon hits with "0 other hit(s)" sits near 1. A steady ratio that is not 1 names what is left out (tempering and arrows push it above 1, a power attack about 2) |
-| same line, `health before / at-event / after` | | whether the event comes before or after the damage (the i8 note's open point) |
-| `[iaus-fill] cast-start` | a foe's caster leaves idle | `bIausFillCasting`: one line per real cast, none while he only holds the spell. Its "seconds since his last cast start" replaces the 1.0 s guess |
+| same line, `health before / at-event / after` | | whether the event comes before or after the damage (the i8 note's open point). `at-event` is read only when the event arrives on the main thread (review F3), else it prints nan. The line's `sink thread` against the status line's `main thread` says which |
+| `[iaus-fill] cast-start` | a foe's caster leaves idle | `bIausFillCasting`: one line per real cast, none while he only holds the spell |
 | `[iaus-fill] swing-start` | a foe's attack state enters Draw or Swing | `bIausFillSwing`: about one line per real swing. Far fewer lines than `hit` lines from that foe means the laps miss swings, and the block road needs an event feed instead |
-| `[spellbook] [iaus-fill] spell ...` | each offense, control or heal spell, once without and once with the perks run | `bIausFillSpells`: `damage` matches the spell's tooltip for the follower, and a spell hit's `took` matches it after resist |
+| `[spellbook] [iaus-fill] spell ...` | each offense, control or heal spell, once without and once with the perks run | `bIausFillSpells`: `damage` matches the spell's tooltip for the follower, and a spell hit's `took` matches it after resist. An offense spell whose damage is not in its own effects (it spawns a hazard, a cloak, a script, a weapon enchantment) is logged "NOT measured" and stays unmeasured, so it is never scored as "does nothing" (review F2) |
 | `[iaus-fill] mortal ...` | once per follower, again when a flag changes | `bIausFillMortal`, after Q77 |
 | `[iaus-fill] swing <name> ... HIT / miss ... learned reach a -> b` | each resolved swing of a follower | `bIausReachLearn`: the value settles within about 12 swings and misses are a small share once it has |
 
@@ -126,6 +156,7 @@ J, 30 fights, seeds 1 and 7 (noise about 0.5):
 |---|---|---|---|---|
 | main 6bc3f38 | 63.958 / 63.519 | 64.743 / 63.594 | 78.889 / 78.764 | 68.91 |
 | this branch | 63.957 / 63.450 | 64.823 / 63.588 | 78.960 / 78.818 | 68.93 |
+| after the review round (swingReach, main merged) | 63.976 / 63.449 | 64.825 / 63.661 | 78.963 / 78.842 | 68.95 |
 
 ## 6. Later, each with its own row or brief
 
@@ -142,8 +173,23 @@ J, 30 fights, seeds 1 and 7 (noise about 0.5):
   or leave it (about 12 swings to relearn)?
 - Q85: `mortal` reads the engine flags only. Which mods on the lists decide follower death (Q77), and is there a
   runtime-agnostic read for them, or does `mortal` stay the engine flags?
-- Q86: a foe's spell rate uses charge time plus 1.0 s until the `cast-start` lines give the real number. Accept
-  a per-actor measured rate (seconds between his own cast starts) once the lines exist?
+- Q86: ANSWERED (marth 2026-11-11): "no, it's IAUS weighted based on magicka, damage, etc." No measured
+  per-actor rate. Built as section 2 "A foe's spell rate".
+
+## 7a. The review round (Opus tier 3 on 541ccb4)
+
+Log: `scratchpad/agentlogs/iaus-fills-review.md`. Confirmed: every switch off equals main, the core formula,
+armor, the rate, the finite guards.
+
+| Finding | Fix |
+|---|---|
+| F3 threading: the sink read health on an unknown thread | the main thread id is captured in `StartupCheck`. The sink reads the at-event health only on that thread, else NaN |
+| F1 a dual wielder's left-hand hit was a miss | a hit on the target by the left-hand weapon is "no outcome" |
+| F4 resolution raced the hit event | a 0.3 s grace before a swing resolves. The next window starts no earlier than the resolution |
+| F5 `meleeReach` replaced wholesale | new `Snapshot::swingReach`, read by PowerAttack and Bash only (`Generate.cpp` `Ctx::SwingReach`). The sim sets it too. Harness: 2 checks |
+| F2 indirect-damage offense spells written as a measured 0 | SpawnHazard, Cloak, Script and EnhanceWeapon carriers stay unmeasured |
+| F6 to F8 wording | the all-off wording here and in `Fills.h`. The "left out" lists name the weapon's own resist value and the poison-resist swap |
+| ruling Q86 | section 2 "A foe's spell rate" |
 
 ## 8. For the reviewer: the spots the author is least sure of
 
@@ -153,6 +199,6 @@ J, 30 fights, seeds 1 and 7 (noise about 0.5):
    no list walk, only while the probe is on.
 3. `Classify`: which effects count as health damage or a heal (the `kRecover` exclusion, Absorb as damage).
 4. The swing window (`LearnReach`): `windowStart` is the previous lap, so a hit from the swing before can be
-   credited to this one when two swings fall inside one lap.
-5. `Snapshot::meleeReach` is replaced wholesale under `bIausReachLearn`, as the sim does. It also feeds touch
-   spells, `StrikeDistance` and the melee-buff test.
+   credited to this one when two whole swings fall inside one lap. (The resolve race is fixed, 7a F4.)
+5. (Fixed, 7a F5.) The learned reach is `Snapshot::swingReach`, PowerAttack and Bash only.
+6. `CastsPerSec` (ruling Q86): the record cost with no reduction, and the two model constants.

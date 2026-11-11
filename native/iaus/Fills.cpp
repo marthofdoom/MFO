@@ -35,14 +35,18 @@ namespace MFO::Iaus::Fills {
         // the float is read live (a plain load), which follows a plugin or a script that changes it. ──────────────────
         enum Gm : std::size_t {
             kDamageWeaponMult = 0, kDamageSkillMin, kDamageSkillMax, kDamagePCSkillMin, kDamagePCSkillMax,
-            kArmorScalingFactor, kMaxArmorRating, kDpsMeleeSpeedMult, kDpsBowSpeedMult, kGmCount
+            kArmorScalingFactor, kMaxArmorRating, kDpsMeleeSpeedMult, kDpsBowSpeedMult, kCombatMagickaRegenMult, kGmCount
         };
         constexpr const char* kGmName[kGmCount] = {
             "fDamageWeaponMult", "fDamageSkillMin", "fDamageSkillMax", "fDamagePCSkillMin", "fDamagePCSkillMax",
-            "fArmorScalingFactor", "fMaxArmorRating", "fCombatDPSMeleeSpeedMult", "fCombatDPSBowSpeedMult"
+            "fArmorScalingFactor", "fMaxArmorRating", "fCombatDPSMeleeSpeedMult", "fCombatDPSBowSpeedMult",
+            "fCombatMagickaRegenRateMult"
         };
         std::atomic<RE::Setting*> g_gm[kGmCount]{};
         std::atomic<bool>         g_epOk{ false };   // the HandleEntryPoint row verified (StartupCheck)
+        // Review F3: the thread TESHitEvent arrives on is NOT known (CrimeProbe.cpp treats it so). The sink reads the
+        // target's health only when it runs on THIS thread (captured at kDataLoaded); 0 = not captured, never equal.
+        std::atomic<std::uint32_t> g_mainThread{ 0 };
 
         // NaN = the GMST is missing or not finite: the estimate that needs it is then NOT produced.
         float G(Gm a_g) {
@@ -116,11 +120,17 @@ namespace MFO::Iaus::Fills {
         // (a chain of swings the laps never saw apart). Sized from the cadence: a lap is 133 ms x party, a swing is
         // 0.5 - 1.2 s from its start to the hit.
         constexpr double kSwingCapSec = 2.5;
+        // Review F4: TESHitEvent can arrive AFTER a lap has seen the attack state leave Swing. A swing is resolved only
+        // once he has been out of Draw / Swing for this long (or swings again, or the cap), and the next swing's window
+        // starts no earlier than that resolution, so a late hit is never credited to the swing after it.
+        constexpr double kSwingGraceSec = 0.3;
         struct ReachState {
             bool   open = false;
             double t0 = 0.0, windowStart = 0.0;
+            double leftAt = 0.0;        // the first lap that saw the open swing out of Draw / Swing (0 = still in them)
+            double resolvedAt = 0.0;    // when the last swing was resolved: the floor of the next window
             float  dist = 0.0f;
-            RE::FormID target = 0, weapon = 0;
+            RE::FormID target = 0, weapon = 0, weaponLeft = 0;
             bool   wasSwinging = false;
             double lastLap = 0.0;
         };
@@ -146,9 +156,11 @@ namespace MFO::Iaus::Fills {
                 r.source     = a_ev->source;
                 r.projectile = a_ev->projectile;
                 r.flags      = static_cast<std::uint8_t>(a_ev->flags.underlying());
-                if (probe)
-                    if (auto* avo = target->AsActorValueOwner()) r.hpEvt = avo->GetActorValue(AV::kHealth);
                 r.thread = static_cast<std::uint32_t>(::GetCurrentThreadId());
+                // The at-event health: an actor-value read, so ONLY on the main thread (review F3). Anywhere else it
+                // stays NaN and the line still has the worker's before / after samples.
+                if (probe && r.thread != 0 && r.thread == g_mainThread.load(std::memory_order_relaxed))
+                    if (auto* avo = target->AsActorValueOwner()) r.hpEvt = avo->GetActorValue(AV::kHealth);
                 std::scoped_lock lk(g_hitMx);
                 if (byFollower) {
                     g_caused[g_causedHead] = Caused{ r.t, r.cause, r.target, r.source, r.flags };
@@ -208,9 +220,42 @@ namespace MFO::Iaus::Fills {
             return sum;
         }
 
-        // The seconds between two casts of a foe's spell are NOT proven (research note 2.4): charge time plus this.
-        // The `[iaus-fill] cast-start` lines print the measured seconds between two starts, which is what replaces it.
-        constexpr float kCastOverheadSec = 1.0f;
+        // RULING Q86 (marth 2026-11-11: "no, it's IAUS weighted based on magicka, damage, etc."). A foe's spell threat
+        // is NOT a cast rate measured per actor. It is estimated from what can be read: what the spell does (RawDamage),
+        // what it costs (the record cost of its effects, no skill or perk reduction), the magicka he has and regains in
+        // combat, and its charge time. Casts per second = the smaller of
+        //   what the charge time allows   1 / charge (a stream: one "hit" of one second per second), and
+        //   what his magicka pays for     (magicka now + regen x horizon) / cost / horizon,
+        // and never above kCastCeilPerSec. Regen per second = max magicka x kMagickaRate% x kMagickaRateMult% x
+        // fCombatMagickaRegenRateMult. A staff spends its own charge, not magicka: the charge-time bound only.
+        constexpr float kCastHorizonSec = 10.0f;   // the seconds the estimate looks ahead (the time-to-live curves read 6 - 12 s)
+        constexpr float kCastCeilPerSec = 1.0f;    // nobody is modelled as casting more than once a second
+
+        float RecordCost(const RE::MagicItem* a_item) {
+            float sum = 0.0f;
+            for (const auto* e : a_item->effects)
+                if (e && std::isfinite(e->cost) && e->cost > 0.0f) sum += e->cost;
+            return sum;
+        }
+
+        float CastsPerSec(const RE::MagicItem* a_item, bool a_staff, RE::ActorValueOwner* a_avo, const Combatant& a_u) {
+            const bool  conc   = a_item->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+            const float charge = a_item->GetChargeTime();
+            float rate = kCastCeilPerSec;
+            if (!conc && std::isfinite(charge) && charge > 0.0f) rate = (std::min)(rate, 1.0f / charge);
+            if (a_staff) return rate;
+            const float cost = RecordCost(a_item);
+            if (!(cost > 0.0f)) return rate;   // free to cast: the charge time is the only bound
+            float regen = 0.0f;
+            {
+                const float pct = a_avo->GetActorValue(AV::kMagickaRate), mult = a_avo->GetActorValue(AV::kMagickaRateMult);
+                const float inCombat = G(kCombatMagickaRegenMult);   // NaN when missing: the regen term is then left out
+                const float r = a_u.mpMax * pct * 0.01f * mult * 0.01f * inCombat;
+                if (std::isfinite(r) && r > 0.0f) regen = r;
+            }
+            const float pays = ((std::max)(0.0f, a_u.mp) + regen * kCastHorizonSec) / cost / kCastHorizonSec;
+            return std::isfinite(pays) ? std::clamp((std::min)(rate, pays), 0.0f, kCastCeilPerSec) : 0.0f;
+        }
 
         // ── the weapon-hit estimate (WORKER: AV reads + record fields + GMSTs) ───────────────────────────────────────
         // The engine's core formula (research note 2.1, AE 26410 / SE 25847) WITHOUT tempering, ammunition, the attack
@@ -218,12 +263,14 @@ namespace MFO::Iaus::Fills {
         //   ((weapon damage x fDamageWeaponMult) x skillMul + (kMeleeDamage | kUnarmedDamage))
         //   skillMul = fDamage[PC]SkillMin + (Max - Min) x clamp(skill, 0, 100) / 100, 1 when the weapon has no skill.
         // The rate is the engine's own AI model (2.4, AE 26411): weapon speed x fCombatDPS(Melee|Bow)SpeedMult.
-        void EstimateHit(RE::Actor* a_actor, RE::ActorValueOwner* a_avo, Pass::Est& e) {
+        void EstimateHit(RE::Actor* a_actor, RE::ActorValueOwner* a_avo, const Combatant& a_u, Pass::Est& e) {
             auto* r  = a_actor->GetEquippedObject(false);
             auto* l  = a_actor->GetEquippedObject(true);
             auto* w  = r ? r->As<RE::TESObjectWEAP>() : nullptr;
             auto* lw = l ? l->As<RE::TESObjectWEAP>() : nullptr;
             if (!w && lw && lw->IsStaff()) w = lw;
+            // Review F1: a second MELEE weapon in the left hand. Its hits carry its own FormID as their source.
+            if (lw && lw != w && lw->IsMelee()) e.srcLeft = lw->GetFormID();
 
             // A staff, or a spell in hand with no weapon: the hit is the spell.
             const RE::MagicItem* magic = nullptr;
@@ -240,9 +287,7 @@ namespace MFO::Iaus::Fills {
             if (magic) {
                 e.magic = true;
                 e.hit   = RawDamage(magic);
-                const bool  conc   = magic->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
-                const float charge = magic->GetChargeTime();
-                e.rate = conc ? 1.0f : 1.0f / ((std::isfinite(charge) && charge > 0.0f ? charge : 0.0f) + kCastOverheadSec);
+                e.rate  = CastsPerSec(magic, w != nullptr, a_avo, a_u);   // ruling Q86
                 return;
             }
 
@@ -323,6 +368,7 @@ namespace MFO::Iaus::Fills {
             else   missing += std::format(" {}", kGmName[i]);
         }
         g_epOk.store(EntryPointOk(), std::memory_order_relaxed);
+        g_mainThread.store(static_cast<std::uint32_t>(::GetCurrentThreadId()), std::memory_order_relaxed);
         spdlog::info("[iaus-fill] gmst{}", vals);
         if (!missing.empty())
             spdlog::error("[iaus-fill] GMST NOT FOUND:{} -- every estimate that needs one stays unmeasured (0), nothing is guessed",
@@ -378,7 +424,7 @@ namespace MFO::Iaus::Fills {
             e.magicResist = std::isfinite(mr) ? mr : 0.0f;
         }
 
-        EstimateHit(a_actor, avo, e);
+        EstimateHit(a_actor, avo, a_u, e);
 
         // ── mid-swing / mid-cast (plain loads; the combat thread advances both while we look: a stale answer is one
         // lap old, never corrupt -- cast/Hands.cpp CastInFlightOnHand makes the same reads on this worker) ───────────
@@ -422,7 +468,7 @@ namespace MFO::Iaus::Fills {
             if (e.casting && !tr.casting) {
                 if (g_edgeLines.Take(m_now))
                     spdlog::info("[iaus-fill] cast-start {} ({:08X}): caster state {} spell {:08X}, {:.2f} s since his last cast start "
-                                 "(-1 = first), estimate rate {:.2f}/s",
+                                 "(-1 = first; shown for reading only, ruling Q86: the rate is never taken from it), estimate rate {:.2f}/s",
                                  a_u.name, e.id, e.castState, castSpell, tr.castStart > 0.0 ? m_now - tr.castStart : -1.0, e.rate);
                 tr.castStart = m_now;
             }
@@ -479,7 +525,8 @@ namespace MFO::Iaus::Fills {
             tr.unitLogged = m_now;
             spdlog::info("[iaus-fill] unit {} ({:08X}) {} seen by {:08X}: hit {:.1f} ({} {:08X}, skill av {} = {:.0f}) x {:.2f}/s "
                          "magic={} ranged={} | DR {:.0f} -> armor {:.3f}, magic resist {:.0f} | losing {:.1f}/s | attack state {} "
-                         "swinging={} caster state {} casting={} | left out: temper, ammo, attack mult, perks, armor base factors",
+                         "swinging={} caster state {} casting={} | left out: temper, ammo, attack mult, perks, armor base factors, "
+                         "the weapon's own resist value, a spell's element or poison resist, spell cost reductions",
                          NameOf(a_s, e.id), e.id, RoleName(e.role), a_s.self.id, e.hit, e.kind, e.src, e.skillAv, e.skill, e.rate,
                          e.magic, e.ranged, e.dr, e.armor, e.magicResist, e.loss, e.atkState, e.swinging, e.castState, e.casting);
         }
@@ -546,7 +593,10 @@ namespace MFO::Iaus::Fills {
     // engine feed of iaus/Reach.h: ONE outcome per swing of HIS melee weapon at his engine combat target.
     //   hit   = a TESHitEvent he caused on that target with that weapon since the swing began (a blocked hit reached);
     //   miss  = the swing ended with no hit of his on anything;
-    //   a hit on someone else only = no outcome (it says nothing about the distance to his target).
+    //   a hit on someone else only = no outcome (it says nothing about the distance to his target);
+    //   a hit on his target by his LEFT-hand weapon only = no outcome (review F1: the attack state does not say which
+    //   hand swung, and the learner is the right-hand weapon's. A dual wielder's miss stays ambiguous the same way and
+    //   is counted for the right-hand weapon: the estimator's stray-miss tolerance carries it).
     // The distance is centre to centre at the lap the swing was first seen, the same measure the swing gate compares
     // (Facts::dist against Facts::reach). ONE learner per (follower, weapon): plain swings and power attacks share it,
     // because a missed swing does not say which it was (the hit's power flag is in the line, so a field log shows whether
@@ -560,17 +610,23 @@ namespace MFO::Iaus::Fills {
         const bool  melee = !me->magic && !me->ranged && me->src != 0;
         const auto  keyOf = [&](RE::FormID a_weapon) { return (static_cast<std::uint64_t>(a_s.self.id) << 32) | a_weapon; };
 
-        // 1. the open swing has landed or gone by: one outcome
-        if (rs.open && (!me->swinging || m_now - rs.t0 > kSwingCapSec)) {
+        // 1. the open swing has landed or gone by: one outcome, after the grace (review F4)
+        if (rs.open && !me->swinging && rs.leftAt == 0.0) rs.leftAt = m_now;
+        const bool swingsAgain = rs.open && rs.leftAt != 0.0 && me->swinging;
+        if (rs.open && ((rs.leftAt != 0.0 && m_now - rs.leftAt >= kSwingGraceSec) || swingsAgain || m_now - rs.t0 > kSwingCapSec)) {
             rs.open = false;
+            rs.leftAt = 0.0;
+            rs.resolvedAt = m_now;
             bool hit = false, other = false;
             std::uint8_t flags = 0;
             {
                 std::scoped_lock lk(g_hitMx);
                 for (const Caused& c : g_caused) {
-                    if (c.cause != a_s.self.id || c.t < rs.windowStart || c.source != rs.weapon) continue;
-                    if (c.target == rs.target) { hit = true; flags = c.flags; }
-                    else other = true;
+                    if (c.cause != a_s.self.id || c.t < rs.windowStart) continue;
+                    const bool right = c.source == rs.weapon, left = rs.weaponLeft != 0 && c.source == rs.weaponLeft;
+                    if (!right && !left) continue;   // a cloak, an enchantment, a spell: not a blow of his weapons
+                    if (right && c.target == rs.target) { hit = true; flags = c.flags; }
+                    else other = true;               // someone else, or his target by the left-hand weapon (review F1)
                 }
             }
             auto it = g_learn.find(keyOf(rs.weapon));
@@ -585,13 +641,13 @@ namespace MFO::Iaus::Fills {
                                  hit ? std::format(" (power={} blocked={})", (flags & 1) != 0, (flags & 8) != 0) : std::string(),
                                  before, L.Value(), L.start, L.Gate(), L.hits, L.misses, m_reach ? "yes" : "no (bIausReachLearn=0)");
             } else if (m_probe && g_swingLines.Take(m_now)) {
-                spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: hit someone else only, no outcome",
+                spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: hit someone else or with the left-hand weapon only, no outcome",
                              a_s.self.name, a_s.self.id, rs.weapon, rs.dist, rs.target);
             }
         }
 
         // 2. a new swing begins this lap (he was not swinging at the last one)
-        if (!rs.open && melee && me->swinging && !rs.wasSwinging) {
+        if (!rs.open && melee && me->swinging && (!rs.wasSwinging || swingsAgain)) {
             RE::FormID target = 0;
             if (auto tp = a_self->GetActorRuntimeData().currentCombatTarget.get(); tp) target = tp->GetFormID();
             for (const Combatant& f : a_s.foes) {
@@ -606,22 +662,27 @@ namespace MFO::Iaus::Fills {
                 rs.t0     = m_now;
                 // The swing began after the last lap saw him not swinging, so a hit since then belongs to it.
                 rs.windowStart = (rs.lastLap > 0.0 && m_now - rs.lastLap < kSwingCapSec) ? rs.lastLap : m_now - 0.5;
+                rs.windowStart = (std::max)(rs.windowStart, rs.resolvedAt);   // review F4: never before the last resolution
+                rs.leftAt = 0.0;
                 rs.dist   = f.dist;
                 rs.target = target;
                 rs.weapon = me->src;
+                rs.weaponLeft = me->srcLeft;
                 break;
             }
         }
         rs.wasSwinging = me->swinging;
         rs.lastLap     = m_now;
 
-        // 3. the swing gate's reach: the learned value for the weapon in his hand. No learner yet (he has not swung it)
-        // or nothing learnable: Snapshot::meleeReach stays fMeleeReach (MFO-B687: an unknown learner's Gate() is 0,
-        // which would switch the range test off).
+        // 3. the swing gate's reach: the learned value for the weapon in his hand, in Snapshot::swingReach, which ONLY
+        // the swing families read (PowerAttack, Bash: review F5, rulings Q68 / Q70). Snapshot::meleeReach is never
+        // touched: the attack's target naming, touch spells, the melee-buff test and the strike distance keep
+        // fMeleeReach. No learner yet (he has not swung it) or nothing learnable: swingReach stays 0 and those families
+        // read meleeReach (MFO-B687: an unknown learner's Gate() is 0, which would switch the range test off).
         if (m_reach && melee)
             if (auto it = g_learn.find(keyOf(me->src)); it != g_learn.end() && it->second.Known()) {
                 const float gate = it->second.Gate();
-                if (std::isfinite(gate) && gate > 0.0f) a_s.meleeReach = gate;
+                if (std::isfinite(gate) && gate > 0.0f) a_s.swingReach = gate;
             }
     }
 
@@ -644,8 +705,21 @@ namespace MFO::Iaus::Fills {
         float damage = 0.0f, heal = 0.0f, rawDamage = 0.0f, rawHeal = 0.0f;
         std::uint32_t controlSec = 0;
         bool epRan = false;
+        // Review F2: an OFFENSE spell whose damage is not in its own effect list (a hazard it spawns, a cloak's second
+        // spell, a script, an enchantment it puts on the weapon) has no readable damage here. Writing a measured 0
+        // would score a Wall of Flames 0 against his best (MFO-B684), so such a spell stays UNMEASURED.
+        bool indirect = false;
         for (const auto* e : a_spell->effects) {
             if (!e || !e->baseEffect) continue;
+            switch (e->baseEffect->GetArchetype()) {
+            case RE::EffectArchetypes::ArchetypeID::kSpawnHazard:
+            case RE::EffectArchetypes::ArchetypeID::kCloak:
+            case RE::EffectArchetypes::ArchetypeID::kScript:
+            case RE::EffectArchetypes::ArchetypeID::kEnhanceWeapon:
+                if (a_e.nature == Prune::Nature::Offense) indirect = true;
+                break;
+            default: break;
+            }
             const Fx fx = Classify(e->baseEffect);
             if (fx == Fx::None) continue;
             if (fx == Fx::Control) { controlSec = (std::max)(controlSec, e->GetDuration()); continue; }
@@ -663,22 +737,25 @@ namespace MFO::Iaus::Fills {
             (fx == Fx::Damage ? damage : heal) += Total(e, mag, conc);
         }
 
-        if (write) {
+        if (write && !indirect) {
             a_e.damage     = damage;
             a_e.heal       = heal;
             a_e.controlSec = static_cast<float>(controlSec);
             a_e.measured   = true;
         }
         if (probe) {
-            a_probeKey = epRan ? 0x46494C31u : 0x46494C30u;
+            a_probeKey = (epRan ? 0x46494C31u : 0x46494C30u) ^ (indirect ? 0x100u : 0u);
             a_probe = std::format("[iaus-fill] spell {} ({:08X}) of {} ({:08X}): damage {:.1f} (record {:.1f}) heal {:.1f} (record {:.1f}) "
                                   "control {} s | concentration={} (counted for 1 s) cost {:.1f} | magnitude perks: {} | written: {} | "
-                                  "left out: duration perks, dual cast, the target's resist (applied per foe)",
+                                  "left out: duration perks, dual cast, the target's resist (applied per foe: magic resist and the "
+                                  "element, NOT the poison-resist swap of a poison-type spell){}",
                                   a_e.name, a_e.form, a_caster->GetName() ? a_caster->GetName() : "?", a_caster->GetFormID(),
                                   damage, rawDamage, heal, rawHeal, controlSec, conc, a_e.cost,
                                   epRan ? std::format("ran against {:08X}", (rawDamage > 0.0f && foe) ? foe->GetFormID() : a_caster->GetFormID())
                                         : (epOk ? "not run (no combat target)" : "REFUSED (row not verified)"),
-                                  write ? "yes" : "no (bIausFillSpells=0)");
+                                  indirect ? "indirect damage (hazard / cloak / script / weapon carrier): NOT measured"
+                                           : (write ? "yes" : "no (bIausFillSpells=0)"),
+                                  indirect ? " | its damage is not in its own effects" : "");
         }
     }
 

@@ -1029,6 +1029,28 @@ namespace {
                 if (c.family == Family::CastOffense && (c.f.bestDamage != 0.0f || c.f.expDamage >= 0.0f)) allOff = false;
             Check(allOff, "B684: with nothing measured no damage fact is set (the considerations read 'off')");
         }
+        {
+            // Review F5 (rulings Q68 / Q70): the learned swing reach gates the swings he times, nothing else.
+            ClassGate warrior; warrior.resolved = true; warrior.powerAttack = true;
+            Snapshot s;
+            s.self = Actor("Warrior", 0x14F01, 180, 200, 0, 0);
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, 190, 0) };
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+            const auto reachOf = [&](Family f) {
+                const Generated g = Generate(s, warrior, t);
+                for (const Candidate& c : g.actions)
+                    if (c.family == f) return c.f.reach;
+                return -1.0f;
+            };
+            const bool unknownOk = reachOf(Family::PowerAttack) == 200.0f;
+            s.swingReach = 150.0f;
+            Check(unknownOk && reachOf(Family::PowerAttack) == 150.0f,
+                  "F5 / B687: the power attack reads the learned swing reach, and fMeleeReach while nothing is learned");
+            Check(reachOf(Family::Attack) == 200.0f && Estimate::StrikeDistance(s) == 400.0f,
+                  "F5: the attack and the strike distance keep fMeleeReach whatever was learned");
+        }
     }
 }
 

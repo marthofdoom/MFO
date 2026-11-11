@@ -47,6 +47,12 @@ namespace MFO::Iaus {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
                 (a_c.family == Family::Posture ? out.postures : out.actions).push_back(std::move(a_c));
             }
+            // The reach of a swing he times himself (PowerAttack, Bash): the learned one when there is one (ruling Q68),
+            // else fMeleeReach (MFO-B687). No other family reads the learned value (Q70).
+            [[nodiscard]] float SwingReach() const {
+                const float learned = Finite(s.swingReach, 0.0f);
+                return (std::max)(0.0f, learned > 0.0f ? learned : Finite(s.meleeReach, 0.0f));
+            }
             // What every family may read about the follower and the fight.
             void Common(Facts& f) const {
                 f.selfHp = selfHp;
@@ -109,7 +115,7 @@ namespace MFO::Iaus {
                     x.Foe(c.f, *foe, false);
                     c.role = RoleTag::Melee;
                     c.f.meleeRange = true;
-                    c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                    c.f.reach = x.SwingReach();
                     // The class row's cooldown; a class with no declared one (and the tree OFF, marth Q63) gets the
                     // tuning floor, so "any follower may power attack" is never "every lap".
                     const float rowCd = (std::max)(0.0f, Finite(x.g.powerCooldownSec, 0.0f));
@@ -181,7 +187,7 @@ namespace MFO::Iaus {
                     x.Foe(c.f, *foe, false);
                     c.role = RoleTag::Melee;
                     c.f.meleeRange = true;
-                    c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                    c.f.reach = x.SwingReach();
                     c.f.foeCasting = foe->casting;
                     c.f.foeSwinging = foe->swinging;
                     c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.bashCooldownSec, 0.0f));

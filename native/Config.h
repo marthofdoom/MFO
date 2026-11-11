@@ -551,9 +551,9 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_iausFillCasting{ false };   // Combatant::casting
     inline std::atomic<bool>  g_iausFillSpells{ false };    // SpellEntry::damage, heal, controlSec, measured
     inline std::atomic<bool>  g_iausFillMortal{ false };    // Snapshot::mortal
-    // [Debug] bIausReachLearn (INI-only, default OFF; ruling Q68). 1 = Snapshot::meleeReach (the power attack's swing
-    // gate) is the reach LEARNED from his own hits and misses with the weapon in his hand (iaus/Reach.h), fMeleeReach
-    // until the learner has a value (MFO-B687). The learner itself runs, and logs `[iaus-fill] swing`, with this key
+    // [Debug] bIausReachLearn (INI-only, default OFF; ruling Q68). 1 = Snapshot::swingReach (the swing gate of the
+    // power attack and the bash, nothing else) is the reach LEARNED from his own hits and misses with the weapon in his
+    // hand (iaus/Reach.h), fMeleeReach until the learner has a value (MFO-B687). The learner itself runs, and logs `[iaus-fill] swing`, with this key
     // OR bIausFillProbe on.
     inline std::atomic<bool>  g_iausReachLearn{ false };
     // COMBAT MOVE PROBE ([Debug] bCombatMoveProbe, INI-only, default OFF; Harbinger ch.31, ABI v38). 1 = a follower in

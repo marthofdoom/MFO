@@ -8940,7 +8940,10 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
 - **`iaus/Fills.h` / `iaus/Fills.cpp` -- THE ENGINE FILLS (card "IAUS engine fills", `feat/iaus-engine-fills`, 2026-11-11;
   note `Docs/research/2026-11/iaus-engine-fills.md`).** Measures the phase-2 inputs: `Combatant::armor / magicResist / hit /
   hitsPerSec / hitIsMagic / rangedWeapon / lossPerSec / swinging / casting`, `SpellEntry::damage / heal / controlSec /
-  measured`, `Snapshot::mortal`, and the learned `Snapshot::meleeReach` (ruling Q68, `iaus/Reach.h`). PROBE FIRST:
+  measured`, `Snapshot::mortal`, and the learned `Snapshot::swingReach` (ruling Q68, `iaus/Reach.h`; read ONLY by
+  PowerAttack and Bash through `Generate.cpp` `Ctx::SwingReach`, never `meleeReach`: review F5 / Q70). A foe's spell
+  rate is an ESTIMATE from magicka, regen, record cost and charge time (`CastsPerSec`, ruling Q86), never a measured
+  per-actor rate. PROBE FIRST:
   `[Debug] bIausFillProbe` logs `[iaus-fill]` lines (gmst, unit, hit, cast-start, swing-start, spell, mortal, swing) and
   writes nothing. `bIausFillArmor / Hit / Loss / Swing / Casting / Spells / Mortal` and `bIausReachLearn` each write one
   input, ALL DEFAULT OFF (`Config.h`). Entry points: `Fills::Pass` (WORKER, built in `Candidates::Gather`: `Unit` after
@@ -8957,7 +8960,10 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   (4) `SpellEntry::measured` (MFO-B684) is what tells a real 0 from "not known". A fill that writes `damage` without
   it is ignored by `Estimate::SpellOn` and the best-damage denominator. The sim sets it in `tools/iaus_sim/Policy.h`.
   (5) HandleEntryPoint is main thread only: never move `MeasureSpell` into the gather. (6) An unknown
-  `Reach::Learner` has `Gate() == 0`: the wiring must leave `meleeReach` at fMeleeReach then (MFO-B687).
+  `Reach::Learner` has `Gate() == 0`: the wiring must leave `swingReach` at 0 then, so the swing families read
+  fMeleeReach (MFO-B687). (7) The hit sink may read an actor value ONLY on the main thread (`g_mainThread`, review
+  F3): the TESHitEvent thread is not known. (8) An offense spell whose damage is indirect (hazard, cloak, script,
+  weapon carrier) must stay `measured = false` (review F2), or MFO-B684 scores it 0.
 - `iaus/Engine.h/.cpp` — the THIN adapter, the only file that touches the engine side: `MakeTick` `:36` (window = `g_suppressWindow` x
   (0.88 + 0.24 Temperament), the #26 length), `FillCooldowns` `:49` (the SHARED `Cooldowns` store, `Kind::IausAction`), `MindFor` `:64`,
   `Decide` `:70` (timed; WARN over `budgetMs`, once-per-session WARN over the candidate cap and on a NaN/inf fact), `Log` `:120`,
