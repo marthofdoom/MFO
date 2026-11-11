@@ -246,7 +246,7 @@ namespace MFO::Iaus::Candidates {
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
             u.sight       = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Own));
             u.sightEngine = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Engine));
-            u.occludedSec = NoteOcclusion(selfID, fid, u.sight == Sight::Occluded, fid == s.currentTargetId, a_t.occlusionHoldSec);
+            u.occludedSec = NoteOcclusion(selfID, fid, u.sight == Sight::Occluded, fid == s.currentTargetId, DefaultTuning().occlusionHoldSec);   // the log line only: Gather has no Tuning
             if (avo)
                 for (const int av : resistAvs) {
                     const float r = avo->GetActorValue(static_cast<RE::ActorValue>(av));
