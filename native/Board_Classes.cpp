@@ -41,16 +41,18 @@ namespace MFO::Board {
             return out;
         }
 
-        // The class's passive state for a follower, as a short label ("" = none).
-        const char* PassiveLabel(bool a_equipped, bool a_mastered) {
-            if (a_equipped) return Str::Get(Str::K::Cl_PassiveFull);
-            if (a_mastered) return Str::Get(Str::K::Cl_PassiveQuarter);
-            return "";
+        // The class's passive state as a short label ("" = none), from the REAL carrier rank (Classes::CarrierRanks):
+        // 0 = off (classes OFF, or a class that is not active), kRankMasteredUnequipped = 1/4, 1..cap = full.
+        const char* PassiveLabel(std::uint8_t a_rank) {
+            if (a_rank == 0) return "";
+            if (a_rank == Classes::kRankMasteredUnequipped) return Str::Get(Str::K::Cl_PassiveQuarter);
+            return Str::Get(Str::K::Cl_PassiveFull);
         }
 
         // One class row. a_full = the unlocked, actionable row; otherwise the locked text row (name + why).
         void DrawClassRow(RE::FormID a_fid, const Classes::ClassDef& a_def, std::uint8_t a_equipped,
-                          Classes::Mask a_mastered, const MenuSkin& a_skin, bool a_unlocked) {
+                          Classes::Mask a_mastered, const MenuSkin& a_skin, bool a_unlocked,
+                          const std::array<std::uint8_t, Classes::kClassCount>& a_ranks, bool a_canAct) {
             const Id id = a_def.id;
             const bool isEquipped = (a_equipped == static_cast<std::uint8_t>(id));
             const bool mastered = (a_mastered & Classes::Bit(id)) != 0;
@@ -100,7 +102,7 @@ namespace MFO::Board {
             } else {
                 std::string st = isEquipped ? Str::Get(Str::K::Cl_Equipped) : Str::Get(Str::K::Cl_Unlocked);
                 if (mastered) { st += "  ["; st += Str::Get(Str::K::Cl_Mastered); st += "]"; }
-                const char* pl = PassiveLabel(isEquipped, mastered);
+                const char* pl = PassiveLabel(a_ranks[static_cast<std::size_t>(id)]);
                 if (*pl) { st += "  "; st += pl; }
                 if (isEquipped) ImGui::TextColored(a_skin.accent, "%s", st.c_str());
                 else ImGui::TextUnformatted(st.c_str());
@@ -110,7 +112,12 @@ namespace MFO::Board {
             ImGui::TableSetColumnIndex(3);
             if (a_unlocked && !isEquipped) {
                 const bool sw = (a_equipped != Classes::kNoClass);
-                if (Click::Button(Str::Label(sw ? Str::K::Cl_Switch : Str::K::Cl_Equip, "clsequip"))) {
+                ImGui::BeginDisabled(!a_canAct);
+                const bool pressed = Click::Button(Str::Label(sw ? Str::K::Cl_Switch : Str::K::Cl_Equip, "clsequip"));
+                ImGui::EndDisabled();
+                if (!a_canAct && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", Str::Get(Str::K::Cl_TipReadOnly));
+                if (pressed) {
                     EditCmd e{ EditKind::ClassAction, a_fid, 0, 0u, static_cast<float>(static_cast<int>(id)) };
                     e.verbId = static_cast<int>(ClassVerb::Equip);
                     QueueEdit(e);
@@ -120,7 +127,8 @@ namespace MFO::Board {
         }
 
         void DrawTable(const char* a_id, RE::FormID a_fid, const std::vector<Id>& a_ids, std::uint8_t a_equipped,
-                       Classes::Mask a_mastered, const MenuSkin& a_skin, bool a_unlocked) {
+                       Classes::Mask a_mastered, const MenuSkin& a_skin, bool a_unlocked,
+                       const std::array<std::uint8_t, Classes::kClassCount>& a_ranks, bool a_canAct) {
             if (a_ids.empty()) return;
             if (!ImGui::BeginTable(a_id, 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) return;
             ImGui::TableSetupColumn(Str::Get(Str::K::Cl_ColClass), ImGuiTableColumnFlags_WidthFixed, 150.0f);
@@ -128,7 +136,7 @@ namespace MFO::Board {
             ImGui::TableSetupColumn(Str::Get(Str::K::Cl_ColState), ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableHeadersRow();
-            for (Id id : a_ids) DrawClassRow(a_fid, Classes::Get(id), a_equipped, a_mastered, a_skin, a_unlocked);
+            for (Id id : a_ids) DrawClassRow(a_fid, Classes::Get(id), a_equipped, a_mastered, a_skin, a_unlocked, a_ranks, a_canAct);
             ImGui::EndTable();
         }
     }
@@ -213,28 +221,33 @@ namespace MFO::Board {
         const Classes::Mask mastered = Classes::GetMastered(fid);
         const bool hasClass = (equipped != Classes::kNoClass) && equipped < Classes::kClassCount;
         const Classes::ClassDef* eq = hasClass ? &Classes::Get(static_cast<Id>(equipped)) : nullptr;
+        // The real passive ranks (one record copy per frame), and whether the class save accepts writes this session.
+        std::array<std::uint8_t, Classes::kClassCount> ranks{};
+        if (const auto fc = Classes::GetFollower(fid)) ranks = Classes::CarrierRanks(*fc);
+        const bool canAct = Classes::Writable();
 
         if (eq) ImGui::TextColored(a_skin.accent, "%s", Str::Fmt(Str::K::Cl_Current, { std::string(eq->name) }).c_str());
         else ImGui::TextDisabled("%s", Str::Get(Str::K::Cl_Off));
         ImGui::TextDisabled("%s", Str::Get(Str::K::Cl_Note));
 
         // Follower-level actions: classes off, and the reset (with an in-page confirm popup).
-        ImGui::BeginDisabled(!hasClass);
+        ImGui::BeginDisabled(!hasClass || !canAct);
         if (Click::Button(Str::Label(Str::K::Cl_Unequip, "clsoff"))) {
             EditCmd e{ EditKind::ClassAction, fid, 0, 0u, 0.0f };
             e.verbId = static_cast<int>(ClassVerb::Unequip);
             QueueEdit(e);
         }
         ImGui::EndDisabled();
-        if (hasClass && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Str::Get(Str::K::Cl_TipUnequip));
+        if (hasClass && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Str::Get(canAct ? Str::K::Cl_TipUnequip : Str::K::Cl_TipReadOnly));
         ImGui::SameLine();
         // Tier 3+ ships no default gambit set (Classes.h), so ResetClassTables would refuse: grey it and say why.
-        const bool canReset = hasClass && eq->tier <= 2;
+        const bool canReset = hasClass && eq->tier <= 2 && canAct;
         ImGui::BeginDisabled(!canReset);
         if (Click::Button(Str::Label(Str::K::Cl_Reset, "clsreset"))) ImGui::OpenPopup("##clsreset");
         ImGui::EndDisabled();
         if (hasClass && !canReset && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", Str::Get(Str::K::Cl_TipResetNone));
+            ImGui::SetTooltip("%s", Str::Get(!canAct ? Str::K::Cl_TipReadOnly : Str::K::Cl_TipResetNone));
 
         ImGuiIO& io = ImGui::GetIO();
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -284,7 +297,7 @@ namespace MFO::Board {
                 ImGui::TableSetupColumn("##l", ImGuiTableColumnFlags_WidthFixed, 230.0f);
                 ImGui::TableSetupColumn("##s", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("##a", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                for (Id id : ids) DrawClassRow(fid, Classes::Get(id), equipped, mastered, a_skin, unlockedNow(id));
+                for (Id id : ids) DrawClassRow(fid, Classes::Get(id), equipped, mastered, a_skin, unlockedNow(id), ranks, canAct);
                 ImGui::EndTable();
             }
         }
@@ -301,14 +314,14 @@ namespace MFO::Board {
                 ImGui::TextUnformatted(Str::Fmt(Str::K::Cl_Tier, { tier }).c_str());
                 ImGui::PopStyleColor();
                 std::string tid = "##clsT" + std::to_string(tier);
-                DrawTable(tid.c_str(), fid, open, equipped, mastered, a_skin, true);
+                DrawTable(tid.c_str(), fid, open, equipped, mastered, a_skin, true, ranks, canAct);
             }
             if (!locked.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, a_skin.dim);
                 ImGui::TextUnformatted(Str::Fmt(Str::K::Cl_Tier, { tier }).c_str());
                 ImGui::PopStyleColor();
                 std::string tid = "##clsL" + std::to_string(tier);
-                DrawTable(tid.c_str(), fid, locked, equipped, mastered, a_skin, false);
+                DrawTable(tid.c_str(), fid, locked, equipped, mastered, a_skin, false, ranks, canAct);
             }
         }
         ImGui::EndTabItem();

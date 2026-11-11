@@ -73,7 +73,6 @@ MFO_STR(Cl_Off,             "No class equipped. His gambits are his own. Equip o
 MFO_STR(Cl_Current,         "Class: {1}", 1)   // {1}=the equipped class name
 MFO_STR(Cl_Note,            "Switching is free and instant between unlocked classes. Each class remembers its own gambit tables. A class is mastered at its level cap.", 0)
 MFO_STR(Cl_Tier,            "Tier {1}", 1)   // {1}=1..5, a section heading
-MFO_STR(Cl_TierLocked,      "Higher tiers (locked, master the classes before them to unlock)", 0)
 MFO_STR(Cl_ColClass,        "Class", 0)
 MFO_STR(Cl_ColLevel,        "Level", 0)
 MFO_STR(Cl_ColState,        "State", 0)
@@ -98,6 +97,7 @@ MFO_STR(Cl_ResetTitle,      "Reset gambits", 0)
 MFO_STR(Cl_ResetBody,       "{1}'s combat gambits go back to the {2} defaults. Edits to this class's combat table are lost.", 2)   // {1}=follower, {2}=class
 MFO_STR(Cl_ResetYes,        "Reset", 0)   // the confirm button
 MFO_STR(Cl_ResetNo,         "Cancel", 0)
+MFO_STR(Cl_TipReadOnly,     "The class save is read-only this session (it came from a newer version of the mod), so classes cannot be changed.", 0)
 MFO_STR(Cl_TipClassPick,    "Turned off while a class is equipped: the class sets his stance (see the Classes tab).", 0)
 
 // == Gambits tab ==

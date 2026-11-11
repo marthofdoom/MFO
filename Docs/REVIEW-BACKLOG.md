@@ -3008,3 +3008,9 @@ GateFor strict-inherit: a follower with no own class row inherits the party gate
 
 ### MFO-B723 (SEV-5, OPEN, classes/ClassTable.cpp Todo rows, against e6aaa1c, same review)
 Thief and Conjurer Todo placeholder rows (G1, G5, G6) remain though the opcodes exist on main (see MFO-B698). Also: the sim's kept Warrior/Conjurer/Warlock sets were reverted before merge (marth 11-11, "Revert to old rows"); they return after the in-game probe. Note for that round: the sim's Conjurer row 2 `cond.foe_lowest_hp -> act.attack` is true whenever any foe exists and shadows the foe_any cast row under first-true-wins.
+
+### MFO-B724 (SEV-5, OPEN, Board_FieldKit.cpp Gambits-tab Class: button, against da493fe, Opus tier-2 review of feat/class-gui)
+The disabled Gambits-tab "Class:" button shows the raw combatClassOverride name (e.g. "Class: Auto"), not the class root in effect while a class is equipped; the tooltip explains it.
+
+### MFO-B725 (SEV-5, OPEN, Board_Classes.cpp, against da493fe, same review)
+The Classes tab has no reserved footer, so with long trees the footer hint scrolls out of view.
