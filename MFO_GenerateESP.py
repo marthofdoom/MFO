@@ -2083,6 +2083,7 @@ def write_prog_mcm_files(out_dir):
 #   0xA40-0xA42 MGEF ability effects (stamina, stamina regen, speed)
 #   0xA50-0xA51 SPEL Mercenary full / quarter    0xA60-0xA73 SPEL Scout speed per level 1..20    0xA74 SPEL Scout quarter
 #   0xA80-0xA82 SPEL marker carriers (Marked / Flanked / Guarded)
+#   0xA83 QUST MFOC_MCMQuest (card C11: the add-on's own MCM Helper quest, script MFOC_MCM, listed in SEQ/MFO_Classes.seq)
 OWN_CLS = 0x01000000
 CGID_MANIFEST_KYWD = OWN_CLS | 0x800
 CGID_MANIFEST      = OWN_CLS | 0x801
@@ -2119,7 +2120,8 @@ CGID_SCOUT_QUARTER_SPELL = OWN_CLS | 0xA74 # Scout: the mastered-unequipped quar
 CGID_MARKED_SPELL      = OWN_CLS | 0xA80   # marker carrier SPELs (B619)
 CGID_FLANKED_SPELL     = OWN_CLS | 0xA81
 CGID_GUARDED_SPELL     = OWN_CLS | 0xA82
-CLS_NEXT_OBJECT_ID = 0xA83
+CGID_MCM_QUEST     = OWN_CLS | 0xA83   # card C11
+CLS_NEXT_OBJECT_ID = 0xA84
 CLS_VERSION_STAMP  = 1.000
 
 # RANK SPACE (marth 11-10: caps T1 10 / T2 15 / T3 20 / T4 25; the T3 strong effect
@@ -2780,6 +2782,79 @@ def make_class_styles(table, flagbits):
     return body, per_class
 
 
+# ── the class add-on's OWN MCM (card C11) ───────────────────────────────────────────────────────────────
+# Same shape as the progression add-on's (make_prog_mcm_quest / prog_mcm_config): a start-game-enabled quest whose VMAD names an
+# empty MCM_ConfigBase shim (MFOC_MCM), a config.json under MCM/Config/MFO_Classes, a settings.ini of defaults and a SEQ. The
+# controls are ModSetting*, so MCM Helper writes Data/MCM/Settings/MFO_Classes.ini, which MFO.dll's Config::Read ingests after the
+# MFO store (live on MCM close). Key names are FROZEN once shipped (MCM Helper persistence identity): they are Config.cpp's.
+# (key, label, help, default); toggles and floats are kept apart because the sourceType differs.
+CLS_MCM_TOGGLES = [
+    ("bClassTree", "Class tree",
+     "ON (default): the 35-class tree (tier 1 to 4, mastery, free switching) is active for the followers you give a class. OFF: "
+     "today's three classes (Melee, Ranged, Mage) exactly; stored class progress is kept untouched. Needs this plugin loaded.", 1),
+    ("bClassStrict", "Strict class adherence",
+     "ON (default): a follower with a class equipped follows it strictly (his gambits, weapon and spell choices stay inside the "
+     "class). OFF: the class only adds its passive. Only means anything while the class tree is ON.", 1),
+    ("bClassInfo", "Class info in combat",
+     "ON (default): show the follower's class and level in the combat display. OFF: hide it. (The setting is stored now; the "
+     "display itself is not built yet.)", 1),
+]
+CLS_MCM_FLOATS = [
+    ("fClassXpRate", "Class XP rate",
+     "Multiplier on all class XP. 1.0 (default) is the sized pace: a tier 1 class masters in about 3 hours of play, tier 2 in 6, "
+     "tier 3 in 10, tier 4 in 13. 2.0 halves those hours, 0 stops class XP.", 0.0, 5.0, 0.1, 1.0),
+    ("fPriestSunPerSec", "Priest sun damage per second",
+     "Damage per second the Priest's sun does to undead and Daedra within 6 metres (default 2).", 0.0, 20.0, 0.5, 2.0),
+    ("fSaintHealPerSec", "Saint aura heal per second",
+     "Health per second the Saint's healing aura gives allies (default 30).", 0.0, 200.0, 1.0, 30.0),
+    ("fSaintUndeadPerSec", "Saint aura damage per second",
+     "Damage per second the Saint's aura does to undead (default 30).", 0.0, 200.0, 1.0, 30.0),
+]
+
+
+def make_cls_mcm_quest():
+    """MFOC_MCMQuest: start-game-enabled, NOT run-once, zero VMAD properties, script MFOC_MCM (an empty MCM_ConfigBase shim)."""
+    vmad = VMADBuilder()
+    vmad.add_script("MFOC_MCM", [])
+    body = subrec('EDID', zstr("MFOC_MCMQuest")) + subrec('VMAD', vmad.build())
+    body += subrec('FULL', zstr("MFO Classes"))
+    body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
+    return record('QUST', CGID_MCM_QUEST, 0, body)
+
+
+def cls_mcm_config():
+    content = [{"text": "Classes", "type": "header"}]
+    for key, label, help_, dflt in CLS_MCM_TOGGLES:
+        content.append({"id": f"{key}:Classes", "text": label, "type": "toggle", "help": help_,
+                        "valueOptions": {"sourceType": "ModSettingBool", "defaultValue": dflt}})
+    for key, label, help_, mn, mx, step, dflt in CLS_MCM_FLOATS:
+        content.append({"id": f"{key}:Classes", "text": label, "type": "slider", "help": help_,
+                        "valueOptions": {"min": mn, "max": mx, "step": step, "sourceType": "ModSettingFloat",
+                                         "defaultValue": dflt}})
+    return {
+        "modName": "MFO_Classes",
+        "displayName": "MFO Classes",
+        "minMcmVersion": 9,
+        "cursorFillMode": "topToBottom",
+        "pages": [{"pageDisplayName": "Classes", "cursorFillMode": "topToBottom", "content": content}],
+    }
+
+
+def write_cls_mcm_files(out_dir):
+    """Emit Data/MCM/Config/MFO_Classes/{config.json,settings.ini} (the defaults MCM Helper registers from)."""
+    cdir = os.path.join(out_dir, 'MCM', 'Config', 'MFO_Classes')
+    os.makedirs(cdir, exist_ok=True)
+    with open(os.path.join(cdir, 'config.json'), 'w') as f:
+        json.dump(cls_mcm_config(), f, indent='\t')
+    with open(os.path.join(cdir, 'settings.ini'), 'w', encoding='utf-8-sig') as f:
+        f.write("[Classes]\n")
+        for key, label, help_, dflt in CLS_MCM_TOGGLES:
+            f.write(f"{key}={int(dflt)}\n")
+        for key, label, help_, mn, mx, step, dflt in CLS_MCM_FLOATS:
+            f.write(f"{key}={dflt:.6f}\n")
+    return cdir
+
+
 def make_classes_tes4():
     # Same header as make_prog_tes4: ONE master (Skyrim.esm), ESL flag 0x200.
     hedr = struct.pack('<f', 1.70) + struct.pack('<I', 100) + struct.pack('<I', CLS_NEXT_OBJECT_ID)
@@ -2843,7 +2918,8 @@ def make_classes_esl():
                   + cls_marker_mgef(CGID_GUARDED_MGEF, "MFOC_Guarded", "Guarded", CGID_GUARDED_KYWD,
                                     CAST_CONCENTRATION, DELIV_AIMED)
                   + ability_mgefs)
-    data += group('SPEL', ability_spels + make_marker_spells())   # Skyrim.esm order: MGEF SPEL ... CSTY
+    data += group('SPEL', ability_spels + make_marker_spells())   # Skyrim.esm order: MGEF SPEL ... QUST ... CSTY
+    data += group('QUST', make_cls_mcm_quest())                   # card C11: the add-on's own MCM quest
     data += group('CSTY', styles)
     flst = prog_flst(CGID_MANIFEST, "MFOC_AddonManifest",
                      [CGID_MANIFEST_KYWD, CGID_FACTION_LIST, CGID_STYLE_LIST]
@@ -2908,8 +2984,8 @@ def main():
     with open(prog_esp_path, 'wb') as f:
         f.write(make_progression_esl(esl=False))
 
-    # The class add-on (card C7) — a third SEPARATE optional plugin. No quests, so
-    # no SEQ and no MCM files here (the class MCM is card C11).
+    # The class add-on (card C7) — a third SEPARATE optional plugin. Its only quest is the MCM one (card C11), so it ships
+    # its own SEQ + MCM config below.
     cls_path = os.path.join(out_dir, "MFO_Classes.esl")
     cls_data = make_classes_esl()
     with open(cls_path, 'wb') as f:
@@ -2938,6 +3014,12 @@ def main():
     prog_seq_path = os.path.join(seq_dir, "MFO_Progression.seq")
     with open(prog_seq_path, 'wb') as f:
         f.write(struct.pack('<I', PGID_MCM_QUEST))
+
+    # The class add-on's own SEQ + MCM config (card C11), same reasoning as MFO_Progression.seq.
+    cls_seq_path = os.path.join(seq_dir, "MFO_Classes.seq")
+    with open(cls_seq_path, 'wb') as f:
+        f.write(struct.pack('<I', CGID_MCM_QUEST))
+    cls_mcm_dir = write_cls_mcm_files(out_dir)
 
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")

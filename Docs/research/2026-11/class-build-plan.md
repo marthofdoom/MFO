@@ -453,6 +453,25 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   targets, and the rate is MCM-tunable.
 - Tier B, effort 3. **Field: yes** (rate tuning). New file `classes/Xp.cpp` (Scheduler.cpp is at 2271, so hook only via a
   one-line call).
+- **STATUS 2026-11-11: BUILT on `feat/class-xp-mcm` (NOT merged, NOT field-run).** No co-save change (MCLS v2 already stores `{xp, level}` per class).
+  - Files: new `classes/Xp.cpp`; `AwardXp` (one compound `g_mx` write, State.cpp beside `ApplyLevel`); one-line hooks in `Rapport.cpp` (death),
+    `scheduler/CombatScan.cpp` (fight end), `cast/HealObs.cpp` (heal). Summon uptime reads `Actuation::LiveCommandedActors` (`cast/Summon.cpp`) with one `MainThread::Post`.
+  - A fight WON: a hostile (hostile to the player, not a teammate) killed by the follower, his commanded summon, the player or a party member he fought
+    beside, and the player not dead at the fight's end. Credit is collected per follower and paid ONCE when the party has been out of combat for two
+    services. Equipped class only; a mastered class earns nothing more; Dragonborn earns none.
+  - XP FORMULA. Hours to master by tier: T1 3, T2 6, T3 10, T4 13 (the 3 / 6 / 10 h targets, Master tier 12 to 14 h per the FE research). Assumed
+    pace ~10 fights an hour (`Docs/BALANCE.md`) at ~100 points a typical fight, so `XpToMaster` = 3000 / 6000 / 10000 / 13000. Cumulative threshold of level L
+    = `XpToMaster x ((L - 1) / (cap - 1))^1.3` (level 1 = 0). Points per fight: participation 60, +20 per kill, +8 per assist, +6 per landed heal on another
+    (max 10), +2 per self-heal (max 5), +1 per 3 s of the fight while a summon of his is still up at the end (max 40), max 400; times `fClassXpRate`.
+    Log: `[classes] XP <fid> <slug>: +N (fight won: ...) -> xp / total level L [(LEVEL UP ...)]`, at most one per follower per 2 s.
+  - In-game check (`MFO_Classes.esl` loaded, `bClassTree = 1`, a follower with a class equipped from the board; set `fClassXpRate = 5` in the MCM to see it fast):
+    1. Kill a bandit with the follower beside you. After the fight (about 1 s after the party leaves combat) `MFO.log` has one `[classes] XP ... fight won: ... kill/assist` line
+       for the follower and the Classes tab shows his xp rise. A second follower fighting beside him gets his own line.
+    2. A fight with no kill (flee, or the foe is non-hostile wildlife) prints no `XP` line.
+    3. A Healer-line follower who heals you in a fight you win gets a `heal` count in the line. A Conjurer with a summon up at the end gets `summon N`.
+    4. Take a class to its cap: `[classes] ... mastered <slug> (level N)` once and the unlocked classes appear. No further XP lines for that class while it stays equipped.
+    5. Unequip the class: no XP line after the next fight. Save, load: xp and level are the same.
+    6. `fClassXpRate = 0`: no XP at all.
 
 **C5. Mastery = level cap, levels, free switching, Auto picks from stats**
 - What: class level 1..cap; mastery when the cap is hit. **Caps by tier (marth 11-10): T1 10, T2 15, T3 20, T4 25.** Switching between unlocked classes is free and instant. With
@@ -547,6 +566,18 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   `valueOptions`). Per marth's /s ruling: Priest sun 2/s, Saint +30 HP/s and 30/s on undead are INI/MCM values, with defaults
   scaled at runtime (never per-list tables). MFO patches the abilities' effect magnitudes at data load and on MCM change.
 - Tier C (keys) + B (the runtime magnitude patch), effort 2.
+- **STATUS 2026-11-11: BUILT on `feat/class-xp-mcm` (NOT merged, NOT field-run), with ONE GAP.** The add-on has its own MCM, "MFO Classes": `MFO_GenerateESP.py`
+  `make_cls_mcm_quest()` / `cls_mcm_config()` / `write_cls_mcm_files()` -> QUST `MFOC_MCMQuest` (local 0xA83) in `MFO_Classes.esl`, script `MFOC_MCM` (`Source/Scripts`, compiled
+  `out/Scripts/MFOC_MCM.pex`), `out/SEQ/MFO_Classes.seq`, `out/MCM/Config/MFO_Classes/{config.json,settings.ini}`. Controls (section `[Classes]`, `minMcmVersion` 9, key names FROZEN once shipped):
+  `bClassTree`, `bClassStrict`, `bClassInfo` (toggles), `fClassXpRate`, `fPriestSunPerSec`, `fSaintHealPerSec`, `fSaintUndeadPerSec` (ModSettingFloat sliders). `Config::Read` ingests
+  `Data/MCM/Settings/MFO_Classes.ini` after the MFO store (live on MCM close); the keys are listed in `Docs/INI-REFERENCE.md`. `bClassInfo` is the key only: the combat display is not built.
+  - **GAP (STOP-report, not a hidden degrade): the Priest sun cloak and the Saint aura abilities are not in `MFO_Classes.esl`** (they are `carrier MISSING` lines of C6). `classes/Auras.cpp`
+    holds the /s values and patches the effect magnitude (value x pulse seconds) at data load and on MCM close for every `kAuras` row that has a local id; all three rows have `localId = 0` today, so it
+    logs `[classes] aura values: ... 0 effect(s) patched, 3 aura ability(ies) not in the ESL yet` and writes nothing. Follow-up card (not built): **C11b, build the Priest sun cloak and Saint aura abilities
+    in the generator** (a Cloak-archetype MGEF with area-applied damage / heal effects, undead / Daedra and ally conditions), give their local ids to the `kAuras` rows, byte-audit them, field-run.
+  - In-game check (MCM Helper installed, the ESL loaded): 1. The MCM lists "MFO Classes" with 3 toggles and 4 sliders at the defaults above. 2. Move `Class XP rate` to 5, close the MCM:
+    the next fight's `[classes] XP` line shows `rate 5.00`. 3. Turn `Class tree` OFF: the Classes tab disappears, ON again: it returns with the progress intact. 4. Change `Priest sun` to 6, close: MFO.log
+    prints `[classes] aura values: Priest sun ... 6/s ...`. 5. `Data/MCM/Settings/MFO_Classes.ini` holds the changed keys.
 
 **C12. Default gambit sets per class**
 - What: on class equip, apply the class's default base-gambit set (rulings list them per class). The user can edit it.
@@ -704,3 +735,7 @@ G1 -> G2 -> C13 -> G13 -> G14. G10 -> G7 / C9. G12 -> C9. G15 -> H-MARK. G8 -> C
 - Ship the Animage-style "+N levels" for release; right after, find a proven foe-only road (target-tab hostility, a MagicInfluence condition, or a DLL-side magnitude cap at cast time), especially if the Deck shows ally buffs (Courage, Rally, Call to Arms) becoming very strong. Field-check buff strength on the Deck.
 
 - MCLS v2 must also store Dragonborn's player-picked T4 combat behaviour (marth Q60, 11-10). DONE 2026-11-11 (`feat/mcls-v2`: `u8 pickedT4`, `Classes::GetPickedT4 / SetPickedT4 / ClearPickedT4`; stored only, C8 / C10 read it).
+
+**Scroll card (NOT built; after the T2 session, marth 11-11)**
+- Every follower may read scrolls in combat; a non-mage who picks one up may give it to a mage; scrolls of spells already known are always traded between followers to one who does not know the spell; all of it MCM options.
+- Not scoped yet (no tier, no effort). Needs the owner of scroll use and trading to be decided first (a Logistics trade / give rule and a combat read road through Harbinger).

@@ -19,6 +19,7 @@
 #include "CasterConsent.h"
 #include "CombatStyle.h"
 #include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
+#include "classes/Classes.h"   // card C11: OnConfigRead after an MCM close
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
 #include "logistics/GemRules.h"
 #include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
@@ -169,6 +170,7 @@ namespace MFO::Diagnostics {
                         PumpTickGate gate(epoch);   // shared body shape; drains with StopPump
                         if (!gate) return;
                         Config::Read();
+                        Classes::OnConfigRead();   // card C11: the MCM /s values into the aura ability effects
                         Actuation::ReconcileWeighSwitch();   // bWeighWeapons flipped OFF: nothing stays half-weighted
                         Logistics::GemRules::LogStatus();   // [gems] status after an MCM change
                         Lotd::OnConfigRead();   // LOTD awareness turned ON -> the shipping intro

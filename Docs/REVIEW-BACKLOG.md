@@ -3027,6 +3027,11 @@ The disabled Gambits-tab "Class:" button shows the raw combatClassOverride name 
 ### MFO-B725 (SEV-5, OPEN, Board_Classes.cpp, against da493fe, same review)
 The Classes tab has no reserved footer, so with long trees the footer hint scrolls out of view.
 
+### MFO-B752 (SEV-5, FIXED-IN-PLACE comment, classes/Xp.cpp "not wiped" test, against a5e3a4e, Opus review of feat/class-xp-mcm)
+"The 'not wiped' test checks only the player (Xp.cpp:218-220) but the comment says 'and at least one follower alive'." Reasoning: the paying follower is serviced on his own tick so he is alive by construction; the comment was fixed to say the test is the player only. No code change.
+
+### MFO-B753 (SEV-5, FIXED-IN-PLACE comment, Config.h bClassTree / bClassStrict, against a5e3a4e, same review)
+"Config.h still says bClassTree/bClassStrict are 'INI-only (no MCM key)'." Reasoning: card C11 gave both a key in the class add-on's own MCM; the comment was corrected. No code change.
 ### MFO-B734 (SEV-4, OPEN, iaus hold claim + cannot-act, against 6253a53, Opus re-review of the G2 fix round)
 Knockdown/paralysis churn: the hold row is picked by Next(), files ch.1 + ch.7 and logs FILED; the cannot-act check rejects it and the next Next() releases both and logs RELEASED: 2 Requests, 2 Releases and 2 unthrottled info lines per lap while he is down and hidden. Fix: service the hold only once the scan stops on it, or skip filing when he cannot act.
 

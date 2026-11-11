@@ -30,6 +30,10 @@ namespace MFO::Classes {
         // Every follower with a stored class record (State.cpp; a copy taken under g_mx). Card C6 re-applies the carriers to all of
         // them after a load.
         std::vector<RE::FormID> StoredFollowerIds();
+        // Card C4 (Xp.cpp): drop every fight-pending credit. ResetAllState / a load (State.cpp ClearAll). Any thread (leaf mutex).
+        void XpReset();
+        // Card C11 (Auras.cpp): push the MCM /s values into the aura ability effects. MAIN thread (OnDataLoaded).
+        void ApplyAuraValues();
 
         // Card C12 (State.cpp): the compound class switch, ONE g_mx hold. a_to = an Id ordinal, or kNoClass = classes OFF
         // for him. The live tables are stored under what he leaves; `combat` / `logistics` are what was stored for where he

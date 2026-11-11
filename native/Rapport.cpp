@@ -134,6 +134,8 @@ namespace MFO::Rapport {
                     auto* player = RE::PlayerCharacter::GetSingleton();
                     if (!player) return;
 
+                    Classes::XpOnDeath(victim, killer);   // card C4: class XP credit (its own world-death gate; reads only)
+
                     // GATE BEFORE THE SCAN. Without this the sink ran a full
                     // ProcessLists sweep for EVERY death in the world -- a
                     // dragon eating a giant three cells away, faction

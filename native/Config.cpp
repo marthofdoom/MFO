@@ -13,6 +13,7 @@ namespace MFO::Config {
 
         constexpr const char* kSeedPath = "Data/SKSE/Plugins/MFO.ini";
         constexpr const char* kMCMPath  = "Data/MCM/Settings/MFO.ini";
+        constexpr const char* kClassesMCMPath = "Data/MCM/Settings/MFO_Classes.ini";   // MCM Helper store of the class add-on (cards C4 / C11)
 
         // Skip unparseable values -- never apply 0.0 (INVARIANTS #38).
         // strtof's silent 0.0 zeroed features in MEO.
@@ -133,6 +134,13 @@ namespace MFO::Config {
                 return;
             }
 #endif
+
+            // CLASS ADD-ON MCM keys (cards C4 / C11): sequential ifs, not part of the else-if chains below (C1061).
+            if (a_key == "fClassXpRate")      { setF(g_classXpRate,      0.0f, 10.0f);   return; }   // default 1.0; MCM (MFO_Classes)
+            if (a_key == "bClassInfo")        { setB(g_classInfo);                       return; }   // default ON; MCM; key only, the GUI is not built
+            if (a_key == "fPriestSunPerSec")  { setF(g_priestSunPerSec,  0.0f, 1000.0f); return; }   // default 2/s
+            if (a_key == "fSaintHealPerSec")  { setF(g_saintHealPerSec,  0.0f, 1000.0f); return; }   // default 30/s
+            if (a_key == "fSaintUndeadPerSec") { setF(g_saintUndeadPerSec, 0.0f, 1000.0f); return; } // default 30/s
 
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
@@ -506,6 +514,11 @@ namespace MFO::Config {
             g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
             g_classTree          = true;    // class add-on tree -- ON (marth 2026-10-27); inert without MFO_Classes.esl
             g_classStrict        = true;    // strict adherence to the class -- ON with the tree (marth 2026-10-27)
+            g_classXpRate        = 1.0f;    // class XP multiplier (card C4)
+            g_classInfo          = true;    // class-info combat-GUI toggle (card C11; key only)
+            g_priestSunPerSec    = 2.0f;    // Priest sun damage /s (marth 2026-11-10 /s ruling)
+            g_saintHealPerSec    = 30.0f;   // Saint aura heal /s to allies
+            g_saintUndeadPerSec  = 30.0f;   // Saint aura damage /s to undead
             g_aimBudget          = true;    // card H5 ch.29 miss budgets -- ON (inert without the ESL / Harbinger >= 0.19.0)
             g_aimBudgetArcher    = 5;       //   Archer: detection + correction, no fixed guarantee (marth 2026-11-10)
             g_aimBudgetScout     = 4;
@@ -986,6 +999,7 @@ namespace MFO::Config {
         ResetToDefaults();
         ReadFile(kSeedPath);
         ReadFile(kMCMPath);    // MCM Helper's store wins
+        ReadFile(kClassesMCMPath);   // the class add-on's own MCM store (absent without the add-on's MCM; ReadFile tolerates that)
 
         spdlog::set_level(g_enableLogging ? spdlog::level::info : spdlog::level::warn);
         spdlog::info("[config] bProximityTrading = {} (the pre-town proximity trade: a follower trading with a vendor he merely stands near; town errands are unaffected)",

@@ -319,6 +319,40 @@ namespace MFO::Classes {
     bool ApplyLevel(RE::FormID a_follower, Id a_class, std::uint8_t a_level);
     bool ActivateClass(RE::FormID a_follower, Id a_class);
 
+    // ── class XP = card C4 (classes/Xp.cpp) + the aura values = card C11 (classes/Auras.cpp) ─────────────────────
+    // A FIGHT WON = the party's combat ends with a hostile killed by the party (the follower, his commanded summon, the
+    // player, or a party member he shared the kill with) and the party not wiped. XP is credited to a follower's EQUIPPED
+    // class only, in whole points: participation + kills + assists + observed heals + summon uptime, times Config::g_classXpRate.
+    // THE CURVE (marth 2026-11-10 pace "~3 h / 6 h / 10 h", the FE research's Master tier "12 to 14 h" -> 13 h): hours to master
+    // by tier T1 3, T2 6, T3 10, T4 13, at ~10 fights an hour (BALANCE.md) and ~100 points a typical fight; XpToMaster(class)
+    // = hours x 10 x 100, the cumulative threshold of level L is XpToMaster x ((L-1)/(cap-1))^1.3 (C5's LevelForXp contract).
+    [[nodiscard]] std::uint32_t XpToMaster(Id a_class);                   // PURE; 0 for Dragonborn
+    [[nodiscard]] std::span<const std::uint32_t> XpCurve(Id a_class);     // PURE, static storage; size == LevelCap, empty for Dragonborn
+
+    // The compound XP writer (State.cpp, ONE g_mx hold): only while a_class is the follower's EQUIPPED class and not yet at its
+    // cap, add a_points, recompute the level through a_cumulative, set mastered at the cap, OR in the rule-computed unlocks.
+    // Any thread (the C4 award runs on the job worker). applied == false: refused (not Writable, not equipped, mastered, bad table).
+    struct XpResult {
+        bool          applied = false;
+        std::uint32_t xp = 0;               // the stored total after the add
+        std::uint8_t  levelBefore = 0, levelAfter = 0;
+        bool          mastered = false;     // this award reached the cap
+    };
+    XpResult AwardXp(RE::FormID a_follower, Id a_class, std::uint32_t a_points, std::span<const std::uint32_t> a_cumulative);
+
+    // The four credit feeds. Each is one line at its call site and does NOTHING unless Active() (and, for a follower, only
+    // when he has a class equipped). THREADS: XpOnDeath and XpOnPartyFightEnd = the job worker (Rapport's gated death task,
+    // CombatScan's party-out-of-combat teardown); XpNoteHeal = the main thread (HealObs verdict); all state is under Xp.cpp's
+    // leaf mutex. The award itself (AwardXp) runs on the thread that ends the fight (the worker).
+    void XpOnDeath(RE::Actor* a_victim, RE::Actor* a_killer);
+    void XpNoteHeal(RE::FormID a_caster, RE::FormID a_target);   // counts only while XpNotePartyCombat(true) is the last edge
+    void XpNotePartyCombat(bool a_inCombat);   // WORKER: CombatScan's party-combat edge (a lock-free mirror for the heal gate)
+    void XpOnPartyFightEnd(RE::FormID a_follower);   // idempotent: every party-out-of-combat service calls it, it acts once per fight
+
+    // Card C11 (classes/Auras.cpp): re-apply the MCM /s values to the aura ability effects after an MCM change. Any thread (it
+    // posts the write to the main thread). OnDataLoaded applies them once at load itself.
+    void OnConfigRead();
+
     // ── default gambit sets + per-class memory = card C12 (classes/Defaults.cpp) ─────────────────────────
     // marth Q8 / Q29 / Q59: equipping a class resets the follower's COMBAT table to that class's defaults the
     // FIRST time, and from then on each class remembers BOTH his tables (combat and logistics): switching away
