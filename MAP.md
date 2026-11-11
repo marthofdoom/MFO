@@ -2351,14 +2351,29 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
 - **FILE LAYOUT (IAUS card I0, 2026-11-10, `refactor/iaus-i0-combatscan`: a pure TU split; linecheck PASS, no-optimizer
   splitcheck proof identical, ONE /O2 function (`ServiceRetreat`) differs by instruction order only and is allow-listed
   (`tools/splitcheck/allow/iaus-i0.txt`, why: `Docs/research/2026-11/iaus-i0-split.md`); TU map `tools/splitcheck/tumaps/iaus-i0.txt`).** Three files, one namespace `MFO::Scheduler`:
-  - **`native/scheduler/CombatScan.cpp`** = the whole `Scheduler::Tick` (`:101`) plus the two reconciliation helpers only it
-    uses, file-local: `MeleeClampDwell` (`:50`), `EquipRangeUndecidable` (`:81`). Inside `Tick`: `Packages::Pump` `:126`, the
-    party-OOC branch `if (!g_partyCombat)` `:368`, `serviceOwnOoc` `:581`, the empty-table return `:868`, the suppression
-    window (`g_recent`) `:915`, **the COMBAT SCAN loop `for (int start = 0; ; )` `:956`**, **the RECONCILIATION `:1174-1461`**
-    (`condKnownFalse` `:1190`, `ReconcileSilver` `:1390`, `ReconcileForcedWeapon` `:1391`, `HealSustainLap` `:1430`, the
-    `!castSeen` release `:1431`), the outcome bookkeeping `switch (outcome.result)` `:1526`. The scan is a span INSIDE `Tick`,
-    not a function of its own, which is why the whole function moved: a split moves whole functions (anything else is an
-    extraction refactor the split tools cannot prove). Giving the scan its own function is IAUS card I1's `ChoiceSource` work.
+  - **`native/scheduler/CombatScan.cpp`** = `Scheduler::Tick` (`:454`) plus, file-local: `MeleeClampDwell` (`:51`),
+    `EquipRangeUndecidable` (`:82`), and since IAUS card I1 the table source and the scan function: `TableSource` (`:103`),
+    `ScanOut` (`:239`), `Scan` (`:265`, the walk loop `for (;;)` `:279`). Inside `Tick`: `Packages::Pump` `:479`, the
+    party-OOC branch `if (!g_partyCombat)` `:721`, the retreat self-heal walk (`TableSource retreatTable` `:1104`),
+    `serviceOwnOoc` `:934`, the empty-table return `:1237`, the suppression window (`g_recent`) `:1268`, **the scan call
+    (`ScanOut scan;` `:1277`)**, **the RECONCILIATION `:1290-1577`** (`condKnownFalse` `:1334`, `ReconcileSilver` `:1507`,
+    `ReconcileForcedWeapon` `:1508`, `HealSustainLap` `:1547`, the `!castSeen` release `:1548`), the bookkeeping
+    (`src.Record` `:1622`, `switch (outcome.result)` `:1631`). The reconciliation and the bookkeeping are still spans inside
+    `Tick` (the file split, MFO-B655, needs them extracted next).
+  - **THE CHOICE SEAM (IAUS card I1, `feat/iaus-i1-seam`, 2026-11-10; research note `Docs/research/2026-11/iaus-i1-seam.md`).**
+    `Eval::Choice::rank` (was `ruleIndex`) + `Eval::Source source` (`Evaluator.h`). The scan reads its choices through
+    `scheduler/ChoiceSource.h` (`Next` / `Reject` / `SuppressionAnchor` / `FiredIdentity` / `CoolingReason` /
+    `HesitationExempt` / `NoteSkipReason` / `Record` and the four reconciliation reads); the only source today is
+    `TableSource`, whose methods are the scan's old row reads moved unchanged. `scheduler/Rank.h` is the PURE rank arithmetic
+    (`IsChoice`, `NextTableRow`, `TableStop`, `WindowActive`, `StopsAtAnchor`, `kMaxTableRow` 254 vs `kIausRankFloor` 1000),
+    checked on the host by `tools/rank_equiv/run.sh` against the pre-I1 expressions. **What breaks:** indexing a table row
+    with a rank outside the table source (an IAUS rank is never a row: only `TableSource` / the logistics walks may index);
+    a source whose `Next` returns false for "no more candidates" (false = record gone, the scan then keeps its LAST choice,
+    which the reconciliation's stop index reads); changing `Rank::OfTableRow` from the identity (every `[eval]` line, the
+    #26 window, `g_firingRule` and the hand-lock / heal-hold rank compares in `cast/` read the same int); an IAUS rank
+    `>= kNoRule` (it would read as an unranked lock). `g_firingRule` (`cast/Actuation_internal.h:220`) already carries the
+    rank (`Fire.cpp:216`), so `cast/` needed no change. The logistics walks (`logistics/Service.cpp`, `LootScan.cpp`,
+    `Upkeep.cpp`) are table-only and read `.rank` as their row index.
   - **`native/Scheduler.cpp`** = the service helpers `Tick` calls, now external linkage with prototypes in the internal header:
     `StallProbe` `:36`, `DeadTgtEnd` `:115`, `DeadTgtService` `:125`, `StartRetreatCooldown` `:160`, `ServiceRetreat` `:178`,
     `ServiceLeashWithReachHold` `:405`; the still file-local `[deadtgt]` state (`g_deadTgt` `:81`, `DeadTgtReason` `:85`,
@@ -2373,8 +2388,8 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   - **What breaks:** a new variable both TUs use goes in the internal header as `inline` (a `static` or anonymous-namespace definition there is one copy
     PER TU, i.e. a silent state split). `ClearTransientState` must clear every
     map the header declares (it does today; a new map needs its line there). Threading is unchanged by the move: each item keeps the rule its
-    own comment states (worker-only, #4; `g_lastTickMs` / `g_ticks` are the atomics other threads read). `CombatScan.cpp` is 1622 lines, past the ~1500 plan mark: the next
-    brief that edits it proposes its split.
+    own comment states (worker-only, #4; `g_lastTickMs` / `g_ticks` are the atomics other threads read). `CombatScan.cpp` is 1730 lines after I1 (was 1622), past the ~1500 plan mark: the
+    split (MFO-B655) needs the reconciliation and the bookkeeping given their own functions first.
 - **PER-RULE COOLDOWN (card G9, ClickUp 1dfcuabcqe6, 2026-11-09).** `Gambit::cooldownTenths` (State.h, serialized FLWR v6) +
   `Cooldowns.h/.cpp` (NEW: the runtime-only last-fired store, key (actor, `Kind::Rule`, rule uid), own mutex, `ClearAll` in
   `ResetAllState` after `StopPump`; built to be shared with IAUS card I2). In the combat scan, right after the cannot-act skip and before
@@ -8867,7 +8882,7 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 ## 11. IAUS combat scorer — `native/iaus/` (card I2, `feat/iaus-i2-core-opus`, 2026-11-10; a LIBRARY, nobody calls it yet)
 
 Utility scoring in place of the combat table (design `Docs/research/2026-11/iaus-design.md` sections 3-6; idea credit LandingCrew).
-I2 is the scorer only. The ChoiceSource seam is I1, candidate generation / the SpellBook mirror is I4, the FLWR toggle bits are I5 (LANDED 2026-11-10: `FollowerState::iausCombat`, bit 3 of the FLWR `mfoEnabled` byte, section 1 "FLWR"; still no reader),
+I2 is the scorer only. The ChoiceSource seam is I1 (LANDED 2026-11-10: `scheduler/ChoiceSource.h` + `Eval::Choice::rank/source`, section 2 "THE CHOICE SEAM"; table source only), candidate generation / the SpellBook mirror is I4, the FLWR toggle bits are I5 (LANDED 2026-11-10: `FollowerState::iausCombat`, bit 3 of the FLWR `mfoEnabled` byte, section 1 "FLWR"; still no reader),
 the scan integration is I6, the board is I7, the class profiles are I8. **NOT serialized** (runtime only, design 7).
 
 - `iaus/Core.h` — the PURE public API (standard headers only, no RE:: types, no clock, no globals): `Family`/`Cons`/`RoleTag`/`PostureKind`
