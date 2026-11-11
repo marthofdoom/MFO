@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "State.h"
 #include "Serialization.h"
+#include "FlwrEnabledByte.h"   // card I5: the FLWR mfoEnabled byte's encode / decode
 #include "Followers.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
@@ -52,6 +53,8 @@
 //     v5  T#78: mfoEnabled (per-follower MFO master switch) added as one u8
 //         right after combatClassOverride. Read gated on version >= 5; an
 //         older record has none (defaults to true -- MFO enabled).
+//         Value space of that byte (no bump): bits 1-2 helmet override, bit 3
+//         combat IAUS toggle (card I5), bit 4 reserved; FlwrEnabledByte.h.
 //     v6  card G9: each gambit row gains u16 cooldownTenths after its flags
 //         byte (GambitWire, Serialization.h). Read gated on version >= 6; an
 //         older row has none (0 = no cooldown). One-way: a v5 DLL skips v6.
@@ -569,8 +572,10 @@ namespace MFO {
             // helmet override (0 Default / 1 Wear / 2 Never), ONLY while mfoEnabled is true. An
             // older DLL reads `byte != 0`, so the enabled state it sees is unchanged; a disabled
             // follower still writes 0 and his override is not kept (Serialization.h, FLWR notes).
-            const std::uint8_t helm = st.helmetOverride <= 2 ? st.helmetOverride : 0;
-            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.mfoEnabled ? (1u | (helm << 1)) : 0u));
+            // (still FLWR's v5 byte, VALUE-SPACE only, card I5): bit 3 carries the per-follower combat IAUS
+            // toggle under the same rule; bit 4 (logistics IAUS, card 1dfcuabcr0g) and bits 5-7 are written 0.
+            // The encoding is FlwrEnabledByte::Encode (FlwrEnabledByte.h), the helmet expression moved verbatim.
+            a_intfc->WriteRecordData(FlwrEnabledByte::Encode(st.mfoEnabled, st.helmetOverride, st.iausCombat));
 
             // Two tables, written in Table enum order (DESIGN.md 4.8).
             // The table COUNT is written explicitly so a future third table
@@ -850,9 +855,13 @@ namespace MFO {
                     // Every record written before it holds 0 or 1 here and reads unchanged. A
                     // stray value (bits 1-2 == 3, or bits 1-2 set without bit 0) is clamped to
                     // Default (#11), and enabled stays `byte != 0`, exactly what an older DLL reads.
-                    st.mfoEnabled = (mfoEnabledByte != 0);
-                    const std::uint8_t helm = static_cast<std::uint8_t>((mfoEnabledByte >> 1) & 3u);
-                    st.helmetOverride = ((mfoEnabledByte & 1u) != 0 && helm <= 2) ? helm : 0;
+                    // Bit 3 = the combat IAUS toggle (card I5), counted only with bit 0 set. Bit 4 (reserved:
+                    // logistics IAUS) and bits 5-7 are ignored. FlwrEnabledByte::Decode holds the expressions
+                    // (the enabled and helmet ones moved verbatim) and proves them against the older readers.
+                    const FlwrEnabledByte::Fields eb = FlwrEnabledByte::Decode(mfoEnabledByte);
+                    st.mfoEnabled     = eb.mfoEnabled;
+                    st.helmetOverride = eb.helmetOverride;
+                    st.iausCombat     = eb.iausCombat;
                 }
 
                 std::uint8_t tableCount = 0;

@@ -264,6 +264,23 @@ namespace MFO {
     //        Every earlier record holds 0 or 1 and reads unchanged. Cost: a follower saved with
     //        MFO switched off for him loses his override (it reads back as Default). A round trip
     //        through an older DLL drops every override (it writes 0/1).
+    //   (still v5's byte, 2026-11-10, VALUE-SPACE only, no layout change, no bump, card I5; design
+    //        Docs/research/2026-11/iaus-design.md section 7): the mfoEnabled u8 gains bit 3 = the per-follower
+    //        COMBAT IAUS toggle (FollowerState::iausCombat, default off) and RESERVES bit 4 for the logistics
+    //        IAUS toggle (card 1dfcuabcr0g): bit 4 is written 0 and IGNORED on read until that card ships. Both
+    //        follow the helmet rule: written ONLY while mfoEnabled is true, so the byte is still 0 exactly when
+    //        MFO is off for him. Readers: enabled = byte != 0 (unchanged); override = bits 1-2 (unchanged);
+    //        iausCombat = bit 0 && bit 3. Bits 5-7 are unused: written 0, ignored on read (no reader of this
+    //        byte ever looked at them, which is what lets bit 3 pass through the helmet-era reader untouched).
+    //        Every earlier record holds bit 3 clear and reads iausCombat off. OLDER DLL: the pre-helmet one
+    //        reads `byte != 0`, the helmet-era one also reads bits 1-2 masked with 3; both see the same
+    //        enabled state and override, never see the toggle, run the follower on his gambit table, and
+    //        write 0/1 (or 0 / 1|helm<<1), so a round trip through one drops the toggle (he comes back on
+    //        gambits: safe in direction). Cost: a follower saved with MFO switched off for him loses his IAUS
+    //        toggle (it reads back off), the same cost the helmet override documents.
+    //        The encode / decode live in FlwrEnabledByte.h (standard headers only), with a static_assert over
+    //        all 256 byte values against mirrors of both older readers; tools/flwr_byte_test runs the same
+    //        functions on the host. The v6 row change below does not touch this byte, nor does MCLS.
     //   v6 - card G9 (ClickUp 1dfcuabcqe6, 2026-11-09): each gambit ROW gains u16 cooldownTenths (the per-rule
     //        cooldown in tenths of a second, 0 = none, clamped [0, 6000] = 600 s on read and write), APPENDED
     //        after the row's flags byte, so a row's v5 prefix is byte-identical. Read ONLY when version >= 6; a
