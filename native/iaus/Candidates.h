@@ -46,7 +46,8 @@ namespace MFO::Iaus::Candidates {
     bool Build(RE::Actor* a_follower, Set& a_out, const Tuning& a_t = DefaultTuning());
 
     // WORKER, after Decide: remember the top-6 cast-offense / cast-control (spell, target) pairs, so the NEXT
-    // Gather asks cast/WillWork for exactly those (design 1.5; a call there is also the prefetch). Unknown passes.
+    // Gather asks cast/WillWork for those (design 1.5; a call there is also the prefetch). Unknown passes. A pair
+    // answered No stays on the list while the refusal stands (Generate.h NextAskList, sim finding D1).
     void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands);
 
     // WORKER. The fight ended for a_follower (his combat clock restarts at the next Gather) / he was dismissed

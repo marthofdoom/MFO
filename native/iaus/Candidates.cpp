@@ -34,12 +34,23 @@ namespace MFO::Iaus::Candidates {
             Clock::time_point seen{};
         };
         std::unordered_map<RE::FormID, Fight>                    g_fights;
-        std::unordered_map<RE::FormID, std::vector<SpellTarget>> g_wants;
+        std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
 
         // A Gather this long after the last one starts a NEW fight clock when card I6 did not call CombatEnded.
         // Sized from the cadence (principle 9): one follower is served every 133 ms x party, about 1.3 s for ten,
         // so 10 s is more than seven missed laps and far shorter than any real pause between two fights.
         constexpr double kFightGapSec = 10.0;
+
+        // How long a refused (spell, target) pair stays on the G10 ask list after its last No (sim finding D1).
+        // Gather re-stamps the No on every lap the answer still stands, so this only has to outlive the gap
+        // between two answers. Sized from the cadences (principle 9): cast/WillWork.cpp serves a measured verdict
+        // for its kTrustSec (6 s) and re-measures it in the background from kRefreshSec (2 s) on each call, and
+        // one follower is served every 133 ms x party (about 1.3 s for ten). 6 s is that whole trust window: a
+        // pair with no No for that long has no verdict left in the mirror either (a load, a lost post), and then
+        // G10's own contract holds again: Unknown passes, the rule is never held.
+        constexpr double kRefusedKeepSec = 6.0;
+
+        double NowSec() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
 
         Sight ToSight(Sightline::Verdict a_v) {
             switch (a_v) {
@@ -233,24 +244,28 @@ namespace MFO::Iaus::Candidates {
             addAlly(ptr.get());
         }
 
-        // ── G10: only the pairs the last decision ranked on top (a call is also the prefetch) ────────────
-        if (auto it = g_wants.find(selfID); it != g_wants.end())
-            for (const auto& w : it->second) {
+        // ── G10: the pairs the last decision ranked on top, plus the pairs still refused (a call is also the
+        // prefetch). A No is stamped on its entry, so NoteDecision keeps a refused pair on the list although the
+        // decision no longer ranks it (D1: it used to drop off and come back as Unknown every second lap).
+        if (auto it = g_wants.find(selfID); it != g_wants.end()) {
+            const double nowSec = NowSec();
+            for (auto& w : it->second) {
                 bool live = false;
                 for (const auto& f : s.foes)
-                    if (f.id == w.target) { live = true; break; }
-                if (!live) continue;
-                auto* sp  = RE::TESForm::LookupByID<RE::SpellItem>(w.spell);
-                auto* tgt = RE::TESForm::LookupByID<RE::Actor>(w.target);
+                    if (f.id == w.pair.target) { live = true; break; }
+                if (!live) continue;   // out of the fight this lap: not asked, the entry ages on its own
+                auto* sp  = RE::TESForm::LookupByID<RE::SpellItem>(w.pair.spell);
+                auto* tgt = RE::TESForm::LookupByID<RE::Actor>(w.pair.target);
                 if (!sp || !tgt) continue;
-                SpellTargetNote n{ w.spell, w.target, Tri::Unknown };
+                SpellTargetNote n{ w.pair.spell, w.pair.target, Tri::Unknown };
                 switch (Actuation::WillWork(a_self, sp, tgt).verdict) {
-                case Actuation::WillWorkVerdict::Yes:     n.answer = Tri::Yes; break;
-                case Actuation::WillWorkVerdict::No:      n.answer = Tri::No; break;
-                case Actuation::WillWorkVerdict::Unknown: break;
+                case Actuation::WillWorkVerdict::Yes:     n.answer = Tri::Yes; w.refused = false; break;
+                case Actuation::WillWorkVerdict::No:      n.answer = Tri::No; w.refused = true; w.lastNo = nowSec; break;
+                case Actuation::WillWorkVerdict::Unknown: break;   // no fresh verdict: Unknown passes (G10), the entry keeps its age
                 }
                 s.willWork.push_back(n);
             }
+        }
 
         // ── heals already running (worker-serial registries + the bridge's claim table) ──────────────────
         for (const auto& e : s.book.entries) {
@@ -283,7 +298,8 @@ namespace MFO::Iaus::Candidates {
     }
 
     void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands) {
-        g_wants[a_follower] = TopSpellPairs(a_d, a_cands);
+        auto& asked = g_wants[a_follower];
+        asked = NextAskList(asked, TopSpellPairs(a_d, a_cands), NowSec(), kRefusedKeepSec);
     }
 
     void CombatEnded(RE::FormID a_follower) {

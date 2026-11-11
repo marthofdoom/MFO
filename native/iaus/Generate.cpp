@@ -368,4 +368,33 @@ namespace MFO::Iaus {
         return out;
     }
 
+    std::vector<AskedPair> NextAskList(std::span<const AskedPair> a_prev, std::span<const SpellTarget> a_top,
+                                       double a_now, double a_keepNoSec, std::size_t a_cap) {
+        const auto live = [&](const AskedPair& p) {
+            const double age = a_now - p.lastNo;
+            return p.refused && std::isfinite(age) && age >= 0.0 && age <= a_keepNoSec;
+        };
+        std::vector<AskedPair> out;
+        out.reserve((std::min)(a_cap, a_top.size() + a_prev.size()));
+        for (const SpellTarget& t : a_top) {
+            if (out.size() >= a_cap) break;
+            AskedPair e{ t, false, 0.0 };
+            for (const AskedPair& p : a_prev)
+                if (p.pair == t && live(p)) { e = p; break; }
+            if (std::find_if(out.begin(), out.end(), [&](const AskedPair& o) { return o.pair == t; }) == out.end())
+                out.push_back(e);
+        }
+        std::vector<AskedPair> kept;
+        for (const AskedPair& p : a_prev)
+            if (live(p) && std::find_if(out.begin(), out.end(), [&](const AskedPair& o) { return o.pair == p.pair; }) == out.end() &&
+                std::find_if(kept.begin(), kept.end(), [&](const AskedPair& o) { return o.pair == p.pair; }) == kept.end())
+                kept.push_back(p);
+        std::stable_sort(kept.begin(), kept.end(), [](const AskedPair& a, const AskedPair& b) { return a.lastNo > b.lastNo; });
+        for (const AskedPair& p : kept) {
+            if (out.size() >= a_cap) break;
+            out.push_back(p);
+        }
+        return out;
+    }
+
 }
