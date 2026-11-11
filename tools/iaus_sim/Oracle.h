@@ -122,7 +122,7 @@ namespace Sim {
         static bool Apply(Fight& G, int ci, const Opt& o, double commit) {
             Ctl& c = G.ctl[static_cast<std::size_t>(ci)]; Body& x = G.b[static_cast<std::size_t>(c.body)];
             const bool held = x.hitAt >= 0 || G.now < x.staggerUntil || G.now < x.ctrlUntil || (x.actIaus && G.now < x.actEnd);
-            auto move = [&](float gx, float gy, double sec, bool sprint) { c.goalX = gx; c.goalY = gy; c.moveUntil = G.now + sec; c.sprint = sprint; c.commitUntil = c.moveUntil; return true; };
+            auto move = [&](float gx, float gy, double sec, bool sprint) { c.goalX = gx; c.goalY = gy; c.moveUntil = G.now + sec; c.sprint = sprint; c.moveFight = false; c.commitUntil = c.moveUntil; return true; };
             switch (o.ext) {
             case Ext::None: break;
             case Ext::StepBack: case Ext::SprintBack: { const Body* n = G.Find(o.target); if (!n) return false; const float dx = x.c.x - n->c.x, dy = x.c.y - n->c.y, l = std::max(1.0f, std::hypot(dx, dy));

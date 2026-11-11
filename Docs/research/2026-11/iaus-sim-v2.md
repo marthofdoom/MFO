@@ -990,3 +990,44 @@ is 8 to 9 J ahead of IAUS+. Results files: label HEADLINE in `~/.cache/mfo-iaus-
 | G15 new | a follower who dies for good weighed his life like one who stands up. `Snapshot::mortal`. Engine read to probe |
 | G16 new | deliberate repositioning, block and bash have no family. The largest gaps left on all three lists (knight-boss, control-setup, kite). Needs the road audit of section 13 first |
 | G17 new | incoming damage counted foes out of reach. Closed in the pure layer (StrikeDistance) |
+
+## 25. Road audit for the actions IAUS has no family for (gap G16) and the first family built on one
+
+The oracle's extended set (section 9.2) is step back, sprint back, go to the player, go to the healer, get line of
+sight, block, bash, scroll. What each one could be built on today, read from `native/APMF_API.h`, `cast/Fire.cpp`
+and the two ch.24 clients MFO already has:
+
+| Action | Road | Verdict |
+|---|---|---|
+| Go to the player, go to the healer (fall back or peel WHILE fighting) | Harbinger ch.24 CombatApproach (`kIntent_CombatApproach`, target X, radius R, `kApproach_Hold`): the follower's combat area is bounded to (X, R), so the engine's own Return To Combat Area walks him there while attacks, casts and blocking keep running. MFO already runs two clients of it: the held-heal approach (`apmf/CombatApproach.cpp`) and the offense approach (`apmf/OffenseApproach.cpp`) | ROAD EXISTS. Needs a third MFO client ("regroup") and an action. Composition, native animation |
+| Get line of sight | the same channel, X = the target. `apmf/OffenseApproach.cpp` is this for casts | EXISTS for casts |
+| Step back, sprint back (away from a foe, no anchor) | none. ch.24 takes a reference, its `pos` is not read. ch.23 PursuitLeash only refuses moves that lead away from an anchor. `act.flee` is the retreat package under ignore-combat: he stops fighting, which is a retreat and not a step back | PROVEN LIMIT today. The nearest thing is a regroup on an anchor that stands away from the foe. A real step back needs a new Harbinger capability: ch.24 centred on a POINT (a feature request, tier A in the Harbinger repo) |
+| Bash | the bash is its own leaf of the combat behaviour tree. ch.18 AttackSelection can only DENY attack classes in the engine's weighted draw and never adds a move. ch.7 CombatAction denies whole leaf categories. Neither can make him bash NOW | PROVEN LIMIT today for a timed bash (interrupting a cast). Only a standing bias exists: the class package's combat-style bash multiplier (card C8) |
+| Block | a tree leaf as well. No promote road. Standing bias only: the package's defensive multiplier | PROVEN LIMIT today |
+| Scroll | card S3 (the lab's `--scroll-road`) | planned |
+
+So of the oracle's winning options in the largest gaps, step back, sprint back, bash and block have NO road, and that
+is where knight-boss, control-setup and kite sit. Those gaps cannot be closed inside MFO. They need one of two new
+Harbinger capabilities, both of which fit the house rules (deny-complete, composed, never a forced move): a combat
+area centred on a point, and a one-shot promote of a tree leaf (block, bash) the engine already owns. Both are
+recorded as feature requests for marth, not started.
+
+### 25.1 Family Regroup (pure layer, behind `Snapshot::regroupRoad`, off in the game)
+
+`Family::Regroup` (appended), target = the player or a party member who can heal others (new `Combatant::healer`).
+Considerations: RegroupNeed (the largest of: the player has seconds left, he has seconds left and the anchor stands
+away from what is hitting him, he is under 60 percent and the anchor heals), RegroupFar (vetoed inside 300 units and
+beyond 3000), a 6 s hard cooldown. In the sim `--regroup-road` turns it on: the order bounds his movement to the
+anchor for 4 s and he still fights a foe in swing reach.
+
+| J (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 | mean |
+|---|---|---|---|---|---|---|---|
+| road off | 63.98 | 63.64 | 64.37 | 63.85 | 78.88 | 78.64 | 67.23 |
+| on, weight 0.8 | 63.75 | 63.75 | 64.56 | 63.27 | 78.51 | 79.19 | 67.17 |
+| on, weight 1.6 | 63.30 | 63.93 | 64.81 | 63.42 | 78.87 | 78.77 | 67.18 |
+| on, weight 3.0 | 63.25 | 63.82 | 64.49 | 63.39 | 78.85 | 78.95 | 67.13 |
+
+No gain. Not adopted: the family stays as scored-but-never-generated, like Sneak. What the clusters show instead is
+that the oracle sends a follower to the player when he is 1700 to 1850 units from the fight (Vanilla
+knight-boss-healer, 51 decisions), which is the pursuit leash's job (ch.23, the package's `pk.leash`), not a need of
+the moment. The three needs written here are the wrong inputs for that. Open.

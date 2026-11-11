@@ -41,6 +41,7 @@ namespace MFO::Iaus {
         case Family::CastWard:     return "cast_ward";
         case Family::Scroll:       return "use_scroll";
         case Family::Exploit:      return "exploit";
+        case Family::Regroup:      return "regroup";
         case Family::kCount:       break;
         }
         return "?";
@@ -71,6 +72,7 @@ namespace MFO::Iaus {
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
+            "need", "far",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -328,6 +330,14 @@ namespace MFO::Iaus {
             // 1.0, two seconds 0.44: a follower who cannot trade blows does not put the bow away because the foe came near.
             // Not applicable while nothing is known to be hitting him.
             at(Cons::PostureTrade) = Lin(0.7f, 0.3f);
+            // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
+            at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            // regroup far: x = distance to the anchor / 1000. Inside 300 units he is already there (veto), 350 0.5, 800
+            // and more 1.0, past 3000 it is not a regroup any more (veto: that is a retreat or a travel).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.3f, 0.4f }, { 0.35f, 0.5f }, { 0.8f, 1.0f } } };
+                at(Cons::RegroupFar) = VetoAbove(VetoBelow(Piece(p), 0.3f), 3.0f);
+            }
             // control worth: x = min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). Ten seconds on a fresh foe
             // 1.0; a 2 s stagger-length hold 0.36; a long hold on a foe at a quarter health 0.66. A hold is worth the blows
             // it stops and the free blows it gives, and both need the foe to live through it. Never 0.
@@ -344,6 +354,7 @@ namespace MFO::Iaus {
             aw(Family::CastOffense, 1.0f); aw(Family::CastControl, 0.9f);  aw(Family::CastHeal, 1.2f);
             aw(Family::CastBuff, 0.7f);    aw(Family::CastSummon, 0.9f);   aw(Family::CastWard, 0.8f);
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
+            aw(Family::Regroup, 0.8f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
             // already makes a clearly best emergency action win at every rank).
@@ -378,6 +389,7 @@ namespace MFO::Iaus {
                 { Cons::TauntSelfHp, 1 }, { Cons::FoeTaunted, 1 }, { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
                 { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
             };
+            constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
@@ -472,6 +484,7 @@ namespace MFO::Iaus {
             case Family::CastSummon:   return kSummon;
             case Family::CastWard:     return kWard;
             case Family::Exploit:      return kExploit;
+            case Family::Regroup:      return kRegroup;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;
@@ -628,6 +641,18 @@ namespace MFO::Iaus {
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             case Cons::HealClaimed:         return B(f.recipientBeingHealed);
             case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::RegroupNeed: {
+                if (c.family != Family::Regroup) return In::Off();
+                float need = 0.0f;
+                // PEEL: the player is being hit and has seconds left (10 s = no need, 0 s = all of it)
+                if (f.recipientIsPlayer && std::isfinite(f.recipientTtl)) need = (std::max)(need, Clamp(1.0f - f.recipientTtl / 10.0f, 0.0f, 1.0f));
+                // FALL BACK: he has seconds left himself and the anchor stands away from what is hitting him
+                if (f.anchorSafer && std::isfinite(f.selfTtl)) need = (std::max)(need, Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f));
+                // TO THE HEALER: he is hurt (under 60 percent) and the anchor heals
+                if (f.anchorHealer) need = (std::max)(need, Clamp((0.6f - Clamp(f.selfHp, 0.0f, 1.0f)) / 0.6f, 0.0f, 1.0f));
+                return need;
+            }
+            case Cons::RegroupFar:    return c.family == Family::Regroup ? In(f.dist / 1000.0f) : In::Off();
             case Cons::PostureTrade:
                 if (!melee || !std::isfinite(f.selfTtl)) return In::Off();
                 return Clamp(f.selfTtl / 10.0f, 0.0f, 1.0f);

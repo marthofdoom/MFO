@@ -67,6 +67,7 @@ namespace Sim {
                 Combatant k = o.c; k.dist = Fight::Dist(self, o); k.sight = F.Sees(self, o) ? Sight::Visible : Sight::Occluded; k.sightEngine = k.sight;
                 if (F.estimates) FillEstimate(F, o, k);
                 if (F.estimates) for (const Body& h : F.b) if (&h != &self && h.role == Role::Follower && h.act == Act::Cast && h.hitAt >= 0 && h.actTarget == o.c.id) { const SimSpell* hs = F.SpellOf(h, h.actSpell); if (hs && hs->e.nature == Prune::Nature::Heal) k.beingHealed = true; }
+                if (o.ctl >= 0) { const Ctl& oc = F.ctl[static_cast<std::size_t>(o.ctl)]; if (oc.gate.spellsOnClass) for (const SimSpell& hs : oc.build->spells) k.healer |= hs.healOther; }
                 sn.allies.push_back(std::move(k));
             }
         }
@@ -82,7 +83,7 @@ namespace Sim {
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
         if (g_learnReach && c.reach[0].Known()) sn.meleeReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
-        sn.mortal = g_followerDeath && g_mortalKnown;
+        sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad;
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
@@ -137,6 +138,8 @@ namespace Sim {
                 const Body& pl = F.b[0]; if (tg->c.targetId == pl.c.id && pl.c.hp < 0.4f * pl.c.hpMax) ++t.tauntSaves; }
             return Fired::Yes; }
         case Family::Retreat: x.retreatUntil = F.now + TM::retreatSec; return Fired::Yes;
+        case Family::Regroup: { if (!tg || !Fight::Up(*tg) || !tg->Party()) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
+            c.goalX = tg->c.x - 110.0f; c.goalY = tg->c.y + (x.c.y > tg->c.y ? 100.0f : -100.0f); c.moveUntil = F.now + 4.0; c.sprint = false; c.moveFight = true; if (subj) ++t.regroups; return Fired::Yes; }
         case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka: {
             Kit& kit = c.book.kit; std::int32_t& n = fam == Family::DrinkHealth ? kit.potionsHealth : fam == Family::DrinkStamina ? kit.potionsStamina : kit.potionsMagicka;
             if (n <= 0) return Fired::Invalid;

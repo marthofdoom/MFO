@@ -122,6 +122,7 @@ namespace MFO::Iaus {
         bool  blocking = false;
         bool  caster = false;               // a spell in either hand right now
         bool  rangedWeapon = false;         // a bow or crossbow in hand right now (it does not have to close to hurt)
+        bool  healer = false;               // party member: knows a heal it can put on another (the regroup anchor "to the healer")
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
         bool  taunted = false;              // already under this follower's taunt
@@ -170,6 +171,8 @@ namespace MFO::Iaus {
         bool  handBusyRight = false;
         bool  scrollRoad = false;         // card S3: a scroll can be READ as a cast (the actuation exists). false (today):
                                           // scrolls stay in the book and no scroll candidate is made
+        bool  regroupRoad = false;        // the ch.24 regroup client exists (close on the player / a healer while fighting).
+                                          // false (today): no regroup candidate is made
         bool  mortal = false;             // he dies FOR GOOD at 0 health (no bleedout he recovers from: not essential, not
                                           // protected, the list lets followers die). false = he goes down and stands up, or
                                           // it is not known. A mortal follower weighs his own life far more.

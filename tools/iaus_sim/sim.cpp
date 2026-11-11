@@ -41,7 +41,7 @@ namespace {
             S(overkill); S(iausDmg); S(overheal); S(healTotal); S(healCasts); S(doubleHeals);
             S(foeCasts); S(foeCastsInterrupted); S(interruptsByFollowers);
             S(elemCasts); S(resistedCasts); S(weakCasts); S(weakOpp); S(immuneCasts); S(splashAllyHits); S(areaCasts);
-            S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks); S(powerWhiffs);
+            S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks); S(powerWhiffs); S(regroups);
             S(playerPressureSec); S(peelSum); S(peelN); S(peelMiss); S(tgtSwitches); S(tauntsOutmatched); S(tauntThenDown); S(tauntSaves);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
@@ -306,6 +306,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
         else if (!std::strcmp(argv[i], "--no-estimates")) estimates = false;
         else if (!std::strcmp(argv[i], "--calm-holds")) g_calmBreaks = false;
+        else if (!std::strcmp(argv[i], "--regroup-road")) g_regroupRoad = true;       // the ch.24 regroup client is modelled as existing
         else if (!std::strcmp(argv[i], "--follower-death")) g_followerDeath = true;   // a follower at 0 health is dead for good (LoreRim's default)
         else if (!std::strcmp(argv[i], "--mortal-blind")) g_mortalKnown = false;       // ... and IAUS is not told (Snapshot::mortal stays false)   // the first control model: a Calm is never broken by a blow
         else if (!std::strcmp(argv[i], "--reach") && i + 1 < argc) { const char* v = argv[++i]; g_learnReach = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "cold") ? 1 : 2; }   // ruling Q68: off | cold | warm (default)

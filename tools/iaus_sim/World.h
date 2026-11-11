@@ -54,6 +54,9 @@ namespace Sim {
     // TM::downSec. true (--follower-death): he is dead for good, and Utility counts that death three times a down (MODEL).
     // g_mortalKnown: the snapshot tells IAUS which of the two it is (Snapshot::mortal); --mortal-blind hides it.
     inline bool g_followerDeath = false, g_mortalKnown = true;
+    // --regroup-road: the ch.24 regroup client is modelled as existing (Snapshot::regroupRoad). MODEL: a regroup order is the
+    // oracle's own move order (3 s toward the anchor, no blows on the way), which is harsher than ch.24 (he keeps fighting).
+    inline bool g_regroupRoad = false;
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
@@ -112,7 +115,7 @@ namespace Sim {
         long   foeCasts = 0, foeCastsInterrupted = 0, interruptsByFollowers = 0;
         long   elemCasts = 0, resistedCasts = 0, weakCasts = 0, weakOpp = 0, immuneCasts = 0;
         long   splashAllyHits = 0, areaCasts = 0;
-        long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0;
+        long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0, regroups = 0;
         double playerPressureSec = 0, peelSum = 0; long peelN = 0, peelMiss = 0;
         long   tgtSwitches = 0; double engagedSec = 0;
         long   tauntsOutmatched = 0, tauntThenDown = 0, tauntSaves = 0;
@@ -162,7 +165,7 @@ namespace Sim {
         double lowSince = -1; bool lowHealed = false, lowHadCand = false;
         double pressureSince = -1;                 // the player came under attack at (peel latency)
         double commitUntil = 0;                    // oracle rollouts: he keeps the option he was given until then
-        float  goalX = 0, goalY = 0; double moveUntil = 0; bool sprint = false;   // a deliberate reposition order (the extended action set)
+        float  goalX = 0, goalY = 0; double moveUntil = 0; bool sprint = false, moveFight = false;   // a deliberate reposition order (the extended action set)
         int    potions0 = 0;                       // potions at the start (Utility: resources left)
         Key    lastKey{}; bool hasLastKey = false; // oracle arm: the action he is on (switch counting)
         std::uint32_t lastTarget = 0;
@@ -562,9 +565,13 @@ namespace Sim {
             x.c.fleeing = false;
             if (c && now < c->moveUntil) {   // a reposition order: he goes there first (sprint = x1.5, stamina 8 / s: MODEL)
                 const float gd = std::hypot(c->goalX - x.c.x, c->goalY - x.c.y);
-                if (gd > 40.0f) { const bool sp = c->sprint && x.c.sp > 5.0f; if (sp) { x.c.sp -= 8.0f * TM::dt; x.regenAt[2] = now + D->rules.delaySp; }
+                // A ch.24 regroup (moveFight) bounds his combat area to the anchor: outside it he walks back, but a foe already in
+                // his swing reach is still fought (MODEL of "keeps fighting the whole way"), and inside 300 units of it the order is done.
+                bool engaged = false;
+                if (c->moveFight) { if (gd <= 300.0f) c->moveUntil = 0; else if (c->drawn == PostureKind::Melee || c->drawn == PostureKind::Silver) for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Dist(x, o) <= Reach(x)) { engaged = true; break; } }
+                if (now < c->moveUntil && !engaged && gd > 40.0f) { const bool sp = c->sprint && x.c.sp > 5.0f; if (sp) { x.c.sp -= 8.0f * TM::dt; x.regenAt[2] = now + D->rules.delaySp; }
                     Move(x, c->goalX, c->goalY, x.spec->run * (sp ? 1.5f : 1.0f)); if (x.ctl == 0) t.moveOrderSec += TM::dt; return; }
-                c->moveUntil = 0;
+                if (!engaged) c->moveUntil = 0;
             }
             // target
             Body* tg = Find(x.c.targetId);

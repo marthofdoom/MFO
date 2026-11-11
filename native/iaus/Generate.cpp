@@ -144,6 +144,31 @@ namespace MFO::Iaus {
             }
         }
 
+        // ── regroup: close on the player or a healer while fighting (Harbinger ch.24). Only once the road exists. ──
+        void Regroups(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (!s.regroupRoad || x.foeCount == 0) return;
+            for (const Combatant& a : s.allies) {
+                if (!Readable(a) || a.downed || !(a.isPlayer || a.healer)) continue;
+                Candidate c = x.Make(Family::Regroup, &a);
+                c.f.dist = (std::max)(0.0f, Finite(a.dist, 0.0f));
+                c.f.recipientIsPlayer = a.isPlayer;
+                c.f.anchorHealer = a.healer;
+                c.f.recipientTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(s, a));
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.regroupCooldownSec, 0.0f));
+                // The anchor is "safer" when every foe that is hitting him stands clearly farther from the anchor.
+                bool any = false, safer = true;
+                const float strike = Estimate::StrikeDistance(s);
+                for (const Combatant& f : s.foes) {
+                    if (f.targetId == 0 || f.targetId != s.self.id || f.paralysed || f.fleeing) continue;
+                    if (Estimate::MustClose(f) && Estimate::Apart(f, s.self) > strike) continue;
+                    any = true;
+                    if (Estimate::Apart(f, a) < Estimate::Apart(f, s.self) + 150.0f) { safer = false; break; }
+                }
+                c.f.anchorSafer = any && safer;
+                x.Push(std::move(c));
+            }
+        }
         // ── the three drinks (P2: no stock, no candidate) ────────────────────────────────────────────────
         void Drinks(Ctx& x) {
             const Kit& k = x.s.book.kit;
@@ -428,6 +453,7 @@ namespace MFO::Iaus {
         out.foesKept = x.top.size();
 
         Swings(x);
+        Regroups(x);
         if (a_s.hasBook) {
             Drinks(x);
             Postures(x, foes);
