@@ -8,6 +8,27 @@ namespace Sim {
 
     inline Thr ReadThr(const J& a) { Thr t; for (const J& p : a.a) t.emplace_back(static_cast<float>(p[0].num()), static_cast<float>(p[1].num())); return t; }
 
+    // <list>.combatmods.json beside the .sim.json (extract_combat_mods.py). Absent file = no such mod.
+    inline void LoadCombatMods(Data& b, const char* simPath) {
+        std::string p = simPath; const std::string tail = ".sim.json";
+        if (p.size() < tail.size() || p.compare(p.size() - tail.size(), tail.size(), tail) != 0) return;
+        p.replace(p.size() - tail.size(), tail.size(), ".combatmods.json");
+        std::ifstream f(p); if (!f) return;
+        std::stringstream ss; ss << f.rdbuf(); const std::string txt = ss.str(); JP jp{ txt }; const J root = jp.val();
+        const J& po = root["poise"];
+        if (po["present"].yes()) {
+            PoiseRules& q = b.poise; q.on = true; auto g = [&](const char* k, float d) { return static_cast<float>(po[k].num(d)); };
+            q.staggerMode = static_cast<int>(po["staggerMode"].num(1)); q.baseMult = g("baseMult", q.baseMult); q.armorMult = g("armorMult", q.armorMult); q.regen = g("regenRate", q.regen);
+            q.bash = g("bash", q.bash); q.bow = g("bow", q.bow); q.creature = g("creature", q.creature); q.melee = g("melee", q.melee); q.unarmed = g("unarmed", q.unarmed);
+            q.toPC = g("toPC", q.toPC); q.toNPC = g("toNPC", q.toNPC); q.weight = g("weight", q.weight); q.magicHealth = g("magicHealth", 0);
+            for (const auto& kv : po["races"].o) q.races[kv.first] = static_cast<float>(kv.second.num(1));
+            static const std::pair<const char*, int> kTypes[] = { {"Sword", 1}, {"Dagger", 2}, {"WarAxe", 3}, {"Mace", 4}, {"Greatsword", 5}, {"Battleaxe", 6}, {"Bow", 7}, {"Crossbow", 9} };
+            for (const auto& t : kTypes) if (po["weapons"][t.first].has()) { q.weap[t.second] = static_cast<float>(po["weapons"][t.first].num()); q.hasWeap[t.second] = true; }
+            if (po["weapons"]["Shield"].has()) { q.shield = static_cast<float>(po["weapons"]["Shield"].num()); q.hasShield = true; }
+        }
+        const J& fs = root["followerScaling"];
+        if (fs["present"].yes()) { b.dfs.on = true; b.dfs.mode = static_cast<int>(fs["mode"].num(1)); b.dfs.reduction = static_cast<float>(fs["reduction"].num()) / 100.0f; }
+    }
     inline Data LoadData(const char* path) {
         Data b;
         std::ifstream f(path); if (!f) { std::fprintf(stderr, "cannot open %s\n", path); std::exit(2); }
@@ -73,6 +94,7 @@ namespace Sim {
         for (const J& s : root["spells"].a) { ++b.rawSpells; if (anyTaught && !s["taught"].yes()) continue; ++b.taughtSpells; SimSpell x; Classify(s, x); AddPoolSpell(b, std::move(x)); }
         for (const J& s : root["scrolls"].a) { SimSpell x; Classify(s, x); if (x.e.drop == Prune::Drop::Keep && (x.dmg + x.dot + x.heal > 0 || x.ctrl || x.armor > 0)) { x.e.source = SpellSource::Scroll; x.e.cost = 0; x.cost0 = 0; b.scrolls.push_back(std::move(x)); } }
         TagRoles(b);
+        LoadCombatMods(b, path);
         return b;
     }
 

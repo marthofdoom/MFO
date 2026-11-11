@@ -114,7 +114,8 @@ namespace Sim {
                 if (lastRow[static_cast<std::size_t>(ci)] >= 0 && ri > lastRow[static_cast<std::size_t>(ci)] && F.now < until[static_cast<std::size_t>(ci)]) break;   // the #26 window: rows below the one that fired wait
                 if (!Known(r.cond)) { if (subj) ++t.tableSkipped; continue; }
                 const float cd = r.act == "act.taunt" ? std::max(r.cooldown, TM::tauntCooldown) : r.cooldown;   // ruling Q69: the gambit side has the 30 s taunt cooldown too
-                if (cd > 0) { auto it = rowFired[static_cast<std::size_t>(ci)].find(ri); if (it != rowFired[static_cast<std::size_t>(ci)].end() && F.now - it->second < cd) continue; }
+                const int cdKey = r.act == "act.power_attack" ? -1 : r.act == "act.taunt" ? -2 : ri;   // rulings Q69 / Q73: ONE taunt and ONE power-attack cooldown per follower, shared by every row
+                if (cd > 0) { auto it = rowFired[static_cast<std::size_t>(ci)].find(cdKey); if (it != rowFired[static_cast<std::size_t>(ci)].end() && F.now - it->second < cd) continue; }
                 const Pick p = Cond(F, c, x, r); if (!p.ok) continue;
                 Candidate k; Family fam = Family::kCount; bool fired = false;
                 auto fire = [&]() { const Fired fr = Fire(F, ci, k); if (fr == Fired::Yes) { fired = true; if (subj) { ++t.fired; ++t.hist[static_cast<std::size_t>(k.family)];
@@ -144,7 +145,7 @@ namespace Sim {
                     fire(); }
                 else if (r.act == "act.wait") continue;   // hold: nothing is issued, his own AI runs
                 else { if (subj) ++t.tableSkipped; continue; }   // an action the lab does not model (loot, steal, sneak, shout ...)
-                if (fired) { if (lastRow[static_cast<std::size_t>(ci)] != ri && subj) ++t.switches; lastRow[static_cast<std::size_t>(ci)] = ri; until[static_cast<std::size_t>(ci)] = F.now + c.window; rowFired[static_cast<std::size_t>(ci)][ri] = F.now; return; }
+                if (fired) { if (lastRow[static_cast<std::size_t>(ci)] != ri && subj) ++t.switches; lastRow[static_cast<std::size_t>(ci)] = ri; until[static_cast<std::size_t>(ci)] = F.now + c.window; rowFired[static_cast<std::size_t>(ci)][cdKey] = F.now; return; }
             }
         }
     };

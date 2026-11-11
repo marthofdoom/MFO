@@ -99,7 +99,7 @@ namespace {
         std::vector<Res> res(pick.size()); std::atomic<int> next{ 0 }; std::mutex mx; const int jobs = static_cast<int>(pick.size()) * fights;
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int si = job / fights, f = job % fights;
             Rng R; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
-            FightSpec fs = pick[static_cast<std::size_t>(si)]->make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5;
+            FightSpec fs = pick[static_cast<std::size_t>(si)]->make(D, classes, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5;
             { std::scoped_lock lk(mx); res[static_cast<std::size_t>(si)].cls = fs.cls->name; }
             Fight F = BuildFight(D, fs, t1); F.g10Sticky = g10Sticky; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight G = F;
             if (trace == f) { std::scoped_lock lk(mx); std::printf("\nTRACE %s fight %d (%s)\n", pick[static_cast<std::size_t>(si)]->name, f, oracle ? "oracle arm" : "IAUS arm");
@@ -151,9 +151,9 @@ namespace {
         const int br[3] = { 0, 1, 3 }; const int nb = 3 * fights, ns = static_cast<int>(mine.size()) * fights; std::atomic<int> next{ 0 }; std::vector<double> u(static_cast<std::size_t>(ns + nb), 0.0);
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= ns + nb) return; Rng R;
             if (job < ns) { const int si = mine[static_cast<std::size_t>(job / fights)], f = job % fights; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
-                FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); }
+                FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); }
             else { const int k = job - ns, b = br[k / fights], f = k % fights; R.g.seed(seed * 1000003ULL + std::uint64_t(ci) * 7919 + std::uint64_t(b) * 104729 + std::uint64_t(f) * 32452843ULL);
-                Fight F = RandomFight(D, classes[static_cast<std::size_t>(ci)], 1 + f % 5, kBrackets[b], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); } } };
+                Fight F = RandomFight(D, classes[static_cast<std::size_t>(ci)], g_forceRank ? g_forceRank : 1 + f % 5, kBrackets[b], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         double a = 0, b = 0; for (int i = 0; i < ns; ++i) a += u[static_cast<std::size_t>(i)]; for (int i = ns; i < ns + nb; ++i) b += u[static_cast<std::size_t>(i)];
         a = ns ? a / ns : 0; b /= std::max(1, nb); if (scenU) *scenU = a; if (natU) *natU = b; return ns ? 0.35 * a + 0.65 * b : b;
@@ -166,9 +166,9 @@ namespace {
         std::vector<double> u(static_cast<std::size_t>(ns + nb), 0.0);
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= ns + nb) return; Rng R;
             if (job < ns) { const int si = job / fights, f = job % fights; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
-                FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); }
+                FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); }
             else { const int k = job - ns, c = k / std::max(1, fights / 2), f = k % std::max(1, fights / 2); R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(f) * 32452843ULL);
-                Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); } } };
+                Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], g_forceRank ? g_forceRank : 1 + f % 5, kBrackets[0], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         double a = 0, b = 0; for (int i = 0; i < ns; ++i) a += u[static_cast<std::size_t>(i)]; for (int i = ns; i < ns + nb; ++i) b += u[static_cast<std::size_t>(i)];
         a /= std::max(1, ns); b /= std::max(1, nb); if (scenU) *scenU = a; if (natU) *natU = b; return 0.5 * (a + b);
@@ -233,6 +233,31 @@ namespace {
         if (c.gate.disengage) { add("cond.self_hp_pct_below", "act.flee", 0.25f); add("cond.foe_attacking_me_melee", "act.flee"); }
         return lib;
     }
+    // Ruling Q74: the ORDER of a class's default rows such that every prefix (3 rows at rank I, then 4, then all) is a good
+    // table on its own. Every permutation of the set is scored as the mean of J over the prefixes 3 .. n (table mode).
+    int OptimisePrefix(const Data& D, std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads) {
+        int ci = -1; for (std::size_t i = 0; i < classes.size(); ++i) if (classes[i].name == g_optClass) ci = static_cast<int>(i);
+        if (ci < 0) { std::fprintf(stderr, "--opt-prefix needs --opt-class <slug>\n"); return 2; }
+        SimClass& c = classes[static_cast<std::size_t>(ci)];
+        std::vector<GRow> cur; { bool any = false; for (const GRow& r : c.rows) any |= r.applied; for (const GRow& r : c.rows) if (r.applied || !any) cur.push_back(r); }
+        const int n = static_cast<int>(cur.size());
+        auto evalK = [&](const std::vector<GRow>& rows, int k) { c.rows = rows; for (GRow& r : c.rows) r.applied = true; g_rowPrefix = k; const double j = Objective(D, classes, seed, fights, threads); g_rowPrefix = 0; return j; };
+        auto line = [&](const char* tag, const std::vector<GRow>& rows) { double sum = 0; std::printf("%s", tag); for (int k = std::min(3, n); k <= n; ++k) { const double j = evalK(rows, k); sum += j; std::printf(" J%d=%.3f", k, j); }
+            const double mean = sum / std::max(1, n - std::min(3, n) + 1); std::printf(" mean=%.3f  %s\n", mean, RowsText(rows).c_str()); return mean; };
+        std::printf("OPT-PREFIX class=%s list=%s rows=%d\n", c.name.c_str(), D.name.c_str(), n);
+        const double start = line("today:", cur);
+        if (n <= 3 || n > 6) { std::printf("end: nothing to order (%d rows)\n--rows %s\n", n, RowsText(cur).c_str()); c.rows = cur; return 0; }
+        std::vector<int> idx(static_cast<std::size_t>(n)); for (int i = 0; i < n; ++i) idx[static_cast<std::size_t>(i)] = i;
+        std::vector<int> bestIdx = idx; double best = start;
+        while (std::next_permutation(idx.begin(), idx.end())) {
+            std::vector<GRow> rows; for (int i : idx) rows.push_back(cur[static_cast<std::size_t>(i)]);
+            double sum = 0; for (int k = 3; k <= n; ++k) sum += evalK(rows, k);
+            const double mean = sum / (n - 2); if (mean > best + 0.15) { best = mean; bestIdx = idx; }
+        }
+        std::vector<GRow> rows; for (int i : bestIdx) rows.push_back(cur[static_cast<std::size_t>(i)]);
+        line("best: ", rows); c.rows = rows; std::printf("--rows %s\n", RowsText(rows).c_str()); return 0;
+    }
+
     int OptimiseRows(const Data& D, std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, int cap, int maxEvals) {
         int ci = -1; for (std::size_t i = 0; i < classes.size(); ++i) if (classes[i].name == g_optClass) ci = static_cast<int>(i);
         if (ci < 0) { std::fprintf(stderr, "--opt-rows needs --opt-class <slug>\n"); return 2; }
@@ -267,7 +292,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; int optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; int optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -297,6 +322,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--rows") && i + 1 < argc) rowsText = argv[++i];          // <class>=<cond>|<act>|<param>|<role>|<cooldown>;...
         else if (!std::strcmp(argv[i], "--print-rows") && i + 1 < argc) printRows = argv[++i];
         else if (!std::strcmp(argv[i], "--opt-rows")) optRows = true;
+        else if (!std::strcmp(argv[i], "--opt-prefix")) optPrefix = true;                          // ruling Q74: order the class's rows so every prefix is a good table
+        else if (!std::strcmp(argv[i], "--row-prefix") && i + 1 < argc) g_rowPrefix = std::atoi(argv[++i]);   // every follower holds only his top N rows
+        else if (!std::strcmp(argv[i], "--rank") && i + 1 < argc) g_forceRank = std::atoi(argv[++i]);          // the subject's rapport rank in every fight
         else if (!std::strcmp(argv[i], "--headline-oracle") && i + 1 < argc) headlineOracle = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--row-cap") && i + 1 < argc) rowCap = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--row-evals") && i + 1 < argc) rowEvals = std::atoi(argv[++i]);
@@ -320,6 +348,7 @@ int main(int argc, char** argv) {
     if (printClasses) { PrintClassTable(allClasses); return 0; }
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (optRows) return OptimiseRows(D, allClasses, seed, fights, threads, rowCap, rowEvals);
+    if (optPrefix) return OptimisePrefix(D, allClasses, seed, fights, threads);
     if (!opt.empty()) return Optimise(D, allClasses, opt, seed, fights, threads, optPasses);
     Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus";
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;

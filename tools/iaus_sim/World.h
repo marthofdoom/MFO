@@ -68,6 +68,7 @@ namespace Sim {
         bool  rangedMode = false, casterMode = false;
         double airUntil = 0, groundUntil = 0;   // dragons
         float armorBuff = 0;
+        float poise = 0, poiseMax = 0;   // Chocolate Poise meter (0 max = the list has no poise mod)
         float dmgScale = 1;              // scenario strength scaling of a foe's damage (Setup.h targetRatio)
         std::string tag;                 // scenario role ("healer", "archer", "boss" ...)
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
@@ -215,6 +216,10 @@ namespace Sim {
             n.c.hp = n.c.hpMax * hpPct; n.c.mp = n.c.mpMax; n.c.sp = n.c.spMax; n.c.x = x; n.c.y = y; n.c.isPlayer = role == Role::Player;
             n.c.undead = n.spec->undead; n.c.unholy = n.spec->undead; n.spellReady.assign(n.spec->spells.size(), 0.0);
             n.think = R.U(0.0f, 0.8f); n.arrows = n.spec->ranged.Has() ? 60 : 0;
+            if (D->poise.on) {   // PoiseAV::GetBaseActorValue: (the race's JSON multiplier, else its mass) x BaseMult + worn armor weight x ArmorMult (weight MODEL: 6 per piece)
+                const PoiseRules& p = D->poise; const auto ri = p.races.find(n.spec->race);
+                n.poiseMax = std::max(0.0f, (ri != p.races.end() ? ri->second : n.spec->mass) * p.baseMult + static_cast<float>(n.spec->pieces) * 6.0f * p.armorMult); n.poise = n.poiseMax;
+            }
             b.push_back(std::move(n)); return b.back();
         }
 
@@ -258,17 +263,52 @@ namespace Sim {
             if (fromIaus && by && by->ctl == 0) { t.healTotal += amt; t.overheal += amt - used; t.healDone += used; }
         }
         void Stagger(Body& x, float sec, Body* by) {
-            if (!Up(x) || x.spec->mass >= 6.0f) return;   // dragons and the like do not stagger (MODEL)
+            if (!Up(x) || (!D->poise.on && x.spec->mass >= 6.0f)) return;   // dragons and the like do not stagger (MODEL); under a poise mod the race's meter decides
             if (x.act == Act::Cast && x.hitAt >= 0) { if (x.role == Role::Foe) { ++t.foeCastsInterrupted; if (by && by->role == Role::Follower) ++t.interruptsByFollowers; } }
             x.act = Act::None; x.hitAt = -1; x.staggerUntil = now + sec; x.actEnd = now + sec; x.blockUntil = 0;
         }
+        // Chocolate Poise, HitEventHandler::RecalculateStagger: the poise damage of one weapon hit. A weapon: lerp(type base, weapon
+        // weight, WeightContribution) x Melee / Bow mult; a weaponless creature: physical damage x CreatureMult; a bash: the shield
+        // (weight MODEL 10) or the weapon x BashMult. Then x (1 + the attack's stagger offset: ATKD, 1.0 on the usual power attack, 0.5
+        // on a bash: MODEL from the modal record values), x (1 - blocked), x total / physical damage, x min(1 - armor, 0.8).
+        [[nodiscard]] float PoiseDamage(const Body& a, const Body& d, float rawDmg, bool power, bool ranged, bool bash, float blockedFrac) const {
+            const PoiseRules& p = D->poise; const Weapon& w = ranged ? a.spec->ranged : a.spec->melee;
+            auto wd = [&](const Weapon& x) { return (x.anim >= 0 && x.anim < 10 && p.hasWeap[x.anim]) ? p.weap[x.anim] + (x.weight - p.weap[x.anim]) * p.weight : x.weight; };
+            float s;
+            if (bash) s = (a.spec->shield ? (p.hasShield ? p.shield + (10.0f - p.shield) * p.weight : 10.0f) : w.Has() ? wd(w) : 5.0f) * p.bash * 1.5f;
+            else if (ranged) s = wd(w) * p.bow;
+            else if (w.Has()) s = wd(w) * p.melee;
+            else s = rawDmg * p.creature;
+            if (power) s *= 2.0f;
+            const float mit = ArmorMitigation(D->rules, ArmorOf(d), d.spec->pieces);
+            return s * (1.0f - blockedFrac) * (1.0f - mit) * std::min(1.0f - mit, 0.8f);
+        }
+        // PoiseAV::DamageAndCheckPoise: the meter empties -> ONE stagger whose length follows the blow's share of the meter (MODEL
+        // 0.5 s + 1.0 s x share), then the meter is full again; no poise damage while staggered (StaggerMode 1); regen in Regen().
+        void PoiseHit(Body& a, Body& d, float amt) {
+            const PoiseRules& p = D->poise;
+            if (!(amt > 0.0f) || !Up(d) || !(d.poiseMax > 0.0f)) return;
+            if (p.staggerMode == 1 && now < d.staggerUntil) return;
+            if (a.role == Role::Player || a.role == Role::Follower) amt *= D->rules.diffByPC;   // Settings::GetDamageMultiplier
+            amt *= d.role == Role::Player ? p.toPC : p.toNPC;
+            d.poise -= amt;
+            if (d.poise <= 0.0f) { d.poise = d.poiseMax; Stagger(d, 0.5f + 1.0f * std::clamp(amt / d.poiseMax, 0.0f, 1.0f), &a); }
+        }
+        // Dynamic Follower Scaling: the multiplier on a follower's weapon hit (1 when the list has no such mod).
+        [[nodiscard]] float FollowerScale() const {
+            if (!D->dfs.on) return 1.0f;
+            int n = 0; for (const Body& o : b) if (o.role == Role::Follower && o.alive) ++n;
+            if (n <= 1) return 1.0f;
+            return D->dfs.mode == 2 ? 1.0f / static_cast<float>(n) : std::pow(std::max(0.0f, 1.0f - D->dfs.reduction), static_cast<float>(n - 1));
+        }
         // one physical hit that has connected in time and space
         float Physical(Body& a, Body& d, float dmg, bool power, bool ranged, bool fromIaus) {
-            const Rules& r = D->rules; bool blocked = false;
+            const Rules& r = D->rules; bool blocked = false; float blockedFrac = 0.0f; const float rawDmg = dmg;
+            if (a.role == Role::Follower) dmg *= FollowerScale();
             if (now < d.blockUntil && !ranged) {   // MODEL block: shield 0.45 + 0.30 x skill, weapon 0.30 + 0.20 x skill; a power attack halves it (fBlockPowerAttackMult)
                 const float sk = d.spec->Skill(kAvBlock) / 100.0f; float bf = d.spec->shield ? 0.45f + 0.30f * sk : 0.30f + 0.20f * sk;
                 if (power) bf *= r.blockPowMult;
-                dmg *= 1.0f - std::min(0.85f, bf); blocked = true;
+                blockedFrac = std::min(0.85f, bf); dmg *= 1.0f - blockedFrac; blocked = true;
                 if (!power && d.spec->shield && R.P(0.25f)) Stagger(a, TM::recoil, &d);
             }
             dmg *= a.dmgScale * (1.0f - ArmorMitigation(r, ArmorOf(d), d.spec->pieces));
@@ -278,7 +318,8 @@ namespace Sim {
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
             const float dealt = Hurt(d, dmg, &a, fromIaus);
             if (trace) std::fprintf(trace, "%7.2f  hit  %s -> %s (%u) %.0f%s%s%s  hp %.0f/%.0f\n", now, a.c.name.c_str(), d.c.name.c_str(), d.c.id, dealt, power ? " POWER" : "", blocked ? " blocked" : "", ranged ? " arrow" : "", d.c.hp, d.c.hpMax);
-            if (power && !blocked && Up(d)) Stagger(d, TM::staggerSec * std::clamp(a.spec->mass / d.spec->mass, 0.6f, 1.4f), &a);
+            if (D->poise.on) PoiseHit(a, d, PoiseDamage(a, d, rawDmg, power, ranged, false, blockedFrac));
+            else if (power && !blocked && Up(d)) Stagger(d, TM::staggerSec * std::clamp(a.spec->mass / d.spec->mass, 0.6f, 1.4f), &a);
             return dealt;
         }
         // a spell's effect on one target (the magnitude already carries the caster's perks)
@@ -290,6 +331,7 @@ namespace Sim {
             if (d.role == Role::Player) k *= r.diffToPC;
             if (a.role == Role::Player) k *= r.diffByPC;
             if (s.dmg > 0) Hurt(d, s.dmg * k, &a, fromIaus);
+            if (s.dmg > 0 && D->poise.on && D->poise.magicHealth > 0.0f) PoiseHit(a, d, s.dmg * k * D->poise.magicHealth);   // ActiveEffectHandler: health damage x the JSON's factor
             if (trace) std::fprintf(trace, "%7.2f  spell %s: %s -> %s (%u) dmg %.0f (x%.2f)%s  hp %.0f/%.0f\n", now, s.e.name.c_str(), a.c.name.c_str(), d.c.name.c_str(), d.c.id, s.dmg * k, k, s.ctrl ? " control" : "", d.c.hp, d.c.hpMax);
             if (s.dot > 0 && Up(d)) d.fx.push_back({ 0, s.dot * k, -1, now + s.dotDur, a.c.id });
             if (s.mpDmg > 0) d.c.mp = std::max(0.0f, d.c.mp - s.mpDmg * k);
@@ -357,7 +399,7 @@ namespace Sim {
             Body* tg = Find(x.actTarget);
             if (kind == Act::Swing || kind == Act::Power || kind == Act::Bash) {
                 if (!tg || !Up(*tg) || Dist(x, *tg) > Reach(x) * 1.2f || (tg->c.outOfMeleeReach)) return;   // whiff
-                if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); Stagger(*tg, TM::bashStagger, &x); return; }
+                if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
                 Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power), kind == Act::Power, false, x.actIaus);
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
@@ -573,6 +615,7 @@ namespace Sim {
             if (now >= x.regenAt[0]) x.c.hp = std::min(x.c.hpMax, x.c.hp + x.c.hpMax * x.spec->hpR / 100.0f * r.combatHp * TM::dt);
             if (now >= x.regenAt[1]) x.c.mp = std::min(x.c.mpMax, x.c.mp + x.c.mpMax * x.spec->mpR / 100.0f * r.combatMp * TM::dt);
             if (now >= x.regenAt[2]) x.c.sp = std::min(x.c.spMax, x.c.sp + x.c.spMax * x.spec->spR / 100.0f * r.combatSp * TM::dt);
+            if (x.poiseMax > 0.0f && now >= x.staggerUntil) x.poise = std::min(x.poiseMax, x.poise + x.poiseMax * D->poise.regen * TM::dt);
             x.recentDmg *= 1.0f - TM::dt / 2.0f; x.armorBuff = 0;
             for (std::size_t i = 0; i < x.fx.size();) {
                 Effect& e = x.fx[i];

@@ -103,6 +103,11 @@ namespace Sim {
     }
     inline void (*&PackageHook())(Ctl&) { static void (*h)(Ctl&) = nullptr; return h; }
 
+    // Ruling Q74 (marth 2026-11-11): a follower holds the TOP rows of his class's default set, as many as his rapport rank
+    // has combat slots (native/State.h kCombatSlotsByRank: 3 / 5 / 7 / 9 / 12), and the rest join in the same order as slots
+    // unlock. g_rowPrefix > 0 forces the prefix length for every follower (the prefix search), g_forceRank the subject's rank.
+    inline int g_rowPrefix = 0, g_forceRank = 0;
+    [[nodiscard]] inline int CombatSlotsForRank(int rank) { static constexpr int k[6] = { 0, 3, 5, 7, 9, 12 }; return k[std::clamp(rank, 1, 5)]; }
     inline void AddFollower(Fight& F, const Data& D, const SimClass& sc, int level, int rank, float x, float y, Rng& R, float worn, const std::vector<std::string>* ensure = nullptr) {
         auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R, true, ensure));
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
@@ -110,6 +115,7 @@ namespace Sim {
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
         Ctl c; c.body = static_cast<int>(F.b.size()) - 1; c.fam = sc.fam; c.gate = sc.gate; c.profile = sc.profile; if (ProfileHook()) ProfileHook()(c.profile);
         { bool anyApplied = false; for (const GRow& r : sc.rows) anyApplied |= r.applied; for (const GRow& r : sc.rows) if (r.applied || !anyApplied) c.rows.push_back(r); }   /* T1: its data-only rows stand in for the kit of today */
+        { const std::size_t cap = static_cast<std::size_t>(g_rowPrefix > 0 ? g_rowPrefix : CombatSlotsForRank(rank)); if (c.rows.size() > cap) c.rows.resize(cap); }   /* ruling Q74 */
         MfoPackage(sc, c);
         if (PackageHook() && F.ctl.empty()) PackageHook()(c);   // the package under search (the subject only)
         c.build = fb; c.book = fb->book;

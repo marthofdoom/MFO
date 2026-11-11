@@ -131,8 +131,21 @@ namespace Sim {
         float bleedoutDefault = 0.15f;                                        // fBleedoutDefault
     };
 
+    // Chocolate Poise as the list configures it (tools/list_balance/extract_combat_mods.py; formula = the mod's own source,
+    // doodlum/skyrim-poise PoiseAV.cpp / HitEventHandler.cpp). on = false: the vanilla stagger MODEL (row 20).
+    struct PoiseRules {
+        bool on = false; int staggerMode = 1;
+        float baseMult = 50, armorMult = 0.2f, regen = 0.045f, bash = 1.5f, bow = 1, creature = 2.5f, melee = 1, unarmed = 3, toPC = 1, toNPC = 1, weight = 2, magicHealth = 0;
+        std::map<std::string, float> races;        // race EditorID -> the multiplier that replaces the race's mass
+        float weap[10] = {}; bool hasWeap[10] = {}; // by Weapon::anim: the "Weapons.Damage" base the weight is lerped from
+        float shield = 0; bool hasShield = false;
+    };
+    // Dynamic Follower Scaling (FollowerScaling.dll): every weapon hit of an actor in CurrentFollowerFaction is scaled by the
+    // number of LOADED actors in that faction. mode 1: (1 - reduction)^(n - 1); mode 2: 1 / n.
+    struct FollowerScaling { bool on = false; int mode = 1; float reduction = 0; };
     struct Data {
         std::string name = "builtin";
+        PoiseRules poise; FollowerScaling dfs;
         std::map<std::string, double> gmst;
         Rules rules;
         std::vector<ActorSpec> specs;

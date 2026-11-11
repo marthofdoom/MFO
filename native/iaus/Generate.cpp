@@ -205,6 +205,16 @@ namespace MFO::Iaus {
             for (const Combatant* f : a_foes)
                 if (f->caster && f->targetId != 0 && f->targetId == s.self.id) { casterOnMe = true; break; }
 
+            // His best castable offense spell on each kept foe (DamageValue's denominator), ONCE per tick: one pass over
+            // the book per foe, not one per (spell, foe) pair.
+            std::vector<float> bestOn(x.top.size(), 0.0f);
+            for (const SpellEntry& o : s.book.entries) {
+                if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Offense) continue;
+                if (!(o.damage > 0.0f)) continue;
+                if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
+                for (std::size_t ti = 0; ti < x.top.size(); ++ti)
+                    bestOn[ti] = (std::max)(bestOn[ti], Estimate::SpellOn(o, *x.top[ti]));
+            }
             for (const SpellEntry& e : s.book.entries) {
                 if (e.source == SpellSource::Staff) continue;        // staves: the posture layer
                 // Scrolls (card S3): a candidate only once a scroll can be read as a cast (Snapshot::scrollRoad), for a
@@ -247,7 +257,8 @@ namespace MFO::Iaus {
                     // reach (0 = the record gives none: range is then not applicable).
                     const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.areaUnits : e.reach);
                     if (e.selfDelivery && !(e.areaUnits > 0.0f)) { ++x.out.droppedTarget; break; }
-                    for (const Combatant* foe : x.top) {
+                    for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
+                        const Combatant* foe = x.top[ti];
                         if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule
                         Candidate c = base(foe);
                         x.Foe(c.f, *foe, true);
@@ -259,13 +270,7 @@ namespace MFO::Iaus {
                         if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
                             c.f.expDamage = Estimate::SpellOn(e, *foe);
                             c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
-                            float best = 0.0f;
-                            for (const SpellEntry& o : s.book.entries) {
-                                if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Offense) continue;
-                                if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
-                                best = (std::max)(best, Estimate::SpellOn(o, *foe));
-                            }
-                            c.f.bestDamage = best;
+                            c.f.bestDamage = bestOn[ti];
                         }
                         if (e.areaUnits > 0.0f) {
                             const Combatant& centre = e.selfDelivery ? s.self : *foe;
