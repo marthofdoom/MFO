@@ -8,17 +8,29 @@
 //
 // "WHILE THE RULE STANDS". Every scan lap that reaches the rule with its condition true calls ServiceSneakRule,
 // which files the claim if none stands and resets the hold counter. The rule is TRANSPARENT (the scan goes on to
-// the rows below), so "Always -> Sneak" sits on top of a thief's table. The pump's sweep (Tick, every 133 ms)
-// counts the unpaused sweeps since the last lap. Past kHoldSweeps (sized from the cadence below) the rule has
-// stopped standing (a higher opaque rule won, its condition went false, the table stopped running, he was
-// dismissed or MFO was turned off for him) and the claim is released.
+// the rows below), so "Always -> Sneak" sits on top of a thief's table.
+// THE HOLD IS COUNTED IN TABLE LAPS, NEVER IN TIME (review SEV-3 on a31f154). Each table calls NoteSneakTableLap
+// just before its rule scan really runs (logistics/Service.cpp, scheduler/CombatScan.cpp). A lap that runs and
+// does not reach the rule adds one. kHoldLaps such laps in a row and the rule has stopped standing (its condition
+// went false, it was disabled or removed, a higher opaque rule won, the table was emptied or switched off): the
+// claim is released right there. A service that returns before its scan (a loot walk, a LotD deposit, an errand
+// tick, a lockpick step, cannot act, the cadence gate, a suppression window) runs no lap, so it never ages the
+// hold, however long it lasts. The other ends are not laps: dismissal and MFO off (Followers ReleaseHeldState),
+// gone / dead / unloaded and combat with bSneakInCombat off (the sweep), a load (ClearSneakClaims).
+// WHICH LAPS COUNT. The claim remembers the table that last reached the rule (owner). A logistics lap counts for
+// either owner: when both tables run in one service (his own flag off inside a party fight) the combat table runs
+// first and resets a combat owner's count, and when the fight is over only logistics laps run, so a combat owner is
+// released by them. A combat lap counts for a combat owner, and for a logistics owner only while he is in his own
+// combat (logistics never runs then). Inside a party fight with his own flag off a combat lap leaves a logistics
+// owner alone, because his logistics still runs and answers for its own rule.
 //
 // THE RE-ASSERT IS MFO's. ch.3 does not re-assert: a package or the combat AI that forces a stance can stand him up
 // while the claim is live. When the claim has stood kReassertSweeps (Harbinger applies a Request on its next game
 // thread drain, and the SneakStart needs its beat) and IsSneaking reads false, MFO releases it and files a new one,
 // so a re-file happens at most once per kReassertSweeps.
 // Not while he swims or rides (the engine's own IsSneaking is false there by definition, and a SneakStart into
-// water is not ours to send).
+// water is not ours to send). The same gate holds at the FIRST file (ServiceSneakRule): the rule still stands, the
+// claim waits until he is on foot (review SEV-4 on a31f154).
 //
 // IN COMBAT IS UNOBSERVED (principle 5). Out of combat ch.3 is field-proven. Whether the combat behaviour tree
 // stands an NPC up mid-fight is not, so the in-combat road is the dev switch bSneakInCombat (MFO.ini, default OFF).
@@ -29,7 +41,8 @@
 // per kLogWindowSec. Past that the lines are counted and one "N lines suppressed" line closes the window. That is
 // what a field run reads to prove (or disprove) the in-combat road.
 //
-// THREADS. ServiceSneakRule and the sweep run on the pump's AddTask worker (Fire, the logistics scan, Tick).
+// THREADS. ServiceSneakRule, the lap notes and the sweep run on the pump's AddTask worker (Fire, the two scans,
+// Tick).
 // ClearSneakClaims runs in the drained-pump load window (ClearTransientState). Own mutex g_sneakMx, a leaf: this
 // file never takes g_mx, and ClearTransientState takes g_sneakMx under g_mx (order g_mx -> g_sneakMx, never the
 // reverse). APMF's Request / Release are thread-safe and never call back into MFO. NOTHING IS SAVED: Harbinger
@@ -49,13 +62,13 @@
 namespace MFO::APMFBridge {
 
     namespace {
-        // Sizes from the real cadence (principle 9). The sweep runs every pump (133 ms). A rule is re-reached once
-        // per service lap of its follower: 133 ms x party, ~1.3 s for ten. Hold = 30 sweeps (~4 s, three missed
-        // laps at a party of ten). Re-assert = 23 sweeps (~3 s) of claim age: the Request lands on Harbinger's next
+        // Sizes from the real cadence (principle 9). The sweep runs every pump (133 ms). Hold = 3 counted laps
+        // without the rule (a logistics lap is ~1 s, a combat lap is 133 ms x party), so one lap where an opaque rule
+        // above took the tick does not drop it. Laps, not sweeps: time spent outside a scan never counts. Re-assert = 23 sweeps (~3 s) of claim age: the Request lands on Harbinger's next
         // drain and the SneakStart animation needs its beat before IsSneaking is a fair read, and a re-file resets the
         // age, so this is also the re-file throttle. A refused Request is retried after 75 sweeps (~10 s), never in a
         // loop.
-        constexpr std::uint32_t kHoldSweeps     = 30;
+        constexpr std::uint32_t kHoldLaps       = 3;
         constexpr std::uint32_t kReassertSweeps = 23;
         constexpr std::uint32_t kRetrySweeps    = 75;
         constexpr std::uint32_t kLogBurst       = 12;
@@ -65,11 +78,12 @@ namespace MFO::APMFBridge {
 
         struct SneakClaim {
             APMF_API::Handle handle      = APMF_API::kInvalidHandle;
-            std::uint32_t    idleSweeps  = 0;       // unpaused sweeps since the rule was last reached
+            std::uint32_t    idleLaps    = 0;       // counted table laps since the rule was last reached
+            SneakTable       owner       = SneakTable::Logistics;   // the table that last reached the rule
             std::uint32_t    ageSweeps   = 0;       // unpaused sweeps since this handle was filed
             std::uint32_t    retryIn     = 0;       // > 0: a refused Request, do not re-file yet (sweeps)
             std::uint32_t    refiles     = 0;       // re-files of this hold (for the log)
-            bool             wanted      = false;   // the rule stood within kHoldSweeps
+            bool             wanted      = false;   // the rule stood within kHoldLaps counted laps
             bool             inCombat    = false;   // the last lap that reached the rule was in combat
             int              lastSneak   = -1;      // last IsSneaking logged while claimed (-1 = none yet)
             bool             refusedLogged = false;
@@ -138,7 +152,7 @@ namespace MFO::APMFBridge {
         }
     }
 
-    const char* ServiceSneakRule(RE::Actor* a_follower) {
+    const char* ServiceSneakRule(RE::Actor* a_follower, SneakTable a_table) {
         if (!a_follower) return "no follower";
         const RE::FormID fid = a_follower->GetFormID();
         const bool inCombat = InCombat(a_follower);
@@ -150,15 +164,40 @@ namespace MFO::APMFBridge {
         if (!api) return "sneak needs Harbinger (ch.3)";
         std::scoped_lock lk(g_sneakMx);
         auto& c = g_sneaks[fid];
-        c.wanted     = true;
-        c.idleSweeps = 0;
+        c.wanted   = true;
+        c.idleLaps = 0;
+        c.owner    = a_table;
         if (c.handle != APMF_API::kInvalidHandle && c.inCombat != inCombat && MayLogLocked(fid, c))
             spdlog::info("[sneak] {:08X}: the held claim crossed {} combat", fid, inCombat ? "INTO" : "OUT OF");
         c.inCombat = inCombat;
         if (c.handle != APMF_API::kInvalidHandle) return nullptr;   // held
+        // The first file takes the re-assert's gate: no SneakStart into water or in the saddle. The rule still
+        // stands (wanted, counter reset above), so the claim files on the first lap he is on foot.
+        if (a_follower->AsActorState()->IsSwimming() || a_follower->IsOnMount()) return "swimming or riding";
         if (c.retryIn > 0) return "Harbinger refused the sneak claim (retrying)";
         c.refiles = 0;
         return FileLocked(api, fid, c, true) ? nullptr : "Harbinger refused the sneak claim";
+    }
+
+    void NoteSneakRuleStands(RE::FormID a_follower, SneakTable a_table) {
+        std::scoped_lock lk(g_sneakMx);
+        const auto it = g_sneaks.find(a_follower);
+        if (it == g_sneaks.end() || !it->second.wanted) return;
+        it->second.idleLaps = 0;
+        it->second.owner    = a_table;
+    }
+
+    void NoteSneakTableLap(RE::FormID a_follower, SneakTable a_table, bool a_ownCombat) {
+        std::scoped_lock lk(g_sneakMx);
+        const auto it = g_sneaks.find(a_follower);
+        if (it == g_sneaks.end() || !it->second.wanted) return;
+        auto& c = it->second;
+        const bool counts = a_table == SneakTable::Logistics || c.owner == SneakTable::Combat || a_ownCombat;
+        if (!counts || ++c.idleLaps < kHoldLaps) return;
+        ReleaseLocked(g_apmf.load(std::memory_order_relaxed), a_follower, c,
+                      a_table == SneakTable::Logistics ? "the rule stopped standing (3 logistics laps without it)"
+                                                       : "the rule stopped standing (3 combat laps without it)");
+        c.wanted = false;
     }
 
     void ReleaseSneak(RE::FormID a_follower, const char* a_why) {
@@ -182,16 +221,16 @@ namespace MFO::APMFBridge {
             if (c.retryIn > 0) --c.retryIn;
             if (c.handle == APMF_API::kInvalidHandle) {
                 // Nothing held (released, or a refused Request waiting out its retry): forget the entry once the
-                // rule has stopped standing.
-                if (!c.wanted || ++c.idleSweeps > kHoldSweeps) { it = g_sneaks.erase(it); continue; }
+                // rule has stopped standing (NoteSneakTableLap, ReleaseSneak).
+                if (!c.wanted) { it = g_sneaks.erase(it); continue; }
                 ++it;
                 continue;
             }
             ++c.ageSweeps;
             auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
             const char* why = nullptr;
-            if (++c.idleSweeps > kHoldSweeps)              why = "the rule stopped standing";
-            else if (!a || a->IsDead() || !a->Is3DLoaded()) why = "follower gone, dead or unloaded";
+            // "The rule stopped standing" is not decided here: it is counted in table laps (NoteSneakTableLap).
+            if (!a || a->IsDead() || !a->Is3DLoaded())      why = "follower gone, dead or unloaded";
             else if (!combatRoad && InCombat(a))            why = "in combat, bSneakInCombat off";
             if (why) {
                 ReleaseLocked(api, fid, c, why);

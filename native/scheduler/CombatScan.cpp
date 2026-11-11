@@ -313,6 +313,9 @@ namespace MFO::Scheduler {
                                          RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam));
                 const bool isSilver = op == Vocab::kActEquipSilver;   // a melee equip (category 1) everywhere below
                 const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged || isSilver;
+                // act.sneak (card G1): its condition held, so the rule stands this lap even when the row is passed
+                // over below (cannot act, cooling) and never reaches Fire. Refresh only, no file (apmf/SneakClaims.cpp).
+                if (op == Vocab::kActSneak) APMFBridge::NoteSneakRuleStands(id, APMFBridge::SneakTable::Combat);
 
                 // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --
                 // and it survives the scan unchanged: during a window the scan
@@ -1269,6 +1272,8 @@ namespace MFO::Scheduler {
                                       forced == CombatStyle::Stance::Melee && Logistics::CombatStyleFor(f, it->second).offHand == 2);
                 }
             }
+            // act.sneak (card G1): an emptied combat table is a lap that reaches no rule (apmf/SneakClaims.cpp).
+            APMFBridge::NoteSneakTableLap(id, APMFBridge::SneakTable::Combat, ownCombat);
             serviceOwnOoc(/*castFacetHeld=*/false);   // no combat rules -> no cast rule can hold the facet -> the OOC road runs
             return;      // no rules -> nothing else to run
         }
@@ -1320,6 +1325,10 @@ namespace MFO::Scheduler {
         const int firedRuleNow = src.SuppressionAnchor(inWindow, recent.firedRule, recent.firedUID);
         const bool windowActive = Rank::WindowActive(inWindow, firedRuleNow);
 
+        // act.sneak (card G1): THE ONE "the table ran" signal of the combat hold. Not inside a suppression window:
+        // the scan stops cold at the anchor there, so a sneak row below it is not reached and the lap is not a full
+        // one. Every return above (the ready beat, a retreat) runs no lap either.
+        if (!windowActive) APMFBridge::NoteSneakTableLap(id, APMFBridge::SneakTable::Combat, ownCombat);
         ScanOut scan;
         Scan(src, f, id, now, cannotAct, windowActive, firedRuleNow, scan);
         auto& castSeen = scan.castSeen;

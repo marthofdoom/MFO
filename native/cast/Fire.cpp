@@ -446,7 +446,7 @@ namespace MFO::Actuation {
         // way: the scan goes on to the rows below, so "Always -> Sneak" can sit on top of a table. NoOp = held,
         // FailedOther = not held (Harbinger absent or refused, or in combat with bSneakInCombat off), reason named.
         if (op == Vocab::kActSneak) {
-            if (const char* why = APMFBridge::ServiceSneakRule(a_follower))
+            if (const char* why = APMFBridge::ServiceSneakRule(a_follower, APMFBridge::SneakTable::Combat))
                 return { Result::FailedOther, why, true };
             return { Result::NoOp, "sneaking", true };
         }
