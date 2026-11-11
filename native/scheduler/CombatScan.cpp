@@ -1124,6 +1124,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseHealApproach(id, "retreating");   // ch.24: so does the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "retreating");
                 APMFBridge::ReleaseGroundStep(id, "retreating");
+                APMFBridge::ReleaseHideHold(id, "retreating");       // G2: no movement block over the retreat travel
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating

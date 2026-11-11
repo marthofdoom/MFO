@@ -79,6 +79,7 @@ namespace MFO::APMFBridge {
                           std::int32_t a_ival, const char* a_name) {
             if (Dead(reinterpret_cast<const APMF_API::APMF_API_v6*>(a_api), a_o)) {
                 spdlog::info("[hide] {:08X}: the {} claim ended (Harbinger released it) -- filing a fresh one", a_fid, a_name);
+                a_api->Release(a_o.h);   // a never-live handle may only be pending: release it so it cannot apply later, orphaned (no-op if dead)
                 a_o.h = APMF_API::kInvalidHandle;
             }
             if (a_o.h != APMF_API::kInvalidHandle) return true;

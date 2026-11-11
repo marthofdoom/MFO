@@ -3026,3 +3026,17 @@ The disabled Gambits-tab "Class:" button shows the raw combatClassOverride name 
 
 ### MFO-B725 (SEV-5, OPEN, Board_Classes.cpp, against da493fe, same review)
 The Classes tab has no reserved footer, so with long trees the footer hint scrolls out of view.
+
+### MFO-B734 (SEV-4, OPEN, iaus hold claim + cannot-act, against 6253a53, Opus re-review of the G2 fix round)
+Knockdown/paralysis churn: the hold row is picked by Next(), files ch.1 + ch.7 and logs FILED; the cannot-act check rejects it and the next Next() releases both and logs RELEASED: 2 Requests, 2 Releases and 2 unthrottled info lines per lap while he is down and hidden. Fix: service the hold only once the scan stops on it, or skip filing when he cannot act.
+
+### MFO-B735 (SEV-4, OPEN, apmf/HideClaims.cpp kStaleSweeps, against 6253a53, same review)
+The stale expiry counts pumps (30), not laps; a follower's lap is N x 133 ms, so it is only safe under about 30 followers, beyond which a live hold flaps release/refile every lap (principle 9). Use counted laps like SneakClaims kHoldLaps, or max(30, 3 x active followers). Legitimate logged release, not a mask.
+
+### MFO-B736 (SEV-4, OPEN, StealthProbe.cpp:524-531 q87 median, against 6253a53, same review)
+Hits with before=max go into the sneak median; "not in his group" does not mean full health, which pushes the median up and can mislead the Q87 verdict. Keep them out of the median or report them separately (with MFO-B731).
+
+### MFO-B737 (SEV-5, OPEN, apmf/HideClaims.cpp refused claims, against 6253a53, same review)
+If Harbinger refuses one of the two claims, the warning logs once but RequestEx is retried every hold lap (APMF.log may repeat the refusal); a partial claim (ch.1 without ch.7 or the reverse) is allowed to stand and is logged.
+
+(Folded into the branch by the coordinator from the same review: F1 retreat lap now releases the hide hold, CombatScan.cpp; F4 a never-live handle is released before reset, HideClaims.cpp.)
