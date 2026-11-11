@@ -250,13 +250,17 @@ namespace MFO::Iaus::Candidates {
                 s.willWork.push_back(n);
             }
 
-        // ── heals already streaming (the direct road's own registry, worker-serial) ──────────────────────
+        // ── heals already running (worker-serial registries + the bridge's claim table) ──────────────────
         for (const auto& e : s.book.entries) {
             if (e.source != SpellSource::Spell || e.nature != Prune::Nature::Heal || e.drop != Prune::Drop::Keep) continue;
-            if (Actuation::TargetStreamLive(selfID, e.form, selfID)) s.liveStreams.push_back({ e.form, 0u, Tri::Yes });
+            // Every road a heal can be running on (I4 review F1): the direct SELF stream (g_selfCast), the direct
+            // on-target stream (g_targetCast) and a standing Harbinger heal claim on either hand.
+            if (Actuation::SelfStreamLive(selfID, e.form) || Actuation::HealClaimLive(selfID, e.form, 0))
+                s.liveStreams.push_back({ e.form, 0u, Tri::Yes });
             if (e.selfDelivery) continue;
             for (const auto& a : s.allies)
-                if (Actuation::TargetStreamLive(selfID, e.form, a.id)) s.liveStreams.push_back({ e.form, a.id, Tri::Yes });
+                if (Actuation::TargetStreamLive(selfID, e.form, a.id) || Actuation::HealClaimLive(selfID, e.form, a.id))
+                    s.liveStreams.push_back({ e.form, a.id, Tri::Yes });
         }
 
         // Ask the main thread to (re)measure the sight lines this tick read (rate-limited per pair inside).
