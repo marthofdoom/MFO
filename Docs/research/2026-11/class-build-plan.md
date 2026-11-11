@@ -89,6 +89,41 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   `RequestDetectionLevel` (id 36748, resolved, unused) is the input to gate. Rule: gate the INPUT the engine reads (the
   foe's detection result for this pair), never patch the output (memory gate-the-source). Deny-completeness: every
   other path that re-acquires (noise, hit by the follower, engaged sense) must be listed.
+- **LAYER 1 BUILT (`feat/g2-hide-layer1`, 2026-11-11, NOT field-run), no seat** (`g2-hide-design.md` section 2): the foe's own
+  combat-group record of the follower is read into the IAUS gather (`iaus/Hide.cpp`, the `TauntProbe.cpp` read), the Sneak
+  family's HOLD row and a blow-from-stealth boost use it, and the engine's own sneak attack does the damage. Layer 2 (the
+  seat) is built only if the field below says Layer 1 is not enough.
+  **In-game test steps** (a Thief-style follower with a melee weapon or a bow, a list with sneak perks, two bandits):
+  1. `MFO.ini`: `[Debug] bStealthProbe=1`, `bSneakInCombat=1`, `bIausExplain=1`, the follower on Sentient AI with an
+     `Always -> Sneak` combat rule (G1). Watch `MFO.log`.
+  2. **P1 (does the stance hold in combat?)** pull a fight. Look for `[stealth-probe] self 0x<id>: sneaking=true ... inCombat=true`
+     once a second. `sneaking=false inCombat=true` every 5 s means the combat AI stood him up (the stance does not hold;
+     leave `bSneakInCombat` OFF). The tail `entries (seed->result ...)` must show 57 / 48 / 47 / 18 results that differ from
+     their seeds for a follower who owns the matching perk; equal to the seed = the perk does not evaluate for him.
+  3. **P2 (does the engine compute foe-to-follower pairs and lose him?)** look for `[stealth-probe] seen foe ... group HELD|LOST|ABSENT
+     detect=N stealthPts=... unrefreshed=Ns ... MFO verdict: detects me = YES|NO (hidden) ; sense: ..., pred: ...`. A foe that
+     never looks his way should go LOST after about 10 s (`unrefreshed` counts the seconds the record stayed unchanged); a foe
+     that looks and fails should lose him at once. `pred` is a LOWER bound (light, weight, action noise and line of sight are
+     not read) and `lightMax` the most the light term could add.
+  4. **The hold row and the strike:** with the follower hidden from every foe the `[iaus]` decision line shows `hold 1` and the
+     pick is `sneak` (Wait: MFO names nothing). When an unaware foe comes within the melee reach the pick becomes `attack`
+     or `power_attack` on it, with the `strike` consideration at x1 in `[iaus-why]`.
+  4b. **The hold CLAIM (Harbinger ch.1 + ch.7, `apmf/HideClaims.cpp`).** With the row picked look for `[hide] <id>: ch.1 movement
+     block (h=..) + ch.7 offense/cast deny (h=..) FILED` once, and `RELEASED (...)` with the reason when the pick changes (the
+     release comes BEFORE the attack on the strike lap), his combat ends, the stance drops, or he is dismissed. Checks: (a) the
+     hold lines match the `[iaus]` pick lap for lap; (b) the first blow lands on the strike lap (the ch.7 deny never eats it);
+     (c) `REFUSED` or `the ch.1 movement block claim ended` lines are a failure to report. **FIELD CAVEAT:** it is unobserved
+     whether ch.1 MovementBlock parks a follower who is IN COMBAT. Read the P1 `moving=` bits while the hold stands: `moving=false`
+     = it parks him. `moving=true` with a live claim = it does not. **Documented next step if it does not (NOT built): a ch.23
+     `kIntent_PursuitLeash` claim anchored on him** (Harbinger's in-combat leash, the `apmf/PursuitLeash.cpp` road).
+  4c. **Silent casting.** The P1 line ends `castSilent=n/m` (spells whose cast-sound entry point 55 reads 0 for him). With a
+     hidden-casting perk the hold row keeps his silent spells as candidates while hidden; without one no cast is generated while
+     the hold row stands. An offensive spell that hits still reveals him through the engine.
+  5. **P3 / Q87 (does the list's sneak multiplier reach a follower?)** look for `[stealth-probe] hit ... kSneakAttack=true ...
+     expected multiplier N ... health before B after A drop D`. After 5 sneak and 5 plain hits with the same weapon type the
+     `[stealth-probe] q87 ...` line says `WITHIN 25%` or `OUTSIDE 25%` (ratio of the median sneak drop to the median plain drop
+     against the expected multiplier) with the raw drops. No sneak hit at all = the engine's sneak attack does not run for an
+     NPC on that list (the multiplier question goes back to marth).
 
 **G3. Disengage to out-of-sight, then sneak**
 - What: a sneak class that is detected picks a point that no engaged foe can see, moves there with H3 (regular movement),

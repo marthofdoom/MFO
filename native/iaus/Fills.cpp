@@ -358,6 +358,21 @@ namespace MFO::Iaus::Fills {
 
     }
 
+    bool CastsSilently(RE::Actor* a_caster, RE::SpellItem* a_spell) {
+        if (!a_caster || !a_spell) return false;
+        if (!g_epOk.load(std::memory_order_relaxed) || !Runtime::IsVerified1_6_1170()) {
+            static std::atomic<bool> s_logged{ false };
+            if (!s_logged.exchange(true))
+                spdlog::warn("[iaus-fill] cast-sound entry point (55) REFUSED by name: needs the verified HandleEntryPoint row on "
+                             "1.6.1170 (the only build its call site was disassembled on) -- every cast counts as LOUD while hidden");
+            return false;
+        }
+        float v = 1.0f;   // the engine's seed (0x5BF42A reads 1.0f from the image)
+        RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellCastingSoundEvent, a_caster,
+                                            static_cast<RE::MagicItem*>(a_spell), &v);
+        return std::isfinite(v) && v == 0.0f;
+    }
+
     void StartupCheck() {
         auto* gsc = RE::GameSettingCollection::GetSingleton();
         std::string vals, missing;
