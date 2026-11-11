@@ -2834,3 +2834,6 @@ Pre-existing drift: "Slot caps ... :112-113" should be State.h:142 (kCombatSlots
 
 ### MFO-B654 (SEV-5, OPEN, FlwrEnabledByte.h:34/:59 sign conversion, against 906c603, Opus tier-3 review of I5)
 clang/g++ -Wsign-conversion warns on the int-to-unsigned shift; tools/flwr_byte_test/run.sh suppresses it. Same expression as the old code, harmless. Also noted (process, no action): the new header was not named in the brief; disclosed, verbatim move, proven.
+
+### MFO-B655 (SEV-5, OPEN, scheduler/CombatScan.cpp + Scheduler_internal.h file-header comments, against 4d6a8f2, I0 author least-sure spot + Opus tier-3 review)
+The file headers say "proven function by function with tools/splitcheck" without naming the one allow entry (tools/splitcheck/allow/iaus-i0.txt, ServiceRetreat). Left unedited so the proof builds stayed paired; MAP.md and Docs/research/2026-11/iaus-i0-split.md state it accurately. Fix with the next edit to either file. Also: CombatScan.cpp is 1622 lines (past ~1500); the split plan needs Tick broken into functions first (I1-shaped work).
