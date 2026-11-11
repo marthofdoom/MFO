@@ -1306,6 +1306,10 @@ namespace MFO::Scheduler {
         // CARD I6: the IAUS source for an iausCombat follower, else the table. The IAUS source gathers and
         // decides in its constructor and logs in its destructor (the end of this service); it is built only
         // when needed, so a table follower pays nothing.
+        // Harbinger ch.31 combat move: write the outcome of his last bash once it is known, and run the DEV probe
+        // ([Debug] bCombatMoveProbe, default OFF: a bash every 6 s while his combat target is in melee reach).
+        APMFBridge::PollCombatMove(id);
+        APMFBridge::CombatMoveProbeTick(f);
         TableSource table(f, id);
         std::optional<IausSource> iaus;
         if (iausOn) iaus.emplace(f, id, iausRapport);

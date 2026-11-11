@@ -1817,6 +1817,19 @@ namespace MFO::APMFBridge {
     bool          PlaceSupported();
     std::uint32_t RequestPlace(RE::FormID a_actor, RE::FormID a_dest, const RE::NiPoint3& a_offset, float a_yaw, std::uint32_t a_flags);
     PlaceRead     ReadPlace(std::uint32_t a_handle);
+    // ── COMBAT MOVE (Harbinger ch.31, ABI v38, kIntent_CombatMove) -- apmf/CombatMove.cpp ─────────────────────────────
+    // ONE bash or power bash, started once by Harbinger on the game thread through the engine's own start-of-attack action
+    // (never a bare animation event: only the action road sets his attack data and attack state). A one-shot, never a claim.
+    // ANY thread. CombatMoveSupported: APMF present AND abiVersion >= 38. RequestBash: a_foe = the foe it is meant for (checked
+    // and measured by Harbinger, never aimed at: reach and facing are MFO's to judge BEFORE asking); returns the handle, or 0
+    // (no road, or refused at the call). The outcome is asynchronous: PollCombatMove(follower) writes it to the log ONCE
+    // (STARTED / REFUSED / FAILED, then HIT or "no bash hit inside the window"); RequestBash polls the previous move first.
+    // CombatMoveProbeTick: the dev probe ([Debug] bCombatMoveProbe, default OFF): a follower whose combat target is inside
+    // melee reach asks for a bash every 6 s. Worker road; own leaf mutex, never g_mx; nothing is saved.
+    bool          CombatMoveSupported();
+    std::uint32_t RequestBash(RE::FormID a_follower, RE::FormID a_foe, bool a_power);
+    void          PollCombatMove(RE::FormID a_follower);
+    void          CombatMoveProbeTick(RE::Actor* a_follower);
     // ── TOWN ERRAND WORK (TOWN PHASE 2 R7: inn + temple) -- apmf/ErrandWork.cpp ───────────────────────────────────────
     // The ch.9 package-offer claim of an errand's WORK (Forms.h MFO_ErrandActivate / Sandbox / Eat / Sleep, one record per kind
     // per follower slot): the shrine Activate, the inn's Sandbox (sit / stay), the Eat meal, the Sleep bed. MFO declares the work and its

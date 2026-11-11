@@ -8959,6 +8959,21 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   the road families (Regroup / GiveGround / Block / Bash behind `Snapshot::*Road`, `IausSource.cpp` answers "no action
   road"), `Tuning::kiteDistance`, and every consideration whose fact the engine side does not fill yet (the estimates,
   `mortal`, `swinging`, `casting`, `controlSec`, `castsWanted`): those read Off. Measured effects: doc section 28.1.
+- **THE BASH ROAD (`feat/iaus-combat-move`, 2026-11-11; Harbinger ch.31 `kIntent_CombatMove`, ABI v38; doc section 29).**
+  `apmf/CombatMove.cpp` (NEW): `CombatMoveSupported` (ABI >= 38), `RequestBash(follower, foe, power)` (a one-shot through
+  `RequestEx`, never a claim), `PollCombatMove` (writes the asynchronous outcome to the log ONCE per move: STARTED /
+  REFUSED / FAILED, then HIT or no hit; own leaf mutex, never `g_mx`), `CombatMoveProbeTick` (the dev probe, `[Debug]
+  bCombatMoveProbe`, default OFF: a bash every 6 s while his combat target is in melee reach). Both are called once per
+  combat service of a follower in `scheduler/CombatScan.cpp`, just before the choice source is built. `Vocab::kActBash`
+  (`act.bash`) is IAUS-ONLY: produced by `scheduler/IausSource.cpp` for `Family::Bash`, executed in `cast/Fire.cpp`
+  (foe alive and inside `g_meleeReach` NOW, else transparent; no closing leg), in NO board table or class row, never
+  serialized. `Snapshot::bashRoad` (`iaus/Candidates.cpp`) = `[Debug] bIausBashRoad` (default OFF until the field proves
+  the road) AND `CombatMoveSupported()`. **What breaks:** never replace the Harbinger request with
+  `NotifyAnimationGraph("bashStart")`: the engine sets attack data and the Bash attack state only on its action road
+  (Harbinger `core/CombatMove.h`). If `act.bash` ever joins the row vocabulary its string freezes (#10) and the board
+  tables need it. MFO must judge reach BEFORE asking: Harbinger measures the foe, it never aims. A ch.7 Offense deny of
+  MFO's own on that follower refuses the bash (`OffenseDenied`): release the deny first, do not expect it to pass.
+  `native/APMF_API.h` is the byte-shared mirror (md5 must equal Harbinger's).
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

@@ -142,6 +142,9 @@ namespace MFO::Iaus::Candidates {
         s.tauntBusy        = s.tauntEnabled && Taunt::Busy(selfID);   // card I6: act.taunt would refuse him now
         s.tauntReach       = Config::g_tauntRadius.load(std::memory_order_relaxed);
         s.meleeReach       = Config::g_meleeReach.load(std::memory_order_relaxed);
+        // The Bash family exists only while its road does: Harbinger's combat move (ch.31, ABI v38) and the switch that
+        // stays OFF until the field run proves that road ([Debug] bIausBashRoad). Harbinger absent = no candidate.
+        s.bashRoad         = Config::g_iausBashRoad.load(std::memory_order_relaxed) && APMFBridge::CombatMoveSupported();
 
         // The resist actor values the book's offense spells key on (the exploit consideration's read).
         std::vector<int> resistAvs;

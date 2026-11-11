@@ -181,5 +181,15 @@ retreat.flee_hold, visual.animated_casts, visual.frame_hitches, ch18.power_floor
 - A claimed follower with Skooma refused: the AI never selects it (0x0F seat) and never drinks it (DrinkPotion 0x10F seat); real potions still drunk.
 - Player drinking from the menu is unaffected; a console/script drink on that follower STANDS (Q61 default allow); a QUEUED script drink is refused (known hole APMF-B258, logged loudly).
 
+### NEW: Harbinger ch.31 combat move, the BASH road (APMF `feat/combat-move` + MFO `feat/iaus-combat-move`, both pending review; iaus-sim-v2.md section 29)
+Needs BOTH DLLs from those branches. A follower with a shield (or any melee weapon) and a melee fight.
+- Setup: `APMF.ini [Probe] bCombatMove=1`, `MFO.ini [Debug] bCombatMoveProbe=1`. Leave `bIausBashRoad=0`.
+- Install line: `[combat-move] installed (kIntent_CombatMove, ABI v38) ... hit sink registered; [Probe] bCombatMove=1` in APMF.log.
+- PASSIVE part (any melee fight, APMF.log): `[combat-move-probe] HIT ...` lines. Wanted: one where a follower or a foe BASHED by itself (`bash=true`, attack data `bashStart`), one where a follower BLOCKED a hit (`blocked=true`, `target wantBlocking=true`), and several follower POWER ATTACKS (do they read `power=true`, and what is the attacker's attack data?).
+- SENT part: every 6 s in melee reach MFO.log shows `[combat-move] ... PROBE bash requested`. Then in APMF.log either `[combat-move] <h> STARTED: ... the engine set his attack data and the Bash attack state` followed by `[combat-move] <h> HIT ...`, or `REFUSED` / `FAILED` with a reason. MFO.log repeats the outcome (`STARTED`, then `HIT` or `NO bash hit arrived`).
+- By eye: does he visibly bash (the shield or weapon shove), does the foe stagger, is a charging mage interrupted, does his stamina drop?
+- PASS = STARTED and HIT lines with `bash=true` in the probe line, and it looks like a bash. Anything else: send both logs, change nothing.
+- Then turn both probe switches OFF again.
+
 ### Saved question
 - Q61 (still OPEN): should scripts/console still make a "no drugs" follower drink? Default kept: allow.

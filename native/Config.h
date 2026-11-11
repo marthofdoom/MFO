@@ -534,6 +534,14 @@ namespace MFO::Config {
     // one `[iaus-why]` line per top-3 candidate (every consideration's input and value) after each `[iaus]` line.
     // LOG-ONLY: the board's Thinking panel does not read it. Read by scheduler/IausSource.cpp on the worker.
     inline std::atomic<bool>  g_iausExplain{ false };
+    // COMBAT MOVE PROBE ([Debug] bCombatMoveProbe, INI-only, default OFF; Harbinger ch.31, ABI v38). 1 = a follower in
+    // combat whose combat target is inside melee reach asks Harbinger for a BASH every 6 s, whatever his gambits or
+    // Sentient AI would do. DEV-ONLY: it proves the road (apmf/CombatMove.cpp CombatMoveProbeTick), nothing ships on it.
+    inline std::atomic<bool>  g_combatMoveProbe{ false };
+    // IAUS BASH ROAD ([Debug] bIausBashRoad, INI-only, default OFF until the field run proves the road). 1 = for a
+    // follower on Sentient AI the Bash family is generated (Snapshot::bashRoad) while Harbinger serves ABI v38, and a
+    // chosen bash is sent through apmf/CombatMove.cpp. Read by iaus/Candidates.cpp on the worker.
+    inline std::atomic<bool>  g_iausBashRoad{ false };
     // IAUS AVAILABLE ([General] bIausAvailable, MCM "Combat & Casting", default ON; marth Q71). The global gate over
     // the per-follower IAUS combat switch (FollowerState::iausCombat, default OFF). 0 = no follower runs the IAUS
     // source whatever his bit says; the bit is KEPT (co-save untouched), so turning this back on restores each

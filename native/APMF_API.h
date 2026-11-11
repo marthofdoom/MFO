@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v36, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v38, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 36;
+    inline constexpr std::uint32_t kABIVersion = 38;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -696,6 +696,51 @@ namespace APMF_API {
                                      //       unsupported runtime, a failed address row or byte check). Read the
                                      //       counts with APMF_API_v36::GetProjectileAimState.
                                      //       See Docs/APMF_API-REFERENCE.md#abi-v36-projectile-aim
+
+        kIntent_PotionAllowance = 30, // ch.30 POTION ALLOWANCE (ABI v37, ClickUp 1dfcuabcqpf, 2026-11-10). Which
+                                     //       potions this actor may DRINK (an AlchemyItem: potion, poison or food),
+                                     //       with NO cast claim needed. Mode: DENY ONLY. The client declares a
+                                     //       predicate with APMF_API_v37::SetPotionAllowance (Harmful = any effect
+                                     //       whose base effect is Hostile or Detrimental, e.g. Skooma; every
+                                     //       non-food potion; food; up to 8 keywords on the item or on any of its
+                                     //       effects). Harbinger refuses a matching potion at two seats: the combat
+                                     //       AI's SELECTION (slot 0x0F of the 15 potion inventory items: the AI
+                                     //       picks among the rest) and every DRINK (Actor::DrinkPotion, Character
+                                     //       slot 0x10F: the combat tree's DrinkPotion leaf and every EquipObject of
+                                     //       the potion). A refused drink returns false and consumes nothing. Ranked
+                                     //       on the Cast facet against the drink's source (Engine, DirectCalls for
+                                     //       Papyrus / console, a plugin DLL by module); the player's own menu use
+                                     //       passes (player agency). Param: none read. A STANDING claim: no TTL,
+                                     //       ended by Release; a claim with no declaration denies nothing.
+                                     //       REFUSED (kInvalidHandle, logged) for the player and while the seats are
+                                     //       not installed ([PotionAllowance] bPotionAllowance=0, VR, 1.7.104 or any
+                                     //       other runtime than exactly 1.6.1170 / 1.5.97, a failed address row).
+                                     //       Read the counts with APMF_API_v37::GetPotionAllowanceState.
+                                     //       See Docs/APMF_API-REFERENCE.md#abi-v37-potion-allowance
+
+        kIntent_CombatMove = 31,     // ch.31 COMBAT MOVE (ABI v38, 2026-11-11). Make this actor do ONE melee move
+                                     //       NOW: a bash or a power bash. Mode: ONE ENGINE ACTION (INVARIANTS #0
+                                     //       (l)), never a claim: the same action the combat AI's own Bash leaf
+                                     //       performs, ONCE, on the game thread. The engine starts an attack by
+                                     //       processing a TESActionData whose animation event is the chosen attack
+                                     //       entry's (StartAttack, AE 49170), and only THAT road sets the actor's
+                                     //       attack data and attack state, which the hit reads. A bare animation
+                                     //       event plays the swing without them. Harbinger builds that same action
+                                     //       data for the actor's own bash entry and processes it: the engine's
+                                     //       animation, stamina, hit frame and stagger, nothing else. It holds no
+                                     //       facet and switches nothing on; the actor's AI carries on around it.
+                                     //       Param: ival = a CombatMove (REQUIRED); target = the foe the move is
+                                     //       meant for (optional, 0 = none): it must be a loaded living actor, and
+                                     //       its distance and bearing at the send are reported, nothing is aimed
+                                     //       or moved (reach and facing are the client's to judge). form / fval /
+                                     //       pos not read. Basis not read. RequestEx only. The handle is a label:
+                                     //       IsClaimLive is false, Release / Repoint do nothing. The outcome is
+                                     //       GetCombatMoveState (APMF_API_v38).
+                                     //       REFUSED (kInvalidHandle, logged): APMF < v38, not installed
+                                     //       ([CombatMove] bCombatMove=0, VR, a runtime other than exactly
+                                     //       1.6.1170 / 1.5.97, a failed address row), the player, actor 0, no
+                                     //       param, a move this ABI does not build (kCombatMove_Block is RESERVED).
+                                     //       See "ABI v38: COMBAT MOVE" at the end of this header.
     };
 
     // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
@@ -1570,6 +1615,9 @@ namespace APMF_API {
     //   fval   kIntent_Place           ABI v28: the yaw in radians, read ONLY with kPlace_SetYaw.
     //   ival   kIntent_ProjectileAim   ABI v36: the miss budget over the last 10 shots (0 = never miss,
     //                                  1..9 = at most that many, 10+ = observe only). Nothing else read.
+    //   none   kIntent_PotionAllowance ABI v37: nothing read; the predicate is SetPotionAllowance's.
+    //   ival   kIntent_CombatMove      ABI v38: a CombatMove (REQUIRED).
+    //   target kIntent_CombatMove      ABI v38: the foe the move is meant for (optional; reported, never aimed at).
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
@@ -3086,7 +3134,7 @@ namespace APMF_API {
         kServePending_CastFromPackage   = 1u << 3,   // kCastFlag_FromPackage: the spell is read off the package at
                                                      //   Drain; a package with none is DROPPED
         kServePending_OneShot           = 1u << 4,   // a one-shot that is never a claim (kCastFlag_AtPosition,
-                                                     //   kIntent_Place): its game-thread step decides the rest
+                                                     //   kIntent_Place, kIntent_CombatMove): its game-thread step decides the rest
                                                      //   (GetPlaceState for a placement)
         kServePending_PlaceRoom         = 1u << 5,   // kIntent_Place: the real call also refuses when the
                                                      //   placement records are full (not checked: the check
@@ -3095,6 +3143,10 @@ namespace APMF_API {
                                                      //   (a form lookup: a target or anchor that is not a loaded
                                                      //   actor, a destination that does not resolve, ...) may end
                                                      //   or idle it, logged there. Every claim
+        kServePending_CombatMoveRoom    = 1u << 7,   // ABI v38, kIntent_CombatMove: the real call also refuses when
+                                                     //   the combat move records are full (not checked: the check
+                                                     //   frees finished records). Its game-thread step decides the
+                                                     //   rest (GetCombatMoveState)
     };
 
     // Which call the query describes. APPEND-ONLY: never renumber.
@@ -3215,6 +3267,259 @@ namespace APMF_API {
         // under APMF's own leaf lock, no game call). A throw inside returns kProjectileAimState_None, nothing
         // written.
         std::uint32_t (*GetProjectileAimState)(RE::FormID actor, APMF_ProjectileAimInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v37: ch.30 POTION ALLOWANCE (kIntent_PotionAllowance) -- which potions the actor may drink
+    // ═════════════════════════════════════════════════════════════════════════════
+    // A client claims kIntent_PotionAllowance on an NPC (Request / RequestEx, no param) and DECLARES, with
+    // SetPotionAllowance, a DENY predicate. Nothing about a cast claim is needed: the allowance stands alone.
+    // Harbinger refuses a potion that matches it at two seats (Docs/FACETS.md "ch.30"):
+    //   SELECTION  slot 0x0F (CheckShouldEquip) of the 15 CombatInventoryItemMagicT<CombatInventoryItemPotion, *>
+    //              classes, which CombatInventory asks for every candidate: the engine answers first, and a YES
+    //              for a matching potion becomes NO, so the combat AI picks among the potions that remain.
+    //   DRINK      Actor::DrinkPotion (Character vtable slot 0x10F; AE 38746 / SE 37797). Every road an NPC
+    //              drinks by ends there: the combat tree's DrinkPotion leaf (AE 49928+0xE6 / SE 48984+0xBE) and
+    //              ActorEquipManager's apply step for an equipped ALCH (AE 38001+0x7B7 / SE 36976+0x82F: sandbox
+    //              eating, AI commands, Papyrus EquipItem, the console, the player's menus, other DLLs). A refused
+    //              drink returns false WITHOUT calling the engine: nothing is cast, nothing is removed from the
+    //              inventory, and both engine callers treat false as an ordinary failure.
+    // THE PREDICATE reads the item's own record data, so it needs nothing list-specific:
+    //   kPotionDeny_Harmful   any effect whose base effect (MGEF) is flagged Hostile or Detrimental. This is the
+    //                         "drug" rule (a Skooma, a potion with a damaging side effect).
+    //   kPotionDeny_Potions   every AlchemyItem that is not food (potions and poisons).
+    //   kPotionDeny_Food      every food item (the ALCH food flag). Off by default: sandbox eating is food.
+    //   keywords              up to kMaxPotionDenyKeywords BGSKeyword FormIDs the client resolved at runtime (from
+    //                         its own plugin or the base game, never a list's item ids). A potion carrying one of
+    //                         them, or having an effect whose base effect carries one, matches.
+    // A potion matches when it meets ANY declared rule.
+    // RANKING: a refusal stands only while the claim outranks the drink's source on the Cast facet (the
+    // Harbinger page / APMF_Sources.ini). The combat AI and every engine road are Engine; Papyrus EquipItem and
+    // the console are DirectCalls (by default they outrank a client, so a script's drink stands, as an equip
+    // does under ch.17); a DLL calling EquipObject or DrinkPotion is that DLL. The player's own menu use on the
+    // actor (the trade / gift / follower inventory) always passes: player agency.
+
+    // SetPotionAllowance's deny rules (APMF_PotionAllowance::deny). APPEND-ONLY.
+    enum PotionDenyFlags : std::uint32_t {
+        kPotionDeny_Harmful = 1u << 0,   // any effect's base effect is Hostile or Detrimental (a drug)
+        kPotionDeny_Potions = 1u << 1,   // every non-food AlchemyItem (potions and poisons)
+        kPotionDeny_Food    = 1u << 2,   // every food AlchemyItem
+    };
+
+    // APMF_PotionAllowance::flags. APPEND-ONLY.
+    enum PotionAllowanceFlags : std::uint32_t {
+        kPotionAllow_ObserveOnly = 1u << 0,   // count and log what WOULD be refused; refuse nothing
+    };
+
+    inline constexpr std::uint32_t kMaxPotionDenyKeywords = 8;
+
+    // The declaration. BYTE-SHARED with clients, static_assert-pinned below. Zero-initialise it, set `size` to
+    // sizeof(APMF_PotionAllowance), and fill what you declare. Unknown deny / flag bits are masked off and a
+    // keywordCount above kMaxPotionDenyKeywords is clamped (both logged once per handle); a keyword slot of 0 is
+    // ignored. Keywords are compared by FormID; the client resolves them (a keyword that is not loaded matches
+    // nothing).
+    struct APMF_PotionAllowance {
+        std::uint32_t size;                              // sizeof(APMF_PotionAllowance) (64); smaller is refused
+        std::uint32_t deny;                              // PotionDenyFlags
+        std::uint32_t flags;                             // PotionAllowanceFlags
+        std::uint32_t keywordCount;                      // 0..kMaxPotionDenyKeywords
+        RE::FormID    keywords[kMaxPotionDenyKeywords];  // BGSKeyword FormIDs
+        std::uint32_t reserved[4];                       // zero
+    };
+    static_assert(sizeof(APMF_PotionAllowance) == 64, "APMF_PotionAllowance is 64 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_PotionAllowance, keywords) == 16, "APMF_PotionAllowance layout is frozen");
+    static_assert(offsetof(APMF_PotionAllowance, reserved) == 48, "APMF_PotionAllowance layout is frozen");
+
+    // Which road a refused (or allowed) drink came by (APMF_PotionAllowanceInfo::lastRoad). APPEND-ONLY.
+    enum PotionRoad : std::uint32_t {
+        kPotionRoad_None      = 0,   // nothing seen yet
+        kPotionRoad_Selection = 1,   // the combat AI's selection (slot 0x0F): the potion was never picked
+        kPotionRoad_CombatAI  = 2,   // the combat tree's DrinkPotion leaf
+        kPotionRoad_Equip     = 3,   // an EquipObject of the potion (engine package, AI command, script, console, DLL)
+        kPotionRoad_Engine    = 4,   // the engine's equip apply step reached without an EquipObject frame
+        kPotionRoad_Direct    = 5,   // a DLL (or skse64) calling Actor::DrinkPotion itself
+    };
+
+    // GetPotionAllowanceState's answer. APPEND-ONLY: never renumber.
+    enum PotionAllowanceState : std::uint32_t {
+        kPotionState_None        = 0,   // no winning ch.30 claim with a declaration on this actor
+        kPotionState_Declared    = 1,   // a winning claim with a declaration; no matching potion met yet
+        kPotionState_Governed    = 2,   // a seat has met at least one matching potion of the actor under the claim
+        kPotionState_Unavailable = 3,   // the seats are not installed (every ch.30 claim is refused)
+    };
+
+    // GetPotionAllowanceState's out-struct. BYTE-SHARED, static_assert-pinned. Set `size` to
+    // sizeof(APMF_PotionAllowanceInfo) before the call; a smaller `size` gets the state only, nothing written.
+    // Counters are since the load (saturating), per actor.
+    struct APMF_PotionAllowanceInfo {
+        std::uint32_t size;              // in: sizeof(APMF_PotionAllowanceInfo) (64)
+        std::uint32_t state;             // PotionAllowanceState (also the return value)
+        Handle        ownerHandle;       // the winning ch.30 claim (kInvalidHandle when none)
+        std::uint32_t deny;              // the declaration as APPLIED (after masking)
+        std::uint32_t flags;             //   "
+        std::uint32_t keywordCount;      //   "
+        std::uint32_t selectionDenied;   // CheckShouldEquip answers turned to NO (the AI's selection)
+        std::uint32_t drinkDenied;       // drinks refused at DrinkPotion
+        std::uint32_t rankStood;         // matches NOT refused because the source outranks the claim
+        std::uint32_t wouldDeny;         // matches NOT refused because of observe-only (INI or the flag)
+        RE::FormID    lastPotion;        // the last matching potion met (refused, stood or would-deny)
+        std::uint32_t lastRoad;          // PotionRoad of that meeting
+        std::uint32_t reserved[4];
+    };
+    static_assert(sizeof(APMF_PotionAllowanceInfo) == 64, "APMF_PotionAllowanceInfo is 64 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_PotionAllowanceInfo, selectionDenied) == 24, "APMF_PotionAllowanceInfo layout is frozen");
+    static_assert(offsetof(APMF_PotionAllowanceInfo, reserved) == 48, "APMF_PotionAllowanceInfo layout is frozen");
+    inline constexpr std::uint32_t kPotionAllowanceInfoV37Size = 64;
+
+    // The v37 interface: APMF_API_v36's members verbatim (prefix EXTENSION), then TWO appended slots.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 37` (INVARIANTS #14b). An older
+    // APMF has neither slot and refuses kIntent_PotionAllowance (no channel serves it): the client's own degrade
+    // path runs (the engine's AI drinks what it always drank).
+    struct APMF_API_v37 : APMF_API_v36 {
+        // DECLARE the deny predicate of an EXISTING kIntent_PotionAllowance claim (`handle`). `allowance` is READ
+        // AND COPIED synchronously (a stack temporary is fine). nullptr CLEARS the declaration (the claim then
+        // denies nothing until it declares again). A re-declaration replaces the previous one. Stored whether or
+        // not the claim owns the channel; the seats read the WINNING claim's. A stale / unknown handle, or a
+        // handle on another intent, is a silent no-op. Thread-safe.
+        void (*SetPotionAllowance)(Handle handle, const APMF_PotionAllowance* allowance);
+
+        // What ch.30 is doing for `actor`: returns a PotionAllowanceState and, when `out` is non-null and
+        // `out->size` >= kPotionAllowanceInfoV37Size, fills `*out`. Read-only, ANY THREAD (an RCU read and a copy
+        // under APMF's own leaf lock, no game call). A throw inside returns kPotionState_None, nothing written.
+        std::uint32_t (*GetPotionAllowanceState)(RE::FormID actor, APMF_PotionAllowanceInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v38: COMBAT MOVE (kIntent_CombatMove) -- one bash or power bash, by the engine's own action road
+    // ═════════════════════════════════════════════════════════════════════════════
+    // A ONE-SHOT, never a claim (the kIntent_Place shape). RequestEx(actor, kIntent_CombatMove, basis, &param)
+    // returns a handle that only labels the request; read its outcome with GetCombatMoveState.
+    //
+    // WHAT RUNS (game thread, once): the engine's own start-of-attack. Its Bash leaf picks an entry of the
+    // actor's attack data (the ATKD records of the actor base: flags Bash, and Power for a power bash) and
+    // processes a TESActionData {source = the actor, priority 2, animation event = the entry's}. Harbinger
+    // does exactly that for the entry the move names: among the actor's bash entries of that kind, the one
+    // with the highest attack chance. The engine's own checks inside the action still apply (stamina, the
+    // behaviour graph accepting the event), and its post-action step sets the actor's attack data and the
+    // Bash attack state. Harbinger then READS BOTH BACK: kCombatMoveState_Started only when the actor's
+    // attack data is that entry and its attack state is Bash; anything else is kCombatMoveState_Failed, loudly.
+    //
+    // BEFORE IT RUNS, on the game thread, each a kCombatMoveState_Refused with its reason:
+    //   * the engine's own bash conditions (its Bash leaf's test, AE 0x6B90F0): no attack in progress, the
+    //     behaviour graph's IsAttackReady true, attacking not disabled on the actor;
+    //   * the actor loaded, alive, not in a kill move; a named target loaded and alive;
+    //   * NO winning kIntent_CombatAction (ch.7) claim on the actor that denies Offense, whoever filed it, and no
+    //     combat substrate holding the actor: a bash is an Offense leaf's action, and a deny of that leaf stands;
+    //   * the calling client outranks the Engine source on the CombatAction facet (the player's Harbinger
+    //     priorities; the same test a ch.7 deny passes).
+    //
+    // WHAT IT IS NOT. Not aimed: the swing goes where the actor faces. Not a hold: nothing is denied, so the
+    // actor's AI may start its own attack right after. Not a retry: one action, one answer. The world's
+    // reaction to the hit (stagger, an interrupted cast, aggression) is the engine's and the client's.
+    //
+    // FIELD STATUS: built from the disassembly of 1.6.1170 and 1.5.97, CI-verified, NOT yet observed on a
+    // deck. The first field run is a probe ([Probe] bCombatMove logs every melee hit by or on a teammate with
+    // its flags and the attacker's attack data).
+
+    // kIntent_CombatMove's param.ival. APPEND-ONLY: never renumber.
+    enum CombatMove : std::uint32_t {
+        kCombatMove_None      = 0,  // refused
+        kCombatMove_Bash      = 1,  // the actor's bash entry (attack data flags: Bash, not Power)
+        kCombatMove_PowerBash = 2,  // the actor's power bash entry (Bash and Power)
+        kCombatMove_Block     = 3,  // RESERVED. Not built in ABI v38: REFUSED at the call. (The engine's block is
+                                    //   the Left Attack action held and the Left Release action; it needs a
+                                    //   window, a release and a deny of the actor's own offense for that window.)
+    };
+
+    // What became of a combat move, per handle. APPEND-ONLY: never renumber.
+    enum CombatMoveState : std::uint32_t {
+        kCombatMoveState_Unknown = 0,  // no record: not a combat move handle, the grace ran out, or a load / new
+                                       //   game dropped it (a move still queued at a load is dropped, never run)
+        kCombatMoveState_Queued  = 1,  // accepted at the call; the game thread has not run it yet
+        kCombatMoveState_Started = 2,  // the engine accepted the action AND the actor's attack data and attack
+                                       //   state read back as this move. Whether the swing then HIT anyone is
+                                       //   kCombatMoveInfo_HitSeen, set later by the hit itself
+        kCombatMoveState_Refused = 3,  // a game-thread check refused it (APMF_CombatMoveStateInfo::why); nothing
+                                       //   was sent to the engine
+        kCombatMoveState_Failed  = 4,  // the action was sent and the engine refused it (kCombatMoveWhy_EngineRefused),
+                                       //   or it returned success without the attack data / state reading back
+                                       //   (kCombatMoveWhy_NotApplied), or the step threw (kCombatMoveWhy_Error)
+    };
+
+    // Why a combat move was refused or failed (APMF_CombatMoveStateInfo::why). APPEND-ONLY.
+    enum CombatMoveWhy : std::uint32_t {
+        kCombatMoveWhy_None           = 0,
+        kCombatMoveWhy_ActorGone      = 1,   // the actor FormID is not an actor in memory
+        kCombatMoveWhy_NotReady       = 2,   // not loaded (no 3D / no high process), dead, in a kill move, or
+                                             //   attacking is disabled on the actor
+        kCombatMoveWhy_Busy           = 3,   // an attack is already in progress (the attack state is not None)
+        kCombatMoveWhy_NotAttackReady = 4,   // the behaviour graph's IsAttackReady is false or unreadable
+                                             //   (staggered, recoiling, weapon not out, mid-draw, ...)
+        kCombatMoveWhy_TargetGone     = 5,   // a target was named and it is not a loaded living actor
+        kCombatMoveWhy_NoAttackData   = 6,   // the actor base has no attack entry of the move's kind
+        kCombatMoveWhy_OffenseDenied  = 7,   // a winning kIntent_CombatAction claim denies Offense (blocker = it)
+        kCombatMoveWhy_SubstrateHeld  = 8,   // a combat substrate holds the actor (blocker = its claim)
+        kCombatMoveWhy_Outranked      = 9,   // the client does not outrank Engine on the CombatAction facet
+        kCombatMoveWhy_EngineRefused  = 10,  // kCombatMoveState_Failed: the engine's action returned false
+        kCombatMoveWhy_NotApplied     = 11,  // kCombatMoveState_Failed: it returned true, but the actor's attack
+                                             //   data is not the entry or its attack state is not Bash
+        kCombatMoveWhy_Error          = 12,  // kCombatMoveState_Failed: an exception inside Harbinger's step
+    };
+
+    inline constexpr std::uint32_t kCombatMoveInfo_HitSeen    = 1u << 0;  // a hit event with the Bash flag, caused by the
+                                                                          //   actor, arrived within kCombatMoveHitWindowMs
+                                                                          //   of the start (hitTarget = whom)
+    inline constexpr std::uint32_t kCombatMoveInfo_HitBlocked = 1u << 1;  // that hit carried the Blocked flag
+    inline constexpr std::uint32_t kCombatMoveInfo_HitOnTarget = 1u << 2; // that hit landed on the named target
+    inline constexpr std::uint32_t kCombatMoveInfo_InCombat   = 1u << 3;  // the actor was in combat at the send
+    inline constexpr std::uint32_t kCombatMoveInfo_WeaponOut  = 1u << 4;  // the actor's weapon was drawn at the send
+    inline constexpr std::uint32_t kCombatMoveHitWindowMs     = 2500;     // wall ms after the start in which a bash
+                                                                          //   hit by the actor counts as this move's
+    inline constexpr std::uint32_t kCombatMoveStateGraceMs    = 30000;    // a finished record stays until it has been
+                                                                          //   read once OR this many wall ms, whichever
+                                                                          //   is LATER (the 128-record cap can evict it)
+
+    // GetCombatMoveState output. EXACT LAYOUT (byte-shared): 64 bytes, every field 4 bytes. The CALLER sets
+    // `size` = sizeof(APMF_CombatMoveStateInfo); APMF fills the v38 fields when `size` >=
+    // kCombatMoveStateInfoV38Size (64, never changes) and writes nothing into a smaller struct.
+    struct APMF_CombatMoveStateInfo {
+        std::uint32_t size;           // +0   the CALLER sets = sizeof(APMF_CombatMoveStateInfo)
+        std::uint32_t state;          // +4   a CombatMoveState (the same value the call returns)
+        std::uint32_t handle;         // +8   the handle asked about
+        RE::FormID    actor;          // +12  the actor (0 on kCombatMoveState_Unknown)
+        RE::FormID    target;         // +16  the named target (param.target; 0 = none)
+        std::uint32_t move;           // +20  the CombatMove asked for
+        std::uint32_t why;            // +24  a CombatMoveWhy (kCombatMoveWhy_None unless Refused / Failed)
+        std::uint32_t blocker;        // +28  the claim's handle on OffenseDenied / SubstrateHeld, else 0
+        std::uint32_t info;           // +32  kCombatMoveInfo_* bits
+        RE::FormID    hitTarget;      // +36  with kCombatMoveInfo_HitSeen: whom the bash hit
+        float         distance;       // +40  units from the actor to the named target at the send (-1 = no target)
+        float         bearingDeg;     // +44  degrees between the actor's heading and the direction to the named
+                                      //        target at the send, 0..180 (-1 = no target)
+        float         staminaSpent;   // +48  the actor's stamina before the action minus right after it (a cost
+                                      //        the engine takes later, at the hit frame, is not in this number)
+        std::uint32_t reserved;       // +52  0
+        std::uint32_t msSinceChange;  // +56  wall ms since this record last changed
+        std::uint32_t seq;            // +60  changes on every change of this record (compare for inequality)
+    };
+    inline constexpr std::uint32_t kCombatMoveStateInfoV38Size = 64;
+    static_assert(sizeof(APMF_CombatMoveStateInfo) == 64, "APMF_CombatMoveStateInfo is 64 bytes, byte-shared with clients");
+    static_assert(alignof(APMF_CombatMoveStateInfo) == 4, "APMF_CombatMoveStateInfo aligns to 4");
+    static_assert(offsetof(APMF_CombatMoveStateInfo, why)           == 24, "why at +24");
+    static_assert(offsetof(APMF_CombatMoveStateInfo, info)          == 32, "info at +32");
+    static_assert(offsetof(APMF_CombatMoveStateInfo, distance)      == 40, "distance at +40");
+    static_assert(offsetof(APMF_CombatMoveStateInfo, msSinceChange) == 56, "msSinceChange at +56");
+    static_assert(offsetof(APMF_CombatMoveStateInfo, seq)           == 60, "seq at +60");
+
+    // The v38 interface: APMF_API_v37's members verbatim (prefix EXTENSION), then ONE appended slot.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 38` (INVARIANTS #14b) before
+    // asking for kIntent_CombatMove or calling the slot: an older APMF has no channel for intent 31 and REFUSES
+    // the request ("no channel serves intent 31"); the client's own degrade path runs (no move is made).
+    struct APMF_API_v38 : APMF_API_v37 {
+        // What became of combat move `handle` (see CombatMoveState). Returns the state and, when `out` is
+        // non-null and `out->size` covers the v38 layout, fills `*out`. Read-only; ANY THREAD (a copy under
+        // APMF's own leaf lock, no game call). A throw inside returns kCombatMoveState_Unknown, nothing written.
+        std::uint32_t (*GetCombatMoveState)(Handle handle, APMF_CombatMoveStateInfo* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
