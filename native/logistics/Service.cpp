@@ -2064,6 +2064,13 @@ namespace MFO::Logistics {
                                  id, sp->GetFormID(), route, dur);
                 }
             }
+            else if (op == Vocab::kActSneak) {
+                // SNEAK (card G1, apmf/SneakClaims.cpp): hold the ch.3 stance claim while this rule stands. Never this
+                // tick's action: the scan goes on to the rule below, exactly like a matched rule that found nothing.
+                APMFBridge::ServiceSneakRule(a_follower);
+                start = choice.rank + 1;
+                continue;
+            }
             else if (op == Vocab::kActWait) {
                 EngageOnSight::NoteWaitRule(id, true);   // engage-on-sight sits BELOW the table
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.

@@ -505,6 +505,7 @@ namespace MFO::Followers {
         APMFBridge::ReleaseRetreatReentryDeny(id, "dismissed");
         APMFBridge::ReleasePursuitLeash(id, "dismissed");
         APMFBridge::ReleaseAimClaim(id, "dismissed");   // ch.29 class miss budget (card H5)
+        APMFBridge::ReleaseSneak(id, "dismissed");      // ch.3 act.sneak hold (card G1)
         APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         APMFBridge::ReleaseOffenseApproach(id, "dismissed", true);   // ch.24 offense approach
         APMFBridge::ReleaseGroundStep(id, "dismissed");              // ch.24 step back (a point claim)

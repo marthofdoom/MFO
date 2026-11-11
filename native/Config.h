@@ -854,6 +854,11 @@ namespace MFO::Config {
     inline std::atomic<int>   g_aimBudgetRanger{ 3 };
     inline std::atomic<int>   g_aimBudgetJaqspur{ 1 };
     inline std::atomic<bool>  g_aimProbe{ false };
+    //   bSneakInCombat (card G1, DEV SWITCH, INI-only, default OFF): act.sneak may hold its Harbinger ch.3 stance claim while
+    //     the follower is IN COMBAT. Off = a follower in combat files no sneak claim and a standing one is released (the
+    //     out-of-combat road is field-proven, the in-combat one is not, principle 5). The [sneak] lines in MFO.log show
+    //     the claim filed, IsSneaking true / false, every re-file and the release, so one field run proves the road.
+    inline std::atomic<bool>  g_sneakInCombat{ false };
     //   bClassCoSaveSelfTest (class update C3, DEBUG, INI-only, default OFF): at every game load, round-trip a synthetic class
     //     state (every field, stored gambit tables included) and then the loaded state through the 'MCLS' codec in memory and log
     //     PASS / FAIL with the first mismatch. Pure memory, writes nothing to the save or the world.

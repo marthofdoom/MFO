@@ -40,7 +40,7 @@ namespace MFO::Iaus {
         Attack = 0,
         PowerAttack,
         Taunt,
-        Sneak,        // after G1 (no act.sneak yet): scored, never generated today
+        Sneak,        // act.sneak exists (card G1, IausSource maps it): scored, never generated today
         Retreat,
         DrinkHealth,
         DrinkStamina,

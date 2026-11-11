@@ -634,6 +634,17 @@ namespace MFO::APMFBridge {
     // Worker-safe; its own mutex (never g_mx).
     void ReleaseAimClaim(RE::FormID a_follower, const char* a_why);
 
+    // ── ch.3 STANCE (ABI 1, kIntent_Stance): act.sneak, class plan card G1 -- apmf/SneakClaims.cpp ──────
+    // ServiceSneakRule: the act.sneak rule was reached with its condition true this lap. Files the follower's ONE ch.3
+    // claim if none stands and marks the rule as standing; the pump's sweep releases the claim once the rule has not
+    // been reached for ~4 s, and re-files (throttled, ~3 s) while the claim is live and IsSneaking reads false. In
+    // combat (InCombat) it files nothing and releases a standing claim unless bSneakInCombat (dev switch, default OFF)
+    // is on. Returns nullptr when the claim is held, else the reason it is not (Harbinger absent, refused, the combat
+    // switch). The caller treats both as TRANSPARENT. ReleaseSneak is the dismissal road. Worker-safe; its own mutex
+    // (never g_mx).
+    const char* ServiceSneakRule(RE::Actor* a_follower);
+    void        ReleaseSneak(RE::FormID a_follower, const char* a_why);
+
     // ── ch.24 HELD-HEAL APPROACH (ABI v19, kIntent_CombatApproach): apmf/CombatApproach.cpp ──
     // X = the held heal's recipient, R = fHealApproachRadius. One claim per follower; a no-op below
     // ABI 19 / seat refused / recipient blocked this fight. Release: a_hand names the hand whose
