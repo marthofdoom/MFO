@@ -1,0 +1,79 @@
+{
+ "schema": 1,
+ "id": "pkg-ebony-warrior-v1",
+ "class": "ebony-warrior",
+ "line": "Melee",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.33,
+  "st.0.def": 0.665,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.0.off": 1.33,
+  "st.0.def": 0.665
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 48.9,
+   "package": 50.61,
+   "delta": 1.71
+  },
+  "LoreRim/iaus": {
+   "today": 44.5,
+   "package": 44.06,
+   "delta": -0.44
+  },
+  "Tuxborn/table": {
+   "today": 51.25,
+   "package": 53.62,
+   "delta": 2.37
+  },
+  "Tuxborn/iaus": {
+   "today": 52.95,
+   "package": 53.39,
+   "delta": 0.44
+  },
+  "Vanilla/table": {
+   "today": 70.28,
+   "package": 73.69,
+   "delta": 3.4
+  },
+  "Vanilla/iaus": {
+   "today": 70.88,
+   "package": 72.98,
+   "delta": 2.1
+  }
+ },
+ "mean_table_gain": 2.49,
+ "verdict": "keep",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

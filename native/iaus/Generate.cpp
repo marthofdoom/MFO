@@ -311,6 +311,7 @@ namespace MFO::Iaus {
                             c.f.expHeal = Estimate::Pos(e.heal);
                             c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
                             c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
+                            c.f.recipientBeingHealed = r->beingHealed;
                         }
                         if (heal) {
                             c.f.alreadyActive = Note(s.liveStreams, e.form, self ? 0u : r->id) == Tri::Yes;

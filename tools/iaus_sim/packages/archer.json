@@ -1,0 +1,80 @@
+{
+ "schema": 1,
+ "id": "pkg-archer-v1",
+ "class": "archer",
+ "line": "Ranged",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {},
+ "evidence": {
+  "LoreRim/table": {
+   "today": 57.22,
+   "package": 57.22,
+   "delta": 0.0
+  },
+  "LoreRim/iaus": {
+   "today": 53.98,
+   "package": 53.98,
+   "delta": 0.0
+  },
+  "Tuxborn/table": {
+   "today": 44.75,
+   "package": 44.75,
+   "delta": 0.0
+  },
+  "Tuxborn/iaus": {
+   "today": 45.79,
+   "package": 45.79,
+   "delta": 0.0
+  },
+  "Vanilla/table": {
+   "today": 71.85,
+   "package": 71.85,
+   "delta": 0.0
+  },
+  "Vanilla/iaus": {
+   "today": 73.78,
+   "package": 73.78,
+   "delta": 0.0
+  }
+ },
+ "mean_table_gain": 0.0,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

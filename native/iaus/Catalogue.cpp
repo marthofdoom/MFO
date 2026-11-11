@@ -69,7 +69,7 @@ namespace MFO::Iaus {
             "self_hp", "scroll_stock", "mp_low", "engaged",
             "caster", "downed", "outnumbered",
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
-            "chase", "helpless", "taunt_chance",
+            "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -298,6 +298,15 @@ namespace MFO::Iaus {
             // taunt chance (ruling Q69): x = the chance the attempt pins this foe. A 0.9 taunt scores 0.92, a coin flip
             // 0.6, the 0.1 floor 0.28: a long shot is dear (30 s cooldown) but never forbidden.
             at(Cons::TauntChance) = Lin(0.8f, 0.2f);
+            // heal claimed: another follower's heal is already on its way to this recipient. A second heal mostly
+            // overheals (sim: 16 to 24% of heal casts were doubles): 0.35, not a veto (a dying recipient may need both).
+            at(Cons::HealClaimed) = Bin(1.0f, 0.35f);
+            // heal urgency: x = the recipient's seconds to live / 10 at the damage he is taking. 0 s 1.0, 5 s 0.8, 10 s
+            // and more 0.55: a heal before the blow lands, not after (not applicable while nothing is hitting him).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 0.8f }, { 1.0f, 0.55f } } };
+                at(Cons::HealUrgency) = Piece(p);
+            }
 
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
@@ -377,7 +386,7 @@ namespace MFO::Iaus {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
                 { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
                 { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
-                { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 },
+                { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 }, { Cons::HealClaimed, 1 }, { Cons::HealUrgency, 0.7f },
             };
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
@@ -578,6 +587,8 @@ namespace MFO::Iaus {
                 return f.dist / f.chase;
             case Cons::BoostControlled:     return B(f.foeControlled);
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
+            case Cons::HealClaimed:         return B(f.recipientBeingHealed);
+            case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
             case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
             case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
             case Cons::kCount:        break;

@@ -1,0 +1,101 @@
+{
+ "schema": 1,
+ "id": "defaults-wizard-v1",
+ "class": "wizard",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_stronger_than_me",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Paralyze",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Destruction",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_stronger_than_me",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Paralyze",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Destruction",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_stronger_than_me|act.cast_target|0|12|0;cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_any|act.cast_target|0|2|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "lab_text": "cond.foe_lowest_hp|act.cast_target|0|1|0;cond.foe_stronger_than_me|act.cast_target|0|12|0;cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_any|act.cast_target|0|2|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 36.97,
+   "lab": 38.5,
+   "delta": 1.54
+  },
+  "Tuxborn": {
+   "today": 42.35,
+   "lab": 42.18,
+   "delta": -0.17
+  },
+  "Vanilla": {
+   "today": 65.93,
+   "lab": 68.13,
+   "delta": 2.2
+  }
+ },
+ "mean_gain": 1.19,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

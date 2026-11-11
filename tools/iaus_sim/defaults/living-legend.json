@@ -1,0 +1,101 @@
+{
+ "schema": 1,
+ "id": "defaults-living-legend-v1",
+ "class": "living-legend",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_blocking",
+   "gambit": "act.power_attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 10.0
+  },
+  {
+   "condition": "cond.foe_is_caster",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_highest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_is_caster",
+   "gambit": "act.power_attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 10.0
+  },
+  {
+   "condition": "cond.foe_is_caster",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weaker_than_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_highest_level",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_blocking|act.power_attack|0|0|10;cond.foe_is_caster|act.attack|0|0|0;cond.foe_highest_hp|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.foe_is_caster|act.power_attack|0|0|10;cond.foe_is_caster|act.attack|0|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_highest_level|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 42.09,
+   "lab": 44.39,
+   "delta": 2.3
+  },
+  "Tuxborn": {
+   "today": 55.22,
+   "lab": 58.72,
+   "delta": 3.5
+  },
+  "Vanilla": {
+   "today": 73.67,
+   "lab": 75.54,
+   "delta": 1.87
+  }
+ },
+ "mean_gain": 2.56,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

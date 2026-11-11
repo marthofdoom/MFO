@@ -1,0 +1,108 @@
+{
+ "schema": 1,
+ "id": "defaults-templar-v1",
+ "class": "templar",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.7,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.cast_self",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_undead",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.7,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.cast_self",
+   "threshold": 0.665,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weaker_than_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_is_undead|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.self_hp_pct_below|act.cast_self|0.665|7|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 39.3,
+   "lab": 41.01,
+   "delta": 1.72
+  },
+  "Tuxborn": {
+   "today": 43.08,
+   "lab": 42.31,
+   "delta": -0.77
+  },
+  "Vanilla": {
+   "today": 63.55,
+   "lab": 63.77,
+   "delta": 0.22
+  }
+ },
+ "mean_gain": 0.39,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

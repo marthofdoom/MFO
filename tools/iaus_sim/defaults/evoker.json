@@ -1,0 +1,94 @@
+{
+ "schema": 1,
+ "id": "defaults-evoker-v1",
+ "class": "evoker",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Destruction",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_stronger_than_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_highest_hp",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Destruction",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.266,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_any|act.cast_target|0|2|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "lab_text": "cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_stronger_than_me|act.attack|0|0|0;cond.foe_highest_hp|act.cast_target|0|1|0;cond.foe_any|act.cast_target|0|2|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.266|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 51.19,
+   "lab": 52.61,
+   "delta": 1.41
+  },
+  "Tuxborn": {
+   "today": 42.64,
+   "lab": 42.04,
+   "delta": -0.61
+  },
+  "Vanilla": {
+   "today": 65.59,
+   "lab": 66.01,
+   "delta": 0.42
+  }
+ },
+ "mean_gain": 0.41,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

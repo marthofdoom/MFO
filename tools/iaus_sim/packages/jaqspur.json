@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "id": "pkg-jaqspur-v1",
+ "class": "jaqspur",
+ "line": "Ranged",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.33,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.1.off": 1.33
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 31.85,
+   "package": 32.53,
+   "delta": 0.68
+  },
+  "LoreRim/iaus": {
+   "today": 34.39,
+   "package": 34.95,
+   "delta": 0.56
+  },
+  "Tuxborn/table": {
+   "today": 47.3,
+   "package": 47.29,
+   "delta": -0.01
+  },
+  "Tuxborn/iaus": {
+   "today": 48.3,
+   "package": 49.4,
+   "delta": 1.09
+  },
+  "Vanilla/table": {
+   "today": 59.9,
+   "package": 60.79,
+   "delta": 0.9
+  },
+  "Vanilla/iaus": {
+   "today": 63.0,
+   "package": 62.88,
+   "delta": -0.12
+  }
+ },
+ "mean_table_gain": 0.52,
+ "verdict": "keep",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

@@ -1,0 +1,80 @@
+{
+ "schema": 1,
+ "id": "pkg-blademaster-v1",
+ "class": "blademaster",
+ "line": "Melee",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 4.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 0.5,
+  "st.0.bash": 1.0,
+  "pk.power": 1.33,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.0.off": 4.0,
+  "st.0.powStag": 0.5,
+  "pk.power": 1.33
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 41.89,
+   "package": 48.58,
+   "delta": 6.69
+  },
+  "LoreRim/iaus": {
+   "today": 41.94,
+   "package": 46.75,
+   "delta": 4.8
+  },
+  "Tuxborn/table": {
+   "today": 48.09,
+   "package": 49.57,
+   "delta": 1.48
+  },
+  "Tuxborn/iaus": {
+   "today": 47.66,
+   "package": 50.52,
+   "delta": 2.86
+  },
+  "Vanilla/table": {
+   "today": 61.41,
+   "package": 63.69,
+   "delta": 2.29
+  },
+  "Vanilla/iaus": {
+   "today": 67.14,
+   "package": 66.6,
+   "delta": -0.54
+  }
+ },
+ "mean_table_gain": 3.49,
+ "verdict": "keep",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

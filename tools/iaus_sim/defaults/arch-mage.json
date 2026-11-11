@@ -1,0 +1,108 @@
+{
+ "schema": 1,
+ "id": "defaults-arch-mage-v1",
+ "class": "arch-mage",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_count_at_least",
+   "gambit": "act.cast_self",
+   "threshold": 3.0,
+   "spell_role": "Summon",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.7,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_count_at_least",
+   "gambit": "act.cast_self",
+   "threshold": 3.0,
+   "spell_role": "Summon",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.ally_downed",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_caster",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_count_at_least|act.cast_self|3|8|0;cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "lab_text": "cond.foe_count_at_least|act.cast_self|3|8|0;cond.ally_downed|act.cast_target|0|7|0;cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_is_caster|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 39.81,
+   "lab": 41.22,
+   "delta": 1.4
+  },
+  "Tuxborn": {
+   "today": 41.94,
+   "lab": 40.95,
+   "delta": -0.99
+  },
+  "Vanilla": {
+   "today": 69.31,
+   "lab": 67.2,
+   "delta": -2.11
+  }
+ },
+ "mean_gain": -0.57,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

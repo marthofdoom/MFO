@@ -18,7 +18,8 @@ using namespace Sim;
 namespace {
 
     bool g_objEstimates = true, g_objScrollRoad = false, g_tableMode = false;
-    void RunMode(Fight& F, bool timeIt = false) { if (g_tableMode) { TablePolicy P; RunFight(F, P); } else { IausPolicy P; P.timeIt = timeIt; RunFight(F, P); } }
+    bool g_oracleMode = false; OracleCfg g_oc;   // --headline-oracle: the objective is played by the rollout oracle over the current IAUS
+    void RunMode(Fight& F, bool timeIt = false) { if (g_oracleMode) { OraclePolicy O; O.cfg = g_oc; RunFight(F, O); } else if (g_tableMode) { TablePolicy P; RunFight(F, P); } else { IausPolicy P; P.timeIt = timeIt; RunFight(F, P); } }
 
     struct Agg {   // a cell's tallies, summed
         Tally s; long fights = 0, wins = 0, losses = 0, playerDeaths = 0, forced = 0, timeouts = 0;
@@ -191,10 +192,82 @@ namespace {
         std::printf("\n"); return 0;
     }
 
+    // ── default gambit rows (card C12): text form, the row library a class may use, and a hill-climb over row sets ──
+    std::string RowsText(const std::vector<GRow>& rows) {
+        std::string o; char b[160];
+        for (const GRow& r : rows) { std::snprintf(b, sizeof b, "%s%s|%s|%g|%d|%g", o.empty() ? "" : ";", r.cond.c_str(), r.act.c_str(), r.param, r.role, r.cooldown); o += b; }
+        return o;
+    }
+    bool ParseRows(const std::string& text, std::vector<GRow>& out) {
+        out.clear(); std::size_t p = 0;
+        while (p < text.size()) { const auto q = text.find(';', p); const std::string one = text.substr(p, q == std::string::npos ? std::string::npos : q - p);
+            std::vector<std::string> f; std::size_t a = 0; for (;;) { const auto bq = one.find('|', a); f.push_back(one.substr(a, bq == std::string::npos ? std::string::npos : bq - a)); if (bq == std::string::npos) break; a = bq + 1; }
+            if (f.size() < 2) return false; GRow r; r.cond = f[0]; r.act = f[1]; r.param = f.size() > 2 ? static_cast<float>(std::atof(f[2].c_str())) : 0; r.role = f.size() > 3 ? std::atoi(f[3].c_str()) : 0; r.cooldown = f.size() > 4 ? static_cast<float>(std::atof(f[4].c_str())) : 0; out.push_back(r);
+            if (q == std::string::npos) break; p = q + 1; }
+        return true;
+    }
+    // Every row the board lets THIS class pick (ruling Q59: a pick that does not match the class is impossible): only vocabulary
+    // opcodes, gated by the class's own gate and weapon set.
+    std::vector<GRow> RowLibrary(const SimClass& c) {
+        std::vector<GRow> lib; auto add = [&](const char* cond, const char* act, float p = 0, int role = 0, float cd = 0) { lib.push_back({ cond, act, p, role, cd, true }); };
+        for (const char* k : { "cond.foe_any", "cond.foe_lowest_hp", "cond.foe_highest_hp", "cond.foe_is_caster", "cond.foe_is_ranged", "cond.foe_attacking_player", "cond.foe_attacking_ally", "cond.foe_attacking_me",
+                               "cond.foe_fleeing", "cond.foe_stronger_than_me", "cond.foe_weaker_than_me", "cond.foe_highest_level" }) add(k, "act.attack");
+        add("cond.foe_hp_pct_below", "act.attack", 0.3f);
+        if (c.gate.powerAttack) for (const char* k : { "cond.foe_blocking", "cond.foe_stronger_than_me", "cond.foe_attacking_player", "cond.foe_is_caster", "cond.foe_any" }) add(k, "act.power_attack", 0, 0, 10.0f);
+        if (c.gate.taunt) { add("cond.foe_attacking_ally", "act.taunt"); add("cond.foe_attacking_player", "act.taunt"); }
+        add("cond.self_hp_pct_below", "act.drink_health_potion", 0.3f); add("cond.self_hp_pct_below", "act.drink_health_potion", 0.5f);
+        add("cond.self_sp_pct_below", "act.drink_stamina_potion", 0.25f);
+        if (c.gate.spellsOnClass) {
+            add("cond.self_mp_pct_below", "act.drink_magicka_potion", 0.2f); add("cond.self_mp_pct_below", "act.drink_magicka_potion", 0.4f);
+            for (const char* k : { "cond.foe_any", "cond.foe_is_caster", "cond.foe_lowest_hp", "cond.foe_attacking_player", "cond.foe_highest_hp" }) add(k, "act.cast_target", 0, kRoleAttack);
+            add("cond.foe_weak_fire", "act.cast_target", 0, kRoleFire); add("cond.foe_weak_frost", "act.cast_target", 0, kRoleFrost); add("cond.foe_weak_shock", "act.cast_target", 0, kRoleShock);
+            add("cond.foe_count_at_least", "act.cast_target", 3, kRoleArea);
+            add("cond.self_hp_pct_below", "act.cast_self", 0.4f, kRoleHeal); add("cond.self_hp_pct_below", "act.cast_self", 0.6f, kRoleHeal);
+            add("cond.ally_hp_pct_below", "act.cast_target", 0.5f, kRoleHeal); add("cond.player_hp_pct_below", "act.cast_player", 0.5f, kRoleHeal); add("cond.ally_downed", "act.cast_target", 0, kRoleHeal);
+            add("cond.foe_any", "act.cast_self", 0, kRoleArmor); add("cond.foe_any", "act.cast_self", 0, kRoleSummon); add("cond.foe_count_at_least", "act.cast_self", 2, kRoleSummon);
+            add("cond.foe_stronger_than_me", "act.cast_target", 0, kRoleParalyze); add("cond.foe_attacking_player", "act.cast_target", 0, kRoleParalyze); add("cond.foe_count_at_least", "act.cast_target", 3, kRoleFear);
+            add("cond.foe_is_undead", "act.cast_target", 0, kRoleTurnUndead);
+        }
+        if (c.kit.oneHand || c.kit.twoHand || c.kit.dagger) { add("cond.foe_any", "act.equip_melee"); add("cond.foe_within_range", "act.equip_melee", 200.0f); add("cond.self_out_of_arrows", "act.equip_melee", 1.0f); }
+        if (c.kit.bow || c.kit.crossbow) { add("cond.foe_any", "act.equip_ranged"); add("cond.foe_beyond_range", "act.equip_ranged", 400.0f); }
+        if (c.gate.disengage) { add("cond.self_hp_pct_below", "act.flee", 0.25f); add("cond.foe_attacking_me_melee", "act.flee"); }
+        return lib;
+    }
+    int OptimiseRows(const Data& D, std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, int cap, int maxEvals) {
+        int ci = -1; for (std::size_t i = 0; i < classes.size(); ++i) if (classes[i].name == g_optClass) ci = static_cast<int>(i);
+        if (ci < 0) { std::fprintf(stderr, "--opt-rows needs --opt-class <slug>\n"); return 2; }
+        SimClass& c = classes[static_cast<std::size_t>(ci)]; const std::vector<GRow> lib = RowLibrary(c);
+        std::vector<GRow> cur; { bool any = false; for (const GRow& r : c.rows) any |= r.applied; for (const GRow& r : c.rows) if (r.applied || !any) cur.push_back(r); }
+        auto eval = [&](const std::vector<GRow>& rows) { c.rows = rows; for (GRow& r : c.rows) r.applied = true; return Objective(D, classes, seed, fights, threads); };
+        const std::vector<GRow> start = cur;
+        double best = eval(cur); int evals = 1; std::printf("OPT-ROWS class=%s list=%s cap=%d library=%zu rows\nstart: J=%.3f  %s\n", c.name.c_str(), D.name.c_str(), cap, lib.size(), best, RowsText(cur).c_str());
+        Rng R; R.g.seed(seed * 77 + 5);
+        for (bool improved = true; improved && evals < maxEvals;) {
+            improved = false; std::vector<std::vector<GRow>> nb;
+            for (std::size_t i = 0; i + 1 < cur.size(); ++i) { auto n = cur; std::swap(n[i], n[i + 1]); nb.push_back(n); }                          // reorder
+            for (std::size_t i = 0; i < cur.size(); ++i) { if (cur.size() > 1) { auto n = cur; n.erase(n.begin() + static_cast<long>(i)); nb.push_back(n); }   // drop
+                if (cur[i].param > 0 && cur[i].param <= 1.0f) for (float k : { 0.75f, 1.33f }) { auto n = cur; n[i].param = std::clamp(cur[i].param * k, 0.05f, 0.95f); nb.push_back(n); }
+                else if (cur[i].param > 1.0f) for (float k : { 0.66f, 1.5f }) { auto n = cur; n[i].param = cur[i].param * k; nb.push_back(n); } }
+            for (const GRow& l : lib) { bool have = false; for (const GRow& r : cur) have |= r.cond == l.cond && r.act == l.act && r.role == l.role; if (have) continue;
+                if (static_cast<int>(cur.size()) < cap) for (std::size_t pos : { std::size_t{ 0 }, cur.size() / 2, cur.size() }) { auto n = cur; n.insert(n.begin() + static_cast<long>(pos), l); nb.push_back(n); }   // add
+                for (std::size_t i = 0; i < cur.size(); ++i) { auto n = cur; n[i] = l; nb.push_back(n); } }                                             // replace
+            std::shuffle(nb.begin(), nb.end(), R.g);
+            // THE CLASS STAYS ITSELF: every kind of action today's defaults hold (act + spell role) must still be there, and the
+            // power-attack rows may not multiply (each row has its own 10 s cooldown, so stacking them is a way round ruling Q7).
+            auto legal = [&](const std::vector<GRow>& n) {
+                for (const GRow& k : start) { bool have = false; for (const GRow& r : n) have |= r.act == k.act && r.role == k.role; if (!have) return false; }
+                int pw = 0, pw0 = 0; for (const GRow& r : n) pw += r.act == "act.power_attack"; for (const GRow& r : start) pw0 += r.act == "act.power_attack";
+                return pw <= std::max(1, pw0);
+            };
+            for (const auto& n : nb) { if (evals >= maxEvals) break; if (!legal(n)) continue; const double j = eval(n); ++evals; if (j > best + 0.3) { best = j; cur = n; improved = true; std::printf("  %4d evals  J=%.3f  %s\n", evals, best, RowsText(cur).c_str()); std::fflush(stdout); break; } }
+        }
+        c.rows = cur; std::printf("end:   J=%.3f after %d evals\n--rows %s\n", best, evals, RowsText(cur).c_str()); return 0;
+    }
+
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt; bool noJson = false, listParams = false; int optPasses = 2;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; int optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -221,6 +294,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--opt") && i + 1 < argc) opt = argv[++i];
         else if (!std::strcmp(argv[i], "--opt-passes") && i + 1 < argc) optPasses = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--opt-class") && i + 1 < argc) g_optClass = argv[++i];
+        else if (!std::strcmp(argv[i], "--rows") && i + 1 < argc) rowsText = argv[++i];          // <class>=<cond>|<act>|<param>|<role>|<cooldown>;...
+        else if (!std::strcmp(argv[i], "--print-rows") && i + 1 < argc) printRows = argv[++i];
+        else if (!std::strcmp(argv[i], "--opt-rows")) optRows = true;
+        else if (!std::strcmp(argv[i], "--headline-oracle") && i + 1 < argc) headlineOracle = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--row-cap") && i + 1 < argc) rowCap = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--row-evals") && i + 1 < argc) rowEvals = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--list-params")) listParams = true;
         else if (!std::strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
@@ -231,13 +310,23 @@ int main(int argc, char** argv) {
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
     const Data D = listPath ? LoadData(listPath) : BuiltinData();
-    const std::vector<SimClass> allClasses = legacy ? LegacyClasses() : RealClasses(mech);
+    std::vector<SimClass> allClasses = legacy ? LegacyClasses() : RealClasses(mech);
+    if (!rowsText.empty()) { const auto eq = rowsText.find('='); bool ok = eq != std::string::npos; std::vector<GRow> rows;
+        if (ok) ok = ParseRows(rowsText.substr(eq + 1), rows); bool found = false;
+        if (ok) for (SimClass& c : allClasses) if (c.name == rowsText.substr(0, eq)) { c.rows = rows; c.defaults = "lab"; found = true; }
+        if (!ok || !found) { std::fprintf(stderr, "bad --rows (use <class>=<cond>|<act>|<param>|<role>|<cooldown>;...)\n"); return 2; } }
+    if (!printRows.empty()) { for (const SimClass& c : allClasses) if (c.name == printRows) { std::vector<GRow> cur; bool any = false; for (const GRow& r : c.rows) any |= r.applied; for (const GRow& r : c.rows) if (r.applied || !any) cur.push_back(r); std::printf("%s\n", RowsText(cur).c_str()); } return 0; }
     const std::vector<SimClass> t1(allClasses.begin(), allClasses.begin() + 3);
     if (printClasses) { PrintClassTable(allClasses); return 0; }
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
+    if (optRows) return OptimiseRows(D, allClasses, seed, fights, threads, rowCap, rowEvals);
     if (!opt.empty()) return Optimise(D, allClasses, opt, seed, fights, threads, optPasses);
     Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus";
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
+    if (!noJson && opt.empty() && headlineOracle > 0) {   // the oracle on the first fights of the same seeds
+        g_oracleMode = true; g_oc = oc; R.oracleJ = Objective(D, allClasses, seed, headlineOracle, threads, &R.oracleJScen, &R.oracleJNat); g_oracleMode = false; R.hasOracleJ = true; R.oracleFights = headlineOracle;
+        R.oracleOver = std::string("rollout oracle (K=") + std::to_string(oc.K) + ", " + std::to_string(int(oc.H)) + " s, " + (oc.ext ? "extended" : "catalogue") + " actions) planning over " + (g_tableMode ? "IAUS (table mode is not planned over)" : estimates ? "IAUS with estimates" : "IAUS as on main") + (sets.empty() ? "" : " + --set");
+        std::printf("HEADLINE  ORACLE J=%.2f (scenarios %.2f, natural %.2f)  %d fights per scenario, %d per class natural  [%s]\n", R.oracleJ, R.oracleJScen, R.oracleJNat, headlineOracle, std::max(1, headlineOracle / 2), R.oracleOver.c_str()); }
     if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, 24, threads, &R.jScen, &R.jNat); R.hasJ = true; std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  mode=%s\n", R.jVal, R.jScen, R.jNat, R.mode.c_str()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
     if (!scenario.empty()) {
         std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);

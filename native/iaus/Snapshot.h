@@ -131,6 +131,7 @@ namespace MFO::Iaus {
         float armor = 0.0f;                 // its physical mitigation, 0..1
         float magicResist = 0.0f;           // kResistMagic, points
         float lossPerSec = 0.0f;            // health it has been losing per second (observed)
+        bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
         std::vector<std::pair<int, float>> resists;   // (resist actor value, its value) for the book's elements

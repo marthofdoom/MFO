@@ -1,0 +1,108 @@
+{
+ "schema": 1,
+ "id": "defaults-great-knight-v1",
+ "class": "great-knight",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_count_at_least",
+   "gambit": "act.taunt",
+   "threshold": 3.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.drink_health_potion",
+   "threshold": 0.35,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.power_attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 10.0
+  },
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.drink_health_potion",
+   "threshold": 0.35,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_count_at_least|act.taunt|3|0|0;cond.foe_attacking_player|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.foe_attacking_player|act.power_attack|0|0|10;cond.foe_attacking_player|act.taunt|0|0|0;cond.foe_attacking_me|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 43.7,
+   "lab": 46.78,
+   "delta": 3.08
+  },
+  "Tuxborn": {
+   "today": 48.37,
+   "lab": 49.97,
+   "delta": 1.59
+  },
+  "Vanilla": {
+   "today": 71.51,
+   "lab": 71.25,
+   "delta": -0.27
+  }
+ },
+ "mean_gain": 1.47,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

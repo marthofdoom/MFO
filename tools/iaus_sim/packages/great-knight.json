@@ -1,0 +1,80 @@
+{
+ "schema": 1,
+ "id": "pkg-great-knight-v1",
+ "class": "great-knight",
+ "line": "Melee",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 4.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.33,
+  "pk.power": 1.33,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.0.off": 4.0,
+  "st.0.bash": 1.33,
+  "pk.power": 1.33
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 43.7,
+   "package": 48.89,
+   "delta": 5.19
+  },
+  "LoreRim/iaus": {
+   "today": 41.76,
+   "package": 45.44,
+   "delta": 3.69
+  },
+  "Tuxborn/table": {
+   "today": 48.37,
+   "package": 52.18,
+   "delta": 3.81
+  },
+  "Tuxborn/iaus": {
+   "today": 52.62,
+   "package": 51.25,
+   "delta": -1.37
+  },
+  "Vanilla/table": {
+   "today": 71.51,
+   "package": 72.41,
+   "delta": 0.9
+  },
+  "Vanilla/iaus": {
+   "today": 71.49,
+   "package": 70.59,
+   "delta": -0.9
+  }
+ },
+ "mean_table_gain": 3.3,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

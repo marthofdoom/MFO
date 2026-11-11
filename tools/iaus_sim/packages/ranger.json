@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "id": "pkg-ranger-v1",
+ "class": "ranger",
+ "line": "Ranged",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 0.5,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.1.off": 0.5
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 35.69,
+   "package": 35.38,
+   "delta": -0.32
+  },
+  "LoreRim/iaus": {
+   "today": 37.68,
+   "package": 37.7,
+   "delta": 0.01
+  },
+  "Tuxborn/table": {
+   "today": 41.97,
+   "package": 42.1,
+   "delta": 0.13
+  },
+  "Tuxborn/iaus": {
+   "today": 41.42,
+   "package": 41.63,
+   "delta": 0.22
+  },
+  "Vanilla/table": {
+   "today": 59.81,
+   "package": 58.49,
+   "delta": -1.32
+  },
+  "Vanilla/iaus": {
+   "today": 59.78,
+   "package": 59.77,
+   "delta": -0.01
+  }
+ },
+ "mean_table_gain": -0.5,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

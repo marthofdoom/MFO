@@ -519,3 +519,149 @@ J with parameter set A and the scroll road, 30 fights:
 Mean difference +0.34 J, inside the run-to-run noise (about 0.5). **The ruling costs nothing the lab can measure.**
 The oracle cluster that prompted the variant ("idle -> attack" at 800 units) is real, but under the gate the
 follower's own AI closes on its own target and the attack is named once he is in reach. The variant stays off.
+
+## 17. Class combat packages (card C8), searched in the lab
+
+A package is the combat style the DLL swaps on per stance (melee, ranged, cast), the ch.18 power-attack share and the
+ch.23 pursuit leash. Today every class runs MFO's three stance styles (`MFO_GenerateESP.py make_csty`) with two class
+offsets. The lab puts exactly those under every follower (`Setup.h MfoPackage`) and searches from there.
+
+Method (`tools/iaus_sim/tune_packages.py`): TABLE mode first (IAUS off, the class's default gambit rows, which is what
+most players get), a coordinate search on LoreRim, objective = 0.35 x the class's scenarios + 0.65 x its natural,
+balanced and strong1 brackets. The found values are then scored on Tuxborn and Vanilla, in table mode AND in IAUS
+mode, over two seeds. A package is kept only when it loses on no list in no mode (more than 0.75 U) and gains more
+than 0.5 U in table mode on average. Files: `tools/iaus_sim/packages/<class>.json` (values, evidence per list and mode).
+
+**Proof level: MODEL.** The CSTY fields move behaviour through the sim's engine-AI model (section 4 row 22: attack
+pause divided by the offensive mult, power attack chance 0.12 x offensive mult x the share, block chance 0.20 x
+defensive mult). The DIRECTION of a finding is what the lab stands behind. The numbers need the in-game probe
+(section 5) before they become generator rows. Circle, flank, strafe and avoid-threat are not modelled, so the search
+cannot speak about them.
+
+| Class | Verdict | Changed from today | Mean table gain (U) | Per list, table / IAUS delta |
+|---|---|---|---|---|
+| arch-mage | today's | st.2.off 0.75, pk.leash 1000 | +0.15 | LoreRim -0.3 / -0.8, Tuxborn +1.0 / +0.4, Vanilla -0.3 / +0.0 |
+| archer | today's | nothing | +0.00 | LoreRim +0.0 / +0.0, Tuxborn +0.0 / +0.0, Vanilla +0.0 / +0.0 |
+| blademaster | KEEP | st.0.off 4, st.0.powStag 0.5, pk.power 1.33 | +3.49 | LoreRim +6.7 / +4.8, Tuxborn +1.5 / +2.9, Vanilla +2.3 / -0.5 |
+| champion | today's | st.0.off 2, st.0.powStag 2, pk.power 1.33, pk.leash 600 | +1.07 | LoreRim +1.4 / +2.6, Tuxborn +1.3 / +3.5, Vanilla +0.5 / -1.0 |
+| conjurer | today's | st.0.off 1.33, st.2.off 1.33 | -0.39 | LoreRim -0.2 / -0.2, Tuxborn -0.9 / +0.4, Vanilla -0.0 / -0.4 |
+| dragonborn | today's | st.0.off 1.33 | +0.37 | LoreRim +1.2 / -0.1, Tuxborn -0.6 / +1.1, Vanilla +0.5 / -0.4 |
+| ebony-warrior | KEEP | st.0.off 1.33, st.0.def 0.665 | +2.49 | LoreRim +1.7 / -0.4, Tuxborn +2.4 / +0.4, Vanilla +3.4 / +2.1 |
+| evoker | today's | st.2.off 1.33 | +0.28 | LoreRim +0.8 / -0.3, Tuxborn +0.1 / +0.4, Vanilla -0.1 / +0.3 |
+| grand-battlemage | today's | st.0.def 0.25 | -0.20 | LoreRim +0.0 / -0.0, Tuxborn -0.3 / +0.0, Vanilla -0.3 / -0.0 |
+| great-knight | today's | st.0.off 4, st.0.bash 1.33, pk.power 1.33 | +3.30 | LoreRim +5.2 / +3.7, Tuxborn +3.8 / -1.4, Vanilla +0.9 / -0.9 |
+| healer | today's | st.2.off 2.66 | +0.27 | LoreRim +0.8 / +0.2, Tuxborn +0.1 / -0.1, Vanilla -0.1 / -0.4 |
+| jaqspur | KEEP | st.1.off 1.33 | +0.52 | LoreRim +0.7 / +0.6, Tuxborn -0.0 / +1.1, Vanilla +0.9 / -0.1 |
+| knight | KEEP | st.0.off 2, st.0.powStag 1.33, pk.power 2.66 | +6.56 | LoreRim +12.2 / +10.7, Tuxborn +5.3 / +4.3, Vanilla +2.1 / +1.0 |
+| listener | today's | st.0.off 2.66, st.0.powStag 1.33, pk.power 2 | +1.78 | LoreRim +4.5 / +2.7, Tuxborn +1.3 / -1.1, Vanilla -0.4 / +1.8 |
+| living-legend | today's | st.0.off 2, st.0.powStag 2, pk.power 2.66, pk.leash 600 | +0.94 | LoreRim +5.0 / +4.3, Tuxborn -0.8 / +1.7, Vanilla -1.4 / +0.6 |
+| mage | today's | st.2.off 0.5, st.2.def 0.25 | -0.60 | LoreRim -1.0 / -0.3, Tuxborn -1.2 / +0.8, Vanilla +0.3 / -0.2 |
+| master-thief | today's | st.1.off 4 | +0.66 | LoreRim +0.9 / -0.7, Tuxborn +0.8 / -2.0, Vanilla +0.2 / +0.8 |
+| melee | today's | st.0.off 1.33, st.0.def 0.25 | +0.69 | LoreRim +0.7 / +0.3, Tuxborn +1.2 / -0.8, Vanilla +0.1 / +0.1 |
+| mercenary | KEEP | st.0.off 4, st.0.powStag 2, pk.power 2, pk.leash 1000 | +4.36 | LoreRim +2.0 / +5.6, Tuxborn +8.7 / +7.2, Vanilla +2.5 / +1.6 |
+| necromancer | today's | st.0.off 1.33, st.2.off 0.5 | +0.40 | LoreRim +1.9 / -0.8, Tuxborn +0.1 / +0.1, Vanilla -0.7 / +0.4 |
+| nightblade | KEEP | st.0.off 2 | +1.07 | LoreRim +1.3 / +1.7, Tuxborn +1.3 / +1.1, Vanilla +0.6 / +0.1 |
+| nightingale | today's | nothing | +0.00 | LoreRim +0.0 / +0.0, Tuxborn +0.0 / +0.0, Vanilla +0.0 / +0.0 |
+| priest | today's | st.2.off 0.75 | -0.50 | LoreRim -0.6 / -0.5, Tuxborn +0.2 / -0.1, Vanilla -1.1 / -0.1 |
+| ranged | today's | nothing | +0.00 | LoreRim +0.0 / +0.0, Tuxborn +0.0 / +0.0, Vanilla +0.0 / +0.0 |
+| ranger | today's | st.1.off 0.5 | -0.50 | LoreRim -0.3 / +0.0, Tuxborn +0.1 / +0.2, Vanilla -1.3 / -0.0 |
+| saint | today's | st.2.off 0.5625 | -0.49 | LoreRim -0.8 / -0.0, Tuxborn -1.2 / +0.2, Vanilla +0.5 / +0.5 |
+| scout | today's | st.1.off 0.75 | +0.35 | LoreRim +0.3 / -0.0, Tuxborn +0.5 / +1.2, Vanilla +0.2 / -0.4 |
+| sorcerer | today's | st.0.off 1.33, st.0.def 0.25 | +0.80 | LoreRim +2.9 / -0.5, Tuxborn -1.0 / +0.1, Vanilla +0.5 / +1.0 |
+| spellsword | today's | st.0.off 0.75, pk.leash 600 | -0.68 | LoreRim -0.1 / -1.8, Tuxborn -0.4 / -0.8, Vanilla -1.6 / -0.6 |
+| templar | today's | st.0.off 0.75 | +0.49 | LoreRim +0.9 / -0.6, Tuxborn +0.6 / -0.2, Vanilla -0.0 / -0.9 |
+| thief | today's | st.1.off 1.33 | +0.03 | LoreRim +0.5 / +0.3, Tuxborn +0.0 / +0.0, Vanilla -0.4 / -0.1 |
+| warlock | today's | st.2.off 1.33 | +0.44 | LoreRim +0.4 / -0.1, Tuxborn +0.9 / -0.0, Vanilla +0.0 / +0.1 |
+| warrior | KEEP | st.0.off 4, st.0.powStag 2, pk.power 2 | +3.20 | LoreRim +7.7 / +5.8, Tuxborn +0.9 / +2.4, Vanilla +1.0 / +1.7 |
+| witchhunter | today's | st.1.off 0.5 | +0.16 | LoreRim -0.7 / -0.3, Tuxborn +1.2 / +1.9, Vanilla -0.0 / +1.3 |
+| wizard | today's | st.2.off 2.66 | +0.37 | LoreRim +0.9 / +0.1, Tuxborn +0.2 / -0.4, Vanilla +0.0 / -1.0 |
+
+Reading: 7 of 35 classes have a package that holds on all three lists. They are the melee lines, and the direction
+is the same every time: a higher offensive mult (shorter pauses between attacks, more power attacks) and a larger
+power-attack share. No ranged or mage class found a robust gain: their stance styles are already near the best the
+modelled fields can do. Parameter names: `st.<0 melee, 1 ranged, 2 cast>.<off, def, fallback, avoid, powBlock, powStag,
+bash>`, `pk.power` (ch.18 share scale), `pk.leash` (units from the player, 0 = none).
+
+For the C8 author: take the KEEP rows as the direction per class, start from the listed values, and confirm with the
+hit and power-attack probe lines before fixing the generator rows.
+
+## 18. Default gambit rows (card C12), searched with the package
+
+Method (`tools/iaus_sim/tune_defaults.py`, `sim --opt-rows`): table mode, the class's kept package under it, a
+hill-climb over row sets on LoreRim: reorder, retune a threshold, drop, add or replace a row. The rows on offer are
+only what the board lets that class pick (vocabulary opcodes, gated by the class gate and its weapon set, ruling
+Q59). Rules the search keeps: every kind of action in today's rows stays (a knight keeps his taunt), power-attack
+rows do not multiply, the row count stays within today's. Validation as for the packages. Files:
+`tools/iaus_sim/defaults/<class>.json` (today's rows, the lab's rows in board terms, evidence).
+
+| Class | Verdict | Mean gain (U) | Per list delta | Lab rows (condition > gambit) |
+|---|---|---|---|---|
+| arch-mage | today's | -0.57 | LoreRim +1.4, Tuxborn -1.0, Vanilla -2.1 | (unchanged) |
+| archer | today's | +0.00 | LoreRim +0.0, Tuxborn +0.0, Vanilla +0.0 | (unchanged) |
+| blademaster | KEEP | +2.66 | LoreRim +3.8, Tuxborn +2.3, Vanilla +1.9 | foe_attacking_player > attack; foe_attacking_me > attack; foe_lowest_hp > attack; self_sp_pct_below 0.25 > drink_stamina_potion; foe_any > equip_melee |
+| champion | KEEP | +2.86 | LoreRim +2.4, Tuxborn +2.4, Vanilla +3.8 | foe_attacking_player > attack; foe_any > power_attack; foe_highest_hp > attack; self_sp_pct_below 0.25 > drink_stamina_potion; foe_any > equip_melee |
+| conjurer | KEEP | +2.19 | LoreRim +1.3, Tuxborn +4.3, Vanilla +0.9 | foe_count_at_least 3 > cast_target [Fear]; foe_any > cast_target [Attack]; self_mp_pct_below 0.25 > drink_magicka_potion; foe_within_range 150 > equip_melee; foe_stronger_than_me > attack |
+| dragonborn | today's | +0.31 | LoreRim +0.1, Tuxborn +0.5, Vanilla +0.4 | (unchanged) |
+| ebony-warrior | today's | +0.00 | LoreRim +0.0, Tuxborn +0.0, Vanilla +0.0 | (unchanged) |
+| evoker | today's | +0.41 | LoreRim +1.4, Tuxborn -0.6, Vanilla +0.4 | (unchanged) |
+| grand-battlemage | KEEP | +1.68 | LoreRim +1.9, Tuxborn +0.5, Vanilla +2.7 | foe_beyond_range 600 > cast_target [Destruction]; foe_weak_fire > cast_target [Fire]; foe_within_range 400 > attack; foe_any > equip_melee; foe_highest_hp > cast_target [Attack] |
+| great-knight | KEEP | +1.47 | LoreRim +3.1, Tuxborn +1.6, Vanilla -0.3 | foe_attacking_player > power_attack; foe_attacking_player > taunt; foe_attacking_me > attack; self_hp_pct_below 0.35 > drink_health_potion; foe_any > equip_melee |
+| healer | KEEP | +1.12 | LoreRim +1.7, Tuxborn +0.9, Vanilla +0.8 | player_hp_pct_below 0.5 > cast_player [Heal]; ally_hp_pct_below 0.5 > cast_target [Heal]; self_hp_pct_below 0.5 > cast_self [Heal]; foe_attacking_player > cast_target [Attack]; self_mp_pct_below 0.266 > drink_magicka_potion |
+| jaqspur | today's | -0.87 | LoreRim +1.2, Tuxborn -1.9, Vanilla -1.9 | (unchanged) |
+| knight | today's | +1.98 | LoreRim +8.1, Tuxborn -1.3, Vanilla -0.8 | (unchanged) |
+| listener | KEEP | +3.53 | LoreRim +7.9, Tuxborn +1.3, Vanilla +1.4 | foe_any > power_attack; foe_hp_pct_below 0.3 > attack; foe_weaker_than_me > attack; foe_count_at_least 3 > cast_target [Fear]; foe_any > equip_melee |
+| living-legend | KEEP | +2.56 | LoreRim +2.3, Tuxborn +3.5, Vanilla +1.9 | foe_is_caster > power_attack; foe_is_caster > attack; foe_weaker_than_me > attack; foe_highest_level > attack; foe_any > equip_melee |
+| mage | KEEP | +2.35 | LoreRim +2.4, Tuxborn +0.3, Vanilla +4.3 | foe_is_caster > cast_target [Attack]; self_hp_pct_below 0.3 > drink_health_potion; foe_count_at_least 3 > cast_target [Fear]; foe_lowest_hp > attack; always > wait |
+| master-thief | today's | -0.36 | LoreRim +0.9, Tuxborn -0.8, Vanilla -1.1 | (unchanged) |
+| melee | KEEP | +1.46 | LoreRim +4.0, Tuxborn +0.2, Vanilla +0.1 | self_hp_pct_below 0.3 > drink_health_potion; foe_weaker_than_me > attack; foe_lowest_hp > attack; always > wait; foe_highest_level > attack |
+| mercenary | KEEP | +0.87 | LoreRim +3.5, Tuxborn -0.4, Vanilla -0.5 | foe_is_ranged > attack; foe_stronger_than_me > power_attack; self_sp_pct_below 0.25 > drink_stamina_potion; foe_any > equip_melee; self_hp_pct_below 0.5 > drink_health_potion |
+| necromancer | today's | +1.69 | LoreRim +4.5, Tuxborn -1.2, Vanilla +1.8 | (unchanged) |
+| nightblade | today's | -0.03 | LoreRim -0.5, Tuxborn +1.0, Vanilla -0.6 | (unchanged) |
+| nightingale | KEEP | +1.64 | LoreRim +1.9, Tuxborn -0.6, Vanilla +3.6 | foe_is_ranged > attack; foe_attacking_player > attack; foe_is_caster > attack; foe_fleeing > equip_melee; foe_any > equip_ranged |
+| priest | KEEP | +1.84 | LoreRim +2.4, Tuxborn +0.9, Vanilla +2.2 | player_hp_pct_below 0.5 > cast_player [Heal]; ally_hp_pct_below 0.5 > cast_target [Heal]; foe_is_unholy > cast_target [TurnUndead]; self_hp_pct_below 0.5 > cast_self [Heal]; foe_lowest_hp > cast_target [Attack]; self_mp_pct_below 0.2 > drink_magicka_potion |
+| ranged | today's | +0.15 | LoreRim +1.4, Tuxborn +1.8, Vanilla -2.9 | (unchanged) |
+| ranger | KEEP | +0.94 | LoreRim +1.2, Tuxborn +1.0, Vanilla +0.7 | foe_attacking_ally > attack; foe_is_caster > attack; foe_attacking_player > attack; self_out_of_arrows 1 > loot_arrows; foe_any > equip_ranged |
+| saint | today's | -0.02 | LoreRim +2.4, Tuxborn +2.7, Vanilla -5.1 | (unchanged) |
+| scout | KEEP | +1.20 | LoreRim +0.4, Tuxborn +0.6, Vanilla +2.6 | ally_hp_pct_below 0.7 > cast_target [Heal]; player_hp_pct_below 0.7 > cast_player [Heal]; foe_is_caster > attack; foe_any > equip_ranged; foe_highest_hp > cast_target [Attack] |
+| sorcerer | KEEP | +1.67 | LoreRim +2.0, Tuxborn -0.4, Vanilla +3.4 | always > cast_self [BoundWeapon]; foe_any > attack; foe_attacking_player > cast_target [Attack] |
+| spellsword | KEEP | +1.03 | LoreRim +1.0, Tuxborn +1.1, Vanilla +0.9 | foe_beyond_range 400 > cast_target [Destruction]; foe_weak_fire > cast_target [Fire]; foe_is_caster > attack; foe_any > equip_melee; foe_highest_hp > cast_target [Attack] |
+| templar | today's | +0.39 | LoreRim +1.7, Tuxborn -0.8, Vanilla +0.2 | (unchanged) |
+| thief | today's | +0.57 | LoreRim +1.2, Tuxborn +0.8, Vanilla -0.3 | (unchanged) |
+| warlock | today's | -0.07 | LoreRim +1.5, Tuxborn -1.9, Vanilla +0.2 | (unchanged) |
+| warrior | KEEP | +3.67 | LoreRim +2.2, Tuxborn +3.8, Vanilla +5.0 | foe_blocking > power_attack; foe_attacking_player > attack; self_hp_pct_below 0.3 > drink_health_potion; self_sp_pct_below 0.3325 > drink_stamina_potion; foe_any > equip_melee |
+| witchhunter | KEEP | +0.88 | LoreRim +1.9, Tuxborn +1.2, Vanilla -0.5 | foe_attacking_player > attack; foe_weak_fire > cast_target [Fire]; foe_lowest_hp > attack; foe_stronger_than_me > cast_target [Paralyze]; foe_any > equip_ranged |
+| wizard | KEEP | +1.19 | LoreRim +1.5, Tuxborn -0.2, Vanilla +2.2 | foe_lowest_hp > cast_target [Attack]; foe_stronger_than_me > cast_target [Paralyze]; foe_weak_fire > cast_target [Fire]; foe_any > cast_target [Destruction]; self_mp_pct_below 0.2 > drink_magicka_potion |
+
+Questions for marth that the search raised (also in section 14):
+- **Is the power-attack cooldown per row or per follower?** Each default row carries its own 10 s cooldown. An
+  unconstrained search stacked three power-attack rows and got three power attacks per 10 s, which goes round
+  ruling Q7. The lab now forbids more power rows than today's set has.
+- **Rank I has 3 combat slots, the class default sets have 4 or 5 rows** (`State.h kCombatSlotsByRank` = 3, 5, 7,
+  9, 12). What happens to the fourth and fifth default row of a Rank I follower?
+
+## 19. Headline: table, IAUS on main, IAUS+ phase 2, the oracle
+
+J = half the mean scenario utility plus half the mean natural-bracket utility. 24 fights per scenario and 12 per class
+for the three policies. The oracle row is the rollout oracle (K = 6, 60 s, extended action set) planning over IAUS+
+on the first 8 fights per scenario and 4 per class of the same seeds. Every value is also in the results files
+(label HEADLINE, fields `headline.j`, `headline.oracle_j`).
+
+| J | Vanilla | Tuxborn | LoreRim |
+|---|---|---|---|
+| table mode (IAUS off, default gambit rows, today's packages) | 75.5 | 59.1 | 59.2 |
+| IAUS as on main (no estimates) | 75.9 | 58.5 | 57.1 |
+| IAUS+ phase 2 (estimates, parameter set A, scroll road, heal claim) | 78.5 | 62.5 | 60.9 |
+| oracle over IAUS+ | 84.9 | 71.5 | 71.4 |
+
+Reading: IAUS as it is on main does not beat the gambit table on Tuxborn and is 2 J behind it on LoreRim. Phase 2 so
+far is 1.7 to 3.4 J ahead of the table on all three lists. The oracle is 6 to 10 J ahead of phase 2: that is the
+distance left, and part of it needs actions IAUS does not have yet (bash, block, deliberate repositioning).
+
+## 20. More questions for marth
+
+- **Taunt success formula (ruling Q69).** Today the executor rolls `0.5 + 0.05 x (taunter level - foe level)`, kept in
+  0.1 to 0.9, once per candidate foe (`Taunt.cpp:219`). It is stat-based and readable before the choice. IAUS now
+  reads exactly that rule as a fact (`Estimate::TauntChance`). Recommendation: keep it, and make the executor call the
+  same function. If more than level should count, the engine-readable candidates are the foe's AIDT confidence and
+  the taunter's block or armor skill. The lab can score a variant once one is named.
+- The two default-row questions of section 18 (power-attack cooldown per row or per follower; Rank I slots).

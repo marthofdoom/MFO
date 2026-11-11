@@ -1,0 +1,122 @@
+{
+ "schema": 1,
+ "id": "defaults-priest-v1",
+ "class": "priest",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.player_hp_pct_below",
+   "gambit": "act.cast_player",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_unholy",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "TurnUndead",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.cast_self",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.player_hp_pct_below",
+   "gambit": "act.cast_player",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_unholy",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "TurnUndead",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.cast_self",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0;cond.foe_any|act.cast_target|0|1|0",
+ "lab_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_lowest_hp|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 37.38,
+   "lab": 39.77,
+   "delta": 2.39
+  },
+  "Tuxborn": {
+   "today": 43.52,
+   "lab": 44.45,
+   "delta": 0.93
+  },
+  "Vanilla": {
+   "today": 65.39,
+   "lab": 67.58,
+   "delta": 2.19
+  }
+ },
+ "mean_gain": 1.84,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 6"
+}

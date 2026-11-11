@@ -1,0 +1,108 @@
+{
+ "schema": 1,
+ "id": "defaults-warrior-v1",
+ "class": "warrior",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "st.0.off=4,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=2,st.0.bash=1,pk.power=2,pk.leash=0",
+ "today": [
+  {
+   "condition": "cond.foe_blocking",
+   "gambit": "act.power_attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 10.0
+  },
+  {
+   "condition": "cond.foe_stronger_than_me",
+   "gambit": "act.power_attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 10.0
+  },
+  {
+   "condition": "cond.foe_highest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_sp_pct_below",
+   "gambit": "act.drink_stamina_potion",
+   "threshold": 0.25,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_blocking",
+   "gambit": "act.power_attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 10.0
+  },
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.drink_health_potion",
+   "threshold": 0.3,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_sp_pct_below",
+   "gambit": "act.drink_stamina_potion",
+   "threshold": 0.3325,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_blocking|act.power_attack|0|0|10;cond.foe_stronger_than_me|act.power_attack|0|0|10;cond.foe_highest_hp|act.attack|0|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.foe_blocking|act.power_attack|0|0|10;cond.foe_attacking_player|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.3325|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 59.17,
+   "lab": 61.34,
+   "delta": 2.17
+  },
+  "Tuxborn": {
+   "today": 62.32,
+   "lab": 66.15,
+   "delta": 3.83
+  },
+  "Vanilla": {
+   "today": 70.02,
+   "lab": 75.03,
+   "delta": 5.01
+  }
+ },
+ "mean_gain": 3.67,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

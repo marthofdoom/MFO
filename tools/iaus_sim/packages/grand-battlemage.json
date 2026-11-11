@@ -1,0 +1,78 @@
+{
+ "schema": 1,
+ "id": "pkg-grand-battlemage-v1",
+ "class": "grand-battlemage",
+ "line": "Melee",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.25,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.0.def": 0.25
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 34.92,
+   "package": 34.95,
+   "delta": 0.03
+  },
+  "LoreRim/iaus": {
+   "today": 32.43,
+   "package": 32.43,
+   "delta": -0.0
+  },
+  "Tuxborn/table": {
+   "today": 45.63,
+   "package": 45.28,
+   "delta": -0.35
+  },
+  "Tuxborn/iaus": {
+   "today": 46.52,
+   "package": 46.52,
+   "delta": 0.0
+  },
+  "Vanilla/table": {
+   "today": 61.57,
+   "package": 61.28,
+   "delta": -0.29
+  },
+  "Vanilla/iaus": {
+   "today": 66.89,
+   "package": 66.88,
+   "delta": -0.01
+  }
+ },
+ "mean_table_gain": -0.2,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

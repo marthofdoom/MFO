@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "id": "defaults-sorcerer-v1",
+ "class": "sorcerer",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.always",
+   "gambit": "act.cast_self",
+   "threshold": 0.0,
+   "spell_role": "BoundWeapon",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.always",
+   "gambit": "act.cast_self",
+   "threshold": 0.0,
+   "spell_role": "BoundWeapon",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.always|act.cast_self|0|9|0;cond.foe_any|act.attack|0|0|0",
+ "lab_text": "cond.always|act.cast_self|0|9|0;cond.foe_any|act.attack|0|0|0;cond.foe_attacking_player|act.cast_target|0|1|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 43.41,
+   "lab": 45.38,
+   "delta": 1.97
+  },
+  "Tuxborn": {
+   "today": 44.35,
+   "lab": 43.99,
+   "delta": -0.36
+  },
+  "Vanilla": {
+   "today": 65.64,
+   "lab": 69.03,
+   "delta": 3.39
+  }
+ },
+ "mean_gain": 1.67,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

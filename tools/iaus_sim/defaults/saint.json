@@ -1,0 +1,101 @@
+{
+ "schema": 1,
+ "id": "defaults-saint-v1",
+ "class": "saint",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.ally_downed",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_unholy",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.7,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.ally_downed",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_count_at_least",
+   "gambit": "act.cast_target",
+   "threshold": 3.0,
+   "spell_role": "Fear",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.ally_downed|act.cast_target|0|7|0;cond.foe_is_unholy|act.attack|0|0|0;cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.foe_attacking_ally|act.taunt|0|0|0",
+ "lab_text": "cond.ally_downed|act.cast_target|0|7|0;cond.foe_attacking_me|act.attack|0|0|0;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_lowest_hp|act.cast_target|0|1|0;cond.foe_attacking_ally|act.taunt|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 42.99,
+   "lab": 45.38,
+   "delta": 2.39
+  },
+  "Tuxborn": {
+   "today": 41.01,
+   "lab": 43.69,
+   "delta": 2.68
+  },
+  "Vanilla": {
+   "today": 73.03,
+   "lab": 67.89,
+   "delta": -5.14
+  }
+ },
+ "mean_gain": -0.02,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

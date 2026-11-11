@@ -100,6 +100,8 @@ namespace MFO::Iaus {
         RangeChase,         // ruling Q70: a melee ATTACK names a target anywhere in chase range (distance shades, the cap vetoes)
         BoostControlled,    // multiplier: a blow on a foe that cannot answer (paralysed, staggered by control)
         TauntChance,        // ruling Q69: the stat-based chance this taunt works on this foe
+        HealClaimed,        // another follower's heal is already in flight on this recipient
+        HealUrgency,        // seconds the recipient has left at the damage he is taking
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -299,6 +301,7 @@ namespace MFO::Iaus {
         float recipientTtl = kInf;        // the heal recipient's
         float chase = 0.0f;               // melee attack: how far he may chase (Snapshot::chaseCap); 0 = not a chase
         float tauntChance = -1.0f;        // taunt: the chance it works on this foe (Estimate::TauntChance); < 0 = unknown
+        bool  recipientBeingHealed = false;   // another party member's heal is in flight on the recipient
     };
 
     struct Candidate {

@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "id": "pkg-master-thief-v1",
+ "class": "master-thief",
+ "line": "Ranged",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 4.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.1.off": 4.0
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 32.97,
+   "package": 33.88,
+   "delta": 0.91
+  },
+  "LoreRim/iaus": {
+   "today": 33.78,
+   "package": 33.07,
+   "delta": -0.71
+  },
+  "Tuxborn/table": {
+   "today": 43.56,
+   "package": 44.39,
+   "delta": 0.83
+  },
+  "Tuxborn/iaus": {
+   "today": 42.93,
+   "package": 40.94,
+   "delta": -1.99
+  },
+  "Vanilla/table": {
+   "today": 64.95,
+   "package": 65.19,
+   "delta": 0.24
+  },
+  "Vanilla/iaus": {
+   "today": 67.46,
+   "package": 68.27,
+   "delta": 0.81
+  }
+ },
+ "mean_table_gain": 0.66,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

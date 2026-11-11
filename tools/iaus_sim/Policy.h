@@ -65,6 +65,7 @@ namespace Sim {
             } else if (o.role == Role::Player || o.role == Role::Follower) {
                 Combatant k = o.c; k.dist = Fight::Dist(self, o); k.sight = F.Sees(self, o) ? Sight::Visible : Sight::Occluded; k.sightEngine = k.sight;
                 if (F.estimates) FillEstimate(F, o, k);
+                if (F.estimates) for (const Body& h : F.b) if (&h != &self && h.role == Role::Follower && h.act == Act::Cast && h.hitAt >= 0 && h.actTarget == o.c.id) { const SimSpell* hs = F.SpellOf(h, h.actSpell); if (hs && hs->e.nature == Prune::Nature::Heal) k.beingHealed = true; }
                 sn.allies.push_back(std::move(k));
             }
         }
