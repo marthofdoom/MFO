@@ -43,6 +43,7 @@ namespace MFO::Iaus::SpellBook {
         std::mutex                           g_mx;        // LEAF: map and ledger access only
         std::unordered_map<RE::FormID, Slot> g_books;
         std::unordered_set<RE::FormID>       g_dropLogged;   // once per spell per session
+        std::unordered_set<RE::FormID>       g_probeLogged;  // the passive probes: once per spell / staff per session
         std::uint32_t                        g_gen = 0;      // bumped by Clear: a pre-Clear refresh is dropped
 
         double Age(const Clock::time_point& a_then, const Clock::time_point& a_now) {
@@ -72,8 +73,12 @@ namespace MFO::Iaus::SpellBook {
 
         // MAIN THREAD. One spell or scroll record -> its entry. The NATURE is cast/'s classifiers' answer fed to
         // Prune::ClassifyNature; nothing here re-derives hostile / heal / buff.
+        // PASSIVE PROBES (principle 5: a read nobody has watched run is not a fact yet). Measure collects one line
+        // per area spell and per staff; PostRefresh logs each form ONCE per session, outside the leaf mutex.
+        using Probes = std::vector<std::pair<RE::FormID, std::string>>;
+
         Entry MakeEntry(RE::Actor* a_actor, RE::SpellItem* a_sp, Source a_source, const ClassGate& a_gate,
-                        const std::vector<RE::Actor*>& a_party) {
+                        const std::vector<RE::Actor*>& a_party, Probes& a_probes) {
             using Arch = RE::EffectArchetypes::ArchetypeID;
             Entry e;
             e.form   = a_sp->GetFormID();
@@ -94,6 +99,11 @@ namespace MFO::Iaus::SpellBook {
             case CasterConsent::SpellKind::Buff:    in.kind = Prune::Kind::Buff; break;
             }
             float costliestHostile = -1.0f;
+            // The BLAST: the effect's own explosion (MGEF data.explosion) and its projectile's (BGSProjectile
+            // data.explosionType) carry the real damage radius in world units (BGSExplosion data.radius). It can
+            // be larger than the EFIT area, and the never-splash rule must see the larger one.
+            float explosionUnits = 0.0f;
+            const char* explosionSrc = "none";
             for (auto* eff : a_sp->effects) {
                 auto* base = eff ? eff->baseEffect : nullptr;
                 if (!base) continue;
@@ -105,6 +115,15 @@ namespace MFO::Iaus::SpellBook {
                 case Arch::kParalysis:  in.control = true; break;
                 default: break;
                 }
+                if (const auto* ex = base->data.explosion; ex && std::isfinite(ex->data.radius) && ex->data.radius > explosionUnits) {
+                    explosionUnits = ex->data.radius;
+                    explosionSrc = "effect";
+                }
+                if (const auto* proj = base->data.projectileBase)
+                    if (const auto* ex = proj->data.explosionType; ex && std::isfinite(ex->data.radius) && ex->data.radius > explosionUnits) {
+                        explosionUnits = ex->data.radius;
+                        explosionSrc = "projectile";
+                    }
                 // The element (design fact 7, section 3.1 exploit): the COSTLIEST hostile effect's resist AV.
                 if ((base->IsHostile() || base->IsDetrimental()) && eff->cost > costliestHostile) {
                     costliestHostile = eff->cost;
@@ -137,7 +156,12 @@ namespace MFO::Iaus::SpellBook {
 
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
-            e.areaUnits = Prune::AreaUnits(static_cast<float>(arch.area));
+            e.areaUnits = Prune::BlastUnits(static_cast<float>(arch.area), explosionUnits);
+            if (arch.area > 0 || explosionUnits > 0.0f)
+                a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}) "
+                                                          "-> blast {:.0f} units", e.name, e.form, arch.area,
+                                                          Prune::AreaUnits(static_cast<float>(arch.area)), explosionUnits,
+                                                          explosionSrc, e.areaUnits));
             // The aimed reach (spell range, else projectile range; Self / Touch = Heal Other's reach, which is
             // what a heal or buff placed on an ally needs). "No cap of its own" is a huge number there: 0 here.
             const float reach = Actuation::HealReach(a_sp);
@@ -159,8 +183,29 @@ namespace MFO::Iaus::SpellBook {
         // MAIN THREAD. The current charge of one carried staff stack. An EQUIPPED staff's live charge is the
         // actor value of its hand; an unequipped one carries it in ExtraCharge, and a stack with no ExtraCharge
         // has never been used (full: the record's EAMT).
-        float StaffCharge(RE::Actor* a_actor, RE::TESObjectWEAP* a_staff, const RE::InventoryEntryData* a_entry) {
+        float StaffCharge(RE::Actor* a_actor, RE::TESObjectWEAP* a_staff, const RE::InventoryEntryData* a_entry,
+                          Probes& a_probes) {
             auto* avo = a_actor->AsActorValueOwner();
+            {   // MFO-B656: every input of the charge read, so one field log settles which of them is the truth.
+                const bool right = a_actor->GetEquippedObject(false) == a_staff;
+                const bool left  = a_actor->GetEquippedObject(true) == a_staff;
+                const float avR = avo ? avo->GetActorValue(RE::ActorValue::kRightItemCharge) : 0.0f;
+                const float avL = avo ? avo->GetActorValue(RE::ActorValue::kLeftItemCharge) : 0.0f;
+                bool  hasExtra = false;
+                float extra = 0.0f;
+                if (a_entry && a_entry->extraLists)
+                    for (auto* xl : *a_entry->extraLists)
+                        if (auto* xc = xl ? xl->GetByType<RE::ExtraCharge>() : nullptr) { hasExtra = true; extra = xc->charge; break; }
+                auto* ench = a_staff->formEnchanting;
+                const float per = ench ? ench->CalculateMagickaCost(a_actor) : 0.0f;
+                a_probes.emplace_back(a_staff->GetFormID(),
+                    std::format("staff probe: {} ({:08X}) on {:08X}: equipped={} AV RightItemCharge={:.1f} LeftItemCharge={:.1f} "
+                                "ExtraCharge={} EAMT={} enchant={:08X} CalculateMagickaCost={:.1f}",
+                                a_staff->GetName() ? a_staff->GetName() : "?", a_staff->GetFormID(), a_actor->GetFormID(),
+                                right ? "right" : (left ? "left" : "no"), avR, avL,
+                                hasExtra ? std::format("{:.1f}", extra) : std::string("absent"),
+                                a_staff->amountofEnchantment, ench ? ench->GetFormID() : 0u, per));
+            }
             if (avo && a_actor->GetEquippedObject(false) == a_staff)
                 return avo->GetActorValue(RE::ActorValue::kRightItemCharge);
             if (avo && a_actor->GetEquippedObject(true) == a_staff)
@@ -191,7 +236,7 @@ namespace MFO::Iaus::SpellBook {
         }
 
         // MAIN THREAD ONLY.
-        std::shared_ptr<const Book> Measure(RE::Actor* a_actor) {
+        std::shared_ptr<const Book> Measure(RE::Actor* a_actor, Probes& a_probes) {
             auto book = std::make_shared<Book>();
             const RE::FormID  fid  = a_actor->GetFormID();
             const ClassGate   gate = GateFor(fid);
@@ -211,7 +256,7 @@ namespace MFO::Iaus::SpellBook {
             a_actor->VisitSpells(vis);
             for (auto* sp : vis.out) {
                 if (!Vocab::IsCastableSpell(sp)) continue;   // abilities, powers, constant effects: never an entry
-                book->entries.push_back(MakeEntry(a_actor, sp, Source::Spell, gate, party));
+                book->entries.push_back(MakeEntry(a_actor, sp, Source::Spell, gate, party, a_probes));
             }
 
             std::vector<Entry> scrolls, staves;
@@ -227,7 +272,7 @@ namespace MFO::Iaus::SpellBook {
                         e.onClass = !gate.strict || gate.weaponStaff;
                         e.fromMastered = false;
                         auto* ench = w->formEnchanting;
-                        const float charge = StaffCharge(a_actor, w, data.second.get());
+                        const float charge = StaffCharge(a_actor, w, data.second.get(), a_probes);
                         const float per    = ench ? ench->CalculateMagickaCost(a_actor) : 0.0f;
                         e.charge  = std::isfinite(charge) ? charge : 0.0f;
                         e.charged = ench && e.charge > 0.0f && (!std::isfinite(per) || e.charge >= per);
@@ -245,7 +290,7 @@ namespace MFO::Iaus::SpellBook {
                     continue;
                 }
                 if (auto* sc = obj->As<RE::ScrollItem>()) {
-                    Entry e = MakeEntry(a_actor, sc, Source::Scroll, gate, party);
+                    Entry e = MakeEntry(a_actor, sc, Source::Scroll, gate, party, a_probes);
                     e.count = data.first;
                     scrolls.push_back(std::move(e));
                     continue;
@@ -276,10 +321,11 @@ namespace MFO::Iaus::SpellBook {
                 // as "he knows no spells".
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
                 std::shared_ptr<const Book> book;
-                if (actor && actor->Is3DLoaded() && !actor->IsDead()) book = Measure(actor);
+                Probes probes;
+                if (actor && actor->Is3DLoaded() && !actor->IsDead()) book = Measure(actor, probes);
 
                 std::string sig;
-                std::vector<std::string> drops;
+                std::vector<std::string> drops;   // also carries the first-time probe lines
                 bool logSig = false;
                 if (book) sig = Signature(*book);
                 {
@@ -296,6 +342,8 @@ namespace MFO::Iaus::SpellBook {
                         if (e.source == Source::Spell && e.drop != Prune::Drop::Keep && g_dropLogged.insert(e.form).second)
                             drops.push_back(std::format("{} ({:08X}): nature={} -- no IAUS candidate: {}", e.name,
                                                         e.form, NatureName(e.nature), Prune::DropName(e.drop)));
+                    for (auto& [form, line] : probes)
+                        if (g_probeLogged.insert(form).second) drops.push_back(std::move(line));
                 }
                 // Logged OUTSIDE the leaf mutex.
                 const char* name = actor->GetName() ? actor->GetName() : "?";
@@ -404,6 +452,7 @@ namespace MFO::Iaus::SpellBook {
         ++g_gen;
         g_books.clear();
         g_dropLogged.clear();
+        g_probeLogged.clear();
     }
 
 }

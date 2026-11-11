@@ -8910,6 +8910,16 @@ the scan integration is I6, the board is I7, the class profiles are I8. **NOT se
     `g_active`, targets, race keyword, resists, Sightline cache, `Targeting::Current`, `CombatSense`, `Logistics::IsUnholy`; the
     book through `SpellBook::Read`; G10 through `Actuation::WillWork` for last lap's top-6 pairs only), `Build` `:271` (Gather +
     GateFor + Generate), `NoteDecision` `:279`, `CombatEnded` / `Forget` / `Clear` `:290`, the fight clock (`kFightGapSec` `:42`).
+  - **I4 review fix round (`fix/iaus-i4-review`, 2026-11-10; F1 + F2, both SEV-3).** F1: the heal `alreadyActive` fact now
+    sees EVERY heal road. `Gather` fills `Snapshot::liveStreams` from `Actuation::SelfStreamLive` (new, `cast/DirectSelf.cpp`:
+    the `g_selfCast` registry, where a self heal's direct stream lives), `Actuation::TargetStreamLive` (`g_targetCast`) and
+    `Actuation::HealClaimLive` (new, `cast/DirectSelf.cpp`: a standing Harbinger heal claim on either hand, the same
+    `APMFBridge::GetHealCastSpell` / `GetHealCastTarget` reads Evaluator's PickAlly makes; recipient 0 = himself). All three are
+    declared in `cast/Actuation.h` beside `TargetStreamLive`, worker-serial pure reads. F2: `SpellEntry::areaUnits` is
+    `Prune::BlastUnits` = the LARGER of the EFIT area (feet x 64/3) and the explosion radius of the effect (`MGEF data.explosion`)
+    or of its projectile (`BGSProjectile data.explosionType`), `BGSExplosion data.radius` in units. PASSIVE PROBES, one line per
+    form per session: `[spellbook] area probe: ...` (EFIT area vs explosion radius) and `[spellbook] staff probe: ...`
+    (AV Right/LeftItemCharge, ExtraCharge, EAMT, CalculateMagickaCost; backlog MFO-B656).
   - Outside `iaus/`: `logistics/Sinks.cpp:182` (the ONE `TESContainerChangedEvent` sink calls `SpellBook::OnContainerChanged`),
     `native/CMakeLists.txt` (three sources). The harness builds `Generate.cpp` too (section 8 of its output).
 
@@ -8938,6 +8948,9 @@ group's read lock covers ONLY the handle copy; `ChaseRadius` and the bridge read
   unloaded follower (it would read as "he knows no spells": `PostRefresh` publishes nothing then); removing the generation check
   in `PostRefresh` (a pre-load book would land in the next session); shortening `kTrustSec` under `kRefreshSec + kAskRetrySec`
   (a live fight would lose its book between refreshes, principle 9).
+- I4 `areaUnits` must never be the EFIT area alone (review F2): an aimed blast's damage radius is its explosion's, and an
+  under-sized radius lets a blast that reaches an ally pass `splash_safe` (marth: never splash the party). Any new heal road
+  must also be read into `Snapshot::liveStreams` (review F1), or its running heal scores as not active and is re-picked.
 - I4 pure layer: `Snapshot.h`, `Prune.h`, `Generate.*` must stay free of RE:: types and engine calls (the harness and the
   simulator build them on the host; `tools/iaus_harness/run.sh` fails if they do not). Candidate names are `string_view`s INTO
   the Snapshot, which is why `Candidates::Set` cannot be copied or moved. A fact a family does not read stays at its default,

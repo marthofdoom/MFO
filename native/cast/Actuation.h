@@ -270,6 +270,16 @@ namespace MFO::Actuation {
     // as "APMF claimed" because ANOTHER rule's claim was live on the follower).
     // Worker-serial, same registry discipline as CastTargetDirect.
     bool TargetStreamLive(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target);
+    // The SELF twin (I4 review F1): does the direct SELF-stream registry (CastSelfDirect's g_selfCast; CastTargetDirect
+    // declines a self target and sends it there) hold a stream of exactly a_spell for a_follower? Worker-serial, the
+    // same registry discipline as CastSelfDirect. A pure read.
+    bool SelfStreamLive(RE::FormID a_follower, RE::FormID a_spell);
+    // The CLAIM road (I4 review F1): does a standing Harbinger heal claim of a_follower, on either hand, name exactly
+    // (a_spell, a_recipient)? a_recipient 0 or the follower himself = a SELF claim (the bridge reports a self claim's
+    // target as 0). The same two reads Evaluator's PickAlly makes for the incumbent recipient
+    // (APMFBridge::GetHealCastSpell / GetHealCastTarget per hand). Worker; takes the bridge's g_mx inside, so the
+    // caller must not hold it. A pure read. False when Harbinger is absent (no claim can stand).
+    bool HealClaimLive(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_recipient);
 
     // ── CAN THIS ACTOR ACT? (fix/mfo-can-act, field 0928c, 2026-09-29) ──────────
     // Field 2026-09-28 21:06-21:07 (MFO.log.1): Jesper, BLEEDING OUT (HP ~0, stamina
