@@ -534,6 +534,12 @@ namespace MFO::Config {
     // one `[iaus-why]` line per top-3 candidate (every consideration's input and value) after each `[iaus]` line.
     // LOG-ONLY: the board's Thinking panel does not read it. Read by scheduler/IausSource.cpp on the worker.
     inline std::atomic<bool>  g_iausExplain{ false };
+    // IAUS AVAILABLE ([General] bIausAvailable, MCM "Combat & Casting", default ON; marth Q71). The global gate over
+    // the per-follower IAUS combat switch (FollowerState::iausCombat, default OFF). 0 = no follower runs the IAUS
+    // source whatever his bit says; the bit is KEPT (co-save untouched), so turning this back on restores each
+    // follower's choice. ANDed into `iausOn` in scheduler/CombatScan.cpp Tick, so the existing IausToggleEdge stands
+    // a running follower down. Read on the worker (scan) and the render thread (board button grey-out).
+    inline std::atomic<bool>  g_iausAvailable{ true };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };

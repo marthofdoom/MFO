@@ -207,6 +207,7 @@ namespace MFO::Config {
             else if (a_key == "bPerkEntryProbe")    setB(g_perkEntryProbe);   // [perk-probe] passive perk-entry probe, INI-only, default OFF
             else if (a_key == "bInheritPerkCensus") setB(g_inheritPerkCensus);   // [inherit-census] hidden-perk census, log only, INI-only, default ON
             else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
+            else if (a_key == "bIausAvailable")     setB(g_iausAvailable);    // global IAUS gate, MCM, default ON (the per-follower bit stays default OFF)
             else if (a_key == "bIausExplain")       setB(g_iausExplain);      // [iaus-why] per-candidate breakdown, INI-only, default OFF
             else if (a_key == "bSpellShapeCensus")  setB(g_spellShapeCensus); // [shape-census] load-time spell shape counts, INI-only, default ON
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
@@ -427,6 +428,7 @@ namespace MFO::Config {
             g_perkEntryProbe     = false;   // [perk-probe] passive perk-entry probe -- OFF everywhere by default
             g_spellShapeCensus   = true;    // [shape-census] load-time log-only census -- ON
             g_inheritPerkCensus  = true;    // [inherit-census] hidden-perk census -- ON (log only, changes nothing)
+            g_iausAvailable      = true;    // global IAUS gate -- ON (the per-follower switch is what defaults OFF)
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
             g_heartbeat          = true;    // [hb] 5 s liveness line -- ON (1 line / 5 s; names the stopped thread on a freeze)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
@@ -553,7 +555,7 @@ namespace MFO::Config {
             { "fRapportRate", "2.000000" },   { "fRapportKill", "1.000000" },
             { "fRapportBossMult", "5.000000" }, { "fRapportDragonMult", "10.000000" },
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
-            { "bEquipToCast", "1" },
+            { "bEquipToCast", "1" },           { "bIausAvailable", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "iCastControl", "2" },
             { "bWarnNoApmf", "1" },
