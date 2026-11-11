@@ -446,7 +446,8 @@ namespace MFO::Scheduler {
                     // The pass's own text, once: the chain prints it, and the source receives it (card I6).
                     const char* const passWhy = satisfiedEquip        ? "satisfied"
                                                 // G9: no countdown in the chain, or its dedup'd log line changes every second
-                                                : !coolReason.empty() ? "cooling down"
+                                                // Taunt::Fire's own "cooling down (Ns)" ticks the same way, so it is flattened too
+                                                : (!coolReason.empty() || outcome.reason.starts_with(Cooldowns::kCoolingPrefix)) ? "cooling down"
                                                                       : outcome.reason.c_str();
                     chain += std::format("{}{}({})", chain.empty() ? "" : ",",
                                          choice.rank, passWhy);

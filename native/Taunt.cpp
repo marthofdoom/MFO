@@ -2,6 +2,7 @@
 #include "Taunt.h"
 #include "Config.h"
 #include "Cooldowns.h"
+#include "iaus/Core.h"
 #include "iaus/Estimate.h"
 #include "MainThread.h"
 #include "apmf/APMFBridge.h"
@@ -210,6 +211,10 @@ namespace MFO::Taunt {
                 auto  fp  = c.h.get();   // HOLD
                 auto* foe = fp.get();
                 if (!foe || foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
+                {   // another knight pinned it since Gather: never repoint it (this taunter's own live pin is re-rolled as before)
+                    std::scoped_lock lk(g_mx);
+                    if (const auto it = g_active.find(c.id); it != g_active.end() && it->second.taunterId != tId) continue;
+                }
                 ++n;
                 const int fLevel = foe->GetLevel();
                 std::string note;
@@ -458,13 +463,13 @@ namespace MFO::Taunt {
             return { R::FailedSkill, "taunt: no melee weapon in the right hand", true };
 
         const auto id = a_f->GetFormID();
-        // Q69 cooldown: kTauntCooldownSec per taunter, from the ATTEMPT (stamped when the idle is filed below), hit or miss.
+        // Q69 cooldown: Iaus::kTauntCooldownSec per taunter, from the ATTEMPT (stamped when the idle is filed below), hit or miss.
         // ONE identity per follower in the shared Cooldowns store (Kind::Follower), the same one the IAUS taunt candidate
         // reads (iaus/Engine.cpp), so toggling IAUS mid-fight cannot grant a second taunt. Transparent: the scan falls through.
         if (const float left = Cooldowns::Remaining(id, Cooldowns::Kind::Follower, Cooldowns::kFollowerTaunt,
-                                                    kTauntCooldownSec, std::chrono::steady_clock::now());
+                                                    Iaus::kTauntCooldownSec, std::chrono::steady_clock::now());
             left > 0.0f) {
-            LogSkip(id, "cooling down", std::format("{:.0f}s left of {:.0f}s", left, kTauntCooldownSec));
+            LogSkip(id, "cooling down", std::format("{:.0f}s left of {:.0f}s", left, Iaus::kTauntCooldownSec));
             return { R::NoOp, Cooldowns::CoolingReason(left), true };
         }
         {

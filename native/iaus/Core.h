@@ -145,6 +145,10 @@ namespace MFO::Iaus {
         float tau = 0.0f;     // softmax temperature; 0 = always the best
     };
 
+    // Per-taunter act.taunt cooldown, seconds, from the ATTEMPT (marth Q69: "a 30s cool down"). The ONE constant: Taunt::Fire
+    // and Tuning::rowlessTauntCooldownSec both use it. (Declared here, before Tuning, which needs it; SharedCooldownId is below.)
+    inline constexpr float kTauntCooldownSec = 30.0f;
+
     struct Tuning {
         std::array<Curve, kCons> curve{};
         std::array<float, kFamilies> actionWeight{};
@@ -180,7 +184,7 @@ namespace MFO::Iaus {
         // 12-20 times a minute. One taunt ATTEMPT is one idle play plus a roll, and a hit already blocks the next
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
-        float rowlessTauntCooldownSec = 30.0f;   // marth Q69: a 30 s taunt cooldown (= Taunt::kTauntCooldownSec)
+        float rowlessTauntCooldownSec = kTauntCooldownSec;   // marth Q69: 30 s, the executor's own cooldown
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -302,7 +306,7 @@ namespace MFO::Iaus {
     // marth Q69 (taunt) / Q73 (power attack): these two families keep ONE cooldown per follower, shared with the gambit
     // rows, not one per (family, posture, form). Returns the Cooldowns::Kind::Follower slot (Cooldowns.h
     // kFollowerPowerAttack = 1, kFollowerTaunt = 2), or 0 = the family keeps its own CooldownId. Engine.cpp maps it.
-    [[nodiscard]] inline std::uint64_t SharedCooldownId(Family a_f) {
+    [[nodiscard]] inline constexpr std::uint64_t SharedCooldownId(Family a_f) {
         return a_f == Family::PowerAttack ? 1u : a_f == Family::Taunt ? 2u : 0u;
     }
 

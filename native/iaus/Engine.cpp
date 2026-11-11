@@ -48,7 +48,8 @@ namespace MFO::Iaus::Engine {
     }
 
     namespace {
-        static_assert(Cooldowns::kFollowerPowerAttack == 1 && Cooldowns::kFollowerTaunt == 2, "iaus/Core.h SharedCooldownId mirrors these");
+        static_assert(SharedCooldownId(Family::PowerAttack) == Cooldowns::kFollowerPowerAttack, "iaus/Core.h SharedCooldownId mirrors Cooldowns.h");
+        static_assert(SharedCooldownId(Family::Taunt) == Cooldowns::kFollowerTaunt, "iaus/Core.h SharedCooldownId mirrors Cooldowns.h");
 
         // The Cooldowns identity of a candidate: power attack and taunt are ONE cooldown per follower (Kind::Follower,
         // shared with the gambit rows, marth Q69 / Q73); everything else keeps its (family, posture, form) IausAction id.

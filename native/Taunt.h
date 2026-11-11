@@ -36,9 +36,7 @@ namespace MFO::Taunt {
     // The entry is filed by the roll (Resolve) and dropped by Tick on the taunt's real ends (duration fTauntDuration,
     // taunter down or dead, foe dead or unloaded, combat over, Harbinger ending the pin), so it can never outlive
     // the pin and is never expired early by a guessed timer (principle 9). Any thread (one leaf-mutex read).
-    // Per-taunter cooldown of act.taunt, seconds, from the ATTEMPT (marth Q69: "a 30s cool down"). IAUS's rowless taunt
-    // floor (iaus/Core.h Tuning::rowlessTauntCooldownSec) is 30 as well; both read ONE shared Cooldowns identity.
-    inline constexpr float kTauntCooldownSec = 30.0f;
+    // The per-taunter act.taunt cooldown is Iaus::kTauntCooldownSec (iaus/Core.h), the one constant IAUS's floor also uses.
     // Is a_foe pinned onto ANY taunter by a live taunt? Same table as TauntedBy. Any thread (one leaf-mutex read).
     [[nodiscard]] bool IsPinned(RE::FormID a_foe);
     [[nodiscard]] bool TauntedBy(RE::FormID a_foe, RE::FormID a_taunter);
