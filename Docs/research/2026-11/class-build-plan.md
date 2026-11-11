@@ -491,6 +491,18 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   Packages never choose targets and never swap weapons (rulings).
 - Tier B, effort 4. **Field: yes** (one session per tier).
 - Depends: H1 merged, C7. The `Stance` ordinals stay frozen.
+- **STATUS 2026-11-11: BUILT on `feat/class-packages` (NOT merged, NOT field-run).** Source of every number: `native/classes/ClassTable.cpp` (`powerShareMax` / `powerShareMin` / `flags`), which already carries the walkthrough rulings (Q27: Thief and Master Thief keep 0.20, Templar has NO cap).
+  - CSTY: `CombatStyle::Want` (worker) asks `Classes::PackageClass` / `PackageStyle` (`classes/Package.cpp`), which walks the ESL manifest entry[2] -> per-class FLST -> mask GLOB + CSTYs (no FormIDs in the DLL). `ApplyTick` (combat thread) only writes the pointer Want stored. A stance the class has no CSTY for keeps `MFO_*Style`. Dragonborn uses his picked T4's package (Q60), else his own.
+  - ch.18: `apmf/AttackMix.cpp`, Normal + Power governed, nothing denied outright, ceiling / floor as declared. Bash stays in every mix (Q38). Dual-wield and Left are not governed.
+  - ch.23: Scheduler `ServiceLeashWithReachHold` scales the confidence radius by `fClassLeashMult` (0.5) for classes flagged short-leash or near-player, never below `fLeashMin`. The class data has the flags but NO length, so 0.5 is a first value to retune in the field.
+  - In-game check (a build with `MFO_Classes.esl`, `bClassTree = 1`, Harbinger >= ABI 34; set `bAttackMixProbe = 1`; DEV build `sDevClassEquip` puts a class on a follower):
+    1. Load: `[classes] package styles resolved: 35 of 35 classes, 95 CSTY record(s)`. Any `[classes] package styles:` ERROR line means that class kept today's styles.
+    2. Equip a Knight (T2), enter a fight: `[wstyle] <fid> <name>: combat style OWNED ... (melee stance, ... class package Knight)`. A T1 (Melee/Ranged/Mage) follower shows NO "class package". Switch class mid-fight: `stance HANDOFF ... class package <new>`.
+    3. `[mix] <fid>: ch.18 attack mix FILED (h=.., class Knight, power share ceiling 0.25 floor -1.00 ...)`; Warrior: `ceiling -1.00 floor 0.40`; Mercenary / Blademaster 0.15; Thief / Master Thief 0.20 ceiling; Listener 0.25; Templar and Archer: NO `[mix]` filed line. In a fight the probe line shows `share` settling under the ceiling (Knight) or above the floor (Warrior) once `fill` reaches 8.
+    4. `[leash] <fid>: ch.23 pursuit leash CLAIMED (... radius N)` for a Knight is about half of the radius an Archer gets in the same spot, and is never under `fLeashMin`.
+    5. Unequip the class (Classes off): `[mix] ... released (no package class ...)` within a second, and the next fight has no "class package" in the `[wstyle]` line. Dismiss him: `[mix] ... released (dismissed)`.
+    6. With APMF.dll absent: no `[mix]` or class `[leash]` lines (the class CSTY still applies); with Harbinger older than ABI 34: one `[mix] Harbinger ABI .. is older than 34` info line.
+    7. Save, reload mid-session: the claims re-file after load (`FILED` again), none from the previous session survive.
 
 **C9. Hybrid "go in" rules**
 - What: a per-class predicate decides IN (melee range) vs RANGE each tick. Spellsword = a health / magicka / range bias;
