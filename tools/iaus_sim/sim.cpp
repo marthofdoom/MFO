@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
     if (!opt.empty()) return Optimise(D, allClasses, opt, seed, fights, threads, optPasses);
     Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus";
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
-    if (!noJson && opt.empty()) { R.j = Objective(D, allClasses, seed, 24, threads, &R.jScen, &R.jNat); R.hasJ = true; std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  mode=%s\n", R.j, R.jScen, R.jNat, R.mode.c_str()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
+    if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, 24, threads, &R.jScen, &R.jNat); R.hasJ = true; std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  mode=%s\n", R.jVal, R.jScen, R.jNat, R.mode.c_str()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
     if (!scenario.empty()) {
         std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
         if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
