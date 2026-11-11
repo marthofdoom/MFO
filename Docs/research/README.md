@@ -14,6 +14,7 @@ Every research round's results are kept here (marth 2026-11-10: "every research 
 | class-m0-re.md | class M0 engine research (less-targeted, disengage, hiding, archer aim) |
 | class-perks-packages.md, fe-class-pattern.md | class passive/package drafts, Fire Emblem pattern |
 | iaus-design.md | IAUS (utility AI) design cards |
+| iaus-i0-split.md | IAUS I0 split: the scan is a span inside Tick (whole function moved); a linkage change reorders /O2 code |
 | hms-magicka-research.md | HMS rates + NPC vs player spell cost curve |
 | dodge-research.md | dodge / step-out research |
 | complex-spells-research.md | spell shapes the cast roads mishandle; engine row alias |
