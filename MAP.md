@@ -787,7 +787,9 @@ per concern:
   `IsSummonSpell` (`:269`, public; it lives here because `CastAuto` inlines it).
 - **SPELL ARCHETYPE PROBE (feat/mfo-spell-archetype-probe, task 7 slice P0, PASSIVE, no behaviour change).**
   `cast/Archetype.cpp` = `ClassifyArchetype(SpellItem*)` (pure SPEL/MGEF form reads, cached per FormID under
-  the leaf `g_cacheMx`): shape, delivery, casting, two-handed, noDualMods, charge, range, area, projectile,
+  the leaf `g_cacheMx`; **`SpellShape::Ward` = any value-modifier-family effect on `kWardPower`, the SAME alias set the row table
+  uses (`IsVmAlias`), since IAUS card I6: real wards are `kAccumulateMagnitude`. Its one functional reader is `iaus/SpellBook.cpp`;
+  the engine row was already `Ward` through the alias, so `BuffRoad.cpp` is unchanged**): shape, delivery, casting, two-handed, noDualMods, charge, range, area, projectile,
   snap-to-navmesh, and a PREDICTED engine caster row mirrored from Harbinger `Docs/STATUS.md:135-161` (each
   `kRows` entry cites its line); `NoteArchetypeRoad` = the once-per-(follower, spell, road) `[archetype]`
   INFO + one WARN per (follower, spell) for a claim road meeting predicted `none` (ledger `g_noted`/`g_warned`
@@ -2351,20 +2353,23 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
 - **FILE LAYOUT (IAUS card I0, 2026-11-10, `refactor/iaus-i0-combatscan`: a pure TU split; linecheck PASS, no-optimizer
   splitcheck proof identical, ONE /O2 function (`ServiceRetreat`) differs by instruction order only and is allow-listed
   (`tools/splitcheck/allow/iaus-i0.txt`, why: `Docs/research/2026-11/iaus-i0-split.md`); TU map `tools/splitcheck/tumaps/iaus-i0.txt`).** Three files, one namespace `MFO::Scheduler`:
-  - **`native/scheduler/CombatScan.cpp`** = `Scheduler::Tick` (`:454`) plus, file-local: `MeleeClampDwell` (`:51`),
-    `EquipRangeUndecidable` (`:82`), and since IAUS card I1 the table source and the scan function: `TableSource` (`:103`),
-    `ScanOut` (`:239`), `Scan` (`:265`, the walk loop `for (;;)` `:279`). Inside `Tick`: `Packages::Pump` `:479`, the
-    party-OOC branch `if (!g_partyCombat)` `:721`, the retreat self-heal walk (`TableSource retreatTable` `:1104`),
-    `serviceOwnOoc` `:934`, the empty-table return `:1237`, the suppression window (`g_recent`) `:1268`, **the scan call
-    (`ScanOut scan;` `:1277`)**, **the RECONCILIATION `:1290-1577`** (`condKnownFalse` `:1334`, `ReconcileSilver` `:1507`,
-    `ReconcileForcedWeapon` `:1508`, `HealSustainLap` `:1547`, the `!castSeen` release `:1548`), the bookkeeping
-    (`src.Record` `:1622`, `switch (outcome.result)` `:1631`). The reconciliation and the bookkeeping are still spans inside
-    `Tick` (the file split, MFO-B655, needs them extracted next).
+  - **`native/scheduler/CombatScan.cpp`** = `Scheduler::Tick` (`:457`) plus, file-local: `MeleeClampDwell` (`:53`),
+    `EquipRangeUndecidable` (`:84`), and since IAUS card I1 the table source and the scan function: `TableSource` (`:105`),
+    `ScanOut` (`:241`), `Scan` (`:267`, the walk loop `for (;;)` `:281`). Inside `Tick`: `Packages::Pump` `:482`, `IausSweep` `:488`,
+    the source pick + toggle edge (`iausOn`, `IausToggleEdge` `:706`), the party-OOC branch `if (!g_partyCombat)` `:732`,
+    `serviceOwnOoc` `:946`, the retreat self heal (IAUS `:1117`, else the `TableSource retreatTable` walk `:1119`), the
+    empty-table return `:1236` (table followers only), the suppression window (`g_recent`) `:1283`, **the source at the seam
+    (`std::optional<IausSource> iaus` `:1291`), the scan call (`ScanOut scan;` `:1297`), `AmendScan` `:1311`**, **the
+    RECONCILIATION `:1313-1607`** (`condKnownFalse` `:1357`, `ReconcileSilver` `:1537`, `ReconcileForcedWeapon` `:1538`,
+    `HealSustainLap` `:1577`, the `!castSeen` release `:1578`), the bookkeeping (`src.Record` `:1655`,
+    `switch (outcome.result)` `:1664`). The reconciliation and the bookkeeping are still spans inside `Tick` (the file split,
+    MFO-B655 / B666, needs them extracted next).
   - **THE CHOICE SEAM (IAUS card I1, `feat/iaus-i1-seam`, 2026-11-10; research note `Docs/research/2026-11/iaus-i1-seam.md`).**
     `Eval::Choice::rank` (was `ruleIndex`) + `Eval::Source source` (`Evaluator.h`). The scan reads its choices through
     `scheduler/ChoiceSource.h` (`Next` / `Reject` / `SuppressionAnchor` / `FiredIdentity` / `CoolingReason` /
-    `HesitationExempt` / `NoteSkipReason` / `Record` and the four reconciliation reads); the only source today is
-    `TableSource`, whose methods are the scan's old row reads moved unchanged. `scheduler/Rank.h` is the PURE rank arithmetic
+    `HesitationExempt` / `NoteSkipReason` / `Record` and the four reconciliation reads). Two sources: `TableSource`, whose
+    methods are the scan's old row reads moved unchanged, and since card I6 `IausSource` (next bullet). `Reject(choice, why)`
+    carries the scan's own pass text since I6 (the table source ignores it). `scheduler/Rank.h` is the PURE rank arithmetic
     (`IsChoice`, `NextTableRow`, `TableStop`, `WindowActive`, `StopsAtAnchor`, `kMaxTableRow` 254 vs `kIausRankFloor` 1000),
     checked on the host by `tools/rank_equiv/run.sh` against the pre-I1 expressions. **What breaks:** indexing a table row
     with a rank outside the table source (an IAUS rank is never a row: only `TableSource` / the logistics walks may index);
@@ -2374,6 +2379,37 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
     `>= kNoRule` (it would read as an unranked lock). `g_firingRule` (`cast/Actuation_internal.h:220`) already carries the
     rank (`Fire.cpp:216`), so `cast/` needed no change. The logistics walks (`logistics/Service.cpp`, `LootScan.cpp`,
     `Upkeep.cpp`) are table-only and read `.rank` as their row index.
+  - **THE IAUS SOURCE (IAUS card I6, `feat/iaus-i6-full`, 2026-11-10; research note `Docs/research/2026-11/iaus-i6.md`).**
+    `scheduler/IausSource.h/.cpp`: the second `ChoiceSource`, built in `Tick` ONLY for a follower whose FLWR bit 3
+    (`FollowerState::iausCombat`, with `mfoEnabled`) is set. With the bit clear the scan is the table scan. `IausSource`
+    ctor `:119` runs the candidate cycle IN THIS ORDER: `Candidates::Build`, `Engine::FillCooldowns`, `Engine::Decide`,
+    `DecidePosture`, `Candidates::NoteDecision` (the `Candidates::Set` is a member, never moved). The walk: the POSTURE winner
+    first as an `act.equip_melee / ranged / silver` choice with rank `Iaus::kRankBase` (it outranks no action decision), then
+    `Decision::order`. `MakeChoice` `:184` maps a candidate to an `Eval::Choice` (every cast target is a live HANDLE; a hostile
+    cast carries subject Self so a dead handle falls to AUTO's enemies, never the player). `Record` `:281`: Fired ->
+    `Engine::NoteFired` (no cooldown stamp on `Outcome::approach`), `SpellBook::Invalidate` after a buff / ward / summon /
+    drink / scroll (MFO-B658), and an attack found already latched is ADOPTED as the running decision. `AmendScan` `:325`: a
+    no-action `Verdict::Hold` is the "suppressed" stop, and the running cast decision keeps `castSeen` / `matchedCast` while it
+    clears the floor. Reconciliation reads: posture decided = "known false when not held", posture without an answer (no fresh
+    book, no readable foe) = UNKNOWN, holds kept. Dtor `:158`: the `[iaus]` line, `[iaus-gen]` (every 10 s), the readout for
+    card I7. Lifecycle (all worker): `IausToggleEdge` `:346` (the edge, either direction, stands the running decision down via
+    `StandDown` `:93`: spell in hand, offense + heal claims, heal hold records, hand locks, cast latch, approach claims, target
+    latch, window, Mind; the forced weapon is LEFT to the new source's reconciliation), `IausCombatEnded` `:357`, `IausSweep`
+    `:362` (every 32nd pump: forget followers that left, the MFO-B639 marshalling), `IausRetreatSelfHeal` `:375` (his best self
+    heal under the table walk's gates; an IAUS follower runs no row). PASSIVE PROBE `[iaus-probe]` `:61`: how often the
+    player's `currentCombatTarget` was set (design fact 8, never observed populated). **What breaks:** reordering the
+    candidate cycle; moving or copying the `Set`; an IAUS choice with `rank < 0` or a cast-target choice without its handle
+    (Fire's ladder would resolve it elsewhere); returning a real anchor from `SuppressionAnchor` (the commitment window is in
+    `Decide`, a second positional window would double it); calling `Engine::Forget / EndDecision / Dismiss` or
+    `Candidates::Forget` off the worker; stripping the forced weapon on the toggle edge (a visible mid-fight unequip); giving
+    the posture choice a rank below an action decision's (it would take a standing heal's hand). **RANKS ACROSS SOURCES
+    (MFO-B667, decided):** a table rank (0-254) always outranks an IAUS rank (>= 1000) in the hand-lock compares, and that is
+    left as it is: one follower runs ONE combat source and the toggle edge releases every rank-carrying lock, so the two only
+    meet through the logistics walk (table-only, rank = its row index), which never casts while `castSeen` holds the facet
+    and, under IAUS, also not while a heal stands (`castSeen || (iaus && healHeld)`, heal-to-full). Same-lap IAUS candidates
+    share one rank (`RankOf(proposedEpoch)`): the one that took the hand first keeps it until it fires or its lock lapses.
+    NOT wired: `bIausExplain` (Config key, card I7), a staff equip road (a winning staff posture issues no order and says so),
+    any writer of `iausCombat` (card I7's board toggle).
   - **`native/Scheduler.cpp`** = the service helpers `Tick` calls, now external linkage with prototypes in the internal header:
     `StallProbe` `:36`, `DeadTgtEnd` `:115`, `DeadTgtService` `:125`, `StartRetreatCooldown` `:160`, `ServiceRetreat` `:178`,
     `ServiceLeashWithReachHold` `:405`; the still file-local `[deadtgt]` state (`g_deadTgt` `:81`, `DeadTgtReason` `:85`,
@@ -2382,13 +2418,13 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   - **`native/scheduler/Scheduler_internal.h`** = the state both TUs share, every variable `inline` (ONE instance, never a
     per-TU copy): `g_lastServiced` `:34`, `Recent` / `g_recent` `:39/:51`, `g_meleeClampTrueAt` `:69`, `g_proposedTarget` `:78`,
     `RetreatNote` / `g_retreatNotes` `:100/:139`, `g_serviceClock` `:150`, `g_partyCombat` (and its doc) `:189`, `StallSample`
-    `:208`, `g_reachHold` `:231`, the retreat dials from `kRetreatConfidence` `:238`. Only the two Scheduler TUs include it.
+    `:208`, `g_reachHold` `:231`, the retreat dials from `kRetreatConfidence` `:238`. Only the two Scheduler TUs and `scheduler/IausSource.cpp` (card I6) include it.
   - **Older cites.** A `Scheduler.cpp:NNN` cite elsewhere in this map or in a code comment predates the split (and most had
     drifted before it). Anything it names inside `Tick` is now in `scheduler/CombatScan.cpp`: grep the symbol.
   - **What breaks:** a new variable both TUs use goes in the internal header as `inline` (a `static` or anonymous-namespace definition there is one copy
     PER TU, i.e. a silent state split). `ClearTransientState` must clear every
     map the header declares (it does today; a new map needs its line there). Threading is unchanged by the move: each item keeps the rule its
-    own comment states (worker-only, #4; `g_lastTickMs` / `g_ticks` are the atomics other threads read). `CombatScan.cpp` is 1730 lines after I1 (was 1622), past the ~1500 plan mark: the
+    own comment states (worker-only, #4; `g_lastTickMs` / `g_ticks` are the atomics other threads read). `CombatScan.cpp` is 1757 lines after I6 (1730 after I1, 1622 before), past the ~1500 plan mark: the
     split (MFO-B655) needs the reconciliation and the bookkeeping given their own functions first.
 - **PER-RULE COOLDOWN (card G9, ClickUp 1dfcuabcqe6, 2026-11-09).** `Gambit::cooldownTenths` (State.h, serialized FLWR v6) +
   `Cooldowns.h/.cpp` (NEW: the runtime-only last-fired store, key (actor, `Kind::Rule`, rule uid), own mutex, `ClearAll` in
@@ -2789,9 +2825,12 @@ rule in the header. Called only from the Scheduler hook above.
 
 ### Taunt.cpp / Taunt.h / apmf/TauntClaims.cpp — `cond.foe_attacking_ally` + `act.taunt` (taunt S2, ClickUp 86e3g6duw, NOT serialized)
 Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.20 "Pinning a hostile NPC" Table 23a + Example 20a.
-- **`Taunt.cpp`** (decisions; worker + one main-thread step): `IsPartyMember:359` (player / teammate / summon commanded by
-  either; also the evaluator's selector test), `MeleeInRightHand:369` (WEAPON_TYPE 1..6 in the right hand; the board offer gate AND
-  `Fire`'s transparent refusal), `Fire:375` (called from `cast/Fire.cpp:384`; refusals are all transparent so the scan falls
+- **`Taunt.cpp`** (decisions; worker + one main-thread step): `IsPartyMember:374` (player / teammate / summon commanded by
+  either; also the evaluator's selector test), `TauntedBy:384` / `Busy:390` (IAUS card I6: any-thread reads of the module's OWN
+  tables under `g_mx`; is this foe pinned onto this taunter by a live taunt, and would `act.taunt` refuse him now. They feed
+  `Iaus::Combatant::taunted` and `Snapshot::tauntBusy` in `iaus/Candidates.cpp`; the entry's lifetime is `Tick`'s, never a second
+  timer), `MeleeInRightHand:398` (WEAPON_TYPE 1..6 in the right hand; the board offer gate AND
+  `Fire`'s transparent refusal), `Fire:404` (called from `cast/Fire.cpp:384`; refusals are all transparent so the scan falls
   through: no Harbinger ABI 24 (logged once, never a fallback to a guess), no melee, no eligible foe, an attempt in progress or ANY foe still pinned by this taunter (marth: "it shouldn't repeat while it's active"; all TRANSPARENT); otherwise
   files the idle and returns `Fired`; the ch.1 hold is NOT filed with it: `ReadTauntIdle` files it the first time `GetIdleState` reads Accepted or a confirmed state = Harbinger accepted the PlayIdle, so a refused idle never holds the follower), `Gather:98` (the chosen foe first, then the nearest others within `fTauntRadius`, up to
   `iTauntMaxFoes` TOTAL; eligible = alive, 3D loaded, in combat, hostile, NOT a party member, `currentCombatTarget` IS a party member,
@@ -8879,11 +8918,11 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 
 **Dev class equip (card C5c, `feat/classes-c5c-dev-equip`).** `Runner.cpp` `DevClassEquipTick` (called from `Tick`, reset in `ClearAll`; worker-only) reads `[Debug] sDevClassEquip` (`Config.h` `g_devClassEquip` + mutex, `Config.cpp` key branch before the TOWN ERRANDS chain, both `#ifdef MFO_DEV_SELFTEST`) and applies each `<follower>:<slug>:<level>[:mastered]` entry once per load through `Classes::SetUnlocked / ActivateClass / ApplyLevel`. Writes MCLS (dev saves only). **What breaks:** renaming those three writers or `FindBySlug` / `LevelCap`; moving the key handler into the release path; the entry separator is a comma because `Config.cpp` ReadFile strips an inline comment at the first `;` or `#`. See `Docs/SELFTEST.md` section 10.
 
-## 11. IAUS combat scorer — `native/iaus/` (card I2, `feat/iaus-i2-core-opus`, 2026-11-10; a LIBRARY, nobody calls it yet)
+## 11. IAUS combat scorer — `native/iaus/` (card I2, `feat/iaus-i2-core-opus`, 2026-11-10; CALLED by the scan's IAUS source since card I6, section 2 "THE IAUS SOURCE")
 
 Utility scoring in place of the combat table (design `Docs/research/2026-11/iaus-design.md` sections 3-6; idea credit LandingCrew).
 I2 is the scorer only. The ChoiceSource seam is I1 (LANDED 2026-11-10: `scheduler/ChoiceSource.h` + `Eval::Choice::rank/source`, section 2 "THE CHOICE SEAM"; table source only), candidate generation / the SpellBook mirror is I4, the FLWR toggle bits are I5 (LANDED 2026-11-10: `FollowerState::iausCombat`, bit 3 of the FLWR `mfoEnabled` byte, section 1 "FLWR"; still no reader),
-the scan integration is I6, the board is I7, the class profiles are I8. **NOT serialized** (runtime only, design 7).
+the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, section 2 "THE IAUS SOURCE"; it reads bit 3), the board is I7, the class profiles are I8. **NOT serialized** (runtime only, design 7).
 
 - `iaus/Core.h` — the PURE public API (standard headers only, no RE:: types, no clock, no globals): `Family`/`Cons`/`RoleTag`/`PostureKind`
   (append-only: log lines and the Cooldowns id carry them), `Tuning` `:148`, `Profile` `:185` (the I8 weight-input shape), `Facts` `:201`,
@@ -8895,10 +8934,12 @@ the scan integration is I6, the board is I7, the class profiles are I8. **NOT se
 - `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
   `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
   (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.
-- `iaus/Engine.h/.cpp` — the THIN adapter, the only file that touches the engine side: `MakeTick` `:34` (window = `g_suppressWindow` x
-  (0.88 + 0.24 Temperament), the #26 length), `FillCooldowns` `:47` (the SHARED `Cooldowns` store, `Kind::IausAction`), `MindFor` `:62`,
-  `Decide` `:68` (timed; WARN over `budgetMs`, once-per-session WARN over the candidate cap and on a NaN/inf fact), `Log` `:116`,
-  `Forget` `:162`, `Clear` `:173`, monotonic `g_epochFloor` `:22`.
+- `iaus/Engine.h/.cpp` — the THIN adapter, the only file that touches the engine side: `MakeTick` `:36` (window = `g_suppressWindow` x
+  (0.88 + 0.24 Temperament), the #26 length), `FillCooldowns` `:49` (the SHARED `Cooldowns` store, `Kind::IausAction`), `MindFor` `:64`,
+  `Decide` `:70` (timed; WARN over `budgetMs`, once-per-session WARN over the candidate cap and on a NaN/inf fact), `Log` `:120`,
+  `Forget` `:166`, `Clear` `:205`, monotonic `g_epochFloor` `:24`. Card I6: `NoteFired(..., a_startCooldown)` (false = adopt the
+  decision without stamping the store: an approach leg, an attack already latched), `NoteSource` `:177` (which source served him
+  last lap; true on a change = the toggle edge), `Dismiss` `:191` (Forget + drop the note), `Paced` `:197` (log pacing).
 - Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
 - Offline combat SIMULATOR (card I2s, host-only, never in the DLL): `tools/iaus_sim/run.sh [--list json] [--seed N] [--fights N] [--baseline out] [--compare base]` drives the real `Generate` + `Decide` over seeded random fights (3 base classes x rapport I..V x 5 foe-strength brackets); `tools/list_balance/extract.py` reads an MO2 list's winning SPEL/MGEF/ALCH/GMST/RACE records into `~/.cache/mfo-list-balance/<list>.json` (test input only, never committed, native/ never reads it). Method + findings: `Docs/research/2026-11/iaus-sim.md`.
   `native/iaus/` except Engine.*.
@@ -8916,11 +8957,12 @@ the scan integration is I6, the board is I7, the class profiles are I8. **NOT se
     `Swings` `:81` (attack, power attack, taunt, retreat), `Drinks` `:121`, `Postures` `:135`, `Casts` `:167` (offense, control, heal,
     buff, summon, ward). `TopSpellPairs` `:348` (the G10 top-6 pairs). NOT generated: sneak (G1), scroll use (S3; scrolls ARE in
     the book), exploit (I3), bash, a "party fan" buff, any spell of Unknown nature.
-  - `iaus/SpellBook.h/.cpp` — the per-follower MAIN-THREAD MIRROR (the SelfStatus pattern): `Read` `:369` (worker; hands out an
+  - `iaus/SpellBook.h/.cpp` — the per-follower MAIN-THREAD MIRROR (the SelfStatus pattern): `Read` `:463` (worker; hands out an
     immutable `shared_ptr<const Book>`, posts ONE `MainThread::Post` refresh when the book is missing, 5 s old or dirty), `Measure`
-    `:194` (MAIN only: `VisitSpells`, `GetInventory`, the active-effect lists, `CalculateMagickaCost`, `CasterHasLiveSummon`, staff
-    charge `:162`), `MakeEntry` `:75`, `GateFor` `:326` (any thread: equipped class when the tree is on, else the T1 of
-    `ResolvedClassFast`), `Invalidate` `:389`, `OnContainerChanged` `:395`, `Clear` `:402` (generation counter: a refresh in
+    `:249` (MAIN only: `VisitSpells`, `GetInventory`, the active-effect lists, `CalculateMagickaCost`, `CasterHasLiveSummon`, staff
+    charge `:196`, and since card I6 `PrecisionBridge::RightWeaponLength` + the reach probe), `MakeEntry` `:82`, `GateFor` `:405` (any
+    thread: equipped class when the tree is on, else the T1 of `ResolvedClassFast`; tree OFF = an all-open gate, marth Q63),
+    `Invalidate` `:483`, `OnContainerChanged` `:489`, `Clear` `:496` (generation counter: a refresh in
     flight across a Clear is dropped). Cadence constants `:30-32` (refresh 5 s, re-ask 3 s, trust 15 s). `[spellbook]` log lines.
   - `iaus/Candidates.h/.cpp` — the engine GATHER, worker: `Gather` `:99` (the Evaluator's own reads: pools, the combat-group walk,
     `g_active`, targets, race keyword, resists, Sightline cache, `Targeting::Current`, `CombatSense`, `Logistics::IsUnholy`; the
@@ -8948,7 +8990,7 @@ clock, the G10 want list) is the g_followers worker domain (#4), no lock. `Gener
 group's read lock covers ONLY the handle copy; `ChaseRadius` and the bridge reads are made BEFORE it (#23, the PickFoe rule).
 
 **What breaks if you change this.**
-- **I6 MUST call `Iaus::Engine::Clear()` in `ResetAllState` after `StopPump()`** (`Serialization.cpp` order; the existing
+- `ResetAllState` calls `Iaus::Engine::Clear()`, `Iaus::SpellBook::Clear()` and `Iaus::Candidates::Clear()` right after `SelfStatus::Clear()`, i.e. after `StopPump()` (card I6; the existing `Cooldowns::ClearAll()` clears the `Kind::IausAction` entries). Moving any of them before `StopPump()`, or dropping one, lets a Mind / a pre-load book / a fight clock survive a load. `Engine::Clear` also drops the card I6 source notes and log pacing.
   `Cooldowns::ClearAll()` already clears the `Kind::IausAction` entries). Without it a Mind survives a load.
 - The rank seam: `RankOf(epoch)` = `kRankBase - epoch`, lower outranks. The epoch must stay MONOTONIC (`g_epochFloor`): a restarted
   epoch would let a surviving cast lock / heal claim outrank a new decision.
@@ -8957,8 +8999,7 @@ group's read lock covers ONLY the handle copy; `ChaseRadius` and the bridge read
 - A NaN/inf fact VETOES its candidate (`FactsFinite`, counted as `BAD-FACTS` in the `[iaus]` line): never turn it back into a drop or a pass.
 - Stickiness = momentum always + the preempt margin INSIDE the commitment window only; outside it a normal 5.1 roll (review round 1 F3).
 - `Cons`/`Family` enum order: the `Name(Cons)` table has a `static_assert` against it; I9 log parsing reads the names.
-- **I6 MUST also call `Iaus::SpellBook::Clear()` and `Iaus::Candidates::Clear()` in `ResetAllState` after `StopPump()`** (beside
-  `SelfStatus::Clear`). Until then nothing calls `Read`, so no book exists to survive a load.
+- **THE COMMITMENT WINDOW IS ANCHORED ONCE (marth Q67, card I6, closes MFO-B651):** `OnFired` sets `Mind::firedAt` only when a NEW decision fires. A repeat Fired of the running decision must not move it, or a decision that keeps firing holds the window open for good and a waiting heal has to beat the preempt margin on every lap (sim: 5-44% of hurt-with-a-heal laps were Hold, now 0-13% average). No emergency margin skip.
 - I4 SpellBook: walking a spell list, an inventory or an active-effect list on the WORKER for IAUS (they mutate on the main thread:
   everything of that kind goes into `Measure`); holding `g_mx` across any engine or log call; publishing an EMPTY book for an
   unloaded follower (it would read as "he knows no spells": `PostRefresh` publishes nothing then); removing the generation check
@@ -8971,10 +9012,22 @@ group's read lock covers ONLY the handle copy; `ChaseRadius` and the bridge read
   simulator build them on the host; `tools/iaus_harness/run.sh` fails if they do not). Candidate names are `string_view`s INTO
   the Snapshot, which is why `Candidates::Set` cannot be copied or moved. A fact a family does not read stays at its default,
   and every ratio goes through `Prune::SafeRatio` (a NaN/inf fact vetoes the whole candidate).
-- I4 class gates read ONE resolved class for every tier (`GateFor`): with the tree OFF that is the T1 class, so a T1 Melee /
-  Ranged follower has NO cast candidates (spells are off-class and nothing can be mastered) and no power attack / taunt /
-  retreat (no default row). Flagged for marth in the I4 research note before I6 turns IAUS on for anyone.
-- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B639 .. MFO-B651 (B647 closed by marth Q62); FLWR byte: MFO-B652..B654.
+- Class gates (`SpellBook::GateFor`): with the class tree OFF the gate restricts NOTHING (marth Q63, card I6, closes MFO-B657):
+  spells on class, power attack, taunt, retreat and every weapon are open, as the gambit table leaves them. With the tree ON
+  it is the I4 behaviour (one resolved class: the equipped one, else the T1). A row-gated action whose row declares no
+  cooldown gets the tuning floor (`Tuning::rowlessPowerCooldownSec` / `rowlessTauntCooldownSec`, 10 s): no taunt row declares
+  one today, so removing the floor brings back a taunt on every miss.
+- Card I6 facts the generator now reads: `Combatant::taunted` = `Taunt::TauntedBy` (the Taunt module's own live pin, section 2
+  "Taunt.cpp"), `Snapshot::tauntBusy` = `Taunt::Busy` (no taunt candidate while `act.taunt` would refuse him).
+  `Prune::BlastUnits(area, explosion, payload)` (MFO-B661): an explosion gives an area on its own only when it carries a
+  payload (`BGSExplosion data.damage > 0` or an enchantment); a cosmetic impact explosion may only enlarge an EFIT area the
+  record states. Dropping the payload test makes `SplashSafe` veto every bolt aimed at a foe a melee ally stands beside.
+- `Kit::precisionWeaponLength` (card I6, marth Q64) is MEASURED ONLY: `PrecisionBridge::RightWeaponLength` (`native/PrecisionBridge.h`:
+  runtime detection of `Precision.dll`, interface V2, vtable slot 8 called by index with the ABI read from the 2.0.4 binary, a
+  self-check that refuses the bridge, MAIN THREAD ONLY, called from `SpellBook::Measure`) and the `[spellbook] reach probe:` line.
+  It is the weapon's collision LENGTH, not a centre-to-centre reach, so `Snapshot::meleeReach` is still `fMeleeReach`. Feeding the
+  length into `meleeReach` unconverted vetoes every melee attack (the range gate is 1.15 x reach). Never copy Precision code (GPL).
+- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B639 .. MFO-B667 (B647 closed by marth Q62; card I6 does B639's marshalling and closes B651, B657, B658, B661 and B667 in code, the entries themselves are still to be marked); FLWR byte: MFO-B652..B654.
 
 ## Appendix — SKSE registration & sink inventory (the wiring choke points)
 

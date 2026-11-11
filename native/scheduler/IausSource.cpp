@@ -316,10 +316,9 @@ namespace MFO::Scheduler {
         if (cand.family == Family::Attack && a_outcome.result == Actuation::Result::NoOp && a_choice.target &&
             Targeting::Current(m_id) == a_choice.target) {
             const Iaus::Mind& m = Iaus::Engine::MindFor(m_id);
-            if (!(m.hasRunning && m.running == Iaus::KeyOf(cand))) {
+            if (!(m.hasRunning && m.running == Iaus::KeyOf(cand)))
                 Iaus::Engine::NoteFired(m_id, cand, step, m_tick, /*a_startCooldown=*/false);
-                m_pickedStep = static_cast<int>(it->idx);
-            }
+            m_pickedStep = static_cast<int>(it->idx);   // the [iaus] line says "pick=", not "none fired": the attack IS in effect
         }
     }
 
