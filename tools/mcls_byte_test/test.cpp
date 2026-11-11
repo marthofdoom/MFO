@@ -50,6 +50,7 @@ namespace MFO::Classes {
     void RefreshCarriers(RE::FormID) {}
     void RefreshAllCarriers() {}
     void ResetCarriers() {}
+    namespace detail { void XpReset() {} }   // card C4 (Xp.cpp): State.cpp's ClearAll drops the fight-pending credits
 }
 
 using namespace MFO;

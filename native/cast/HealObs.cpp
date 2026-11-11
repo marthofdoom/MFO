@@ -4,6 +4,7 @@
 // move, proven function by function with tools/splitcheck.
 #include "Direct_internal.h"
 #include "ComposedCast.h"   // LastFireHand: the hand-aware fire sink (feat/mfo-perhand-heal)
+#include "classes/Classes.h"   // card C4: XpNoteHeal
 #include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
 #include <map>            // feat/mfo-animheal-p0 fix: ReadbackWarnDue gate (tuple key)
 #include <tuple>
@@ -261,6 +262,7 @@ namespace MFO::Actuation {
                 const bool hpRose     = hpAfter > o.hpBefore + 0.005f;
                 const bool atApply    = !liveStream && o.attach == HealAttach::Present;
                 const bool landed     = atApply || present || hpRose;
+                if (landed && hpRose) Classes::XpNoteHeal(o.caster, o.target);   // card C4: a heal that raised health is class XP credit
                 // On the claim road the fire itself is the evidence the cast happened, so
                 // a lasting heal with no effect and no HP rise 1 s later is NOT landing.
                 const bool gone   = lasting && !landed &&

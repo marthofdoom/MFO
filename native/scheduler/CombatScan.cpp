@@ -31,6 +31,7 @@
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
+#include "classes/Classes.h"   // card C4: XpOnPartyFightEnd
 #include "TauntProbe.h"    // taunt S0 passive probes (bTauntProbe)
 #include "Taunt.h"         // taunt S2: Taunt::Tick (every pump) / Clear
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
@@ -780,6 +781,7 @@ namespace MFO::Scheduler {
                 // note carries the cooldown across the fight edge and is never
                 // erased here.
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+                Classes::XpOnPartyFightEnd(id);   // card C4: the fight's class XP (idempotent; acts once per fight)
                 if (iausOn) IausCombatEnded(id);   // card I6: the running decision and the fight clock end with the fight
                 Actuation::NoteCombatEpisodeEnded(id);   // re-arm the once-per-episode ch.26 "nothing to prefer" line
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
