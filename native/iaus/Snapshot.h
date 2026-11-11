@@ -53,6 +53,10 @@ namespace MFO::Iaus {
         float         damage = 0.0f;            // health damage (a damage-over-time effect counted for its duration)
         float         heal = 0.0f;              // healing
         float         controlSec = 0.0f;        // Control: seconds its effect holds the target (the control effect's duration)
+        // MFO-B684: the three estimates above were MEASURED for this entry (the engine fill ran, iaus/Fills.h). false =
+        // the zeros mean "not known" and no damage consideration applies to this spell. true = a 0 is a real 0 (a spell
+        // that does no health damage scores 0 against his best measured one).
+        bool          measured = false;
         std::string   name;
     };
 

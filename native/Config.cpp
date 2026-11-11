@@ -209,6 +209,14 @@ namespace MFO::Config {
             else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
             else if (a_key == "bIausAvailable")     setB(g_iausAvailable);    // global IAUS gate, MCM, default ON (the per-follower bit stays default OFF)
             else if (a_key == "bIausExplain")       setB(g_iausExplain);      // [iaus-why] per-candidate breakdown, INI-only, default OFF
+            else if (a_key == "bIausFillProbe")     setB(g_iausFillProbe);    // [iaus-fill] measured inputs next to reality, log only, INI-only, default OFF
+            else if (a_key == "bIausFillArmor")     setB(g_iausFillArmor);    // the IAUS engine fills, one input each, INI-only, all default OFF
+            else if (a_key == "bIausFillHit")       setB(g_iausFillHit);
+            else if (a_key == "bIausFillLoss")      setB(g_iausFillLoss);
+            else if (a_key == "bIausFillSwing")     setB(g_iausFillSwing);
+            else if (a_key == "bIausFillCasting")   setB(g_iausFillCasting);
+            else if (a_key == "bIausFillSpells")    setB(g_iausFillSpells);
+            else if (a_key == "bIausFillMortal")    setB(g_iausFillMortal);
             else if (a_key == "bSpellShapeCensus")  setB(g_spellShapeCensus); // [shape-census] load-time spell shape counts, INI-only, default ON
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bProgCatalogDump")   setB(g_progCatalogDump);  // catalog census dump, dev-only
@@ -430,6 +438,14 @@ namespace MFO::Config {
             g_inheritPerkCensus  = true;    // [inherit-census] hidden-perk census -- ON (log only, changes nothing)
             g_iausAvailable      = true;    // global IAUS gate -- ON (the per-follower switch is what defaults OFF)
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
+            g_iausFillProbe      = false;   // [iaus-fill] probe lines -- OFF everywhere by default (the Deck INI arms it)
+            g_iausFillArmor      = false;   // the IAUS engine fills -- each OFF until its probe numbers are field-proven
+            g_iausFillHit        = false;
+            g_iausFillLoss       = false;
+            g_iausFillSwing      = false;
+            g_iausFillCasting    = false;
+            g_iausFillSpells     = false;
+            g_iausFillMortal     = false;
             g_heartbeat          = true;    // [hb] 5 s liveness line -- ON (1 line / 5 s; names the stopped thread on a freeze)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default

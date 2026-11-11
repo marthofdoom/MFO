@@ -322,7 +322,7 @@ namespace MFO::Iaus {
         bool  fromMastered = false;
         float emergency = 0.0f;
         // estimates (iaus/Estimate.h). 0 / +inf = not measured: the considerations that read them do not apply.
-        float expDamage = 0.0f;           // this cast's expected health damage on this target
+        float expDamage = 0.0f;           // this cast's expected health damage on this target; < 0 = this spell is not measured
         float bestDamage = 0.0f;          // the best expDamage among his castable offense spells on this target
         float foeHealth = 0.0f;           // the target's health now, absolute
         float expHeal = 0.0f;             // this cast's expected healing

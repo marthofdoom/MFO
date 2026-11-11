@@ -634,8 +634,10 @@ namespace MFO::Iaus {
             case Cons::DamageValue:
                 // Not applicable only while NOTHING he can cast has a measured damage on this target. Once his best is known,
                 // a spell that does no damage (a noise, a debuff) is 0 against it: unmeasured must not read as "as good as any".
-                if (!(f.bestDamage > 0.0f)) return In::Off();
-                return Clamp((std::max)(0.0f, f.expDamage) / f.bestDamage, 0.0f, 1.0f);
+                // MFO-B684: a spell whose own damage was NOT measured (expDamage < 0) is not applicable either. Only a
+                // MEASURED 0 scores 0.
+                if (!(f.bestDamage > 0.0f) || f.expDamage < 0.0f) return In::Off();
+                return Clamp(f.expDamage / f.bestDamage, 0.0f, 1.0f);
             case Cons::Overkill:
                 if (!(f.expDamage > 0.0f) || !(f.foeHealth > 0.0f)) return In::Off();
                 return Clamp(f.foeHealth / f.expDamage, 0.0f, 1.0f);

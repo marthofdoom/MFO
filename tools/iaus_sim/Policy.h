@@ -77,7 +77,7 @@ namespace Sim {
             SpellEntry& e = sn.book.entries[i]; e.activeOn.clear();
             for (const auto& pr : c.active[i]) if (pr.second > F.now) e.activeOn.push_back(pr.first);
             e.liveSummon = c.summonUntil[i] > F.now;
-            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; }
+            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; e.measured = true; }
         }
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;

@@ -11,6 +11,7 @@
 #include "Vocabulary.h"
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
+#include "iaus/Fills.h"
 #include "iaus/SpellBook.h"
 #include "logistics/Logistics.h"
 
@@ -115,6 +116,10 @@ namespace MFO::Iaus::Candidates {
         auto* player = RE::PlayerCharacter::GetSingleton();
 
         FillUnit(s.self, a_self, a_self);
+        // The engine fills (iaus/Fills.h): the measured estimates of every unit, probe first, each input behind its
+        // own [Debug] switch (all default OFF). Unarmed, it reads nothing.
+        Fills::Pass fills;
+        fills.Unit(s.self, a_self, Fills::Role::Self);
         s.playerId = player ? player->GetFormID() : 0;
 
         // ── the fight clock ──────────────────────────────────────────────────────────────────────────────
@@ -221,6 +226,7 @@ namespace MFO::Iaus::Candidates {
                     const float r = avo->GetActorValue(static_cast<RE::ActorValue>(av));
                     if (std::isfinite(r)) u.resists.emplace_back(av, r);
                 }
+            fills.Unit(u, foe, Fills::Role::Foe);
             wantFoes.push_back(fid);
             s.foes.push_back(std::move(u));
         }
@@ -235,6 +241,7 @@ namespace MFO::Iaus::Candidates {
             FillUnit(u, a, a_self);
             u.sight = ToSight(Sightline::Check(selfID, u.id, Sightline::Basis::Own));
             u.sightEngine = u.sight;
+            fills.Unit(u, a, Fills::Role::Ally);
             wantAllies.push_back(u.id);
             s.allies.push_back(std::move(u));
         };
@@ -286,6 +293,7 @@ namespace MFO::Iaus::Candidates {
             Sightline::Want(selfID, std::move(wantFoes), Sightline::Basis::Engine);
         }
         if (!wantAllies.empty()) Sightline::Want(selfID, std::move(wantAllies), Sightline::Basis::Own);
+        fills.Finish(s, a_self);   // Snapshot::mortal and this lap's [iaus-fill] probe lines
         return true;
     }
 
@@ -312,6 +320,7 @@ namespace MFO::Iaus::Candidates {
     void Clear() {
         g_fights.clear();
         g_wants.clear();
+        Fills::Clear();   // the fills' tracker and pending hit records: the same domain and the same moment
     }
 
     std::string Describe(const Set& a_set) {
