@@ -68,11 +68,13 @@ namespace Sim {
         bool  rangedMode = false, casterMode = false;
         double airUntil = 0, groundUntil = 0;   // dragons
         float armorBuff = 0;
+        float dmgScale = 1;              // scenario strength scaling of a foe's damage (Setup.h targetRatio)
         std::string tag;                 // scenario role ("healer", "archer", "boss" ...)
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
     };
 
     struct Occluder { float x, y, r; };
+    struct Spawn { double at = 0; std::shared_ptr<const ActorSpec> spec; float x = 0, y = 0; std::string tag; float dmgScale = 1; };   // a foe that joins later (waves)
 
     // Per-fight counters. `subject` = follower 0 unless stated.
     struct Tally {
@@ -101,7 +103,8 @@ namespace Sim {
         long   deathsWithHeal = 0;                        // a party member went down while the subject had an affordable heal for him
         long   killOrderGood = 0, killOrderBad = 0;       // priority foes (healer / caster / archer) killed before / after grunts
         double retreatSec = 0, kiteDmgTaken = 0;
-        long   wastedCasts = 0;                           // released at a dead / out-of-sight target
+        long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0;
+        double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         std::vector<std::string> killOrder;
     };
 
@@ -124,6 +127,9 @@ namespace Sim {
         float potH = 100, potM = 100, potS = 100;
         double lowSince = -1; bool lowHealed = false, lowHadCand = false;
         double pressureSince = -1;                 // the player came under attack at (peel latency)
+        double commitUntil = 0;                    // oracle rollouts: he keeps the option he was given until then
+        int    potions0 = 0;                       // potions at the start (Utility: resources left)
+        Key    lastKey{}; bool hasLastKey = false; // oracle arm: the action he is on (switch counting)
         std::uint32_t lastTarget = 0;
     };
 
@@ -136,11 +142,14 @@ namespace Sim {
         std::vector<Ctl> ctl;
         std::vector<Occluder> occ;
         std::vector<Shot> shots;
+        std::vector<Spawn> late;
+        float foeHpTotal = 0;                      // every foe's full health, late ones included (Utility)
         double now = 0, nextPump = 0, maxSec = 150;
         int rr = 0;
         bool tauntVisible = false, engineCasts = true, g10Sticky = false, over = false;
         Tally t;
         std::uint32_t nextId = 1;
+        std::FILE* trace = nullptr;   // --trace: one line per event (never set in a rollout copy)
         double lastTauntBy0 = -1e9;   // the subject's last landed taunt (taunt-then-down tally)
 
         // ── lookup ──
@@ -183,6 +192,7 @@ namespace Sim {
 
         // ── damage and healing ──
         void Down(Body& x, const Body* by) {
+            if (trace) std::fprintf(trace, "%7.2f  DOWN %s (%u) by %s\n", now, x.c.name.c_str(), x.c.id, by ? by->c.name.c_str() : "-");
             if (x.role == Role::Foe || x.role == Role::Summon) {
                 x.alive = false; x.c.hp = 0;
                 if (x.role == Role::Foe) { if (t.firstKill < 0) t.firstKill = now; t.killOrder.push_back(x.tag.empty() ? "grunt" : x.tag); }
@@ -233,11 +243,13 @@ namespace Sim {
                 dmg *= 1.0f - std::min(0.85f, bf); blocked = true;
                 if (!power && d.spec->shield && R.P(0.25f)) Stagger(a, TM::recoil, &d);
             }
-            dmg *= 1.0f - ArmorMitigation(r, ArmorOf(d), d.spec->pieces);
+            dmg *= a.dmgScale * (1.0f - ArmorMitigation(r, ArmorOf(d), d.spec->pieces));
             if (d.role == Role::Player) dmg *= r.diffToPC;
             if (a.role == Role::Player) dmg *= r.diffByPC;
-            if (Controlled(d)) { if (a.ctl == 0) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; } }
+            if (a.ctl == 0) { if (Controlled(d)) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; }
+                for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
             const float dealt = Hurt(d, dmg, &a, fromIaus);
+            if (trace) std::fprintf(trace, "%7.2f  hit  %s -> %s (%u) %.0f%s%s%s  hp %.0f/%.0f\n", now, a.c.name.c_str(), d.c.name.c_str(), d.c.id, dealt, power ? " POWER" : "", blocked ? " blocked" : "", ranged ? " arrow" : "", d.c.hp, d.c.hpMax);
             if (power && !blocked && Up(d)) Stagger(d, TM::staggerSec * std::clamp(a.spec->mass / d.spec->mass, 0.6f, 1.4f), &a);
             return dealt;
         }
@@ -246,10 +258,11 @@ namespace Sim {
             if (!Up(d)) return;
             const Rules& r = D->rules;
             const float el = std::clamp(ResistOf(d, s.e.resistAv) / 100.0f, -1.0f, 1.0f), mr = std::clamp(ResistOf(d, kAvResistMagic) / 100.0f, -1.0f, 0.85f);
-            float k = mag * (1.0f - el) * (1.0f - mr);
+            float k = mag * a.dmgScale * (1.0f - el) * (1.0f - mr);
             if (d.role == Role::Player) k *= r.diffToPC;
             if (a.role == Role::Player) k *= r.diffByPC;
             if (s.dmg > 0) Hurt(d, s.dmg * k, &a, fromIaus);
+            if (trace) std::fprintf(trace, "%7.2f  spell %s: %s -> %s (%u) dmg %.0f (x%.2f)%s  hp %.0f/%.0f\n", now, s.e.name.c_str(), a.c.name.c_str(), d.c.name.c_str(), d.c.id, s.dmg * k, k, s.ctrl ? " control" : "", d.c.hp, d.c.hpMax);
             if (s.dot > 0 && Up(d)) d.fx.push_back({ 0, s.dot * k, -1, now + s.dotDur, a.c.id });
             if (s.mpDmg > 0) d.c.mp = std::max(0.0f, d.c.mp - s.mpDmg * k);
             if (s.spDmg > 0) d.c.sp = std::max(0.0f, d.c.sp - s.spDmg * k);
@@ -396,6 +409,7 @@ namespace Sim {
         void StartCast(Body& x, int idx, const SimSpell& s, std::uint32_t target, float cost, bool fromIaus) {
             x.act = Act::Cast; x.actSpell = idx; x.actTarget = target; x.actCost = cost; x.actIaus = fromIaus;
             x.hitAt = now + s.castSec; x.actEnd = x.hitAt + TM::castRecover; x.c.caster = true;
+            if (trace) std::fprintf(trace, "%7.2f  cast %s begins %s -> %u (%s, %.1fs, cost %.0f, mp %.0f)\n", now, x.c.name.c_str(), s.e.name.c_str(), target, fromIaus ? "decision" : "own AI", s.castSec, cost, x.c.mp);
             if (x.role == Role::Foe && (s.e.nature == Prune::Nature::Offense || s.e.nature == Prune::Nature::Heal || s.ctrl)) ++t.foeCasts;
             if (static_cast<std::size_t>(idx) < x.spellReady.size()) x.spellReady[static_cast<std::size_t>(idx)] = x.actEnd + std::max(0.0f, s.recovery);
         }
@@ -527,25 +541,29 @@ namespace Sim {
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }
                 if (x.role == Role::Summon && x.airUntil < 0 && now >= -x.airUntil) { x.alive = false; continue; }
                 Regen(x); if (!Up(x)) continue;
+                if (x.role == Role::Foe && now < x.fleeUntil && Dist(x, b[0]) > 4096.0f) { x.alive = false; ++t.escaped; if (trace) std::fprintf(trace, "%7.2f  ESCAPED %s (%u)\n", now, x.c.name.c_str(), x.c.id); continue; }   // a routed foe past the chase cap has left the fight
                 if (now >= x.ctrlUntil) x.c.paralysed = false;
                 if (now >= x.fleeUntil) x.c.fleeing = now < x.retreatUntil;
                 if (now >= x.blockUntil) x.c.blocking = false;
                 if (now >= x.tauntUntil) x.c.taunted = false;
                 if (x.hitAt >= 0 && now >= x.hitAt && now >= x.staggerUntil && now >= x.ctrlUntil) Resolve(b[i]);
             }
+            for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale;
+                    if (!ctl.empty() && t.mpAtLate < 0) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; t.mpAtLate = s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1.0; } } else ++i; }
             for (std::size_t i = 0; i < shots.size();) { if (shots[i].at <= now) { const Shot s = shots[i]; shots[i] = shots.back(); shots.pop_back(); Land(s); } else ++i; }
             for (std::size_t i = 0; i < b.size(); ++i) { Body& x = b[i]; if (!Up(x) || Busy(x)) continue; if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
             // tallies that integrate over time
             Body& pl = Player(); bool pressed = false; bool anyFoe = false, anyParty = false;
             for (auto& x : b) { if (!Up(x)) continue; if (x.role == Role::Foe) { anyFoe = true; if (x.c.targetId == pl.c.id && Dist(x, pl) < 1500) pressed = true; } else if (x.role == Role::Player || x.role == Role::Follower) anyParty = true; }
             if (pressed) t.playerPressureSec += TM::dt;
+            if (pl.alive) t.playerMinHp = std::min(t.playerMinHp, double(pl.c.hp / std::max(1.0f, pl.c.hpMax))); else t.playerMinHp = 0;
             if (!ctl.empty()) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; if (Up(s0)) { t.upSec += TM::dt; const std::size_t ai = now < s0.actEnd ? static_cast<std::size_t>(s0.act) : 0; t.bodySec[ai] += TM::dt; if (ai && s0.actIaus) t.bodyIausSec[ai] += TM::dt; } }
             if (!ctl.empty()) { Ctl& c0 = ctl[0]; const Body& s0 = b[static_cast<std::size_t>(c0.body)];
                 if (pressed && c0.pressureSince < 0) c0.pressureSince = now; if (!pressed) c0.pressureSince = -1;
                 t.mpSum += s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1; t.hpSum += s0.c.hp / std::max(1.0f, s0.c.hpMax); t.spSum += s0.c.spMax > 0 ? s0.c.sp / s0.c.spMax : 1; ++t.resN;
                 if (c0.gate.spellsOnClass && Up(s0)) { float cheapest = 1e9f; for (const auto& e : c0.book.entries) if (e.source == SpellSource::Spell && e.cost > 0 && e.drop == Prune::Drop::Keep) cheapest = std::min(cheapest, e.cost); if (cheapest < 1e8f && s0.c.mp < cheapest) t.mpDrySec += TM::dt; } }
             now += TM::dt;
-            if (!anyFoe) { over = true; t.won = true; }
+            if (!anyFoe && late.empty()) { over = true; t.won = true; }
             else if (!pl.alive || !anyParty) { over = true; t.lost = true; }
             else if (now >= maxSec) over = true;
             if (over) t.dur = now;

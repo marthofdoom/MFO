@@ -75,10 +75,18 @@ namespace Sim {
         bool  foesOnPlayer = false;              // scenario: every foe starts on the player
         std::uint64_t seed = 1;
         int   occluders = -1;                    // -1 = by interior
+        std::vector<std::pair<double, std::shared_ptr<const ActorSpec>>> late;   // (seconds, spec): foes that join later
+        std::vector<std::string> lateTags;
+        float playerHp = 1, subjectHp = 1, subjectMp = 1;   // scenario start fractions
+        int   playerPotions = 4; int subjectPotionsH = -1;  // -1 = the random kit
+        float foeSpread = 250;
+        std::vector<std::string> ensure, ensureOthers;      // spells the subject / the other followers must know (Load.h SpellIs)
+        bool  onSubject = false;                            // every foe starts on the subject
+        float targetRatio = 0;                              // > 0: the foes' health and damage are scaled so StrengthRatio lands here (a scenario must be winnable by good play on every list)
     };
 
-    inline void AddFollower(Fight& F, const Data& D, const SimClass& sc, int level, int rank, float x, float y, Rng& R, float worn) {
-        auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R));
+    inline void AddFollower(Fight& F, const Data& D, const SimClass& sc, int level, int rank, float x, float y, Rng& R, float worn, const std::vector<std::string>* ensure = nullptr) {
+        auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R, true, ensure));
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
         Body& b = F.Add(Role::Follower, spec, x, y); b.ctl = static_cast<int>(F.ctl.size()); b.arrows = fb->book.kit.arrows + fb->book.kit.bolts;
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
@@ -96,6 +104,8 @@ namespace Sim {
         f.tag = healer ? "healer" : caster ? "caster" : (f.spec->ranged.Has() && (!f.spec->melee.Has() || f.spec->st.wRanged > f.spec->st.wMelee)) ? "archer" : "grunt";
     }
 
+    inline float StrengthRatio(const Data& D, const Fight& F);
+
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
         Fight F; F.D = &D; F.R.g.seed(fs.seed); Rng& R = F.R;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
@@ -103,17 +113,30 @@ namespace Sim {
         { auto pb = BuildFollower(D, pc.fam, pc.kit, pc.gate, fs.level, R); auto ps = std::make_shared<ActorSpec>(pb.spec); ps->name = "Player"; ps->spells.clear();
           Body& p = F.Add(Role::Player, ps, 0, 0); p.arrows = 80; p.potions = 4; if (fs.worn > 0) p.c.hp *= R.U(1.0f - fs.worn * 0.5f, 1.0f); }
         auto place = [&](Cls f) { return std::pair<float, float>{ f == Cls::Melee ? 220.0f : f == Cls::Ranged ? -300.0f : -250.0f, R.U(-220, 220) }; };
-        { auto [x, y] = place(fs.cls->fam); AddFollower(F, D, *fs.cls, fs.level, fs.rank, x, y, R, fs.worn); }
-        for (const SimClass* o : fs.others) { auto [x, y] = place(o->fam); AddFollower(F, D, *o, fs.level, 3, x, y, R, fs.worn); }
+        { auto [x, y] = place(fs.cls->fam); AddFollower(F, D, *fs.cls, fs.level, fs.rank, x, y, R, fs.worn, fs.ensure.empty() ? nullptr : &fs.ensure); }
+        for (const SimClass* o : fs.others) { auto [x, y] = place(o->fam); AddFollower(F, D, *o, fs.level, 3, x, y, R, fs.worn, fs.ensureOthers.empty() ? nullptr : &fs.ensureOthers); }
         const float ang = R.U(-0.4f, 0.4f), cx = fs.foeDist * std::cos(ang), cy = fs.foeDist * std::sin(ang);
         std::size_t ti = 0;
         auto addFoe = [&](std::shared_ptr<const ActorSpec> sp, float dx, float dy) {
             Body& f = F.Add(Role::Foe, std::move(sp), cx + std::clamp(dx, -700.0f, 700.0f), cy + std::clamp(dy, -700.0f, 700.0f));
             TagFoe(D, f); if (ti < fs.foeTags.size() && !fs.foeTags[ti].empty()) f.tag = fs.foeTags[ti]; ++ti;
             if (fs.foesOnPlayer) { f.c.targetId = 2; f.retargetAt = 6.0; }
+            if (fs.onSubject) { f.c.targetId = F.b[static_cast<std::size_t>(F.ctl[0].body)].c.id; f.retargetAt = 8.0; }
         };
         for (const auto& m : fs.foes) addFoe(std::shared_ptr<const ActorSpec>(std::shared_ptr<const ActorSpec>{}, &D.specs[static_cast<std::size_t>(m.first)]), m.second.first, m.second.second);
-        for (const auto& s : fs.customFoes) addFoe(s, R.U(-250, 250), R.U(-250, 250));
+        for (const auto& s : fs.customFoes) addFoe(s, R.U(-fs.foeSpread, fs.foeSpread), R.U(-fs.foeSpread, fs.foeSpread));
+        for (std::size_t i = 0; i < fs.late.size(); ++i) F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + R.U(-200, 200), cy + R.U(-200, 200), i < fs.lateTags.size() ? fs.lateTags[i] : std::string() });
+        if (fs.targetRatio > 0) {   // late foes count toward the strength as if present
+            Fight T = F; for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y);
+            const float k = std::clamp(fs.targetRatio / std::max(0.01f, StrengthRatio(D, T)), 0.05f, 20.0f);
+            for (Body& x : F.b) if (x.role == Role::Foe) { auto sp = std::make_shared<ActorSpec>(*x.spec); sp->hp *= k; x.spec = sp; x.c.hpMax *= k; x.c.hp *= k; x.dmgScale = k; }
+            for (Spawn& s : F.late) { auto sp = std::make_shared<ActorSpec>(*s.spec); sp->hp *= k; s.spec = sp; s.dmgScale = k; }
+        }
+        for (const Body& x : F.b) if (x.role == Role::Foe) F.foeHpTotal += x.c.hpMax;
+        for (const Spawn& s : F.late) F.foeHpTotal += s.spec->hp;
+        F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
+        { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH; }
+        for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
         const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);
         for (int i = 0; i < no; ++i) { const float tt = R.U(0.3f, 0.75f); F.occ.push_back({ cx * tt + R.U(-350, 350), cy * tt + R.U(-350, 350), R.U(60, 140) }); }
         return F;

@@ -123,7 +123,7 @@ namespace Sim {
         // the roster: {name, race, level, hp, mp, sp, weapon dmg/speed/anim, skill, AR, flags}
         auto mk = [&](const char* nm, const char* race, int lvl, float hp, float mp, float sp, Weapon m, Weapon r, float skill, float ar, int pieces) {
             ActorSpec a; a.name = nm; a.race = race; a.level = lvl; a.hp = hp; a.mp = mp; a.sp = sp; a.melee = std::move(m); a.ranged = std::move(r); a.skill.fill(skill); a.ar = ar; a.pieces = pieces;
-            a.hpR = 0; a.ammoDmg = a.ranged.Has() ? 8.0f : 0.0f; a.hasStyle = true; return a; };
+            a.hpR = 0; a.ammoDmg = a.ranged.Has() ? 8.0f : 0.0f; a.hasStyle = true; a.conf = 3; return a; };
         const Weapon none;
         for (int t = 0; t < 6; ++t) {   // one tier per level bucket
             const int L = b.buckets[static_cast<std::size_t>(t)]; const float l = static_cast<float>(L);
@@ -132,7 +132,7 @@ namespace Sim {
             ActorSpec archer = mk("BanditMissile", "NordRace", L, 35 + 14 * l, 25, 70 + 5 * l, wp("dagger", 4 + 0.1f * l, 1.3f, 2, kAvOneHanded, 0, 2), wp("bow", 7 + 0.25f * l, 1, 7, kAvMarksman, 0, 6), sk, 15 + 3 * l, 3); archer.st.wRanged = 2;
             ActorSpec mage = mk("BanditMage", "NordRace", L, 35 + 10 * l, 60 + 12 * l, 50, wp("dagger", 4, 1.3f, 2, kAvOneHanded, 0, 2), none, sk, 0, 0); mage.spells = { 0, 1 }; mage.st.wMagic = 3;
             ActorSpec healer = mk("FixHealer", "NordRace", L, 35 + 10 * l, 80 + 12 * l, 50, wp("dagger", 4, 1.3f, 2, kAvOneHanded, 0, 2), none, sk, 0, 0); healer.spells = { 3, 2 }; healer.st.wMagic = 3;
-            ActorSpec draugr = mk("FixDraugr", "DraugrRace", L, 50 + 20 * l, 0, 150, wp("ancient sword", 8 + 0.3f * l, 1, 1, kAvOneHanded, 0.75f, 12), none, sk, 10 + 3 * l, 0); draugr.undead = true; draugr.creature = true; draugr.rFrost = 50; draugr.rPoison = 100; draugr.run = 345;
+            ActorSpec draugr = mk("FixDraugr", "DraugrRace", L, 50 + 20 * l, 0, 150, wp("ancient sword", 8 + 0.3f * l, 1, 1, kAvOneHanded, 0.75f, 12), none, sk, 10 + 3 * l, 0); draugr.undead = true; draugr.creature = true; draugr.conf = 4; draugr.rFrost = 50; draugr.rPoison = 100; draugr.run = 345;
             ActorSpec wolf = mk("FixWolf", "WolfRace", L, 12 + 10 * l, 0, 100, none, none, sk, 0, 0); wolf.unarmed = 5 + 0.8f * l; wolf.animal = wolf.creature = true; wolf.run = 556;
             ActorSpec troll = mk("FixTroll", "TrollRace", L, 250 + 10 * l, 0, 250, none, none, sk, 30, 0); troll.unarmed = 20 + 1.5f * l; troll.creature = true; troll.rFire = -50; troll.hpR = 2; troll.mass = 2.5f; troll.run = 400;
             ActorSpec fatro = mk("FixFrostAtronach", "AtronachFrostRace", L, 150 + 10 * l, 100, 200, none, none, sk, 60, 0); fatro.unarmed = 20 + 1.5f * l; fatro.creature = fatro.daedra = true; fatro.rFrost = 100; fatro.rFire = -33; fatro.immunePar = true; fatro.mass = 3; fatro.run = 325;
@@ -169,7 +169,17 @@ namespace Sim {
         return v[static_cast<std::size_t>(std::lround(q * static_cast<float>(v.size() - 1)))];
     }
 
-    inline FollowerBuild BuildFollower(const Data& D, Cls fam, const KitChoice& kc, const ClassGate& gate, int level, Rng& R, bool withKit = true) {
+    // Does a pool spell answer a scenario's "he must know one of these" token?
+    inline bool SpellIs(const SimSpell& s, const std::string& tok) {
+        const bool off = s.e.nature == Prune::Nature::Offense;
+        if (tok == "area") return off && s.e.areaUnits > 0 && !s.e.selfDelivery; if (tok == "paralyze") return s.ctrlPar; if (tok == "fear") return s.ctrlFlee && !s.turnUndead;
+        if (tok == "heal") return s.e.nature == Prune::Nature::Heal && s.e.selfDelivery; if (tok == "healOther") return s.healOther;
+        if (tok == "fire" || tok == "frost" || tok == "shock") return off && s.element == tok && s.e.areaUnits <= 0 && !s.e.touch && !s.e.selfDelivery;
+        if (tok == "armor") return s.armor > 0; if (tok == "summon") return s.summon;
+        return false;
+    }
+
+    inline FollowerBuild BuildFollower(const Data& D, Cls fam, const KitChoice& kc, const ClassGate& gate, int level, Rng& R, bool withKit = true, const std::vector<std::string>* ensure = nullptr) {
         FollowerBuild fb; ActorSpec& a = fb.spec; const Rules& r = D.rules;
         const FRace& rc = D.races[static_cast<std::size_t>(R.I(0, static_cast<int>(D.races.size()) - 1))]; FClass c = D.cls[static_cast<int>(fam)];
         if (kc.mageBlend > 0) { const FClass& m = D.cls[2]; auto norm = [](const FClass& k) { float s = 0; for (float w : k.skillW) s += w; return std::max(1.0f, s); };
@@ -221,6 +231,12 @@ namespace Sim {
             for (int i = R.I(2, 5); i > 0; --i) fb.spells.push_back(*afford[static_cast<std::size_t>(R.I(0, static_cast<int>(afford.size()) - 1))]);
         } else if (!D.spells.empty() && R.I(0, 2) == 0) {   // a non-caster sometimes knows a heal spell the gate must drop
             for (const SimSpell& s : D.spells) if (s.e.nature == Prune::Nature::Heal) { fb.spells.push_back(s); break; }
+        }
+        if (ensure) for (const std::string& tok : *ensure) {   // a scenario needs him to know one: the dearest he can afford twice, else the cheapest
+            bool have = false; for (const SimSpell& s : fb.spells) have |= SpellIs(s, tok); if (have) continue;
+            const SimSpell* pick = nullptr; const SimSpell* cheap = nullptr;
+            for (const SimSpell& s : D.spells) { if (!SpellIs(s, tok)) continue; const float c0 = costOf(s); if (!cheap || c0 < costOf(*cheap)) cheap = &s; if (c0 <= a.mp * 0.45f && (!pick || c0 > costOf(*pick))) pick = &s; }
+            if (!pick) pick = cheap; if (pick) fb.spells.push_back(*pick);
         }
         if (kc.staff && withKit && R.I(0, 1) == 0) {   // a staff: an entry with no magicka cost and charges
             SimSpell st; st.e.nature = Prune::Nature::Offense; st.e.role = RoleTag::Fire; st.e.resistAv = kAvResistFire; st.e.source = SpellSource::Staff; st.e.reach = 4096; st.element = "fire";
