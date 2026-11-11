@@ -184,6 +184,12 @@ namespace Sim {
         for (const Playstyle& p : Playstyles()) if (cls == p.cls) return &p;
         return nullptr;
     }
+    // The PARKED rows (everything below the banner) take effect only with --parked. A class is Beta 1 when kBeta1Classes lists it.
+    inline bool g_parked = false;
+    [[nodiscard]] inline bool IsBeta1(const std::string& cls) { return (std::string(",") + kBeta1Classes + ",").find("," + cls + ",") != std::string::npos; }
+    [[nodiscard]] inline bool PlaystyleInForce(const std::string& cls) { return g_parked || IsBeta1(cls); }
+    // The playstyle of a class when it is in force (Beta 1, or --parked), else nullptr: rulings, persona, forbid bits and the class passives all read this.
+    inline const Playstyle* ActivePlaystyle(const std::string& cls) { return PlaystyleInForce(cls) ? PlaystyleOf(cls) : nullptr; }
 
     // How much of one band is met, 0..1: 1 inside it, falling to 0 at half the bound (or 5, whichever is larger) outside.
     inline double BandCredit(const Band& b, double v) {
@@ -194,9 +200,11 @@ namespace Sim {
     }
     // The class-personality score of one cell, 0..100 (-1 = the class has no band, or no band's metric had a sample).
     inline double Persona(const std::string& cls, const std::map<std::string, double>& m) {
-        const Playstyle* p = PlaystyleOf(cls); if (!p) return -1;
+        const Playstyle* p = ActivePlaystyle(cls); if (!p) return -1;
         double sum = 0; int n = 0;
-        for (const Band& b : p->bands) { auto it = m.find(b.metric); if (it == m.end() || it->second < 0) continue; sum += BandCredit(b, it->second); ++n; }
+        for (const Band& b : p->bands) { auto it = m.find(b.metric); double v;   // the same rule as the rulings (Results.h RulingValue): a missing a.<family> share is 0
+            if (it != m.end()) { v = it->second; if (v < 0) continue; } else if (!std::strncmp(b.metric, "a.", 2)) v = 0; else continue;
+            sum += BandCredit(b, v); ++n; }
         return n ? 100.0 * sum / n : -1;
     }
 

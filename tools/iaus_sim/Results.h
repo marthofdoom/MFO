@@ -43,7 +43,7 @@ namespace Sim {
     inline const std::vector<Ruling>& ClassRulings() {
         static std::vector<std::string> keep; static std::vector<Ruling> r;
         if (r.empty()) { std::size_t n = 0; for (const Playstyle& p : Playstyles()) n += 2 * p.bands.size(); keep.reserve(n);
-            for (const Playstyle& p : Playstyles()) { int i = 0; for (const Band& b : p.bands) { ++i;
+            for (const Playstyle& p : Playstyles()) { if (!PlaystyleInForce(p.cls)) continue; int i = 0; for (const Band& b : p.bands) { ++i;
                 if (b.lo > -kOpen) { keep.push_back(std::string("P-") + p.cls + "-" + std::to_string(i)); r.push_back({ keep.back().c_str(), b.why, p.cls, b.metric, ">=", b.lo }); }
                 if (b.hi < kOpen) { keep.push_back(std::string("P-") + p.cls + "-" + std::to_string(i) + (b.lo > -kOpen ? "b" : "")); r.push_back({ keep.back().c_str(), b.why, p.cls, b.metric, "<=", b.hi }); } } } }
         return r;
@@ -198,13 +198,13 @@ namespace Sim {
                 j += std::string(i ? ",\n" : "\n") + "{\"id\":" + JsonOut::Str(g.id) + ",\"family\":" + JsonOut::Str(g.family) + ",\"class\":" + JsonOut::Str(g.cls) + ",\"desc\":" + JsonOut::Str(g.desc) + ",\"scenario\":" + JsonOut::Str(g.scenario)
                    + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + "}"; }
             auto ran = [&](const char* cls) { for (const ResultRow& row : rows) if (row.cls == cls) return true; return false; };   // only the classes this run played
-            for (const Playstyle& p : Playstyles()) { if (!ran(p.cls)) continue; std::string ids = std::string(",") + p.gaps + ",";   // the class gap ledger: one row per (gap, class)
+            for (const Playstyle& p : Playstyles()) { if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; std::string ids = std::string(",") + p.gaps + ",";   // the class gap ledger: one row per (gap, class)
                 for (const ClassGap& g : ClassGaps()) { if (ids.find(std::string(",") + g.id + ",") == std::string::npos) continue; double dU = 0; bool has = false;
                     for (const ScenarioRow& s : scen) if (s.hasOracle && s.name == g.scenario) { dU = s.gap; has = true; }
                     j += std::string(",\n") + "{\"id\":" + JsonOut::Str(g.id) + ",\"family\":" + JsonOut::Str(g.family) + ",\"class\":" + JsonOut::Str(p.cls) + ",\"desc\":" + JsonOut::Str(g.desc) + ",\"scenario\":" + JsonOut::Str(g.scenario)
                        + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + "}"; } }
             j += "],\n\"playstyles\":["; bool firstPs = true;
-            for (std::size_t i = 0; i < Playstyles().size(); ++i) { const Playstyle& p = Playstyles()[i]; if (!ran(p.cls)) continue; const bool sep = !firstPs; firstPs = false;
+            for (std::size_t i = 0; i < Playstyles().size(); ++i) { const Playstyle& p = Playstyles()[i]; if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; const bool sep = !firstPs; firstPs = false;
                 j += std::string(sep ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(p.cls) + ",\"does\":" + JsonOut::Str(p.does) + ",\"never\":" + JsonOut::Str(p.never) + ",\"forbid\":" + std::to_string(p.forbid) + ",\"gaps\":" + JsonOut::Str(p.gaps) + "}"; }
             j += "],\n\"metric_info\":{";
             for (std::size_t i = 0; i < MetricInfos().size(); ++i) { const MetricInfo& mi = MetricInfos()[i]; j += std::string(i ? "," : "") + JsonOut::Str(mi.name) + ":{\"better\":" + JsonOut::Str(mi.better) + ",\"unit\":" + JsonOut::Str(mi.unit) + "}"; }

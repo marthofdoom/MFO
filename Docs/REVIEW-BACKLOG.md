@@ -2945,3 +2945,12 @@ MAP.md §11 lists 'DamageValue 0 for a no-damage spell' as LIVE; it is not live 
 Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale step drains in 700 ms with one log line). Clear in ResetAllState with the next touch.
 
 ### Harbinger-side backlog from the same review (recorded here for the MFO adoption; APMF entries in APMF Docs): F1-3 HitSeen matches the engine's own bash within 2.5 s; F1-4 the combat move does not yield to an active ch.8 cast claim; F1-5 kAtkLeft is the charge bit; F2-2 pointSpace bound at the first sweep; probe Post per melee hit while [Probe] bCombatMove is on.
+
+### MFO-B690 (SEV-4, OPEN, IAUS classes lab, against 62f67b1, Opus review of feat/iaus-classes)
+Staff "hand" sneak rows. (Finding text as relayed in the fix brief: the review's full wording was not available to the recorder.) Reasoning: lab-only (tools/iaus_sim), no native code, no Beta 1 class is affected; deferred under rule 9 and fixed with the next stealth lab round.
+
+### MFO-B691 (SEV-4, OPEN, IAUS classes lab, against 62f67b1, Opus review of feat/iaus-classes)
+Free stealth entry ends only on a weapon hit. (Finding text as relayed in the fix brief.) Reasoning: lab-only, it bounds the Thief's opener worth in the stealth model; deferred under rule 9, fix with the next stealth lab round.
+
+### MFO-B692 (SEV-5, OPEN, IAUS classes lab, against 62f67b1, Opus review of feat/iaus-classes)
+Gap-ledger JSON comma. (Finding text as relayed in the fix brief.) Reasoning: results-file formatting in tools/iaus_sim/Results.h, lab-only; deferred under rule 9.

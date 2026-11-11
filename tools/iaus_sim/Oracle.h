@@ -93,8 +93,8 @@ namespace Sim {
     }
 
     // THE CLASS RULINGS AS CONSTRAINTS (Playstyles.h): an option the follower's class forbids is never tried, so the oracle is an
-    // expert who plays THAT class. --no-class-rulings turns them off (the unconstrained oracle of doc sections 9 to 27).
-    inline bool g_classRulings = true;
+    // expert who plays THAT class. They are OFF unless --class-rulings (or --class-oracle) is given: the default oracle is main's unconstrained one (doc sections 9 to 27).
+    inline bool g_classRulings = false;   // OFF by default (main's oracle); --class-rulings, or --class-oracle, turns it on
     [[nodiscard]] inline bool ClassAllows(const Fight& F, const Ctl& c, const Opt& o) {
         const Body& x = F.b[static_cast<std::size_t>(c.body)]; const Candidate* k = o.k; const unsigned fb = c.forbid;
         if (k && k->f.hasArea && !k->f.splashSafe) return false;                                  // never splash the party (every class)

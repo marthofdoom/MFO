@@ -100,7 +100,7 @@ namespace {
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
         const std::vector<Scenario> all = AllScenarios(true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "all,stealth" = both
-        for (const Scenario& s : all) if ((!s.stealth && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos) pick.push_back(&s);
+        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.stealth && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; };
@@ -300,7 +300,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; int optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; bool noClassRulings = false; int optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -316,9 +316,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--calm-holds")) g_calmBreaks = false;
         else if (!std::strcmp(argv[i], "--roads") && i + 1 < argc) { const std::string v = argv[++i]; g_groundRoad = v.find("ground") != std::string::npos; g_blockRoad = v.find("block") != std::string::npos; g_bashRoad = v.find("bash") != std::string::npos; }
         else if (!std::strcmp(argv[i], "--stealth") && i + 1 < argc) { const char* v = argv[++i]; g_stealth = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "g1") ? 1 : !std::strcmp(v, "hide") ? 2 : !std::strcmp(v, "aware") ? 3 : std::atoi(v); }   // the stealth roads modelled as existing (World.h g_stealth)
-        else if (!std::strcmp(argv[i], "--no-class-rulings")) g_classRulings = false;   // the oracle is not held to the class playstyles (Playstyles.h)
+        else if (!std::strcmp(argv[i], "--class-rulings")) g_classRulings = true;      // the oracle is held to the class playstyles (Playstyles.h); OFF by default, --class-oracle turns it on
+        else if (!std::strcmp(argv[i], "--no-class-rulings")) { g_classRulings = false; noClassRulings = true; }   // ... and stays unconstrained even with --class-oracle
+        else if (!std::strcmp(argv[i], "--parked")) g_parked = true;                  // the PARKED rows (T3+ playstyles, passives, stealth scenarios) take effect; Beta 1 = T1 + T2 only without it
         else if (!std::strcmp(argv[i], "--class-kit")) g_classKit = true;              // the subject knows the spells his class's default rows name
-        else if (!std::strcmp(argv[i], "--class-oracle") && i + 1 < argc) classOracle = std::atoi(argv[++i]);   // N natural fights per class with the class-constrained oracle: the per-class oracle gap
+        else if (!std::strcmp(argv[i], "--class-oracle") && i + 1 < argc) { classOracle = std::atoi(argv[++i]); if (!noClassRulings) g_classRulings = true; }   // N natural fights per class with the class-constrained oracle: the per-class oracle gap
         else if (!std::strcmp(argv[i], "--regroup-road")) g_regroupRoad = true;       // the ch.24 regroup client is modelled as existing
         else if (!std::strcmp(argv[i], "--follower-death")) g_followerDeath = true;   // a follower at 0 health is dead for good (LoreRim's default)
         else if (!std::strcmp(argv[i], "--mortal-blind")) g_mortalKnown = false;       // ... and IAUS is not told (Snapshot::mortal stays false)   // the first control model: a Calm is never broken by a blow

@@ -13,8 +13,9 @@ namespace Sim {
         const char* metrics;    // comma list of metric keys to print (sim.cpp Metrics), first = the primary
         bool lowerBetter;       // for the primary metric
         bool stealth = false;   // a class playstyle scenario of the stealth lab: never part of the headline J, run by name or by --scenario stealth
+        bool parked = false;    // a PARKED class's scenario (T3 / T4): excluded unless --parked
         std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> make;
-        Scenario(const char* n, const char* w, const char* m, bool lb, std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> mk, bool st = false) : name(n), what(w), metrics(m), lowerBetter(lb), stealth(st), make(std::move(mk)) {}
+        Scenario(const char* n, const char* w, const char* m, bool lb, std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> mk, bool st = false, bool pk = false) : name(n), what(w), metrics(m), lowerBetter(lb), stealth(st), parked(pk), make(std::move(mk)) {}
     };
 
     inline const SimClass* ClassBySlug(const std::vector<SimClass>& v, const char* slug) {
@@ -103,18 +104,18 @@ namespace Sim {
         v.push_back({ "hit-and-hide", "a brute has seen the master thief and he cannot trade with it: break off behind cover, hide, come back with a sneak attack",
             "U,sneakDmg%,hidden%,hide/min,taken/s,downs/f", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "master-thief", 25, Cls::Melee);
                 f.customFoes.push_back(Foe(D, { "troll", "giant", "bandit" }, 26, R, 2.0f, 1.6f, "Brute")); f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 22, R)); f.foeTags = { "boss", "grunt" };
-                f.interior = true; f.light = 0.35f; f.occluders = 3; f.freeEntry = 0; f.onSubject = true; f.foeDist = 900; f.targetRatio = 1.00f; return f; }, true });
+                f.interior = true; f.light = 0.35f; f.occluders = 3; f.freeEntry = 0; f.onSubject = true; f.foeDist = 900; f.targetRatio = 1.00f; return f; }, true, true });
         v.push_back({ "shadowcloak", "open ground in daylight, nowhere to hide: the Nightingale's cloak is his only stealth, and every cloak must end in a sneak attack",
             "U,sneakDmg%,sneakAtk%,hidden%,dur.s,win%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "nightingale", 30, Cls::Melee);
-                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 28, R, 2.0f, 1.2f)); f.light = 0.9f; f.occluders = 0; f.freeEntry = 0; f.foeDist = 900; f.targetRatio = 0.95f; return f; }, true });
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 28, R, 2.0f, 1.2f)); f.light = 0.9f; f.occluders = 0; f.freeEntry = 0; f.foeDist = 900; f.targetRatio = 0.95f; return f; }, true, true });
         v.push_back({ "flank", "a knight holds one of two strong foes: the master thief stabs the held one (the flanking half bonus), never the free one that would turn on him",
             "U,flank%,sneakDmg%,taken/s,dur.s", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "master-thief", 28, Cls::Ranged);
                 f.others.push_back(ClassBySlug(c, "knight")); for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 28, R, 2.5f, 1.2f));
-                f.interior = true; f.light = 0.5f; f.occluders = 0; f.freeEntry = 0; f.foeDist = 700; f.targetRatio = 0.95f; return f; }, true });
+                f.interior = true; f.light = 0.5f; f.occluders = 0; f.freeEntry = 0; f.foeDist = 700; f.targetRatio = 0.95f; return f; }, true, true });
         v.push_back({ "assassinate", "a healer keeps two brutes alive: the Listener's stealth entry is the one chance to kill the healer before the fight starts",
             "prio%,U,opener%,sneakDmg%,dur.s,win%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "listener", 30, Cls::Melee);
                 for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 28, R, 1.5f)); f.customFoes.push_back(Foe(D, { "healer" }, 26, R)); f.foeTags = { "grunt", "grunt", "healer" };
-                f.interior = true; f.light = 0.3f; f.occluders = 2; f.freeEntry = 1; f.foesOnPlayer = true; f.foeDist = 1100; f.targetRatio = 0.95f; return f; }, true });
+                f.interior = true; f.light = 0.3f; f.occluders = 2; f.freeEntry = 1; f.foesOnPlayer = true; f.foeDist = 1100; f.targetRatio = 0.95f; return f; }, true, true });
         return v;
     }
 

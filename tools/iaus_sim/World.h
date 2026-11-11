@@ -102,6 +102,7 @@ namespace Sim {
         std::string tag;                 // scenario role ("healer", "archer", "boss" ...)
         // stealth (g_stealth > 0 and a sneak class): his stance, and which foes know where he is
         bool  stealthy = false, sneaking = false;
+        std::vector<std::pair<std::uint32_t, double>> struckFoes;   // foe id -> when he last HIT it: the engine's ForceDetect puts the victim in combat with him for fCombatDetectionLostTimeLimit
         std::vector<std::pair<std::uint32_t, double>> knownBy;   // foe id -> when it last sensed him (a foe not listed never has)
         double movedAt = -1, cloakUntil = 0, cloakReady = 0, hideAt = -1e9, runUntil = 0;
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
@@ -287,6 +288,7 @@ namespace Sim {
         [[nodiscard]] bool Detects(const Body& o, const Body& x) const {
             if (!x.stealthy) return true;
             if (now < x.cloakUntil) return false;
+            for (const auto& k : x.struckFoes) if (k.first == o.c.id && now - k.second <= static_cast<double>(D->G("fCombatDetectionLostTimeLimit", 10))) return true;   // it was hit by him: it keeps him as its enemy (list setting, vanilla 10 s)
             for (const auto& k : x.knownBy) if (k.first == o.c.id) return now - k.second <= (g_stealth == 1 ? static_cast<double>(D->G("fCombatDetectionLostTimeLimit", 10)) : 0.6);
             return false;
         }
@@ -311,7 +313,7 @@ namespace Sim {
                 Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
                 x.sneaking = now >= x.runUntil;   // G1 holds the stance; a break for cover is a RUN (H3), he crouches again on arrival
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Senses(o, x)) Reveal(x, o);
-                if (c.cloak && g_stealth >= 2 && now > 4.0 && now >= x.cloakReady && now >= x.cloakUntil && !Unseen(x)) { x.cloakUntil = now + 3.0; x.cloakReady = now + 30.0; x.knownBy.clear(); }   // H10: once per 30 s, undetected for 3 s
+                if (c.cloak && g_stealth >= 2 && now > 4.0 && now >= x.cloakReady && now >= x.cloakUntil && !Unseen(x)) { x.cloakUntil = now + 3.0; x.cloakReady = now + 30.0; x.knownBy.clear(); x.struckFoes.clear(); }   // H10: once per 30 s, undetected for 3 s
             }
         }
 
@@ -419,7 +421,8 @@ namespace Sim {
                 const float sm = SneakAttackMult(*D, *a.spec, ranged ? a.spec->ranged : a.spec->melee) * ac.sneakAtkClass;
                 if (a.sneaking && !Detects(d, a)) { dmg *= sm; sneakAtk = true; }
                 else if (ac.flank && g_stealth >= 2) { const Body* dt = Find(d.c.targetId); if (dt && dt != &a && dt->Party()) { dmg *= 1.0f + 0.5f * (sm - 1.0f); flankAtk = true; } }   // G4: half the bonus on a foe engaged with an ally
-                Reveal(a, d); if (a.cloakUntil > now) a.cloakUntil = now;   // the blow tells the victim where he is (the engine's ForceDetect on a hit)
+                Reveal(a, d); { bool f = false; for (auto& k : a.struckFoes) if (k.first == d.c.id) { k.second = now; f = true; } if (!f) a.struckFoes.push_back({ d.c.id, now }); }   // a hit: the victim now knows him for fCombatDetectionLostTimeLimit (Detects)
+            if (a.cloakUntil > now) a.cloakUntil = now;   // the blow tells the victim where he is (the engine's ForceDetect on a hit)
             }
             if (a.ctl == 0) { ++t.wpnHits; if (sneakAtk) ++t.sneakHits; if (flankAtk) ++t.flankHits; if (!t.firstHits) { t.firstHits = 1; t.sneakOpens = sneakAtk ? 1 : 0; } }
             if (now < d.blockUntil && !ranged) {   // MODEL block: shield 0.45 + 0.30 x skill, weapon 0.30 + 0.20 x skill; a power attack halves it (fBlockPowerAttackMult)

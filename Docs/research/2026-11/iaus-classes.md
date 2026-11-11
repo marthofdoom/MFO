@@ -24,7 +24,7 @@ never does, taken from the class's card and rulings, and turns it into three thi
   earns 1. Outside, the credit falls to 0 at half the bound (or 5, whichever is larger). 100 means an observer sees the
   class. A low score means he plays like a generic bot of his line. It is written as the metric `persona` on every cell.
 - **Forbid bits.** The oracle constraint set. The expert oracle may not take an option the class's rulings forbid, so a
-  class's oracle gap is measured against an expert who plays that class. `--no-class-rulings` turns them off.
+  class's oracle gap is measured against an expert who plays that class. They are applied only with `--class-rulings` (or `--class-oracle`, which implies it); without a flag the oracle is main's unconstrained one. `--no-class-rulings` turns them off even under `--class-oracle`.
 
 A band's numbers come from the card, on the lab's scales. They are never fitted to what IAUS does today, so a band that
 fails is a finding.
@@ -187,28 +187,28 @@ What the tables say:
 | list | mode | utility | win_pct | persona | sneak% | hidden% | opener% | sneakAtk% | sneakDmg% | hide/min | b.shoot | melee_share_pct | contact% | taken/s | dps | rulings | oracle gap | oracle persona |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | LoreRim | off | 59.5 | 62.0 | 33.3 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 58.1 | 10.0 | 21.7 | 2.6 | 17.0 | 6 / 10 | +0.1 | 50 |
-| LoreRim | hide | 59.7 | 62.0 | 83.3 | 100.0 | 57.4 | 78.1 | 39.1 | 66.4 | 0.0 | 61.3 | 6.5 | 12.7 | 0.9 | 19.6 | 9 / 10 | +0.9 | 100 |
-| LoreRim | aware | 59.7 | 62.0 | 83.3 | 99.1 | 57.6 | 81.2 | 44.6 | 70.1 | 0.1 | 64.5 | 5.1 | 10.6 | 0.7 | 19.8 | 9 / 10 | +0.9 | 100 |
+| LoreRim | hide | 59.7 | 62.0 | 83.3 | 100.0 | 49.7 | 78.1 | 30.5 | 54.4 | 0.0 | 61.5 | 6.7 | 13.2 | 1.3 | 19.0 | 9 / 10 | +1.2 | 83 |
+| LoreRim | aware | 59.5 | 62.0 | 83.3 | 99.1 | 49.6 | 81.2 | 35.3 | 58.4 | 0.1 | 64.8 | 5.2 | 11.1 | 1.0 | 19.1 | 9 / 10 | +1.2 | 100 |
 | Tuxborn | off | 73.5 | 78.0 | 33.3 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 57.0 | 8.9 | 14.0 | 0.9 | 17.4 | 6 / 10 | -9.3 | 35 |
-| Tuxborn | hide | 74.7 | 80.0 | 83.3 | 100.0 | 47.8 | 72.5 | 32.8 | 63.5 | 0.0 | 47.3 | 10.5 | 16.7 | 1.1 | 19.9 | 9 / 10 | +0.8 | 83 |
-| Tuxborn | aware | 74.9 | 80.0 | 83.3 | 100.0 | 46.9 | 72.5 | 36.7 | 64.9 | 0.0 | 48.0 | 8.0 | 14.4 | 1.0 | 19.8 | 9 / 10 | +1.4 | 87 |
+| Tuxborn | hide | 74.8 | 80.0 | 83.3 | 100.0 | 43.6 | 72.5 | 30.9 | 61.1 | 0.0 | 47.3 | 10.6 | 17.8 | 1.3 | 19.8 | 9 / 10 | +0.2 | 83 |
+| Tuxborn | aware | 75.2 | 80.0 | 83.3 | 100.0 | 42.8 | 72.5 | 36.0 | 64.3 | 0.0 | 48.9 | 8.4 | 15.6 | 1.1 | 21.0 | 9 / 10 | +0.1 | 92 |
 | Vanilla | off | 89.1 | 94.0 | 33.3 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 63.1 | 9.3 | 14.0 | 1.4 | 15.9 | 6 / 10 | +0.6 | 49 |
-| Vanilla | hide | 92.3 | 98.0 | 83.3 | 100.0 | 45.8 | 55.0 | 29.9 | 49.1 | 0.0 | 57.1 | 8.7 | 13.7 | 1.4 | 17.8 | 9 / 10 | +0.5 | 83 |
-| Vanilla | aware | 90.6 | 96.0 | 83.3 | 99.4 | 45.0 | 52.5 | 29.4 | 49.7 | 0.3 | 56.0 | 8.9 | 14.2 | 1.5 | 18.1 | 9 / 10 | +0.4 | 83 |
+| Vanilla | hide | 90.9 | 96.0 | 83.3 | 100.0 | 37.3 | 55.0 | 22.8 | 42.7 | 0.0 | 55.9 | 8.9 | 16.0 | 1.4 | 17.5 | 9 / 10 | +0.5 | 100 |
+| Vanilla | aware | 90.8 | 96.0 | 83.3 | 99.4 | 37.6 | 52.5 | 25.5 | 44.9 | 0.3 | 55.4 | 8.9 | 16.2 | 1.5 | 17.8 | 9 / 10 | -0.2 | 100 |
 
 ### 4.4 Mean over the 12 classes: U, persona, oracle gap by mode (only the thief changes with the mode)
 
 | list | mode | mean U | mean persona | mean oracle gap | rulings passed |
 |---|---|---|---|---|---|
 | LoreRim | off | 64.05 | 80.2 | +5.12 | 74 / 104 |
-| LoreRim | hide | 64.07 | 84.4 | +5.19 | 77 / 104 |
-| LoreRim | aware | 64.06 | 84.4 | +5.20 | 77 / 104 |
+| LoreRim | hide | 64.06 | 84.4 | +5.22 | 77 / 104 |
+| LoreRim | aware | 64.05 | 84.4 | +5.22 | 77 / 104 |
 | Tuxborn | off | 82.02 | 67.9 | +1.17 | 71 / 104 |
-| Tuxborn | hide | 82.12 | 72.1 | +2.01 | 74 / 104 |
-| Tuxborn | aware | 82.14 | 72.1 | +2.06 | 74 / 104 |
+| Tuxborn | hide | 82.12 | 72.1 | +1.96 | 74 / 104 |
+| Tuxborn | aware | 82.16 | 72.1 | +1.95 | 74 / 104 |
 | Vanilla | off | 91.25 | 81.0 | +3.95 | 76 / 104 |
-| Vanilla | hide | 91.52 | 85.2 | +3.94 | 79 / 104 |
-| Vanilla | aware | 91.37 | 85.2 | +3.93 | 79 / 104 |
+| Vanilla | hide | 91.40 | 85.2 | +3.94 | 79 / 104 |
+| Vanilla | aware | 91.39 | 85.2 | +3.88 | 78 / 104 |
 
 ### 4.5 Scenarios with the class rulings in force (oracle K=6, 60 s, 20 fights): gap = oracle U - IAUS U
 
@@ -227,14 +227,14 @@ What the tables say:
 | mp-budget | evoker | 89.7 (+2.0) | 89.7 (+2.0) | 59.2 (+21.7) | 59.2 (+21.7) | 84.0 (+4.2) | 84.0 (+4.2) |
 | splash | evoker | 90.2 (+4.7) | 90.2 (+4.7) | 78.9 (+7.6) | 78.9 (+7.6) | 79.2 (+12.3) | 79.2 (+12.3) |
 | control-setup | warrior | 66.8 (+28.0) | 66.8 (+28.0) | 73.8 (+2.0) | 73.8 (+2.0) | 79.0 (+4.0) | 79.0 (+4.0) |
-| kite | thief | 1.6 (+0.4) | 35.8 (+2.8) | 6.0 (+7.8) | 5.6 (+7.1) | 10.4 (+18.5) | 46.3 (-9.1) |
+| kite | thief | 1.6 (+0.4) | 2.4 (-0.0) | 6.0 (+7.8) | 5.6 (+7.4) | 10.4 (+18.5) | 16.8 (+20.0) |
 | knight-boss | knight | 11.6 (+14.0) | 11.6 (+14.0) | 32.5 (+33.2) | 32.5 (+33.2) | 63.7 (+15.8) | 63.7 (+15.8) |
 | knight-boss-healer | knight | 20.9 (+27.6) | 20.9 (+27.6) | 8.7 (+4.4) | 8.7 (+4.4) | 55.7 (+17.2) | 55.7 (+17.2) |
 | hurt-knight | knight | 4.4 (-0.2) | 4.4 (-0.2) | 14.1 (+11.2) | 14.1 (+11.2) | 26.2 (+3.3) | 26.2 (+3.3) |
-| ambush | thief | 89.4 (+2.0) | 91.2 (+1.1) | 79.9 (+0.7) | 90.3 (+1.2) | 89.6 (+0.7) | 90.6 (+1.5) |
-| MEAN GAP (17, without ambush) | | +8.28 | +8.42 | +9.87 | +9.83 | +5.57 | +3.95 |
+| ambush | thief | 89.4 (+2.0) | 91.3 (+0.9) | 79.9 (+0.7) | 90.1 (-3.2) | 89.6 (+0.7) | 89.6 (+0.4) |
+| MEAN GAP (17, without ambush) | | +8.28 | +8.25 | +9.87 | +9.84 | +5.57 | +5.66 |
 
-Headline J of those runs (IAUS, 24 fights, the 17 scenarios + every class's natural bracket; stealth scenarios are never in J): LoreRim off: J 63.31; LoreRim aware: J 64.96; Tuxborn off: J 63.78; Tuxborn aware: J 64.02; Vanilla off: J 79.10; Vanilla aware: J 80.12
+Headline J of those runs (IAUS, 24 fights, the 17 scenarios + every class's natural bracket; stealth scenarios are never in J): LoreRim off: J 63.31; LoreRim aware: J 63.56; Tuxborn off: J 63.78; Tuxborn aware: J 63.98; Vanilla off: J 79.10; Vanilla aware: J 79.27
 
 ## 5. Stealth: road audit and the H-DETECT design (as far as the Thief needs it)
 
@@ -345,7 +345,7 @@ Model rows (each is MODEL unless a source is named):
 | Close and in view | Inside 12% of the sneak range and inside the cone he is seen whatever his skill | MODEL, conservative. With the settings alone a perked sneak would walk up to a foe's face in daylight |
 | Light | Interior 0.15 to 0.6, outside day 0.9 or night 0.2 | MODEL |
 | Sneak gait | x0.55 | MODEL |
-| A blow reveals him to the victim | The engine's ForceDetect on a hit | PROVEN that a hit is one of its 9 callers |
+| A blow reveals him to the victim | The engine's ForceDetect on a hit puts the victim in combat with the attacker: it keeps knowing him for `fCombatDetectionLostTimeLimit` (read from the list's game settings, vanilla 10 s if absent) after the hit, in every mode, and retargets him | PROVEN that a hit is one of its 9 callers. The 10 s window is MODEL (the engine's lost-target timer) |
 | Free stealth entry | 1 fight in 5, undetected until his first blow | W Thief |
 | Thief passive | Movement noise x0.70 | W Thief |
 | Hide (G3) | A run to a point behind an occluder that no foe has sight of, then the stance again. 12 s pacing | MODEL of H3 + the concealment query |
@@ -367,29 +367,40 @@ Read table C with the caveat of section 6: the detection model's shape is unprov
 relative to each other.
 
 - **Off (the game today):** the Thief is a bow follower. Persona 33, 6 of 10 rulings. Nothing of his card shows.
-- **Hide (G1 + G2):** the stance holds all fight, he is unseen 46 to 57% of the time, 55 to 78% of his fights open
-  with a sneak attack and 49 to 66% of his damage comes out of stealth. Persona 83, 9 of 10 rulings. The one that still
+- **Hide (G1 + G2):** the stance holds all fight, he is unseen 37 to 50% of the time, 55 to 78% of his fights open
+  with a sneak attack and 43 to 61% of his damage comes out of stealth. Persona 83, 9 of 10 rulings. The one that still
   fails is the ch.18 power cap, which is card C8's. His natural-bracket utility moves little (LoreRim +0.2, Tuxborn
-  +1.2, Vanilla +3.2): he plays his class, and the fights were mostly won or lost by the rest of the party.
+  +1.3, Vanilla +1.8): he plays his class, and the fights were mostly won or lost by the rest of the party.
 - **Aware (the detection input and the hide action on top):** the same as hide in the natural bracket. Once G2 hides
-  him by itself he is already where the input would send him. The input and the hide action earn their place where he
-  is seen by something he cannot trade with: the kite scenario goes from 1.6 to 35.8 U on LoreRim and from 10.4 to 46.3
-  on Vanilla (no change on Tuxborn), and the ambush from 80 to 90 on Tuxborn.
+  him by itself he is already where the input would send him. A foe he has struck now keeps him as its enemy for
+  `fCombatDetectionLostTimeLimit` and turns on him (the engine's ForceDetect, section 6), so a thief that has hit a
+  foe cannot vanish behind cover at once. That removed most of the earlier kite gains: kite went from 1.6 to 2.4 U on
+  LoreRim, from 10.4 to 16.8 on Vanilla, and 6.0 to 5.6 on Tuxborn (the first version of this document, where a
+  struck foe forgot him after 0.6 s, had 35.8 and 46.3). The ambush goes from 89.4 to 91.3 on LoreRim and from 79.9
+  to 90.1 on Tuxborn (Vanilla 89.6 both).
 
 So for Beta 1 the order by worth is G1, then G2. The detection input and G3 come after, and their worth should be
 measured again once the detection formula is the engine's own.
 
-## 8. Questions for marth (also in `scratchpad/pending-questions.md`; none blocks)
+## 8. Questions for marth (answered 11-11; also in `open-questions-for-marth.md`)
 
-- **Q87.** A sneaking follower gets the list's own sneak attack multipliers from the engine (5.2): up to x15 with a
-  dagger on Vanilla perks, x12 on LoreRim. Leave them to the list? Default: yes, they are the list's rules, and the
-  Thief's passive adds nothing to them.
-- **Q88.** Before any stealth number is quoted as a prediction, read CalculateDetection (AE 37774, 478 instructions)
-  into a formula and replace the lab's model. Do it as a read-only card beside G2? Default: yes.
-- **Q89 (for the T3 round, parked).** Card G4 gives T3+ sneak classes half the sneak bonus on a flanked foe. With a list
-  multiplier of x12 to x18 that is about x9 on every flanking hit. Cap it, or is that intended?
-- **Q90 (for the T4 round, parked).** The Listener's table root is Ranged (a bow kit) while his card and default rows
-  are a blade executioner. Which is right?
+- **Q87. [ANSWERED 11-11]** A sneaking follower gets the list's own sneak attack multipliers from the engine (5.2): up to
+  x15 with a dagger on Vanilla perks, x12 on LoreRim. Leave them to the list? marth: "If we confirm the lists number
+  affects followers yes, the related perks the follower can get through progression must also work". So the multipliers
+  stay the list's only once a field probe confirms they apply to a follower, and the sneak perks a follower gets through
+  progression must also work for him.
+- **Q88. [ANSWERED 11-11]** Before any stealth number is quoted as a prediction, read CalculateDetection (AE 37774, 478
+  instructions) into a formula and replace the lab's model. marth: "Yes read it, worst case we may need to add forced non
+  detection blocks into harbinger on npcs who would otherwise detect if the game doesnt properly calculate npc to npc
+  detection". So CalculateDetection is read as a read-only RE card beside G2. The fallback, if the engine does not
+  calculate NPC to NPC detection properly, is a Harbinger forced non-detection deny on the foes that would otherwise
+  detect him.
+- **Q89 (T3, parked). [ANSWERED 11-11]** Card G4 gives T3+ sneak classes half the sneak bonus on a flanked foe. With a
+  list multiplier of x12 to x18 that is about x9 on every flanking hit. marth: cap the G4 flanking bonus. The cap value
+  is the T3 round's to choose.
+- **Q90 (T4, parked). [ANSWERED 11-11]** The Listener's table root is Ranged (a bow kit) while his card and default rows
+  are a blade executioner. marth: "Personality says they enjoy the blood of melee, but they will bow when needed". So
+  the Listener's primary is the blade and the bow is the fallback.
 
 ## 9. PARKED: tier 3, tier 4 and the Dragonborn
 
@@ -405,6 +416,8 @@ here is in force, measured or reviewed.
 | Scenarios hit-and-hide, shadowcloak, flank, assassinate | `Scenarios.h`, `--scenario stealth` | Ran once on two lists as a smoke test, results not kept |
 | One early all-35 run on LoreRim | Not kept | It showed, as leads only: Necromancer in melee 23% of his time, Templar fleeing his line (the Retreat family reads the same disengage flag as the H3 reposition), the Listener shooting 77% |
 
+None of it takes effect by default: a parked playstyle's rulings, persona, forbid bits and stealth passives, and the four parked stealth scenarios, need `--parked` (section 10), so a plain `--classes real` run is Beta 1 plus the unchanged T3+ table behaviour of main.
+
 The T3 round starts from the cards again and may use these as a draft.
 
 ## 10. How to run
@@ -412,14 +425,15 @@ The T3 round starts from the cards again and may use these as a draft.
 ```
 tools/iaus_sim/run.sh --list ~/.cache/mfo-list-balance/LoreRim.sim.json --classes beta1 --class-kit \
     --stealth off|g1|hide|aware --class-oracle 10 --oracle-k 6 --oracle-h 60 --fights 10 --scroll-road --label ".."
-tools/iaus_sim/run.sh --list ... --scenario all,ambush --oracle --oracle-k 6 --oracle-h 60 --fights 20 --stealth aware
+tools/iaus_sim/run.sh --list ... --scenario all,ambush --oracle --class-rulings --oracle-k 6 --oracle-h 60 --fights 20 --stealth aware
 ```
 
 - `--classes beta1`: the 12 T1 and T2 classes. `--class-kit`: the class knows its own rows' spells.
 - `--class-oracle N`: N natural fights per class played by IAUS and by the oracle held to the class's rulings. It
   writes the per-class oracle gap (`scenarios` rows named `class:<slug>`, which the dashboard's Classes view shows as
   the class gap) and the oracle's own persona.
-- `--no-class-rulings`: the unconstrained oracle of `iaus-sim-v2.md`.
+- `--class-rulings`: hold the oracle of `--oracle` / `--headline-oracle` / the scenarios to the class rulings (implied by `--class-oracle`). Without it every oracle is main's unconstrained one of `iaus-sim-v2.md`, and the headline oracle J equals main's. `--no-class-rulings` forces that even under `--class-oracle`.
+- `--parked`: the T3 / T4 / Dragonborn playstyles take effect (rulings, persona, forbid bits, the Master Thief / Nightingale / Listener stealth passives) and the four parked stealth scenarios (hit-and-hide, shadowcloak, flank, assassinate) become runnable. Without it only the 12 Beta 1 classes have a playstyle, whatever `--classes` says.
 - `--scenario all` is the 17 scenarios of the headline. `--scenario stealth` adds the stealth lab's. A stealth
   scenario is never part of the headline J.
 - The dashboard needs no change: class rulings, persona, class gaps and the per-class oracle gap ride fields it
