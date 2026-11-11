@@ -8944,6 +8944,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   last lap; true on a change = the toggle edge), `Dismiss` `:191` (Forget + drop the note), `Paced` `:197` (log pacing).
 - Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
 - Offline combat SIMULATOR (card I2s, host-only, never in the DLL): `tools/iaus_sim/run.sh [--list json] [--seed N] [--fights N] [--baseline out] [--compare base]` drives the real `Generate` + `Decide` over seeded random fights (3 base classes x rapport I..V x 5 foe-strength brackets); `tools/list_balance/extract.py` reads an MO2 list's winning SPEL/MGEF/ALCH/GMST/RACE records into `~/.cache/mfo-list-balance/<list>.json` (test input only, never committed, native/ never reads it). Method + findings: `Docs/research/2026-11/iaus-sim.md`.
+- IAUS sim DASHBOARD (host-only, stdlib curses, never in the DLL): `tools/iaus_dash/dash.py [--runs DIR] [--report [--run ID] [--compare ID]] [--json-check FILE]` views the simulator's per-run JSON (schema v1) per class, with rulings, scenario gaps, gap ledger and trends; `tools/iaus_dash/test.sh` checks the non-interactive modes on synthetic fixtures. README there has the keys + schema.
   `native/iaus/` except Engine.*.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
