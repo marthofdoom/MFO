@@ -167,34 +167,50 @@ namespace {
         a = ns ? a / ns : 0; b /= std::max(1, nb); if (scenU) *scenU = a; if (natU) *natU = b; return ns ? 0.35 * a + 0.65 * b : b;
     }
 
+    std::string g_objScope;   // --classes a,b: the headline J and the --opt objective cover those classes only (empty = all; --opt-class wins)
     double Objective(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU = nullptr, double* natU = nullptr) {
         if (!g_optClass.empty()) return ObjectiveClass(D, classes, seed, fights, threads, scenU, natU);
-        const std::vector<Scenario> all = AllScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
-        const int ns = static_cast<int>(all.size()) * fights, nb = static_cast<int>(classes.size()) * std::max(1, fights / 2); std::atomic<int> next{ 0 };
+        const std::vector<Scenario> all0 = AllScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
+        std::vector<Scenario> all; std::vector<int> cls;   // the scenarios and the natural-bracket classes the objective covers
+        const auto inScope = [&](const std::string& n) { return g_objScope.empty() || ("," + g_objScope + ",").find("," + n + ",") != std::string::npos; };
+        if (g_objScope.empty()) { all = all0; for (std::size_t i = 0; i < classes.size(); ++i) cls.push_back(static_cast<int>(i)); }
+        else { Rng R0; R0.g.seed(1); for (const Scenario& sc : all0) { FightSpec fs = sc.make(D, classes, R0); if (inScope(fs.cls->name)) all.push_back(sc); }
+            for (std::size_t i = 0; i < classes.size(); ++i) if (inScope(classes[i].name)) cls.push_back(static_cast<int>(i)); }
+        const int ns = static_cast<int>(all.size()) * fights, nb = static_cast<int>(cls.size()) * std::max(1, fights / 2); std::atomic<int> next{ 0 };
         std::vector<double> u(static_cast<std::size_t>(ns + nb), 0.0);
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= ns + nb) return; Rng R;
             if (job < ns) { const int si = job / fights, f = job % fights; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
                 FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); }
-            else { const int k = job - ns, c = k / std::max(1, fights / 2), f = k % std::max(1, fights / 2); R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(f) * 32452843ULL);
+            else { const int k = job - ns, c = cls[static_cast<std::size_t>(k / std::max(1, fights / 2))], f = k % std::max(1, fights / 2); R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(f) * 32452843ULL);
                 Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], g_forceRank ? g_forceRank : 1 + f % 5, kBrackets[0], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         double a = 0, b = 0; for (int i = 0; i < ns; ++i) a += u[static_cast<std::size_t>(i)]; for (int i = ns; i < ns + nb; ++i) b += u[static_cast<std::size_t>(i)];
         a /= std::max(1, ns); b /= std::max(1, nb); if (scenU) *scenU = a; if (natU) *natU = b; return 0.5 * (a + b);
     }
 
+    std::vector<std::uint64_t> g_seeds;   // --seeds a,b,c: the objective is the mean over these seeds (empty = the single --seed)
+    double ObjectiveMulti(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU = nullptr, double* natU = nullptr) {
+        if (g_seeds.empty()) return Objective(D, classes, seed, fights, threads, scenU, natU);
+        double j = 0, a = 0, b = 0; for (std::uint64_t sd : g_seeds) { double x = 0, y = 0; j += Objective(D, classes, sd, fights, threads, &x, &y); a += x; b += y; }
+        const double n = static_cast<double>(g_seeds.size()); if (scenU) *scenU = a / n; if (natU) *natU = b / n; return j / n;
+    }
+    std::string ObjectiveCovers() { return !g_optClass.empty() ? g_optClass : g_objScope.empty() ? std::string("all classes") : g_objScope; }
+
     int Optimise(const Data& D, const std::vector<SimClass>& classes, const std::string& params, std::uint64_t seed, int fights, int threads, int passes) {
         std::vector<std::string> ps; { std::size_t p = 0; while (p <= params.size()) { const auto q = params.find(',', p); ps.push_back(params.substr(p, q == std::string::npos ? std::string::npos : q - p)); if (q == std::string::npos) break; p = q + 1; } }
         for (const std::string& p : ps) if (!SetParam(p, GetParam(p))) { std::fprintf(stderr, "unknown parameter '%s' (see --list-params)\n", p.c_str()); return 2; }
-        double sU = 0, nU = 0; double best = Objective(D, classes, seed, fights, threads, &sU, &nU);
-        std::printf("OPTIMISE list=%s  %zu parameter(s), %d pass(es), %d fights per scenario\nstart: J=%.3f (scenarios %.2f, natural %.2f)\n", D.name.c_str(), ps.size(), passes, fights, best, sU, nU);
+        double sU = 0, nU = 0; double best = ObjectiveMulti(D, classes, seed, fights, threads, &sU, &nU);
+        std::printf("OPTIMISE list=%s  %zu parameter(s), %d pass(es), %d fights per scenario\n", D.name.c_str(), ps.size(), passes, fights);
+        if (!g_optClass.empty() || !g_objScope.empty() || !g_seeds.empty()) std::printf("objective covers: %s  seeds=%zu\n", ObjectiveCovers().c_str(), g_seeds.empty() ? size_t(1) : g_seeds.size());
+        std::printf("start: J=%.3f (scenarios %.2f, natural %.2f)\n", best, sU, nU);
         for (int pass = 0; pass < passes; ++pass) for (const std::string& p : ps) {
             const double v0 = GetParam(p); double bv = v0;
             std::vector<double> tries = { v0 * 0.5, v0 * 0.75, v0 * 1.33, v0 * 2.0 }; if (std::fabs(v0) < 0.3) { tries.push_back(v0 + 0.15); tries.push_back(std::max(0.0, v0 - 0.15)); }
             if (p == "pk.leash") tries = { 0.0, 600.0, 1000.0, 1500.0, 2500.0 };
-            for (double v : tries) { SetParam(p, v); const double j = Objective(D, classes, seed, fights, threads); if (j > best + 0.05) { best = j; bv = v; } }
+            for (double v : tries) { SetParam(p, v); const double j = ObjectiveMulti(D, classes, seed, fights, threads); if (j > best + 0.05) { best = j; bv = v; } }
             SetParam(p, bv); std::printf("  pass %d  %-14s %8.3f -> %8.3f   J=%.3f\n", pass + 1, p.c_str(), v0, bv, best); std::fflush(stdout);
         }
-        Objective(D, classes, seed, fights, threads, &sU, &nU);
+        ObjectiveMulti(D, classes, seed, fights, threads, &sU, &nU);
         std::printf("end:   J=%.3f (scenarios %.2f, natural %.2f)\n--set ", best, sU, nU);
         for (std::size_t i = 0; i < ps.size(); ++i) std::printf("%s%s=%.4g", i ? "," : "", ps[i].c_str(), GetParam(ps[i]));
         std::printf("\n"); return 0;
@@ -300,7 +316,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; bool noClassRulings = false; int optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -339,6 +355,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--opt") && i + 1 < argc) opt = argv[++i];
         else if (!std::strcmp(argv[i], "--opt-passes") && i + 1 < argc) optPasses = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--opt-class") && i + 1 < argc) g_optClass = argv[++i];
+        else if (!std::strcmp(argv[i], "--opt-fights") && i + 1 < argc) optFights = std::atoi(argv[++i]);   // fights per scenario for each --opt evaluation (default: --fights)
+        else if (!std::strcmp(argv[i], "--seeds") && i + 1 < argc) { g_seeds.clear(); const std::string v = argv[++i]; std::size_t p = 0; while (p <= v.size()) { const auto q = v.find(',', p); const std::string t = v.substr(p, q == std::string::npos ? std::string::npos : q - p); if (!t.empty()) g_seeds.push_back(std::strtoull(t.c_str(), nullptr, 10)); if (q == std::string::npos) break; p = q + 1; } }
         else if (!std::strcmp(argv[i], "--rows") && i + 1 < argc) rowsText = argv[++i];          // <class>=<cond>|<act>|<param>|<role>|<cooldown>;...
         else if (!std::strcmp(argv[i], "--print-rows") && i + 1 < argc) printRows = argv[++i];
         else if (!std::strcmp(argv[i], "--opt-rows")) optRows = true;
@@ -353,7 +371,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) oc.K = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) oc.H = std::atof(argv[++i]);
-        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text]\n"); return 2; } }
+        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
     if (listParams) { ListParams(); return 0; }
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
@@ -369,14 +387,20 @@ int main(int argc, char** argv) {
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (optRows) return OptimiseRows(D, allClasses, seed, fights, threads, rowCap, rowEvals);
     if (optPrefix) return OptimisePrefix(D, allClasses, seed, fights, threads);
-    if (!opt.empty()) return Optimise(D, allClasses, opt, seed, fights, threads, optPasses);
+    if (g_optClass.empty() && !only.empty()) g_objScope = only;   // --classes scopes the headline J and the objective (--opt-class wins)
+    if (!opt.empty()) return Optimise(D, allClasses, opt, seed, optFights > 0 ? optFights : fights, threads, optPasses);
+    if (!g_seeds.empty()) {   // J per seed, mean and standard error; no full tables
+        std::vector<double> js; for (std::uint64_t sd : g_seeds) { double a = 0, b = 0; js.push_back(Objective(D, allClasses, sd, 24, threads, &a, &b)); std::printf("SEED %llu  J=%.2f (scenarios %.2f, natural %.2f)\n", (unsigned long long)sd, js.back(), a, b); }
+        double m = 0; for (double x : js) m += x; m /= double(js.size()); double v = 0; for (double x : js) v += (x - m) * (x - m);
+        const double se = js.size() > 1 ? std::sqrt(v / double(js.size() - 1) / double(js.size())) : 0.0;
+        std::printf("HEADLINE  J mean=%.2f  se=%.2f  n=%zu seeds  covers=%s  mode=%s\n", m, se, js.size(), ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus"); return 0; }
     Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus";
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (!noJson && opt.empty() && headlineOracle > 0) {   // the oracle on the first fights of the same seeds
         g_oracleMode = true; g_oc = oc; R.oracleJ = Objective(D, allClasses, seed, headlineOracle, threads, &R.oracleJScen, &R.oracleJNat); g_oracleMode = false; R.hasOracleJ = true; R.oracleFights = headlineOracle;
         R.oracleOver = std::string("rollout oracle (K=") + std::to_string(oc.K) + ", " + std::to_string(int(oc.H)) + " s, " + (oc.ext ? "extended" : "catalogue") + " actions) planning over " + (g_tableMode ? "IAUS (table mode is not planned over)" : estimates ? "IAUS with estimates" : "IAUS as on main") + (sets.empty() ? "" : " + --set");
         std::printf("HEADLINE  ORACLE J=%.2f (scenarios %.2f, natural %.2f)  %d fights per scenario, %d per class natural  [%s]\n", R.oracleJ, R.oracleJScen, R.oracleJNat, headlineOracle, std::max(1, headlineOracle / 2), R.oracleOver.c_str()); }
-    if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, 24, threads, &R.jScen, &R.jNat); R.hasJ = true; std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  mode=%s\n", R.jVal, R.jScen, R.jNat, R.mode.c_str()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
+    if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, 24, threads, &R.jScen, &R.jNat); R.hasJ = true; std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  mode=%s%s\n", R.jVal, R.jScen, R.jNat, R.mode.c_str(), (g_objScope.empty() && g_optClass.empty()) ? "" : ("  covers=" + ObjectiveCovers()).c_str()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
     if (!scenario.empty()) {
         std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
         if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
