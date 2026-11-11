@@ -8818,6 +8818,45 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 
 **Dev class equip (card C5c, `feat/classes-c5c-dev-equip`).** `Runner.cpp` `DevClassEquipTick` (called from `Tick`, reset in `ClearAll`; worker-only) reads `[Debug] sDevClassEquip` (`Config.h` `g_devClassEquip` + mutex, `Config.cpp` key branch before the TOWN ERRANDS chain, both `#ifdef MFO_DEV_SELFTEST`) and applies each `<follower>:<slug>:<level>[:mastered]` entry once per load through `Classes::SetUnlocked / ActivateClass / ApplyLevel`. Writes MCLS (dev saves only). **What breaks:** renaming those three writers or `FindBySlug` / `LevelCap`; moving the key handler into the release path; the entry separator is a comma because `Config.cpp` ReadFile strips an inline comment at the first `;` or `#`. See `Docs/SELFTEST.md` section 10.
 
+## 11. IAUS combat scorer — `native/iaus/` (card I2, `feat/iaus-i2-core-opus`, 2026-11-10; a LIBRARY, nobody calls it yet)
+
+Utility scoring in place of the combat table (design `Docs/research/2026-11/iaus-design.md` sections 3-6; idea credit LandingCrew).
+I2 is the scorer only. The ChoiceSource seam is I1, candidate generation / the SpellBook mirror is I4, the FLWR toggle bits are I5,
+the scan integration is I6, the board is I7, the class profiles are I8. **NOT serialized** (runtime only, design 7).
+
+- `iaus/Core.h` — the PURE public API (standard headers only, no RE:: types, no clock, no globals): `Family`/`Cons`/`RoleTag`/`PostureKind`
+  (append-only: log lines and the Cooldowns id carry them), `Tuning` `:148`, `Profile` `:185` (the I8 weight-input shape), `Facts` `:201`,
+  `Candidate` `:273`, `CooldownId` `:294`, `FactsFinite` `:299`, `Mind` `:306`, `kRankBase` `:327` (Choice.rank for I1), `Decide` `:389`,
+  `DecidePosture` `:395`, `OnFired` `:400`, `ShouldLog` `:424`, `Readout` `:428`.
+- `iaus/Catalogue.cpp` — names, roles (Shape/Gate/Boost), `FactsFinite` `:99`, `DefaultTuning()` `:128` (EVERY curve parameter and weight,
+  each with its reason; I9 tunes here, as data), the per-family consideration sets `SetFor` `:372`, the inputs `Input` `:406`
+  (explicit applicability `In{on,x}`, never a NaN sentinel).
+- `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
+  `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
+  (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.
+- `iaus/Engine.h/.cpp` — the THIN adapter, the only file that touches the engine side: `MakeTick` `:34` (window = `g_suppressWindow` x
+  (0.88 + 0.24 Temperament), the #26 length), `FillCooldowns` `:47` (the SHARED `Cooldowns` store, `Kind::IausAction`), `MindFor` `:62`,
+  `Decide` `:68` (timed; WARN over `budgetMs`, once-per-session WARN over the candidate cap and on a NaN/inf fact), `Log` `:116`,
+  `Forget` `:162`, `Clear` `:173`, monotonic `g_epochFloor` `:22`.
+- Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
+  `native/iaus/` except Engine.*.
+
+**Threading.** Minds (and every Engine call except Publish/ReadReadout) are the g_followers worker domain (#4), no lock. `Forget` /
+`EndDecision` are worker-only: the board toggle (render) and dismissal (main / Papyrus) must MARSHAL to the worker (MFO-B639).
+The readout has its own leaf mutex.
+
+**What breaks if you change this.**
+- **I6 MUST call `Iaus::Engine::Clear()` in `ResetAllState` after `StopPump()`** (`Serialization.cpp` order; the existing
+  `Cooldowns::ClearAll()` already clears the `Kind::IausAction` entries). Without it a Mind survives a load.
+- The rank seam: `RankOf(epoch)` = `kRankBase - epoch`, lower outranks. The epoch must stay MONOTONIC (`g_epochFloor`): a restarted
+  epoch would let a surviving cast lock / heal claim outrank a new decision.
+- Never prune the running candidate (review round 1 F1: the verdict became candidate-order dependent). Heals and heal scrolls are
+  never pruned (Retreat / the health drink read the exact `bestHeal`).
+- A NaN/inf fact VETOES its candidate (`FactsFinite`, counted as `BAD-FACTS` in the `[iaus]` line): never turn it back into a drop or a pass.
+- Stickiness = momentum always + the preempt margin INSIDE the commitment window only; outside it a normal 5.1 roll (review round 1 F3).
+- `Cons`/`Family` enum order: the `Name(Cons)` table has a `static_assert` against it; I9 log parsing reads the names.
+- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B639 .. MFO-B647.
+
 ## Appendix — SKSE registration & sink inventory (the wiring choke points)
 
 | Registration | Site | Notes |

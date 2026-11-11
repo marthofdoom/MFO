@@ -27,6 +27,7 @@ namespace MFO::Cooldowns {
     // What a key's id means. APPEND ONLY (IAUS adds its own kinds, e.g. an (action, form) pair packed in id).
     enum class Kind : std::uint8_t {
         Rule = 0,   // id = the gambit row's runtime uid (State.h Gambit::uid, NextRuleUID; never 0)
+        IausAction = 1,   // id = Iaus::CooldownId(key): (family, posture, form) of an IAUS candidate (card I2)
     };
 
     // Record that (a_actor, a_kind, a_id) fired at a_now.
