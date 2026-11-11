@@ -41,7 +41,7 @@ namespace {
             S(overkill); S(iausDmg); S(overheal); S(healTotal); S(healCasts); S(doubleHeals);
             S(foeCasts); S(foeCastsInterrupted); S(interruptsByFollowers);
             S(elemCasts); S(resistedCasts); S(weakCasts); S(weakOpp); S(immuneCasts); S(splashAllyHits); S(areaCasts);
-            S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks);
+            S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks); S(powerWhiffs);
             S(playerPressureSec); S(peelSum); S(peelN); S(peelMiss); S(tgtSwitches); S(tauntsOutmatched); S(tauntThenDown); S(tauntSaves);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
@@ -85,7 +85,7 @@ namespace {
         m["U"] = a.uSum / n; m["pMinHp%"] = 100.0 * a.pMinSum / n; m["mpAtLate%"] = a.mpLateN ? 100.0 * a.mpLateSum / double(a.mpLateN) : -1; m["splashHits/f"] = double(s.splashAllyHits) / n;
         m["ctlFocus%"] = pct(double(s.hitsOnControlled), double(s.hitsWhileCtl)); m["retreat%"] = 100.0 * s.retreatSec / secs;
         m["wwDecl/min"] = double(s.wwDeclined) / mins; m["ext/f"] = double(s.extActions) / n; m["scroll/f"] = double(s.scrollsUsed) / n; m["move%"] = 100.0 * s.moveOrderSec / secs;
-        m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks));
+        m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks));
         return m;
     }
 
@@ -305,6 +305,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-engine-casts")) engineCasts = false;
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
         else if (!std::strcmp(argv[i], "--no-estimates")) estimates = false;
+        else if (!std::strcmp(argv[i], "--reach") && i + 1 < argc) { const char* v = argv[++i]; g_learnReach = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "cold") ? 1 : 2; }   // ruling Q68: off | cold | warm (default)
         else if (!std::strcmp(argv[i], "--scroll-road")) scrollRoad = true;
         else if (!std::strcmp(argv[i], "--mode") && i + 1 < argc) g_tableMode = !std::strcmp(argv[++i], "table");
         else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); }

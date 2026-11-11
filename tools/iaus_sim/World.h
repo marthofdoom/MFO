@@ -13,6 +13,8 @@
 #include "iaus/Generate.h"
 #include "iaus_sim/Load.h"
 
+#include "iaus/Reach.h"
+
 namespace Sim {
 
     // ── timing (seconds). MODEL values unless a source is named; every row is in the doc's model table ──
@@ -40,6 +42,10 @@ namespace Sim {
         static constexpr float aimMiss = 0.12f;        // an aimed projectile at a moving target
     };
 
+    // Ruling Q68: the swing reach is learned per weapon from hits and misses (native/iaus/Reach.h). 0 = off (the constant
+    // fMeleeReach 200, as on main), 1 = cold (every fight starts at 200), 2 = warm (the session's earlier swings are replayed
+    // into the learner first: 20 outcomes around the weapon's true reach with 4% noise). The game's learner lives for the session.
+    inline int g_learnReach = 2;
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
@@ -55,7 +61,7 @@ namespace Sim {
         // activity
         Act   act = Act::None;
         double actEnd = 0, hitAt = -1;  // free again at actEnd; the pending impact / release at hitAt (< 0 none)
-        std::uint32_t actTarget = 0; int actSpell = -1; bool actIaus = false; float actCost = 0;
+        std::uint32_t actTarget = 0; int actSpell = -1; bool actIaus = false; float actCost = 0; float swingDist = 0;
         double think = 0, retargetAt = 0;
         double blockUntil = 0, staggerUntil = 0, ctrlUntil = 0, tauntUntil = 0, fleeUntil = 0, downUntil = 0, frenzyUntil = 0, retreatUntil = 0;
         std::uint32_t tauntBy = 0, lastAttacker = 0;
@@ -97,7 +103,7 @@ namespace Sim {
         long   foeCasts = 0, foeCastsInterrupted = 0, interruptsByFollowers = 0;
         long   elemCasts = 0, resistedCasts = 0, weakCasts = 0, weakOpp = 0, immuneCasts = 0;
         long   splashAllyHits = 0, areaCasts = 0;
-        long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0;
+        long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0;
         double playerPressureSec = 0, peelSum = 0; long peelN = 0, peelMiss = 0;
         long   tgtSwitches = 0; double engagedSec = 0;
         long   tauntsOutmatched = 0, tauntThenDown = 0, tauntSaves = 0;
@@ -131,6 +137,7 @@ namespace Sim {
         std::vector<std::vector<std::pair<std::uint32_t, double>>> active;   // per entry: (recipient, until)
         std::vector<double> summonUntil;
         Mind  mind;
+        MFO::Iaus::Reach::Learner reach[2];   // ruling Q68: the learned swing reach of his melee weapon (0 plain swing, 1 power attack)
         // THE CLASS PACKAGE (card C8): the combat style the DLL swaps on per stance (0 melee, 1 ranged, 2 cast), the ch.18
         // power-attack share (a scale on the engine AI's own power attacks) and the ch.23 pursuit leash (units from the player, 0 = none).
         Style pkg[3]; float powerShare = 1.0f, leash = 0.0f;
@@ -386,7 +393,7 @@ namespace Sim {
             float dur = base / std::max(0.3f, w.Has() ? w.speed : 1.0f), hf = TM::hitFrac;
             if (power) { dur *= TM::powerMult; hf = TM::powerHitFrac; x.c.sp = std::max(0.0f, x.c.sp - PowerStamina(D->rules, w)); x.regenAt[2] = now + D->rules.delaySp + dur; if (x.ctl == 0) ++t.powerAttacks; }
             if (kind == Act::Bash) { dur = TM::bash; hf = TM::bashHitFrac; x.c.sp = std::max(0.0f, x.c.sp - 20.0f); }
-            x.act = kind; x.actTarget = tg.c.id; x.hitAt = now + dur * hf; x.actEnd = now + dur; x.actIaus = fromIaus;
+            x.act = kind; x.actTarget = tg.c.id; x.hitAt = now + dur * hf; x.actEnd = now + dur; x.actIaus = fromIaus; x.swingDist = Dist(x, tg);
             // the defender may read the swing and block it (MODEL: 0.20 x defensive mult, + 0.25 with a shield)
             if (kind != Act::Bash && Up(tg) && !Busy(tg) && tg.spec->hasStyle && (tg.spec->shield || tg.spec->melee.Has()) && !tg.rangedMode && !tg.casterMode && tg.c.targetId == x.c.id) {
                 const float p = std::clamp(0.20f * StyleOf(tg).def + (tg.spec->shield ? 0.25f : 0.0f), 0.0f, 0.75f);
@@ -398,7 +405,10 @@ namespace Sim {
             const Act kind = x.act; x.hitAt = -1;
             Body* tg = Find(x.actTarget);
             if (kind == Act::Swing || kind == Act::Power || kind == Act::Bash) {
-                if (!tg || !Up(*tg) || Dist(x, *tg) > Reach(x) * 1.2f || (tg->c.outOfMeleeReach)) return;   // whiff
+                const bool whiff = tg && Up(*tg) && (Dist(x, *tg) > Reach(x) * 1.2f || tg->c.outOfMeleeReach);
+                if (tg && Up(*tg) && x.ctl >= 0 && kind != Act::Bash && g_learnReach) ctl[static_cast<std::size_t>(x.ctl)].reach[kind == Act::Power ? 1 : 0].Observe(x.swingDist, !whiff);   // Q68: one outcome
+                if (whiff && x.ctl == 0 && kind == Act::Power && x.actIaus) ++t.powerWhiffs;
+                if (!tg || !Up(*tg) || whiff) return;   // whiff
                 if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
                 Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power), kind == Act::Power, false, x.actIaus);
             } else if (kind == Act::Shoot) {

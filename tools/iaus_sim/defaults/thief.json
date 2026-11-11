@@ -97,5 +97,88 @@
  },
  "mean_gain": 0.57,
  "verdict": "no robust gain: keep today's rows",
- "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
+ "prefix": {
+  "ruling": "Q74",
+  "start_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_fleeing|act.attack|0|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+  "ordered_text": "cond.foe_any|act.equip_ranged|0|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_fleeing|act.attack|0|0|0",
+  "ordered": [
+   {
+    "condition": "cond.foe_any",
+    "gambit": "act.equip_ranged",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_within_range",
+    "gambit": "act.equip_melee",
+    "threshold": 150.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_lowest_hp",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_fleeing",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   }
+  ],
+  "evidence": {
+   "LoreRim": {
+    "prefix3": {
+     "start": 22.61,
+     "ordered": 22.62,
+     "delta": 0.01
+    },
+    "prefix4": {
+     "start": 22.41,
+     "ordered": 22.62,
+     "delta": 0.21
+    }
+   },
+   "Tuxborn": {
+    "prefix3": {
+     "start": 31.22,
+     "ordered": 30.92,
+     "delta": -0.3
+    },
+    "prefix4": {
+     "start": 30.68,
+     "ordered": 30.92,
+     "delta": 0.24
+    }
+   },
+   "Vanilla": {
+    "prefix3": {
+     "start": 43.3,
+     "ordered": 42.33,
+     "delta": -0.97
+    },
+    "prefix4": {
+     "start": 42.38,
+     "ordered": 42.33,
+     "delta": -0.05
+    }
+   }
+  },
+  "mean_gain": -0.14,
+  "verdict": "no robust gain: keep the starting order",
+  "slots_by_rank": [
+   3,
+   5,
+   7,
+   9,
+   12
+  ],
+  "method": "all permutations on LoreRim, mean J over prefixes 3..4, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+ }
 }

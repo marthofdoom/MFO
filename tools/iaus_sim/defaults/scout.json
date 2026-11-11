@@ -97,5 +97,110 @@
  },
  "mean_gain": 1.2,
  "verdict": "keep",
- "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
+ "prefix": {
+  "ruling": "Q74",
+  "start_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.player_hp_pct_below|act.cast_player|0.7|7|0;cond.foe_is_caster|act.attack|0|0|0;cond.foe_any|act.equip_ranged|0|0|0;cond.foe_highest_hp|act.cast_target|0|1|0",
+  "ordered_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.foe_is_caster|act.attack|0|0|0;cond.foe_highest_hp|act.cast_target|0|1|0;cond.player_hp_pct_below|act.cast_player|0.7|7|0;cond.foe_any|act.equip_ranged|0|0|0",
+  "ordered": [
+   {
+    "condition": "cond.ally_hp_pct_below",
+    "gambit": "act.cast_target",
+    "threshold": 0.7,
+    "spell_role": "Heal",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_is_caster",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_highest_hp",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "Attack",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.player_hp_pct_below",
+    "gambit": "act.cast_player",
+    "threshold": 0.7,
+    "spell_role": "Heal",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_any",
+    "gambit": "act.equip_ranged",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   }
+  ],
+  "evidence": {
+   "LoreRim": {
+    "prefix3": {
+     "start": 32.12,
+     "ordered": 33.62,
+     "delta": 1.5
+    },
+    "prefix4": {
+     "start": 32.12,
+     "ordered": 33.62,
+     "delta": 1.5
+    },
+    "prefix5": {
+     "start": 33.62,
+     "ordered": 33.62,
+     "delta": 0.0
+    }
+   },
+   "Tuxborn": {
+    "prefix3": {
+     "start": 40.89,
+     "ordered": 41.35,
+     "delta": 0.46
+    },
+    "prefix4": {
+     "start": 40.89,
+     "ordered": 41.35,
+     "delta": 0.46
+    },
+    "prefix5": {
+     "start": 41.35,
+     "ordered": 41.35,
+     "delta": 0.0
+    }
+   },
+   "Vanilla": {
+    "prefix3": {
+     "start": 59.48,
+     "ordered": 61.59,
+     "delta": 2.11
+    },
+    "prefix4": {
+     "start": 59.48,
+     "ordered": 61.59,
+     "delta": 2.11
+    },
+    "prefix5": {
+     "start": 61.59,
+     "ordered": 61.59,
+     "delta": 0.0
+    }
+   }
+  },
+  "mean_gain": 0.9,
+  "verdict": "keep",
+  "slots_by_rank": [
+   3,
+   5,
+   7,
+   9,
+   12
+  ],
+  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+ }
 }

@@ -90,5 +90,110 @@
  },
  "mean_gain": 2.35,
  "verdict": "keep",
- "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
+ "prefix": {
+  "ruling": "Q74",
+  "start_text": "cond.foe_is_caster|act.cast_target|0|1|0;cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0",
+  "ordered_text": "cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_is_caster|act.cast_target|0|1|0;cond.foe_count_at_least|act.cast_target|3|13|0;cond.always|act.wait|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0",
+  "ordered": [
+   {
+    "condition": "cond.self_hp_pct_below",
+    "gambit": "act.drink_health_potion",
+    "threshold": 0.3,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_is_caster",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "Attack",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_count_at_least",
+    "gambit": "act.cast_target",
+    "threshold": 3.0,
+    "spell_role": "Fear",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.always",
+    "gambit": "act.wait",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_lowest_hp",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   }
+  ],
+  "evidence": {
+   "LoreRim": {
+    "prefix3": {
+     "start": 40.39,
+     "ordered": 40.64,
+     "delta": 0.25
+    },
+    "prefix4": {
+     "start": 39.19,
+     "ordered": 40.64,
+     "delta": 1.44
+    },
+    "prefix5": {
+     "start": 39.19,
+     "ordered": 39.19,
+     "delta": 0.0
+    }
+   },
+   "Tuxborn": {
+    "prefix3": {
+     "start": 41.33,
+     "ordered": 41.33,
+     "delta": 0.0
+    },
+    "prefix4": {
+     "start": 40.13,
+     "ordered": 41.33,
+     "delta": 1.2
+    },
+    "prefix5": {
+     "start": 40.13,
+     "ordered": 40.13,
+     "delta": -0.0
+    }
+   },
+   "Vanilla": {
+    "prefix3": {
+     "start": 70.87,
+     "ordered": 70.92,
+     "delta": 0.04
+    },
+    "prefix4": {
+     "start": 71.31,
+     "ordered": 70.92,
+     "delta": -0.39
+    },
+    "prefix5": {
+     "start": 71.31,
+     "ordered": 71.3,
+     "delta": -0.01
+    }
+   }
+  },
+  "mean_gain": 0.28,
+  "verdict": "no robust gain: keep the starting order",
+  "slots_by_rank": [
+   3,
+   5,
+   7,
+   9,
+   12
+  ],
+  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+ }
 }
