@@ -47,16 +47,29 @@ namespace MFO::Iaus::Engine {
         return t;
     }
 
+    namespace {
+        static_assert(Cooldowns::kFollowerPowerAttack == 1 && Cooldowns::kFollowerTaunt == 2, "iaus/Core.h SharedCooldownId mirrors these");
+
+        // The Cooldowns identity of a candidate: power attack and taunt are ONE cooldown per follower (Kind::Follower,
+        // shared with the gambit rows, marth Q69 / Q73); everything else keeps its (family, posture, form) IausAction id.
+        struct CdId { Cooldowns::Kind kind; std::uint64_t id; };
+        CdId CdOf(const Candidate& a_c) {
+            if (const std::uint64_t shared = SharedCooldownId(a_c.family); shared != 0)
+                return { Cooldowns::Kind::Follower, shared };
+            return { Cooldowns::Kind::IausAction, CooldownId(KeyOf(a_c)) };
+        }
+    }
+
     void FillCooldowns(RE::FormID a_actor, std::span<Candidate> a_cands, const Tick& a_tick, const Tuning& a_t) {
         for (auto& c : a_cands) {
-            const std::uint64_t id = CooldownId(KeyOf(c));
+            const CdId cd = CdOf(c);
             c.f.hardCooldownLeft = c.f.hardCooldownSec > 0.0f
-                ? Cooldowns::Remaining(a_actor, Cooldowns::Kind::IausAction, id, c.f.hardCooldownSec, a_tick.tp)
+                ? Cooldowns::Remaining(a_actor, cd.kind, cd.id, c.f.hardCooldownSec, a_tick.tp)
                 : 0.0f;
             // Seconds since it fired, read back from the same store: Remaining over the soft window T is T - since
             // while it is recent, 0 once T has passed (or it never fired) -- both mean "fully recovered".
             const float T = a_t.softCooldownSec;
-            const float left = T > 0.0f ? Cooldowns::Remaining(a_actor, Cooldowns::Kind::IausAction, id, T, a_tick.tp)
+            const float left = T > 0.0f ? Cooldowns::Remaining(a_actor, cd.kind, cd.id, T, a_tick.tp)
                                         : 0.0f;
             c.f.sinceFired = left > 0.0f ? T - left : kInf;
         }
@@ -110,12 +123,12 @@ namespace MFO::Iaus::Engine {
                    bool a_startCooldown) {
         OnFired(MindFor(a_actor), a_c, a_step, a_tick.in.now);
         if (a_startCooldown)
-            Cooldowns::NoteFired(a_actor, Cooldowns::Kind::IausAction, CooldownId(KeyOf(a_c)), a_tick.tp);
+            Cooldowns::NoteFired(a_actor, CdOf(a_c).kind, CdOf(a_c).id, a_tick.tp);
     }
 
     void NotePostureFired(RE::FormID a_actor, const Candidate& a_c, const Tick& a_tick) {
         OnPostureFired(MindFor(a_actor), a_c);
-        Cooldowns::NoteFired(a_actor, Cooldowns::Kind::IausAction, CooldownId(KeyOf(a_c)), a_tick.tp);
+        Cooldowns::NoteFired(a_actor, CdOf(a_c).kind, CdOf(a_c).id, a_tick.tp);
     }
 
     void Log(RE::FormID a_actor, std::string_view a_name, const Decision& a_d, std::span<const Candidate> a_cands,

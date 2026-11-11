@@ -175,12 +175,12 @@ namespace MFO::Iaus {
         float noHealRetreat = 0.30f;           // Retreat vetoed while a heal candidate scores above this
         float noHealDrink = 0.50f;             // Health drink vetoed while a heal candidate scores above this
         // Card I6: the hard cooldown of a ROW-GATED action whose class row declares none (ClassGate::*CooldownSec
-        // == 0). The power-attack rows all declare 10 s; no taunt row declares one, and with the class tree OFF
+        // == 0). The power-attack rows all declare 10 s; no taunt row declares one (the floor is the 30 s of Q69), and with the class tree OFF
         // (marth Q63: nothing is class-gated) there is no row at all. Without a floor the sim's Knight taunts
         // 12-20 times a minute. One taunt ATTEMPT is one idle play plus a roll, and a hit already blocks the next
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
-        float rowlessTauntCooldownSec = 10.0f;
+        float rowlessTauntCooldownSec = 30.0f;   // marth Q69: a 30 s taunt cooldown (= Taunt::kTauntCooldownSec)
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -299,6 +299,12 @@ namespace MFO::Iaus {
     [[nodiscard]] Key KeyOf(const Candidate& a_c);
     // Cooldowns id (Engine): (family, posture, form), NOT the target -- a spell cools down whoever it hit.
     [[nodiscard]] std::uint64_t CooldownId(const Key& a_k);
+    // marth Q69 (taunt) / Q73 (power attack): these two families keep ONE cooldown per follower, shared with the gambit
+    // rows, not one per (family, posture, form). Returns the Cooldowns::Kind::Follower slot (Cooldowns.h
+    // kFollowerPowerAttack = 1, kFollowerTaunt = 2), or 0 = the family keeps its own CooldownId. Engine.cpp maps it.
+    [[nodiscard]] inline std::uint64_t SharedCooldownId(Family a_f) {
+        return a_f == Family::PowerAttack ? 1u : a_f == Family::Taunt ? 2u : 0u;
+    }
 
     // Every float fact is finite (sinceFired may be +inf, "not recently"). A candidate that fails is VETOED by the
     // scorer and counted in Decision::badFacts: a NaN would otherwise read as a passing or dropped term (review

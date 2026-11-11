@@ -2826,7 +2826,7 @@ rule in the header. Called only from the Scheduler hook above.
 ### Taunt.cpp / Taunt.h / apmf/TauntClaims.cpp — `cond.foe_attacking_ally` + `act.taunt` (taunt S2, ClickUp 86e3g6duw, NOT serialized)
 Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.20 "Pinning a hostile NPC" Table 23a + Example 20a.
 - **`Taunt.cpp`** (decisions; worker + one main-thread step): `IsPartyMember:374` (player / teammate / summon commanded by
-  either; also the evaluator's selector test), `TauntedBy:384` / `Busy:390` (IAUS card I6: any-thread reads of the module's OWN
+  either; also the evaluator's selector test), `TauntedBy:384` / `Busy:390` / `IsPinned` (taunt-rules Q69: pinned by ANY taunter; feeds `Combatant::taunted`; `Fire` also holds a 30 s per-taunter cooldown in `Cooldowns` `Kind::Follower`, shared with the IAUS taunt candidate, and the power-attack cooldown is one per follower via `CooldownKey` in `scheduler/CombatScan.cpp` + `CdOf` in `iaus/Engine.cpp`; Docs/research/2026-11/taunt-rules.md) (IAUS card I6: any-thread reads of the module's OWN
   tables under `g_mx`; is this foe pinned onto this taunter by a live taunt, and would `act.taunt` refuse him now. They feed
   `Iaus::Combatant::taunted` and `Snapshot::tauntBusy` in `iaus/Candidates.cpp`; the entry's lifetime is `Tick`'s, never a second
   timer), `MeleeInRightHand:398` (WEAPON_TYPE 1..6 in the right hand; the board offer gate AND

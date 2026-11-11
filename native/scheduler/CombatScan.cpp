@@ -99,6 +99,14 @@ namespace MFO::Scheduler {
             return CombatSense::FoeCount(a_self) > 0;  // no target, foes remain -> undecidable
         }
 
+        // The Cooldowns identity of a row's cooldown: per ROW (Kind::Rule, uid) for every action but power attack, whose
+        // cooldown is ONE per follower shared by every power row and by IAUS (marth Q73; the 10 s values are unchanged).
+        [[nodiscard]] std::pair<Cooldowns::Kind, std::uint64_t> CooldownKey(const Gambit& a_rule) {
+            if (a_rule.actionOpcode == Vocab::kActPowerAttack)
+                return { Cooldowns::Kind::Follower, Cooldowns::kFollowerPowerAttack };
+            return { Cooldowns::Kind::Rule, a_rule.uid };
+        }
+
         // THE TABLE SOURCE (IAUS card I1): the gambit table behind the ChoiceSource seam. Each method is a row
         // read the pre-I1 scan made inline on `ruleIndex`, moved here with the same guards; rank IS the row
         // index for a table choice (Rank::OfTableRow). Docs/research/2026-11/iaus-i1-seam.md lists every read.
@@ -145,9 +153,13 @@ namespace MFO::Scheduler {
                 std::string coolReason;
                 if (const Gambit* rule = Row(a_choice))
                     if (rule->cooldownTenths != 0 && rule->uid != 0)
-                        if (const float left = Cooldowns::Remaining(m_id, Cooldowns::Kind::Rule, rule->uid, CooldownSec(*rule), a_now);
+                    // Q73: a power-attack row's cooldown is the FOLLOWER's (one slot for every power row and for IAUS)
+                    {
+                        const auto key = CooldownKey(*rule);
+                        if (const float left = Cooldowns::Remaining(m_id, key.first, key.second, CooldownSec(*rule), a_now);
                             left > 0.0f)
                             coolReason = Cooldowns::CoolingReason(left);
+                    }
                 return coolReason;
             }
 
@@ -173,8 +185,14 @@ namespace MFO::Scheduler {
                     if (rule->lastFired) rule->lastFiredAt = a_now;   // flair #9: board pulse
                     // Card G9: a real FIRE starts this rule's cooldown. Not an approach leg (Outcome::approach: the
                     // power attack closing to melee), or the swing it is closing for would be cooled out.
-                    if (rule->lastFired && !a_outcome.approach && rule->cooldownTenths != 0 && rule->uid != 0)
-                        Cooldowns::NoteFired(m_id, Cooldowns::Kind::Rule, rule->uid, a_now);
+                    if (rule->lastFired && !a_outcome.approach && rule->cooldownTenths != 0 && rule->uid != 0) {
+                        const auto [ck, cid] = CooldownKey(*rule);
+                        Cooldowns::NoteFired(m_id, ck, cid, a_now);
+                    }
+                    // Q73: a power attack stamps the follower-wide slot even from a row with no cooldown of its own, so
+                    // every OTHER power row (and the IAUS candidate) that does declare one sees it.
+                    else if (rule->lastFired && !a_outcome.approach && rule->actionOpcode == Vocab::kActPowerAttack)
+                        Cooldowns::NoteFired(m_id, Cooldowns::Kind::Follower, Cooldowns::kFollowerPowerAttack, a_now);
                 }
             }
 
