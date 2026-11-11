@@ -2867,3 +2867,9 @@ Spell and target are read under two separate bridge-lock acquisitions, so they a
 
 ### MFO-B665 (SEV-5, OPEN, iaus/SpellBook.cpp MakeEntry, against 325e8ea, N5)
 Chained explosions (BGSExplosion::spawnProjectile) are not followed for the blast radius.
+
+### MFO-B666 (SEV-5, OPEN, scheduler/CombatScan.cpp size, against 7ba469c, Opus tier-3 review of I1)
+CombatScan.cpp is 1724 lines, past the ~1500 plan-a-split line. The next brief that touches it proposes the split as its own round. The reconciliation (~:1290-1577) and the bookkeeping are still spans inside Tick and must be extracted first (see B655).
+
+### MFO-B667 (SEV-4, OPEN, I6 obligation, cast/Fire.cpp:216 g_firingRule, against 7ba469c, Opus tier-3 review of I1)
+g_firingRule = a_choice.rank feeds the rank-preemption cast lock (sentinel kNoRule = INT_MAX). An IAUS rank (>= 1000, up to 1e9) still reads as ranked, but a table rank (0-254) always outranks an IAUS rank there. I6 must decide whether that cross-source comparison is what it wants and write it down.
