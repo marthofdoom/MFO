@@ -722,6 +722,20 @@
             "sourceType": "ModSettingFloat",
             "defaultValue": 0.0
           }
+        },
+        {
+          "text": "IAUS combat",
+          "type": "header"
+        },
+        {
+          "id": "bIausAvailable:General",
+          "text": "IAUS combat available",
+          "type": "toggle",
+          "help": "ON (default): each follower can be switched to IAUS combat on the board, where he scores every action he could take in a fight and picks the best one. The board switch is off for every follower until you turn it on. OFF: no follower uses IAUS combat and all go back to their combat gambits. Their own board choice is kept and comes back when this is turned on again.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
         }
       ]
     },

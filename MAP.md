@@ -2408,6 +2408,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
     meet through the logistics walk (table-only, rank = its row index), which never casts while `castSeen` holds the facet
     and, under IAUS, also not while a heal stands (`castSeen || (iaus && healHeld)`, heal-to-full). Same-lap IAUS candidates
     share one rank (`RankOf(proposedEpoch)`): the one that took the hand first keeps it until it fires or its lock lapses.
+    **`bIausAvailable` (marth Q71, `[General]`, MCM Combat & Casting, `Config::g_iausAvailable`, default ON) is ANDed into `iausOn` in `Tick` (`CombatScan.cpp`, the `IausToggleEdge` site), so switching it off stands a running follower down through the existing edge; the per-follower bit is kept (no co-save change). `Board_FieldKit.cpp` greys `###iausbtn` (tooltip `Gb_TipIausOff`) and skips `DrawIausThinking` while it is off.**
     `bIausExplain` (card I7, INI-only `[Debug]`, `Config::g_iausExplain`, default OFF) now gates the `[iaus-why]` lines (the dtor's
     `Engine::Log` call). NOT wired: a staff equip road (a winning staff posture issues no order and says so).
   - **`native/Scheduler.cpp`** = the service helpers `Tick` calls, now external linkage with prototypes in the internal header:
