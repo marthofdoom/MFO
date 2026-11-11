@@ -19,6 +19,7 @@
 #include "selftest/SelfTest_internal.h"
 #include "Config.h"
 #include "Followers.h"
+#include "apmf/APMFBridge.h"   // IsSubstrateAnchor: Harbinger's ghost stand-in is not a bystander
 #include "LocationTypes.h"
 #include "classes/Classes.h"
 
@@ -271,7 +272,7 @@ namespace MFO::SelfTest {
         };
         if (auto* pl = RE::ProcessLists::GetSingleton()) {
             pl->ForEachHighActor([&](RE::Actor* a) {
-                if (!a || a->IsDead() || a->IsDisabled() || isParty(a)) return RE::BSContainer::ForEachResult::kContinue;
+                if (!a || a->IsDead() || a->IsDisabled() || isParty(a) || APMFBridge::IsSubstrateAnchor(a->GetFormID())) return RE::BSContainer::ForEachResult::kContinue;
                 // summons / reanimated of the player or a party member
                 if (auto cmd = a->GetCommandingActor(); cmd && isParty(cmd.get())) return RE::BSContainer::ForEachResult::kContinue;
                 // the player's last-ridden mount, or any mount a party member sits on
