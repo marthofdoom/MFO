@@ -35,7 +35,7 @@ namespace Sim {
         static constexpr float thinkMin = 0.05f, thinkMax = 0.45f;   // the engine AI pause between attacks, / offensive mult. CALIBRATED: field hit cadence p50 1.21 s (calib_logs.py)
         static constexpr float arrowSpeed = 3600.0f, spellSpeed = 2400.0f;
         static constexpr float downSec = 9.5f;         // bleedout before a follower stands again. CALIBRATED: field p50 9.5 s (n=50)
-        static constexpr float tauntChance = 0.7f, tauntDur = 15.0f;   // duration: Config fTauntDuration default 15 s (PROVEN, code); the chance is MODEL
+        static constexpr float tauntDur = 15.0f, tauntCooldown = 30.0f, tauntRadius = 600.0f;   // fTauntDuration 15 s (code); cooldown 30 s (ruling Q69)
         static constexpr float retreatSec = 2.0f;
         static constexpr float aimMiss = 0.12f;        // an aimed projectile at a moving target
     };
@@ -369,9 +369,13 @@ namespace Sim {
                 const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
                 if (x.actSpell == 0) Heal(x, c.potH, nullptr, false); else if (x.actSpell == 1) x.c.mp = std::min(x.c.mpMax, x.c.mp + c.potM); else x.c.sp = std::min(x.c.spMax, x.c.sp + c.potS);
             } else if (kind == Act::Taunt) {
-                if (!tg || !Up(*tg)) return;
-                if (R.P(TM::tauntChance)) { tg->tauntUntil = now + TM::tauntDur; tg->tauntBy = x.c.id; tg->c.taunted = true; tg->c.targetId = x.c.id; x.think = now; lastTauntBy0 = x.ctl == 0 ? now : lastTauntBy0; }
-                else if (x.ctl == 0) ++t.tauntFail;
+                // ONE attempt rolls on EVERY candidate foe (Taunt.cpp): the foes fighting the party inside the radius that can sense him.
+                // p = 0.5 + 0.05 per level he has over the foe, in [0.1, 0.9] (the executor's own rule, Estimate::TauntChance).
+                bool any = false;
+                for (Body& o : b) { if (o.role != Role::Foe || !Up(o) || Dist(x, o) > TM::tauntRadius || now < o.tauntUntil || !Sees(o, x)) continue;
+                    const Body* ot = Find(o.c.targetId); if (!ot || !ot->Party() || ot == &x) continue;
+                    if (R.P(std::clamp(0.5f + 0.05f * static_cast<float>(x.c.level - o.c.level), 0.1f, 0.9f))) { o.tauntUntil = now + TM::tauntDur; o.tauntBy = x.c.id; o.c.taunted = true; o.c.targetId = x.c.id; any = true; } }
+                if (any) { x.think = now; if (x.ctl == 0) lastTauntBy0 = now; } else if (x.ctl == 0) ++t.tauntFail;
             }
         }
         [[nodiscard]] const SimSpell* SpellOf(const Body& x, int idx) const {

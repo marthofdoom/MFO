@@ -113,7 +113,8 @@ namespace Sim {
                 const GRow& r = rows[static_cast<std::size_t>(ri)];
                 if (lastRow[static_cast<std::size_t>(ci)] >= 0 && ri > lastRow[static_cast<std::size_t>(ci)] && F.now < until[static_cast<std::size_t>(ci)]) break;   // the #26 window: rows below the one that fired wait
                 if (!Known(r.cond)) { if (subj) ++t.tableSkipped; continue; }
-                if (r.cooldown > 0) { auto it = rowFired[static_cast<std::size_t>(ci)].find(ri); if (it != rowFired[static_cast<std::size_t>(ci)].end() && F.now - it->second < r.cooldown) continue; }
+                const float cd = r.act == "act.taunt" ? std::max(r.cooldown, TM::tauntCooldown) : r.cooldown;   // ruling Q69: the gambit side has the 30 s taunt cooldown too
+                if (cd > 0) { auto it = rowFired[static_cast<std::size_t>(ci)].find(ri); if (it != rowFired[static_cast<std::size_t>(ci)].end() && F.now - it->second < cd) continue; }
                 const Pick p = Cond(F, c, x, r); if (!p.ok) continue;
                 Candidate k; Family fam = Family::kCount; bool fired = false;
                 auto fire = [&]() { const Fired fr = Fire(F, ci, k); if (fr == Fired::Yes) { fired = true; if (subj) { ++t.fired; ++t.hist[static_cast<std::size_t>(k.family)];
@@ -141,6 +142,7 @@ namespace Sim {
                     if (fam == Family::CastOffense || fam == Family::CastControl) { if (!p.foe) continue; k.target = p.foe->c.id; }
                     else if (fam == Family::CastHeal || fam == Family::CastBuff) { if (rec && rec != &x) { if (e.selfDelivery) continue; k.target = rec->c.id; } if (fam == Family::CastHeal && (rec ? rec : &x)->c.hp >= 0.999f * (rec ? rec : &x)->c.hpMax) continue; }
                     fire(); }
+                else if (r.act == "act.wait") continue;   // hold: nothing is issued, his own AI runs
                 else { if (subj) ++t.tableSkipped; continue; }   // an action the lab does not model (loot, steal, sneak, shout ...)
                 if (fired) { if (lastRow[static_cast<std::size_t>(ci)] != ri && subj) ++t.switches; lastRow[static_cast<std::size_t>(ci)] = ri; until[static_cast<std::size_t>(ci)] = F.now + c.window; rowFired[static_cast<std::size_t>(ci)][ri] = F.now; return; }
             }

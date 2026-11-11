@@ -98,6 +98,12 @@ namespace Sim {
                 k.bow = (d.weapons & C::Weapon::kBow) != 0; k.crossbow = (d.weapons & C::Weapon::kCrossbow) != 0 && !k.bow; k.staff = (d.weapons & C::Weapon::kStaff) != 0; k.shield = (d.weapons & C::Weapon::kShield) != 0;
                 k.heavy = c.fam == Cls::Melee; k.light = c.fam == Cls::Ranged;   // MODEL: armor weight by root line; mages wear cloth
             }
+            // T1 keeps TODAY'S KIT (marth 2026-11-09): the three combat rows every new follower gets, Followers::ApplyDefaultKit
+            // (native/Followers.cpp:43-45). Hand-mirrored here (that file is engine code): drink at 30% health, attack the weakest foe, else wait.
+            if (d.tier == 1) { c.rows.clear(); c.defaults = "default-kit";
+                c.rows.push_back({ V::kCondSelfHpBelow, V::kActDrinkHealthPotion, 0.30f, 0, 0.0f, true });
+                c.rows.push_back({ V::kCondFoeLowestHp, V::kActAttack, 0.0f, 0, 0.0f, true });
+                c.rows.push_back({ V::kCondAlways, V::kActWait, 0.0f, 0, 0.0f, true }); }
             k.mageBlend = hybrid && c.fam != Cls::Mage ? 0.5f : 0.0f;   // MODEL: a hybrid's attributes and skills are half his school's
             out.push_back(std::move(c));
         }

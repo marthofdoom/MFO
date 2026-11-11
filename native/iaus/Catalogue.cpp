@@ -69,7 +69,7 @@ namespace MFO::Iaus {
             "self_hp", "scroll_stock", "mp_low", "engaged",
             "caster", "downed", "outnumbered",
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
-            "chase", "helpless",
+            "chase", "helpless", "taunt_chance",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -103,7 +103,7 @@ namespace MFO::Iaus {
         const float v[] = { f.dist, f.reach, f.foeLevelRatio, f.foeHpPct, f.cost, f.magicka, f.magickaMax,
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
-                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing };
+                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -286,14 +286,18 @@ namespace MFO::Iaus {
             at(Cons::HealSize) = Lin(0.6f, 0.4f);
             at(Cons::BoostPlayerDying) = Bin(1.0f, 1.8f);      // the player has under kDyingSec to live
             at(Cons::BoostRecipientDying) = Bin(1.0f, 1.4f);   // the recipient has
-            // chase (melee attack), ONLY under the Tuning::attackChase variant (off: ruling Q64, the reach gate
-            // stands). x = distance / the chase cap: 1.0 in reach, 0.75 at 15% of the cap (about 600 units), 0.5 at the
-            // cap, vetoed beyond it. The swing-range veto stays on the power attack either way.
+            // chase (melee attack). Ruling Q70 (marth 2026-11-11, clarifying Q64): TARGET choice is not gated by
+            // reach, a melee follower may name any foe in chase range; the reach gate is for the SWINGS IAUS times
+            // (the power attack keeps RangeMelee). x = distance / the chase cap: 1.0 in reach, 0.75 at 15% of the cap
+            // (about 600 units), 0.5 at the cap, vetoed beyond it.
             {
                 static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 1.0f }, { 0.15f, 0.75f }, { 1.0f, 0.5f } } };
                 at(Cons::RangeChase) = VetoAbove(Piece(p), 1.0f);
             }
             at(Cons::BoostControlled) = Bin(1.0f, 1.3f);       // a helpless foe: every blow lands
+            // taunt chance (ruling Q69): x = the chance the attempt pins this foe. A 0.9 taunt scores 0.92, a coin flip
+            // 0.6, the 0.1 floor 0.28: a long shot is dear (30 s cooldown) but never forbidden.
+            at(Cons::TauntChance) = Lin(0.8f, 0.2f);
 
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
@@ -321,7 +325,7 @@ namespace MFO::Iaus {
         namespace {
             using U = Use;
             constexpr U kAttack[] = {
-                { Cons::RangeMelee, 1 }, { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
+                { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
                 { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 }, { Cons::BoostControlled, 1 },
@@ -336,7 +340,7 @@ namespace MFO::Iaus {
             constexpr U kTaunt[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
                 { Cons::TauntSelfHp, 1 }, { Cons::FoeTaunted, 1 }, { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
-                { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 },
+                { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 },
             };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 } };
@@ -449,9 +453,7 @@ namespace MFO::Iaus {
             const Facts& f = c.f;
             const bool melee = f.posture == PostureKind::Melee || f.posture == PostureKind::Silver;
             switch (k) {
-            case Cons::RangeMelee:
-                if (t.attackChase && c.family == Family::Attack) return In::Off();   // the variant: RangeChase answers instead
-                return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
+            case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::Los:
                 switch (f.sight) {
@@ -571,10 +573,11 @@ namespace MFO::Iaus {
                 if (!(f.expHeal > 0.0f)) return In::Off();
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
             case Cons::RangeChase:
-                if (!t.attackChase || !f.meleeRange) return In::Off();
+                if (!f.meleeRange) return In::Off();
                 if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(f.dist / (f.reach * 20.0f)) : In::Off();   // no cap known: 20 reaches
                 return f.dist / f.chase;
             case Cons::BoostControlled:     return B(f.foeControlled);
+            case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
             case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
             case Cons::kCount:        break;

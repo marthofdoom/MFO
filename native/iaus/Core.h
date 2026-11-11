@@ -97,8 +97,9 @@ namespace MFO::Iaus {
         HealSize,           // how much of the heal the recipient can use
         BoostPlayerDying,   // multiplier: the player has seconds to live
         BoostRecipientDying,   // multiplier: the heal's recipient has seconds to live
-        RangeChase,         // VARIANT (Tuning::attackChase, off): a melee attack shaded by distance, vetoed past the chase cap
+        RangeChase,         // ruling Q70: a melee ATTACK names a target anywhere in chase range (distance shades, the cap vetoes)
         BoostControlled,    // multiplier: a blow on a foe that cannot answer (paralysed, staggered by control)
+        TauntChance,        // ruling Q69: the stat-based chance this taunt works on this foe
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -191,12 +192,7 @@ namespace MFO::Iaus {
         // 12-20 times a minute. One taunt ATTEMPT is one idle play plus a roll, and a hit already blocks the next
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
-        float rowlessTauntCooldownSec = 10.0f;
-        // VARIANT, OFF (ruling Q64 stands: a melee follower attacks "within precision reach", so a melee attack is
-        // vetoed beyond the reach gate). ON = a melee ATTACK is shaded by distance and vetoed only past the chase cap
-        // (Cons::RangeChase), on the argument that act.attack only names the target and the engine closes. Sim v2
-        // measures both; it is marth's to rule (Docs/research/2026-11/iaus-sim-v2.md "Q64 variant").
-        bool  attackChase = false;
+        float rowlessTauntCooldownSec = 30.0f;   // ruling Q69 (marth 2026-11-11): a taunt has a 30 s cooldown
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -302,6 +298,7 @@ namespace MFO::Iaus {
         float playerTtl = kInf;           // the player's
         float recipientTtl = kInf;        // the heal recipient's
         float chase = 0.0f;               // melee attack: how far he may chase (Snapshot::chaseCap); 0 = not a chase
+        float tauntChance = -1.0f;        // taunt: the chance it works on this foe (Estimate::TauntChance); < 0 = unknown
     };
 
     struct Candidate {

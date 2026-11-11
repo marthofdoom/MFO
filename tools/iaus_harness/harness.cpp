@@ -7,6 +7,7 @@
 // list with every consideration ([iaus-why] format), so a curve change can be judged before a field cycle. The
 // CHECKs at the end assert the properties the design promises; the exit code is the number that failed.
 #include "iaus/Core.h"
+#include "iaus/Estimate.h"
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 
 #include <algorithm>
@@ -478,22 +479,22 @@ namespace {
                 std::printf("\n");
             }
             Check(worst >= 1.2f * t.actFloor, "F4: worst plain current-target attack >= 1.2 x act floor across the grid");
-            Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) == 0.0f,
-                  "F4: the 1.15x reach gate still vetoes");
-            {   // The Q64 VARIANT (Tuning::attackChase, off by default; sim v2 measures it for marth's ruling): a melee
-                // ATTACK is shaded by distance and vetoed only past the chase cap. The power attack keeps the swing gate.
-                Tuning v = t; v.attackChase = true;
-                Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, v, 1, 0, nullptr) > 0.0f,
-                      "Q64 variant: a melee attack on a foe just out of reach is not vetoed");
+            {   // RULING Q70 (marth 2026-11-11, clarifying Q64: "I meant when it should swing the weapon, not when it
+                // should choose a target"). The 1.15x reach gate is the SWING gate: it vetoes a power attack. A melee
+                // ATTACK only names the target, so it is shaded by distance and vetoed only past the chase cap.
                 Candidate pw = PlainAttack(1, 1.0f, 1.16f); pw.family = Family::PowerAttack; Cons by = Cons::kCount;
-                Check(ScoreOne(pw, Mind{}, Profile{}, v, 1, 0, nullptr, &by) == 0.0f && by == Cons::RangeMelee,
-                      "Q64 variant: the 1.15x reach gate still vetoes a power attack");
+                Check(ScoreOne(pw, Mind{}, Profile{}, t, 1, 0, nullptr, &by) == 0.0f && by == Cons::RangeMelee,
+                      "F4 (Q70): the 1.15x reach gate still vetoes a swing (power attack)");
+                Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) > 0.0f,
+                      "Q70: a melee attack names a foe just out of reach (target choice is not gated by reach)");
                 Candidate nearC = PlainAttack(1, 1.0f, 0.9f), midC = PlainAttack(1, 1.0f, 4.0f), farC = PlainAttack(1, 1.0f, 0.9f);
                 nearC.f.chase = 4096.0f; midC.f.chase = 4096.0f; farC.f.chase = 4096.0f; farC.f.dist = 4200.0f;
-                const float sNear = ScoreOne(nearC, Mind{}, Profile{}, v, 1, 0, nullptr), sMid = ScoreOne(midC, Mind{}, Profile{}, v, 1, 0, nullptr);
-                Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, v, 1, 0, nullptr, &byFar);
-                Check(sNear > sMid && sMid > 0.0f, "Q64 variant: a nearer foe is the better attack, a farther one still an attack");
-                Check(sFar == 0.0f && byFar == Cons::RangeChase, "Q64 variant: a foe beyond the chase cap is vetoed");
+                const float sNear = ScoreOne(nearC, Mind{}, Profile{}, t, 1, 0, nullptr), sMid = ScoreOne(midC, Mind{}, Profile{}, t, 1, 0, nullptr);
+                Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &byFar);
+                Check(sNear > sMid && sMid > 0.0f, "Q70: a nearer foe is the better attack, a farther one still an attack");
+                Check(sFar == 0.0f && byFar == Cons::RangeChase, "Q70: a foe beyond the chase cap is vetoed");
+                Check(Estimate::TauntChance(20, 20) == 0.5f && Estimate::TauntChance(30, 20) == 0.9f && Estimate::TauntChance(10, 30) == 0.1f,
+                      "Q69: the taunt chance is the executor's rule (0.5 + 0.05 per level, kept in 0.1 .. 0.9)");
             }
         }
         // F5 (SEV-4): the log dedupe includes the verdict and the fired flag.

@@ -54,6 +54,13 @@ namespace MFO::Iaus::Estimate {
         return h / in;
     }
 
+    // The chance one taunt attempt pins a foe (ruling Q69: stat-based and readable BEFORE he chooses). It is the taunt
+    // executor's own rule (Taunt.cpp, the roll): 0.5 + 0.05 per level the taunter has over the foe, kept in [0.1, 0.9].
+    // ONE formula for both: the executor should call this (the Taunt card), so the fact can never drift from the roll.
+    [[nodiscard]] inline float TauntChance(int a_taunterLevel, int a_foeLevel) {
+        return std::clamp(0.5f + 0.05f * static_cast<float>(a_taunterLevel - a_foeLevel), 0.1f, 0.9f);
+    }
+
     // What one cast of a_e does to a_to's health: damage x (1 - element resist) x (1 - magic resist); 0 at 100 points
     // of either (the engine's own rule). 0 = the spell's damage was not measured.
     [[nodiscard]] inline float SpellOn(const SpellEntry& a_e, const Combatant& a_to) {

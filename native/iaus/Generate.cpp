@@ -127,6 +127,7 @@ namespace MFO::Iaus {
                     c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.rowlessTauntCooldownSec, 0.0f));
                     // What he would be taking with this foe on him too (a foe already on him adds nothing).
                     c.f.tauntTtl = Estimate::Ttl(s.self.hp, x.selfIncoming + (foe->targetId == s.self.id ? 0.0f : Estimate::Dps(*foe, s.self)));
+                    c.f.tauntChance = Estimate::TauntChance(s.self.level, foe->level);   // ruling Q69
                     x.Push(std::move(c));
                 }
             }

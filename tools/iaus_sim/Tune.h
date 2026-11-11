@@ -6,7 +6,7 @@
 //       w.<family>.<cons>     that family's weight on a consideration (Profile::WeightOverride)
 //       aw.<family>           the family's action weight
 //       c.<cons>.a | .b | .floor     the consideration's curve parameters (Core.h Curve)
-//       t.momentum | t.preempt | t.actFloor | t.softCd | t.tauntCd | t.powerCd | t.attackChase (0 / 1: the Q64 variant)
+//       t.momentum | t.preempt | t.actFloor | t.softCd | t.tauntCd | t.powerCd
 //     <family> / <cons> are INDEXES (--list-params prints them: several considerations share a display name).
 //   --opt <param>[,<param>...] [--opt-passes N] [--opt-fights N]
 //       coordinate search: each parameter in turn is tried at x0.5, x0.75, x1.33, x2 of its value (and +-0.15 for a
@@ -36,8 +36,7 @@ namespace Sim {
         if (name.rfind("aw.", 0) == 0) { const std::size_t fi = idx(3); if (fi >= kFamilies) return false; s.t.actionWeight[fi] = f; return true; }
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); if (dot == std::string::npos) return false; const std::size_t ci = idx(2); if (ci >= kCons) return false; Curve& c = s.t.curve[ci]; const std::string fld = name.substr(dot + 1);
             if (fld == "a") c.a = f; else if (fld == "b") c.b = f; else if (fld == "floor") c.floor = f; else return false; return true; }
-        if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0) { s.pkg[name] = f; return true; }
-        if (name == "t.attackChase") { s.t.attackChase = v != 0.0; return true; }
+        if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { s.pkg[name] = f; return true; }
         if (name == "t.momentum") s.t.momentum = f; else if (name == "t.preempt") s.t.preemptMargin = f; else if (name == "t.actFloor") s.t.actFloor = f; else if (name == "t.softCd") s.t.softCooldownSec = f;
         else if (name == "t.tauntCd") s.t.rowlessTauntCooldownSec = f; else if (name == "t.powerCd") s.t.rowlessPowerCooldownSec = f; else return false;
         return true;
@@ -49,8 +48,7 @@ namespace Sim {
             for (const auto& o : s.weights) if (o.family == static_cast<Family>(fi) && o.cons == static_cast<Cons>(ci)) return o.w; return unset; }
         if (name.rfind("aw.", 0) == 0) return s.t.actionWeight[idx(3) % kFamilies];
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); const Curve& c = s.t.curve[idx(2) % kCons]; const std::string fld = dot == std::string::npos ? "" : name.substr(dot + 1); return fld == "a" ? c.a : fld == "b" ? c.b : c.floor; }
-        if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0) { auto i = s.pkg.find(name); return i == s.pkg.end() ? unset : i->second; }
-        if (name == "t.attackChase") return s.t.attackChase ? 1.0 : 0.0;
+        if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { auto i = s.pkg.find(name); return i == s.pkg.end() ? unset : i->second; }
         if (name == "t.momentum") return s.t.momentum; if (name == "t.preempt") return s.t.preemptMargin; if (name == "t.actFloor") return s.t.actFloor; if (name == "t.softCd") return s.t.softCooldownSec;
         if (name == "t.tauntCd") return s.t.rowlessTauntCooldownSec; if (name == "t.powerCd") return s.t.rowlessPowerCooldownSec;
         return unset;
@@ -59,6 +57,7 @@ namespace Sim {
     inline void ApplyPackage(Ctl& c) {
         for (const auto& kv : Tune().pkg) { const std::string& n = kv.first; const float v = kv.second;
             if (n == "pk.power") { c.powerShare = v; continue; } if (n == "pk.leash") { c.leash = v; continue; }
+            if (n.rfind("row.", 0) == 0) { const std::size_t ri = static_cast<std::size_t>(std::atoi(n.c_str() + 4)); if (ri < c.rows.size()) c.rows[ri].param = v; continue; }   // a default row's threshold
             const int s = n.size() > 3 ? n[3] - '0' : -1; if (s < 0 || s > 2 || n.size() < 6) continue; Style& y = c.pkg[s]; const std::string f = n.substr(5);
             if (f == "off") y.off = v; else if (f == "def") y.def = v; else if (f == "avoid") y.avoidThreat = v; else if (f == "fallback") y.fallback = v; else if (f == "circle") y.circle = v;
             else if (f == "powBlock") y.powBlocking = v; else if (f == "powStag") y.powStaggered = v; else if (f == "bash") y.bash = v; }
