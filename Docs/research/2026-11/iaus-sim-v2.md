@@ -843,12 +843,150 @@ TESHitEvent (`Diagnostics.cpp:129`, registered at `:1354`) and the attack animat
 
 ## 23. Questions for marth (successor 1)
 
-- **Dynamic Follower Scaling (now Q76).** It does apply to MFO followers on LoreRim (section 21.2). Options: leave it (it is
-  the list author's balance), or have MFO neutralise it for managed followers (an engine change that belongs in
-  Harbinger), or tell IAUS about it (a per-list fact MFO would have to read at runtime from the mod's INI, since no
-  list data may live in native). Recommendation: leave it, and let the damage estimate learn a follower's real
-  weapon damage from observed hits later, the same way the reach is learned.
+- **Dynamic Follower Scaling (Q76, RULED 2026-11-11).** marth: "Then it's relevant in LoreRim and we factor it in", and then "I just mean it's factored in the sim." So MFO does not neutralise it, nothing in native detects or special-cases it, and the lab models it per list (section 21.2). If the hit-against-estimate probe later shows a gap in the field, that is a new finding for marth then.
 - **Learned reach across sessions.** Runtime only today. The learner converges in about 10 to 20 swings from a bad
   start, so a session relearns each weapon in its first fight. Saving it means a co-save change. Recommendation: do
   not save it.
 - **Token ledger** (fixed by the coordinator at 22:40): the script summed a message once per content block. Counted once per message the two authors had spent 1.87M, so about 8.13M of the 10M was left.
+
+## 24. Successor 1, round 2: two fidelity bugs, set A2, and five new inputs (2026-11-10)
+
+### 24.1 Two bugs in the lab that every earlier number carried
+
+**Spell reach.** The sim took a spell record's range as its reach whenever it was above 0. The game does not:
+`Actuation::AimedReachOf` (`cast/CanAct.cpp:51-71`) reads the record's range only from 300 units up, else the
+projectile's range, else no cap. 587 of LoreRim's 4773 spells, 557 of Tuxborn's 4456 and 51 of Vanilla's 677 carry a
+small range (Requiem's target heals carry 30). In the sim those spells could only be cast from inside 30 units, so
+on LoreRim a heal on another actor was never a candidate at all. Fixed in `Data.h Classify`. Every heal, double-heal
+and predictive-heal number for LoreRim and Tuxborn before this section is void.
+
+**The oracle ignored two cooldowns.** It obeyed the power-attack cooldown only when the class row declared one, and
+never the taunt's. It taunted 6 times a minute against a 30 s cooldown (ruling Q69). It now obeys every hard cooldown
+(rulings Q7, Q69, Q73). The knight scenarios' oracle values fell with it.
+
+**Incoming damage counted foes that cannot reach.** `Estimate::IncomingOn` summed the damage of every foe that TARGETS
+an actor, at any distance. A brute 15 m away gave a ranged follower "5 seconds to live" and he fled from the first
+tick of the kite scenario without firing an arrow. Now a foe that has to close (no bow, no spell in hand) counts only
+inside two swing reaches of the actor (`Estimate::StrikeDistance`). The wider question, what he would take with all of
+them on him, is `Estimate::ThreatOn`. New measured input `Combatant::rangedWeapon`.
+
+### 24.2 Parameter set A2
+
+With heals working, set A let a control cast (weight 1.8) outrank a heal on a player at 46 percent health. A new
+search on LoreRim moved 23 values and lost 0.6 J on Vanilla, so it was not taken as a whole. One value at a time, three
+changes hold on every list and both seeds:
+
+**A2 = A with control casts 1.8 to 3.6, heal casts 1.2 to 2.4, the dying-recipient boost 0.7 to 1.4.**
+
+| J (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 |
+|---|---|---|---|---|---|---|
+| set A (after the reach fix, poise, DFS) | 61.54 | 61.18 | 62.88 | 61.08 | 78.35 | 78.09 |
+| set A2 | 63.37 | 62.86 | 64.50 | 63.29 | 78.92 | 78.49 |
+| A2 + the inputs of 24.3 | 63.98 | 63.64 | 64.37 | 63.85 | 78.88 | 78.64 |
+
+Heal claimed, heal urgency and heal size (section 16) each move J by less than 0.4 on any list, inside the noise.
+They stay because they are not applicable without their inputs, and the double-heal scenario is where they act.
+
+A control weight of 3.6 is a sign of a missing input, not a truth: a per-list search still wants 7.2 on Tuxborn.
+Paralysis and fear decide whole fights in the sim. The sim's Calm was checked as a suspect (it held through blows).
+It now breaks when the party hits the target (MODEL, unproven), and that changes J by under 0.01, so the result does
+not rest on Calm.
+
+### 24.3 New inputs (pure layers, all not applicable while unmeasured, harness 0 failed)
+
+| Consideration | Family | Input | Why |
+|---|---|---|---|
+| ControlWorth | control casts | min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). New `SpellEntry::controlSec` | a 1 s hold and a 30 s hold scored the same, and so did a hold on a foe at a quarter health |
+| MagickaBuys | magicka potion | casts of his best spell the fight still asks for (kept foes' health / best damage, else missing party health / best heal), over 3 | the potion weight wanted 0.275 on LoreRim and 1.65 on Tuxborn. With the input both searches agree it is low (0.14 and 0.55) |
+| DamageValue (changed) | offense casts | a spell with NO damage now scores 0 against his best, once his best is known | an Illusion noise spell (damage 0) had no damage term at all and so outscored real spells. Seen in a trace: a healer cast it three times while the player died. +0.4 to +0.85 J on LoreRim, +0.2 to +0.5 on Tuxborn |
+| RangeTaunt | taunt | flat inside the reach, same outer edge as before | the aimed-spell curve shaded a taunt at 90 percent of its reach to 0.38. A taunt is a call. Neutral in J |
+| MortalTaunt, BoostMortalDanger | taunt, retreat, health potion | new `Snapshot::mortal`: he dies for good at 0 health | see 24.4 |
+| PostureTrade | weapon category | seconds he lives at the damage coming in, over 10, on the melee category | do not put the bow away to trade with a brute. Neutral in J so far |
+| kite term in RetreatDanger | retreat | behind `Tuning::kiteDistance`, 0 = off | no effect in any run (the retreat is gated by class and by "no heal available"). Left off, in the ledger as unproven |
+
+Tried and removed: a "sacrifice" term (the taunter's own survival counts for less when the player has seconds
+left). It made every knight scenario worse on every list (LoreRim knight-boss 14.6 to 4.4). The boss kills the knight
+and then the player anyway. What the oracle does there is step back and stay free to block, not die first.
+
+### 24.4 Follower death (marth 2026-11-10)
+
+marth: "Lorerim by default has follower death. I personally have mine turned off."
+
+The sim's default is his setup: a follower at 0 health goes down for 9.5 s (the field median) and stands up.
+`--follower-death` makes it LoreRim's default: dead for good, counted as three downs in the utility (MODEL).
+IAUS gets one new fact, `Snapshot::mortal`, and two multipliers that only act when it is true: a taunt he cannot
+outlast is all but refused (x0.15 under 3 s to live), and retreat and the health potion weigh x1.5.
+
+| J with follower death on (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 |
+|---|---|---|---|---|---|---|
+| IAUS not told (`--mortal-blind`) | 63.72 | 63.44 | 63.54 | 62.79 | 77.90 | 77.19 |
+| IAUS told | 63.83 | 63.65 | 63.77 | 62.98 | 78.25 | 77.75 |
+
+Small, and the same sign in all six. Kept. Engine side (not written): what tells the DLL that a follower dies for
+good is to be probed, never assumed. Candidates: the actor's essential and protected flags, and how the list's
+follower-death option is built (which mod, which flag). No list data in native: the fact is read at runtime or stays
+false.
+
+### 24.5 Oracle gap after this round (K = 6, 60 s, 20 fights, set A2, before the inputs of 24.3)
+
+| Scenario | LoreRim | Tuxborn | Vanilla |
+|---|---|---|---|
+| tank3 | +2.0 | +1.7 | +1.2 |
+| mage-dragon | +22.2 | +2.3 | +6.4 |
+| bandit-pack | +0.9 | +5.7 | +1.3 |
+| focus-healer | 0.0 | +1.0 | -0.6 |
+| interrupt | +1.9 | -3.3 | +2.2 |
+| weakness | +8.8 | +36.4 | +20.9 |
+| predictive-heal | +11.6 | +2.6 | +11.3 |
+| peel | +12.5 | +8.5 | -4.3 |
+| overkill | +3.5 | +4.4 | +2.7 |
+| double-heal | +16.3 | +19.5 | +13.6 |
+| mp-budget | +1.8 | +19.3 | +9.2 |
+| splash | +5.5 | +15.9 | +10.6 |
+| control-setup | +38.6 | +21.0 | +5.7 |
+| kite | +0.5 | +1.8 | +38.7 |
+| knight-boss | +30.9 | +21.5 | +3.5 |
+| knight-boss-healer | +46.2 | +25.3 | +17.6 |
+| hurt-knight | -0.2 | +14.1 | +14.1 |
+| MEAN | +11.9 | +11.6 | +9.1 |
+
+Before this round, same oracle: +14.8 / +13.2 / +9.8. With the oracle held to the cooldowns the LoreRim mean is +10.8
+and Vanilla +5.8 (knight-boss on Vanilla -9.0, hurt-knight -4.0: IAUS is ahead of the one-step oracle there).
+
+What the largest clusters say now:
+
+- **knight-boss, knight-boss-healer, control-setup, kite:** the oracle's winning options are `ext:step_back`,
+  `ext:sprint_back`, `ext:to_player` and "do nothing" in place of a power attack. These are the actions IAUS has no
+  family for (open work 5: deliberate repositioning, block, bash). Nothing in the catalogue closes these gaps.
+- **weakness on Tuxborn and Vanilla, splash:** a control cast where the oracle casts damage, or equips. The control
+  weight is carrying what a "what does this hold buy against what my damage buys" input should carry.
+- **mage-dragon on LoreRim, predictive-heal:** a dry mage names an attack where the oracle equips a weapon or
+  drinks. The weapon category layer has no "my magicka is gone" term.
+- **peel:** a power attack on the nearest foe where the oracle names the one further away.
+
+### 24.6 Headline after this round (24 fights per scenario, 12 per class, oracle on the first 8 and 4)
+
+| J | Vanilla | Tuxborn | LoreRim |
+|---|---|---|---|
+| table mode (IAUS off, default gambit rows, rows cut to the rank's slots, one power-attack cooldown per follower) | 75.5 | 59.1 | 61.0 |
+| IAUS as on main (no estimates, constant reach) | 75.8 | 58.5 | 60.2 |
+| IAUS+ phase 2 (set A2, the inputs of 24.3, learned reach, scroll road) | 78.9 | 63.5 | 63.4 |
+| oracle over IAUS+ | 87.0 | 72.4 | 71.9 |
+
+The LoreRim rows moved against section 19 because the world did (poise, follower scaling, the spell reach). IAUS+ is
+2.4 to 4.4 J ahead of the gambit table on every list, and IAUS as on main is still level with it or behind. The oracle
+is 8 to 9 J ahead of IAUS+. Results files: label HEADLINE in `~/.cache/mfo-iaus-sim/runs/`.
+
+### 24.7 Gap ledger, changes
+
+| id | Change |
+|---|---|
+| G3, G4 | heals on another actor did not exist on LoreRim in the lab before the reach fix. Re-measured: double-heal +16 / +19 / +14, predictive-heal +12 / +3 / +11. Open |
+| G5 | a no-damage offense spell outscored real ones. Closed in the pure layer (DamageValue) |
+| G6 | magicka potion has its input (MagickaBuys). mp-budget still +19 on Tuxborn. Open |
+| G12 new | swing reach differs per weapon (Q68). `Reach.h` learned reach, proven in the harness. Engine feed not written (tier A) |
+| G13 new | control casts have no worth input beyond the hold's length. The weight 3.6 stands in for it. Open |
+| G14 new | a dry mage has no reason to change weapon category. Open |
+| G15 new | a follower who dies for good weighed his life like one who stands up. `Snapshot::mortal`. Engine read to probe |
+| G16 new | deliberate repositioning, block and bash have no family. The largest gaps left on all three lists (knight-boss, control-setup, kite). Needs the road audit of section 13 first |
+| G17 new | incoming damage counted foes out of reach. Closed in the pure layer (StrikeDistance) |
