@@ -2973,3 +2973,15 @@ Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale 
 
 ### MFO-B698 (SEV-5, OPEN, classes/ClassTable.cpp todo.* rows, against a31f154, same review)
 "The card's always-true default row for the four sneak classes is not in the diff (ClassTable untouched)." The class rows still use todo.act.sneak, todo.cond.self_no_summon, todo.cond.foe_attacking_my_summon: the class defaults card wires them.
+
+### MFO-B720 (SEV-4, OPEN, classes/Defaults.cpp LayDown/LandPicks, against e6aaa1c, Opus tier-3 review of feat/mcls-v2)
+"A save in the 1 or 2 frames between LayDown and LandPicks stores the default cast rows disabled with no spell. After that save loads, nothing picks them again." Suggested fix: on load, re-post the pick for disabled, spell-less cast rows that still match the equipped class's default prefix (SameDefault). Reviewer: rare window, rows visible on the board and the WARN is logged; not a corruption.
+
+### MFO-B721 (SEV-5, OPEN, classes/State.cpp SwapClass + dev hook, against e6aaa1c, same review)
+"If test rows are live when the dev hook equips, SwapClass stores them in offCombat and Scrub zeroes their uid", which gets past FLWR's SelfTest::IsRunRow strip (Serialization.cpp:596), so they can persist in dev saves through MCLS. Dev build only.
+
+### MFO-B722 (SEV-5, OPEN, classes/State.cpp SwapClass, against e6aaa1c, same review)
+"A refused SwapClass (locked, or already equipped) still creates an empty g_store entry through Mutate and calls RefreshCarriers." Same as ActivateClass/SetPickedT4 today; harmless.
+
+### MFO-B723 (SEV-5, OPEN, classes/ClassTable.cpp Todo rows, against e6aaa1c, same review)
+Thief and Conjurer Todo placeholder rows (G1, G5, G6) remain though the opcodes exist on main (see MFO-B698). Also: the sim's kept Warrior/Conjurer/Warlock sets were reverted before merge (marth 11-11, "Revert to old rows"); they return after the in-game probe. Note for that round: the sim's Conjurer row 2 `cond.foe_lowest_hp -> act.attack` is true whenever any foe exists and shadows the foe_any cast row under first-true-wins.
