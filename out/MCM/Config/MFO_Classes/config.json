@@ -1,0 +1,100 @@
+{
+	"modName": "MFO_Classes",
+	"displayName": "MFO Classes",
+	"minMcmVersion": 9,
+	"cursorFillMode": "topToBottom",
+	"pages": [
+		{
+			"pageDisplayName": "Classes",
+			"cursorFillMode": "topToBottom",
+			"content": [
+				{
+					"text": "Classes",
+					"type": "header"
+				},
+				{
+					"id": "bClassTree:Classes",
+					"text": "Class tree",
+					"type": "toggle",
+					"help": "ON (default): the 35-class tree (tier 1 to 4, mastery, free switching) is active for the followers you give a class. OFF: today's three classes (Melee, Ranged, Mage) exactly; stored class progress is kept untouched. Needs this plugin loaded.",
+					"valueOptions": {
+						"sourceType": "ModSettingBool",
+						"defaultValue": 1
+					}
+				},
+				{
+					"id": "bClassStrict:Classes",
+					"text": "Strict class adherence",
+					"type": "toggle",
+					"help": "ON (default): a follower with a class equipped follows it strictly (his gambits, weapon and spell choices stay inside the class). OFF: the class only adds its passive. Only means anything while the class tree is ON.",
+					"valueOptions": {
+						"sourceType": "ModSettingBool",
+						"defaultValue": 1
+					}
+				},
+				{
+					"id": "bClassInfo:Classes",
+					"text": "Class info in combat",
+					"type": "toggle",
+					"help": "ON (default): show the follower's class and level in the combat display. OFF: hide it. (The setting is stored now; the display itself is not built yet.)",
+					"valueOptions": {
+						"sourceType": "ModSettingBool",
+						"defaultValue": 1
+					}
+				},
+				{
+					"id": "fClassXpRate:Classes",
+					"text": "Class XP rate",
+					"type": "slider",
+					"help": "Multiplier on all class XP. 1.0 (default) is the sized pace: a tier 1 class masters in about 3 hours of play, tier 2 in 6, tier 3 in 10, tier 4 in 13. 2.0 halves those hours, 0 stops class XP.",
+					"valueOptions": {
+						"min": 0.0,
+						"max": 5.0,
+						"step": 0.1,
+						"sourceType": "ModSettingFloat",
+						"defaultValue": 1.0
+					}
+				},
+				{
+					"id": "fPriestSunPerSec:Classes",
+					"text": "Priest sun damage per second",
+					"type": "slider",
+					"help": "Damage per second the Priest's sun does to undead and Daedra within 6 metres (default 2).",
+					"valueOptions": {
+						"min": 0.0,
+						"max": 20.0,
+						"step": 0.5,
+						"sourceType": "ModSettingFloat",
+						"defaultValue": 2.0
+					}
+				},
+				{
+					"id": "fSaintHealPerSec:Classes",
+					"text": "Saint aura heal per second",
+					"type": "slider",
+					"help": "Health per second the Saint's healing aura gives allies (default 30).",
+					"valueOptions": {
+						"min": 0.0,
+						"max": 200.0,
+						"step": 1.0,
+						"sourceType": "ModSettingFloat",
+						"defaultValue": 30.0
+					}
+				},
+				{
+					"id": "fSaintUndeadPerSec:Classes",
+					"text": "Saint aura damage per second",
+					"type": "slider",
+					"help": "Damage per second the Saint's aura does to undead (default 30).",
+					"valueOptions": {
+						"min": 0.0,
+						"max": 200.0,
+						"step": 1.0,
+						"sourceType": "ModSettingFloat",
+						"defaultValue": 30.0
+					}
+				}
+			]
+		}
+	]
+}

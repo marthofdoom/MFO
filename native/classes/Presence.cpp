@@ -60,6 +60,7 @@ namespace MFO::Classes {
             spdlog::info("[classes] class add-on ESL loaded but bClassTree = 0 -- class tree inert, the three classes behave as before");
         } else {
             spdlog::info("[classes] class add-on ACTIVE (bClassTree = 1, bClassStrict = {})", strict ? 1 : 0);
+            detail::ApplyAuraValues();   // card C11: the MCM /s values into the aura ability effects
         }
         if (present) detail::ResolvePackageStyles();   // card C8: the per-class CSTY lookup (classes/Package.cpp)
         // The table self-check runs whatever the presence: it is a build/data integrity line, not a feature.

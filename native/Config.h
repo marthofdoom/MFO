@@ -859,9 +859,20 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_townToasts{ false };
     //   bClassTree / bClassStrict (class add-on, classes/; marth 2026-10-27): the class TREE is an optional part, ON by default, and
     //     inert unless the add-on ESL (MFO_Classes.esl) is loaded. OFF (or ESL absent) = today's three classes exactly. bClassStrict =
-    //     strict adherence to the equipped class; it only means anything while the tree is active. INI-only (no MCM key).
+    //     strict adherence to the equipped class; it only means anything while the tree is active. Both have an MCM key in the add-on's own MCM (MFO_Classes, card C11).
     inline std::atomic<bool>  g_classTree{ true };
     inline std::atomic<bool>  g_classStrict{ true };
+    //   fClassXpRate / bClassInfo / fPriestSunPerSec / fSaintHealPerSec / fSaintUndeadPerSec (class add-on MCM, card C4 / C11,
+    //     marth 2026-11-11): the add-on's own MCM store (Data/MCM/Settings/MFO_Classes.ini, read by Read() after the MFO store) or
+    //     the seed MFO.ini. fClassXpRate = multiplier on every class XP award (1.0 = the sized 3 h / 6 h / 10 h / 13 h pace; 0 = no
+    //     XP). bClassInfo = the class-info combat-GUI toggle (KEY ONLY: the display itself is not built). The three /s values are the
+    //     Priest sun damage to undead / Daedra, the Saint aura heal to allies and the Saint aura damage to undead, all PER SECOND;
+    //     classes/Auras.cpp scales them at runtime into the aura ability effects (never a per-list table).
+    inline std::atomic<float> g_classXpRate{ 1.0f };
+    inline std::atomic<bool>  g_classInfo{ true };
+    inline std::atomic<float> g_priestSunPerSec{ 2.0f };
+    inline std::atomic<float> g_saintHealPerSec{ 30.0f };
+    inline std::atomic<float> g_saintUndeadPerSec{ 30.0f };
 #ifdef MFO_DEV_SELFTEST
     //   sDevClassEquip (card C5c, DEV BUILDS ONLY, INI-only, [Debug]): the dev class-equip list, raw text, applied once per load by
     //     selftest/Runner.cpp (DevClassEquipTick). Written by the config reader (SKSE task / main), read on the pump worker: under

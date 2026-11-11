@@ -132,6 +132,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/StuckAtOrigin.cpp
     logistics/PickupSound.cpp
     logistics/TradePerks.cpp
+    classes/Auras.cpp
     classes/Carriers.cpp
     classes/ClassTable.cpp
     classes/Classes.cpp
@@ -140,6 +141,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/Package.cpp
     classes/Presence.cpp
     classes/State.cpp
+    classes/Xp.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp

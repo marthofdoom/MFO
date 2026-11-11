@@ -959,6 +959,7 @@ namespace MFO::Classes {
             g_keptBytes.shrink_to_fit();
         }
         ResetCarriers();   // card C6: the pending set, the granted-perk memory and the pump generation are save-scoped too
+        detail::XpReset();   // card C4: the fight-pending credits are save-scoped too
     }
 
     std::vector<RE::FormID> detail::StoredFollowerIds() {
@@ -1165,6 +1166,34 @@ namespace MFO::Classes {
         if (ran && newlyMastered)
             spdlog::info("[classes] {:08X} mastered {} (level {})", a_follower, Get(a_class).slug, static_cast<int>(finalLevel));
         return ran && changed;
+    }
+
+    // Card C4 compound XP writer: the add, the level, the mastery and the unlocks under ONE g_mx hold (the ApplyLevel shape), and
+    // only while a_class is the EQUIPPED class. No layout change: ClassProgress{xp, level} is what MCLS already stores.
+    XpResult AwardXp(RE::FormID a_follower, Id a_class, std::uint32_t a_points, std::span<const std::uint32_t> a_cumulative) {
+        XpResult out;
+        if (!ValidId(a_class) || a_points == 0) return out;
+        const std::uint8_t cap = LevelCap(a_class);
+        if (cap == 0 || a_cumulative.size() != cap) return out;   // Dragonborn, or a curve that could never reach mastery
+        Mutate(a_follower, [&](FollowerClasses& fc) {
+            if (fc.equipped != static_cast<std::uint8_t>(a_class)) return;
+            auto& p = fc.progress[static_cast<std::size_t>(a_class)];
+            if (p.level >= cap) return;   // mastered: nothing more to earn on this class
+            out.levelBefore = p.level;
+            const std::uint64_t sum = static_cast<std::uint64_t>(p.xp) + a_points;
+            p.xp = static_cast<std::uint32_t>(std::min<std::uint64_t>(sum, a_cumulative.back()));   // the total at the cap is the ceiling
+            const std::uint8_t lvl = std::max<std::uint8_t>(std::max<std::uint8_t>(p.level, 1), LevelForXp(p.xp, a_cumulative));
+            p.level = std::min(lvl, cap);
+            if (p.level >= cap && !(fc.mastered & Bit(a_class))) { fc.mastered |= Bit(a_class); out.mastered = true; }
+            const Mask unlocked = (fc.unlocked | ComputeUnlocked(fc.mastered)) & RosterMask(kClassCount);   // never revoked
+            if (unlocked != fc.unlocked) fc.unlocked = unlocked;
+            out.xp = p.xp;
+            out.levelAfter = p.level;
+            out.applied = true;
+        });
+        if (out.applied && out.mastered)
+            spdlog::info("[classes] {:08X} mastered {} (level {})", a_follower, Get(a_class).slug, static_cast<int>(out.levelAfter));
+        return out;
     }
 
     bool ActivateClass(RE::FormID a_follower, Id a_class) {
