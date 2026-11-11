@@ -1121,6 +1121,7 @@ namespace MFO::APMFBridge {
         SweepReentryDenies();
         SweepPursuitLeashes();
         SweepAimClaims();             // ch.29 class miss budgets (apmf/AimClaims.cpp): own mutex, before g_mx
+        SweepSneakClaims();           // ch.3 act.sneak holds (apmf/SneakClaims.cpp, card G1): own mutex, before g_mx
         SweepHealApproaches();
         SweepOffenseApproaches();
         SweepSubstrateCasts();        // ch.27 OOC substrate casts (apmf/Substrate.cpp): own mutex, before g_mx
@@ -1368,6 +1369,7 @@ namespace MFO::APMFBridge {
         ClearEquipPreferences();      // ch.26 equip preferences: same (own mutex; order g_mx -> g_prefMx, never the reverse)
         ClearSubstrateCasts();        // ch.27 OOC substrate casts: same (own mutex; order g_mx -> g_subMx; Harbinger never saves a substrate)
         ClearAimClaims();             // ch.29 class miss budgets: same (own mutex; order g_mx -> g_aimMx; Harbinger never saves them)
+        ClearSneakClaims();           // ch.3 act.sneak holds: same (own mutex, order g_mx -> g_sneakMx, Harbinger never saves them)
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

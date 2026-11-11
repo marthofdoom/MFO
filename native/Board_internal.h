@@ -194,6 +194,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeBeyondRange, Str::K::Cond_FoeBeyondRange, ParamKind::Distance},
         { Vocab::kCondFoeAttackingPlayer, Str::K::Cond_FoeAttackingPlayer, ParamKind::None },
         { Vocab::kCondFoeAttackingAlly, Str::K::Cond_FoeAttackingAlly, ParamKind::None   },
+        { Vocab::kCondFoeAttackingMySummon, Str::K::Cond_FoeAttackingMySummon, ParamKind::None },   // card G6
         { Vocab::kCondFoeAttackingMe, Str::K::Cond_FoeAttackingMe,     ParamKind::None    },
         { Vocab::kCondFoeAttackingMeMelee, Str::K::Cond_FoeAttackingMeMelee,  ParamKind::None },
         { Vocab::kCondFoeAttackingMeRanged, Str::K::Cond_FoeAttackingMeRanged, ParamKind::None },
@@ -236,6 +237,8 @@ namespace MFO::Board {
         { Vocab::kCondDark, Str::K::Cond_Dark,                 ParamKind::None    },
         { Vocab::kCondSelfUnderwater, Str::K::Cond_SelfUnderwater, ParamKind::None    },
         { Vocab::kCondSelfPoisoned, Str::K::Cond_SelfPoisoned,     ParamKind::None    },
+        { Vocab::kCondSelfHasSummon, Str::K::Cond_SelfHasSummon,   ParamKind::None    },   // card G5
+        { Vocab::kCondSelfNoSummon, Str::K::Cond_SelfNoSummon,     ParamKind::None    },   // card G5
         { Vocab::kCondAllyDowned, Str::K::Cond_AllyDowned,         ParamKind::None    },
         { Vocab::kCondAllyParalysed, Str::K::Cond_AllyParalysed,   ParamKind::None    },
         { Vocab::kCondAllyPoisoned, Str::K::Cond_AllyPoisoned,     ParamKind::None    },
@@ -259,6 +262,7 @@ namespace MFO::Board {
         { Vocab::kActTaunt, Str::K::Act_Taunt },   // melee-only: the picker offers it only while a melee weapon is in the right hand
         { Vocab::kActPowerAttack, Str::K::Act_PowerAttack },
         { Vocab::kActFlee, Str::K::Act_Flee },
+        { Vocab::kActSneak, Str::K::Act_Sneak },   // card G1: in combat only with bSneakInCombat (dev switch, default OFF)
 #ifdef MFO_DEV_SELFTEST
         // DEV BUILDS ONLY: the self-test runner's standing marker (native/selftest/, Docs/SELFTEST.md).
         { Vocab::kActDevSelftest, Str::K::Act_Wait, ParamKind::None, "DEV: run self-tests" },
@@ -285,6 +289,8 @@ namespace MFO::Board {
         { Vocab::kCondDark, Str::K::Cond_Dark,                  ParamKind::None    },
         { Vocab::kCondSelfUnderwater, Str::K::Cond_SelfUnderwater, ParamKind::None    },
         { Vocab::kCondSelfPoisoned, Str::K::Cond_SelfPoisoned,     ParamKind::None    },
+        { Vocab::kCondSelfHasSummon, Str::K::Cond_SelfHasSummon,   ParamKind::None    },   // card G5
+        { Vocab::kCondSelfNoSummon, Str::K::Cond_SelfNoSummon,     ParamKind::None    },   // card G5
         { Vocab::kCondAllyDowned, Str::K::Cond_AllyDowned,         ParamKind::None    },
         { Vocab::kCondAllyParalysed, Str::K::Cond_AllyParalysed,   ParamKind::None    },
         { Vocab::kCondAllyPoisoned, Str::K::Cond_AllyPoisoned,     ParamKind::None    },
@@ -318,6 +324,7 @@ namespace MFO::Board {
         { Vocab::kActCastSelf, Str::K::Act_CastSelf },
         { Vocab::kActCastTarget, Str::K::Act_CastTarget },
         { Vocab::kActCastPlayer, Str::K::Act_CastPlayer },
+        { Vocab::kActSneak, Str::K::Act_Sneak },   // card G1: hold sneak while the rule stands (transparent)
         { Vocab::kActWait, Str::K::Act_Wait },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
 

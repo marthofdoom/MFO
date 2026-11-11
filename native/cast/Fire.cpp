@@ -442,6 +442,14 @@ namespace MFO::Actuation {
         if (op == Vocab::kActEquipMelee)  return EquipWeapon(a_follower, false);
         if (op == Vocab::kActEquipSilver) return EquipSilver(a_follower);   // cast/EquipSilver.cpp (86e3p2gp9)
         if (op == Vocab::kActTaunt) return Taunt::Fire(a_follower, a_choice);   // Taunt.cpp (taunt S2, 86e3g6duw)
+        // SNEAK (card G1, apmf/SneakClaims.cpp): hold the ch.3 stance claim while this rule stands. TRANSPARENT either
+        // way: the scan goes on to the rows below, so "Always -> Sneak" can sit on top of a table. NoOp = held,
+        // FailedOther = not held (Harbinger absent or refused, or in combat with bSneakInCombat off), reason named.
+        if (op == Vocab::kActSneak) {
+            if (const char* why = APMFBridge::ServiceSneakRule(a_follower, APMFBridge::SneakTable::Combat))
+                return { Result::FailedOther, why, true };
+            return { Result::NoOp, "sneaking", true };
+        }
         // kActEquipTorch moved to the LOGISTICS table (#35, marth: never needed in
         // combat) -- handled by Logistics::ServiceFollower now, not here.
 

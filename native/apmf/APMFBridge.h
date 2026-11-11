@@ -634,6 +634,23 @@ namespace MFO::APMFBridge {
     // Worker-safe; its own mutex (never g_mx).
     void ReleaseAimClaim(RE::FormID a_follower, const char* a_why);
 
+    // ── ch.3 STANCE (ABI 1, kIntent_Stance): act.sneak, class plan card G1 -- apmf/SneakClaims.cpp ──────
+    // ServiceSneakRule: the act.sneak rule of table a_table was reached with its condition true this lap. Files the
+    // follower's ONE ch.3 claim if none stands (not while he swims or rides) and marks the rule as standing. The hold
+    // is counted in TABLE LAPS: each table calls NoteSneakTableLap just before its rule scan really runs, and three
+    // counted laps in a row without the rule release the claim. A service that returns before its scan never ages it.
+    // NoteSneakRuleStands: the scan reached the rule but passed it over (cannot act, cooling), so the hold stands
+    // without a file. The sweep re-files (throttled, ~3 s) while the claim is live and IsSneaking reads false. In
+    // combat (InCombat) it files nothing and releases a standing claim unless bSneakInCombat (dev switch, default OFF)
+    // is on. Returns nullptr when the claim is held, else the reason it is not (Harbinger absent, refused, the combat
+    // switch, swimming or riding). The caller treats both as TRANSPARENT. ReleaseSneak is the dismissal road.
+    // Worker-safe, its own mutex (never g_mx).
+    enum class SneakTable : std::uint8_t { Combat, Logistics };
+    const char* ServiceSneakRule(RE::Actor* a_follower, SneakTable a_table);
+    void        NoteSneakRuleStands(RE::FormID a_follower, SneakTable a_table);
+    void        NoteSneakTableLap(RE::FormID a_follower, SneakTable a_table, bool a_ownCombat);
+    void        ReleaseSneak(RE::FormID a_follower, const char* a_why);
+
     // ── ch.24 HELD-HEAL APPROACH (ABI v19, kIntent_CombatApproach): apmf/CombatApproach.cpp ──
     // X = the held heal's recipient, R = fHealApproachRadius. One claim per follower; a no-op below
     // ABI 19 / seat refused / recipient blocked this fight. Release: a_hand names the hand whose

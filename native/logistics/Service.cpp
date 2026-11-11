@@ -285,6 +285,9 @@ namespace MFO::Logistics {
 
         if (!Config::g_logistics.load()) {   // whole subsystem off by default (#45)
             EngageOnSight::NoteWaitRule(id, false);   // no table evaluated -> no Wait holds
+            // act.sneak (card G1): a switched-off table is a lap that reaches no rule, so a sneak hold it owned, or a
+            // combat table's hold once the fight is over, is released (apmf/SneakClaims.cpp, WHICH LAPS COUNT).
+            APMFBridge::NoteSneakTableLap(id, APMFBridge::SneakTable::Logistics, false);
             return;
         }
 
@@ -1459,6 +1462,10 @@ namespace MFO::Logistics {
         // engage-on-sight reads the OUTCOME of this evaluation (marth: "If wait is higher
         // than anything it stops all gambits below it"): cleared here, set at the Wait exit.
         EngageOnSight::NoteWaitRule(id, false);
+        // act.sneak (card G1): THE ONE "the table ran" signal of the logistics hold. Every early return above (the
+        // cadence gate, cannot act, a LotD deposit, an errand tick, a loot walk, a lockpick or activate step) runs no
+        // lap, so it never ages the hold. Before the empty check: an emptied table is a lap that reaches no rule.
+        APMFBridge::NoteSneakTableLap(id, APMFBridge::SneakTable::Logistics, false);
         if (a_state.logistics().empty()) return;   // no rules -> nothing to run
 
         // FALL-THROUGH scan. Try matching rules in order until one ACTUALLY
@@ -2063,6 +2070,13 @@ namespace MFO::Logistics {
                     spdlog::info("[logistics] {:08X} OOC cast {:08X} ({}), refresh in {:.0f}s",
                                  id, sp->GetFormID(), route, dur);
                 }
+            }
+            else if (op == Vocab::kActSneak) {
+                // SNEAK (card G1, apmf/SneakClaims.cpp): hold the ch.3 stance claim while this rule stands. Never this
+                // tick's action: the scan goes on to the rule below, exactly like a matched rule that found nothing.
+                APMFBridge::ServiceSneakRule(a_follower, APMFBridge::SneakTable::Logistics);
+                start = choice.rank + 1;
+                continue;
             }
             else if (op == Vocab::kActWait) {
                 EngageOnSight::NoteWaitRule(id, true);   // engage-on-sight sits BELOW the table

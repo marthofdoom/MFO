@@ -169,6 +169,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/GroundApproach.cpp
     apmf/ErrandWork.cpp
     apmf/TauntClaims.cpp
+    apmf/SneakClaims.cpp
     apmf/Los.cpp
     apmf/Substrate.cpp
     imgui_impl_win32.cpp

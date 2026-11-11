@@ -240,7 +240,7 @@ namespace MFO::Scheduler {
             }
             break;
         }
-        case Family::Sneak:
+        case Family::Sneak:        c.actionOpcode = Vocab::kActSneak; break;   // card G1 (apmf/SneakClaims.cpp), no generator emits it yet
         case Family::Posture:
         case Family::Scroll:
         case Family::Exploit:

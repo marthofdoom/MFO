@@ -14,7 +14,7 @@
 #include "apmf/APMFBridge.h"   // GetHealCastSpell/Target -- the incumbent heal recipient (PickAlly)
 #include "cast/Actuation.h" // MeleeOnly -- has MFO declared him melee, with nothing ranged in hand
 #include "Taunt.h"        // IsPartyMember -- cond.foe_attacking_ally's party test
-#include "SelfStatus.h"   // Poisoned -- the main-thread mirror behind cond.self_poisoned
+#include "SelfStatus.h"   // Poisoned / HasSummon / CommandedLive -- the main-thread mirror (cond.self_poisoned, G5, G6)
 #include "Scheduler.h"   // ReachHoldSlack -- the reach hold's hysteresis line (review U3)
 
 namespace MFO::Eval {
@@ -40,7 +40,8 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeMultipleWithin || a_op == Vocab::kCondFoeIsUnholy ||
                    a_op == Vocab::kCondFoeAttackingAlly ||
                    a_op == Vocab::kCondFoeIsDragonFlying || a_op == Vocab::kCondFoeIsDragonLanded ||
-                   a_op == Vocab::kCondFoeIsDaedra || a_op == Vocab::kCondFoeIsSummoned;
+                   a_op == Vocab::kCondFoeIsDaedra || a_op == Vocab::kCondFoeIsSummoned ||
+                   a_op == Vocab::kCondFoeAttackingMySummon;
         }
 
         // Weak to an element = its resist actor-value is negative (a race trait
@@ -431,6 +432,14 @@ namespace MFO::Eval {
                 return std::find(givenUp.begin(), givenUp.end(), a_fid) != givenUp.end();
             };
             RE::FormID waivedFoe = 0;   // the foe the waiver kept this pass (logged once per transition, after the lock)
+            // CARD G6 (cond.foe_attacking_my_summon): the live actors this follower commands, from the card G5 mirror.
+            // Read ONCE, BEFORE the group lock (it takes SelfStatus's leaf mutex and may post a refresh). Empty (no
+            // summon, or no fresh measurement) = no foe can qualify, so the rule falls through.
+            std::vector<RE::FormID> mySummons;
+            if (a_op == Vocab::kCondFoeAttackingMySummon) {
+                mySummons = SelfStatus::CommandedLive(a_self);
+                if (mySummons.empty()) return best;
+            }
             // The reach gate's own height read, once and before the lock (pure reads).
             const float selfHeight = a_reachGate ? CombatSense::BodyHeight(a_self) : 0.0f;
             RE::ActorHandle          reachSkipped;   // the first foe the reach gate skipped
@@ -562,6 +571,12 @@ namespace MFO::Eval {
                         // this follower. The target is HELD for the test; nearest foe wins (score = dist).
                         auto tp = foe->GetActorRuntimeData().currentCombatTarget.get();
                         if (!tp.get() || tp.get() == a_self || !Taunt::IsPartyMember(tp.get())) continue;
+                    } else if (a_op == Vocab::kCondFoeAttackingMySummon) {
+                        // Card G6: the foe's combat target is one of this follower's live commanded actors (read
+                        // before the lock, above). The target is HELD for the test. Nearest foe wins (score = dist).
+                        auto tp = foe->GetActorRuntimeData().currentCombatTarget.get();
+                        if (!tp.get() ||
+                            std::find(mySummons.begin(), mySummons.end(), tp->GetFormID()) == mySummons.end()) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMeMelee) {
                         // Targeting the follower AND swinging steel (not a bow, not a
                         // spell) -- the "peel this one off me" rule for a mixed pack.
@@ -842,6 +857,8 @@ namespace MFO::Eval {
             // SITUATIONAL STATE gates (ClickUp 86e3g81x0): reads of the follower (or the player), no target.
             if (op == Vocab::kCondSelfUnderwater) return ActorUnderwater(a_self);
             if (op == Vocab::kCondSelfPoisoned)   return SelfStatus::Poisoned(a_self);   // main-thread mirror (SelfStatus.h)
+            if (op == Vocab::kCondSelfHasSummon)  return SelfStatus::HasSummon(a_self);  // card G5, same mirror, stale = false
+            if (op == Vocab::kCondSelfNoSummon)   return SelfStatus::NoSummon(a_self);   // card G5, same mirror, stale = false
             if (op == Vocab::kCondPlayerSneaking) return a_player && a_player->IsSneaking();
 
             // Foe-COUNT gate -- reads the group, picks no target.

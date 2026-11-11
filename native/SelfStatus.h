@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <vector>
 
 // SELF STATUS READS that the gambit evaluator cannot make on its own thread (ClickUp 86e3g81x0, marth 2026-09-29).
 //
@@ -22,6 +23,16 @@ namespace MFO::SelfStatus {
 
     // True when the mirror says a_actor carries a live poison. Worker-safe (a mutex-guarded map read).
     [[nodiscard]] bool Poisoned(RE::Actor* a_actor);
+
+    // CARD G5 (cond.self_has_summon / cond.self_no_summon) and G6 (cond.foe_attacking_my_summon): the LIVE actors
+    // a_actor commands (conjured creatures and Reanimate thralls), measured on the MAIN thread by
+    // Actuation::LiveCommandedActors in the SAME refresh as the poison read (one Post, one stamp, the same 1 s refresh
+    // and 5 s trust). Worker-safe. With no fresh measurement both conditions read FALSE (fail closed: "no summon"
+    // is never claimed on a stale or missing read either), and CommandedLive returns empty.
+    [[nodiscard]] bool HasSummon(RE::Actor* a_actor);
+    [[nodiscard]] bool NoSummon(RE::Actor* a_actor);
+    // The FormIDs of those live commanded actors (empty = none, or no fresh measurement).
+    [[nodiscard]] std::vector<RE::FormID> CommandedLive(RE::Actor* a_actor);
 
     // Drop the whole mirror. ResetAllState (load / revert), after StopPump, beside MainThread::Clear: a pre-load
     // answer must not outlive the load (handles and FormIDs are re-resolved against the next session).

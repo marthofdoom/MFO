@@ -2963,3 +2963,12 @@ Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale 
 
 ### MFO-B695 (SEV-4, OPEN, selftest/Setup.cpp SpawnUnsafeReason mount skip, against 7e095eb, Opus review of fix/selftest-spawn-guard)
 "an unridden follower horse still blocks the spawn. The player's horse is skipped even when nobody is riding it (QLastRiddenMount). A follower's horse is only skipped while the follower is on it (GetMountedBy rider is party). A dismounted follower horse within 3500 units that is protected or non-hostile still refuses." Engine limit: Actor slot 0x114 returns a null handle, only PlayerCharacter overrides it, so no follower has a last-ridden mount. Dev-build only. The refusal line now names the horse, so it diagnoses in one field cycle.
+
+### MFO-B696 (SEV-4, OPEN, apmf/SneakClaims.cpp re-file, against a31f154, Opus review of feat/gcards-batch1)
+"The re-file assumes MFO holds the only ch.3 claim on the actor. If another client also holds one, our Release does not bring the claim count to 0. The new Request then becomes an additional claim (ControlMap.cpp ~:1290, no Engage), so the re-assert sends nothing. It would log a RE-FILE every ~3 s and IsSneaking would stay FALSE." Visible in the log, not masked.
+
+### MFO-B697 (SEV-5, OPEN, G1 combat Sneak row, against a31f154, same review)
+"A combat-table Sneak row does nothing in the follower's own combat by default (switch off). The board gives no sign of this: the FailedOther reason reaches only the chain."
+
+### MFO-B698 (SEV-5, OPEN, classes/ClassTable.cpp todo.* rows, against a31f154, same review)
+"The card's always-true default row for the four sneak classes is not in the diff (ClassTable untouched)." The class rows still use todo.act.sneak, todo.cond.self_no_summon, todo.cond.foe_attacking_my_summon: the class defaults card wires them.
