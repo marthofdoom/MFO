@@ -1180,3 +1180,38 @@ Set A2 does not need the estimates. In the game as it can run today (no estimate
 So the weights alone are worth +1.2 to +3.6 J in the live game, before any engine-side fill. This is a behaviour
 change on main once merged (more power attacks and control casts, fewer magicka potions) and wants its Opus review
 and a field look.
+
+## 27. Class packages (C8), default rows (C12) and prefix orders (Q74) re-run under the corrected world
+
+Sections 17, 18 and 22.1 were searched before Chocolate Poise, follower scaling, the spell-reach fix and rulings Q73
+and Q74 were in the lab. All three searches were run again (table mode, train LoreRim, validate Tuxborn and Vanilla,
+seeds 1 and 7, the same keep rule). The files `tools/iaus_sim/packages/<class>.json` and `defaults/<class>.json` now
+hold THESE results and supersede the tables of sections 17, 18 and 22.1. The default-row search now runs with the
+rows cut to the rank's slots, so the sets it finds already have to work as prefixes.
+
+**Packages kept (7 of 35):**
+
+| Class | Mean gain (J) | Change against today's package |
+|---|---|---|
+| mercenary | +4.94 | melee stance offensive x4, power share x2, leash 1500 |
+| knight | +4.00 | melee stance offensive x4, bash x2, power share x0.75, leash 1000 |
+| ebony-warrior | +2.78 | offensive x2.66, power share x2 |
+| warrior | +2.38 | offensive x2.66, power attack on a staggered foe x2, power share x2, leash 2500 |
+| listener | +1.46 | melee and ranged stance offensive x2, power attack on a staggered foe x2, power share x1.33 |
+| priest | +0.80 | cast stance offensive x2 |
+| nightblade | +0.76 | offensive x1.33, leash 1500 |
+
+The pattern is the same as in section 17 and stronger: the melee line wants a far more offensive melee stance than
+today's and a leash on the player. The other 28 classes show no robust gain (blademaster +2.74 and great-knight +1.09
+gain on the train list and lose on a validation list, so they are not kept).
+
+**Default rows kept (11 of 35):** blademaster +5.03, witchhunter +3.91, living-legend +3.28, warrior +3.17, champion
++2.78, conjurer +2.10, sorcerer +1.98, nightingale +1.91, grand-battlemage +1.52, necromancer +1.18, wizard +1.10.
+The row sets are in each class's `defaults/<class>.json` (`lab`, with `today` beside it and the per-list evidence).
+
+**Prefix orders kept (3):** listener +1.96, warlock +1.76, grand-battlemage +0.56. Fewer than in 22.1 because the row
+search itself now scores the cut sets.
+
+Caveat, unchanged: table mode acts through the sim's engine-AI MODEL, and only some combat-style fields are
+modelled (offensive, defensive, the power-attack and bash multipliers, fallback, the three weapon weights). The
+direction is the finding. The values want the in-game probe before the C8 and C12 authors take them.

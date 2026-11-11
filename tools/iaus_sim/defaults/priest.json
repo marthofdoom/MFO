@@ -8,7 +8,7 @@
   "Vanilla"
  ],
  "mode": "table",
- "package": "current",
+ "package": "st.0.off=1,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=1,st.0.bash=1,st.2.off=2,st.2.def=0.5,st.2.fallback=0.5,st.2.avoid=0.2,pk.power=1,pk.leash=0",
  "today": [
   {
    "condition": "cond.player_hp_pct_below",
@@ -83,46 +83,46 @@
    "cooldown_s": 0.0
   },
   {
-   "condition": "cond.foe_lowest_hp",
-   "gambit": "act.cast_target",
-   "threshold": 0.0,
-   "spell_role": "Attack",
-   "cooldown_s": 0.0
-  },
-  {
    "condition": "cond.self_mp_pct_below",
    "gambit": "act.drink_magicka_potion",
    "threshold": 0.2,
    "spell_role": "None",
    "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
   }
  ],
  "today_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0;cond.foe_any|act.cast_target|0|1|0",
- "lab_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_lowest_hp|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "lab_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0;cond.foe_any|act.cast_target|0|1|0",
  "evidence": {
   "LoreRim": {
-   "today": 37.38,
-   "lab": 39.77,
-   "delta": 2.39
+   "today": 39.27,
+   "lab": 39.27,
+   "delta": 0.0
   },
   "Tuxborn": {
-   "today": 43.52,
-   "lab": 44.45,
-   "delta": 0.93
+   "today": 44.27,
+   "lab": 44.27,
+   "delta": 0.0
   },
   "Vanilla": {
-   "today": 65.39,
-   "lab": 67.58,
-   "delta": 2.19
+   "today": 67.17,
+   "lab": 67.17,
+   "delta": 0.0
   }
  },
- "mean_gain": 1.84,
- "verdict": "keep",
+ "mean_gain": 0.0,
+ "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 6",
  "prefix": {
   "ruling": "Q74",
-  "start_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_lowest_hp|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
-  "ordered_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.foe_lowest_hp|act.cast_target|0|1|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+  "start_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0;cond.foe_any|act.cast_target|0|1|0",
+  "ordered_text": "cond.player_hp_pct_below|act.cast_player|0.5|7|0;cond.ally_hp_pct_below|act.cast_target|0.5|7|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_is_unholy|act.cast_target|0|16|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0;cond.foe_any|act.cast_target|0|1|0",
   "ordered": [
    {
     "condition": "cond.player_hp_pct_below",
@@ -139,24 +139,17 @@
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.foe_is_unholy",
-    "gambit": "act.cast_target",
-    "threshold": 0.0,
-    "spell_role": "TurnUndead",
-    "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.foe_lowest_hp",
-    "gambit": "act.cast_target",
-    "threshold": 0.0,
-    "spell_role": "Attack",
-    "cooldown_s": 0.0
-   },
-   {
     "condition": "cond.self_hp_pct_below",
     "gambit": "act.cast_self",
     "threshold": 0.5,
     "spell_role": "Heal",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_is_unholy",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "TurnUndead",
     "cooldown_s": 0.0
    },
    {
@@ -165,77 +158,84 @@
     "threshold": 0.2,
     "spell_role": "None",
     "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_any",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "Attack",
+    "cooldown_s": 0.0
    }
   ],
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 37.93,
-     "ordered": 37.93,
-     "delta": 0.0
+     "start": 39.56,
+     "ordered": 40.25,
+     "delta": 0.69
     },
     "prefix4": {
-     "start": 37.39,
-     "ordered": 38.04,
-     "delta": 0.64
+     "start": 39.87,
+     "ordered": 39.87,
+     "delta": 0.0
     },
     "prefix5": {
-     "start": 38.08,
-     "ordered": 38.07,
-     "delta": -0.01
+     "start": 40.62,
+     "ordered": 40.62,
+     "delta": 0.0
     },
     "prefix6": {
-     "start": 37.58,
-     "ordered": 37.53,
-     "delta": -0.05
+     "start": 37.77,
+     "ordered": 37.77,
+     "delta": 0.0
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 43.27,
-     "ordered": 43.27,
-     "delta": 0.0
+     "start": 43.47,
+     "ordered": 43.52,
+     "delta": 0.05
     },
     "prefix4": {
-     "start": 43.58,
-     "ordered": 43.48,
-     "delta": -0.1
+     "start": 43.34,
+     "ordered": 43.34,
+     "delta": 0.0
     },
     "prefix5": {
-     "start": 43.76,
-     "ordered": 43.75,
-     "delta": -0.01
+     "start": 44.31,
+     "ordered": 44.31,
+     "delta": 0.0
     },
     "prefix6": {
-     "start": 44.37,
-     "ordered": 44.34,
-     "delta": -0.03
+     "start": 43.58,
+     "ordered": 43.58,
+     "delta": 0.0
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 66.46,
-     "ordered": 66.46,
-     "delta": 0.0
+     "start": 66.33,
+     "ordered": 67.51,
+     "delta": 1.18
     },
     "prefix4": {
-     "start": 66.81,
-     "ordered": 68.04,
-     "delta": 1.22
+     "start": 66.34,
+     "ordered": 66.34,
+     "delta": 0.0
     },
     "prefix5": {
-     "start": 68.17,
-     "ordered": 68.13,
-     "delta": -0.04
+     "start": 67.74,
+     "ordered": 67.74,
+     "delta": 0.0
     },
     "prefix6": {
-     "start": 68.23,
-     "ordered": 68.19,
-     "delta": -0.04
+     "start": 65.28,
+     "ordered": 65.28,
+     "delta": 0.0
     }
    }
   },
-  "mean_gain": 0.13,
+  "mean_gain": 0.16,
   "verdict": "no robust gain: keep the starting order",
   "slots_by_rank": [
    3,

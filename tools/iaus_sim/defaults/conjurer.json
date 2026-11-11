@@ -34,10 +34,17 @@
  ],
  "lab": [
   {
-   "condition": "cond.foe_count_at_least",
+   "condition": "cond.foe_is_caster",
    "gambit": "act.cast_target",
-   "threshold": 3.0,
-   "spell_role": "Fear",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
    "cooldown_s": 0.0
   },
   {
@@ -60,47 +67,40 @@
    "threshold": 150.0,
    "spell_role": "None",
    "cooldown_s": 0.0
-  },
-  {
-   "condition": "cond.foe_stronger_than_me",
-   "gambit": "act.attack",
-   "threshold": 0.0,
-   "spell_role": "None",
-   "cooldown_s": 0.0
   }
  ],
  "today_text": "cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0",
- "lab_text": "cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_stronger_than_me|act.attack|0|0|0",
+ "lab_text": "cond.foe_is_caster|act.cast_target|0|1|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 40.21,
-   "lab": 41.55,
-   "delta": 1.34
+   "today": 39.34,
+   "lab": 40.63,
+   "delta": 1.3
   },
   "Tuxborn": {
-   "today": 38.08,
-   "lab": 42.37,
-   "delta": 4.29
+   "today": 38.13,
+   "lab": 39.66,
+   "delta": 1.54
   },
   "Vanilla": {
-   "today": 61.84,
-   "lab": 62.79,
-   "delta": 0.94
+   "today": 62.23,
+   "lab": 65.7,
+   "delta": 3.47
   }
  },
- "mean_gain": 2.19,
+ "mean_gain": 2.1,
  "verdict": "keep",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
   "ruling": "Q74",
-  "start_text": "cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_stronger_than_me|act.attack|0|0|0",
-  "ordered_text": "cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_stronger_than_me|act.attack|0|0|0;cond.foe_within_range|act.equip_melee|150|0|0",
+  "start_text": "cond.foe_is_caster|act.cast_target|0|1|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0",
+  "ordered_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_any|act.cast_target|0|1|0;cond.foe_is_caster|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0",
   "ordered": [
    {
-    "condition": "cond.foe_count_at_least",
-    "gambit": "act.cast_target",
-    "threshold": 3.0,
-    "spell_role": "Fear",
+    "condition": "cond.foe_lowest_hp",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
     "cooldown_s": 0.0
    },
    {
@@ -111,16 +111,16 @@
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.self_mp_pct_below",
-    "gambit": "act.drink_magicka_potion",
-    "threshold": 0.25,
-    "spell_role": "None",
+    "condition": "cond.foe_is_caster",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "Attack",
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.foe_stronger_than_me",
-    "gambit": "act.attack",
-    "threshold": 0.0,
+    "condition": "cond.self_mp_pct_below",
+    "gambit": "act.drink_magicka_potion",
+    "threshold": 0.25,
     "spell_role": "None",
     "cooldown_s": 0.0
    },
@@ -135,57 +135,57 @@
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 39.13,
-     "ordered": 39.13,
-     "delta": 0.0
+     "start": 38.78,
+     "ordered": 40.04,
+     "delta": 1.26
     },
     "prefix4": {
-     "start": 39.46,
-     "ordered": 39.49,
-     "delta": 0.03
+     "start": 38.17,
+     "ordered": 39.52,
+     "delta": 1.35
     },
     "prefix5": {
-     "start": 39.27,
-     "ordered": 39.57,
-     "delta": 0.3
+     "start": 37.91,
+     "ordered": 38.9,
+     "delta": 0.99
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 42.09,
-     "ordered": 42.09,
-     "delta": 0.0
+     "start": 39.42,
+     "ordered": 39.06,
+     "delta": -0.36
     },
     "prefix4": {
-     "start": 42.18,
-     "ordered": 42.68,
-     "delta": 0.49
+     "start": 39.92,
+     "ordered": 39.88,
+     "delta": -0.04
     },
     "prefix5": {
-     "start": 42.85,
-     "ordered": 42.85,
-     "delta": 0.0
+     "start": 39.82,
+     "ordered": 39.18,
+     "delta": -0.64
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 62.56,
-     "ordered": 62.56,
-     "delta": 0.0
+     "start": 64.53,
+     "ordered": 62.89,
+     "delta": -1.64
     },
     "prefix4": {
-     "start": 63.52,
-     "ordered": 62.85,
-     "delta": -0.67
+     "start": 64.08,
+     "ordered": 62.12,
+     "delta": -1.96
     },
     "prefix5": {
-     "start": 63.25,
-     "ordered": 63.26,
-     "delta": 0.01
+     "start": 64.0,
+     "ordered": 62.01,
+     "delta": -1.99
     }
    }
   },
-  "mean_gain": 0.02,
+  "mean_gain": -0.34,
   "verdict": "no robust gain: keep the starting order",
   "slots_by_rank": [
    3,

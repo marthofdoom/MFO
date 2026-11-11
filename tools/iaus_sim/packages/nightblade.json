@@ -28,51 +28,52 @@
   "pk.leash": 0.0
  },
  "found": {
-  "st.0.off": 2.0,
+  "st.0.off": 1.33,
   "st.0.def": 0.5,
   "st.0.fallback": 0.42,
   "st.0.powBlock": 1.0,
   "st.0.powStag": 1.0,
   "st.0.bash": 1.0,
   "pk.power": 1.0,
-  "pk.leash": 0.0
+  "pk.leash": 1500.0
  },
  "changed": {
-  "st.0.off": 2.0
+  "st.0.off": 1.33,
+  "pk.leash": 1500.0
  },
  "evidence": {
   "LoreRim/table": {
-   "today": 37.72,
-   "package": 39.01,
-   "delta": 1.29
+   "today": 40.15,
+   "package": 40.87,
+   "delta": 0.72
   },
   "LoreRim/iaus": {
-   "today": 36.89,
-   "package": 38.62,
-   "delta": 1.73
+   "today": 37.48,
+   "package": 38.27,
+   "delta": 0.79
   },
   "Tuxborn/table": {
-   "today": 47.01,
-   "package": 48.32,
-   "delta": 1.3
+   "today": 46.58,
+   "package": 48.31,
+   "delta": 1.73
   },
   "Tuxborn/iaus": {
-   "today": 46.0,
-   "package": 47.05,
-   "delta": 1.05
+   "today": 48.79,
+   "package": 48.46,
+   "delta": -0.33
   },
   "Vanilla/table": {
-   "today": 69.6,
-   "package": 70.22,
-   "delta": 0.62
+   "today": 69.59,
+   "package": 69.41,
+   "delta": -0.18
   },
   "Vanilla/iaus": {
-   "today": 75.91,
-   "package": 76.01,
-   "delta": 0.1
+   "today": 79.74,
+   "package": 79.56,
+   "delta": -0.18
   }
  },
- "mean_table_gain": 1.07,
+ "mean_table_gain": 0.76,
  "verdict": "keep",
  "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
 }

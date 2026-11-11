@@ -8,7 +8,7 @@
   "Vanilla"
  ],
  "mode": "table",
- "package": "st.0.off=2,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=1,st.0.bash=1,pk.power=1,pk.leash=0",
+ "package": "st.0.off=1.33,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=1,st.0.bash=1,pk.power=1,pk.leash=1500",
  "today": [
   {
    "condition": "cond.foe_stronger_than_me",
@@ -69,33 +69,33 @@
    "cooldown_s": 0.0
   },
   {
-   "condition": "cond.foe_is_caster",
+   "condition": "cond.foe_attacking_player",
    "gambit": "act.cast_target",
    "threshold": 0.0,
-   "spell_role": "Attack",
+   "spell_role": "Paralyze",
    "cooldown_s": 0.0
   }
  ],
  "today_text": "cond.foe_stronger_than_me|act.cast_target|0|13|0;cond.foe_fleeing|act.attack|0|0|0;cond.always|act.cast_self|0|11|0;cond.foe_any|act.equip_melee|0|0|0",
- "lab_text": "cond.foe_stronger_than_me|act.cast_target|0|13|0;cond.foe_fleeing|act.attack|0|0|0;cond.always|act.cast_self|0|11|0;cond.foe_any|act.equip_melee|0|0|0;cond.foe_is_caster|act.cast_target|0|1|0",
+ "lab_text": "cond.foe_stronger_than_me|act.cast_target|0|13|0;cond.foe_fleeing|act.attack|0|0|0;cond.always|act.cast_self|0|11|0;cond.foe_any|act.equip_melee|0|0|0;cond.foe_attacking_player|act.cast_target|0|12|0",
  "evidence": {
   "LoreRim": {
-   "today": 39.01,
-   "lab": 38.5,
-   "delta": -0.51
+   "today": 40.87,
+   "lab": 42.19,
+   "delta": 1.32
   },
   "Tuxborn": {
-   "today": 48.32,
-   "lab": 49.33,
-   "delta": 1.02
+   "today": 48.31,
+   "lab": 47.85,
+   "delta": -0.46
   },
   "Vanilla": {
-   "today": 70.22,
-   "lab": 69.61,
-   "delta": -0.61
+   "today": 69.41,
+   "lab": 70.53,
+   "delta": 1.12
   }
  },
- "mean_gain": -0.03,
+ "mean_gain": 0.66,
  "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
@@ -135,37 +135,37 @@
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 38.19,
-     "ordered": 38.19,
+     "start": 39.46,
+     "ordered": 39.46,
      "delta": 0.0
     },
     "prefix4": {
-     "start": 38.19,
-     "ordered": 38.19,
+     "start": 39.46,
+     "ordered": 39.46,
      "delta": 0.0
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 46.61,
-     "ordered": 46.61,
+     "start": 46.65,
+     "ordered": 46.65,
      "delta": 0.0
     },
     "prefix4": {
-     "start": 46.61,
-     "ordered": 46.61,
+     "start": 46.65,
+     "ordered": 46.65,
      "delta": 0.0
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 68.96,
-     "ordered": 68.96,
+     "start": 68.44,
+     "ordered": 68.44,
      "delta": 0.0
     },
     "prefix4": {
-     "start": 68.96,
-     "ordered": 68.96,
+     "start": 68.44,
+     "ordered": 68.44,
      "delta": 0.0
     }
    }

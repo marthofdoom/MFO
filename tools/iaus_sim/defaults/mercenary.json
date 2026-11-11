@@ -8,7 +8,7 @@
   "Vanilla"
  ],
  "mode": "table",
- "package": "st.0.off=4,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=2,st.0.bash=1,pk.power=2,pk.leash=1000",
+ "package": "st.0.off=4,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=1,st.0.bash=1,pk.power=2,pk.leash=1500",
  "today": [
   {
    "condition": "cond.foe_is_caster",
@@ -48,6 +48,13 @@
  ],
  "lab": [
   {
+   "condition": "cond.foe_attacking_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
    "condition": "cond.foe_is_ranged",
    "gambit": "act.attack",
    "threshold": 0.0,
@@ -55,7 +62,7 @@
    "cooldown_s": 0.0
   },
   {
-   "condition": "cond.foe_stronger_than_me",
+   "condition": "cond.foe_any",
    "gambit": "act.power_attack",
    "threshold": 0.0,
    "spell_role": "None",
@@ -74,44 +81,51 @@
    "threshold": 0.0,
    "spell_role": "None",
    "cooldown_s": 0.0
-  },
-  {
-   "condition": "cond.self_hp_pct_below",
-   "gambit": "act.drink_health_potion",
-   "threshold": 0.5,
-   "spell_role": "None",
-   "cooldown_s": 0.0
   }
  ],
  "today_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0",
- "lab_text": "cond.foe_is_ranged|act.attack|0|0|0;cond.foe_stronger_than_me|act.power_attack|0|0|10;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.5|0|0",
+ "lab_text": "cond.foe_attacking_me|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_any|act.power_attack|0|0|10;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 62.51,
-   "lab": 66.04,
-   "delta": 3.53
+   "today": 62.86,
+   "lab": 64.83,
+   "delta": 1.98
   },
   "Tuxborn": {
-   "today": 63.6,
-   "lab": 63.21,
-   "delta": -0.39
+   "today": 64.17,
+   "lab": 63.55,
+   "delta": -0.63
   },
   "Vanilla": {
-   "today": 74.92,
-   "lab": 74.37,
-   "delta": -0.54
+   "today": 74.73,
+   "lab": 74.81,
+   "delta": 0.08
   }
  },
- "mean_gain": 0.87,
- "verdict": "keep",
+ "mean_gain": 0.48,
+ "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
   "ruling": "Q74",
-  "start_text": "cond.foe_is_ranged|act.attack|0|0|0;cond.foe_stronger_than_me|act.power_attack|0|0|10;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.5|0|0",
-  "ordered_text": "cond.foe_is_ranged|act.attack|0|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.5|0|0;cond.foe_any|act.equip_melee|0|0|0;cond.foe_stronger_than_me|act.power_attack|0|0|10",
+  "start_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0",
+  "ordered_text": "cond.foe_is_ranged|act.attack|0|0|0;cond.foe_is_caster|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_any|act.equip_melee|0|0|0",
   "ordered": [
    {
     "condition": "cond.foe_is_ranged",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_is_caster",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_lowest_hp",
     "gambit": "act.attack",
     "threshold": 0.0,
     "spell_role": "None",
@@ -125,81 +139,67 @@
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.self_hp_pct_below",
-    "gambit": "act.drink_health_potion",
-    "threshold": 0.5,
-    "spell_role": "None",
-    "cooldown_s": 0.0
-   },
-   {
     "condition": "cond.foe_any",
     "gambit": "act.equip_melee",
     "threshold": 0.0,
     "spell_role": "None",
     "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.foe_stronger_than_me",
-    "gambit": "act.power_attack",
-    "threshold": 0.0,
-    "spell_role": "None",
-    "cooldown_s": 10.0
    }
   ],
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 64.23,
-     "ordered": 64.88,
-     "delta": 0.65
+     "start": 63.45,
+     "ordered": 63.66,
+     "delta": 0.21
     },
     "prefix4": {
-     "start": 64.23,
-     "ordered": 64.88,
-     "delta": 0.65
+     "start": 63.62,
+     "ordered": 63.82,
+     "delta": 0.19
     },
     "prefix5": {
-     "start": 64.27,
-     "ordered": 64.48,
-     "delta": 0.21
+     "start": 63.62,
+     "ordered": 63.82,
+     "delta": 0.19
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 63.6,
-     "ordered": 62.18,
-     "delta": -1.42
+     "start": 63.83,
+     "ordered": 63.64,
+     "delta": -0.19
     },
     "prefix4": {
-     "start": 63.6,
-     "ordered": 62.18,
-     "delta": -1.42
+     "start": 64.11,
+     "ordered": 63.87,
+     "delta": -0.23
     },
     "prefix5": {
-     "start": 63.26,
-     "ordered": 63.25,
-     "delta": -0.01
+     "start": 64.11,
+     "ordered": 63.87,
+     "delta": -0.23
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 73.36,
-     "ordered": 74.07,
-     "delta": 0.71
+     "start": 74.32,
+     "ordered": 74.03,
+     "delta": -0.29
     },
     "prefix4": {
-     "start": 73.36,
-     "ordered": 74.07,
-     "delta": 0.71
+     "start": 74.67,
+     "ordered": 74.36,
+     "delta": -0.3
     },
     "prefix5": {
-     "start": 73.89,
-     "ordered": 73.88,
-     "delta": -0.01
+     "start": 74.67,
+     "ordered": 74.36,
+     "delta": -0.3
     }
    }
   },
-  "mean_gain": 0.01,
+  "mean_gain": -0.11,
   "verdict": "no robust gain: keep the starting order",
   "slots_by_rank": [
    3,

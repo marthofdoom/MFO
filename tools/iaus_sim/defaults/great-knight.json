@@ -48,7 +48,7 @@
  ],
  "lab": [
   {
-   "condition": "cond.foe_attacking_player",
+   "condition": "cond.foe_is_caster",
    "gambit": "act.power_attack",
    "threshold": 0.0,
    "spell_role": "None",
@@ -56,14 +56,14 @@
   },
   {
    "condition": "cond.foe_attacking_player",
-   "gambit": "act.taunt",
+   "gambit": "act.attack",
    "threshold": 0.0,
    "spell_role": "None",
    "cooldown_s": 0.0
   },
   {
-   "condition": "cond.foe_attacking_me",
-   "gambit": "act.attack",
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
    "threshold": 0.0,
    "spell_role": "None",
    "cooldown_s": 0.0
@@ -84,34 +84,34 @@
   }
  ],
  "today_text": "cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_count_at_least|act.taunt|3|0|0;cond.foe_attacking_player|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
- "lab_text": "cond.foe_attacking_player|act.power_attack|0|0|10;cond.foe_attacking_player|act.taunt|0|0|0;cond.foe_attacking_me|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.foe_is_caster|act.power_attack|0|0|10;cond.foe_attacking_player|act.attack|0|0|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 43.7,
-   "lab": 46.78,
-   "delta": 3.08
+   "today": 42.99,
+   "lab": 43.94,
+   "delta": 0.94
   },
   "Tuxborn": {
-   "today": 48.37,
-   "lab": 49.97,
-   "delta": 1.59
+   "today": 50.16,
+   "lab": 49.9,
+   "delta": -0.26
   },
   "Vanilla": {
-   "today": 71.51,
-   "lab": 71.25,
-   "delta": -0.27
+   "today": 70.71,
+   "lab": 69.29,
+   "delta": -1.42
   }
  },
- "mean_gain": 1.47,
- "verdict": "keep",
+ "mean_gain": -0.25,
+ "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
   "ruling": "Q74",
-  "start_text": "cond.foe_attacking_player|act.power_attack|0|0|10;cond.foe_attacking_player|act.taunt|0|0|0;cond.foe_attacking_me|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
-  "ordered_text": "cond.foe_attacking_player|act.taunt|0|0|0;cond.foe_attacking_player|act.power_attack|0|0|10;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0;cond.foe_attacking_me|act.attack|0|0|0",
+  "start_text": "cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_count_at_least|act.taunt|3|0|0;cond.foe_attacking_player|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
+  "ordered_text": "cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_attacking_player|act.attack|0|0|0;cond.foe_count_at_least|act.taunt|3|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.35|0|0;cond.foe_any|act.equip_melee|0|0|0",
   "ordered": [
    {
-    "condition": "cond.foe_attacking_player",
+    "condition": "cond.foe_attacking_ally",
     "gambit": "act.taunt",
     "threshold": 0.0,
     "spell_role": "None",
@@ -119,10 +119,17 @@
    },
    {
     "condition": "cond.foe_attacking_player",
-    "gambit": "act.power_attack",
+    "gambit": "act.attack",
     "threshold": 0.0,
     "spell_role": "None",
-    "cooldown_s": 10.0
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_count_at_least",
+    "gambit": "act.taunt",
+    "threshold": 3.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
    },
    {
     "condition": "cond.self_hp_pct_below",
@@ -137,65 +144,58 @@
     "threshold": 0.0,
     "spell_role": "None",
     "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.foe_attacking_me",
-    "gambit": "act.attack",
-    "threshold": 0.0,
-    "spell_role": "None",
-    "cooldown_s": 0.0
    }
   ],
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 45.39,
-     "ordered": 46.6,
-     "delta": 1.21
+     "start": 44.43,
+     "ordered": 43.91,
+     "delta": -0.52
     },
     "prefix4": {
-     "start": 44.83,
-     "ordered": 46.6,
-     "delta": 1.77
+     "start": 44.15,
+     "ordered": 44.4,
+     "delta": 0.25
     },
     "prefix5": {
-     "start": 44.83,
-     "ordered": 43.95,
-     "delta": -0.89
+     "start": 44.15,
+     "ordered": 44.4,
+     "delta": 0.25
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 49.88,
-     "ordered": 49.92,
-     "delta": 0.04
+     "start": 49.56,
+     "ordered": 50.46,
+     "delta": 0.9
     },
     "prefix4": {
-     "start": 50.09,
-     "ordered": 49.92,
-     "delta": -0.18
+     "start": 49.05,
+     "ordered": 49.53,
+     "delta": 0.47
     },
     "prefix5": {
-     "start": 50.09,
-     "ordered": 50.0,
-     "delta": -0.1
+     "start": 49.05,
+     "ordered": 49.53,
+     "delta": 0.47
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 70.16,
-     "ordered": 70.59,
-     "delta": 0.43
+     "start": 70.42,
+     "ordered": 70.49,
+     "delta": 0.07
     },
     "prefix4": {
-     "start": 70.95,
-     "ordered": 70.59,
-     "delta": -0.36
+     "start": 71.92,
+     "ordered": 71.29,
+     "delta": -0.63
     },
     "prefix5": {
-     "start": 70.95,
-     "ordered": 69.65,
-     "delta": -1.29
+     "start": 71.92,
+     "ordered": 71.29,
+     "delta": -0.63
     }
    }
   },

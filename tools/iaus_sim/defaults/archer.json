@@ -48,7 +48,7 @@
  ],
  "lab": [
   {
-   "condition": "cond.foe_is_caster",
+   "condition": "cond.foe_attacking_ally",
    "gambit": "act.attack",
    "threshold": 0.0,
    "spell_role": "None",
@@ -84,31 +84,31 @@
   }
  ],
  "today_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_any|act.equip_ranged|0|0|0",
- "lab_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+ "lab_text": "cond.foe_attacking_ally|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_any|act.equip_ranged|0|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 57.22,
-   "lab": 57.22,
-   "delta": 0.0
+   "today": 57.1,
+   "lab": 56.67,
+   "delta": -0.44
   },
   "Tuxborn": {
-   "today": 44.75,
-   "lab": 44.75,
-   "delta": 0.0
+   "today": 44.74,
+   "lab": 45.59,
+   "delta": 0.85
   },
   "Vanilla": {
    "today": 71.85,
-   "lab": 71.85,
-   "delta": 0.0
+   "lab": 71.92,
+   "delta": 0.07
   }
  },
- "mean_gain": 0.0,
+ "mean_gain": 0.16,
  "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
   "ruling": "Q74",
   "start_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_any|act.equip_ranged|0|0|0",
-  "ordered_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.foe_any|act.equip_ranged|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0",
+  "ordered_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_within_range|act.equip_melee|150|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_any|act.equip_ranged|0|0|0",
   "ordered": [
    {
     "condition": "cond.foe_is_caster",
@@ -132,16 +132,16 @@
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.foe_any",
-    "gambit": "act.equip_ranged",
-    "threshold": 0.0,
+    "condition": "cond.self_out_of_arrows",
+    "gambit": "act.loot_arrows",
+    "threshold": 1.0,
     "spell_role": "None",
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.self_out_of_arrows",
-    "gambit": "act.loot_arrows",
-    "threshold": 1.0,
+    "condition": "cond.foe_any",
+    "gambit": "act.equip_ranged",
+    "threshold": 0.0,
     "spell_role": "None",
     "cooldown_s": 0.0
    }
@@ -149,18 +149,18 @@
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 55.77,
-     "ordered": 56.2,
-     "delta": 0.43
+     "start": 56.54,
+     "ordered": 56.96,
+     "delta": 0.42
     },
     "prefix4": {
-     "start": 56.2,
-     "ordered": 56.1,
-     "delta": -0.09
+     "start": 56.96,
+     "ordered": 56.96,
+     "delta": 0.0
     },
     "prefix5": {
-     "start": 56.1,
-     "ordered": 56.1,
+     "start": 56.5,
+     "ordered": 56.5,
      "delta": 0.0
     }
    },
@@ -172,34 +172,34 @@
     },
     "prefix4": {
      "start": 45.34,
-     "ordered": 44.93,
-     "delta": -0.41
+     "ordered": 45.34,
+     "delta": 0.0
     },
     "prefix5": {
-     "start": 44.93,
-     "ordered": 44.93,
+     "start": 44.92,
+     "ordered": 44.92,
      "delta": 0.0
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 71.56,
-     "ordered": 71.77,
-     "delta": 0.21
+     "start": 71.53,
+     "ordered": 71.75,
+     "delta": 0.23
     },
     "prefix4": {
-     "start": 71.77,
-     "ordered": 71.32,
-     "delta": -0.45
+     "start": 71.75,
+     "ordered": 71.75,
+     "delta": 0.0
     },
     "prefix5": {
-     "start": 71.32,
-     "ordered": 71.32,
+     "start": 71.3,
+     "ordered": 71.3,
      "delta": 0.0
     }
    }
   },
-  "mean_gain": -0.06,
+  "mean_gain": 0.05,
   "verdict": "no robust gain: keep the starting order",
   "slots_by_rank": [
    3,

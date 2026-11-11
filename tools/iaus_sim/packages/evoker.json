@@ -46,37 +46,37 @@
  },
  "evidence": {
   "LoreRim/table": {
-   "today": 51.19,
-   "package": 52.04,
-   "delta": 0.85
+   "today": 51.73,
+   "package": 52.56,
+   "delta": 0.83
   },
   "LoreRim/iaus": {
-   "today": 47.29,
-   "package": 47.0,
-   "delta": -0.3
+   "today": 53.43,
+   "package": 53.45,
+   "delta": 0.02
   },
   "Tuxborn/table": {
-   "today": 42.64,
-   "package": 42.76,
+   "today": 42.66,
+   "package": 42.78,
    "delta": 0.12
   },
   "Tuxborn/iaus": {
-   "today": 43.02,
-   "package": 43.44,
-   "delta": 0.42
+   "today": 50.2,
+   "package": 50.45,
+   "delta": 0.25
   },
   "Vanilla/table": {
-   "today": 65.59,
-   "package": 65.45,
-   "delta": -0.14
+   "today": 65.85,
+   "package": 65.43,
+   "delta": -0.42
   },
   "Vanilla/iaus": {
-   "today": 61.77,
-   "package": 62.09,
-   "delta": 0.32
+   "today": 67.7,
+   "package": 67.72,
+   "delta": 0.02
   }
  },
- "mean_table_gain": 0.28,
+ "mean_table_gain": 0.18,
  "verdict": "no robust gain: keep today's package",
  "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
 }

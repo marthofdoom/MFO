@@ -34,6 +34,13 @@
  ],
  "lab": [
   {
+   "condition": "cond.foe_is_caster",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
    "condition": "cond.self_hp_pct_below",
    "gambit": "act.drink_health_potion",
    "threshold": 0.3,
@@ -60,140 +67,28 @@
    "threshold": 0.0,
    "spell_role": "None",
    "cooldown_s": 0.0
-  },
-  {
-   "condition": "cond.foe_highest_level",
-   "gambit": "act.attack",
-   "threshold": 0.0,
-   "spell_role": "None",
-   "cooldown_s": 0.0
   }
  ],
  "today_text": "cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0",
- "lab_text": "cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0;cond.foe_highest_level|act.attack|0|0|0",
+ "lab_text": "cond.foe_is_caster|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 41.73,
-   "lab": 45.77,
-   "delta": 4.04
+   "today": 43.22,
+   "lab": 44.26,
+   "delta": 1.04
   },
   "Tuxborn": {
-   "today": 53.52,
-   "lab": 53.77,
-   "delta": 0.24
+   "today": 53.93,
+   "lab": 52.52,
+   "delta": -1.41
   },
   "Vanilla": {
-   "today": 68.08,
-   "lab": 68.17,
-   "delta": 0.1
+   "today": 68.02,
+   "lab": 66.84,
+   "delta": -1.18
   }
  },
- "mean_gain": 1.46,
- "verdict": "keep",
- "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
- "prefix": {
-  "ruling": "Q74",
-  "start_text": "cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0;cond.foe_highest_level|act.attack|0|0|0",
-  "ordered_text": "cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_highest_level|act.attack|0|0|0;cond.always|act.wait|0|0|0",
-  "ordered": [
-   {
-    "condition": "cond.foe_weaker_than_me",
-    "gambit": "act.attack",
-    "threshold": 0.0,
-    "spell_role": "None",
-    "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.foe_lowest_hp",
-    "gambit": "act.attack",
-    "threshold": 0.0,
-    "spell_role": "None",
-    "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.self_hp_pct_below",
-    "gambit": "act.drink_health_potion",
-    "threshold": 0.3,
-    "spell_role": "None",
-    "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.foe_highest_level",
-    "gambit": "act.attack",
-    "threshold": 0.0,
-    "spell_role": "None",
-    "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.always",
-    "gambit": "act.wait",
-    "threshold": 0.0,
-    "spell_role": "None",
-    "cooldown_s": 0.0
-   }
-  ],
-  "evidence": {
-   "LoreRim": {
-    "prefix3": {
-     "start": 41.77,
-     "ordered": 42.05,
-     "delta": 0.29
-    },
-    "prefix4": {
-     "start": 41.77,
-     "ordered": 43.0,
-     "delta": 1.24
-    },
-    "prefix5": {
-     "start": 42.7,
-     "ordered": 43.0,
-     "delta": 0.3
-    }
-   },
-   "Tuxborn": {
-    "prefix3": {
-     "start": 52.7,
-     "ordered": 52.69,
-     "delta": -0.01
-    },
-    "prefix4": {
-     "start": 52.7,
-     "ordered": 52.99,
-     "delta": 0.29
-    },
-    "prefix5": {
-     "start": 53.0,
-     "ordered": 52.99,
-     "delta": -0.02
-    }
-   },
-   "Vanilla": {
-    "prefix3": {
-     "start": 66.57,
-     "ordered": 66.9,
-     "delta": 0.33
-    },
-    "prefix4": {
-     "start": 66.57,
-     "ordered": 66.83,
-     "delta": 0.26
-    },
-    "prefix5": {
-     "start": 67.19,
-     "ordered": 66.83,
-     "delta": -0.36
-    }
-   }
-  },
-  "mean_gain": 0.26,
-  "verdict": "no robust gain: keep the starting order",
-  "slots_by_rank": [
-   3,
-   5,
-   7,
-   9,
-   12
-  ],
-  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
- }
+ "mean_gain": -0.52,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
 }

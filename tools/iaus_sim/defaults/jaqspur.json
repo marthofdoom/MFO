@@ -8,7 +8,7 @@
   "Vanilla"
  ],
  "mode": "table",
- "package": "st.0.off=1,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=1,st.0.bash=1,st.1.off=1.33,st.1.def=0.5,st.1.fallback=0.65,st.1.avoid=0.5,pk.power=1,pk.leash=0",
+ "package": "current",
  "today": [
   {
    "condition": "cond.foe_highest_level",
@@ -41,9 +41,9 @@
  ],
  "lab": [
   {
-   "condition": "cond.self_hp_pct_below",
-   "gambit": "act.flee",
-   "threshold": 0.25,
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.attack",
+   "threshold": 0.0,
    "spell_role": "None",
    "cooldown_s": 0.0
   },
@@ -55,7 +55,7 @@
    "cooldown_s": 0.0
   },
   {
-   "condition": "cond.foe_highest_hp",
+   "condition": "cond.foe_is_ranged",
    "gambit": "act.attack",
    "threshold": 0.0,
    "spell_role": "None",
@@ -77,25 +77,25 @@
   }
  ],
  "today_text": "cond.foe_highest_level|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_any|act.equip_ranged|0|0|0",
- "lab_text": "cond.self_hp_pct_below|act.flee|0.25|0|0;cond.foe_highest_level|act.attack|0|0|0;cond.foe_highest_hp|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+ "lab_text": "cond.foe_attacking_player|act.attack|0|0|0;cond.foe_highest_level|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.self_out_of_arrows|act.loot_arrows|1|0|0;cond.foe_any|act.equip_ranged|0|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 32.53,
-   "lab": 33.77,
-   "delta": 1.24
+   "today": 30.88,
+   "lab": 32.17,
+   "delta": 1.29
   },
   "Tuxborn": {
-   "today": 47.29,
-   "lab": 45.35,
-   "delta": -1.94
+   "today": 47.3,
+   "lab": 48.06,
+   "delta": 0.77
   },
   "Vanilla": {
-   "today": 60.79,
-   "lab": 58.9,
-   "delta": -1.9
+   "today": 59.9,
+   "lab": 60.0,
+   "delta": 0.1
   }
  },
- "mean_gain": -0.87,
+ "mean_gain": 0.72,
  "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
@@ -135,42 +135,42 @@
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 32.35,
-     "ordered": 32.76,
-     "delta": 0.42
+     "start": 32.02,
+     "ordered": 32.38,
+     "delta": 0.37
     },
     "prefix4": {
-     "start": 32.35,
-     "ordered": 32.76,
-     "delta": 0.42
+     "start": 32.02,
+     "ordered": 32.38,
+     "delta": 0.37
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 46.46,
-     "ordered": 45.99,
-     "delta": -0.48
+     "start": 46.1,
+     "ordered": 45.86,
+     "delta": -0.24
     },
     "prefix4": {
-     "start": 46.46,
-     "ordered": 45.99,
-     "delta": -0.48
+     "start": 46.1,
+     "ordered": 45.86,
+     "delta": -0.24
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 61.44,
-     "ordered": 61.31,
-     "delta": -0.13
+     "start": 61.0,
+     "ordered": 61.02,
+     "delta": 0.02
     },
     "prefix4": {
-     "start": 61.44,
-     "ordered": 61.31,
-     "delta": -0.13
+     "start": 61.0,
+     "ordered": 61.02,
+     "delta": 0.02
     }
    }
   },
-  "mean_gain": -0.06,
+  "mean_gain": 0.05,
   "verdict": "no robust gain: keep the starting order",
   "slots_by_rank": [
    3,

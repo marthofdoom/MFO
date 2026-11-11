@@ -8,7 +8,7 @@
   "Vanilla"
  ],
  "mode": "table",
- "package": "current",
+ "package": "st.0.off=2,st.0.def=0.5,st.0.fallback=0.42,st.0.powBlock=1,st.0.powStag=2,st.0.bash=1,st.1.off=2,st.1.def=0.5,st.1.fallback=0.65,st.1.avoid=0.5,pk.power=1.33,pk.leash=0",
  "today": [
   {
    "condition": "cond.foe_lowest_hp",
@@ -41,25 +41,25 @@
  ],
  "lab": [
   {
-   "condition": "cond.foe_any",
-   "gambit": "act.power_attack",
+   "condition": "cond.foe_within_range",
+   "gambit": "act.equip_melee",
+   "threshold": 200.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.attack",
    "threshold": 0.0,
    "spell_role": "None",
-   "cooldown_s": 10.0
+   "cooldown_s": 0.0
   },
   {
    "condition": "cond.foe_hp_pct_below",
-   "gambit": "act.attack",
-   "threshold": 0.3,
+   "gambit": "act.power_attack",
+   "threshold": 0.25,
    "spell_role": "None",
-   "cooldown_s": 0.0
-  },
-  {
-   "condition": "cond.foe_weaker_than_me",
-   "gambit": "act.attack",
-   "threshold": 0.0,
-   "spell_role": "None",
-   "cooldown_s": 0.0
+   "cooldown_s": 10.0
   },
   {
    "condition": "cond.foe_count_at_least",
@@ -77,44 +77,44 @@
   }
  ],
  "today_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_hp_pct_below|act.power_attack|0.25|0|10;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.equip_melee|0|0|0",
- "lab_text": "cond.foe_any|act.power_attack|0|0|10;cond.foe_hp_pct_below|act.attack|0.3|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.foe_within_range|act.equip_melee|200|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_hp_pct_below|act.power_attack|0.25|0|10;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.equip_melee|0|0|0",
  "evidence": {
   "LoreRim": {
-   "today": 36.41,
-   "lab": 44.28,
-   "delta": 7.87
+   "today": 34.27,
+   "lab": 34.45,
+   "delta": 0.17
   },
   "Tuxborn": {
-   "today": 47.35,
-   "lab": 48.67,
-   "delta": 1.32
+   "today": 48.09,
+   "lab": 48.13,
+   "delta": 0.04
   },
   "Vanilla": {
-   "today": 62.09,
-   "lab": 63.5,
-   "delta": 1.41
+   "today": 62.84,
+   "lab": 64.38,
+   "delta": 1.55
   }
  },
- "mean_gain": 3.53,
- "verdict": "keep",
+ "mean_gain": 0.59,
+ "verdict": "no robust gain: keep today's rows",
  "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
  "prefix": {
   "ruling": "Q74",
-  "start_text": "cond.foe_any|act.power_attack|0|0|10;cond.foe_hp_pct_below|act.attack|0.3|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.equip_melee|0|0|0",
-  "ordered_text": "cond.foe_any|act.power_attack|0|0|10;cond.foe_hp_pct_below|act.attack|0.3|0|0;cond.foe_any|act.equip_melee|0|0|0;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_weaker_than_me|act.attack|0|0|0",
+  "start_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_hp_pct_below|act.power_attack|0.25|0|10;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.equip_melee|0|0|0",
+  "ordered_text": "cond.foe_hp_pct_below|act.power_attack|0.25|0|10;cond.foe_count_at_least|act.cast_target|3|13|0;cond.foe_any|act.equip_melee|0|0|0;cond.foe_lowest_hp|act.attack|0|0|0",
   "ordered": [
    {
-    "condition": "cond.foe_any",
+    "condition": "cond.foe_hp_pct_below",
     "gambit": "act.power_attack",
-    "threshold": 0.0,
+    "threshold": 0.25,
     "spell_role": "None",
     "cooldown_s": 10.0
    },
    {
-    "condition": "cond.foe_hp_pct_below",
-    "gambit": "act.attack",
-    "threshold": 0.3,
-    "spell_role": "None",
+    "condition": "cond.foe_count_at_least",
+    "gambit": "act.cast_target",
+    "threshold": 3.0,
+    "spell_role": "Fear",
     "cooldown_s": 0.0
    },
    {
@@ -125,14 +125,7 @@
     "cooldown_s": 0.0
    },
    {
-    "condition": "cond.foe_count_at_least",
-    "gambit": "act.cast_target",
-    "threshold": 3.0,
-    "spell_role": "Fear",
-    "cooldown_s": 0.0
-   },
-   {
-    "condition": "cond.foe_weaker_than_me",
+    "condition": "cond.foe_lowest_hp",
     "gambit": "act.attack",
     "threshold": 0.0,
     "spell_role": "None",
@@ -142,57 +135,42 @@
   "evidence": {
    "LoreRim": {
     "prefix3": {
-     "start": 31.51,
-     "ordered": 38.14,
-     "delta": 6.62
+     "start": 30.44,
+     "ordered": 37.55,
+     "delta": 7.11
     },
     "prefix4": {
-     "start": 31.51,
-     "ordered": 38.14,
-     "delta": 6.62
-    },
-    "prefix5": {
-     "start": 36.5,
-     "ordered": 37.51,
-     "delta": 1.01
+     "start": 35.34,
+     "ordered": 36.4,
+     "delta": 1.06
     }
    },
    "Tuxborn": {
     "prefix3": {
-     "start": 45.97,
-     "ordered": 49.15,
-     "delta": 3.19
+     "start": 45.87,
+     "ordered": 48.71,
+     "delta": 2.84
     },
     "prefix4": {
-     "start": 45.97,
-     "ordered": 49.15,
-     "delta": 3.19
-    },
-    "prefix5": {
-     "start": 48.89,
-     "ordered": 49.15,
-     "delta": 0.27
+     "start": 50.08,
+     "ordered": 48.19,
+     "delta": -1.88
     }
    },
    "Vanilla": {
     "prefix3": {
-     "start": 62.42,
-     "ordered": 64.62,
-     "delta": 2.2
+     "start": 63.63,
+     "ordered": 66.57,
+     "delta": 2.94
     },
     "prefix4": {
-     "start": 62.42,
-     "ordered": 64.62,
-     "delta": 2.2
-    },
-    "prefix5": {
-     "start": 65.13,
-     "ordered": 65.41,
-     "delta": 0.28
+     "start": 64.61,
+     "ordered": 64.28,
+     "delta": -0.33
     }
    }
   },
-  "mean_gain": 2.84,
+  "mean_gain": 1.96,
   "verdict": "keep",
   "slots_by_rank": [
    3,
@@ -201,6 +179,6 @@
    9,
    12
   ],
-  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+  "method": "all permutations on LoreRim, mean J over prefixes 3..4, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
  }
 }

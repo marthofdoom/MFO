@@ -44,23 +44,23 @@
  "changed": {},
  "evidence": {
   "LoreRim/table": {
-   "today": 57.22,
-   "package": 57.22,
+   "today": 57.1,
+   "package": 57.1,
    "delta": 0.0
   },
   "LoreRim/iaus": {
-   "today": 53.98,
-   "package": 53.98,
+   "today": 56.81,
+   "package": 56.81,
    "delta": 0.0
   },
   "Tuxborn/table": {
-   "today": 44.75,
-   "package": 44.75,
+   "today": 44.74,
+   "package": 44.74,
    "delta": 0.0
   },
   "Tuxborn/iaus": {
-   "today": 45.79,
-   "package": 45.79,
+   "today": 46.36,
+   "package": 46.36,
    "delta": 0.0
   },
   "Vanilla/table": {
@@ -69,8 +69,8 @@
    "delta": 0.0
   },
   "Vanilla/iaus": {
-   "today": 73.78,
-   "package": 73.78,
+   "today": 76.03,
+   "package": 76.03,
    "delta": 0.0
   }
  },
