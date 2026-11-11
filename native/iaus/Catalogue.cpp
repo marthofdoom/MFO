@@ -69,6 +69,7 @@ namespace MFO::Iaus {
             "self_hp", "scroll_stock", "mp_low", "engaged",
             "caster", "downed", "outnumbered",
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
+            "chase", "helpless",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -84,7 +85,7 @@ namespace MFO::Iaus {
         case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive:
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
-        case Cons::BoostPlayerDying: case Cons::BoostRecipientDying:
+        case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -285,6 +286,16 @@ namespace MFO::Iaus {
             at(Cons::HealSize) = Lin(0.6f, 0.4f);
             at(Cons::BoostPlayerDying) = Bin(1.0f, 1.8f);      // the player has under kDyingSec to live
             at(Cons::BoostRecipientDying) = Bin(1.0f, 1.4f);   // the recipient has
+            // chase (melee attack): x = distance / the chase cap. act.attack only NAMES the target and the engine's
+            // own AI closes, so a foe out of arm's reach is a valid attack, just a dearer one: 1.0 in reach, 0.75 at
+            // 15% of the cap (about 600 units), 0.5 at the cap, vetoed beyond it. (The swing-range veto stays on the
+            // power attack, which IS a swing.) Sim: a melee follower used to go Idle with the player's attacker 800
+            // units away, because every attack was vetoed out of reach.
+            {
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 1.0f }, { 0.15f, 0.75f }, { 1.0f, 0.5f } } };
+                at(Cons::RangeChase) = VetoAbove(Piece(p), 1.0f);
+            }
+            at(Cons::BoostControlled) = Bin(1.0f, 1.3f);       // a helpless foe: every blow lands
 
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
@@ -312,17 +323,17 @@ namespace MFO::Iaus {
         namespace {
             using U = Use;
             constexpr U kAttack[] = {
-                { Cons::RangeMelee, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
+                { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
-                { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
+                { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 }, { Cons::BoostControlled, 1 },
             };
             constexpr U kPowerAttack[] = {
                 { Cons::RangeMelee, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
                 { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
-                { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 },
+                { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 }, { Cons::BoostControlled, 1 },
             };
             constexpr U kTaunt[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
@@ -559,6 +570,11 @@ namespace MFO::Iaus {
             case Cons::HealSize:
                 if (!(f.expHeal > 0.0f)) return In::Off();
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
+            case Cons::RangeChase:
+                if (!f.meleeRange) return In::Off();
+                if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(f.dist / (f.reach * 20.0f)) : In::Off();   // no cap known: 20 reaches
+                return f.dist / f.chase;
+            case Cons::BoostControlled:     return B(f.foeControlled);
             case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
             case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
             case Cons::kCount:        break;

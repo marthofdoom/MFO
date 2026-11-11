@@ -98,6 +98,7 @@ namespace MFO::Iaus {
                     x.Foe(c.f, *foe, ranged);
                     c.role = ranged ? RoleTag::Ranged : RoleTag::Melee;
                     c.f.meleeRange = !ranged;
+                    if (!ranged) c.f.chase = (std::max)(0.0f, Finite(s.chaseCap, 0.0f));   // act.attack names the target; the engine closes
                     c.f.reach = (std::max)(0.0f, Finite(ranged ? s.chaseCap : s.meleeReach, 0.0f));
                     x.Push(std::move(c));
                 }

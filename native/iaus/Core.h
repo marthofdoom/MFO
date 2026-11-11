@@ -97,6 +97,8 @@ namespace MFO::Iaus {
         HealSize,           // how much of the heal the recipient can use
         BoostPlayerDying,   // multiplier: the player has seconds to live
         BoostRecipientDying,   // multiplier: the heal's recipient has seconds to live
+        RangeChase,         // a melee ATTACK names a target the engine then closes on: distance shades, the chase cap vetoes
+        BoostControlled,    // multiplier: a blow on a foe that cannot answer (paralysed, staggered by control)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -294,6 +296,7 @@ namespace MFO::Iaus {
         float tauntTtl = kInf;            // ... with this foe on him as well (taunt)
         float playerTtl = kInf;           // the player's
         float recipientTtl = kInf;        // the heal recipient's
+        float chase = 0.0f;               // melee attack: how far he may chase (Snapshot::chaseCap); 0 = not a chase
     };
 
     struct Candidate {
