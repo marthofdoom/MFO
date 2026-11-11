@@ -1,5 +1,5 @@
 // apmf/SneakClaims.cpp -- the Harbinger ch.3 STANCE claim behind act.sneak (class plan card G1, ClickUp class
-// build plan G1). A new claim family, so its own file in apmf/; the table shape mirrors apmf/AimClaims.cpp.
+// build plan G1). A new claim family, so its own file in apmf/. The table shape mirrors apmf/AimClaims.cpp.
 //
 // WHAT MFO DECLARES. A rule "<condition> -> Sneak" asks for the follower to crouch and stay crouched while the rule
 // stands. MFO files ONE ch.3 kIntent_Stance claim (ABI 1, no param, FACETS ch.3 "Field-proven"): Harbinger sends
@@ -9,7 +9,7 @@
 // "WHILE THE RULE STANDS". Every scan lap that reaches the rule with its condition true calls ServiceSneakRule,
 // which files the claim if none stands and resets the hold counter. The rule is TRANSPARENT (the scan goes on to
 // the rows below), so "Always -> Sneak" sits on top of a thief's table. The pump's sweep (Tick, every 133 ms)
-// counts the unpaused sweeps since the last lap; past kHoldSweeps (sized from the cadence below) the rule has
+// counts the unpaused sweeps since the last lap. Past kHoldSweeps (sized from the cadence below) the rule has
 // stopped standing (a higher opaque rule won, its condition went false, the table stopped running, he was
 // dismissed or MFO was turned off for him) and the claim is released.
 //
@@ -26,7 +26,7 @@
 //
 // PROBE ([sneak], always on, passive and rate-limited). One line per event: claim FILED, IsSneaking true / false
 // (transitions only, while a claim stands), RE-FILE, RELEASED (with the reason). At most kLogBurst lines per follower
-// per kLogWindowSec; past that the lines are counted and one "N lines suppressed" line closes the window. That is
+// per kLogWindowSec. Past that the lines are counted and one "N lines suppressed" line closes the window. That is
 // what a field run reads to prove (or disprove) the in-combat road.
 //
 // THREADS. ServiceSneakRule and the sweep run on the pump's AddTask worker (Fire, the logistics scan, Tick).
@@ -120,7 +120,7 @@ namespace MFO::APMFBridge {
             return true;
         }
 
-        // g_sneakMx HELD. Releases the handle (if any); the entry stays so its log window survives a re-file.
+        // g_sneakMx HELD. Releases the handle (if any). The entry stays so its log window survives a re-file.
         void ReleaseLocked(const APMF_API::APMF_API_v2* a_api, RE::FormID a_fid, SneakClaim& a_c, const char* a_why) {
             if (a_c.handle == APMF_API::kInvalidHandle) return;
             if (a_api) a_api->Release(a_c.handle);

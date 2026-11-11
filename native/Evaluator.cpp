@@ -573,7 +573,7 @@ namespace MFO::Eval {
                         if (!tp.get() || tp.get() == a_self || !Taunt::IsPartyMember(tp.get())) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMySummon) {
                         // Card G6: the foe's combat target is one of this follower's live commanded actors (read
-                        // before the lock, above). The target is HELD for the test; nearest foe wins (score = dist).
+                        // before the lock, above). The target is HELD for the test. Nearest foe wins (score = dist).
                         auto tp = foe->GetActorRuntimeData().currentCombatTarget.get();
                         if (!tp.get() ||
                             std::find(mySummons.begin(), mySummons.end(), tp->GetFormID()) == mySummons.end()) continue;
@@ -857,8 +857,8 @@ namespace MFO::Eval {
             // SITUATIONAL STATE gates (ClickUp 86e3g81x0): reads of the follower (or the player), no target.
             if (op == Vocab::kCondSelfUnderwater) return ActorUnderwater(a_self);
             if (op == Vocab::kCondSelfPoisoned)   return SelfStatus::Poisoned(a_self);   // main-thread mirror (SelfStatus.h)
-            if (op == Vocab::kCondSelfHasSummon)  return SelfStatus::HasSummon(a_self);  // card G5, same mirror; stale = false
-            if (op == Vocab::kCondSelfNoSummon)   return SelfStatus::NoSummon(a_self);   // card G5, same mirror; stale = false
+            if (op == Vocab::kCondSelfHasSummon)  return SelfStatus::HasSummon(a_self);  // card G5, same mirror, stale = false
+            if (op == Vocab::kCondSelfNoSummon)   return SelfStatus::NoSummon(a_self);   // card G5, same mirror, stale = false
             if (op == Vocab::kCondPlayerSneaking) return a_player && a_player->IsSneaking();
 
             // Foe-COUNT gate -- reads the group, picks no target.

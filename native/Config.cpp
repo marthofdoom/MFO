@@ -149,7 +149,7 @@ namespace MFO::Config {
             else if (a_key == "iAimBudgetRanger")   { setI(g_aimBudgetRanger, 0, 10);      return; }   // marth 2026-11-10: at most 3
             else if (a_key == "iAimBudgetJaqspur")  { setI(g_aimBudgetJaqspur, 0, 10);     return; }   // marth 2026-11-10: at most 1 (0 ok)
             else if (a_key == "bAimProbe")          { setB(g_aimProbe);      return; }   // default OFF; INI-only; "[aim]" state line / 30 s
-            else if (a_key == "bSneakInCombat")     { setB(g_sneakInCombat); return; }   // default OFF; INI-only DEV switch; card G1 act.sneak in combat
+            else if (a_key == "bSneakInCombat")     { setB(g_sneakInCombat); return; }   // default OFF, INI-only DEV switch: card G1 act.sneak in combat
             else if (a_key == "bClassCoSaveSelfTest") { setB(g_classCoSaveSelfTest); return; }   // default OFF; INI-only DEBUG; MCLS round-trip self-test at load
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
             else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
