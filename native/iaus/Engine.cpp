@@ -26,7 +26,8 @@ namespace MFO::Iaus::Engine {
 
         // Leaf mutex: the worker publishes, the render thread copies. Never held across an engine call.
         std::mutex                              g_readoutMx;
-        std::unordered_map<RE::FormID, Readout> g_readouts;
+        struct StampedReadout { Readout r; std::chrono::steady_clock::time_point at; };
+        std::unordered_map<RE::FormID, StampedReadout> g_readouts;
 
         double Seconds(std::chrono::steady_clock::time_point tp) {
             return std::chrono::duration<double>(tp.time_since_epoch()).count();
@@ -148,14 +149,16 @@ namespace MFO::Iaus::Engine {
 
     void Publish(RE::FormID a_actor, Readout a_r) {
         std::scoped_lock lk(g_readoutMx);
-        g_readouts[a_actor] = std::move(a_r);
+        g_readouts[a_actor] = StampedReadout{ std::move(a_r), std::chrono::steady_clock::now() };
     }
 
-    bool ReadReadout(RE::FormID a_actor, Readout& a_out) {
+    bool ReadReadout(RE::FormID a_actor, Readout& a_out, double* a_ageSec) {
         std::scoped_lock lk(g_readoutMx);
         const auto it = g_readouts.find(a_actor);
         if (it == g_readouts.end()) return false;
-        a_out = it->second;
+        a_out = it->second.r;
+        if (a_ageSec)
+            *a_ageSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - it->second.at).count();
         return true;
     }
 

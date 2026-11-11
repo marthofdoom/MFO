@@ -207,6 +207,7 @@ namespace MFO::Config {
             else if (a_key == "bPerkEntryProbe")    setB(g_perkEntryProbe);   // [perk-probe] passive perk-entry probe, INI-only, default OFF
             else if (a_key == "bInheritPerkCensus") setB(g_inheritPerkCensus);   // [inherit-census] hidden-perk census, log only, INI-only, default ON
             else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
+            else if (a_key == "bIausExplain")       setB(g_iausExplain);      // [iaus-why] per-candidate breakdown, INI-only, default OFF
             else if (a_key == "bSpellShapeCensus")  setB(g_spellShapeCensus); // [shape-census] load-time spell shape counts, INI-only, default ON
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bProgCatalogDump")   setB(g_progCatalogDump);  // catalog census dump, dev-only
@@ -426,6 +427,7 @@ namespace MFO::Config {
             g_perkEntryProbe     = false;   // [perk-probe] passive perk-entry probe -- OFF everywhere by default
             g_spellShapeCensus   = true;    // [shape-census] load-time log-only census -- ON
             g_inheritPerkCensus  = true;    // [inherit-census] hidden-perk census -- ON (log only, changes nothing)
+            g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
             g_heartbeat          = true;    // [hb] 5 s liveness line -- ON (1 line / 5 s; names the stopped thread on a freeze)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default

@@ -738,6 +738,20 @@ namespace MFO::Board {
                             if (Click::SmallButton(hl.c_str())) ImGui::OpenPopup("##helm");
                         }
                         ImGui::SameLine();
+                        // IAUS card I7: the per-follower "IAUS combat" switch. A SmallButton like its two
+                        // neighbours (d-pad focus, [A] toggles), applied through the edit queue on the worker.
+                        // Combat page only: the logistics IAUS is not built (greyed on the Logistics page).
+                        {
+                            ImGui::BeginDisabled(selTable != 0);
+                            std::string ib = Str::Fmt(Str::K::Gb_IausBtn,
+                                { Str::Get(who->iausCombat ? Str::K::Gb_IausOn : Str::K::Gb_IausOff) }) + "###iausbtn";
+                            if (Click::SmallButton(ib.c_str()))
+                                QueueEdit({ EditKind::SetIausCombat, sel, selTable, 0u, who->iausCombat ? 0.0f : 1.0f });
+                            ImGui::EndDisabled();
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip("%s", Str::Get(Str::K::Gb_TipIaus));
+                        }
+                        ImGui::SameLine();
                         ImGui::BeginDisabled(party.size() < 2);
                         if (Click::SmallButton(">##nextf")) switchFollower(+1);
                         ImGui::EndDisabled();
@@ -763,6 +777,7 @@ namespace MFO::Board {
                         ImGui::SameLine();
                         ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_SlotsUsed, { (int)rules.size(), slots }).c_str());
                         ImGui::Separator();
+                        if (combat && who->iausCombat) DrawIausThinking(who->id, skin);   // IAUS card I7
 
                         // ── THE LIST-PICKER (the FFXII interaction) ─────
                         // A big centred scrolling list of Selectables. Opened by

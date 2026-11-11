@@ -67,6 +67,8 @@ namespace MFO::Board {
         // 86e3phy41: FollowerState::helmetOverride for the Gambits-tab "Helmets" button
         // (0 = Default, the MCM bWearHelmets; 1 = Wear; 2 = Never).
         std::uint8_t  helmetOverride = 0;
+        // IAUS card I7: FollowerState::iausCombat (FLWR bit 3), mirrored for the Gambits-tab "IAUS combat" switch. OFF by default.
+        bool          iausCombat = false;
         // Retained (inactive) rows only: the follower's current cell name, or its location
         // name when the cell is unnamed. Filled in PublishSnapshot, empty when unknown.
         std::string   cell;
