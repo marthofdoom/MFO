@@ -157,7 +157,7 @@ def main():
             if not e: continue
             row = dict(edid=edid, cost=u32(d, 0), castType=CASTTYPE[min(u32(d, 16), 3)],
                        delivery=DELIVERY[min(u32(d, 20), 4)], chargeTime=f32(d, 12), castDuration=f32(d, 24), range=f32(d, 28),
-                       autoCalc=bool(u32(d, 4) & 1), taught=(owner, loc) in taught, effects=e)
+                       autoCalc=not (u32(d, 4) & 1), taught=(owner, loc) in taught, effects=e)
             (spells if sig == 'SPEL' else scrolls).append(row)
         elif sig == 'ALCH':
             e = fx(names, light, pl, subs)
@@ -170,7 +170,7 @@ def main():
         elif sig == 'ECZN':
             d = sub(subs, 'DATA')
             if d and len(d) >= 12: ecz.append((d[9], d[11]))   # minLevel, maxLevel (owner4 loc4 rank1 min1 flags1 max1)
-    # SPEL name/edid spells keep only ones with at least one cost-bearing effect
+    # SPIT flag 0x1 = kCostOverride: the stored cost is authoritative; autoCalc = not override
     lv = {}
     for mn, mx in ecz: lv[mx] = lv.get(mx, 0) + 1
     out = dict(list=name, profile=a.profile, plugins=len(order), pluginsMissing=len(missing),

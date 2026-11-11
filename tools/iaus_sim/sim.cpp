@@ -50,7 +50,7 @@ struct JP {
 
 // ── the list balance (from JSON, or built-in vanilla-like defaults) ─────────────────────────────────────
 struct SimSpell {
-    SpellEntry e; float dmg = 0, heal = 0, dur = 0, castSec = 1.0f, cost0 = 0; bool ctrl = false, ctrlPar = false; float ctrlDur = 0; int skillReq = 0;
+    SpellEntry e; float dmg = 0, heal = 0, dur = 0, castSec = 1.0f, cost0 = 0; bool ctrl = false, ctrlPar = false; float ctrlDur = 0; int skillReq = 0; bool reanimate = false;
 };
 struct Balance {
     std::string name = "builtin";
@@ -61,7 +61,7 @@ struct Balance {
     std::vector<SimSpell> spells;            // castable pool (taught by a BOOK when the JSON has the flag)
     float potHealth = 100, potMagicka = 100, potStamina = 100;
     int natures[7] = {};                     // classified spells per Prune::Nature (index 0 = Unknown, dropped)
-    int rawSpells = 0, taughtSpells = 0;
+    int rawSpells = 0, taughtSpells = 0, dropPlace = 0, dropNotCast = 0, dropReanim = 0, dropUnknown = 0;
 };
 
 static bool Hostile(const J& e) { return e["hostile"].num() != 0; }
@@ -90,14 +90,14 @@ static void Classify(const J& sp, SimSpell& out) {
             out.ctrlDur = std::max(out.ctrlDur, float(d));
         }
         if (arch == 35 && self) cloak = true;
-        if (host || detr) { if (host) hostileAny = true; if (ec > topHostCost) { topHostCost = ec; resist = int(x["resist"].num(-1)); } }
+        if (host || detr) { hostileAny = true; if (ec > topHostCost) { topHostCost = ec; resist = int(x["resist"].num(-1)); } }
         if (host && (arch == 0 || arch == 34 || arch == 4) && av == kAvHealth) dmg += tot;
         if (!host && !detr && av == kAvWardPower && (arch == 0 || arch == 34)) ward = true;
         if (!host && !detr && av == kAvHealth && (arch == 0 || arch == 34)) { heal = true; healSum += tot; }
         e.areaUnits = std::max(e.areaUnits, Prune::BlastUnits(float(x["area"].num()), 0.0f));
         dur = std::max(dur, d);
     }
-    if (reanimate) e.drop = Prune::Drop::UnknownNature;
+    if (reanimate) { e.drop = Prune::Drop::UnknownNature; out.reanimate = true; }
     else if (summon) e.nature = Prune::Nature::Summon;
     else if (ward) e.nature = Prune::Nature::Ward;
     else if (control) e.nature = Prune::Nature::Control;
@@ -115,7 +115,8 @@ static void Classify(const J& sp, SimSpell& out) {
     if (dl == "TargetLocation") e.drop = Prune::Drop::Placement;
     if (sp["castType"].s == "ConstantEffect") e.drop = Prune::Drop::NotCastable;
     // cost: the record's, except an auto-calculate spell (SPIT flag 0x1) whose stored cost is not authoritative: effect costs summed.
-    out.cost0 = sp["autoCalc"].num() != 0 ? float(autoCost) : float(sp["cost"].num());
+    out.cost0 = float(sp["cost"].num());
+    if (out.cost0 <= 0 && sp["autoCalc"].num() != 0) out.cost0 = float(autoCost);   // APPROXIMATION, only when the record stores 0 and does not override
     e.cost = out.cost0; out.skillReq = skillReq;
     out.dmg = float(dmg); out.heal = float(healSum); out.dur = float(dur);
     out.castSec = e.concentration ? 2.0f : std::max(0.6f, float(sp["chargeTime"].num(0.0)));
@@ -154,7 +155,7 @@ static Balance LoadBalance(const char* path) {
     for (const J& s : root["spells"].a) {
         ++b.rawSpells; if (anyTaught && s["taught"].num() == 0) continue; ++b.taughtSpells;
         SimSpell ss2; Classify(s, ss2);
-        if (ss2.e.drop == Prune::Drop::Keep) { ++b.natures[int(ss2.e.nature)]; b.spells.push_back(std::move(ss2)); } else ++b.natures[0]; }
+        if (ss2.e.drop == Prune::Drop::Keep) { ++b.natures[int(ss2.e.nature)]; b.spells.push_back(std::move(ss2)); } else { ++b.natures[0]; switch (ss2.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; default: ++(ss2.reanimate ? b.dropReanim : b.dropUnknown); } } }
     double best[3] = { 0, 0, 0 };   // largest SINGLE-effect restore with no side effect
     for (const J& p2 : root["potions"].a) {
         const auto& fx = p2["effects"].a; if (fx.size() != 1) continue;
@@ -480,8 +481,8 @@ int main(int argc, char** argv) {
         else { std::fprintf(stderr, "usage: run.sh [--list json] [--seed N] [--fights N] [--compare baseline] [--baseline out] [--taunt-visible]\n"); return 2; } }
     const Balance B = LoadBalance(listPath);
     std::printf("IAUS SIM  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d\n", B.name.c_str(), (unsigned long long)seed, fights, int(g_tauntVisible));
-    std::printf("spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped-unknown=%d  potions(h/m/s)=%.0f/%.0f/%.0f\n",
-                B.rawSpells, B.taughtSpells, B.natures[1], B.natures[2], B.natures[3], B.natures[4], B.natures[5], B.natures[6], B.natures[0], B.potHealth, B.potMagicka, B.potStamina);
+    std::printf("spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d  potions(h/m/s)=%.0f/%.0f/%.0f\n",
+                B.rawSpells, B.taughtSpells, B.natures[1], B.natures[2], B.natures[3], B.natures[4], B.natures[5], B.natures[6], B.dropPlace, B.dropNotCast, B.dropReanim, B.dropUnknown, B.potHealth, B.potMagicka, B.potStamina);
     std::map<std::string, std::map<std::string, double>> all; std::map<std::string, Stats> rankCell; long totalBad = 0, totalInvalid = 0;
     for (int c = 0; c < kNC; ++c) for (int b = 0; b < kNB; ++b) {
         Stats S;
