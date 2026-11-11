@@ -295,6 +295,28 @@ namespace {
         Check(S0(d).rank < runRank, "the new decision outranks the running one (lower Choice.rank)");
         OnFired(m, c[1], S0(d), 10.6);
         Check(m.epoch == 2 && RankOf(m.epoch) == S0(d).rank, "OnFired adopts the new epoch");
+
+        // Card I6, marth Q67 (closes MFO-B651): a repeat Fired of the SAME decision does not re-anchor the window.
+        {
+            Mind q;
+            std::vector<Candidate> a{ Attack(Family::Attack, fa, 160, true), Attack(Family::Attack, fb, 160, true) };
+            Decision d0 = Decide(q, a, Profile{}, noMom, Tick(5, 20.0));
+            OnFired(q, a[S0(d0).idx], S0(d0), 20.0);
+            const double anchor = q.firedAt;
+            const std::uint32_t epoch = q.epoch;
+            const std::size_t run = S0(d0).idx, other = 1 - run;
+            for (double tt = 20.2; tt < 23.1; tt += 0.4) {   // the same attack keeps firing for 3 s
+                const Decision dk = Decide(q, a, Profile{}, noMom, Tick(5, tt));
+                if (!dk.order.empty() && dk.order[0].running) OnFired(q, a[dk.order[0].idx], dk.order[0], tt);
+            }
+            Check(q.firedAt == anchor && q.epoch == epoch, "Q67: repeat fires of the same decision leave the window anchor and the epoch alone");
+            a[other].f.foeHpPct = 0.3f;   // a small gain (~+5%), under the preempt margin
+            const Decision late = Decide(q, a, Profile{}, noMom, Tick(5, 23.2));
+            Check(late.verdict == Verdict::Act && late.newDecision && S0(late).idx == other,
+                  "Q67: 3 s into a repeating decision the window is over, so a small gain is picked (no Hold)");
+            OnFired(q, a[S0(late).idx], S0(late), 23.2);
+            Check(q.firedAt == 23.2 && q.epoch == epoch + 1, "Q67: a NEW decision firing re-anchors the window");
+        }
     }
 
     void TiesAndPosture() {
@@ -679,6 +701,44 @@ namespace {
         bool cd = true;
         for (const auto& c : gw.actions) if (c.family == Family::PowerAttack && c.f.hardCooldownSec != 10.0f) cd = false;
         Check(cd, "the power attack carries the class row's 10 s hard cooldown");
+        // Card I6 (sim R1): the taunt's hard cooldown, the taunted gate's input and the busy rule.
+        {
+            float tauntCd = -1.0f;
+            for (const auto& c : gw.actions) if (c.family == Family::Taunt) tauntCd = c.f.hardCooldownSec;
+            Check(tauntCd == t.rowlessTauntCooldownSec && tauntCd > 0.0f, "I6: a taunt row with no cooldown gets the tuning floor as its hard cooldown");
+            ClassGate rowCd = warrior; rowCd.tauntCooldownSec = 25.0f;
+            for (const auto& c : Generate(ws, rowCd, t).actions) if (c.family == Family::Taunt) tauntCd = c.f.hardCooldownSec;
+            Check(tauntCd == 25.0f, "I6: a taunt row's own cooldown wins over the floor");
+            ClassGate open = warrior; open.powerCooldownSec = 0.0f;   // the tree OFF (Q63): open, no row
+            bool floorCd = true; int n = 0;
+            for (const auto& c : Generate(ws, open, t).actions)
+                if (c.family == Family::PowerAttack) { ++n; if (c.f.hardCooldownSec != t.rowlessPowerCooldownSec) floorCd = false; }
+            Check(n > 0 && floorCd, "I6 / Q63: a power attack with no class row gets the tuning floor as its hard cooldown");
+            Snapshot busy = ws; busy.tauntBusy = true;
+            Check(CountFam(Generate(busy, warrior, t), Family::Taunt) == 0, "I6: no taunt candidate while his taunt is in flight or still holds a foe");
+            Snapshot tk = ws;
+            for (auto& f : tk.foes) f.taunted = true;
+            const Generated gt = Generate(tk, warrior, t);
+            bool vetoed = CountFam(gt, Family::Taunt) > 0;
+            Mind tm;
+            for (const auto& c : gt.actions)
+                if (c.family == Family::Taunt) {
+                    Cons by = Cons::kCount;
+                    const float sc = ScoreOne(c, tm, Profile{}, t, 5, 0.0f, nullptr, &by);
+                    if (!(sc == 0.0f && by == Cons::FoeTaunted)) vetoed = false;
+                }
+            Check(vetoed, "I6: a foe already under his taunt vetoes the taunt candidate (FoeTaunted has its input now)");
+            // The hard cooldown gate: inside it the taunt is vetoed, after it it scores.
+            for (auto c : gw.actions)
+                if (c.family == Family::Taunt) {
+                    Cons by = Cons::kCount;
+                    c.f.hardCooldownLeft = 4.0f;
+                    const float in = ScoreOne(c, tm, Profile{}, t, 5, 0.0f, nullptr, &by);
+                    c.f.hardCooldownLeft = 0.0f;
+                    const float out = ScoreOne(c, tm, Profile{}, t, 5, 0.0f, nullptr);
+                    Check(in == 0.0f && by == Cons::CooldownHard && out > 0.0f, "I6: the taunt is vetoed inside its hard cooldown and scores after it");
+                }
+        }
         warrior.spellsFromMastered = true;
         const Generated gm = Generate(ws, warrior, t);
         bool flagged = CountFam(gm, Family::CastHeal) > 0;
@@ -704,9 +764,22 @@ namespace {
 
         // I4 review F2: the blast radius is the larger of the EFIT area and the explosion radius, and it is what
         // splash_safe and foes-in-area measure with.
-        Check(Prune::BlastUnits(15.0f, 600.0f) == 600.0f && Prune::BlastUnits(15.0f, 0.0f) == Prune::AreaUnits(15.0f) &&
-              Prune::BlastUnits(15.0f, NAN) == Prune::AreaUnits(15.0f) && Prune::BlastUnits(0.0f, 0.0f) == 0.0f,
+        Check(Prune::BlastUnits(15.0f, 600.0f, false) == 600.0f && Prune::BlastUnits(15.0f, 0.0f, false) == Prune::AreaUnits(15.0f) &&
+              Prune::BlastUnits(15.0f, NAN, false) == Prune::AreaUnits(15.0f) && Prune::BlastUnits(0.0f, 0.0f, false) == 0.0f,
               "F2: blast = max(EFIT area in units, explosion radius); a broken explosion read falls back to the area");
+        // MFO-B661 (card I6): a cosmetic impact explosion gives a bolt NO area; a payload explosion does.
+        Check(Prune::BlastUnits(0.0f, 300.0f, false) == 0.0f && Prune::BlastUnits(0.0f, 300.0f, true) == 300.0f &&
+              Prune::BlastUnits(0.0f, NAN, true) == 0.0f && Prune::BlastUnits(15.0f, 600.0f, true) == 600.0f,
+              "B661: EFIT area 0 + a cosmetic explosion = no area; a payload explosion (damage or enchantment) counts");
+        {
+            Snapshot b = MageFight(); b.self.mp = 200;
+            b.allies[0].x = 600.0f + 100.0f; b.allies[0].y = 0;   // the player stands 100 units from the nearest foe (a tank at his target)
+            for (auto& e : b.book.entries) if (e.form == 0x1C789) e.areaUnits = Prune::BlastUnits(0.0f, 300.0f, false);
+            bool any = false, vetoShape = false;
+            for (const auto& c : Generate(b, mage, t).actions)
+                if (c.form == 0x1C789 && c.target == 0x3B500) { any = true; vetoShape = c.f.hasArea || !c.f.splashSafe; }
+            Check(any && !vetoShape, "B661: a bolt with a cosmetic explosion stays castable at a foe a party member stands beside");
+        }
         auto blast = [&](float units, bool* unsafe, float* inArea) {
             Snapshot b = MageFight(); b.self.mp = 200;
             b.allies[0].x = 600.0f + 400.0f; b.allies[0].y = 0;      // the player, 400 units behind the nearest foe
@@ -716,8 +789,8 @@ namespace {
                 if (c.form == 0x1C789 && c.target == 0x3B500) { *unsafe = !c.f.splashSafe; *inArea = c.f.foesInArea; }
         };
         bool unsafeSmall = true, unsafeBig = false; float inSmall = 0, inBig = 0;
-        blast(Prune::BlastUnits(5.0f, 0.0f), &unsafeSmall, &inSmall);      // EFIT 5 ft alone: about 107 units
-        blast(Prune::BlastUnits(5.0f, 500.0f), &unsafeBig, &inBig);       // with a 500-unit explosion
+        blast(Prune::BlastUnits(5.0f, 0.0f, false), &unsafeSmall, &inSmall);      // EFIT 5 ft alone: about 107 units
+        blast(Prune::BlastUnits(5.0f, 500.0f, false), &unsafeBig, &inBig);       // with a 500-unit explosion (it may enlarge a stated area)
         std::printf("   F2 5 ft EFIT alone: splash-unsafe %d, foes in area %.0f | with a 500-unit explosion: %d, %.0f\n",
                     unsafeSmall ? 1 : 0, inSmall, unsafeBig ? 1 : 0, inBig);
         Check(!unsafeSmall && unsafeBig, "F2: an ally 400 units from the target is safe from 107 units, NOT from a 500-unit explosion");

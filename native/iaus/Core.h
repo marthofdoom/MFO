@@ -174,6 +174,13 @@ namespace MFO::Iaus {
         float emergencyHpLow = 0.10f;          //                1 at or below this
         float noHealRetreat = 0.30f;           // Retreat vetoed while a heal candidate scores above this
         float noHealDrink = 0.50f;             // Health drink vetoed while a heal candidate scores above this
+        // Card I6: the hard cooldown of a ROW-GATED action whose class row declares none (ClassGate::*CooldownSec
+        // == 0). The power-attack rows all declare 10 s; no taunt row declares one, and with the class tree OFF
+        // (marth Q63: nothing is class-gated) there is no row at all. Without a floor the sim's Knight taunts
+        // 12-20 times a minute. One taunt ATTEMPT is one idle play plus a roll, and a hit already blocks the next
+        // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
+        float rowlessPowerCooldownSec = 10.0f;
+        float rowlessTauntCooldownSec = 10.0f;
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -307,7 +314,7 @@ namespace MFO::Iaus {
         bool          hasRunning = false;
         Key           running{};
         std::uint32_t epoch = 0;              // decision epoch; rank = kRankBase - epoch
-        double        firedAt = -1.0e300;     // last Fired of the running decision (window anchor)
+        double        firedAt = -1.0e300;     // FIRST Fired of the running decision (window anchor; a repeat Fired of the same decision does not move it, marth Q67)
         double        decidedAt = -1.0e300;   // when the running decision started (readout "how long")
         std::array<std::uint32_t, 4> recent{};   // last 4 Fired forms (variety)
         std::uint8_t  recentN = 0;
@@ -395,8 +402,9 @@ namespace MFO::Iaus {
     [[nodiscard]] int DecidePosture(const Mind& a_m, std::span<const Candidate> a_cands, const Profile& a_p,
                                     const Tuning& a_t, std::uint8_t a_rapportRank, float* a_score = nullptr);
 
-    // Bookkeeping after Actuation::Fire returned FIRED for a_step (design 1.1 "Record"). Re-anchors the
-    // commitment window (every Fired, as today's #26 window does), adopts the epoch, feeds the variety ring.
+    // Bookkeeping after Actuation::Fire returned FIRED for a_step (design 1.1 "Record"). A NEW decision adopts the
+    // epoch and anchors the commitment window; a repeat Fired of the running decision does NOT re-anchor it (marth
+    // Q67, card I6). Every Fired feeds the variety ring.
     void OnFired(Mind& a_m, const Candidate& a_c, const Step& a_step, double a_now);
     void OnPostureFired(Mind& a_m, const Candidate& a_c);
     // The running decision ended without a successor (combat end, the toggle edge, a dead target).

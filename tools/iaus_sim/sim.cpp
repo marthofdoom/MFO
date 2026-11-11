@@ -68,8 +68,8 @@ static bool Hostile(const J& e) { return e["hostile"].num() != 0; }
 static constexpr int kAvHealth = 24, kAvWardPower = 63;
 
 // Mirrors Prune::ClassifyNature's precedence (reanimate, summon, ward, control, self cloak, hostile = Offense, heal,
-// script-costliest / undeclared = Unknown, else Buff). ward = a beneficial ValueMod on kWardPower (APPROXIMATION of
-// Actuation::SpellShape::Ward); Offense = any hostile effect (CasterConsent kind Offense, APPROXIMATION).
+// script-costliest / undeclared = Unknown, else Buff). ward = a ValueMod-family effect on kWardPower (the SAME test as
+// Actuation::SpellShape::Ward since card I6: archetypes 0 / 4 / 5 / 32 / 34); Offense = any hostile effect (CasterConsent kind Offense, APPROXIMATION).
 static void Classify(const J& sp, SimSpell& out) {
     const auto& fx = sp["effects"].a; SpellEntry& e = out.e;
     bool summon = false, reanimate = false, ward = false, control = false, cloak = false, hostileAny = false, heal = false;
@@ -92,9 +92,9 @@ static void Classify(const J& sp, SimSpell& out) {
         if (arch == 35 && self) cloak = true;
         if (host || detr) { hostileAny = true; if (ec > topHostCost) { topHostCost = ec; resist = int(x["resist"].num(-1)); } }
         if (host && (arch == 0 || arch == 34 || arch == 4) && av == kAvHealth) dmg += tot;
-        if (!host && !detr && av == kAvWardPower && (arch == 0 || arch == 34)) ward = true;
+        if (av == kAvWardPower && (arch == 0 || arch == 4 || arch == 5 || arch == 32 || arch == 34)) ward = true;   // card I6: cast/Archetype.cpp anyWard (ValueModifier + its aliases; real wards are 32)
         if (!host && !detr && av == kAvHealth && (arch == 0 || arch == 34)) { heal = true; healSum += tot; }
-        e.areaUnits = std::max(e.areaUnits, Prune::BlastUnits(float(x["area"].num()), 0.0f));
+        e.areaUnits = std::max(e.areaUnits, Prune::BlastUnits(float(x["area"].num()), 0.0f, false));
         dur = std::max(dur, d);
     }
     if (reanimate) { e.drop = Prune::Drop::UnknownNature; out.reanimate = true; }
@@ -133,10 +133,11 @@ static Balance LoadBalance(const char* path) {
                         {"Healing", Prune::Nature::Heal, RoleTag::Heal, -1, 40, 0, 80, 0}, {"FastHealing", Prune::Nature::Heal, RoleTag::Heal, -1, 100, 0, 200, 0},
                         {"OakFlesh", Prune::Nature::Buff, RoleTag::Buff, -1, 100, 0, 0, 0}, {"Fear", Prune::Nature::Control, RoleTag::Control, -1, 70, 0, 0, 0},
                         {"Paralyze", Prune::Nature::Control, RoleTag::Control, -1, 120, 0, 0, 0},
-                        {"ConjureFlameAtronach", Prune::Nature::Summon, RoleTag::Summon, -1, 150, 0, 0, 0} };
+                        {"ConjureFlameAtronach", Prune::Nature::Summon, RoleTag::Summon, -1, 150, 0, 0, 0},
+                        {"LesserWard", Prune::Nature::Ward, RoleTag::Ward, -1, 30, 0, 0, 0} };   // card I6: wards are classified now
         for (const D& x : d) { SimSpell s; s.e.nature = x.na; s.e.role = x.r; s.e.resistAv = x.rs; s.e.cost = x.c; s.cost0 = x.c; s.e.name = x.n;
-            s.e.selfDelivery = x.na == Prune::Nature::Buff || x.na == Prune::Nature::Summon; s.e.reach = s.e.selfDelivery ? 0 : 4096; s.dmg = x.d; s.heal = x.h; s.dur = 60;
-            s.e.areaUnits = Prune::BlastUnits(x.area, 0.0f); s.ctrl = x.na == Prune::Nature::Control; s.ctrlDur = 10; s.ctrlPar = std::string(x.n) == "Paralyze";
+            s.e.selfDelivery = x.na == Prune::Nature::Buff || x.na == Prune::Nature::Summon || x.na == Prune::Nature::Ward; s.e.reach = s.e.selfDelivery ? 0 : 4096; s.dmg = x.d; s.heal = x.h; s.dur = 60;
+            s.e.areaUnits = Prune::BlastUnits(x.area, 0.0f, false); s.ctrl = x.na == Prune::Nature::Control; s.ctrlDur = 10; s.ctrlPar = std::string(x.n) == "Paralyze";
             ++b.natures[int(x.na)]; b.spells.push_back(s); }
         b.rawSpells = b.taughtSpells = int(b.spells.size());
         return b;
@@ -215,7 +216,7 @@ struct Rng {
 };
 
 static constexpr double kDt = 0.133;
-static bool g_tauntVisible = false;   // --taunt-visible: show Combatant::taunted to the generator (the game does NOT: R1)
+static bool g_tauntVisible = true;    // card I6: the game shows Combatant::taunted and the busy rule; --taunt-hidden = the pre-I6 behaviour
 
 static void Place(Combatant& c, float x, float y) { c.x = x; c.y = y; }
 static float Dist(const Combatant& a, const Combatant& b) { return std::hypot(a.x - b.x, a.y - b.y); }
@@ -270,7 +271,8 @@ static void RunFight(const Balance& B, const ClsDef& cd, int rank, const Bracket
         for (const SimSpell& s : B.spells) if (s.skillReq <= skill + 10 && s.cost0 * (1.0 - 0.5 * skill / 100.0) <= self.c.mpMax * 0.7) afford.push_back(&s);
         if (afford.empty()) for (const SimSpell& s : B.spells) afford.push_back(&s);
         if (cls == Cls::Mage) {
-            for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control }) {
+            // card I6: a mage also knows a ward when the list has one (the ward shape is classified now; before it read as Buff)
+            for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control, Prune::Nature::Ward }) {
                 std::vector<const SimSpell*> c; for (auto* s : afford) if (s->e.nature == nat) c.push_back(s);
                 if (!c.empty()) mySp.push_back(*c[size_t(R.I(0, int(c.size()) - 1))]);
             }
@@ -297,6 +299,7 @@ static void RunFight(const Balance& B, const ClsDef& cd, int rank, const Bracket
 
     Mind mind; PostureKind drawn = cls == Cls::Ranged ? PostureKind::Bow : cls == Cls::Mage ? PostureKind::None : PostureKind::Melee;
     double now = 0, busyUntil = 0, lowSince = -1; bool lowHealedFlag = false, lowHadCand = false; std::uint32_t curTarget = 0;
+    std::map<std::uint64_t, double> lastFired;   // card I6: Engine::FillCooldowns' store (Cooldowns, Kind::IausAction), keyed by CooldownId
     const Tuning& T = DefaultTuning(); const Profile P;
     auto alive = [](const Actor& a) { return a.alive && a.c.hp > 0; };
     auto find = [&](std::uint32_t id) -> Actor* {
@@ -351,7 +354,11 @@ static void RunFight(const Balance& B, const ClsDef& cd, int rank, const Bracket
         if (!low && lowSince >= 0) lowSince = -1;
         // ── snapshot ──
         Snapshot sn; sn.self = self.c; sn.self.dist = 0; sn.self.targetId = curTarget;
-        for (auto* f : liveFoes) { Combatant c = f->c; if (!g_tauntVisible) c.taunted = false; sn.foes.push_back(c); }
+        // Card I6: the game fills Combatant::taunted from the Taunt module's own pins, and act.taunt refuses while one of his taunts still
+        // holds a foe (Taunt::Busy). --taunt-hidden restores the pre-I6 blindness for a before/after run.
+        bool tauntBusy = false;
+        for (auto* f : liveFoes) { Combatant c = f->c; if (now < f->tauntUntil) tauntBusy = true; if (!g_tauntVisible) c.taunted = false; sn.foes.push_back(c); }
+        sn.tauntBusy = g_tauntVisible && tauntBusy;
         sn.allies.push_back(player.c); for (auto& a : allies) if (alive(a)) sn.allies.push_back(a.c);
         sn.playerId = 2; sn.currentTargetId = curTarget; sn.hasBook = true; sn.book = book; sn.book.kit = k;
         for (size_t i = 0; i < mySp.size(); ++i) {
@@ -363,6 +370,11 @@ static void RunFight(const Balance& B, const ClsDef& cd, int rank, const Bracket
         // ── IAUS ──
         const auto t0 = std::chrono::steady_clock::now();
         Generated g = Generate(sn, gate, T);
+        for (auto& c : g.actions) {   // Engine::FillCooldowns, on the sim clock
+            const auto it = lastFired.find(CooldownId(KeyOf(c)));
+            const double since = it == lastFired.end() ? 1e30 : now - it->second;
+            c.f.hardCooldownLeft = c.f.hardCooldownSec > 0.0f ? float(std::max(0.0, double(c.f.hardCooldownSec) - since)) : 0.0f;
+            c.f.sinceFired = since < double(T.softCooldownSec) ? float(since) : kInf; }
         TickIn in; in.now = now; in.rapportRank = std::uint8_t(rank); in.seed = seed; in.commitWindowSec = 1.5;
         Decision d = Decide(mind, g.actions, P, T, in);
         const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
@@ -399,14 +411,18 @@ static void RunFight(const Balance& B, const ClsDef& cd, int rank, const Bracket
                     if (found && book.entries[si].source == SpellSource::Staff && !book.entries[si].charged) bad = true; }
                 if (bad) { ++S.invalid; if (std::getenv("SIM_DEBUG")) std::fprintf(stderr, "invalid: fam=%s target=%u form=%u mp=%.0f cls=%s\n", std::string(Name(c->family)).c_str(), c->target, c->form, self.c.mp, cd.name); }
                 else {
-                    OnFired(mind, *c, st, now); ++S.fired; ++S.hist[size_t(fam)]; if (d.newDecision) ++S.switches;
+                    const std::uint64_t cdId = CooldownId(KeyOf(*c)); const auto cdPrev = lastFired.find(cdId);
+                    const bool cdHad = cdPrev != lastFired.end(); const double cdWas = cdHad ? cdPrev->second : 0.0;
+                    OnFired(mind, *c, st, now); lastFired[cdId] = now; ++S.fired; ++S.hist[size_t(fam)]; if (d.newDecision) ++S.switches;
                     double dur = 1.0;
                     const bool healAct = fam == Family::DrinkHealth || fam == Family::CastHeal;
                     if (healAct && lowSince >= 0 && !lowHealedFlag && lowHadCand) { lowHealedFlag = true; ++S.lowHealed; S.lowHealSecSum += now - lowSince; }
                     switch (fam) {
                     case Family::Attack: case Family::PowerAttack: {
                         curTarget = tg->c.id; const bool rangedAtk = drawn == PostureKind::Bow;
-                        if (!rangedAtk && tg->c.dist > 180.0f) { StepToward(self.c, tg->c.x, tg->c.y, float(350 * 0.6)); dur = 0.6; break; }   // closes first
+                        if (!rangedAtk && tg->c.dist > 180.0f) { StepToward(self.c, tg->c.x, tg->c.y, float(350 * 0.6)); dur = 0.6;
+                            if (cdHad) lastFired[cdId] = cdWas; else lastFired.erase(cdId);   // an approach leg starts no cooldown (Outcome::approach)
+                            break; }   // closes first
                         float m = fam == Family::PowerAttack ? 1.8f : 1.0f; const float sc = float(staCost) * (fam == Family::PowerAttack ? 2.5f : 1.0f);
                         if (self.c.sp < sc) m *= 0.5f;
                         self.c.sp = std::max(0.0f, self.c.sp - sc);
@@ -478,6 +494,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--compare") && i + 1 < argc) cmp = argv[++i];
         else if (!std::strcmp(argv[i], "--baseline") && i + 1 < argc) outBase = argv[++i];
         else if (!std::strcmp(argv[i], "--taunt-visible")) g_tauntVisible = true;
+        else if (!std::strcmp(argv[i], "--taunt-hidden")) g_tauntVisible = false;
         else { std::fprintf(stderr, "usage: run.sh [--list json] [--seed N] [--fights N] [--compare baseline] [--baseline out] [--taunt-visible]\n"); return 2; } }
     const Balance B = LoadBalance(listPath);
     std::printf("IAUS SIM  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d\n", B.name.c_str(), (unsigned long long)seed, fights, int(g_tauntVisible));

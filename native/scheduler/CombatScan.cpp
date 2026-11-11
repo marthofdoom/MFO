@@ -9,6 +9,7 @@
 #include "Scheduler.h"
 #include "scheduler/Scheduler_internal.h"
 #include "scheduler/ChoiceSource.h"   // IAUS card I1: the combat scan reads its choices through the seam
+#include "scheduler/IausSource.h"     // IAUS card I6: the second source, for a follower whose FLWR bit 3 is set
 #include "Evaluator.h"
 #include "cast/Actuation.h"
 #include "Followers.h"
@@ -36,6 +37,7 @@
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 #include "selftest/SelfTest.h" // dev builds only: the self-test runner tick (an empty inline in release)
 #include <cstring>          // [deadtgt] strcmp on the CannotActReason strings
+#include <optional>         // card I6: the IAUS source is built only for an iausCombat follower
 #include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
 namespace MFO::Scheduler {
@@ -113,7 +115,7 @@ namespace MFO::Scheduler {
                 return true;
             }
 
-            void Reject(const Eval::Choice& a_choice) override { m_start = Rank::NextTableRow(a_choice.rank); }
+            void Reject(const Eval::Choice& a_choice, std::string_view) override { m_start = Rank::NextTableRow(a_choice.rank); }
 
             // #11: re-anchor the positional suppression window to the fired rule's IDENTITY. Suppression is
             // positional (INVARIANTS #26), but the anchor is the rule that FIRED, not a frozen index -- a board
@@ -326,7 +328,7 @@ namespace MFO::Scheduler {
                     if (cat != handClaim) {
                         chain += std::format("{}{}(hand claimed)",
                                              chain.empty() ? "" : ",", choice.rank);
-                        a_src.Reject(choice);
+                        a_src.Reject(choice, "hand claimed");
                         continue;
                     }
                 }
@@ -350,7 +352,7 @@ namespace MFO::Scheduler {
                     silverHeld = silverHeld || isSilver;
                     chain += std::format("{}{}(cannot act: {})", chain.empty() ? "" : ",",
                                          choice.rank, cannotAct);
-                    a_src.Reject(choice);
+                    a_src.Reject(choice, std::format("cannot act: {}", cannotAct));
                     continue;
                 }
 
@@ -423,17 +425,18 @@ namespace MFO::Scheduler {
                         isEquip && outcome.result == Actuation::Result::NoOp;
                     if (satisfiedEquip) handClaim = wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
                     if (satisfiedEquip) silverHeld = silverHeld || isSilver;
+                    // The pass's own text, once: the chain prints it, and the source receives it (card I6).
+                    const char* const passWhy = satisfiedEquip        ? "satisfied"
+                                                // G9: no countdown in the chain, or its dedup'd log line changes every second
+                                                : !coolReason.empty() ? "cooling down"
+                                                                      : outcome.reason.c_str();
                     chain += std::format("{}{}({})", chain.empty() ? "" : ",",
-                                         choice.rank,
-                                         satisfiedEquip        ? "satisfied"
-                                         // G9: no countdown in the chain, or its dedup'd log line changes every second
-                                         : !coolReason.empty() ? "cooling down"
-                                                               : outcome.reason.c_str());
+                                         choice.rank, passWhy);
                     // G10: a skipped rule's "will not work" reason reaches the board (lastFailReason is otherwise written for the stopping rule only).
                     // G9's "cooling down (Ns)" takes the same road.
                     if (outcome.reason.starts_with("will not work:") || outcome.reason.starts_with(Cooldowns::kCoolingPrefix))
                         a_src.NoteSkipReason(choice, outcome.reason);
-                    a_src.Reject(choice);
+                    a_src.Reject(choice, passWhy);
                     continue;
                 }
 
@@ -482,6 +485,7 @@ namespace MFO::Scheduler {
         // duration and the early ends) EVERY pump, before the early returns: a taunt must release the same tick its
         // taunter goes down or the party empties, and none of that is a follower service. Pauses with the game.
         Taunt::Tick();
+        IausSweep();        // IAUS card I6: forget the IAUS memory of followers that left (worker-side, MFO-B639)
         SelfTest::Tick();   // dev builds only (native/selftest/, Docs/SELFTEST.md); before the empty-party return: it also
                             // removes fixtures a load brought in. An empty inline in a release build.
 
@@ -693,6 +697,13 @@ namespace MFO::Scheduler {
         // ONCE, latched in g_mfoDisabledSwept. This runs on the SAME worker as
         // the dismissal sweep that shares ReleaseHeldState, so the context is
         // identical. Re-enabling erases the latch, re-arming a future release.
+        // IAUS CARD I6 -- THE COMBAT SOURCE. A follower whose FLWR bit 3 (FollowerState::iausCombat) is set is
+        // served by the IAUS source below instead of his gambit table; with the bit clear NOTHING here differs
+        // from the table-only scan. The toggle EDGE (either direction, the MFO master switch included) stands the
+        // running decision down first, on this worker, so no lock, claim or latch of the old source survives it.
+        const bool iausOn = it->second.mfoEnabled && it->second.iausCombat;
+        const std::uint8_t iausRapport = it->second.rank;
+        IausToggleEdge(f, id, iausOn);
         if (!it->second.mfoEnabled) {
             if (g_mfoDisabledSwept.insert(id).second)
                 Followers::ReleaseHeldState(id);
@@ -746,6 +757,7 @@ namespace MFO::Scheduler {
                 // note carries the cooldown across the fight edge and is never
                 // erased here.
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+                if (iausOn) IausCombatEnded(id);   // card I6: the running decision and the fight clock end with the fight
                 Actuation::NoteCombatEpisodeEnded(id);   // re-arm the once-per-episode ch.26 "nothing to prefer" line
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
                 APMFBridge::ReleasePursuitLeash(id, "combat ended");   // ch.23: the in-combat leash ends with the fight
@@ -1100,13 +1112,16 @@ namespace MFO::Scheduler {
                 // (ChooseHealRoad DirectNoCombat), which owns no package and no alias, so the
                 // retreat travel is untouched and nothing is left for a later StopCombat to
                 // cut. Before it lands, nothing runs (a claim minted now would be cut by it).
-                if (!APMFBridge::InCombat(f) && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
-                    TableSource retreatTable(f, id);   // the combat TABLE, by name (card I1; IAUS: card I6 decides)
+                // CARD I6: an IAUS follower runs no row. His self heal here is the IAUS pick, under the same gates.
+                if (iausOn) {
+                    IausRetreatSelfHeal(f, id, iausRapport, now);
+                } else if (!APMFBridge::InCombat(f) && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
+                    TableSource retreatTable(f, id);   // the combat TABLE, by name (card I1)
                     for (;;) {
                         Eval::Choice sc;
                         if (!retreatTable.Next(sc)) break;
                         if (!Rank::IsChoice(sc.rank)) break;
-                        retreatTable.Reject(sc);
+                        retreatTable.Reject(sc, {});
                         // act.cast_self, or a cast_target row whose TARGET is "Self" (Subject::Caster,
                         // 2026-10-06): the same self road (Fire -> CastOn(f, spell, f)), self by definition.
                         const bool selfRule =
@@ -1218,7 +1233,7 @@ namespace MFO::Scheduler {
         if (Packages::IsRetreating(id)) APMFBridge::ReleasePursuitLeash(id, "retreat started");
         else                            ServiceLeashWithReachHold(f, id);
 
-        if (it->second.combat().empty()) {
+        if (!iausOn && it->second.combat().empty()) {   // card I6: an IAUS follower needs no rows
             // #65: no combat gambits, but a class override is still a valid STYLE
             // pick -- apply it (same master-toggle gating as the main stance path
             // below) before this early-out, so "just make this follower Ranged/
@@ -1269,8 +1284,13 @@ namespace MFO::Scheduler {
         const bool inWindow = now < recent.until;
         // #11: the window's anchor is the fired decision's IDENTITY, re-resolved to its
         // CURRENT rank each tick by the source (TableSource::SuppressionAnchor).
-        TableSource table(f, id);   // card I6 picks the IAUS source here for an iausCombat follower
-        ChoiceSource& src = table;
+        // CARD I6: the IAUS source for an iausCombat follower, else the table. The IAUS source gathers and
+        // decides in its constructor and logs in its destructor (the end of this service); it is built only
+        // when needed, so a table follower pays nothing.
+        TableSource table(f, id);
+        std::optional<IausSource> iaus;
+        if (iausOn) iaus.emplace(f, id, iausRapport);
+        ChoiceSource& src = iaus ? static_cast<ChoiceSource&>(*iaus) : static_cast<ChoiceSource&>(table);
         const int firedRuleNow = src.SuppressionAnchor(inWindow, recent.firedRule, recent.firedUID);
         const bool windowActive = Rank::WindowActive(inWindow, firedRuleNow);
 
@@ -1286,6 +1306,9 @@ namespace MFO::Scheduler {
         auto& chain = scan.chain;
         auto& choice = scan.choice;
         auto& outcome = scan.outcome;
+        // CARD I6: a commitment-window Hold that took no action is the "suppressed" stop, and the running cast
+        // decision keeps its loan while it still clears the floor (design 1.3). Table: no-op.
+        if (iaus) iaus->AmendScan(stopped, suppressed, castSeen, matchedCast);
 
         // COMBAT-STYLE OWNERSHIP. The actual combatStyle write happens on the
         // combat thread (CombatStyle::ApplyTick from the UpdateCombat hook); this
@@ -1358,7 +1381,9 @@ namespace MFO::Scheduler {
         // CombatSense::FoeCount > 0. A genuinely empty group still reads false and releases.
         if (silverKnownFalse && !silverHeld) {
             const bool unholyRuleEvaluated = src.UnholySilverEvaluated(choice);
-            if (unholyRuleEvaluated && !Eval::CurrentTargetIfTrackable(f) && CombatSense::FoeCount(f) > 0)
+            // CARD I6: the IAUS source answers "the posture layer had no answer this lap" here; that alone is
+            // UNKNOWN (there is no row whose target read could be re-checked).
+            if (unholyRuleEvaluated && (iaus || (!Eval::CurrentTargetIfTrackable(f) && CombatSense::FoeCount(f) > 0)))
                 silverKnownFalse = false;
         }
         // MFO-B55 FIX: a "known false" that came from a target-relative equip
@@ -1371,9 +1396,14 @@ namespace MFO::Scheduler {
             equipRangeUndecidable = src.EquipRangeUndecidable(f, choice);
             if (equipRangeUndecidable) {
                 equipCondKnownFalse = false;
-                if (g_equipRangeUndecidableNoted.insert(id).second)
+                if (g_equipRangeUndecidableNoted.insert(id).second) {
+                    if (iaus)
+                        spdlog::info("[sched] {:08X}: the IAUS posture layer had no answer (no fresh spell book or no "
+                                     "readable foe) -- hold kept (truth unknown, not false)", id);
+                    else
                     spdlog::info("[sched] {:08X}: equip range rule has no usable combat target while own group has foes -- "
                                  "hold kept (truth unknown, not false; MFO-B55)", id);
+                }
             }
         }
 
@@ -1600,7 +1630,7 @@ namespace MFO::Scheduler {
                 // follower inside a party fight: every foe-keyed rule reads his
                 // own empty group) is distinguishable from a table that never
                 // ran. Re-armed in the party-OOC branch.
-                if (g_noneMatchedNoted.insert(id).second) {
+                if (!iaus && g_noneMatchedNoted.insert(id).second) {   // IAUS says "idle" in its own [iaus] line
                     std::size_t nRules = 0;
                     if (const auto rr = g_followers.find(id); rr != g_followers.end())
                         nRules = rr->second.combat().size();
@@ -1610,7 +1640,10 @@ namespace MFO::Scheduler {
             // The combat table took no action -> this tick's one action slot goes
             // to logistics, UNLESS a cast rule's condition held (castSeen): then
             // the cast facet is the combat table's for this lap (see the lambda).
-            serviceOwnOoc(/*castFacetHeld=*/castSeen);
+            // CARD I6 / MFO-B667: under IAUS a standing heal keeps the cast facet too. A logistics row carries its
+            // row index as its rank, which is below every IAUS rank, so its cast would always displace the heal
+            // hold (the heal-to-full contract). Table: unchanged.
+            serviceOwnOoc(/*castFacetHeld=*/castSeen || (iaus && healHeld != 0));
             g_lastTickMs = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t0).count();
             return;

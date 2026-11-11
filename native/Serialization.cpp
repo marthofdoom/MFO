@@ -22,6 +22,9 @@
 #include "MainThread.h"
 #include "CrimeProbe.h"
 #include "SelfStatus.h"   // ResetAllState: drop the poisoned-state mirror
+#include "iaus/Engine.h"      // IAUS card I6: ResetAllState clears the Minds ...
+#include "iaus/SpellBook.h"   // ... the spell-book mirror ...
+#include "iaus/Candidates.h"  // ... and the gather's per-fight state
 #include "Probe.h"
 #include "Board.h"
 #include "progression/ProgAllocator.h"
@@ -1169,6 +1172,12 @@ namespace MFO {
         MainThread::Clear();
         CrimeProbe::ResetState();   // [crime-probe]: the dropped Post's latch, belt and braces (the token also clears it)
         SelfStatus::Clear();   // the poisoned-state mirror (gambit conditions): a pre-load answer must not survive the load
+        // IAUS card I6 (runtime only, never saved; after StopPump like every clear here): the Minds / readouts /
+        // source notes, the spell-book mirror (its generation bump drops a refresh in flight) and the gather's
+        // fight clocks and G10 want lists.
+        Iaus::Engine::Clear();
+        Iaus::SpellBook::Clear();
+        Iaus::Candidates::Clear();
         g_followers.clear();
         // ARCHITECTURE §7: revert zeroes EVERYTHING save-scoped. The active
         // handle list is save-scoped too -- handle slots get reused, so a

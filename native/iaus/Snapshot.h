@@ -65,6 +65,11 @@ namespace MFO::Iaus {
         bool crossbow = false;
         bool staff = false;
         bool staffCharged = false;   // at least one carried staff has a cast left
+        // Card I6 (marth Q64), MEASURED ONLY, NOT SCORED YET: Precision's attack-collision capsule length of his
+        // right-hand weapon, in units (0 = Precision absent, refused, or nothing to measure). It is the weapon's
+        // LENGTH from the hand, not a centre-to-centre reach, so Generate still reads Snapshot::meleeReach
+        // (Docs/research/2026-11/iaus-i6.md "Precision reach").
+        float precisionWeaponLength = 0.0f;
     };
 
     struct Book {
@@ -74,7 +79,8 @@ namespace MFO::Iaus {
 
     // ── The follower's class as the generator gates on it (design section 2) ──────────────────────────────
     // Plain flags so the simulator can write any class by hand. SpellBook::GateFor fills it from the EQUIPPED
-    // class when the class tree is on, else from the T1 class of his resolved combat class.
+    // class when the class tree is on (else his T1 class). With the tree OFF nothing is class-gated (marth Q63,
+    // card I6): every flag below is open, as the gambit table leaves it today.
     struct ClassGate {
         bool resolved = false;        // false: no class known yet -- weapons and spells are not gated
         bool treeOn = false;
@@ -85,6 +91,7 @@ namespace MFO::Iaus {
         bool powerAttack = false;     // a ch.18 power share or a power-attack default row
         float powerCooldownSec = 0.0f;   // that row's cooldown (10 s); 0 = none declared
         bool taunt = false;           // a taunt default row
+        float tauntCooldownSec = 0.0f;   // that row's cooldown; 0 = none declared (Tuning::rowlessTauntCooldownSec then)
         bool disengage = false;       // Flag::kDisengage (Retreat)
         bool weaponMelee = true;      // the class weapon set holds a melee weapon (dagger / 1H / 2H)
         bool weaponBow = true;
@@ -149,6 +156,8 @@ namespace MFO::Iaus {
         bool  handBusyLeft = false;       // a heal stands on that hand (design 1.3: never preempted)
         bool  handBusyRight = false;
         bool  tauntEnabled = false;       // the taunt feature switch
+        bool  tauntBusy = false;          // his taunt attempt is in flight or a foe is still pinned to him: act.taunt
+                                          // refuses (Taunt::Fire), so no taunt candidate is made (card I6)
         float tauntReach = 0.0f;
         float meleeReach = 200.0f;        // fMeleeReach
         float chaseCap = 4096.0f;         // Confidence::ChaseRadius

@@ -31,6 +31,17 @@ namespace MFO::Taunt {
     // through; opaque "in progress" while an attempt waits on its idle.
     Actuation::Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice);
 
+    // IAUS card I6 (sim finding R1: the FoeTaunted gate had no input). MFO's OWN BOOKKEEPING of its taunts, read
+    // from the tables this module already keeps (no engine read): is a_foe pinned onto a_taunter by a LIVE taunt?
+    // The entry is filed by the roll (Resolve) and dropped by Tick on the taunt's real ends (duration fTauntDuration,
+    // taunter down or dead, foe dead or unloaded, combat over, Harbinger ending the pin), so it can never outlive
+    // the pin and is never expired early by a guessed timer (principle 9). Any thread (one leaf-mutex read).
+    [[nodiscard]] bool TauntedBy(RE::FormID a_foe, RE::FormID a_taunter);
+    // act.taunt would refuse a_taunter right now: his attempt is in flight (idle playing or the roll pending) or a
+    // foe is still pinned to him ("it shouldn't repeat while it's active", marth 2026-10-13). The same two tests
+    // Fire makes. Any thread.
+    [[nodiscard]] bool Busy(RE::FormID a_taunter);
+
     // Once per Scheduler pump, worker, BEFORE the early returns: advances every attempt (idle confirmation) and
     // every active taunt (duration and the early ends). Pauses with the game.
     void Tick();

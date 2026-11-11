@@ -229,8 +229,13 @@ namespace MFO::Iaus {
             m.running = k;
             m.decidedAt = now;
             m.epoch = s.epoch;
+            // THE WINDOW IS ANCHORED ONCE, WHEN A NEW DECISION FIRES (marth Q67, closes MFO-B651). A repeat Fired of
+            // the SAME decision does not re-anchor it: a decision that keeps firing (an attack re-latched, a
+            // stream re-driven) used to keep the window open for good, so a waiting heal had to beat it by the
+            // preempt margin on every tick (sim: 5-44% of hurt-with-a-heal ticks were Hold). After the window a
+            // running decision is held by momentum alone. No emergency margin skip (same ruling).
+            m.firedAt = now;
         }
-        m.firedAt = now;   // every Fired re-anchors the window, as today's #26 window does (Scheduler recent.until)
         if (c.form != 0) {
             m.recent[m.recentHead] = c.form;
             m.recentHead = static_cast<std::uint8_t>((m.recentHead + 1u) % m.recent.size());

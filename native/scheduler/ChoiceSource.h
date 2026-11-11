@@ -6,9 +6,9 @@
 // cooldown and hesitation gates, Actuation::Fire, the reconciliation, the [eval] lines); the source only says
 // which choices to try, in which order, and keeps its own bookkeeping.
 //
-// Today the only source is the table source (TableSource in CombatScan.cpp): the Evaluate(start) walk and the
-// row reads the scan used to make on `ruleIndex`, moved behind these methods unchanged. Card I6 adds the IAUS
-// source. A source is built per follower per lap on the worker (#4) and never outlives the lap.
+// Two sources: the table source (TableSource in CombatScan.cpp: the Evaluate(start) walk and the row reads the
+// scan used to make on `ruleIndex`, moved behind these methods unchanged) and, since card I6, the IAUS source
+// (scheduler/IausSource.h) for a follower whose FLWR bit 3 is set. A source is built per follower per lap on the worker (#4) and never outlives the lap.
 //
 // Every row read re-finds the follower's record by FormID (INVARIANTS #2): a transparent outcome may have
 // dispatched engine events, so no source holds an iterator across a call.
@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "Evaluator.h"
 #include "cast/Actuation.h"
@@ -37,8 +38,9 @@ namespace MFO::Scheduler {
         virtual bool Next(Eval::Choice& a_out) = 0;
 
         // The scan passes over a_choice (a transparent outcome, the hand claim, cannot act): the next Next()
-        // starts after it.
-        virtual void Reject(const Eval::Choice& a_choice) = 0;
+        // starts after it. a_why is the scan's own text for the pass (card I6: the IAUS source prints it in its
+        // [iaus] line; the table source ignores it, its reasons are in the [eval] chain).
+        virtual void Reject(const Eval::Choice& a_choice, std::string_view a_why) = 0;
 
         // The positional suppression anchor (INVARIANTS #26, #11): the CURRENT rank of the decision that bought
         // the window, re-resolved from its stored identity. a_firedRank / a_firedIdentity are Recent::firedRule /

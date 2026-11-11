@@ -43,6 +43,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Probe.cpp
     TauntProbe.cpp
     Taunt.cpp
+    PrecisionBridge.cpp
     ProgProbe.cpp
     Progression.cpp
     progression/Allocator.cpp
@@ -82,6 +83,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/SubstrateRoad.cpp
     Scheduler.cpp
     scheduler/CombatScan.cpp
+    scheduler/IausSource.cpp
     Cooldowns.cpp
     iaus/Curves.cpp
     iaus/Catalogue.cpp
