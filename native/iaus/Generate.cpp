@@ -74,6 +74,7 @@ namespace MFO::Iaus {
                 f.foeBlocking = a_foe.blocking;
                 f.foeStronger = a_foe.level > s.self.level;
                 f.foeControlled = a_foe.paralysed || a_foe.fleeing;
+                f.foeHelpless = a_foe.paralysed;
                 f.foeTaunted = a_foe.taunted;
                 f.foeOutOfMeleeReach = a_foe.outOfMeleeReach;
                 f.foeUnholy = a_foe.unholy;

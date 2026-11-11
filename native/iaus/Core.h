@@ -104,7 +104,7 @@ namespace MFO::Iaus {
         BoostPlayerDying,   // multiplier: the player has seconds to live
         BoostRecipientDying,   // multiplier: the heal's recipient has seconds to live
         RangeChase,         // ruling Q70: a melee ATTACK names a target anywhere in chase range (distance shades, the cap vetoes)
-        BoostControlled,    // multiplier: a blow on a foe that cannot answer (paralysed, staggered by control)
+        BoostControlled,    // multiplier: a blow on a foe that cannot answer (PARALYSED only: Facts::foeHelpless)
         TauntChance,        // ruling Q69: the stat-based chance this taunt works on this foe
         HealClaimed,        // another follower's heal is already in flight on this recipient
         HealUrgency,        // seconds the recipient has left at the damage he is taking
@@ -207,8 +207,10 @@ namespace MFO::Iaus {
         float emergencyStrictAt = 0.5f;        // emergency level at which the strict reading bites
         float emergencyHpHigh = 0.35f;         // EmergencyLevel: 0 at or above this party-worst HP pct
         float emergencyHpLow = 0.10f;          //                1 at or below this
-        float noHealRetreat = 0.30f;           // Retreat vetoed while a heal candidate scores above this
-        float noHealDrink = 0.50f;             // Health drink vetoed while a heal candidate scores above this
+        // Both compare against Decision::bestHeal = the best heal's score DIVIDED BY its family's action weight. The values
+        // are the doc's 0.30 / 0.50 over the heal weight they were written against (1.2), so they mean what they meant.
+        float noHealRetreat = 0.25f;           // Retreat vetoed while a heal candidate scores above this
+        float noHealDrink = 0.4167f;           // Health drink vetoed while a heal candidate scores above this
         // Card I6: the hard cooldown of a ROW-GATED action whose class row declares none (ClassGate::*CooldownSec
         // == 0). The power-attack rows all declare 10 s; no taunt row declares one (the floor is the 30 s of Q69), and with the class tree OFF
         // (marth Q63: nothing is class-gated) there is no row at all. Without a floor the sim's Knight taunts
@@ -342,6 +344,9 @@ namespace MFO::Iaus {
         bool  anchorSafer = false;        // regroup: the anchor stands clearly farther from what is hitting him than he does
         bool  foeSwinging = false;        // block / bash: this foe's swing at him is in the air
         bool  foeCasting = false;         // bash: this foe is charging a spell right now
+        bool  foeHelpless = false;        // BoostControlled: the foe is PARALYSED (he cannot answer a blow). Not a fleeing foe:
+                                          // foeControlled also covers fleeing (the control-cast gate), and a boost on a runner
+                                          // pulled followers after him (review of 303c14d, F2)
     };
 
     struct Candidate {
@@ -454,7 +459,7 @@ namespace MFO::Iaus {
         bool          overCap = false;   // more than maxCandidates offered (only the first maxCandidates scored)
         std::size_t   badFacts = 0;      // candidates VETOED because a fact was NaN / inf (a reader bug: never masked)
         int           firstBadFact = -1; // the first such candidate's index, for the adapter's WARN
-        float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score (Retreat and the health drink read it)
+        float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score over its action weight (Retreat and the health drink read it)
         std::uint8_t  rapportRank = 1;
     };
 

@@ -662,9 +662,11 @@ namespace MFO::Iaus {
                 if (!f.meleeRange) return In::Off();
                 if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(f.dist / (f.reach * 20.0f)) : In::Off();   // no cap known: 20 reaches
                 return f.dist / f.chase;
-            case Cons::BoostControlled:     return B(f.foeControlled);
+            case Cons::BoostControlled:     return B(f.foeHelpless);
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
-            case Cons::HealClaimed:         return B(f.recipientBeingHealed);
+            // Off when nobody else is healing him: an input that is on counts toward n (the I4 rule), and a
+            // constant 1.0 on every heal raised each heal's compensation (review of 303c14d, F4).
+            case Cons::HealClaimed:         return f.recipientBeingHealed ? In(1.0f) : In::Off();
             case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
             case Cons::GroundNeed: {
                 if (c.family != Family::GiveGround) return In::Off();

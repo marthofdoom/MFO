@@ -1215,3 +1215,48 @@ search itself now scores the cut sets.
 Caveat, unchanged: table mode acts through the sim's engine-AI MODEL, and only some combat-style fields are
 modelled (offensive, defensive, the power-attack and bash multipliers, fallback, the three weapon weights). The
 direction is the finding. The values want the in-game probe before the C8 and C12 authors take them.
+
+## 28. Review of the phase-2 native diff (Opus tier 3, on 303c14d) and the fix round (successor 2, 2026-11-11)
+
+The review found nothing above SEV-3. Its report is `scratchpad/agentlogs/iaus-p2-review.md`. Cost about 58 µs per
+tick at 152 candidates, the harness 0 failed on the branch and on a trial merge with main. This round fixes F2, F4,
+F5 and F6, lists F1 and F3 as intended, and merges main (13f2e41 and later: the taunt rules) into the branch.
+
+### 28.1 What phase 2 changes in the LIVE game once it merges
+
+Phase 2 is not only lab work. These reach a follower on Sentient AI the day the branch merges, with no engine-side
+fill and no road flag. Lab effect = mean J over LoreRim, Tuxborn and Vanilla, seeds 1 and 7, 30 fights, the
+estimates measured. The noise at that size is about 0.5 J.
+
+| Change | Live because | What the player sees | Lab effect |
+|---|---|---|---|
+| Set A2 as the default weights (26.5) | `DefaultTuning()` | more power attacks and control casts, fewer magicka potions | +1.2 to +3.6 J per list without the estimates |
+| TauntChance (F1): a taunt is scaled by its chance to work, 0.8 x chance + 0.2 | main fills both levels (`Combatant::level`, the taunt rules card) | fewer taunt attempts on a foe above his level. With the taunt weight at 0.75 a taunt on a foe 2 levels up scores about 44 percent lower than on main (chance 0.4: the curve gives 0.52, about 0.74 after the compensation, times the 0.75 weight, against main's 1.0) | weight 0 against weight 1: 68.97 against 68.91, inside the noise |
+| RangeTaunt (F3) replaces RangeSpell in the taunt set | the taunt set is read every tick | a taunt is no longer shaded down near the edge of its reach (the spell curve gave 0.38 at 90 percent). Same outer edge, 1.15 x reach | neutral (24, table of inputs) |
+| BoostControlled x1.3 on a blow, now PARALYSED foes only (F2) | main fills `paralysed` | he presses a paralysed foe. He no longer gets the boost on a FLEEING foe, which with the chase range pulled him after runners | fleeing included 68.92, paralysed only 68.93, boost off 68.99: inside the noise |
+| The health potion weight 2.2 (26.5) | `DefaultTuning()` | none intended: it keeps "the potion ranks first when he has no valid heal" under the higher power attack weight | neutral |
+| DamageValue scores a no-damage spell 0 against his best | the book is filled today | a spell with no measured damage is not cast as offense while a measured one exists | part of set A2's numbers |
+
+Not live: everything behind `Snapshot::regroupRoad` / `groundRoad` / `blockRoad` / `bashRoad`, `Tuning::kiteDistance`
+(0), and every input whose fact is still unmeasured in the game (the estimates, `mortal`, `swinging`, `casting`,
+`controlSec`, `castsWanted`): those considerations read "off" until the engine-side fill card.
+
+### 28.2 The fixes
+
+| Finding | Fix | Check |
+|---|---|---|
+| F2 (SEV-3) BoostControlled boosted fleeing foes | new fact `Facts::foeHelpless` = paralysed. `foeControlled` (paralysed or fleeing) stays the control-cast gate's input | harness 0 failed. J 68.92 to 68.93 |
+| F4 (SEV-4) HealClaimed counted as an applicable input on every heal | off unless another heal is in flight on the recipient (the I4 rule: an input that is off does not raise n) | J 68.93 to 68.91 |
+| F5 (SEV-3) heal weight 2.4 halved what `noHealDrink` (0.50) and `noHealRetreat` (0.30) meant | `Decision::bestHeal` is now the best heal's score DIVIDED BY its family's action weight, so no weight tuning moves the two gates again. The thresholds are rescaled by the 1.2 they were written against: 0.4167 and 0.25, the same meaning as on main for a heal spell. A heal SCROLL (weight 0.9) now blocks the drink a little sooner than on main (its raw score above 0.375 instead of 0.5) | harness 0 failed, "the health potion ranks first" passes, J unchanged to three decimals (68.91) |
+| F6 (SEV-4) `scheduler/IausSource.cpp` had no case for Regroup, GiveGround, Block, Bash | the four join "no action road for this family yet" | CI |
+
+`[iaus-why]` and the readout print `best heal` in the new unit (score over weight).
+
+### 28.3 Merge with main
+
+`Estimate.h` is the branch file, `TauntChance` uses `(std::clamp)` and its comment says the roll in `Taunt.cpp`
+calls it (Q72). `Core.h` keeps main's `rowlessTauntCooldownSec = kTauntCooldownSec` with the phase-2 Tuning fields
+after it. The harness keeps both includes and runs `SharedTauntPowerRules()` then `ReachLearning()`: 0 failed.
+
+For the engine-fill card (recorded by the coordinator as backlog): F7, `bestOn` filters and a per-entry "measured"
+flag, and `Reach` falling back to `fMeleeReach` while `!Known()`.

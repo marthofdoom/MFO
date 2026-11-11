@@ -97,7 +97,14 @@ namespace MFO::Iaus {
             }
             if (o.pruned) { ++d.pruned; return; }
             ++d.evaluated;
-            if (detail::IsHeal(c)) d.bestHeal = (std::max)(d.bestHeal, o.score / mom);
+            // The best heal is read WITHOUT the heal's action weight: Retreat and the health drink ask "is a good heal
+            // at hand", and a weight that only ranks heals against other actions must not move those two gates
+            // (review of 303c14d, F5: heal weight 2.4 had halved what noHealDrink / noHealRetreat meant).
+            if (detail::IsHeal(c)) {
+                const auto fi = static_cast<std::size_t>(c.family);
+                const float aw = fi < kFamilies ? t.actionWeight[fi] : 0.0f;
+                if (aw > 0.0f) d.bestHeal = (std::max)(d.bestHeal, o.score / mom / aw);
+            }
             if (o.score < t.actFloor) return;
             top.Add(o.score);
             d.ranked.push_back(Scored{ static_cast<std::uint16_t>(i), o.score, o.score / mom, o.focus, running });

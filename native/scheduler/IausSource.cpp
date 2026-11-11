@@ -241,6 +241,10 @@ namespace MFO::Scheduler {
         case Family::Posture:
         case Family::Scroll:
         case Family::Exploit:
+        case Family::Regroup:      // the four road families: generated only behind Snapshot::*Road, which no engine
+        case Family::GiveGround:   // code sets yet (the Harbinger combat-move and point-area capabilities)
+        case Family::Block:
+        case Family::Bash:
         case Family::kCount:
             a_whyNot = "no action road for this family yet";
             return false;
