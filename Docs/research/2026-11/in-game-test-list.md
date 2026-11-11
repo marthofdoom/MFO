@@ -68,7 +68,7 @@ Build: main d1fc315 (DEV DLL) with Harbinger 599346f, deployed. "Sentient AI" is
 46. `[iaus-probe]` lines (player target probe from check 14, and any other `[iaus-probe]` line).
 
 ## What to send back
-- `MFO.log` from this run. It sits where the earlier sections' logs do: the mod's SKSE log folder (LoreRim `overwrite/SKSE/Plugins/MFO.log` or `Documents/My Games/Skyrim Special Edition/SKSE/MFO.log`, whichever exists and is newest). Also the main-build `MFO.log` from check 2.
+- `MFO.log` from this run. It sits where the earlier sections' logs do: `/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log` (verified). Also the main-build `MFO.log` from check 2.
 - Any crash log (Crash Logger / .NET Script Framework file) and the time it happened.
 - Which checks you skipped, and notes on 6 (how often the mage drew a weapon) and 43 (length and distance per weapon).
 
