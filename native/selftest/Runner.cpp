@@ -301,7 +301,10 @@ namespace MFO::SelfTest {
                 const std::uint8_t       cap = Classes::LevelCap(e.cls);
                 const std::uint8_t       lvl = (e.mastered && cap) ? cap : e.level;
                 bool ok = Classes::SetUnlocked(e.fid, Classes::GetUnlocked(e.fid) | Classes::Bit(e.cls));   // the dev unlock override
-                if (ok) Classes::ActivateClass(e.fid, e.cls);                    // false when already equipped: fine
+                // Card C12: the REAL equip road (what the board card C10 will call), so the class's default / remembered gambit
+                // tables are laid down too and a list of entries for one follower walks a class switch. Refused when already
+                // equipped: fine.
+                if (ok) Classes::EquipClass(e.fid, e.cls, g_followers.find(e.fid)->second);
                 if (ok && cap) Classes::ApplyLevel(e.fid, e.cls, lvl);           // false when nothing changed: fine
                 const auto prog = Classes::GetProgress(e.fid, e.cls);
                 ok = ok && Classes::GetEquipped(e.fid) == static_cast<std::uint8_t>(e.cls) && (!cap || prog.level >= lvl) &&

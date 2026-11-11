@@ -105,11 +105,14 @@ namespace MFO::Classes {
             G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack),
             G(Vocab::kCondSelfHpBelow, Vocab::kActDrinkHealthPotion, 0.35f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
-        // 10 s cooldown on each power-attack row (marth); the field is data until card G9 (per-rule cooldown).
+        // 10 s cooldown on each power-attack row (marth), applied by card C12 through G9's row field.
+        // Card C12: the simulator's kept set (tools/iaus_sim/defaults/warrior.json `lab`, iaus-sim-v2.md section 27, +3.17),
+        // a STARTING default until the in-game probe. Before it: foe_blocking / foe_stronger_than_me power attacks, then
+        // attack the highest-health foe.
         constexpr DefaultGambit kWarriorG[] = {
-            G(Vocab::kCondFoeBlocking, Vocab::kActPowerAttack, 0.0f, SpellRole::None, kSelf, 10.0f),
-            G(Vocab::kCondFoeStrongerThanMe, Vocab::kActPowerAttack, 0.0f, SpellRole::None, kSelf, 10.0f),
-            G(Vocab::kCondFoeHighestHp, Vocab::kActAttack),
+            G(Vocab::kCondFoeIsCaster, Vocab::kActPowerAttack, 0.0f, SpellRole::None, kSelf, 10.0f),
+            G(Vocab::kCondFoeFleeing, Vocab::kActAttack),
+            G(Vocab::kCondFoeAny, Vocab::kActPowerAttack, 0.0f, SpellRole::None, kSelf, 10.0f),
             G(Vocab::kCondSelfSpBelow, Vocab::kActDrinkStaminaPotion, 0.25f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         // Casters, then archers, then lowest HP; stamina potion < 25%; else equip melee (marth).
@@ -141,6 +144,11 @@ namespace MFO::Classes {
         constexpr DefaultGambit kConjurerG[] = {
             Todo(kTodoNoSummon, Vocab::kActCastSelf, "G5", 0.0f, SpellRole::Summon),
             Todo(kTodoFoeHitsMySummon, Vocab::kActCastTarget, "G6", 0.0f, SpellRole::Attack, kSelf),
+            // Card C12: the applied rows are the simulator's kept set (tools/iaus_sim/defaults/conjurer.json `lab`,
+            // iaus-sim-v2.md section 27, +2.10), a STARTING default until the in-game probe. Before it: foe_any attack
+            // cast, magicka potion, equip melee within 150.
+            G(Vocab::kCondFoeIsCaster, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf),
+            G(Vocab::kCondFoeLowestHp, Vocab::kActAttack),
             G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.25f),
             G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 150.0f) };   // dagger when something is on it
@@ -153,12 +161,15 @@ namespace MFO::Classes {
             G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf) };
         // Trimmed set (marth): paralyze/fear a stronger foe, armor spell up, magicka potion, Destruction nearest.
         // The spell-will-work level skip (G10) is a BASE rule, not a row.
+        // Card C12 (marth Q74, every prefix a good table): the SAME five rows in the simulator's kept prefix order
+        // (tools/iaus_sim/defaults/warlock.json `prefix`, iaus-sim-v2.md section 27, +1.76), so a Rank I Warlock (3 slots)
+        // holds a damage row. Before it: paralyze, fear, armor, magicka potion, destruction.
         constexpr DefaultGambit kWarlockG[] = {
-            Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Paralyze),
             Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Fear),
-            G(Vocab::kCondAlways, Vocab::kActCastSelf, 0.0f, SpellRole::Armor),
             G(Vocab::kCondSelfMpBelow, Vocab::kActDrinkMagickaPotion, 0.20f),
-            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kSelf) };
+            G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Destruction, kSelf),
+            G(Vocab::kCondAlways, Vocab::kActCastSelf, 0.0f, SpellRole::Armor),
+            Ctl(Vocab::kCondFoeStrongerThanMe, Vocab::kActCastTarget, 0.0f, SpellRole::Paralyze) };
 
         // T3 pure
         constexpr DefaultGambit kGreatKnightG[] = {   // Knight's set + taunt at 3+ foes

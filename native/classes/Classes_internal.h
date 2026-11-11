@@ -24,5 +24,16 @@ namespace MFO::Classes {
         // Every follower with a stored class record (State.cpp; a copy taken under g_mx). Card C6 re-applies the carriers to all of
         // them after a load.
         std::vector<RE::FormID> StoredFollowerIds();
+
+        // Card C12 (State.cpp): the compound class switch, ONE g_mx hold. a_to = an Id ordinal, or kNoClass = classes OFF
+        // for him. The live tables are stored under what he leaves; `combat` / `logistics` are what was stored for where he
+        // goes (nullopt = nothing stored: a first equip), consumed from the record. done == false = refused, nothing changed.
+        struct Swap {
+            bool         done = false;
+            std::uint8_t from = kNoClass;   // what he had equipped (kNoClass = classes were OFF)
+            std::optional<std::vector<Gambit>> combat;
+            std::optional<std::vector<Gambit>> logistics;
+        };
+        Swap SwapClass(RE::FormID a_follower, std::uint8_t a_to, std::vector<Gambit> a_liveCombat, std::vector<Gambit> a_liveLogistics);
     }
 }
