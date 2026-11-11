@@ -3040,3 +3040,15 @@ Hits with before=max go into the sneak median; "not in his group" does not mean 
 If Harbinger refuses one of the two claims, the warning logs once but RequestEx is retried every hold lap (APMF.log may repeat the refusal); a partial claim (ch.1 without ch.7 or the reverse) is allowed to stand and is logged.
 
 (Folded into the branch by the coordinator from the same review: F1 retreat lap now releases the hide hold, CombatScan.cpp; F4 a never-live handle is released before reset, HideClaims.cpp.)
+
+### MFO-B740 (SEV-4, OPEN, Concealment.cpp / Sightline::PointSeenNow worst-case cost, against 1f59152, Opus tier-3 review of the movement batch)
+The pick's worst case is about 432 picks plus 56 FindEmptySpace calls per frame per follower on the main thread. If the Deck hitches, add a per-frame ray budget (fewer candidates per frame, or a shared budget across followers).
+
+### MFO-B741 (SEV-4, OPEN, Concealment.cpp hold test, against 1f59152, same review)
+The hold's "he was hit" test (health drop since arrival) counts damage-over-time as "found". A poisoned or burning thief ends the hold early. Count only a hit event, or ignore a steady drain.
+
+### MFO-B742 (SEV-5, OPEN, Concealment.cpp duplicate pick after Release, against 1f59152, same review)
+A Release erases the follower's pick entry, so a pick job still in flight on the main thread can land after it (the epoch only guards a load) and a second pick can run for the same fight. Harmless today (one run per answer); a per-follower generation counter would close it.
+
+### MFO-B743 (SEV-5, OPEN, a sustained heal claim during the run, against 1f59152, same review)
+A sustained heal claim (the heal-hold records) is not released when the hide run starts; the run's ch.7 Offense deny and a standing heal approach (ch.24, which outranks a disengage) can contend. Observe in the field before changing. The non-sneak flee makes this more likely, since it wants heals during the run.

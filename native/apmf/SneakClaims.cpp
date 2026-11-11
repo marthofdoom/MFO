@@ -32,6 +32,9 @@
 // water is not ours to send). The same gate holds at the FIRST file (ServiceSneakRule): the rule still stands, the
 // claim waits until he is on foot (review SEV-4 on a31f154).
 //
+// THE HIDE OWNER (card G3, marth MB5). Concealment.cpp keeps the claim through a hide run and G2's hold row
+// (HoldSneakForHide / ReleaseSneakHide): a `hideHeld` mark that bSneakInCombat's refusal, the in-combat sweep release and the
+// table-lap aging all skip. It is released on the blow, a reveal, the fight's end, dismissal, death or a load.
 // IN COMBAT IS UNOBSERVED (principle 5). Out of combat ch.3 is field-proven. Whether the combat behaviour tree
 // stands an NPC up mid-fight is not, so the in-combat road is the dev switch bSneakInCombat (MFO.ini, default OFF).
 // With it off, a follower in combat (APMFBridge::InCombat) gets no claim and a standing one is released at once.

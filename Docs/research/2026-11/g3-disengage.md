@@ -117,3 +117,20 @@ edits in `Sightline.{h,cpp}` (PointSeenNow), `apmf/APMFBridge.h`, `apmf/Bridge.c
 `iaus/SpellBook.cpp`, `iaus/Candidates.cpp`, `iaus/Generate.cpp`, `iaus/Catalogue.cpp`, `scheduler/IausSource.cpp`,
 `scheduler/CombatScan.cpp`, `cast/Fire.cpp`, `Followers.cpp`, `Serialization.cpp` (one transient clear), `Vocabulary.h`,
 `Config.{h,cpp}`, `CMakeLists.txt`.
+
+## 6. Fix round (marth rulings 2026-11-11, on top of the merge with G2 Layer 1)
+
+- **Seam closed.** `iaus/Disengage.h` `FoeHasFound` = `detectsMe == Tri::Yes`. G3's snapshot fields are `concealRoad` /
+  `concealPoint` / `fleeRun` (G2 owns `hideRoad`).
+- **Pacing.** The main purpose of the run is to become hidden. A sneak class's run / hold ends as soon as no listed foe detects
+  him (`Concealment::Service`, G2's own verdict read, on the way or at the point); the 12 s hold is only the upper bound and is
+  logged when hit. G2's hold row and the blow from stealth take over. For anyone else the disengage is a FLEE: same drive, a
+  point at least 150 units farther from the nearest foe (no cover test), heals first (`Cons::BoostFleeHeal` x2, offense not
+  generated), over when health is above 30% (the retreat's own line, `Cons::RetreatHp` / `RetreatDanger`), on arrival or on
+  failure. Need terms: hide = share of counted foes that found him, flee = RetreatDanger (low health) plus a foe on him.
+  The 25 s hard cooldown counts from the end.
+- **MB3.** Class tree OFF: no hide run (`ClassGate::sneakClass` is false then) and no flee (the generator requires `treeOn`).
+- **MB5.** The stance claim is held for the hide from arrival (or from "hidden") through G2's hold, released on the blow, on a
+  reveal, at combat end, dismissal, death, stand-down and load. API: `APMFBridge::HoldSneakForHide` / `ReleaseSneakHide`.
+- **Review fixes (1f59152).** `RequestDisengage` releases the offense approach and the give-ground step and `Begin` consumes the
+  pick only after Harbinger accepted; the dead/disabled early return in `CombatScan` releases the run and the hold.

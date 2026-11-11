@@ -9087,31 +9087,46 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   (Harbinger's own end, a claim that never owned the channel after 700 ms, or Yielded / Leashed / Disabled for 1.5 s).
   `ReleaseDisengage` releases both. `FindStandPoint` = the one wrapper of Harbinger's `FindEmptySpace` (ABI v11, MAIN
   THREAD ONLY). Own leaf mutex `g_disengageMx` (only nesting: `ClearTransientState`, `g_mx -> g_disengageMx`).
-  `Concealment.{h,cpp}` (NEW, card G3): `Prepare(follower, foes)` (worker, the IAUS gather: true = a fresh point is
+  `Concealment.{h,cpp}` (NEW, card G3): `Prepare(follower, foes, flee)` (worker, the IAUS gather: true = a fresh point is
   known; asks for a pick at most every 1.5 s), the PICK on the main thread (`PickStep`, 4 candidates per frame, re-Posts
   itself; 24 candidates from `FindStandPoint`, each tested by `Sightline::PointSeenNow` from every listed foe), `Begin`
   (from `cast/Fire.cpp` `act.disengage`), `Service(follower)` (once per combat service in `scheduler/CombatScan.cpp`,
-  right after `ServiceGroundStep`: true = the run or its 12 s hold stands and the RULE SCAN IS SKIPPED this lap, as in a
-  retreat), `Release` (beside every `ReleaseGroundStep`: combat end, retreat, dismissal, `IausSource` `StandDown`),
+  right after `ServiceGroundStep`: true = a SNEAK run or its hold stands and the RULE SCAN IS SKIPPED this lap, as in a
+  retreat; a non-sneak FLEE returns false every lap so the IAUS keeps healing), `Release` (beside every `ReleaseGroundStep`: combat end, retreat, dismissal, `IausSource` `StandDown`),
   `ClearTransientState` (`Serialization.cpp`, after `Scheduler::ClearTransientState`; an epoch drops a pick of the old
   world). `Sightline::PointSeenNow(viewer, point, bodyHeight)` (`Sightline.h`, MAIN THREAD ONLY): MFO's own ray to a
   POINT at three crouched heights; only solid world geometry stops it (an allow-list of six layers, everything else
   and every phantom passed through); `Unavailable` is never hidden.
   IAUS: `Family::Disengage` (APPENDED, `iaus/Core.h`), `Vocab::kActDisengage` (`act.disengage`, IAUS-ONLY like
   `act.bash`), `ClassGate::sneakClass` (`Flag::kSneakAlways`, `iaus/SpellBook.cpp`; false with the tree OFF),
-  `Snapshot::hideRoad` / `hidePoint` (set in `Candidates::Build` after the gate), `Tuning::disengageCooldownSec` (25 s),
+  `Snapshot::concealRoad` / `concealPoint` / `fleeRun` (set in `Candidates::Build` after the gate; G2 owns `hideRoad`), `Tuning::disengageCooldownSec` (25 s),
   generated in `Generate.cpp` `Guards` only when the road is open, a point is known, the class is a sneak class that may
   disengage and `iaus/Disengage.h` `Found(snapshot)` is true. `[Debug] bIausHideRoad` (default OFF).
-  **THE SEAM TO G2 LAYER 1:** `iaus/Disengage.h` `FoeHasFound` reads "this foe's combat target is the follower" on main;
-  once `Combatant::detectsMe` is on main its body becomes `return a_foe.detectsMe == Tri::Yes;`.
+  **G2 SEAM (done, merged with Layer 1):** `iaus/Disengage.h` `FoeHasFound` = `a_foe.detectsMe == Tri::Yes`; `Found`,
+  `DetectShare`, `Threatened`, `kFleeHealthLine` (0.30, the retreat's own line, `Cons::RetreatHp` / `RetreatDanger`).
+  **PACING (marth 2026-11-11, fix round on 1f59152):** a SNEAK class's run / hold ENDS the moment `Concealment::Service`
+  reads `Hide::Verdict(Hide::Read(foe, handle))` != Yes for every listed foe (on the way or at the point; the 12 s cap is
+  logged when hit); the G1 stance claim is then kept by `APMFBridge::HoldSneakForHide` (a `hideHeld` mark in
+  `apmf/SneakClaims.cpp`: the in-combat refusal and table-lap aging do not apply to this owner) for G2's hold row, and is
+  released by `ReleaseSneakHide` on the blow (`Concealment::NoteBlow`, called from `IausSource::Record` when an attack /
+  power attack / offense or control cast / exploit / bash fires), on a reveal (a foe detects him again), at combat end,
+  dismissal, death (`CombatScan` dead branch), a stand-down and a load (`Release` / `ClearTransientState`). A NON-SNEAK class
+  (class tree ON, kDisengage, not kSneakAlways) at or under 30% health with a foe on him FLEEs through the same drive to a
+  point 150u+ farther from the nearest foe (no cover test): `Snapshot::fleeRun` (`Concealment::FleeRunning`) stops
+  `Generate` making attacks, power attacks, taunts, retreats, offense/control casts, guards and a second Disengage, and
+  `Cons::BoostFleeHeal` (x2) lifts his own heal casts and health potions. It ends when `Service` reads health over the line,
+  on arrival, or on failure. Need term `Cons::DisengageNeed` (APPENDED): hide = the share of the counted foes that have found
+  him, flee = `RetreatDangerOf` (the Retreat family's own RetreatDanger, extracted in `Catalogue.cpp`). The 25 s hard cooldown
+  counts from the END of the run (`Iaus::Engine::NoteDisengageEnded`; `IausSource::Record` stamps nothing at the fire).
   **What breaks:** calling `PointSeenNow`, `FindStandPoint` or `Confidence::LeashRadius` on the wrong thread (the first
   two are MAIN only, the leash is read on the WORKER in `Prepare` and carried in the job); reading `Unavailable` as
   hidden (he "hides" in plain sight on a cold cell); dropping the `Concealment::Service` early return (a cast or attack
-  named under the run's own ch.7 Offense deny is refused by Harbinger every lap); filing the drive without releasing the
-  offense approach and the give-ground step first (all MFO ch.24 clients file at `kOwnBasis`, the EARLIER claim keeps
-  the channel); sending a target with `kApproach_Point`; a new `Family` value anywhere but the END of the enum (its
-  number is in log lines and the cooldown id). `tools/iaus_sim` and `tools/iaus_harness` do not model this family (the
-  sim's `Policy.h` falls to its `default`); its weight 1.0 and cooldown were chosen, not searched.
+  named under the run's own ch.7 Offense deny is refused by Harbinger every lap); releasing the offense approach and the give-ground step BEFORE Harbinger has accepted the drive (`RequestDisengage` releases them only after the
+  approach handle is granted; all MFO ch.24 clients file at `kOwnBasis`, the EARLIER claim keeps the channel); letting the combat
+  table's sneak rule or the sweep release a hide-held claim in combat; stamping the Disengage cooldown at the fire; sending a target with `kApproach_Point`; a new `Family` value anywhere but the END of the enum (its
+  number is in log lines and the cooldown id). The harness models the gate and the pacing (`DisengageRules`); `tools/iaus_sim`
+  does not model this family (the sim's `Policy.h` falls to its `default`); its weight 1.0 and cooldown were chosen, not
+  searched. OPEN review findings for this subsystem: `Docs/REVIEW-BACKLOG.md` MFO-B740..B743.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

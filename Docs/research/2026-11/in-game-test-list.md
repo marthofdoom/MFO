@@ -218,12 +218,22 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
    Expect `[ch.24] 0x... GAIT PROBE (H3, passive): speed N u/s, heading-vs-velocity N deg = FORWARD|STRAFE|BACKPEDAL`
    once per second and a `SUMMARY` line at the end. Send the summary lines. Mostly FORWARD at 300+ u/s = a real run.
    Mostly STRAFE or BACKPEDAL = he keeps facing his target (the facing seat question, B#16).
-3. **G3 hide run.** Let a foe attack the Thief near cover (a pillar, a rock, a wall corner, a doorway).
-   Expect in `MFO.log`: `[conceal] ... concealment point x,y,z ... hidden from all N foe(s)`, then `[iaus]` choosing
-   `disengage`, `[disengage] ... running to ...`, `[disengage] ... ARRIVED`, `[conceal] ... crouching`, and after at most
-   12 s `[conceal] ... hide run over`. Watch: does he run (not walk), does he stop attacking on the way, does he end
-   behind the cover and crouch, do the foes lose him. In the open with no cover expect `NO concealment point` and no run.
-4. **G3 failures are loud.** If he never arrives: `[conceal] ... hide run FAILED: <why>` (no path, outside the leash,
-   another ch.24 claim, 10 s). Send the line.
+3. **G3 hide run (sneak class), then the sneak attack.** Let a foe find the Thief near cover (a pillar, a rock, a wall corner,
+   a doorway). Expect in `MFO.log`: `[conceal] ... concealment point x,y,z ... hidden from all N foe(s)`, then `[iaus]` choosing
+   `disengage`, `[disengage] ... running to ...`, `[disengage] ... ARRIVED` (or the run ends on the way), and
+   `[conceal] ... hide run over: hidden ... no foe detects him (G2's verdict)` as soon as the foes lose him, with
+   `[sneak] ... the hide hold (card G3) keeps the stance claim`. Then G2's hold row keeps him still and the blow from stealth
+   follows: `[conceal] ... the blow from stealth is picked: the hide hold's stance is released`. Watch: does he run (not walk),
+   does he stop attacking on the way, does the run end the moment the foes lose him (not after 12 s), does the first blow
+   land as a sneak attack. If the cap is hit expect `hide run FAILED: the hold CAP (12 s) was hit ...`. In the open with no
+   cover expect `NO concealment point` and no run. A foe that detects him again before the blow releases the stance
+   (`a foe detects him again (revealed)`).
+3b. **G3 flee (non-sneak class, tree ON).** A fighter class that may disengage (kDisengage), `bIausHideRoad=1`. Get him under 30%
+   health with a foe on him and a health potion or a heal spell. Expect `[conceal] ... FLEE point ...`, `disengage` chosen,
+   `[disengage] ... running to ...`, and during the run no swings or offense casts, a heal cast or a potion drunk as soon as
+   possible, then `flee run over: healed past the retreat's health line` (or `arrived at the point away from the foes`).
+   With the class tree OFF he must never take this flee.
+4. **G3 failures are loud.** If he never arrives: `[conceal] ... hide run FAILED: <why>` / `flee run FAILED` (no path, outside the
+   leash, another ch.24 claim, 10 s). Send the line. The 25 s cooldown counts from the END of the run.
 5. **No hitch.** While a Thief is being attacked the pick runs about every 1.5 s. Watch the frame time on the Deck.
 
