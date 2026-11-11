@@ -89,6 +89,41 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   `RequestDetectionLevel` (id 36748, resolved, unused) is the input to gate. Rule: gate the INPUT the engine reads (the
   foe's detection result for this pair), never patch the output (memory gate-the-source). Deny-completeness: every
   other path that re-acquires (noise, hit by the follower, engaged sense) must be listed.
+- **LAYER 1 BUILT (`feat/g2-hide-layer1`, 2026-11-11, NOT field-run), no seat** (`g2-hide-design.md` section 2): the foe's own
+  combat-group record of the follower is read into the IAUS gather (`iaus/Hide.cpp`, the `TauntProbe.cpp` read), the Sneak
+  family's HOLD row and a blow-from-stealth boost use it, and the engine's own sneak attack does the damage. Layer 2 (the
+  seat) is built only if the field below says Layer 1 is not enough.
+  **In-game test steps** (a Thief-style follower with a melee weapon or a bow, a list with sneak perks, two bandits):
+  1. `MFO.ini`: `[Debug] bStealthProbe=1`, `bSneakInCombat=1`, `bIausExplain=1`, the follower on Sentient AI with an
+     `Always -> Sneak` combat rule (G1). Watch `MFO.log`.
+  2. **P1 (does the stance hold in combat?)** pull a fight. Look for `[stealth-probe] self 0x<id>: sneaking=true ... inCombat=true`
+     once a second. `sneaking=false inCombat=true` every 5 s means the combat AI stood him up (the stance does not hold;
+     leave `bSneakInCombat` OFF). The tail `entries (seed->result ...)` must show 57 / 48 / 47 / 18 results that differ from
+     their seeds for a follower who owns the matching perk; equal to the seed = the perk does not evaluate for him.
+  3. **P2 (does the engine compute foe-to-follower pairs and lose him?)** look for `[stealth-probe] seen foe ... group HELD|LOST|ABSENT
+     detect=N stealthPts=... unrefreshed=Ns ... MFO verdict: detects me = YES|NO (hidden) ; sense: ..., pred: ...`. A foe that
+     never looks his way should go LOST after about 10 s (`unrefreshed` counts the seconds the record stayed unchanged); a foe
+     that looks and fails should lose him at once. `pred` is a LOWER bound (light, weight, action noise and line of sight are
+     not read) and `lightMax` the most the light term could add.
+  4. **The hold row and the strike:** with the follower hidden from every foe the `[iaus]` decision line shows `hold 1` and the
+     pick is `sneak` (Wait: MFO names nothing). When an unaware foe comes within the melee reach the pick becomes `attack`
+     or `power_attack` on it, with the `strike` consideration at x1 in `[iaus-why]`.
+  4b. **The hold CLAIM (Harbinger ch.1 + ch.7, `apmf/HideClaims.cpp`).** With the row picked look for `[hide] <id>: ch.1 movement
+     block (h=..) + ch.7 offense/cast deny (h=..) FILED` once, and `RELEASED (...)` with the reason when the pick changes (the
+     release comes BEFORE the attack on the strike lap), his combat ends, the stance drops, or he is dismissed. Checks: (a) the
+     hold lines match the `[iaus]` pick lap for lap; (b) the first blow lands on the strike lap (the ch.7 deny never eats it);
+     (c) `REFUSED` or `the ch.1 movement block claim ended` lines are a failure to report. **FIELD CAVEAT:** it is unobserved
+     whether ch.1 MovementBlock parks a follower who is IN COMBAT. Read the P1 `moving=` bits while the hold stands: `moving=false`
+     = it parks him. `moving=true` with a live claim = it does not. **Documented next step if it does not (NOT built): a ch.23
+     `kIntent_PursuitLeash` claim anchored on him** (Harbinger's in-combat leash, the `apmf/PursuitLeash.cpp` road).
+  4c. **Silent casting.** The P1 line ends `castSilent=n/m` (spells whose cast-sound entry point 55 reads 0 for him). With a
+     hidden-casting perk the hold row keeps his silent spells as candidates while hidden; without one no cast is generated while
+     the hold row stands. An offensive spell that hits still reveals him through the engine.
+  5. **P3 / Q87 (does the list's sneak multiplier reach a follower?)** look for `[stealth-probe] hit ... kSneakAttack=true ...
+     expected multiplier N ... health before B after A drop D`. After 5 sneak and 5 plain hits with the same weapon type the
+     `[stealth-probe] q87 ...` line says `WITHIN 25%` or `OUTSIDE 25%` (ratio of the median sneak drop to the median plain drop
+     against the expected multiplier) with the raw drops. No sneak hit at all = the engine's sneak attack does not run for an
+     NPC on that list (the multiplier question goes back to marth).
 
 **G3. Disengage to out-of-sight, then sneak**
 - What: a sneak class that is detected picks a point that no engaged foe can see, moves there with H3 (regular movement),
@@ -475,6 +510,18 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   Packages never choose targets and never swap weapons (rulings).
 - Tier B, effort 4. **Field: yes** (one session per tier).
 - Depends: H1 merged, C7. The `Stance` ordinals stay frozen.
+- **STATUS 2026-11-11: BUILT on `feat/class-packages` (NOT merged, NOT field-run).** Source of every number: `native/classes/ClassTable.cpp` (`powerShareMax` / `powerShareMin` / `flags`), which already carries the walkthrough rulings (Q27: Thief and Master Thief keep 0.20, Templar has NO cap).
+  - CSTY: `CombatStyle::Want` (worker) asks `Classes::PackageClass` / `PackageStyle` (`classes/Package.cpp`), which walks the ESL manifest entry[2] -> per-class FLST -> mask GLOB + CSTYs (no FormIDs in the DLL). `ApplyTick` (combat thread) only writes the pointer Want stored. A stance the class has no CSTY for keeps `MFO_*Style`. Dragonborn uses his picked T4's package (Q60), else his own.
+  - ch.18: `apmf/AttackMix.cpp`, Normal + Power governed, nothing denied outright, ceiling / floor as declared. Bash stays in every mix (Q38). Dual-wield and Left are not governed.
+  - ch.23: Scheduler `ServiceLeashWithReachHold` scales the confidence radius by `fClassLeashMult` (0.5) for classes flagged short-leash or near-player, never below `fLeashMin`. The class data has the flags but NO length, so 0.5 is a first value to retune in the field.
+  - In-game check (a build with `MFO_Classes.esl`, `bClassTree = 1`, Harbinger >= ABI 34; set `bAttackMixProbe = 1`; DEV build `sDevClassEquip` puts a class on a follower):
+    1. Load: `[classes] package styles resolved: 35 of 35 classes, 95 CSTY record(s)`. Any `[classes] package styles:` ERROR line means that class kept today's styles.
+    2. Equip a Knight (T2), enter a fight: `[wstyle] <fid> <name>: combat style OWNED ... (melee stance, ... class package Knight)`. A T1 (Melee/Ranged/Mage) follower shows NO "class package". Switch class mid-fight: `stance HANDOFF ... class package <new>`.
+    3. `[mix] <fid>: ch.18 attack mix FILED (h=.., class Knight, power share ceiling 0.25 floor -1.00 ...)`; Warrior: `ceiling -1.00 floor 0.40`; Mercenary / Blademaster 0.15; Thief / Master Thief 0.20 ceiling; Listener 0.25; Templar and Archer: NO `[mix]` filed line. In a fight the probe line shows `share` settling under the ceiling (Knight) or above the floor (Warrior) once `fill` reaches 8.
+    4. `[leash] <fid>: ch.23 pursuit leash CLAIMED (... radius N)` for a Knight is about half of the radius an Archer gets in the same spot, and is never under `fLeashMin`.
+    5. Unequip the class (Classes off): `[mix] ... released (no package class ...)` within a second, and the next fight has no "class package" in the `[wstyle]` line. Dismiss him: `[mix] ... released (dismissed)`.
+    6. With APMF.dll absent: no `[mix]` or class `[leash]` lines (the class CSTY still applies); with Harbinger older than ABI 34: one `[mix] Harbinger ABI .. is older than 34` info line.
+    7. Save, reload mid-session: the claims re-file after load (`FILED` again), none from the previous session survive.
 
 **C9. Hybrid "go in" rules**
 - What: a per-class predicate decides IN (melee range) vs RANGE each tick. Spellsword = a health / magicka / range bias;

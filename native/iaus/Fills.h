@@ -52,6 +52,13 @@ namespace MFO::Iaus::Fills {
     // `[iaus-fill] gmst` line (the Requiem check) and the switch states.
     void StartupCheck();
 
+    // G2 (marth 2026-11-11, "a perk for hidden casting"): does the engine emit NO casting sound for a_caster casting a_spell?
+    // The engine's own spell-cast function (1.6.1170 0x5BF400) seeds a float 1.0, runs perk entry point 55 (kModSpellCastingSoundEvent)
+    // with the CASTER as owner and the SPELL as the one condition argument, and skips the sound event when the result is 0. Read
+    // here the same way, so it is whatever the loaded perks say, never a perk FormID or a list name. MAIN THREAD. False when the
+    // row is not verified or the runtime is not 1.6.1170 (the only build that site was disassembled on): refused by name, loud.
+    [[nodiscard]] bool CastsSilently(RE::Actor* a_caster, RE::SpellItem* a_spell);
+
     // MAIN, Diagnostics::Install: the hit sink (inert while bIausFillProbe = 0).
     void RegisterHitSink();
 

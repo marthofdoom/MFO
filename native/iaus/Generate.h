@@ -7,7 +7,8 @@
 //
 // FAMILIES GENERATED: attack, power attack, taunt, retreat, the three drinks, posture (its own list, for
 // DecidePosture), cast offense / control / heal / buff, summon, ward.
-// NOT generated here: sneak (G1 has not landed), scroll use (card S3: scrolls are IN the book, with their count
+// SNEAK: the G2 Layer 1 hold row only (he sneaks and no listed foe's group detects him, Holds()); the stance itself is G1's.
+// NOT generated here: scroll use (card S3: scrolls are IN the book, with their count
 // and nature, but no candidate is made), exploit (I3, a gambit row), bash (no action exists).
 //
 // NEVER GENERATED (design section 2): a spell only the unanimated road can cast, runes and every other target

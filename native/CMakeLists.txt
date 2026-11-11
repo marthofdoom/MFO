@@ -44,6 +44,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     i18n/Strings.cpp
     Probe.cpp
     TauntProbe.cpp
+    StealthProbe.cpp
     Taunt.cpp
     PrecisionBridge.cpp
     ProgProbe.cpp
@@ -97,6 +98,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/SpellBook.cpp
     iaus/Candidates.cpp
     iaus/Fills.cpp
+    iaus/Hide.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp
@@ -136,6 +138,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/Classes.cpp
     classes/Defaults.cpp
     classes/Mastery.cpp
+    classes/Package.cpp
     classes/Presence.cpp
     classes/State.cpp
     classes/Xp.cpp
@@ -161,6 +164,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ReentryDeny.cpp
     apmf/PursuitLeash.cpp
     apmf/AimClaims.cpp
+    apmf/AttackMix.cpp
     apmf/CombatApproach.cpp
     apmf/OffenseApproach.cpp
     apmf/SpellAllowList.cpp
@@ -174,6 +178,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ErrandWork.cpp
     apmf/TauntClaims.cpp
     apmf/SneakClaims.cpp
+    apmf/HideClaims.cpp
     apmf/Los.cpp
     apmf/Substrate.cpp
     imgui_impl_win32.cpp

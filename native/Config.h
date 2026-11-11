@@ -352,6 +352,11 @@ namespace MFO::Config {
     // animation, no engine write, not in the MCM.
     inline std::atomic<bool>  g_tauntProbe{ false };
 
+    // STEALTH PROBE P1-P3 ([Debug] bStealthProbe, INI-only, default OFF; card G2, Docs/research/2026-11/g2-hide-design.md section 3).
+    // PASSIVE: rate-limited [stealth-probe] self / seen / hit / q87 lines (StealthProbe.cpp). The follower's detection inputs, each
+    // foe's group record of him, and every sneak hit with the expected multiplier. No claim, no engine write, not in the MCM.
+    inline std::atomic<bool>  g_stealthProbe{ false };
+
     // TAUNT MASTER SWITCH (INI-only [Taunt] bTaunt, ClickUp 86e3pyjk2). Default OFF: marth 2026-10-13, Taunt failed its
     // field test, so a Taunt gambit is skipped (Taunt::Fire, transparent) this release. The release-time cleanup
     // (Taunt::Clear / Tick / ClearTauntClaims) runs regardless. Not in the MCM.
@@ -887,6 +892,16 @@ namespace MFO::Config {
     inline std::atomic<int>   g_aimBudgetRanger{ 3 };
     inline std::atomic<int>   g_aimBudgetJaqspur{ 1 };
     inline std::atomic<bool>  g_aimProbe{ false };
+    //   Card C8 (class combat packages, 2026-11-11), all INI-only. bClassStyles (default ON): a follower with a TIER 2+ class
+    //     equipped fights on that class's own per-stance CSTY (MFO_Classes.esl) instead of MFO_*Style (CombatStyle.cpp); tier 1 and
+    //     classes OFF are unchanged. bClassAttackMix (default ON): the class's ch.18 power-share ceiling / floor as a Harbinger
+    //     kIntent_AttackSelection claim, ABI >= 34 (apmf/AttackMix.cpp). fClassLeashMult (default 0.5): the factor on the confidence
+    //     leash radius for a class flagged kShortLeash / kNearPlayer (never below fLeashMin). bAttackMixProbe (default OFF): one
+    //     "[mix]" state line per claimed follower every 30 s.
+    inline std::atomic<bool>  g_classStyles{ true };
+    inline std::atomic<bool>  g_classAttackMix{ true };
+    inline std::atomic<float> g_classLeashMult{ 0.5f };
+    inline std::atomic<bool>  g_attackMixProbe{ false };
     //   bSneakInCombat (card G1, DEV SWITCH, INI-only, default OFF): act.sneak may hold its Harbinger ch.3 stance claim while
     //     the follower is IN COMBAT. Off = a follower in combat files no sneak claim and a standing one is released (the
     //     out-of-combat road is field-proven, the in-combat one is not, principle 5). The [sneak] lines in MFO.log show

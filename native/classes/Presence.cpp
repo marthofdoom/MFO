@@ -13,6 +13,7 @@ namespace MFO::Classes {
     namespace {
         constexpr std::string_view kManifestKeywordSuffix = "_MFOClassesManifest";
         std::atomic<bool> g_present{ false };
+        RE::BGSListForm* g_manifestList = nullptr;   // the first manifest FLST found; written ONCE at kDataLoaded (card C8 reads its style lookup entry)
         std::string g_addonFile;   // the plugin the manifest came from (card C6 resolves its forms by local id). Written ONCE at kDataLoaded, read later.
 
         bool EdidHasSuffix(RE::TESForm* a_form, std::string_view a_suffix) {
@@ -38,7 +39,7 @@ namespace MFO::Classes {
             ++found;
             std::string plugin;
             if (auto* file = list->GetFile(0)) plugin = std::string(file->GetFilename());
-            if (found == 1) g_addonFile = plugin;
+            if (found == 1) { g_addonFile = plugin; g_manifestList = list; }
             const char* kwEdid = kw->GetFormEditorID();
             spdlog::info("[classes] class add-on manifest {:08X} found (from \"{}\", keyword \"{}\", {} entr(ies))",
                          list->GetFormID(), plugin, kwEdid ? kwEdid : "", list->forms.size());
@@ -61,6 +62,7 @@ namespace MFO::Classes {
             spdlog::info("[classes] class add-on ACTIVE (bClassTree = 1, bClassStrict = {})", strict ? 1 : 0);
             detail::ApplyAuraValues();   // card C11: the MCM /s values into the aura ability effects
         }
+        if (present) detail::ResolvePackageStyles();   // card C8: the per-class CSTY lookup (classes/Package.cpp)
         // The table self-check runs whatever the presence: it is a build/data integrity line, not a feature.
         const int defects = detail::SelfCheck();
         if (defects)
@@ -68,6 +70,7 @@ namespace MFO::Classes {
     }
 
     std::string_view detail::AddonFileName() { return g_addonFile; }
+    RE::BGSListForm* detail::ManifestList()  { return g_manifestList; }
 
     bool Present() { return g_present.load(); }
     bool Active()  { return g_present.load() && Config::g_classTree.load(); }

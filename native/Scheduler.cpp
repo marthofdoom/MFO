@@ -16,6 +16,7 @@
 #include "logistics/Errand.h"   // engage in a party fight: not while he is away on a town errand
 #include "State.h"
 #include "Cooldowns.h"      // card G9: the per-rule cooldown last-fired store (runtime-only)
+#include "classes/Classes.h"   // card C8: PackageLeashScale (the class ch.23 leash length)
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
 #include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
@@ -23,6 +24,7 @@
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "TauntProbe.h"    // taunt S0 passive probes (bTauntProbe)
+#include "StealthProbe.h"  // G2 stealth probe P1-P3 (bStealthProbe)
 #include "Taunt.h"         // taunt S2: Taunt::Tick (every pump) / Clear
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
@@ -411,7 +413,12 @@ namespace MFO::Scheduler {
                 scan = CombatSense::ScanMeleeReach(a_f, cap, wasHolding ? -CombatSense::kReachHoldBand : 0.0f);
             }
             const bool hold = meleeOnly && scan.unreachable > 0 && scan.reachable == 0;
-            const float radius = hold ? Config::g_leashMin.load() : Confidence::LeashRadius(a_f);
+            // Card C8: a class flagged short-leash / near-player (Knight line, Templar, healers) scales the confidence radius by
+            // fClassLeashMult, never below fLeashMin; the reach HOLD radius is fLeashMin already and is left alone.
+            float radius = hold ? Config::g_leashMin.load() : Confidence::LeashRadius(a_f);
+            if (!hold)
+                if (const float scale = Classes::PackageLeashScale(a_id); scale < 1.0f)
+                    radius = std::max(Config::g_leashMin.load(), radius * scale);
             APMFBridge::ServicePursuitLeash(a_id, radius);
             if (hold == wasHolding) return;
             if (hold) {
@@ -469,6 +476,7 @@ namespace MFO::Scheduler {
         g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_deadTgt.clear();                      // [deadtgt] windows are session state
         TauntProbe::Reset();                    // [taunt-probe] samples are session state
+        StealthProbe::Reset();                  // [stealth-probe] samples, pending hits and the q87 aggregate are session state
         Taunt::Clear();                         // taunt attempts + pinned foes: logged "load", claims released
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note

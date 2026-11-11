@@ -399,6 +399,20 @@ namespace MFO::Classes {
     // it is NOT called from State.cpp because it reads g_followers, worker-only). Until then the mirror catches up at the next
     // Followers::Refresh (its tail republishes). Direct readers on the worker see an equip change at once (no cache).
 
+    // ── combat packages = card C8 (classes/Package.cpp) ─────────────────────────────────────────────
+    // The class whose PACKAGE (CSTY per stance, ch.18 mix, ch.23 leash) a follower fights with: his equipped class, except Dragonborn,
+    // whose combat behaviour is his picked T4 (marth Q60), or Dragonborn's own when none is picked. kNoClass = classes OFF for him, the
+    // add-on inactive, or a TIER 1 class (marth: "t1 behaves vanilla for those roles", so T1 has no package). WORKER / any non-combat
+    // thread (takes the State mutex); never from a combat-thread hook.
+    [[nodiscard]] std::uint8_t PackageClass(RE::FormID a_follower);
+    // The class's CSTY for a stance (1 melee, 2 ranged, 3 cast; a_dual picks the melee DUAL twin, kAllowDualWielding), resolved through
+    // the ESL's lookup FLSTs. nullptr = this class has no such style (or the lookup did not resolve): the caller keeps today's MFO_*Style.
+    // Immutable after kDataLoaded, so ANY thread.
+    [[nodiscard]] RE::TESCombatStyle* PackageStyle(Id a_class, std::uint8_t a_stance, bool a_dual);
+    // ch.23: the factor on the confidence leash radius for this follower's package class (1.0 = none; Config::g_classLeashMult for a
+    // class flagged Flag::kShortLeash / kNearPlayer). WORKER.
+    [[nodiscard]] float PackageLeashScale(RE::FormID a_follower);
+
     // ── passive carriers = card C6 (classes/Carriers.cpp) ─────────────────────────────────────────────
     // The ESL's passive PERKS are gated on each follower's rank in the class faction MFOC_P_<Name> (the C7 RANK SPACE): 0 / absent
     // OFF, 1..cap ACTIVE at class level N, kRankMasteredUnequipped = mastered and unequipped (1/4 of the FULL value). CarrierRanks

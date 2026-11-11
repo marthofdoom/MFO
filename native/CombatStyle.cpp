@@ -3,6 +3,7 @@
 #include "CombatStyle.h"
 #include "CasterConsent.h"   // the equip gate exempts the latched gambit spell (T#75)
 #include "Config.h"
+#include "classes/Classes.h"   // card C8: the equipped class's per-stance CSTY (Want, worker side)
 #include "Forms.h"
 #include "apmf/APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
                              // T2a CheckShouldEquip hook now owns it (Phase 2)
@@ -31,6 +32,11 @@ namespace MFO::CombatStyle {
             Stance                applied  = Stance::None;   // what we last wrote (handoff detect)
             bool                  dual     = false;          // Want: melee stance may dual wield (perk vote)
             bool                  appliedDual = false;       // the dual flavour we last wrote (handoff detect)
+            // Card C8: the equipped TIER 2+ class's CSTY for `stance`/`dual`, resolved by Want on the WORKER (Classes::PackageClass takes the
+            // State mutex, which the combat thread must not). nullptr = no class package: today's MFO_*Style. ApplyTick only reads these.
+            RE::TESCombatStyle*   classStyle = nullptr;
+            std::string_view      classTag{};                // the class's display name, for the [wstyle] lines (a static table string)
+            RE::TESCombatStyle*   appliedStyle = nullptr;    // the style we last wrote (a class change is a handoff)
             RE::CombatController*  cc       = nullptr;        // identity ONLY -- never dereferenced
             RE::TESCombatStyle*    saved    = nullptr;        // engine-derived style this fight
             std::uint32_t          rederives = 0;             // engine re-derived under us, times
@@ -143,6 +149,17 @@ namespace MFO::CombatStyle {
 
     void Want(RE::FormID a_follower, Stance a_stance, bool a_equipOrder, bool a_allowDual) {
         if (a_stance == Stance::None) return;
+        // Card C8 (worker, BEFORE g_mx): the equipped class's CSTY for this stance. Tier 1, classes OFF, the add-on inactive,
+        // bClassStyles = 0 and a stance the class has no style for all leave it nullptr = today's MFO_*Style.
+        RE::TESCombatStyle* classStyle = nullptr;
+        std::string_view    classTag{};
+        if (Config::g_classStyles.load(std::memory_order_relaxed) && Classes::Active()) {
+            if (const std::uint8_t cls = Classes::PackageClass(a_follower); cls != Classes::kNoClass) {
+                const auto id = static_cast<Classes::Id>(cls);
+                classStyle = Classes::PackageStyle(id, static_cast<std::uint8_t>(a_stance), a_allowDual && a_stance == Stance::Melee);
+                if (classStyle) classTag = Classes::Get(id).name;
+            }
+        }
         // NOTE: the FEATURE gate lives at the call site now, not here -- weapon
         // stances (Melee/Ranged) are gated by bWeaponStyleControl, the Cast
         // stance by iCastControl. Want only records intent.
@@ -154,6 +171,8 @@ namespace MFO::CombatStyle {
         auto& o = g_owned[a_follower];
         o.stance = a_stance;
         o.dual   = a_allowDual && a_stance == Stance::Melee;
+        o.classStyle = classStyle;
+        o.classTag   = classTag;
         o.restorePending = false;   // review F2: the combat table owns the controller now -- no restore over it
         // T#75: only a WEAPON stance can be an equip order, and a later Want
         // that is not one (a cast latch flipping the stance to Cast, the class
@@ -319,7 +338,11 @@ namespace MFO::CombatStyle {
         const Stance want = a_substrateOnly ? (o.substrateCast ? Stance::Cast : Stance::None) : o.stance;
         const bool dual = (want == Stance::Melee) && !a_substrateOnly && o.dual;
         RE::TESCombatStyle* target = StyleFor(want, dual);
-        if (!target) return;   // no owner on this path, or form missing -> stance disabled, silent per the "one feature" rule
+        if (!target) return;
+        // Card C8: the class's own CSTY for the TABLE stance replaces MFO_*Style (the substrate cast pair keeps MFO_CastStyle). The
+        // StyleFor check above still gates it: no owner on this path = nothing written.
+        std::string_view classTag{};
+        if (!a_substrateOnly && o.classStyle) { target = o.classStyle; classTag = o.classTag; }   // no owner on this path, or form missing -> stance disabled, silent per the "one feature" rule
 
         // A DIFFERENT controller than we last swapped means the fight that swap
         // lived in is over -- its controller (and our swap) died with it, and
@@ -333,12 +356,14 @@ namespace MFO::CombatStyle {
             o.rederives = 0;
             o.applied   = want;
             o.appliedDual = dual;
+            o.appliedStyle = target;
             a_cc->combatStyle = target;
-            spdlog::info("[wstyle] {:08X} {}: combat style OWNED {:08X} -> {:08X} ({} stance{})",
+            spdlog::info("[wstyle] {:08X} {}: combat style OWNED {:08X} -> {:08X} ({} stance{}{}{})",
                          fid, a_actor->GetName() ? a_actor->GetName() : "?",
                          o.saved ? o.saved->GetFormID() : 0,
                          target->GetFormID(), Name(want),
-                         want == Stance::Melee ? (dual ? ", dual-wield allowed (perks)" : ", single-weapon (no dual-wield perks)") : "");
+                         want == Stance::Melee ? (dual ? ", dual-wield allowed (perks)" : ", single-weapon (no dual-wield perks)") : "",
+                         classTag.empty() ? "" : ", class package ", std::string(classTag));
             return;
         }
 
@@ -348,13 +373,15 @@ namespace MFO::CombatStyle {
         //  * the engine RE-DERIVED the style under us mid-combat -- re-assert so
         //    the follower stays in the gambit's stance (the cast probe proved
         //    the engine does this; count it).
-        if (o.applied != want || o.appliedDual != dual) {
+        if (o.applied != want || o.appliedDual != dual || o.appliedStyle != target) {
             a_cc->combatStyle = target;
             o.applied = want;
             o.appliedDual = dual;
-            spdlog::info("[wstyle] {:08X}: stance HANDOFF -> {:08X} ({}{})",
+            o.appliedStyle = target;
+            spdlog::info("[wstyle] {:08X}: stance HANDOFF -> {:08X} ({}{}{}{})",
                          fid, target->GetFormID(), Name(want),
-                         want == Stance::Melee ? (dual ? ", dual-wield allowed (perks)" : ", single-weapon") : "");
+                         want == Stance::Melee ? (dual ? ", dual-wield allowed (perks)" : ", single-weapon") : "",
+                         classTag.empty() ? "" : ", class package ", std::string(classTag));
         } else if (a_cc->combatStyle != target) {
             // The engine re-derived the base style under us mid-combat (the cast
             // probe proved it does). COUNT it regardless of the toggle below --
