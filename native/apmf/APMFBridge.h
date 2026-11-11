@@ -634,6 +634,16 @@ namespace MFO::APMFBridge {
     // Worker-safe; its own mutex (never g_mx).
     void ReleaseAimClaim(RE::FormID a_follower, const char* a_why);
 
+    // ── ch.18 ATTACK SELECTION (ABI v34, kIntent_AttackSelection): the class attack mix ──────
+    // apmf/AttackMix.cpp (card C8). The pump's sweep files one standing claim per managed
+    // follower whose package class (Classes::PackageClass: equipped tier 2+, Dragonborn = picked T4)
+    // has a power-share ceiling / floor in the class table, declared as SetAttackMix (Normal +
+    // Power governed, deny-only through the share rule). Re-declares on a class change, releases when
+    // the class is unequipped / classes go off. ReleaseAttackMix is the dismissal / MFO-off road. No-op
+    // when Harbinger is absent, ABI < 34, the class add-on is inactive, or the seat refused.
+    // Worker-safe; its own mutex (never g_mx).
+    void ReleaseAttackMix(RE::FormID a_follower, const char* a_why);
+
     // ── ch.3 STANCE (ABI 1, kIntent_Stance): act.sneak, class plan card G1 -- apmf/SneakClaims.cpp ──────
     // ServiceSneakRule: the act.sneak rule of table a_table was reached with its condition true this lap. Files the
     // follower's ONE ch.3 claim if none stands (not while he swims or rides) and marks the rule as standing. The hold

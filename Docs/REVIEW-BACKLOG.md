@@ -3052,3 +3052,9 @@ A Release erases the follower's pick entry, so a pick job still in flight on the
 
 ### MFO-B743 (SEV-5, OPEN, a sustained heal claim during the run, against 1f59152, same review)
 A sustained heal claim (the heal-hold records) is not released when the hide run starts; the run's ch.7 Offense deny and a standing heal approach (ch.24, which outranks a disengage) can contend. Observe in the field before changing. The non-sneak flee makes this more likely, since it wants heals during the run.
+
+### MFO-B750 (SEV-5, OPEN, CombatStyle.cpp:341-345 comment, against 2628beb, Opus review of feat/class-packages)
+The old "no owner on this path, or form missing -> stance disabled ..." comment now trails the class-style line instead of the `if (!target) return;` line.
+
+### MFO-B751 (SEV-5, OPEN, C8 author's spots, against 2628beb, same review)
+Accepted as documented: fClassLeashMult 0.5 is a tunable guess (floored at fLeashMin; field tunes it); dead followers are released on the not-managed path with the 30 s backoff for an ended claim; Harbinger absent = silent mix sweep (matches AimClaims); Dragonborn with no picked T4 uses its own tier-5 package; Templar vs-undead power floor not built (needs a conditional facet) and Ebony Warrior inherits 0.20 (not ruled).

@@ -16,6 +16,7 @@
 #include "logistics/Errand.h"   // engage in a party fight: not while he is away on a town errand
 #include "State.h"
 #include "Cooldowns.h"      // card G9: the per-rule cooldown last-fired store (runtime-only)
+#include "classes/Classes.h"   // card C8: PackageLeashScale (the class ch.23 leash length)
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
 #include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
@@ -412,7 +413,12 @@ namespace MFO::Scheduler {
                 scan = CombatSense::ScanMeleeReach(a_f, cap, wasHolding ? -CombatSense::kReachHoldBand : 0.0f);
             }
             const bool hold = meleeOnly && scan.unreachable > 0 && scan.reachable == 0;
-            const float radius = hold ? Config::g_leashMin.load() : Confidence::LeashRadius(a_f);
+            // Card C8: a class flagged short-leash / near-player (Knight line, Templar, healers) scales the confidence radius by
+            // fClassLeashMult, never below fLeashMin; the reach HOLD radius is fLeashMin already and is left alone.
+            float radius = hold ? Config::g_leashMin.load() : Confidence::LeashRadius(a_f);
+            if (!hold)
+                if (const float scale = Classes::PackageLeashScale(a_id); scale < 1.0f)
+                    radius = std::max(Config::g_leashMin.load(), radius * scale);
             APMFBridge::ServicePursuitLeash(a_id, radius);
             if (hold == wasHolding) return;
             if (hold) {
