@@ -9,6 +9,7 @@
 //   retreat       -> he backs off
 //   drink / cast / posture -> the body is busy for the animation; the effect lands at its frame
 // A Policy decides for ONE follower when the pump serves him. IausPolicy is the game's own Generate + Decide.
+#include <cstdlib>
 #include "iaus_sim/World.h"
 
 #include <chrono>
@@ -75,7 +76,7 @@ namespace Sim {
             SpellEntry& e = sn.book.entries[i]; e.activeOn.clear();
             for (const auto& pr : c.active[i]) if (pr.second > F.now) e.activeOn.push_back(pr.first);
             e.liveSummon = c.summonUntil[i] > F.now;
-            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; }
+            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; }
         }
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
@@ -189,6 +190,12 @@ namespace Sim {
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);
+            if (F.trace && std::getenv("SIM_WHY")) {   // debug: SIM_WHY=1 with --trace prints why the top candidates and every heal scored as they did
+                std::fprintf(F.trace, "%7.2f  WHY %s: %zu candidates, %zu ranked, verdict %d, best heal %.3f\n", F.now, x.c.name.c_str(), sv.g.actions.size(), sv.d.ranked.size(), static_cast<int>(sv.d.verdict), sv.d.bestHeal);
+                for (std::size_t i = 0; i < sv.d.ranked.size() && i < 3; ++i) std::fprintf(F.trace, "           #%zu %s\n", i + 1, FormatWhy(sv.g.actions[sv.d.ranked[i].idx], c.mind, c.profile, *T, c.rank, sv.d.bestHeal).c_str());
+                if (F.now < 0.3) for (const SpellEntry& e : sv.sn.book.entries) std::fprintf(F.trace, "           book %-40s nature %d drop %d cost %.0f reach %.0f self %d conc %d heal %.0f dmg %.0f src %d n %d\n", e.name.c_str(), static_cast<int>(e.nature), static_cast<int>(e.drop), e.cost, e.reach, e.selfDelivery, e.concentration, e.heal, e.damage, static_cast<int>(e.source), e.count);
+                for (const Candidate& k : sv.g.actions) if (k.family == Family::CastHeal) std::fprintf(F.trace, "           heal %s\n", FormatWhy(k, c.mind, c.profile, *T, c.rank, sv.d.bestHeal).c_str());
+            }
             if (timeIt && subj) { const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count(); t.dSum += us; t.dMax = std::max(t.dMax, us); ++t.dN; }
             const Decision& d = sv.d; const auto& acts = sv.g.actions;
             c.wants = TopSpellPairs(d, acts);

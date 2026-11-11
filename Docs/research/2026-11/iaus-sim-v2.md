@@ -665,3 +665,190 @@ distance left, and part of it needs actions IAUS does not have yet (bash, block,
   same function. If more than level should count, the engine-readable candidates are the foe's AIDT confidence and
   the taunter's block or armor skill. The lab can score a variant once one is named.
 - The two default-row questions of section 18 (power-attack cooldown per row or per follower; Rank I slots).
+
+## 21. Combat-rule mods in the lab: Chocolate Poise and Dynamic Follower Scaling (successor 1, 2026-11-10)
+
+Both are SKSE plugins that change the fight's rules outside the records, so `extract_world.py` cannot see them.
+`tools/list_balance/extract_combat_mods.py --list <list> --profile <profile>` reads their settings from the list
+(read-only, the winning file by mod priority) into `~/.cache/mfo-list-balance/<list>.combatmods.json`. The sim loads
+that file beside the `.sim.json` (`Load.h LoadCombatMods`). A list without the DLL gets the vanilla model.
+
+| List | Chocolate Poise | Dynamic Follower Scaling |
+|---|---|---|
+| LoreRim (Ultra) | on. INI from "LoreRim - MCM and INI Settings", JSON from "Chocolate Poise Plus" | on. Mode 1, 20 percent |
+| Tuxborn (Deck) | absent | absent |
+| Vanilla | absent | absent |
+
+### 21.1 Chocolate Poise
+
+Source of the formula: the mod's own code (`doodlum/skyrim-poise`, `src/Hooks/PoiseAV.cpp` and `HitEventHandler.cpp`),
+read for the rules only. Proof level: SOURCE for the formula, MODEL for the three values marked below.
+
+- Poise meter of an actor = (the race's multiplier in `ChocolatePoise.json`, else the race's mass) x BaseMult + worn
+  armor weight x ArmorMult. LoreRim: BaseMult 25, ArmorMult 0.02. A human has 25, a troll 50, a giant 137, a dragon 175.
+  The sim has no armor weights, so it uses 6 per worn piece (MODEL, under 1 point).
+- Poise damage of one weapon hit = lerp(the type's base in the JSON, the weapon's weight, WeightContribution) x
+  MeleeMult or BowMult. LoreRim sets every type base to 0 and WeightContribution 1.4, so it is 1.4 x weapon weight
+  (bows x 0.5). A creature without a weapon deals physical damage x CreatureMult (2.0). A bash deals the shield's
+  value x BashMult (1.0, shield weight 10 is a MODEL).
+- Then x (1 + the attack's stagger offset from the race's attack data). The usual power attack has 1.0, a bash 0.5
+  (MODEL: the modal record values, the sim does not carry them per attack). Then x (1 - blocked share), x total
+  damage over physical damage, x min(1 - the target's armor mitigation, 0.8). Poise damage to an NPC x 1.2, to the
+  player x 0.8.
+- Spells: health damage x 0.2 (the JSON's "Magic Effects" factor).
+- When the meter reaches 0 the actor staggers once and the meter refills. While staggered it takes no poise damage
+  (StaggerMode 1). The meter regenerates 5 percent of its maximum per second. The vanilla stagger on a hit is set
+  to 0 by the mod, so a power attack no longer staggers by itself. Stagger length: 0.5 s plus 1.0 s x the blow's
+  share of the meter (MODEL).
+
+What it changes in the lab: the oracle can no longer hold a boss by bashing it every 0.9 s, which is what made the
+knight-boss gaps of section 16.3 (+65, +77) untrusted. Tuxborn's Blade and Blunt (bZeroAllWeaponStagger) is still not
+modelled: its power-attack stagger stays the vanilla MODEL.
+
+### 21.2 Dynamic Follower Scaling (ruling Q75: "make sure")
+
+What it scales: `FollowerScaling.dll` 1.1.0 hooks the hit event (its own symbol
+`HitEventHook::ProcessHitEvent(TESObjectREFR*, HitData*)`). When the aggressor is an actor in CurrentFollowerFaction
+(FormID 0x0005C84E, the immediate at DLL address 0x1800295fa followed by the faction test), it counts the LOADED
+actors in that faction and scales the hit:
+
+- Mode 1 (LoreRim): damage x (1 - ReductionPerFollower)^(followers - 1). With 20 percent: 2 followers 0.80 each,
+  3 followers 0.64, 4 followers 0.51, 5 followers 0.41.
+- Mode 2: damage / followers.
+
+It works on HitData, so on weapon hits (melee and arrows). Damage a spell deals through its magic effects is not in
+HitData's damage. So spells are not scaled as far as the code shows. That part is unproven in the field.
+
+Does MFO override it: **no**. `native/` holds no reference to CurrentFollowerFaction or 0x5C84E, no HitData or
+ProcessHit hook, and no damage scaling of its own. A follower recruited the normal way is in that faction, so the
+scaling applies to MFO followers. This is a finding for marth (his expectation was that MFO already overrides it).
+
+Sim model: a follower's weapon hit x the mode's multiplier with n = followers alive. LoreRim only.
+
+J (set A, scroll road, 30 fights) with both mods modelled: LoreRim 60.90 / 60.70 (seeds 1 / 7), before 61.46 / 61.37.
+Tuxborn 63.03 / 61.44 and Vanilla 78.68 / 78.53 do not move (no such mod).
+
+What this means for IAUS on LoreRim: with three followers a weapon hit is worth 0.64 of what the damage estimate
+says, and a spell is worth all of it. The estimate (`Estimate::Dps`) cannot read the hook. It matters only where a
+follower weighs his own weapon against his own spell, which IAUS does not do with numbers yet.
+
+## 22. Rulings of 2026-11-11 (Q68, Q72 to Q75) and what the lab did with each
+
+| Ruling | Text (short) | In the lab |
+|---|---|---|
+| Q72 | Taunt success keeps the level rule: clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9). No extra stats | `Estimate::TauntChance` is that rule already. Nothing to change |
+| Q73 | Power-attack cooldown is PER FOLLOWER, one cooldown shared by every row and by IAUS, like the taunt cooldown (Q69) | Table mode: every power-attack row of a follower shares one timer (`Table.h`, also the taunt rows). IAUS already keys the cooldown by (family, form), which is per follower for a power attack. The native table side belongs to the taunt and cooldown card |
+| Q74 | Rank I has 3 combat slots. The follower gets the TOP rows in order, the rest join as slots unlock. Every prefix must be a good table | The sim cuts a follower's rows to his rank's slots (3 / 5 / 7 / 9 / 12, `native/State.h` kCombatSlotsByRank). `--opt-prefix` and `tune_prefix.py` order each class's set, see 22.1 |
+| Q75 | Dynamic Follower Scaling: research it, make sure about MFO | Section 21.2 |
+| Q68 | The swing-gate reach is different for every weapon and is LEARNED from hits and misses | `native/iaus/Reach.h`, see 22.2 |
+
+### 22.1 Q74: the order that makes every prefix a good table
+
+Method: table mode, each class's recommended set (the lab set of section 18 where its verdict was keep, else
+today's rows). Every permutation is scored on LoreRim as the mean of J over the prefixes 3 .. n (40 fights). The best
+order is then scored against the starting order per prefix on LoreRim, Tuxborn and Vanilla with seeds 1 and 7. Kept
+only when no list loses more than 0.75 J and the mean gains more than 0.5 J. Only the ORDER changes, never the rows.
+
+With today's slot table the 3-row prefix is what a Rank I follower holds and Rank II already holds all five. The
+4-row prefix is scored too, as ruled.
+
+| Class | Mean gain (J) | New order (rows by their action) |
+|---|---|---|
+| listener | +2.84 | power attack, attack foe under 30 percent, equip melee, fear cast at 3 foes, attack weaker foe. Today the equip row is last, so a Rank I Listener never draws |
+| warlock | +2.46 | fear on a stronger foe, magicka potion, destruction on any foe, paralyze on a stronger foe, armor spell. Today the damage row is fifth, so a Rank I Warlock has no damage row |
+| witchhunter | +1.20 | fire on a fire-weak foe, attack lowest health, paralyze a stronger foe, attack the player's attacker, equip ranged |
+| scout | +0.90 | heal ally, attack casters, attack cast on highest health, heal player, equip ranged |
+| spellsword | +0.78 | destruction beyond 400, fire on fire-weak, equip melee, attack cast on highest health, attack casters |
+| grand-battlemage | +0.73 | fire on fire-weak, attack within 400, attack cast on highest health, destruction beyond 600, equip melee |
+
+The other classes with more than 3 rows show no robust gain from a new order (between -0.9 and +0.4 J, inside the
+noise): today's order already makes good prefixes. The full evidence per class and per prefix is in
+`tools/iaus_sim/defaults/<class>.json`, block `prefix`. The pattern in the six: a class whose only damage or draw
+row sits in slot 4 or 5 is a broken table at Rank I.
+
+Caveat (unchanged from section 18): table mode acts through the sim's engine-AI MODEL. The direction is the
+finding. The numbers need the in-game check.
+
+### 22.2 Q68: the learned swing reach (`native/iaus/Reach.h`, pure, new file)
+
+marth: "precision reach will be different for every single weapon. so find one formula won't work." and "In game I
+would measure by whether it hits or not. A miss that should have hit (based on distance alone) lowers the distance,
+hits distance is also tracked."
+
+**What it is.** One number per (follower, weapon form, swing kind). It starts at the best estimate there is:
+Precision's own for that weapon when the bridge answers (GetAttackCollisionCapsuleLength, then Precision's
+conversion with fAIWeaponReachOffset read from its INI, k and r from its docs or measured), else the vanilla
+fMeleeReach. Then every committed swing is one outcome: the distance at the swing's start, and HIT or MISS.
+
+**The estimator.** It keeps the last 12 outcomes and the present value r. After each outcome the new value is the
+distance of the longest hit the evidence supports: over every split point it counts the misses inside the split
+(weight 1.5, a whiff wastes the swing, its stamina and its cooldown) and the hits beyond it (weight 1), takes the
+split with the lowest count (on a tie the one nearest r), and r becomes the longest hit under that split. The
+present r votes as one hit, which makes the value a memory and not only a window. With no hit under the split r
+goes to 0.95 x the shortest miss. One outcome moves r by 10 percent of itself at most. r stays inside 0.5 to 2.0 x
+its start value.
+
+- A hit beyond r raises it. A hit inside r changes nothing.
+- A miss inside r lowers it toward that distance, unless hits recorded beyond that distance outvote it (a target
+  that stepped aside is one stray miss).
+- A miss beyond r changes nothing. It was not expected to hit.
+- A miss never raises the value.
+
+**No expiry** (principle 9). Nothing reads a clock. The window is counted in swings (12 is about 15 s of melee at
+the measured 1.2 s hit cadence), so a follower who has not swung for a minute knows what he knew.
+
+**What the gate reads.** `Learner::Gate()` = r x 1.05 / 1.15. The range curve vetoes above 1.15 x its reach, so he
+still tries 5 percent past what he knows. That is how r can grow from his own swings. The engine's own swings are
+outcomes too and they are not gated at all.
+
+**Keying.** Follower and weapon form: yes (scale and moveset differ per follower, the state then lives with the
+follower in the worker domain and needs no lock). Swing kind (plain swing, power attack): yes, a power attack
+lunges. The power attack reads its own learner once it has 3 outcomes, before that the plain swing's. Race: no, the
+follower key covers it. Precision on or off: no, it is fixed for the session and the state is runtime only.
+The TARGET's size is the open covariate: a distance to a giant's centre and to a wolf's centre are not the same
+reach. Proposal: the engine side records the distance minus the target's bound radius if the probe shows the hit
+distances differ by target race. To decide from the probe, not now.
+
+**Proof (harness, 13 new checks, `tools/iaus_harness/run.sh`).** A toy world with a true reach the learner never
+sees, 5 percent distance noise, 5 percent of swings missing for other reasons, 7 in 10 swings the engine's own:
+
+| | Result |
+|---|---|
+| 72 runs (true reach 150 / 240 / 330, start 0.6 / 1.0 / 1.6 x, 8 seeds), value after 480 swings | within 8.7 percent of the true reach in the worst run, 4.5 percent in the mean |
+| Gated swings that miss by distance | 6.4 percent mean, 10.8 percent worst |
+| Swings that would have hit and the gate still allows | 98.3 percent worst |
+| Without noise, start 1.5 x | settles on the true reach (0.1 percent), spread 1.3 percent, no oscillation |
+| Heavy noise (10 percent, 15 percent stray misses), reported only | end error 19.9 percent, whiffs 6.6 percent, coverage 97.8 percent |
+
+**In the sim.** Each follower's weapon has its true reach (fCombatDistance x the weapon's reach, plus the body
+radii, x 1.2 at the hit frame) and the target moves during the swing, which is the noise. `--reach off|cold|warm`:
+off is the constant 200 as on main, cold starts every fight at 200, warm (default) first replays 20 earlier swings.
+Effect on J: none that can be measured (LoreRim 60.97 / 60.69 warm against 60.90 / 60.70 off, the others the same to
+0.07). The reason: the constant gate whiffs only about 1 percent of power attacks in the sim (new metric
+`powWhiff%`), because the sim's true reaches (191 to 284) sit near 200 x 1.15. The sim has no Precision. So the
+learner is proven as an estimator, and its value in play is a field question.
+
+**Engine side (not written, tier A: it crosses threads).** MFO already sinks both events as passive probes:
+TESHitEvent (`Diagnostics.cpp:129`, registered at `:1354`) and the attack animation events `weaponSwing` /
+`HitFrame` / `attackStart` (`Diagnostics.cpp:418-422`, the sink at `:544`). The plan:
+1. Probe first (principle 5): one rate-limited line per committed swing of a managed follower with the weapon form,
+   the distance at the swing event, and whether a hit event from that attacker with that weapon on the intended
+   target arrived inside the swing window. Size the window from the logged gap between the swing event and the hit.
+2. A miss counts only "by distance alone": the intended target alive, not blocking the path question of line of
+   sight (engine sight Visible), and no hit on ANOTHER actor in the window (a swing that struck someone else is not a
+   reach miss).
+3. Outcomes go to the worker through the existing posted-snapshot road, never a lock. `Kit` gains the learned reach
+   per drawn weapon and `Generate` reads `Kit` instead of `Snapshot::meleeReach` for the power attack's reach.
+4. Persistence: runtime only. Saving it would be a co-save change and is a question for marth (section 23).
+
+## 23. Questions for marth (successor 1)
+
+- **Dynamic Follower Scaling (now Q76).** It does apply to MFO followers on LoreRim (section 21.2). Options: leave it (it is
+  the list author's balance), or have MFO neutralise it for managed followers (an engine change that belongs in
+  Harbinger), or tell IAUS about it (a per-list fact MFO would have to read at runtime from the mod's INI, since no
+  list data may live in native). Recommendation: leave it, and let the damage estimate learn a follower's real
+  weapon damage from observed hits later, the same way the reach is learned.
+- **Learned reach across sessions.** Runtime only today. The learner converges in about 10 to 20 swings from a bad
+  start, so a session relearns each weapon in its first fight. Saving it means a co-save change. Recommendation: do
+  not save it.
+- **Token ledger** (fixed by the coordinator at 22:40): the script summed a message once per content block. Counted once per message the two authors had spent 1.87M, so about 8.13M of the 10M was left.

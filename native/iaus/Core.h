@@ -102,6 +102,8 @@ namespace MFO::Iaus {
         TauntChance,        // ruling Q69: the stat-based chance this taunt works on this foe
         HealClaimed,        // another follower's heal is already in flight on this recipient
         HealUrgency,        // seconds the recipient has left at the damage he is taking
+        ControlWorth,       // how long this control holds the foe, and how much of the foe is left to hold
+        MagickaBuys,        // magicka potion: the casts the fight still asks of him
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -302,6 +304,8 @@ namespace MFO::Iaus {
         float chase = 0.0f;               // melee attack: how far he may chase (Snapshot::chaseCap); 0 = not a chase
         float tauntChance = -1.0f;        // taunt: the chance it works on this foe (Estimate::TauntChance); < 0 = unknown
         bool  recipientBeingHealed = false;   // another party member's heal is in flight on the recipient
+        float controlSec = 0.0f;          // control cast: seconds the effect holds the foe (SpellEntry::controlSec); 0 = not measured
+        float castsWanted = -1.0f;        // magicka potion: casts of his best spell the fight still asks for; < 0 = unknown
     };
 
     struct Candidate {

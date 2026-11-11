@@ -257,7 +257,9 @@ namespace Sim {
         out.element = resist == kAvResistFire ? "fire" : resist == kAvResistFrost ? "frost" : resist == kAvResistShock ? "shock" : "";
         e.role = Prune::RoleOf(e.nature, e.resistAv);
         e.selfDelivery = self; e.touch = dl == "Touch"; e.concentration = conc;
-        e.reach = (e.selfDelivery || e.touch) ? 0.0f : static_cast<float>(sp["range"].num()) > 0 ? static_cast<float>(sp["range"].num()) : 4096.0f;
+        // Actuation::AimedReachOf (cast/CanAct.cpp): the record's range counts only from kMinSaneReach (300) up, else the projectile's
+        // (not extracted: 4096 stands in). Requiem's target heals carry range 30, which the game does not read as a reach.
+        e.reach = (e.selfDelivery || e.touch) ? 0.0f : static_cast<float>(sp["range"].num()) >= 300.0f ? static_cast<float>(sp["range"].num()) : 4096.0f;
         if (dl == "TargetLocation") e.drop = Prune::Drop::Placement;
         if (sp["castType"].s == "ConstantEffect") e.drop = Prune::Drop::NotCastable;
         out.healOther = heal && !self;

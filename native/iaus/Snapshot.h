@@ -52,6 +52,7 @@ namespace MFO::Iaus {
         // Estimates (iaus/Estimate.h): one cast on an unresisting target, after his perks. 0 = not measured.
         float         damage = 0.0f;            // health damage (a damage-over-time effect counted for its duration)
         float         heal = 0.0f;              // healing
+        float         controlSec = 0.0f;        // Control: seconds its effect holds the target (the control effect's duration)
         std::string   name;
     };
 

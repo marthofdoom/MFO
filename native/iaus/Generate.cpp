@@ -149,7 +149,34 @@ namespace MFO::Iaus {
             };
             drink(Family::DrinkHealth, k.potionsHealth);
             drink(Family::DrinkStamina, k.potionsStamina);
-            drink(Family::DrinkMagicka, k.potionsMagicka);
+            // What the magicka would buy: the casts of his best measured spell the fight still asks for. Offense first (the
+            // kept foes' health against his best spell's damage), else healing (the party's missing health against his best
+            // heal). Unknown (no measured spell) leaves the potion scored as before.
+            if (k.potionsMagicka > 0) {
+                float bestDmg = 0.0f, bestHeal = 0.0f;
+                for (const SpellEntry& e : x.s.book.entries) {
+                    if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                    if (e.nature == Prune::Nature::Offense) bestDmg = (std::max)(bestDmg, Estimate::Pos(e.damage));
+                    else if (e.nature == Prune::Nature::Heal) bestHeal = (std::max)(bestHeal, Estimate::Pos(e.heal));
+                }
+                float wanted = -1.0f;
+                if (bestDmg > 0.0f) {
+                    float hp = 0.0f;
+                    for (const Combatant* f : x.top) hp += (std::max)(0.0f, Finite(f->hp, 0.0f));
+                    wanted = hp / bestDmg;
+                } else if (bestHeal > 0.0f) {
+                    float missing = (std::max)(0.0f, Finite(x.s.self.hpMax, 0.0f) - Finite(x.s.self.hp, 0.0f));
+                    for (const auto& a : x.s.allies)
+                        if (Readable(a)) missing += (std::max)(0.0f, Finite(a.hpMax, 0.0f) - Finite(a.hp, 0.0f));
+                    wanted = missing / bestHeal;
+                }
+                {
+                    Candidate c = x.Make(Family::DrinkMagicka, nullptr);
+                    c.f.stock = k.potionsMagicka;
+                    c.f.castsWanted = std::isfinite(wanted) ? wanted : -1.0f;
+                    x.Push(std::move(c));
+                }
+            }
         }
 
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
@@ -266,6 +293,7 @@ namespace MFO::Iaus {
                         c.f.reach = (std::max)(0.0f, Finite(reach, 0.0f));
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
+                        if (e.nature == Prune::Nature::Control) c.f.controlSec = Estimate::Pos(e.controlSec);
                         if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
                         if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
                             c.f.expDamage = Estimate::SpellOn(e, *foe);

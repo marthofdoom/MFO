@@ -70,6 +70,7 @@ namespace MFO::Iaus {
             "caster", "downed", "outnumbered",
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
+            "control_worth", "magicka_buys",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -103,7 +104,8 @@ namespace MFO::Iaus {
         const float v[] = { f.dist, f.reach, f.foeLevelRatio, f.foeHpPct, f.cost, f.magicka, f.magickaMax,
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
-                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance };
+                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
+                            f.controlSec, f.castsWanted };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -308,6 +310,13 @@ namespace MFO::Iaus {
                 at(Cons::HealUrgency) = Piece(p);
             }
 
+            // control worth: x = min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). Ten seconds on a fresh foe
+            // 1.0; a 2 s stagger-length hold 0.36; a long hold on a foe at a quarter health 0.66. A hold is worth the blows
+            // it stops and the free blows it gives, and both need the foe to live through it. Never 0.
+            at(Cons::ControlWorth) = Lin(0.8f, 0.2f);
+            // magicka buys: x = min(1, casts the fight still asks for / 3). Three casts and more 1.0, one cast 0.45, none
+            // (the foes left die to one blow) 0.18: a potion drunk for a fight that is over is the bot's tell.
+            at(Cons::MagickaBuys) = Lin(0.82f, 0.18f);
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
             auto aw = [&](Family f, float w) { d.actionWeight[static_cast<std::size_t>(f)] = w; };
@@ -356,7 +365,7 @@ namespace MFO::Iaus {
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
             };
-            constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 } };
             constexpr U kPosture[] = {
                 { Cons::PostureRanged, 1 }, { Cons::PostureMelee, 1 }, { Cons::Ammo, 1 }, { Cons::StaffCharge, 1 },
                 { Cons::MeleeReach, 1 }, { Cons::Unholy, 1 }, { Cons::MundaneVsUnholy, 1 }, { Cons::ClassWeapon, 1 },
@@ -381,6 +390,7 @@ namespace MFO::Iaus {
                 { Cons::CooldownSoft, 1 }, { Cons::FoeThreat, 1.5f }, { Cons::BoostCaster, 1 },
                 { Cons::FoeControlled, 1 }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 },
                 { Cons::FoeCountControl, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
+                { Cons::ControlWorth, 1 },
             };
             constexpr U kHeal[] = {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -589,6 +599,12 @@ namespace MFO::Iaus {
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             case Cons::HealClaimed:         return B(f.recipientBeingHealed);
             case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::ControlWorth:
+                if (!(f.controlSec > 0.0f)) return In::Off();
+                return Clamp(f.controlSec / 10.0f, 0.0f, 1.0f) * (0.4f + 0.6f * Clamp(f.foeHpPct, 0.0f, 1.0f));
+            case Cons::MagickaBuys:
+                if (c.family != Family::DrinkMagicka || f.castsWanted < 0.0f) return In::Off();
+                return Clamp(f.castsWanted / 3.0f, 0.0f, 1.0f);
             case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
             case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
             case Cons::kCount:        break;
