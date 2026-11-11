@@ -16,7 +16,7 @@ import argparse, json, os, re, struct, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import esp_inspect as ei
 
-WANT = {b'SPEL', b'SCRL', b'ALCH', b'MGEF', b'GMST', b'RACE', b'ECZN'}
+WANT = {b'SPEL', b'SCRL', b'ALCH', b'MGEF', b'GMST', b'RACE', b'ECZN', b'BOOK'}
 # GMSTs kept (EDID regex). The exact names found are written to the JSON ("gmst").
 GMST_RE = re.compile(r'Regen|DiffMult|Difficulty|PowerAttack|MagicCost|MagicSkill|MagicDiff|MagicCasting|'
                      r'StaminaAttack|MeleeWeaponStamina|BowDrawStamina|BlockStamina|AVDamage|AVDHealth|'
@@ -109,12 +109,15 @@ def main():
     for (sig, owner, loc), (names, light, pl, subs) in win.items():
         if sig != 'MGEF': continue
         d = sub(subs, 'DATA')
-        if d is None or len(d) < 72: continue
-        fl = u32(d, 0)
-        mgef[(owner, loc)] = dict(hostile=bool(fl & 1), detrimental=bool(fl & 4), baseCost=f32(d, 4),
-                                  skill=SCHOOLS.get(i32(d, 12), 'None'), resist=i32(d, 16), minSkill=u32(d, 40),
-                                  archetype=u32(d, 64), av=i32(d, 68),
-                                  castType=u32(d, 80), delivery=u32(d, 84))
+        try:
+            if d is None or len(d) < 88: continue
+            fl = u32(d, 0)
+            mgef[(owner, loc)] = dict(hostile=bool(fl & 1), detrimental=bool(fl & 4), baseCost=f32(d, 4),
+                                      skill=SCHOOLS.get(i32(d, 12), 'None'), resist=i32(d, 16), minSkill=u32(d, 40),
+                                      archetype=u32(d, 64), av=i32(d, 68),
+                                      castType=u32(d, 80), delivery=u32(d, 84))
+        except Exception as ex:
+            print('bad MGEF', owner, loc, ex, file=sys.stderr)
 
     def fx(names, light, pl, subs):
         out = []
@@ -122,7 +125,7 @@ def main():
             m = mgef.get(ref(names, light, pl, e['mgef']))
             if not m: continue
             out.append(dict(e, **{k: m[k] for k in ('hostile', 'detrimental', 'skill', 'resist', 'minSkill',
-                                                      'archetype', 'av', 'delivery')}))
+                                                      'archetype', 'av', 'delivery', 'baseCost')}))
             del out[-1]['mgef']
         return out
 
@@ -134,20 +137,27 @@ def main():
                 cur['mag'], cur['area'], cur['dur'] = f32(d, 0), u32(d, 4), u32(d, 8)
         return o
 
+    taught = set()   # (owner, local) of every spell some BOOK teaches (DATA flag 0x04 = teaches spell; teaches FormID at +4)
+    for (sig, owner, loc), (names, light, pl, subs) in win.items():
+        if sig != 'BOOK': continue
+        d = sub(subs, 'DATA')
+        if d and len(d) >= 8 and d[0] & 0x04: taught.add(ref(names, light, pl, u32(d, 4)))
     spells, scrolls, potions, gmst, races, ecz = [], [], [], {}, [], []
     for (sig, owner, loc), (names, light, pl, subs) in win.items():
         edid = ei._zstr(sub(subs, 'EDID') or b'')
         if sig == 'GMST':
             d = sub(subs, 'DATA')
             if d and GMST_RE.search(edid) and len(d) >= 4:
-                gmst[edid] = f32(d, 0) if edid[0] == 'f' else (i32(d, 0) if edid[0] in 'is' else None)
+                if edid[0] == 'f': gmst[edid] = f32(d, 0)
+                elif edid[0] in 'ib': gmst[edid] = i32(d, 0)   # 's' GMSTs are strings: skipped
         elif sig in ('SPEL', 'SCRL'):
             d = sub(subs, 'SPIT')
             if d is None or len(d) < 36 or (sig == 'SPEL' and u32(d, 8) != 0): continue   # spells only (not powers/abilities)
             e = fx(names, light, pl, subs)
             if not e: continue
             row = dict(edid=edid, cost=u32(d, 0), castType=CASTTYPE[min(u32(d, 16), 3)],
-                       delivery=DELIVERY[min(u32(d, 20), 4)], castDuration=f32(d, 24), range=f32(d, 28), effects=e)
+                       delivery=DELIVERY[min(u32(d, 20), 4)], chargeTime=f32(d, 12), castDuration=f32(d, 24), range=f32(d, 28),
+                       autoCalc=bool(u32(d, 4) & 1), taught=(owner, loc) in taught, effects=e)
             (spells if sig == 'SPEL' else scrolls).append(row)
         elif sig == 'ALCH':
             e = fx(names, light, pl, subs)
