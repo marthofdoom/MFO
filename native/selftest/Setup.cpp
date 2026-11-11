@@ -261,6 +261,14 @@ namespace MFO::SelfTest {
                    (cff && x->IsInFaction(cff));
         };
         auto nameOf = [](RE::Actor* x) { const char* n = x->GetName(); return std::string(n && *n ? n : "(unnamed)"); };
+        // Diagnosis detail for the refusal line (a blocker the player cannot see is the field suspect): base, 3D, teammate, tracked, distance, cell.
+        auto detail = [&](RE::Actor* x) {
+            const auto* base = x->GetBaseObject();
+            const auto* cell = x->GetParentCell();
+            return std::format("base {:08X} 3D={} teammate={} tracked={} dist={:.0f} cell {:08X}", base ? base->GetFormID() : 0u,
+                               x->Is3DLoaded(), x->IsPlayerTeammate(), Followers::IsTrackedFast(x->GetFormID()),
+                               x->GetPosition().GetDistance(a_follower->GetPosition()), cell ? cell->GetFormID() : 0u);
+        };
         if (auto* pl = RE::ProcessLists::GetSingleton()) {
             pl->ForEachHighActor([&](RE::Actor* a) {
                 if (!a || a->IsDead() || a->IsDisabled() || isParty(a)) return RE::BSContainer::ForEachResult::kContinue;
@@ -274,12 +282,12 @@ namespace MFO::SelfTest {
                 }
                 if (a->GetPosition().GetSquaredDistance(a_follower->GetPosition()) > kNear2) return RE::BSContainer::ForEachResult::kContinue;
                 if (a->IsEssential() || a->IsProtected()) {
-                    s_why = std::format("an essential / protected NPC is within 3500 units: '{}' {:08X}", nameOf(a), a->GetFormID());
+                    s_why = std::format("an essential / protected NPC is within 3500 units: '{}' {:08X} ({})", nameOf(a), a->GetFormID(), detail(a));
                     blocked = true;
                     return RE::BSContainer::ForEachResult::kStop;
                 }
                 if (!a->IsHostileToActor(player)) {
-                    s_why = std::format("a non-hostile NPC is within 3500 units (inhabited area): '{}' {:08X}", nameOf(a), a->GetFormID());
+                    s_why = std::format("a non-hostile NPC is within 3500 units (inhabited area): '{}' {:08X} ({})", nameOf(a), a->GetFormID(), detail(a));
                     blocked = true;
                     return RE::BSContainer::ForEachResult::kStop;
                 }
