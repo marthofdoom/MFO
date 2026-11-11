@@ -222,12 +222,17 @@ under one second per list on 8 cores.
 
 ## 7. Native findings so far (reported, not fixed: native/ is not touched on this branch)
 
-- **D1, G10 answers are forgotten every second lap (`native/iaus/Candidates.cpp:235`, `Generate.cpp:348`).**
-  `g_wants` holds only the pairs of the last decision's `ranked` list. A pair answered No is vetoed by the WillWork
+- **D1, G10 answers are forgotten every second lap (`native/iaus/Candidates.cpp`, `Generate.cpp` TopSpellPairs).**
+  The ask list held only the pairs of the last decision's `ranked` list. A pair answered No is vetoed by the WillWork
   gate, so it is not ranked, so it is not asked on the next lap, so it has no note, so it is Unknown, and Unknown
-  passes. The pair is a live candidate again every other lap. Evidence: Tuxborn, 20 fights per cell. Failed control
-  casts with the code as it is: mage natural 26.7 percent, mixed-boss 35.3, weak 60.0. With the answers remembered
-  (`--g10-sticky`): 15.4, 26.7, 25.0. The rest is the first ask, where Unknown passes once by design.
+  passes. The pair is a live candidate again every other lap.
+  **Severity, corrected.** My first measurement (failed control casts 27 / 35 / 60 percent against 15 / 27 / 25 with the
+  answers kept) was taken before the sim mirrored `cast/Fire.cpp:430`, where the actuation itself refuses a cast that
+  WillWork answers No. With that mirrored the failed casts are the same before and after (they are the first ask, where
+  Unknown passes once by design). What D1 costs in the game is a wasted walk try and a decision flicker: 0.1 to 1.0
+  refused tries per minute per caster (Tuxborn, 40 fights per cell, mage lines), 0 with the fix.
+  **Fix:** branch `fix/iaus-d1-willwork` (0c70d81): `Generate.h NextAskList` (pure, harness-checked) keeps a refused pair
+  on the ask list while its last No is younger than 6 s (cast/WillWork's trust window). Gather re-stamps it each lap.
 - (more as the gap audit runs)
 
 ## 8. Open work on the world model
@@ -382,7 +387,7 @@ Status: open = evidence exists, no design yet. Priority by oracle gap.
 | G7 | all | attack target | no value for killing the healer or the archer first | focus-healer: healer first in 20 vs 83 percent | a foe role term (heals others, ranged, caster) and time-to-kill ordering | open |
 | G8 | mage lines | attack | melee share of body time 3 to 19 percent | BODY table, LoreRim natural | ruling: a T1 mage almost never melees | open |
 | G9 | all | attack target | target switches 8 to 12 per minute | field logs: 2.1 pins per minute (p50) | target momentum | open, the sim's engine targeting may add to it |
-| G10 | casters | cast control | a refused (spell, target) pair comes back every second lap | D1, section 7 | keep the answers (native fix) | open |
+| G10 | casters | cast control | a refused (spell, target) pair comes back every second lap and spends a walk try | D1, section 7 | `fix/iaus-d1-willwork` 0c70d81 | fix in review |
 | G11 | casters | cast offense | area casts reach allies in 11 to 33 percent of area casts in random fights (v1 run before the I6 merge) | INTELLIGENCE table | to re-measure after I6's payload rule | to verify |
 
 ## 13. The full action set (road audit, to do)

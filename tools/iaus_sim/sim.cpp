@@ -36,7 +36,7 @@ namespace {
             S(elemCasts); S(resistedCasts); S(weakCasts); S(weakOpp); S(immuneCasts); S(splashAllyHits); S(areaCasts);
             S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks);
             S(playerPressureSec); S(peelSum); S(peelN); S(peelMiss); S(tgtSwitches); S(tauntsOutmatched); S(tauntThenDown); S(tauntSaves);
-            S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl);
+            S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
             bool gruntDead = false; for (const std::string& k : t.killOrder) { if (k == "grunt" || k == "boss") gruntDead = true; else (gruntDead ? s.killOrderBad : s.killOrderGood)++; }
@@ -76,6 +76,7 @@ namespace {
         m["tsw/min"] = double(s.tgtSwitches) / mins; m["dwh/f"] = double(s.deathsWithHeal) / n; m["tntDown%"] = pct(double(s.tauntThenDown), double(s.taunts));
         m["U"] = a.uSum / n; m["pMinHp%"] = 100.0 * a.pMinSum / n; m["mpAtLate%"] = a.mpLateN ? 100.0 * a.mpLateSum / double(a.mpLateN) : -1; m["splashHits/f"] = double(s.splashAllyHits) / n;
         m["ctlFocus%"] = pct(double(s.hitsOnControlled), double(s.hitsWhileCtl)); m["retreat%"] = 100.0 * s.retreatSec / secs;
+        m["wwDecl/min"] = double(s.wwDeclined) / mins;
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks));
         return m;
     }
@@ -202,9 +203,9 @@ int main(int argc, char** argv) {
     std::printf("\nBODY (what he does, %% of the time he is up): the behaviour signature\n%-20s %6s %6s %6s %6s %6s %6s %6s %6s\n", "class|bracket", "melee", "power", "shoot", "cast", "castI", "block", "other", "free");
     for (auto& kv : all) { auto& m = kv.second;
         std::printf("%-20s %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f\n", kv.first.c_str(), G(m, "b.melee"), G(m, "b.power"), G(m, "b.shoot"), G(m, "b.cast"), G(m, "b.castIaus"), G(m, "b.block"), G(m, "b.other"), G(m, "b.free")); }
-    std::printf("\nINTELLIGENCE (-1 = no sample)\n%-20s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s\n", "class|bracket", "ovkil%", "ovhl%", "dblh%", "intr%", "resis%", "immun%", "weak%", "splsh%", "ctlF%", "peel.s", "press%", "prio%", "waste%", "tsw/m", "dwh/f");
+    std::printf("\nINTELLIGENCE (-1 = no sample)\n%-20s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s %6s\n", "class|bracket", "ovkil%", "ovhl%", "dblh%", "intr%", "resis%", "immun%", "weak%", "splsh%", "ctlF%", "peel.s", "press%", "prio%", "waste%", "tsw/m", "dwh/f", "wwD/m");
     for (auto& kv : all) { auto& m = kv.second;
-        std::printf("%-20s %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.2f %6.1f %6.1f %6.1f %6.1f %6.2f\n", kv.first.c_str(), G(m, "overkill%"), G(m, "overheal%"), G(m, "dblheal%"), G(m, "intr%"), G(m, "resisted%"), G(m, "immune%"), G(m, "weak%"), G(m, "splash%"), G(m, "ctrlFail%"), G(m, "peel.s"), G(m, "press%"), G(m, "prio%"), G(m, "waste%"), G(m, "tsw/min"), G(m, "dwh/f")); }
+        std::printf("%-20s %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.2f %6.1f %6.1f %6.1f %6.1f %6.2f %6.2f\n", kv.first.c_str(), G(m, "overkill%"), G(m, "overheal%"), G(m, "dblheal%"), G(m, "intr%"), G(m, "resisted%"), G(m, "immune%"), G(m, "weak%"), G(m, "splash%"), G(m, "ctrlFail%"), G(m, "peel.s"), G(m, "press%"), G(m, "prio%"), G(m, "waste%"), G(m, "tsw/min"), G(m, "dwh/f"), G(m, "wwDecl/min")); }
     std::printf("\nIdle%% by rapport rank (all brackets):\n");
     for (int c = 0; c < nc; ++c) for (int rk = 0; rk < 5; ++rk) { const Agg& A = rankCell[static_cast<std::size_t>(c * 5 + rk)]; const double t = std::max<double>(1, double(A.s.ticks));
         std::printf("  %-12s rank%d  idle %.1f%%  hold %.1f%%  sw/min %.1f\n", classes[static_cast<std::size_t>(c)].name.c_str(), rk + 1, 100.0 * double(A.s.idle) / t, 100.0 * double(A.s.hold) / t, double(A.s.switches) / std::max(1e-9, A.durSum / 60.0)); }

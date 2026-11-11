@@ -103,7 +103,7 @@ namespace Sim {
         long   deathsWithHeal = 0;                        // a party member went down while the subject had an affordable heal for him
         long   killOrderGood = 0, killOrderBad = 0;       // priority foes (healer / caster / archer) killed before / after grunts
         double retreatSec = 0, kiteDmgTaken = 0;
-        long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0;
+        long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         std::vector<std::string> killOrder;
     };
@@ -122,6 +122,7 @@ namespace Sim {
         std::map<std::uint64_t, double> firedAt;   // the Cooldowns store (Kind::IausAction): CooldownId -> last fired
         std::vector<SpellTarget> wants;            // G10: the pairs the last decision ranked on top
         std::vector<SpellTarget> asked;            // every pair ever asked (--g10-sticky: the answers are remembered)
+        std::vector<SpellTarget> wwMirror;         // cast/WillWork's mirror: pairs with a measured verdict (the first ask or Fire is the prefetch)
         std::uint32_t steer = 0;                   // act.attack's target for the engine AI
         std::uint8_t rank = 3; std::uint64_t seed = 0; double window = 1.5;
         float potH = 100, potM = 100, potS = 100;
