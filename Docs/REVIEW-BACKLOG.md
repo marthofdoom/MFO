@@ -2972,3 +2972,26 @@ Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale 
 
 ### MFO-B698 (SEV-5, OPEN, classes/ClassTable.cpp todo.* rows, against a31f154, same review)
 "The card's always-true default row for the four sneak classes is not in the diff (ClassTable untouched)." The class rows still use todo.act.sneak, todo.cond.self_no_summon, todo.cond.foe_attacking_my_summon: the class defaults card wires them.
+### MFO-B710 (SEV-4, OPEN, IAUS sim tool tools/iaus_sim/sim.cpp, against a6844761, Opus review of fix/iaus-sim-tool)
+"`--seeds` headline always runs 24 fights and does not say so. `--seeds 1,2 --fights 60` gives exactly the `--fights`-less result, and the HEADLINE line has no fight count." Reasoning: consistent with the single-seed headline (also 24). The real 60-fight measurement today is `--opt <p> --opt-passes 0 --opt-fights 60 --seeds ...`. Drain before the Fable tuning round.
+
+### MFO-B711 (SEV-4, OPEN, IAUS sim tool, against a6844761, same review)
+"`covers=` prints what was asked for, not which classes were matched. `--classes mage,mgae --seeds 1,2,3` silently covers only mage but prints covers=mage,mgae. `--classes mgae --opt ...` runs the whole search at J=0.000 with no error." Reasoning: operator typo guard; drain before the tuning round.
+
+### MFO-B712 (SEV-4, OPEN, IAUS sim tool, against a6844761, same review)
+"The JSON `headline.j` is now scoped, but no field records the scope. A `--classes X` results file cannot be told apart from an all-class one; a later --compare or archive diff would read a scope change as a tuning delta. The oracle headline is scoped too but prints no covers=." Reasoning: results provenance; drain before the tuning round.
+
+### MFO-B713 (SEV-4, OPEN, IAUS sim tool, against a6844761, same review)
+"`--opt-rows` and `--opt-prefix` silently ignore `--seeds` and `--opt-fights`. They call Objective(seed, fights) directly." Reasoning: latent, the tune scripts do not pass these flags today.
+
+### MFO-B714 (SEV-5, OPEN, IAUS sim tool, against a6844761, same review)
+Notes: scoped scenario seed uses the filtered-list index (unbiased and paired, but not equal to the all-class slice; keeping the original index i would fix it); `--seeds` n=1 prints se=0.00 instead of n/a; `--seeds ,` silently ignored; the printed SE is between-seed SE of absolute J, looser than the paired-difference noise a keep decision needs; `--classes X` and `--opt-class X` are different objectives (0.5/0.5 natural only vs 0.35/0.65 over 3 brackets), the doc could say so.
+
+### MFO-B699 (SEV-4, OPEN, iaus/Candidates.cpp NoteOcclusion, against 24a1dbb, Opus review of fix/iaus-field-1)
+NoteOcclusion keeps stale occlusion state: the per-foe age is not reset across a pause or a target switch and has no cap, so a long-occluded foe that becomes visible and is occluded again can start with an old age. Reasoning: the hold is bounded by occlusionHoldSec and an untracked age (0) takes no hold since b838392; worst case is a shorter hold. Drain with the next IAUS round.
+
+### MFO-B700 (SEV-4, OPEN, apmf/Excursion.cpp TargetCalmNow, against 24a1dbb, same review)
+TargetCalmNow has no thread note: it reads actor state (combat target, hostility) and is called from the pin sweep and ReleaseTargetPin under g_mx. Document which threads reach it and that it takes no lock. Reasoning: doc-only; the reads are the same plain member reads the sweep already makes.
+
+### MFO-B701 (SEV-5, OPEN, class gate GateFor, against 24a1dbb, same review)
+GateFor strict-inherit: a follower with no own class row inherits the party gate strictly; a looser inherit may be wanted when the class tree switch is OFF. Reasoning: matches the current ruling; revisit with C2/C6.
