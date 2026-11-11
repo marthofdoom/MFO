@@ -8885,6 +8885,7 @@ the scan integration is I6, the board is I7, the class profiles are I8. **NOT se
   `Decide` `:68` (timed; WARN over `budgetMs`, once-per-session WARN over the candidate cap and on a NaN/inf fact), `Log` `:116`,
   `Forget` `:162`, `Clear` `:173`, monotonic `g_epochFloor` `:22`.
 - Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
+- Offline combat SIMULATOR (card I2s, host-only, never in the DLL): `tools/iaus_sim/run.sh [--list json] [--seed N] [--fights N] [--baseline out] [--compare base]` drives the real `Generate` + `Decide` over seeded random fights (3 base classes x rapport I..V x 5 foe-strength brackets); `tools/list_balance/extract.py` reads an MO2 list's winning SPEL/MGEF/ALCH/GMST/RACE records into `~/.cache/mfo-list-balance/<list>.json` (test input only, never committed, native/ never reads it). Method + findings: `Docs/research/2026-11/iaus-sim.md`.
   `native/iaus/` except Engine.*.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
