@@ -947,6 +947,25 @@ namespace {
     }
 }
 
+// marth Q69 / Q72 / Q73: the one taunt formula, the 30 s taunt floor, and the follower-wide cooldown identity of
+// power attack and taunt (the Cooldowns store itself is engine-side; the host sees the identity the Engine maps).
+void SharedTauntPowerRules() {
+    Check(Estimate::TauntChance(10, 10) == 0.5f, "Q72: equal levels taunt at 0.50");
+    Check(std::fabs(Estimate::TauntChance(20, 10) - 0.9f) < 1e-6f && Estimate::TauntChance(50, 1) == 0.9f, "Q72: a higher taunter is capped at 0.90");
+    Check(std::fabs(Estimate::TauntChance(10, 14) - 0.3f) < 1e-6f && Estimate::TauntChance(1, 60) == 0.1f, "Q72: a stronger foe lowers it, floored at 0.10");
+    Check(DefaultTuning().rowlessTauntCooldownSec == 30.0f, "Q69: the rowless taunt floor is 30 s");
+    Check(DefaultTuning().rowlessPowerCooldownSec == 10.0f, "Q73: the power attack floor keeps its 10 s");
+    // Shared identity: every power-attack candidate (any posture, any foe) and every taunt candidate map to ONE slot each,
+    // distinct from each other; no other family is remapped (a cooldown per row stacks power attacks, this blocks it).
+    Check(SharedCooldownId(Family::PowerAttack) != 0 && SharedCooldownId(Family::Taunt) != 0 &&
+              SharedCooldownId(Family::PowerAttack) != SharedCooldownId(Family::Taunt),
+          "Q69/Q73: power attack and taunt each own one follower-wide cooldown slot");
+    Check(SharedCooldownId(Family::Attack) == 0 && SharedCooldownId(Family::Retreat) == 0, "Q73: other families keep their own cooldown id");
+    Candidate a, b; a.family = b.family = Family::PowerAttack; a.f.posture = PostureKind::Melee; b.f.posture = PostureKind::Silver; b.form = 7;
+    Check(CooldownId(KeyOf(a)) != CooldownId(KeyOf(b)) && SharedCooldownId(a.family) == SharedCooldownId(b.family),
+          "Q73: two power-attack candidates that differ per (posture, form) share the one follower slot");
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -958,6 +977,7 @@ int main() {
     ReviewRound1();
     Budget();
     Generation();
+    SharedTauntPowerRules();
     ReachLearning();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;

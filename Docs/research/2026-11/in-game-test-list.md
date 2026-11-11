@@ -1,3 +1,79 @@
+# MORNING TEST 2026-11-11: Sentient AI (IAUS) first run, LoreRim Ultra
+Build: main d1fc315 (DEV DLL) with Harbinger 599346f, deployed. "Sentient AI" is the player-facing name (IAUS in the logs). Sources: iaus-i6.md (steps 1-30), iaus-i7.md, iaus-i1-seam.md, taunt-rules.md.
+
+## Setup
+- In MFO.ini `[Debug]` set `bIausExplain=1` for this run. That turns on the `[iaus-why]` lines after each `[iaus]` line.
+- Three followers: one Melee, one Ranged (bow and a sword), one Mage T1. Turn Sentient AI ON for each with the Gambits tab button "Sentient AI: On/Off" (default is Off).
+- Do the whole run twice: class tree OFF first, then tree ON (only checks 29 and the notes say where the tree matters).
+- Have a save from before the run for the parity check (check 4).
+
+## A. Off means off
+1. All three followers with Sentient AI OFF, fight one group. `MFO.log` has no `[iaus]`, `[iaus-gen]`, `[spellbook]` or `[precision]` line.
+2. Parity (IAUS-off `[eval]`): load the same save on the last main build deployed before this one, then on this DLL. Same follower, same table, about 60 s of the same fight each. `grep '\[eval\]'` both logs, strip timestamps, compare. Expect the same rule numbers in `fired rule N`, `rules A,B skipped -> rule N`, `did NOT fire`, `held off` lines in the same order and the same `combat table: N rules, none matched` line. Board pulses and a G9 rule's "cooling down" look as on main. Timing differences are fine, rule NUMBER differences are a defect.
+
+## B. The source runs (Sentient AI ON)
+3. Enter combat. Within about a second: one `[spellbook] <name>: spells offense=..` line per follower, then `[iaus-gen]` every 10 s and an `[iaus]` line on every change of pick, each followed by `[iaus-why]`. No `[eval] combat table: N rules, none matched` line for them.
+4. Melee T1: `[iaus] pick=attack -> <foe>` and he fights that foe. The pick does not flip between foes every second. `[eval] ... held off: already on that target` appears once, not per tick.
+5. Ranged T1: `[iaus-gen] ... posture bow` at range. Walk a foe into him and the posture turns to melee after the dwell with ONE swap, and back when the foe leaves. No weapon vanishing.
+6. Mage T1: casts are animated at the foe the `[iaus]` line names. No hostile cast at the player or an ally. Expected until card I8, not a defect: with the default profile he may draw a melee weapon when a foe is near and cast one-handed. Note how often.
+7. Idle: when nothing clears the floor the line reads `idle: nothing above the floor` and he fights on with his own AI. He must not stand still.
+
+## C. The I6 rules
+8. Q67: hurt a follower who has a heal while he keeps attacking. The heal comes within about a second. `[iaus] hold=` lines stay rare.
+9. Heal hand: while a heal runs on one hand, no other cast takes that hand until the recipient is full.
+10. Power attack (tree OFF): at most one swing per 10 s. The closing leg does not start the cooldown.
+11. Ward: a mage who knows a ward, against a caster. `[spellbook]` counts `ward=1` and a `cast_ward` pick appears.
+12. B661: a mage with a bolt spell while a melee follower stands on the target still casts it, and `[spellbook] area probe:` for it says `cosmetic explosion: no area`. With Fireball he must NOT cast into the melee.
+13. B658: after he summons, the summon is not a candidate again while it lives. After a drink the potion count in the next `[spellbook]` line is one lower.
+14. `[iaus-probe] player currentCombatTarget: set on N of M`. In a real fight N must be above 0. If it stays 0, report it.
+15. D1: a spell answered "won't work" (G10 level cap, Turn Undead on a living foe) no longer flickers in and out of the `[iaus]` ranked list every second lap. It stays out.
+
+## D. Taunt and power rules (taunt-rules.md)
+16. Taunt (melee follower, `bTaunt=1`): he taunts a foe that is on the player or an ally. A second taunt inside 30 s logs `[taunt] skip: cooling down`, hit or miss.
+17. Success follows the level gap: chance is 50% plus 5% per level the taunter is above the foe, clamped 10% to 90%. A much higher level taunter lands nearly always, a much lower one rarely.
+18. When every foe is already pinned: `[taunt] skip: every foe already taunted` and no idle, no cooldown started.
+19. Two knights (two melee followers with taunt) never double-taunt one foe, in Sentient AI mode too.
+20. Power rows cannot stack: with two power-attack rows on one follower there is still only one swing per 10 s, shared.
+21. Toggle Sentient AI off or on mid-fight right after a taunt: no extra taunt inside the 30 s.
+
+## E. Toggle, board and gate (I7 and bIausAvailable)
+22. Switch ON for one follower, save, reload: the button still says On. The other followers stay Off.
+23. Gamepad: d-pad to the Sentient AI button, [A] flips it. No mouse needed.
+24. Fight with it on: the Thinking panel (Combat page) shows the decision, top 3 candidates and their scores moving. After the fight it reads "Last decision, N s ago".
+25. Switch OFF mid-fight (then ON again): one `[iaus] ... combat source: IAUS -> gambit table` line. The spell leaves his hand, no cast keeps running, the weapon stays, the table takes over next lap, the panel disappears. With an equip rule holding a two-hander or shield, the heal still takes the left hand on the next laps (no `[heal-hand]` refusal naming a rule 0-254).
+26. MCM "Sentient AI available" OFF mid-fight: the follower stands down to his gambits on his next scan.
+27. Available OFF, save, load, then Available ON: Sentient AI resumes for the followers who had it on.
+28. With Available OFF: the board button is greyed with a tooltip and the Thinking panel is hidden.
+29. `bIausExplain=0` (flip after the run): no `[iaus-why]` lines.
+
+## F. Edges
+30. Dismiss a Sentient AI follower mid-fight and recruit him again. No crash, his first `[iaus]` line starts clean.
+31. Save and load mid-fight. No `[iaus]` or `[spellbook]` line from before the load, a fresh `[spellbook]` line after.
+32. Retreat: a follower who falls back heals himself (`[retreat-heal] ... IAUS self-heal`) and nobody else.
+33. Knock him down or paralyse him: `[iaus] ... walk=0 (1: ... 'cannot act: ...')` once, no cast, weapon and spell stay.
+34. Budget: `[iaus]` lines end with the decision time. With 8 foes and about 30 spells it stays under 0.5 ms and there is no `over fIausBudgetMs` warning.
+35. Rune is counted under not-candidates with one `no IAUS candidate: target location` line.
+36. Give him a potion mid-fight then take it back: the count follows within one lap.
+37. Teach him a spell by console mid-fight: it appears within 5 s.
+38. A staff, charged and empty: the line says `(charged)` or `(EMPTY)`. This read is unobserved (MFO-B656).
+39. A buff already on him (Oakflesh): no buff candidate for him while it runs.
+40. A melee-only follower against a flying dragon: no attack names the dragon while it is airborne out of reach.
+41. Tavern brawl: no candidate names the brawl partner.
+42. Tree ON, a Warrior with a known heal and no mastered mage class: `dropped class` above 0 and no cast. Master a mage class and the heal appears, scoring low until someone is badly hurt. Tree OFF: the same Warrior casts it.
+
+## G. Probe lines to capture for the sim calibration
+43. `[precision] bridge live` once, and `[spellbook] reach probe:` lines with a capsule length above 0 for each follower holding a weapon. Write down per weapon the Precision length and the distance at the time. Without Precision the line says the DLL is not loaded.
+44. `[spellbook] area probe:` lines for every area spell used (Fireball, bolt spells).
+45. Staff probe: the `[spellbook]` staff line for one charged and one empty staff.
+46. `[iaus-probe]` lines (player target probe from check 14, and any other `[iaus-probe]` line).
+
+## What to send back
+- `MFO.log` from this run. It sits where the earlier sections' logs do: `/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log` (verified). Also the main-build `MFO.log` from check 2.
+- Any crash log (Crash Logger / .NET Script Framework file) and the time it happened.
+- Which checks you skipped, and notes on 6 (how often the mage drew a weapon) and 43 (length and distance per weapon).
+
+---
+
 # In-game test list (needs a play session; goal set 2026-11-09)
 No sessions for a while. Every item here is tagged `needs-session` in ClickUp with its due date cleared; due dates get set when sessions resume.
 

@@ -127,7 +127,7 @@ namespace MFO::Iaus {
         bool  healer = false;               // party member: knows a heal it can put on another (the regroup anchor "to the healer")
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
-        bool  taunted = false;              // already under this follower's taunt
+        bool  taunted = false;              // already under a live taunt (any taunter)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
         // Estimates (iaus/Estimate.h). 0 = not measured, which every reader treats as unknown.
         float hit = 0.0f;                   // physical damage of ONE weapon hit before the target's armor

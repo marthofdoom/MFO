@@ -176,6 +176,10 @@ namespace MFO::Iaus {
         float tau = 0.0f;     // softmax temperature; 0 = always the best
     };
 
+    // Per-taunter act.taunt cooldown, seconds, from the ATTEMPT (marth Q69: "a 30s cool down"). The ONE constant: Taunt::Fire
+    // and Tuning::rowlessTauntCooldownSec both use it. (Declared here, before Tuning, which needs it; SharedCooldownId is below.)
+    inline constexpr float kTauntCooldownSec = 30.0f;
+
     struct Tuning {
         std::array<Curve, kCons> curve{};
         std::array<float, kFamilies> actionWeight{};
@@ -206,12 +210,12 @@ namespace MFO::Iaus {
         float noHealRetreat = 0.30f;           // Retreat vetoed while a heal candidate scores above this
         float noHealDrink = 0.50f;             // Health drink vetoed while a heal candidate scores above this
         // Card I6: the hard cooldown of a ROW-GATED action whose class row declares none (ClassGate::*CooldownSec
-        // == 0). The power-attack rows all declare 10 s; no taunt row declares one, and with the class tree OFF
+        // == 0). The power-attack rows all declare 10 s; no taunt row declares one (the floor is the 30 s of Q69), and with the class tree OFF
         // (marth Q63: nothing is class-gated) there is no row at all. Without a floor the sim's Knight taunts
         // 12-20 times a minute. One taunt ATTEMPT is one idle play plus a roll, and a hit already blocks the next
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
-        float rowlessTauntCooldownSec = 30.0f;   // ruling Q69 (marth 2026-11-11): a taunt has a 30 s cooldown
+        float rowlessTauntCooldownSec = kTauntCooldownSec;   // marth Q69: 30 s, the executor's own cooldown
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;
@@ -362,6 +366,12 @@ namespace MFO::Iaus {
     [[nodiscard]] Key KeyOf(const Candidate& a_c);
     // Cooldowns id (Engine): (family, posture, form), NOT the target -- a spell cools down whoever it hit.
     [[nodiscard]] std::uint64_t CooldownId(const Key& a_k);
+    // marth Q69 (taunt) / Q73 (power attack): these two families keep ONE cooldown per follower, shared with the gambit
+    // rows, not one per (family, posture, form). Returns the Cooldowns::Kind::Follower slot (Cooldowns.h
+    // kFollowerPowerAttack = 1, kFollowerTaunt = 2), or 0 = the family keeps its own CooldownId. Engine.cpp maps it.
+    [[nodiscard]] inline constexpr std::uint64_t SharedCooldownId(Family a_f) {
+        return a_f == Family::PowerAttack ? 1u : a_f == Family::Taunt ? 2u : 0u;
+    }
 
     // Every float fact is finite (sinceFired may be +inf, "not recently"). A candidate that fails is VETOED by the
     // scorer and counted in Decision::badFacts: a NaN would otherwise read as a passing or dropped term (review

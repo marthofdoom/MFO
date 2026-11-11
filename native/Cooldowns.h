@@ -28,7 +28,12 @@ namespace MFO::Cooldowns {
     enum class Kind : std::uint8_t {
         Rule = 0,   // id = the gambit row's runtime uid (State.h Gambit::uid, NextRuleUID; never 0)
         IausAction = 1,   // id = Iaus::CooldownId(key): (family, posture, form) of an IAUS candidate (card I2)
+        Follower = 2,     // id = a kFollower* slot: ONE cooldown per follower shared by every gambit row AND the IAUS
+                          // candidate of that action (marth Q69 taunt, Q73 power attack)
     };
+    // Kind::Follower ids. Mirrored by Iaus::SharedCooldownId (iaus/Core.h, host-pure); Engine.cpp static_asserts they agree.
+    inline constexpr std::uint64_t kFollowerPowerAttack = 1;
+    inline constexpr std::uint64_t kFollowerTaunt = 2;
 
     // Record that (a_actor, a_kind, a_id) fired at a_now.
     void NoteFired(RE::FormID a_actor, Kind a_kind, std::uint64_t a_id,

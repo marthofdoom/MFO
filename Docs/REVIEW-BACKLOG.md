@@ -2905,3 +2905,22 @@ The per-follower ask cap of 24 raises the WillWork shared mirror's worst case fo
 
 ### MFO-B677 (SEV-5, OPEN, iaus/Candidates.cpp kRefusedKeepSec comment, against 0c70d81, F3)
 The 6 s keep is timed from Gather's stamp, not the mirror's measurement time, so the list can hold a pair up to ~6 s after the mirror's No expired (extra Unknown asks only). Comment wording.
+
+### MFO-B678 (SEV-4, OPEN, taunt rules, against d159a89, Opus review of feat/taunt-rules)
+class tauntCooldownSec replaces the IAUS taunt floor (Generate.cpp:117-118) instead of max(rowCd, kTauntCooldownSec); latent (0 today).
+
+### MFO-B679 (SEV-5, OPEN, taunt rules, against d159a89, Opus review of feat/taunt-rules)
+LogSkip static map not cleared in Clear() (bounded, harmless).
+
+### MFO-B680 (SEV-5, OPEN, taunt rules, against d159a89, Opus review of feat/taunt-rules)
+Cooldowns use steady_clock (run out in menu pauses) vs Taunt g_clockMs game clock; existing convention.
+
+### MFO-B681 (SEV-5, OPEN, taunt rules, against d159a89, Opus review of feat/taunt-rules)
+MAP.md Taunt TauntedBy/Busy line refs stale (~407/413), IsPinned has none; TAUNT-DESIGN.md "a different taunter repoints it" outdated.
+
+### MFO-B682 (SEV-5, OPEN, taunt rules, against d159a89, Opus review of feat/taunt-rules)
+(pre-existing) Resolve calls APMFBridge::PinFoeToTaunter under Taunt g_mx, so g_mx is not strictly a leaf; no cycle.
+
+### MFO-B683 (SEV-5, OPEN, taunt rules, against d159a89, Opus review of feat/taunt-rules)
+Estimate.h add/add conflict with feat/iaus-sim-v2: resolve by taking sim-v2's file.
+

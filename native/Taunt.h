@@ -8,10 +8,10 @@
 // act.taunt is MELEE-ONLY (a melee weapon in the right hand). One firing is ONE ATTEMPT: the follower plays the
 // combat taunt idle through Harbinger ch.12 (ch.1 holds him still), and only when that idle is CONFIRMED played the
 // chosen foe and up to three more nearby (in combat with the party, within fTauntRadius, able to sense him) each
-// roll p = clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9). A hit pins THAT FOE onto the taunter with a
+// roll p = Iaus::Estimate::TauntChance = clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9). A hit pins THAT FOE onto the taunter with a
 // Harbinger ch.20 pin (plus a ch.21 entry only when the taunter is not in the foe's combat group), held for
 // fTauntDuration and released early on the taunter downed or dead, the foe dead or unloaded, combat ending, a
-// load, or Harbinger ending the hold itself. No cooldown, no co-save (all state is transient). The claims live in
+// load, or Harbinger ending the hold itself. A 30 s per-taunter cooldown from the attempt (Cooldowns, runtime-only), no co-save (all state is transient). The claims live in
 // apmf/TauntClaims.cpp; this file owns the decisions.
 //
 // THREADING (INVARIANTS #4). Fire and Tick run on the AddTask job worker (the Scheduler tick). The roll-and-pin step
@@ -36,6 +36,9 @@ namespace MFO::Taunt {
     // The entry is filed by the roll (Resolve) and dropped by Tick on the taunt's real ends (duration fTauntDuration,
     // taunter down or dead, foe dead or unloaded, combat over, Harbinger ending the pin), so it can never outlive
     // the pin and is never expired early by a guessed timer (principle 9). Any thread (one leaf-mutex read).
+    // The per-taunter act.taunt cooldown is Iaus::kTauntCooldownSec (iaus/Core.h), the one constant IAUS's floor also uses.
+    // Is a_foe pinned onto ANY taunter by a live taunt? Same table as TauntedBy. Any thread (one leaf-mutex read).
+    [[nodiscard]] bool IsPinned(RE::FormID a_foe);
     [[nodiscard]] bool TauntedBy(RE::FormID a_foe, RE::FormID a_taunter);
     // act.taunt would refuse a_taunter right now: his attempt is in flight (idle playing or the roll pending) or a
     // foe is still pinned to him ("it shouldn't repeat while it's active", marth 2026-10-13). The same two tests
