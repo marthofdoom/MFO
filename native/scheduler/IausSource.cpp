@@ -56,11 +56,20 @@ namespace MFO::Scheduler {
             std::uint32_t set = 0, unset = 0;
             double        lastLog = -1.0e300;
             RE::FormID    lastTarget = 0;
+            RE::FormID    lastNonFoe = 0;   // a non-zero player target that was not a foe (an ally), for the line
         } g_ptProbe;
 
         void ProbePlayerTarget(const Iaus::Snapshot& a_snap, double a_now) {
-            if (a_snap.playerTargetId != 0) { ++g_ptProbe.set; g_ptProbe.lastTarget = a_snap.playerTargetId; }
-            else ++g_ptProbe.unset;
+            // Count only a target that is one of the snapshot's foes: the field showed the player's target set to an
+            // ALLY (a teammate), which is not input to player_target.
+            bool isFoe = false;
+            if (a_snap.playerTargetId != 0)
+                for (const auto& f : a_snap.foes) if (f.id == a_snap.playerTargetId) { isFoe = true; break; }
+            if (isFoe) { ++g_ptProbe.set; g_ptProbe.lastTarget = a_snap.playerTargetId; }
+            else {
+                ++g_ptProbe.unset;
+                if (a_snap.playerTargetId != 0) g_ptProbe.lastNonFoe = a_snap.playerTargetId;
+            }
             if (a_now - g_ptProbe.lastLog < 10.0) return;
             g_ptProbe.lastLog = a_now;
             auto* pc = RE::PlayerCharacter::GetSingleton();
@@ -68,6 +77,10 @@ namespace MFO::Scheduler {
             if (g_ptProbe.lastTarget != 0) {
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(g_ptProbe.lastTarget);
                 who = std::format("{} ({:08X})", t && t->GetName() ? t->GetName() : "?", g_ptProbe.lastTarget);
+            } else if (g_ptProbe.lastNonFoe != 0) {
+                auto* t = RE::TESForm::LookupByID<RE::Actor>(g_ptProbe.lastNonFoe);
+                who = std::format("{} ({:08X}) not a foe{}", t && t->GetName() ? t->GetName() : "?", g_ptProbe.lastNonFoe,
+                                  t && (t->IsPlayerTeammate() || t->IsPlayerRef()) ? " (ally)" : "");
             }
             spdlog::info("[iaus-probe] player currentCombatTarget: set on {} of {} IAUS laps since the last line (last "
                          "seen: {}); player IsInCombat={}. If it stays 0 in a real fight the player_target "
@@ -75,6 +88,7 @@ namespace MFO::Scheduler {
                          g_ptProbe.set, g_ptProbe.set + g_ptProbe.unset, who, pc && pc->IsInCombat() ? 1 : 0);
             g_ptProbe.set = g_ptProbe.unset = 0;
             g_ptProbe.lastTarget = 0;
+            g_ptProbe.lastNonFoe = 0;
         }
 
         const char* PostureOpcode(PostureKind a_k) {

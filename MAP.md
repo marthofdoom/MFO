@@ -6745,6 +6745,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     within `kStartRangeMargin` (0.9) x `r.range` while sending the full range as `fval`; a ch.21 end where the target
     is alive, still `IsEnemy` and beyond `Note::engageRange` is a RANGE DROP and is NOT added to `givenUp` (logged once). A pin may now end with "no longer a combat target (it was one)",
     not only lost/dead; nothing in MFO relies on the old set. (That range-drop guess is now the ABI-30 path only, below.)
+    **fix/iaus-field-1 (2026-11-11, first IAUS field run):** `PinEndedLocked` (`apmf/Excursion.cpp`) now ALSO gives the target up on `kClaimEnd_ArrivedIdle` (the pin road only; `IsNotEngagedEnd` and the ch.21 entry road are unchanged), same state-only lift. Also: `iaus/SpellBook.cpp` `GateFor` treats a follower with no equipped class as classes OFF (the Q63 open branch), the ammo count uses `Logistics::AmmoIsBolt`, and `IausSource.cpp`'s player-target probe counts only snapshot foes.
     **ABI v31 CLAIM END REASON + THE NOT-ENGAGED GIVE-UP (fix/mfo-nopath-giveup, marth 2026-10-27; field: Auri re-pinned
     a Sabre Cat she could not path to 47 ms after Harbinger's no-path watchdog ended the hold).** `APMF_API.h` mirrored
     from Harbinger ce1614b (`APMF_API_v31 : APMF_API_v29` + `GetClaimEndReason`). `ClaimEndReasonOf` (`:307`, internal)
