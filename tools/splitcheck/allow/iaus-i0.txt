@@ -1,0 +1,31 @@
+# IAUS card I0 (2026-11-10): the ONE allow-listed /O2 difference of the Scheduler split
+# (main 2b0b91a vs branch 894f40b). Accepted by the coordinator; see
+# Docs/research/2026-11/iaus-i0-split.md section 2. Format: kind<TAB>regex<TAB>justification.
+#
+# MFO::Scheduler::ServiceRetreat: 3475 bytes and 714 instructions on BOTH sides. The only
+# difference is the order of 4 adjacent instructions, for these three source lines
+# (native/Scheduler.cpp:256-258 on the branch):
+#     note.phase       = RetreatPhase::Stay;
+#     note.stayAt      = now;
+#     note.stayClockAt = g_serviceClock;
+# They are instructions 226-229 of 714. main does the stayClockAt pair FIRST: the load of
+# g_serviceClock (fn+0x412) and its store to note+0x30, then the phase store (+0x18) and the
+# stayAt store (+0x28). The branch keeps source order: phase (+0x18), stayAt (+0x28), then
+# the load (fn+0x41b) and the store to +0x30. The inline sites are identical, which is the
+# class splitcheck always FAILs.
+# CAUSE: g_serviceClock went from internal linkage (anonymous namespace in Scheduler.cpp,
+# never address-taken, so MSVC may read it ahead of stores made through a pointer) to
+# external linkage (an `inline` variable in scheduler/Scheduler_internal.h, shared by
+# Scheduler.cpp and scheduler/CombatScan.cpp), where MSVC must assume the stores could alias it.
+# NO ALIASING: the three stores go to three separate fields of one RetreatNote inside a
+# g_retreatNotes unordered_map node (heap). The node cannot overlap the global, so both
+# orders store the same three values.
+# THREADING: ServiceRetreat and every other reader / writer of g_serviceClock run on the
+# AddTask worker only (#4). No other thread can observe the order.
+# ONE OBJECT: g_serviceClock has one address in the branch builds (O2 0003:126960, /Od
+# 0003:125392), referenced from both TUs (Tick, ServiceRetreat, ClearTransientState,
+# ServiceClock).
+# PROOF: the no-optimizer builds compare `--strict --copies-ok` PASS, 73420 identical, 0 fail
+# (ServiceRetreat included). Runs: main /Od 42912868303, branch /Od 42913066568
+# (O2: main 42912852560, branch 42913049233).
+differ	^MFO::Scheduler::(`anonymous namespace'::)?ServiceRetreat$	IAUS I0: same 714 instructions, 4 adjacent ones (226-229) reordered: main does the stayClockAt load + store (+0x30) before the phase (+0x18) and stayAt (+0x28) stores, the branch keeps source order (Scheduler.cpp:256-258); three stores to separate fields of one heap map node; cause = g_serviceClock internal -> external linkage; no aliasing, worker thread only; /Od proof identical (runs 42912868303 / 42913066568)
