@@ -3214,6 +3214,8 @@ the AI can't re-arm magic over a forced weapon.
   is byte-identical native enforcement.
 
 ### Sightline.cpp — line-of-sight split across threads (NOT a hook)
+
+- **`PointSeenNow` (card G3, 2026-11-11):** viewer -> a POINT, MAIN THREAD ONLY, uncached, no Harbinger call; consumer `Concealment.cpp`. See section 11 "THE DISENGAGE DRIVE + THE HIDE RUN".
 Raycast runs only on the main thread, results cached, worker reads the cache.
 - **TWO BASES (2026-09-30, `fix/mfo-heal-field0930`, marth: every spell and bow gets our LoS).** The engine's
   `Actor::HasLineOfSight` for an NPC viewer is a CACHED per-(viewer, target) bool (AIProcess), not a raycast, so it
@@ -9064,6 +9066,39 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   must say where it stands in that order. Never send a target with `kApproach_Point` (an older Harbinger would walk him
   to that target instead). The point is not navmesh-checked by MFO: a point the engine cannot path to costs the step's
   2.5 s and is logged, it is not retried.
+- **THE DISENGAGE DRIVE + THE HIDE RUN (cards H3 + G3, `feat/g3-disengage`, 2026-11-11; NOT field-run; research note
+  `Docs/research/2026-11/g3-disengage.md`).**
+  `apmf/Disengage.cpp` (NEW, card H3): `DisengageSupported` (ABI >= 39), `RequestDisengage(follower, point, R, denyOffense)`
+  = TWO Harbinger claims filed together: ch.24 `kApproach_Point | kApproach_Hold` (the engine's own Return To Combat Area
+  runs him to the point, the hold keeps him inside R) and, optional, a ch.7 `kCombatActionCat_Offense` deny for the leg.
+  `ServiceDisengage` -> `DisengageState` None / Running / Arrived (Harbinger `Holding` with the bound applied) / Failed
+  (Harbinger's own end, a claim that never owned the channel after 700 ms, or Yielded / Leashed / Disabled for 1.5 s).
+  `ReleaseDisengage` releases both. `FindStandPoint` = the one wrapper of Harbinger's `FindEmptySpace` (ABI v11, MAIN
+  THREAD ONLY). Own leaf mutex `g_disengageMx` (only nesting: `ClearTransientState`, `g_mx -> g_disengageMx`).
+  `Concealment.{h,cpp}` (NEW, card G3): `Prepare(follower, foes)` (worker, the IAUS gather: true = a fresh point is
+  known; asks for a pick at most every 1.5 s), the PICK on the main thread (`PickStep`, 4 candidates per frame, re-Posts
+  itself; 24 candidates from `FindStandPoint`, each tested by `Sightline::PointSeenNow` from every listed foe), `Begin`
+  (from `cast/Fire.cpp` `act.disengage`), `Service(follower)` (once per combat service in `scheduler/CombatScan.cpp`,
+  right after `ServiceGroundStep`: true = the run or its 12 s hold stands and the RULE SCAN IS SKIPPED this lap, as in a
+  retreat), `Release` (beside every `ReleaseGroundStep`: combat end, retreat, dismissal, `IausSource` `StandDown`),
+  `ClearTransientState` (`Serialization.cpp`, after `Scheduler::ClearTransientState`; an epoch drops a pick of the old
+  world). `Sightline::PointSeenNow(viewer, point, bodyHeight)` (`Sightline.h`, MAIN THREAD ONLY): MFO's own ray to a
+  POINT at three crouched heights, a body in the way passed through; `Unavailable` is never hidden.
+  IAUS: `Family::Disengage` (APPENDED, `iaus/Core.h`), `Vocab::kActDisengage` (`act.disengage`, IAUS-ONLY like
+  `act.bash`), `ClassGate::sneakClass` (`Flag::kSneakAlways`, `iaus/SpellBook.cpp`; false with the tree OFF),
+  `Snapshot::hideRoad` / `hidePoint` (set in `Candidates::Build` after the gate), `Tuning::disengageCooldownSec` (25 s),
+  generated in `Generate.cpp` `Guards` only when the road is open, a point is known, the class is a sneak class that may
+  disengage and `iaus/Disengage.h` `Found(snapshot)` is true. `[Debug] bIausHideRoad` (default OFF).
+  **THE SEAM TO G2 LAYER 1:** `iaus/Disengage.h` `FoeHasFound` reads "this foe's combat target is the follower" on main;
+  once `Combatant::detectsMe` is on main its body becomes `return a_foe.detectsMe == Tri::Yes;`.
+  **What breaks:** calling `PointSeenNow`, `FindStandPoint` or `Confidence::LeashRadius` on the wrong thread (the first
+  two are MAIN only, the leash is read on the WORKER in `Prepare` and carried in the job); reading `Unavailable` as
+  hidden (he "hides" in plain sight on a cold cell); dropping the `Concealment::Service` early return (a cast or attack
+  named under the run's own ch.7 Offense deny is refused by Harbinger every lap); filing the drive without releasing the
+  offense approach and the give-ground step first (all MFO ch.24 clients file at `kOwnBasis`, the EARLIER claim keeps
+  the channel); sending a target with `kApproach_Point`; a new `Family` value anywhere but the END of the enum (its
+  number is in log lines and the cooldown id). `tools/iaus_sim` and `tools/iaus_harness` do not model this family (the
+  sim's `Policy.h` falls to its `default`); its weight 1.0 and cooldown were chosen, not searched.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

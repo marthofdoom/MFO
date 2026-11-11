@@ -201,3 +201,29 @@ Needs BOTH DLLs from those branches. A follower with a shield (or any melee weap
 
 ### Saved question
 - Q61 (still OPEN): should scripts/console still make a "no drugs" follower drink? Default kept: allow.
+
+## Movement batch (Harbinger `feat/h3-disengage` + MFO `feat/g3-disengage`, pending review; g3-disengage.md)
+
+Setup: both DLLs from the two branches. Harbinger `APMF.ini`: `[CombatApproach] bApproachGaitProbe=1` (default),
+`[CombatSubstrate] bSubstrateHolderJoinGuard=1` (default). MFO.ini `[Debug]`: `bIausHideRoad=1`, `bSneakInCombat=1`,
+and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-line class equipped and Sentient AI ON.
+
+1. **Anchor leak Q92.** Fight a group with two followers, one of them a caster with an out-of-combat buff (Candlelight).
+   Kill the last near foe so the party drops out of combat for a moment while more foes are close.
+   Expect in `APMF.log`: `HELD HOLDER GROUP JOIN REFUSED` when the engine tries to pull the caster into the other
+   follower's fight, NO `ANCHOR LEAK` line, and the other follower keeps fighting (no `combat ENDED` on him).
+   Then once with `bSubstrateHolderJoinGuard=0`: `ANCHOR LEAK ... his fight is GENUINE`, then
+   `REAL COMBAT (merged-into-a-genuine-fight ...)` for the caster, and still no `combat ENDED` on the other follower.
+2. **H3 gait (also "class H3" above).** Any ch.24 claim that moves a follower: the give-ground step, or the hide run.
+   Expect `[ch.24] 0x... GAIT PROBE (H3, passive): speed N u/s, heading-vs-velocity N deg = FORWARD|STRAFE|BACKPEDAL`
+   once per second and a `SUMMARY` line at the end. Send the summary lines. Mostly FORWARD at 300+ u/s = a real run.
+   Mostly STRAFE or BACKPEDAL = he keeps facing his target (the facing seat question, B#16).
+3. **G3 hide run.** Let a foe attack the Thief near cover (a pillar, a rock, a wall corner, a doorway).
+   Expect in `MFO.log`: `[conceal] ... concealment point x,y,z ... hidden from all N foe(s)`, then `[iaus]` choosing
+   `disengage`, `[disengage] ... running to ...`, `[disengage] ... ARRIVED`, `[conceal] ... crouching`, and after at most
+   12 s `[conceal] ... hide run over`. Watch: does he run (not walk), does he stop attacking on the way, does he end
+   behind the cover and crouch, do the foes lose him. In the open with no cover expect `NO concealment point` and no run.
+4. **G3 failures are loud.** If he never arrives: `[conceal] ... hide run FAILED: <why>` (no path, outside the leash,
+   another ch.24 claim, 10 s). Send the line.
+5. **No hitch.** While a Thief is being attacked the pick runs about every 1.5 s. Watch the frame time on the Deck.
+

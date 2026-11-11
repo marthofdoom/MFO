@@ -132,14 +132,14 @@ namespace MFO::Concealment {
                 const float cost = me.GetDistance(pt);
                 if (cost < kMinMove) { ++a_job->noMove; continue; }
                 if (pc && leash > 0.0f && pc->GetPosition().GetDistance(pt) > leash - kLeashMargin) { ++a_job->offLeash; continue; }
-                bool near = false, seen = false, unknown = false;
+                bool beside = false, seen = false, unknown = false;
                 for (RE::Actor* foe : foes) {
-                    if (foe->GetPosition().GetDistance(pt) < kMinFoeDist) { near = true; break; }
+                    if (foe->GetPosition().GetDistance(pt) < kMinFoeDist) { beside = true; break; }
                     const auto ps = Sightline::PointSeenNow(foe, pt, height);
                     if (ps == Sightline::PointSight::Seen) { seen = true; break; }
                     if (ps == Sightline::PointSight::Unavailable) { unknown = true; break; }   // never read as hidden
                 }
-                if (near) { ++a_job->tooNear; continue; }
+                if (beside) { ++a_job->tooNear; continue; }
                 if (seen) { ++a_job->seen; continue; }
                 if (unknown) { ++a_job->unknown; continue; }
                 ++a_job->hidden;
