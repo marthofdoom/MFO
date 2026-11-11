@@ -8886,10 +8886,40 @@ the scan integration is I6, the board is I7, the class profiles are I8. **NOT se
   `Forget` `:162`, `Clear` `:173`, monotonic `g_epochFloor` `:22`.
 - Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
   `native/iaus/` except Engine.*.
+- **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
+  off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
+  `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.
+  - `iaus/Snapshot.h` — PURE data (std types only, never an RE:: header): `SpellEntry` `:28` / `Kit` / `Book` (the SpellBook's
+    content), `ClassGate` `:78` (the class as plain flags), `Combatant` `:96` (one actor: absolute pools WITH their maxima, position,
+    level, target, state flags, the two sight verdicts, resists), `Snapshot` `:134` (self, foes, allies, book, hands, reaches, the
+    fight clock, G10 answers, live heal streams). The type is `Combatant`, NOT `Unit`: `Core.h` has a function `Unit()`.
+  - `iaus/Prune.h` — PURE rules: `SafeRatio` `:22`, `ClassifyNature` `:54` (fed cast/'s classifiers' answers, it never re-derives
+    hostile / heal / buff), `StaticDrop` `:74` (P1 + the "never generated" list), `RoleOf` (element -> RoleTag), `Affordable` (P2),
+    `FoeRelevance` `:149` / `TopFoes` `:163` (P3, top 5).
+  - `iaus/Generate.h/.cpp` — PURE `Generate(snapshot, classGate, tuning)` `:300` -> `Generated{actions, postures, ...}`:
+    `Swings` `:81` (attack, power attack, taunt, retreat), `Drinks` `:121`, `Postures` `:135`, `Casts` `:167` (offense, control, heal,
+    buff, summon, ward). `TopSpellPairs` `:348` (the G10 top-6 pairs). NOT generated: sneak (G1), scroll use (S3; scrolls ARE in
+    the book), exploit (I3), bash, a "party fan" buff, any spell of Unknown nature.
+  - `iaus/SpellBook.h/.cpp` — the per-follower MAIN-THREAD MIRROR (the SelfStatus pattern): `Read` `:369` (worker; hands out an
+    immutable `shared_ptr<const Book>`, posts ONE `MainThread::Post` refresh when the book is missing, 5 s old or dirty), `Measure`
+    `:194` (MAIN only: `VisitSpells`, `GetInventory`, the active-effect lists, `CalculateMagickaCost`, `CasterHasLiveSummon`, staff
+    charge `:162`), `MakeEntry` `:75`, `GateFor` `:326` (any thread: equipped class when the tree is on, else the T1 of
+    `ResolvedClassFast`), `Invalidate` `:389`, `OnContainerChanged` `:395`, `Clear` `:402` (generation counter: a refresh in
+    flight across a Clear is dropped). Cadence constants `:30-32` (refresh 5 s, re-ask 3 s, trust 15 s). `[spellbook]` log lines.
+  - `iaus/Candidates.h/.cpp` — the engine GATHER, worker: `Gather` `:99` (the Evaluator's own reads: pools, the combat-group walk,
+    `g_active`, targets, race keyword, resists, Sightline cache, `Targeting::Current`, `CombatSense`, `Logistics::IsUnholy`; the
+    book through `SpellBook::Read`; G10 through `Actuation::WillWork` for last lap's top-6 pairs only), `Build` `:271` (Gather +
+    GateFor + Generate), `NoteDecision` `:279`, `CombatEnded` / `Forget` / `Clear` `:290`, the fight clock (`kFightGapSec` `:42`).
+  - Outside `iaus/`: `logistics/Sinks.cpp:182` (the ONE `TESContainerChangedEvent` sink calls `SpellBook::OnContainerChanged`),
+    `native/CMakeLists.txt` (three sources). The harness builds `Generate.cpp` too (section 8 of its output).
 
 **Threading.** Minds (and every Engine call except Publish/ReadReadout) are the g_followers worker domain (#4), no lock. `Forget` /
 `EndDecision` are worker-only: the board toggle (render) and dismissal (main / Papyrus) must MARSHAL to the worker (MFO-B639).
 The readout has its own leaf mutex.
+I4: `SpellBook` is measured on the MAIN thread only and read on the worker under ONE leaf mutex (no engine call, no spdlog call,
+no other MFO lock under it); `GateFor`, `Invalidate` and `OnContainerChanged` are any-thread. `Candidates` (Gather, the fight
+clock, the G10 want list) is the g_followers worker domain (#4), no lock. `Generate` / `Prune` are pure. In `Gather` the combat
+group's read lock covers ONLY the handle copy; `ChaseRadius` and the bridge reads are made BEFORE it (#23, the PickFoe rule).
 
 **What breaks if you change this.**
 - **I6 MUST call `Iaus::Engine::Clear()` in `ResetAllState` after `StopPump()`** (`Serialization.cpp` order; the existing
@@ -8901,6 +8931,20 @@ The readout has its own leaf mutex.
 - A NaN/inf fact VETOES its candidate (`FactsFinite`, counted as `BAD-FACTS` in the `[iaus]` line): never turn it back into a drop or a pass.
 - Stickiness = momentum always + the preempt margin INSIDE the commitment window only; outside it a normal 5.1 roll (review round 1 F3).
 - `Cons`/`Family` enum order: the `Name(Cons)` table has a `static_assert` against it; I9 log parsing reads the names.
+- **I6 MUST also call `Iaus::SpellBook::Clear()` and `Iaus::Candidates::Clear()` in `ResetAllState` after `StopPump()`** (beside
+  `SelfStatus::Clear`). Until then nothing calls `Read`, so no book exists to survive a load.
+- I4 SpellBook: walking a spell list, an inventory or an active-effect list on the WORKER for IAUS (they mutate on the main thread:
+  everything of that kind goes into `Measure`); holding `g_mx` across any engine or log call; publishing an EMPTY book for an
+  unloaded follower (it would read as "he knows no spells": `PostRefresh` publishes nothing then); removing the generation check
+  in `PostRefresh` (a pre-load book would land in the next session); shortening `kTrustSec` under `kRefreshSec + kAskRetrySec`
+  (a live fight would lose its book between refreshes, principle 9).
+- I4 pure layer: `Snapshot.h`, `Prune.h`, `Generate.*` must stay free of RE:: types and engine calls (the harness and the
+  simulator build them on the host; `tools/iaus_harness/run.sh` fails if they do not). Candidate names are `string_view`s INTO
+  the Snapshot, which is why `Candidates::Set` cannot be copied or moved. A fact a family does not read stays at its default,
+  and every ratio goes through `Prune::SafeRatio` (a NaN/inf fact vetoes the whole candidate).
+- I4 class gates read ONE resolved class for every tier (`GateFor`): with the tree OFF that is the T1 class, so a T1 Melee /
+  Ranged follower has NO cast candidates (spells are off-class and nothing can be mastered) and no power attack / taunt /
+  retreat (no default row). Flagged for marth in the I4 research note before I6 turns IAUS on for anyone.
 - Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B639 .. MFO-B651 (B647 closed by marth Q62); FLWR byte: MFO-B652..B654.
 
 ## Appendix — SKSE registration & sink inventory (the wiring choke points)
