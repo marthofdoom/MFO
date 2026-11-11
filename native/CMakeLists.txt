@@ -137,6 +137,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/Classes.cpp
     classes/Defaults.cpp
     classes/Mastery.cpp
+    classes/Package.cpp
     classes/Presence.cpp
     classes/State.cpp
     Loadout.cpp
@@ -161,6 +162,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ReentryDeny.cpp
     apmf/PursuitLeash.cpp
     apmf/AimClaims.cpp
+    apmf/AttackMix.cpp
     apmf/CombatApproach.cpp
     apmf/OffenseApproach.cpp
     apmf/SpellAllowList.cpp

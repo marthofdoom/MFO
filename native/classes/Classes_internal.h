@@ -21,6 +21,12 @@ namespace MFO::Classes {
         // The plugin file the manifest came from ("MFO_Classes.esl"), empty before OnDataLoaded / when absent (Presence.cpp).
         // Card C6 resolves its carrier forms by local id in this file.
         std::string_view AddonFileName();
+        // The class ESL's manifest FLST (Presence.cpp), nullptr when absent. Written once at kDataLoaded.
+        RE::BGSListForm* ManifestList();
+        // Card C8 (Package.cpp): resolve the per-class CSTY lookup (manifest entry[2] -> one FLST per class -> its CSTYs). MAIN THREAD,
+        // once, at kDataLoaded, after DetectManifest found the manifest. Logs one summary line; a bad shape logs loudly and leaves the
+        // lookup empty (every class then keeps today's MFO_*Style).
+        void ResolvePackageStyles();
         // Every follower with a stored class record (State.cpp; a copy taken under g_mx). Card C6 re-applies the carriers to all of
         // them after a load.
         std::vector<RE::FormID> StoredFollowerIds();
