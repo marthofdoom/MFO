@@ -2837,3 +2837,18 @@ clang/g++ -Wsign-conversion warns on the int-to-unsigned shift; tools/flwr_byte_
 
 ### MFO-B655 (SEV-5, OPEN, scheduler/CombatScan.cpp + Scheduler_internal.h file-header comments, against 4d6a8f2, I0 author least-sure spot + Opus tier-3 review)
 The file headers say "proven function by function with tools/splitcheck" without naming the one allow entry (tools/splitcheck/allow/iaus-i0.txt, ServiceRetreat). Left unedited so the proof builds stayed paired; MAP.md and Docs/research/2026-11/iaus-i0-split.md state it accurately. Fix with the next edit to either file. Also: CombatScan.cpp is 1622 lines (past ~1500); the split plan needs Tick broken into functions first (I1-shaped work).
+
+### MFO-B656 (SEV-4, OPEN, iaus/SpellBook.cpp StaffCharge, against bbd9bdf, Opus tier-3 review of I4, F3)
+Staff charge has never been observed. The symbols are verified against fork 0b904231 (kRightItemCharge 64, kLeftItemCharge 82, ExtraCharge::charge float@0x10, amountofEnchantment uint16). The semantics are not: whether an NPC's equipped staff really drains k*ItemCharge (vanilla NPC enchanted items are commonly reported not to drain), whether EnchantmentItem::CalculateMagickaCost(actor) is the charge cost per use, whether a missing ExtraCharge always means full, and whether an unequipped stack of mixed charges is read correctly (only the first ExtraCharge is). A wrong "EMPTY" silently removes the staff posture. Before I6 relies on it: a passive, rate-limited [spellbook] probe line around a staff fire (AV, ExtraCharge, EAMT, cost per use).
+
+### MFO-B657 (SEV-4, OPEN, iaus/SpellBook.cpp GateFor:326 + Generate.cpp Casts, against bbd9bdf, Opus tier-3 review of I4, F4 = Q63)
+Postures honour `resolved && strict`, but the cast gate ignores both strict and treeOn. With the tree OFF and strict OFF, a T1 Melee follower's own learned heals produce zero candidates. That conflicts with "the tree is optional, new gambits work without it". Not checked: that no T4/T5 class with line Melee or Ranged carries cast rows. Needs marth's ruling (Q63) before I6.
+
+### MFO-B658 (SEV-4, OPEN, I6 obligation, against bbd9bdf, Opus tier-3 review of I4, F5)
+Buff/ward activeOn and summon liveSummon in the book can be up to 5 s stale (kRefreshSec), and no container event covers them. I6 must call SpellBook::Invalidate after every Fired buff, ward, summon and drink. The author's log names only summon and drink.
+
+### MFO-B659 (SEV-5, OPEN, iaus/SpellBook.cpp PostRefresh:289-290, against bbd9bdf, Opus tier-3 review of I4, F6)
+When the actor is gone, `asked` is reset to epoch, so the next Read re-posts at once instead of after 3 s, despite the comment saying the stamp ages out. Rare because Gather pre-checks 3D and dead.
+
+### MFO-B660 (SEV-5, OPEN, iaus/SpellBook.cpp:227, against bbd9bdf, Opus tier-3 review of I4, F7)
+Entry.onClass = !gate.strict || gate.weaponStaff ignores gate.resolved, so an unresolved follower under strict shows his staff as off-class. Postures use resolved && strict. Only the log and board mirror are affected.
