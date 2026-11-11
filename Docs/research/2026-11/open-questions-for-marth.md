@@ -118,3 +118,6 @@ Each: question, context, my recommended default (work proceeds on the default wh
 78. [ANSWERED 11-11: relearn each load] (also Q84) The learned per-weapon reach is runtime only, relearned after every load (~12 swings). No co-save change.
 79. [ANSWERED 11-11: accept] The taunt's "no foe can sense him" case is found after the idle plays (no safe off-main sense read); logged per foe, the 30 s starts.
 80. [ANSWERED 11-11: all obey 10 s] Every power-attack row, including rows without a cooldown of their own, and IAUS obey the one per-follower 10 s power-attack cooldown.
+81. [ANSWERED 11-11: hold until probed, then adopt with a cast yield] Harbinger INVARIANTS #0 (l) START ONE COMBAT MOVE stays PROPOSED until marth's field probe proves the bash; then it is adopted with the added condition that the move yields to an active ch.8 cast claim (a bash never cuts his own charging spell, review F1-4).
+82. [ANSWERED 11-11: move to Harbinger] If the probe confirms MFO's power attack is only an animation event, move it to the ch.31 action as kCombatMove_PowerAttack (the engine's real road: power damage and stamina).
+83. [ANSWERED 11-11: build next] A Harbinger block (held state: window + deny of his own offense and of the engine's release) is the next Harbinger round, after the bash road is field-proven.
