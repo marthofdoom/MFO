@@ -17,6 +17,9 @@ using namespace Sim;
 
 namespace {
 
+    bool g_objEstimates = true, g_objScrollRoad = false, g_tableMode = false;
+    void RunMode(Fight& F, bool timeIt = false) { if (g_tableMode) { TablePolicy P; RunFight(F, P); } else { IausPolicy P; P.timeIt = timeIt; RunFight(F, P); } }
+
     struct Agg {   // a cell's tallies, summed
         Tally s; long fights = 0, wins = 0, losses = 0, playerDeaths = 0, forced = 0, timeouts = 0;
         double durSum = 0, firstKillSum = 0; long firstKillN = 0; double uSum = 0, pMinSum = 0, mpLateSum = 0; long mpLateN = 0, fightsWithDown = 0, foes = 0;
@@ -101,7 +104,7 @@ namespace {
             if (trace == f) { std::scoped_lock lk(mx); std::printf("\nTRACE %s fight %d (%s)\n", pick[static_cast<std::size_t>(si)]->name, f, oracle ? "oracle arm" : "IAUS arm");
                 for (const Body& x : F.b) std::printf("   %-10s id %-4u L%-2d hp %.0f mp %.0f sp %.0f  AR %.0f  melee %s %.0f  ranged %.0f  spells %zu  run %.0f\n", x.c.name.c_str(), x.c.id, x.c.level, x.c.hp, x.c.mp, x.c.sp, x.spec->ar, x.spec->melee.name.c_str(), WeaponDamage(D.rules, *x.spec, x.spec->melee, false), x.spec->ranged.Has() ? WeaponDamage(D.rules, *x.spec, x.spec->ranged, false) : 0.0f, x.ctl >= 0 ? F.ctl[static_cast<std::size_t>(x.ctl)].build->spells.size() : x.spec->spells.size(), x.spec->run);
                 (oracle ? G : F).trace = stdout; }
-            IausPolicy P; P.timeIt = true; RunFight(F, P); const double uI = Utility(F);
+            RunMode(F, true); const double uI = Utility(F);
             double uO = 0; OraclePolicy O; std::map<std::string, Disagreement> dl;
             if (oracle) { O.cfg = oc; O.log = &dl; RunFight(G, O); uO = Utility(G); }
             std::scoped_lock lk(mx); Res& r = res[static_cast<std::size_t>(si)]; r.iaus.uSum += uI; r.iaus.Add(F.t, false);
@@ -132,23 +135,22 @@ namespace {
         if (oracle) std::printf("\nMEAN U GAP over %zu scenario(s): %+.2f\n", pick.size(), gapSum / double(pick.size()));
         { std::map<std::string, std::pair<double, int>> byClass; std::map<std::string, Agg> agg;
           for (std::size_t i = 0; i < pick.size(); ++i) { auto& b = byClass[res[i].cls]; if (oracle) { b.first += out.scen[i].gap; ++b.second; } Agg& a = agg[res[i].cls]; a.uSum += res[i].iaus.uSum; a.s = res[i].iaus.s; a.fights += res[i].iaus.fights; a.durSum += res[i].iaus.durSum; }
-          for (auto& kv : byClass) { const SimClass* sc = ClassBySlug(classes, kv.first.c_str()); ResultRow rr; rr.cls = kv.first; rr.line = sc->line; rr.tier = sc->tier; rr.bracket = "scenarios"; rr.fights = agg[kv.first].fights;
+          for (auto& kv : byClass) { const SimClass* sc = ClassBySlug(classes, kv.first.c_str()); ResultRow rr; rr.cls = kv.first; rr.line = sc->line; rr.tier = sc->tier; rr.bracket = "scenarios"; rr.fights = agg[kv.first].fights; rr.mode = g_tableMode ? "table" : "iaus"; rr.package = sc->package; rr.defaults = sc->defaults;
               rr.metrics["U"] = agg[kv.first].fights ? agg[kv.first].uSum / double(agg[kv.first].fights) : 0; if (kv.second.second) { rr.hasGap = true; rr.mainGap = kv.second.first / kv.second.second; } out.rows.push_back(std::move(rr)); } }
         std::printf("\nCHECKS: BAD-FACTS ticks=%ld (must be 0)  invalid picks=%ld (must be 0)  => %s\n", bad, inv, bad == 0 && inv == 0 ? "PASS" : "FAIL");
         return bad == 0 && inv == 0 ? 0 : 1;
     }
 
     // Mean utility of IAUS (no oracle) over the scenarios and the natural bracket of every class: the search objective.
-    bool g_objEstimates = true, g_objScrollRoad = false;
     double Objective(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU = nullptr, double* natU = nullptr) {
         const std::vector<Scenario> all = AllScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         const int ns = static_cast<int>(all.size()) * fights, nb = static_cast<int>(classes.size()) * std::max(1, fights / 2); std::atomic<int> next{ 0 };
         std::vector<double> u(static_cast<std::size_t>(ns + nb), 0.0);
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= ns + nb) return; Rng R;
             if (job < ns) { const int si = job / fights, f = job % fights; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
-                FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; IausPolicy P; RunFight(F, P); u[static_cast<std::size_t>(job)] = Utility(F); }
+                FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5; Fight F = BuildFight(D, fs, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); }
             else { const int k = job - ns, c = k / std::max(1, fights / 2), f = k % std::max(1, fights / 2); R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(f) * 32452843ULL);
-                Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; IausPolicy P; RunFight(F, P); u[static_cast<std::size_t>(job)] = Utility(F); } } };
+                Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); F.estimates = g_objEstimates; F.scrollRoad = g_objScrollRoad; RunMode(F); u[static_cast<std::size_t>(job)] = Utility(F); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         double a = 0, b = 0; for (int i = 0; i < ns; ++i) a += u[static_cast<std::size_t>(i)]; for (int i = ns; i < ns + nb; ++i) b += u[static_cast<std::size_t>(i)];
         a /= std::max(1, ns); b /= std::max(1, nb); if (scenU) *scenU = a; if (natU) *natU = b; return 0.5 * (a + b);
@@ -188,6 +190,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
         else if (!std::strcmp(argv[i], "--no-estimates")) estimates = false;
         else if (!std::strcmp(argv[i], "--scroll-road")) scrollRoad = true;
+        else if (!std::strcmp(argv[i], "--mode") && i + 1 < argc) g_tableMode = !std::strcmp(argv[++i], "table");
         else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); }
         else if (!std::strcmp(argv[i], "--profiles") && i + 1 < argc) mech = !std::strcmp(argv[++i], "mech");
         else if (!std::strcmp(argv[i], "--print-classes")) printClasses = true;
@@ -222,7 +225,7 @@ int main(int argc, char** argv) {
     std::vector<SimClass> classes;   // --classes a,b,c narrows the cells (slugs)
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
     if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
-    std::printf("IAUS SIM v2  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s\n", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default");
+    std::printf("IAUS SIM v2  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s  mode=%s\n", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default", g_tableMode ? "table" : "iaus");
     std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d\n",
                 D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown);
     const Rules& r = D.rules;
@@ -240,7 +243,7 @@ int main(int argc, char** argv) {
                 Rng R; R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(b) * 104729 + std::uint64_t(rk) * 15485863ULL + std::uint64_t(f) * 32452843ULL);
                 bool forced = false; Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], rk, kBrackets[b], R, t1, &forced);
                 F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.g10Sticky = g10Sticky; F.estimates = estimates; F.scrollRoad = scrollRoad;
-                IausPolicy P; P.timeIt = true; RunFight(F, P);
+                RunMode(F, true);
                 A.uSum += Utility(F); A.Add(F.t, forced); RA[rk - 1].Add(F.t, forced);
             }
             std::scoped_lock lk(mx); cell[static_cast<std::size_t>(job)] = A;
@@ -252,7 +255,7 @@ int main(int argc, char** argv) {
     std::map<std::string, std::map<std::string, double>> all; long totalBad = 0, totalInvalid = 0;
     for (int c = 0; c < nc; ++c) for (int b = 0; b < kNB; ++b) { const Agg& A = cell[static_cast<std::size_t>(c * kNB + b)];
         all[classes[static_cast<std::size_t>(c)].name + "|" + kBrackets[b].name] = Metrics(A); totalBad += A.s.badFacts; totalInvalid += A.s.invalid;
-        { const SimClass& sc = classes[static_cast<std::size_t>(c)]; ResultRow rr; rr.cls = sc.name; rr.line = sc.line; rr.tier = sc.tier; rr.planned = sc.planned; rr.bracket = kBrackets[b].name; rr.fights = A.fights; rr.metrics = Metrics(A); R.rows.push_back(std::move(rr)); } }
+        { const SimClass& sc = classes[static_cast<std::size_t>(c)]; ResultRow rr; rr.cls = sc.name; rr.line = sc.line; rr.tier = sc.tier; rr.planned = sc.planned; rr.bracket = kBrackets[b].name; rr.fights = A.fights; rr.metrics = Metrics(A); rr.mode = g_tableMode ? "table" : "iaus"; rr.package = sc.package; rr.defaults = sc.defaults; R.rows.push_back(std::move(rr)); } }
     if (!noJson) R.Write(jsonPath);
     auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? 0.0 : i->second; };
     std::printf("\nDECISIONS\n%-20s %5s %5s %5s %6s %6s %5s %5s %5s %4s %4s %5s %5s %5s  decisions (%% of deciding time)\n", "class|bracket", "idle", "hold", "sw/m", "heal.s", "heal%", "noHC%", "holdL", "iC%", "iR%", "inv", "dec.us", "tnt/m", "tR%");

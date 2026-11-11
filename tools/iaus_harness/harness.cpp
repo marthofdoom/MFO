@@ -478,21 +478,22 @@ namespace {
                 std::printf("\n");
             }
             Check(worst >= 1.2f * t.actFloor, "F4: worst plain current-target attack >= 1.2 x act floor across the grid");
-            // Phase 2 (sim v2, oracle cluster "idle -> attack"): act.attack only NAMES the target and the engine closes, so
-            // a melee ATTACK is shaded by distance (Cons::RangeChase) and vetoed only beyond the chase cap. The 1.15x swing
-            // gate stays on the POWER attack, which is a swing.
-            Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) > 0.0f,
-                  "phase 2: a melee attack on a foe just out of reach is NOT vetoed (the engine closes)");
-            {
+            Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) == 0.0f,
+                  "F4: the 1.15x reach gate still vetoes");
+            {   // The Q64 VARIANT (Tuning::attackChase, off by default; sim v2 measures it for marth's ruling): a melee
+                // ATTACK is shaded by distance and vetoed only past the chase cap. The power attack keeps the swing gate.
+                Tuning v = t; v.attackChase = true;
+                Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, v, 1, 0, nullptr) > 0.0f,
+                      "Q64 variant: a melee attack on a foe just out of reach is not vetoed");
                 Candidate pw = PlainAttack(1, 1.0f, 1.16f); pw.family = Family::PowerAttack; Cons by = Cons::kCount;
-                Check(ScoreOne(pw, Mind{}, Profile{}, t, 1, 0, nullptr, &by) == 0.0f && by == Cons::RangeMelee,
-                      "F4: the 1.15x reach gate still vetoes a power attack");
+                Check(ScoreOne(pw, Mind{}, Profile{}, v, 1, 0, nullptr, &by) == 0.0f && by == Cons::RangeMelee,
+                      "Q64 variant: the 1.15x reach gate still vetoes a power attack");
                 Candidate nearC = PlainAttack(1, 1.0f, 0.9f), midC = PlainAttack(1, 1.0f, 4.0f), farC = PlainAttack(1, 1.0f, 0.9f);
                 nearC.f.chase = 4096.0f; midC.f.chase = 4096.0f; farC.f.chase = 4096.0f; farC.f.dist = 4200.0f;
-                const float sNear = ScoreOne(nearC, Mind{}, Profile{}, t, 1, 0, nullptr), sMid = ScoreOne(midC, Mind{}, Profile{}, t, 1, 0, nullptr);
-                Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &byFar);
-                Check(sNear > sMid && sMid > 0.0f, "phase 2: a nearer foe is the better attack, a farther one still an attack");
-                Check(sFar == 0.0f && byFar == Cons::RangeChase, "phase 2: a foe beyond the chase cap is vetoed");
+                const float sNear = ScoreOne(nearC, Mind{}, Profile{}, v, 1, 0, nullptr), sMid = ScoreOne(midC, Mind{}, Profile{}, v, 1, 0, nullptr);
+                Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, v, 1, 0, nullptr, &byFar);
+                Check(sNear > sMid && sMid > 0.0f, "Q64 variant: a nearer foe is the better attack, a farther one still an attack");
+                Check(sFar == 0.0f && byFar == Cons::RangeChase, "Q64 variant: a foe beyond the chase cap is vetoed");
             }
         }
         // F5 (SEV-4): the log dedupe includes the verdict and the fired flag.

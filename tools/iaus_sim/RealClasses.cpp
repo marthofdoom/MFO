@@ -88,6 +88,7 @@ namespace Sim {
                 if (act == V::kActPowerAttack) { g.powerAttack = true; g.powerCooldownSec = std::max(g.powerCooldownSec, row.cooldownSec); }
                 else if (act == V::kActTaunt) { g.taunt = true; g.tauntCooldownSec = std::max(g.tauntCooldownSec, row.cooldownSec); }
                 if (row.IsApplied() && !row.pendingRuling) { if (mechProfiles) Bump(c.profile, row, idx, applied); ++idx; }
+                if (row.IsApplied() && row.cond) { GRow gr; gr.cond = row.cond; gr.act = row.act; gr.param = row.condParam; gr.role = static_cast<int>(row.role); gr.cooldown = row.cooldownSec; gr.applied = !row.pendingRuling; c.rows.push_back(std::move(gr)); }
             }
             // the kit the class row lets him carry (unrestricted T1 rows keep today's kit by line)
             KitChoice& k = c.kit; k = KitChoice{}; k.oneHand = k.twoHand = k.dagger = k.bow = k.crossbow = k.staff = k.shield = k.heavy = k.light = false;

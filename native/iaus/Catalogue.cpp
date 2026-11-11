@@ -286,11 +286,9 @@ namespace MFO::Iaus {
             at(Cons::HealSize) = Lin(0.6f, 0.4f);
             at(Cons::BoostPlayerDying) = Bin(1.0f, 1.8f);      // the player has under kDyingSec to live
             at(Cons::BoostRecipientDying) = Bin(1.0f, 1.4f);   // the recipient has
-            // chase (melee attack): x = distance / the chase cap. act.attack only NAMES the target and the engine's
-            // own AI closes, so a foe out of arm's reach is a valid attack, just a dearer one: 1.0 in reach, 0.75 at
-            // 15% of the cap (about 600 units), 0.5 at the cap, vetoed beyond it. (The swing-range veto stays on the
-            // power attack, which IS a swing.) Sim: a melee follower used to go Idle with the player's attacker 800
-            // units away, because every attack was vetoed out of reach.
+            // chase (melee attack), ONLY under the Tuning::attackChase variant (off: ruling Q64, the reach gate
+            // stands). x = distance / the chase cap: 1.0 in reach, 0.75 at 15% of the cap (about 600 units), 0.5 at the
+            // cap, vetoed beyond it. The swing-range veto stays on the power attack either way.
             {
                 static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 1.0f }, { 0.15f, 0.75f }, { 1.0f, 0.5f } } };
                 at(Cons::RangeChase) = VetoAbove(Piece(p), 1.0f);
@@ -323,7 +321,7 @@ namespace MFO::Iaus {
         namespace {
             using U = Use;
             constexpr U kAttack[] = {
-                { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
+                { Cons::RangeMelee, 1 }, { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
                 { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 }, { Cons::BoostControlled, 1 },
@@ -451,7 +449,9 @@ namespace MFO::Iaus {
             const Facts& f = c.f;
             const bool melee = f.posture == PostureKind::Melee || f.posture == PostureKind::Silver;
             switch (k) {
-            case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
+            case Cons::RangeMelee:
+                if (t.attackChase && c.family == Family::Attack) return In::Off();   // the variant: RangeChase answers instead
+                return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::Los:
                 switch (f.sight) {
@@ -571,7 +571,7 @@ namespace MFO::Iaus {
                 if (!(f.expHeal > 0.0f)) return In::Off();
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
             case Cons::RangeChase:
-                if (!f.meleeRange) return In::Off();
+                if (!t.attackChase || !f.meleeRange) return In::Off();
                 if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(f.dist / (f.reach * 20.0f)) : In::Off();   // no cap known: 20 reaches
                 return f.dist / f.chase;
             case Cons::BoostControlled:     return B(f.foeControlled);

@@ -97,7 +97,7 @@ namespace MFO::Iaus {
         HealSize,           // how much of the heal the recipient can use
         BoostPlayerDying,   // multiplier: the player has seconds to live
         BoostRecipientDying,   // multiplier: the heal's recipient has seconds to live
-        RangeChase,         // a melee ATTACK names a target the engine then closes on: distance shades, the chase cap vetoes
+        RangeChase,         // VARIANT (Tuning::attackChase, off): a melee attack shaded by distance, vetoed past the chase cap
         BoostControlled,    // multiplier: a blow on a foe that cannot answer (paralysed, staggered by control)
         kCount
     };
@@ -192,6 +192,11 @@ namespace MFO::Iaus {
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
         float rowlessTauntCooldownSec = 10.0f;
+        // VARIANT, OFF (ruling Q64 stands: a melee follower attacks "within precision reach", so a melee attack is
+        // vetoed beyond the reach gate). ON = a melee ATTACK is shaded by distance and vetoed only past the chase cap
+        // (Cons::RangeChase), on the argument that act.attack only names the target and the engine closes. Sim v2
+        // measures both; it is marth's to rule (Docs/research/2026-11/iaus-sim-v2.md "Q64 variant").
+        bool  attackChase = false;
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();

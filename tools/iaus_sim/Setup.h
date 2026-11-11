@@ -1,7 +1,7 @@
 #pragma once
 // iaus_sim/Setup.h -- who is in a fight: the class cells, the party, the foes from the list's real encounters
 // (or the fixture groups), and the relative-strength brackets. HOST-ONLY.
-#include "iaus_sim/Policy.h"
+#include "iaus_sim/Table.h"
 
 namespace Sim {
 
@@ -15,6 +15,8 @@ namespace Sim {
         Profile profile;
         int   tier = 1;
         bool  planned = false;
+        std::vector<GRow> rows;  // the class's default gambit rows (table mode); applied = false for T1 rows kept as data
+        std::string package = "current", defaults = "current";   // ids of the package / default rows in use (results file)
         std::string playstyle;   // the human expert playstyle the oracle and the personality metric are measured against
     };
 
@@ -91,7 +93,9 @@ namespace Sim {
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
         Body& b = F.Add(Role::Follower, spec, x, y); b.ctl = static_cast<int>(F.ctl.size()); b.arrows = fb->book.kit.arrows + fb->book.kit.bolts;
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
-        Ctl c; c.body = static_cast<int>(F.b.size()) - 1; c.fam = sc.fam; c.gate = sc.gate; c.profile = sc.profile; if (ProfileHook()) ProfileHook()(c.profile); c.build = fb; c.book = fb->book;
+        Ctl c; c.body = static_cast<int>(F.b.size()) - 1; c.fam = sc.fam; c.gate = sc.gate; c.profile = sc.profile; if (ProfileHook()) ProfileHook()(c.profile);
+        { bool anyApplied = false; for (const GRow& r : sc.rows) anyApplied |= r.applied; for (const GRow& r : sc.rows) if (r.applied || !anyApplied) c.rows.push_back(r); }   /* T1: its data-only rows stand in for the kit of today */
+        c.build = fb; c.book = fb->book;
         c.active.resize(fb->spells.size()); c.summonUntil.assign(fb->spells.size(), 0.0); c.rank = static_cast<std::uint8_t>(rank); c.seed = R.g();
         c.window = 1.5 * (0.88 + 0.24 * R.U(0.0f, 1.0f));   // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick
         c.drawn = sc.fam == Cls::Ranged && fb->spec.ranged.Has() ? PostureKind::Bow : sc.fam == Cls::Mage ? PostureKind::None : fb->spec.melee.Has() ? PostureKind::Melee : PostureKind::None;

@@ -86,7 +86,7 @@ namespace Sim {
         return o;
     }
 
-    struct ResultRow { std::string cls, line, bracket, rank = "all"; int tier = 1; bool planned = false; long fights = 0; std::map<std::string, double> metrics; bool hasGap = false; double mainGap = 0; };
+    struct ResultRow { std::string mode = "iaus", package = "current", defaults = "current"; std::string cls, line, bracket, rank = "all"; int tier = 1; bool planned = false; long fights = 0; std::map<std::string, double> metrics; bool hasGap = false; double mainGap = 0; };
 
     // Which way is better, and the unit, for every metric the dashboard may colour.
     struct MetricInfo { const char* name; const char* better; const char* unit; };
@@ -122,7 +122,7 @@ namespace Sim {
             for (std::size_t i = 0; i < rows.size(); ++i) { const ResultRow& r = rows[i]; std::map<std::string, double> mix, met;
                 for (const auto& kv : SchemaMetrics(r.metrics)) { if (kv.first.rfind("a.", 0) == 0) mix[kv.first.substr(2)] = kv.second; else met[kv.first] = kv.second; }
                 j += std::string(i ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(r.cls) + ",\"tier\":" + std::to_string(r.tier) + ",\"line\":" + JsonOut::Str(r.line) + ",\"planned\":" + (r.planned ? "true" : "false")
-                   + ",\"bracket\":" + JsonOut::Str(r.bracket) + ",\"rank\":" + JsonOut::Str(r.rank) + ",\"fights\":" + std::to_string(r.fights) + ",\"main_gap\":" + (r.hasGap ? JsonOut::Num(r.mainGap) : "null") + ",\"metrics\":" + JsonOut::Map(met) + ",\"action_mix\":" + JsonOut::Map(mix) + "}"; }
+                   + ",\"mode\":" + JsonOut::Str(r.mode) + ",\"package\":" + JsonOut::Str(r.package) + ",\"defaults\":" + JsonOut::Str(r.defaults) + ",\"bracket\":" + JsonOut::Str(r.bracket) + ",\"rank\":" + JsonOut::Str(r.rank) + ",\"fights\":" + std::to_string(r.fights) + ",\"main_gap\":" + (r.hasGap ? JsonOut::Num(r.mainGap) : "null") + ",\"metrics\":" + JsonOut::Map(met) + ",\"action_mix\":" + JsonOut::Map(mix) + "}"; }
             j += "],\n\"scenarios\":[";
             for (std::size_t i = 0; i < scen.size(); ++i) { const ScenarioRow& s = scen[i];
                 j += std::string(i ? ",\n" : "\n") + "{\"name\":" + JsonOut::Str(s.name) + ",\"class\":" + JsonOut::Str(s.cls) + ",\"iaus_u\":" + JsonOut::Num(s.iausU) + ",\"oracle_u\":" + (s.hasOracle ? JsonOut::Num(s.oracleU) : "null")

@@ -103,13 +103,24 @@ namespace Sim {
         long   deathsWithHeal = 0;                        // a party member went down while the subject had an affordable heal for him
         long   killOrderGood = 0, killOrderBad = 0;       // priority foes (healer / caster / archer) killed before / after grunts
         double retreatSec = 0, kiteDmgTaken = 0;
-        long   scrollsUsed = 0, extActions = 0; double moveOrderSec = 0;   // the extended action set (oracle / phase 2)
+        long   scrollsUsed = 0, extActions = 0, tableSkipped = 0; double moveOrderSec = 0;   // the extended action set (oracle / phase 2)
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         std::vector<std::string> killOrder;
     };
 
-    struct Ctl {   // one IAUS-driven follower
+    struct GRow {                 // one default gambit row, in board terms
+        std::string cond, act;
+        float param = 0;
+        int   role = 0;           // MFO::Classes::SpellRole ordinal (cast rows)
+        float cooldown = 0;
+        bool  applied = true;     // false: a T1 row kept as data only (the T1 classes keep today's kit)
+    };
+    // SpellRole ordinals (native/classes/Classes.h, frozen order).
+    enum : int { kRoleNone = 0, kRoleAttack, kRoleDestruction, kRoleFire, kRoleFrost, kRoleShock, kRoleArea, kRoleHeal, kRoleSummon, kRoleBoundWeapon, kRoleWard, kRoleArmor,
+                 kRoleParalyze, kRoleFear, kRoleCalm, kRoleReanimate, kRoleTurnUndead };
+
+    struct Ctl {   // one follower with a decision layer (IAUS, or his gambit table)
         int   body = -1;
         Cls   fam = Cls::Melee;
         ClassGate gate;
@@ -119,6 +130,7 @@ namespace Sim {
         std::vector<std::vector<std::pair<std::uint32_t, double>>> active;   // per entry: (recipient, until)
         std::vector<double> summonUntil;
         Mind  mind;
+        std::vector<GRow> rows;            // table mode: his class's default gambit rows
         PostureKind drawn = PostureKind::None;
         std::map<std::uint64_t, double> firedAt;   // the Cooldowns store (Kind::IausAction): CooldownId -> last fired
         std::vector<SpellTarget> wants;            // G10: the pairs the last decision ranked on top

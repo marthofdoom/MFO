@@ -462,7 +462,7 @@ The oracle is rebuilt over every new IAUS, so the gap stays honest as IAUS impro
 |---|---|---|
 | 2a estimates | `native/iaus/Estimate.h` (new, pure), `Snapshot.h`, `Core.h`, `Generate.cpp`, `Catalogue.cpp` | Per-combatant inputs (one weapon hit, the engine's hit rate, armor mitigation, magic resist, observed health loss) and per-spell expected damage / healing. New considerations: DamageValue (this spell's expected damage on this target against his best option), Overkill, TauntSurvive (seconds to live with the foe on him too, replaces the self-health term once measured), RetreatDanger (the old 30 percent gate, or seconds to live under 8), HealSize, BoostPlayerDying, BoostRecipientDying |
 | 2b scrolls | `Snapshot::scrollRoad`, `Generate.cpp` | Scroll candidates (family Scroll, the catalogue's scroll sets) once a scroll can be read as a cast. Off in the game until card S3 has its road |
-| 2c chase | `Core.h`, `Generate.cpp`, `Catalogue.cpp`, harness | A melee attack names a target the engine then closes on: RangeChase shades by distance and vetoes past the chase cap. Before, every melee attack was vetoed beyond 1.15 x reach, so a melee follower went Idle with the player's attacker 800 units away. The swing gate stays on the power attack. BoostControlled x1.3 for a blow on a controlled foe. The harness check "F4: the 1.15x reach gate still vetoes" was rewritten to this intent: a DESIGN CHANGE against the I2 review, for the reviewer to judge |
+| 2c controlled, Q64 variant | `Core.h`, `Generate.cpp`, `Catalogue.cpp`, harness | BoostControlled x1.3 for a blow on a controlled foe. And a VARIANT behind `Tuning::attackChase` (off): a melee attack shaded by distance and vetoed only past the chase cap, instead of the 1.15 x reach gate. Ruling Q64 ("within precision reach") stands as the default, the F4 harness check is unchanged, the variant has its own checks. See 16.5 |
 
 Engine side still to write (CI only): `Candidates.cpp` and `SpellBook.cpp` must fill the new Snapshot fields from the
 reads the I8 research proved (weapon damage by the core formula, `weaponData.speed` x fCombatDPS*SpeedMult,
@@ -484,7 +484,7 @@ In words: power attack weight 0.9 to 2.4, control casts 0.9 to 1.8, offense cast
 | + estimates v1, first-guess weights | 57.67 | 59.42 | 77.24 |
 | + parameter set A | 61.83 | 61.86 | 78.59 |
 | + scroll road | 61.81 | 62.39 | 78.67 |
-| + chase range, controlled boost | 61.36 | 63.79 | 79.45 |
+| + controlled boost (reach gate as ruled, Q64) | 61.74 | 62.35 | 78.81 |
 
 Set A was searched on LoreRim only and holds on Tuxborn, Vanilla and seed 7 (LoreRim 60.1, Tuxborn 61.5, Vanilla
 78.7). A set searched on Tuxborn generalised worse and was dropped. Set A is NOT yet written into `Catalogue.cpp`.
@@ -501,3 +501,21 @@ weakness +23, splash +21.
   until poise is modelled. And bash has no road in IAUS today.
 - **Magicka potions.** The search wants them far less on LoreRim (0.275) and more on Tuxborn (1.65). A weight cannot
   be right on both: the missing input is what the magicka would buy (the foes still standing against his spells).
+
+### 16.5 Q64 variant: reach gate (ruled) against chase range (measured for marth)
+
+Ruling Q64: a melee follower attacks "within precision reach". The sim has no Precision numbers yet, so the gate is
+the vanilla reach (`Snapshot::meleeReach` 200, vetoed beyond 1.15 x). The variant lets a melee attack name a foe
+anywhere inside the chase cap, on the argument that act.attack only names the target and the engine closes.
+
+J with parameter set A and the scroll road, 30 fights:
+
+| | LoreRim seed 1 | seed 7 | Tuxborn seed 1 | seed 7 | Vanilla seed 1 | seed 7 |
+|---|---|---|---|---|---|---|
+| reach gate (the ruling) | 61.74 | 60.65 | 62.35 | 61.89 | 78.81 | 78.80 |
+| chase variant | 61.36 | 61.00 | 63.79 | 61.43 | 79.45 | 79.26 |
+| difference | -0.38 | +0.35 | +1.44 | -0.46 | +0.64 | +0.46 |
+
+Mean difference +0.34 J, inside the run-to-run noise (about 0.5). **The ruling costs nothing the lab can measure.**
+The oracle cluster that prompted the variant ("idle -> attack" at 800 units) is real, but under the gate the
+follower's own AI closes on its own target and the attack is named once he is in reach. The variant stays off.
