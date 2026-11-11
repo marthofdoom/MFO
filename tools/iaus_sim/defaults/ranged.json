@@ -1,0 +1,94 @@
+{
+ "schema": 1,
+ "id": "defaults-ranged-v1",
+ "class": "ranged",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.drink_health_potion",
+   "threshold": 0.3,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.always",
+   "gambit": "act.wait",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.drink_health_potion",
+   "threshold": 0.3,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weaker_than_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_sp_pct_below",
+   "gambit": "act.drink_stamina_potion",
+   "threshold": 0.25,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.always",
+   "gambit": "act.wait",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0",
+ "lab_text": "cond.self_hp_pct_below|act.drink_health_potion|0.3|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.self_sp_pct_below|act.drink_stamina_potion|0.25|0|0;cond.foe_lowest_hp|act.attack|0|0|0;cond.always|act.wait|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 31.98,
+   "lab": 33.53,
+   "delta": 1.55
+  },
+  "Tuxborn": {
+   "today": 45.43,
+   "lab": 46.88,
+   "delta": 1.46
+  },
+  "Vanilla": {
+   "today": 68.57,
+   "lab": 65.39,
+   "delta": -3.18
+  }
+ },
+ "mean_gain": -0.06,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

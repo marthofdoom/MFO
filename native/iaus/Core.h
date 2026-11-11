@@ -54,6 +54,12 @@ namespace MFO::Iaus {
         CastWard,
         Scroll,       // uses the set of Candidate::scrollOf (Offense / Heal / Buff) with the scroll terms
         Exploit,      // the act.exploit gambit row (I3): the offense set with exploit at w 2.0
+        Regroup,      // close on the player or a healer WHILE FIGHTING (Harbinger ch.24 combat approach). Generated only
+                      // once that road has its MFO client (Snapshot::regroupRoad), never today
+        GiveGround,   // step back from a foe he cannot trade with, still facing it (needs the Harbinger point-centred combat
+                      // area: Snapshot::groundRoad). Lab only until that road exists
+        Block,        // raise the guard against a swing that is coming (needs the Harbinger leaf promote: Snapshot::blockRoad)
+        Bash,         // bash a foe in reach, first of all one that is charging a spell (same road: Snapshot::bashRoad)
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -88,6 +94,31 @@ namespace MFO::Iaus {
         HealReach, BuffEarly, BuffMelee, SummonLive, SummonFoes, WardCaster, WardHp, ScrollStock, ScrollMpLow, FoeEngaged,
         // multipliers (> 1 when the fact holds; outside the compensated product)
         BoostCaster, BoostDowned, BoostOutnumbered,
+        // estimates (iaus/Estimate.h, the damage-estimate part of card I8). Each one is NOT APPLICABLE while its
+        // inputs are unmeasured, so a follower without estimates scores exactly as before.
+        DamageValue,        // this spell's expected damage on this target against his best option on it
+        Overkill,           // the target's remaining health against that expected damage
+        TauntSurvive,       // seconds he would live with this foe on him as well
+        RetreatDanger,      // low health, or seconds to live at the present incoming damage
+        HealSize,           // how much of the heal the recipient can use
+        BoostPlayerDying,   // multiplier: the player has seconds to live
+        BoostRecipientDying,   // multiplier: the heal's recipient has seconds to live
+        RangeChase,         // ruling Q70: a melee ATTACK names a target anywhere in chase range (distance shades, the cap vetoes)
+        BoostControlled,    // multiplier: a blow on a foe that cannot answer (PARALYSED only: Facts::foeHelpless)
+        TauntChance,        // ruling Q69: the stat-based chance this taunt works on this foe
+        HealClaimed,        // another follower's heal is already in flight on this recipient
+        HealUrgency,        // seconds the recipient has left at the damage he is taking
+        ControlWorth,       // how long this control holds the foe, and how much of the foe is left to hold
+        MagickaBuys,        // magicka potion: the casts the fight still asks of him
+        RangeTaunt,         // the taunt's reach: inside it every distance is the same (a shout, not an aimed cast)
+        MortalTaunt,        // multiplier (<= 1): a follower who dies for good does not pull a foe he cannot outlast
+        BoostMortalDanger,  // multiplier: a follower who dies for good backs off / drinks sooner
+        PostureTrade,       // the melee category: seconds he lives at the damage coming in (do not draw steel to trade with a brute)
+        RegroupNeed,        // regroup: the player is being killed, or he is and the anchor is away from it, or he is hurt and it heals
+        RegroupFar,         // regroup: how far the anchor is (already beside it = nothing to do)
+        GroundNeed,         // give ground: he is being beaten by something he cannot trade with, or it is closing on a ranged fighter
+        BlockNeed,          // block: a foe's swing at him is in the air, and how much it matters
+        BashNeed,           // bash: the foe is charging a spell (an interrupt), else it is on him
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -176,8 +207,10 @@ namespace MFO::Iaus {
         float emergencyStrictAt = 0.5f;        // emergency level at which the strict reading bites
         float emergencyHpHigh = 0.35f;         // EmergencyLevel: 0 at or above this party-worst HP pct
         float emergencyHpLow = 0.10f;          //                1 at or below this
-        float noHealRetreat = 0.30f;           // Retreat vetoed while a heal candidate scores above this
-        float noHealDrink = 0.50f;             // Health drink vetoed while a heal candidate scores above this
+        // Both compare against Decision::bestHeal = the best heal's score DIVIDED BY its family's action weight. The values
+        // are the doc's 0.30 / 0.50 over the heal weight they were written against (1.2), so they mean what they meant.
+        float noHealRetreat = 0.25f;           // Retreat vetoed while a heal candidate scores above this
+        float noHealDrink = 0.4167f;           // Health drink vetoed while a heal candidate scores above this
         // Card I6: the hard cooldown of a ROW-GATED action whose class row declares none (ClassGate::*CooldownSec
         // == 0). The power-attack rows all declare 10 s; no taunt row declares one (the floor is the 30 s of Q69), and with the class tree OFF
         // (marth Q63: nothing is class-gated) there is no row at all. Without a floor the sim's Knight taunts
@@ -185,6 +218,15 @@ namespace MFO::Iaus {
         // taunt for fTauntDuration (15 s) in the executor, so the floor only spaces MISSES. Tunable (I9).
         float rowlessPowerCooldownSec = 10.0f;
         float rowlessTauntCooldownSec = kTauntCooldownSec;   // marth Q69: 30 s, the executor's own cooldown
+        // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
+        // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
+        float kiteDistance = 0.0f;
+        float groundCooldownSec = 3.0f;          // give ground: one step, then look again
+        float blockCooldownSec = 2.0f;
+        float blockBase = 0.0f;                  // BlockNeed for a swing in the air when he is in no danger. 0 = he blocks only what is
+                                                 // killing him (the lab: 0.5 lost on LoreRim, 0 holds on every list)
+        float bashCooldownSec = 4.0f;
+        float regroupCooldownSec = 6.0f;         // a regroup is a walk of seconds: no second order inside this (no yo-yo)
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -279,6 +321,32 @@ namespace MFO::Iaus {
         bool  onClass = true;
         bool  fromMastered = false;
         float emergency = 0.0f;
+        // estimates (iaus/Estimate.h). 0 / +inf = not measured: the considerations that read them do not apply.
+        float expDamage = 0.0f;           // this cast's expected health damage on this target
+        float bestDamage = 0.0f;          // the best expDamage among his castable offense spells on this target
+        float foeHealth = 0.0f;           // the target's health now, absolute
+        float expHeal = 0.0f;             // this cast's expected healing
+        float recipientMissing = 0.0f;    // health the recipient is missing, absolute
+        float selfTtl = kInf;             // seconds he lives at the present incoming damage
+        float tauntTtl = kInf;            // ... with this foe on him as well (taunt)
+        float playerTtl = kInf;           // the player's
+        float recipientTtl = kInf;        // the heal recipient's
+        float chase = 0.0f;               // melee attack: how far he may chase (Snapshot::chaseCap); 0 = not a chase
+        float tauntChance = -1.0f;        // taunt: the chance it works on this foe (Estimate::TauntChance); < 0 = unknown
+        bool  recipientBeingHealed = false;   // another party member's heal is in flight on the recipient
+        float controlSec = 0.0f;          // control cast: seconds the effect holds the foe (SpellEntry::controlSec); 0 = not measured
+        float castsWanted = -1.0f;        // magicka potion: casts of his best spell the fight still asks for; < 0 = unknown
+        bool  mortal = false;             // Snapshot::mortal
+        float meleeThreatDist = kInf;     // retreat: distance of the nearest foe that targets him and has to close to hurt; +inf = none
+        bool  rangedDrawn = false;        // retreat: a bow, crossbow or staff is in his hands (he fights at range)
+        float threatTtl = kInf;           // retreat: seconds he would live with every foe that targets him on him (Estimate::ThreatOn)
+        bool  anchorHealer = false;       // regroup: the anchor can heal others
+        bool  anchorSafer = false;        // regroup: the anchor stands clearly farther from what is hitting him than he does
+        bool  foeSwinging = false;        // block / bash: this foe's swing at him is in the air
+        bool  foeCasting = false;         // bash: this foe is charging a spell right now
+        bool  foeHelpless = false;        // BoostControlled: the foe is PARALYSED (he cannot answer a blow). Not a fleeing foe:
+                                          // foeControlled also covers fleeing (the control-cast gate), and a boost on a runner
+                                          // pulled followers after him (review of 303c14d, F2)
     };
 
     struct Candidate {
@@ -391,7 +459,7 @@ namespace MFO::Iaus {
         bool          overCap = false;   // more than maxCandidates offered (only the first maxCandidates scored)
         std::size_t   badFacts = 0;      // candidates VETOED because a fact was NaN / inf (a reader bug: never masked)
         int           firstBadFact = -1; // the first such candidate's index, for the adapter's WARN
-        float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score (Retreat and the health drink read it)
+        float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score over its action weight (Retreat and the health drink read it)
         std::uint8_t  rapportRank = 1;
     };
 

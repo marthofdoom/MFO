@@ -1,0 +1,1262 @@
+# IAUS simulator v2: a game-faithful combat model, and the lab for IAUS intelligence
+
+Status: WORK IN PROGRESS on `feat/iaus-sim-v2`. This file is the research record. Every layout, formula and
+calibration number found so far is here so nobody has to derive it again. The handoff log with the exact next step
+is `scratchpad/agentlogs/iaus-sim-v2.md` (session scratchpad, not in the repo).
+
+Host-only tools. Nothing here is part of the DLL. List data is TEST INPUT only: it lives in
+`~/.cache/mfo-list-balance/`, it is never committed, and `native/` never reads it.
+
+## 1. Pipeline
+
+```
+installed list (read-only, 'rb')            unpacked SkyrimSE.exe (read-only)
+        |                                              |
+tools/list_balance/extract_world.py          tools/list_balance/gmst_defaults.py
+tools/list_balance/extract.py                          |
+        |                                    gmst_defaults.json (3726 code defaults)
+<list>.world.json (raw winning records)                |
+<list>.json (taught spell pool)                        |
+        +----------- tools/list_balance/compile_world.py ---+
+                              |
+                    <list>.sim.json  (6 to 11 MB)
+                              |
+                    tools/iaus_sim/run.sh --list <list>.sim.json
+```
+
+Commands (each list takes under a minute):
+
+```
+python3 -I tools/list_balance/gmst_defaults.py binaries/1.6.1170/SkyrimSE.unpacked.exe
+python3 -I tools/list_balance/extract_world.py --list /mnt/gaming/modlists/LoreRim --profile Ultra --data "Stock Game/Data"
+python3 -I tools/list_balance/extract.py       --list /mnt/gaming/modlists/LoreRim --profile Ultra --data "Stock Game/Data"
+python3 -I tools/list_balance/compile_world.py --name LoreRim
+# Tuxborn: --profile "Tuxborn - Deck" --data "Game Root/Data".  Vanilla reference set: add --vanilla to both extractors (name Vanilla).
+tools/iaus_sim/run.sh [--list ~/.cache/mfo-list-balance/LoreRim.sim.json] [--seed N] [--fights N] [--threads N]
+                      [--baseline out] [--compare base] [--taunt-hidden] [--no-engine-casts] [--g10-sticky]
+                      [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes]
+                      [--scenario all|name,name [--oracle --oracle-k 8 --oracle-h 150] [--trace N]]
+python3 -I tools/iaus_sim/calib_logs.py        # real fight shapes out of _evidence/*/MFO.log
+```
+
+Three data sets exist: `Vanilla` (the five base ESMs of the Tuxborn install), `Tuxborn` (SimonRim) and `LoreRim`
+(Requiem). With no `--list` the sim runs its BUILT-IN fixture set: Skyrim.esm's game-setting values plus a small
+hand-written roster. The fixtures are not game data.
+
+**v1 extractor bug, fixed here.** `plugins.txt` does not list the implicit masters (Skyrim.esm, Update.esm,
+Dawnguard.esm, HearthFires.esm, Dragonborn.esm, then the Creation Club files of `Skyrim.ccc`). The v1 `extract.py`
+therefore read only vanilla records that some mod overrode. `find_plugins` now loads them first. The v1 JSONs are kept
+as `<list>.v1-noimplicit.json`.
+
+## 2. Record layouts used (each one self-checked)
+
+`extract_world.py --selfcheck` prints one row per anchor and a MISS when a list overrides the vanilla value (that is
+information, not an error). All offsets are bytes into the subrecord.
+
+| Record | Subrecord | Layout | Check |
+|---|---|---|---|
+| WEAP | DATA | value u32 @0, weight f32 @4, damage u16 @8 | Iron Sword 7 |
+| WEAP | DNAM (100) | anim type u8 @0, speed f32 @4, reach f32 @8, flags u16 @12, flags2 u32 @40, skill i32 @76, stagger f32 @96 | Iron Sword anim 1 skill 6 speed 1.0 stagger 0.75, Iron Greatsword anim 5 skill 7 speed 0.7, Hunting Bow anim 7 skill 8 |
+| WEAP | CRDT | crit damage u16 @0 | |
+| ARMO | DNAM | armor rating x100 i32 | Iron Cuirass 25 |
+| ARMO | BOD2 | slot mask u32 @0, type u32 @4 (0 light, 1 heavy, 2 clothing). BODT: type @8 | Iron Cuirass heavy, slot 0x4 |
+| AMMO | DATA | flags u32 @4 (0x4 = not a bolt), damage f32 @8, value u32 @12 | |
+| RACE | DATA | 7 x (skill AV i8, boost i8) @0, flags u32 @32 (bit 0 playable), health @36, magicka @40, stamina @44, mass @52, heal rate @84, magicka rate @88, stamina rate @92, unarmed damage @96, unarmed reach @100 | Nord playable, hp 50, unarmed 4 |
+| RACE | ATKD (44) | damage mult f32 @0, chance @4, flags u32 @12 (0x4 power), stagger @24, recovery @36, stamina mult @40 | |
+| NPC_ | ACBS (24) | flags u32 @0, magicka offset i16 @4, stamina offset i16 @6, level u16 @8 (x1000 multiplier when flag 0x80), calc min @10, calc max @12, speed mult @14, template flags u16 @18, health offset i16 @20 | Bandit hp 35, mp 25, sp 70 |
+| NPC_ | DNAM | 18 skill values, 18 skill offsets, then u16 health @36, magicka @38, stamina @40. These are the values the CK calculated | wolf 22, frost troll 460, giant 591, dragon 905 |
+| NPC_ | AIDT | aggression u8 @0, confidence u8 @1, assistance u8 @5 | |
+| NPC_ | TPLT + ACBS template flags | 0x1 traits (race), 0x2 stats, 0x4 factions, 0x8 spell list and perks, 0x10 AI data and combat style, 0x80 base data, 0x100 inventory, 0x1000 keywords | |
+| CLAS | DATA (36) | 18 skill weights u8 @6, health / magicka / stamina weights u8 @32 / 33 / 34 | used by the auto-calc proof below |
+| CSTY | CSGD | 10 floats: offensive, defensive, group offensive, melee, magic, ranged, shout, unarmed, staff, avoid threat | |
+| CSTY | CSME | 8 floats: attack staggered, power attack staggered, power attack blocking, bash, bash recoil, bash attack, bash power attack, special attack | |
+| CSTY | CSCR / CSLR / DATA | close range 4 floats (circle, fallback, flank distance, stalk). long range strafe. flags (1 dueling, 2 flanking, 4 dual wield) | |
+| MOVT | SPED | 11 floats. forward walk @16, forward run @20 | NPC_1HM_MT 80 / 370, Wolf_Run_MT 556, Draugr1HM_MT 345 |
+| LVLN / LVLI | LVLO (12) | level u16 @0, form u32 @4, count u16 @8. LVLF flags (1 = all levels at or under the PC, 4 = use all). LVLD chance none | |
+| ECZN | DATA (12) | min level u8 @9, flags u8 @10 (2 = match PC below minimum), max level u8 @11 | |
+| FACT | XNAM (12) | faction u32, modifier i32, combat reaction u32 (0 neutral, 1 enemy, 2 ally, 3 friend) | |
+| PERK | PRKE / DATA / PRKC / CTDA / EPFD | entry type u8 (1 ability, 2 entry point). entry point u8, function u8. condition tab i8. EPFD one or two floats | entry point ids from the fork's `BGSEntryPoint.h` |
+| CTDA (32) | | compare op in the top 3 bits of byte 0 (0 ==, 1 !=, 2 >, 3 >=, 4 <, 5 <=), OR flag bit 0, value f32 @4, function u16 @8, param1 u32 @12, param2 u32 @16 | function ids from the fork's `TESCondition.h` |
+| SPEL | SPIT | cost u32 @0, flags u32 @4 (1 = cost override), type u32 @8 (0 spell, 4 ability), charge time f32 @12, cast type @16, delivery @20, range @28 | (v1) |
+| MGEF | DATA | flags @0 (1 hostile, 2 recover, 4 detrimental), base cost f32 @4, school AV i32 @12, resist AV i32 @16, min skill u32 @40, archetype u32 @64, primary AV i32 @68, cast type @80, delivery @84 | (v1) |
+| CELL / ACHR | | ACHR NAME = base (always an NPC_), DATA position 3 floats, XEZN encounter zone. CELL XEZN, DATA bit 0 interior | |
+
+Facts about the data that changed the design:
+
+- A placed actor's base is always an `NPC_`. Leveling is the NPC's template pointing at a leveled list (`LVLN`).
+  The sim resolves the template chain per ACBS template flag at the encounter's level.
+- Bandits are hostile to the player because their AI data says "very aggressive" (aggression 2 attacks neutrals),
+  NOT because of a faction enemy relation. Hostility rule used: aggression 3, or aggression 1+ with an enemy
+  reaction toward PlayerFaction in either direction, or aggression 2 with no ally / friend reaction.
+- The engine binds a race to its movement types through behaviour graph state names. No record states the link.
+  MODEL: the `MOVT` whose editor id starts with the race's name stem, else `NPC_1HM_MT`.
+- Condition function ids verified in the fork: GetActorValue 14, GetIsRace 69, GetIsID 72, GetRandomPercent 77,
+  GetWeaponAnimType 108, IsWeaponSkillType 109, GetEquipped 182, HasMagicEffect 214, HasSpell 264,
+  GetBaseActorValue 277, GetIsObjectType 432, HasPerk 448, HasKeyword 560, GetEquippedItemType 597,
+  IsPowerAttacking 673, WornHasKeyword 682, EPMagic_SpellHasKeyword 693, EPMagic_SpellHasSkill 696, IsAttackType 697,
+  HasMagicEffectKeyword 699, WornApparelHasKeywordCount 722.
+- Entry point ids verified in the fork: CalculateWeaponDamage 0, ModPowerAttackStamina 27, ModPowerAttackDamage 28,
+  ModSpellMagnitude 29, ModSpellDuration 30, ModAttackDamage 35, ModIncomingDamage 36, ModTargetDamageResistance 37,
+  ModSpellCost 38, ModIncomingSpellMagnitude 41, ModArmorRating 85.
+
+## 3. Game settings: code default, then Skyrim.esm, then the list
+
+`gmst_defaults.py` reads every setting's compiled-in value from the executable. Each one is a statically initialised
+`Setting` object in `.data`: vtable pointer at +0, the value at +8, a pointer to the name string at +0x10. Observed at
+`fArmorScalingFactor` on 1.6.1170 (0x3E19999A = 0.15 in code, Skyrim.esm sets 0.12). 3726 settings.
+
+Skyrim.esm does NOT define some settings, so the code default is live in an unmodded game. The ones that matter:
+
+| Setting | Code default | Skyrim.esm | Tuxborn | LoreRim | Meaning |
+|---|---|---|---|---|---|
+| fDamageSkillMin / Max (NPC) | 1.0 / 3.0 | not defined | not defined | 1.0 / 1.0 | NPC weapon damage is x1 at skill 0 and x3 at skill 100 in vanilla. Requiem turns that off |
+| fDamagePCSkillMax | 3.0 | 1.5 | 2.0 | 1.0 | the player's version |
+| fArmorRatingMax (NPC) | 2.5 | not defined | 2.5 | 1.0 | NPC armor rating x1 to x2.5 by armor skill |
+| fArmorScalingFactor | 0.15 | 0.12 | 0.15 | 0.10 | mitigation percent per point of rating |
+| fMaxArmorRating | 95 | 80 | 75 | 75 | mitigation cap in percent |
+| fArmorBaseFactor | 0.02 | 0.03 | 0.0 | 0.0 | hidden mitigation per worn piece |
+| fNPCHealthLevelBonus | 5 | not defined | 5 | 2 | NPC health per level |
+| iAVDhmsLevelUp | 10 | 10 | 10 | 5 | attribute points per level, split by class weights |
+| iAVDSkillsLevelUp | 10 | 8 | 8 | 8 | NPC skill points per level, split by class weights |
+| fPowerAttackDefaultBonus | 3.0 | 1.0 | 1.0 | 1.0 | power attack = x(1 + bonus) |
+| fStaminaAttackWeaponBase / Mult | 7 / 0.1 | 20 / 1.0 | 20 / 1.0 | 20 / 0.25 | power attack stamina |
+| fPowerAttackStaminaPenalty | 5 | 2 | 2 | 2 | |
+| fCombatMagickaRegenRateMult | 0.75 | 0.33 | 0.5 | 0.5 | |
+| fCombatStaminaRegenRateMult | 0.75 | 0.35 | 0.5 | 1.0 | |
+| fCombatHealthRegenRateMult | 0.75 | 0.0 | 0.0 | 1.0 | see the UNPROVEN note in the model table |
+| fMagicCasterSkillCostBase / Mult, fMagicSkillCostScale (NPC) | 0.005 / 1.0 / 0.5 | - / 0.5 / 0.5 | - / 0.5 / 0.5 | - / 1.0 / 0.5 | NPC magicka cost by skill |
+| fDiffMultHPToPCN | 1.0 | - | 1.5 | 1.0 | damage to the player on the list's normal difficulty |
+| fBowDrawTime | 1.6667 | - | - | 1.6667 | |
+
+The damage / mitigation call chain itself was proven in the disassembly by the I8 research agent (its log:
+`scratchpad/agentlogs/iaus-i8-research.md`): GetDamage reads fDamageWeaponMult and fDamageSkillMin / Max through the
+clamped skill value. HitData::Populate runs entry points 0x1A, 0x1C, 0x23, 0x24. Mitigation is the DamageResist AV
+x fArmorScalingFactor x 0.01 plus the armor base factor sum, entry point 0x25, clamped by fMaxArmorRating. Spell
+magnitude runs entry point 0x1D, dual casting multiplies by fMagicDualCastingEffectivenessBase.
+
+## 4. Model table
+
+Proof levels: PROVEN (engine formula or code verified), DATA (read from the list's records), CALIBRATED (a model
+value fitted to field logs), MODEL (a documented approximation), UNPROVEN (shape assumed, flagged).
+
+| # | Sub-model | What the sim does | Source | Level |
+|---|---|---|---|---|
+| 1 | Decision cadence | world steps at 30 Hz. One follower is served per 133 ms pump tick, round-robin, so each follower decides every 133 ms x followers | `Diagnostics` kPumpMs, `Candidates.cpp:40`. Field logs: 133.16 ms median over 3168 heartbeat intervals | PROVEN |
+| 2 | What act.attack does | it only names the target. The engine's combat AI closes, swings, blocks and shoots | `Vocabulary.h:201` | PROVEN (code) |
+| 3 | NPC health / magicka / stamina | race base + ACBS offset + (level - 1) x (fNPCHealthLevelBonus [health only] + iAVDhmsLevelUp x class weight share) | matches the CK-stored DNAM health on 111 of 111 vanilla static auto-calc actors | PROVEN |
+| 4 | NPC skills | iAVDSkillStart 15 + race boost + (level - 1) x iAVDSkillsLevelUp x class skill weight share. Non auto-calc actors use DNAM values + offsets | matches DNAM skills within 1 on 105 of 111 vanilla actors (rounding) | PROVEN |
+| 5 | Leveled actors | template chain per ACBS flag. LVLN / LVLI entries at or under the level, highest level only unless the list's flag says all. PC-level-mult actors: level = PC level x mult, clamped by calc min / max. Zone level = PC level clamped by the encounter zone | record semantics (CK wiki), not re-verified in the disassembly | DATA + MODEL |
+| 6 | Weapon damage | (weapon + ammo) x fDamageWeaponMult x lerp(fDamageSkillMin, fDamageSkillMax, skill / 100) x ModAttackDamage perks. Power attack x (1 + fPowerAttackDefaultBonus) | I8 research 2.1: the core formula decoded on AE 26410 (linear in the clamped skill). The power attack multiplier as a pre-swing read is unproven there | PROVEN (normal hit), MODEL (power multiplier) |
+| 7 | Unarmed / creature damage | race unarmed damage x the mean ATKD damage mult of its normal attacks | record fields. No level scaling assumed | MODEL |
+| 8 | Armor mitigation | min(fMaxArmorRating, rating x fArmorScalingFactor + worn pieces x fArmorBaseFactor x 100) percent | I8 disassembly + GMSTs | PROVEN |
+| 9 | Armor rating | sum of piece ratings x lerp(fArmorRatingBase, fArmorRatingMax, armor skill / 100), plus the race skin armor and ability armor | GMSTs, records. Shape by analogy with damage | UNPROVEN shape |
+| 10 | NPC perks (attack / power multipliers) | only UNCONDITIONED multiply entries are applied. 87 to 99 percent of the entries on NPC perks carry conditions and are skipped | see section 8 (perks v2 is open) | MODEL, known gap |
+| 11 | Follower perks | he holds every playable perk of his weapon / magic tree that his skill meets. A ranked chain = the best value whose skill requirement he meets | PERK conditions (GetBaseActorValue) | MODEL |
+| 12 | Spell damage | magnitude x ModSpellMagnitude perks x (1 - element resist) x (1 - magic resist). Damage over time for its duration. Stamina / magicka damage applied | records. Resist stacking as two factors is standard, not re-verified | DATA + MODEL |
+| 13 | Magicka cost | record cost x max(0, 1 - fMagicCasterSkillCostMult x (fMagicCasterSkillCostBase x skill)^fMagicSkillCostScale) x ModSpellCost perk of the spell's tier | the shape reproduces the documented player curve with the player's settings. NPC shape not verified | UNPROVEN shape |
+| 14 | Illusion / control | a calm / fear / frenzy / turn spell works when the target's level is at or under the magnitude. Paralysis fails on ImmuneParalysis. Turn undead only on undead | MGEF semantics | DATA + MODEL |
+| 15 | Resists and weaknesses | from constant abilities (race, NPC, perk abilities): value modifiers on AV 39 to 44, detrimental = a weakness | records | DATA |
+| 16 | Melee timing | one-handed swing 1.00 s / weapon speed, two-handed 1.40 s / speed, creature 1.30 s. Hit frame at 45 percent. Power attack x1.55, hit at 55 percent. Then the AI pauses U(0.05, 0.45) s / offensive mult | field hit cadence (weapon enchant procs of one follower): p50 1.21 s, p10 0.83 s, n = 28 | CALIBRATED (small sample) |
+| 17 | Bow timing | nock 0.55 s + fBowDrawTime / speed x 0.6 + hold, recover 0.35 s. Arrow speed 3600 units / s | GMST + MODEL | MODEL |
+| 18 | Spell timing | SPIT charge time, then the release, 0.45 s recovery. A concentration spell is a 2 s stream. Projectile 2400 units / s | SPIT (DATA), rest MODEL | DATA + MODEL |
+| 19 | Potion, weapon swap, taunt | 1.2 s (effect at 0.6 s), 1.3 s, 1.2 s | none | MODEL |
+| 20 | Stagger | an unblocked power attack staggers 1.1 s x clamp(mass ratio). Bash 0.8 s. A stagger cancels a cast in its charge | none (the fStagger settings are extracted, not used yet) | MODEL |
+| 21 | Block | shield 0.45 + 0.30 x block skill, weapon 0.30 + 0.20 x skill, cap 0.85. A power attack halves it. The defender blocks an incoming swing with chance 0.20 x defensive mult (+0.25 with a shield) | CSTY defensive mult, fBlockPowerAttackMult | MODEL |
+| 22 | Engine combat AI | target by distance, last attacker and a retarget timer. Mode from the combat style weights and the kit (caster / ranged / melee). Power attack chance 0.12 x offensive mult (x the blocking / staggered mults). Bash chance 0.18 x bash mult against a caster or blocker. Ranged standoff from fCombatRangedDistance / MinimumRange. Caster standoff 750 | CSTY fields (DATA), every chance MODEL | MODEL |
+| 23 | Flee | AIDT confidence: cowardly under 75 percent health, cautious 40, average 20, brave 8, foolhardy never | none | MODEL |
+| 24 | Movement | 2D. Run speed = the race's MOVT forward run x ACBS speed mult. Back-pedal at 55 percent | MOVT (DATA), binding MODEL | DATA + MODEL |
+| 25 | Line of sight | 0 to 3 circular occluders between the sides. A blocked ray stops shots and aimed spells | none | MODEL |
+| 26 | Regen | max x rate percent x combat mult per second, paused for fDamaged*RegenDelay after a loss. Magicka and stamina use fCombat*RegenRateMult. Health uses 0.7 | GMSTs. Health in combat: Skyrim.esm sets the GMST to 0, yet the player does regenerate in combat, so the actor value CombatHealthRegenMult (0.7) is assumed to rule | PROVEN magicka / stamina, UNPROVEN health |
+| 27 | Power attack stamina | (fStaminaAttackWeaponBase + weapon weight x fStaminaAttackWeaponMult) x fPowerAttackStaminaPenalty. Normal attacks are free | GMSTs. Weapon weight is not carried through compile_world yet (8 assumed) | DATA, small gap |
+| 28 | Bleedout | a follower at 0 health is down 9.5 s, then stands at fBleedoutDefault of his health. The player model dies | field logs: p50 9.5 s, mean 13.1 s, n = 50 | CALIBRATED |
+| 29 | Taunt | one attempt, 70 percent, pins the foe 15 s. No new taunt while one is in flight or holds a foe | `Config` fTauntDuration default 15 s, `Snapshot::tauntBusy` (I6). The 70 percent is a model value | PROVEN duration, MODEL chance |
+| 30 | Summon | a level-scaled atronach (60 + 12 x level health) for the spell's duration | none | MODEL |
+| 31 | Player model | a T1 kit run by the same engine-AI model, 4 potions (drinks at 35 percent health), takes fDiffMultHPToPCN | none | MODEL |
+| 32 | Follower kit | weapon / armor / potion ladders of the list's playable unenchanted gear sorted by value, position = (level - 1) / 45 x 0.75 | records (DATA), the ladder rule MODEL | DATA + MODEL |
+| 33 | Encounters | hostile placed actors clustered per cell (1800 units), up to 8, with the cell's encounter zone. 1200 sampled per list, at 6 player-level buckets (5, 12, 20, 28, 38, 50) | CELL / ACHR / ECZN | DATA |
+| 34 | Brackets | natural = encounters as placed. The others are bands of sqrt(sum effective health x sum dps), foes over party: weak under 0.6, balanced 0.6 to 1.25, strong1 to 2.0, strong2 to 3.5, mixed-boss (one foe holds half the health, 3+ foes) | definition | MODEL |
+| 35 | G10 answers | a (spell, target) pair has a WillWork answer only on the lap after it was ranked in the top 6. That is what `Candidates.cpp` does today | code mirror | PROVEN (code) |
+| 36 | Cooldown facts | `hardCooldownLeft` and `sinceFired` are filled like `Engine::FillCooldowns`. Sim v1 never filled them | code mirror | PROVEN (code) |
+
+## 5. Calibration against field logs
+
+`tools/iaus_sim/calib_logs.py` over the 28 saved logs in `_evidence/` (LoreRim and deck sessions, 2026-10-20 to
+2026-11-02):
+
+| Metric | Field | Sim | Verdict |
+|---|---|---|---|
+| pump period | p50 133.16 ms (n = 3168) | 133 ms | match |
+| bleedout length | p10 6.3, p50 9.5, p90 22.1 s (n = 50) | 9.5 s fixed | median fitted, no spread |
+| hit cadence of a melee follower (consecutive weapon enchant procs under 6 s) | p10 0.83, p50 1.21, p90 4.16 s (n = 28) | swing 1.0 / speed + pause 0.05 to 0.45 | median fitted |
+| engine spell cast gap, same actor, under 8 s | p50 4.3 s (n = 44, mostly buffs and heals) | not fitted | open |
+| incoming damage on a follower, non-zero samples | p10 0.4, p50 3.0, p90 5.0 percent of health per second (n = 95) | to compare per list (todo: the same statistic from the sim) | open |
+| fight span seen by `[sense]` | p10 3.2, p50 16.3, p90 100.8 s (n = 68) | LoreRim natural mean 9 to 16 s | same order, sim shorter at the tail |
+| foes on one follower | p50 1, p90 3, mean 1.5 | natural encounters p50 1 to 2 | plausible |
+| time alive before a down | p50 158 s | not comparable yet (single fights) | open |
+| target pins per fight minute | p50 2.1, p90 6.2 | tsw/min 3 to 10 | sim higher, to check |
+
+What the logs can NOT give, and the passive probe lines the next in-game run should produce (rate-limited, config
+gated, no hotkeys):
+
+- `[hit-probe] <attacker> -> <target> dmg=<health removed> weapon=<form> power=<0/1> blocked=<0/1> t=<ms>` from the
+  hit event sink, for swing cadence per weapon type and damage per hit against the sim's formulas.
+- `[fight-probe] <follower> start / end, duration, foes killed, health / magicka / stamina at start and end`, for
+  time-to-kill and the resource curves.
+- `[cast-probe] <actor> begin / release / interrupted <spell>` with timestamps, for charge time, recovery and
+  interrupt rates.
+- `[swap-probe]` equip start and the first swing after it, and `[drink-probe]` use and the pool change, for the two
+  timing rows that are pure MODEL today.
+
+## 6. First runs (seed 1, 8 fights x 5 ranks per cell, natural bracket)
+
+Win rate, fight length and the player's survival now come from records. Natural encounters, party level 12 to 45:
+
+| List | win % | fight s | player dead % |
+|---|---|---|---|
+| Vanilla | 90 to 98 | 7 to 17 | 2 to 10 |
+| Tuxborn | 80 to 92 | 10 to 17 | 8 to 20 |
+| LoreRim | 50 to 78 | 9 to 16 | 22 to 48 |
+
+LoreRim is harder for a level 12 to 45 party because Requiem's world is not leveled. The full three-list run takes
+under one second per list on 8 cores.
+
+## 7. Native findings so far (reported, not fixed: native/ is not touched on this branch)
+
+- **D1, G10 answers are forgotten every second lap (`native/iaus/Candidates.cpp`, `Generate.cpp` TopSpellPairs).**
+  The ask list held only the pairs of the last decision's `ranked` list. A pair answered No is vetoed by the WillWork
+  gate, so it is not ranked, so it is not asked on the next lap, so it has no note, so it is Unknown, and Unknown
+  passes. The pair is a live candidate again every other lap.
+  **Severity, corrected.** My first measurement (failed control casts 27 / 35 / 60 percent against 15 / 27 / 25 with the
+  answers kept) was taken before the sim mirrored `cast/Fire.cpp:430`, where the actuation itself refuses a cast that
+  WillWork answers No. With that mirrored the failed casts are the same before and after (they are the first ask, where
+  Unknown passes once by design). What D1 costs in the game is a wasted walk try and a decision flicker: 0.1 to 1.0
+  refused tries per minute per caster (Tuxborn, 40 fights per cell, mage lines), 0 with the fix.
+  **Fix:** branch `fix/iaus-d1-willwork` (0c70d81): `Generate.h NextAskList` (pure, harness-checked) keeps a refused pair
+  on the ask list while its last No is younger than 6 s (cast/WillWork's trust window). Gather re-stamps it each lap.
+- (more as the gap audit runs)
+
+## 8. Open work on the world model
+
+- **Perks v2.** Requiem (LoreRim) puts most of its combat rules into perk entry points with conditions:
+  ModIncomingDamage keyed on weapon keywords (`REQ_DamageType_Slash / Blunt / Pierce / Ranged`) against armor
+  keywords (`WornApparelHasKeywordCount`, `WornHasKeyword`), ModTargetDamageResistance, spell magnitude scaled by
+  actor values (entry function 14 = multiply by 1 + AV x mult). The extractor already resolves every condition
+  parameter by function. A generic evaluator over (owner, weapon or spell, target) is the next sub-model. Until then
+  LoreRim melee and ranged damage ignore armor-type interactions.
+- Weapon weight through `compile_world.py` (power attack stamina).
+- Animation data (hkx annotations) for the swing table instead of the calibrated constants.
+- The sim's own "incoming damage percent per second" and fight-span distribution, for the open rows of section 5.
+
+## 9. The lab: utility, the expert oracle, the scenarios
+
+### 9.1 Utility U (0 to 100), one objective for every policy
+
+`Oracle.h Utility()`. Player dead: `10 x share of foe health removed`. Otherwise:
+`50 x share of foe health removed + 15 x (1 - duration / 150 s) on a win + 15 x player health share
++ 10 x (1 - follower downs per follower, capped at 1) + 5 x mean follower health share
++ 5 x resources left (half magicka share, half potions left)`.
+It says what a skilled player wants: win, fast, the player and the party healthy, nobody down, resources kept.
+
+### 9.2 The expert oracle
+
+A rollout search with full information and no time budget over the same world. At each decision of a free follower:
+1. options = IAUS's ranked candidates, plus the best-looking unranked candidate per family (weakest foe, the foe on the
+   player, a caster, the most hurt recipient), plus every other weapon category, plus "let his own AI run". At most 16.
+2. each option is applied in a copy of the fight and HELD (2.5 s for a target, the action's length for the rest),
+3. the copy runs to the horizon with IAUS for everyone, over K random streams shared by all options,
+4. the option with the best mean U is taken. The action he is on wins a tie within 0.3 U.
+
+Settings used for the tables: K = 8, horizon = the whole fight (`--oracle-k 8 --oracle-h 150`). Cost: 17 scenarios x 20
+fights in 82 s on 8 cores. With a 10 s horizon the oracle was NOT an upper bound (mage-dragon -4.4, double-heal -11.2).
+At full horizon it is at or above IAUS on all 17 scenarios.
+
+**What this oracle is not yet.** It is a one-step improvement over IAUS (the rollouts play IAUS), and it only uses the
+actions the catalogue generates today. So the gaps below are a FLOOR. Open: an iterated oracle (rollouts over the
+previous oracle), and the full action set (scrolls, staves, deliberate repositioning, block, bash, shouts).
+
+Every decision where IAUS's own pick differs from the oracle's by 1 U or more is logged and clustered by
+`IAUS family -> oracle family`, with the mean facts of both picks (foe health, on the player, caster, resist,
+recipient health, distance). `--scenario <name> --oracle` prints the top five clusters per scenario.
+
+### 9.3 Scenarios (`--scenario all|name,name`)
+
+Each scenario's foes come from the list's own records by role (draugr, troll, frost atronach, dragon, bandit, archer,
+healer, mage) and fall back to the fixtures. Health and damage are then scaled so the strength ratio lands on the
+scenario's target: a scenario must be winnable by good play on every list.
+
+| Scenario | Class | What a skilled player does | Primary metric |
+|---|---|---|---|
+| tank3 | warrior | the player tanks three draugr: kill one at a time | U, player damage taken |
+| mage-dragon | evoker | range, the weak element, no waste while it flies | U |
+| bandit-pack | archer | three bandits and an archer: the archer first if reachable | prio% |
+| focus-healer | archer | kill the healer first | prio% |
+| interrupt | warrior | stagger a caster before the release | intr% |
+| weakness | evoker | troll (weak to fire) and frost atronach (immune to frost) | immune%, resisted%, weak% |
+| predictive-heal | healer | a boss on the player: heal by what is coming | player dead %, player min health |
+| peel | mercenary | two foes on a squishy player | press%, peel.s |
+| overkill | evoker | five weak wolves: no big spell on a dying wolf | overkill% |
+| double-heal | healer + healer | one heals, the other fights | dblheal% |
+| mp-budget | evoker | four grunts, a boss at 25 s | mpAtLate% |
+| splash | evoker | the player in the middle of four foes | splash hits per fight |
+| control-setup | warrior + evoker | an ally paralyses: hit the helpless one | ctlFocus% |
+| kite | thief | a brute he cannot trade with | damage taken per second |
+| knight-boss | knight | a far stronger foe on the player, no healer | U, taunt-then-down % |
+| knight-boss-healer | knight + healer | the same with a healer | U |
+| hurt-knight | knight | knight at 30 percent, player at 20 with a foe on him | player dead % |
+
+### 9.4 Baseline: IAUS on main 3e21e0c against the oracle (built-in set, 20 fights each)
+
+| Scenario | U IAUS | U oracle | gap | what differs |
+|---|---|---|---|---|
+| hurt-knight | 20.5 | 54.2 | +36.8 | player dies 80 percent with IAUS, 35 with the oracle |
+| knight-boss-healer | 71.8 | 87.8 | +11.9 | downs 0.75 vs 0.30, taunts 1.8 vs 4.3 per minute |
+| kite | 5.9 | 16.7 | +11.7 | damage taken 15.2 vs 9.5 per second, retreat 7 vs 16 percent of the time |
+| knight-boss | 66.1 | 75.0 | +10.6 | player dead 10 vs 0 percent |
+| double-heal | 86.2 | 84.3 | +6.0 | double heals 21 vs 8 percent of heal casts |
+| predictive-heal | 86.1 | 91.1 | +5.1 | |
+| splash | 90.4 | 93.5 | +3.5 | fight 18 vs 13 s |
+| control-setup | 88.3 | 91.8 | +3.5 | |
+| mp-budget | 88.0 | 91.4 | +3.0 | magicka at the boss 66 vs 81 percent |
+| tank3 | 89.5 | 91.6 | +2.7 | |
+| peel | 89.9 | 92.0 | +2.6 | |
+| weakness | 91.8 | 93.8 | +1.9 | |
+| mage-dragon | 70.9 | 67.2 | +1.4 | |
+| overkill | 95.6 | 97.3 | +1.3 | overkill 24 vs 5 percent of his damage |
+| interrupt | 90.6 | 91.3 | +1.2 | interrupts 6 vs 11 percent of foe casts |
+| focus-healer | 89.3 | 89.8 | +0.4 | healer killed first in 20 vs 83 percent of fights |
+| bandit-pack | 90.9 | 90.3 | +0.2 | |
+| MEAN | | | +6.1 | |
+
+(U columns are from the K = 6, 30 s run. The gap column is the K = 8 full horizon run. Both are in the session
+scratchpad as `sim2/sc_6_30.txt` and `sim2/sc_8_150.txt`. To be re-run and unified once the oracle is final.)
+
+## 10. Enemy AI outside the records (LoreRim and Tuxborn)
+
+`tools/list_balance/inventory_ai_mods.py --list <list> --profile <profile>` lists every enabled mod with an SKSE DLL or
+behaviour files and writes `<list>.aimods.json`. LoreRim: 3961 enabled mods, 348 with a DLL or behaviour files, 108
+match a combat hint. Tuxborn: 1371, 120, 21.
+
+| List | Mod | What it changes (source) | In the sim |
+|---|---|---|---|
+| LoreRim | Aggro Management in Skyrim (`SmartNPCTargetSelector.dll`) | NPC target choice by a hate table. `SmartTargetingNPC.ini`: fBaseThreat 5, fSwitchThreshold 0.15, fHateHalfLife 30, fTauntBonus 1000, fExecutionerThreshold 0.30, fExecutionerBonus 500, fBashHateBonus 50, fSummonHateBonus 300, fKillTransferBonus 500, ranges 800 / 2000 / 3000 | NOT YET. Next: hate-based targeting as a per-list Brain parameter (values DATA, semantics MODEL from the key names) |
+| LoreRim | Dynamic Follower Scaling (`FollowerScaling.dll`) | `ReductionPerFollower = 20`, `Mode = 1`. No documentation found in the mod folder. A Nexus comment describes the mod as reducing follower damage by a percentage | NOT modelled. Semantics unproven. It directly scales follower damage, so it matters for absolute numbers |
+| LoreRim | Chocolate Poise | a poise meter replaces the stagger rule. `ChocolatePoise.ini`: StaggerMode 1, Health BaseMult 25, ArmorMult 0.02, RegenRate 0.05, Damage Melee 1.0, Bow 0.5, Creature 2.0, Unarmed 2.5, ToPC 0.8, ToNPC 1.2, WeightContribution 1.4 | NOT modelled (the formula is not in the INI) |
+| LoreRim | Modern Stagger Lock | stagger magnitudes 0 / 0.5 / 0.75 / 1.0 | not modelled |
+| LoreRim | SCAR 2 | NPC attack combos | not modelled (attack chains would raise hits per engagement) |
+| LoreRim | Ultimate NPC Dodging | NPCs dodge. The INI is empty (defaults) | not modelled |
+| LoreRim | Precision, Precision Creatures | weapon reach from collision | reach stays the record formula |
+| LoreRim | Project Gap Close | NPC sprint attacks and gap closing | not modelled |
+| LoreRim | Combat Pathing Revolution | sets fCombatFallbackChanceMin/Max 0 / 0.75, fCombatCircleChanceMin/Max 0.15 / 0.95 at runtime | not modelled (circling and fallback are not in the Brain) |
+| LoreRim | Comprehensive Attack Rate Patch | attack speed formula fix | not modelled |
+| LoreRim, Tuxborn | NPCs Learn to Aim | aim and release by skill: bow 1.0 / 1.0, crossbow 0.85 / 7.0, spell 1.15 / 0.85, staff 0.85 / 1.15 | not modelled (the sim's miss chance is a constant) |
+| LoreRim | Ultimate Animated Potions NG | potions are animated | the 1.2 s drink is a MODEL value |
+| LoreRim, Tuxborn | Spell Perk Item Distributor | 139 / 108 `_DISTR.ini` files hand spells, perks and items to NPCs at runtime | NOT modelled. Enemy kits in the sim are the records' only |
+| Tuxborn | Blade and Blunt (`BladeAndBlunt.dll`) | bZeroAllWeaponStagger, bArmorRatingScalingEnabled, injuries at 10 / 25 / 50 percent | not modelled. Its record-level changes (game settings, perks) ARE read |
+
+Honest summary: the record half of each list's enemy AI is in the sim (combat styles, AI data, stats, spells, perks
+without conditions). The DLL half is inventoried and not yet modelled. The first one to model is LoreRim's hate-based
+targeting, because it changes who the enemies attack, which is what taunt, peel and tank decisions are about.
+
+## 11. Classes
+
+The sim's class cells are the game's own 35 rows: `RealClasses.cpp` compiles `native/classes/ClassTable.cpp` on the
+host. `--print-classes` prints the gate and kit of each. `--classes slug,slug` narrows a run. `--classes legacy` keeps
+the eight hand-written v1 cells.
+
+Still to do here: the "human expert playstyle" of each class from `class-build-plan.md`,
+`class-walkthrough-decisions.md` and the Q1 to Q69 rulings, the planned classes as "planned" cells, and the per-class
+gap rows.
+
+First readings of the class table against the catalogue (to be confirmed, then asked):
+- No hybrid class has a power attack (no power share, no power row), so "paralyse, then power attack" cannot be done
+  by one follower. The control-setup scenario therefore pairs a warrior with an evoker.
+- T1 Melee and T1 Ranged have no power attack, taunt or retreat with the tree on (no default rows).
+
+## 12. GAP LEDGER
+
+Status: open = evidence exists, no design yet. Priority by oracle gap.
+
+| id | Class | Family | Missing input or behaviour | Evidence | Closing action, or proven limit | Status |
+|---|---|---|---|---|---|---|
+| G1 | knight line | taunt | no survivability term (effective health against that foe's damage, a healer in the party, potions) and no sacrifice term (the protected ally is about to die) | hurt-knight +36.8, knight-boss +10.6, knight-boss-healer +11.9 | new considerations from the I8 damage estimate | open |
+| G2 | all | retreat, movement | he does not back off when outmatched | kite +11.7: damage taken 15.2 vs 9.5 per second | retreat scored by incoming damage against his health. Deliberate repositioning (section 13) | open |
+| G3 | healers | heal | reactive and wasteful: 40 to 60 percent overheal in random fights (mage lines, natural bracket) | random brackets, predictive-heal +5.1 | heal need by predicted incoming damage and by the heal's size against the missing health | open |
+| G4 | healers | heal | two followers heal the same target at once | double-heal: 21 vs 8 percent of heal casts | a party claim on (recipient, heal) visible to the other followers | open |
+| G5 | casters | cast offense | no overkill term | overkill: 24 vs 5 percent of his damage wasted | expected damage against the target's remaining health | open |
+| G6 | casters | all casts | no magicka budget across the fight | mp-budget: 66 vs 81 percent magicka when the boss arrives | reserve by the foes still to come and their strength | open |
+| G7 | all | attack target | no value for killing the healer or the archer first | focus-healer: healer first in 20 vs 83 percent | a foe role term (heals others, ranged, caster) and time-to-kill ordering | open |
+| G8 | mage lines | attack | melee share of body time 3 to 19 percent | BODY table, LoreRim natural | ruling: a T1 mage almost never melees | open |
+| G9 | all | attack target | target switches 8 to 12 per minute | field logs: 2.1 pins per minute (p50) | target momentum | open, the sim's engine targeting may add to it |
+| G10 | casters | cast control | a refused (spell, target) pair comes back every second lap and spends a walk try | D1, section 7 | `fix/iaus-d1-willwork` 0c70d81 | fix in review |
+| G11 | casters | cast offense | area casts reach allies in 11 to 33 percent of area casts in random fights (v1 run before the I6 merge) | INTELLIGENCE table | to re-measure after I6's payload rule | to verify |
+
+## 13. The full action set (road audit, to do)
+
+A skilled player uses everything the follower can do. For each of these the ledger needs the existing road (an MFO
+actuation, a Harbinger facet, an engine call MFO already makes), then a candidate family and its considerations, or a
+design, or a proven limit: scrolls (scroll use is off in Generate, card S3), staves as their own action with charge
+awareness (B656 / B662: staff charge has never been observed), deliberate repositioning (step back, kite, flank, get
+line of sight, leave a blast or make one splash-safe, body-block for the player, retreat to the healer, close to melee
+on purpose), shouts, powers, dual casting, blocking, bashing, sprint, sneak, potions beyond the three drinks. The oracle
+must search the same full set.
+
+## 14. Questions for marth (not guessed)
+
+- Dynamic Follower Scaling in LoreRim (`ReductionPerFollower = 20`, `Mode = 1`): what does it scale, and is it part of
+  the intended follower balance on that list?
+- More to come from the class playstyle pass.
+
+## 15. Results file (for the dashboard, `tools/iaus_dash`)
+
+Every run writes one JSON file: `--json <path>`, default `~/.cache/mfo-iaus-sim/runs/<run_id>.json` (cache only, never
+committed). `--no-json` turns it off, `--label "<what changed>"` names the run. Writer: `tools/iaus_sim/Results.h`.
+
+Schema 1 (stable: fields are added, never renamed):
+
+```
+{ "schema": 1, "run_id": "YYYYMMDD-HHMMSS-<short>", "time": "<ISO>", "branch": "...", "sha": "<git short sha>",
+  "list": "Vanilla|Tuxborn|LoreRim|builtin", "seed": N, "fights_per_cell": N, "label": "...",
+  "oracle": { "k": N, "horizon_s": N, "kind": "none | rollout over IAUS, catalogue actions | rollout over IAUS, extended action set" },
+  "classes": [ { "class": "<ClassTable slug>", "tier": N, "line": "Melee|Ranged|Mage|Hybrid", "planned": false,
+                 "bracket": "natural|balanced|weak|strong1|strong2|mixed-boss", "rank": "all", "fights": N,
+                 "metrics": { ... }, "action_mix": { "<family>": percent of deciding time } } ],
+  "scenarios": [ { "name": "...", "class": "...", "iaus_u": x, "oracle_u": x|null, "gap": x|null,
+                   "metrics": { ... IAUS ... }, "oracle_metrics": { ... } } ],
+  "rulings": [ { "id", "text", "class", "metric", "op", "target", "value", "pass" } ],     (natural bracket rows)
+  "gaps": [ { "id": "G1", "family", "class", "desc", "scenario", "delta_u": x|null, "status": "open|closing|closed|limit" } ] }
+```
+
+Fixed metric keys (the sim's own names are written beside them): `idle_pct`, `idle_cand_pct`, `hold_pct`,
+`hold_low_pct`, `switches_per_min`, `target_switch_per_min`, `heal_latency_s`, `healed_pct`, `overheal_pct`,
+`double_heal_pct`, `overkill_pct`, `mp_at_boss_pct`, `melee_share_pct` (share of the time he is up that his body spends
+in a melee swing), `taunt_per_min`, `power_per_min`, `follower_death_pct` (fights in which he went down),
+`player_death_pct`, `ttk_s` (time to the first kill), `damage_taken_per_foe`, `bad_facts`, `invalid`,
+`decide_us_mean`, `decide_us_max`. Added: `utility`, `win_pct`, `fight_s`, `splash_ally_hits_per_fight`.
+
+Rulings checked today (`Results.h Rulings()`): R-MAGE-MELEE-T1 (`mage` melee_share_pct <= 5), R-MAGE-MELEE-T2+
+(pure mage line, tier 2 and up, <= 3), R-NO-SPLASH (0 ally hits per fight), R-BAD-FACTS, R-INVALID, R-BUDGET
+(decide_us_max <= 500). More are added with the class playstyles.
+
+## 16. Phase 2: making IAUS itself smarter (work in progress on `feat/iaus-sim-v2`)
+
+### 16.1 The success criterion ("humanlike"), stated so it can be measured
+
+A policy is optimal when no single decision, changed and then followed by the policy itself, improves the outcome at
+any state (the policy improvement theorem). The oracle of section 9.2 is exactly that test: it tries every option at
+every decision and rolls IAUS forward. So:
+
+1. **Oracle gap.** On every scenario and on the natural bracket of every class, on all three lists, the mean
+   utility of IAUS is within the margin of the rollout oracle built over that same IAUS, with the FULL action set.
+   Proposed margin: 3 U per scenario and 1.5 U in the mean. Reason: the oracle's own noise at K = 8 is about 1 to 2 U
+   per scenario over 20 fights (seen as small negative gaps), and 3 U is a tenth of what one follower down costs.
+2. **Bot tells**, each a metric in the results file, inside the range a person shows: decision switches per minute,
+   target switches per minute (field logs: 2.1 pins per minute at the median), overkill, double heals, idle with a
+   candidate in reach, refused tries, mage melee share against the ruling.
+3. **Robustness.** A change is kept only when it is found on one list and holds on the others and on a second seed.
+
+The oracle is rebuilt over every new IAUS, so the gap stays honest as IAUS improves.
+
+### 16.2 What changed in the pure layers so far (all NOT APPLICABLE while their inputs are unmeasured, harness 0 failed)
+
+| Step | Files | What |
+|---|---|---|
+| 2a estimates | `native/iaus/Estimate.h` (new, pure), `Snapshot.h`, `Core.h`, `Generate.cpp`, `Catalogue.cpp` | Per-combatant inputs (one weapon hit, the engine's hit rate, armor mitigation, magic resist, observed health loss) and per-spell expected damage / healing. New considerations: DamageValue (this spell's expected damage on this target against his best option), Overkill, TauntSurvive (seconds to live with the foe on him too, replaces the self-health term once measured), RetreatDanger (the old 30 percent gate, or seconds to live under 8), HealSize, BoostPlayerDying, BoostRecipientDying |
+| 2b scrolls | `Snapshot::scrollRoad`, `Generate.cpp` | Scroll candidates (family Scroll, the catalogue's scroll sets) once a scroll can be read as a cast. Off in the game until card S3 has its road |
+| 2c controlled, Q64 variant | `Core.h`, `Generate.cpp`, `Catalogue.cpp`, harness | BoostControlled x1.3 for a blow on a controlled foe. And a VARIANT behind `Tuning::attackChase` (off): a melee attack shaded by distance and vetoed only past the chase cap, instead of the 1.15 x reach gate. Ruling Q64 ("within precision reach") stands as the default, the F4 harness check is unchanged, the variant has its own checks. See 16.5 |
+
+Engine side still to write (CI only): `Candidates.cpp` and `SpellBook.cpp` must fill the new Snapshot fields from the
+reads the I8 research proved (weapon damage by the core formula, `weaponData.speed` x fCombatDPS*SpeedMult,
+DamageResist x fArmorScalingFactor, kResistMagic, `Confidence::HpLossRate`, spell magnitude through entry point 0x1D).
+
+### 16.3 Tuning by search, not by hand
+
+`tools/iaus_sim/Tune.h`: `--set` overrides a weight, an action weight or a curve parameter at run time, `--opt` runs a
+coordinate search on J = half the mean scenario utility plus half the mean natural-bracket utility.
+
+Parameter set A (searched on LoreRim, 12 fights, 2 passes), indexes from `--list-params`:
+`w.9.60=0.9975,w.9.61=0.931,w.2.62=1.995,c.65.b=1.8,w.11.64=0.8,c.66.b=0.7,aw.4=0.665,aw.1=2.394,aw.2=0.75,aw.10=1.8,aw.7=0.275,aw.9=1.769,aw.11=1.2,aw.0=0.8,c.63.a=0.665`
+In words: power attack weight 0.9 to 2.4, control casts 0.9 to 1.8, offense casts 1.0 to 1.77, magicka potion 1.1 to
+0.275, taunt 1.0 to 0.75, retreat 0.5 to 0.665, taunt survive weight 2.0.
+
+| J (30 fights, seed 1) | LoreRim | Tuxborn | Vanilla |
+|---|---|---|---|
+| IAUS on main (no estimates) | 57.29 | 58.56 | 76.68 |
+| + estimates v1, first-guess weights | 57.67 | 59.42 | 77.24 |
+| + parameter set A | 61.83 | 61.86 | 78.59 |
+| + scroll road | 61.81 | 62.39 | 78.67 |
+| + controlled boost (reach gate as ruled, Q64) | 61.74 | 62.35 | 78.81 |
+
+Set A was searched on LoreRim only and holds on Tuxborn, Vanilla and seed 7 (LoreRim 60.1, Tuxborn 61.5, Vanilla
+78.7). A set searched on Tuxborn generalised worse and was dropped. Set A is NOT yet written into `Catalogue.cpp`.
+
+Oracle gap over IAUS + set A (K = 6, 60 s, 20 fights): LoreRim mean +14.3 (from +20.1), Tuxborn +15.5 (from +19.5).
+Largest left: knight-boss and knight-boss-healer on LoreRim (+65, +77: the oracle bashes and controls the boss, see
+below), double-heal (+34, +43), control-setup (+26, +34), predictive-heal (+14, +19), and on Tuxborn mp-budget +24,
+weakness +23, splash +21.
+
+### 16.4 Open questions the lab raised
+
+- **Bash and stagger on LoreRim.** The oracle beats the boss by bashing it (a 0.8 s stagger each time). LoreRim runs
+  Chocolate Poise, where a poise meter replaces the stagger rule, so the sim overstates stun-locking on that list
+  until poise is modelled. And bash has no road in IAUS today.
+- **Magicka potions.** The search wants them far less on LoreRim (0.275) and more on Tuxborn (1.65). A weight cannot
+  be right on both: the missing input is what the magicka would buy (the foes still standing against his spells).
+
+### 16.5 Q64 variant: reach gate (ruled) against chase range (measured for marth)
+
+Ruling Q64: a melee follower attacks "within precision reach". The sim has no Precision numbers yet, so the gate is
+the vanilla reach (`Snapshot::meleeReach` 200, vetoed beyond 1.15 x). The variant lets a melee attack name a foe
+anywhere inside the chase cap, on the argument that act.attack only names the target and the engine closes.
+
+J with parameter set A and the scroll road, 30 fights:
+
+| | LoreRim seed 1 | seed 7 | Tuxborn seed 1 | seed 7 | Vanilla seed 1 | seed 7 |
+|---|---|---|---|---|---|---|
+| reach gate (the ruling) | 61.74 | 60.65 | 62.35 | 61.89 | 78.81 | 78.80 |
+| chase variant | 61.36 | 61.00 | 63.79 | 61.43 | 79.45 | 79.26 |
+| difference | -0.38 | +0.35 | +1.44 | -0.46 | +0.64 | +0.46 |
+
+Mean difference +0.34 J, inside the run-to-run noise (about 0.5). **The ruling costs nothing the lab can measure.**
+The oracle cluster that prompted the variant ("idle -> attack" at 800 units) is real, but under the gate the
+follower's own AI closes on its own target and the attack is named once he is in reach. The variant stays off.
+
+## 17. Class combat packages (card C8), searched in the lab
+
+A package is the combat style the DLL swaps on per stance (melee, ranged, cast), the ch.18 power-attack share and the
+ch.23 pursuit leash. Today every class runs MFO's three stance styles (`MFO_GenerateESP.py make_csty`) with two class
+offsets. The lab puts exactly those under every follower (`Setup.h MfoPackage`) and searches from there.
+
+Method (`tools/iaus_sim/tune_packages.py`): TABLE mode first (IAUS off, the class's default gambit rows, which is what
+most players get), a coordinate search on LoreRim, objective = 0.35 x the class's scenarios + 0.65 x its natural,
+balanced and strong1 brackets. The found values are then scored on Tuxborn and Vanilla, in table mode AND in IAUS
+mode, over two seeds. A package is kept only when it loses on no list in no mode (more than 0.75 U) and gains more
+than 0.5 U in table mode on average. Files: `tools/iaus_sim/packages/<class>.json` (values, evidence per list and mode).
+
+**Proof level: MODEL.** The CSTY fields move behaviour through the sim's engine-AI model (section 4 row 22: attack
+pause divided by the offensive mult, power attack chance 0.12 x offensive mult x the share, block chance 0.20 x
+defensive mult). The DIRECTION of a finding is what the lab stands behind. The numbers need the in-game probe
+(section 5) before they become generator rows. Circle, flank, strafe and avoid-threat are not modelled, so the search
+cannot speak about them.
+
+| Class | Verdict | Changed from today | Mean table gain (U) | Per list, table / IAUS delta |
+|---|---|---|---|---|
+| arch-mage | today's | st.2.off 0.75, pk.leash 1000 | +0.15 | LoreRim -0.3 / -0.8, Tuxborn +1.0 / +0.4, Vanilla -0.3 / +0.0 |
+| archer | today's | nothing | +0.00 | LoreRim +0.0 / +0.0, Tuxborn +0.0 / +0.0, Vanilla +0.0 / +0.0 |
+| blademaster | KEEP | st.0.off 4, st.0.powStag 0.5, pk.power 1.33 | +3.49 | LoreRim +6.7 / +4.8, Tuxborn +1.5 / +2.9, Vanilla +2.3 / -0.5 |
+| champion | today's | st.0.off 2, st.0.powStag 2, pk.power 1.33, pk.leash 600 | +1.07 | LoreRim +1.4 / +2.6, Tuxborn +1.3 / +3.5, Vanilla +0.5 / -1.0 |
+| conjurer | today's | st.0.off 1.33, st.2.off 1.33 | -0.39 | LoreRim -0.2 / -0.2, Tuxborn -0.9 / +0.4, Vanilla -0.0 / -0.4 |
+| dragonborn | today's | st.0.off 1.33 | +0.37 | LoreRim +1.2 / -0.1, Tuxborn -0.6 / +1.1, Vanilla +0.5 / -0.4 |
+| ebony-warrior | KEEP | st.0.off 1.33, st.0.def 0.665 | +2.49 | LoreRim +1.7 / -0.4, Tuxborn +2.4 / +0.4, Vanilla +3.4 / +2.1 |
+| evoker | today's | st.2.off 1.33 | +0.28 | LoreRim +0.8 / -0.3, Tuxborn +0.1 / +0.4, Vanilla -0.1 / +0.3 |
+| grand-battlemage | today's | st.0.def 0.25 | -0.20 | LoreRim +0.0 / -0.0, Tuxborn -0.3 / +0.0, Vanilla -0.3 / -0.0 |
+| great-knight | today's | st.0.off 4, st.0.bash 1.33, pk.power 1.33 | +3.30 | LoreRim +5.2 / +3.7, Tuxborn +3.8 / -1.4, Vanilla +0.9 / -0.9 |
+| healer | today's | st.2.off 2.66 | +0.27 | LoreRim +0.8 / +0.2, Tuxborn +0.1 / -0.1, Vanilla -0.1 / -0.4 |
+| jaqspur | KEEP | st.1.off 1.33 | +0.52 | LoreRim +0.7 / +0.6, Tuxborn -0.0 / +1.1, Vanilla +0.9 / -0.1 |
+| knight | KEEP | st.0.off 2, st.0.powStag 1.33, pk.power 2.66 | +6.56 | LoreRim +12.2 / +10.7, Tuxborn +5.3 / +4.3, Vanilla +2.1 / +1.0 |
+| listener | today's | st.0.off 2.66, st.0.powStag 1.33, pk.power 2 | +1.78 | LoreRim +4.5 / +2.7, Tuxborn +1.3 / -1.1, Vanilla -0.4 / +1.8 |
+| living-legend | today's | st.0.off 2, st.0.powStag 2, pk.power 2.66, pk.leash 600 | +0.94 | LoreRim +5.0 / +4.3, Tuxborn -0.8 / +1.7, Vanilla -1.4 / +0.6 |
+| mage | today's | st.2.off 0.5, st.2.def 0.25 | -0.60 | LoreRim -1.0 / -0.3, Tuxborn -1.2 / +0.8, Vanilla +0.3 / -0.2 |
+| master-thief | today's | st.1.off 4 | +0.66 | LoreRim +0.9 / -0.7, Tuxborn +0.8 / -2.0, Vanilla +0.2 / +0.8 |
+| melee | today's | st.0.off 1.33, st.0.def 0.25 | +0.69 | LoreRim +0.7 / +0.3, Tuxborn +1.2 / -0.8, Vanilla +0.1 / +0.1 |
+| mercenary | KEEP | st.0.off 4, st.0.powStag 2, pk.power 2, pk.leash 1000 | +4.36 | LoreRim +2.0 / +5.6, Tuxborn +8.7 / +7.2, Vanilla +2.5 / +1.6 |
+| necromancer | today's | st.0.off 1.33, st.2.off 0.5 | +0.40 | LoreRim +1.9 / -0.8, Tuxborn +0.1 / +0.1, Vanilla -0.7 / +0.4 |
+| nightblade | KEEP | st.0.off 2 | +1.07 | LoreRim +1.3 / +1.7, Tuxborn +1.3 / +1.1, Vanilla +0.6 / +0.1 |
+| nightingale | today's | nothing | +0.00 | LoreRim +0.0 / +0.0, Tuxborn +0.0 / +0.0, Vanilla +0.0 / +0.0 |
+| priest | today's | st.2.off 0.75 | -0.50 | LoreRim -0.6 / -0.5, Tuxborn +0.2 / -0.1, Vanilla -1.1 / -0.1 |
+| ranged | today's | nothing | +0.00 | LoreRim +0.0 / +0.0, Tuxborn +0.0 / +0.0, Vanilla +0.0 / +0.0 |
+| ranger | today's | st.1.off 0.5 | -0.50 | LoreRim -0.3 / +0.0, Tuxborn +0.1 / +0.2, Vanilla -1.3 / -0.0 |
+| saint | today's | st.2.off 0.5625 | -0.49 | LoreRim -0.8 / -0.0, Tuxborn -1.2 / +0.2, Vanilla +0.5 / +0.5 |
+| scout | today's | st.1.off 0.75 | +0.35 | LoreRim +0.3 / -0.0, Tuxborn +0.5 / +1.2, Vanilla +0.2 / -0.4 |
+| sorcerer | today's | st.0.off 1.33, st.0.def 0.25 | +0.80 | LoreRim +2.9 / -0.5, Tuxborn -1.0 / +0.1, Vanilla +0.5 / +1.0 |
+| spellsword | today's | st.0.off 0.75, pk.leash 600 | -0.68 | LoreRim -0.1 / -1.8, Tuxborn -0.4 / -0.8, Vanilla -1.6 / -0.6 |
+| templar | today's | st.0.off 0.75 | +0.49 | LoreRim +0.9 / -0.6, Tuxborn +0.6 / -0.2, Vanilla -0.0 / -0.9 |
+| thief | today's | st.1.off 1.33 | +0.03 | LoreRim +0.5 / +0.3, Tuxborn +0.0 / +0.0, Vanilla -0.4 / -0.1 |
+| warlock | today's | st.2.off 1.33 | +0.44 | LoreRim +0.4 / -0.1, Tuxborn +0.9 / -0.0, Vanilla +0.0 / +0.1 |
+| warrior | KEEP | st.0.off 4, st.0.powStag 2, pk.power 2 | +3.20 | LoreRim +7.7 / +5.8, Tuxborn +0.9 / +2.4, Vanilla +1.0 / +1.7 |
+| witchhunter | today's | st.1.off 0.5 | +0.16 | LoreRim -0.7 / -0.3, Tuxborn +1.2 / +1.9, Vanilla -0.0 / +1.3 |
+| wizard | today's | st.2.off 2.66 | +0.37 | LoreRim +0.9 / +0.1, Tuxborn +0.2 / -0.4, Vanilla +0.0 / -1.0 |
+
+Reading: 7 of 35 classes have a package that holds on all three lists. They are the melee lines, and the direction
+is the same every time: a higher offensive mult (shorter pauses between attacks, more power attacks) and a larger
+power-attack share. No ranged or mage class found a robust gain: their stance styles are already near the best the
+modelled fields can do. Parameter names: `st.<0 melee, 1 ranged, 2 cast>.<off, def, fallback, avoid, powBlock, powStag,
+bash>`, `pk.power` (ch.18 share scale), `pk.leash` (units from the player, 0 = none).
+
+For the C8 author: take the KEEP rows as the direction per class, start from the listed values, and confirm with the
+hit and power-attack probe lines before fixing the generator rows.
+
+## 18. Default gambit rows (card C12), searched with the package
+
+Method (`tools/iaus_sim/tune_defaults.py`, `sim --opt-rows`): table mode, the class's kept package under it, a
+hill-climb over row sets on LoreRim: reorder, retune a threshold, drop, add or replace a row. The rows on offer are
+only what the board lets that class pick (vocabulary opcodes, gated by the class gate and its weapon set, ruling
+Q59). Rules the search keeps: every kind of action in today's rows stays (a knight keeps his taunt), power-attack
+rows do not multiply, the row count stays within today's. Validation as for the packages. Files:
+`tools/iaus_sim/defaults/<class>.json` (today's rows, the lab's rows in board terms, evidence).
+
+| Class | Verdict | Mean gain (U) | Per list delta | Lab rows (condition > gambit) |
+|---|---|---|---|---|
+| arch-mage | today's | -0.57 | LoreRim +1.4, Tuxborn -1.0, Vanilla -2.1 | (unchanged) |
+| archer | today's | +0.00 | LoreRim +0.0, Tuxborn +0.0, Vanilla +0.0 | (unchanged) |
+| blademaster | KEEP | +2.66 | LoreRim +3.8, Tuxborn +2.3, Vanilla +1.9 | foe_attacking_player > attack; foe_attacking_me > attack; foe_lowest_hp > attack; self_sp_pct_below 0.25 > drink_stamina_potion; foe_any > equip_melee |
+| champion | KEEP | +2.86 | LoreRim +2.4, Tuxborn +2.4, Vanilla +3.8 | foe_attacking_player > attack; foe_any > power_attack; foe_highest_hp > attack; self_sp_pct_below 0.25 > drink_stamina_potion; foe_any > equip_melee |
+| conjurer | KEEP | +2.19 | LoreRim +1.3, Tuxborn +4.3, Vanilla +0.9 | foe_count_at_least 3 > cast_target [Fear]; foe_any > cast_target [Attack]; self_mp_pct_below 0.25 > drink_magicka_potion; foe_within_range 150 > equip_melee; foe_stronger_than_me > attack |
+| dragonborn | today's | +0.31 | LoreRim +0.1, Tuxborn +0.5, Vanilla +0.4 | (unchanged) |
+| ebony-warrior | today's | +0.00 | LoreRim +0.0, Tuxborn +0.0, Vanilla +0.0 | (unchanged) |
+| evoker | today's | +0.41 | LoreRim +1.4, Tuxborn -0.6, Vanilla +0.4 | (unchanged) |
+| grand-battlemage | KEEP | +1.68 | LoreRim +1.9, Tuxborn +0.5, Vanilla +2.7 | foe_beyond_range 600 > cast_target [Destruction]; foe_weak_fire > cast_target [Fire]; foe_within_range 400 > attack; foe_any > equip_melee; foe_highest_hp > cast_target [Attack] |
+| great-knight | KEEP | +1.47 | LoreRim +3.1, Tuxborn +1.6, Vanilla -0.3 | foe_attacking_player > power_attack; foe_attacking_player > taunt; foe_attacking_me > attack; self_hp_pct_below 0.35 > drink_health_potion; foe_any > equip_melee |
+| healer | KEEP | +1.12 | LoreRim +1.7, Tuxborn +0.9, Vanilla +0.8 | player_hp_pct_below 0.5 > cast_player [Heal]; ally_hp_pct_below 0.5 > cast_target [Heal]; self_hp_pct_below 0.5 > cast_self [Heal]; foe_attacking_player > cast_target [Attack]; self_mp_pct_below 0.266 > drink_magicka_potion |
+| jaqspur | today's | -0.87 | LoreRim +1.2, Tuxborn -1.9, Vanilla -1.9 | (unchanged) |
+| knight | today's | +1.98 | LoreRim +8.1, Tuxborn -1.3, Vanilla -0.8 | (unchanged) |
+| listener | KEEP | +3.53 | LoreRim +7.9, Tuxborn +1.3, Vanilla +1.4 | foe_any > power_attack; foe_hp_pct_below 0.3 > attack; foe_weaker_than_me > attack; foe_count_at_least 3 > cast_target [Fear]; foe_any > equip_melee |
+| living-legend | KEEP | +2.56 | LoreRim +2.3, Tuxborn +3.5, Vanilla +1.9 | foe_is_caster > power_attack; foe_is_caster > attack; foe_weaker_than_me > attack; foe_highest_level > attack; foe_any > equip_melee |
+| mage | KEEP | +2.35 | LoreRim +2.4, Tuxborn +0.3, Vanilla +4.3 | foe_is_caster > cast_target [Attack]; self_hp_pct_below 0.3 > drink_health_potion; foe_count_at_least 3 > cast_target [Fear]; foe_lowest_hp > attack; always > wait |
+| master-thief | today's | -0.36 | LoreRim +0.9, Tuxborn -0.8, Vanilla -1.1 | (unchanged) |
+| melee | KEEP | +1.46 | LoreRim +4.0, Tuxborn +0.2, Vanilla +0.1 | self_hp_pct_below 0.3 > drink_health_potion; foe_weaker_than_me > attack; foe_lowest_hp > attack; always > wait; foe_highest_level > attack |
+| mercenary | KEEP | +0.87 | LoreRim +3.5, Tuxborn -0.4, Vanilla -0.5 | foe_is_ranged > attack; foe_stronger_than_me > power_attack; self_sp_pct_below 0.25 > drink_stamina_potion; foe_any > equip_melee; self_hp_pct_below 0.5 > drink_health_potion |
+| necromancer | today's | +1.69 | LoreRim +4.5, Tuxborn -1.2, Vanilla +1.8 | (unchanged) |
+| nightblade | today's | -0.03 | LoreRim -0.5, Tuxborn +1.0, Vanilla -0.6 | (unchanged) |
+| nightingale | KEEP | +1.64 | LoreRim +1.9, Tuxborn -0.6, Vanilla +3.6 | foe_is_ranged > attack; foe_attacking_player > attack; foe_is_caster > attack; foe_fleeing > equip_melee; foe_any > equip_ranged |
+| priest | KEEP | +1.84 | LoreRim +2.4, Tuxborn +0.9, Vanilla +2.2 | player_hp_pct_below 0.5 > cast_player [Heal]; ally_hp_pct_below 0.5 > cast_target [Heal]; foe_is_unholy > cast_target [TurnUndead]; self_hp_pct_below 0.5 > cast_self [Heal]; foe_lowest_hp > cast_target [Attack]; self_mp_pct_below 0.2 > drink_magicka_potion |
+| ranged | today's | +0.15 | LoreRim +1.4, Tuxborn +1.8, Vanilla -2.9 | (unchanged) |
+| ranger | KEEP | +0.94 | LoreRim +1.2, Tuxborn +1.0, Vanilla +0.7 | foe_attacking_ally > attack; foe_is_caster > attack; foe_attacking_player > attack; self_out_of_arrows 1 > loot_arrows; foe_any > equip_ranged |
+| saint | today's | -0.02 | LoreRim +2.4, Tuxborn +2.7, Vanilla -5.1 | (unchanged) |
+| scout | KEEP | +1.20 | LoreRim +0.4, Tuxborn +0.6, Vanilla +2.6 | ally_hp_pct_below 0.7 > cast_target [Heal]; player_hp_pct_below 0.7 > cast_player [Heal]; foe_is_caster > attack; foe_any > equip_ranged; foe_highest_hp > cast_target [Attack] |
+| sorcerer | KEEP | +1.67 | LoreRim +2.0, Tuxborn -0.4, Vanilla +3.4 | always > cast_self [BoundWeapon]; foe_any > attack; foe_attacking_player > cast_target [Attack] |
+| spellsword | KEEP | +1.03 | LoreRim +1.0, Tuxborn +1.1, Vanilla +0.9 | foe_beyond_range 400 > cast_target [Destruction]; foe_weak_fire > cast_target [Fire]; foe_is_caster > attack; foe_any > equip_melee; foe_highest_hp > cast_target [Attack] |
+| templar | today's | +0.39 | LoreRim +1.7, Tuxborn -0.8, Vanilla +0.2 | (unchanged) |
+| thief | today's | +0.57 | LoreRim +1.2, Tuxborn +0.8, Vanilla -0.3 | (unchanged) |
+| warlock | today's | -0.07 | LoreRim +1.5, Tuxborn -1.9, Vanilla +0.2 | (unchanged) |
+| warrior | KEEP | +3.67 | LoreRim +2.2, Tuxborn +3.8, Vanilla +5.0 | foe_blocking > power_attack; foe_attacking_player > attack; self_hp_pct_below 0.3 > drink_health_potion; self_sp_pct_below 0.3325 > drink_stamina_potion; foe_any > equip_melee |
+| witchhunter | KEEP | +0.88 | LoreRim +1.9, Tuxborn +1.2, Vanilla -0.5 | foe_attacking_player > attack; foe_weak_fire > cast_target [Fire]; foe_lowest_hp > attack; foe_stronger_than_me > cast_target [Paralyze]; foe_any > equip_ranged |
+| wizard | KEEP | +1.19 | LoreRim +1.5, Tuxborn -0.2, Vanilla +2.2 | foe_lowest_hp > cast_target [Attack]; foe_stronger_than_me > cast_target [Paralyze]; foe_weak_fire > cast_target [Fire]; foe_any > cast_target [Destruction]; self_mp_pct_below 0.2 > drink_magicka_potion |
+
+Questions for marth that the search raised (also in section 14):
+- **Is the power-attack cooldown per row or per follower?** Each default row carries its own 10 s cooldown. An
+  unconstrained search stacked three power-attack rows and got three power attacks per 10 s, which goes round
+  ruling Q7. The lab now forbids more power rows than today's set has.
+- **Rank I has 3 combat slots, the class default sets have 4 or 5 rows** (`State.h kCombatSlotsByRank` = 3, 5, 7,
+  9, 12). What happens to the fourth and fifth default row of a Rank I follower?
+
+## 19. Headline: table, IAUS on main, IAUS+ phase 2, the oracle
+
+J = half the mean scenario utility plus half the mean natural-bracket utility. 24 fights per scenario and 12 per class
+for the three policies. The oracle row is the rollout oracle (K = 6, 60 s, extended action set) planning over IAUS+
+on the first 8 fights per scenario and 4 per class of the same seeds. Every value is also in the results files
+(label HEADLINE, fields `headline.j`, `headline.oracle_j`).
+
+| J | Vanilla | Tuxborn | LoreRim |
+|---|---|---|---|
+| table mode (IAUS off, default gambit rows, today's packages) | 75.5 | 59.1 | 59.2 |
+| IAUS as on main (no estimates) | 75.9 | 58.5 | 57.1 |
+| IAUS+ phase 2 (estimates, parameter set A, scroll road, heal claim) | 78.5 | 62.5 | 60.9 |
+| oracle over IAUS+ | 84.9 | 71.5 | 71.4 |
+
+Reading: IAUS as it is on main does not beat the gambit table on Tuxborn and is 2 J behind it on LoreRim. Phase 2 so
+far is 1.7 to 3.4 J ahead of the table on all three lists. The oracle is 6 to 10 J ahead of phase 2: that is the
+distance left, and part of it needs actions IAUS does not have yet (bash, block, deliberate repositioning).
+
+## 20. More questions for marth
+
+- **Taunt success formula (ruling Q69).** Today the executor rolls `0.5 + 0.05 x (taunter level - foe level)`, kept in
+  0.1 to 0.9, once per candidate foe (`Taunt.cpp:219`). It is stat-based and readable before the choice. IAUS now
+  reads exactly that rule as a fact (`Estimate::TauntChance`). Recommendation: keep it, and make the executor call the
+  same function. If more than level should count, the engine-readable candidates are the foe's AIDT confidence and
+  the taunter's block or armor skill. The lab can score a variant once one is named.
+- The two default-row questions of section 18 (power-attack cooldown per row or per follower; Rank I slots).
+
+## 21. Combat-rule mods in the lab: Chocolate Poise and Dynamic Follower Scaling (successor 1, 2026-11-10)
+
+Both are SKSE plugins that change the fight's rules outside the records, so `extract_world.py` cannot see them.
+`tools/list_balance/extract_combat_mods.py --list <list> --profile <profile>` reads their settings from the list
+(read-only, the winning file by mod priority) into `~/.cache/mfo-list-balance/<list>.combatmods.json`. The sim loads
+that file beside the `.sim.json` (`Load.h LoadCombatMods`). A list without the DLL gets the vanilla model.
+
+| List | Chocolate Poise | Dynamic Follower Scaling |
+|---|---|---|
+| LoreRim (Ultra) | on. INI from "LoreRim - MCM and INI Settings", JSON from "Chocolate Poise Plus" | on. Mode 1, 20 percent |
+| Tuxborn (Deck) | absent | absent |
+| Vanilla | absent | absent |
+
+### 21.1 Chocolate Poise
+
+Source of the formula: the mod's own code (`doodlum/skyrim-poise`, `src/Hooks/PoiseAV.cpp` and `HitEventHandler.cpp`),
+read for the rules only. Proof level: SOURCE for the formula, MODEL for the three values marked below.
+
+- Poise meter of an actor = (the race's multiplier in `ChocolatePoise.json`, else the race's mass) x BaseMult + worn
+  armor weight x ArmorMult. LoreRim: BaseMult 25, ArmorMult 0.02. A human has 25, a troll 50, a giant 137, a dragon 175.
+  The sim has no armor weights, so it uses 6 per worn piece (MODEL, under 1 point).
+- Poise damage of one weapon hit = lerp(the type's base in the JSON, the weapon's weight, WeightContribution) x
+  MeleeMult or BowMult. LoreRim sets every type base to 0 and WeightContribution 1.4, so it is 1.4 x weapon weight
+  (bows x 0.5). A creature without a weapon deals physical damage x CreatureMult (2.0). A bash deals the shield's
+  value x BashMult (1.0, shield weight 10 is a MODEL).
+- Then x (1 + the attack's stagger offset from the race's attack data). The usual power attack has 1.0, a bash 0.5
+  (MODEL: the modal record values, the sim does not carry them per attack). Then x (1 - blocked share), x total
+  damage over physical damage, x min(1 - the target's armor mitigation, 0.8). Poise damage to an NPC x 1.2, to the
+  player x 0.8.
+- Spells: health damage x 0.2 (the JSON's "Magic Effects" factor).
+- When the meter reaches 0 the actor staggers once and the meter refills. While staggered it takes no poise damage
+  (StaggerMode 1). The meter regenerates 5 percent of its maximum per second. The vanilla stagger on a hit is set
+  to 0 by the mod, so a power attack no longer staggers by itself. Stagger length: 0.5 s plus 1.0 s x the blow's
+  share of the meter (MODEL).
+
+What it changes in the lab: the oracle can no longer hold a boss by bashing it every 0.9 s, which is what made the
+knight-boss gaps of section 16.3 (+65, +77) untrusted. Tuxborn's Blade and Blunt (bZeroAllWeaponStagger) is still not
+modelled: its power-attack stagger stays the vanilla MODEL.
+
+### 21.2 Dynamic Follower Scaling (ruling Q75: "make sure")
+
+What it scales: `FollowerScaling.dll` 1.1.0 hooks the hit event (its own symbol
+`HitEventHook::ProcessHitEvent(TESObjectREFR*, HitData*)`). When the aggressor is an actor in CurrentFollowerFaction
+(FormID 0x0005C84E, the immediate at DLL address 0x1800295fa followed by the faction test), it counts the LOADED
+actors in that faction and scales the hit:
+
+- Mode 1 (LoreRim): damage x (1 - ReductionPerFollower)^(followers - 1). With 20 percent: 2 followers 0.80 each,
+  3 followers 0.64, 4 followers 0.51, 5 followers 0.41.
+- Mode 2: damage / followers.
+
+It works on HitData, so on weapon hits (melee and arrows). Damage a spell deals through its magic effects is not in
+HitData's damage. So spells are not scaled as far as the code shows. That part is unproven in the field.
+
+Does MFO override it: **no**. `native/` holds no reference to CurrentFollowerFaction or 0x5C84E, no HitData or
+ProcessHit hook, and no damage scaling of its own. A follower recruited the normal way is in that faction, so the
+scaling applies to MFO followers. This is a finding for marth (his expectation was that MFO already overrides it).
+
+Sim model: a follower's weapon hit x the mode's multiplier with n = followers alive. LoreRim only.
+
+J (set A, scroll road, 30 fights) with both mods modelled: LoreRim 60.90 / 60.70 (seeds 1 / 7), before 61.46 / 61.37.
+Tuxborn 63.03 / 61.44 and Vanilla 78.68 / 78.53 do not move (no such mod).
+
+What this means for IAUS on LoreRim: with three followers a weapon hit is worth 0.64 of what the damage estimate
+says, and a spell is worth all of it. The estimate (`Estimate::Dps`) cannot read the hook. It matters only where a
+follower weighs his own weapon against his own spell, which IAUS does not do with numbers yet.
+
+## 22. Rulings of 2026-11-11 (Q68, Q72 to Q75) and what the lab did with each
+
+| Ruling | Text (short) | In the lab |
+|---|---|---|
+| Q72 | Taunt success keeps the level rule: clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9). No extra stats | `Estimate::TauntChance` is that rule already. Nothing to change |
+| Q73 | Power-attack cooldown is PER FOLLOWER, one cooldown shared by every row and by IAUS, like the taunt cooldown (Q69) | Table mode: every power-attack row of a follower shares one timer (`Table.h`, also the taunt rows). IAUS already keys the cooldown by (family, form), which is per follower for a power attack. The native table side belongs to the taunt and cooldown card |
+| Q74 | Rank I has 3 combat slots. The follower gets the TOP rows in order, the rest join as slots unlock. Every prefix must be a good table | The sim cuts a follower's rows to his rank's slots (3 / 5 / 7 / 9 / 12, `native/State.h` kCombatSlotsByRank). `--opt-prefix` and `tune_prefix.py` order each class's set, see 22.1 |
+| Q75 | Dynamic Follower Scaling: research it, make sure about MFO | Section 21.2 |
+| Q68 | The swing-gate reach is different for every weapon and is LEARNED from hits and misses | `native/iaus/Reach.h`, see 22.2 |
+
+### 22.1 Q74: the order that makes every prefix a good table
+
+Method: table mode, each class's recommended set (the lab set of section 18 where its verdict was keep, else
+today's rows). Every permutation is scored on LoreRim as the mean of J over the prefixes 3 .. n (40 fights). The best
+order is then scored against the starting order per prefix on LoreRim, Tuxborn and Vanilla with seeds 1 and 7. Kept
+only when no list loses more than 0.75 J and the mean gains more than 0.5 J. Only the ORDER changes, never the rows.
+
+With today's slot table the 3-row prefix is what a Rank I follower holds and Rank II already holds all five. The
+4-row prefix is scored too, as ruled.
+
+| Class | Mean gain (J) | New order (rows by their action) |
+|---|---|---|
+| listener | +2.84 | power attack, attack foe under 30 percent, equip melee, fear cast at 3 foes, attack weaker foe. Today the equip row is last, so a Rank I Listener never draws |
+| warlock | +2.46 | fear on a stronger foe, magicka potion, destruction on any foe, paralyze on a stronger foe, armor spell. Today the damage row is fifth, so a Rank I Warlock has no damage row |
+| witchhunter | +1.20 | fire on a fire-weak foe, attack lowest health, paralyze a stronger foe, attack the player's attacker, equip ranged |
+| scout | +0.90 | heal ally, attack casters, attack cast on highest health, heal player, equip ranged |
+| spellsword | +0.78 | destruction beyond 400, fire on fire-weak, equip melee, attack cast on highest health, attack casters |
+| grand-battlemage | +0.73 | fire on fire-weak, attack within 400, attack cast on highest health, destruction beyond 600, equip melee |
+
+The other classes with more than 3 rows show no robust gain from a new order (between -0.9 and +0.4 J, inside the
+noise): today's order already makes good prefixes. The full evidence per class and per prefix is in
+`tools/iaus_sim/defaults/<class>.json`, block `prefix`. The pattern in the six: a class whose only damage or draw
+row sits in slot 4 or 5 is a broken table at Rank I.
+
+Caveat (unchanged from section 18): table mode acts through the sim's engine-AI MODEL. The direction is the
+finding. The numbers need the in-game check.
+
+### 22.2 Q68: the learned swing reach (`native/iaus/Reach.h`, pure, new file)
+
+marth: "precision reach will be different for every single weapon. so find one formula won't work." and "In game I
+would measure by whether it hits or not. A miss that should have hit (based on distance alone) lowers the distance,
+hits distance is also tracked."
+
+**What it is.** One number per (follower, weapon form, swing kind). It starts at the best estimate there is:
+Precision's own for that weapon when the bridge answers (GetAttackCollisionCapsuleLength, then Precision's
+conversion with fAIWeaponReachOffset read from its INI, k and r from its docs or measured), else the vanilla
+fMeleeReach. Then every committed swing is one outcome: the distance at the swing's start, and HIT or MISS.
+
+**The estimator.** It keeps the last 12 outcomes and the present value r. After each outcome the new value is the
+distance of the longest hit the evidence supports: over every split point it counts the misses inside the split
+(weight 1.5, a whiff wastes the swing, its stamina and its cooldown) and the hits beyond it (weight 1), takes the
+split with the lowest count (on a tie the one nearest r), and r becomes the longest hit under that split. The
+present r votes as one hit, which makes the value a memory and not only a window. With no hit under the split r
+goes to 0.95 x the shortest miss. One outcome moves r by 10 percent of itself at most. r stays inside 0.5 to 2.0 x
+its start value.
+
+- A hit beyond r raises it. A hit inside r changes nothing.
+- A miss inside r lowers it toward that distance, unless hits recorded beyond that distance outvote it (a target
+  that stepped aside is one stray miss).
+- A miss beyond r changes nothing. It was not expected to hit.
+- A miss never raises the value.
+
+**No expiry** (principle 9). Nothing reads a clock. The window is counted in swings (12 is about 15 s of melee at
+the measured 1.2 s hit cadence), so a follower who has not swung for a minute knows what he knew.
+
+**What the gate reads.** `Learner::Gate()` = r x 1.05 / 1.15. The range curve vetoes above 1.15 x its reach, so he
+still tries 5 percent past what he knows. That is how r can grow from his own swings. The engine's own swings are
+outcomes too and they are not gated at all.
+
+**Keying.** Follower and weapon form: yes (scale and moveset differ per follower, the state then lives with the
+follower in the worker domain and needs no lock). Swing kind (plain swing, power attack): yes, a power attack
+lunges. The power attack reads its own learner once it has 3 outcomes, before that the plain swing's. Race: no, the
+follower key covers it. Precision on or off: no, it is fixed for the session and the state is runtime only.
+The TARGET's size is the open covariate: a distance to a giant's centre and to a wolf's centre are not the same
+reach. Proposal: the engine side records the distance minus the target's bound radius if the probe shows the hit
+distances differ by target race. To decide from the probe, not now.
+
+**Proof (harness, 13 new checks, `tools/iaus_harness/run.sh`).** A toy world with a true reach the learner never
+sees, 5 percent distance noise, 5 percent of swings missing for other reasons, 7 in 10 swings the engine's own:
+
+| | Result |
+|---|---|
+| 72 runs (true reach 150 / 240 / 330, start 0.6 / 1.0 / 1.6 x, 8 seeds), value after 480 swings | within 8.7 percent of the true reach in the worst run, 4.5 percent in the mean |
+| Gated swings that miss by distance | 6.4 percent mean, 10.8 percent worst |
+| Swings that would have hit and the gate still allows | 98.3 percent worst |
+| Without noise, start 1.5 x | settles on the true reach (0.1 percent), spread 1.3 percent, no oscillation |
+| Heavy noise (10 percent, 15 percent stray misses), reported only | end error 19.9 percent, whiffs 6.6 percent, coverage 97.8 percent |
+
+**In the sim.** Each follower's weapon has its true reach (fCombatDistance x the weapon's reach, plus the body
+radii, x 1.2 at the hit frame) and the target moves during the swing, which is the noise. `--reach off|cold|warm`:
+off is the constant 200 as on main, cold starts every fight at 200, warm (default) first replays 20 earlier swings.
+Effect on J: none that can be measured (LoreRim 60.97 / 60.69 warm against 60.90 / 60.70 off, the others the same to
+0.07). The reason: the constant gate whiffs only about 1 percent of power attacks in the sim (new metric
+`powWhiff%`), because the sim's true reaches (191 to 284) sit near 200 x 1.15. The sim has no Precision. So the
+learner is proven as an estimator, and its value in play is a field question.
+
+**Engine side (not written, tier A: it crosses threads).** MFO already sinks both events as passive probes:
+TESHitEvent (`Diagnostics.cpp:129`, registered at `:1354`) and the attack animation events `weaponSwing` /
+`HitFrame` / `attackStart` (`Diagnostics.cpp:418-422`, the sink at `:544`). The plan:
+1. Probe first (principle 5): one rate-limited line per committed swing of a managed follower with the weapon form,
+   the distance at the swing event, and whether a hit event from that attacker with that weapon on the intended
+   target arrived inside the swing window. Size the window from the logged gap between the swing event and the hit.
+2. A miss counts only "by distance alone": the intended target alive, not blocking the path question of line of
+   sight (engine sight Visible), and no hit on ANOTHER actor in the window (a swing that struck someone else is not a
+   reach miss).
+3. Outcomes go to the worker through the existing posted-snapshot road, never a lock. `Kit` gains the learned reach
+   per drawn weapon and `Generate` reads `Kit` instead of `Snapshot::meleeReach` for the power attack's reach.
+4. Persistence: runtime only. Saving it would be a co-save change and is a question for marth (section 23).
+
+## 23. Questions for marth (successor 1)
+
+- **Dynamic Follower Scaling (Q76, RULED 2026-11-11).** marth: "Then it's relevant in LoreRim and we factor it in", and then "I just mean it's factored in the sim." So MFO does not neutralise it, nothing in native detects or special-cases it, and the lab models it per list (section 21.2). If the hit-against-estimate probe later shows a gap in the field, that is a new finding for marth then.
+- **Learned reach across sessions.** Runtime only today. The learner converges in about 10 to 20 swings from a bad
+  start, so a session relearns each weapon in its first fight. Saving it means a co-save change. Recommendation: do
+  not save it.
+- **Token ledger** (fixed by the coordinator at 22:40): the script summed a message once per content block. Counted once per message the two authors had spent 1.87M, so about 8.13M of the 10M was left.
+
+## 24. Successor 1, round 2: two fidelity bugs, set A2, and five new inputs (2026-11-10)
+
+### 24.1 Two bugs in the lab that every earlier number carried
+
+**Spell reach.** The sim took a spell record's range as its reach whenever it was above 0. The game does not:
+`Actuation::AimedReachOf` (`cast/CanAct.cpp:51-71`) reads the record's range only from 300 units up, else the
+projectile's range, else no cap. 587 of LoreRim's 4773 spells, 557 of Tuxborn's 4456 and 51 of Vanilla's 677 carry a
+small range (Requiem's target heals carry 30). In the sim those spells could only be cast from inside 30 units, so
+on LoreRim a heal on another actor was never a candidate at all. Fixed in `Data.h Classify`. Every heal, double-heal
+and predictive-heal number for LoreRim and Tuxborn before this section is void.
+
+**The oracle ignored two cooldowns.** It obeyed the power-attack cooldown only when the class row declared one, and
+never the taunt's. It taunted 6 times a minute against a 30 s cooldown (ruling Q69). It now obeys every hard cooldown
+(rulings Q7, Q69, Q73). The knight scenarios' oracle values fell with it.
+
+**Incoming damage counted foes that cannot reach.** `Estimate::IncomingOn` summed the damage of every foe that TARGETS
+an actor, at any distance. A brute 15 m away gave a ranged follower "5 seconds to live" and he fled from the first
+tick of the kite scenario without firing an arrow. Now a foe that has to close (no bow, no spell in hand) counts only
+inside two swing reaches of the actor (`Estimate::StrikeDistance`). The wider question, what he would take with all of
+them on him, is `Estimate::ThreatOn`. New measured input `Combatant::rangedWeapon`.
+
+### 24.2 Parameter set A2
+
+With heals working, set A let a control cast (weight 1.8) outrank a heal on a player at 46 percent health. A new
+search on LoreRim moved 23 values and lost 0.6 J on Vanilla, so it was not taken as a whole. One value at a time, three
+changes hold on every list and both seeds:
+
+**A2 = A with control casts 1.8 to 3.6, heal casts 1.2 to 2.4, the dying-recipient boost 0.7 to 1.4.**
+
+| J (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 |
+|---|---|---|---|---|---|---|
+| set A (after the reach fix, poise, DFS) | 61.54 | 61.18 | 62.88 | 61.08 | 78.35 | 78.09 |
+| set A2 | 63.37 | 62.86 | 64.50 | 63.29 | 78.92 | 78.49 |
+| A2 + the inputs of 24.3 | 63.98 | 63.64 | 64.37 | 63.85 | 78.88 | 78.64 |
+
+Heal claimed, heal urgency and heal size (section 16) each move J by less than 0.4 on any list, inside the noise.
+They stay because they are not applicable without their inputs, and the double-heal scenario is where they act.
+
+A control weight of 3.6 is a sign of a missing input, not a truth: a per-list search still wants 7.2 on Tuxborn.
+Paralysis and fear decide whole fights in the sim. The sim's Calm was checked as a suspect (it held through blows).
+It now breaks when the party hits the target (MODEL, unproven), and that changes J by under 0.01, so the result does
+not rest on Calm.
+
+### 24.3 New inputs (pure layers, all not applicable while unmeasured, harness 0 failed)
+
+| Consideration | Family | Input | Why |
+|---|---|---|---|
+| ControlWorth | control casts | min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). New `SpellEntry::controlSec` | a 1 s hold and a 30 s hold scored the same, and so did a hold on a foe at a quarter health |
+| MagickaBuys | magicka potion | casts of his best spell the fight still asks for (kept foes' health / best damage, else missing party health / best heal), over 3 | the potion weight wanted 0.275 on LoreRim and 1.65 on Tuxborn. With the input both searches agree it is low (0.14 and 0.55) |
+| DamageValue (changed) | offense casts | a spell with NO damage now scores 0 against his best, once his best is known | an Illusion noise spell (damage 0) had no damage term at all and so outscored real spells. Seen in a trace: a healer cast it three times while the player died. +0.4 to +0.85 J on LoreRim, +0.2 to +0.5 on Tuxborn |
+| RangeTaunt | taunt | flat inside the reach, same outer edge as before | the aimed-spell curve shaded a taunt at 90 percent of its reach to 0.38. A taunt is a call. Neutral in J |
+| MortalTaunt, BoostMortalDanger | taunt, retreat, health potion | new `Snapshot::mortal`: he dies for good at 0 health | see 24.4 |
+| PostureTrade | weapon category | seconds he lives at the damage coming in, over 10, on the melee category | do not put the bow away to trade with a brute. Neutral in J so far |
+| kite term in RetreatDanger | retreat | behind `Tuning::kiteDistance`, 0 = off | no effect in any run (the retreat is gated by class and by "no heal available"). Left off, in the ledger as unproven |
+
+Tried and removed: a "sacrifice" term (the taunter's own survival counts for less when the player has seconds
+left). It made every knight scenario worse on every list (LoreRim knight-boss 14.6 to 4.4). The boss kills the knight
+and then the player anyway. What the oracle does there is step back and stay free to block, not die first.
+
+### 24.4 Follower death (marth 2026-11-10)
+
+marth: "Lorerim by default has follower death. I personally have mine turned off."
+
+The sim's default is his setup: a follower at 0 health goes down for 9.5 s (the field median) and stands up.
+`--follower-death` makes it LoreRim's default: dead for good, counted as three downs in the utility (MODEL).
+IAUS gets one new fact, `Snapshot::mortal`, and two multipliers that only act when it is true: a taunt he cannot
+outlast is all but refused (x0.15 under 3 s to live), and retreat and the health potion weigh x1.5.
+
+| J with follower death on (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 |
+|---|---|---|---|---|---|---|
+| IAUS not told (`--mortal-blind`) | 63.72 | 63.44 | 63.54 | 62.79 | 77.90 | 77.19 |
+| IAUS told | 63.83 | 63.65 | 63.77 | 62.98 | 78.25 | 77.75 |
+
+Small, and the same sign in all six. Kept. Engine side (not written): what tells the DLL that a follower dies for
+good is to be probed, never assumed. Candidates: the actor's essential and protected flags, and how the list's
+follower-death option is built (which mod, which flag). No list data in native: the fact is read at runtime or stays
+false.
+
+### 24.5 Oracle gap after this round (K = 6, 60 s, 20 fights, set A2, before the inputs of 24.3)
+
+| Scenario | LoreRim | Tuxborn | Vanilla |
+|---|---|---|---|
+| tank3 | +2.0 | +1.7 | +1.2 |
+| mage-dragon | +22.2 | +2.3 | +6.4 |
+| bandit-pack | +0.9 | +5.7 | +1.3 |
+| focus-healer | 0.0 | +1.0 | -0.6 |
+| interrupt | +1.9 | -3.3 | +2.2 |
+| weakness | +8.8 | +36.4 | +20.9 |
+| predictive-heal | +11.6 | +2.6 | +11.3 |
+| peel | +12.5 | +8.5 | -4.3 |
+| overkill | +3.5 | +4.4 | +2.7 |
+| double-heal | +16.3 | +19.5 | +13.6 |
+| mp-budget | +1.8 | +19.3 | +9.2 |
+| splash | +5.5 | +15.9 | +10.6 |
+| control-setup | +38.6 | +21.0 | +5.7 |
+| kite | +0.5 | +1.8 | +38.7 |
+| knight-boss | +30.9 | +21.5 | +3.5 |
+| knight-boss-healer | +46.2 | +25.3 | +17.6 |
+| hurt-knight | -0.2 | +14.1 | +14.1 |
+| MEAN | +11.9 | +11.6 | +9.1 |
+
+Before this round, same oracle: +14.8 / +13.2 / +9.8. With the oracle held to the cooldowns the LoreRim mean is +10.8
+and Vanilla +5.8 (knight-boss on Vanilla -9.0, hurt-knight -4.0: IAUS is ahead of the one-step oracle there).
+
+What the largest clusters say now:
+
+- **knight-boss, knight-boss-healer, control-setup, kite:** the oracle's winning options are `ext:step_back`,
+  `ext:sprint_back`, `ext:to_player` and "do nothing" in place of a power attack. These are the actions IAUS has no
+  family for (open work 5: deliberate repositioning, block, bash). Nothing in the catalogue closes these gaps.
+- **weakness on Tuxborn and Vanilla, splash:** a control cast where the oracle casts damage, or equips. The control
+  weight is carrying what a "what does this hold buy against what my damage buys" input should carry.
+- **mage-dragon on LoreRim, predictive-heal:** a dry mage names an attack where the oracle equips a weapon or
+  drinks. The weapon category layer has no "my magicka is gone" term.
+- **peel:** a power attack on the nearest foe where the oracle names the one further away.
+
+### 24.6 Headline after this round (24 fights per scenario, 12 per class, oracle on the first 8 and 4)
+
+| J | Vanilla | Tuxborn | LoreRim |
+|---|---|---|---|
+| table mode (IAUS off, default gambit rows, rows cut to the rank's slots, one power-attack cooldown per follower) | 75.5 | 59.1 | 61.0 |
+| IAUS as on main (no estimates, constant reach) | 75.8 | 58.5 | 60.2 |
+| IAUS+ phase 2 (set A2, the inputs of 24.3, learned reach, scroll road) | 78.9 | 63.5 | 63.4 |
+| oracle over IAUS+ | 87.0 | 72.4 | 71.9 |
+
+The LoreRim rows moved against section 19 because the world did (poise, follower scaling, the spell reach). IAUS+ is
+2.4 to 4.4 J ahead of the gambit table on every list, and IAUS as on main is still level with it or behind. The oracle
+is 8 to 9 J ahead of IAUS+. Results files: label HEADLINE in `~/.cache/mfo-iaus-sim/runs/`.
+
+### 24.7 Gap ledger, changes
+
+| id | Change |
+|---|---|
+| G3, G4 | heals on another actor did not exist on LoreRim in the lab before the reach fix. Re-measured: double-heal +16 / +19 / +14, predictive-heal +12 / +3 / +11. Open |
+| G5 | a no-damage offense spell outscored real ones. Closed in the pure layer (DamageValue) |
+| G6 | magicka potion has its input (MagickaBuys). mp-budget still +19 on Tuxborn. Open |
+| G12 new | swing reach differs per weapon (Q68). `Reach.h` learned reach, proven in the harness. Engine feed not written (tier A) |
+| G13 new | control casts have no worth input beyond the hold's length. The weight 3.6 stands in for it. Open |
+| G14 new | a dry mage has no reason to change weapon category. Open |
+| G15 new | a follower who dies for good weighed his life like one who stands up. `Snapshot::mortal`. Engine read to probe |
+| G16 new | deliberate repositioning, block and bash have no family. The largest gaps left on all three lists (knight-boss, control-setup, kite). Needs the road audit of section 13 first |
+| G17 new | incoming damage counted foes out of reach. Closed in the pure layer (StrikeDistance) |
+
+## 25. Road audit for the actions IAUS has no family for (gap G16) and the first family built on one
+
+The oracle's extended set (section 9.2) is step back, sprint back, go to the player, go to the healer, get line of
+sight, block, bash, scroll. What each one could be built on today, read from `native/APMF_API.h`, `cast/Fire.cpp`
+and the two ch.24 clients MFO already has:
+
+| Action | Road | Verdict |
+|---|---|---|
+| Go to the player, go to the healer (fall back or peel WHILE fighting) | Harbinger ch.24 CombatApproach (`kIntent_CombatApproach`, target X, radius R, `kApproach_Hold`): the follower's combat area is bounded to (X, R), so the engine's own Return To Combat Area walks him there while attacks, casts and blocking keep running. MFO already runs two clients of it: the held-heal approach (`apmf/CombatApproach.cpp`) and the offense approach (`apmf/OffenseApproach.cpp`) | ROAD EXISTS. Needs a third MFO client ("regroup") and an action. Composition, native animation |
+| Get line of sight | the same channel, X = the target. `apmf/OffenseApproach.cpp` is this for casts | EXISTS for casts |
+| Step back, sprint back (away from a foe, no anchor) | none. ch.24 takes a reference, its `pos` is not read. ch.23 PursuitLeash only refuses moves that lead away from an anchor. `act.flee` is the retreat package under ignore-combat: he stops fighting, which is a retreat and not a step back | PROVEN LIMIT today. The nearest thing is a regroup on an anchor that stands away from the foe. A real step back needs a new Harbinger capability: ch.24 centred on a POINT (a feature request, tier A in the Harbinger repo) |
+| Bash | the bash is its own leaf of the combat behaviour tree. ch.18 AttackSelection can only DENY attack classes in the engine's weighted draw and never adds a move. ch.7 CombatAction denies whole leaf categories. Neither can make him bash NOW | PROVEN LIMIT today for a timed bash (interrupting a cast). Only a standing bias exists: the class package's combat-style bash multiplier (card C8) |
+| Block | a tree leaf as well. No promote road. Standing bias only: the package's defensive multiplier | PROVEN LIMIT today |
+| Scroll | card S3 (the lab's `--scroll-road`) | planned |
+
+So of the oracle's winning options in the largest gaps, step back, sprint back, bash and block have NO road, and that
+is where knight-boss, control-setup and kite sit. Those gaps cannot be closed inside MFO. They need one of two new
+Harbinger capabilities, both of which fit the house rules (deny-complete, composed, never a forced move): a combat
+area centred on a point, and a one-shot promote of a tree leaf (block, bash) the engine already owns. Both are
+recorded as feature requests for marth, not started.
+
+### 25.1 Family Regroup (pure layer, behind `Snapshot::regroupRoad`, off in the game)
+
+`Family::Regroup` (appended), target = the player or a party member who can heal others (new `Combatant::healer`).
+Considerations: RegroupNeed (the largest of: the player has seconds left, he has seconds left and the anchor stands
+away from what is hitting him, he is under 60 percent and the anchor heals), RegroupFar (vetoed inside 300 units and
+beyond 3000), a 6 s hard cooldown. In the sim `--regroup-road` turns it on: the order bounds his movement to the
+anchor for 4 s and he still fights a foe in swing reach.
+
+| J (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 | mean |
+|---|---|---|---|---|---|---|---|
+| road off | 63.98 | 63.64 | 64.37 | 63.85 | 78.88 | 78.64 | 67.23 |
+| on, weight 0.8 | 63.75 | 63.75 | 64.56 | 63.27 | 78.51 | 79.19 | 67.17 |
+| on, weight 1.6 | 63.30 | 63.93 | 64.81 | 63.42 | 78.87 | 78.77 | 67.18 |
+| on, weight 3.0 | 63.25 | 63.82 | 64.49 | 63.39 | 78.85 | 78.95 | 67.13 |
+
+No gain. Not adopted: the family stays as scored-but-never-generated, like Sneak. What the clusters show instead is
+that the oracle sends a follower to the player when he is 1700 to 1850 units from the fight (Vanilla
+knight-boss-healer, 51 decisions), which is the pursuit leash's job (ch.23, the package's `pk.leash`), not a need of
+the moment. The three needs written here are the wrong inputs for that. Open.
+
+## 26. The two missing roads, proven in the lab first, then designed for Harbinger (coordinator, 2026-11-11)
+
+The mandate authorises the missing roads: designed and authored under the house rules on a feat/ branch of the
+Harbinger (APMF) repo, tier A, full Opus review, the coordinator merges. The condition: each one is first proven in
+the lab as a modelled road with its expected gain, "so we only build what earns its place".
+
+### 26.1 Lab proof: three families behind road flags
+
+Pure layer (`native/iaus`, never generated in the game: `Snapshot::groundRoad`, `blockRoad`, `bashRoad` are false):
+
+| Family | Candidate | Need (its one shaping input) | Sim model (`--roads ground,block,bash`) |
+|---|---|---|---|
+| GiveGround | the nearest foe that targets him and has to close | he has under 6 s at the damage coming in, or he fights at range and that foe is inside 450 units and he could not afford it on him. 3 s cooldown | the oracle's step back: 500 units directly away, 2 s |
+| Block | a foe whose swing at him is in the air, in striking distance, with a melee weapon drawn | 0.5 for the swing alone, the rest by how few seconds he has. 2 s cooldown | the oracle's block: guard up 1.5 s |
+| Bash | each kept foe in swing reach | 1.0 when the foe is charging a spell, 0.4 when it is on him, 0.15 otherwise. Stamina, 4 s cooldown | the oracle's bash (20 stamina. Under Chocolate Poise it deals poise damage only, as on LoreRim) |
+
+New measured inputs: `Combatant::swinging` (its swing is in the air) and `Combatant::casting` (it is charging a spell).
+
+J, 40 fights, the same weight on every list (the default set, bash 1.33):
+
+| | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 | mean |
+|---|---|---|---|---|---|---|---|
+| no road | 63.33 | 63.81 | 64.11 | 63.79 | 79.07 | 78.79 | 67.15 |
+| give ground only | 63.57 | 63.76 | 64.06 | 64.01 | 79.23 | 78.71 | 67.22 |
+| give ground + bash | 63.63 | 63.85 | 64.70 | 64.30 | 79.66 | 79.11 | 67.54 |
+| block + bash | 63.23 | 63.91 | 64.91 | 64.78 | 79.08 | 78.87 | 67.46 |
+| all three | 63.34 | 63.78 | 64.87 | 64.64 | 79.30 | 79.16 | 67.52 |
+
+Scenario utility (30 fights, seeds 1 and 7 averaged), no road against all three:
+
+| | LoreRim | Tuxborn | Vanilla |
+|---|---|---|---|
+| knight-boss | 13.6 to 17.9 | 24.5 to 42.2 | 73.5 to 77.3 |
+| knight-boss-healer | 15.9 to 14.9 | 13.2 to 21.0 | 40.9 to 41.9 |
+| control-setup | 75.4 to 70.9 | 62.4 to 71.0 | 77.3 to 78.2 |
+| kite (give ground + bash: 1.4 / 6.2 / 24.1) | 1.5 to 1.5 | 6.8 to 8.7 | 16.0 to 18.3 |
+| mean of all 17 | 62.27 to 61.99 | 47.25 to 49.51 | 68.29 to 68.70 |
+
+A per-list search of the three weights and need slopes reaches +0.65 J on LoreRim, +1.4 on Tuxborn and +1.3 on
+Vanilla, but the lists want different weights (bash 0.5 on LoreRim, 1.33 elsewhere, block 1.0 / 2.0 / 0.56).
+
+**Verdict of the proof.**
+- **Bash earns its place on every list** with one shared weight: give ground + bash is ahead in all six runs
+  (+0.04 to +0.6 J). It is weakest on LoreRim, correctly: under Chocolate Poise a bash is poise damage and rarely
+  interrupts.
+- **Give ground earns a little alone** (+0.07 J) and more with bash. It moves the kite scenario on Vanilla from 16
+  to 24 and knight-boss on LoreRim from 13.6 to 19.0.
+- **Block earns once it blocks only what is killing him.** With a base need of 0.5 for any swing in the air it was
+  worth +13 U on Tuxborn's knight-boss and cost on LoreRim. With the base at 0 (`Tuning::blockBase`, the need is only
+  how few seconds he has) and weight 2: +0.43 J in the mean of the six runs (LoreRim -0.27 / +0.21, Tuxborn +1.32 /
+  +1.02, Vanilla +0.24 / +0.04), no list beyond the noise. That is now the default.
+- **The roads are not the whole gap.** The oracle earns +30 to +46 U on these scenarios with the same three actions.
+  First-guess needs capture about a tenth of that. What is missing after the roads is TIMING (when a step back pays,
+  which swing to block), which is lab work on the considerations, not engine work.
+
+Expected gain to plan with: +0.4 J shared today, +0.65 to +1.4 J with per-list-free tuning, and a ceiling several
+times that once the timing inputs exist. The order below builds the cheaper and better-proven capability first.
+
+### 26.2 Design A: a one-shot combat move (bash, power bash, block) in Harbinger
+
+**What MFO does today for the power attack** (`cast/Fire.cpp`, the act.power_attack executor): once the follower is
+inside reach of the chosen foe, `NotifyAnimationGraph("attackPowerStartInPlace")`. It is the engine's own animation,
+the hit is the animation's own hit frame, and it has been in the field for months. MFO's diagnostics already observe
+the sibling events `bashStart`, `bashPowerStart`, `blockStart`, `blockStop` (`Diagnostics.cpp:416-422`), so the
+behaviour graph raises them for followers.
+
+**The capability.** A new Harbinger intent (append-only, next free number, proposed name `kIntent_CombatMove`):
+PROMOTE, one-shot, bounded. Param: `ival` = the move (Bash, PowerBash, Block), `target` = the foe (Bash: optional
+facing and reach check), `fval` = seconds (Block: how long the guard stays up, bounded, default 1.5). The client
+declares WHAT, Harbinger enforces the composition:
+
+1. Refuse (kInvalidHandle, with a reason the client can read) when the move cannot be done as declared: no shield or
+   blocking weapon drawn, the actor staggered, in a kill move, mid-cast on the hand it needs, or the graph rejects the
+   event. Never a silent success.
+2. Send the graph event the engine's own combat AI sends for that move. One event, the engine's animation.
+3. DENY-COMPLETENESS for a block: while the guard is declared up, the actor's own Offense leaves would drop it. So
+   the claim composes with the existing ch.7 CombatAction deny (kCombatActionCat_Offense) for exactly the block
+   window and releases both together. Nothing else is denied. A bash needs no deny: it is one animation.
+4. End: the window passes, the actor is staggered or downed, the client releases, a save loads.
+
+**What must be probed before one line of it is trusted (principle 5 and 6):**
+- Does a graph-sent `bashStart` on an NPC produce a real bash (the hit event with the bash flag, stamina spent,
+  the stagger or poise damage)? The engine's own Bash leaf may set attack data on the actor's process before the
+  event. If the hit reads that data, a bare event would swing with stale or missing data. The passive probe: log,
+  for the engine's OWN bashes on followers, the process's attack data before `bashStart` and the hit that follows.
+  Then one deliberate dev-only test on one follower.
+- Does `blockStart` alone make incoming hits count as blocked (HitData percent blocked), or does the engine read an
+  actor state the Block leaf sets? Same method: observe the engine's own blocks first.
+- The 1.5.97 and 1.7 layouts get their own verification (principle 11). An animation event has no address row, which
+  is why this design is the cheaper of the two.
+
+**MFO side.** A thin client like `apmf/OffenseApproach.cpp`, `Snapshot::bashRoad` / `blockRoad` read from "the client
+is live", Harbinger absent = no candidate (a documented degrade, not a mask).
+
+### 26.3 Design B: a combat area centred on a point (give ground, kite)
+
+**What exists.** ch.24 CombatApproach substitutes the centre and radius of the actor's own standard combat area
+with (X, R) where X is a REFERENCE. The engine's own Return To Combat Area walks him there and he fights all the way.
+Its `pos` parameter is not read.
+
+**The capability.** An append-only flag on ch.24 (`kApproach_Point`): the centre is `param.pos`, a world point, and
+`target` becomes optional (when given, it is the foe to keep facing: movement is two facets, the GOAL and the
+FACING, per the PFP design, and only the goal is claimed). Everything else of ch.24 stands as it is: the area is
+answered with the engine's own area outside movement, a package's hold position outranks it, a ch.23 leash is
+respected, Harbinger ends the claim itself on arrival / target lost / combat end.
+
+**What MFO declares for a step back:** the point 400 to 500 units from the foe on the line foe to follower, checked
+on the navmesh (the engine's own path query: a point he cannot reach is refused, never guessed), R about 150, held
+2 s.
+
+**Recon done (read-only, Harbinger `native/channels/CombatApproach.cpp`):** the seat already works on a point. Each sweep it
+reads the reference's position (`:1097`) and declares the area as `Geo{ x, y, z, space, radius }` (`:1184`), and an
+internal caller can already hand it a point directly (`SetInternalBound(actor, point, space, radius)`, `:1339`). So a
+point-centred claim is the same substitution with a fixed point and the actor's own space, plus the end conditions that
+today hang on the reference (target lost) restated for a point. No new engine seat.
+
+**To probe first:** that the existing ch.24 seat reads its centre in one place (so a point is the same substitution),
+and how the actor moves to an area BEHIND him while a foe is on him (he may turn his back: acceptable for a kite, a
+tell for a knight). The facing facet is a second step, only if the field shows the tell.
+
+### 26.4 Order and status
+
+1. Design A (combat move): probes, then the Harbinger intent, then the MFO client. Bash first, block when its need
+   has earned it in the lab.
+2. Design B (point-centred area): the ch.24 flag, then the MFO client.
+3. In the lab meanwhile: the timing inputs (26.1, last bullet).
+
+Status: nothing in the Harbinger repo is written. The lab families and the designs above are the brief. This is the
+next author's first item.
+
+### 26.5 Parameter set A2 is now the default tuning
+
+`Catalogue.cpp DefaultTuning()` carries set A2 (commit after e02e360), with one addition that is not from the search:
+the health potion weight 1.1 to 2.2. With the power attack at 2.394 a melee follower at 22 percent health would have
+swung before he drank, which a reviewed harness check ("the health potion ranks first") forbids. The raise is neutral
+in the lab (67.25 against 67.23) and keeps that intent. Harness 0 failed.
+
+Set A2 does not need the estimates. In the game as it can run today (no estimates, constant reach):
+
+| J (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 |
+|---|---|---|---|---|---|---|
+| the doc weights (on main) | 61.44 | 60.95 | 59.54 | 58.95 | 75.92 | 73.96 |
+| set A2 as default | 63.41 | 62.14 | 63.03 | 62.33 | 78.20 | 77.56 |
+| set A2 with the estimates measured | 64.10 | 63.53 | 64.64 | 63.83 | 78.74 | 78.67 |
+
+So the weights alone are worth +1.2 to +3.6 J in the live game, before any engine-side fill. This is a behaviour
+change on main once merged (more power attacks and control casts, fewer magicka potions) and wants its Opus review
+and a field look.
+
+## 27. Class packages (C8), default rows (C12) and prefix orders (Q74) re-run under the corrected world
+
+Sections 17, 18 and 22.1 were searched before Chocolate Poise, follower scaling, the spell-reach fix and rulings Q73
+and Q74 were in the lab. All three searches were run again (table mode, train LoreRim, validate Tuxborn and Vanilla,
+seeds 1 and 7, the same keep rule). The files `tools/iaus_sim/packages/<class>.json` and `defaults/<class>.json` now
+hold THESE results and supersede the tables of sections 17, 18 and 22.1. The default-row search now runs with the
+rows cut to the rank's slots, so the sets it finds already have to work as prefixes.
+
+**Packages kept (7 of 35):**
+
+| Class | Mean gain (J) | Change against today's package |
+|---|---|---|
+| mercenary | +4.94 | melee stance offensive x4, power share x2, leash 1500 |
+| knight | +4.00 | melee stance offensive x4, bash x2, power share x0.75, leash 1000 |
+| ebony-warrior | +2.78 | offensive x2.66, power share x2 |
+| warrior | +2.38 | offensive x2.66, power attack on a staggered foe x2, power share x2, leash 2500 |
+| listener | +1.46 | melee and ranged stance offensive x2, power attack on a staggered foe x2, power share x1.33 |
+| priest | +0.80 | cast stance offensive x2 |
+| nightblade | +0.76 | offensive x1.33, leash 1500 |
+
+The pattern is the same as in section 17 and stronger: the melee line wants a far more offensive melee stance than
+today's and a leash on the player. The other 28 classes show no robust gain (blademaster +2.74 and great-knight +1.09
+gain on the train list and lose on a validation list, so they are not kept).
+
+**Default rows kept (11 of 35):** blademaster +5.03, witchhunter +3.91, living-legend +3.28, warrior +3.17, champion
++2.78, conjurer +2.10, sorcerer +1.98, nightingale +1.91, grand-battlemage +1.52, necromancer +1.18, wizard +1.10.
+The row sets are in each class's `defaults/<class>.json` (`lab`, with `today` beside it and the per-list evidence).
+
+**Prefix orders kept (3):** listener +1.96, warlock +1.76, grand-battlemage +0.56. Fewer than in 22.1 because the row
+search itself now scores the cut sets.
+
+Caveat, unchanged: table mode acts through the sim's engine-AI MODEL, and only some combat-style fields are
+modelled (offensive, defensive, the power-attack and bash multipliers, fallback, the three weapon weights). The
+direction is the finding. The values want the in-game probe before the C8 and C12 authors take them.
+
+## 28. Review of the phase-2 native diff (Opus tier 3, on 303c14d) and the fix round (successor 2, 2026-11-11)
+
+The review found nothing above SEV-3. Its report is `scratchpad/agentlogs/iaus-p2-review.md`. Cost about 58 µs per
+tick at 152 candidates, the harness 0 failed on the branch and on a trial merge with main. This round fixes F2, F4,
+F5 and F6, lists F1 and F3 as intended, and merges main (13f2e41 and later: the taunt rules) into the branch.
+
+### 28.1 What phase 2 changes in the LIVE game once it merges
+
+Phase 2 is not only lab work. These reach a follower on Sentient AI the day the branch merges, with no engine-side
+fill and no road flag. Lab effect = mean J over LoreRim, Tuxborn and Vanilla, seeds 1 and 7, 30 fights, the
+estimates measured. The noise at that size is about 0.5 J.
+
+| Change | Live because | What the player sees | Lab effect |
+|---|---|---|---|
+| Set A2 as the default weights (26.5) | `DefaultTuning()` | more power attacks and control casts, fewer magicka potions | +1.2 to +3.6 J per list without the estimates |
+| TauntChance (F1): a taunt is scaled by its chance to work, 0.8 x chance + 0.2 | main fills both levels (`Combatant::level`, the taunt rules card) | fewer taunt attempts on a foe above his level. With the taunt weight at 0.75 a taunt on a foe 2 levels up scores about 44 percent lower than on main (chance 0.4: the curve gives 0.52, about 0.74 after the compensation, times the 0.75 weight, against main's 1.0) | weight 0 against weight 1: 68.97 against 68.91, inside the noise |
+| RangeTaunt (F3) replaces RangeSpell in the taunt set | the taunt set is read every tick | a taunt is no longer shaded down near the edge of its reach (the spell curve gave 0.38 at 90 percent). Same outer edge, 1.15 x reach | neutral (24, table of inputs) |
+| BoostControlled x1.3 on a blow, now PARALYSED foes only (F2) | main fills `paralysed` | he presses a paralysed foe. He no longer gets the boost on a FLEEING foe, which with the chase range pulled him after runners | fleeing included 68.92, paralysed only 68.93, boost off 68.99: inside the noise |
+| The health potion weight 2.2 (26.5) | `DefaultTuning()` | none intended: it keeps "the potion ranks first when he has no valid heal" under the higher power attack weight | neutral |
+| DamageValue scores a no-damage spell 0 against his best | the book is filled today | a spell with no measured damage is not cast as offense while a measured one exists | part of set A2's numbers |
+
+Not live: everything behind `Snapshot::regroupRoad` / `groundRoad` / `blockRoad` / `bashRoad`, `Tuning::kiteDistance`
+(0), and every input whose fact is still unmeasured in the game (the estimates, `mortal`, `swinging`, `casting`,
+`controlSec`, `castsWanted`): those considerations read "off" until the engine-side fill card.
+
+### 28.2 The fixes
+
+| Finding | Fix | Check |
+|---|---|---|
+| F2 (SEV-3) BoostControlled boosted fleeing foes | new fact `Facts::foeHelpless` = paralysed. `foeControlled` (paralysed or fleeing) stays the control-cast gate's input | harness 0 failed. J 68.92 to 68.93 |
+| F4 (SEV-4) HealClaimed counted as an applicable input on every heal | off unless another heal is in flight on the recipient (the I4 rule: an input that is off does not raise n) | J 68.93 to 68.91 |
+| F5 (SEV-3) heal weight 2.4 halved what `noHealDrink` (0.50) and `noHealRetreat` (0.30) meant | `Decision::bestHeal` is now the best heal's score DIVIDED BY its family's action weight, so no weight tuning moves the two gates again. The thresholds are rescaled by the 1.2 they were written against: 0.4167 and 0.25, the same meaning as on main for a heal spell. A heal SCROLL (weight 0.9) now blocks the drink a little sooner than on main (its raw score above 0.375 instead of 0.5) | harness 0 failed, "the health potion ranks first" passes, J unchanged to three decimals (68.91) |
+| F6 (SEV-4) `scheduler/IausSource.cpp` had no case for Regroup, GiveGround, Block, Bash | the four join "no action road for this family yet" | CI |
+
+`[iaus-why]` and the readout print `best heal` in the new unit (score over weight).
+
+### 28.3 Merge with main
+
+`Estimate.h` is the branch file, `TauntChance` uses `(std::clamp)` and its comment says the roll in `Taunt.cpp`
+calls it (Q72). `Core.h` keeps main's `rowlessTauntCooldownSec = kTauntCooldownSec` with the phase-2 Tuning fields
+after it. The harness keeps both includes and runs `SharedTauntPowerRules()` then `ReachLearning()`: 0 failed.
+
+For the engine-fill card (recorded by the coordinator as backlog): F7, `bestOn` filters and a per-entry "measured"
+flag, and `Reach` falling back to `fMeleeReach` while `!Known()`.

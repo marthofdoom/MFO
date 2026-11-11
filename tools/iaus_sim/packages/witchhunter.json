@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "id": "pkg-witchhunter-v1",
+ "class": "witchhunter",
+ "line": "Ranged",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 2.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.1.off": 2.0
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 31.29,
+   "package": 31.29,
+   "delta": -0.0
+  },
+  "LoreRim/iaus": {
+   "today": 32.54,
+   "package": 32.24,
+   "delta": -0.3
+  },
+  "Tuxborn/table": {
+   "today": 36.85,
+   "package": 37.64,
+   "delta": 0.79
+  },
+  "Tuxborn/iaus": {
+   "today": 39.92,
+   "package": 39.93,
+   "delta": 0.01
+  },
+  "Vanilla/table": {
+   "today": 56.08,
+   "package": 55.69,
+   "delta": -0.38
+  },
+  "Vanilla/iaus": {
+   "today": 69.28,
+   "package": 70.28,
+   "delta": 1.0
+  }
+ },
+ "mean_table_gain": 0.14,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

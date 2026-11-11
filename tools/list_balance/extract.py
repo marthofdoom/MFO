@@ -70,6 +70,16 @@ def find_plugins(root, profile, data_dirs):
             if nm.lower().endswith(('.esp', '.esm', '.esl')): where.setdefault(nm.lower(), os.path.join(d, nm))
     order = [l[1:].strip() for l in open(os.path.join(prof, 'plugins.txt'), encoding='utf-8', errors='replace').read().splitlines()
              if l.startswith('*')]
+    # plugins.txt never lists the implicit masters: the five base ESMs, then the Creation Club files of Skyrim.ccc
+    # (game root, next to the Data folder). They load FIRST, in this order (v1 missed them: only overridden vanilla records were read).
+    implicit = ['Skyrim.esm', 'Update.esm', 'Dawnguard.esm', 'HearthFires.esm', 'Dragonborn.esm']
+    for d in data_dirs:
+        ccc = os.path.join(root, os.path.dirname(d.rstrip('/')), 'Skyrim.ccc')
+        if os.path.isfile(ccc):
+            implicit += [l.strip() for l in open(ccc, 'rb').read().decode('utf-8', 'replace').splitlines() if l.strip()]
+            break
+    have = {o.lower() for o in order}
+    order = [m for m in implicit if m.lower() in where and m.lower() not in have] + order
     return order, where
 
 
@@ -82,9 +92,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--list', required=True); ap.add_argument('--profile', required=True)
     ap.add_argument('--data', action='append', default=[]); ap.add_argument('--out'); ap.add_argument('--name')
+    ap.add_argument('--vanilla', action='store_true', help='only the five base ESMs of this install (name Vanilla)')
     a = ap.parse_args()
-    name = a.name or os.path.basename(a.list.rstrip('/'))
+    name = a.name or ('Vanilla' if a.vanilla else os.path.basename(a.list.rstrip('/')))
     order, where = find_plugins(a.list, a.profile, a.data)
+    if a.vanilla: order = order[:5]
     win = {}; missing = []
     for pl in order:
         p = where.get(pl.lower())

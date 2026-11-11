@@ -1,0 +1,213 @@
+{
+ "schema": 1,
+ "id": "defaults-templar-v1",
+ "class": "templar",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.7,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.cast_self",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_undead",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.ally_hp_pct_below",
+   "gambit": "act.cast_target",
+   "threshold": 0.7,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_hp_pct_below",
+   "gambit": "act.cast_self",
+   "threshold": 0.5,
+   "spell_role": "Heal",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_ally",
+   "gambit": "act.taunt",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_weaker_than_me",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_is_undead|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "lab_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_weaker_than_me|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 39.06,
+   "lab": 39.74,
+   "delta": 0.68
+  },
+  "Tuxborn": {
+   "today": 43.08,
+   "lab": 42.75,
+   "delta": -0.32
+  },
+  "Vanilla": {
+   "today": 63.15,
+   "lab": 63.58,
+   "delta": 0.43
+  }
+ },
+ "mean_gain": 0.26,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
+ "prefix": {
+  "ruling": "Q74",
+  "start_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_is_undead|act.attack|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+  "ordered_text": "cond.ally_hp_pct_below|act.cast_target|0.7|7|0;cond.self_hp_pct_below|act.cast_self|0.5|7|0;cond.foe_is_undead|act.attack|0|0|0;cond.foe_attacking_ally|act.taunt|0|0|0;cond.foe_any|act.equip_melee|0|0|0",
+  "ordered": [
+   {
+    "condition": "cond.ally_hp_pct_below",
+    "gambit": "act.cast_target",
+    "threshold": 0.7,
+    "spell_role": "Heal",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.self_hp_pct_below",
+    "gambit": "act.cast_self",
+    "threshold": 0.5,
+    "spell_role": "Heal",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_is_undead",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_attacking_ally",
+    "gambit": "act.taunt",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_any",
+    "gambit": "act.equip_melee",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   }
+  ],
+  "evidence": {
+   "LoreRim": {
+    "prefix3": {
+     "start": 37.09,
+     "ordered": 37.95,
+     "delta": 0.86
+    },
+    "prefix4": {
+     "start": 38.1,
+     "ordered": 38.04,
+     "delta": -0.05
+    },
+    "prefix5": {
+     "start": 38.1,
+     "ordered": 38.04,
+     "delta": -0.05
+    }
+   },
+   "Tuxborn": {
+    "prefix3": {
+     "start": 42.85,
+     "ordered": 40.95,
+     "delta": -1.9
+    },
+    "prefix4": {
+     "start": 42.29,
+     "ordered": 41.67,
+     "delta": -0.62
+    },
+    "prefix5": {
+     "start": 42.29,
+     "ordered": 41.67,
+     "delta": -0.62
+    }
+   },
+   "Vanilla": {
+    "prefix3": {
+     "start": 63.56,
+     "ordered": 62.22,
+     "delta": -1.34
+    },
+    "prefix4": {
+     "start": 62.47,
+     "ordered": 62.75,
+     "delta": 0.28
+    },
+    "prefix5": {
+     "start": 62.47,
+     "ordered": 62.75,
+     "delta": 0.28
+    }
+   }
+  },
+  "mean_gain": -0.35,
+  "verdict": "no robust gain: keep the starting order",
+  "slots_by_rank": [
+   3,
+   5,
+   7,
+   9,
+   12
+  ],
+  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+ }
+}

@@ -1,0 +1,87 @@
+{
+ "schema": 1,
+ "id": "defaults-evoker-v1",
+ "class": "evoker",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Destruction",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.2,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_weak_fire",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Fire",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Paralyze",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Destruction",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.266,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_any|act.cast_target|0|2|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.2|0|0",
+ "lab_text": "cond.foe_weak_fire|act.cast_target|0|3|0;cond.foe_attacking_player|act.cast_target|0|12|0;cond.foe_any|act.cast_target|0|2|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.266|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 51.73,
+   "lab": 52.65,
+   "delta": 0.92
+  },
+  "Tuxborn": {
+   "today": 42.66,
+   "lab": 42.51,
+   "delta": -0.16
+  },
+  "Vanilla": {
+   "today": 65.85,
+   "lab": 64.8,
+   "delta": -1.05
+  }
+ },
+ "mean_gain": -0.1,
+ "verdict": "no robust gain: keep today's rows",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5"
+}

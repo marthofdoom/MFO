@@ -41,6 +41,10 @@ namespace MFO::Iaus {
         case Family::CastWard:     return "cast_ward";
         case Family::Scroll:       return "use_scroll";
         case Family::Exploit:      return "exploit";
+        case Family::Regroup:      return "regroup";
+        case Family::GiveGround:   return "give_ground";
+        case Family::Block:        return "block";
+        case Family::Bash:         return "bash";
         case Family::kCount:       break;
         }
         return "?";
@@ -68,6 +72,10 @@ namespace MFO::Iaus {
             "foe_count", "recipient_hp", "heal_reach", "early", "in_melee", "live_summon", "foes", "caster_on_me",
             "self_hp", "scroll_stock", "mp_low", "engaged",
             "caster", "downed", "outnumbered",
+            "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
+            "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
+            "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
+            "need", "far", "need", "need", "need",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -83,6 +91,8 @@ namespace MFO::Iaus {
         case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive:
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
+        case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
+        case Cons::MortalTaunt: case Cons::BoostMortalDanger:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -99,10 +109,14 @@ namespace MFO::Iaus {
     bool FactsFinite(const Facts& f) {
         const float v[] = { f.dist, f.reach, f.foeLevelRatio, f.foeHpPct, f.cost, f.magicka, f.magickaMax,
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
-                            f.selfMagicka, f.recipientHp, f.combatSec, f.emergency };
+                            f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
+                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
+                            f.controlSec, f.castsWanted };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
-        return !std::isnan(f.sinceFired);   // +inf is the documented "not recently"
+        // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
+        return !std::isnan(f.sinceFired) && !std::isnan(f.selfTtl) && !std::isnan(f.tauntTtl) && !std::isnan(f.playerTtl) &&
+               !std::isnan(f.recipientTtl) && !std::isnan(f.meleeThreatDist) && !std::isnan(f.threatTtl);
     }
 
     float EmergencyLevel(float worst, const Tuning& t) {
@@ -256,15 +270,110 @@ namespace MFO::Iaus {
             at(Cons::BoostDowned) = Bin(1.0f, 1.4f);      // doc: x1.4 heal on a downed recipient
             at(Cons::BoostOutnumbered) = Bin(1.0f, 1.3f); // doc: x1.3 summon when foes > party
 
+            // ── estimates (iaus/Estimate.h; sim v2 phase 2, Docs/research/2026-11/iaus-sim-v2.md "Phase 2") ──
+            // damage: x = this spell's expected damage on the target / his best castable spell's on it. The best
+            // spell is 1.0, one doing a third of it 0.53. Never 0: a weak spell is still a cast.
+            at(Cons::DamageValue) = Lin(0.7f, 0.3f);
+            // overkill: x = target health / expected damage, capped at 1. A cast that fits scores 1; one doing
+            // five times what is left 0.5. Shapes only: finishing a foe is never wrong, wasting most of a big spell is.
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 0.35f }, { 0.5f, 0.75f }, { 1.0f, 1.0f } } };
+                at(Cons::Overkill) = Piece(p);
+            }
+            // survive (taunt): x = seconds he would live with this foe on him too / 12. Under 3 s the taunt is
+            // nearly thrown away (0.15, never a veto: a sacrifice must stay possible), 6 s 0.7, 12 s and more 1.
+            {
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 0.15f }, { 0.25f, 0.3f }, { 0.5f, 0.7f }, { 1.0f, 1.0f } } };
+                at(Cons::TauntSurvive) = Piece(p);
+            }
+            // danger (retreat): x = max(low-health danger, seconds-to-live danger), see Input. No danger = veto, as
+            // the 30% health gate was.
+            at(Cons::RetreatDanger) = VetoBelow(Lin(0.665f, 0.0f), 0.001f);   // slope: set A2 (was 1.0)
+            // heal size: x = missing health / the heal, capped at 1. A heal he can use in full 1.0, one four times
+            // too big 0.55.
+            at(Cons::HealSize) = Lin(0.6f, 0.4f);
+            at(Cons::BoostPlayerDying) = Bin(1.0f, 1.8f);      // the player has under kDyingSec to live
+            at(Cons::BoostRecipientDying) = Bin(1.0f, 1.4f);   // the recipient has
+            // chase (melee attack). Ruling Q70 (marth 2026-11-11, clarifying Q64): TARGET choice is not gated by
+            // reach, a melee follower may name any foe in chase range; the reach gate is for the SWINGS IAUS times
+            // (the power attack keeps RangeMelee). x = distance / the chase cap: 1.0 in reach, 0.75 at 15% of the cap
+            // (about 600 units), 0.5 at the cap, vetoed beyond it.
+            {
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 1.0f }, { 0.15f, 0.75f }, { 1.0f, 0.5f } } };
+                at(Cons::RangeChase) = VetoAbove(Piece(p), 1.0f);
+            }
+            at(Cons::BoostControlled) = Bin(1.0f, 1.3f);       // a helpless foe: every blow lands
+            // taunt chance (ruling Q69): x = the chance the attempt pins this foe. A 0.9 taunt scores 0.92, a coin flip
+            // 0.6, the 0.1 floor 0.28: a long shot is dear (30 s cooldown) but never forbidden.
+            at(Cons::TauntChance) = Lin(0.8f, 0.2f);
+            // heal claimed: another follower's heal is already on its way to this recipient. A second heal mostly
+            // overheals (sim: 16 to 24% of heal casts were doubles): 0.35, not a veto (a dying recipient may need both).
+            at(Cons::HealClaimed) = Bin(1.0f, 0.35f);
+            // heal urgency: x = the recipient's seconds to live / 10 at the damage he is taking. 0 s 1.0, 5 s 0.8, 10 s
+            // and more 0.55: a heal before the blow lands, not after (not applicable while nothing is hitting him).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 0.8f }, { 1.0f, 0.55f } } };
+                at(Cons::HealUrgency) = Piece(p);
+            }
+
+            // taunt range: x = distance / the taunt's reach. Flat inside, vetoed beyond 1.15 x (the same outer edge the aimed
+            // curve had, so no taunt that was a candidate stops being one): the taunt is a call, it lands the same at 5 m
+            // and at 1 m. (The aimed-spell curve shaded a taunt at 90% of its reach to 0.38.)
+            at(Cons::RangeTaunt) = VetoAbove(Lin(0.0f, 1.0f), 1.15f);
+            // mortal taunt (a multiplier, applies only to a follower who dies for good): x = seconds he would live with this
+            // foe on him / 12. Under 3 s the taunt is all but refused (x0.15), 6 s x0.6, 12 s and more x1. For a follower
+            // who stands up again the survive term alone decides, as before.
+            {
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 0.15f }, { 0.25f, 0.15f }, { 0.5f, 0.6f }, { 1.0f, 1.0f } } };
+                at(Cons::MortalTaunt) = Piece(p);
+            }
+            // mortal danger (retreat, health potion): x1.5 for a follower who dies for good. His life is not a resource.
+            at(Cons::BoostMortalDanger) = Bin(1.0f, 1.5f);
+            // trade (the melee weapon category): x = seconds he lives at the damage coming in / 10. Ten seconds and more
+            // 1.0, two seconds 0.44: a follower who cannot trade blows does not put the bow away because the foe came near.
+            // Not applicable while nothing is known to be hitting him.
+            at(Cons::PostureTrade) = Lin(0.7f, 0.3f);
+            // give ground / block / bash need: see Input. Under 0.05 there is no reason: veto.
+            at(Cons::GroundNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            at(Cons::BlockNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
+            at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            // regroup far: x = distance to the anchor / 1000. Inside 300 units he is already there (veto), 350 0.5, 800
+            // and more 1.0, past 3000 it is not a regroup any more (veto: that is a retreat or a travel).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.3f, 0.4f }, { 0.35f, 0.5f }, { 0.8f, 1.0f } } };
+                at(Cons::RegroupFar) = VetoAbove(VetoBelow(Piece(p), 0.3f), 3.0f);
+            }
+            // control worth: x = min(1, seconds held / 10) x (0.4 + 0.6 x the foe's health share). Ten seconds on a fresh foe
+            // 1.0; a 2 s stagger-length hold 0.36; a long hold on a foe at a quarter health 0.66. A hold is worth the blows
+            // it stops and the free blows it gives, and both need the foe to live through it. Never 0.
+            at(Cons::ControlWorth) = Lin(0.8f, 0.2f);
+            // magicka buys: x = min(1, casts the fight still asks for / 3). Three casts and more 1.0, one cast 0.45, none
+            // (the foes left die to one blow) 0.18: a potion drunk for a fight that is over is the bot's tell.
+            at(Cons::MagickaBuys) = Lin(0.82f, 0.18f);
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
             auto aw = [&](Family f, float w) { d.actionWeight[static_cast<std::size_t>(f)] = w; };
-            aw(Family::Attack, 0.8f);      aw(Family::PowerAttack, 0.9f);  aw(Family::Taunt, 1.0f);
-            aw(Family::Sneak, 0.6f);       aw(Family::Retreat, 0.5f);      aw(Family::DrinkHealth, 1.1f);
-            aw(Family::DrinkStamina, 1.1f); aw(Family::DrinkMagicka, 1.1f); aw(Family::Posture, 1.0f);
-            aw(Family::CastOffense, 1.0f); aw(Family::CastControl, 0.9f);  aw(Family::CastHeal, 1.2f);
+            // PARAMETER SET A2 (sim v2, Docs/research/2026-11/iaus-sim-v2.md sections 16.3 and 24.2): searched on LoreRim,
+            // kept only where Tuxborn, Vanilla and a second seed agree. Against the doc values in brackets, with the
+            // estimates NOT measured (the game today) it is worth +1.4 to +3.8 J on every list and seed, and more with them.
+            //   power attack 2.394 [0.9]   a timed heavy blow is the melee follower's strongest decision
+            //   taunt 0.75 [1.0]           retreat 0.665 [0.5]
+            //   magicka potion 0.275 [1.1] a potion rarely buys what the fight still needs (see MagickaBuys)
+            //   offense casts 1.769 [1.0]  control casts 3.6 [0.9]   heal casts 2.4 [1.2]
+            //   health potion 2.2 [1.1]    NOT from the search (it is neutral there, 67.25 against 67.23): raised with the
+            //                              power attack so a follower at a fifth of his health still drinks before he swings
+            //                              (the harness check "the health potion ranks first" is the intent it keeps)
+            // The control weight stands in for an input that does not exist yet (what the hold buys against what damage
+            // buys, gap G13): expect it to come down when that input lands.
+            aw(Family::Attack, 0.8f);      aw(Family::PowerAttack, 2.394f); aw(Family::Taunt, 0.75f);
+            aw(Family::Sneak, 0.6f);       aw(Family::Retreat, 0.665f);    aw(Family::DrinkHealth, 2.2f);
+            aw(Family::DrinkStamina, 1.1f); aw(Family::DrinkMagicka, 0.275f); aw(Family::Posture, 1.0f);
+            aw(Family::CastOffense, 1.769f); aw(Family::CastControl, 3.6f); aw(Family::CastHeal, 2.4f);
             aw(Family::CastBuff, 0.7f);    aw(Family::CastSummon, 0.9f);   aw(Family::CastWard, 0.8f);
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
+            aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
             // already makes a clearly best emergency action win at every rank).
@@ -282,31 +391,38 @@ namespace MFO::Iaus {
         namespace {
             using U = Use;
             constexpr U kAttack[] = {
-                { Cons::RangeMelee, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
+                { Cons::RangeChase, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
-                { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
+                { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 }, { Cons::BoostControlled, 1 },
             };
             constexpr U kPowerAttack[] = {
                 { Cons::RangeMelee, 1 }, { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeThreat, 1 },
                 { Cons::BoostCaster, 1 }, { Cons::FoeEngaged, 1 },
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1.5f }, { Cons::FoeFinish, 0.7f },
                 { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
-                { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 },
+                { Cons::FoeBlocking, 1 }, { Cons::SelfStamina, 1 }, { Cons::FoeStronger, 1 }, { Cons::BoostControlled, 1 },
             };
             constexpr U kTaunt[] = {
-                { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
+                { Cons::RangeTaunt, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
                 { Cons::TauntSelfHp, 1 }, { Cons::FoeTaunted, 1 }, { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
+                { Cons::TauntSurvive, 1.995f },   /* set A2 */ { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
             };
+            constexpr U kGiveGround[] = { { Cons::GroundNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
+            constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
-            constexpr U kRetreat[] = { { Cons::RetreatHp, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 } };
+            constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
+                { Cons::BoostMortalDanger, 1 },
             };
-            constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 } };
             constexpr U kPosture[] = {
                 { Cons::PostureRanged, 1 }, { Cons::PostureMelee, 1 }, { Cons::Ammo, 1 }, { Cons::StaffCharge, 1 },
                 { Cons::MeleeReach, 1 }, { Cons::Unholy, 1 }, { Cons::MundaneVsUnholy, 1 }, { Cons::ClassWeapon, 1 },
+                { Cons::PostureTrade, 1 },
             };
             constexpr U kOffense[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -314,6 +430,7 @@ namespace MFO::Iaus {
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1 }, { Cons::Exploit, 1.3f },
                 { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::SplashSafe, 1 }, { Cons::AreaValue, 1 },
                 { Cons::Variety, 0.5f }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 }, { Cons::ClassFit, 1 },
+                { Cons::DamageValue, 0.9975f }, { Cons::Overkill, 0.931f },   // set A2
             };
             constexpr U kExploit[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -327,11 +444,13 @@ namespace MFO::Iaus {
                 { Cons::CooldownSoft, 1 }, { Cons::FoeThreat, 1.5f }, { Cons::BoostCaster, 1 },
                 { Cons::FoeControlled, 1 }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 },
                 { Cons::FoeCountControl, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
+                { Cons::ControlWorth, 1 },
             };
             constexpr U kHeal[] = {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
                 { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
                 { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
+                { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 }, { Cons::HealClaimed, 1 }, { Cons::HealUrgency, 0.7f },
             };
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
@@ -387,6 +506,10 @@ namespace MFO::Iaus {
             case Family::CastSummon:   return kSummon;
             case Family::CastWard:     return kWard;
             case Family::Exploit:      return kExploit;
+            case Family::Regroup:      return kRegroup;
+            case Family::GiveGround:   return kGiveGround;
+            case Family::Block:        return kBlock;
+            case Family::Bash:         return kBash;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;
@@ -409,6 +532,7 @@ namespace MFO::Iaus {
             switch (k) {
             case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
             case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : In::Off();
+            case Cons::RangeTaunt:    return (f.reach > 0.0f && c.family == Family::Taunt) ? f.dist / f.reach : In::Off();
             case Cons::Los:
                 switch (f.sight) {
                 case Sight::None:     return In::Off();
@@ -461,7 +585,7 @@ namespace MFO::Iaus {
             case Cons::SelfStamina:   return f.selfStamina;
             case Cons::FoeStronger:   return B(f.foeStronger);
             case Cons::FoeTaunted:    return B(!f.foeTaunted);
-            case Cons::TauntSelfHp:   return f.selfHp;
+            case Cons::TauntSelfHp:   return std::isfinite(f.tauntTtl) ? In::Off() : In(f.selfHp);   // superseded by survive once measured
             case Cons::Unseen:
                 if (f.unseen == Tri::Unknown) return In::Off();
                 return B(f.unseen == Tri::Yes);
@@ -507,6 +631,86 @@ namespace MFO::Iaus {
             case Cons::BoostCaster:   return B(f.foeCaster);
             case Cons::BoostDowned:   return B(f.recipientDowned);
             case Cons::BoostOutnumbered: return B(f.foeCount > f.partyCount);
+            case Cons::DamageValue:
+                // Not applicable only while NOTHING he can cast has a measured damage on this target. Once his best is known,
+                // a spell that does no damage (a noise, a debuff) is 0 against it: unmeasured must not read as "as good as any".
+                if (!(f.bestDamage > 0.0f)) return In::Off();
+                return Clamp((std::max)(0.0f, f.expDamage) / f.bestDamage, 0.0f, 1.0f);
+            case Cons::Overkill:
+                if (!(f.expDamage > 0.0f) || !(f.foeHealth > 0.0f)) return In::Off();
+                return Clamp(f.foeHealth / f.expDamage, 0.0f, 1.0f);
+            case Cons::TauntSurvive:
+                if (!std::isfinite(f.tauntTtl)) return In::Off();
+                return Clamp(f.tauntTtl / 12.0f, 0.0f, 1.0f);
+            case Cons::RetreatDanger: {
+                // The 30% health gate as it was (1 - hp^3 under 0.30, nothing above), or seconds to live under 8.
+                const float hp = Clamp(f.selfHp, 0.0f, 1.0f);
+                const float byHp = hp <= 0.30f ? 1.0f - hp * hp * hp : 0.0f;
+                const float byTtl = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f;
+                // KITE: he fights at range and a foe that has to close is nearly on him. Distance alone is not danger (a
+                // skeever is no reason to stop shooting): it counts by how little he could afford the trade, 0 when he would
+                // live 20 s and more with the foes that target him on him, all of it under 8 s. Unknown = no kite.
+                float byKite = 0.0f;
+                if (t.kiteDistance > 0.0f && f.rangedDrawn && std::isfinite(f.meleeThreatDist) && std::isfinite(f.threatTtl))
+                    byKite = Clamp(1.0f - f.meleeThreatDist / t.kiteDistance, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f);
+                return (std::max)((std::max)(byHp, byTtl), byKite);
+            }
+            case Cons::HealSize:
+                if (!(f.expHeal > 0.0f)) return In::Off();
+                return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
+            case Cons::RangeChase:
+                if (!f.meleeRange) return In::Off();
+                if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(f.dist / (f.reach * 20.0f)) : In::Off();   // no cap known: 20 reaches
+                return f.dist / f.chase;
+            case Cons::BoostControlled:     return B(f.foeHelpless);
+            case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
+            // Off when nobody else is healing him: an input that is on counts toward n (the I4 rule), and a
+            // constant 1.0 on every heal raised each heal's compensation (review of 303c14d, F4).
+            case Cons::HealClaimed:         return f.recipientBeingHealed ? In(1.0f) : In::Off();
+            case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::GroundNeed: {
+                if (c.family != Family::GiveGround) return In::Off();
+                // BEATEN: what is hitting him now leaves him seconds (6 s and more = no need).
+                float need = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 6.0f, 0.0f, 1.0f) : 0.0f;
+                // KITE: he fights at range, a foe that has to close is inside 450 units, and he could not afford it on him.
+                if (f.rangedDrawn && std::isfinite(f.meleeThreatDist) && std::isfinite(f.threatTtl))
+                    need = (std::max)(need, Clamp(1.0f - f.meleeThreatDist / 450.0f, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f));
+                return need;
+            }
+            case Cons::BlockNeed:
+                if (c.family != Family::Block || !f.foeSwinging) return c.family == Family::Block ? In(0.0f) : In::Off();
+                // A swing is in the air: half the need for that alone, the rest by how few seconds he has.
+                return t.blockBase + (1.0f - t.blockBase) * (std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f);
+            case Cons::BashNeed:
+                if (c.family != Family::Bash) return In::Off();
+                return f.foeCasting ? 1.0f : (f.foeOnMe ? 0.4f : 0.15f);
+            case Cons::RegroupNeed: {
+                if (c.family != Family::Regroup) return In::Off();
+                float need = 0.0f;
+                // PEEL: the player is being hit and has seconds left (10 s = no need, 0 s = all of it)
+                if (f.recipientIsPlayer && std::isfinite(f.recipientTtl)) need = (std::max)(need, Clamp(1.0f - f.recipientTtl / 10.0f, 0.0f, 1.0f));
+                // FALL BACK: he has seconds left himself and the anchor stands away from what is hitting him
+                if (f.anchorSafer && std::isfinite(f.selfTtl)) need = (std::max)(need, Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f));
+                // TO THE HEALER: he is hurt (under 60 percent) and the anchor heals
+                if (f.anchorHealer) need = (std::max)(need, Clamp((0.6f - Clamp(f.selfHp, 0.0f, 1.0f)) / 0.6f, 0.0f, 1.0f));
+                return need;
+            }
+            case Cons::RegroupFar:    return c.family == Family::Regroup ? In(f.dist / 1000.0f) : In::Off();
+            case Cons::PostureTrade:
+                if (!melee || !std::isfinite(f.selfTtl)) return In::Off();
+                return Clamp(f.selfTtl / 10.0f, 0.0f, 1.0f);
+            case Cons::MortalTaunt:
+                if (!f.mortal || !std::isfinite(f.tauntTtl)) return In::Off();
+                return Clamp(f.tauntTtl / 12.0f, 0.0f, 1.0f);
+            case Cons::BoostMortalDanger: return B(f.mortal);
+            case Cons::ControlWorth:
+                if (!(f.controlSec > 0.0f)) return In::Off();
+                return Clamp(f.controlSec / 10.0f, 0.0f, 1.0f) * (0.4f + 0.6f * Clamp(f.foeHpPct, 0.0f, 1.0f));
+            case Cons::MagickaBuys:
+                if (c.family != Family::DrinkMagicka || f.castsWanted < 0.0f) return In::Off();
+                return Clamp(f.castsWanted / 3.0f, 0.0f, 1.0f);
+            case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
+            case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
             case Cons::kCount:        break;
             }
             return In::Off();

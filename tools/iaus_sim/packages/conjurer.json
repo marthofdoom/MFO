@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "id": "pkg-conjurer-v1",
+ "class": "conjurer",
+ "line": "Mage",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.2.off": 1.33,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "changed": {
+  "st.2.off": 1.33
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 39.34,
+   "package": 39.78,
+   "delta": 0.44
+  },
+  "LoreRim/iaus": {
+   "today": 40.22,
+   "package": 39.97,
+   "delta": -0.24
+  },
+  "Tuxborn/table": {
+   "today": 38.13,
+   "package": 37.79,
+   "delta": -0.33
+  },
+  "Tuxborn/iaus": {
+   "today": 45.84,
+   "package": 45.85,
+   "delta": 0.01
+  },
+  "Vanilla/table": {
+   "today": 62.23,
+   "package": 62.22,
+   "delta": -0.01
+  },
+  "Vanilla/iaus": {
+   "today": 68.45,
+   "package": 68.04,
+   "delta": -0.4
+  }
+ },
+ "mean_table_gain": 0.03,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

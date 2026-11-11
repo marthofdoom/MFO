@@ -49,6 +49,10 @@ namespace MFO::Iaus {
         float         charge = 0.0f;            // staff: current charge
         bool          charged = true;           // staff: at least one cast left
         std::vector<std::uint32_t> activeOn;    // Buff / Ward: party members this spell's effect is live on
+        // Estimates (iaus/Estimate.h): one cast on an unresisting target, after his perks. 0 = not measured.
+        float         damage = 0.0f;            // health damage (a damage-over-time effect counted for its duration)
+        float         heal = 0.0f;              // healing
+        float         controlSec = 0.0f;        // Control: seconds its effect holds the target (the control effect's duration)
         std::string   name;
     };
 
@@ -117,10 +121,22 @@ namespace MFO::Iaus {
         bool  fleeing = false;
         bool  blocking = false;
         bool  caster = false;               // a spell in either hand right now
+        bool  rangedWeapon = false;         // a bow or crossbow in hand right now (it does not have to close to hurt)
+        bool  swinging = false;             // its melee swing is in the air right now (started, not landed)
+        bool  casting = false;              // it is charging a spell right now (a bash or a stagger stops the cast)
+        bool  healer = false;               // party member: knows a heal it can put on another (the regroup anchor "to the healer")
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
         bool  taunted = false;              // already under a live taunt (any taunter)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
+        // Estimates (iaus/Estimate.h). 0 = not measured, which every reader treats as unknown.
+        float hit = 0.0f;                   // physical damage of ONE weapon hit before the target's armor
+        float hitsPerSec = 0.0f;            // the engine's rate model: weapon speed x fCombatDPS(Melee|Bow)SpeedMult
+        bool  hitIsMagic = false;           // the hit is a spell in hand (armor does not apply)
+        float armor = 0.0f;                 // its physical mitigation, 0..1
+        float magicResist = 0.0f;           // kResistMagic, points
+        float lossPerSec = 0.0f;            // health it has been losing per second (observed)
+        bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
         std::vector<std::pair<int, float>> resists;   // (resist actor value, its value) for the book's elements
@@ -155,6 +171,16 @@ namespace MFO::Iaus {
         bool  meleeOnly = false;          // Actuation::MeleeOnly (the reach gate's subject)
         bool  handBusyLeft = false;       // a heal stands on that hand (design 1.3: never preempted)
         bool  handBusyRight = false;
+        bool  scrollRoad = false;         // card S3: a scroll can be READ as a cast (the actuation exists). false (today):
+                                          // scrolls stay in the book and no scroll candidate is made
+        bool  groundRoad = false;         // Harbinger can step him back from a point (lab only today)
+        bool  blockRoad = false;          // Harbinger can make him raise his guard now (lab only today)
+        bool  bashRoad = false;           // Harbinger can make him bash now (lab only today)
+        bool  regroupRoad = false;        // the ch.24 regroup client exists (close on the player / a healer while fighting).
+                                          // false (today): no regroup candidate is made
+        bool  mortal = false;             // he dies FOR GOOD at 0 health (no bleedout he recovers from: not essential, not
+                                          // protected, the list lets followers die). false = he goes down and stands up, or
+                                          // it is not known. A mortal follower weighs his own life far more.
         bool  tauntEnabled = false;       // the taunt feature switch
         bool  tauntBusy = false;          // his taunt attempt is in flight or a foe is still pinned to him: act.taunt
                                           // refuses (Taunt::Fire), so no taunt candidate is made (card I6)

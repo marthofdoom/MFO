@@ -1,0 +1,199 @@
+{
+ "schema": 1,
+ "id": "defaults-necromancer-v1",
+ "class": "necromancer",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.25,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_within_range",
+   "gambit": "act.equip_melee",
+   "threshold": 150.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_highest_hp",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Attack",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_me_melee",
+   "gambit": "act.flee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_attacking_player",
+   "gambit": "act.cast_target",
+   "threshold": 0.0,
+   "spell_role": "Paralyze",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.self_mp_pct_below",
+   "gambit": "act.drink_magicka_potion",
+   "threshold": 0.25,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_within_range",
+   "gambit": "act.equip_melee",
+   "threshold": 99.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|150|0|0",
+ "lab_text": "cond.foe_highest_hp|act.cast_target|0|1|0;cond.foe_attacking_me_melee|act.flee|0|0|0;cond.foe_attacking_player|act.cast_target|0|12|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|99|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 36.34,
+   "lab": 37.94,
+   "delta": 1.61
+  },
+  "Tuxborn": {
+   "today": 40.54,
+   "lab": 42.12,
+   "delta": 1.58
+  },
+  "Vanilla": {
+   "today": 65.14,
+   "lab": 65.47,
+   "delta": 0.34
+  }
+ },
+ "mean_gain": 1.18,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
+ "prefix": {
+  "ruling": "Q74",
+  "start_text": "cond.foe_highest_hp|act.cast_target|0|1|0;cond.foe_attacking_me_melee|act.flee|0|0|0;cond.foe_attacking_player|act.cast_target|0|12|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_within_range|act.equip_melee|99|0|0",
+  "ordered_text": "cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0;cond.foe_attacking_me_melee|act.flee|0|0|0;cond.foe_highest_hp|act.cast_target|0|1|0;cond.foe_attacking_player|act.cast_target|0|12|0;cond.foe_within_range|act.equip_melee|99|0|0",
+  "ordered": [
+   {
+    "condition": "cond.self_mp_pct_below",
+    "gambit": "act.drink_magicka_potion",
+    "threshold": 0.25,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_attacking_me_melee",
+    "gambit": "act.flee",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_highest_hp",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "Attack",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_attacking_player",
+    "gambit": "act.cast_target",
+    "threshold": 0.0,
+    "spell_role": "Paralyze",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_within_range",
+    "gambit": "act.equip_melee",
+    "threshold": 99.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   }
+  ],
+  "evidence": {
+   "LoreRim": {
+    "prefix3": {
+     "start": 39.29,
+     "ordered": 39.34,
+     "delta": 0.05
+    },
+    "prefix4": {
+     "start": 40.12,
+     "ordered": 40.88,
+     "delta": 0.77
+    },
+    "prefix5": {
+     "start": 40.13,
+     "ordered": 41.17,
+     "delta": 1.04
+    }
+   },
+   "Tuxborn": {
+    "prefix3": {
+     "start": 40.91,
+     "ordered": 40.72,
+     "delta": -0.18
+    },
+    "prefix4": {
+     "start": 41.58,
+     "ordered": 40.71,
+     "delta": -0.87
+    },
+    "prefix5": {
+     "start": 41.6,
+     "ordered": 40.77,
+     "delta": -0.83
+    }
+   },
+   "Vanilla": {
+    "prefix3": {
+     "start": 64.77,
+     "ordered": 64.0,
+     "delta": -0.77
+    },
+    "prefix4": {
+     "start": 64.89,
+     "ordered": 63.99,
+     "delta": -0.9
+    },
+    "prefix5": {
+     "start": 64.82,
+     "ordered": 63.93,
+     "delta": -0.89
+    }
+   }
+  },
+  "mean_gain": -0.29,
+  "verdict": "no robust gain: keep the starting order",
+  "slots_by_rank": [
+   3,
+   5,
+   7,
+   9,
+   12
+  ],
+  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+ }
+}

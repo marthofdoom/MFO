@@ -2,6 +2,8 @@
 // Standard headers only: tools/iaus_harness/run.sh builds this file with the host compiler.
 #include "iaus/Generate.h"
 
+#include "iaus/Estimate.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -36,6 +38,10 @@ namespace MFO::Iaus {
             int   foeCount = 0;
             int   partyCount = 1;
             std::vector<const Combatant*> top;   // the P3 cut, most relevant first
+            // estimates (iaus/Estimate.h); unknown = +inf / 0
+            float selfIncoming = 0.0f;
+            float selfTtl = kInf;
+            float playerTtl = kInf;
 
             void Push(Candidate&& a_c) {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
@@ -50,6 +56,9 @@ namespace MFO::Iaus {
                 f.foeCount = foeCount;
                 f.partyCount = partyCount;
                 f.emergency = out.emergency;
+                f.selfTtl = selfTtl;
+                f.playerTtl = playerTtl;
+                f.mortal = s.mortal;
             }
             void Foe(Facts& f, const Combatant& a_foe, bool a_ownRay) const {
                 f.dist = (std::max)(0.0f, Finite(a_foe.dist, 0.0f));
@@ -65,6 +74,7 @@ namespace MFO::Iaus {
                 f.foeBlocking = a_foe.blocking;
                 f.foeStronger = a_foe.level > s.self.level;
                 f.foeControlled = a_foe.paralysed || a_foe.fleeing;
+                f.foeHelpless = a_foe.paralysed;
                 f.foeTaunted = a_foe.taunted;
                 f.foeOutOfMeleeReach = a_foe.outOfMeleeReach;
                 f.foeUnholy = a_foe.unholy;
@@ -90,6 +100,7 @@ namespace MFO::Iaus {
                     x.Foe(c.f, *foe, ranged);
                     c.role = ranged ? RoleTag::Ranged : RoleTag::Melee;
                     c.f.meleeRange = !ranged;
+                    if (!ranged) c.f.chase = (std::max)(0.0f, Finite(s.chaseCap, 0.0f));   // act.attack names the target; the engine closes
                     c.f.reach = (std::max)(0.0f, Finite(ranged ? s.chaseCap : s.meleeReach, 0.0f));
                     x.Push(std::move(c));
                 }
@@ -116,16 +127,92 @@ namespace MFO::Iaus {
                     c.f.reach = (std::max)(0.0f, Finite(s.tauntReach, 0.0f));
                     const float rowCd = (std::max)(0.0f, Finite(x.g.tauntCooldownSec, 0.0f));
                     c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.rowlessTauntCooldownSec, 0.0f));
+                    // What he would be taking with this foe on him too (a foe already on him adds nothing).
+                    c.f.tauntTtl = Estimate::Ttl(s.self.hp, x.selfIncoming + (foe->targetId == s.self.id ? 0.0f : Estimate::Dps(*foe, s.self)));
+                    c.f.tauntChance = Estimate::TauntChance(s.self.level, foe->level);   // ruling Q69
                     x.Push(std::move(c));
                 }
             }
             if (x.g.disengage && x.foeCount > 0) {
                 Candidate c = x.Make(Family::Retreat, nullptr);
                 c.f.disengageClass = true;
+                c.f.rangedDrawn = ranged;
+                c.f.threatTtl = Estimate::Ttl(s.self.hp, Estimate::ThreatOn(s, s.self));
+                for (const Combatant& f : s.foes)   // the nearest foe on him that has to close to hurt him
+                    if (f.targetId != 0 && f.targetId == s.self.id && !f.caster && !f.rangedWeapon && !f.paralysed && !f.fleeing && std::isfinite(f.dist))
+                        c.f.meleeThreatDist = (std::min)(c.f.meleeThreatDist, (std::max)(0.0f, f.dist));
                 x.Push(std::move(c));
             }
         }
 
+        // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
+        void Guards(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (x.foeCount == 0) return;
+            const bool ranged = s.drawn == PostureKind::Bow || s.drawn == PostureKind::Staff;
+            const bool melee  = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver;
+            const float strike = Estimate::StrikeDistance(s);
+            const Combatant* nearOn = nullptr;      // the nearest foe that targets him and has to close
+            const Combatant* swingOn = nullptr;     // a foe whose swing at him is in the air, in striking distance
+            for (const Combatant& f : s.foes) {
+                if (!Readable(f) || f.targetId == 0 || f.targetId != s.self.id || f.paralysed || f.fleeing || !std::isfinite(f.dist)) continue;
+                if (Estimate::MustClose(f) && (!nearOn || f.dist < nearOn->dist)) nearOn = &f;
+                if (f.swinging && f.dist <= strike && (!swingOn || f.dist < swingOn->dist)) swingOn = &f;
+            }
+            if (s.groundRoad && nearOn) {
+                Candidate c = x.Make(Family::GiveGround, nearOn);
+                c.f.dist = (std::max)(0.0f, nearOn->dist);
+                c.f.rangedDrawn = ranged;
+                c.f.meleeThreatDist = c.f.dist;
+                c.f.threatTtl = Estimate::Ttl(s.self.hp, Estimate::ThreatOn(s, s.self));
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.groundCooldownSec, 0.0f));
+                x.Push(std::move(c));
+            }
+            if (s.blockRoad && melee && swingOn) {
+                Candidate c = x.Make(Family::Block, swingOn);
+                c.f.foeSwinging = true;
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
+                x.Push(std::move(c));
+            }
+            if (s.bashRoad && melee)
+                for (const Combatant* foe : x.top) {
+                    if (foe->outOfMeleeReach) continue;
+                    Candidate c = x.Make(Family::Bash, foe);
+                    x.Foe(c.f, *foe, false);
+                    c.role = RoleTag::Melee;
+                    c.f.meleeRange = true;
+                    c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                    c.f.foeCasting = foe->casting;
+                    c.f.foeSwinging = foe->swinging;
+                    c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.bashCooldownSec, 0.0f));
+                    x.Push(std::move(c));
+                }
+        }
+        // ── regroup: close on the player or a healer while fighting (Harbinger ch.24). Only once the road exists. ──
+        void Regroups(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (!s.regroupRoad || x.foeCount == 0) return;
+            for (const Combatant& a : s.allies) {
+                if (!Readable(a) || a.downed || !(a.isPlayer || a.healer)) continue;
+                Candidate c = x.Make(Family::Regroup, &a);
+                c.f.dist = (std::max)(0.0f, Finite(a.dist, 0.0f));
+                c.f.recipientIsPlayer = a.isPlayer;
+                c.f.anchorHealer = a.healer;
+                c.f.recipientTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(s, a));
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.regroupCooldownSec, 0.0f));
+                // The anchor is "safer" when every foe that is hitting him stands clearly farther from the anchor.
+                bool any = false, safer = true;
+                const float strike = Estimate::StrikeDistance(s);
+                for (const Combatant& f : s.foes) {
+                    if (f.targetId == 0 || f.targetId != s.self.id || f.paralysed || f.fleeing) continue;
+                    if (Estimate::MustClose(f) && Estimate::Apart(f, s.self) > strike) continue;
+                    any = true;
+                    if (Estimate::Apart(f, a) < Estimate::Apart(f, s.self) + 150.0f) { safer = false; break; }
+                }
+                c.f.anchorSafer = any && safer;
+                x.Push(std::move(c));
+            }
+        }
         // ── the three drinks (P2: no stock, no candidate) ────────────────────────────────────────────────
         void Drinks(Ctx& x) {
             const Kit& k = x.s.book.kit;
@@ -137,7 +224,34 @@ namespace MFO::Iaus {
             };
             drink(Family::DrinkHealth, k.potionsHealth);
             drink(Family::DrinkStamina, k.potionsStamina);
-            drink(Family::DrinkMagicka, k.potionsMagicka);
+            // What the magicka would buy: the casts of his best measured spell the fight still asks for. Offense first (the
+            // kept foes' health against his best spell's damage), else healing (the party's missing health against his best
+            // heal). Unknown (no measured spell) leaves the potion scored as before.
+            if (k.potionsMagicka > 0) {
+                float bestDmg = 0.0f, bestHeal = 0.0f;
+                for (const SpellEntry& e : x.s.book.entries) {
+                    if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                    if (e.nature == Prune::Nature::Offense) bestDmg = (std::max)(bestDmg, Estimate::Pos(e.damage));
+                    else if (e.nature == Prune::Nature::Heal) bestHeal = (std::max)(bestHeal, Estimate::Pos(e.heal));
+                }
+                float wanted = -1.0f;
+                if (bestDmg > 0.0f) {
+                    float hp = 0.0f;
+                    for (const Combatant* f : x.top) hp += (std::max)(0.0f, Finite(f->hp, 0.0f));
+                    wanted = hp / bestDmg;
+                } else if (bestHeal > 0.0f) {
+                    float missing = (std::max)(0.0f, Finite(x.s.self.hpMax, 0.0f) - Finite(x.s.self.hp, 0.0f));
+                    for (const auto& a : x.s.allies)
+                        if (Readable(a)) missing += (std::max)(0.0f, Finite(a.hpMax, 0.0f) - Finite(a.hp, 0.0f));
+                    wanted = missing / bestHeal;
+                }
+                {
+                    Candidate c = x.Make(Family::DrinkMagicka, nullptr);
+                    c.f.stock = k.potionsMagicka;
+                    c.f.castsWanted = std::isfinite(wanted) ? wanted : -1.0f;
+                    x.Push(std::move(c));
+                }
+            }
         }
 
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
@@ -193,13 +307,29 @@ namespace MFO::Iaus {
             for (const Combatant* f : a_foes)
                 if (f->caster && f->targetId != 0 && f->targetId == s.self.id) { casterOnMe = true; break; }
 
+            // His best castable offense spell on each kept foe (DamageValue's denominator), ONCE per tick: one pass over
+            // the book per foe, not one per (spell, foe) pair.
+            std::vector<float> bestOn(x.top.size(), 0.0f);
+            for (const SpellEntry& o : s.book.entries) {
+                if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Offense) continue;
+                if (!(o.damage > 0.0f)) continue;
+                if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
+                for (std::size_t ti = 0; ti < x.top.size(); ++ti)
+                    bestOn[ti] = (std::max)(bestOn[ti], Estimate::SpellOn(o, *x.top[ti]));
+            }
             for (const SpellEntry& e : s.book.entries) {
-                if (e.source != SpellSource::Spell) continue;        // scrolls: card S3. Staves: the posture layer.
+                if (e.source == SpellSource::Staff) continue;        // staves: the posture layer
+                // Scrolls (card S3): a candidate only once a scroll can be read as a cast (Snapshot::scrollRoad), for a
+                // scroll user (ruling Q36), with one in stock. Offense / control / heal / buff only (the scroll sets).
+                const bool scroll = e.source == SpellSource::Scroll;
+                if (scroll && !(s.scrollRoad && x.g.scrollUser && e.count > 0)) continue;
+                if (scroll && (e.nature == Prune::Nature::Summon || e.nature == Prune::Nature::Ward)) continue;
                 if (e.drop != Prune::Drop::Keep) continue;           // P1 + "never generated"
                 const Family fam = Prune::FamilyOf(e.nature);
                 if (fam == Family::kCount) continue;
-                // Ruling Q34: an off-class spell is a candidate ONLY when a mastered class grants it.
-                if (!onClass && !fromMastered) { ++x.out.droppedClass; continue; }
+                // Ruling Q34: an off-class spell is a candidate ONLY when a mastered class grants it. (A scroll is
+                // Q36's: the scroll-user gate above.)
+                if (!scroll && !onClass && !fromMastered) { ++x.out.droppedClass; continue; }
                 // P1: a two-hander needs both hands; while a heal stands on one it is not a candidate.
                 if (e.twoHanded ? anyBusy : bothBusy) { ++x.out.droppedHand; continue; }
                 // P2: cost over the pool drops every pair of this spell. An unreadable pool drops a priced spell.
@@ -207,13 +337,17 @@ namespace MFO::Iaus {
                 if (priced && (!poolOk || !Prune::Affordable(e.cost, pool))) { ++x.out.droppedCost; continue; }
 
                 const auto base = [&](const Combatant* a_target) {
-                    Candidate c = x.Make(fam, a_target);
+                    Candidate c = x.Make(scroll ? Family::Scroll : fam, a_target);
+                    if (scroll) {
+                        c.scrollOf = fam == Family::CastHeal || fam == Family::CastBuff ? fam : Family::CastOffense;
+                        c.f.stock = e.count;
+                    }
                     c.role = e.role;
                     c.form = e.form;
                     c.formName = e.name;
                     if (priced) { c.f.cost = e.cost; c.f.magicka = pool; c.f.magickaMax = s.self.mpMax; }
                     c.f.handFree = true;   // the P1 test above already dropped a held hand
-                    c.f.onClass = onClass;
+                    c.f.onClass = scroll ? true : onClass;
                     c.f.fromMastered = fromMastered;
                     return c;
                 };
@@ -225,7 +359,8 @@ namespace MFO::Iaus {
                     // reach (0 = the record gives none: range is then not applicable).
                     const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.areaUnits : e.reach);
                     if (e.selfDelivery && !(e.areaUnits > 0.0f)) { ++x.out.droppedTarget; break; }
-                    for (const Combatant* foe : x.top) {
+                    for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
+                        const Combatant* foe = x.top[ti];
                         if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule
                         Candidate c = base(foe);
                         x.Foe(c.f, *foe, true);
@@ -233,7 +368,13 @@ namespace MFO::Iaus {
                         c.f.reach = (std::max)(0.0f, Finite(reach, 0.0f));
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
+                        if (e.nature == Prune::Nature::Control) c.f.controlSec = Estimate::Pos(e.controlSec);
                         if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
+                        if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
+                            c.f.expDamage = Estimate::SpellOn(e, *foe);
+                            c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
+                            c.f.bestDamage = bestOn[ti];
+                        }
                         if (e.areaUnits > 0.0f) {
                             const Combatant& centre = e.selfDelivery ? s.self : *foe;
                             int inArea = 0;
@@ -275,6 +416,12 @@ namespace MFO::Iaus {
                         c.f.recipientIsPlayer = r->isPlayer;
                         c.f.recipientDowned = r->downed;
                         if (heal) {
+                            c.f.expHeal = Estimate::Pos(e.heal);
+                            c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
+                            c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
+                            c.f.recipientBeingHealed = r->beingHealed;
+                        }
+                        if (heal) {
                             c.f.alreadyActive = Note(s.liveStreams, e.form, self ? 0u : r->id) == Tri::Yes;
                         } else {
                             c.f.meleeBuff = e.meleeBuff;
@@ -314,6 +461,10 @@ namespace MFO::Iaus {
         x.selfHp = Pct(a_s.self.hp, a_s.self.hpMax);
         x.selfSp = Pct(a_s.self.sp, a_s.self.spMax);
         x.selfMp = Pct(a_s.self.mp, a_s.self.mpMax);
+        x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
+        x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
+        for (const Combatant& a : a_s.allies)
+            if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }
 
         out.worstPartyHp = x.selfHp;
         for (const auto& a : a_s.allies) {
@@ -346,6 +497,8 @@ namespace MFO::Iaus {
         out.foesKept = x.top.size();
 
         Swings(x);
+        Regroups(x);
+        Guards(x);
         if (a_s.hasBook) {
             Drinks(x);
             Postures(x, foes);

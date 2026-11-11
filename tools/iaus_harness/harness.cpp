@@ -8,6 +8,7 @@
 // CHECKs at the end assert the properties the design promises; the exit code is the number that failed.
 #include "iaus/Core.h"
 #include "iaus/Estimate.h"
+#include "iaus/Reach.h"      // ruling Q68: the learned swing reach
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 
 #include <algorithm>
@@ -479,8 +480,23 @@ namespace {
                 std::printf("\n");
             }
             Check(worst >= 1.2f * t.actFloor, "F4: worst plain current-target attack >= 1.2 x act floor across the grid");
-            Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) == 0.0f,
-                  "F4: the 1.15x reach gate still vetoes");
+            {   // RULING Q70 (marth 2026-11-11, clarifying Q64: "I meant when it should swing the weapon, not when it
+                // should choose a target"). The 1.15x reach gate is the SWING gate: it vetoes a power attack. A melee
+                // ATTACK only names the target, so it is shaded by distance and vetoed only past the chase cap.
+                Candidate pw = PlainAttack(1, 1.0f, 1.16f); pw.family = Family::PowerAttack; Cons by = Cons::kCount;
+                Check(ScoreOne(pw, Mind{}, Profile{}, t, 1, 0, nullptr, &by) == 0.0f && by == Cons::RangeMelee,
+                      "F4 (Q70): the 1.15x reach gate still vetoes a swing (power attack)");
+                Check(ScoreOne(PlainAttack(1, 1.0f, 1.16f), Mind{}, Profile{}, t, 1, 0, nullptr) > 0.0f,
+                      "Q70: a melee attack names a foe just out of reach (target choice is not gated by reach)");
+                Candidate nearC = PlainAttack(1, 1.0f, 0.9f), midC = PlainAttack(1, 1.0f, 4.0f), farC = PlainAttack(1, 1.0f, 0.9f);
+                nearC.f.chase = 4096.0f; midC.f.chase = 4096.0f; farC.f.chase = 4096.0f; farC.f.dist = 4200.0f;
+                const float sNear = ScoreOne(nearC, Mind{}, Profile{}, t, 1, 0, nullptr), sMid = ScoreOne(midC, Mind{}, Profile{}, t, 1, 0, nullptr);
+                Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &byFar);
+                Check(sNear > sMid && sMid > 0.0f, "Q70: a nearer foe is the better attack, a farther one still an attack");
+                Check(sFar == 0.0f && byFar == Cons::RangeChase, "Q70: a foe beyond the chase cap is vetoed");
+                Check(Estimate::TauntChance(20, 20) == 0.5f && Estimate::TauntChance(30, 20) == 0.9f && Estimate::TauntChance(10, 30) == 0.1f,
+                      "Q69: the taunt chance is the executor's rule (0.5 + 0.05 per level, kept in 0.1 .. 0.9)");
+            }
         }
         // F5 (SEV-4): the log dedupe includes the verdict and the fired flag.
         {
@@ -855,6 +871,80 @@ namespace {
         const auto top = Prune::TopFoes(fs, 2);
         Check(top.size() == 2 && top[0] == 1 && top[1] == 2, "relevance: a foe on the player outranks a near one; ties go to the lower id");
     }
+
+    // ── Ruling Q68: the swing reach is LEARNED per weapon from hits and misses (iaus/Reach.h) ───────────────────────
+    // A toy world with a TRUE reach R the learner never sees: a swing from distance d hits when d + noise <= R, and a
+    // share of swings miss for reasons that are not distance (the target stepped aside). Seven in ten swings are the
+    // engine's own (anywhere from 0.5 R to 1.1 R), three in ten are gated by the learned value (up to 1.15 x Gate(), which is 1.05 x it).
+    struct ReachRun { float endErr = 0, spread = 0, whiff = 0, cover = 0, minR = 0; };
+    ReachRun RunReach(float R, float prior, float sigma, float stray, std::uint32_t seed, int warm, int steady) {
+        Reach::Learner L; L.Reset(prior);
+        std::uint32_t st = seed * 2654435761u + 12345u;
+        auto u = [&]() { st = st * 1664525u + 1013904223u; return static_cast<float>(st >> 8) / 16777216.0f; };
+        auto gauss = [&]() { float a = 0; for (int i = 0; i < 6; ++i) a += u(); return (a - 3.0f) * 1.41421f; };   // ~N(0,1)
+        ReachRun o; o.minR = L.Value(); float lo = 1e9f, hi = 0; int own = 0, ownMiss = 0, could = 0, allowed = 0;
+        for (int i = 0; i < warm + steady; ++i) {
+            const bool mine = u() < 0.3f;
+            const float d = mine ? (0.6f + 0.55f * u()) * L.Gate() : (0.5f + 0.6f * u()) * R;
+            const bool byDist = d + sigma * R * gauss() <= R;
+            const bool hit = byDist && !(u() < stray);
+            if (i >= warm) {
+                lo = (std::min)(lo, L.Value()); hi = (std::max)(hi, L.Value());
+                if (mine) { ++own; if (!byDist) ++ownMiss; }
+                const float probe = (0.5f + 0.6f * u()) * R;          // a swing chance at a random distance: would the gate let it?
+                if (probe <= R * (1.0f - sigma)) { ++could; if (probe <= 1.15f * L.Gate()) ++allowed; }
+            }
+            L.Observe(d, hit);
+            o.minR = (std::min)(o.minR, L.Value());
+        }
+        o.endErr = std::fabs(L.Value() - R) / R; o.spread = (hi - lo) / R;
+        o.whiff = own ? static_cast<float>(ownMiss) / static_cast<float>(own) : 0.0f;
+        o.cover = could ? static_cast<float>(allowed) / static_cast<float>(could) : 1.0f;
+        return o;
+    }
+    void ReachLearning() {
+        std::printf("\n== Q68: the learned swing reach ==\n");
+        float worstErr = 0, worstSpread = 0, worstWhiff = 0, worstCover = 1, worstFloor = 1e9f, meanErr = 0, meanWhiff = 0; int runs = 0;
+        for (const float R : { 150.0f, 240.0f, 330.0f })
+            for (const float pf : { 0.6f, 1.0f, 1.6f })
+                for (std::uint32_t seed = 1; seed <= 8; ++seed) {
+                    const ReachRun o = RunReach(R, R * pf, 0.05f, 0.05f, seed, 80, 400);
+                    worstErr = (std::max)(worstErr, o.endErr); worstSpread = (std::max)(worstSpread, o.spread);
+                    worstWhiff = (std::max)(worstWhiff, o.whiff); worstCover = (std::min)(worstCover, o.cover);
+                    worstFloor = (std::min)(worstFloor, o.minR / (R * pf)); meanErr += o.endErr; meanWhiff += o.whiff; ++runs;
+                }
+        std::printf("  %d runs (3 true reaches x start 0.6 / 1.0 / 1.6 x 8 seeds, noise 5%%, stray misses 5%%): end error mean %.1f%% worst %.1f%%, worst spread %.1f%%, whiff share mean %.1f%% worst %.1f%%, worst coverage %.1f%%, lowest value %.2f x start\n",
+                    runs, meanErr / runs * 100, worstErr * 100, worstSpread * 100, meanWhiff / runs * 100, worstWhiff * 100, worstCover * 100, worstFloor);
+        const ReachRun clean = RunReach(240.0f, 240.0f * 1.5f, 0.0f, 0.0f, 3, 80, 400);
+        std::printf("  no noise, start 1.5 x: end error %.1f%%, spread %.1f%%, whiff %.1f%%, coverage %.1f%%\n", clean.endErr * 100, clean.spread * 100, clean.whiff * 100, clean.cover * 100);
+        const ReachRun noisy = RunReach(240.0f, 240.0f, 0.10f, 0.15f, 5, 80, 400);
+        std::printf("  heavy noise (10%%, stray 15%%): end error %.1f%%, spread %.1f%%, whiff %.1f%%, coverage %.1f%% (reported, not a check)\n", noisy.endErr * 100, noisy.spread * 100, noisy.whiff * 100, noisy.cover * 100);
+        Check(meanErr / runs <= 0.08f && worstErr <= 0.15f, "Q68 reach: from a start 0.6x to 1.6x off it ends within 15% of the true reach in every run (mean within 8%)");
+        Check(meanWhiff / runs <= 0.10f && worstWhiff <= 0.15f, "Q68 reach: gated swings that miss by distance stay under 15% in every run (mean under 10%)");
+        Check(worstCover >= 0.95f, "Q68 reach: the gate still lets through at least 95% of the swings that would have hit");
+        Check(worstFloor >= Reach::kFloor - 1e-4f, "Q68 reach: the value never goes under its floor");
+        Check(clean.endErr <= 0.02f && clean.spread <= 0.05f, "Q68 reach: without noise it settles on the true reach and stays (no oscillation)");
+        {
+            Reach::Learner L;
+            L.Observe(100.0f, true);
+            Check(!L.Known() && L.Value() == 0.0f, "Q68 reach: a learner that was never given a start value answers unknown and ignores outcomes");
+            L.Reset(200.0f);
+            L.Observe(NAN, false); L.Observe(-5.0f, false);
+            Check(L.Value() == 200.0f && L.misses == 0, "Q68 reach: a non-finite or negative distance moves nothing");
+            for (const float d : { 150.0f, 170.0f, 160.0f, 180.0f }) L.Observe(d, true);
+            Check(L.Value() == 200.0f, "Q68 reach: hits inside the reach leave it where it is");
+            L.Observe(60.0f, false);
+            Check(L.Value() == 200.0f, "Q68 reach: one miss far inside (the target stepped aside) is outvoted by the hits beyond it");
+            L.Observe(190.0f, false);
+            Check(L.Value() < 200.0f && L.Value() >= 180.0f, "Q68 reach: a miss just inside the reach lowers it toward that distance, by one step at most");
+            const float low = L.Value();
+            L.Observe(260.0f, false);
+            Check(L.Value() == low, "Q68 reach: a miss beyond the reach changes nothing (it was not expected to hit)");
+            L.Observe(low * 1.04f, true);
+            Check(L.Value() > low, "Q68 reach: a hit beyond the reach raises it");
+            Check(std::fabs(L.Gate() - L.Value() * Reach::kGate) < 1e-4f && L.Gate() * 1.15f <= L.Value() * 1.05f + 1e-3f, "Q68 reach: the gate's reach lets him try 5% past the learned value, not 15%");
+        }
+    }
 }
 
 // marth Q69 / Q72 / Q73: the one taunt formula, the 30 s taunt floor, and the follower-wide cooldown identity of
@@ -888,6 +978,7 @@ int main() {
     Budget();
     Generation();
     SharedTauntPowerRules();
+    ReachLearning();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

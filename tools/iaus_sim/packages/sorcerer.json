@@ -1,0 +1,80 @@
+{
+ "schema": 1,
+ "id": "pkg-sorcerer-v1",
+ "class": "sorcerer",
+ "line": "Melee",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "objective": "0.35 x class scenarios + 0.65 x (natural, balanced, strong1) mean utility, table mode",
+ "today": {
+  "st.0.off": 1.0,
+  "st.0.def": 0.5,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "st.1.off": 1.0,
+  "st.1.def": 0.5,
+  "st.1.fallback": 0.65,
+  "st.1.avoid": 0.5,
+  "st.2.off": 1.0,
+  "st.2.def": 0.5,
+  "st.2.fallback": 0.5,
+  "st.2.avoid": 0.2,
+  "pk.power": 1.0,
+  "pk.leash": 0.0
+ },
+ "found": {
+  "st.0.off": 2.0,
+  "st.0.def": 1.0,
+  "st.0.fallback": 0.42,
+  "st.0.powBlock": 1.0,
+  "st.0.powStag": 1.0,
+  "st.0.bash": 1.0,
+  "pk.power": 1.0,
+  "pk.leash": 600.0
+ },
+ "changed": {
+  "st.0.off": 2.0,
+  "st.0.def": 1.0,
+  "pk.leash": 600.0
+ },
+ "evidence": {
+  "LoreRim/table": {
+   "today": 42.9,
+   "package": 44.74,
+   "delta": 1.83
+  },
+  "LoreRim/iaus": {
+   "today": 42.54,
+   "package": 42.83,
+   "delta": 0.3
+  },
+  "Tuxborn/table": {
+   "today": 44.35,
+   "package": 43.36,
+   "delta": -0.99
+  },
+  "Tuxborn/iaus": {
+   "today": 48.17,
+   "package": 48.2,
+   "delta": 0.03
+  },
+  "Vanilla/table": {
+   "today": 65.73,
+   "package": 67.7,
+   "delta": 1.97
+  },
+  "Vanilla/iaus": {
+   "today": 73.31,
+   "package": 75.65,
+   "delta": 2.34
+  }
+ },
+ "mean_table_gain": 0.94,
+ "verdict": "no robust gain: keep today's package",
+ "proof": "MODEL: the CSTY fields act through the sim engine-AI model (doc section 4 row 22). Direction is the finding; numbers need the in-game probe."
+}

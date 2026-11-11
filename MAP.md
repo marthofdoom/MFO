@@ -8944,9 +8944,21 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   decision without stamping the store: an approach leg, an attack already latched), `NoteSource` `:177` (which source served him
   last lap; true on a change = the toggle edge), `Dismiss` `:191` (Forget + drop the note), `Paced` `:197` (log pacing).
 - Off-line harness: `tools/iaus_harness/run.sh` (host g++, pure core only, exit code = failed checks). Run it after ANY change to
-- Offline combat SIMULATOR (card I2s, host-only, never in the DLL): `tools/iaus_sim/run.sh [--list json] [--seed N] [--fights N] [--baseline out] [--compare base]` drives the real `Generate` + `Decide` over seeded random fights (3 base classes x rapport I..V x 5 foe-strength brackets); `tools/list_balance/extract.py` reads an MO2 list's winning SPEL/MGEF/ALCH/GMST/RACE records into `~/.cache/mfo-list-balance/<list>.json` (test input only, never committed, native/ never reads it). Method + findings: `Docs/research/2026-11/iaus-sim.md`.
+- Offline combat SIMULATOR v2 (host-only, never in the DLL; `feat/iaus-sim-v2`): `tools/iaus_sim/run.sh [--list <list>.sim.json] [--scenario all --oracle] [--mode table|iaus] [--set / --opt]` drives the real `Generate` + `Decide` inside a 30 Hz world built from the installed list's own records (`tools/list_balance/extract_world.py` -> `compile_world.py` -> `~/.cache/mfo-list-balance/`, test input only, never committed, native/ never reads it), with all 35 classes from the real `classes/ClassTable.cpp`, a rollout oracle, 17 intelligence scenarios, table mode and one results JSON per run. Everything (record layouts, the model table with proof levels, calibration, the gap ledger, phase 2, class packages and default rows) is in `Docs/research/2026-11/iaus-sim-v2.md`. After ANY change to the pure layers run it and `tools/iaus_harness/run.sh`.
 - IAUS sim DASHBOARD (host-only, stdlib curses, never in the DLL): `tools/iaus_dash/dash.py [--runs DIR] [--report [--run ID] [--compare ID]] [--json-check FILE]` views the simulator's per-run JSON (schema v1) per class, with rulings, scenario gaps, gap ledger and trends; `tools/iaus_dash/test.sh` checks the non-interactive modes on synthetic fixtures. README there has the keys + schema.
   `native/iaus/` except Engine.*.
+- **PHASE 2 (sim v2, `feat/iaus-sim-v2`; `Docs/research/2026-11/iaus-sim-v2.md` sections 24-28) -- WHAT IS LIVE.** Pure-layer
+  files: `iaus/Estimate.h` (the fight in numbers: `TauntChance`, which `Taunt.cpp`'s roll calls too, `SpellOn`, `ThreatOn`,
+  `IncomingOn`, ...), `iaus/Reach.h` (Q68 learned swing reach; no engine file includes it yet). LIVE for a follower on
+  Sentient AI with no further wiring: set A2 as `DefaultTuning()` (more power attacks and control casts, fewer magicka
+  potions), `Cons::TauntChance` (a taunt scaled by its level-rule chance: about 44 percent lower on a foe 2 levels up),
+  `Cons::RangeTaunt` in place of RangeSpell in the taunt set, `Cons::BoostControlled` x1.3 on a PARALYSED foe only
+  (`Facts::foeHelpless`; `foeControlled` = paralysed or fleeing stays the control-cast gate), DamageValue 0 for a
+  no-damage spell. `Decision::bestHeal` is the best heal's score OVER its action weight, and `Tuning::noHealDrink` /
+  `noHealRetreat` (0.4167 / 0.25) compare against that: retune a heal weight freely, never these two with it. NOT live:
+  the road families (Regroup / GiveGround / Block / Bash behind `Snapshot::*Road`, `IausSource.cpp` answers "no action
+  road"), `Tuning::kiteDistance`, and every consideration whose fact the engine side does not fill yet (the estimates,
+  `mortal`, `swinging`, `casting`, `controlSec`, `castsWanted`): those read Off. Measured effects: doc section 28.1.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

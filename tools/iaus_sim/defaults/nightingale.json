@@ -1,0 +1,199 @@
+{
+ "schema": 1,
+ "id": "defaults-nightingale-v1",
+ "class": "nightingale",
+ "train": "LoreRim",
+ "validate": [
+  "Tuxborn",
+  "Vanilla"
+ ],
+ "mode": "table",
+ "package": "current",
+ "today": [
+  {
+   "condition": "cond.foe_is_caster",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_fleeing",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_ranged",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "lab": [
+  {
+   "condition": "cond.foe_lowest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_is_ranged",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_highest_hp",
+   "gambit": "act.attack",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_fleeing",
+   "gambit": "act.equip_melee",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  },
+  {
+   "condition": "cond.foe_any",
+   "gambit": "act.equip_ranged",
+   "threshold": 0.0,
+   "spell_role": "None",
+   "cooldown_s": 0.0
+  }
+ ],
+ "today_text": "cond.foe_is_caster|act.attack|0|0|0;cond.foe_fleeing|act.equip_melee|0|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+ "lab_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_highest_hp|act.attack|0|0|0;cond.foe_fleeing|act.equip_melee|0|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+ "evidence": {
+  "LoreRim": {
+   "today": 32.0,
+   "lab": 35.7,
+   "delta": 3.71
+  },
+  "Tuxborn": {
+   "today": 44.97,
+   "lab": 44.46,
+   "delta": -0.51
+  },
+  "Vanilla": {
+   "today": 60.08,
+   "lab": 62.61,
+   "delta": 2.52
+  }
+ },
+ "mean_gain": 1.91,
+ "verdict": "keep",
+ "rules": "vocabulary opcodes only; class gate decides the picks (Q59); every action kind of today's rows kept; power-attack rows do not multiply; row cap 5",
+ "prefix": {
+  "ruling": "Q74",
+  "start_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_highest_hp|act.attack|0|0|0;cond.foe_fleeing|act.equip_melee|0|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+  "ordered_text": "cond.foe_lowest_hp|act.attack|0|0|0;cond.foe_is_ranged|act.attack|0|0|0;cond.foe_highest_hp|act.attack|0|0|0;cond.foe_fleeing|act.equip_melee|0|0|0;cond.foe_any|act.equip_ranged|0|0|0",
+  "ordered": [
+   {
+    "condition": "cond.foe_lowest_hp",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_is_ranged",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_highest_hp",
+    "gambit": "act.attack",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_fleeing",
+    "gambit": "act.equip_melee",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   },
+   {
+    "condition": "cond.foe_any",
+    "gambit": "act.equip_ranged",
+    "threshold": 0.0,
+    "spell_role": "None",
+    "cooldown_s": 0.0
+   }
+  ],
+  "evidence": {
+   "LoreRim": {
+    "prefix3": {
+     "start": 36.77,
+     "ordered": 36.77,
+     "delta": 0.0
+    },
+    "prefix4": {
+     "start": 36.77,
+     "ordered": 36.77,
+     "delta": 0.0
+    },
+    "prefix5": {
+     "start": 36.77,
+     "ordered": 36.77,
+     "delta": 0.0
+    }
+   },
+   "Tuxborn": {
+    "prefix3": {
+     "start": 45.89,
+     "ordered": 45.89,
+     "delta": 0.0
+    },
+    "prefix4": {
+     "start": 45.86,
+     "ordered": 45.86,
+     "delta": 0.0
+    },
+    "prefix5": {
+     "start": 45.61,
+     "ordered": 45.61,
+     "delta": 0.0
+    }
+   },
+   "Vanilla": {
+    "prefix3": {
+     "start": 64.31,
+     "ordered": 64.31,
+     "delta": 0.0
+    },
+    "prefix4": {
+     "start": 64.31,
+     "ordered": 64.31,
+     "delta": 0.0
+    },
+    "prefix5": {
+     "start": 64.31,
+     "ordered": 64.31,
+     "delta": 0.0
+    }
+   }
+  },
+  "mean_gain": 0.0,
+  "verdict": "no robust gain: keep the starting order",
+  "slots_by_rank": [
+   3,
+   5,
+   7,
+   9,
+   12
+  ],
+  "method": "all permutations on LoreRim, mean J over prefixes 3..5, 40 fights; validated on LoreRim, Tuxborn, Vanilla, seeds 1 and 7"
+ }
+}
