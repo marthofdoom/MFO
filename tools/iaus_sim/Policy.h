@@ -54,7 +54,7 @@ namespace Sim {
             if (&o == &self || !o.alive) continue;
             if (o.role == Role::Foe) {
                 if (o.c.downed) continue;
-                Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode;
+                Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode; k.swinging = (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;
                 if (!F.tauntVisible) k.taunted = false;
                 const Body* tg = F.Find(o.c.targetId);
                 k.targetIsAlly = tg && tg->Party() && tg->c.id != self.c.id && tg->role != Role::Player;
@@ -83,7 +83,7 @@ namespace Sim {
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
         if (g_learnReach && c.reach[0].Known()) sn.meleeReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
-        sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad;
+        sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad; sn.groundRoad = g_groundRoad; sn.blockRoad = g_blockRoad; sn.bashRoad = g_bashRoad;
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
@@ -138,6 +138,12 @@ namespace Sim {
                 const Body& pl = F.b[0]; if (tg->c.targetId == pl.c.id && pl.c.hp < 0.4f * pl.c.hpMax) ++t.tauntSaves; }
             return Fired::Yes; }
         case Family::Retreat: x.retreatUntil = F.now + TM::retreatSec; return Fired::Yes;
+        case Family::GiveGround: { if (!tg || !Fight::Up(*tg)) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
+            const float dx = x.c.x - tg->c.x, dy = x.c.y - tg->c.y, l = std::max(1.0f, std::hypot(dx, dy));
+            c.goalX = x.c.x + dx / l * 500.0f; c.goalY = x.c.y + dy / l * 500.0f; c.moveUntil = F.now + 2.0; c.sprint = false; c.moveFight = false; if (subj) ++t.grounds; return Fired::Yes; }
+        case Family::Block: { if (bodyHeld) return Fired::Declined; x.act = Act::Block; x.blockUntil = F.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; if (subj) ++t.blocks; return Fired::Yes; }
+        case Family::Bash: { if (!tg || !Fight::Up(*tg) || tg->Party()) return Fired::Invalid; if (bodyHeld || x.c.sp < 20.0f || Fight::Dist(x, *tg) > F.Reach(x) * 1.1f) return Fired::Declined;
+            F.StartSwing(x, *tg, Act::Bash, true); if (subj) ++t.bashes; return Fired::Yes; }
         case Family::Regroup: { if (!tg || !Fight::Up(*tg) || !tg->Party()) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
             c.goalX = tg->c.x - 110.0f; c.goalY = tg->c.y + (x.c.y > tg->c.y ? 100.0f : -100.0f); c.moveUntil = F.now + 4.0; c.sprint = false; c.moveFight = true; if (subj) ++t.regroups; return Fired::Yes; }
         case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka: {

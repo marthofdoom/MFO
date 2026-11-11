@@ -122,6 +122,8 @@ namespace MFO::Iaus {
         bool  blocking = false;
         bool  caster = false;               // a spell in either hand right now
         bool  rangedWeapon = false;         // a bow or crossbow in hand right now (it does not have to close to hurt)
+        bool  swinging = false;             // its melee swing is in the air right now (started, not landed)
+        bool  casting = false;              // it is charging a spell right now (a bash or a stagger stops the cast)
         bool  healer = false;               // party member: knows a heal it can put on another (the regroup anchor "to the healer")
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
@@ -171,6 +173,9 @@ namespace MFO::Iaus {
         bool  handBusyRight = false;
         bool  scrollRoad = false;         // card S3: a scroll can be READ as a cast (the actuation exists). false (today):
                                           // scrolls stay in the book and no scroll candidate is made
+        bool  groundRoad = false;         // Harbinger can step him back from a point (lab only today)
+        bool  blockRoad = false;          // Harbinger can make him raise his guard now (lab only today)
+        bool  bashRoad = false;           // Harbinger can make him bash now (lab only today)
         bool  regroupRoad = false;        // the ch.24 regroup client exists (close on the player / a healer while fighting).
                                           // false (today): no regroup candidate is made
         bool  mortal = false;             // he dies FOR GOOD at 0 health (no bleedout he recovers from: not essential, not

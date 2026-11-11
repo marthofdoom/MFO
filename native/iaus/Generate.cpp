@@ -144,6 +144,49 @@ namespace MFO::Iaus {
             }
         }
 
+        // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
+        void Guards(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (x.foeCount == 0) return;
+            const bool ranged = s.drawn == PostureKind::Bow || s.drawn == PostureKind::Staff;
+            const bool melee  = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver;
+            const float strike = Estimate::StrikeDistance(s);
+            const Combatant* nearOn = nullptr;      // the nearest foe that targets him and has to close
+            const Combatant* swingOn = nullptr;     // a foe whose swing at him is in the air, in striking distance
+            for (const Combatant& f : s.foes) {
+                if (!Readable(f) || f.targetId == 0 || f.targetId != s.self.id || f.paralysed || f.fleeing || !std::isfinite(f.dist)) continue;
+                if (Estimate::MustClose(f) && (!nearOn || f.dist < nearOn->dist)) nearOn = &f;
+                if (f.swinging && f.dist <= strike && (!swingOn || f.dist < swingOn->dist)) swingOn = &f;
+            }
+            if (s.groundRoad && nearOn) {
+                Candidate c = x.Make(Family::GiveGround, nearOn);
+                c.f.dist = (std::max)(0.0f, nearOn->dist);
+                c.f.rangedDrawn = ranged;
+                c.f.meleeThreatDist = c.f.dist;
+                c.f.threatTtl = Estimate::Ttl(s.self.hp, Estimate::ThreatOn(s, s.self));
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.groundCooldownSec, 0.0f));
+                x.Push(std::move(c));
+            }
+            if (s.blockRoad && melee && swingOn) {
+                Candidate c = x.Make(Family::Block, swingOn);
+                c.f.foeSwinging = true;
+                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
+                x.Push(std::move(c));
+            }
+            if (s.bashRoad && melee)
+                for (const Combatant* foe : x.top) {
+                    if (foe->outOfMeleeReach) continue;
+                    Candidate c = x.Make(Family::Bash, foe);
+                    x.Foe(c.f, *foe, false);
+                    c.role = RoleTag::Melee;
+                    c.f.meleeRange = true;
+                    c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
+                    c.f.foeCasting = foe->casting;
+                    c.f.foeSwinging = foe->swinging;
+                    c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.bashCooldownSec, 0.0f));
+                    x.Push(std::move(c));
+                }
+        }
         // ── regroup: close on the player or a healer while fighting (Harbinger ch.24). Only once the road exists. ──
         void Regroups(Ctx& x) {
             const Snapshot& s = x.s;
@@ -454,6 +497,7 @@ namespace MFO::Iaus {
 
         Swings(x);
         Regroups(x);
+        Guards(x);
         if (a_s.hasBook) {
             Drinks(x);
             Postures(x, foes);

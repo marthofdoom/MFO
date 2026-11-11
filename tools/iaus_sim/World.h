@@ -57,6 +57,8 @@ namespace Sim {
     // --regroup-road: the ch.24 regroup client is modelled as existing (Snapshot::regroupRoad). MODEL: a regroup order is the
     // oracle's own move order (3 s toward the anchor, no blows on the way), which is harsher than ch.24 (he keeps fighting).
     inline bool g_regroupRoad = false;
+    // --roads ground,block,bash: the Harbinger capabilities of doc section 26 modelled as existing (the oracle's own extended actions).
+    inline bool g_groundRoad = false, g_blockRoad = false, g_bashRoad = false;
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
@@ -115,7 +117,7 @@ namespace Sim {
         long   foeCasts = 0, foeCastsInterrupted = 0, interruptsByFollowers = 0;
         long   elemCasts = 0, resistedCasts = 0, weakCasts = 0, weakOpp = 0, immuneCasts = 0;
         long   splashAllyHits = 0, areaCasts = 0;
-        long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0, regroups = 0;
+        long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0, regroups = 0, grounds = 0, blocks = 0, bashes = 0;
         double playerPressureSec = 0, peelSum = 0; long peelN = 0, peelMiss = 0;
         long   tgtSwitches = 0; double engagedSec = 0;
         long   tauntsOutmatched = 0, tauntThenDown = 0, tauntSaves = 0;

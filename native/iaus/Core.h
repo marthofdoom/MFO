@@ -56,6 +56,10 @@ namespace MFO::Iaus {
         Exploit,      // the act.exploit gambit row (I3): the offense set with exploit at w 2.0
         Regroup,      // close on the player or a healer WHILE FIGHTING (Harbinger ch.24 combat approach). Generated only
                       // once that road has its MFO client (Snapshot::regroupRoad), never today
+        GiveGround,   // step back from a foe he cannot trade with, still facing it (needs the Harbinger point-centred combat
+                      // area: Snapshot::groundRoad). Lab only until that road exists
+        Block,        // raise the guard against a swing that is coming (needs the Harbinger leaf promote: Snapshot::blockRoad)
+        Bash,         // bash a foe in reach, first of all one that is charging a spell (same road: Snapshot::bashRoad)
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -112,6 +116,9 @@ namespace MFO::Iaus {
         PostureTrade,       // the melee category: seconds he lives at the damage coming in (do not draw steel to trade with a brute)
         RegroupNeed,        // regroup: the player is being killed, or he is and the anchor is away from it, or he is hurt and it heals
         RegroupFar,         // regroup: how far the anchor is (already beside it = nothing to do)
+        GroundNeed,         // give ground: he is being beaten by something he cannot trade with, or it is closing on a ranged fighter
+        BlockNeed,          // block: a foe's swing at him is in the air, and how much it matters
+        BashNeed,           // bash: the foe is charging a spell (an interrupt), else it is on him
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -208,6 +215,9 @@ namespace MFO::Iaus {
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;
+        float groundCooldownSec = 3.0f;          // give ground: one step, then look again
+        float blockCooldownSec = 2.0f;
+        float bashCooldownSec = 4.0f;
         float regroupCooldownSec = 6.0f;         // a regroup is a walk of seconds: no second order inside this (no yo-yo)
     };
 
@@ -324,6 +334,8 @@ namespace MFO::Iaus {
         float threatTtl = kInf;           // retreat: seconds he would live with every foe that targets him on him (Estimate::ThreatOn)
         bool  anchorHealer = false;       // regroup: the anchor can heal others
         bool  anchorSafer = false;        // regroup: the anchor stands clearly farther from what is hitting him than he does
+        bool  foeSwinging = false;        // block / bash: this foe's swing at him is in the air
+        bool  foeCasting = false;         // bash: this foe is charging a spell right now
     };
 
     struct Candidate {

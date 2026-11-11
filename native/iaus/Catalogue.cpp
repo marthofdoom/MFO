@@ -42,6 +42,9 @@ namespace MFO::Iaus {
         case Family::Scroll:       return "use_scroll";
         case Family::Exploit:      return "exploit";
         case Family::Regroup:      return "regroup";
+        case Family::GiveGround:   return "give_ground";
+        case Family::Block:        return "block";
+        case Family::Bash:         return "bash";
         case Family::kCount:       break;
         }
         return "?";
@@ -72,7 +75,7 @@ namespace MFO::Iaus {
             "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
-            "need", "far",
+            "need", "far", "need", "need", "need",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -285,7 +288,7 @@ namespace MFO::Iaus {
             }
             // danger (retreat): x = max(low-health danger, seconds-to-live danger), see Input. No danger = veto, as
             // the 30% health gate was.
-            at(Cons::RetreatDanger) = VetoBelow(Lin(1.0f, 0.0f), 0.001f);
+            at(Cons::RetreatDanger) = VetoBelow(Lin(0.665f, 0.0f), 0.001f);   // slope: set A2 (was 1.0)
             // heal size: x = missing health / the heal, capped at 1. A heal he can use in full 1.0, one four times
             // too big 0.55.
             at(Cons::HealSize) = Lin(0.6f, 0.4f);
@@ -330,6 +333,10 @@ namespace MFO::Iaus {
             // 1.0, two seconds 0.44: a follower who cannot trade blows does not put the bow away because the foe came near.
             // Not applicable while nothing is known to be hitting him.
             at(Cons::PostureTrade) = Lin(0.7f, 0.3f);
+            // give ground / block / bash need: see Input. Under 0.05 there is no reason: veto.
+            at(Cons::GroundNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            at(Cons::BlockNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup far: x = distance to the anchor / 1000. Inside 300 units he is already there (veto), 350 0.5, 800
@@ -348,13 +355,25 @@ namespace MFO::Iaus {
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
             auto aw = [&](Family f, float w) { d.actionWeight[static_cast<std::size_t>(f)] = w; };
-            aw(Family::Attack, 0.8f);      aw(Family::PowerAttack, 0.9f);  aw(Family::Taunt, 1.0f);
-            aw(Family::Sneak, 0.6f);       aw(Family::Retreat, 0.5f);      aw(Family::DrinkHealth, 1.1f);
-            aw(Family::DrinkStamina, 1.1f); aw(Family::DrinkMagicka, 1.1f); aw(Family::Posture, 1.0f);
-            aw(Family::CastOffense, 1.0f); aw(Family::CastControl, 0.9f);  aw(Family::CastHeal, 1.2f);
+            // PARAMETER SET A2 (sim v2, Docs/research/2026-11/iaus-sim-v2.md sections 16.3 and 24.2): searched on LoreRim,
+            // kept only where Tuxborn, Vanilla and a second seed agree. Against the doc values in brackets, with the
+            // estimates NOT measured (the game today) it is worth +1.4 to +3.8 J on every list and seed, and more with them.
+            //   power attack 2.394 [0.9]   a timed heavy blow is the melee follower's strongest decision
+            //   taunt 0.75 [1.0]           retreat 0.665 [0.5]
+            //   magicka potion 0.275 [1.1] a potion rarely buys what the fight still needs (see MagickaBuys)
+            //   offense casts 1.769 [1.0]  control casts 3.6 [0.9]   heal casts 2.4 [1.2]
+            //   health potion 2.2 [1.1]    NOT from the search (it is neutral there, 67.25 against 67.23): raised with the
+            //                              power attack so a follower at a fifth of his health still drinks before he swings
+            //                              (the harness check "the health potion ranks first" is the intent it keeps)
+            // The control weight stands in for an input that does not exist yet (what the hold buys against what damage
+            // buys, gap G13): expect it to come down when that input lands.
+            aw(Family::Attack, 0.8f);      aw(Family::PowerAttack, 2.394f); aw(Family::Taunt, 0.75f);
+            aw(Family::Sneak, 0.6f);       aw(Family::Retreat, 0.665f);    aw(Family::DrinkHealth, 2.2f);
+            aw(Family::DrinkStamina, 1.1f); aw(Family::DrinkMagicka, 0.275f); aw(Family::Posture, 1.0f);
+            aw(Family::CastOffense, 1.769f); aw(Family::CastControl, 3.6f); aw(Family::CastHeal, 2.4f);
             aw(Family::CastBuff, 0.7f);    aw(Family::CastSummon, 0.9f);   aw(Family::CastWard, 0.8f);
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
-            aw(Family::Regroup, 0.8f);     // chosen: a move is not a blow, it has to be clearly worth it
+            aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
             // already makes a clearly best emergency action win at every rank).
@@ -387,8 +406,11 @@ namespace MFO::Iaus {
             constexpr U kTaunt[] = {
                 { Cons::RangeTaunt, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
                 { Cons::TauntSelfHp, 1 }, { Cons::FoeTaunted, 1 }, { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
-                { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
+                { Cons::TauntSurvive, 1.995f },   /* set A2 */ { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
             };
+            constexpr U kGiveGround[] = { { Cons::GroundNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
@@ -408,7 +430,7 @@ namespace MFO::Iaus {
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1 }, { Cons::Exploit, 1.3f },
                 { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::SplashSafe, 1 }, { Cons::AreaValue, 1 },
                 { Cons::Variety, 0.5f }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 }, { Cons::ClassFit, 1 },
-                { Cons::DamageValue, 1.5f }, { Cons::Overkill, 0.7f },
+                { Cons::DamageValue, 0.9975f }, { Cons::Overkill, 0.931f },   // set A2
             };
             constexpr U kExploit[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -485,6 +507,9 @@ namespace MFO::Iaus {
             case Family::CastWard:     return kWard;
             case Family::Exploit:      return kExploit;
             case Family::Regroup:      return kRegroup;
+            case Family::GiveGround:   return kGiveGround;
+            case Family::Block:        return kBlock;
+            case Family::Bash:         return kBash;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;
@@ -641,6 +666,22 @@ namespace MFO::Iaus {
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             case Cons::HealClaimed:         return B(f.recipientBeingHealed);
             case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::GroundNeed: {
+                if (c.family != Family::GiveGround) return In::Off();
+                // BEATEN: what is hitting him now leaves him seconds (6 s and more = no need).
+                float need = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 6.0f, 0.0f, 1.0f) : 0.0f;
+                // KITE: he fights at range, a foe that has to close is inside 450 units, and he could not afford it on him.
+                if (f.rangedDrawn && std::isfinite(f.meleeThreatDist) && std::isfinite(f.threatTtl))
+                    need = (std::max)(need, Clamp(1.0f - f.meleeThreatDist / 450.0f, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f));
+                return need;
+            }
+            case Cons::BlockNeed:
+                if (c.family != Family::Block || !f.foeSwinging) return c.family == Family::Block ? In(0.0f) : In::Off();
+                // A swing is in the air: half the need for that alone, the rest by how few seconds he has.
+                return 0.5f + 0.5f * (std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f);
+            case Cons::BashNeed:
+                if (c.family != Family::Bash) return In::Off();
+                return f.foeCasting ? 1.0f : (f.foeOnMe ? 0.4f : 0.15f);
             case Cons::RegroupNeed: {
                 if (c.family != Family::Regroup) return In::Off();
                 float need = 0.0f;
