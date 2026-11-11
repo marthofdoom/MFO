@@ -46,6 +46,7 @@ namespace MFO::Iaus {
             Tri  unseen = Tri::Unknown;
             bool hold = false;          // the hold row stands: unseen Yes, a weapon posture
             bool strikeReady = false;   // some unaware foe is in reach (melee) or in sight (bow): the blow from stealth is ready
+            bool holdQuiet = false;     // hold && !strikeReady: nothing LOUD is generated (no taunt, no cast whose sound the engine emits)
             // An unaware foe he could strike now. Melee: inside the swing reach and not airborne beyond it; bow: in the
             // follower's own ray and inside the chase cap. A caster's posture (None / Staff) never holds or strikes.
             [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const {
@@ -148,7 +149,7 @@ namespace MFO::Iaus {
                 // Card I6 (sim finding R1): no candidate while his own taunt is in flight or still holds a foe (the
                 // executor refuses then), the FoeTaunted gate reads Combatant::taunted (filled from the Taunt
                 // module's own pins), and the taunt carries a HARD cooldown: the class row's, else the tuning floor.
-                if (s.tauntEnabled && !s.tauntBusy && x.g.taunt && s.meleeInRightHand && onParty) {
+                if (s.tauntEnabled && !s.tauntBusy && x.g.taunt && s.meleeInRightHand && onParty && !x.holdQuiet) {   // G2: a shout is noise
                     Candidate c = x.Make(Family::Taunt, foe);
                     x.Foe(c.f, *foe, false);
                     c.f.meleeRange = false;
@@ -371,6 +372,7 @@ namespace MFO::Iaus {
             }
             for (const SpellEntry& e : s.book.entries) {
                 if (e.source == SpellSource::Staff) continue;        // staves: the posture layer
+                if (x.holdQuiet && !e.silent) continue;              // G2: hidden and no blow ready -> a loud cast is not made (a soundless one is)
                 // Scrolls (card S3): a candidate only once a scroll can be read as a cast (Snapshot::scrollRoad), for a
                 // scroll user (ruling Q36), with one in stock. Offense / control / heal / buff only (the scroll sets).
                 const bool scroll = e.source == SpellSource::Scroll;
@@ -557,10 +559,11 @@ namespace MFO::Iaus {
             }
             x.unseen = anyYes ? Tri::No : (anyUnknown ? Tri::Unknown : (a_s.selfSneaking ? Tri::Yes : Tri::No));
         }
-        x.hold = x.unseen == Tri::Yes && (a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver || a_s.drawn == PostureKind::Bow);
+        x.hold = a_s.hideRoad && x.unseen == Tri::Yes && (a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver || a_s.drawn == PostureKind::Bow);
         if (x.hold)
             for (const Combatant* f : foes)
                 if (x.StrikeReady(*f)) { x.strikeReady = true; break; }
+        x.holdQuiet = x.hold && !x.strikeReady;
 
         Swings(x);
         Holds(x);

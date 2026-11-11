@@ -181,6 +181,7 @@ namespace MFO::Iaus::SpellBook {
                 const float cost = a_sp->CalculateMagickaCost(a_actor);
                 e.cost = (std::isfinite(cost) && cost > 0.0f) ? cost : 0.0f;
             }
+            e.silent = Fills::CastsSilently(a_actor, a_sp);   // G2: the engine's cast-sound entry point (main thread, book cadence)
             e.onClass      = a_source == Source::Scroll ? a_gate.scrollUser : a_gate.spellsOnClass;
             e.fromMastered = a_gate.spellsFromMastered;
             if (e.nature == Prune::Nature::Summon) e.liveSummon = Actuation::CasterHasLiveSummon(a_actor, a_sp);

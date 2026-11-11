@@ -981,6 +981,7 @@ namespace {
             s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
             s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
             s.selfSneaking = sneaking;
+            s.hideRoad = true;
             return s;
         };
         const auto count = [](const Generated& g, Family f) {
@@ -1015,6 +1016,35 @@ namespace {
             s.foes[1].detectsMe = Tri::Yes;
             const Generated g = Generate(s, warrior, t);
             Check(count(g, Family::Sneak) == 0, "G2: one foe detects him -> no hold row");
+        }
+        {   // Harbinger absent (hideRoad false): no hold row, nothing is held back (legacy = absent only, never a stand-in)
+            Snapshot s = make(900, Tri::No, true);
+            s.hideRoad = false;
+            const Generated g = Generate(s, warrior, t);
+            Check(count(g, Family::Sneak) == 0, "G2: no Harbinger hold road -> no hold row");
+        }
+        {   // hidden, no blow ready: a loud cast and the taunt are not made, a soundless cast is (marth 2026-11-11, hidden casting)
+            Snapshot s = make(900, Tri::No, true);
+            s.self.mp = 100; s.self.mpMax = 100;
+            s.foes[0].targetId = 0x14;
+            SpellEntry loud = Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 2000, Prune::kAvResistFire);
+            SpellEntry quiet = Spell("Quiet Bolt", 0x12FCE, Prune::Nature::Offense, 40, 2000, Prune::kAvResistFire);
+            quiet.silent = true;
+            s.book.entries = { loud, quiet };
+            const Generated hid = Generate(s, warrior, t);
+            int loudN = 0, quietN = 0;
+            for (const Candidate& c : hid.actions) {
+                if (c.family != Family::CastOffense) continue;
+                if (c.form == 0x12FCD) ++loudN;
+                if (c.form == 0x12FCE) ++quietN;
+            }
+            Check(count(hid, Family::Sneak) == 1 && loudN == 0 && quietN > 0, "G2: hold row up -> the loud cast is dropped, the soundless one stays");
+            Snapshot seen = s;
+            seen.foes[0].detectsMe = Tri::Yes;
+            const Generated open = Generate(seen, warrior, t);
+            int loudOpen = 0;
+            for (const Candidate& c : open.actions) if (c.family == Family::CastOffense && c.form == 0x12FCD) ++loudOpen;
+            Check(loudOpen > 0, "G2: seen (no hold row) -> the loud cast is generated as before");
         }
         {   // a caster posture never holds
             Snapshot s = make(900, Tri::No, true);

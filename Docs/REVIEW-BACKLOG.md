@@ -2995,3 +2995,15 @@ TargetCalmNow has no thread note: it reads actor state (combat target, hostility
 
 ### MFO-B701 (SEV-5, OPEN, class gate GateFor, against 24a1dbb, same review)
 GateFor strict-inherit: a follower with no own class row inherits the party gate strictly; a looser inherit may be wanted when the class tree switch is OFF. Reasoning: matches the current ruling; revisit with C2/C6.
+
+### MFO-B730 (SEV-4, OPEN, StealthProbe.cpp hit ring, against 8c06925, Opus review of feat/g2-hide-layer1)
+g_ring entries never age out, and the overflow count is credited to the first drainer. A hit recorded for a follower who is never serviced again (dismissed, unloaded) stays in the ring until Reset, and a full ring's overflow is added to whichever follower drains next, not the one whose hits were lost. Reasoning: the probe is passive and OFF by default (bStealthProbe), the ring is capped at 64 so nothing grows; the attribution of dropped hits is only a diagnostic line.
+
+### MFO-B731 (SEV-4, OPEN, StealthProbe.cpp q87 drop, against 8c06925, same review)
+The q87 drop merges hits between two health samples: two hits landing between one pair of samples both read the same before/after, so each is credited the combined drop, and the sneak/plain ratio is biased. Reasoning: a probe estimate with a stated tolerance (25%), not a decision input; I9 reads it as a rough check of the engine multiplier.
+
+### MFO-B732 (SEV-5, OPEN, StealthProbe.cpp ResolveHitMain, against 8c06925, same review)
+fCombatSneakAttackBonusMult is left out of "expected": the expected multiplier is the weapon's fCombatSneak*Mult through entry 18 only, and the engine's flat sneak attack bonus setting is not added. Reasoning: probe line only; the 25% tolerance absorbs it until the field run shows otherwise.
+
+### MFO-B733 (SEV-5, OPEN, StealthProbe.cpp MovingBits, against 8c06925, same review)
+The actorState1 moving bits (movingForward/Back/Left/Right) are not the engine's IsMoving / IsRunning (Address Library ids 37953 / 37234); the P1 moving= column can disagree with what the detection formula sees. Reasoning: the P1 line is a probe, the engine functions are not called by design (no new address in this layer); the field run reads the difference.

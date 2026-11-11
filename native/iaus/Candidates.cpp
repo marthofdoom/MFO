@@ -144,7 +144,11 @@ namespace MFO::Iaus::Candidates {
         Fills::Pass fills;
         fills.Unit(s.self, a_self, Fills::Role::Self);
         s.playerId = player ? player->GetFormID() : 0;
-        s.selfSneaking = a_self->IsSneaking();   // G2 Layer 1: the stance flag, an actor-state bit (no engine call)
+        // G2 Layer 1: the stance flag, an actor-state bit (no engine call), counted only when the sneak is MFO's: bSneakInCombat on or
+        // G1's ch.3 claim live. With the defaults an engine-forced sneak mid-fight changes nothing (identical to main).
+        s.selfSneaking = a_self->IsSneaking() && (Config::g_sneakInCombat.load(std::memory_order_relaxed) ||
+                                                  APMFBridge::SneakClaimHeld(selfID));
+        s.hideRoad     = s.selfSneaking && APMFBridge::HideHoldSupported();   // asked only while it could matter (logs the absence once)
         const std::uint32_t selfHandle = a_self->GetHandle().native_handle();
 
         // ── the fight clock ──────────────────────────────────────────────────────────────────────────────

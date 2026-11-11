@@ -6,6 +6,7 @@
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"   // SenseOf (MAIN THREAD ONLY)
 #include "iaus/Hide.h"
+#include "iaus/SpellBook.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -133,6 +134,8 @@ namespace MFO::StealthProbe {
         // ── Q87 aggregate (MAIN-thread work behind its own LEAF mutex; Reset clears it) ───────────────────────────
         struct Q87 {
             std::vector<float> sneak, plain;
+            std::uint32_t sneakBeforeMax = 0;   // sneak hits whose before was the target's max health (an opener, no sample)
+            std::uint32_t sneakNoBefore = 0;    // sneak hits with no usable before at all (not counted in the median)
             float  expected = kNaN;
             double lastLog = 0.0;
         };
@@ -198,7 +201,7 @@ namespace MFO::StealthProbe {
                 auto& h = g_hp[foe->GetFormID()];
                 if (!h.s.empty() && a_now - h.s.back().t < 0.05) continue;   // two services in one instant: one sample
                 h.s.push_back({ a_now, hp });
-                while (h.s.size() > 8) h.s.pop_front();
+                while (h.s.size() > 16) h.s.pop_front();   // 16 laps (~2 s): a hit settles 0.3 s later, a busy party laps slower
                 h.last = a_now;
             }
             for (auto it = g_hp.begin(); it != g_hp.end();) {
@@ -261,10 +264,21 @@ namespace MFO::StealthProbe {
             const float invis = Av(a_f, RE::ActorValue::kInvisibility);
             RE::FormID wpnId = 0;
             if (auto* r = a_f->GetEquippedObject(false)) if (auto* w = r->As<RE::TESObjectWEAP>()) wpnId = w->GetFormID();
+            // G2: how many of his book's spells the engine's cast-sound entry point leaves soundless (iaus/Fills.h CastsSilently).
+            std::string castSilent = "no book";
+            if (const auto book = Iaus::SpellBook::Read(a_f)) {
+                int spells = 0, silent = 0;
+                for (const auto& e : book->entries) {
+                    if (e.source != Iaus::SpellSource::Spell) continue;
+                    ++spells;
+                    if (e.silent) ++silent;
+                }
+                castSilent = std::format("{}/{}", silent, spells);
+            }
             std::string head = std::format(
                 "[stealth-probe] self 0x{:08X}: sneaking={} moving={} walking={} running={} sprint={} inCombat={} target=0x{:08X} | "
-                "Sneak AV {:.1f} (base {:.1f}) MovementNoiseMult {:.2f} Invisibility {:.1f}",
-                a_id, sneaking, moving, walking, running, sprint, a_ownCombat, tgtId, skill, skillBase, noise, invis);
+                "Sneak AV {:.1f} (base {:.1f}) MovementNoiseMult {:.2f} Invisibility {:.1f} castSilent={}",
+                a_id, sneaking, moving, walking, running, sprint, a_ownCombat, tgtId, skill, skillBase, noise, invis, castSilent);
             const auto finish = [a_id, tgtId, wpnId, skill, head = std::move(head)](bool a_main) {
                 std::string tail;
                 if (a_main) {
@@ -413,6 +427,7 @@ namespace MFO::StealthProbe {
             RE::FormID cause, target, source, projectile;
             std::uint8_t flags;
             float before, after, hitAgeMs;
+            bool  beforeMax;   // no health sample of the target at or before the hit (an opener): before = its max health
             const char* afterSrc;
             bool  logIt;
             std::uint32_t suppressed;
@@ -448,6 +463,8 @@ namespace MFO::StealthProbe {
                 Q87& a = g_q87[(static_cast<std::uint64_t>(o.cause) << 8) | static_cast<std::uint64_t>(wtype + 1)];
                 const bool clean = !power && !bash && !blocked && std::isfinite(drop) && drop > 0.0f;   // like with like: no power, bash or blocked hit
                 if (clean) PushCapped(sneak ? a.sneak : a.plain, drop);
+                if (sneak && o.beforeMax) ++a.sneakBeforeMax;
+                if (sneak && !std::isfinite(o.before)) ++a.sneakNoBefore;
                 if (sneak && std::isfinite(expected)) a.expected = expected;
                 const double now = NowSec();
                 if (clean && now - a.lastLog >= kQ87LogS) {
@@ -458,21 +475,21 @@ namespace MFO::StealthProbe {
                     const char* verdict = !enough ? "NOT ENOUGH SAMPLES"
                         : (!std::isfinite(ratio) || !std::isfinite(a.expected)) ? "NO RATIO"
                         : (std::fabs(ratio / a.expected - 1.0f) <= 0.25f ? "WITHIN 25%" : "OUTSIDE 25%");
-                    q = std::format("[stealth-probe] q87 follower 0x{:08X} weapon type {} ({}): sneak hits {} (median drop {:.1f}) plain hits {} (median drop {:.1f}) "
+                    q = std::format("[stealth-probe] q87 follower 0x{:08X} weapon type {} ({}): sneak hits {} (median drop {:.1f}; {} with before=max, {} with no before) plain hits {} (median drop {:.1f}) "
                                     "ratio {:.2f} expected {:.2f} (need {} + {}) -> {} | raw sneak [{}] plain [{}] (drop = health before - after, "
                                     "no power/bash/blocked hits; armour and other attackers are NOT removed)",
-                                    o.cause, wtype, TypeName(wtype), a.sneak.size(), ms, a.plain.size(), mp, ratio, a.expected, kQ87Need, kQ87Need,
+                                    o.cause, wtype, TypeName(wtype), a.sneak.size(), ms, a.sneakBeforeMax, a.sneakNoBefore, a.plain.size(), mp, ratio, a.expected, kQ87Need, kQ87Need,
                                     verdict, Raw(a.sneak), Raw(a.plain));
                 }
             }
             if (o.logIt) {
                 spdlog::info("[stealth-probe] hit 0x{:08X} -> 0x{:08X} source 0x{:08X} ({}) projectile 0x{:08X}: kSneakAttack={} power={} bash={} blocked={} | "
                              "target's record of him: {} detect={} stealthPts={:.1f} lost={} (read {} ms after the event) | expected multiplier {:.2f} "
-                             "({} = {:.2f}, then entry 18{}) | health before {:.1f} after {:.1f} ({}) drop {:.1f} | event age {:.0f} ms{}",
+                             "({} = {:.2f}, then entry 18{}) | health before {:.1f}{} after {:.1f} ({}) drop {:.1f} | event age {:.0f} ms{}",
                              o.cause, o.target, o.source, TypeName(wtype), o.projectile, sneak, power, bash, blocked,
                              !o.recHas ? "NOGROUP" : (!o.recPresent ? "ABSENT" : (o.recLost ? "LOST" : "HELD")), o.recDetect, o.recStealth, o.recLost,
                              o.recLagMs, expected, gname ? gname : "no weapon setting", gval, EntryPointOk() ? "" : " [row REFUSED: setting only]",
-                             o.before, o.after, o.afterSrc, drop, o.hitAgeMs,
+                             o.before, o.beforeMax ? " before=max" : "", o.after, o.afterSrc, drop, o.hitAgeMs,
                              o.suppressed ? std::format(" | +{} hit line(s) suppressed (20/min cap)", o.suppressed) : std::string());
             }
             if (!q.empty()) spdlog::info("{}", q);
@@ -497,12 +514,20 @@ namespace MFO::StealthProbe {
                 if (age > kPendingDropS) { ++a_st.droppedHits; it = vec.erase(it); continue; }
                 float before = kNaN, after = kNaN;
                 const char* afterSrc = "sampled";
-                bool haveAfter = false;
+                bool haveAfter = false, beforeMax = false;
                 if (auto hp = g_hp.find(h.target); hp != g_hp.end()) {
                     for (const auto& smp : hp->second.s) {
                         if (smp.t <= h.t) before = smp.hp;
                         else if (!haveAfter && smp.t >= h.t + kSettleS) { after = smp.hp; haveAfter = true; }
                     }
+                }
+                if (!std::isfinite(before)) {
+                    // P3 opener: the target was not in his group before the hit (so nothing sampled it), i.e. it was not in combat. Its
+                    // health was whole: use its max (permanent) health, flagged before=max, so a first sneak hit still gives a drop.
+                    auto* tgt = RE::TESForm::LookupByID<RE::Actor>(h.target);
+                    auto* avo = tgt ? tgt->AsActorValueOwner() : nullptr;
+                    const float mx = avo ? avo->GetPermanentActorValue(RE::ActorValue::kHealth) : kNaN;
+                    if (std::isfinite(mx) && mx > 0.0f) { before = mx; beforeMax = true; }
                 }
                 if (!haveAfter) {
                     if (age < kPendingMaxS) { ++it; continue; }   // wait for the next lap's sample
@@ -512,7 +537,7 @@ namespace MFO::StealthProbe {
                 }
                 HitOut o{};
                 o.cause = h.cause; o.target = h.target; o.source = h.source; o.projectile = h.projectile; o.flags = h.flags;
-                o.before = before; o.after = after; o.hitAgeMs = static_cast<float>(age * 1000.0); o.afterSrc = afterSrc;
+                o.before = before; o.beforeMax = beforeMax; o.after = after; o.hitAgeMs = static_cast<float>(age * 1000.0); o.afterSrc = afterSrc;
                 o.logIt = a_st.hits.Take(a_now);
                 if (o.logIt) { o.suppressed = a_st.hits.suppressed; a_st.hits.suppressed = 0; }
                 if (auto* t = RE::TESForm::LookupByID<RE::Actor>(h.target)) {

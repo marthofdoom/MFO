@@ -129,8 +129,7 @@ namespace Sim {
     }
     // THE DETECTION INPUT IN THE LAB (g_stealth 3). native/iaus is not edited in this phase, so the two things the input would feed
     // ride considerations that exist: (1) a blow on a foe that does not detect him is a sneak attack, and is boosted the way a blow on
-    // a helpless foe is (BoostControlled, Facts::foeHelpless); (2) "go and hide" is a Family::Sneak candidate whose worth, (m - 1) /
-    // (m + 1) of his sneak multiplier m, rides the FightStart curve (Inv(1): combatSec = 6 x (1 / worth - 1)). Both are STAND-INS for
+    // a helpless foe is (BoostControlled, Facts::foeHelpless); (2) "go and hide" is a Family::Sneak candidate driven through the G2 Layer 1 Unseen / HoldStill gates (see below). Both are STAND-INS for
     // the considerations of iaus-classes.md "The Sneak family"; the numbers they give are the worth of the input, not of the wiring.
     inline void StealthInject(const Fight& F, int ci, Served& sv) {
         const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)];
@@ -139,10 +138,13 @@ namespace Sim {
             const Body* tg = F.Find(k.target); if (!tg || tg->role != Role::Foe) continue;
             if (x.sneaking && !F.Detects(*tg, x)) k.f.foeHelpless = true;
             else if (c.flank) { const Body* tt = F.Find(tg->c.targetId); if (tt && tt != &x && tt->Party()) k.f.foeHelpless = true; } }
-        if (CanHide(F, ci)) { const Body& pl = F.b[0]; bool playerDying = pl.alive && pl.c.hp < 0.35f * pl.c.hpMax;
-            const Weapon& w = (c.drawn == PostureKind::Bow && x.spec->ranged.Has()) ? x.spec->ranged : x.spec->melee;
-            const float m = SneakAttackMult(*F.D, *x.spec, w) * c.sneakAtkClass, worth = std::clamp((m - 1.0f) / (m + 1.0f), 0.05f, 1.0f) * (playerDying ? 0.3f : 1.0f);
-            Candidate k; k.family = Family::Sneak; k.formName = "hide"; k.f.unseen = Tri::Yes; k.f.combatSec = 6.0f * (1.0f / worth - 1.0f); k.f.selfHp = x.c.hp / std::max(1.0f, x.c.hpMax); k.f.onClass = true;
+        // G2 Layer 1: Cons::FightStart left the Sneak family, so the old combatSec-encoded worth no longer reaches the score. The hide
+        // row is now driven through its own terms, the way Generate emits it: Unseen (Yes) and HoldStill (!strikeReady) are gates, so
+        // the candidate stands at the family weight. The lab keeps the one worth it had that matters, "not while the player is dying",
+        // by not offering the break-off then.
+        if (CanHide(F, ci)) { const Body& pl = F.b[0]; if (pl.alive && pl.c.hp < 0.35f * pl.c.hpMax) return;
+            Candidate k; k.family = Family::Sneak; k.formName = "hide"; k.f.unseen = Tri::Yes; k.f.selfSneaking = true; k.f.strikeReady = false;
+            k.f.selfHp = x.c.hp / std::max(1.0f, x.c.hpMax); k.f.onClass = true;
             sv.g.actions.push_back(k); }
     }
 

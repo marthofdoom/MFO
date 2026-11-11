@@ -41,6 +41,8 @@ namespace MFO::Iaus {
         bool          concentration = false;
         bool          undeadOnly = false;       // a TurnUndead-archetype effect: undead foes only
         bool          meleeBuff = false;        // armor / cloak type: values a recipient in melee
+        bool          silent = false;           // G2: the engine's own cast-sound entry point (55) leaves his cast of THIS spell soundless
+                                                // (Fills::CastsSilently; false = loud or not measurable, which is today's behaviour)
         // The class-allowed bits AS THE BOOK MEASURED THEM (log / board). Generate reads the live ClassGate.
         bool          onClass = true;           // class_fit (ruling Q34): his current class casts spells
         bool          fromMastered = false;     // class_fit: a class he has MASTERED casts spells
@@ -169,7 +171,9 @@ namespace MFO::Iaus {
                                     // inside the chase cap). The top-5 cut is the generator's (pure).
         std::vector<Combatant> allies;   // the player (isPlayer) and the active followers other than the follower
         std::uint32_t playerId = 0;
-        bool  selfSneaking = false;   // G2 Layer 1: Actor::IsSneaking() on the follower this lap (the stance, however it got held)
+        bool  selfSneaking = false;   // G2 Layer 1: Actor::IsSneaking() on the follower this lap, counted only when MFO owns the sneak
+                                      // (bSneakInCombat on, or G1's stance claim live): with the defaults it stays false, as on main
+        bool  hideRoad = false;       // G2: Harbinger can hold him still and quiet (ch.1 + ch.7). false: no hold row is generated
         std::uint32_t currentTargetId = 0;   // Targeting::Current, else his engine combat target
         std::uint32_t playerTargetId = 0;    // the player's combat target (design fact 8)
 

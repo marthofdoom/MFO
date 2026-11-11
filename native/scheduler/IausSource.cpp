@@ -128,6 +128,7 @@ namespace MFO::Scheduler {
             // The IAUS memory: the running decision, the G10 want list, the fight clock.
             Iaus::Engine::Forget(a_id);
             Iaus::Candidates::Forget(a_id);
+            APMFBridge::ReleaseHideHold(a_id, a_why);   // G2 hold row: ch.1 + ch.7 belong to the old source's decision
         }
 
     }
@@ -274,12 +275,20 @@ namespace MFO::Scheduler {
         if (g_followers.find(m_id) == g_followers.end()) return false;   // the record is gone: the scan keeps its last choice
         while (const Item* it = Current()) {
             std::string whyNot;
-            if (MakeChoice(*it, a_out, whyNot)) return true;
+            if (MakeChoice(*it, a_out, whyNot)) {
+                // G2 hold row (apmf/HideClaims.cpp): the claim follows the item the scan is about to fire, BEFORE it fires. The hold
+                // row files ch.1 + ch.7; every other pick releases both first, so the ch.7 deny never eats a blow from stealth,
+                // a reveal or another family winning. A posture item leaves the claim as it is (it fires nothing the deny covers).
+                if (!it->posture)
+                    APMFBridge::ServiceHideHold(m_self, m_set.gen.actions[m_d.order[it->idx].idx].family == Family::Sneak);
+                return true;
+            }
             if (!it->posture) m_notes.push_back({ m_d.order[it->idx].idx, std::move(whyNot) });
             ++m_pos;
         }
         a_out = Eval::Choice{};   // rank -1: no more candidates
         a_out.source = Eval::Source::Iaus;
+        APMFBridge::ServiceHideHold(m_self, false);   // nothing picked this lap: no hold
         return true;
     }
 
@@ -380,6 +389,7 @@ namespace MFO::Scheduler {
 
     void IausCombatEnded(RE::FormID a_id) {
         Iaus::Engine::EndDecision(a_id);
+        APMFBridge::ReleaseHideHold(a_id, "combat ended");
         Iaus::Candidates::CombatEnded(a_id);
     }
 

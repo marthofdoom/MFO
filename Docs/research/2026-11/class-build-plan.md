@@ -108,6 +108,17 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   4. **The hold row and the strike:** with the follower hidden from every foe the `[iaus]` decision line shows `hold 1` and the
      pick is `sneak` (Wait: MFO names nothing). When an unaware foe comes within the melee reach the pick becomes `attack`
      or `power_attack` on it, with the `strike` consideration at x1 in `[iaus-why]`.
+  4b. **The hold CLAIM (Harbinger ch.1 + ch.7, `apmf/HideClaims.cpp`).** With the row picked look for `[hide] <id>: ch.1 movement
+     block (h=..) + ch.7 offense/cast deny (h=..) FILED` once, and `RELEASED (...)` with the reason when the pick changes (the
+     release comes BEFORE the attack on the strike lap), his combat ends, the stance drops, or he is dismissed. Checks: (a) the
+     hold lines match the `[iaus]` pick lap for lap; (b) the first blow lands on the strike lap (the ch.7 deny never eats it);
+     (c) `REFUSED` or `the ch.1 movement block claim ended` lines are a failure to report. **FIELD CAVEAT:** it is unobserved
+     whether ch.1 MovementBlock parks a follower who is IN COMBAT. Read the P1 `moving=` bits while the hold stands: `moving=false`
+     = it parks him. `moving=true` with a live claim = it does not. **Documented next step if it does not (NOT built): a ch.23
+     `kIntent_PursuitLeash` claim anchored on him** (Harbinger's in-combat leash, the `apmf/PursuitLeash.cpp` road).
+  4c. **Silent casting.** The P1 line ends `castSilent=n/m` (spells whose cast-sound entry point 55 reads 0 for him). With a
+     hidden-casting perk the hold row keeps his silent spells as candidates while hidden; without one no cast is generated while
+     the hold row stands. An offensive spell that hits still reveals him through the engine.
   5. **P3 / Q87 (does the list's sneak multiplier reach a follower?)** look for `[stealth-probe] hit ... kSneakAttack=true ...
      expected multiplier N ... health before B after A drop D`. After 5 sneak and 5 plain hits with the same weapon type the
      `[stealth-probe] q87 ...` line says `WITHIN 25%` or `OUTSIDE 25%` (ratio of the median sneak drop to the median plain drop

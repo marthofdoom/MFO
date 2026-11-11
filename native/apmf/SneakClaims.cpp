@@ -209,6 +209,12 @@ namespace MFO::APMFBridge {
         it->second.wanted = false;
     }
 
+    bool SneakClaimHeld(RE::FormID a_follower) {
+        std::scoped_lock lk(g_sneakMx);
+        const auto it = g_sneaks.find(a_follower);
+        return it != g_sneaks.end() && it->second.handle != APMF_API::kInvalidHandle;
+    }
+
     void SweepSneakClaims() {
         const auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api) return;
