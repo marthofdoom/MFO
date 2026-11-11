@@ -146,7 +146,7 @@ value fitted to field logs), MODEL (a documented approximation), UNPROVEN (shape
 | 3 | NPC health / magicka / stamina | race base + ACBS offset + (level - 1) x (fNPCHealthLevelBonus [health only] + iAVDhmsLevelUp x class weight share) | matches the CK-stored DNAM health on 111 of 111 vanilla static auto-calc actors | PROVEN |
 | 4 | NPC skills | iAVDSkillStart 15 + race boost + (level - 1) x iAVDSkillsLevelUp x class skill weight share. Non auto-calc actors use DNAM values + offsets | matches DNAM skills within 1 on 105 of 111 vanilla actors (rounding) | PROVEN |
 | 5 | Leveled actors | template chain per ACBS flag. LVLN / LVLI entries at or under the level, highest level only unless the list's flag says all. PC-level-mult actors: level = PC level x mult, clamped by calc min / max. Zone level = PC level clamped by the encounter zone | record semantics (CK wiki), not re-verified in the disassembly | DATA + MODEL |
-| 6 | Weapon damage | (weapon + ammo) x fDamageWeaponMult x lerp(fDamageSkillMin, fDamageSkillMax, skill / 100) x ModAttackDamage perks. Power attack x (1 + fPowerAttackDefaultBonus) | I8 disassembly for the chain, GMST values per list. The lerp shape is the I8 agent's reading | PROVEN chain, UNPROVEN that it is exactly linear |
+| 6 | Weapon damage | (weapon + ammo) x fDamageWeaponMult x lerp(fDamageSkillMin, fDamageSkillMax, skill / 100) x ModAttackDamage perks. Power attack x (1 + fPowerAttackDefaultBonus) | I8 research 2.1: the core formula decoded on AE 26410 (linear in the clamped skill). The power attack multiplier as a pre-swing read is unproven there | PROVEN (normal hit), MODEL (power multiplier) |
 | 7 | Unarmed / creature damage | race unarmed damage x the mean ATKD damage mult of its normal attacks | record fields. No level scaling assumed | MODEL |
 | 8 | Armor mitigation | min(fMaxArmorRating, rating x fArmorScalingFactor + worn pieces x fArmorBaseFactor x 100) percent | I8 disassembly + GMSTs | PROVEN |
 | 9 | Armor rating | sum of piece ratings x lerp(fArmorRatingBase, fArmorRatingMax, armor skill / 100), plus the race skin armor and ability armor | GMSTs, records. Shape by analogy with damage | UNPROVEN shape |
@@ -436,3 +436,68 @@ in a melee swing), `taunt_per_min`, `power_per_min`, `follower_death_pct` (fight
 Rulings checked today (`Results.h Rulings()`): R-MAGE-MELEE-T1 (`mage` melee_share_pct <= 5), R-MAGE-MELEE-T2+
 (pure mage line, tier 2 and up, <= 3), R-NO-SPLASH (0 ally hits per fight), R-BAD-FACTS, R-INVALID, R-BUDGET
 (decide_us_max <= 500). More are added with the class playstyles.
+
+## 16. Phase 2: making IAUS itself smarter (work in progress on `feat/iaus-sim-v2`)
+
+### 16.1 The success criterion ("humanlike"), stated so it can be measured
+
+A policy is optimal when no single decision, changed and then followed by the policy itself, improves the outcome at
+any state (the policy improvement theorem). The oracle of section 9.2 is exactly that test: it tries every option at
+every decision and rolls IAUS forward. So:
+
+1. **Oracle gap.** On every scenario and on the natural bracket of every class, on all three lists, the mean
+   utility of IAUS is within the margin of the rollout oracle built over that same IAUS, with the FULL action set.
+   Proposed margin: 3 U per scenario and 1.5 U in the mean. Reason: the oracle's own noise at K = 8 is about 1 to 2 U
+   per scenario over 20 fights (seen as small negative gaps), and 3 U is a tenth of what one follower down costs.
+2. **Bot tells**, each a metric in the results file, inside the range a person shows: decision switches per minute,
+   target switches per minute (field logs: 2.1 pins per minute at the median), overkill, double heals, idle with a
+   candidate in reach, refused tries, mage melee share against the ruling.
+3. **Robustness.** A change is kept only when it is found on one list and holds on the others and on a second seed.
+
+The oracle is rebuilt over every new IAUS, so the gap stays honest as IAUS improves.
+
+### 16.2 What changed in the pure layers so far (all NOT APPLICABLE while their inputs are unmeasured, harness 0 failed)
+
+| Step | Files | What |
+|---|---|---|
+| 2a estimates | `native/iaus/Estimate.h` (new, pure), `Snapshot.h`, `Core.h`, `Generate.cpp`, `Catalogue.cpp` | Per-combatant inputs (one weapon hit, the engine's hit rate, armor mitigation, magic resist, observed health loss) and per-spell expected damage / healing. New considerations: DamageValue (this spell's expected damage on this target against his best option), Overkill, TauntSurvive (seconds to live with the foe on him too, replaces the self-health term once measured), RetreatDanger (the old 30 percent gate, or seconds to live under 8), HealSize, BoostPlayerDying, BoostRecipientDying |
+| 2b scrolls | `Snapshot::scrollRoad`, `Generate.cpp` | Scroll candidates (family Scroll, the catalogue's scroll sets) once a scroll can be read as a cast. Off in the game until card S3 has its road |
+| 2c chase | `Core.h`, `Generate.cpp`, `Catalogue.cpp`, harness | A melee attack names a target the engine then closes on: RangeChase shades by distance and vetoes past the chase cap. Before, every melee attack was vetoed beyond 1.15 x reach, so a melee follower went Idle with the player's attacker 800 units away. The swing gate stays on the power attack. BoostControlled x1.3 for a blow on a controlled foe. The harness check "F4: the 1.15x reach gate still vetoes" was rewritten to this intent: a DESIGN CHANGE against the I2 review, for the reviewer to judge |
+
+Engine side still to write (CI only): `Candidates.cpp` and `SpellBook.cpp` must fill the new Snapshot fields from the
+reads the I8 research proved (weapon damage by the core formula, `weaponData.speed` x fCombatDPS*SpeedMult,
+DamageResist x fArmorScalingFactor, kResistMagic, `Confidence::HpLossRate`, spell magnitude through entry point 0x1D).
+
+### 16.3 Tuning by search, not by hand
+
+`tools/iaus_sim/Tune.h`: `--set` overrides a weight, an action weight or a curve parameter at run time, `--opt` runs a
+coordinate search on J = half the mean scenario utility plus half the mean natural-bracket utility.
+
+Parameter set A (searched on LoreRim, 12 fights, 2 passes), indexes from `--list-params`:
+`w.9.60=0.9975,w.9.61=0.931,w.2.62=1.995,c.65.b=1.8,w.11.64=0.8,c.66.b=0.7,aw.4=0.665,aw.1=2.394,aw.2=0.75,aw.10=1.8,aw.7=0.275,aw.9=1.769,aw.11=1.2,aw.0=0.8,c.63.a=0.665`
+In words: power attack weight 0.9 to 2.4, control casts 0.9 to 1.8, offense casts 1.0 to 1.77, magicka potion 1.1 to
+0.275, taunt 1.0 to 0.75, retreat 0.5 to 0.665, taunt survive weight 2.0.
+
+| J (30 fights, seed 1) | LoreRim | Tuxborn | Vanilla |
+|---|---|---|---|
+| IAUS on main (no estimates) | 57.29 | 58.56 | 76.68 |
+| + estimates v1, first-guess weights | 57.67 | 59.42 | 77.24 |
+| + parameter set A | 61.83 | 61.86 | 78.59 |
+| + scroll road | 61.81 | 62.39 | 78.67 |
+| + chase range, controlled boost | 61.36 | 63.79 | 79.45 |
+
+Set A was searched on LoreRim only and holds on Tuxborn, Vanilla and seed 7 (LoreRim 60.1, Tuxborn 61.5, Vanilla
+78.7). A set searched on Tuxborn generalised worse and was dropped. Set A is NOT yet written into `Catalogue.cpp`.
+
+Oracle gap over IAUS + set A (K = 6, 60 s, 20 fights): LoreRim mean +14.3 (from +20.1), Tuxborn +15.5 (from +19.5).
+Largest left: knight-boss and knight-boss-healer on LoreRim (+65, +77: the oracle bashes and controls the boss, see
+below), double-heal (+34, +43), control-setup (+26, +34), predictive-heal (+14, +19), and on Tuxborn mp-budget +24,
+weakness +23, splash +21.
+
+### 16.4 Open questions the lab raised
+
+- **Bash and stagger on LoreRim.** The oracle beats the boss by bashing it (a 0.8 s stagger each time). LoreRim runs
+  Chocolate Poise, where a poise meter replaces the stagger rule, so the sim overstates stun-locking on that list
+  until poise is modelled. And bash has no road in IAUS today.
+- **Magicka potions.** The search wants them far less on LoreRim (0.275) and more on Tuxborn (1.65). A weight cannot
+  be right on both: the missing input is what the magicka would buy (the foes still standing against his spells).
