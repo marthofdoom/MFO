@@ -5,8 +5,9 @@
 // service helpers Scheduler::Tick calls. The variables are `inline` (ONE shared
 // instance across the two TUs, never per-TU copies). The move changes no
 // threading: each item keeps the rule its own comment states (MAP.md, #4).
-// NOT a public API: only those two TUs may include this; everything else
-// includes Scheduler.h.
+// NOT a public API: only those two TUs and scheduler/IausSource.cpp (IAUS card
+// I6: the scan's IAUS source reads g_recent / g_proposedTarget / g_retreatHealLog)
+// may include this; everything else includes Scheduler.h.
 // Split out of native/Scheduler.cpp by IAUS card I0 (2026-11-10): a pure move,
 // proven function by function with tools/splitcheck.
 

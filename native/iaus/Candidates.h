@@ -14,8 +14,8 @@
 //   GENERATE (iaus/Generate.h, pure): Snapshot + ClassGate + Tuning -> the candidates.
 // Build() is the two in a row for one follower.
 //
-// NOBODY CALLS THIS YET. Card I6 calls Build from the combat scan, then Engine::FillCooldowns / Engine::Decide
-// over set.gen.actions (DecidePosture over set.gen.postures), then NoteDecision, and wires Clear() into
+// CALLED BY the scan's IAUS source (scheduler/IausSource.cpp, card I6): Build, then Engine::FillCooldowns /
+// Engine::Decide over set.gen.actions (DecidePosture over set.gen.postures), then NoteDecision. Clear() runs in
 // ResetAllState (beside SpellBook::Clear, after StopPump).
 //
 // THREADING: everything here is the g_followers worker domain (#4) -- the AddTask job worker inside the scan,

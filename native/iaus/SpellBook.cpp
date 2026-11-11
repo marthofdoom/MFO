@@ -2,8 +2,10 @@
 #include "iaus/SpellBook.h"
 
 #include "CasterConsent.h"
+#include "Config.h"
 #include "Followers.h"
 #include "MainThread.h"
+#include "PrecisionBridge.h"   // card I6 (marth Q64): the measured weapon length, main thread
 #include "Vocabulary.h"
 #include "cast/Actuation.h"
 #include "logistics/Logistics.h"
@@ -102,8 +104,18 @@ namespace MFO::Iaus::SpellBook {
             // The BLAST: the effect's own explosion (MGEF data.explosion) and its projectile's (BGSProjectile
             // data.explosionType) carry the real damage radius in world units (BGSExplosion data.radius). It can
             // be larger than the EFIT area, and the never-splash rule must see the larger one.
-            float explosionUnits = 0.0f;
+            // MFO-B661 (card I6): an explosion with a PAYLOAD (BGSExplosion data.damage > 0, or an enchantment) is
+            // tracked apart from a cosmetic one. Only a payload explosion can give an area to a spell whose EFIT
+            // area is 0; a cosmetic impact explosion can at most enlarge an area the record already states.
+            float explosionUnits = 0.0f;          // the largest radius of ANY explosion
+            float payloadUnits = 0.0f;            // the largest radius of an explosion that carries a payload
             const char* explosionSrc = "none";
+            const auto noteExplosion = [&](const RE::BGSExplosion* ex, const char* a_src) {
+                if (!ex || !std::isfinite(ex->data.radius) || !(ex->data.radius > 0.0f)) return;
+                const bool payload = (std::isfinite(ex->data.damage) && ex->data.damage > 0.0f) || ex->formEnchanting != nullptr;
+                if (payload && ex->data.radius > payloadUnits) payloadUnits = ex->data.radius;
+                if (ex->data.radius > explosionUnits) { explosionUnits = ex->data.radius; explosionSrc = a_src; }
+            };
             for (auto* eff : a_sp->effects) {
                 auto* base = eff ? eff->baseEffect : nullptr;
                 if (!base) continue;
@@ -115,15 +127,8 @@ namespace MFO::Iaus::SpellBook {
                 case Arch::kParalysis:  in.control = true; break;
                 default: break;
                 }
-                if (const auto* ex = base->data.explosion; ex && std::isfinite(ex->data.radius) && ex->data.radius > explosionUnits) {
-                    explosionUnits = ex->data.radius;
-                    explosionSrc = "effect";
-                }
-                if (const auto* proj = base->data.projectileBase)
-                    if (const auto* ex = proj->data.explosionType; ex && std::isfinite(ex->data.radius) && ex->data.radius > explosionUnits) {
-                        explosionUnits = ex->data.radius;
-                        explosionSrc = "projectile";
-                    }
+                noteExplosion(base->data.explosion, "effect");
+                if (const auto* proj = base->data.projectileBase) noteExplosion(proj->data.explosionType, "projectile");
                 // The element (design fact 7, section 3.1 exploit): the COSTLIEST hostile effect's resist AV.
                 if ((base->IsHostile() || base->IsDetrimental()) && eff->cost > costliestHostile) {
                     costliestHostile = eff->cost;
@@ -156,12 +161,17 @@ namespace MFO::Iaus::SpellBook {
 
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
-            e.areaUnits = Prune::BlastUnits(static_cast<float>(arch.area), explosionUnits);
+            // With an EFIT area any explosion may enlarge it (the larger radius is the safe one for the never-splash
+            // rule); without one only a payload explosion counts (MFO-B661).
+            e.areaUnits = Prune::BlastUnits(static_cast<float>(arch.area), arch.area > 0 ? explosionUnits : payloadUnits,
+                                            payloadUnits > 0.0f);
             if (arch.area > 0 || explosionUnits > 0.0f)
-                a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}) "
-                                                          "-> blast {:.0f} units", e.name, e.form, arch.area,
+                a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}), "
+                                                          "payload explosion {:.0f} units -> blast {:.0f} units{}", e.name, e.form, arch.area,
                                                           Prune::AreaUnits(static_cast<float>(arch.area)), explosionUnits,
-                                                          explosionSrc, e.areaUnits));
+                                                          explosionSrc, payloadUnits, e.areaUnits,
+                                                          (e.areaUnits <= 0.0f && explosionUnits > 0.0f)
+                                                              ? " (cosmetic explosion: no area, MFO-B661)" : ""));
             // The aimed reach (spell range, else projectile range; Self / Touch = Heal Other's reach, which is
             // what a heal or buff placed on an ally needs). "No cap of its own" is a huge number there: 0 here.
             const float reach = Actuation::HealReach(a_sp);
@@ -251,6 +261,27 @@ namespace MFO::Iaus::SpellBook {
             addParty(RE::PlayerCharacter::GetSingleton());
             if (const auto snap = Followers::ActiveSnapshot())
                 for (const RE::FormID id : *snap) addParty(RE::TESForm::LookupByID<RE::Actor>(id));
+
+            // Card I6 (marth Q64): Precision's capsule length of the right-hand weapon. MEASURED, not scored (the
+            // header of PrecisionBridge.h and the research note say why). PASSIVE PROBE: one line per follower
+            // and right-hand weapon per session, with the numbers a ruling on the reach formula needs.
+            {
+                const float len = PrecisionBridge::RightWeaponLength(a_actor);
+                book->kit.precisionWeaponLength = len;
+                auto* rw = a_actor->GetEquippedObject(false);
+                const RE::FormID wf = rw ? rw->GetFormID() : 0;
+                float dist = -1.0f;
+                if (auto tp = a_actor->GetActorRuntimeData().currentCombatTarget.get(); tp)
+                    dist = a_actor->GetPosition().GetDistance(tp->GetPosition());
+                // The ledger key mixes follower and weapon so each pair logs once (a FormID-shaped key, never a form).
+                a_probes.emplace_back(fid ^ (wf * 0x9E3779B1u) ^ (dist >= 0.0f ? 0x50524543u : 0x50524542u),   // once without and once with a target
+                    std::format("reach probe: {} ({:08X}) right hand {:08X} '{}': Precision capsule length {:.1f} units "
+                                "(bridge {}), fMeleeReach {:.0f}, distance to his combat target {:.0f} (-1 = none). "
+                                "Measured only: IAUS melee reach is still fMeleeReach (Q64)",
+                                a_actor->GetName() ? a_actor->GetName() : "?", fid, wf,
+                                rw && rw->GetName() ? rw->GetName() : "-", len, PrecisionBridge::State(),
+                                Config::g_meleeReach.load(std::memory_order_relaxed), dist));
+            }
 
             SpellVisitor vis;
             a_actor->VisitSpells(vis);
@@ -384,6 +415,20 @@ namespace MFO::Iaus::SpellBook {
             mastered = Classes::GetMastered(a_follower);
         }
         if (!def) def = Classes::T1ForOverride(Followers::ResolvedClassFast(a_follower));
+        if (!g.treeOn) {
+            // THE CLASS TREE IS OFF: THE CLASS GATE RESTRICTS NOTHING (marth Q63, card I6; closes MFO-B657). Any
+            // known spell, power attack, taunt and retreat are open, and no weapon category is gated, exactly as
+            // the gambit table leaves them today. The row cooldowns stay 0 (no row): Generate applies the tuning
+            // floors (Tuning::rowlessPowerCooldownSec / rowlessTauntCooldownSec). Scrolls keep ruling Q36 (tree
+            // OFF: the Mage T1 uses them); no scroll candidate is generated yet (card S3).
+            g.resolved      = def != nullptr;
+            g.spellsOnClass = true;
+            g.scrollUser    = def && CastingClass(*def);
+            g.powerAttack   = true;
+            g.taunt         = true;
+            g.disengage     = true;
+            return g;       // weaponMelee / Bow / Crossbow / Staff keep their open defaults
+        }
         if (!def) return g;   // not resolved yet: nothing is class-gated (the defaults)
         g.resolved = true;
 
@@ -409,6 +454,7 @@ namespace MFO::Iaus::SpellBook {
                 g.powerCooldownSec = (std::max)(g.powerCooldownSec, row.cooldownSec);
             } else if (act == Vocab::kActTaunt) {
                 g.taunt = true;
+                g.tauntCooldownSec = (std::max)(g.tauntCooldownSec, row.cooldownSec);   // card I6: the row's own, 0 today
             }
         }
         return g;

@@ -30,6 +30,7 @@ namespace MFO::Iaus {
         struct Ctx {
             const Snapshot&  s;
             const ClassGate& g;
+            const Tuning&    t;
             Generated&       out;
             float selfHp = 1.0f, selfSp = 1.0f, selfMp = 1.0f;
             int   foeCount = 0;
@@ -98,15 +99,23 @@ namespace MFO::Iaus {
                     c.role = RoleTag::Melee;
                     c.f.meleeRange = true;
                     c.f.reach = (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
-                    c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.g.powerCooldownSec, 0.0f));
+                    // The class row's cooldown; a class with no declared one (and the tree OFF, marth Q63) gets the
+                    // tuning floor, so "any follower may power attack" is never "every lap".
+                    const float rowCd = (std::max)(0.0f, Finite(x.g.powerCooldownSec, 0.0f));
+                    c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.rowlessPowerCooldownSec, 0.0f));
                     x.Push(std::move(c));
                 }
                 const bool onParty = foe->targetIsAlly || (foe->targetId != 0 && foe->targetId == s.playerId);
-                if (s.tauntEnabled && x.g.taunt && s.meleeInRightHand && onParty) {
+                // Card I6 (sim finding R1): no candidate while his own taunt is in flight or still holds a foe (the
+                // executor refuses then), the FoeTaunted gate reads Combatant::taunted (filled from the Taunt
+                // module's own pins), and the taunt carries a HARD cooldown: the class row's, else the tuning floor.
+                if (s.tauntEnabled && !s.tauntBusy && x.g.taunt && s.meleeInRightHand && onParty) {
                     Candidate c = x.Make(Family::Taunt, foe);
                     x.Foe(c.f, *foe, false);
                     c.f.meleeRange = false;
                     c.f.reach = (std::max)(0.0f, Finite(s.tauntReach, 0.0f));
+                    const float rowCd = (std::max)(0.0f, Finite(x.g.tauntCooldownSec, 0.0f));
+                    c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.rowlessTauntCooldownSec, 0.0f));
                     x.Push(std::move(c));
                 }
             }
@@ -301,7 +310,7 @@ namespace MFO::Iaus {
         Generated out;
         if (!Readable(a_s.self)) { out.selfUnreadable = true; return out; }   // unloaded: skip, never divide
 
-        Ctx x{ a_s, a_gate, out, 1.0f, 1.0f, 1.0f, 0, 1, {} };
+        Ctx x{ a_s, a_gate, a_t, out, 1.0f, 1.0f, 1.0f, 0, 1, {} };
         x.selfHp = Pct(a_s.self.hp, a_s.self.hpMax);
         x.selfSp = Pct(a_s.self.sp, a_s.self.spMax);
         x.selfMp = Pct(a_s.self.mp, a_s.self.mpMax);

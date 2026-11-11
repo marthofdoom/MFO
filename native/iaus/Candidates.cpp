@@ -128,6 +128,7 @@ namespace MFO::Iaus::Candidates {
         s.handBusyLeft     = Actuation::HealStandsOnHand(selfID, Actuation::kHandLeft);
         s.handBusyRight    = Actuation::HealStandsOnHand(selfID, Actuation::kHandRight);
         s.tauntEnabled     = Config::g_taunt.load(std::memory_order_relaxed);
+        s.tauntBusy        = s.tauntEnabled && Taunt::Busy(selfID);   // card I6: act.taunt would refuse him now
         s.tauntReach       = Config::g_tauntRadius.load(std::memory_order_relaxed);
         s.meleeReach       = Config::g_meleeReach.load(std::memory_order_relaxed);
 
@@ -200,6 +201,7 @@ namespace MFO::Iaus::Candidates {
             }
             if (auto* race = foe->GetRace()) u.undead = race->HasKeywordString("ActorTypeUndead");
             u.unholy = Logistics::IsUnholy(foe);
+            u.taunted = Taunt::TauntedBy(fid, selfID);   // card I6 (R1): the Taunt module's own live pin, not an engine read
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
             u.sight       = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Own));
             u.sightEngine = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Engine));
