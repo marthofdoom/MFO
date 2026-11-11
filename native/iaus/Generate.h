@@ -61,4 +61,23 @@ namespace MFO::Iaus {
     [[nodiscard]] std::vector<SpellTarget> TopSpellPairs(const Decision& a_d, std::span<const Candidate> a_cands,
                                                           std::size_t a_n = 6);
 
+    // G10's ASK LIST, with a memory for refusals (sim finding D1). The top pairs alone forget a refusal every
+    // second lap: a pair answered No is vetoed by the WillWork gate, so the decision does not rank it, so it is
+    // not asked on the next lap, so it has no answer, and an unanswered pair is Unknown, which passes. A refused
+    // pair therefore stays ON the list, and keeps being asked, for as long as its last No is younger than
+    // a_keepNoSec. The engine side stamps lastNo each lap the answer is still No, so a standing refusal never
+    // lapses; a Yes clears it. PURE (the harness checks it).
+    struct AskedPair {
+        SpellTarget pair;
+        bool        refused = false;   // its last answer was No
+        double      lastNo = 0.0;      // when (seconds, the caller's monotonic clock)
+        bool operator==(const AskedPair&) const = default;
+    };
+    // a_prev: the list that was asked this lap, with the answers written back. a_top: this decision's top pairs.
+    // Result: a_top first (a pair that is also a live refusal keeps its stamp), then the other live refusals,
+    // newest No first, a_cap entries at most (the oldest refusals are dropped first, never a top pair).
+    [[nodiscard]] std::vector<AskedPair> NextAskList(std::span<const AskedPair> a_prev,
+                                                     std::span<const SpellTarget> a_top, double a_now,
+                                                     double a_keepNoSec, std::size_t a_cap = 24);
+
 }
