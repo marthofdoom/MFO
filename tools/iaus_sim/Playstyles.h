@@ -91,6 +91,11 @@ namespace Sim {
               "casts a level-capped spell at a foe above its cap (the base will-work rule); melees",
               { atLeast("a.cast_control", 8, "control comes first"), atMost("ctrlFail%", 10, "marth: a spell that will never work is skipped"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "spell range") }, kPsNoMelee, "C-H3" },
 
+            // ═══ PARKED (marth 2026-11-11: the class release order is T2 first, Classes Beta 1, THEN T3) ═══════════════════════════
+            // Everything below this line (tier 3, tier 4, the Dragonborn) is a FIRST DRAFT written before the scope change. It was
+            // never measured, tuned or reviewed, and its numbers were not checked against a run. It is kept so the T3 round does
+            // not start from nothing. The class report runs only the 12 T1 + T2 classes (kBeta1Classes below); do not quote a T3+
+            // row as a ruling until its round re-derives it from the cards.
             // ── tier 3, pure ──
             { "great-knight", "the knight made extreme: the wall with Shieldwall, taunts at three foes or more as well, heavier guard, shorter leash",
               "leaves the line; swings heavy more than a fifth of the time",
@@ -171,6 +176,9 @@ namespace Sim {
         };
         return v;
     }
+
+    // Classes Beta 1 = tiers 1 and 2: the classes whose playstyles are in force (the --classes value of the class report).
+    inline constexpr const char* kBeta1Classes = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock";
 
     inline const Playstyle* PlaystyleOf(const std::string& cls) {
         for (const Playstyle& p : Playstyles()) if (cls == p.cls) return &p;

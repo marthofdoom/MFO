@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--reach") && i + 1 < argc) { const char* v = argv[++i]; g_learnReach = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "cold") ? 1 : 2; }   // ruling Q68: off | cold | warm (default)
         else if (!std::strcmp(argv[i], "--scroll-road")) scrollRoad = true;
         else if (!std::strcmp(argv[i], "--mode") && i + 1 < argc) g_tableMode = !std::strcmp(argv[++i], "table");
-        else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); }
+        else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); else if (only == "beta1") only = kBeta1Classes; }   // beta1 = the 12 T1 + T2 classes
         else if (!std::strcmp(argv[i], "--profiles") && i + 1 < argc) mech = !std::strcmp(argv[++i], "mech");
         else if (!std::strcmp(argv[i], "--print-classes")) printClasses = true;
         else if (!std::strcmp(argv[i], "--scenario") && i + 1 < argc) scenario = argv[++i];

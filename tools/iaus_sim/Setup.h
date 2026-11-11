@@ -183,10 +183,11 @@ namespace Sim {
         { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH; }
         for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
         F.interior = fs.interior;
-        if (g_stealth > 0) {   // drawn only in a stealth mode, so the fights of mode 0 are the fights of main, draw for draw
-            F.light = fs.light >= 0 ? fs.light : fs.interior ? R.U(0.15f, 0.6f) : R.P(0.35f) ? 0.2f : 0.9f;
+        if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)
+            Rng S; S.g.seed(fs.seed * 0x9E3779B97F4A7C15ULL + 77u);
+            F.light = fs.light >= 0 ? fs.light : fs.interior ? S.U(0.15f, 0.6f) : S.P(0.35f) ? 0.2f : 0.9f;
             for (std::size_t i = 0; i < F.ctl.size(); ++i) { const Ctl& c = F.ctl[i]; Body& x = F.b[static_cast<std::size_t>(c.body)]; if (!x.stealthy || c.entryOdds <= 0 || g_stealth < 2) continue;
-                const bool free = i == 0 && fs.freeEntry >= 0 ? fs.freeEntry == 1 : R.P(1.0f / static_cast<float>(c.entryOdds));
+                const bool free = i == 0 && fs.freeEntry >= 0 ? fs.freeEntry == 1 : S.P(1.0f / static_cast<float>(c.entryOdds));
                 if (free) x.cloakUntil = 1e9; }   // card C13: he opens undetected whatever the foes could sense; his first blow ends it
         }
         const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);

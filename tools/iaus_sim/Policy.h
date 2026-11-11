@@ -130,8 +130,10 @@ namespace Sim {
     inline void StealthInject(const Fight& F, int ci, Served& sv) {
         const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)];
         if (!x.stealthy) return;
-        if (x.sneaking) for (Candidate& k : sv.g.actions) { if (k.family != Family::Attack && k.family != Family::PowerAttack) continue;
-            const Body* tg = F.Find(k.target); if (tg && tg->role == Role::Foe && !F.Detects(*tg, x)) k.f.foeHelpless = true; }
+        for (Candidate& k : sv.g.actions) { if (k.family != Family::Attack && k.family != Family::PowerAttack) continue;   // a blow that is multiplied: a sneak attack, or the flanking half bonus (G4)
+            const Body* tg = F.Find(k.target); if (!tg || tg->role != Role::Foe) continue;
+            if (x.sneaking && !F.Detects(*tg, x)) k.f.foeHelpless = true;
+            else if (c.flank) { const Body* tt = F.Find(tg->c.targetId); if (tt && tt != &x && tt->Party()) k.f.foeHelpless = true; } }
         if (CanHide(F, ci)) { const Body& pl = F.b[0]; bool playerDying = pl.alive && pl.c.hp < 0.35f * pl.c.hpMax;
             const Weapon& w = (c.drawn == PostureKind::Bow && x.spec->ranged.Has()) ? x.spec->ranged : x.spec->melee;
             const float m = SneakAttackMult(*F.D, *x.spec, w) * c.sneakAtkClass, worth = std::clamp((m - 1.0f) / (m + 1.0f), 0.05f, 1.0f) * (playerDying ? 0.3f : 1.0f);

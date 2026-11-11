@@ -273,6 +273,10 @@ namespace Sim {
             if (los) { const Body* ot = Find(o.c.targetId);   // he looks at what he fights; with no target he looks around (MODEL)
                 if (ot && ot != &x) { const float ax = ot->c.x - o.c.x, ay = ot->c.y - o.c.y, bx = x.c.x - o.c.x, by = x.c.y - o.c.y, la = std::hypot(ax, ay), lb = std::hypot(bx, by);
                     if (la > 1 && lb > 1) inCone = (ax * bx + ay * by) / (la * lb) >= std::cos(0.5f * g("fDetectionViewCone", 190) * 0.0174533f); } }
+            // MODEL, conservative: in plain view and close (inside 12% of the sneak range: 300 units indoors, 630 outside) he is seen
+            // whatever his skill. With the settings alone a perked sneak would walk up to a foe's face in daylight; the lab does not let
+            // a number rest on that until the engine's formula is read. A blade must therefore come from outside the foe's view cone.
+            if (inCone && d < 0.12f * maxD) return true;
             float sight = 0, sound = 0;
             if (inCone) { sight = 100.0f * light * g("fSneakLightMult", 0.33) * (interior ? 1.0f : g("fSneakLightExteriorMult", 0.5)); if (moving) sight *= 1.0f + g("fSneakLightMoveMult", 0.01); }
             if (moving) { sound = g("fSneakSoundsMult", 1) * (g("fSneakEquippedWeightBase", 12) + g("fSneakEquippedWeightMult", 0.5) * 3.0f) * StealthCombine(D->sneakNoiseRows, *x.spec, true, true) * (c ? c->noiseClass : 1.0f);
