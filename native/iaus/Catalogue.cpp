@@ -678,7 +678,7 @@ namespace MFO::Iaus {
             case Cons::BlockNeed:
                 if (c.family != Family::Block || !f.foeSwinging) return c.family == Family::Block ? In(0.0f) : In::Off();
                 // A swing is in the air: half the need for that alone, the rest by how few seconds he has.
-                return 0.5f + 0.5f * (std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f);
+                return t.blockBase + (1.0f - t.blockBase) * (std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f);
             case Cons::BashNeed:
                 if (c.family != Family::Bash) return In::Off();
                 return f.foeCasting ? 1.0f : (f.foeOnMe ? 0.4f : 0.15f);

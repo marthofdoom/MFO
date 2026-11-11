@@ -1079,8 +1079,10 @@ Vanilla, but the lists want different weights (bash 0.5 on LoreRim, 1.33 elsewhe
   interrupts.
 - **Give ground earns a little alone** (+0.07 J) and more with bash. It moves the kite scenario on Vanilla from 16
   to 24 and knight-boss on LoreRim from 13.6 to 19.0.
-- **Block does not earn robustly yet.** It is worth +13 U on Tuxborn's knight-boss and costs on LoreRim. The need is
-  too eager (any swing in the air). It needs a better input before it is built on.
+- **Block earns once it blocks only what is killing him.** With a base need of 0.5 for any swing in the air it was
+  worth +13 U on Tuxborn's knight-boss and cost on LoreRim. With the base at 0 (`Tuning::blockBase`, the need is only
+  how few seconds he has) and weight 2: +0.43 J in the mean of the six runs (LoreRim -0.27 / +0.21, Tuxborn +1.32 /
+  +1.02, Vanilla +0.24 / +0.04), no list beyond the noise. That is now the default.
 - **The roads are not the whole gap.** The oracle earns +30 to +46 U on these scenarios with the same three actions.
   First-guess needs capture about a tenth of that. What is missing after the roads is TIMING (when a step back pays,
   which swing to block), which is lab work on the considerations, not engine work.

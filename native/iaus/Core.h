@@ -217,6 +217,8 @@ namespace MFO::Iaus {
         float kiteDistance = 0.0f;
         float groundCooldownSec = 3.0f;          // give ground: one step, then look again
         float blockCooldownSec = 2.0f;
+        float blockBase = 0.0f;                  // BlockNeed for a swing in the air when he is in no danger. 0 = he blocks only what is
+                                                 // killing him (the lab: 0.5 lost on LoreRim, 0 holds on every list)
         float bashCooldownSec = 4.0f;
         float regroupCooldownSec = 6.0f;         // a regroup is a walk of seconds: no second order inside this (no yo-yo)
     };
