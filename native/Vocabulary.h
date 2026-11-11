@@ -221,6 +221,17 @@ namespace MFO::Vocab {
     // FOE, Taunt.cpp). MELEE-ONLY: offered, and run, only while a melee weapon is in the right hand. No param.
     // APPENDED; frozen serialization string (#10).
     inline constexpr const char* kActTaunt = "act.taunt";
+    // BASH (Harbinger ch.31 combat move, ABI v38; sim v2 section 26 "Design A"): the follower bashes the chosen foe NOW,
+    // when that foe is inside melee reach (no closing leg: a bash is a move of the moment). Sent through
+    // apmf/CombatMove.cpp, never as a bare animation event. IAUS-ONLY today: the scheduler's IAUS source produces it for
+    // Family::Bash; it is in NO board table and no class row, so it is never serialized. If it ever joins the row
+    // vocabulary this string becomes a frozen serialization string (#10).
+    inline constexpr const char* kActBash = "act.bash";
+    // GIVE GROUND (Harbinger ch.24 on a point, ABI v39; sim v2 section 26 "Design B"): the follower steps back from the
+    // chosen foe: his combat area is bounded for a moment to a point 400 units straight away from that foe, and the
+    // engine's own movement walks him there while he keeps fighting. Filed through apmf/GroundApproach.cpp. IAUS-ONLY, in
+    // no board table and no class row, never serialized (the same note as act.bash).
+    inline constexpr const char* kActGiveGround = "act.give_ground";
 #ifdef MFO_DEV_SELFTEST
     // DEV BUILDS ONLY (CMake MFO_DEV_SELFTEST; ClickUp 1dfcuabcqr7, Docs/SELFTEST.md): "DEV: run self-tests".
     // A STANDING MARKER, never an action: an enabled combat rule holding it turns the self-test runner

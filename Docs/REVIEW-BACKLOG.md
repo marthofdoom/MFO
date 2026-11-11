@@ -2940,3 +2940,8 @@ four Cons named "need" (ambiguous [iaus-why]); -Wconversion at harness.cpp:917-9
 ### MFO-B688 (SEV-4, OPEN, IAUS phase 2, against 303c14d/34ae66d, Opus tier-3 review of feat/iaus-sim-v2)
 MAP.md §11 lists 'DamageValue 0 for a no-damage spell' as LIVE; it is not live until the engine fills spell damage (term reads Off). Move it to the NOT-live list.
 
+
+### MFO-B689 (SEV-5, OPEN, apmf/CombatMove.cpp g_last + apmf/GroundApproach.cpp g_steps, against 694df41, Opus tier-3 review of feat/iaus-combat-move)
+Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale step drains in 700 ms with one log line). Clear in ResetAllState with the next touch.
+
+### Harbinger-side backlog from the same review (recorded here for the MFO adoption; APMF entries in APMF Docs): F1-3 HitSeen matches the engine's own bash within 2.5 s; F1-4 the combat move does not yield to an active ch.8 cast claim; F1-5 kAtkLeft is the charge bit; F2-2 pointSpace bound at the first sweep; probe Post per melee hit while [Probe] bCombatMove is on.

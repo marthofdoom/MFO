@@ -165,6 +165,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/Deposit.cpp
     apmf/ErrandClaims.cpp
     apmf/Place.cpp
+    apmf/CombatMove.cpp
+    apmf/GroundApproach.cpp
     apmf/ErrandWork.cpp
     apmf/TauntClaims.cpp
     apmf/Los.cpp
