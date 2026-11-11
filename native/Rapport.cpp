@@ -8,6 +8,7 @@
 #include "MainThread.h"   // #63 quash runs on the pump, never in the dispatch
 #include "apmf/APMFBridge.h"   // InCombat: a Harbinger combat substrate is not combat (ABI v26)
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the death-sink body
+#include "classes/Classes.h"   // card C12: OnRankUp (marth Q74)
 
 namespace MFO::Rapport {
 
@@ -494,6 +495,9 @@ namespace MFO::Rapport {
                          a_actorID, before, st.rank, st.rapport,
                          SlotsForRank(before, Table::Combat),    SlotsForRank(st.rank, Table::Combat),
                          SlotsForRank(before, Table::Logistics), SlotsForRank(st.rank, Table::Logistics));
+            // Class update C12 (marth Q74): the next class default rows join as the rank opens combat slots, only while
+            // his table is still the untouched default prefix. Inert unless the class tree is live and he has a class.
+            if (st.rank > before) Classes::OnRankUp(a_actorID, st, before);
 
             // FLAIR #13: surface the rank TRANSITION on the HUD -- the
             // fighting-together system's "the party grows" beat. Transition-

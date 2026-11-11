@@ -39,6 +39,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Board_Progression.cpp
     Board_Click.cpp
     Board_Iaus.cpp
+    Board_Classes.cpp
     Board_FieldKit.cpp
     i18n/Strings.cpp
     Probe.cpp
@@ -134,6 +135,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/Carriers.cpp
     classes/ClassTable.cpp
     classes/Classes.cpp
+    classes/Defaults.cpp
     classes/Mastery.cpp
     classes/Presence.cpp
     classes/State.cpp

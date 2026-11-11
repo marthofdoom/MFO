@@ -165,11 +165,16 @@ namespace MFO {
     // below, the ONE encoding); the record names the row version its rows were written at (GambitWire::kRowSchema,
     // in FLWR version numbers; card G9).
     //   v1 - u32 rowSchema, u8 classCount, u32 followerCount, then per follower the v1 entry (State.cpp).
+    //   v2 - card C12: APPENDED to every follower entry, after its v1 tables: u8 pickedT4 (marth Q60, Dragonborn's
+    //        picked T4 or 0xFF), u8 logiTableCount + one stored LOGISTICS table per class that has one (marth Q29),
+    //        u8 offMask + the combat / logistics tables he had with classes OFF. Nothing before it moved. Read gated
+    //        on version >= 2; a v1 record loads with none of it and is written back as v2. One-way: a v1 DLL meets
+    //        v2, KEEPS it verbatim and freezes class state for the session (the rule below), never destroys it.
     // Written ONLY when there is class state (a save without it carries no MCLS). Kept and re-written whether
     // the class ESL is loaded or not (marth Q9). A record this DLL cannot parse (a newer version, rowSchema or
     // classCount) is KEPT VERBATIM and written back unchanged, never skipped.
     inline constexpr std::uint32_t kRecClasses     = 'MCLS';
-    inline constexpr std::uint32_t kClassesVersion = 1;
+    inline constexpr std::uint32_t kClassesVersion = 2;
 
     // ClickUp 86e3t1mx7 (TOWN R2, design 2.7): a SIXTH independent record -- the town errands in progress
     // (logistics/Errand.h `Saved`). The autosave on every load door makes a save mid-errand the COMMON case;
