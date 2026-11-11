@@ -106,6 +106,14 @@ deadlock. It is least-sure spot 2 below.
     cast-control latch, both approach claims, the target latch and its proposal, the suppression window, the Mind and
     the gather's per-fight state. Every call is the existing idempotent release. The forced weapon is NOT stripped,
     because a mid-fight unequip is visible. The new source's reconciliation keeps it or releases it through the dwell.
+    Its RANK is reset (review F1, `Actuation::UnrankForcedHold`, `cast/Equip.cpp`): the hold and the shield top-up
+    carried the old source's rank, and a table row index (0 to 254) is below every IAUS heal rank (1000 and up), so
+    `HealClaimTakesLeftFrom` (`a_holdRule < healRule` keeps the hand) refused every IAUS heal the left hand until
+    the posture re-stamped the hold. Both ranks become `kNoRule` (INT_MAX), which is never below a heal's rank, so
+    the heal takes the hand. In the IAUS to table direction the same reset is harmless: `kRankBase` already ranked
+    below every row, and the table's equip rule stamps its own index on the first lap it fires or is satisfied.
+    Not reachable from the host (the ledger is in `cast/Equip.cpp`, engine types), so there is no harness check.
+    The proof is this reading plus in-game step 16.
     A retreat in flight and a taunt in flight keep their own lifecycles.
 
 ## Precision reach (Q64): evidence, and why scoring did not change
@@ -258,7 +266,9 @@ OFF for the first pass, then tree ON.
 4. Ranged T1 with a bow and a sword: `[iaus-gen] ... posture bow` at range. Walk a foe into him: the posture turns to
    melee after the dwell, with ONE swap, and back when the foe leaves. No weapon vanishing.
 5. Mage T1: casts are animated, at the foe the `[iaus]` line names. No cast at the player or an ally with a hostile
-   spell. Known for this card, tuned in I8: a T1 mage who carries a dagger draws it when a foe is close.
+   spell. EXPECTED UNTIL I8 (review F2), not a defect of this run: with the default profile a T1 mage's posture may
+   draw a melee weapon when a foe is near, and he then casts one-handed (the equip order holds the weapon, the spell
+   goes to the other hand). Note how often it happens. I8's mage profile is what removes it.
 6. Idle: when nothing clears the floor the line reads `idle: nothing above the floor` and the follower fights on with
    his own AI. He must not stand still.
 
@@ -287,6 +297,8 @@ OFF for the first pass, then tree ON.
 
 16. Toggle the bit off in a fight (and on again). One `[iaus] ... combat source: IAUS -> gambit table` line. The
     spell leaves his hand, no cast keeps running, the weapon stays, and the table takes over on the next lap.
+    F1: toggle a follower with an equip rule holding a two-hander or a shield from the table to IAUS while someone
+    is hurt. His heal must still take the left hand on the next laps (no `[heal-hand]` refusal naming a rule 0-254).
 17. Dismiss an IAUS follower mid-fight, then recruit him again. No crash, and his first `[iaus]` line starts clean.
 18. Save and load mid-fight. No `[iaus]` or `[spellbook]` line from before the load, a fresh `[spellbook]` line after.
 19. Retreat: an IAUS follower who falls back heals himself (`[retreat-heal] ... IAUS self-heal`) and nobody else.

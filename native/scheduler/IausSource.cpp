@@ -102,6 +102,9 @@ namespace MFO::Scheduler {
             CasterConsent::Clear(a_id);
             APMFBridge::ReleaseHealApproach(a_id, a_why);
             APMFBridge::ReleaseOffenseApproach(a_id, a_why);
+            // The WEAPON stays in his hand, but its hold's RANK is the old source's (review F1): a table row index
+            // would outrank every IAUS heal on the left hand. Unranked until the new source's equip stamps its own.
+            Actuation::UnrankForcedHold(a_id);
             // The attack: the commanded target and its pending proposal. The new source names its own.
             Targeting::Clear(a_id);
             g_proposedTarget.erase(a_id);

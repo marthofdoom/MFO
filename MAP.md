@@ -2394,7 +2394,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
     book, no readable foe) = UNKNOWN, holds kept. Dtor `:158`: the `[iaus]` line, `[iaus-gen]` (every 10 s), the readout for
     card I7. Lifecycle (all worker): `IausToggleEdge` `:346` (the edge, either direction, stands the running decision down via
     `StandDown` `:93`: spell in hand, offense + heal claims, heal hold records, hand locks, cast latch, approach claims, target
-    latch, window, Mind; the forced weapon is LEFT to the new source's reconciliation), `IausCombatEnded` `:357`, `IausSweep`
+    latch, window, Mind; the forced weapon is LEFT to the new source's reconciliation, but its hold RANK and the shield top-up's are reset to `kNoRule` by `Actuation::UnrankForcedHold` (`cast/Equip.cpp`, review F1: a leftover table row index would outrank every IAUS heal on the left hand in `HealClaimTakesLeftFrom`)), `IausCombatEnded` `:357`, `IausSweep`
     `:362` (every 32nd pump: forget followers that left, the MFO-B639 marshalling), `IausRetreatSelfHeal` `:375` (his best self
     heal under the table walk's gates; an IAUS follower runs no row). PASSIVE PROBE `[iaus-probe]` `:61`: how often the
     player's `currentCombatTarget` was set (design fact 8, never observed populated). **What breaks:** reordering the

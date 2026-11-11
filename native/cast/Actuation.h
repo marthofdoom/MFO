@@ -636,6 +636,13 @@ namespace MFO::Actuation {
     // ABI >= 22 a released silver hold's main weapon is then re-armed with the direct non-forced equip
     // (the documented Loadout::Restore exception: nothing will ever declare a placement for him).
     void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown = false, bool a_leaving = false);
+    // IAUS card I6, review F1: the combat SOURCE changed for a_follower (the toggle edge). The weapon stays, but
+    // the RANK its hold carries belongs to the old source: a table row index (0-254) would outrank every IAUS
+    // heal (>= 1000) on the left hand (LeftHoldRule -> HealClaimTakesLeftFrom) until the new source re-stamped
+    // it. Sets the forced-weapon hold's rank and the shield top-up's rank to "unranked" (it outranks nothing).
+    // Nothing is unequipped and no entry is added or removed. Harmless in either direction: the new source's
+    // equip stamps its own rank on the first lap its order fires or is satisfied. Worker (#4), under g_forcedMx.
+    void UnrankForcedHold(RE::FormID a_follower);
 
     // SILVER SWITCH-BACK (ClickUp 86e3p2gp9, cast/EquipSilver.cpp). Called by the Scheduler on
     // every combat lap, just BEFORE ReconcileForcedWeapon: a_held = an act.equip_silver rule's

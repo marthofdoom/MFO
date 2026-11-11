@@ -1149,6 +1149,12 @@ namespace MFO::Actuation {
 
     // ── GAMBIT ORDER ON THE LEFT HAND (review round 2; contract in
     // Actuation_internal.h beside the declarations) ──────────────────────────────
+    void UnrankForcedHold(RE::FormID a_follower) {
+        std::scoped_lock lk(g_forcedMx);
+        if (const auto it = g_forcedWeapon.find(a_follower); it != g_forcedWeapon.end()) it->second.rule = kNoRule;
+        if (const auto s = g_shieldRank.find(a_follower); s != g_shieldRank.end()) s->second.rule = kNoRule;
+    }
+
     int LeftHoldRule(RE::FormID a_follower) {
         ShieldRank shield;
         {
