@@ -68,6 +68,7 @@ namespace MFO::Iaus {
             "foe_count", "recipient_hp", "heal_reach", "early", "in_melee", "live_summon", "foes", "caster_on_me",
             "self_hp", "scroll_stock", "mp_low", "engaged",
             "caster", "downed", "outnumbered",
+            "damage", "overkill", "survive", "danger", "heal_size", "player_dying", "recipient_dying",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -83,6 +84,7 @@ namespace MFO::Iaus {
         case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive:
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
+        case Cons::BoostPlayerDying: case Cons::BoostRecipientDying:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -99,10 +101,13 @@ namespace MFO::Iaus {
     bool FactsFinite(const Facts& f) {
         const float v[] = { f.dist, f.reach, f.foeLevelRatio, f.foeHpPct, f.cost, f.magicka, f.magickaMax,
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
-                            f.selfMagicka, f.recipientHp, f.combatSec, f.emergency };
+                            f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
+                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
-        return !std::isnan(f.sinceFired);   // +inf is the documented "not recently"
+        // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
+        return !std::isnan(f.sinceFired) && !std::isnan(f.selfTtl) && !std::isnan(f.tauntTtl) && !std::isnan(f.playerTtl) &&
+               !std::isnan(f.recipientTtl);
     }
 
     float EmergencyLevel(float worst, const Tuning& t) {
@@ -256,6 +261,31 @@ namespace MFO::Iaus {
             at(Cons::BoostDowned) = Bin(1.0f, 1.4f);      // doc: x1.4 heal on a downed recipient
             at(Cons::BoostOutnumbered) = Bin(1.0f, 1.3f); // doc: x1.3 summon when foes > party
 
+            // ── estimates (iaus/Estimate.h; sim v2 phase 2, Docs/research/2026-11/iaus-sim-v2.md "Phase 2") ──
+            // damage: x = this spell's expected damage on the target / his best castable spell's on it. The best
+            // spell is 1.0, one doing a third of it 0.53. Never 0: a weak spell is still a cast.
+            at(Cons::DamageValue) = Lin(0.7f, 0.3f);
+            // overkill: x = target health / expected damage, capped at 1. A cast that fits scores 1; one doing
+            // five times what is left 0.5. Shapes only: finishing a foe is never wrong, wasting most of a big spell is.
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 0.35f }, { 0.5f, 0.75f }, { 1.0f, 1.0f } } };
+                at(Cons::Overkill) = Piece(p);
+            }
+            // survive (taunt): x = seconds he would live with this foe on him too / 12. Under 3 s the taunt is
+            // nearly thrown away (0.15, never a veto: a sacrifice must stay possible), 6 s 0.7, 12 s and more 1.
+            {
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 0.15f }, { 0.25f, 0.3f }, { 0.5f, 0.7f }, { 1.0f, 1.0f } } };
+                at(Cons::TauntSurvive) = Piece(p);
+            }
+            // danger (retreat): x = max(low-health danger, seconds-to-live danger), see Input. No danger = veto, as
+            // the 30% health gate was.
+            at(Cons::RetreatDanger) = VetoBelow(Lin(1.0f, 0.0f), 0.001f);
+            // heal size: x = missing health / the heal, capped at 1. A heal he can use in full 1.0, one four times
+            // too big 0.55.
+            at(Cons::HealSize) = Lin(0.6f, 0.4f);
+            at(Cons::BoostPlayerDying) = Bin(1.0f, 1.8f);      // the player has under kDyingSec to live
+            at(Cons::BoostRecipientDying) = Bin(1.0f, 1.4f);   // the recipient has
+
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
             auto aw = [&](Family f, float w) { d.actionWeight[static_cast<std::size_t>(f)] = w; };
@@ -297,9 +327,10 @@ namespace MFO::Iaus {
             constexpr U kTaunt[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::FoeOnAlly, 2 }, { Cons::FoeOnPlayer, 2 },
                 { Cons::TauntSelfHp, 1 }, { Cons::FoeTaunted, 1 }, { Cons::CooldownHard, 1 }, { Cons::ClassFit, 1 },
+                { Cons::TauntSurvive, 1.5f }, { Cons::BoostPlayerDying, 1 },
             };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::FightStart, 1 }, { Cons::ClassFit, 1 } };
-            constexpr U kRetreat[] = { { Cons::RetreatHp, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 } };
+            constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
             };
@@ -314,6 +345,7 @@ namespace MFO::Iaus {
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1 }, { Cons::Exploit, 1.3f },
                 { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::SplashSafe, 1 }, { Cons::AreaValue, 1 },
                 { Cons::Variety, 0.5f }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 }, { Cons::ClassFit, 1 },
+                { Cons::DamageValue, 1.5f }, { Cons::Overkill, 0.7f },
             };
             constexpr U kExploit[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -332,6 +364,7 @@ namespace MFO::Iaus {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
                 { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
                 { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
+                { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 },
             };
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
@@ -461,7 +494,7 @@ namespace MFO::Iaus {
             case Cons::SelfStamina:   return f.selfStamina;
             case Cons::FoeStronger:   return B(f.foeStronger);
             case Cons::FoeTaunted:    return B(!f.foeTaunted);
-            case Cons::TauntSelfHp:   return f.selfHp;
+            case Cons::TauntSelfHp:   return std::isfinite(f.tauntTtl) ? In::Off() : In(f.selfHp);   // superseded by survive once measured
             case Cons::Unseen:
                 if (f.unseen == Tri::Unknown) return In::Off();
                 return B(f.unseen == Tri::Yes);
@@ -507,6 +540,27 @@ namespace MFO::Iaus {
             case Cons::BoostCaster:   return B(f.foeCaster);
             case Cons::BoostDowned:   return B(f.recipientDowned);
             case Cons::BoostOutnumbered: return B(f.foeCount > f.partyCount);
+            case Cons::DamageValue:
+                if (!(f.expDamage > 0.0f) || !(f.bestDamage > 0.0f)) return In::Off();
+                return Clamp(f.expDamage / f.bestDamage, 0.0f, 1.0f);
+            case Cons::Overkill:
+                if (!(f.expDamage > 0.0f) || !(f.foeHealth > 0.0f)) return In::Off();
+                return Clamp(f.foeHealth / f.expDamage, 0.0f, 1.0f);
+            case Cons::TauntSurvive:
+                if (!std::isfinite(f.tauntTtl)) return In::Off();
+                return Clamp(f.tauntTtl / 12.0f, 0.0f, 1.0f);
+            case Cons::RetreatDanger: {
+                // The 30% health gate as it was (1 - hp^3 under 0.30, nothing above), or seconds to live under 8.
+                const float hp = Clamp(f.selfHp, 0.0f, 1.0f);
+                const float byHp = hp <= 0.30f ? 1.0f - hp * hp * hp : 0.0f;
+                const float byTtl = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f;
+                return (std::max)(byHp, byTtl);
+            }
+            case Cons::HealSize:
+                if (!(f.expHeal > 0.0f)) return In::Off();
+                return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
+            case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
+            case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
             case Cons::kCount:        break;
             }
             return In::Off();

@@ -88,6 +88,15 @@ namespace MFO::Iaus {
         HealReach, BuffEarly, BuffMelee, SummonLive, SummonFoes, WardCaster, WardHp, ScrollStock, ScrollMpLow, FoeEngaged,
         // multipliers (> 1 when the fact holds; outside the compensated product)
         BoostCaster, BoostDowned, BoostOutnumbered,
+        // estimates (iaus/Estimate.h, the damage-estimate part of card I8). Each one is NOT APPLICABLE while its
+        // inputs are unmeasured, so a follower without estimates scores exactly as before.
+        DamageValue,        // this spell's expected damage on this target against his best option on it
+        Overkill,           // the target's remaining health against that expected damage
+        TauntSurvive,       // seconds he would live with this foe on him as well
+        RetreatDanger,      // low health, or seconds to live at the present incoming damage
+        HealSize,           // how much of the heal the recipient can use
+        BoostPlayerDying,   // multiplier: the player has seconds to live
+        BoostRecipientDying,   // multiplier: the heal's recipient has seconds to live
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -275,6 +284,16 @@ namespace MFO::Iaus {
         bool  onClass = true;
         bool  fromMastered = false;
         float emergency = 0.0f;
+        // estimates (iaus/Estimate.h). 0 / +inf = not measured: the considerations that read them do not apply.
+        float expDamage = 0.0f;           // this cast's expected health damage on this target
+        float bestDamage = 0.0f;          // the best expDamage among his castable offense spells on this target
+        float foeHealth = 0.0f;           // the target's health now, absolute
+        float expHeal = 0.0f;             // this cast's expected healing
+        float recipientMissing = 0.0f;    // health the recipient is missing, absolute
+        float selfTtl = kInf;             // seconds he lives at the present incoming damage
+        float tauntTtl = kInf;            // ... with this foe on him as well (taunt)
+        float playerTtl = kInf;           // the player's
+        float recipientTtl = kInf;        // the heal recipient's
     };
 
     struct Candidate {

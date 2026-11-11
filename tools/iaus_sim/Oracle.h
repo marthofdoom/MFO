@@ -165,7 +165,9 @@ namespace Sim {
             last[static_cast<std::size_t>(ci)] = F.now;
             // the options: IAUS's ranked list first, then the best-looking candidate of every family it did not rank, postures, the extended set, idle
             const auto& acts = sv.g.actions; std::vector<Opt> opt;
-            auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; Opt o; o.k = k; if (allowed && !allowed(c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
+            auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; Opt o; o.k = k;
+                if (k->family == Family::PowerAttack && c.gate.powerCooldownSec > 0.0f && k->f.hardCooldownLeft > 0.0f) return;   /* ruling Q7: the class row cooldown binds a person too */
+                if (allowed && !allowed(c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
             const Candidate* iausPick = nullptr;
             if (sv.d.verdict != Verdict::Idle && !sv.d.order.empty() && sv.d.order[0].idx < acts.size()) iausPick = &acts[sv.d.order[0].idx];
             for (std::size_t i = 0; i < sv.d.ranked.size() && opt.size() + 4 < cfg.maxOptions; ++i) if (sv.d.ranked[i].idx < acts.size()) add(&acts[sv.d.ranked[i].idx]);

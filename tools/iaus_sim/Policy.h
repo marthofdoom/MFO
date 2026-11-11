@@ -22,9 +22,30 @@ namespace Sim {
         Decision  d;
     };
 
+    // The estimate inputs of one actor, from what the GAME can read of him: his drawn weapon (or the spell in his hand) through the
+    // engine's own damage and rate model (I8 research 2.1 / 2.4), his armor, his magic resistance, the damage he has been taking.
+    inline void FillEstimate(const Fight& F, const Body& o, Combatant& k) {
+        const Rules& r = F.D->rules; const ActorSpec& sp = *o.spec;
+        k.hit = 0; k.hitsPerSec = 0; k.hitIsMagic = false;
+        const Ctl* c = o.ctl >= 0 ? &F.ctl[static_cast<std::size_t>(o.ctl)] : nullptr;
+        if (o.casterMode) {
+            float best = 0, cast = 1.0f; const std::size_t n = c ? c->build->spells.size() : sp.spells.size();
+            for (std::size_t i = 0; i < n; ++i) { const SimSpell* s = F.SpellOf(o, static_cast<int>(i)); if (!s || s->e.nature != Prune::Nature::Offense) continue;
+                const float cost = c ? c->book.entries[i].cost : s->e.cost; if (cost > o.c.mp) continue; const float dm = s->dmg + s->dot * s->dotDur; if (dm > best) { best = dm; cast = s->castSec; } }
+            if (best > 0) { k.hit = best * o.dmgScale; k.hitsPerSec = 1.0f / (cast + TM::castRecover + 0.25f); k.hitIsMagic = true; }
+        }
+        if (!(k.hit > 0)) {
+            const bool ranged = o.rangedMode && sp.ranged.Has(); const Weapon& w = ranged ? sp.ranged : sp.melee;
+            k.hit = WeaponDamage(r, sp, w, false) * o.dmgScale;
+            k.hitsPerSec = (w.Has() ? w.speed : 1.0f) * static_cast<float>(ranged ? F.D->G("fCombatDPSBowSpeedMult", 0.2) : F.D->G("fCombatDPSMeleeSpeedMult", 1.0));
+        }
+        k.armor = ArmorMitigation(r, F.ArmorOf(o), sp.pieces); k.magicResist = F.ResistOf(o, kAvResistMagic); k.lossPerSec = o.recentDmg / 2.0f;
+    }
+
     inline void MakeSnapshot(const Fight& F, int ci, Snapshot& sn) {
         const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& self = F.b[static_cast<std::size_t>(c.body)];
         sn.self = self.c; sn.self.dist = 0; sn.self.targetId = c.steer ? c.steer : self.c.targetId;
+        if (F.estimates) FillEstimate(F, self, sn.self);
         std::vector<int> elems;
         for (const auto& e : c.book.entries) if (e.resistAv >= 0 && std::find(elems.begin(), elems.end(), e.resistAv) == elems.end()) elems.push_back(e.resistAv);
         const Body& pl = F.b[0];
@@ -39,9 +60,11 @@ namespace Sim {
                 k.paralysed = F.now < o.ctrlUntil; k.fleeing = F.now < o.fleeUntil; k.blocking = F.now < o.blockUntil;
                 k.sight = F.Sees(self, o) ? Sight::Visible : Sight::Occluded; k.sightEngine = k.sight;
                 k.resists.clear(); for (int av : elems) k.resists.push_back({ av, F.ResistOf(o, av) });
+                if (F.estimates) FillEstimate(F, o, k);
                 sn.foes.push_back(std::move(k));
             } else if (o.role == Role::Player || o.role == Role::Follower) {
                 Combatant k = o.c; k.dist = Fight::Dist(self, o); k.sight = F.Sees(self, o) ? Sight::Visible : Sight::Occluded; k.sightEngine = k.sight;
+                if (F.estimates) FillEstimate(F, o, k);
                 sn.allies.push_back(std::move(k));
             }
         }
@@ -51,6 +74,7 @@ namespace Sim {
             SpellEntry& e = sn.book.entries[i]; e.activeOn.clear();
             for (const auto& pr : c.active[i]) if (pr.second > F.now) e.activeOn.push_back(pr.first);
             e.liveSummon = c.summonUntil[i] > F.now;
+            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; }
         }
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;

@@ -85,7 +85,7 @@ namespace {
     }
 
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
-    int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out) {
+    int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates) {
         const std::vector<Scenario> all = AllScenarios(); std::vector<const Scenario*> pick;
         for (const Scenario& s : all) if (which == "all" || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
@@ -96,7 +96,7 @@ namespace {
             Rng R; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
             FightSpec fs = pick[static_cast<std::size_t>(si)]->make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5;
             { std::scoped_lock lk(mx); res[static_cast<std::size_t>(si)].cls = fs.cls->name; }
-            Fight F = BuildFight(D, fs, t1); F.g10Sticky = g10Sticky; Fight G = F;
+            Fight F = BuildFight(D, fs, t1); F.g10Sticky = g10Sticky; F.estimates = estimates; Fight G = F;
             if (trace == f) { std::scoped_lock lk(mx); std::printf("\nTRACE %s fight %d (%s)\n", pick[static_cast<std::size_t>(si)]->name, f, oracle ? "oracle arm" : "IAUS arm");
                 for (const Body& x : F.b) std::printf("   %-10s id %-4u L%-2d hp %.0f mp %.0f sp %.0f  AR %.0f  melee %s %.0f  ranged %.0f  spells %zu  run %.0f\n", x.c.name.c_str(), x.c.id, x.c.level, x.c.hp, x.c.mp, x.c.sp, x.spec->ar, x.spec->melee.name.c_str(), WeaponDamage(D.rules, *x.spec, x.spec->melee, false), x.spec->ranged.Has() ? WeaponDamage(D.rules, *x.spec, x.spec->ranged, false) : 0.0f, x.ctl >= 0 ? F.ctl[static_cast<std::size_t>(x.ctl)].build->spells.size() : x.spec->spells.size(), x.spec->run);
                 (oracle ? G : F).trace = stdout; }
@@ -129,6 +129,10 @@ namespace {
             std::printf("\n");
         }
         if (oracle) std::printf("\nMEAN U GAP over %zu scenario(s): %+.2f\n", pick.size(), gapSum / double(pick.size()));
+        { std::map<std::string, std::pair<double, int>> byClass; std::map<std::string, Agg> agg;
+          for (std::size_t i = 0; i < pick.size(); ++i) { auto& b = byClass[res[i].cls]; if (oracle) { b.first += out.scen[i].gap; ++b.second; } Agg& a = agg[res[i].cls]; a.uSum += res[i].iaus.uSum; a.s = res[i].iaus.s; a.fights += res[i].iaus.fights; a.durSum += res[i].iaus.durSum; }
+          for (auto& kv : byClass) { const SimClass* sc = ClassBySlug(classes, kv.first.c_str()); ResultRow rr; rr.cls = kv.first; rr.line = sc->line; rr.tier = sc->tier; rr.bracket = "scenarios"; rr.fights = agg[kv.first].fights;
+              rr.metrics["U"] = agg[kv.first].fights ? agg[kv.first].uSum / double(agg[kv.first].fights) : 0; if (kv.second.second) { rr.hasGap = true; rr.mainGap = kv.second.first / kv.second.second; } out.rows.push_back(std::move(rr)); } }
         std::printf("\nCHECKS: BAD-FACTS ticks=%ld (must be 0)  invalid picks=%ld (must be 0)  => %s\n", bad, inv, bad == 0 && inv == 0 ? "PASS" : "FAIL");
         return bad == 0 && inv == 0 ? 0 : 1;
     }
@@ -136,7 +140,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label; bool noJson = false;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool tauntVisible = true, engineCasts = true, estimates = true, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label; bool noJson = false;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -148,6 +152,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--taunt-hidden")) tauntVisible = false;
         else if (!std::strcmp(argv[i], "--no-engine-casts")) engineCasts = false;
         else if (!std::strcmp(argv[i], "--g10-sticky")) g10Sticky = true;
+        else if (!std::strcmp(argv[i], "--no-estimates")) estimates = false;
         else if (!std::strcmp(argv[i], "--classes") && i + 1 < argc) { only = argv[++i]; if (only == "legacy") { legacy = true; only.clear(); } else if (only == "real") only.clear(); }
         else if (!std::strcmp(argv[i], "--profiles") && i + 1 < argc) mech = !std::strcmp(argv[++i], "mech");
         else if (!std::strcmp(argv[i], "--print-classes")) printClasses = true;
@@ -169,7 +174,7 @@ int main(int argc, char** argv) {
     if (!scenario.empty()) {
         std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
         if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
-        const int rc = RunScenarios(D, allClasses, scenario, seed, fights, trace >= 0 ? 1 : threads, oracle, oc, g10Sticky, trace, R); if (!noJson) R.Write(jsonPath); return rc; }
+        const int rc = RunScenarios(D, allClasses, scenario, seed, fights, trace >= 0 ? 1 : threads, oracle, oc, g10Sticky, trace, R, estimates); if (!noJson) R.Write(jsonPath); return rc; }
     std::vector<SimClass> classes;   // --classes a,b,c narrows the cells (slugs)
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
     if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
@@ -190,7 +195,7 @@ int main(int argc, char** argv) {
             for (int rk = 1; rk <= 5; ++rk) for (int f = 0; f < fights; ++f) {
                 Rng R; R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + std::uint64_t(b) * 104729 + std::uint64_t(rk) * 15485863ULL + std::uint64_t(f) * 32452843ULL);
                 bool forced = false; Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], rk, kBrackets[b], R, t1, &forced);
-                F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.g10Sticky = g10Sticky;
+                F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.g10Sticky = g10Sticky; F.estimates = estimates;
                 IausPolicy P; P.timeIt = true; RunFight(F, P);
                 A.uSum += Utility(F); A.Add(F.t, forced); RA[rk - 1].Add(F.t, forced);
             }

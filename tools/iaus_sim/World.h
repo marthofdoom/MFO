@@ -149,7 +149,8 @@ namespace Sim {
         float foeHpTotal = 0;                      // every foe's full health, late ones included (Utility)
         double now = 0, nextPump = 0, maxSec = 150;
         int rr = 0;
-        bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;   // card I6: the game fills Combatant::taunted
+        bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
+        bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
         Tally t;
         std::uint32_t nextId = 1;
         std::FILE* trace = nullptr;   // --trace: one line per event (never set in a rollout copy)
@@ -180,7 +181,7 @@ namespace Sim {
         [[nodiscard]] float ResistOf(const Body& x, int av) const {
             float r = x.spec->Resist(av);
             for (const Effect& e : x.fx) if (e.kind == 3 && e.av == av && e.until > now) r += e.v;
-            return std::clamp(r, -100.0f, D->rules.maxResist + (x.spec->Resist(av) >= 100.0f ? 15.0f : 0.0f));   // a 100% innate resist is an immunity
+            return x.role == Role::Player ? std::clamp(r, -100.0f, D->rules.maxResist) : std::clamp(r, -100.0f, 100.0f);   // I8 research 2.3: only a PLAYER target is capped (fPlayerMaxResistance); 100 = immune
         }
 
         // ── building ──
@@ -260,7 +261,7 @@ namespace Sim {
         void SpellHit(Body& a, const SimSpell& s, Body& d, bool fromIaus, float mag = 1.0f) {
             if (!Up(d)) return;
             const Rules& r = D->rules;
-            const float el = std::clamp(ResistOf(d, s.e.resistAv) / 100.0f, -1.0f, 1.0f), mr = std::clamp(ResistOf(d, kAvResistMagic) / 100.0f, -1.0f, 0.85f);
+            const float el = std::clamp(ResistOf(d, s.e.resistAv) / 100.0f, -1.0f, 1.0f), mr = std::clamp(ResistOf(d, kAvResistMagic) / 100.0f, -1.0f, 1.0f);   // mult = (1 - p)(1 - s), 0 at 100 (AE 26507)
             float k = mag * a.dmgScale * (1.0f - el) * (1.0f - mr);
             if (d.role == Role::Player) k *= r.diffToPC;
             if (a.role == Role::Player) k *= r.diffByPC;

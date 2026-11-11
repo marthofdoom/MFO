@@ -2,6 +2,8 @@
 // Standard headers only: tools/iaus_harness/run.sh builds this file with the host compiler.
 #include "iaus/Generate.h"
 
+#include "iaus/Estimate.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -36,6 +38,10 @@ namespace MFO::Iaus {
             int   foeCount = 0;
             int   partyCount = 1;
             std::vector<const Combatant*> top;   // the P3 cut, most relevant first
+            // estimates (iaus/Estimate.h); unknown = +inf / 0
+            float selfIncoming = 0.0f;
+            float selfTtl = kInf;
+            float playerTtl = kInf;
 
             void Push(Candidate&& a_c) {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
@@ -50,6 +56,8 @@ namespace MFO::Iaus {
                 f.foeCount = foeCount;
                 f.partyCount = partyCount;
                 f.emergency = out.emergency;
+                f.selfTtl = selfTtl;
+                f.playerTtl = playerTtl;
             }
             void Foe(Facts& f, const Combatant& a_foe, bool a_ownRay) const {
                 f.dist = (std::max)(0.0f, Finite(a_foe.dist, 0.0f));
@@ -116,6 +124,8 @@ namespace MFO::Iaus {
                     c.f.reach = (std::max)(0.0f, Finite(s.tauntReach, 0.0f));
                     const float rowCd = (std::max)(0.0f, Finite(x.g.tauntCooldownSec, 0.0f));
                     c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.rowlessTauntCooldownSec, 0.0f));
+                    // What he would be taking with this foe on him too (a foe already on him adds nothing).
+                    c.f.tauntTtl = Estimate::Ttl(s.self.hp, x.selfIncoming + (foe->targetId == s.self.id ? 0.0f : Estimate::Dps(*foe, s.self)));
                     x.Push(std::move(c));
                 }
             }
@@ -234,6 +244,17 @@ namespace MFO::Iaus {
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
                         if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
+                        if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
+                            c.f.expDamage = Estimate::SpellOn(e, *foe);
+                            c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
+                            float best = 0.0f;
+                            for (const SpellEntry& o : s.book.entries) {
+                                if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Offense) continue;
+                                if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
+                                best = (std::max)(best, Estimate::SpellOn(o, *foe));
+                            }
+                            c.f.bestDamage = best;
+                        }
                         if (e.areaUnits > 0.0f) {
                             const Combatant& centre = e.selfDelivery ? s.self : *foe;
                             int inArea = 0;
@@ -275,6 +296,11 @@ namespace MFO::Iaus {
                         c.f.recipientIsPlayer = r->isPlayer;
                         c.f.recipientDowned = r->downed;
                         if (heal) {
+                            c.f.expHeal = Estimate::Pos(e.heal);
+                            c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
+                            c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
+                        }
+                        if (heal) {
                             c.f.alreadyActive = Note(s.liveStreams, e.form, self ? 0u : r->id) == Tri::Yes;
                         } else {
                             c.f.meleeBuff = e.meleeBuff;
@@ -314,6 +340,10 @@ namespace MFO::Iaus {
         x.selfHp = Pct(a_s.self.hp, a_s.self.hpMax);
         x.selfSp = Pct(a_s.self.sp, a_s.self.spMax);
         x.selfMp = Pct(a_s.self.mp, a_s.self.mpMax);
+        x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
+        x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
+        for (const Combatant& a : a_s.allies)
+            if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }
 
         out.worstPartyHp = x.selfHp;
         for (const auto& a : a_s.allies) {

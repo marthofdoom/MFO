@@ -49,6 +49,9 @@ namespace MFO::Iaus {
         float         charge = 0.0f;            // staff: current charge
         bool          charged = true;           // staff: at least one cast left
         std::vector<std::uint32_t> activeOn;    // Buff / Ward: party members this spell's effect is live on
+        // Estimates (iaus/Estimate.h): one cast on an unresisting target, after his perks. 0 = not measured.
+        float         damage = 0.0f;            // health damage (a damage-over-time effect counted for its duration)
+        float         heal = 0.0f;              // healing
         std::string   name;
     };
 
@@ -121,6 +124,13 @@ namespace MFO::Iaus {
         bool  unholy = false;               // what the load order's silver hits
         bool  taunted = false;              // already under this follower's taunt
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
+        // Estimates (iaus/Estimate.h). 0 = not measured, which every reader treats as unknown.
+        float hit = 0.0f;                   // physical damage of ONE weapon hit before the target's armor
+        float hitsPerSec = 0.0f;            // the engine's rate model: weapon speed x fCombatDPS(Melee|Bow)SpeedMult
+        bool  hitIsMagic = false;           // the hit is a spell in hand (armor does not apply)
+        float armor = 0.0f;                 // its physical mitigation, 0..1
+        float magicResist = 0.0f;           // kResistMagic, points
+        float lossPerSec = 0.0f;            // health it has been losing per second (observed)
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
         std::vector<std::pair<int, float>> resists;   // (resist actor value, its value) for the book's elements
