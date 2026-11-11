@@ -37,24 +37,6 @@ namespace MFO::Taunt {
         constexpr double kPendingFailMs = 2000.0;
         constexpr double kClockMaxStepMs = 400.0;   // one Tick-to-Tick gap counts at most this much unpaused time
 
-        // One log line per (taunter, reason) per kSkipLogGapSec, so a gate that holds every pump names itself once
-        // (marth Q69: the first field run must show which gate held). Fire runs on the worker; Clear drains after it.
-        constexpr double kSkipLogGapSec = 10.0;
-        void LogSkip(RE::FormID a_taunter, std::string_view a_reason, const std::string& a_detail) {
-            static std::unordered_map<std::string, Clock::time_point> s_last;   // guarded by g_mx
-            const auto now = Clock::now();
-            const std::string key = std::format("{:08X}|{}", a_taunter, a_reason);
-            {
-                std::scoped_lock lk(g_mx);
-                auto [it, fresh] = s_last.try_emplace(key, now);
-                if (!fresh) {
-                    if (std::chrono::duration<double>(now - it->second).count() < kSkipLogGapSec) return;
-                    it->second = now;
-                }
-            }
-            spdlog::info("[taunt] skip: {} ({:08X}): {}", a_reason, a_taunter, a_detail);
-        }
-
         struct Cand {
             RE::ActorHandle h;
             RE::FormID      id = 0;
@@ -85,6 +67,24 @@ namespace MFO::Taunt {
         std::uint64_t                             g_gen = 0;         // guarded by g_mx
         double                                    g_clockMs = 0.0;   // the unpaused clock (guarded by g_mx)
         Clock::time_point                         g_clockAt{};       // worker (Tick) only
+
+        // One log line per (taunter, reason) per kSkipLogGapSec, so a gate that holds every pump names itself once
+        // (marth Q69: the first field run must show which gate held). Fire runs on the worker; Clear drains after it.
+        constexpr double kSkipLogGapSec = 10.0;
+        void LogSkip(RE::FormID a_taunter, std::string_view a_reason, const std::string& a_detail) {
+            static std::unordered_map<std::string, Clock::time_point> s_last;   // guarded by g_mx
+            const auto now = Clock::now();
+            const std::string key = std::format("{:08X}|{}", a_taunter, a_reason);
+            {
+                std::scoped_lock lk(g_mx);
+                auto [it, fresh] = s_last.try_emplace(key, now);
+                if (!fresh) {
+                    if (std::chrono::duration<double>(now - it->second).count() < kSkipLogGapSec) return;
+                    it->second = now;
+                }
+            }
+            spdlog::info("[taunt] skip: {} ({:08X}): {}", a_reason, a_taunter, a_detail);
+        }
 
         std::string NameOf(const RE::Actor* a) {
             return a && a->GetName() && *a->GetName() ? std::string(a->GetName()) : std::string("?");
