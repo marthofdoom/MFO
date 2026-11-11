@@ -19,6 +19,8 @@ namespace RE {
         float GetActorValueModifier(ACTOR_VALUE_MODIFIER, ActorValue) { return 0.0f; }
     };
     class CombatController;
+    class TESCombatStyle;   // C8: Classes.h PackageStyle
+    class BGSListForm;      // C8: Classes_internal.h ManifestList
     namespace MagicSystem {
         enum class SpellType : std::uint32_t { kSpell = 0 };
         enum class CastingType : std::uint32_t { kConstantEffect = 0, kFireAndForget = 1 };
