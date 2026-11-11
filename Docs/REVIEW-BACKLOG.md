@@ -2852,3 +2852,18 @@ When the actor is gone, `asked` is reset to epoch, so the next Read re-posts at 
 
 ### MFO-B660 (SEV-5, OPEN, iaus/SpellBook.cpp:227, against bbd9bdf, Opus tier-3 review of I4, F7)
 Entry.onClass = !gate.strict || gate.weaponStaff ignores gate.resolved, so an unresolved follower under strict shows his staff as off-class. Postures use resolved && strict. Only the log and board mirror are affected.
+
+### MFO-B661 (SEV-3, OPEN, MUST FIX BEFORE I6 ENABLES IAUS, iaus/Prune.h BlastUnits + SpellBook MakeEntry, against 325e8ea, Opus check of the I4 fix round, N1)
+BlastUnits takes max(EFIT x 64/3, explosion radius), so a spell with EFIT area 0 but any projectile/MGEF explosion gets areaUnits > 0. Generate then sets hasArea=true and computes splashSafe, and Catalogue.cpp:179 makes SplashSafe a veto. A bolt-type spell with a cosmetic impact explosion (damage 0, no enchantment) would be vetoed whenever an ally is within that radius of the target, which is the common case of a melee tank beside his foe. Fix: let the explosion enlarge only a spell that already has arch.area > 0, or one whose explosion carries damage or an enchantment (BGSExplosion damage at 0x34), until the area probe proves the semantics.
+
+### MFO-B662 (SEV-4, OPEN, iaus/SpellBook.cpp staff probe, against 325e8ea, N2)
+The B656 staff probe logs once per staff form per session, so it records one sample from the first follower measured, probably while the staff is full. It cannot show whether an NPC staff drains. Log again when the charge read changes, rate-limited.
+
+### MFO-B663 (SEV-5, OPEN, iaus/SpellBook.cpp Measure, against 325e8ea, N3)
+Probe strings are formatted on every Measure (every 5 s per area spell and staff), even after the form is already logged. Pre-check the ledger first.
+
+### MFO-B664 (SEV-5, OPEN, cast/DirectSelf.cpp HealClaimLive, against 325e8ea, N4)
+Spell and target are read under two separate bridge-lock acquisitions, so they are not an atomic pair. Harmless while claims only change on the worker.
+
+### MFO-B665 (SEV-5, OPEN, iaus/SpellBook.cpp MakeEntry, against 325e8ea, N5)
+Chained explosions (BGSExplosion::spawnProjectile) are not followed for the blast radius.
