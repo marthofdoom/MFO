@@ -130,6 +130,9 @@ namespace Sim {
         std::vector<std::vector<std::pair<std::uint32_t, double>>> active;   // per entry: (recipient, until)
         std::vector<double> summonUntil;
         Mind  mind;
+        // THE CLASS PACKAGE (card C8): the combat style the DLL swaps on per stance (0 melee, 1 ranged, 2 cast), the ch.18
+        // power-attack share (a scale on the engine AI's own power attacks) and the ch.23 pursuit leash (units from the player, 0 = none).
+        Style pkg[3]; float powerShare = 1.0f, leash = 0.0f;
         std::vector<GRow> rows;            // table mode: his class's default gambit rows
         PostureKind drawn = PostureKind::None;
         std::map<std::uint64_t, double> firedAt;   // the Cooldowns store (Kind::IausAction): CooldownId -> last fired
@@ -187,6 +190,14 @@ namespace Sim {
         [[nodiscard]] float Reach(const Body& x) const {   // hit reach in units: fCombatDistance x weapon reach, plus both bodies' radii (MODEL 70)
             const float r = x.spec->melee.Has() ? D->rules.combatDistance * x.spec->melee.reach : std::max(96.0f, x.spec->unarmedReach);
             return r + 70.0f + (x.spec->mass > 2.0f ? 60.0f : 0.0f);
+        }
+        // The combat style in force: a follower's is his class package for the stance his drawn weapon gives (the DLL swaps
+        // it with the equip gambit); everyone else's is his record's.
+        [[nodiscard]] const Style& StyleOf(const Body& x) const {
+            if (x.ctl < 0) return x.spec->st;
+            const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
+            const int stance = (c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver) ? 0 : c.drawn == PostureKind::Bow ? 1 : (c.gate.spellsOnClass || c.drawn == PostureKind::Staff) ? 2 : 0;
+            return c.pkg[stance];
         }
         [[nodiscard]] bool Busy(const Body& x) const { return now < x.actEnd || now < x.staggerUntil || now < x.ctrlUntil || now < x.downUntil; }
         [[nodiscard]] bool Controlled(const Body& x) const { return now < x.ctrlUntil || now < x.fleeUntil; }
@@ -336,7 +347,7 @@ namespace Sim {
             x.act = kind; x.actTarget = tg.c.id; x.hitAt = now + dur * hf; x.actEnd = now + dur; x.actIaus = fromIaus;
             // the defender may read the swing and block it (MODEL: 0.20 x defensive mult, + 0.25 with a shield)
             if (kind != Act::Bash && Up(tg) && !Busy(tg) && tg.spec->hasStyle && (tg.spec->shield || tg.spec->melee.Has()) && !tg.rangedMode && !tg.casterMode && tg.c.targetId == x.c.id) {
-                const float p = std::clamp(0.20f * tg.spec->st.def + (tg.spec->shield ? 0.25f : 0.0f), 0.0f, 0.75f);
+                const float p = std::clamp(0.20f * StyleOf(tg).def + (tg.spec->shield ? 0.25f : 0.0f), 0.0f, 0.75f);
                 if (R.P(p)) { tg.act = Act::Block; tg.blockUntil = x.hitAt + 0.15; tg.actEnd = tg.blockUntil; tg.c.blocking = true; }
             }
         }
@@ -463,7 +474,7 @@ namespace Sim {
             switch (x.spec->conf) { case 0: return 0.75f; case 1: return 0.40f; case 2: return 0.20f; case 3: return 0.08f; default: return 0.0f; }
         }
         void Brain(Body& x) {
-            const Rules& r = D->rules; const Style& st = x.spec->st;
+            const Rules& r = D->rules; const Style& st = StyleOf(x);
             if (x.spec->dragon) {   // MODEL: 12 s on the wing, 15 s on the ground
                 if (x.airUntil == 0 && x.groundUntil == 0) x.groundUntil = now + R.U(6, 14);
                 if (x.c.outOfMeleeReach && now >= x.airUntil) { x.c.outOfMeleeReach = false; x.groundUntil = now + 15; }
@@ -539,6 +550,7 @@ namespace Sim {
             if (!hasMelee) return;
             // melee
             const float reach = Reach(x);
+            if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash
             if (d > reach * 0.9f || tg->c.outOfMeleeReach) { if (!tg->c.outOfMeleeReach) Move(x, tg->c.x, tg->c.y, x.spec->run); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f); return; }
             if (now < x.think) return;
             const bool tgBlocking = now < tg->blockUntil, tgStag = now < tg->staggerUntil, tgCasting = tg->act == Act::Cast && tg->hitAt >= 0;
@@ -546,7 +558,7 @@ namespace Sim {
             Act kind = Act::Swing;
             const bool engPower = !c || c->gate.powerAttack || !c->gate.resolved;   // a class without a power share does not power attack on its own (the ch.18 share denies it)
             if (x.spec->shield && (tgCasting || tgBlocking) && R.P(std::clamp(0.18f * st.bash, 0.0f, 0.6f)) && x.c.sp >= 20) kind = Act::Bash;
-            else if (engPower && x.c.sp >= PowerStamina(r, w) && R.P(std::clamp(0.12f * st.off * (tgBlocking ? 1.5f * st.powBlocking : 1.0f) * (tgStag ? 1.3f * st.powStaggered : 1.0f), 0.0f, 0.6f))) kind = Act::Power;
+            else if (engPower && x.c.sp >= PowerStamina(r, w) && R.P(std::clamp(0.12f * st.off * (c ? c->powerShare : 1.0f) * (tgBlocking ? 1.5f * st.powBlocking : 1.0f) * (tgStag ? 1.3f * st.powStaggered : 1.0f), 0.0f, 0.6f))) kind = Act::Power;
             StartSwing(x, *tg, kind, false);
             x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) / std::max(0.25f, st.off);
         }

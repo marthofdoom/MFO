@@ -15,6 +15,7 @@ namespace Sim {
         Profile profile;
         int   tier = 1;
         bool  planned = false;
+        bool shortLeash = false;   // Flag::kShortLeash (the wall classes)
         std::vector<GRow> rows;  // the class's default gambit rows (table mode); applied = false for T1 rows kept as data
         std::string package = "current", defaults = "current";   // ids of the package / default rows in use (results file)
         std::string playstyle;   // the human expert playstyle the oracle and the personality metric are measured against
@@ -88,6 +89,20 @@ namespace Sim {
         float targetRatio = 0;                              // > 0: the foes' health and damage are scaled so StrengthRatio lands here (a scenario must be winnable by good play on every list)
     };
 
+    // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
+    // mirrors) with the class offsets of class_csty_params (kShortLeash: circle -0.10, fallback -0.15; kDisengage: fallback +0.15,
+    // and avoidThreat +0.20 outside the melee stance). No attack mix, no leash (card C8 adds them).
+    inline void MfoPackage(const SimClass& sc, Ctl& c) {
+        const float csgd[3][10] = { { 1.0f, 0.5f, 1.0f, 10.0f, 0.1f, 0.1f, 1.0f, 0.1f, 0.1f, 0.0f }, { 1.0f, 0.5f, 1.0f, 0.1f, 0.1f, 10.0f, 1.0f, 0.1f, 0.1f, 0.5f }, { 1.0f, 0.5f, 1.0f, 0.1f, 10.0f, 0.2f, 1.0f, 0.1f, 1.0f, 0.2f } };
+        const float cscr[3][2] = { { 0.73f, 0.42f }, { 0.45f, 0.65f }, { 0.30f, 0.50f } };
+        for (int s = 0; s < 3; ++s) { Style& y = c.pkg[s]; y = Style{}; y.off = csgd[s][0]; y.def = csgd[s][1]; y.groupOff = csgd[s][2]; y.wMelee = csgd[s][3]; y.wMagic = csgd[s][4]; y.wRanged = csgd[s][5]; y.wShout = csgd[s][6];
+            y.wUnarmed = csgd[s][7]; y.wStaff = csgd[s][8]; y.avoidThreat = csgd[s][9]; y.circle = cscr[s][0]; y.fallback = cscr[s][1]; y.dueling = true;
+            if (sc.shortLeash) { y.circle = std::max(0.0f, y.circle - 0.10f); y.fallback = std::max(0.0f, y.fallback - 0.15f); }
+            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); } }
+        c.powerShare = 1.0f; c.leash = 0.0f;
+    }
+    inline void (*&PackageHook())(Ctl&) { static void (*h)(Ctl&) = nullptr; return h; }
+
     inline void AddFollower(Fight& F, const Data& D, const SimClass& sc, int level, int rank, float x, float y, Rng& R, float worn, const std::vector<std::string>* ensure = nullptr) {
         auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R, true, ensure));
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
@@ -95,6 +110,8 @@ namespace Sim {
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
         Ctl c; c.body = static_cast<int>(F.b.size()) - 1; c.fam = sc.fam; c.gate = sc.gate; c.profile = sc.profile; if (ProfileHook()) ProfileHook()(c.profile);
         { bool anyApplied = false; for (const GRow& r : sc.rows) anyApplied |= r.applied; for (const GRow& r : sc.rows) if (r.applied || !anyApplied) c.rows.push_back(r); }   /* T1: its data-only rows stand in for the kit of today */
+        MfoPackage(sc, c);
+        if (PackageHook() && F.ctl.empty()) PackageHook()(c);   // the package under search (the subject only)
         c.build = fb; c.book = fb->book;
         c.active.resize(fb->spells.size()); c.summonUntil.assign(fb->spells.size(), 0.0); c.rank = static_cast<std::uint8_t>(rank); c.seed = R.g();
         c.window = 1.5 * (0.88 + 0.24 * R.U(0.0f, 1.0f));   // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick

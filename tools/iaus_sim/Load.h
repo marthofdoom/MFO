@@ -210,7 +210,7 @@ namespace Sim {
             }
         }
         if (a.melee.Has()) { a.atkMult = PerkBest(D.pAttack, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); a.powMult = PerkBest(D.pPower, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); }
-        a.hasStyle = true; a.st.wMagic = fam == Cls::Mage ? 3.0f : 0.5f; a.st.wRanged = fam == Cls::Ranged ? 3.0f : 1.0f; a.conf = 3;
+        a.hasStyle = true; a.st.wMagic = fam == Cls::Mage ? 3.0f : 0.5f; a.st.wRanged = fam == Cls::Ranged ? 3.0f : 1.0f; a.conf = 3;   // the player model's style; a follower's is his class package (Setup.h MfoPackage)
         k.potionsHealth = R.I(0, 4); k.potionsStamina = R.I(0, 2); k.potionsMagicka = R.I(0, 3);
         for (int i = 0; i < 3; ++i) if (!D.pots[i].empty()) (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = LadderAt(D.pots[i], level, 0.9f).first;
         // spells: what he could plausibly have learnt (tier within reach of his skill, affordable), as sim v1 chose them

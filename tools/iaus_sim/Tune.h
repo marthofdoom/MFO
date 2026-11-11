@@ -20,6 +20,7 @@ namespace Sim {
     struct TuneState {
         Tuning t = DefaultTuning();
         std::vector<Profile::WeightOverride> weights;
+        std::map<std::string, float> pkg;   // st.<stance>.<field> / pk.power / pk.leash: the class package under search
     };
     inline TuneState& Tune() { static TuneState s; return s; }
 
@@ -35,6 +36,7 @@ namespace Sim {
         if (name.rfind("aw.", 0) == 0) { const std::size_t fi = idx(3); if (fi >= kFamilies) return false; s.t.actionWeight[fi] = f; return true; }
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); if (dot == std::string::npos) return false; const std::size_t ci = idx(2); if (ci >= kCons) return false; Curve& c = s.t.curve[ci]; const std::string fld = name.substr(dot + 1);
             if (fld == "a") c.a = f; else if (fld == "b") c.b = f; else if (fld == "floor") c.floor = f; else return false; return true; }
+        if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0) { s.pkg[name] = f; return true; }
         if (name == "t.attackChase") { s.t.attackChase = v != 0.0; return true; }
         if (name == "t.momentum") s.t.momentum = f; else if (name == "t.preempt") s.t.preemptMargin = f; else if (name == "t.actFloor") s.t.actFloor = f; else if (name == "t.softCd") s.t.softCooldownSec = f;
         else if (name == "t.tauntCd") s.t.rowlessTauntCooldownSec = f; else if (name == "t.powerCd") s.t.rowlessPowerCooldownSec = f; else return false;
@@ -47,11 +49,21 @@ namespace Sim {
             for (const auto& o : s.weights) if (o.family == static_cast<Family>(fi) && o.cons == static_cast<Cons>(ci)) return o.w; return unset; }
         if (name.rfind("aw.", 0) == 0) return s.t.actionWeight[idx(3) % kFamilies];
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); const Curve& c = s.t.curve[idx(2) % kCons]; const std::string fld = dot == std::string::npos ? "" : name.substr(dot + 1); return fld == "a" ? c.a : fld == "b" ? c.b : c.floor; }
+        if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0) { auto i = s.pkg.find(name); return i == s.pkg.end() ? unset : i->second; }
         if (name == "t.attackChase") return s.t.attackChase ? 1.0 : 0.0;
         if (name == "t.momentum") return s.t.momentum; if (name == "t.preempt") return s.t.preemptMargin; if (name == "t.actFloor") return s.t.actFloor; if (name == "t.softCd") return s.t.softCooldownSec;
         if (name == "t.tauntCd") return s.t.rowlessTauntCooldownSec; if (name == "t.powerCd") return s.t.rowlessPowerCooldownSec;
         return unset;
     }
+    // The package overrides onto a follower (st.<0 melee|1 ranged|2 cast>.<off|def|avoid|fallback|circle|powBlock|powStag|bash>, pk.power, pk.leash).
+    inline void ApplyPackage(Ctl& c) {
+        for (const auto& kv : Tune().pkg) { const std::string& n = kv.first; const float v = kv.second;
+            if (n == "pk.power") { c.powerShare = v; continue; } if (n == "pk.leash") { c.leash = v; continue; }
+            const int s = n.size() > 3 ? n[3] - '0' : -1; if (s < 0 || s > 2 || n.size() < 6) continue; Style& y = c.pkg[s]; const std::string f = n.substr(5);
+            if (f == "off") y.off = v; else if (f == "def") y.def = v; else if (f == "avoid") y.avoidThreat = v; else if (f == "fallback") y.fallback = v; else if (f == "circle") y.circle = v;
+            else if (f == "powBlock") y.powBlocking = v; else if (f == "powStag") y.powStaggered = v; else if (f == "bash") y.bash = v; }
+    }
+
     inline bool ParseSets(const char* spec) {   // "a=1,b=2" (a weight may give its start as  w.9.60=1.5)
         std::string s = spec; std::size_t p = 0;
         while (p < s.size()) { const auto q = s.find(',', p); const std::string kv = s.substr(p, q == std::string::npos ? std::string::npos : q - p); const auto eq = kv.find('=');

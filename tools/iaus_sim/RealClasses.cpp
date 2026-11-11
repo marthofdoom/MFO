@@ -78,7 +78,7 @@ namespace Sim {
             const bool any = (d.weapons & C::Weapon::kUnrestricted) != 0;
             g.weaponMelee = any || (d.weapons & (C::Weapon::kDagger | C::Weapon::kOneHand | C::Weapon::kTwoHand)) != 0;
             g.weaponBow = any || (d.weapons & C::Weapon::kBow) != 0; g.weaponCrossbow = any || (d.weapons & C::Weapon::kCrossbow) != 0; g.weaponStaff = any || (d.weapons & C::Weapon::kStaff) != 0;
-            g.disengage = (d.flags & C::Flag::kDisengage) != 0;
+            g.disengage = (d.flags & C::Flag::kDisengage) != 0; c.shortLeash = (d.flags & C::Flag::kShortLeash) != 0;
             g.powerAttack = d.powerShareMax != C::kShareUnset || d.powerShareMin != C::kShareUnset;
             int applied = 0; for (std::size_t i = 0; i < d.gambitCount; ++i) if (d.gambits[i].act && d.gambits[i].IsApplied() && !d.gambits[i].pendingRuling) ++applied;
             int idx = 0;

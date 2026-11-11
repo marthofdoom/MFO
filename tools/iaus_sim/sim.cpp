@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) oc.H = std::atof(argv[++i]);
         else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text]\n"); return 2; } }
     if (listParams) { ListParams(); return 0; }
-    ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights;
+    ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
     const Data D = listPath ? LoadData(listPath) : BuiltinData();
     const std::vector<SimClass> allClasses = legacy ? LegacyClasses() : RealClasses(mech);
