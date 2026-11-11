@@ -8874,7 +8874,7 @@ The readout has its own leaf mutex.
 - A NaN/inf fact VETOES its candidate (`FactsFinite`, counted as `BAD-FACTS` in the `[iaus]` line): never turn it back into a drop or a pass.
 - Stickiness = momentum always + the preempt margin INSIDE the commitment window only; outside it a normal 5.1 roll (review round 1 F3).
 - `Cons`/`Family` enum order: the `Name(Cons)` table has a `static_assert` against it; I9 log parsing reads the names.
-- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B639 .. MFO-B651 (B647 closed by marth Q62).
+- Open review findings: `Docs/REVIEW-BACKLOG.md` MFO-B639 .. MFO-B651 (B647 closed by marth Q62); FLWR byte: MFO-B652..B654.
 
 ## Appendix — SKSE registration & sink inventory (the wiring choke points)
 

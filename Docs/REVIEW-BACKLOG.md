@@ -2825,3 +2825,12 @@ The input-calculation check catches NaN but not inf. No current input can produc
 
 ### MFO-B651 (SEV-4, OPEN, iaus window anchor, for I9 tuning, against a167d994, Opus tier-3 review of I2 round 2)
 The window re-anchors on every Fired (design §4.5, same as #26), so a decision that keeps firing needs about 1.56x its base score to be replaced, at every rank; the rapport roll only acts when a decision lapses or changes. Within the design, not a defect. I9 option: anchor at decidedAt instead, or lower fIausPreemptMargin. I4 brief note from the same review: never leave a stale or garbage value in a Facts field the family does not read, because FactsFinite vetoes the whole candidate.
+
+### MFO-B652 (SEV-5, OPEN, FlwrEnabledByte.h stray bytes, against 906c603, Opus tier-3 review of I5)
+Bits 5-7 are ignored rather than clamped, and a stray 0x08 or 0x20 reads enabled=true, helmet Default, toggle off. That is exactly what both older DLLs read, and no writer produces it. Intentional and documented; the reviewer agrees. Recorded only.
+
+### MFO-B653 (SEV-5, OPEN, MAP.md FollowerState slot caps citation, against 906c603, Opus tier-3 review of I5)
+Pre-existing drift: "Slot caps ... :112-113" should be State.h:142 (kCombatSlotsByRank). Someone following the map lands on the helmetOverride comment.
+
+### MFO-B654 (SEV-5, OPEN, FlwrEnabledByte.h:34/:59 sign conversion, against 906c603, Opus tier-3 review of I5)
+clang/g++ -Wsign-conversion warns on the int-to-unsigned shift; tools/flwr_byte_test/run.sh suppresses it. Same expression as the old code, harmless. Also noted (process, no action): the new header was not named in the brief; disclosed, verbatim move, proven.
