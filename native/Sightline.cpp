@@ -355,12 +355,23 @@ namespace MFO::Sightline {
         const float scale = RE::bhkWorld::GetWorldScale();
         RE::BSReadLockGuard lock(world->worldLock);
         for (const auto& pt : samples) {
-            // A BODY IS NOT COVER. The ray's layer collides with other actors' capsules (the follower himself often
-            // stands between the viewer and a point behind him). A hit on an actor's body is passed through: the ray
-            // goes on from 8 units past it, at most three times; a fourth body in a row reads as Seen (no wall was found).
+            // ONLY SOLID WORLD GEOMETRY IS COVER. The character-controller ray also meets things that hide nobody:
+            // other actors' capsules (the follower himself often stands between the viewer and a point behind him),
+            // trigger and trap volumes, actor zones, stair helpers, collision boxes, invisible walls, glass. Harbinger's
+            // line of sight learned this in the field (its core/Sightline.cpp "THE HIT FILTER": stair helpers and overlap
+            // volumes read as walls). Here the rule is an ALLOW-LIST, because a point wrongly read as hidden is the
+            // defect and a point wrongly read as seen only costs a candidate: a hit is a wall only on STATIC,
+            // ANIMSTATIC, TREES, PROPS, TERRAIN or GROUND, and never when it is a phantom (an overlap volume). Any
+            // other hit is passed through: the ray goes on from 8 units past it. Six hits in a row without a wall read
+            // as Seen. PickObject's output is the CLOSEST hit (Harbinger core/SpaceQuery.cpp reads it the same way).
+            constexpr std::uint64_t kCover =
+                (1ull << static_cast<int>(RE::COL_LAYER::kStatic)) | (1ull << static_cast<int>(RE::COL_LAYER::kAnimStatic)) |
+                (1ull << static_cast<int>(RE::COL_LAYER::kTrees)) | (1ull << static_cast<int>(RE::COL_LAYER::kProps)) |
+                (1ull << static_cast<int>(RE::COL_LAYER::kTerrain)) | (1ull << static_cast<int>(RE::COL_LAYER::kGround));
+            constexpr std::int8_t kBroadPhasePhantom = 2;   // hkpWorldObject::BroadPhaseType (Harbinger core/Sightline.cpp:276)
             RE::NiPoint3 from = eye;
             bool         wall = false;
-            for (int pass = 0; pass < 4; ++pass) {
+            for (int pass = 0; pass < 6; ++pass) {
                 const RE::NiPoint3 seg = pt - from;
                 const float        len = seg.Length();
                 if (len <= 8.0f) break;
@@ -371,12 +382,14 @@ namespace MFO::Sightline {
                 pick.rayInput.filterInfo = rayFilter;
                 world->PickObject(pick);
                 if (!pick.rayOutput.HasHit()) break;   // nothing (more) between the eye and that part of him
-                const auto layer = pick.rayOutput.rootCollidable->GetCollisionLayer();
-                const bool body  = layer == RE::COL_LAYER::kCharController || layer == RE::COL_LAYER::kBiped ||
-                                   layer == RE::COL_LAYER::kBipedNoCC || layer == RE::COL_LAYER::kDeadBip;
-                if (!body) { wall = true; break; }
+                const auto* coll  = pick.rayOutput.rootCollidable;
+                const auto  layer = static_cast<std::uint32_t>(coll->GetCollisionLayer());
+                if (coll->broadPhaseHandle.type != kBroadPhasePhantom && layer < 64 && (kCover & (1ull << layer)) != 0) {
+                    wall = true;
+                    break;
+                }
                 const float f = pick.rayOutput.hitFraction + 8.0f / len;
-                if (!(f < 1.0f)) break;                // the body stands at the point itself
+                if (!(f < 1.0f)) break;                // what was hit stands at the point itself
                 from = { from.x + seg.x * f, from.y + seg.y * f, from.z + seg.z * f };
             }
             if (!wall) return PointSight::Seen;

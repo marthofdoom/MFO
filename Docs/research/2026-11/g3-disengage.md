@@ -71,8 +71,9 @@ the next card, tier A, in Harbinger.
    bearings on rings of 320 and 600 units, each from Harbinger's `FindEmptySpace` (standable, empty, a straight walk
    from him). Each is tested with MFO's OWN rays (marth 2026-11-11) from every listed foe's eye to the point at three
    heights of a crouched body (`Sightline::PointSeenNow`). A point is taken only when every foe's rays are stopped by
-   geometry. A ray that could not run is never read as hidden. A body in the way is not cover (the ray passes
-   through actors). Also refused: a point within 250 units of a foe, within 200 units of the leash edge, or less
+   geometry. A ray that could not run is never read as hidden. Only solid world geometry is cover (static,
+   animated static, tree, prop, terrain, ground): actors, overlap volumes, stair helpers, invisible walls and glass
+   are passed through, an allow-list, because a point wrongly read as hidden is the defect. Also refused: a point within 250 units of a foe, within 200 units of the leash edge, or less
    than 160 units from him. The nearest hidden point wins.
 3. **The run.** The IAUS `Disengage` family (weight 1.0, hard cooldown 25 s) is generated only once a fresh point is
    known. Chosen, `act.disengage` starts the drive (R 90, Offense denied). While the run or its hold stands his rule

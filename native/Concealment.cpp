@@ -237,6 +237,14 @@ namespace MFO::Concealment {
             return false;
         };
 
+        // The engine reports him out of his OWN combat (a Harbinger substrate is not a fight). Harbinger ends the ch.24
+        // claim on that itself (CombatEnded), so the run has no road left. At the point this is what the run is for
+        // (no foe holds him as a target any more); on the way it can also be the engine's flag dropping for a moment.
+        // Either way the claims are released and the next lap decides again. Not a failure, and said as what it is.
+        if (!APMFBridge::InCombat(a_follower))
+            return end(run.phase == Phase::Hiding ? "the engine reports him out of combat at the point (no foe holds him)"
+                                                  : "the engine reports him out of combat on the way", false);
+
         if (run.phase == Phase::Running) {
             std::string why;
             const auto  st = APMFBridge::ServiceDisengage(id, why);

@@ -106,6 +106,9 @@ namespace MFO::Sightline {
     // The same own ray as Basis::Own (the viewer's eye, the havok world of the viewer's cell, the viewer's own capsule
     // skipped), cast at THREE heights of a body of a_bodyHeight CROUCHED at the point: just off the ground, its torso
     // and its head (0.35 and 0.65 of the standing height). ANY clear ray = Seen; every ray stopped = Hidden.
+    // A ray is stopped only by SOLID WORLD GEOMETRY (static, animated static, tree, prop, terrain, ground). Actors,
+    // overlap volumes, stair helpers, invisible walls and glass are passed through (an allow-list: a point wrongly
+    // read as hidden is the defect).
     // Geometry only: no view cone, no light, no detection formula (a viewer facing away still "sees" the point,
     // because he can turn). Unavailable = the ray could not run (no cell, no havok world, an unloaded viewer): the
     // caller must NOT read that as hidden. Nothing is cached and nothing is written. Each call is at most 3 picks

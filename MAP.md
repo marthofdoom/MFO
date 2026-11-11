@@ -9083,7 +9083,8 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   retreat), `Release` (beside every `ReleaseGroundStep`: combat end, retreat, dismissal, `IausSource` `StandDown`),
   `ClearTransientState` (`Serialization.cpp`, after `Scheduler::ClearTransientState`; an epoch drops a pick of the old
   world). `Sightline::PointSeenNow(viewer, point, bodyHeight)` (`Sightline.h`, MAIN THREAD ONLY): MFO's own ray to a
-  POINT at three crouched heights, a body in the way passed through; `Unavailable` is never hidden.
+  POINT at three crouched heights; only solid world geometry stops it (an allow-list of six layers, everything else
+  and every phantom passed through); `Unavailable` is never hidden.
   IAUS: `Family::Disengage` (APPENDED, `iaus/Core.h`), `Vocab::kActDisengage` (`act.disengage`, IAUS-ONLY like
   `act.bash`), `ClassGate::sneakClass` (`Flag::kSneakAlways`, `iaus/SpellBook.cpp`; false with the tree OFF),
   `Snapshot::hideRoad` / `hidePoint` (set in `Candidates::Build` after the gate), `Tuning::disengageCooldownSec` (25 s),
