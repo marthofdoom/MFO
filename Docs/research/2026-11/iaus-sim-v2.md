@@ -1031,3 +1031,150 @@ No gain. Not adopted: the family stays as scored-but-never-generated, like Sneak
 that the oracle sends a follower to the player when he is 1700 to 1850 units from the fight (Vanilla
 knight-boss-healer, 51 decisions), which is the pursuit leash's job (ch.23, the package's `pk.leash`), not a need of
 the moment. The three needs written here are the wrong inputs for that. Open.
+
+## 26. The two missing roads, proven in the lab first, then designed for Harbinger (coordinator, 2026-11-11)
+
+The mandate authorises the missing roads: designed and authored under the house rules on a feat/ branch of the
+Harbinger (APMF) repo, tier A, full Opus review, the coordinator merges. The condition: each one is first proven in
+the lab as a modelled road with its expected gain, "so we only build what earns its place".
+
+### 26.1 Lab proof: three families behind road flags
+
+Pure layer (`native/iaus`, never generated in the game: `Snapshot::groundRoad`, `blockRoad`, `bashRoad` are false):
+
+| Family | Candidate | Need (its one shaping input) | Sim model (`--roads ground,block,bash`) |
+|---|---|---|---|
+| GiveGround | the nearest foe that targets him and has to close | he has under 6 s at the damage coming in, or he fights at range and that foe is inside 450 units and he could not afford it on him. 3 s cooldown | the oracle's step back: 500 units directly away, 2 s |
+| Block | a foe whose swing at him is in the air, in striking distance, with a melee weapon drawn | 0.5 for the swing alone, the rest by how few seconds he has. 2 s cooldown | the oracle's block: guard up 1.5 s |
+| Bash | each kept foe in swing reach | 1.0 when the foe is charging a spell, 0.4 when it is on him, 0.15 otherwise. Stamina, 4 s cooldown | the oracle's bash (20 stamina. Under Chocolate Poise it deals poise damage only, as on LoreRim) |
+
+New measured inputs: `Combatant::swinging` (its swing is in the air) and `Combatant::casting` (it is charging a spell).
+
+J, 40 fights, the same weight on every list (the default set, bash 1.33):
+
+| | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 | mean |
+|---|---|---|---|---|---|---|---|
+| no road | 63.33 | 63.81 | 64.11 | 63.79 | 79.07 | 78.79 | 67.15 |
+| give ground only | 63.57 | 63.76 | 64.06 | 64.01 | 79.23 | 78.71 | 67.22 |
+| give ground + bash | 63.63 | 63.85 | 64.70 | 64.30 | 79.66 | 79.11 | 67.54 |
+| block + bash | 63.23 | 63.91 | 64.91 | 64.78 | 79.08 | 78.87 | 67.46 |
+| all three | 63.34 | 63.78 | 64.87 | 64.64 | 79.30 | 79.16 | 67.52 |
+
+Scenario utility (30 fights, seeds 1 and 7 averaged), no road against all three:
+
+| | LoreRim | Tuxborn | Vanilla |
+|---|---|---|---|
+| knight-boss | 13.6 to 17.9 | 24.5 to 42.2 | 73.5 to 77.3 |
+| knight-boss-healer | 15.9 to 14.9 | 13.2 to 21.0 | 40.9 to 41.9 |
+| control-setup | 75.4 to 70.9 | 62.4 to 71.0 | 77.3 to 78.2 |
+| kite (give ground + bash: 1.4 / 6.2 / 24.1) | 1.5 to 1.5 | 6.8 to 8.7 | 16.0 to 18.3 |
+| mean of all 17 | 62.27 to 61.99 | 47.25 to 49.51 | 68.29 to 68.70 |
+
+A per-list search of the three weights and need slopes reaches +0.65 J on LoreRim, +1.4 on Tuxborn and +1.3 on
+Vanilla, but the lists want different weights (bash 0.5 on LoreRim, 1.33 elsewhere, block 1.0 / 2.0 / 0.56).
+
+**Verdict of the proof.**
+- **Bash earns its place on every list** with one shared weight: give ground + bash is ahead in all six runs
+  (+0.04 to +0.6 J). It is weakest on LoreRim, correctly: under Chocolate Poise a bash is poise damage and rarely
+  interrupts.
+- **Give ground earns a little alone** (+0.07 J) and more with bash. It moves the kite scenario on Vanilla from 16
+  to 24 and knight-boss on LoreRim from 13.6 to 19.0.
+- **Block does not earn robustly yet.** It is worth +13 U on Tuxborn's knight-boss and costs on LoreRim. The need is
+  too eager (any swing in the air). It needs a better input before it is built on.
+- **The roads are not the whole gap.** The oracle earns +30 to +46 U on these scenarios with the same three actions.
+  First-guess needs capture about a tenth of that. What is missing after the roads is TIMING (when a step back pays,
+  which swing to block), which is lab work on the considerations, not engine work.
+
+Expected gain to plan with: +0.4 J shared today, +0.65 to +1.4 J with per-list-free tuning, and a ceiling several
+times that once the timing inputs exist. The order below builds the cheaper and better-proven capability first.
+
+### 26.2 Design A: a one-shot combat move (bash, power bash, block) in Harbinger
+
+**What MFO does today for the power attack** (`cast/Fire.cpp`, the act.power_attack executor): once the follower is
+inside reach of the chosen foe, `NotifyAnimationGraph("attackPowerStartInPlace")`. It is the engine's own animation,
+the hit is the animation's own hit frame, and it has been in the field for months. MFO's diagnostics already observe
+the sibling events `bashStart`, `bashPowerStart`, `blockStart`, `blockStop` (`Diagnostics.cpp:416-422`), so the
+behaviour graph raises them for followers.
+
+**The capability.** A new Harbinger intent (append-only, next free number, proposed name `kIntent_CombatMove`):
+PROMOTE, one-shot, bounded. Param: `ival` = the move (Bash, PowerBash, Block), `target` = the foe (Bash: optional
+facing and reach check), `fval` = seconds (Block: how long the guard stays up, bounded, default 1.5). The client
+declares WHAT, Harbinger enforces the composition:
+
+1. Refuse (kInvalidHandle, with a reason the client can read) when the move cannot be done as declared: no shield or
+   blocking weapon drawn, the actor staggered, in a kill move, mid-cast on the hand it needs, or the graph rejects the
+   event. Never a silent success.
+2. Send the graph event the engine's own combat AI sends for that move. One event, the engine's animation.
+3. DENY-COMPLETENESS for a block: while the guard is declared up, the actor's own Offense leaves would drop it. So
+   the claim composes with the existing ch.7 CombatAction deny (kCombatActionCat_Offense) for exactly the block
+   window and releases both together. Nothing else is denied. A bash needs no deny: it is one animation.
+4. End: the window passes, the actor is staggered or downed, the client releases, a save loads.
+
+**What must be probed before one line of it is trusted (principle 5 and 6):**
+- Does a graph-sent `bashStart` on an NPC produce a real bash (the hit event with the bash flag, stamina spent,
+  the stagger or poise damage)? The engine's own Bash leaf may set attack data on the actor's process before the
+  event. If the hit reads that data, a bare event would swing with stale or missing data. The passive probe: log,
+  for the engine's OWN bashes on followers, the process's attack data before `bashStart` and the hit that follows.
+  Then one deliberate dev-only test on one follower.
+- Does `blockStart` alone make incoming hits count as blocked (HitData percent blocked), or does the engine read an
+  actor state the Block leaf sets? Same method: observe the engine's own blocks first.
+- The 1.5.97 and 1.7 layouts get their own verification (principle 11). An animation event has no address row, which
+  is why this design is the cheaper of the two.
+
+**MFO side.** A thin client like `apmf/OffenseApproach.cpp`, `Snapshot::bashRoad` / `blockRoad` read from "the client
+is live", Harbinger absent = no candidate (a documented degrade, not a mask).
+
+### 26.3 Design B: a combat area centred on a point (give ground, kite)
+
+**What exists.** ch.24 CombatApproach substitutes the centre and radius of the actor's own standard combat area
+with (X, R) where X is a REFERENCE. The engine's own Return To Combat Area walks him there and he fights all the way.
+Its `pos` parameter is not read.
+
+**The capability.** An append-only flag on ch.24 (`kApproach_Point`): the centre is `param.pos`, a world point, and
+`target` becomes optional (when given, it is the foe to keep facing: movement is two facets, the GOAL and the
+FACING, per the PFP design, and only the goal is claimed). Everything else of ch.24 stands as it is: the area is
+answered with the engine's own area outside movement, a package's hold position outranks it, a ch.23 leash is
+respected, Harbinger ends the claim itself on arrival / target lost / combat end.
+
+**What MFO declares for a step back:** the point 400 to 500 units from the foe on the line foe to follower, checked
+on the navmesh (the engine's own path query: a point he cannot reach is refused, never guessed), R about 150, held
+2 s.
+
+**Recon done (read-only, Harbinger `native/channels/CombatApproach.cpp`):** the seat already works on a point. Each sweep it
+reads the reference's position (`:1097`) and declares the area as `Geo{ x, y, z, space, radius }` (`:1184`), and an
+internal caller can already hand it a point directly (`SetInternalBound(actor, point, space, radius)`, `:1339`). So a
+point-centred claim is the same substitution with a fixed point and the actor's own space, plus the end conditions that
+today hang on the reference (target lost) restated for a point. No new engine seat.
+
+**To probe first:** that the existing ch.24 seat reads its centre in one place (so a point is the same substitution),
+and how the actor moves to an area BEHIND him while a foe is on him (he may turn his back: acceptable for a kite, a
+tell for a knight). The facing facet is a second step, only if the field shows the tell.
+
+### 26.4 Order and status
+
+1. Design A (combat move): probes, then the Harbinger intent, then the MFO client. Bash first, block when its need
+   has earned it in the lab.
+2. Design B (point-centred area): the ch.24 flag, then the MFO client.
+3. In the lab meanwhile: the timing inputs (26.1, last bullet).
+
+Status: nothing in the Harbinger repo is written. The lab families and the designs above are the brief. This is the
+next author's first item.
+
+### 26.5 Parameter set A2 is now the default tuning
+
+`Catalogue.cpp DefaultTuning()` carries set A2 (commit after e02e360), with one addition that is not from the search:
+the health potion weight 1.1 to 2.2. With the power attack at 2.394 a melee follower at 22 percent health would have
+swung before he drank, which a reviewed harness check ("the health potion ranks first") forbids. The raise is neutral
+in the lab (67.25 against 67.23) and keeps that intent. Harness 0 failed.
+
+Set A2 does not need the estimates. In the game as it can run today (no estimates, constant reach):
+
+| J (30 fights) | LoreRim s1 | s7 | Tuxborn s1 | s7 | Vanilla s1 | s7 |
+|---|---|---|---|---|---|---|
+| the doc weights (on main) | 61.44 | 60.95 | 59.54 | 58.95 | 75.92 | 73.96 |
+| set A2 as default | 63.41 | 62.14 | 63.03 | 62.33 | 78.20 | 77.56 |
+| set A2 with the estimates measured | 64.10 | 63.53 | 64.64 | 63.83 | 78.74 | 78.67 |
+
+So the weights alone are worth +1.2 to +3.6 J in the live game, before any engine-side fill. This is a behaviour
+change on main once merged (more power attacks and control casts, fewer magicka potions) and wants its Opus review
+and a field look.
