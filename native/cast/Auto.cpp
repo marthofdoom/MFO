@@ -10,7 +10,6 @@
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
 #include "Runtime.h"        // CastPathsVerified(): the ONE exact-version gate the cast paths share
-#include "Scheduler.h"       // PartyCombatSettling: the ooc substrate debounce after party combat OFF
 #include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
                             // non-heal (Offense/Buff) CONCENTRATION stream -- ComposedCast::Try
                             // above is HEAL-ONLY by design, so offense/buff concentration needs
@@ -997,8 +996,6 @@ namespace MFO::Actuation {
             // unchanged; any other mix is a transparent no-cast, never the fan beside the road. Hostile (round R4)
             // and concentration (slice S5) never ask; nor does the combat table (g_firingRule).
             if (!hostile && !concentration && g_firingRule == kNoRule && Config::g_substrateCasts.load()) {
-                if (Scheduler::PartyCombatSettling())
-                    return { Result::NoOp, "auto: held, party combat just went OFF (substrate open debounce)", true };
                 const bool healSet = kind == CasterConsent::SpellKind::Heal || SpellHealsHealth(spell);
                 std::vector<std::pair<float, RE::Actor*>> order;
                 for (const auto tgtID : targets)

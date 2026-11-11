@@ -23,6 +23,7 @@
 // APMFBridge call that takes g_subMx). The player / actor reads are the plain member
 // reads the OOC table already makes on the worker (PlayerActivelyStealthing, HasMagicEffect, the AV reads).
 #include "Actuation_internal.h"
+#include "Scheduler.h"          // PartyCombat / PartyCombatSettling: the source gate for ooc opens
 #include "Runtime.h"            // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"    // the claim pair (apmf/Substrate.cpp), HealCastClaimSupported
 #include "LocationTypes.h"      // TownAnchor: the errands' own town test (town-panic workaround)
@@ -220,6 +221,8 @@ namespace MFO::Actuation {
             auto* pc   = RE::PlayerCharacter::GetSingleton();
             auto* proc = a_follower->GetActorRuntimeData().currentProcess;
             if (pc && pc->IsInCombat())                   pre = "the player is in combat (real combat: Harbinger opens no substrate)";
+            else if (Scheduler::PartyCombat())            pre = "party combat is on (a follower's fight: an open here is dropped as party-combat and delays his join, field 2026-11)";
+            else if (Scheduler::PartyCombatSettling())    pre = "party combat went OFF under 5 s ago (debounce, Scheduler::PartyCombatSettling)";
             else if (!a_follower->Is3DLoaded())           pre = "he is not loaded";
             else if (!proc || !proc->InHighProcess())     pre = "he is not in high process";
             else if (a_follower->GetCurrentScene())       pre = "he is in a scene";
