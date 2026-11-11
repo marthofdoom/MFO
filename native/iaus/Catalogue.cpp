@@ -540,9 +540,10 @@ namespace MFO::Iaus {
                 case Sight::Unknown:  return 0.5f;
                 case Sight::Occluded:
                     // KEEP THE CURRENT ATTACK (marth Q93): a running attack on the foe he is already on is not
-                    // dropped by a short occlusion. Bounded by Tuning::occlusionHoldSec.
+                    // dropped by a short occlusion. Bounded by Tuning::occlusionHoldSec. f.occludedSec is the age of the
+                    // ray f.sight reads (own or engine, Generate's Foe), and 0 = untracked, which takes no hold.
                     if ((c.family == Family::Attack || c.family == Family::PowerAttack) && f.currentTarget &&
-                        t.occlusionHoldSec > 0.0f && f.occludedSec < t.occlusionHoldSec)
+                        t.occlusionHoldSec > 0.0f && f.occludedSec > 0.0f && f.occludedSec < t.occlusionHoldSec)
                         return 1.0f;
                     return 0.0f;
                 }

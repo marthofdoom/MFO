@@ -404,8 +404,10 @@ namespace MFO::APMFBridge {
         // mutex g_giveUpMx, so it is called with g_mx HELD (order g_mx -> g_giveUpMx; the registry never
         // takes g_mx). ClearEngageGiveUps: ClearTransientState's teardown (a load / revert).
         std::uint32_t ClaimEndReasonOf(const APMF_API::APMF_API_v2* api, APMF_API::Handle h);
+        // calm = given up because the foe was calm (TargetCalmNow): the record stores it as not fighting and not
+        // hostile, so ANY later fighting or hostility lifts it (a rising edge from calm).
         void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road,
-                                float range);   // range = the ch.21 engage range (fval), 0 for a pin
+                                float range, bool calm = false);   // range = the ch.21 engage range (fval), 0 for a pin
         void ClearEngageGiveUps();
         // True when the target is neither fighting the party nor hostile to it (the calm foe a held engagement
         // cannot make fight). Any thread, takes no MFO lock, reads actor state only.

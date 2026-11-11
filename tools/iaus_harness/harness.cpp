@@ -967,6 +967,46 @@ void SharedTauntPowerRules() {
 }
 
 namespace {
+    // marth Q93 keep-current-attack hold, review round 2: a melee swing reads the ENGINE ray, so its hold is bounded by the
+    // engine ray's occlusion age, never by the own ray's. Diverges the two rays (own Visible, engine Occluded).
+    void OcclusionHoldBound() {
+        std::printf("\n== Q93: the keep-current-attack hold is bounded on the ray the swing reads ==\n");
+        const Tuning& t = DefaultTuning();
+        ClassGate warrior; warrior.resolved = true; warrior.powerAttack = true;
+        Snapshot s;
+        s.self = Actor("Warrior", 0x14F01, 180, 200, 0, 0);
+        s.playerId = 0x14;
+        s.foes = { Actor("Bandit", 0x3B610, 100, 100, 150, 0) };
+        s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+        s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+        s.foes[0].sight = Sight::Visible; s.foes[0].occludedSec = 0.0f;   // the own ray is clear: its age is 0
+        s.foes[0].sightEngine = Sight::Occluded;
+        const auto scoreOf = [&](Family fam, float engineAge, float* age = nullptr) {
+            s.foes[0].occludedSecEngine = engineAge;
+            const Generated g = Generate(s, warrior, t);
+            for (const Candidate& c : g.actions)
+                if (c.family == fam && c.target == 0x3B610) {
+                    if (age) *age = c.f.occludedSec;
+                    return ScoreOne(c, Mind{}, Profile{}, t, 1, 0, nullptr);
+                }
+            return -1.0f;
+        };
+        for (const Family fam : { Family::Attack, Family::PowerAttack }) {
+            float ageRead = -1.0f;
+            const float held    = scoreOf(fam, 1.0f, &ageRead);
+            const float expired = scoreOf(fam, t.occlusionHoldSec + 1.0f);
+            const float untrack = scoreOf(fam, 0.0f);
+            std::printf("  %s: held %.4f expired %.4f untracked %.4f (age read %.2f)\n", std::string(Name(fam)).c_str(),
+                        held, expired, untrack, ageRead);
+            Check(ageRead == 1.0f, fam == Family::Attack ? "Q93: the melee attack reads the engine ray's occlusion age"
+                                                         : "Q93: the power attack reads the engine ray's occlusion age");
+            Check(held > expired && expired >= 0.0f, fam == Family::Attack ? "Q93: the attack's hold ends once the engine ray is occluded past the hold"
+                                                                           : "Q93: the power attack's hold ends once the engine ray is occluded past the hold");
+            Check(untrack == expired, fam == Family::Attack ? "Q93: an untracked age (0) takes no hold for the attack"
+                                                            : "Q93: an untracked age (0) takes no hold for the power attack");
+        }
+    }
+
     // MFO-B684 (the engine-fill card): the best-damage denominator applies the candidate's own filters, and an
     // UNMEASURED spell is "not known", never "does nothing".
     void EngineFillRules() {
@@ -1068,6 +1108,7 @@ int main() {
     SharedTauntPowerRules();
     ReachLearning();
     EngineFillRules();
+    OcclusionHoldBound();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

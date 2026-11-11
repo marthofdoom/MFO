@@ -17,7 +17,8 @@
 // lap, never the direct road. Today's road runs only when the switch is OFF, Harbinger is absent, or Harbinger is
 // present but reports the substrate unavailable (a loud once-per-session error, the declared degrade).
 //
-// THREADING. SubstrateRoadFor: WORKER only (ChooseBuffRoad's maps are worker-serial). FileSubstrateCast: worker, or
+// THREADING. SubstrateRoadFor: WORKER only (ChooseBuffRoad's maps are worker-serial, and its party-combat hold reads
+// the Scheduler's worker-only party-combat state). FileSubstrateCast: worker, or
 // MAIN for a self recipient (the summon files from its main-thread gate; the reach gate, which reads the Sightline
 // cache, runs only for another recipient). The maps here are guarded by g_roadMx (a leaf: never held across an
 // APMFBridge call that takes g_subMx). The player / actor reads are the plain member
@@ -101,7 +102,9 @@ namespace MFO::Actuation {
 
     namespace { constexpr std::uint32_t kTownFixMinAbi = 32; }   // Harbinger 0.16.0: the Spectator fix (same ABI as CastGuard kBystandersMinAbi)
 
-    bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable) {
+    bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable,
+                          bool& a_held) {
+        a_held = false;
         if (!Config::g_substrateCasts.load()) return false;   // OFF: today's road, byte for byte (nothing else read)
         if (!a_oocTable || !a_follower || !a_spell) return false;
         if (APMFBridge::SubstrateAvailability() != APMFBridge::SubstrateAvail::Available)
@@ -174,6 +177,19 @@ namespace MFO::Actuation {
             NoteDirect(a_follower, a_spell, why);
             return false;
         }
+        // PARTY COMBAT HOLD (fix/iaus-field-1): this cast takes the substrate road, but party combat is on, or went OFF
+        // under kOocCastDebounceSecs ago. Not cast this lap (a_held), never the direct road. Asked HERE, on the worker,
+        // because g_partyCombat / g_serviceClock / g_partyOffAt are worker-only (#4) and the summon files its pair on main.
+        const char* hold = Scheduler::PartyCombat()
+            ? "party combat is on (a follower's fight: an open here is dropped as party-combat and delays his join, field 2026-11)"
+            : Scheduler::PartyCombatSettling()
+                ? "party combat went OFF under 5 s ago (debounce, Scheduler::PartyCombatSettling)"
+                : nullptr;
+        if (hold) {
+            a_held = true;
+            NoteRefused(a_follower->GetFormID(), a_spell, 9, hold);
+            return false;
+        }
         return true;
     }
 
@@ -221,8 +237,6 @@ namespace MFO::Actuation {
             auto* pc   = RE::PlayerCharacter::GetSingleton();
             auto* proc = a_follower->GetActorRuntimeData().currentProcess;
             if (pc && pc->IsInCombat())                   pre = "the player is in combat (real combat: Harbinger opens no substrate)";
-            else if (Scheduler::PartyCombat())            pre = "party combat is on (a follower's fight: an open here is dropped as party-combat and delays his join, field 2026-11)";
-            else if (Scheduler::PartyCombatSettling())    pre = "party combat went OFF under 5 s ago (debounce, Scheduler::PartyCombatSettling)";
             else if (!a_follower->Is3DLoaded())           pre = "he is not loaded";
             else if (!proc || !proc->InHighProcess())     pre = "he is not in high process";
             else if (a_follower->GetCurrentScene())       pre = "he is in a scene";
@@ -346,7 +360,9 @@ namespace MFO::Actuation {
 
     SubstrateTry TrySubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
                                   bool a_oocTable, const char* a_site) {
-        if (!SubstrateRoadFor(a_follower, a_spell, a_recipient, a_oocTable)) return SubstrateTry::NotTaken;
+        bool held = false;
+        if (!SubstrateRoadFor(a_follower, a_spell, a_recipient, a_oocTable, held))
+            return held ? SubstrateTry::Refused : SubstrateTry::NotTaken;
         return FileSubstrateCast(a_follower, a_spell, a_recipient, a_site);
     }
 }

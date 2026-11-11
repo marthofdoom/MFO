@@ -264,7 +264,7 @@ namespace MFO::Iaus {
         float reach = 0.0f;               // <= 0: range not applicable (self actions)
         bool  meleeRange = false;         // true: melee range curve, false: spell / ranged curve
         Sight sight = Sight::None;
-        float occludedSec = 0.0f;         // how long his own ray to the foe has been Occluded (0 = not occluded, or not tracked)
+        float occludedSec = 0.0f;         // how long the ray this candidate reads (sight) has been Occluded (0 = not, or not tracked)
         // the foe
         float foeLevelRatio = 1.0f;       // foe level / self level
         float foeHpPct = 1.0f;

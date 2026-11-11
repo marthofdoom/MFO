@@ -569,11 +569,14 @@ namespace MFO::Actuation {
     //             is open, or the spell's effect is still up on him. AUTO tries its next recipient.
     //   Refused   a TRANSPARENT no-cast for EVERY recipient this lap, never the direct road: a pair already stands
     //             for him (the PENDING latch), the player is sneaking (marth 2026-10-19 Q6), he cannot act, does not
-    //             know the spell, cannot afford it, or Harbinger REFUSED the open.
+    //             know the spell, cannot afford it, party combat is on or settling (SubstrateRoadFor a_held), or
+    //             Harbinger REFUSED the open.
     enum class SubstrateTry : std::uint8_t { NotTaken, Filed, Skipped, Refused };
     // WORKER only (ChooseBuffRoad's state is worker-serial). Does this cast take the substrate road? a_oocTable is
-    // false for every combat-table caller (g_firingRule set): the combat table never files a substrate.
-    bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable);
+    // false for every combat-table caller (g_firingRule set): the combat table never files a substrate. a_held = true
+    // (with false): the road is right but party combat is on or settling, so NOT CAST this lap, never the direct road.
+    bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable,
+                          bool& a_held);
     // WORKER, or MAIN for a self recipient (the summon). Files the pair after the per-cast gates.
     SubstrateTry FileSubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
                                    const char* a_site);
