@@ -482,6 +482,34 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
 - What: on class equip, apply the class's default base-gambit set (rulings list them per class). The user can edit it.
   See question 3 for the overwrite policy.
 - Tier B, effort 2.
+- **STATUS 2026-11-11: BUILT with MCLS v2 on `feat/mcls-v2` (tier A, co-save; NOT merged, NOT field-run).** What it does:
+  - `Classes::EquipClass` (`native/classes/Defaults.cpp`) is the equip road for C10. First equip of a class: the COMBAT table becomes
+    the class defaults (Q8, Q59). Later equips: his own combat AND logistics tables for that class come back (Q8, Q29). The tables
+    he had with classes OFF are kept too and come back with `UnequipClass`. `ResetClassTables` is the reset action for C10's button.
+  - Defaults: T2 = the applied `DefaultGambit` rows; T1 = today's base kit (the 2026-11-09 ruling); T3+ = parked, the table is
+    carried over. The logistics table has no class default (none exists in the rulings), so first equip and reset leave it alone.
+  - Q74: only the top rows that fit the rank's combat slots are laid down; a rank-up adds the next ones while the table is still
+    the untouched default prefix.
+  - Spell roles: a cast row arrives disabled, the follower's own spell for the role is picked (the strongest he can pay for) and
+    the row is enabled. No spell for the role: the row stays disabled for the player to fill.
+  - Row data changed: Warrior and Conjurer = the simulator's kept sets, Warlock = its kept prefix order (iaus-sim-v2.md section 27).
+    Starting values, they still want the in-game probe.
+  - NOT done here (other cards): the board button and the reset button (C10), reading Dragonborn's picked T4 (C8, C10), the
+    placeholder rows whose opcodes now exist (G1 sneak, G5 no-summon, G6 foe-hits-my-summon are still `Todo` rows in `ClassTable.cpp`).
+  - In-game check (DEV build, `MFO_Classes.esl` loaded, `bClassTree = 1`, `bClassCoSaveSelfTest = 1`):
+    1. Load an existing save made BEFORE this build with class state in it. Expect `loaded class state ... (MCLS v1 ...) ... an older
+       record: the next save writes it as v2`, the four `MCLS self-test ... PASS` lines and no `FAIL`. Save, load that save: expect
+       `MCLS v2` and the same follower count.
+    2. Edit a follower's combat and logistics tables on the board so they are recognisable. Set
+       `sDevClassEquip = <follower>:knight:1, <follower>:warrior:1, <follower>:knight:1` and load. Expect three
+       `[classes] <fid>: ... -> ...` lines: `classes OFF -> knight ... DEFAULTS (first equip)`, `knight -> warrior ... DEFAULTS`,
+       `warrior -> knight ... RESTORED`. On the board the combat table is the Knight default (taunt, attack, potion: 3 rows at Rank I).
+    3. With a mage follower: `sDevClassEquip = <follower>:healer:1`. Expect `default combat table laid down ... cast row(s) waiting
+       for a spell pick`, then one `default row ... casts <spell>` line per role he knows a spell for, or `knows no Heal spell ...
+       stays DISABLED`. On the board each cast row shows its spell and is enabled, or is disabled with no spell.
+    4. Save and load with the entry removed: the class, the tables and the stored tables are the same (`saved class state ... N combat
+       + N logistics + 2 classes-OFF stored table(s)` on save, the same counts on load).
+    5. Set `bClassTree = 0`, load, save, set it back to 1, load: the class and every stored table are unchanged.
 
 **C13. Thief stealth entry: guaranteed undetected open 1 fight in 5 (Master Thief 1 in 3), the others roll on stats**
 - What: a fight counter in MCLS. On a guaranteed fight, the Thief enters the fight hidden (G1 + G2, or H10's invisibility
@@ -605,4 +633,4 @@ G1 -> G2 -> C13 -> G13 -> G14. G10 -> G7 / C9. G12 -> C9. G15 -> H-MARK. G8 -> C
 **Post-release quick patch: Warlock/Nightblade foe-only Illusion bonus (marth Q58, 11-10)**
 - Ship the Animage-style "+N levels" for release; right after, find a proven foe-only road (target-tab hostility, a MagicInfluence condition, or a DLL-side magnitude cap at cast time), especially if the Deck shows ally buffs (Courage, Rally, Call to Arms) becoming very strong. Field-check buff strength on the Deck.
 
-- MCLS v2 must also store Dragonborn's player-picked T4 combat behaviour (marth Q60, 11-10).
+- MCLS v2 must also store Dragonborn's player-picked T4 combat behaviour (marth Q60, 11-10). DONE 2026-11-11 (`feat/mcls-v2`: `u8 pickedT4`, `Classes::GetPickedT4 / SetPickedT4 / ClearPickedT4`; stored only, C8 / C10 read it).

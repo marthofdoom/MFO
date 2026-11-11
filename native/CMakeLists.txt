@@ -132,6 +132,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/Carriers.cpp
     classes/ClassTable.cpp
     classes/Classes.cpp
+    classes/Defaults.cpp
     classes/Mastery.cpp
     classes/Presence.cpp
     classes/State.cpp

@@ -2580,7 +2580,8 @@ Verbatim (reviewer): Ebony Warrior has kDisengage without kSpellRange. Saint has
 ### MFO-B567 (SEV-4, OPEN, classes/State.cpp kept MCLS record, against 2a035b1) -- stale FormIDs in a kept record
 Verbatim (reviewer, F-3): a record kept verbatim by an older DLL carries the FormIDs of the save it came from. Downgrade -> load-order change -> upgrade, and the newer DLL resolves them against the wrong plugin table. Reasoning: only a parse could re-resolve them and the older DLL cannot parse; the exposure is the stored gambit rows' actionParamForm / subjectActorForm. C12's restore must type-check actionParamForm (a spell for a cast row, and so on) the way the live evaluator does, never trust it.
 
-### MFO-B568 (SEV-4, OPEN, design question for marth, classes/State.cpp, against 2a035b1) -- only the COMBAT table is stored per class
+### MFO-B568 (SEV-4, CLOSED by card C12 / MCLS v2 `feat/mcls-v2` 2026-11-11, classes/State.cpp, against 2a035b1) -- only the COMBAT table is stored per class
+Resolution: marth Q29 ruled that the per-class memory stores BOTH tables. MCLS v2 appends one stored LOGISTICS table per class under `a_version >= 2` (plus the classes-OFF tables and Dragonborn's picked T4); no v1 field changed. Proof: `tools/mcls_byte_test/run.sh`.
 Verbatim (reviewer, F-4): Q8 says "remember each classes setup"; MCLS v1 stores the combat table only. Reasoning: whether a class's setup includes the logistics table is marth's call; if yes it is a v2 APPEND (a per-table kind byte or a second table list under `if (a_version >= 2)`), no v1 change.
 
 ### MFO-B569 (SEV-5, CLOSED by card G9 `feat/g9-rule-cooldown` 2026-11-09, classes/State.cpp rowSchema, against 2a035b1) -- rowSchema is stamped from kSchemaVersion
@@ -2995,3 +2996,15 @@ TargetCalmNow has no thread note: it reads actor state (combat target, hostility
 
 ### MFO-B701 (SEV-5, OPEN, class gate GateFor, against 24a1dbb, same review)
 GateFor strict-inherit: a follower with no own class row inherits the party gate strictly; a looser inherit may be wanted when the class tree switch is OFF. Reasoning: matches the current ruling; revisit with C2/C6.
+
+### MFO-B720 (SEV-4, OPEN, classes/Defaults.cpp LayDown/LandPicks, against e6aaa1c, Opus tier-3 review of feat/mcls-v2)
+"A save in the 1 or 2 frames between LayDown and LandPicks stores the default cast rows disabled with no spell. After that save loads, nothing picks them again." Suggested fix: on load, re-post the pick for disabled, spell-less cast rows that still match the equipped class's default prefix (SameDefault). Reviewer: rare window, rows visible on the board and the WARN is logged; not a corruption.
+
+### MFO-B721 (SEV-5, OPEN, classes/State.cpp SwapClass + dev hook, against e6aaa1c, same review)
+"If test rows are live when the dev hook equips, SwapClass stores them in offCombat and Scrub zeroes their uid", which gets past FLWR's SelfTest::IsRunRow strip (Serialization.cpp:596), so they can persist in dev saves through MCLS. Dev build only.
+
+### MFO-B722 (SEV-5, OPEN, classes/State.cpp SwapClass, against e6aaa1c, same review)
+"A refused SwapClass (locked, or already equipped) still creates an empty g_store entry through Mutate and calls RefreshCarriers." Same as ActivateClass/SetPickedT4 today; harmless.
+
+### MFO-B723 (SEV-5, OPEN, classes/ClassTable.cpp Todo rows, against e6aaa1c, same review)
+Thief and Conjurer Todo placeholder rows (G1, G5, G6) remain though the opcodes exist on main (see MFO-B698). Also: the sim's kept Warrior/Conjurer/Warlock sets were reverted before merge (marth 11-11, "Revert to old rows"); they return after the in-game probe. Note for that round: the sim's Conjurer row 2 `cond.foe_lowest_hp -> act.attack` is true whenever any foe exists and shadows the foe_any cast row under first-true-wins.

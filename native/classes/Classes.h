@@ -27,6 +27,8 @@
 // THREADING: OnDataLoaded runs once on the main thread at kDataLoaded. Every accessor after that is a
 // read of immutable constexpr data or of two atomics, safe from any thread.
 
+namespace MFO { struct FollowerState; }   // State.h; card C12 takes the follower's live tables by reference
+
 namespace MFO::Classes {
 
     // 35 classes. The ORDER is the bit index into every mastered/unlocked bitset (C3 will persist those),
@@ -94,7 +96,8 @@ namespace MFO::Classes {
     };
 
     // What a cast gambit row wants for its spell. The class defaults name a ROLE, never a spell form (a
-    // spell is the follower's own known spell; card C12 resolves the role to a form). Not serialized.
+    // spell is the follower's own known spell; card C12 resolves the role to a form, classes/Defaults.cpp).
+    // Not serialized.
     enum class SpellRole : std::uint8_t {
         None, Attack, Destruction, Fire, Frost, Shock, Area, Heal, Summon, BoundWeapon, Ward, Armor,
         Paralyze, Fear, Calm, Reanimate, TurnUndead
@@ -109,7 +112,7 @@ namespace MFO::Classes {
         float        condParam;      // pct params are fractions [0,1], distances are units, like Gambit::conditionParam
         std::uint8_t subject;        // Vocab::Subject ordinal (0 Self/Auto ... 4 Caster)
         SpellRole    role;           // cast rows only
-        float        cooldownSec;    // 0 = none. NOT applied until card G9 (per-rule cooldown, FLWR v6) exists
+        float        cooldownSec;    // 0 = none. Applied by card C12 through CooldownTenthsFromSec (card G9's FLWR v6 row field)
         const char*  planCard;       // nullptr = applied; otherwise the card that adds the missing opcode
         bool         pendingRuling;  // a T1 row (marth 2026-11-09: T1 keeps today's kit, no class default set): C12 must not apply it. (Enemy-control rows were also flagged until AUTO-hostile landed, 1dfcuabcr0d.)
         [[nodiscard]] constexpr bool IsApplied() const { return planCard == nullptr; }
@@ -198,10 +201,25 @@ namespace MFO::Classes {
         std::uint16_t thiefFights = 0;         // card C13: fights since the Thief's last guaranteed stealth entry
         std::uint16_t masterThiefFights = 0;   // card C13: same, Master Thief
         // marth Q8: the COMBAT gambit table saved under each class when he switched away from it (card C12).
-        // nullopt = none stored (the class was never switched away from); an engaged EMPTY vector is a real,
-        // stored empty table. The equipped class's live table is FLWR's, not this.
+        // nullopt = none stored (the class was never switched away from, or it is the equipped one: the switch
+        // back CONSUMES the stored table); an engaged EMPTY vector is a real, stored empty table. The equipped
+        // class's live table is FLWR's, not this.
         std::array<std::optional<std::vector<Gambit>>, kClassCount> tables{};
+        // ── MCLS v2 (card C12; all default-empty, so a v1 record loads with none of it) ──────────────────
+        // marth Q60: Dragonborn's player-picked T4 COMBAT BEHAVIOUR (an Id ordinal of a tier-4 class), or
+        // kNoClass = none picked. Stored only; cards C8 / C10 read it.
+        std::uint8_t pickedT4 = kNoClass;
+        // marth Q29: the LOGISTICS table saved under each class, same rules as `tables` above.
+        std::array<std::optional<std::vector<Gambit>>, kClassCount> logiTables{};
+        // The tables he had with classes OFF (equipped == kNoClass), saved when his FIRST class is equipped and
+        // handed back when his class is taken off again, so equipping a class never destroys the setup the
+        // player built without classes. nullopt = none stored.
+        std::optional<std::vector<Gambit>> offCombat;
+        std::optional<std::vector<Gambit>> offLogistics;
     };
+
+    // Which of a class's two stored tables (the values equal MFO::Table's, State.h).
+    enum class TableKind : std::uint8_t { Combat = 0, Logistics = 1 };
 
     // Co-save (Serialization.cpp calls these and nothing else does).
     void CoSave(SKSE::SerializationInterface* a_intfc);
@@ -221,8 +239,10 @@ namespace MFO::Classes {
     [[nodiscard]] Mask GetMastered(RE::FormID a_follower);
     [[nodiscard]] Mask GetUnlocked(RE::FormID a_follower);
     [[nodiscard]] std::pair<std::uint16_t, std::uint16_t> GetStealthFights(RE::FormID a_follower);   // {thief, masterThief}
-    [[nodiscard]] bool HasStoredTable(RE::FormID a_follower, Id a_class);
-    [[nodiscard]] std::optional<std::vector<Gambit>> GetStoredTable(RE::FormID a_follower, Id a_class);
+    [[nodiscard]] bool HasStoredTable(RE::FormID a_follower, Id a_class, TableKind a_kind = TableKind::Combat);
+    [[nodiscard]] std::optional<std::vector<Gambit>> GetStoredTable(RE::FormID a_follower, Id a_class,
+                                                                    TableKind a_kind = TableKind::Combat);
+    [[nodiscard]] std::uint8_t GetPickedT4(RE::FormID a_follower);   // marth Q60; kNoClass if none
 
     // Writes (false = refused: not Writable(), a 0xFF follower id, an Id out of range, or a table over
     // kMaxStoredRows). Masks drop bits beyond the roster.
@@ -232,8 +252,12 @@ namespace MFO::Classes {
     bool SetMastered(RE::FormID a_follower, Mask a_mastered);
     bool SetUnlocked(RE::FormID a_follower, Mask a_unlocked);
     bool SetStealthFights(RE::FormID a_follower, std::uint16_t a_thief, std::uint16_t a_masterThief);
-    bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows);   // C12: on switching away; runtime-only fields (uid, last*) are zeroed
-    bool ClearStoredTable(RE::FormID a_follower, Id a_class);                          // C12: the reset button
+    bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows,
+                    TableKind a_kind = TableKind::Combat);   // runtime-only fields (uid, last*) are zeroed
+    bool ClearStoredTable(RE::FormID a_follower, Id a_class, TableKind a_kind = TableKind::Combat);
+    // marth Q60: Dragonborn's picked T4. Refused unless a_t4 is a TIER-4 class the follower has MASTERED.
+    bool SetPickedT4(RE::FormID a_follower, Id a_t4);
+    bool ClearPickedT4(RE::FormID a_follower);
 
     // ── mastery = card C5 (classes/Mastery.cpp) ───────────────────────────────────────────────────────
     // Class level 1..cap per class; reaching the cap sets the mastered bit. CAPS BY TIER (marth 2026-11-10): T1 10, T2 15,
@@ -284,8 +308,8 @@ namespace MFO::Classes {
     bool SetLevelFromXp(RE::FormID a_follower, Id a_class, std::span<const std::uint32_t> a_cumulative);
 
     // Free, instant switch between UNLOCKED classes (C10's accessor). A class never used before is started at level 1 (Dragonborn
-    // stays level 0). false if not Writable(), the class is not unlocked, or it is already equipped. Storing / restoring the
-    // per-class gambit table (Q8) is card C12's, not done here.
+    // stays level 0). false if not Writable(), the class is not unlocked, or it is already equipped. It does NOT store or
+    // restore the per-class gambit tables (Q8): the board calls EquipClass (card C12, below), which does both in one write.
     bool SwitchClass(RE::FormID a_follower, Id a_class);
 
     // The compound writers behind SetLevelFromXp / SwitchClass (State.cpp, one g_mx hold each; false = refused or nothing changed).
@@ -295,13 +319,48 @@ namespace MFO::Classes {
     bool ApplyLevel(RE::FormID a_follower, Id a_class, std::uint8_t a_level);
     bool ActivateClass(RE::FormID a_follower, Id a_class);
 
+    // ── default gambit sets + per-class memory = card C12 (classes/Defaults.cpp) ─────────────────────────
+    // marth Q8 / Q29 / Q59: equipping a class resets the follower's COMBAT table to that class's defaults the
+    // FIRST time, and from then on each class remembers BOTH his tables (combat and logistics): switching away
+    // stores the live tables under the class he leaves, switching back hands them back. The store, the equip and
+    // the hand-back are ONE compound write in State.cpp (one g_mx hold); the live tables are then replaced here.
+    //   - DEFAULTS: tier 2 = the class's applied DefaultGambit rows (ClassTable.cpp; a "todo.*" placeholder row
+    //     and a pendingRuling row are never applied); tier 1 = today's base kit (Followers::ApplyDefaultKit's
+    //     combat rows, marth 2026-11-09 "T1 keeps today's kit"); tier 3+ = NONE SHIPPED YET (parked by marth): the
+    //     live combat table is carried over unchanged. There is no class default for the LOGISTICS table: a first
+    //     equip and a reset leave it alone (the per-class memory still stores and restores it).
+    //   - RANK (marth Q74): the follower gets the TOP rows that fit his rank's combat slots; OnRankUp appends the
+    //     next ones when a rank-up opens slots, only while his table is still the untouched default prefix.
+    //   - SPELLS: a default cast row names a SpellRole. The row is added DISABLED with no spell, the follower's own
+    //     known spell for the role is picked on the MAIN thread (MainThread::Post) and written back on the worker,
+    //     which enables the row. No spell for the role: the row stays disabled, logged, for the player to fill.
+    //   - CLASSES OFF: his first class equip saves the tables he had without classes; UnequipClass hands them back.
+    // THREADING: all four are WORKER-ONLY (they read and write a_st, which lives in g_followers). They refuse and
+    // change NOTHING unless Writable() (so with the ESL absent or bClassTree = 0 they are inert).
+    // EquipClass / UnequipClass call Followers::RepublishActiveMirror() themselves (the C10 HOOK below).
+    enum class EquipResult : std::uint8_t {
+        Refused,    // not Writable(), a 0xFF id, locked, already equipped, or a live table the store cannot hold
+        Restored,   // the class had stored tables: handed back
+        Defaults,   // first equip: the class's default combat rows
+        Kept        // first equip of a class with no shipped default set (tier 3+): the live tables carried over
+    };
+    EquipResult EquipClass(RE::FormID a_follower, Id a_class, FollowerState& a_st);
+    // Classes OFF for this follower (equipped -> kNoClass). true = done; the pre-class tables come back when stored.
+    bool UnequipClass(RE::FormID a_follower, FollowerState& a_st);
+    // The reset action (C10's button): the equipped class's default combat rows again. false = refused (not
+    // Writable(), no class equipped, or a tier 3+ class with no shipped default set).
+    bool ResetClassTables(RE::FormID a_follower, FollowerState& a_st);
+    // Rapport.cpp, on a rank INCREASE (a_before = the old rank; a_st.rank is the new one). marth Q74.
+    void OnRankUp(RE::FormID a_follower, FollowerState& a_st, std::uint8_t a_before);
+
     // NO class Auto (marth 2026-11-10: "Auto is disabled per follower when classes are enabled on that follower"). The C5 stat-based
     // picker (AutoClassFor / PickAutoClass / ReadStats) was removed in card C5b: no class is ever auto-assigned. A follower with
     // classes ON (equipped != kNoClass) skips the Gambit-tab Auto vote in Logistics::ResolveBaseClass and takes his equipped
     // class's rootT1 instead.
     // C2b: EVERY reader of the class pick (not just the vote) goes through Logistics::EffectiveClassPick (logistics/ClassResolve.cpp):
     // classes ON -> his equipped class's root T1 (Dragonborn: Q60), else the raw combatClassOverride. The raw value is never written on
-    // class equip. C10 HOOK: after a SwitchClass / ActivateClass / SetEquipped / ClearEquipped and after a bClassTree toggle, call
+    // class equip. C10 HOOK: after a SwitchClass / ActivateClass / SetEquipped / ClearEquipped and after a bClassTree toggle (NOT after
+    // EquipClass / UnequipClass, which call it themselves), call
     // Followers::RepublishActiveMirror() on the WORKER (the ResolvedClassFast mirror the main-thread HMS poll reads is rebuilt by it;
     // it is NOT called from State.cpp because it reads g_followers, worker-only). Until then the mirror catches up at the next
     // Followers::Refresh (its tail republishes). Direct readers on the worker see an equip change at once (no cache).

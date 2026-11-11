@@ -1,12 +1,14 @@
 // classes/State.cpp -- per-follower class state and its co-save record 'MCLS' (class update card C3).
 //
 // WHAT IT HOLDS: per follower, the equipped class, XP + level for every class, the mastered / unlocked
-// bitsets, the Thief / Master Thief stealth-entry fight counters (card C13), and the COMBAT gambit table
-// saved under each class he switched away from (marth Q8, card C12). Nothing here accrues XP, decides
-// mastery, applies a gambit or touches the engine: those are cards C4 / C5 / C6 / C12. This file only
-// holds, guards and persists the state, and exposes the accessors (Classes.h) those cards call.
+// bitsets, the Thief / Master Thief stealth-entry fight counters (card C13), the COMBAT and the LOGISTICS
+// gambit table saved under each class he switched away from (marth Q8 / Q29, card C12), the tables he had
+// with classes OFF, and Dragonborn's picked T4 (marth Q60). Nothing here accrues XP, decides mastery,
+// applies a gambit or touches the engine: those are cards C4 / C5 / C6 / C12. This file only holds, guards
+// and persists the state, and exposes the accessors (Classes.h) those cards call.
 //
-// ── 'MCLS' v1 BYTE LAYOUT (little-endian, SKSE record body) ─────────────────────────────────────────
+// ── 'MCLS' BYTE LAYOUT (little-endian, SKSE record body). v1 = everything down to the v1 tables; v2 (card
+//    C12) APPENDS the block marked "v2" to every follower entry and changes NOTHING before it. ───────────
 //   header
 //     u32  rowSchema       the gambit-row version the rows below were written at, in FLWR's version numbers
 //                          (Serialization.h GambitWire::kRowSchema = the FLWR version at which the row last
@@ -35,12 +37,29 @@
 //                          does; an unresolvable subjectActor reads as 0. A rowSchema-5 row (written by a pre-G9
 //                          DLL) ends at its flags byte and reads with cooldown 0; a pre-G9 DLL meets rowSchema 6
 //                          and KEEPS the record verbatim (the rule below), so a downgrade freezes, never loses, it.
+//     ── v2 only (read under `a_version >= 2`; a v1 entry ENDS at its last v1 table) ──
+//     u8   pickedT4        marth Q60, Dragonborn's picked T4 combat behaviour: the Id ordinal of a TIER-4 class
+//                          (< classCount) or 0xFF = none; anything else -> none (logged, #11)
+//     u8   logiTableCount  stored LOGISTICS tables that follow (marth Q29), <= classCount (more = ABORTED)
+//     per logistics table
+//       u8 classId         < classCount, unique within the follower's logistics tables (otherwise ABORTED)
+//       u8 rowCount        <= kMaxStoredRows = 64 (more = ABORTED)
+//       rowCount x ROW     the same row as above, at rowSchema
+//     u8   offMask         the tables he had with classes OFF: bit 0 = a COMBAT table follows, bit 1 = a
+//                          LOGISTICS table follows (combat first). Any other bit = ABORTED (no writer sets one)
+//     per set bit: u8 rowCount (<= 64, more = ABORTED), rowCount x ROW
 //   Followers are written in ascending FormID order and tables in Id order, so the bytes are deterministic.
+//   SIZES: a follower's v1 part is 201 bytes + its tables; the v2 block is 3 bytes + its tables. A row is at
+//   most 152 bytes (two 64-byte opcodes), a table at most 64 rows, so one follower is bounded at about 0.7 MB
+//   and a real one is a few hundred bytes; the whole record is refused over kMaxRecordBytes.
 //
 // ── VERSION AND COMPAT RULES ────────────────────────────────────────────────────────────────────────
-//   * Extension is BY VERSION, never by blob size: a v2 APPENDS fields at the end of the per-follower entry,
+//   * Extension is BY VERSION, never by blob size: v2 APPENDS fields at the end of the per-follower entry,
 //     read under `if (a_version >= 2)`; the v1 reader stays forever (#12). A new class APPENDS an Id (Classes.h
 //     rule): the writer then writes the larger classCount, and an older DLL meets classCount > its kClassCount.
+//   * v1 -> v2: a v1 record is read by the SAME code with the v2 block skipped, so its followers load with no
+//     picked T4, no logistics tables and no classes-OFF tables; the next save writes v2. v2 -> v1 DLL: the older
+//     DLL meets version 2 > its 1 and KEEPS the record verbatim (the rule below), frozen for that session.
 //   * A record this DLL cannot parse -- a version > kClassesVersion, a rowSchema > GambitWire::kRowSchema (a newer FLWR
 //     row, e.g. card G9's cooldown) or a classCount > kClassCount -- is KEPT VERBATIM (its version + bytes) and
 //     written back unchanged on every save; the class state is then FROZEN for the session (every setter
@@ -85,6 +104,7 @@ namespace MFO::Classes {
         constexpr std::uint32_t kMaxRecordBytes    = 256u << 20;    // a sanity bound on the record body (#11);
                                                                     // a real record is a few KB
         constexpr std::size_t   kOffRowSchema = 0, kOffClassCount = 4, kOffFollowerCount = 5;   // header offsets
+        constexpr std::uint8_t  kNoClassCombatBit = 1u << 0, kNoClassLogisticsBit = 1u << 1;            // v2 offMask
 
         using Snapshot = std::vector<std::pair<RE::FormID, FollowerClasses>>;   // ascending FormID
 
@@ -109,17 +129,36 @@ namespace MFO::Classes {
         };
         struct LoadStats {
             std::uint32_t loaded = 0, droppedFollower = 0, collisions = 0, disabledRules = 0,
-                          maskedBits = 0, badEquipped = 0, tables = 0, rows = 0;
+                          maskedBits = 0, badEquipped = 0, tables = 0, rows = 0,
+                          logiTables = 0, offTables = 0, badPickedT4 = 0;   // v2
         };
         enum class ReadResult { Ok, Unparseable, Aborted };
 
         // ── codec (templated on the stream: SKSE::SerializationInterface or CoSaveBuffer) ─────────────
         // a_rowSchema: production always writes GambitWire::kRowSchema. The self-test alone writes an older row
         // schema (card G9: v5) into a CoSaveBuffer, to prove the reader takes a pre-G9 record.
+        // a_version: production always writes kClassesVersion. The self-test alone writes 1 (the entry WITHOUT the
+        // v2 block, exactly the v1 writer's bytes: the code above the `a_version >= 2` gate is the v1 writer,
+        // untouched) to prove the v1 -> v2 upgrade.
         template <class W>
-        bool WriteBody(W& w, const Snapshot& a_snap, std::uint32_t a_rowSchema = GambitWire::kRowSchema) {
+        bool WriteBody(W& w, const Snapshot& a_snap, std::uint32_t a_rowSchema = GambitWire::kRowSchema,
+                       std::uint32_t a_version = kClassesVersion) {
             bool ok = true;
             auto put = [&](const auto& v) { if (!w.WriteRecordData(v)) ok = false; };
+            // One stored table of the v2 block: u8 rowCount + the rows (the v1 tables above keep their own loop).
+            auto putRows = [&](const std::vector<Gambit>& a_rows) {
+                put(static_cast<std::uint8_t>(a_rows.size()));   // <= kMaxStoredRows, enforced by the writers / the reader
+                for (const auto& g : a_rows) {
+                    bool rowOk = false;
+                    if constexpr (std::is_same_v<W, CoSaveBuffer>)
+                        rowOk = a_rowSchema == GambitWire::kRowSchema ? GambitWire::WriteRow(w, g)
+                                                                      : GambitWire::WriteRowAt(w, g, a_rowSchema);
+                    else
+                        rowOk = a_rowSchema == GambitWire::kRowSchema && GambitWire::WriteRow(w, g);
+                    if (!rowOk) return false;
+                }
+                return true;
+            };
             put(a_rowSchema);   // rowSchema
             put(static_cast<std::uint8_t>(kClassCount));
             put(static_cast<std::uint32_t>(a_snap.size()));
@@ -148,6 +187,21 @@ namespace MFO::Classes {
                             rowOk = a_rowSchema == GambitWire::kRowSchema && GambitWire::WriteRow(w, g);
                         if (!rowOk) return false;
                     }
+                }
+                if (a_version >= 2) {   // ── the v2 block (card C12) ──
+                    put(fc.pickedT4);
+                    std::uint8_t logiCount = 0;
+                    for (const auto& t : fc.logiTables) if (t) ++logiCount;
+                    put(logiCount);
+                    for (std::size_t i = 0; i < kClassCount; ++i) {
+                        const auto& t = fc.logiTables[i];
+                        if (!t) continue;
+                        put(static_cast<std::uint8_t>(i));
+                        if (!putRows(*t)) return false;
+                    }
+                    put(static_cast<std::uint8_t>((fc.offCombat ? kNoClassCombatBit : 0u) | (fc.offLogistics ? kNoClassLogisticsBit : 0u)));
+                    if (fc.offCombat && !putRows(*fc.offCombat)) return false;
+                    if (fc.offLogistics && !putRows(*fc.offLogistics)) return false;
                 }
             }
             return ok;
@@ -235,8 +289,58 @@ namespace MFO::Classes {
                     ++a_st.tables;
                     fc.tables[classId] = std::move(rows);
                 }
-                // v2+ appends its per-follower fields HERE, under `if (a_version >= 2)`.
-                (void)a_version;
+                // ── the v2 block (card C12): appended per-follower fields. A v1 entry ends above. ──
+                if (a_version >= 2) {
+                    // One stored table: u8 rowCount + the rows. nullptr = read; otherwise the reason to abort with.
+                    auto readRows = [&](std::vector<Gambit>& a_rows) -> const char* {
+                        std::uint8_t rowCount = 0;
+                        if (r.ReadRecordData(rowCount) != sizeof(rowCount)) return "short read";
+                        if (rowCount > kMaxStoredRows) return "stored table over the row bound";
+                        a_rows.reserve(rowCount);
+                        for (std::uint8_t k = 0; k < rowCount; ++k) {
+                            Gambit g{};
+                            bool paramUnresolved = false;
+                            if (!GambitWire::ReadRow(r, a_h.rowSchema, g, paramUnresolved)) return "short read in a gambit row";
+                            if (paramUnresolved) ++a_st.disabledRules;
+                            a_rows.push_back(std::move(g));
+                        }
+                        a_st.rows += rowCount;
+                        return nullptr;
+                    };
+                    std::uint8_t logiCount = 0;
+                    if (r.ReadRecordData(fc.pickedT4) != sizeof(fc.pickedT4) || r.ReadRecordData(logiCount) != sizeof(logiCount))
+                        return bail("short read", i);
+                    if (fc.pickedT4 != kNoClass && (fc.pickedT4 >= n || kTable[fc.pickedT4].tier != 4)) {
+                        ++a_st.badPickedT4;
+                        fc.pickedT4 = kNoClass;   // #11: clamp at ingestion
+                    }
+                    if (logiCount > n) return bail("logistics table count over the class count", i);
+                    for (std::uint8_t t = 0; t < logiCount; ++t) {
+                        std::uint8_t classId = 0;
+                        if (r.ReadRecordData(classId) != sizeof(classId)) return bail("short read", i);
+                        if (classId >= n) return bail("stored logistics table for a class beyond the class count", i);
+                        if (fc.logiTables[classId]) return bail("two stored logistics tables for one class", i);
+                        std::vector<Gambit> rows;
+                        if (const char* why = readRows(rows)) return bail(why, i);
+                        ++a_st.logiTables;
+                        fc.logiTables[classId] = std::move(rows);
+                    }
+                    std::uint8_t offMask = 0;
+                    if (r.ReadRecordData(offMask) != sizeof(offMask)) return bail("short read", i);
+                    if (offMask & ~(kNoClassCombatBit | kNoClassLogisticsBit)) return bail("unknown classes-OFF table flags", i);
+                    if (offMask & kNoClassCombatBit) {
+                        std::vector<Gambit> rows;
+                        if (const char* why = readRows(rows)) return bail(why, i);
+                        ++a_st.offTables;
+                        fc.offCombat = std::move(rows);
+                    }
+                    if (offMask & kNoClassLogisticsBit) {
+                        std::vector<Gambit> rows;
+                        if (const char* why = readRows(rows)) return bail(why, i);
+                        ++a_st.offTables;
+                        fc.offLogistics = std::move(rows);
+                    }
+                }
 
                 if (!resolved) {
                     ++a_st.droppedFollower;
@@ -277,8 +381,32 @@ namespace MFO::Classes {
                    expCd == a_r.cooldownTenths;
         }
 
+        // "" = the same table (presence, row count, every row); otherwise what differs.
+        std::string TableMismatch(const std::optional<std::vector<Gambit>>& ta, const std::optional<std::vector<Gambit>>& tb,
+                                  std::uint32_t a_rowSchema) {
+            if (ta.has_value() != tb.has_value()) return "presence";
+            if (!ta) return {};
+            if (ta->size() != tb->size()) return "row count";
+            for (std::size_t k = 0; k < ta->size(); ++k)
+                if (!SameRow((*ta)[k], (*tb)[k], a_rowSchema)) return std::format("row {}", k);
+            return {};
+        }
+
+        // a = what was written, b = what was read back. a_version = the record version it went through: at 1 the v2
+        // fields are not on the wire, so b must hold NONE of them whatever a holds.
         std::string FirstMismatch(const FollowerClasses& a, const FollowerClasses& b,
-                                  std::uint32_t a_rowSchema = GambitWire::kRowSchema) {
+                                  std::uint32_t a_rowSchema = GambitWire::kRowSchema, std::uint32_t a_version = kClassesVersion) {
+            if (a_version >= 2) {
+                if (a.pickedT4 != b.pickedT4) return "pickedT4";
+                for (std::size_t c = 0; c < kClassCount; ++c)
+                    if (auto m = TableMismatch(a.logiTables[c], b.logiTables[c], a_rowSchema); !m.empty())
+                        return std::format("logistics table[{}] {}", Get(static_cast<Id>(c)).slug, m);
+                if (auto m = TableMismatch(a.offCombat, b.offCombat, a_rowSchema); !m.empty()) return "classes-OFF combat table " + m;
+                if (auto m = TableMismatch(a.offLogistics, b.offLogistics, a_rowSchema); !m.empty()) return "classes-OFF logistics table " + m;
+            } else {
+                if (b.pickedT4 != kNoClass || b.offCombat || b.offLogistics) return "a v2 field read from a v1 record";
+                for (const auto& t : b.logiTables) if (t) return "a v2 logistics table read from a v1 record";
+            }
             if (a.equipped != b.equipped) return "equipped";
             for (std::size_t c = 0; c < kClassCount; ++c)
                 if (!(a.progress[c] == b.progress[c])) return std::format("progress[{}]", Get(static_cast<Id>(c)).slug);
@@ -323,8 +451,9 @@ namespace MFO::Classes {
             CoSaveBuffer second;
             if (!WriteBody(second, SortedCopy(back))) return fail("the re-write refused");
             if (second.Bytes() != first.Bytes()) return fail("re-written bytes differ from the first write");
-            spdlog::info("[classes] MCLS self-test ({}): PASS -- {} follower(s), {} table(s), {} row(s), {} byte(s); re-write byte-identical",
-                         a_label, a_snap.size(), st.tables, st.rows, first.Bytes().size());
+            spdlog::info("[classes] MCLS self-test ({}): PASS -- {} follower(s), {} combat + {} logistics + {} classes-OFF table(s), "
+                         "{} row(s), {} byte(s); re-write byte-identical",
+                         a_label, a_snap.size(), st.tables, st.logiTables, st.offTables, st.rows, first.Bytes().size());
             if (a_bytesOut) *a_bytesOut = first.Bytes();
             return true;
         }
@@ -348,7 +477,11 @@ namespace MFO::Classes {
         // opcode, an appended-subject row, a disabled row, a 0xFF subject actor (written as 0), the last Id, and
         // (card G9) cooldowns at 0 / 10 s / the 600 s bound / over the bound (written clamped), then the same state
         // written at rowSchema 5 (pre-G9) must read back with every cooldown 0.
-        // Then five corrupt variants of the bytes must be refused the right way.
+        // Then the corrupt variants of the bytes must be refused the right way.
+        // v2 (card C12): follower A also carries a picked T4, logistics tables (rows, an engaged EMPTY one, a full one, the
+        // last Id) and both classes-OFF tables; follower B carries NO v2 state, so his v2 block is the three bytes FF 00 00
+        // at the very end of the record (the corrupt variants patch them). The same state written as v1 must read back
+        // with every v2 field empty, and re-written (v2) must round-trip byte-identically: the v1 -> v2 upgrade.
         void RunSelfTest() {
             Snapshot s;
             FollowerClasses a{};
@@ -379,6 +512,28 @@ namespace MFO::Classes {
                                    static_cast<std::uint8_t>(k % 3), 0x00000014 + static_cast<RE::FormID>(k), 0, (k & 1) == 0,
                                    static_cast<std::uint16_t>((k * 97u) % (kMaxCooldownTenths + 1u))));
             a.tables[static_cast<std::size_t>(Id::Warrior)] = std::move(full);
+            // ── v2 fields ──
+            a.pickedT4 = static_cast<std::uint8_t>(Id::Listener);
+            a.logiTables[static_cast<std::size_t>(Id::Knight)] = std::vector<Gambit>{
+                Row("cond.self_hp_below", "act.drink_health", 0.5f, 0, 0, 0, true),
+                Row("cond.self_out_of_arrows", "act.loot_arrows", 10.0f, 0, 0, 0, true),
+                Row("cond.always", "act.loot_equipment", 0.0f, 0, 0, 0, false),
+            };
+            a.logiTables[static_cast<std::size_t>(Id::Melee)] = std::vector<Gambit>{};   // engaged and empty
+            a.logiTables[static_cast<std::size_t>(Id::Dragonborn)] = std::vector<Gambit>{
+                Row("cond.always", std::string(GambitWire::kMaxOpcodeLen, 'a'), 2.0f, 1, 0, 0xFE00A789, true, 5),
+            };
+            std::vector<Gambit> fullLogi;
+            for (std::size_t k = 0; k < kMaxStoredRows; ++k)
+                fullLogi.push_back(Row("cond.self_low_health_potion", "act.loot_potions", static_cast<float>(k), 0, 0,
+                                       0x00000F00 + static_cast<RE::FormID>(k), (k % 3) != 0));
+            a.logiTables[static_cast<std::size_t>(Id::Archer)] = std::move(fullLogi);
+            a.offCombat = std::vector<Gambit>{
+                Row("cond.self_hp_below", "act.drink_health", 0.3f, 0, 0, 0, true),
+                Row("cond.foe_lowest_hp", "act.attack", 0.0f, 0, 0, 0, true),
+                Row("cond.always", "act.wait", 0.0f, 0, 0, 0, true),
+            };
+            a.offLogistics = std::vector<Gambit>{};   // engaged and empty
             s.emplace_back(0x00013BBB, std::move(a));
 
             FollowerClasses b{};   // a follower with nothing but one counter and one partial mask
@@ -395,9 +550,14 @@ namespace MFO::Classes {
             // proves v6 -> v6; this proves v5 -> parse).
             {
                 std::size_t rowCount = 0;
-                for (const auto& [fid, fc] : s)
+                for (const auto& [fid, fc] : s) {
                     for (const auto& t : fc.tables)
                         if (t) rowCount += t->size();
+                    for (const auto& t : fc.logiTables)   // v2: the row schema covers every stored table
+                        if (t) rowCount += t->size();
+                    if (fc.offCombat) rowCount += fc.offCombat->size();
+                    if (fc.offLogistics) rowCount += fc.offLogistics->size();
+                }
                 CoSaveBuffer v5;
                 if (!WriteBody(v5, s, 5)) {
                     spdlog::error("[classes] MCLS self-test (rows v5): FAIL -- the v5 row writer refused");
@@ -433,8 +593,58 @@ namespace MFO::Classes {
                              rowCount, expect5);
             }
 
+            // Card C12 (MCLS v2): the SAME state as a v1 DLL wrote it (no v2 block) must read back Ok at version 1 with
+            // every v1 field intact and every v2 field EMPTY, consume exactly its bytes, and be shorter than the v2 write
+            // by exactly the v2 blocks. Read at version 2 the v1 bytes must ABORT (a v1 entry has no v2 block: the
+            // version, not the blob size, decides). The read-back state then round-trips as v2: the v1 -> v2 upgrade.
+            {
+                auto fail = [](const std::string& a_why) { spdlog::error("[classes] MCLS self-test (v1 -> v2): FAIL -- {}", a_why); };
+                CoSaveBuffer v1;
+                if (!WriteBody(v1, s, GambitWire::kRowSchema, 1)) return fail("the v1 writer refused");
+                // The v2 blocks, measured from an independent encode of each follower with and without his v2 fields.
+                std::size_t v2Bytes = 0;
+                for (const auto& [fid, fc] : s) {
+                    FollowerClasses bare = fc;
+                    bare.pickedT4 = kNoClass;
+                    for (auto& t : bare.logiTables) t.reset();
+                    bare.offCombat.reset();
+                    bare.offLogistics.reset();
+                    CoSaveBuffer with, without;
+                    if (!WriteBody(with, Snapshot{ { fid, fc } }) || !WriteBody(without, Snapshot{ { fid, bare } })) return fail("an encode refused");
+                    v2Bytes += 3 + (with.Bytes().size() - without.Bytes().size());   // 3 = pickedT4 + logiTableCount + offMask
+                }
+                if (v1.Bytes().size() + v2Bytes != bytes.size())
+                    return fail(std::format("v1 {} byte(s) + v2 blocks {} != v2 {}", v1.Bytes().size(), v2Bytes, bytes.size()));
+                CoSaveBuffer rd;
+                rd.Bytes() = v1.Bytes();
+                std::unordered_map<RE::FormID, FollowerClasses> back;
+                LoadStats st{};
+                Header h{};
+                if (ReadBody(rd, 1, back, st, h) != ReadResult::Ok) return fail("the v1 bytes did not read Ok at version 1");
+                if (rd.Remaining()) return fail(std::format("{} trailing byte(s) after the v1 body", rd.Remaining()));
+                if (back.size() != s.size()) return fail(std::format("{} follower(s) written, {} read", s.size(), back.size()));
+                for (const auto& [fid, fc] : s) {
+                    const auto it = back.find(fid);
+                    if (it == back.end()) return fail(std::format("{:08X} missing", fid));
+                    if (auto m = FirstMismatch(fc, it->second, GambitWire::kRowSchema, 1); !m.empty())
+                        return fail(std::format("{:08X}: {} differs", fid, m));
+                }
+                {
+                    spdlog::info("[classes] MCLS self-test (v1 -> v2): reading the v1 bytes as v2 -- the ABORTING line that follows is EXPECTED");
+                    CoSaveBuffer asV2;
+                    asV2.Bytes() = v1.Bytes();
+                    std::unordered_map<RE::FormID, FollowerClasses> out;
+                    LoadStats st2{};
+                    Header h2{};
+                    if (ReadBody(asV2, 2, out, st2, h2) != ReadResult::Aborted) return fail("v1 bytes read at version 2 were not aborted");
+                }
+                spdlog::info("[classes] MCLS self-test (v1 -> v2): PASS -- {} v1 byte(s) read with no v2 state; the v2 write is {} byte(s) "
+                             "longer; re-writing what was read:", v1.Bytes().size(), v2Bytes);
+                if (!RoundTrip(SortedCopy(back), "v1 state re-written as v2")) return;
+            }
+
             // Corrupt variants: each must be refused, never fabricated (#11).
-            constexpr int kVariants = 7;
+            constexpr int kVariants = 11;
             spdlog::info("[classes] MCLS self-test: planting {} corrupt variants -- the reader's ABORTING lines that follow are EXPECTED", kVariants);
             int bad = 0;
             auto expect = [&](std::string_view a_name, std::vector<std::uint8_t> a_b, ReadResult a_want) {
@@ -478,6 +688,44 @@ namespace MFO::Classes {
                 t[off] = static_cast<std::uint8_t>(kClassCount + 1);
                 expect("table count over the class count", std::move(t), ReadResult::Aborted);
             }
+            // v2: the LAST follower (B) has no v2 state, so the record ends with his block: pickedT4 FF, logiTableCount 00,
+            // offMask 00.
+            if (bytes.size() < 3 || bytes[bytes.size() - 3] != kNoClass || bytes[bytes.size() - 2] != 0 || bytes[bytes.size() - 1] != 0) {
+                ++bad;
+                spdlog::error("[classes] MCLS self-test (corrupt variants): FAIL -- the record does not end with an empty v2 block");
+            } else {
+                {
+                    auto t = bytes;
+                    t[t.size() - 1] = 0x04;
+                    expect("unknown classes-OFF table flag", std::move(t), ReadResult::Aborted);
+                }
+                {
+                    auto t = bytes;
+                    t[t.size() - 1] = kNoClassCombatBit;   // says a table follows; the record ends
+                    expect("classes-OFF table flagged but missing", std::move(t), ReadResult::Aborted);
+                }
+                {
+                    auto t = bytes;
+                    t[t.size() - 2] = static_cast<std::uint8_t>(kClassCount + 1);
+                    expect("logistics table count over the class count", std::move(t), ReadResult::Aborted);
+                }
+                {
+                    // A picked T4 that is not a tier-4 class is CLAMPED to none (counted), never an abort.
+                    auto t = bytes;
+                    t[t.size() - 3] = static_cast<std::uint8_t>(Id::Knight);
+                    CoSaveBuffer rd;
+                    rd.Bytes() = std::move(t);
+                    std::unordered_map<RE::FormID, FollowerClasses> out;
+                    LoadStats st{};
+                    Header h{};
+                    const auto got = ReadBody(rd, kClassesVersion, out, st, h);
+                    const auto it = out.find(0xFE012345);
+                    if (got != ReadResult::Ok || st.badPickedT4 != 1 || it == out.end() || it->second.pickedT4 != kNoClass) {
+                        ++bad;
+                        spdlog::error("[classes] MCLS self-test (corrupt: picked T4 that is not tier 4): FAIL -- not cleared to none");
+                    }
+                }
+            }
             if (bad == 0)
                 spdlog::info("[classes] MCLS self-test (corrupt variants): PASS -- {} of {} refused", kVariants, kVariants);
         }
@@ -500,6 +748,32 @@ namespace MFO::Classes {
         }
 
         bool ValidId(Id a_id) { return static_cast<std::size_t>(a_id) < kClassCount; }
+
+        // A table the record can hold: within the row bound, and no opcode the row writer would refuse (refuse at
+        // the door instead of at save).
+        bool Storable(const std::vector<Gambit>& a_rows) {
+            if (a_rows.size() > kMaxStoredRows) return false;
+            for (const auto& g : a_rows)
+                if (g.conditionOpcode.size() > GambitWire::kMaxOpcodeLen || g.actionOpcode.size() > GambitWire::kMaxOpcodeLen)
+                    return false;
+            return true;
+        }
+
+        // Review F-7: drop the RUNTIME-ONLY fields (State.h:29 uid, and the display-only lastFired / lastFailReason /
+        // lastFiredAt) so a restored table re-mints its uids (Board.cpp assigns one to every uid == 0 rule) and shows
+        // no stale outcome. The serialized fields are untouched.
+        void Scrub(std::vector<Gambit>& a_rows) {
+            for (auto& g : a_rows) {
+                g.uid = 0;
+                g.lastFired = false;
+                g.lastFailReason.clear();
+                g.lastFiredAt = {};
+            }
+        }
+
+        std::optional<std::vector<Gambit>>& SlotOf(FollowerClasses& a_fc, Id a_class, TableKind a_kind) {
+            return (a_kind == TableKind::Logistics ? a_fc.logiTables : a_fc.tables)[static_cast<std::size_t>(a_class)];
+        }
     }
 
     // ── co-save ──────────────────────────────────────────────────────────────────────────────────────
@@ -561,11 +835,15 @@ namespace MFO::Classes {
         if (!a_intfc->WriteRecordData(buf.Bytes().data(), static_cast<std::uint32_t>(buf.Bytes().size())))
             spdlog::error("[cosave] MCLS: WriteRecordData failed -- this save's class record is TRUNCATED");
 
-        std::size_t tables = 0;
-        for (const auto& [fid, fc] : snap)
+        std::size_t tables = 0, logiTables = 0, offTables = 0;
+        for (const auto& [fid, fc] : snap) {
             for (const auto& t : fc.tables) if (t) ++tables;
-        spdlog::info("[cosave] saved class state for {} follower(s) ({} stored table(s), {} byte(s)), schema v{} rows v{}{}",
-                     snap.size(), tables, buf.Bytes().size(), kClassesVersion, GambitWire::kRowSchema,
+            for (const auto& t : fc.logiTables) if (t) ++logiTables;
+            offTables += (fc.offCombat ? 1u : 0u) + (fc.offLogistics ? 1u : 0u);
+        }
+        spdlog::info("[cosave] saved class state for {} follower(s) ({} combat + {} logistics + {} classes-OFF stored table(s), "
+                     "{} byte(s)), schema v{} rows v{}{}",
+                     snap.size(), tables, logiTables, offTables, buf.Bytes().size(), kClassesVersion, GambitWire::kRowSchema,
                      skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) id(s)", skippedRuntime) : std::string{});
         if (!Active() && !g_loggedInactiveKeep.exchange(true))
             spdlog::info("[classes] class add-on inactive ({}) -- class progress for {} follower(s) KEPT and written back unchanged "
@@ -652,12 +930,15 @@ namespace MFO::Classes {
             g_keptBytes.clear();
             for (auto& [fid, fc] : parsed) g_store[fid] = std::move(fc);
         }
-        spdlog::info("[cosave] loaded class state for {} follower(s){} (MCLS v{}, rows v{}, {} classes): {} stored table(s), {} row(s); "
+        spdlog::info("[cosave] loaded class state for {} follower(s){} (MCLS v{}, rows v{}, {} classes): {} combat + {} logistics + "
+                     "{} classes-OFF stored table(s), {} row(s); "
                      "dropped {} unresolvable follower(s); disabled {} rule(s) with missing targets; {} id collision(s); "
-                     "{} bad equipped id(s) cleared; {} mask(s) with bits beyond the roster trimmed{}",
+                     "{} bad equipped id(s) cleared; {} mask(s) with bits beyond the roster trimmed; {} bad picked T4 cleared{}{}",
                      loadedCount, res == ReadResult::Aborted ? " (RECORD ABORTED, see above)" : "", a_version, h.rowSchema,
-                     h.classCount, st.tables, st.rows, st.droppedFollower, st.disabledRules, st.collisions, st.badEquipped,
-                     st.maskedBits, Active() ? "" : " -- add-on inactive: held unchanged (marth Q9)");
+                     h.classCount, st.tables, st.logiTables, st.offTables, st.rows, st.droppedFollower, st.disabledRules,
+                     st.collisions, st.badEquipped, st.maskedBits, st.badPickedT4,
+                     a_version < kClassesVersion ? " -- an older record: the next save writes it as v2" : "",
+                     Active() ? "" : " -- add-on inactive: held unchanged (marth Q9)");
         if (!forTest.empty()) RoundTrip(forTest, "loaded state");
         RefreshAllCarriers();   // card C6: re-apply the carriers to every stored follower once the world is up (queued, main thread)
     }
@@ -736,19 +1017,25 @@ namespace MFO::Classes {
         return { it->second.thiefFights, it->second.masterThiefFights };
     }
 
-    bool HasStoredTable(RE::FormID a_follower, Id a_class) {
+    bool HasStoredTable(RE::FormID a_follower, Id a_class, TableKind a_kind) {
         if (!ValidId(a_class)) return false;
         std::scoped_lock lk(g_mx);
         const auto it = g_store.find(a_follower);
-        return it != g_store.end() && it->second.tables[static_cast<std::size_t>(a_class)].has_value();
+        return it != g_store.end() && SlotOf(it->second, a_class, a_kind).has_value();
     }
 
-    std::optional<std::vector<Gambit>> GetStoredTable(RE::FormID a_follower, Id a_class) {
+    std::optional<std::vector<Gambit>> GetStoredTable(RE::FormID a_follower, Id a_class, TableKind a_kind) {
         if (!ValidId(a_class)) return std::nullopt;
         std::scoped_lock lk(g_mx);
         const auto it = g_store.find(a_follower);
         if (it == g_store.end()) return std::nullopt;
-        return it->second.tables[static_cast<std::size_t>(a_class)];
+        return SlotOf(it->second, a_class, a_kind);
+    }
+
+    std::uint8_t GetPickedT4(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_store.find(a_follower);
+        return it == g_store.end() ? kNoClass : it->second.pickedT4;
     }
 
     // ── writes (all refuse unless Writable()) ────────────────────────────────────────────────────────
@@ -781,26 +1068,79 @@ namespace MFO::Classes {
         });
     }
 
-    bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows) {
-        if (!ValidId(a_class) || a_rows.size() > kMaxStoredRows) return false;
-        for (const auto& g : a_rows)   // the row writer refuses these; refuse at the door instead of at save
-            if (g.conditionOpcode.size() > GambitWire::kMaxOpcodeLen || g.actionOpcode.size() > GambitWire::kMaxOpcodeLen)
-                return false;
-        // Review F-7: drop the RUNTIME-ONLY fields (State.h:29 uid, and the display-only lastFired / lastFailReason /
-        // lastFiredAt) so a restored table re-mints its uids (Board.cpp assigns one to every uid == 0 rule) and shows
-        // no stale outcome. The serialized fields are untouched.
-        for (auto& g : a_rows) {
-            g.uid = 0;
-            g.lastFired = false;
-            g.lastFailReason.clear();
-            g.lastFiredAt = {};
-        }
-        return Mutate(a_follower, [&](FollowerClasses& fc) { fc.tables[static_cast<std::size_t>(a_class)] = std::move(a_rows); });
+    bool StoreTable(RE::FormID a_follower, Id a_class, std::vector<Gambit> a_rows, TableKind a_kind) {
+        if (!ValidId(a_class) || !Storable(a_rows)) return false;
+        Scrub(a_rows);
+        return Mutate(a_follower, [&](FollowerClasses& fc) { SlotOf(fc, a_class, a_kind) = std::move(a_rows); });
     }
 
-    bool ClearStoredTable(RE::FormID a_follower, Id a_class) {
+    bool ClearStoredTable(RE::FormID a_follower, Id a_class, TableKind a_kind) {
         if (!ValidId(a_class)) return false;
-        return Mutate(a_follower, [&](FollowerClasses& fc) { fc.tables[static_cast<std::size_t>(a_class)].reset(); });
+        return Mutate(a_follower, [&](FollowerClasses& fc) { SlotOf(fc, a_class, a_kind).reset(); });
+    }
+
+    bool SetPickedT4(RE::FormID a_follower, Id a_t4) {
+        if (!ValidId(a_t4) || Get(a_t4).tier != 4) return false;
+        bool done = false;
+        Mutate(a_follower, [&](FollowerClasses& fc) {
+            if (!(fc.mastered & Bit(a_t4))) return;   // marth Q60: any MASTERED T4
+            fc.pickedT4 = static_cast<std::uint8_t>(a_t4);
+            done = true;
+        });
+        return done;
+    }
+
+    bool ClearPickedT4(RE::FormID a_follower) {
+        return Mutate(a_follower, [](FollowerClasses& fc) { fc.pickedT4 = kNoClass; });
+    }
+
+    // Card C12, the ONE compound class switch (Classes_internal.h): under a single g_mx hold it stores the live tables
+    // under what he is leaving (his class, or the classes-OFF slot), equips a_to under ActivateClass's rules (or takes
+    // the class off for kNoClass), and hands back what was stored for where he is going, CONSUMING it (the equipped
+    // class's tables are FLWR's live ones, never a second copy here). A co-save snapshot therefore never sees the
+    // equip without the store. Refused (done == false, NOTHING changed): not Writable(), a 0xFF id, a_to out of range,
+    // locked, already there, or a live table the record cannot hold.
+    detail::Swap detail::SwapClass(RE::FormID a_follower, std::uint8_t a_to, std::vector<Gambit> a_liveCombat,
+                                   std::vector<Gambit> a_liveLogistics) {
+        Swap out;
+        if (a_to != kNoClass && a_to >= kClassCount) return out;
+        if (!Storable(a_liveCombat) || !Storable(a_liveLogistics)) {
+            spdlog::error("[classes] {:08X}: class switch REFUSED -- a live table ({} combat / {} logistics row(s)) is over the {} row "
+                          "store bound or holds an opcode over {} bytes; nothing changed",
+                          a_follower, a_liveCombat.size(), a_liveLogistics.size(), kMaxStoredRows, GambitWire::kMaxOpcodeLen);
+            return out;
+        }
+        Scrub(a_liveCombat);
+        Scrub(a_liveLogistics);
+        Mutate(a_follower, [&](FollowerClasses& fc) {
+            if (fc.equipped == a_to) return;   // already there
+            if (a_to != kNoClass && !(((fc.unlocked | ComputeUnlocked(fc.mastered)) >> static_cast<unsigned>(a_to)) & 1u)) return;   // locked
+            out.from = fc.equipped;
+            if (fc.equipped == kNoClass) {
+                fc.offCombat = std::move(a_liveCombat);
+                fc.offLogistics = std::move(a_liveLogistics);
+            } else if (fc.equipped < kClassCount) {   // always (clamped at load, validated by every setter)
+                fc.tables[fc.equipped] = std::move(a_liveCombat);
+                fc.logiTables[fc.equipped] = std::move(a_liveLogistics);
+            }
+            auto take = [](std::optional<std::vector<Gambit>>& a_slot) {
+                std::optional<std::vector<Gambit>> t = std::move(a_slot);
+                a_slot.reset();
+                return t;
+            };
+            if (a_to == kNoClass) {
+                out.combat = take(fc.offCombat);
+                out.logistics = take(fc.offLogistics);
+            } else {
+                auto& p = fc.progress[a_to];
+                if (LevelCap(static_cast<Id>(a_to)) != 0 && p.level == 0) p.level = 1;   // ActivateClass's rule: first use starts at level 1
+                out.combat = take(fc.tables[a_to]);
+                out.logistics = take(fc.logiTables[a_to]);
+            }
+            fc.equipped = a_to;
+            out.done = true;
+        });
+        return out;
     }
 
     // Card C5 compound writers: the whole read-decide-write under ONE g_mx hold, so a CoSave snapshot (main thread) can never
