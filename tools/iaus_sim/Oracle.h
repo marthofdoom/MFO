@@ -37,9 +37,9 @@ namespace Sim {
     }
 
     // ── the extended action set ─────────────────────────────────────────────────────────────────────────
-    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, kCount };
+    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, Hide, kCount };
     inline const char* Name(Ext e) {
-        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll" };
+        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll", "ext:hide" };
         return n[static_cast<std::size_t>(e)];
     }
     struct Opt {                       // one thing he could do now
@@ -67,6 +67,7 @@ namespace Sim {
         for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o)) continue; const float d = Fight::Dist(x, o); if (d < nd) { nd = d; near = &o; }
             if (o.c.targetId == x.c.id && d < F.Reach(o) * 1.6f) onMe = &o; if (o.act == Act::Cast && o.hitAt >= 0 && d < F.Reach(x)) casting = &o; }
         if (!near) return;
+        if (CanHide(F, ci)) out.push_back({ nullptr, Ext::Hide, -1, 0 });   // G3: break off to a point no foe sees (stealth mode 2+)
         if (nd < 900.0f) { out.push_back({ nullptr, Ext::StepBack, -1, near->c.id }); if (x.c.sp > 20.0f) out.push_back({ nullptr, Ext::SprintBack, -1, near->c.id }); }
         if (Fight::Dist(x, F.b[0]) > 350.0f && F.b[0].alive) out.push_back({ nullptr, Ext::ToPlayer, -1, 0 });
         for (const Ctl& o : F.ctl) { if (&o == &c) continue; const Body& ob = F.b[static_cast<std::size_t>(o.body)]; if (!Fight::Up(ob) || Fight::Dist(x, ob) < 300.0f) continue;
@@ -91,6 +92,27 @@ namespace Sim {
         }
     }
 
+    // THE CLASS RULINGS AS CONSTRAINTS (Playstyles.h): an option the follower's class forbids is never tried, so the oracle is an
+    // expert who plays THAT class. --no-class-rulings turns them off (the unconstrained oracle of doc sections 9 to 27).
+    inline bool g_classRulings = true;
+    [[nodiscard]] inline bool ClassAllows(const Fight& F, const Ctl& c, const Opt& o) {
+        const Body& x = F.b[static_cast<std::size_t>(c.body)]; const Candidate* k = o.k; const unsigned fb = c.forbid;
+        if (k && k->f.hasArea && !k->f.splashSafe) return false;                                  // never splash the party (every class)
+        const bool toMelee = k && k->family == Family::Posture && (k->f.posture == PostureKind::Melee || k->f.posture == PostureKind::Silver);
+        const bool meleeAct = (k && (k->family == Family::PowerAttack || k->family == Family::Bash)) || o.ext == Ext::Bash;
+        const bool flee = k && k->family == Family::Retreat, back = o.ext == Ext::StepBack || (k && k->family == Family::GiveGround), run = o.ext == Ext::SprintBack, hide = o.ext == Ext::Hide || (k && k->family == Family::Sneak);
+        if ((fb & kPsNoMelee) && (toMelee || meleeAct)) {   // the blade only when he has nothing else left
+            bool other = c.book.kit.potionsMagicka > 0;
+            for (const SpellEntry& e : c.book.entries) other |= e.nature == Prune::Nature::Offense && (e.source == SpellSource::Staff ? e.charged : e.source == SpellSource::Scroll ? e.count > 0 : e.cost <= x.c.mp);
+            if (other) return false; }
+        if ((fb & kPsNoMeleeSwap) && toMelee && x.arrows > 0) return false;
+        if ((fb & kPsGoIn) && (toMelee || meleeAct) && !F.GoInOk(c, x)) return false;
+        if ((fb & kPsNoRetreat) && (flee || back || run || hide)) return false;
+        if ((fb & kPsBackOnly) && (flee || run)) return false;
+        if ((fb & kPsNearPlayer) && (flee || back || run) && Fight::Dist(x, F.b[0]) > 900.0f) return false;
+        return true;
+    }
+
     struct Disagreement {      // one cluster: IAUS picked a, the oracle picked b
         long n = 0; double dU = 0;
         double iFoeHp = 0, oFoeHp = 0, iOnPlayer = 0, oOnPlayer = 0, iCaster = 0, oCaster = 0, iResist = 0, oResist = 0, iRecHp = 0, oRecHp = 0, selfHp = 0, selfMp = 0, foes = 0, sameTarget = 0, iDist = 0, oDist = 0, playerHp = 0, nearDist = 0;
@@ -107,7 +129,8 @@ namespace Sim {
     struct OraclePolicy : Policy {
         OracleCfg cfg;
         IausPolicy iaus;                       // followers the oracle does not drive, and IAUS's own pick for the log
-        std::function<bool(const Ctl&, const Opt&)> allowed;   // rulings as constraints (nullptr = everything)
+        std::function<bool(const Fight&, const Ctl&, const Opt&)> allowed;   // extra constraints of the caller (nullptr = none); the class rulings are ClassAllows
+        [[nodiscard]] bool Ok(const Fight& F, const Ctl& c, const Opt& o) const { return (!g_classRulings || ClassAllows(F, c, o)) && (!allowed || allowed(F, c, o)); }
         std::map<std::string, Disagreement>* log = nullptr;
         std::vector<double> last;
         long decisions = 0, disagreed = 0; double dUSum = 0;
@@ -133,6 +156,7 @@ namespace Sim {
                 for (float r : { 250.0f, 450.0f, 700.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
                     if (SeesFrom(G, gx, gy, *tg)) return move(gx, gy, 2.5, false); }
                 return false; }
+            case Ext::Hide: if (!DoHide(G, ci)) return false; c.commitUntil = c.moveUntil + 0.6; return true;
             case Ext::Block: if (held) return false; x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.commitUntil = x.actEnd; return true;
             case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f) return false; G.StartSwing(x, *tg, Act::Bash, true); c.commitUntil = x.actEnd; return true; }
             case Ext::Scroll: { if (held || o.idx < 0 || c.book.entries[static_cast<std::size_t>(o.idx)].count <= 0) return false;
@@ -156,7 +180,7 @@ namespace Sim {
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; const bool subj = ci == 0;
             if (!Fight::Up(x)) return;
             const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil;
-            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T);
+            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T); if (g_stealth >= 3) StealthInject(F, ci, sv);
             FillCooldowns(c, sv.g.actions, F.now, *iaus.T); FillCooldowns(c, sv.g.postures, F.now, *iaus.T);
             TickIn in; in.now = F.now; in.rapportRank = 5; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *iaus.T, in);
@@ -167,7 +191,7 @@ namespace Sim {
             const auto& acts = sv.g.actions; std::vector<Opt> opt;
             auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; Opt o; o.k = k;
                 if (k->f.hardCooldownSec > 0.0f && k->f.hardCooldownLeft > 0.0f) return;   /* rulings Q7 / Q69 / Q73: a hard cooldown (the power attack's, the taunt's 30 s) binds a person too */
-                if (allowed && !allowed(c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
+                if (!Ok(F, c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
             const Candidate* iausPick = nullptr;
             if (sv.d.verdict != Verdict::Idle && !sv.d.order.empty() && sv.d.order[0].idx < acts.size()) iausPick = &acts[sv.d.order[0].idx];
             for (std::size_t i = 0; i < sv.d.ranked.size() && opt.size() + 4 < cfg.maxOptions; ++i) if (sv.d.ranked[i].idx < acts.size()) add(&acts[sv.d.ranked[i].idx]);
@@ -177,8 +201,8 @@ namespace Sim {
                     if (!lo || k.f.foeHpPct < lo->f.foeHpPct) lo = &k; if (k.f.foeOnPlayer && !onP) onP = &k; if (k.f.foeCaster && !cast) cast = &k; if (!rec || k.f.recipientHp < rec->f.recipientHp) rec = &k; }
                 for (const Candidate* k : { lo, onP, cast, rec }) if (k) add(k);
             }
-            for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { Opt o; o.k = &k; opt.push_back(o); }
-            if (cfg.ext) { std::vector<Opt> ex; ExtOptions(F, ci, ex); for (const Opt& o : ex) if (!allowed || allowed(c, o)) opt.push_back(o); }
+            for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { Opt o; o.k = &k; if (Ok(F, c, o)) opt.push_back(o); }
+            if (cfg.ext) { std::vector<Opt> ex; ExtOptions(F, ci, ex); for (const Opt& o : ex) if (Ok(F, c, o)) opt.push_back(o); }
             opt.push_back(Opt{});   // idle: his own AI
             // evaluate
             std::vector<double> u(opt.size(), -1e9); const std::uint64_t s0 = F.R.g();

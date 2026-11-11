@@ -90,6 +90,10 @@ namespace Sim {
         for (const auto& kv : pt["spellMag"].o) b.pSpellMag[kv.first] = ReadThr(kv.second);
         for (const auto& kv : pt["spellCost"].o) b.pSpellCost[kv.first] = ReadThr(kv.second);
         for (const auto& kv : pt["armor"].o) b.pArmor[kv.first] = ReadThr(kv.second);
+        { const J& st = pt["stealth"];   // absent in a sim.json compiled before the class lab: the stealth perks are then none
+          auto rd = [](const J& a) { std::vector<StealthRow> v; for (const J& p : a.a) { StealthRow r; r.av = static_cast<int>(p[0].num(15)); r.thr = static_cast<float>(p[1].num()); r.v = static_cast<float>(p[2].num(1)); r.chain = p[3].s; v.push_back(std::move(r)); } return v; };
+          for (const auto& kv : st["sneakAttack"].o) b.sneakAtk[kv.first] = rd(kv.second);
+          b.sneakSkillRows = rd(st["sneakSkill"]); b.sneakNoiseRows = rd(st["sneakNoise"]); }
         bool anyTaught = false; for (const J& s : root["spells"].a) if (s["taught"].yes()) { anyTaught = true; break; }
         for (const J& s : root["spells"].a) { ++b.rawSpells; if (anyTaught && !s["taught"].yes()) continue; ++b.taughtSpells; SimSpell x; Classify(s, x); AddPoolSpell(b, std::move(x)); }
         for (const J& s : root["scrolls"].a) { SimSpell x; Classify(s, x); if (x.e.drop == Prune::Drop::Keep && (x.dmg + x.dot + x.heal > 0 || x.ctrl || x.armor > 0)) { x.e.source = SpellSource::Scroll; x.e.cost = 0; x.cost0 = 0; b.scrolls.push_back(std::move(x)); } }

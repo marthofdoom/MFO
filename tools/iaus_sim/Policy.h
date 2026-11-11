@@ -109,6 +109,36 @@ namespace Sim {
 
     enum class Fired : std::uint8_t { Yes, Declined, Invalid };
 
+    // G3 in the lab: break off at a RUN (H3) to a point no foe sees, crouch there (G1), and G2 hides him. The hide has its own 12 s pacing.
+    [[nodiscard]] inline bool CanHide(const Fight& F, int ci, float* gx = nullptr, float* gy = nullptr) {
+        const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)];
+        if (g_stealth < 2 || !x.stealthy || !c.gate.disengage || F.now - x.hideAt < 12.0 || F.now < x.cloakUntil || F.Unseen(x)) return false;
+        float px = 0, py = 0; if (!F.HidePoint(x, px, py)) return false; if (gx) *gx = px; if (gy) *gy = py; return true;
+    }
+    inline bool DoHide(Fight& F, int ci) {
+        Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; float gx = 0, gy = 0;
+        if (x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || !CanHide(F, ci, &gx, &gy)) return false;
+        const double sec = std::min(5.0, static_cast<double>(std::hypot(gx - x.c.x, gy - x.c.y) / std::max(100.0f, x.spec->run)) + 0.4);
+        c.goalX = gx; c.goalY = gy; c.moveUntil = F.now + sec; c.sprint = false; c.moveFight = false; x.runUntil = c.moveUntil; x.sneaking = false; x.hideAt = F.now; c.steer = 0;
+        if (ci == 0) ++F.t.hides; return true;
+    }
+    // THE DETECTION INPUT IN THE LAB (g_stealth 3). native/iaus is not edited in this phase, so the two things the input would feed
+    // ride considerations that exist: (1) a blow on a foe that does not detect him is a sneak attack, and is boosted the way a blow on
+    // a helpless foe is (BoostControlled, Facts::foeHelpless); (2) "go and hide" is a Family::Sneak candidate whose worth, (m - 1) /
+    // (m + 1) of his sneak multiplier m, rides the FightStart curve (Inv(1): combatSec = 6 x (1 / worth - 1)). Both are STAND-INS for
+    // the considerations of iaus-classes.md "The Sneak family"; the numbers they give are the worth of the input, not of the wiring.
+    inline void StealthInject(const Fight& F, int ci, Served& sv) {
+        const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)];
+        if (!x.stealthy) return;
+        if (x.sneaking) for (Candidate& k : sv.g.actions) { if (k.family != Family::Attack && k.family != Family::PowerAttack) continue;
+            const Body* tg = F.Find(k.target); if (tg && tg->role == Role::Foe && !F.Detects(*tg, x)) k.f.foeHelpless = true; }
+        if (CanHide(F, ci)) { const Body& pl = F.b[0]; bool playerDying = pl.alive && pl.c.hp < 0.35f * pl.c.hpMax;
+            const Weapon& w = (c.drawn == PostureKind::Bow && x.spec->ranged.Has()) ? x.spec->ranged : x.spec->melee;
+            const float m = SneakAttackMult(*F.D, *x.spec, w) * c.sneakAtkClass, worth = std::clamp((m - 1.0f) / (m + 1.0f), 0.05f, 1.0f) * (playerDying ? 0.3f : 1.0f);
+            Candidate k; k.family = Family::Sneak; k.formName = "hide"; k.f.unseen = Tri::Yes; k.f.combatSec = 6.0f * (1.0f / worth - 1.0f); k.f.selfHp = x.c.hp / std::max(1.0f, x.c.hpMax); k.f.onClass = true;
+            sv.g.actions.push_back(k); }
+    }
+
     // What firing a candidate does to the world. Declined = transparent (the walk goes on); Invalid = IAUS offered
     // something the world cannot do at all (a defect, counted).
     inline Fired Fire(Fight& F, int ci, const Candidate& k) {
@@ -138,6 +168,7 @@ namespace Sim {
                 const Body& pl = F.b[0]; if (tg->c.targetId == pl.c.id && pl.c.hp < 0.4f * pl.c.hpMax) ++t.tauntSaves; }
             return Fired::Yes; }
         case Family::Retreat: x.retreatUntil = F.now + TM::retreatSec; return Fired::Yes;
+        case Family::Sneak: return DoHide(F, ci) ? Fired::Yes : Fired::Declined;
         case Family::GiveGround: { if (!tg || !Fight::Up(*tg)) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
             const float dx = x.c.x - tg->c.x, dy = x.c.y - tg->c.y, l = std::max(1.0f, std::hypot(dx, dy));
             c.goalX = x.c.x + dx / l * 500.0f; c.goalY = x.c.y + dy / l * 500.0f; c.moveUntil = F.now + 2.0; c.sprint = false; c.moveFight = false; if (subj) ++t.grounds; return Fired::Yes; }
@@ -167,7 +198,7 @@ namespace Sim {
             }
             if (subj) {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
-                if (fam == Family::CastHeal) { const Body* r = F.Find(target);
+                if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; }
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
                     (void)r; }
             }
@@ -197,6 +228,7 @@ namespace Sim {
             MakeSnapshot(F, ci, sv.sn);
             const auto t0 = timeIt ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             sv.g = Generate(sv.sn, c.gate, *T);
+            if (g_stealth >= 3) StealthInject(F, ci, sv);
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);
@@ -230,7 +262,7 @@ namespace Sim {
                     fired = true; OnFired(c.mind, k, st, F.now); c.firedAt[CooldownId(KeyOf(k))] = F.now;
                     if (F.trace && (k.family != Family::Attack || d.newDecision)) std::fprintf(F.trace, "%7.2f  IAUS %s: %s%s%s -> %u  score %.3f  (%s, try %zu)\n", F.now, x.c.name.c_str(), std::string(Name(k.family)).c_str(), k.formName.empty() ? "" : " ", std::string(k.formName).c_str(), k.target, s < d.ranked.size() ? d.ranked[0].score : 0.0f, d.verdict == Verdict::Hold ? "hold" : "act", s);
                     if (subj) { ++t.fired; ++t.hist[static_cast<std::size_t>(k.family)]; if (d.newDecision && s == 0) ++t.switches;
-                        t.actSec[static_cast<std::size_t>(k.family)] += k.family == Family::Attack ? TM::pump * static_cast<double>(F.ctl.size()) : k.family == Family::Retreat ? TM::retreatSec : std::max(0.0, x.actEnd - F.now);
+                        t.actSec[static_cast<std::size_t>(k.family)] += k.family == Family::Attack ? TM::pump * static_cast<double>(F.ctl.size()) : k.family == Family::Retreat ? TM::retreatSec : k.family == Family::Sneak ? std::max(0.0, c.moveUntil - F.now) : std::max(0.0, x.actEnd - F.now);
                         if ((k.family == Family::DrinkHealth || k.family == Family::CastHeal) && c.lowSince >= 0 && !c.lowHealed && c.lowHadCand) { c.lowHealed = true; ++t.lowHealed; t.lowHealSecSum += F.now - c.lowSince; } }
                 }
             }

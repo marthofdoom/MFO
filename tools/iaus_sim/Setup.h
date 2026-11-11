@@ -19,6 +19,12 @@ namespace Sim {
         std::vector<GRow> rows;  // the class's default gambit rows (table mode); applied = false for T1 rows kept as data
         std::string package = "current", defaults = "current";   // ids of the package / default rows in use (results file)
         std::string playstyle;   // the human expert playstyle the oracle and the personality metric are measured against
+        // class traits the world applies (RealClasses.cpp: the table's flags, plus the passives the class cards rule on stealth)
+        bool  sneakAlways = false, flank = false, cloak = false, nearPlayer = false, pureMage = false;
+        int   entryOdds = 0, goIn = 0, partyPct = 0;   // the free stealth entry is 1 fight in entryOdds (card C13)
+        float sneakAtkClass = 1.0f, noiseClass = 1.0f;
+        unsigned forbid = 0;                 // Playstyles.h: the class's oracle constraint bits
+        std::vector<std::string> ensure;     // the spells its own default rows name (Load.h SpellIs tokens): a Conjurer knows a summon
     };
 
     inline ClassGate MkGate(bool treeOn, bool spells, bool power, bool taunt, bool dis, bool melee, bool bow, bool xbow, bool staff) {
@@ -87,6 +93,8 @@ namespace Sim {
         std::vector<std::string> ensure, ensureOthers;      // spells the subject / the other followers must know (Load.h SpellIs)
         bool  onSubject = false;                            // every foe starts on the subject
         float targetRatio = 0;                              // > 0: the foes' health and damage are scaled so StrengthRatio lands here (a scenario must be winnable by good play on every list)
+        float light = -1;                                   // stealth: the light on the party, 0 dark .. 1 daylight; < 0 = drawn (interior 0.15..0.6, outside day 0.9 / night 0.2)
+        int   freeEntry = -1;                               // stealth: 1 = the subject's free stealth entry is this fight, 0 = it is not, -1 = rolled 1 in entryOdds
     };
 
     // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
@@ -114,6 +122,8 @@ namespace Sim {
         Body& b = F.Add(Role::Follower, spec, x, y); b.ctl = static_cast<int>(F.ctl.size()); b.arrows = fb->book.kit.arrows + fb->book.kit.bolts;
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
         Ctl c; c.body = static_cast<int>(F.b.size()) - 1; c.fam = sc.fam; c.gate = sc.gate; c.profile = sc.profile; if (ProfileHook()) ProfileHook()(c.profile);
+        c.forbid = sc.forbid; c.sneakClass = sc.sneakAlways; c.flank = sc.flank; c.cloak = sc.cloak; c.nearPlayer = sc.nearPlayer; c.entryOdds = sc.entryOdds; c.goIn = sc.goIn; c.partyPct = sc.partyPct; c.sneakAtkClass = sc.sneakAtkClass; c.noiseClass = sc.noiseClass;
+        if (g_stealth > 0 && sc.sneakAlways) { b.stealthy = true; b.sneaking = true; }   // G1: the sneak classes hold the stance for the whole fight
         { bool anyApplied = false; for (const GRow& r : sc.rows) anyApplied |= r.applied; for (const GRow& r : sc.rows) if (r.applied || !anyApplied) c.rows.push_back(r); }   /* T1: its data-only rows stand in for the kit of today */
         { const std::size_t cap = static_cast<std::size_t>(g_rowPrefix > 0 ? g_rowPrefix : CombatSlotsForRank(rank)); if (c.rows.size() > cap) c.rows.resize(cap); }   /* ruling Q74 */
         if (g_learnReach) {   // ruling Q68: start at the vanilla reach; warm = what this session's earlier swings taught him
@@ -172,6 +182,13 @@ namespace Sim {
         F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
         { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH; }
         for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
+        F.interior = fs.interior;
+        if (g_stealth > 0) {   // drawn only in a stealth mode, so the fights of mode 0 are the fights of main, draw for draw
+            F.light = fs.light >= 0 ? fs.light : fs.interior ? R.U(0.15f, 0.6f) : R.P(0.35f) ? 0.2f : 0.9f;
+            for (std::size_t i = 0; i < F.ctl.size(); ++i) { const Ctl& c = F.ctl[i]; Body& x = F.b[static_cast<std::size_t>(c.body)]; if (!x.stealthy || c.entryOdds <= 0 || g_stealth < 2) continue;
+                const bool free = i == 0 && fs.freeEntry >= 0 ? fs.freeEntry == 1 : R.P(1.0f / static_cast<float>(c.entryOdds));
+                if (free) x.cloakUntil = 1e9; }   // card C13: he opens undetected whatever the foes could sense; his first blow ends it
+        }
         const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);
         for (int i = 0; i < no; ++i) { const float tt = R.U(0.3f, 0.75f); F.occ.push_back({ cx * tt + R.U(-350, 350), cy * tt + R.U(-350, 350), R.U(60, 140) }); }
         return F;
@@ -187,8 +204,12 @@ namespace Sim {
 
     // A random fight of one bracket: real encounters of the list at the party's level bucket, re-drawn until the
     // strength ratio lands in the bracket (the closest draw is used when none does: counted in `forced`).
+    // --class-kit: the subject knows the spells his class's own default rows name. OFF by default: main's fights draw his book at
+    // random, and the headline J must stay comparable with main. The class playstyle report runs with it ON.
+    inline bool g_classKit = false;
     inline Fight RandomFight(const Data& D, const SimClass& cls, int rank, const Bracket& br, Rng& R, const std::vector<SimClass>& t1, bool* forced = nullptr) {
         FightSpec fs; fs.cls = &cls; fs.rank = rank; fs.level = R.I(12, 45); fs.seed = R.g();
+        if (g_classKit) fs.ensure = cls.ensure;
         fs.playerFam = static_cast<Cls>(R.I(0, 2));
         for (int i = R.I(0, 2); i > 0; --i) fs.others.push_back(&t1[static_cast<std::size_t>(R.I(0, 2))]);
         fs.worn = R.I(0, 3) == 0 ? 0.45f : 0.0f; fs.foeDist = R.U(900, 2200);

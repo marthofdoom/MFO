@@ -14,6 +14,7 @@
 #include "iaus_sim/Load.h"
 
 #include "iaus/Reach.h"
+#include "iaus_sim/Playstyles.h"
 
 namespace Sim {
 
@@ -59,6 +60,14 @@ namespace Sim {
     inline bool g_regroupRoad = false;
     // --roads ground,block,bash: the Harbinger capabilities of doc section 26 modelled as existing (the oracle's own extended actions).
     inline bool g_groundRoad = false, g_blockRoad = false, g_bashRoad = false;
+    // STEALTH (the class playstyle lab, Docs/research/2026-11/iaus-classes.md). 0 = off: nobody sneaks (the game today: no act.sneak).
+    // 1 = G1: a sneak class holds the sneak stance for the whole fight and a foe that sensed him keeps knowing where he is for
+    // fCombatDetectionLostTimeLimit (MODEL of the engine alone). 2 = G1 + G2 (H-DETECT hide-when-unseen): a sneaking follower that no
+    // foe senses is hidden AT ONCE (marth's D&D ruling), the stealth entry of card C13 and Shadowcloak work. 3 = 2 + the detection
+    // INPUT and G3: IAUS is told which foes do not detect him and may break off to a point no foe sees (Policy.h StealthInject).
+    inline int g_stealth = 0;
+    // Hybrid / T4 go-in rules (native/classes/Classes.h GoIn, same order).
+    enum : int { kGoNone = 0, kGoNever, kGoBias, kGoSummons, kGoParty, kGoControlled };
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
@@ -91,6 +100,10 @@ namespace Sim {
         float poise = 0, poiseMax = 0;   // Chocolate Poise meter (0 max = the list has no poise mod)
         float dmgScale = 1;              // scenario strength scaling of a foe's damage (Setup.h targetRatio)
         std::string tag;                 // scenario role ("healer", "archer", "boss" ...)
+        // stealth (g_stealth > 0 and a sneak class): his stance, and which foes know where he is
+        bool  stealthy = false, sneaking = false;
+        std::vector<std::pair<std::uint32_t, double>> knownBy;   // foe id -> when it last sensed him (a foe not listed never has)
+        double movedAt = -1, cloakUntil = 0, cloakReady = 0, hideAt = -1e9, runUntil = 0;
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
     };
 
@@ -125,6 +138,10 @@ namespace Sim {
         long   killOrderGood = 0, killOrderBad = 0;       // priority foes (healer / caster / archer) killed before / after grunts
         double retreatSec = 0, kiteDmgTaken = 0;
         long   scrollsUsed = 0, extActions = 0, tableSkipped = 0; double moveOrderSec = 0;   // the extended action set (oracle / phase 2)
+        // the class playstyle lab: stealth, position and rule tallies of the subject
+        long   wpnHits = 0, sneakHits = 0, flankHits = 0, hides = 0, firstHits = 0, sneakOpens = 0, healAtN = 0;
+        double sneakDmg = 0, hiddenSec = 0, sneakSec = 0, tgtDistSum = 0, playerDistSum = 0, contactSec = 0, goInBadSec = 0, summonSec = 0, undeadDmg = 0, healAtSum = 0, cloakSec = 0;
+        long   posN = 0, tgtDistN = 0, arrowsShot = 0, arrowsHit = 0;
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         std::vector<std::string> killOrder;
@@ -171,6 +188,9 @@ namespace Sim {
         int    potions0 = 0;                       // potions at the start (Utility: resources left)
         Key    lastKey{}; bool hasLastKey = false; // oracle arm: the action he is on (switch counting)
         std::uint32_t lastTarget = 0;
+        // class traits the world applies (the class's own design data: SimClass, RealClasses.cpp)
+        unsigned forbid = 0;   // the class's oracle constraint bits (Playstyles.h kPs*)
+        float sneakAtkClass = 1.0f, noiseClass = 1.0f; bool flank = false, cloak = false, sneakClass = false, nearPlayer = false; int entryOdds = 0, goIn = 0, partyPct = 0;
     };
 
     struct Policy;   // decides for one follower when he is served (Policy.h)
@@ -188,6 +208,7 @@ namespace Sim {
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
+        float light = 0.6f; bool interior = false; double nextDetect = 0;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
         Tally t;
         std::uint32_t nextId = 1;
@@ -230,6 +251,66 @@ namespace Sim {
             return x.role == Role::Player ? std::clamp(r, -100.0f, D->rules.maxResist) : std::clamp(r, -100.0f, 100.0f);   // I8 research 2.3: only a PLAYER target is capped (fPlayerMaxResistance); 100 = immune
         }
 
+        // ── stealth ──
+        // MODEL of the engine's detection test for a SNEAKING actor. The terms are the ones the game settings name (skill against
+        // skill, sight by light inside the view cone, the sound of movement, a distance falloff); the body of CalculateDetection
+        // (AE 37774) has not been read into a formula, so the SHAPE is UNPROVEN. An actor that is not sneaking is always sensed.
+        [[nodiscard]] bool Senses(const Body& o, const Body& x) const {
+            if (!x.sneaking) return true;
+            if (now < x.cloakUntil) return false;
+            const float d = Dist(o, x);
+            if (d < 130.0f) return true;   // he is touched
+            auto g = [&](const char* k, double dv) { return static_cast<float>(D->G(k, dv)); };
+            const float maxD = g("fSneakMaxDistance", 2500) * (interior ? 1.0f : g("fSneakExteriorDistanceMult", 2.1));
+            if (d >= maxD) return false;
+            const float att = 1.0f - std::pow(d / maxD, g("fSneakDistanceAttenuationExponent", 2));
+            const float base = g("fSneakBaseValue", -15), km = g("fSneakSkillMult", 0.5);
+            const Ctl* c = x.ctl >= 0 ? &ctl[static_cast<std::size_t>(x.ctl)] : nullptr;
+            const float sx = base + km * (x.spec->Skill(15) + StealthCombine(D->sneakSkillRows, *x.spec, false));
+            const float so = base + km * std::clamp(o.spec->Skill(15), g("fSneakPerceptionSkillMin", 0), g("fSneakPerceptionSkillMax", 100));
+            const bool moving = now - x.movedAt < 0.2, los = Sees(o, x);
+            bool inCone = los;
+            if (los) { const Body* ot = Find(o.c.targetId);   // he looks at what he fights; with no target he looks around (MODEL)
+                if (ot && ot != &x) { const float ax = ot->c.x - o.c.x, ay = ot->c.y - o.c.y, bx = x.c.x - o.c.x, by = x.c.y - o.c.y, la = std::hypot(ax, ay), lb = std::hypot(bx, by);
+                    if (la > 1 && lb > 1) inCone = (ax * bx + ay * by) / (la * lb) >= std::cos(0.5f * g("fDetectionViewCone", 190) * 0.0174533f); } }
+            float sight = 0, sound = 0;
+            if (inCone) { sight = 100.0f * light * g("fSneakLightMult", 0.33) * (interior ? 1.0f : g("fSneakLightExteriorMult", 0.5)); if (moving) sight *= 1.0f + g("fSneakLightMoveMult", 0.01); }
+            if (moving) { sound = g("fSneakSoundsMult", 1) * (g("fSneakEquippedWeightBase", 12) + g("fSneakEquippedWeightMult", 0.5) * 3.0f) * StealthCombine(D->sneakNoiseRows, *x.spec, true, true) * (c ? c->noiseClass : 1.0f);
+                if (!los) sound *= g("fSneakSoundLosMult", 0.3); }
+            return so - sx + (sight + sound) * att > 0.0f;
+        }
+        // Does this foe know where he is? Mode 1: for fCombatDetectionLostTimeLimit after it last sensed him. Mode 2+: only while it senses him.
+        [[nodiscard]] bool Detects(const Body& o, const Body& x) const {
+            if (!x.stealthy) return true;
+            if (now < x.cloakUntil) return false;
+            for (const auto& k : x.knownBy) if (k.first == o.c.id) return now - k.second <= (g_stealth == 1 ? static_cast<double>(D->G("fCombatDetectionLostTimeLimit", 10)) : 0.6);
+            return false;
+        }
+        void Reveal(Body& x, const Body& o) { for (auto& k : x.knownBy) if (k.first == o.c.id) { k.second = now; return; } x.knownBy.push_back({ o.c.id, now }); }
+        [[nodiscard]] bool Unseen(const Body& x) const { if (!x.stealthy || !x.sneaking) return false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Detects(o, x)) return false; return true; }
+        [[nodiscard]] bool PointHidden(float px, float py, const Body& o) const {
+            for (const Occluder& oc : occ) { const float dx = px - o.c.x, dy = py - o.c.y, l2 = dx * dx + dy * dy; if (l2 < 1) continue;
+                const float tt = std::clamp(((oc.x - o.c.x) * dx + (oc.y - o.c.y) * dy) / l2, 0.0f, 1.0f); if (std::hypot(o.c.x + tt * dx - oc.x, o.c.y + tt * dy - oc.y) < oc.r) return true; }
+            return false;
+        }
+        // G3: a point near him that no foe that knows of him can see (behind an occluder). false = there is none within 1400 units.
+        [[nodiscard]] bool HidePoint(const Body& x, float& gx, float& gy) const {
+            float best = 1400.0f; bool any = false;
+            for (const Occluder& oc : occ) for (int a = 0; a < 8; ++a) { const float ang = 0.7854f * static_cast<float>(a), px = oc.x + (oc.r + 80.0f) * std::cos(ang), py = oc.y + (oc.r + 80.0f) * std::sin(ang);
+                bool ok = true; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && (!PointHidden(px, py, o) || std::hypot(o.c.x - px, o.c.y - py) < 200.0f)) { ok = false; break; }
+                const float d = std::hypot(px - x.c.x, py - x.c.y); if (ok && d < best) { best = d; gx = px; gy = py; any = true; } }
+            return any;
+        }
+        // The half-second detection pass (the engine's own runs every fDetectionUpdateTime*: MODEL 0.5 s), the G1 re-assert and Shadowcloak.
+        void UpdateStealth() {
+            for (Body& x : b) { if (!x.stealthy || !Up(x)) continue;
+                Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
+                x.sneaking = now >= x.runUntil;   // G1 holds the stance; a break for cover is a RUN (H3), he crouches again on arrival
+                for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Senses(o, x)) Reveal(x, o);
+                if (c.cloak && g_stealth >= 2 && now > 4.0 && now >= x.cloakReady && now >= x.cloakUntil && !Unseen(x)) { x.cloakUntil = now + 3.0; x.cloakReady = now + 30.0; x.knownBy.clear(); }   // H10: once per 30 s, undetected for 3 s
+            }
+        }
+
         // ── building ──
         Body& Add(Role role, std::shared_ptr<const ActorSpec> sp, float x, float y, float hpPct = 1.0f) {
             Body n; n.role = role; n.spec = std::move(sp); n.c.id = role == Role::Player ? 2u : role == Role::Foe ? 100u + nextId++ : 10u + nextId++;
@@ -264,7 +345,7 @@ namespace Sim {
             if (!x.alive || x.c.downed || dmg <= 0) return 0;
             const float before = x.c.hp; x.c.hp -= dmg; x.regenAt[0] = now + D->rules.delayHp; x.recentDmg += dmg;
             const float dealt = std::min(before, dmg);
-            if (by) { by->dmgDealt += dealt; x.lastAttacker = by->c.id; if (by->ctl == 0) t.dmgDone += dealt; }
+            if (by) { by->dmgDealt += dealt; x.lastAttacker = by->c.id; if (by->ctl == 0) { t.dmgDone += dealt; if (x.spec->undead) t.undeadDmg += dealt; } }
             if (fromIaus && by && by->ctl == 0) { t.iausDmg += dmg; t.overkill += dmg - dealt; }
             if (x.role == Role::Player) t.playerDmgTaken += dealt;
             if (x.Party()) t.partyDmgTaken += dealt;
@@ -328,6 +409,15 @@ namespace Sim {
         float Physical(Body& a, Body& d, float dmg, bool power, bool ranged, bool fromIaus) {
             const Rules& r = D->rules; bool blocked = false; float blockedFrac = 0.0f; const float rawDmg = dmg;
             if (a.role == Role::Follower) dmg *= FollowerScale();
+            bool sneakAtk = false, flankAtk = false;
+            if (a.stealthy && d.role == Role::Foe) {   // AE 44016: the attacker sneaks and the target does not detect him -> x the weapon's sneak multiplier
+                const Ctl& ac = ctl[static_cast<std::size_t>(a.ctl)];
+                const float sm = SneakAttackMult(*D, *a.spec, ranged ? a.spec->ranged : a.spec->melee) * ac.sneakAtkClass;
+                if (a.sneaking && !Detects(d, a)) { dmg *= sm; sneakAtk = true; }
+                else if (ac.flank && g_stealth >= 2) { const Body* dt = Find(d.c.targetId); if (dt && dt != &a && dt->Party()) { dmg *= 1.0f + 0.5f * (sm - 1.0f); flankAtk = true; } }   // G4: half the bonus on a foe engaged with an ally
+                Reveal(a, d); if (a.cloakUntil > now) a.cloakUntil = now;   // the blow tells the victim where he is (the engine's ForceDetect on a hit)
+            }
+            if (a.ctl == 0) { ++t.wpnHits; if (sneakAtk) ++t.sneakHits; if (flankAtk) ++t.flankHits; if (!t.firstHits) { t.firstHits = 1; t.sneakOpens = sneakAtk ? 1 : 0; } }
             if (now < d.blockUntil && !ranged) {   // MODEL block: shield 0.45 + 0.30 x skill, weapon 0.30 + 0.20 x skill; a power attack halves it (fBlockPowerAttackMult)
                 const float sk = d.spec->Skill(kAvBlock) / 100.0f; float bf = d.spec->shield ? 0.45f + 0.30f * sk : 0.30f + 0.20f * sk;
                 if (power) bf *= r.blockPowMult;
@@ -340,7 +430,8 @@ namespace Sim {
             if (a.ctl == 0) { if (Controlled(d)) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; }
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
             const float dealt = Hurt(d, dmg, &a, fromIaus);
-            if (trace) std::fprintf(trace, "%7.2f  hit  %s -> %s (%u) %.0f%s%s%s  hp %.0f/%.0f\n", now, a.c.name.c_str(), d.c.name.c_str(), d.c.id, dealt, power ? " POWER" : "", blocked ? " blocked" : "", ranged ? " arrow" : "", d.c.hp, d.c.hpMax);
+            if (sneakAtk && a.ctl == 0) t.sneakDmg += dealt;
+            if (trace) std::fprintf(trace, "%7.2f  hit  %s -> %s (%u) %.0f%s%s%s%s%s  hp %.0f/%.0f\n", now, a.c.name.c_str(), d.c.name.c_str(), d.c.id, dealt, power ? " POWER" : "", blocked ? " blocked" : "", ranged ? " arrow" : "", sneakAtk ? " SNEAK" : "", flankAtk ? " flank" : "", d.c.hp, d.c.hpMax);
             if (D->poise.on) PoiseHit(a, d, PoiseDamage(a, d, rawDmg, power, ranged, false, blockedFrac));
             else if (power && !blocked && Up(d)) Stagger(d, TM::staggerSec * std::clamp(a.spec->mass / d.spec->mass, 0.6f, 1.4f), &a);
             return dealt;
@@ -385,7 +476,8 @@ namespace Sim {
         // ── the engine's combat AI (MODEL from the combat style) ──
         void Move(Body& x, float tx, float ty, float speed) {
             const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f) return;
-            const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k;
+            if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait
+            const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
         }
         [[nodiscard]] Body* PickTarget(Body& x) {
             Body* best = nullptr; float bs = -1;
@@ -393,6 +485,7 @@ namespace Sim {
             for (auto& o : b) {
                 if (&o == &x || !Up(o)) continue;
                 if (!frenzy && o.Party() == x.Party()) continue;
+                if (x.role == Role::Foe && o.stealthy && !Detects(x, o)) continue;   // it cannot fight what it does not know of
                 float s = 1000.0f / (Dist(x, o) + 300.0f);
                 if (o.c.id == x.lastAttacker) s *= 1.8f;
                 if (x.role == Role::Foe && o.role == Role::Player) s *= 1.25f;
@@ -429,7 +522,7 @@ namespace Sim {
                 Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power), kind == Act::Power, false, x.actIaus);
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
-                --x.arrows;
+                --x.arrows; if (x.ctl == 0) ++t.arrowsShot;
                 shots.push_back({ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, WeaponDamage(D->rules, *x.spec, x.spec->ranged, false), -1, false, x.actIaus, tg->c.x, tg->c.y, 1 });
             } else if (kind == Act::Cast) {
                 ReleaseCast(x, tg);
@@ -492,6 +585,7 @@ namespace Sim {
                 if (!d || !Up(*d)) return;
                 const float moved = std::hypot(d->c.x - sh.x, d->c.y - sh.y);
                 if (!Sees(*a, *d) || (moved > 40.0f && R.P(TM::aimMiss))) return;
+                if (a->ctl == 0) ++t.arrowsHit;
                 Physical(*a, *d, sh.dmg, false, true, sh.fromIaus); return;
             }
             const SimSpell* s = SpellOf(*a, sh.spell); if (!s) return;
@@ -580,6 +674,7 @@ namespace Sim {
             const bool taunted = now < x.tauntUntil;
             if (taunted) { Body* tb = Find(x.tauntBy); if (tb && Up(*tb)) tg = tb; else x.tauntUntil = 0; }
             else if (c && c->steer) { Body* s = Find(c->steer); if (s && Up(*s) && !s->Party()) tg = s; else c->steer = 0; }
+            if (tg && x.role == Role::Foe && tg->stealthy && !taunted && !Detects(x, *tg)) tg = nullptr;   // it lost him
             if (!tg || !Up(*tg) || (tg->Party() == x.Party() && now >= x.frenzyUntil) || (!taunted && !(c && c->steer) && now >= x.retargetAt)) {
                 tg = PickTarget(x); x.retargetAt = now + R.U(3, 7);
             }
@@ -654,6 +749,33 @@ namespace Sim {
                 ++i;
             }
         }
+        // Is the class's go-in rule (card C9) satisfied right now? true = he may stand in melee.
+        [[nodiscard]] bool GoInOk(const Ctl& c, const Body& x) const {
+            const float hp = x.c.hp / std::max(1.0f, x.c.hpMax), mp = x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 0.0f;
+            auto partyOk = [&]() { for (const Body& o : b) if (o.Party() && o.role != Role::Summon && o.alive && o.c.hp < 0.01f * static_cast<float>(c.partyPct ? c.partyPct : 70) * o.c.hpMax) return false; return true; };
+            auto cheapest = [&](Prune::Nature n) { float m = 1e9f; for (const auto& e : c.book.entries) if (e.nature == n && e.source == SpellSource::Spell) m = std::min(m, e.cost); return m; };
+            switch (c.goIn) {
+            case kGoNever: { for (const Body& o : b) if (o.role == Role::Foe && Up(o) && !Controlled(o)) return false; return true; }   // ruling Q10: melee only when ALL foes are controlled
+            case kGoBias: return !(hp < 0.40f && mp > 0.30f);                                   // a low-health spellsword with magicka left goes back to spell range
+            case kGoSummons: { bool knows = false, live = false; for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].nature == Prune::Nature::Summon) { knows = true; live |= c.summonUntil[i] > now; } return hp >= 0.70f && (!knows || live); }
+            case kGoParty: return partyOk() || x.c.mp < cheapest(Prune::Nature::Heal);
+            case kGoControlled: { const Body* tg = Find(c.steer ? c.steer : x.c.targetId); if (tg && Controlled(*tg)) return true;
+                for (std::size_t i = 0; i < c.book.entries.size(); ++i) { const SpellEntry& e = c.book.entries[i]; if (e.nature != Prune::Nature::Control || e.cost > x.c.mp) continue;
+                    for (const Body& o : b) if (o.role == Role::Foe && Up(o) && !Controlled(o) && WillWork(c.build->spells[i], o) == Tri::Yes) return false; }
+                return true; }
+            default: return c.partyPct > 0 && c.fam == Cls::Ranged ? partyOk() : true;            // Scout: the party-healthy rule, else he stays ranged
+            }
+        }
+        // Where the subject stands and what state he is in, once per step (the class playstyle metrics).
+        void PlaystyleTally(const Ctl& c, const Body& x) {
+            ++t.posN; t.playerDistSum += Dist(x, b[0]);
+            bool contact = false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Dist(x, o) < 260.0f) { contact = true; break; }
+            if (contact) { t.contactSec += TM::dt; if ((c.goIn != kGoNone || (c.partyPct > 0 && c.fam == Cls::Ranged)) && !GoInOk(c, x)) t.goInBadSec += TM::dt; }
+            if (const Body* tg = Find(c.steer ? c.steer : x.c.targetId); tg && Up(*tg) && !tg->Party()) { t.tgtDistSum += Dist(x, *tg); ++t.tgtDistN; }
+            for (std::size_t i = 0; i < c.summonUntil.size(); ++i) if (c.summonUntil[i] > now) { t.summonSec += TM::dt; break; }
+            if (x.sneaking) t.sneakSec += TM::dt; if (now < x.cloakUntil) t.cloakSec += TM::dt;
+            if (x.stealthy && Unseen(x)) t.hiddenSec += TM::dt;
+        }
         void StepWorld() {
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
@@ -669,6 +791,7 @@ namespace Sim {
             }
             for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale;
                     if (!ctl.empty() && t.mpAtLate < 0) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; t.mpAtLate = s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1.0; } } else ++i; }
+            if (g_stealth > 0 && now >= nextDetect) { nextDetect = now + 0.5; UpdateStealth(); }
             for (std::size_t i = 0; i < shots.size();) { if (shots[i].at <= now) { const Shot s = shots[i]; shots[i] = shots.back(); shots.pop_back(); Land(s); } else ++i; }
             for (std::size_t i = 0; i < b.size(); ++i) { Body& x = b[i]; if (!Up(x) || Busy(x)) continue; if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
             // tallies that integrate over time
@@ -678,6 +801,7 @@ namespace Sim {
             if (pl.alive) t.playerMinHp = std::min(t.playerMinHp, double(pl.c.hp / std::max(1.0f, pl.c.hpMax))); else t.playerMinHp = 0;
             if (!ctl.empty()) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; if (Up(s0)) { t.upSec += TM::dt; const std::size_t ai = now < s0.actEnd ? static_cast<std::size_t>(s0.act) : 0; t.bodySec[ai] += TM::dt; if (ai && s0.actIaus) t.bodyIausSec[ai] += TM::dt; } }
             if (!ctl.empty()) { Ctl& c0 = ctl[0]; const Body& s0 = b[static_cast<std::size_t>(c0.body)];
+                if (Up(s0)) PlaystyleTally(c0, s0);
                 if (pressed && c0.pressureSince < 0) c0.pressureSince = now; if (!pressed) c0.pressureSince = -1;
                 t.mpSum += s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1; t.hpSum += s0.c.hp / std::max(1.0f, s0.c.hpMax); t.spSum += s0.c.spMax > 0 ? s0.c.sp / s0.c.spMax : 1; ++t.resN;
                 if (c0.gate.spellsOnClass && Up(s0)) { float cheapest = 1e9f; for (const auto& e : c0.book.entries) if (e.source == SpellSource::Spell && e.cost > 0 && e.drop == Prune::Drop::Keep) cheapest = std::min(cheapest, e.cost); if (cheapest < 1e8f && s0.c.mp < cheapest) t.mpDrySec += TM::dt; } }

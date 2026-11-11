@@ -79,6 +79,19 @@ namespace Sim {
             g.weaponMelee = any || (d.weapons & (C::Weapon::kDagger | C::Weapon::kOneHand | C::Weapon::kTwoHand)) != 0;
             g.weaponBow = any || (d.weapons & C::Weapon::kBow) != 0; g.weaponCrossbow = any || (d.weapons & C::Weapon::kCrossbow) != 0; g.weaponStaff = any || (d.weapons & C::Weapon::kStaff) != 0;
             g.disengage = (d.flags & C::Flag::kDisengage) != 0; c.shortLeash = (d.flags & C::Flag::kShortLeash) != 0;
+            c.sneakAlways = (d.flags & C::Flag::kSneakAlways) != 0; c.nearPlayer = (d.flags & C::Flag::kNearPlayer) != 0; c.goIn = static_cast<int>(d.goIn); c.partyPct = d.partyHealthyPct;
+            c.pureMage = d.line == C::Line::Mage;
+            if (const Playstyle* ps = PlaystyleOf(c.name)) { c.forbid = ps->forbid; c.playstyle = ps->does; }
+            for (std::size_t i = 0; i < d.gambitCount; ++i) { using R = C::SpellRole; const char* tok = nullptr; const char* tok2 = nullptr;   // the roles his own rows name (todo rows too: the card names them)
+                switch (d.gambits[i].role) { case R::Fire: tok = "fire"; break; case R::Frost: tok = "frost"; break; case R::Shock: tok = "shock"; break; case R::Heal: tok = "healOther"; tok2 = "heal"; break;
+                    case R::Summon: tok = "summon"; break; case R::Armor: tok = "armor"; break; case R::Paralyze: tok = "paralyze"; break; case R::Fear: tok = "fear"; break; default: break; }
+                for (const char* t : { tok, tok2 }) if (t && std::find(c.ensure.begin(), c.ensure.end(), t) == c.ensure.end()) c.ensure.push_back(t); }
+            // The stealth passives and packages the class cards rule (class-walkthrough-decisions.md Thief / Master Thief / Nightingale /
+            // Listener; our own design data, at full strength = the class mastered). Thief: sneaking 30% quieter, a free stealth entry 1
+            // fight in 5. Master Thief: sneak attacks x1.5, the flanking half bonus (G4), entry 1 in 3, the mastered Thief passive at 1/4.
+            // The two T4s hold Master Thief's passive at full. CHOICE: they keep its 1-in-3 entry (their packages do not say).
+            if (d.id == C::Id::Thief) { c.entryOdds = 5; c.noiseClass = 0.70f; }
+            else if (d.id == C::Id::MasterThief || d.id == C::Id::Nightingale || d.id == C::Id::Listener) { c.entryOdds = 3; c.sneakAtkClass = 1.5f; c.flank = true; c.noiseClass = 0.925f; c.cloak = d.id == C::Id::Nightingale; }
             g.powerAttack = d.powerShareMax != C::kShareUnset || d.powerShareMin != C::kShareUnset;
             int applied = 0; for (std::size_t i = 0; i < d.gambitCount; ++i) if (d.gambits[i].act && d.gambits[i].IsApplied() && !d.gambits[i].pendingRuling) ++applied;
             int idx = 0;

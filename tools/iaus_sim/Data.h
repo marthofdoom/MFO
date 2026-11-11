@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -143,6 +144,8 @@ namespace Sim {
     // Dynamic Follower Scaling (FollowerScaling.dll): every weapon hit of an actor in CurrentFollowerFaction is scaled by the
     // number of LOADED actors in that faction. mode 1: (1 - reduction)^(n - 1); mode 2: 1 / n.
     struct FollowerScaling { bool on = false; int mode = 1; float reduction = 0; };
+    // One stealth perk row (tools/list_balance/compile_world.py "STEALTH perk tables"): a skill gate, a value, its ranked chain.
+    struct StealthRow { int av = 15; float thr = 0, v = 1; std::string chain; };
     struct Data {
         std::string name = "builtin";
         PoiseRules poise; FollowerScaling dfs;
@@ -161,6 +164,8 @@ namespace Sim {
         std::vector<float> arrows, bolts;
         std::vector<std::pair<float, float>> pots[3];      // health / magicka / stamina: (magnitude, duration)
         std::map<std::string, Thr> pAttack, pPower, pSpellMag, pSpellCost, pArmor;
+        std::map<std::string, std::vector<StealthRow>> sneakAtk;          // EP 18 ModSneakAttackMult rows by weapon kind
+        std::vector<StealthRow> sneakSkillRows, sneakNoiseRows;            // EP 57 ModDetectionSneakSkill (add), EP 48 ModDetectionMovement (multiply)
         int natures[7] = {};
         int rawSpells = 0, taughtSpells = 0, dropPlace = 0, dropNotCast = 0, dropReanim = 0, dropUnknown = 0;
         std::map<std::string, std::vector<int>> roles;     // "draugr", "troll" ... -> spec indices (scenarios)
@@ -172,6 +177,30 @@ namespace Sim {
         float v = none; bool any = false;
         for (const auto& p : i->second) if (p.first <= skill && (!any || (none >= 1.0f ? p.second > v : p.second < v))) { v = p.second; any = true; }
         return v;
+    }
+
+    // ── stealth (the class playstyle lab; every row is in iaus-classes.md "Stealth model") ──
+    // The best row of every chain the actor's skill reaches, combined over the chains (mul: a product, else a sum).
+    [[nodiscard]] inline float StealthCombine(const std::vector<StealthRow>& rows, const ActorSpec& a, bool mul, bool lowBest = false) {
+        std::map<std::string, float> best;
+        for (const StealthRow& r : rows) { if (a.Skill(r.av) + 0.01f < r.thr) continue; auto it = best.find(r.chain);
+            if (it == best.end()) best[r.chain] = r.v; else it->second = lowBest ? std::min(it->second, r.v) : std::max(it->second, r.v); }
+        float o = mul ? 1.0f : 0.0f; for (const auto& kv : best) o = mul ? o * kv.second : o + kv.second; return o;
+    }
+    [[nodiscard]] inline const char* SneakKind(const Weapon& w) { return !w.Has() ? "hand" : w.anim == 2 ? "dagger" : (w.anim == 1 || w.anim == 3 || w.anim == 4) ? "oneHand" : w.TwoH() ? "twoHand" : w.anim == 7 ? "bow" : w.anim == 9 ? "crossbow" : "hand"; }
+    // The engine's sneak attack multiplier of one weapon. PROVEN (read, 1.6.1170): AE 44016 multiplies the hit by AE 18100's value, a
+    // game-setting table indexed by the weapon's animation type (fCombatSneak*Mult), then by perk entry point 0x12 ModSneakAttackMult.
+    // MODEL: which perks the follower holds (every playable chain his skill reaches, as the other perk tables assume). A chain that
+    // has a row for a named weapon kind is not also read through its unconditioned ("all") row.
+    [[nodiscard]] inline float SneakAttackMult(const Data& D, const ActorSpec& a, const Weapon& w) {
+        static const char* g[10] = { "fCombatSneakHandMult", "fCombatSneak1HSwordMult", "fCombatSneak1HDaggerMult", "fCombatSneak1HAxeMult", "fCombatSneak1HMaceMult", "fCombatSneak2HSwordMult", "fCombatSneak2HAxeMult", "fCombatSneakBowMult", "fCombatSneakStaffMult", "fCombatSneakCrossbowMult" };
+        static const double dv[10] = { 2, 3, 3, 3, 3, 2, 2, 2, 1, 2 };
+        const int an = w.Has() ? std::clamp(w.anim, 0, 9) : 0;
+        std::vector<StealthRow> rows; std::set<std::string> named;
+        for (const auto& kv : D.sneakAtk) if (kv.first != "all") for (const StealthRow& r : kv.second) named.insert(r.chain);
+        if (auto i = D.sneakAtk.find(SneakKind(w)); i != D.sneakAtk.end()) rows = i->second;
+        if (auto i = D.sneakAtk.find("all"); i != D.sneakAtk.end()) for (const StealthRow& r : i->second) if (!named.count(r.chain)) rows.push_back(r);
+        return static_cast<float>(D.G(g[an], dv[an])) * StealthCombine(rows, a, true);
     }
 
     // ── combat formulas ─────────────────────────────────────────────────────────────────────────────────
