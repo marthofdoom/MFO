@@ -529,6 +529,14 @@ namespace MFO::Actuation {
     // candlelight/buff/heal pacing is untouched. Worker/main context, list read only.
     bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell);
 
+    // CARD G5 (cond.self_has_summon / cond.self_no_summon) and G6 (cond.foe_attacking_my_summon). MAIN THREAD
+    // ONLY. The FormIDs of the LIVE actors a_caster commands right now: every entry of the process's
+    // commandedActors array (the list SummonGate's limit count reads) whose handle resolves to an actor that is
+    // not dead and not deleted. A dead-but-listed slot is NOT counted here (it holds the engine's limit slot, but
+    // no creature fights for him). Conjured creatures and Reanimate thralls both count. Empty when he has no
+    // middle-high process. The worker never calls this: it reads SelfStatus's mirror of the answer.
+    std::vector<RE::FormID> LiveCommandedActors(RE::Actor* a_caster);
+
     // SUMMON = ONE-SHOT CONJURE (fix/mfo-summon-oneshot, deck 2026-09-24). True
     // when any effect of a_spell has the kSummonCreature archetype (bound weapons
     // and Reanimate never match).

@@ -253,6 +253,7 @@ MFO_STR(Cond_FoeIsSummoned, "Foe: Summoned", 0)   // a conjured or reanimated cr
 MFO_STR(Cond_FoeIsMechanical, "Foe: Mechanical", 0)
 MFO_STR(Cond_FoeIsUnholy, "Foe targeted: Unholy", 0)   // the foe the follower is fighting is one the load order's silver weapons hurt more (undead, werewolves, vampires, ...)
 MFO_STR(Cond_FoeAttackingAlly, "Foe: Targeting an ally", 0)   // the nearest foe whose target is the player, a teammate or a summon they command, but not this follower
+MFO_STR(Cond_FoeAttackingMySummon, "Foe: Targeting my summon", 0)   // the nearest foe whose target is a creature or thrall this follower commands
 MFO_STR(Cond_FoeIsCaster, "Foe: Spellcaster", 0)
 MFO_STR(Cond_FoeIsRanged, "Foe: Ranged", 0)
 MFO_STR(Cond_FoeWeakerThanMe, "Foe: Weaker than me", 0)
@@ -278,6 +279,8 @@ MFO_STR(Cond_IsNight, "At night", 0)
 MFO_STR(Cond_Dark, "In the dark", 0)
 MFO_STR(Cond_SelfUnderwater, "Self: Underwater", 0)   // the water is over the follower's head (Waterbreathing)
 MFO_STR(Cond_SelfPoisoned, "Self: Poisoned", 0)   // a poison is working on the follower (Cure Poison)
+MFO_STR(Cond_SelfHasSummon, "Self: Summon active", 0)   // the follower commands at least one living summoned creature or raised thrall
+MFO_STR(Cond_SelfNoSummon, "Self: No summon active", 0)   // the follower commands no living summon (the "summon when none is out" rule)
 MFO_STR(Cond_AllyDowned, "Ally: Downed", 0)   // the nearest ally who is bleeding out or down (a revive or heal target)
 MFO_STR(Cond_AllyParalysed, "Ally: Paralysed", 0)   // the nearest paralysed ally
 MFO_STR(Cond_AllyPoisoned, "Ally: Poisoned", 0)   // the nearest poisoned ally (Cure Poison)
@@ -299,6 +302,7 @@ MFO_STR(Act_EquipSilver, "Switch to silver weapon", 0)   // puts the follower's 
 MFO_STR(Act_Taunt, "Taunt", 0)   // plays a taunt animation, then nearby foes roll to turn on this follower for a while. Only offered with a melee weapon in the right hand
 MFO_STR(Act_PowerAttack, "Power attack", 0)
 MFO_STR(Act_Flee, "Flee to player", 0)
+MFO_STR(Act_Sneak, "Sneak", 0)   // the follower crouches into sneak and stays in it while this rule holds
 MFO_STR(Act_LootArrows, "Loot arrows", 0)
 MFO_STR(Act_LootBolts, "Loot bolts", 0)
 MFO_STR(Act_LootPotions, "Loot potions (any)", 0)

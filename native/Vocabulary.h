@@ -173,6 +173,11 @@ namespace MFO::Vocab {
     // creature (Banish / Dispel targets). Evaluator.cpp. (Foe: Werewolf was dropped, marth 2026-10-27: Unholy covers it.)
     inline constexpr const char* kCondFoeIsDaedra        = "cond.foe_is_daedra";
     inline constexpr const char* kCondFoeIsSummoned      = "cond.foe_is_summoned";
+    // "Foe: Targeting my summon" (class plan card G6): a FOE SELECTOR in kCondFoeAttackingAlly's shape. Picks the
+    // nearest foe whose combat target is one of the live actors THIS follower commands (the card G5 mirror,
+    // SelfStatus::CommandedLive). No fresh mirror = no summon known = no candidate (fail closed).
+    // APPENDED; frozen serialization string (#10).
+    inline constexpr const char* kCondFoeAttackingMySummon = "cond.foe_attacking_my_summon";
     // SITUATIONAL STATE gates (ClickUp 86e3g81x0), APPENDED, frozen strings (#10). Self = the follower the rule belongs
     // to (no param, no target, kCondDark's shape). Underwater: the water surface is above his head (Waterbreathing).
     // Poisoned: a live poison is on him (Cure Poison). Player sneaking: the player's own sneak state.
@@ -180,6 +185,13 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondSelfUnderwater     = "cond.self_underwater";
     inline constexpr const char* kCondSelfPoisoned       = "cond.self_poisoned";
     inline constexpr const char* kCondPlayerSneaking     = "cond.player_sneaking";
+    // SUMMON gates (class plan card G5): Self = the follower. "Has summon" is true when he commands at least one LIVE
+    // actor (a conjured creature or a Reanimate thrall: the process's commandedActors list, dead entries not counted);
+    // "No summon" is its negation for the "summon when none is out" row. Both read the SelfStatus main-thread mirror
+    // (1 s refresh, 5 s trust) and BOTH read false without a fresh measurement (fail closed). No param, no target.
+    // APPENDED, frozen strings (#10), saved as strings like every opcode.
+    inline constexpr const char* kCondSelfHasSummon      = "cond.self_has_summon";
+    inline constexpr const char* kCondSelfNoSummon       = "cond.self_no_summon";
     // ALLY STATE SELECTORS (ClickUp 86e3g81x0, marth 2026-10-27), kCondAllyHpBelow's shape (no param): the NEAREST
     // teammate (or the player, as the HP picker does) in the state, and that ally becomes the rule's target. Downed:
     // bleedout / essential-down. Paralysed: Paralysis actor value up. Poisoned: a live poison (SelfStatus mirror).
@@ -232,6 +244,14 @@ namespace MFO::Vocab {
     // engine's own movement walks him there while he keeps fighting. Filed through apmf/GroundApproach.cpp. IAUS-ONLY, in
     // no board table and no class row, never serialized (the same note as act.bash).
     inline constexpr const char* kActGiveGround = "act.give_ground";
+    // SNEAK (class plan card G1): enter and hold sneak while the rule stands. Files ONE Harbinger ch.3 kIntent_Stance
+    // claim (ABI 1) and keeps it while the rule keeps being reached with its condition true; a rule that stops being
+    // reached lets the claim go (apmf/SneakClaims.cpp). ch.3 does not re-assert, so MFO does: while the claim is live
+    // and IsSneaking reads false, it releases and re-files, throttled. NOT ch.16 (that would erase a thief's perks).
+    // TRANSPARENT: the scan goes on to the rows below, so "Always -> Sneak" can sit on top. In combat it is a
+    // dev-switch road (bSneakInCombat, default OFF) until a field run proves the combat AI keeps him crouched.
+    // Combat AND logistics table. No param. APPENDED; frozen serialization string (#10).
+    inline constexpr const char* kActSneak = "act.sneak";
 #ifdef MFO_DEV_SELFTEST
     // DEV BUILDS ONLY (CMake MFO_DEV_SELFTEST; ClickUp 1dfcuabcqr7, Docs/SELFTEST.md): "DEV: run self-tests".
     // A STANDING MARKER, never an action: an enabled combat rule holding it turns the self-test runner

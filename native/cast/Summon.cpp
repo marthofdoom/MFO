@@ -49,6 +49,18 @@ namespace MFO::Actuation {
         return false;
     }
 
+    // CARD G5 (Actuation.h). MAIN THREAD: the process's commandedActors array and the handles in it.
+    std::vector<RE::FormID> LiveCommandedActors(RE::Actor* a_caster) {
+        std::vector<RE::FormID> out;
+        auto* proc = a_caster ? a_caster->GetActorRuntimeData().currentProcess : nullptr;
+        if (!proc || !proc->middleHigh) return out;
+        for (const auto& d : proc->middleHigh->commandedActors) {
+            auto cmd = d.commandedActor.get();   // HOLD the NiPointer
+            if (cmd && !cmd->IsDead() && !cmd->IsDeleted()) out.push_back(cmd->GetFormID());
+        }
+        return out;
+    }
+
     namespace {
         // ── THREADING (review of 78f9631) ──────────────────────────────────
         // Every ENGINE read a summon decision needs -- the caster's active-
