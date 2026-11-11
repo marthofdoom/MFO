@@ -252,3 +252,11 @@ Source draft: class-perks-packages.md. Each ruling here OVERRIDES the draft.
 - Target for I8 (T1 Mage profile): attack is a last resort, near 0% of fired actions while any affordable cast, drink-magicka, staff or posture option exists. Sim acceptance: mage `attack=` share in the low single digits across brackets.
 - Pure-mage classes higher in the tree (T2+ line Mage, not hybrids) melee even less than T1. Hybrids (one weapon class + one school) are not covered by this rule.
 - Do not get there by removing the attack candidate (attacks are additive, never removed): weight it down in the class profile so a mage reaches for magicka, staff or retreat first.
+
+## IAUS skill fit + damage estimate (marth 2026-11-10: "absolutely, skill fit and class considerations even better if we can estimate the damage and make rulings on that")
+Finding: IAUS Facts (native/iaus/Core.h) carry no weapon-skill, school-skill or damage fact, so an attack and a cast score on range/target only. That is why the sim's T1 mage melees 21-42% of the time.
+Ruling, for I8:
+1. **Skill fit:** each candidate is scaled by the follower's skill for it (weapon skill for attacks/power attacks, the spell's school skill for casts), read from his live AVs at runtime.
+2. **Class weight** on top (the mage melee ruling above).
+3. **Damage estimate** where it can be proven: expected damage per second (and per magicka for casts) for each offensive candidate, against the target's resist/armor, so the rulings compare real outcomes ("the firebolt does 3x the dagger"). It must use the engine's own numbers (weapon damage with skill and perks, spell magnitude with perk entry points), resolved at runtime and never from list tables. Each engine read is verified against the fork + disassembly and observed with a passive probe before it drives scoring (principle 5). If a read cannot be proven, that candidate falls back to skill fit alone, logged, never a guess.
+Sim: model the same estimate so the sim can tune it, and use the target "T1 mage attack share in low single digits".
