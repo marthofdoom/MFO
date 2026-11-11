@@ -212,7 +212,7 @@ namespace MFO::Iaus::Candidates {
             }
             if (auto* race = foe->GetRace()) u.undead = race->HasKeywordString("ActorTypeUndead");
             u.unholy = Logistics::IsUnholy(foe);
-            u.taunted = Taunt::TauntedBy(fid, selfID);   // card I6 (R1): the Taunt module's own live pin, not an engine read
+            u.taunted = Taunt::IsPinned(fid);   // card I6 (R1): the Taunt module's own live pin by ANY taunter (Q69), not an engine read
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
             u.sight       = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Own));
             u.sightEngine = ToSight(Sightline::Check(selfID, fid, Sightline::Basis::Engine));

@@ -1,6 +1,9 @@
 #include "PCH.h"
 #include "Taunt.h"
 #include "Config.h"
+#include "Cooldowns.h"
+#include "iaus/Core.h"
+#include "iaus/Estimate.h"
 #include "MainThread.h"
 #include "apmf/APMFBridge.h"
 #include "APMF_API.h"
@@ -66,6 +69,24 @@ namespace MFO::Taunt {
         double                                    g_clockMs = 0.0;   // the unpaused clock (guarded by g_mx)
         Clock::time_point                         g_clockAt{};       // worker (Tick) only
 
+        // One log line per (taunter, reason) per kSkipLogGapSec, so a gate that holds every pump names itself once
+        // (marth Q69: the first field run must show which gate held). Fire runs on the worker; Clear drains after it.
+        constexpr double kSkipLogGapSec = 10.0;
+        void LogSkip(RE::FormID a_taunter, std::string_view a_reason, const std::string& a_detail) {
+            static std::unordered_map<std::string, Clock::time_point> s_last;   // guarded by g_mx
+            const auto now = Clock::now();
+            const std::string key = std::format("{:08X}|{}", a_taunter, a_reason);
+            {
+                std::scoped_lock lk(g_mx);
+                auto [it, fresh] = s_last.try_emplace(key, now);
+                if (!fresh) {
+                    if (std::chrono::duration<double>(now - it->second).count() < kSkipLogGapSec) return;
+                    it->second = now;
+                }
+            }
+            spdlog::info("[taunt] skip: {} ({:08X}): {}", a_reason, a_taunter, a_detail);
+        }
+
         std::string NameOf(const RE::Actor* a) {
             return a && a->GetName() && *a->GetName() ? std::string(a->GetName()) : std::string("?");
         }
@@ -98,7 +119,8 @@ namespace MFO::Taunt {
 
         // ── candidates (WORKER: reads the taunter's group, then each foe's own group, each under ONE read lock with
         // nothing nested and only handle resolution inside, #23) ────────────────────────────────────────────────────
-        std::vector<Cand> Gather(RE::Actor* a_f, RE::ActorHandle a_chosen) {
+        struct GatherStats { int pinned = 0; };   // foes dropped ONLY because a live taunt (any taunter) already pins them
+        std::vector<Cand> Gather(RE::Actor* a_f, RE::ActorHandle a_chosen, GatherStats* a_st = nullptr) {
             std::vector<Cand> out;
             auto* cc = a_f->GetActorRuntimeData().combatController;
             if (!cc || !cc->combatGroup) return out;
@@ -132,10 +154,10 @@ namespace MFO::Taunt {
                 if (!cur || !IsPartyMember(cur)) continue;   // a taunt never starts a fight: only foes already fighting the party
                 const float d = selfPos.GetDistance(foe->GetPosition());
                 if (!r.chosen && d > radius) continue;
-                {   // already pinned onto THIS taunter by a live taunt: not eligible again (a different taunter repoints it)
+                {   // already pinned by ANY taunter (marth Q69: "skip if everyone already taunted"): not eligible, so two
+                    // knights never double-taunt one foe. The pin is a live taunt, never re-rolled until it ends.
                     std::scoped_lock lk(g_mx);
-                    const auto it = g_active.find(foe->GetFormID());
-                    if (it != g_active.end() && it->second.taunterId == selfId) continue;
+                    if (g_active.contains(foe->GetFormID())) { if (a_st) ++a_st->pinned; continue; }
                 }
                 keep.push_back({ std::move(r.p), d, r.chosen });
             }
@@ -189,6 +211,10 @@ namespace MFO::Taunt {
                 auto  fp  = c.h.get();   // HOLD
                 auto* foe = fp.get();
                 if (!foe || foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
+                {   // another knight pinned it since Gather: never repoint it (this taunter's own live pin is re-rolled as before)
+                    std::scoped_lock lk(g_mx);
+                    if (const auto it = g_active.find(c.id); it != g_active.end() && it->second.taunterId != tId) continue;
+                }
                 ++n;
                 const int fLevel = foe->GetLevel();
                 std::string note;
@@ -216,7 +242,7 @@ namespace MFO::Taunt {
                     note = " sense=unknown";
                 }
 
-                const float p = std::clamp(0.5f + 0.05f * static_cast<float>(tLevel - fLevel), 0.1f, 0.9f);
+                const float p = Iaus::Estimate::TauntChance(tLevel, fLevel);   // the ONE formula the IAUS fact reads too
                 const float r = dist(gen);
                 const bool  hit = r < p;
                 std::string result = hit ? "HIT" : "MISS";
@@ -387,6 +413,11 @@ namespace MFO::Taunt {
         return it != g_active.end() && it->second.taunterId == a_taunter;
     }
 
+    bool IsPinned(RE::FormID a_foe) {
+        std::scoped_lock lk(g_mx);
+        return g_active.contains(a_foe);
+    }
+
     bool Busy(RE::FormID a_taunter) {
         std::scoped_lock lk(g_mx);
         if (g_attempts.contains(a_taunter)) return true;
@@ -432,6 +463,15 @@ namespace MFO::Taunt {
             return { R::FailedSkill, "taunt: no melee weapon in the right hand", true };
 
         const auto id = a_f->GetFormID();
+        // Q69 cooldown: Iaus::kTauntCooldownSec per taunter, from the ATTEMPT (stamped when the idle is filed below), hit or miss.
+        // ONE identity per follower in the shared Cooldowns store (Kind::Follower), the same one the IAUS taunt candidate
+        // reads (iaus/Engine.cpp), so toggling IAUS mid-fight cannot grant a second taunt. Transparent: the scan falls through.
+        if (const float left = Cooldowns::Remaining(id, Cooldowns::Kind::Follower, Cooldowns::kFollowerTaunt,
+                                                    Iaus::kTauntCooldownSec, std::chrono::steady_clock::now());
+            left > 0.0f) {
+            LogSkip(id, "cooling down", std::format("{:.0f}s left of {:.0f}s", left, Iaus::kTauntCooldownSec));
+            return { R::NoOp, Cooldowns::CoolingReason(left), true };
+        }
         {
             std::scoped_lock lk(g_mx);
             // marth 2026-10-13: "for the taunt gambit, it shouldn't repeat while it's active". An attempt in progress, or any
@@ -447,9 +487,18 @@ namespace MFO::Taunt {
         RE::ActorHandle chosen = a_choice.target;
         if (!chosen.get()) chosen = a_f->GetActorRuntimeData().currentCombatTarget;
 
-        auto cands = Gather(a_f, chosen);
-        if (cands.empty())
-            return { R::NoOp, "taunt: every foe in reach is already taunted or not fighting the party", true };
+        GatherStats gst;
+        auto cands = Gather(a_f, chosen, &gst);
+        if (cands.empty()) {
+            // Q69: "skip if everyone already taunted or no one can be" -- transparent, no idle, no cooldown started.
+            // (Whether a foe can SENSE him is a main-thread Harbinger read, so it stays at the roll, Resolve.)
+            if (gst.pinned > 0) {
+                LogSkip(id, "every foe already taunted", std::format("{} foe(s) pinned by a live taunt", gst.pinned));
+                return { R::NoOp, "taunt: every foe in reach is already taunted", true };
+            }
+            LogSkip(id, "no foe to taunt", "no foe in reach is fighting an ally or the player");
+            return { R::NoOp, "taunt: no foe in reach is fighting the party", true };
+        }
 
         // The idle by loadout (design 3.1): shield + one-hander -> 0x0B8C73, everything else -> 0x0B8C71.
         const int r = ItemType(a_f, false), l = ItemType(a_f, true);
@@ -477,6 +526,7 @@ namespace MFO::Taunt {
             a.startMs = g_clockMs;
             g_attempts[id] = a;
         }
+        Cooldowns::NoteFired(id, Cooldowns::Kind::Follower, Cooldowns::kFollowerTaunt, std::chrono::steady_clock::now());
         spdlog::info("[taunt] {} ({:08X}) idle {} filed at {:08X} (R={} L={}, {} candidate foe(s)) -- the roll waits for the "
                      "Harbinger to report the idle played (GetIdleState Confirmed), the ch.1 hold is filed once it accepts the play", a.name, id, shield1H ? "B8C73" : "B8C71", idleTarget, r, l, cands.size());
         return { R::Fired, "taunt: idle filed" };

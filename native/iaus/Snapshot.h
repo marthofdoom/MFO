@@ -119,7 +119,7 @@ namespace MFO::Iaus {
         bool  caster = false;               // a spell in either hand right now
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
-        bool  taunted = false;              // already under this follower's taunt
+        bool  taunted = false;              // already under a live taunt (any taunter)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
