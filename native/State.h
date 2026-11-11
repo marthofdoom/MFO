@@ -112,6 +112,14 @@ namespace MFO {
         // mfoEnabled byte, written only while mfoEnabled is true (Serialization.cpp, so an
         // older DLL's `byte != 0` read is still exactly mfoEnabled). Clamped to [0,2] on load.
         std::uint8_t  helmetOverride = 0;
+        // Card I5 (design Docs/research/2026-11/iaus-design.md section 7; marth Q31: OFF by default per
+        // follower): the per-follower COMBAT IAUS toggle. true = the IAUS scorer (native/iaus/, MAP.md
+        // section 11) picks his combat action in place of the combat table. NOBODY READS IT YET: I6 consumes
+        // it, I7 gives it a board control. NO co-save layout change: it rides bit 3 of the FLWR v5 mfoEnabled
+        // byte under the helmet override's rule (written only while mfoEnabled is true; FlwrEnabledByte.h).
+        // Bit 4 of that byte is reserved for the logistics toggle (card 1dfcuabcr0g): it has NO field here,
+        // is written 0 and is ignored on load.
+        bool          iausCombat = false;
         std::vector<Gambit> tables[static_cast<size_t>(Table::kCount)];
         std::vector<PackageOverride> overrides;
 

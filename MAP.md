@@ -122,7 +122,7 @@ independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
 **Seven records (`Serialization.h`), each with its own version + reader** (the list below grew record by record; MCLS is the seventh):
-- **`'FLWR'` / `kSchemaVersion=6`** (`Serialization.h:289`) — per-follower
+- **`'FLWR'` / `kSchemaVersion=6`** (`Serialization.h:309`) — per-follower
   `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`; each table row is the
   `GambitWire` row (v6 appends the per-rule `cooldownTenths`, card G9).
   Written `SaveCallback` `Serialization.cpp:86`; read by `LoadCallback` `:569`
@@ -143,6 +143,21 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   2 Never), written ONLY while `mfoEnabled` (byte stays 0 when off, so an older DLL's `!= 0` read is
   unchanged); reader: enabled = `byte != 0`, override = bits 1-2 when bit 0 set and <= 2, else 0. A
   follower saved with MFO off for him, or a round trip through an older DLL, drops the override.
+  **Still that byte (card I5, 2026-11-10, value space only, NO bump): bit 3 = `FollowerState::iausCombat`, the
+  per-follower COMBAT IAUS toggle (default off, marth Q31; the scorer is section 11); bit 4 is RESERVED for the
+  logistics IAUS toggle (card 1dfcuabcr0g): written 0, IGNORED on read; bits 5-7 unused (written 0, ignored).**
+  Same rule as the helmet bits: written only while `mfoEnabled`, so the byte is 0 exactly when MFO is off for him.
+  Reader: `iausCombat = bit 0 && bit 3`; enabled and the override read exactly as before. The whole value space is
+  `FlwrEnabledByte::Encode` / `Decode` (`native/FlwrEnabledByte.h`, standard headers only; writer call
+  `Serialization.cpp:578`, reader call `:861`), with a `static_assert(SelfCheck())` over all 256 byte values against
+  constexpr mirrors of BOTH older readers (`byte != 0`, and the helmet-era lines) and `tools/flwr_byte_test/run.sh`
+  running the same functions on the host. **What breaks:** setting any bit while `mfoEnabled` is false makes an
+  older DLL read a switched-off follower as ON; giving bit 4 a meaning needs its own card (a save written by a
+  DLL that reads it must still load here as "ignored"); a NEW reader of this byte must go through `Decode`, never
+  re-derive the bits. A follower saved with MFO off for him, or a round trip through an older DLL, drops the
+  toggle (he comes back on gambits). **NOBODY READS `iausCombat` YET** (I6 consumes it, I7 is the board control);
+  the G9 v6 row (`GambitWire`) and MCLS (`classes/State.cpp`) do not touch this byte. Note:
+  `Docs/research/2026-11/iaus-i5-toggle.md`.
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:223-254`, read `ReadStockRecord` `:286-346`. Owner: `logistics/Upkeep.cpp` (the accessors).
@@ -243,9 +258,9 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   FormIDs re-resolve for the current load order (marth Q9).** Debug: `bClassCoSaveSelfTest` (INI-only, default 0) runs an in-memory
   round trip + 7 corrupt variants at every load (`RunSelfTest`, `RoundTrip`), plus (card G9) cooldown rows (0 / 10 s / the 600 s bound /
   over it, written clamped) and the same state written at rowSchema 5 (`GambitWire::WriteRowAt`, self-test only) read back with cooldown 0.
-- **`GambitWire` -- THE gambit-row wire encoding** (`Serialization.h:336`, impl `WriteRowT:104` / `ReadRowT:133` + the string helpers
+- **`GambitWire` -- THE gambit-row wire encoding** (`Serialization.h:383`, impl `WriteRowT:104` / `ReadRowT:133` + the string helpers
   `WriteOpT:74` / `ReadOpT:86` in `Serialization.cpp`; card C3). The FLWR row code moved VERBATIM out of the FLWR writer (`:560`) and
-  reader (`:840`) loops into templates over the stream (`SKSE::SerializationInterface` or `CoSaveBuffer`, `Serialization.h:280`, an in-memory
+  reader (`:840`) loops into templates over the stream (`SKSE::SerializationInterface` or `CoSaveBuffer`, `Serialization.h:326`, an in-memory
   body with the SKSE method names), so FLWR and MCLS share ONE row encoding. Card G9 (FLWR v6) appended `u16 cooldownTenths` after the
   flags byte there. **What breaks:** a row change MUST be made inside `WriteRowT/ReadRowT`, gated on the version argument, AND bump
   `GambitWire::kRowSchema` (`Serialization.h`, "the FLWR version at which the row last changed") to the new `kSchemaVersion`, or MCLS's
@@ -299,12 +314,16 @@ re-reads the alias from the quest even when the module believes it holds nothing
   `subjectSelector`, `subjectActorForm` (#68, v3). `uid` is **runtime-only, never
   serialized** (`:29`) — the board keys edits on it, not row index.
   `lastFired*` display-only, never read back by the evaluator.
-- `FollowerState` (`State.h:72`): `rapport`, `rank` (clamped [1,5]),
+- `FollowerState` (`State.h:88`): `rapport`, `rank` (clamped [1,5]),
   `combatClassOverride` (v4; ordinals == `CombatStyle::Stance`),
   `mfoEnabled` (v5, T#78; the per-follower MFO master switch, default true),
   `helmetOverride` (86e3phy41; rides `mfoEnabled`'s byte, see FLWR above),
+  `iausCombat` (`State.h:122`, card I5; the combat IAUS toggle, default false, rides bit 3 of the same byte, see
+  FLWR above and section 11; no reader yet; every record-creation path leaves it at the default exactly as it
+  leaves `helmetOverride`: `try_emplace` in `Followers::TryEnsureRecord`, `FollowerState st{}` in the FLWR reader,
+  `g_followers.clear()` in `ResetAllState` / the FLWR reader, the roster-removal erase + fresh record),
   `tables[kCount]`, `overrides`.
-- `g_followers` (`State.h:126`) — **MAIN-THREAD-ONLY, takes no lock (#4).** Keyed
+- `g_followers` (`State.h:156`) — **MAIN-THREAD-ONLY, takes no lock (#4).** Keyed
   on persistent FormID; dismissed followers stay. Off-thread access must snapshot.
 - Slot caps `kCombatSlotsByRank`/`kLogisticsSlotsByRank` (`:112-113`) — the
   default kit must fit Rank I (3 combat / 4 logistics) or a round-trip truncates it.
@@ -8821,7 +8840,7 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 ## 11. IAUS combat scorer — `native/iaus/` (card I2, `feat/iaus-i2-core-opus`, 2026-11-10; a LIBRARY, nobody calls it yet)
 
 Utility scoring in place of the combat table (design `Docs/research/2026-11/iaus-design.md` sections 3-6; idea credit LandingCrew).
-I2 is the scorer only. The ChoiceSource seam is I1, candidate generation / the SpellBook mirror is I4, the FLWR toggle bits are I5,
+I2 is the scorer only. The ChoiceSource seam is I1, candidate generation / the SpellBook mirror is I4, the FLWR toggle bits are I5 (LANDED 2026-11-10: `FollowerState::iausCombat`, bit 3 of the FLWR `mfoEnabled` byte, section 1 "FLWR"; still no reader),
 the scan integration is I6, the board is I7, the class profiles are I8. **NOT serialized** (runtime only, design 7).
 
 - `iaus/Core.h` — the PURE public API (standard headers only, no RE:: types, no clock, no globals): `Family`/`Cons`/`RoleTag`/`PostureKind`
