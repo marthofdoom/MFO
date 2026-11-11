@@ -71,6 +71,7 @@ namespace Sim {
         for (const auto& kv : pt["armor"].o) b.pArmor[kv.first] = ReadThr(kv.second);
         bool anyTaught = false; for (const J& s : root["spells"].a) if (s["taught"].yes()) { anyTaught = true; break; }
         for (const J& s : root["spells"].a) { ++b.rawSpells; if (anyTaught && !s["taught"].yes()) continue; ++b.taughtSpells; SimSpell x; Classify(s, x); AddPoolSpell(b, std::move(x)); }
+        for (const J& s : root["scrolls"].a) { SimSpell x; Classify(s, x); if (x.e.drop == Prune::Drop::Keep && (x.dmg + x.dot + x.heal > 0 || x.ctrl || x.armor > 0)) { x.e.source = SpellSource::Scroll; x.e.cost = 0; x.cost0 = 0; b.scrolls.push_back(std::move(x)); } }
         TagRoles(b);
         return b;
     }
@@ -118,6 +119,7 @@ namespace Sim {
         SimSpell atro = Fx("ConjureFlameAtronach", N::Summon, kAvConjuration, -1, 150, 0, 0, 0, 0.5f, 25);
         for (SimSpell* s : { &flames, &fb, &is, &lb, &fball, &heal, &fheal, &hh, &oak, &fear, &para, &atro }) { ++b.rawSpells; ++b.taughtSpells; AddPoolSpell(b, SimSpell(*s)); }
         b.foeSpells = { fb, is, lb, hh, flames, fball }; for (auto& s : b.foeSpells) s.e.cost = s.cost0;
+        for (const SimSpell* s : { &fball, &fheal, &para, &lb }) { SimSpell sc = *s; sc.e.source = SpellSource::Scroll; sc.e.cost = 0; sc.cost0 = 0; sc.e.name = "Scroll" + s->e.name; b.scrolls.push_back(sc); }
         SimSpell breath = Fx("FireBreath", N::Offense, -1, kAvResistFire, 0, 60, 0, 12, 0.8f); breath.recovery = 8; breath.dot = 6; breath.dotDur = 5; b.foeSpells.push_back(breath);
         SimSpell ice = Fx("IceStorm", N::Offense, kAvDestruction, kAvResistFrost, 0, 20, 0, 0, 0.6f); ice.recovery = 4; ice.spDmg = 20; b.foeSpells.push_back(ice);
         // the roster: {name, race, level, hp, mp, sp, weapon dmg/speed/anim, skill, AR, flags}
@@ -243,9 +245,11 @@ namespace Sim {
             st.dmg = 15.0f + static_cast<float>(level); st.castSec = 0.6f; st.e.name = "Staff"; st.e.charge = static_cast<float>(R.I(4, 14)); st.e.charged = true; st.e.count = 1; st.school = -1;
             fb.staffIdx = static_cast<int>(fb.spells.size()); fb.spells.push_back(st); k.staff = true; k.staffCharged = true; a.staff = true;
         }
+        const std::size_t firstScroll = fb.spells.size();
+        if (withKit && gate.scrollUser && !D.scrolls.empty()) for (int i = R.I(0, 2); i > 0; --i) { SimSpell sc = D.scrolls[static_cast<std::size_t>(R.I(0, static_cast<int>(D.scrolls.size()) - 1))]; sc.e.count = R.I(1, 2); fb.spells.push_back(sc); }   // ruling Q36: a casting class reads scrolls
         for (std::size_t i = 0; i < fb.spells.size(); ++i) {
             SimSpell& s = fb.spells[i]; s.e.form = 0x1000u + static_cast<std::uint32_t>(i); s.e.onClass = gate.spellsOnClass;
-            if (static_cast<int>(i) != fb.staffIdx) {
+            if (static_cast<int>(i) != fb.staffIdx && i < firstScroll) {
                 s.e.cost = costOf(s);
                 static const char* sn[5] = { "Alteration", "Conjuration", "Destruction", "Illusion", "Restoration" };
                 if (s.school >= 18 && s.school <= 22) {   // ModSpellMagnitude perks of his school (and element)

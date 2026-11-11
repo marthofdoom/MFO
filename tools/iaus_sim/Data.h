@@ -140,6 +140,7 @@ namespace Sim {
         std::vector<Encounter> encounters;
         std::vector<int> buckets;
         std::vector<SimSpell> spells;   // the castable pool a follower's book is drawn from (taught by a BOOK)
+        std::vector<SimSpell> scrolls;  // SCRL records (the list's scrolls a follower may carry)
         std::vector<FRace> races;
         FClass cls[3];                  // melee, ranged, mage
         std::vector<Weapon> wOneHand, wDagger, wTwoHand, wBow, wCrossbow;

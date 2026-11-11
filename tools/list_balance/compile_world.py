@@ -125,7 +125,7 @@ def main():
         return [min(G('iAVDAutoCalcSkillMax', 100), G('iAVDSkillStart', 15) + boost.get(i + 6, 0) + (level - 1) * G('iAVDSkillsLevelUp', 8) * w[i] / tot + (e['skillOff'][i] if e['skillOff'] else 0)) for i in range(18)]
 
     def weapon_row(w):
-        return dict(name=w['edid'], dmg=w['dmg'], speed=w['speed'], reach=w['reach'], stagger=w['stagger'], anim=w['anim'], skill=w['skill'], crit=w['crit'], silver=w['silver'], value=w['value'])
+        return dict(name=w['edid'], weight=w['weight'], dmg=w['dmg'], speed=w['speed'], reach=w['reach'], stagger=w['stagger'], anim=w['anim'], skill=w['skill'], crit=w['crit'], silver=w['silver'], value=w['value'])
 
     def armor_rating(pieces, sk):   # displayed rating: each piece x lerp(fArmorRatingBase, fArmorRatingMax, its skill / 100)
         lo, hi = G('fArmorRatingBase', 1.0), G('fArmorRatingMax', 2.5); ar = 0.0; n = 0; shield = False; seen = {}
@@ -289,7 +289,7 @@ def main():
                   boosts=r.get('boosts', [])) for r in races if r and r['playable'] and r['hp'] > 0 and 'Child' not in r['edid'] and 'Vampire' not in r['edid']]
     out = dict(list=W['list'], gmst={k: v for k, v in sorted(gm.items()) if isinstance(v, (int, float))}, specs=specs, encounters=encounters, buckets=BUCKETS,
                follower=dict(races=frace, classes=fclass, weapons=wl, armor=al, arrows=arrows, bolts=bolts, perks=ptab, potions=pots),
-               spells=[s for s in L.get('spells', [])], foeSpells=fspells, potionsRaw=len(W.get('potions', [])), stats=stats)
+               spells=[s for s in L.get('spells', [])], scrolls=[s for s in L.get('scrolls', [])], foeSpells=fspells, potionsRaw=len(W.get('potions', [])), stats=stats)
     path = cache + a.name + '.sim.json'
     with open(path, 'w') as f: json.dump(out, f, separators=(',', ':'))
     print(path, 'specs', len(specs), 'encounters', len(encounters), 'spells', len(out['spells']), 'MB %.1f' % (os.path.getsize(path) / 1e6))

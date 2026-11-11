@@ -103,6 +103,7 @@ namespace Sim {
         long   deathsWithHeal = 0;                        // a party member went down while the subject had an affordable heal for him
         long   killOrderGood = 0, killOrderBad = 0;       // priority foes (healer / caster / archer) killed before / after grunts
         double retreatSec = 0, kiteDmgTaken = 0;
+        long   scrollsUsed = 0, extActions = 0; double moveOrderSec = 0;   // the extended action set (oracle / phase 2)
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         std::vector<std::string> killOrder;
@@ -129,6 +130,7 @@ namespace Sim {
         double lowSince = -1; bool lowHealed = false, lowHadCand = false;
         double pressureSince = -1;                 // the player came under attack at (peel latency)
         double commitUntil = 0;                    // oracle rollouts: he keeps the option he was given until then
+        float  goalX = 0, goalY = 0; double moveUntil = 0; bool sprint = false;   // a deliberate reposition order (the extended action set)
         int    potions0 = 0;                       // potions at the start (Utility: resources left)
         Key    lastKey{}; bool hasLastKey = false; // oracle arm: the action he is on (switch counting)
         std::uint32_t lastTarget = 0;
@@ -357,6 +359,7 @@ namespace Sim {
             // pay at the release (an interrupted charge costs nothing)
             if (x.ctl >= 0) { Ctl& c = ctl[static_cast<std::size_t>(x.ctl)]; SpellEntry& e = c.book.entries[static_cast<std::size_t>(x.actSpell)];
                 if (e.source == SpellSource::Staff) { e.charge -= 1.0f; e.charged = e.charge > 0.5f; c.book.kit.staffCharged = e.charged; }
+                else if (e.source == SpellSource::Scroll) { e.count = std::max(0, e.count - 1); if (x.ctl == 0) ++t.scrollsUsed; }
                 else { x.c.mp = std::max(0.0f, x.c.mp - x.actCost); x.regenAt[1] = now + D->rules.delayMp; } }
             else { x.c.mp = std::max(0.0f, x.c.mp - x.actCost); x.regenAt[1] = now + D->rules.delayMp; }
             const bool iaus = x.actIaus; const Prune::Nature na = s->e.nature;
@@ -422,7 +425,7 @@ namespace Sim {
             for (std::size_t i = 0; i < n; ++i) {
                 const SimSpell* s = SpellOf(x, static_cast<int>(i)); if (!s || now < x.spellReady[i]) continue;
                 float cost = s->e.cost;
-                if (x.ctl >= 0) { const SpellEntry& e = ctl[static_cast<std::size_t>(x.ctl)].book.entries[i]; if (e.source == SpellSource::Staff) continue; if (!ctl[static_cast<std::size_t>(x.ctl)].gate.spellsOnClass) continue; cost = e.cost; }
+                if (x.ctl >= 0) { const SpellEntry& e = ctl[static_cast<std::size_t>(x.ctl)].book.entries[i]; if (e.source != SpellSource::Spell) continue; if (!ctl[static_cast<std::size_t>(x.ctl)].gate.spellsOnClass) continue; cost = e.cost; }
                 if (cost > x.c.mp) continue;
                 float w = 0; std::uint32_t tid = 0;
                 if (s->e.nature == Prune::Nature::Heal && x.role == Role::Foe) {   // foes heal themselves and each other; a follower's heals are IAUS's to cast
@@ -465,6 +468,12 @@ namespace Sim {
                 return;
             }
             x.c.fleeing = false;
+            if (c && now < c->moveUntil) {   // a reposition order: he goes there first (sprint = x1.5, stamina 8 / s: MODEL)
+                const float gd = std::hypot(c->goalX - x.c.x, c->goalY - x.c.y);
+                if (gd > 40.0f) { const bool sp = c->sprint && x.c.sp > 5.0f; if (sp) { x.c.sp -= 8.0f * TM::dt; x.regenAt[2] = now + D->rules.delaySp; }
+                    Move(x, c->goalX, c->goalY, x.spec->run * (sp ? 1.5f : 1.0f)); if (x.ctl == 0) t.moveOrderSec += TM::dt; return; }
+                c->moveUntil = 0;
+            }
             // target
             Body* tg = Find(x.c.targetId);
             const bool taunted = now < x.tauntUntil;
@@ -483,12 +492,18 @@ namespace Sim {
             x.casterMode = canCast && st.wMagic >= 0.9f;
             x.rangedMode = !x.casterMode && hasRanged && (c ? true : (st.wRanged > st.wMelee || d > 700.0f || tg->c.outOfMeleeReach || !x.spec->melee.Has()));
             x.c.caster = x.casterMode;
+            if (c && c->drawn == PostureKind::Staff && now >= x.think) {   // a drawn staff is fired by the engine AI while it has a charge
+                for (std::size_t i = 0; i < c->book.entries.size(); ++i) { const SpellEntry& e = c->book.entries[i];
+                    if (e.source != SpellSource::Staff || !e.charged) continue;
+                    if (!los || d > 2000.0f) { Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
+                    StartCast(x, static_cast<int>(i), c->build->spells[i], tg->c.id, 0.0f, false); x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax); return; }
+            }
             if (x.casterMode) {
                 if (now >= x.think && BrainCast(x, tg)) { x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) / std::max(0.25f, st.off); return; }
                 // nothing castable now: keep the standoff, or fall back to the blade when out of magicka (a dagger)
                 bool anyAfford = false; { const std::size_t n = x.ctl >= 0 ? c->build->spells.size() : x.spec->spells.size();
                     for (std::size_t i = 0; i < n; ++i) { const SimSpell* s = SpellOf(x, static_cast<int>(i)); const float cost = x.ctl >= 0 ? c->book.entries[i].cost : (s ? s->e.cost : 1e9f);
-                        if (s && s->e.nature == Prune::Nature::Offense && cost <= x.c.mp && !(x.ctl >= 0 && c->book.entries[i].source == SpellSource::Staff)) anyAfford = true; } }
+                        if (s && s->e.nature == Prune::Nature::Offense && cost <= x.c.mp && !(x.ctl >= 0 && c->book.entries[i].source != SpellSource::Spell)) anyAfford = true; } }
                 if (anyAfford || (x.Party() && x.c.mp > 0.15f * x.c.mpMax)) {
                     const float want = 750.0f;
                     if (!los || d > want * 1.4f) Move(x, tg->c.x, tg->c.y, x.spec->run);

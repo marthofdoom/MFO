@@ -1,11 +1,14 @@
 #pragma once
 // iaus_sim/Oracle.h -- the EXPERT ORACLE: the "skilled human player" upper bound IAUS is measured against. HOST-ONLY.
 //
-// A rollout search with full information and no time budget over the SAME action set (Generate's candidates plus
-// "let his own AI run") and the SAME world. At each decision of a free follower every option is tried in a copy of
-// the fight, held for a commitment (as a person holds a choice), rolled H seconds forward with the base policy for
-// everyone, over K random streams shared by all options, and scored by Utility(). The best option is taken. A
-// written ruling acts as a constraint: an option a ruling forbids is never tried (Constraint).
+// A rollout search with full information and no time budget over the same world. At each decision of a free
+// follower every option is tried in a copy of the fight, held for a commitment (as a person holds a choice), rolled
+// forward with the base policy for everyone over K random streams shared by all options, and scored by Utility().
+// The best option is taken. A written ruling acts as a constraint: an option a ruling forbids is never tried.
+//
+// OPTIONS = the catalogue's candidates (Generate) + "let his own AI run" + THE EXTENDED ACTION SET (Ext below):
+// what a follower can physically do that the catalogue has no family for yet (scrolls, deliberate repositioning,
+// block, bash). An oracle limited to the catalogue would hide exactly those gaps.
 //
 // Every decision where IAUS's own pick differs from the oracle's is logged with the utility it cost (Disagreement):
 // the gap ledger's evidence.
@@ -33,13 +36,67 @@ namespace Sim {
              + 10.0 * (1.0 - std::min(1.0, double(F.t.partyDowns) / nf)) + 5.0 * partyHp / nf + 5.0 * res / nf;
     }
 
-    struct Disagreement {      // one cluster: IAUS picked a, the oracle picked b
-        long n = 0; double dU = 0;
-        // means over the cluster, IAUS's pick then the oracle's (i / o)
-        double iFoeHp = 0, oFoeHp = 0, iOnPlayer = 0, oOnPlayer = 0, iCaster = 0, oCaster = 0, iResist = 0, oResist = 0, iRecHp = 0, oRecHp = 0, selfHp = 0, selfMp = 0, foes = 0, sameTarget = 0, iDist = 0, oDist = 0;
+    // ── the extended action set ─────────────────────────────────────────────────────────────────────────
+    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, kCount };
+    inline const char* Name(Ext e) {
+        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll" };
+        return n[static_cast<std::size_t>(e)];
+    }
+    struct Opt {                       // one thing he could do now
+        const Candidate* k = nullptr;  // a catalogue candidate (nullptr with ext None = his own AI)
+        Ext   ext = Ext::None;
+        int   idx = -1;                // Scroll: the book entry
+        std::uint32_t target = 0;
+        [[nodiscard]] std::string Label() const { return ext != Ext::None ? std::string(Name(ext)) : k ? std::string(MFO::Iaus::Name(k->family)) : std::string("idle"); }
+        [[nodiscard]] bool Same(const Opt& o) const { return ext == o.ext && idx == o.idx && target == o.target && ((!k && !o.k) || (k && o.k && KeyOf(*k) == KeyOf(*o.k))); }
     };
 
-    struct OracleCfg { int K = 2; double H = 8.0, every = 0.4, commit = 2.5; std::size_t maxOptions = 14; double minDU = 1.0; bool allFollowers = true; };
+    [[nodiscard]] inline bool SeesFrom(const Fight& F, float ax, float ay, const Body& o) {
+        for (const Occluder& oc : F.occ) {
+            const float dx = o.c.x - ax, dy = o.c.y - ay, l2 = dx * dx + dy * dy; if (l2 < 1) continue;
+            const float tt = std::clamp(((oc.x - ax) * dx + (oc.y - ay) * dy) / l2, 0.0f, 1.0f);
+            if (std::hypot(ax + tt * dx - oc.x, ay + tt * dy - oc.y) < oc.r) return false;
+        }
+        return true;
+    }
+
+    // What the extended set offers this follower right now.
+    inline void ExtOptions(const Fight& F, int ci, std::vector<Opt>& out) {
+        const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)];
+        const Body* near = nullptr; float nd = 1e9f; const Body* onMe = nullptr; const Body* casting = nullptr;
+        for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o)) continue; const float d = Fight::Dist(x, o); if (d < nd) { nd = d; near = &o; }
+            if (o.c.targetId == x.c.id && d < F.Reach(o) * 1.6f) onMe = &o; if (o.act == Act::Cast && o.hitAt >= 0 && d < F.Reach(x)) casting = &o; }
+        if (!near) return;
+        if (nd < 900.0f) { out.push_back({ nullptr, Ext::StepBack, -1, near->c.id }); if (x.c.sp > 20.0f) out.push_back({ nullptr, Ext::SprintBack, -1, near->c.id }); }
+        if (Fight::Dist(x, F.b[0]) > 350.0f && F.b[0].alive) out.push_back({ nullptr, Ext::ToPlayer, -1, 0 });
+        for (const Ctl& o : F.ctl) { if (&o == &c) continue; const Body& ob = F.b[static_cast<std::size_t>(o.body)]; if (!Fight::Up(ob) || Fight::Dist(x, ob) < 300.0f) continue;
+            bool heals = false; for (const SimSpell& s : o.build->spells) heals |= s.healOther; if (heals && o.gate.spellsOnClass) { out.push_back({ nullptr, Ext::ToHealer, -1, ob.c.id }); break; } }
+        const Body* tg = F.Find(c.steer ? c.steer : x.c.targetId);
+        if (tg && Fight::Up(*tg) && !F.Sees(x, *tg) && (c.drawn == PostureKind::Bow || c.drawn == PostureKind::Staff || c.gate.spellsOnClass)) out.push_back({ nullptr, Ext::GetSight, -1, tg->c.id });
+        const bool blade = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
+        if (onMe && blade) out.push_back({ nullptr, Ext::Block, -1, onMe->c.id });
+        if (blade && x.c.sp >= 20.0f) { if (casting) out.push_back({ nullptr, Ext::Bash, -1, casting->c.id }); else if (onMe && nd < F.Reach(x)) out.push_back({ nullptr, Ext::Bash, -1, onMe->c.id }); }
+        if (c.gate.scrollUser) for (std::size_t i = 0; i < c.book.entries.size(); ++i) {   // a scroll: on the strongest foe, the foe on the player, or the most hurt friend
+            const SpellEntry& e = c.book.entries[i]; if (e.source != SpellSource::Scroll || e.count <= 0) continue;
+            const SimSpell& s = c.build->spells[i];
+            if (s.e.nature == Prune::Nature::Offense || s.ctrl) {
+                const Body* big = nullptr; const Body* onP = nullptr;
+                for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o) || !F.Sees(x, o) || F.WillWork(s, o) == Tri::No) continue; if (!big || o.c.hp > big->c.hp) big = &o; if (o.c.targetId == F.b[0].c.id) onP = &o; }
+                if (big) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), big->c.id });
+                if (onP && onP != big) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), onP->c.id });
+            } else if (s.e.nature == Prune::Nature::Heal) {
+                const Body* hurt = nullptr; for (const Body& o : F.b) if (o.Party() && o.role != Role::Summon && o.alive && (s.healOther || &o == &x) && (!hurt || o.c.hp / o.c.hpMax < hurt->c.hp / hurt->c.hpMax)) hurt = &o;
+                if (hurt && hurt->c.hp < 0.7f * hurt->c.hpMax) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), hurt->c.id });
+            } else out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), x.c.id });
+        }
+    }
+
+    struct Disagreement {      // one cluster: IAUS picked a, the oracle picked b
+        long n = 0; double dU = 0;
+        double iFoeHp = 0, oFoeHp = 0, iOnPlayer = 0, oOnPlayer = 0, iCaster = 0, oCaster = 0, iResist = 0, oResist = 0, iRecHp = 0, oRecHp = 0, selfHp = 0, selfMp = 0, foes = 0, sameTarget = 0, iDist = 0, oDist = 0, playerHp = 0, nearDist = 0;
+    };
+
+    struct OracleCfg { int K = 8; double H = 150.0, every = 0.4, commit = 2.5; std::size_t maxOptions = 14; double minDU = 1.0; bool allFollowers = true, ext = true; };
 
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
     struct RolloutPolicy : Policy {
@@ -50,7 +107,7 @@ namespace Sim {
     struct OraclePolicy : Policy {
         OracleCfg cfg;
         IausPolicy iaus;                       // followers the oracle does not drive, and IAUS's own pick for the log
-        std::function<bool(const Ctl&, const Candidate&)> allowed;   // rulings as constraints (nullptr = everything)
+        std::function<bool(const Ctl&, const Opt&)> allowed;   // rulings as constraints (nullptr = everything)
         std::map<std::string, Disagreement>* log = nullptr;
         std::vector<double> last;
         long decisions = 0, disagreed = 0; double dUSum = 0;
@@ -61,9 +118,28 @@ namespace Sim {
                 G.StepWorld();
             }
         }
-        // Apply option `k` (nullptr = let his own AI run) for follower ci in G. false = it cannot be done now.
-        static bool Apply(Fight& G, int ci, const Candidate* k, double commit) {
+        // Apply an option for follower ci in G. false = it cannot be done now.
+        static bool Apply(Fight& G, int ci, const Opt& o, double commit) {
             Ctl& c = G.ctl[static_cast<std::size_t>(ci)]; Body& x = G.b[static_cast<std::size_t>(c.body)];
+            const bool held = x.hitAt >= 0 || G.now < x.staggerUntil || G.now < x.ctrlUntil || (x.actIaus && G.now < x.actEnd);
+            auto move = [&](float gx, float gy, double sec, bool sprint) { c.goalX = gx; c.goalY = gy; c.moveUntil = G.now + sec; c.sprint = sprint; c.commitUntil = c.moveUntil; return true; };
+            switch (o.ext) {
+            case Ext::None: break;
+            case Ext::StepBack: case Ext::SprintBack: { const Body* n = G.Find(o.target); if (!n) return false; const float dx = x.c.x - n->c.x, dy = x.c.y - n->c.y, l = std::max(1.0f, std::hypot(dx, dy));
+                return move(x.c.x + dx / l * 500.0f, x.c.y + dy / l * 500.0f, 2.0, o.ext == Ext::SprintBack); }
+            case Ext::ToPlayer: { const Body& p = G.b[0]; return move(p.c.x - 120.0f, p.c.y + (x.c.y > p.c.y ? 100.0f : -100.0f), 3.0, false); }
+            case Ext::ToHealer: { const Body* h = G.Find(o.target); if (!h) return false; return move(h->c.x - 100.0f, h->c.y, 3.0, false); }
+            case Ext::GetSight: { const Body* tg = G.Find(o.target); if (!tg) return false;
+                for (float r : { 250.0f, 450.0f, 700.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
+                    if (SeesFrom(G, gx, gy, *tg)) return move(gx, gy, 2.5, false); }
+                return false; }
+            case Ext::Block: if (held) return false; x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.commitUntil = x.actEnd; return true;
+            case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f) return false; G.StartSwing(x, *tg, Act::Bash, true); c.commitUntil = x.actEnd; return true; }
+            case Ext::Scroll: { if (held || o.idx < 0 || c.book.entries[static_cast<std::size_t>(o.idx)].count <= 0) return false;
+                G.StartCast(x, o.idx, c.build->spells[static_cast<std::size_t>(o.idx)], o.target, 0.0f, true); c.commitUntil = x.actEnd; return true; }
+            default: return false;
+            }
+            const Candidate* k = o.k;
             if (!k) { c.steer = 0; c.commitUntil = G.now + commit; return true; }
             if (k->family == Family::Posture) {
                 if (k->f.posture == c.drawn || k->f.posture == PostureKind::None || x.hitAt >= 0) return false;
@@ -79,7 +155,7 @@ namespace Sim {
             if (last.size() < F.ctl.size()) last.assign(F.ctl.size(), -1e9);
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; const bool subj = ci == 0;
             if (!Fight::Up(x)) return;
-            const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd);
+            const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil;
             Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T);
             FillCooldowns(c, sv.g.actions, F.now, *iaus.T); FillCooldowns(c, sv.g.postures, F.now, *iaus.T);
             TickIn in; in.now = F.now; in.rapportRank = 5; in.seed = c.seed; in.commitWindowSec = c.window;
@@ -87,26 +163,27 @@ namespace Sim {
             if (subj) IausPolicy::Account(F, c, x, sv);
             if (held || F.now - last[static_cast<std::size_t>(ci)] < cfg.every) return;
             last[static_cast<std::size_t>(ci)] = F.now;
-            // the options: IAUS's ranked list first, then the best-looking candidate of every family it did not rank, then postures, then idle
-            const auto& acts = sv.g.actions; std::vector<const Candidate*> opt; std::vector<Key> seen;
-            auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; if (allowed && !allowed(c, *k)) return; const Key key = KeyOf(*k); if (std::find(seen.begin(), seen.end(), key) != seen.end()) return; seen.push_back(key); opt.push_back(k); };
+            // the options: IAUS's ranked list first, then the best-looking candidate of every family it did not rank, postures, the extended set, idle
+            const auto& acts = sv.g.actions; std::vector<Opt> opt;
+            auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; Opt o; o.k = k; if (allowed && !allowed(c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
             const Candidate* iausPick = nullptr;
             if (sv.d.verdict != Verdict::Idle && !sv.d.order.empty() && sv.d.order[0].idx < acts.size()) iausPick = &acts[sv.d.order[0].idx];
-            for (std::size_t i = 0; i < sv.d.ranked.size() && opt.size() < cfg.maxOptions - 4; ++i) if (sv.d.ranked[i].idx < acts.size()) add(&acts[sv.d.ranked[i].idx]);
-            for (std::size_t f = 0; f < kFamilies; ++f) {   // one unranked option per family and target class: the weakest foe, the foe on the player, a caster
+            for (std::size_t i = 0; i < sv.d.ranked.size() && opt.size() + 4 < cfg.maxOptions; ++i) if (sv.d.ranked[i].idx < acts.size()) add(&acts[sv.d.ranked[i].idx]);
+            for (std::size_t f = 0; f < kFamilies; ++f) {
                 const Candidate* lo = nullptr; const Candidate* onP = nullptr; const Candidate* cast = nullptr; const Candidate* rec = nullptr;
                 for (const Candidate& k : acts) { if (static_cast<std::size_t>(k.family) != f) continue;
                     if (!lo || k.f.foeHpPct < lo->f.foeHpPct) lo = &k; if (k.f.foeOnPlayer && !onP) onP = &k; if (k.f.foeCaster && !cast) cast = &k; if (!rec || k.f.recipientHp < rec->f.recipientHp) rec = &k; }
                 for (const Candidate* k : { lo, onP, cast, rec }) if (k) add(k);
             }
-            for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { if (opt.size() < cfg.maxOptions + 2) { opt.push_back(&k); } }
-            opt.push_back(nullptr);   // idle: his own AI
+            for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { Opt o; o.k = &k; opt.push_back(o); }
+            if (cfg.ext) { std::vector<Opt> ex; ExtOptions(F, ci, ex); for (const Opt& o : ex) if (!allowed || allowed(c, o)) opt.push_back(o); }
+            opt.push_back(Opt{});   // idle: his own AI
             // evaluate
             std::vector<double> u(opt.size(), -1e9); const std::uint64_t s0 = F.R.g();
             for (std::size_t i = 0; i < opt.size(); ++i) {
                 double sum = 0; int n = 0;
                 for (int k = 0; k < cfg.K; ++k) {
-                    Fight G = F; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k));
+                    Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k));
                     if (!Apply(G, ci, opt[i], cfg.commit)) break;
                     RolloutPolicy rp; RunFor(G, rp, F.now + cfg.H); sum += Utility(G); ++n;
                 }
@@ -114,32 +191,36 @@ namespace Sim {
             }
             // pick: the best; the action he is already on wins a near tie (a person does not dither)
             std::size_t best = opt.size() - 1; for (std::size_t i = 0; i < opt.size(); ++i) if (u[i] > u[best]) best = i;
-            if (c.hasLastKey) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i] && KeyOf(*opt[i]) == c.lastKey && u[i] > -1e8 && u[i] >= u[best] - 0.3) { best = i; break; }
+            if (c.hasLastKey) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey && u[i] > -1e8 && u[i] >= u[best] - 0.3) { best = i; break; }
             ++decisions;
             // the disagreement with IAUS's own pick
+            std::size_t ii = opt.size() - 1; if (iausPick) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == KeyOf(*iausPick)) { ii = i; break; }
             if (log) {
-                std::size_t ii = opt.size() - 1; if (iausPick) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i] && KeyOf(*opt[i]) == KeyOf(*iausPick)) ii = i;
                 const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
                 if (ii != best && dU >= cfg.minDU) {
                     ++disagreed; dUSum += dU;
-                    auto nm = [](const Candidate* k) { return k ? std::string(Name(k->family)) : std::string("idle"); };
-                    const Candidate* a = opt[ii]; const Candidate* b = opt[best];
-                    Disagreement& g = (*log)[nm(a) + " -> " + nm(b)]; ++g.n; g.dU += dU;
+                    const Candidate* a = opt[ii].k; const Candidate* b = opt[best].k;
+                    Disagreement& g = (*log)[opt[ii].Label() + " -> " + opt[best].Label()]; ++g.n; g.dU += dU;
                     auto fill = [](const Candidate* k, double& hp, double& onP, double& cas, double& res, double& rec, double& dist) { if (!k) return; hp += k->f.foeHpPct; onP += k->f.foeOnPlayer; cas += k->f.foeCaster; res += k->f.resist; rec += k->f.recipientHp; dist += k->f.dist; };
                     fill(a, g.iFoeHp, g.iOnPlayer, g.iCaster, g.iResist, g.iRecHp, g.iDist); fill(b, g.oFoeHp, g.oOnPlayer, g.oCaster, g.oResist, g.oRecHp, g.oDist);
+                    float nd = 1e9f; for (const auto& f : sv.sn.foes) nd = std::min(nd, f.dist);
                     g.selfHp += x.c.hp / std::max(1.0f, x.c.hpMax); g.selfMp += x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1; g.foes += double(sv.sn.foes.size()); g.sameTarget += a && b && a->target == b->target;
+                    g.playerHp += F.b[0].c.hp / std::max(1.0f, F.b[0].c.hpMax); g.nearDist += nd < 1e8f ? nd : 0;
                 }
             }
             // act
-            const Candidate* k = opt[best]; Tally& t = F.t;
-            const Key key = k ? KeyOf(*k) : Key{ Family::kCount, PostureKind::None, 0, 0 };
-            if (!Apply(F, ci, k, 0.0)) return;
-            if (F.trace && (!c.hasLastKey || !(c.lastKey == key))) std::fprintf(F.trace, "%7.2f  ORACLE %s: %s%s%s -> %u  U %.2f (IAUS would: %s, U %.2f)\n", F.now, x.c.name.c_str(), k ? std::string(Name(k->family)).c_str() : "idle", k && !k->formName.empty() ? " " : "", k ? std::string(k->formName).c_str() : "", k ? k->target : 0u, u[best], iausPick ? std::string(Name(iausPick->family)).c_str() : "idle", 0.0);
+            const Opt& o = opt[best]; const Candidate* k = o.k; Tally& t = F.t;
+            const Key key = k ? KeyOf(*k) : Key{ Family::kCount, PostureKind::None, static_cast<std::uint32_t>(o.ext) * 1000u + static_cast<std::uint32_t>(o.idx + 1), o.target };
+            if (!Apply(F, ci, o, 0.0)) return;
             c.commitUntil = 0;
-            if (k && subj) { ++t.fired; if (k->family != Family::Posture) { ++t.hist[static_cast<std::size_t>(k->family)];
-                    t.actSec[static_cast<std::size_t>(k->family)] += k->family == Family::Attack ? cfg.every : k->family == Family::Retreat ? TM::retreatSec : std::max(0.0, x.actEnd - F.now); } else ++t.postureSwaps;
+            if (F.trace && (!c.hasLastKey || !(c.lastKey == key))) std::fprintf(F.trace, "%7.2f  ORACLE %s: %s%s%s -> %u  U %.2f (IAUS would: %s, U %.2f)\n", F.now, x.c.name.c_str(), o.Label().c_str(), k && !k->formName.empty() ? " " : "", k ? std::string(k->formName).c_str() : "", k ? k->target : o.target, u[best], opt[ii].Label().c_str(), u[ii]);
+            if (subj) {
+                if (o.ext != Ext::None) ++t.extActions;
+                if (k) { ++t.fired; if (k->family != Family::Posture) { ++t.hist[static_cast<std::size_t>(k->family)];
+                        t.actSec[static_cast<std::size_t>(k->family)] += k->family == Family::Attack ? cfg.every : k->family == Family::Retreat ? TM::retreatSec : std::max(0.0, x.actEnd - F.now); } else ++t.postureSwaps;
+                    if ((k->family == Family::DrinkHealth || k->family == Family::CastHeal) && c.lowSince >= 0 && !c.lowHealed && c.lowHadCand) { c.lowHealed = true; ++t.lowHealed; t.lowHealSecSum += F.now - c.lowSince; } }
                 if (!c.hasLastKey || !(c.lastKey == key)) ++t.switches;
-                if ((k->family == Family::DrinkHealth || k->family == Family::CastHeal) && c.lowSince >= 0 && !c.lowHealed && c.lowHadCand) { c.lowHealed = true; ++t.lowHealed; t.lowHealSecSum += F.now - c.lowSince; } }
+            }
             c.lastKey = key; c.hasLastKey = true;
         }
     };
