@@ -2951,3 +2951,12 @@ Not cleared on load. Harmless (Harbinger handles are process-monotonic, a stale 
 "when he dual-wields the same weapon form in both hands, lw == w, so srcLeft stays 0 and left-hand hits count as right-hand hits." Informational: same weapon, same reach, so the reach evidence is still valid.
 
 ### Harbinger-side backlog from the same review (recorded here for the MFO adoption; APMF entries in APMF Docs): F1-3 HitSeen matches the engine's own bash within 2.5 s; F1-4 the combat move does not yield to an active ch.8 cast claim; F1-5 kAtkLeft is the charge bit; F2-2 pointSpace bound at the first sweep; probe Post per melee hit while [Probe] bCombatMove is on.
+
+### MFO-B692 (SEV-4, OPEN, IAUS classes lab tools/iaus_sim, against 62f67b1, Opus review of feat/iaus-classes)
+"Free stealth entry ends only on a weapon hit. Where: Setup.h `cloakUntil = 1e9` is cleared only in `Physical`. A spell cast (ReleaseCast) or a missed arrow never ends it, so a follower who opens with a spell (for example the parked Listener's Fear) stays invisible to foe targeting for the whole fight." Reasoning: Lab-only (tools/iaus_sim), no native code. Fix with the next stealth lab round.
+
+### MFO-B693 (SEV-4, OPEN, IAUS classes lab tools/iaus_sim, against 62f67b1, Opus review of feat/iaus-classes)
+"Staffs read the hand sneak rows. In Data.h `SneakKind`, anim 8 (staff) maps to hand. compile_world never emits hand rows today, so the effect is latent." Reasoning: Lab-only and latent today.
+
+### MFO-B694 (SEV-5, OPEN, IAUS classes lab tools/iaus_sim, against 62f67b1, Opus review of feat/iaus-classes)
+"Possible invalid JSON in the gap ledger. Results.h writes each class gap row with an unconditional comma prefix. That is invalid JSON if GapRows() is ever empty. It is not empty today." Reasoning: Lab-only results formatting.

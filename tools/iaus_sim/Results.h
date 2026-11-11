@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "iaus_sim/Playstyles.h"
+
 namespace Sim {
 
     struct JsonOut {
@@ -36,6 +38,20 @@ namespace Sim {
             { "R-BUDGET", "Decide stays inside fIausBudgetMs (0.5 ms)", "*", "decide_us_max", "<=", 500.0 },
         };
         return r;
+    }
+    // THE CLASS RULINGS: every band of every class playstyle (Playstyles.h) is one measurable ruling, id P-<class>-<n>.
+    inline const std::vector<Ruling>& ClassRulings() {
+        static std::vector<std::string> keep; static std::vector<Ruling> r;
+        if (r.empty()) { std::size_t n = 0; for (const Playstyle& p : Playstyles()) n += 2 * p.bands.size(); keep.reserve(n);
+            for (const Playstyle& p : Playstyles()) { if (!PlaystyleInForce(p.cls)) continue; int i = 0; for (const Band& b : p.bands) { ++i;
+                if (b.lo > -kOpen) { keep.push_back(std::string("P-") + p.cls + "-" + std::to_string(i)); r.push_back({ keep.back().c_str(), b.why, p.cls, b.metric, ">=", b.lo }); }
+                if (b.hi < kOpen) { keep.push_back(std::string("P-") + p.cls + "-" + std::to_string(i) + (b.lo > -kOpen ? "b" : "")); r.push_back({ keep.back().c_str(), b.why, p.cls, b.metric, "<=", b.hi }); } } } }
+        return r;
+    }
+    // A metric of a cell for a ruling: an action share (a.<family>) that never fired is 0; anything else missing or negative = no sample.
+    inline bool RulingValue(const std::map<std::string, double>& sm, const char* metric, double& v) {
+        auto it = sm.find(metric); if (it != sm.end()) { v = it->second; return v >= 0; }
+        if (!std::strncmp(metric, "a.", 2)) { v = 0; return true; } return false;
     }
     inline bool RulingApplies(const Ruling& r, const std::string& cls, const std::string& line, int tier) {
         const std::string p = r.cls;
@@ -64,6 +80,45 @@ namespace Sim {
             { "G12", "power attack / bash", "melee lines", "a stagger is not used to interrupt a caster", "interrupt", "open" },
             { "G13", "control + attack", "*", "attacks do not follow an ally's control", "control-setup", "open" },
             { "G14", "attack target", "*", "the foe on the player is not handled first", "peel", "open" },
+        };
+        return g;
+    }
+    // THE CLASS GAP LEDGER: what a class's card needs that today's actions cannot express, with the missing road. One results row
+    // per (gap, class) from Playstyle::gaps; delta_u comes from the gap's scenario when it ran with the oracle.
+    struct ClassGap { const char* id; const char* family; const char* desc; const char* scenario; const char* status; };
+    inline const std::vector<ClassGap>& ClassGaps() {
+        static const std::vector<ClassGap> g = {
+            { "C-G1", "sneak", "no act.sneak: the sneak stance is never taken. Road: card G1 (Harbinger ch.3 stance + MFO's own re-assert), tier B, probe in combat first", "ambush", "open" },
+            { "C-G2", "sneak", "no hide-when-unseen and no detection input. Road: H-DETECT (a read of the foe group's detect level + the post-call gate on CalculateDetection, card G2), tier A", "hit-and-hide", "open" },
+            { "C-G3", "sneak", "cannot break off to a point no foe sees. Road: card G3 (H3 run + a concealment-point query) and the Sneak family's hide candidate", "hit-and-hide", "open" },
+            { "C-G4", "sneak", "no flanking half bonus. Road: card G4 (marker effect + class perk), tier B", "flank", "open" },
+            { "C-H10", "sneak", "no Shadowcloak. Road: card H10 (a 3 s invisibility every 30 s), falls back to H-DETECT if invisibility does not drop detection", "shadowcloak", "open" },
+            { "C-G13", "logistics", "steal and pick locks (cards G13 / G14) are logistics actions, outside the combat lab", "", "limit" },
+            { "C-BLOCK", "block", "no held guard: a wall class cannot block near-constantly. Road: the Harbinger block state (question Q83), then Family::Block as a held action", "knight-boss", "open" },
+            { "C-C8", "package", "power share, circling, flanking and leash are the class combat package (card C8: CSTY + ch.18 + ch.23), not an IAUS decision", "", "open" },
+            { "C-POWER", "power attack", "MFO's own power attack may land as an ordinary hit (question Q82, unproven): the lab may over-value it", "", "open" },
+            { "C-H3", "movement", "cannot leave melee by choice: no mid-fight disengage / keep-away drive. Road: card H3 (Harbinger, tier A)", "kite", "open" },
+            { "C-H4", "movement", "range does not follow the equipped spell. Road: card H4 (ch.24 close-in + H3 back-off)", "", "open" },
+            { "C-H5", "ranged", "miss budgets cannot be played: the lab's miss rate is one fixed model number. Road: card H5 (ch.29 projectile aim, built) + a lab model of it", "", "open" },
+            { "C-MARK", "mark", "no Mark: party pin for 10 s + 10% damage taken. Road: card H-MARK (ch.20 fan-out + class perks), then a Mark candidate", "", "open" },
+            { "C-G5", "summon", "table mode cannot summon on need (no cond.self_has_summon, no foe-attacking-my-summon selector: cards G5 / G6); IAUS has CastSummon", "", "open" },
+            { "C-G7", "summon", "no corpse target: reanimate spells are dropped by the lab and by IAUS. Road: card G7", "", "open" },
+            { "C-G11", "ward", "no 'a hostile spell is being charged at me' input, so a ward cannot be timed. Road: card G11 (a read-only foe-caster mirror)", "", "open" },
+            { "C-G17", "posture", "a bound weapon does not count as his melee weapon (card G17, field bug)", "", "open" },
+            { "C-H2", "targeting", "'less likely to be targeted' is a foe-side weight (card H2), not modelled in the lab", "", "open" },
+            { "C-H6", "cast control", "Illusion immunity lift for undead / Daedra (card H6), not modelled", "", "open" },
+            { "C-H7", "casts", "two simultaneous casts of different spells (card H7, deep RE): one cast at a time in the lab and in the game", "", "open" },
+            { "C-H8", "defence", "40% auto-block while attacking (card H8), not modelled", "", "open" },
+            { "C-H9", "defence", "Guardian damage share (card H9), not modelled", "", "open" },
+            { "C-H11", "power attack", "a power attack that releases the off-hand spell (card H11): IAUS has no input for that spell's worth on the struck foe", "", "open" },
+            { "C-C9", "movement", "the go-in rule is a movement decision IAUS does not own: goInBad% is his time in melee against the rule. Road: card C9 over H3 / H4", "", "open" },
+            { "C-FLEE", "retreat", "Retreat (act.flee) is gated by the same kDisengage flag as the H3 reposition, so a line-holding hybrid runs from his line", "", "open" },
+            { "C-UNDEAD", "attack target", "anti-undead aggression: no class term that values an undead foe. Road: a class profile weight on FoeUnholy + the C8 package", "", "open" },
+            { "C-AURA", "passive", "the Saint's aura (card C11) is not modelled", "", "open" },
+            { "C-ROOT", "class table", "the Listener's table root is Ranged (a bow kit) while his card and default rows are a blade executioner: a question for the C12 card", "assassinate", "open" },
+            { "C-MODE", "package", "champion mode against one big foe, flurry mode against many: a per-fight ch.18 switch (cards C8 / C9)", "", "open" },
+            { "C-G8", "shout", "no act.shout and no Harbinger shout drive (card G8, tier A)", "", "open" },
+            { "C-DB", "class table", "the Dragonborn's player-picked T4 behaviour needs MCLS v2; the lab plays him as an unrestricted hybrid", "", "open" },
         };
         return g;
     }
@@ -101,6 +156,8 @@ namespace Sim {
             { "intr%", "higher", "%" }, { "resisted%", "lower", "%" }, { "immune%", "lower", "%" }, { "weak%", "higher", "%" }, { "splash%", "lower", "%" }, { "ctrlFail%", "lower", "%" },
             { "peel.s", "lower", "s" }, { "press%", "lower", "%" }, { "prio%", "higher", "%" }, { "waste%", "lower", "%" }, { "dwh/f", "lower", "" }, { "wwDecl/min", "lower", "/min" },
             { "dry%", "lower", "%" }, { "downs/f", "lower", "" }, { "pMinHp%", "higher", "%" }, { "ctlFocus%", "higher", "%" }, { "taken/s", "lower", "" }, { "pTaken/s", "lower", "" },
+            { "persona", "higher", "" }, { "sneak%", "neutral", "%" }, { "hidden%", "neutral", "%" }, { "sneakAtk%", "higher", "%" }, { "sneakDmg%", "higher", "%" }, { "opener%", "higher", "%" }, { "flank%", "neutral", "%" }, { "hide/min", "neutral", "/min" },
+            { "tgtDist", "neutral", "" }, { "pDist", "neutral", "" }, { "contact%", "neutral", "%" }, { "goInBad%", "lower", "%" }, { "summonUp%", "higher", "%" }, { "healAt%", "neutral", "%" }, { "miss%", "lower", "%" }, { "powShare%", "neutral", "%" }, { "undeadDmg%", "neutral", "%" },
             { "dps", "higher", "" }, { "loss%", "lower", "%" }, { "timeout%", "lower", "%" }, { "tntDown%", "lower", "%" }, { "b.cast", "neutral", "%" }, { "b.shoot", "neutral", "%" }, { "b.free", "neutral", "%" },
         };
         return v;
@@ -130,16 +187,25 @@ namespace Sim {
                 j += std::string(i ? ",\n" : "\n") + "{\"name\":" + JsonOut::Str(s.name) + ",\"class\":" + JsonOut::Str(s.cls) + ",\"iaus_u\":" + JsonOut::Num(s.iausU) + ",\"oracle_u\":" + (s.hasOracle ? JsonOut::Num(s.oracleU) : "null")
                    + ",\"gap\":" + (s.hasOracle ? JsonOut::Num(s.gap) : "null") + ",\"metrics\":" + JsonOut::Map(SchemaMetrics(s.metrics)) + ",\"oracle_metrics\":" + JsonOut::Map(SchemaMetrics(s.oracleMetrics)) + "}"; }
             j += "],\n\"rulings\":["; bool first = true;
-            for (const Ruling& r : Rulings()) for (const ResultRow& row : rows) {
+            for (const std::vector<Ruling>* set : { &Rulings(), &ClassRulings() }) for (const Ruling& r : *set) for (const ResultRow& row : rows) {
                 if (row.bracket != "natural" || !RulingApplies(r, row.cls, row.line, row.tier)) continue;
-                const auto sm = SchemaMetrics(row.metrics); auto it = sm.find(r.metric); if (it == sm.end() || it->second < 0) continue;
+                const auto sm = SchemaMetrics(row.metrics); double val = 0; if (!RulingValue(sm, r.metric, val)) continue;
                 j += std::string(first ? "\n" : ",\n") + "{\"id\":" + JsonOut::Str(r.id) + ",\"text\":" + JsonOut::Str(r.text) + ",\"class\":" + JsonOut::Str(row.cls) + ",\"metric\":" + JsonOut::Str(r.metric) + ",\"op\":" + JsonOut::Str(r.op)
-                   + ",\"target\":" + JsonOut::Num(r.target) + ",\"value\":" + JsonOut::Num(it->second) + ",\"pass\":" + (RulingPass(r, it->second) ? "true" : "false") + "}"; first = false; }
+                   + ",\"target\":" + JsonOut::Num(r.target) + ",\"value\":" + JsonOut::Num(val) + ",\"pass\":" + (RulingPass(r, val) ? "true" : "false") + "}"; first = false; }
             j += "],\n\"gaps\":[";
             for (std::size_t i = 0; i < GapRows().size(); ++i) { const GapRow& g = GapRows()[i]; double dU = 0; bool has = false;
                 for (const ScenarioRow& s : scen) if (s.hasOracle && s.name == g.scenario) { dU = s.gap; has = true; }
                 j += std::string(i ? ",\n" : "\n") + "{\"id\":" + JsonOut::Str(g.id) + ",\"family\":" + JsonOut::Str(g.family) + ",\"class\":" + JsonOut::Str(g.cls) + ",\"desc\":" + JsonOut::Str(g.desc) + ",\"scenario\":" + JsonOut::Str(g.scenario)
                    + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + "}"; }
+            auto ran = [&](const char* cls) { for (const ResultRow& row : rows) if (row.cls == cls) return true; return false; };   // only the classes this run played
+            for (const Playstyle& p : Playstyles()) { if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; std::string ids = std::string(",") + p.gaps + ",";   // the class gap ledger: one row per (gap, class)
+                for (const ClassGap& g : ClassGaps()) { if (ids.find(std::string(",") + g.id + ",") == std::string::npos) continue; double dU = 0; bool has = false;
+                    for (const ScenarioRow& s : scen) if (s.hasOracle && s.name == g.scenario) { dU = s.gap; has = true; }
+                    j += std::string(",\n") + "{\"id\":" + JsonOut::Str(g.id) + ",\"family\":" + JsonOut::Str(g.family) + ",\"class\":" + JsonOut::Str(p.cls) + ",\"desc\":" + JsonOut::Str(g.desc) + ",\"scenario\":" + JsonOut::Str(g.scenario)
+                       + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + "}"; } }
+            j += "],\n\"playstyles\":["; bool firstPs = true;
+            for (std::size_t i = 0; i < Playstyles().size(); ++i) { const Playstyle& p = Playstyles()[i]; if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; const bool sep = !firstPs; firstPs = false;
+                j += std::string(sep ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(p.cls) + ",\"does\":" + JsonOut::Str(p.does) + ",\"never\":" + JsonOut::Str(p.never) + ",\"forbid\":" + std::to_string(p.forbid) + ",\"gaps\":" + JsonOut::Str(p.gaps) + "}"; }
             j += "],\n\"metric_info\":{";
             for (std::size_t i = 0; i < MetricInfos().size(); ++i) { const MetricInfo& mi = MetricInfos()[i]; j += std::string(i ? "," : "") + JsonOut::Str(mi.name) + ":{\"better\":" + JsonOut::Str(mi.better) + ",\"unit\":" + JsonOut::Str(mi.unit) + "}"; }
             j += "}}\n";

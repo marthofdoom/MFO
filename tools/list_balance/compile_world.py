@@ -16,7 +16,7 @@ What is resolved here (every formula and its proof level is in Docs/research/202
 
 usage: compile_world.py --name LoreRim
 """
-import argparse, json, os, random, sys
+import re, argparse, json, os, random, sys
 
 AV_1H, AV_2H, AV_BOW, AV_BLOCK, AV_HEAVY, AV_LIGHT = 6, 7, 8, 9, 11, 12
 SK = lambda av: av - 6          # skill actor value -> index into the 18-entry skill arrays
@@ -277,6 +277,48 @@ def main():
             elif ep == 85 and av in (11, 12) and v > 1: ptab['armor'].setdefault(str(av), []).append([thr, v])
     for t in ptab.values():
         for k in t: t[k] = sorted(t[k])
+    # STEALTH perk tables (the class playstyle lab, iaus-classes.md "Stealth model"). Rows are [skill AV, threshold, value, chain]:
+    # a chain is one ranked perk line (the EditorID without its trailing digits); the sim takes the best row of a chain the
+    # follower's skill qualifies for and combines chains (sneak attack: multiply; sneak skill: add; noise: multiply).
+    #   sneakAttack[kind]: EP 18 ModSneakAttackMult, fn 3 (multiply), by weapon kind (dagger / oneHand / twoHand / bow / all)
+    #   sneakSkill:        EP 57 ModDetectionSneakSkill, fn 2 (add)
+    #   sneakNoise:        EP 48 ModDetectionMovement, fn 3 (multiply, < 1)
+    # A perk with no skill requirement counts (threshold 0) only when its chain has a ranked sibling that does have one, so an
+    # item-granted perk (the Shrouded gloves' DBBackstab) is not read as a perk the follower owns.
+    KW_KIND = {'WeapTypeDagger': ('dagger',), 'WeapTypeSword': ('oneHand',), 'WeapTypeWarAxe': ('oneHand',), 'WeapTypeMace': ('oneHand',), 'WeapTypeBow': ('bow',),
+               'WeapTypeBattleaxe': ('twoHand',), 'WeapTypeWarhammer': ('twoHand',), 'WeapTypeGreatsword': ('twoHand',)}
+    SKILL_KIND = {6: ('oneHand', 'dagger'), 7: ('twoHand',), 8: ('bow',)}
+    def chain_of(edid): return re.sub(r'[0-9]+$', '', edid)
+    ranked = set()
+    for p in perks:
+        if p and p['playable'] and any(c[0] == 277 and isinstance(c[1], int) and 6 <= c[1] <= 23 and c[3] in (2, 3) for c in p['conds']): ranked.add(chain_of(p['edid']))
+    stab = dict(sneakAttack={}, sneakSkill=[], sneakNoise=[])
+    for p in perks:
+        if not p or not p['playable']: continue
+        req = [(c[1], c[4]) for c in p['conds'] if c[0] == 277 and isinstance(c[1], int) and 6 <= c[1] <= 23 and c[3] in (2, 3)]
+        ch = chain_of(p['edid'])
+        if req: av, thr = max(req, key=lambda r: r[1])
+        elif ch in ranked: av, thr = 15, 0.0
+        else: continue
+        for e in p['entries']:
+            if e['type'] != 2 or 'v' not in e: continue
+            ep = e.get('ep'); fn = e.get('fn'); v = e['v']
+            # only entries whose every condition is understood: a weapon keyword / weapon skill type, "does not hold the next rank"
+            # (HasPerk == 0) or "not in heavy armor" (WornHasKeyword ArmorHeavy == 0). Anything else (a target state, a spell, a
+            # quest) is a situation the lab does not model, so the entry is left out rather than counted as always on.
+            if not all((c[0] == 560 and isinstance(c[1], str) and c[1] in KW_KIND) or (c[0] == 109 and c[1] in SKILL_KIND) or (c[0] == 448 and c[4] == 0.0)
+                       or (c[0] == 682 and c[1] == 'ArmorHeavy' and c[4] == 0.0) for c in e['conds']): continue
+            if ep == 18 and fn == 3 and v > 1:
+                kinds = set()
+                for c in e['conds']:
+                    if c[0] == 560 and isinstance(c[1], str) and c[4] == 1.0 and c[3] == 0: kinds.update(KW_KIND.get(c[1], ()))
+                    if c[0] == 109 and isinstance(c[1], int) and c[4] == 1.0 and c[3] == 0: kinds.update(SKILL_KIND.get(c[1], ()))
+                for k in (kinds or {'all'}): stab['sneakAttack'].setdefault(k, []).append([av, thr, v, ch])
+            elif ep == 57 and fn == 2 and 0 < v <= 100: stab['sneakSkill'].append([av, thr, v, ch])
+            elif ep == 48 and fn == 3 and 0 < v < 1: stab['sneakNoise'].append([av, thr, v, ch])
+    for k in stab['sneakAttack']: stab['sneakAttack'][k].sort(key=lambda r: (r[3], r[1]))
+    stab['sneakSkill'].sort(key=lambda r: (r[3], r[1])); stab['sneakNoise'].sort(key=lambda r: (r[3], r[1]))
+    ptab['stealth'] = stab
 
     pots = {}
     for p in W.get('potions', []):
@@ -296,6 +338,7 @@ def main():
     print('  ', stats)
     print('   follower classes:', {k: (v['edid'] if v else None) for k, v in fclass.items()}, 'weapon ladders:', {k: len(v) for k, v in wl.items()},
           'perk tables:', {k: {kk: len(vv) for kk, vv in v.items()} for k, v in ptab.items()})
+    print('   stealth perks:', json.dumps(stab)[:900])
 
 
 if __name__ == '__main__':
