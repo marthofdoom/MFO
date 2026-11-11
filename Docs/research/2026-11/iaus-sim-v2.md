@@ -1260,3 +1260,114 @@ after it. The harness keeps both includes and runs `SharedTauntPowerRules()` the
 
 For the engine-fill card (recorded by the coordinator as backlog): F7, `bestOn` filters and a per-entry "measured"
 flag, and `Reach` falling back to `fMeleeReach` while `!Known()`.
+
+## 29. Design A built: the bash through Harbinger's combat move (successor 2, 2026-11-11)
+
+Branches: Harbinger `feat/combat-move` (ch.31, `kIntent_CombatMove`, ABI v38) and MFO `feat/iaus-combat-move` (the
+mirror, the client, the probe switch, the IAUS executor). Both tier A, both waiting for their Opus review.
+
+### 29.1 The probe that changed the design: a bare animation event is not the engine's road
+
+Section 26.2 proposed sending the engine's own graph event (`bashStart`) and asked first whether the engine's Bash
+leaf sets attack data before it. The disassembly of 1.6.1170 (1.5.97 checked as a twin) answers that before any
+field run:
+
+| Step | Where (1.6.1170) | What it does |
+|---|---|---|
+| The Bash leaf's attempt | AE 47841 `0x86B4A0` | tests the actor (`0x6B90F0`: attack state None, graph bool `IsAttackReady`, attacking not disabled), then StartAttack on the bash context |
+| StartAttack | AE 49170 `0x8A28B0` | draws an entry of the actor base's attack data, builds a `TESActionData` on its stack (priority 2, source = the actor, animation event = the entry's), calls `Process` (vtable slot 5) |
+| The action mediator | AE 38949 `0x6CD0D0` | its pre-checks, the animation event on the actor's graph, and on success the post-action step AE 39004 `0x6CF760` |
+| The post-action step | calls AE 39541 `0x6EE0C0` | THE setter of an actor's attack data: looks the event up in the actor base's map, writes `process->high->attackData`, then sets the attack state (bash flag: 6 = Bash) |
+
+AE 39541 has exactly one caller on each build. So the attack data and the attack state a hit reads are set ONLY by
+the action road. `NotifyAnimationGraph("bashStart")` alone plays the swing with whatever attack data the actor had
+before, and no Bash state. The design is therefore the action, not the event: Harbinger builds the same action data
+and calls `Process()` once. That costs two verified address rows (the constructor and the vtable) where 26.2 hoped
+for none.
+
+The same reading shows the engine's block: `0x7F9770(actor, 3)` = the Left Attack action through the same `Process`
+road, released with the Left Release action (index 4).
+
+### 29.2 What was built
+
+Harbinger (`core/CombatMove.{h,cpp}`): a one-shot like `kIntent_Place`, never a claim, no hook. `RequestEx(actor,
+kIntent_CombatMove, 0, {ival = Bash | PowerBash, target = the foe})`. On the game thread: the engine's own bash test,
+a yield to any ch.7 Offense deny and to a combat substrate, the player's ranking (the client must outrank Engine on
+CombatAction), the actor base's bash entry, ONE `Process()`, then the read-back. `Started` only when the attack data
+is that entry and the attack state is Bash. A hit event with the Bash flag inside 2.5 s sets `HitSeen`. Everything
+else is `Refused` or `Failed` with a reason, logged. `kCombatMove_Block` is reserved and refused. Exactly 1.6.1170 and
+1.5.97, 1.7.104 refused by name. INVARIANTS #0 (l) is written as PROPOSED: its adoption is marth's.
+
+MFO: `apmf/CombatMove.cpp` (RequestBash, PollCombatMove: the outcome is written to MFO.log once), `Vocab::kActBash`
+(IAUS-only, in no board table, never serialized), its executor in `cast/Fire.cpp` (the foe alive and inside melee
+reach now, else transparent), `Family::Bash` mapped in `scheduler/IausSource.cpp`, `Snapshot::bashRoad` = Harbinger
+serves ABI 38 AND `[Debug] bIausBashRoad` (default OFF until the field proves the road).
+
+### 29.3 The field probe (needs marth's run)
+
+Two switches, both default OFF:
+- Harbinger `APMF.ini [Probe] bCombatMove=1`: PASSIVE. One line per melee hit by or on a teammate: the hit's flags
+  (power, bash, blocked), the attacker's attack data and attack state, the target's blocking state. This shows what
+  the engine's own bashes and blocks look like.
+- MFO `MFO.ini [Debug] bCombatMoveProbe=1`: a follower whose combat target is in melee reach asks for a bash every
+  6 s. This is the one deliberate test.
+
+The road is PROVEN when a `[combat-move] ... STARTED` line is followed by `[combat-move] ... HIT` and the probe's hit
+line for it reads `bash=true` with attack data `bashStart`. It is NOT proven on a `FAILED` (the engine refused the
+action, or accepted it without the attack data) or on STARTED lines never followed by a hit while he stood in reach.
+Then `bIausBashRoad` stays off and the lines go to an Opus diagnosis. Nothing masks either case.
+
+### 29.4 A finding outside the brief: MFO's power attack is a bare animation event
+
+`cast/Fire.cpp`'s power attack is `NotifyAnimationGraph("attackPowerStartInPlace")`. By 29.1 that swing runs without
+the engine setting the power attack's data, so its hit may be an ordinary hit in a power attack's animation (no power
+damage multiplier, no stamina cost, no power-attack stagger). It has been in the field for months, so it does swing.
+The passive probe above answers what its hit is: its line shows `power=` and the attacker's attack data for every
+follower power attack. If the flag is missing, the proper road is the same Harbinger action with the power entry (a
+`kCombatMove_PowerAttack`, append-only), and the lab's power attack numbers should be re-read, because the sim gives a
+power attack its full damage. Saved as a question, not changed here.
+
+### 29.5 Not built, and why
+
+- Block. It is a HELD state: the engine starts it with one action and ends it with another, and the actor's own
+  offense leaves and the Block leaf's own release would drop a guard MFO asked for. A complete deny for the window
+  (ch.7 Offense, plus the release) is its own Harbinger amendment and round. The lab gain to weigh it against is
+  +0.43 J (26.1).
+- 1.7.104. Both rows verify there. The road was not read on that build, so it refuses by name.
+
+### 29.6 Design B built: give ground through ch.24 on a point (Harbinger `feat/approach-point`, ABI v39)
+
+Harbinger: one flag bit, `kApproach_Point`. The centre of the ch.24 bound is `param.pos` and `param.target` must be 0.
+The recon of 26.3 held: the seats only ever apply a point (`Entry::want`), so the change is the sweep's source of X,
+the end condition restated for a point (the actor left the point's cell space), and the call-time refusals. No new
+seat, no new address row, no struct, no slot. An older Harbinger refuses the claim for its missing target, so the
+bit is safe to send.
+
+MFO: `apmf/GroundApproach.cpp`. The point is 400 units straight away from the foe, R 150, the claim ends on arrival
+and never outlives 2.5 s. `Vocab::kActGiveGround` (IAUS-only), its executor in `cast/Fire.cpp`, `Family::GiveGround`
+mapped in `scheduler/IausSource.cpp`, `Snapshot::groundRoad` = Harbinger ABI 39 AND `[Debug] bIausGroundRoad`
+(default OFF).
+
+Two things 26.3 asked for that this round does NOT do, said plainly:
+- **No navmesh check of the point.** MFO declares the point by geometry only. A point the engine cannot path to makes
+  the engine's own return fail: Harbinger ends that as EngineDropped after 3 s, and MFO releases first at 2.5 s with
+  "the engine never carried the bound" when that is the case. Nothing is retried. A pre-check wants Harbinger's
+  space query (main thread only) and is open.
+- **No facing.** How he moves to a point behind him while a foe is on him is the engine's. He may turn and walk.
+  That is the first thing to look at in the field.
+
+**It cannot fire in the game yet.** GroundNeed reads the follower's seconds to live (`selfTtl`, `threatTtl`), which
+come from the damage estimates the engine side does not fill yet (the fill card, next). Until then the need is 0 and
+the family is never chosen: the road is built and inert. The same holds for half of Bash: BashNeed is 1.0 only for a
+foe that is charging a spell (`Combatant::casting`, unfilled), and 0.4 for a foe on him, which is filled today.
+
+To look at in game once the estimates are filled (`bIausGroundRoad=1`, Sentient AI on an archer or a mage with a brute on him): `[ground] ... step
+back from ...` then `[ground] ... over: arrived (the area carried the bound N time(s) ...)` with N above 0, and by eye
+whether the step reads as backing off or as turning his back.
+
+### 29.7 Lab numbers to hold the field against
+
+From 26.1 (40 fights, the same weight on every list): give ground + bash +0.39 J in the mean and ahead in all six
+runs, block + bash +0.31, all three +0.37. The oracle earns +30 to +46 U on the scenarios these roads were built for
+with the same actions, so the remaining gap is the TIMING inputs, which is lab work on the considerations.
+

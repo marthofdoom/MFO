@@ -541,6 +541,38 @@ namespace MFO::Actuation {
             return { Result::Fired, std::format("power attack -> {}", foeName) };
         }
 
+        if (op == Vocab::kActBash) {
+            // BASH (Harbinger ch.31, ABI v38). MFO owns WHO and WHEN: the chosen foe, alive, inside melee reach NOW. There is
+            // no closing leg (a bash answers the moment: a foe charging a spell, a foe on him). Harbinger starts the engine's
+            // own bash action once on the game thread; the outcome is asynchronous and written by APMFBridge::PollCombatMove.
+            // Everything before the request is TRANSPARENT: a bash that cannot be asked for mutates nothing.
+            auto ptr = a_choice.target.get();
+            auto* foe = ptr.get();
+            if (!foe || foe->IsDead()) return { Result::FailedOther, "chosen foe no longer resolves", true };
+            if (!APMFBridge::CombatMoveSupported())
+                return { Result::FailedOther, "no bash road (Harbinger absent or older than ABI 38)", true };
+            const float dist = a_follower->GetPosition().GetDistance(foe->GetPosition());
+            if (dist > Config::g_meleeReach.load())
+                return { Result::FailedSkill, "bash: the foe is out of melee reach", true };
+            const std::uint32_t h = APMFBridge::RequestBash(a_follower->GetFormID(), foe->GetFormID(), /*a_power=*/false);
+            if (h == 0) return { Result::FailedOther, "bash refused by Harbinger at the call", true };
+            return { Result::Fired, std::format("bash requested -> {} (h={})", foe->GetName() ? foe->GetName() : "?", h) };
+        }
+
+        if (op == Vocab::kActGiveGround) {
+            // GIVE GROUND (Harbinger ch.24 on a point, ABI v39). MFO declares the point (straight away from the chosen foe);
+            // the engine's own return-to-area movement walks him there while he keeps fighting. Transparent when no step can
+            // be filed (no road, a held-heal approach stands, a step already stands): nothing was mutated.
+            auto ptr = a_choice.target.get();
+            auto* foe = ptr.get();
+            if (!foe || foe->IsDead()) return { Result::FailedOther, "chosen foe no longer resolves", true };
+            if (!APMFBridge::GroundStepSupported())
+                return { Result::FailedOther, "no give-ground road (Harbinger absent or older than ABI 39)", true };
+            if (!APMFBridge::RequestGroundStep(a_follower, foe))
+                return { Result::FailedSkill, "give ground: no step filed (a heal approach or a step stands, or refused)", true };
+            return { Result::Fired, std::format("giving ground from {}", foe->GetName() ? foe->GetName() : "?") };
+        }
+
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
         // available here so a survival gambit ("Self HP < 30% -> Drink health
         // potion") can fire mid-fight. Logistics::DrinkPotion is cooldown-gated

@@ -102,6 +102,7 @@ namespace MFO::Scheduler {
             CasterConsent::Clear(a_id);
             APMFBridge::ReleaseHealApproach(a_id, a_why);
             APMFBridge::ReleaseOffenseApproach(a_id, a_why);
+            APMFBridge::ReleaseGroundStep(a_id, a_why);
             // The WEAPON stays in his hand, but its hold's RANK is the old source's (review F1): a table row index
             // would outrank every IAUS heal on the left hand. Unranked until the new source's equip stamps its own.
             Actuation::UnrankForcedHold(a_id);
@@ -209,6 +210,8 @@ namespace MFO::Scheduler {
         case Family::Attack:       c.actionOpcode = Vocab::kActAttack; break;
         case Family::PowerAttack:  c.actionOpcode = Vocab::kActPowerAttack; break;
         case Family::Taunt:        c.actionOpcode = Vocab::kActTaunt; break;
+        case Family::Bash:         c.actionOpcode = Vocab::kActBash; break;    // Harbinger ch.31 (generated only behind Snapshot::bashRoad)
+        case Family::GiveGround:   c.actionOpcode = Vocab::kActGiveGround; break;   // Harbinger ch.24 on a point (Snapshot::groundRoad)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
@@ -241,10 +244,8 @@ namespace MFO::Scheduler {
         case Family::Posture:
         case Family::Scroll:
         case Family::Exploit:
-        case Family::Regroup:      // the four road families: generated only behind Snapshot::*Road, which no engine
-        case Family::GiveGround:   // code sets yet (the Harbinger combat-move and point-area capabilities)
-        case Family::Block:
-        case Family::Bash:
+        case Family::Regroup:      // the road families with no executor yet: generated only behind Snapshot::*Road,
+        case Family::Block:        // which no engine code sets for them (a regroup client, the Harbinger block)
         case Family::kCount:
             a_whyNot = "no action road for this family yet";
             return false;
