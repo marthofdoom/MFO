@@ -27,7 +27,7 @@ Absolute win/death rates are not calibrated, only relative changes between runs 
 ## Fix round (review of 802272d): what changed
 S1 real x/y geometry (player at origin, foes on rays ahead of the follower, allies near the player; `dist` derived, foes walk to their target) so the splash-safe gate is no longer always false.
 S2 `Classify` mirrors `Prune::ClassifyNature` precedence (reanimate, summon, ward, control archetypes only, self cloak, any hostile = Offense, heal, script/undeclared = Unknown) and takes resistAv from the costliest hostile effect.
-S3 a control spell sets `paralysed`/`fleeing` for the effect's own duration. S4 pool = spells some BOOK teaches (DATA flag 0x04), auto-calculate spells costed from effect base costs, cost scaled by skill, no invented cost.
+S3 a control spell sets `paralysed`/`fleeing` for the effect's own duration. S4 pool = spells some BOOK teaches (DATA flag 0x04), stored SPIT cost used when non-zero (the effect-cost formula only when it is 0; see Cost), cost scaled by skill, no invented cost.
 S5 Hold fires order[0] as a continuation. S6 gates written from the ClassTable T1/T2 rows, tree ON and tree OFF (Q63) cells, Knight and Evoker T2 cells, mage staff option. S7 taunt: 70% success, 10 s duration.
 S9 SPIT charge time offset 12, S11 MGEF guard >= 88 inside the try, `s` GMSTs skipped. Metrics: healed% only over episodes that had a heal candidate (deaths reported separately), iC% = idle among ticks with a candidate, iR% = idle with a candidate and a foe in reach.
 **Q63 flag:** `SpellBook::GateFor` with the tree OFF still derives the gate from the T1 row (melee T1: `spellsOnClass=false`, no power attack / taunt / disengage). The sim EMULATES Q63 (everything allowed) in the `*-off` cells. The native change belongs to I6.
@@ -182,6 +182,8 @@ CHECKS: BAD-FACTS ticks=0 (must be 0)  invalid picks=0 (must be 0)  => PASS
 ```
 
 ## Remaining findings after the artefacts are gone
+
+> **Stale (coordinator note, 2026-11-10):** the numbers in this section predate 0e76c37 (the cost-flag fix F1). The tables above are current, e.g. mage attack 21-42%, mage idle with candidates 5-37%, mage holdL 7-25%. Real findings that still stand: R2 heal held behind the window (I6: no re-anchor), taunt with no cooldown (I6), ward never classified (cast/Archetype.cpp, I6 must-list).
 - **R2 CONFIRMED:** 5-44% of the ticks where the follower is under 35% HP with a heal candidate offered are Hold (melee 17-44% in LoreRim/Tuxborn, mage 1-25%). The commitment window holds the running non-heal decision while a heal waits (heal.s 0.4-1.6 s, up to 2x slower in strong brackets). marth's "no re-anchor" choice for I6 targets exactly this.
 - **R1 PARTLY CONFIRMED:** `Candidates.cpp` never sets `Combatant::taunted` (grep: no assignment), so the FoeTaunted gate cannot fire in game. In the sim `--taunt-visible` changes nothing (redundant taunts 0-14% either way), because taunt is offered only for foes hitting an ally and a landed taunt retargets the foe. But the taunt rate is 12-20 per minute for Knight (one every 3-5 s) with no cooldown, 22-33% of its fired actions in weak fights: a cooldown consideration is still missing.
 - Hold 8-17% for ranged in strong brackets stays (the window keeps a bow shot running after the target dies).
