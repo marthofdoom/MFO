@@ -148,6 +148,10 @@ namespace MFO::Config {
             else if (a_key == "iAimBudgetWitchhunter") { setI(g_aimBudgetWitchhunter, 0, 10); return; }
             else if (a_key == "iAimBudgetRanger")   { setI(g_aimBudgetRanger, 0, 10);      return; }   // marth 2026-11-10: at most 3
             else if (a_key == "iAimBudgetJaqspur")  { setI(g_aimBudgetJaqspur, 0, 10);     return; }   // marth 2026-11-10: at most 1 (0 ok)
+            else if (a_key == "bClassStyles")       { setB(g_classStyles);   return; }   // default ON; INI-only; card C8 per-class CSTY (tier 2+)
+            else if (a_key == "bClassAttackMix")    { setB(g_classAttackMix); return; }  // default ON; INI-only; card C8 ch.18 class power share
+            else if (a_key == "fClassLeashMult")    { setF(g_classLeashMult, 0.1f, 1.0f); return; }   // default 0.5; card C8 ch.23 short / near-player classes
+            else if (a_key == "bAttackMixProbe")    { setB(g_attackMixProbe); return; }  // default OFF; INI-only; "[mix]" state line / 30 s
             else if (a_key == "bAimProbe")          { setB(g_aimProbe);      return; }   // default OFF; INI-only; "[aim]" state line / 30 s
             else if (a_key == "bSneakInCombat")     { setB(g_sneakInCombat); return; }   // default OFF, INI-only DEV switch: card G1 act.sneak in combat
             else if (a_key == "bClassCoSaveSelfTest") { setB(g_classCoSaveSelfTest); return; }   // default OFF; INI-only DEBUG; MCLS round-trip self-test at load
@@ -505,6 +509,10 @@ namespace MFO::Config {
             g_aimBudgetScout     = 4;
             g_aimBudgetWitchhunter = 4;
             g_aimBudgetRanger    = 3;       //   marth 2026-11-10: at most 3 misses in 10
+            g_classStyles        = true;    // card C8 per-class CSTY (inert without the ESL / tier 1)
+            g_classAttackMix     = true;    // card C8 ch.18 class power share (inert without the ESL / Harbinger >= ABI 34)
+            g_classLeashMult     = 0.5f;    // card C8 ch.23 factor for the short-leash / near-player classes
+            g_attackMixProbe     = false;
             g_aimBudgetJaqspur   = 1;       //   marth 2026-11-10: at most 1 in 10 (never-miss accepted: set 0)
             g_aimProbe           = false;   // [aim] passive state probe -- OFF everywhere by default
             g_sneakInCombat      = false;   // card G1: act.sneak's in-combat road -- OFF until a field run proves it

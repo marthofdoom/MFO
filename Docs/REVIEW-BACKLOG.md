@@ -3040,3 +3040,9 @@ Hits with before=max go into the sneak median; "not in his group" does not mean 
 If Harbinger refuses one of the two claims, the warning logs once but RequestEx is retried every hold lap (APMF.log may repeat the refusal); a partial claim (ch.1 without ch.7 or the reverse) is allowed to stand and is logged.
 
 (Folded into the branch by the coordinator from the same review: F1 retreat lap now releases the hide hold, CombatScan.cpp; F4 a never-live handle is released before reset, HideClaims.cpp.)
+
+### MFO-B750 (SEV-5, OPEN, CombatStyle.cpp:341-345 comment, against 2628beb, Opus review of feat/class-packages)
+The old "no owner on this path, or form missing -> stance disabled ..." comment now trails the class-style line instead of the `if (!target) return;` line.
+
+### MFO-B751 (SEV-5, OPEN, C8 author's spots, against 2628beb, same review)
+Accepted as documented: fClassLeashMult 0.5 is a tunable guess (floored at fLeashMin; field tunes it); dead followers are released on the not-managed path with the 30 s backoff for an ended claim; Harbinger absent = silent mix sweep (matches AimClaims); Dragonborn with no picked T4 uses its own tier-5 package; Templar vs-undead power floor not built (needs a conditional facet) and Ebony Warrior inherits 0.20 (not ruled).

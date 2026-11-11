@@ -881,6 +881,16 @@ namespace MFO::Config {
     inline std::atomic<int>   g_aimBudgetRanger{ 3 };
     inline std::atomic<int>   g_aimBudgetJaqspur{ 1 };
     inline std::atomic<bool>  g_aimProbe{ false };
+    //   Card C8 (class combat packages, 2026-11-11), all INI-only. bClassStyles (default ON): a follower with a TIER 2+ class
+    //     equipped fights on that class's own per-stance CSTY (MFO_Classes.esl) instead of MFO_*Style (CombatStyle.cpp); tier 1 and
+    //     classes OFF are unchanged. bClassAttackMix (default ON): the class's ch.18 power-share ceiling / floor as a Harbinger
+    //     kIntent_AttackSelection claim, ABI >= 34 (apmf/AttackMix.cpp). fClassLeashMult (default 0.5): the factor on the confidence
+    //     leash radius for a class flagged kShortLeash / kNearPlayer (never below fLeashMin). bAttackMixProbe (default OFF): one
+    //     "[mix]" state line per claimed follower every 30 s.
+    inline std::atomic<bool>  g_classStyles{ true };
+    inline std::atomic<bool>  g_classAttackMix{ true };
+    inline std::atomic<float> g_classLeashMult{ 0.5f };
+    inline std::atomic<bool>  g_attackMixProbe{ false };
     //   bSneakInCombat (card G1, DEV SWITCH, INI-only, default OFF): act.sneak may hold its Harbinger ch.3 stance claim while
     //     the follower is IN COMBAT. Off = a follower in combat files no sneak claim and a standing one is released (the
     //     out-of-combat road is field-proven, the in-combat one is not, principle 5). The [sneak] lines in MFO.log show
