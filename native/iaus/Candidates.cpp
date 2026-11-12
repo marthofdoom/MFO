@@ -2,6 +2,7 @@
 #include "iaus/Candidates.h"
 
 #include "CombatSense.h"
+#include "classes/Classes.h"   // batch I item 2: the Thief's free stealth entry
 #include "Confidence.h"
 #include "Config.h"
 #include "Followers.h"
@@ -16,6 +17,7 @@
 #include "iaus/Disengage.h"
 #include "iaus/Fills.h"
 #include "iaus/Hide.h"
+#include "iaus/Reposition.h"   // batch I: H4, the back-off, the hidden step
 #include "iaus/SpellBook.h"
 #include "logistics/Logistics.h"
 
@@ -155,12 +157,13 @@ namespace MFO::Iaus::Candidates {
         const std::uint32_t selfHandle = a_self->GetHandle().native_handle();
 
         // ── the fight clock ──────────────────────────────────────────────────────────────────────────────
+        bool newFight = false;   // batch I item 2: this lap starts a new fight for him
         {
             const auto now = Clock::now();
             auto& fight = g_fights[selfID];
             const bool fresh = fight.seen.time_since_epoch().count() != 0 &&
                                std::chrono::duration<double>(now - fight.seen).count() <= kFightGapSec;
-            if (!fresh) fight.start = now;
+            if (!fresh) { fight.start = now; newFight = true; }
             fight.seen = now;
             s.combatSec = static_cast<float>(std::chrono::duration<double>(now - fight.start).count());
         }
@@ -171,6 +174,14 @@ namespace MFO::Iaus::Candidates {
             s.hasBook = true;
         }
         s.drawn            = Drawn(a_self);
+        // H4 (batch I): the spell in his hand, right first (a one-handed cast comes from it; a dual cast holds the same in both). The book
+        // supplies its reach / delivery (iaus/Reposition.h EquippedEntry); 0 = none.
+        {
+            auto* r = a_self->GetEquippedObject(false);
+            auto* l = a_self->GetEquippedObject(true);
+            if (auto* rs = r ? r->As<RE::SpellItem>() : nullptr) s.equippedSpell = rs->GetFormID();
+            else if (auto* ls = l ? l->As<RE::SpellItem>() : nullptr) s.equippedSpell = ls->GetFormID();
+        }
         s.meleeInRightHand = Taunt::MeleeInRightHand(a_self);
         s.meleeOnly        = Actuation::MeleeOnly(a_self);
         s.handBusyLeft     = Actuation::HealStandsOnHand(selfID, Actuation::kHandLeft);
@@ -281,6 +292,21 @@ namespace MFO::Iaus::Candidates {
             s.foes.push_back(std::move(u));
         }
 
+        // ── batch I item 2: the Thief's free stealth entry (classes/StealthEntry.cpp). On the guaranteed fight a foe the engine has no verdict
+        // on yet (its group has no record of him) is read as UNAWARE, which lets G2's hold row stand from the first lap; the moment any foe's
+        // group record says it HAS him the entry is spent and the engine reads every foe alone. Not a result: the same input, read.
+        s.freeEntry = Classes::StealthEntryLive(selfID, newFight);
+        if (s.freeEntry) {
+            bool anyYes = false;
+            for (const auto& f : s.foes) if (f.detectsMe == Tri::Yes) { anyYes = true; break; }
+            if (anyYes) {
+                Classes::StealthEntrySpend(selfID, "a foe's own group record has him (the engine's verdict)");
+                s.freeEntry = false;
+            } else {
+                for (auto& f : s.foes) if (f.detectsMe == Tri::Unknown) f.detectsMe = Tri::No;
+            }
+        }
+
         // ── allies: the player and the active followers (the Evaluator's PickAlly set, without its radius) ──
         std::vector<RE::FormID> wantAllies;
         const auto addAlly = [&](RE::Actor* a) {
@@ -358,17 +384,36 @@ namespace MFO::Iaus::Candidates {
         a_out.snap.concealRoad  = Concealment::RoadOpen();
         a_out.snap.concealPoint = false;
         a_out.snap.fleeRun      = a_out.snap.concealRoad && Concealment::FleeRunning(a_out.snap.self.id);
+        bool concealWanted      = false;   // batch I: a hide or a flee is wanted this lap (its pick owns the single pick slot)
         if (a_out.snap.concealRoad && !a_out.snap.fleeRun) {
             const Snapshot& sn = a_out.snap;
             const float hpPct = sn.self.hpMax > 0.0f ? sn.self.hp / sn.self.hpMax : 1.0f;
             const bool hide = a_out.gate.sneakClass && a_out.gate.disengage && Disengage::Found(sn);
             const bool flee = !a_out.gate.sneakClass && a_out.gate.treeOn && a_out.gate.disengage &&
                               hpPct <= Disengage::kFleeHealthLine && Disengage::Threatened(sn);
+            concealWanted = hide || flee;
             if (hide || flee) {
                 std::vector<RE::FormID> foes;
                 foes.reserve(sn.foes.size());
                 for (const auto& f : sn.foes) foes.push_back(f.id);
                 a_out.snap.concealPoint = Concealment::Prepare(a_follower, foes, /*a_flee=*/!hide);
+            }
+        }
+        // BATCH I: the other two short H3 runs share the hide road's switch and its pick machinery (Concealment::PrepareKind). A pick is asked
+        // for only while the generator could use it, and never while a hide run or a flee stands or is wanted (a hide or a flee outranks both).
+        {
+            Snapshot& sn = a_out.snap;
+            sn.backOffRoad = Concealment::RoadOpen();
+            sn.stepRoad    = sn.backOffRoad;
+            const bool hideOrFlee = concealWanted || sn.fleeRun;
+            if (sn.backOffRoad && !hideOrFlee && !sn.foes.empty()) {
+                std::vector<RE::FormID> foes;
+                foes.reserve(sn.foes.size());
+                for (const auto& f : sn.foes) foes.push_back(f.id);
+                if (Reposition::BackOffNeed(sn, a_out.gate) > 0.0f)
+                    sn.backOffPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::BackOff);
+                else if (const Combatant* tgt = Reposition::StepTarget(sn))
+                    sn.stepPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::Step, tgt->id, sn.drawn == PostureKind::Bow);
             }
         }
         a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
@@ -381,6 +426,7 @@ namespace MFO::Iaus::Candidates {
     }
 
     void CombatEnded(RE::FormID a_follower) {
+        Classes::StealthEntryForget(a_follower);   // batch I item 2: the next fight is counted afresh
         g_fights.erase(a_follower);
         g_wants.erase(a_follower);
     }
@@ -388,6 +434,7 @@ namespace MFO::Iaus::Candidates {
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }
 
     void Clear() {
+        Classes::StealthEntryClear();
         g_fights.clear();
         g_wants.clear();
         Fills::Clear();   // the fills' tracker and pending hit records: the same domain and the same moment

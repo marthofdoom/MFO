@@ -13,6 +13,8 @@
 #include "Vocabulary.h"
 #include "apmf/APMFBridge.h"
 #include "Concealment.h"   // card G3: the hide run is released with the running decision
+#include "classes/Classes.h"   // batch I item 2: the Thief's free entry is spent by his first blow
+#include "iaus/Reposition.h"   // batch I H4: the spell range
 #include "cast/Actuation.h"
 #include "iaus/SpellBook.h"
 
@@ -103,6 +105,20 @@ namespace MFO::Scheduler {
             return nullptr;
         }
 
+        // H4 (batch I item 1, marth: "use spell appropriate range automatically. Near the furthest range an equipped spell will work, but will
+        // move to range for touch or cone spells automatically"): the CLOSING half. A caster in the spell phase, with a ranged spell in his
+        // hand, gets a ch.24 approach to the foe he casts at bounded by the range MFO derives from the spell (iaus/Reposition.h SpellRange);
+        // a new one is filed only when the foe stands beyond that range, a standing one is refreshed every lap. Keeping BACK is the BackOff
+        // family (H3). [Debug] bIausSpellRange (default ON: ch.24 on a foe is field-proven for healers). The claim is MFO's own and is not
+        // a pick of the IAUS: it never costs a lap and names no action.
+        void ServiceSpellRange(RE::FormID a_id, const Iaus::Snapshot& a_snap, const Iaus::ClassGate& a_gate) {
+            if (!Config::g_iausSpellRange.load(std::memory_order_relaxed) || !APMFBridge::RangeCloseSupported()) return;
+            if (!Iaus::Reposition::SpellPhase(a_snap)) { APMFBridge::ReleaseRangeClose(a_id, "his hands hold a weapon, not a spell"); return; }
+            Iaus::Reposition::Close c;
+            if (!Iaus::Reposition::RangeToHold(a_snap, a_gate, c)) return;   // the stale timer ends a claim nobody refreshes
+            APMFBridge::ServiceRangeClose(a_id, c.foe, c.radius, c.far);
+        }
+
         // RELEASE WHAT A RUNNING DECISION HOLDS (the toggle edge). Every call is the existing, idempotent release
         // the combat-end teardown and the `!castSeen` lap already make; nothing here is a new engine road.
         void StandDown(RE::FormID a_id, const char* a_why) {
@@ -118,6 +134,7 @@ namespace MFO::Scheduler {
             APMFBridge::ReleaseHealApproach(a_id, a_why);
             APMFBridge::ReleaseOffenseApproach(a_id, a_why);
             APMFBridge::ReleaseGroundStep(a_id, a_why);
+            APMFBridge::ReleaseRangeClose(a_id, a_why);   // H4: the spell-range close
             Concealment::Release(a_id, a_why);   // card G3: a hide run and its drive
             // The WEAPON stays in his hand, but its hold's RANK is the old source's (review F1): a table row index
             // would outrank every IAUS heal on the left hand. Unranked until the new source's equip stamps its own.
@@ -144,6 +161,7 @@ namespace MFO::Scheduler {
         // member and is never moved while the candidates (string_views into its snapshot) are in use.
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
+        ServiceSpellRange(a_id, m_set.snap, m_set.gate);
         auto& acts = m_set.gen.actions;
         Iaus::Engine::FillCooldowns(a_id, acts, m_tick, T);
         m_d = Iaus::Engine::Decide(a_id, acts, DefaultProfile(), T, m_tick, &m_ms);
@@ -230,6 +248,10 @@ namespace MFO::Scheduler {
         case Family::Bash:         c.actionOpcode = Vocab::kActBash; break;    // Harbinger ch.31 (generated only behind Snapshot::bashRoad)
         case Family::GiveGround:   c.actionOpcode = Vocab::kActGiveGround; break;   // Harbinger ch.24 on a point (Snapshot::groundRoad)
         case Family::Disengage:    c.actionOpcode = Vocab::kActDisengage; break;    // card G3 (Concealment.cpp; Snapshot::concealRoad)
+        // batch I: the other two short H3 runs ride act.disengage with a KIND in the action parameter (Reposition::kBackOffForm / kStepForm),
+        // so no new frozen opcode exists. Concealment::Begin starts the run the fresh pick is for.
+        case Family::BackOff:      c.actionOpcode = Vocab::kActDisengage; c.actionParam = cand.form; break;
+        case Family::Step:         c.actionOpcode = Vocab::kActDisengage; c.actionParam = cand.form; break;
         case Family::Block:        c.actionOpcode = Vocab::kActBlock; break;        // batch I item 4: Harbinger ch.31 held guard (Snapshot::blockRoad + the class's Block row)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
@@ -335,7 +357,7 @@ namespace MFO::Scheduler {
             // An approach leg (the power attack closing to melee) is the decision in effect, not the swing: it
             // must not start the hard cooldown of the swing it is closing for (the G9 rule, Outcome::approach).
             // The disengage's cooldown counts from the END of its run (Concealment calls NoteDisengageEnded), not from the fire.
-            Iaus::Engine::NoteFired(m_id, cand, step, m_tick, /*a_startCooldown=*/!a_outcome.approach && cand.family != Family::Disengage);
+            Iaus::Engine::NoteFired(m_id, cand, step, m_tick, /*a_startCooldown=*/!a_outcome.approach && cand.family != Family::Disengage);   // BackOff / Step stamp at the fire: their run is a few seconds
             // Card G3 (marth MB5): a blow ends the hide hold's stance. The pick that fired is the blow (the engine's own sneak
             // attack, G2 Layer 1): the blow is ARMED here and the stance claim is released when it RESOLVES (his hit, or the
             // swing's end: Concealment::Service), because the engine reads the stance when the hit lands, not at the pick.
@@ -343,6 +365,7 @@ namespace MFO::Scheduler {
             case Family::Attack: case Family::PowerAttack: case Family::CastOffense: case Family::CastControl:
             case Family::Exploit: case Family::Bash:
                 Concealment::NoteBlow(m_id);
+                Classes::StealthEntrySpend(m_id, "his first blow");   // batch I item 2: the free entry is used up by the blow
                 break;
             default: break;
             }

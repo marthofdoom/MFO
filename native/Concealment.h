@@ -24,6 +24,20 @@
 
 namespace MFO::Concealment {
 
+    // BATCH I (T2): the same pick-on-the-main-thread + H3 drive carries two more SHORT runs besides the hide run and the flee.
+    //   BackOff  a point farther from the foes (the flee's pick, no cover needed), no ch.7 deny, the rule scan is NOT skipped: he keeps
+    //            fighting while he moves (a mage inside the minimum range of his equipped spell, H4; a Mercenary two foes press, Q-T2-3).
+    //            It ends on arrival, on failure, or at a 5 s cap. It stamps no hide cooldown: the IAUS family has its own.
+    //   Step     G18, the hidden step: toward a foe that does not detect him (a blade: until he is in reach; a bow: until he has a line of
+    //            fire), quietly: the stance claim is held, a ch.7 deny of every attack and cast, the rule scan skipped (as the hide run).
+    //            It ends on arrival (the stance is kept for G2's hold row), the moment any foe has him (revealed), on failure, or at an 8 s cap.
+    // Hide / Flee are the original card G3 runs; a pick is for ONE kind (a different kind asked for re-picks).
+    enum class Kind : std::uint8_t { Hide = 0, Flee, BackOff, Step };
+    // act.disengage's parameter (Candidate::form, Iaus::Reposition::kBackOffForm / kStepForm): 0 = the hide run or the flee the pick is for.
+    [[nodiscard]] inline Kind KindOfForm(std::uint32_t a_form) {
+        return a_form == 1 ? Kind::BackOff : (a_form == 2 ? Kind::Step : Kind::Hide);
+    }
+
     // The road exists: the switch is on, Harbinger serves the disengage drive (ABI >= 39) and the main-thread pump runs.
     bool RoadOpen();
 
@@ -33,6 +47,9 @@ namespace MFO::Concealment {
     // The leash radius is read HERE, on the worker (Confidence::LeashRadius), never on the main thread.
     // a_flee: the non-sneak flee (a point clearly farther from the foes, no cover needed) instead of a hiding place.
     bool Prepare(RE::Actor* a_follower, const std::vector<RE::FormID>& a_foes, bool a_flee);
+    // Batch I: the same for a BackOff (a_target ignored) or a Step (a_target = the foe it closes on, a_bow = a line of fire is the aim, else a
+    // blow's reach). Asks for a pick when the last answer is stale; true = a FRESH point for exactly that kind (and target) is known.
+    bool PrepareKind(RE::Actor* a_follower, const std::vector<RE::FormID>& a_foes, Kind a_kind, RE::FormID a_target = 0, bool a_bow = false);
 
     // WORKER. A non-sneak flee run stands for him (the IAUS gather reads it: no offense, his heals boosted).
     bool FleeRunning(RE::FormID a_follower);
@@ -52,7 +69,7 @@ namespace MFO::Concealment {
 
     // WORKER (cast/Fire.cpp, act.disengage). Starts the run to the fresh point. nullptr = started (a_desc says where);
     // otherwise why not (nothing was changed).
-    const char* Begin(RE::Actor* a_follower, std::string& a_desc);
+    const char* Begin(RE::Actor* a_follower, std::string& a_desc, Kind a_want = Kind::Hide);
 
     // WORKER, once per combat service of a follower, before his rule scan. Drives a standing run: arrival, the crouch,
     // the bounded hold, every failure said out loud. True = the run holds him this lap (the caller runs no scan).

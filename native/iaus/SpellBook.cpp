@@ -148,6 +148,7 @@ namespace MFO::Iaus::SpellBook {
             const auto delivery = a_sp->GetDelivery();
             e.selfDelivery  = delivery == RE::MagicSystem::Delivery::kSelf;
             e.touch         = delivery == RE::MagicSystem::Delivery::kTouch;
+            e.targetActor   = delivery == RE::MagicSystem::Delivery::kTargetActor;   // batch I H4 (iaus/Reposition.h SpellRange)
             e.twoHanded     = arch.twoHanded;
             e.concentration = arch.casting == RE::MagicSystem::CastingType::kConcentration;
 
@@ -496,6 +497,9 @@ namespace MFO::Iaus::SpellBook {
         g.weaponStaff    = any || (def->weapons & W::kStaff) != 0;
         g.disengage   = (def->flags & Classes::Flag::kDisengage) != 0;
         g.sneakClass  = (def->flags & Classes::Flag::kSneakAlways) != 0;   // card G3: only a sneak class runs to hide
+        // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no way out BY DESIGN; the
+        // Blademaster (its T3, "Mercenary, more extreme") is NOT included: a default taken, asked in the questions file.
+        g.backOffPressed = def->id == Classes::Id::Mercenary;
         g.powerAttack = def->powerShareMax != Classes::kShareUnset || def->powerShareMin != Classes::kShareUnset;
         for (std::size_t i = 0; i < def->gambitCount; ++i) {
             const auto& row = def->gambits[i];

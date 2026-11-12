@@ -36,6 +36,7 @@ namespace MFO::Iaus {
         float         reach = 0.0f;             // aimed reach in units; 0 = no cap of its own
         float         areaUnits = 0.0f;         // max effect area in units; 0 = single target
         bool          selfDelivery = false;
+        bool          targetActor = false;      // Delivery::kTargetActor (batch I H4: a lock-on spell; aimed otherwise when not touch / self)
         bool          touch = false;            // reach = the melee reach
         bool          twoHanded = false;
         bool          concentration = false;
@@ -105,6 +106,8 @@ namespace MFO::Iaus {
         bool taunt = false;           // a taunt default row
         float tauntCooldownSec = 0.0f;   // that row's cooldown; 0 = none declared (Tuning::rowlessTauntCooldownSec then)
         bool disengage = false;       // Flag::kDisengage (Retreat)
+        bool backOffPressed = false;  // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no
+                                      // way out by design. false with the tree OFF
         bool sneakClass = false;      // Flag::kSneakAlways: a sneak class (card G3's hide run). false with the tree OFF
         bool weaponMelee = true;      // the class weapon set holds a melee weapon (dagger / 1H / 2H)
         bool weaponBow = true;
@@ -195,6 +198,13 @@ namespace MFO::Iaus {
         bool  concealPoint = false;          // ...and Concealment knows a fresh point (hidden from every listed foe; a flee: away from them)
         bool  fleeRun = false;               // card G3: a NON-sneak flee run stands (Concealment::FleeRunning): no offense is generated,
                                              // his own heals and health potions are boosted
+        // batch I: the H3 runs that are not a hide or a flee. Each road is Concealment::RoadOpen() (the hide road switch, Harbinger ABI 39);
+        // each point is a FRESH answer of Concealment's pick for that kind (asked only while the generator could use it).
+        bool  backOffRoad = false, backOffPoint = false;
+        bool  stepRoad = false, stepPoint = false;
+        std::uint32_t equippedSpell = 0;      // batch I H4: the spell in his right hand (else left); 0 = no spell in hand. Looked up in the book
+        bool  freeEntry = false;              // batch I item 2: this fight is a guaranteed stealth-entry fight and the entry is not spent (the gather
+                                              // already read foes the engine has no verdict on as unaware; logged by Classes::StealthEntry)
         bool  blockRoad = false;          // Harbinger serves the held guard (ch.31 kCombatMove_Block) and his hands can block now (batch I item 4)
         bool  guardHeld = false;          // a block request of his is out or his guard is up (APMFBridge::BlockHoldLive): the held-guard gate
                                           // (marth Q-melee-3) -- no attack, power attack, bash, taunt, cast or weapon change is generated

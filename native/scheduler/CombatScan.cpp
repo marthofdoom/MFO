@@ -794,6 +794,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseHealApproach(id, "combat ended", APMFBridge::kApproachAnyHand, true);   // ch.24: and the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "combat ended", true);   // ch.24 offense approach
                 APMFBridge::ReleaseGroundStep(id, "combat ended");              // ch.24 step back (a point claim)
+                APMFBridge::ReleaseRangeClose(id, "combat ended");              // ch.24 spell-range close (batch I, H4)
                 Concealment::Release(id, "combat ended");                       // card G3: a hide run and its drive
                 g_reachHold.erase(id);   // fix/mfo-unreachable-flyer: and its reach hold (no line: the fight is over)
 
@@ -1131,6 +1132,7 @@ namespace MFO::Scheduler {
                 APMFBridge::ReleaseHealApproach(id, "retreating");   // ch.24: so does the held-heal approach
                 APMFBridge::ReleaseOffenseApproach(id, "retreating");
                 APMFBridge::ReleaseGroundStep(id, "retreating");
+                APMFBridge::ReleaseRangeClose(id, "retreating");
                 Concealment::Release(id, "retreating");   // card G3: the retreat has its own road
                 APMFBridge::ReleaseHideHold(id, "retreating");       // G2: no movement block over the retreat travel
                 // While falling back, do NOT run the gambit table: a cast rule
@@ -1330,6 +1332,7 @@ namespace MFO::Scheduler {
         APMFBridge::PollCombatMove(id);
         APMFBridge::PollBlock(id);           // Harbinger ch.31 block (ABI v43): each outcome of his held guard, once
         APMFBridge::CombatMoveProbeTick(f);
+        APMFBridge::TickRangeClose(id);      // batch I H4: end a spell-range close that is over, leashed or no longer asked for
         APMFBridge::ServiceGroundStep(id);   // Harbinger ch.24 on a point: end a step back that is over (one outcome line)
         // Card G3 (Concealment.cpp): a hide run holds him (running to the point, or the bounded hold at it). No rule scan
         // this lap, as in a retreat: a cast or an attack named now would fight the run's own Offense deny. No own-OOC

@@ -114,6 +114,7 @@ namespace MFO::APMFBridge {
         // is what keeps cast/Fire.cpp's "transparent" answer true).
         ReleaseOffenseApproach(id, "disengaging");
         ReleaseGroundStep(id, "disengaging");
+        ReleaseRangeClose(id, "disengaging");   // H4: the drive owns the one ch.24 claim now
         // The ch.7 deny of the leg. `said` is what the start line reports.
         std::string said = "not asked";
         std::uint32_t cats = 0;

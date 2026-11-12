@@ -62,6 +62,10 @@ namespace MFO::Iaus {
         Bash,         // bash a foe in reach, first of all one that is charging a spell (same road: Snapshot::bashRoad)
         Disengage,    // card G3: a sneak class a foe has found runs to a point no foe can see and crouches there (the H3
                       // disengage drive, Concealment.cpp). Generated only behind Snapshot::concealRoad with a point known
+        BackOff,      // batch I (H4 + Mercenary): a short H3 run to a point farther from the foes, then he fights on. A mage inside the
+                      // minimum range of his equipped spell, or a Mercenary two or more foes press. Behind Snapshot::backOffRoad + a point
+        Step,         // batch I item 5 (gap G18): hidden with no blow ready, a short quiet H3 run toward a foe that does not detect him,
+                      // to gain a strike (blade) or a line of fire (bow) and stay hidden. Behind Snapshot::stepRoad + a point
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -126,6 +130,8 @@ namespace MFO::Iaus {
         DisengageNeed,      // disengage (card G3): a sneak class = the share of the foes that have found him; any other class = the
                             // retreat's own RetreatDanger (low health under threat)
         BoostFleeHeal,      // multiplier: a heal or a health potion for HIMSELF while a non-sneak flee runs (heal as soon as possible)
+        BackOffNeed,        // back off (batch I): a mage = how far inside the minimum range of his equipped spell a foe on him stands;
+                            // a Mercenary = how many foes press him (two or more)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -242,6 +248,9 @@ namespace MFO::Iaus {
         float blockBase = 0.0f;                  // BlockNeed for a swing in the air when he is in no danger. 0 = he blocks only what is
                                                  // killing him (the lab: 0.5 lost on LoreRim, 0 holds on every list)
         float bashCooldownSec = 4.0f;
+        float backOffCooldownSec = 6.0f;         // batch I: one back-off run, then he fights from where he is for a while (so a Mercenary darts in
+                                                 // again and a mage is not run in circles; chosen, tuned in the sim)
+        float stepCooldownSec = 3.0f;            // batch I item 5: one quiet step, then the hold row looks again (chosen)
         float regroupCooldownSec = 6.0f;         // a regroup is a walk of seconds: no second order inside this (no yo-yo)
     };
 
@@ -328,6 +337,7 @@ namespace MFO::Iaus {
         Tri   unseen = Tri::Unknown;      // no foe has me in sight (G2 Layer 1: he sneaks and every listed foe's group record says he is not detected)
         bool  selfSneaking = false;       // Snapshot::selfSneaking
         Tri   foeUnaware = Tri::Unknown;  // THIS candidate's foe does not detect him (Combatant::detectsMe == No -> Yes)
+        float backOffNeed = 0.0f;         // batch I: Cons::BackOffNeed's input, 0..1 (Generate fills it; iaus/Reposition.h)
         bool  strikeReady = false;        // the hold row: a blow from stealth is ready now (an unaware foe in reach / in sight)
         bool  disengageClass = false;     // Flag::kDisengage
         bool  disengageFlee = false;      // disengage: a non-sneak flee (need = RetreatDanger) rather than a hide run (need = detectShare)

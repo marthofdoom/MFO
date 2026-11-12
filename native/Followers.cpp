@@ -515,6 +515,7 @@ namespace MFO::Followers {
         APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         APMFBridge::ReleaseOffenseApproach(id, "dismissed", true);   // ch.24 offense approach
         APMFBridge::ReleaseGroundStep(id, "dismissed");              // ch.24 step back (a point claim)
+        APMFBridge::ReleaseRangeClose(id, "dismissed");              // ch.24 spell-range close (batch I, H4)
         Concealment::Release(id, "dismissed");                       // card G3: a hide run and its drive
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
         // serialized tail), but a dismissed follower's live heal-cast claim +

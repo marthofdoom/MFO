@@ -584,6 +584,11 @@ namespace MFO::Config {
     // concealPoint) while Harbinger serves ABI v39; a chosen run goes through apmf/Disengage.cpp (card H3), then the G1
     // stance claim. Read by iaus/Candidates.cpp on the worker.
     inline std::atomic<bool>  g_iausHideRoad{ false };
+    // IAUS SPELL RANGE ([Debug] bIausSpellRange, INI-only, default ON; batch I item 1 / card H4). 1 = a caster in the spell phase gets a ch.24
+    // approach to the foe he casts at, bounded by the range of the spell in his hand (apmf/RangeApproach.cpp; ch.24 on a foe is field-proven for
+    // healers). 0 = off: the engine's own combat movement alone. The back-off half of H4, the Mercenary's back-off and the hidden step ride the
+    // hide road's switch (bIausHideRoad), because they are H3 drives.
+    inline std::atomic<bool>  g_iausSpellRange{ true };
     // IAUS AVAILABLE ([General] bIausAvailable, MCM "Combat & Casting", default ON; marth Q71). The global gate over
     // the per-follower IAUS combat switch (FollowerState::iausCombat, default OFF). 0 = no follower runs the IAUS
     // source whatever his bit says; the bit is KEPT (co-save untouched), so turning this back on restores each

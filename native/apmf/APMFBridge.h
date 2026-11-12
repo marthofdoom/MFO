@@ -1952,6 +1952,20 @@ namespace MFO::APMFBridge {
     bool RequestGroundStep(RE::Actor* a_follower, RE::Actor* a_foe);
     void ServiceGroundStep(RE::FormID a_follower);
     void ReleaseGroundStep(RE::FormID a_follower, const char* a_why);
+    // ── SPELL RANGE (H4, batch I item 1; Harbinger ch.24 kApproach_Hold on a FOE, ABI v19) -- apmf/RangeApproach.cpp ──────────────────
+    // The closing half of "the distance follows the equipped spell": a ch.24 combat approach X = the foe, R = the radius MFO derived from
+    // the spell in his hand (iaus/Reposition.h). The engine's own Return To Combat Area walks him inside R and he casts the whole way.
+    // RangeCloseSupported: APMF present AND abiVersion >= 19. ServiceRangeClose: the IAUS lap's ask, once per lap in the spell phase: refreshes
+    // or repoints a standing claim, and files a new one only when a_file (the foe stands beyond the range); never while a held heal's
+    // approach or a disengage drive stands. TickRangeClose (once per combat service, beside ServiceGroundStep): ends a claim that is over or
+    // that nobody refreshed for 3.5 s. ReleaseRangeClose: combat end / retreat / dismissal / the source toggle / a disengage drive. Worker road;
+    // own leaf mutex, never g_mx. ClearRangeCloses: revert / load. Nothing is saved.
+    bool RangeCloseSupported();
+    bool RangeCloseStands(RE::FormID a_follower);
+    void ServiceRangeClose(RE::FormID a_follower, RE::FormID a_foe, float a_radius, bool a_file);
+    void TickRangeClose(RE::FormID a_follower);
+    void ReleaseRangeClose(RE::FormID a_follower, const char* a_why);
+    void ClearRangeCloses();
     // ── THE DISENGAGE DRIVE (class plan card H3; Harbinger ch.24 on a POINT with the hold bit + ch.7 Offense deny) --
     // apmf/Disengage.cpp. He RUNS to a declared point mid-fight (the engine's own Return To Combat Area, at its run speed)
     // and stays inside R of it until released. DisengageSupported: APMF present AND abiVersion >= 39. RequestDisengage:

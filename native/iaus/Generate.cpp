@@ -4,6 +4,7 @@
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
+#include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step
 
 #include <algorithm>
 #include <cmath>
@@ -52,14 +53,7 @@ namespace MFO::Iaus {
             bool fleeRun = false;       // card G3: a non-sneak flee run stands: no offense is generated, his own heals are boosted
             // An unaware foe he could strike now. Melee: inside the swing reach and not airborne beyond it; bow: in the
             // follower's own ray and inside the chase cap. A caster's posture (None / Staff) never holds or strikes.
-            [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const {
-                if (a_foe.detectsMe != Tri::No || !std::isfinite(a_foe.dist)) return false;
-                if (s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver)
-                    return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
-                if (s.drawn == PostureKind::Bow)
-                    return a_foe.sight == Sight::Visible && a_foe.dist <= (std::max)(0.0f, Finite(s.chaseCap, 0.0f));
-                return false;
-            }
+            [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const { return Reposition::StrikeReady(s, a_foe); }
 
             void Push(Candidate&& a_c) {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
@@ -187,6 +181,18 @@ namespace MFO::Iaus {
             if (!x.hold) return;
             Candidate c = x.Make(Family::Sneak, nullptr);
             x.Push(std::move(c));
+            // G18 (batch I item 5, marth 11-12 Q-SIM-3): the hold row has no exit. Hidden with no blow ready, he steps quietly toward a foe
+            // that does not detect him to gain a strike (blade) or a line of fire (bow), staying hidden: a short H3 run (Concealment Kind::Step)
+            // to a point the main thread picked. Only with a fresh point; it outranks the hold row (Catalogue aw), so the hold stands only
+            // when there is no step to take. Never a reveal by design: the run denies every attack and cast and ends the moment a foe has him.
+            if (x.s.stepRoad && x.s.stepPoint && !x.strikeReady) {
+                if (const Combatant* tgt = Reposition::StepTarget(x.s)) {
+                    Candidate st = x.Make(Family::Step, tgt);
+                    st.form = Reposition::kStepForm;
+                    st.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.stepCooldownSec, 0.0f));
+                    x.Push(std::move(st));
+                }
+            }
         }
 
         // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
@@ -239,6 +245,18 @@ namespace MFO::Iaus {
             // BLOCK (batch I item 4, marth 11-12 MFO-B800): only for a class whose table carries the Block row (Q-melee-2:
             // Knight, Great Knight, Ebony Warrior; everyone else blocks by the engine's own style). Generated while the guard
             // stands too, so the renewal past 60% of the window is asked for (ServiceBlock).
+            // BACK OFF (batch I): a short H3 run to a point farther from the foes, then he fights on. A mage inside the minimum range of the spell
+            // in his hand (H4), or a Mercenary two or more foes press (Q-T2-3). Only with the road open and a fresh point. Not during a held guard.
+            if (s.backOffRoad && s.backOffPoint && !x.guard) {
+                const float need = Reposition::BackOffNeed(s, x.g);
+                if (need > 0.0f) {
+                    Candidate c = x.Make(Family::BackOff, nullptr);
+                    c.form = Reposition::kBackOffForm;
+                    c.f.backOffNeed = need;
+                    c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.backOffCooldownSec, 0.0f));
+                    x.Push(std::move(c));
+                }
+            }
             if (s.blockRoad && x.g.block && melee && swingOn) {
                 Candidate c = x.Make(Family::Block, swingOn);
                 c.f.foeSwinging = true;

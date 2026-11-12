@@ -1397,6 +1397,7 @@ namespace MFO::APMFBridge {
         ClearSubstrateCasts();        // ch.27 OOC substrate casts: same (own mutex; order g_mx -> g_subMx; Harbinger never saves a substrate)
         ClearAimClaims();             // ch.29 class miss budgets: same (own mutex; order g_mx -> g_aimMx; Harbinger never saves them)
         ClearAversionClaims();        // ch.32 class aversion: same (own mutex; order g_mx -> g_avMx; Harbinger never saves them)
+        ClearRangeCloses();           // H4 spell-range closes: same
         ClearDisengage();             // H3 disengage drives: same (own leaf mutex g_disengageMx; Harbinger never saves a claim)
         ClearAttackMixClaims();       // ch.18 class attack mix: same (own mutex; order g_mx -> g_mixMx; Harbinger never saves them)
         ClearStyleClaims();           // ch.33 combat style claims: same (own mutex; order g_mx -> g_styleMx; Harbinger never saves them)

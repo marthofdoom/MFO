@@ -73,6 +73,30 @@ namespace MFO::Concealment {
         constexpr int kHiddenReads = 2;
         constexpr std::chrono::milliseconds kBlowCapMs{ 6000 };
         constexpr std::chrono::milliseconds kBlowFlightMs{ 1500 };
+        // BATCH I (the BackOff and Step kinds; the header has the contract). Sized from:
+        //   kStepRing / kStepOff   the Step's candidates: 5 bearings (the way to the foe, +-25, +-50 degrees) on two short rings. A step is
+        //                          one hop toward a foe (the next lap picks the next), not a route, so the rings are shorter than the hide's.
+        //   kStepGain              a step point must stand at least this much nearer the foe than he does (a smaller gain is no step).
+        //   kBackOffMaxMs          a back-off is 320 to 600 units at the engine's run speed (under 2 s): 5 s is a path around furniture; past it
+        //                          the run is a FAILURE, said out loud (principle 7).
+        //   kStepRunMaxMs          a quiet step at the sneak gait (x0.55 of a run, the lab's number) over 420 units: 8 s with margin.
+        constexpr int   kStepOffCount = 5;
+        constexpr float kStepOff[kStepOffCount] = { 0.0f, 0.4363f, -0.4363f, 0.8727f, -0.8727f };   // radians: 0, +-25, +-50 degrees
+        constexpr float kStepRing[2] = { 200.0f, 420.0f };
+        constexpr int   kStepCandidates = kStepOffCount * 2;
+        constexpr float kStepGain = 100.0f;
+        constexpr std::chrono::milliseconds kBackOffMaxMs{ 5000 };
+        constexpr std::chrono::milliseconds kStepRunMaxMs{ 8000 };
+
+        const char* KindName(Kind a_k) {
+            switch (a_k) {
+            case Kind::Hide:    return "hide";
+            case Kind::Flee:    return "flee";
+            case Kind::BackOff: return "back-off";
+            case Kind::Step:    return "step";
+            }
+            return "?";
+        }
 
         struct Pick {
             RE::NiPoint3      point{};
@@ -81,6 +105,8 @@ namespace MFO::Concealment {
             bool              valid = false;
             bool              pending = false;
             bool              flee = false;              // the answer is for a flee (a point away from the foes), not a hide
+            Kind              kind = Kind::Hide;         // batch I: the answer is for exactly this kind (flee == Flee or BackOff: a point away)
+            RE::FormID        target = 0;                // batch I: a Step's foe
             std::vector<RE::FormID> foes;                // the foes the answer was picked against (the run reads them again)
         };
         enum class Phase : std::uint8_t { None, Running, Hiding };
@@ -91,6 +117,7 @@ namespace MFO::Concealment {
             float             hpAtArrival = 0.0f;
             bool              sneakNoteLogged = false;
             bool              flee = false;              // a non-sneak flee: the IAUS keeps running (it heals), the scan is not skipped
+            Kind              kind = Kind::Hide;         // batch I: Hide / Flee (flee above) / BackOff / Step
             int               hiddenReads = 0;           // consecutive laps on which no foe detected him (the hide run ends at kHiddenReads)
             std::vector<RE::FormID> foes;                // the pick's foes; every lap reads these AND his current foes (WatchList)
         };
@@ -117,6 +144,10 @@ namespace MFO::Concealment {
             std::vector<RE::FormID> foes;
             float                   leash = 0.0f;   // Confidence::LeashRadius, read on the worker in Prepare
             bool                    flee = false;
+            Kind                    kind = Kind::Hide;     // batch I: BackOff picks like a flee (flee is true for it); Step has its own candidates
+            RE::FormID              target = 0;            // a Step's foe
+            bool                    bow = false;           // a Step for a line of fire (else for a blow's reach)
+            float                   targetNow = 0.0f;      // a Step: his distance to the target when the pick began
             float                   nearestNow = 0.0f;   // flee: his own distance to the nearest foe when the pick began
             std::uint64_t           epoch = 0;
             int                     next = 0;
@@ -137,10 +168,30 @@ namespace MFO::Concealment {
                 p.point   = a_job->best;
                 p.at      = Clock::now();
                 p.flee    = a_job->flee;
+                p.kind    = a_job->kind;
+                p.target  = a_job->target;
                 p.foes    = a_job->foes;
             }
             if (a_abort)
                 spdlog::info("[conceal] {:08X}: pick dropped ({})", a_job->follower, a_abort);
+            else if (a_job->kind == Kind::Step)
+                spdlog::info("[conceal] {:08X}: STEP {} toward {:08X} ({}): {:.0f},{:.0f},{:.0f} ({:.0f}u from him, {:.0f}u from the foe; he stands {:.0f}u "
+                             "from it) | {} candidates: standable {}, no real move {}, outside the leash {}, not nearer the foe {}, no line to "
+                             "the foe {}, ray unknown {}, beside another foe {}",
+                             a_job->follower, a_job->have ? "point" : "NONE", a_job->target, a_job->bow ? "line of fire" : "reach",
+                             a_job->best.x, a_job->best.y, a_job->best.z, a_job->bestCost, a_job->bestFoeDist, a_job->targetNow,
+                             kStepCandidates, a_job->standable, a_job->noMove, a_job->offLeash, a_job->seen, a_job->hidden, a_job->unknown,
+                             a_job->tooNear);
+            else if (a_job->have && a_job->kind == Kind::BackOff)
+                spdlog::info("[conceal] {:08X}: BACK-OFF point {:.0f},{:.0f},{:.0f} ({:.0f}u from him), {:.0f}u from the nearest of {} foe(s) "
+                             "(he stands {:.0f}u from it now)",
+                             a_job->follower, a_job->best.x, a_job->best.y, a_job->best.z, a_job->bestCost, a_job->bestFoeDist,
+                             a_job->foes.size(), a_job->nearestNow);
+            else if (a_job->kind == Kind::BackOff)
+                spdlog::info("[conceal] {:08X}: NO back-off point farther from the {} foe(s) within {:.0f}u | {} candidates: standable {}, "
+                             "beside a foe {}, not far enough from the foes {}, outside the leash {}, no real move {}",
+                             a_job->follower, a_job->foes.size(), kRing[1], kCandidates, a_job->standable, a_job->tooNear, a_job->seen,
+                             a_job->offLeash, a_job->noMove);
             else if (a_job->have && a_job->flee)
                 spdlog::info("[conceal] {:08X}: FLEE point {:.0f},{:.0f},{:.0f} ({:.0f}u from him), {:.0f}u from the nearest of {} foe(s) "
                              "(he stands {:.0f}u from it now) | {} candidates: standable {}, beside a foe {}, not far enough from the "
@@ -186,6 +237,46 @@ namespace MFO::Concealment {
             auto*       pc    = RE::PlayerCharacter::GetSingleton();
             const float leash = a_job->leash;
 
+            if (a_job->kind == Kind::Step) {
+                // THE HIDDEN STEP (batch I item 5): candidates toward the foe the step is for.
+                auto* tf = RE::TESForm::LookupByID<RE::Actor>(a_job->target);
+                if (!tf || tf->IsDead() || !tf->Is3DLoaded()) return Finish(a_job, "the step's foe is gone");
+                const RE::NiPoint3 tp = tf->GetPosition();
+                if (a_job->next == 0) a_job->targetNow = me.GetDistance(tp);
+                const float base = std::atan2(tp.x - me.x, tp.y - me.y);   // FindStandPoint's heading: radians, 0 = +Y, clockwise
+                for (int n = 0; n < kPerFrame && a_job->next < kStepCandidates; ++n, ++a_job->next) {
+                    const int   i       = a_job->next;
+                    const float heading = base + kStepOff[i % kStepOffCount];
+                    const float dist    = kStepRing[i / kStepOffCount];
+                    RE::NiPoint3  pt{};
+                    std::uint32_t status = 0;
+                    if (!APMFBridge::FindStandPoint(a_job->follower, heading, dist, kClearance, pt, status)) continue;
+                    ++a_job->standable;
+                    const float cost = me.GetDistance(pt);
+                    if (cost < kMinMove) { ++a_job->noMove; continue; }
+                    if (pc && leash > 0.0f && pc->GetPosition().GetDistance(pt) > leash - kLeashMargin) { ++a_job->offLeash; continue; }
+                    const float toTarget = pt.GetDistance(tp);
+                    if (toTarget > a_job->targetNow - kStepGain) { ++a_job->seen; continue; }   // not a step toward the foe
+                    bool beside = false;
+                    for (RE::Actor* foe : foes)
+                        if (foe != tf && foe->GetPosition().GetDistance(pt) < kMinFoeDist) { beside = true; break; }
+                    if (beside) { ++a_job->tooNear; continue; }
+                    if (a_job->bow) {
+                        // A line of fire: the foe's eye can reach the point (MFO's own ray, clear of world geometry). Unknown is never taken.
+                        const auto ps = Sightline::PointSeenNow(tf, pt, height);
+                        if (ps == Sightline::PointSight::Unavailable) { ++a_job->unknown; continue; }
+                        if (ps != Sightline::PointSight::Seen) { ++a_job->hidden; continue; }
+                        if (!a_job->have || cost < a_job->bestCost) {   // the shortest walk that gives a line
+                            a_job->have = true; a_job->best = pt; a_job->bestCost = cost; a_job->bestFoeDist = toTarget;
+                        }
+                    } else if (!a_job->have || toTarget < a_job->bestFoeDist) {   // a blade: the point nearest the foe
+                        a_job->have = true; a_job->best = pt; a_job->bestCost = cost; a_job->bestFoeDist = toTarget;
+                    }
+                }
+                if (a_job->next >= kStepCandidates) return Finish(a_job, nullptr);
+                MainThread::Post([a_job]() { PickStep(a_job); });
+                return;
+            }
             if (a_job->flee && a_job->next == 0) {
                 float nearest = (std::numeric_limits<float>::max)();
                 for (RE::Actor* foe : foes) nearest = (std::min)(nearest, foe->GetPosition().GetDistance(me));
@@ -399,11 +490,16 @@ namespace MFO::Concealment {
     bool FleeRunning(RE::FormID a_follower) {
         std::scoped_lock lk(g_mx);
         const auto it = g_runs.find(a_follower);
-        return it != g_runs.end() && it->second.phase != Phase::None && it->second.flee;
+        return it != g_runs.end() && it->second.phase != Phase::None && it->second.kind == Kind::Flee;   // a BackOff is not a flee: offense stays on
     }
 
     bool Prepare(RE::Actor* a_actor, const std::vector<RE::FormID>& a_foes, bool a_flee) {
+        return PrepareKind(a_actor, a_foes, a_flee ? Kind::Flee : Kind::Hide);
+    }
+
+    bool PrepareKind(RE::Actor* a_actor, const std::vector<RE::FormID>& a_foes, Kind a_kind, RE::FormID a_target, bool a_bow) {
         if (!a_actor || a_foes.empty() || !RoadOpen()) return false;
+        const bool a_flee = a_kind == Kind::Flee || a_kind == Kind::BackOff;   // the pick shape: a point away from the foes, no cover
         const RE::FormID     a_follower = a_actor->GetFormID();
         const float          leash = Confidence::LeashRadius(a_actor);   // worker read, as the scheduler's own
         std::shared_ptr<Job> job;
@@ -411,10 +507,11 @@ namespace MFO::Concealment {
         {
             std::scoped_lock lk(g_mx);
             if (const auto r = g_runs.find(a_follower); r != g_runs.end() && r->second.phase != Phase::None) return false;
-            if (g_stances.contains(a_follower)) return false;   // he is already hidden and holding
+            // He is already hidden and holding: no hide run. A BackOff or a Step is exactly what a hold may want (batch I).
+            if ((a_kind == Kind::Hide || a_kind == Kind::Flee) && g_stances.contains(a_follower)) return false;
             Pick&      p   = g_picks[a_follower];
             const auto now = Clock::now();
-            fresh = p.valid && p.flee == a_flee && now - p.at < kFreshMs;
+            fresh = p.valid && p.kind == a_kind && (a_kind != Kind::Step || p.target == a_target) && now - p.at < kFreshMs;
             if (!p.pending && now - p.askedAt >= kRepickMs) {
                 p.pending = true;
                 p.askedAt = now;
@@ -423,6 +520,9 @@ namespace MFO::Concealment {
                 job->epoch    = g_epoch;
                 job->leash    = leash;
                 job->flee     = a_flee;
+                job->kind     = a_kind;
+                job->target   = a_target;
+                job->bow      = a_bow;
                 job->foes.assign(a_foes.begin(), a_foes.begin() + static_cast<std::ptrdiff_t>((std::min)(a_foes.size(), kMaxFoes)));
             }
         }
@@ -430,12 +530,13 @@ namespace MFO::Concealment {
         return fresh;
     }
 
-    const char* Begin(RE::Actor* a_follower, std::string& a_desc) {
+    const char* Begin(RE::Actor* a_follower, std::string& a_desc, Kind a_want) {
         if (!a_follower) return "no follower";
         if (!RoadOpen()) return "no hide road ([Debug] bIausHideRoad off, Harbinger absent or older than ABI 39, or no main-thread pump)";
         const RE::FormID id = a_follower->GetFormID();
         RE::NiPoint3     pt{};
         bool             flee = false;
+        Kind             kind = Kind::Hide;
         std::vector<RE::FormID> foes;
         {
             std::scoped_lock lk(g_mx);
@@ -443,15 +544,22 @@ namespace MFO::Concealment {
             const auto p = g_picks.find(id);
             if (p == g_picks.end() || !p->second.valid || Clock::now() - p->second.at >= kFreshMs)
                 return "no fresh concealment point (the pick found none, or its answer is older than 3 s)";
+            // act.disengage asks for ONE kind (0 = the hide run or the flee, whichever the pick is for): a pick for another kind is not it.
+            const Kind pk = p->second.kind;
+            if (a_want == Kind::Hide ? (pk != Kind::Hide && pk != Kind::Flee) : pk != a_want)
+                return "the fresh point is for another kind of run";
             pt   = p->second.point;
-            flee = p->second.flee;
+            flee = pk == Kind::Flee;
+            kind = pk;
             foes = p->second.foes;
         }
         // The pick is consumed only once Harbinger has ACCEPTED the request (review of 1f59152 SEV-4: a refusal changed nothing).
         // The leg's ch.7 deny (marth 2026-11-11, Offense means hostile): a FLEE denies hostile offense only, so his own
         // heals land (Harbinger ABI >= 40; below it no ch.7 claim is filed, said once). A HIDE RUN denies attacks and every
         // cast, as it always did.
-        const auto deny = flee ? APMFBridge::DisengageDeny::HostileOffense : APMFBridge::DisengageDeny::OffenseAndCast;
+        // A BackOff denies nothing (he fights while he moves); a Step denies every attack and cast (quiet, never a reveal by design).
+        const auto deny = kind == Kind::BackOff ? APMFBridge::DisengageDeny::None
+                        : flee ? APMFBridge::DisengageDeny::HostileOffense : APMFBridge::DisengageDeny::OffenseAndCast;
         if (const char* why = APMFBridge::RequestDisengage(a_follower, pt, kRadius, deny)) return why;
         {
             std::scoped_lock lk(g_mx);
@@ -462,10 +570,13 @@ namespace MFO::Concealment {
             r.point     = pt;
             r.startedAt = Clock::now();
             r.flee      = flee;
+            r.kind      = kind;
             r.foes      = std::move(foes);
         }
-        a_desc = fmt::format("{} to a {} point {:.0f}u away ({:.0f},{:.0f},{:.0f})", flee ? "fleeing" : "disengaging",
-                             flee ? "flee" : "concealment", a_follower->GetPosition().GetDistance(pt), pt.x, pt.y, pt.z);
+        a_desc = fmt::format("{} to a {} point {:.0f}u away ({:.0f},{:.0f},{:.0f})",
+                             kind == Kind::BackOff ? "backing off" : kind == Kind::Step ? "stepping hidden" : flee ? "fleeing" : "disengaging",
+                             kind == Kind::BackOff ? "back-off" : kind == Kind::Step ? "step" : flee ? "flee" : "concealment",
+                             a_follower->GetPosition().GetDistance(pt), pt.x, pt.y, pt.z);
         return nullptr;
     }
 
@@ -521,10 +632,11 @@ namespace MFO::Concealment {
             }
             APMFBridge::ReleaseDisengage(id, a_why);
             if (!a_keepStance && !run.flee) APMFBridge::ReleaseSneakHide(id, a_why);
-            Iaus::Engine::NoteDisengageEnded(id);
+            const bool shortRun = run.kind == Kind::BackOff || run.kind == Kind::Step;   // batch I: their families pace themselves (Tuning)
+            if (!shortRun) Iaus::Engine::NoteDisengageEnded(id);
             if (a_failure) spdlog::warn("[conceal] {:08X}: {} run FAILED: {}. Not retried until its cooldown (counted from now) is over.",
-                                        id, run.flee ? "flee" : "hide", a_why);
-            else spdlog::info("[conceal] {:08X}: {} run over: {}", id, run.flee ? "flee" : "hide", a_why);
+                                        id, KindName(run.kind), a_why);
+            else spdlog::info("[conceal] {:08X}: {} run over: {}", id, KindName(run.kind), a_why);
             return false;   // the run no longer holds him: the scan runs this lap
         };
 
@@ -533,6 +645,41 @@ namespace MFO::Concealment {
         if (!APMFBridge::InCombat(a_follower))
             return end(run.phase == Phase::Hiding ? "the engine reports him out of combat at the point (no foe holds him)"
                                                   : "the engine reports him out of combat on the way", false, false);
+
+        // BATCH I: a BACK-OFF. He keeps fighting while he moves (no ch.7 deny, the scan is NOT skipped: this returns false every lap, so the
+        // IAUS keeps scoring and casts or swings on the way). It ends on arrival, on the drive's failure, or at the cap.
+        if (run.kind == Kind::BackOff) {
+            std::string why;
+            const auto  st = APMFBridge::ServiceDisengage(id, why);
+            if (st == APMFBridge::DisengageState::None) return end("the drive is gone (released elsewhere)", true, false);
+            if (st == APMFBridge::DisengageState::Failed) return end(why.c_str(), true, false);
+            if (st == APMFBridge::DisengageState::Arrived) return end("backed off to the point; he fights on from there", false, false);
+            if (now - run.startedAt > kBackOffMaxMs) return end("he did not reach the point in 5 s", true, false);
+            return false;
+        }
+
+        // BATCH I: the HIDDEN STEP (gap G18). Quiet (the stance claim is held each lap, the drive denies every attack and cast) and
+        // never a reveal by design: the moment the engine says any foe has him, the step stops (the engine's verdict, not ours). On
+        // arrival the stance stays for G2's hold row, which then strikes (a foe in reach / in sight) or steps again.
+        if (run.kind == Kind::Step) {
+            bool       anyYes = false;
+            NoFoeDetects(a_follower, WatchList(a_follower, run.foes), anyYes);
+            if (anyYes) return end("a foe detects him: the step stops (revealed; the engine's verdict)", false, false);
+            if (const char* why = APMFBridge::HoldSneakForHide(a_follower); why && !run.sneakNoteLogged) {
+                {
+                    std::scoped_lock lk(g_mx);
+                    if (const auto it = g_runs.find(id); it != g_runs.end()) it->second.sneakNoteLogged = true;
+                }
+                spdlog::warn("[conceal] {:08X}: stepping but NOT sneaking: {}. The engine's own rules decide whether a foe notices.", id, why);
+            }
+            std::string why;
+            const auto  st = APMFBridge::ServiceDisengage(id, why);
+            if (st == APMFBridge::DisengageState::None) return end("the drive is gone (released elsewhere)", true, false);
+            if (st == APMFBridge::DisengageState::Failed) return end(why.c_str(), true, false);
+            if (st == APMFBridge::DisengageState::Arrived) return end("arrived: hidden at the new spot, the hold row looks again", false, true);
+            if (now - run.startedAt > kStepRunMaxMs) return end("he did not reach the step's point in 8 s", true, false);
+            return true;
+        }
 
         if (run.flee) {
             // NON-SNEAK FLEE (marth 2026-11-11: "for anyone else, they would try to heal asap during the flee"). The IAUS keeps
@@ -631,17 +778,19 @@ namespace MFO::Concealment {
     }
 
     void Release(RE::FormID a_follower, const char* a_why) {
-        bool had = false, stance = false;
+        bool had = false, stance = false, shortRun = false;
         {
             std::scoped_lock lk(g_mx);
+            if (const auto r = g_runs.find(a_follower); r != g_runs.end())
+                shortRun = r->second.kind == Kind::BackOff || r->second.kind == Kind::Step;   // batch I: no hide cooldown stamp
             had    = g_runs.erase(a_follower) != 0;
             stance = g_stances.erase(a_follower) != 0;
             g_picks.erase(a_follower);
         }
         APMFBridge::ReleaseDisengage(a_follower, a_why);   // idempotent (a drive Begin filed and the run lost track of)
         APMFBridge::ReleaseSneakHide(a_follower, a_why);   // idempotent
-        if (had) Iaus::Engine::NoteDisengageEnded(a_follower);   // the cooldown counts from the end, however it ended
-        if (had) spdlog::info("[conceal] {:08X}: hide run released ({})", a_follower, a_why ? a_why : "");
+        if (had && !shortRun) Iaus::Engine::NoteDisengageEnded(a_follower);   // the cooldown counts from the end, however it ended
+        if (had) spdlog::info("[conceal] {:08X}: {} released ({})", a_follower, shortRun ? "short run" : "hide run", a_why ? a_why : "");
         if (stance) spdlog::info("[conceal] {:08X}: the hide hold's stance is released ({})", a_follower, a_why ? a_why : "");
     }
 
