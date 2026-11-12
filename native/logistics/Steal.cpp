@@ -503,26 +503,34 @@ namespace MFO::Logistics::Steal {
                     const Copy c = NextOwned(f, chest, obj, cellOwnedOnly);
                     if (!c.found) break;
                     if (obj->GetFormID() != 0x0000000F && !IsCoinLoot(obj) && !FitsCarryWeight(f, obj->GetWeight() * c.n)) break;
-                    // a plain stack with a stampable owner moves only on the stamp road: refused (logged once, by ListSeat) = it STAYS IN
-                    // THE CHEST, never moved unstamped. Copies with their own extra list are not affected.
+                    // NOTHING is ever moved without its owner (marth 2026-11-12: a stolen item is never laundered). A plain stack moves only on
+                    // the stamp road (a stampable owner and a verified seat; a refused seat is logged once, by ListSeat); a copy with its own
+                    // extra list moves only once it carries an ExtraOwnership owner. Anything else STAYS IN THE CHEST.
                     const bool plainStamp = !c.xl && c.owner && !c.owner->IsDynamicForm();
-                    if (plainStamp && !ListSeat().ok) { leftInChest = true; break; }
-                    TheftGate::NoteAction(a_fid, TheftGate::Road::Steal, a_cid, "take (owned chest item)");
-                    const char* how = "xOwn";
-                    const std::int32_t before = CountIn(chest, obj);
-                    std::int32_t moved = 0;
+                    if (!c.xl && !plainStamp) {
+                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} stays in the chest: its owner ({:08X}) cannot be stamped (none, or a dynamic form)",
+                                     a_fid, a_cid, obj->GetFormID(), c.n, c.owner ? c.owner->GetFormID() : 0u);
+                        leftInChest = true; break;
+                    }
+                    if (!c.xl && !ListSeat().ok) { leftInChest = true; break; }
                     if (c.xl) {
                         // keep the copy's own owner; a copy with none gets the chest's (or cell's) owner stamped before it moves
                         auto* own = c.xl->GetByType<RE::ExtraOwnership>();
                         if ((!own || !own->owner) && c.owner) { c.xl->SetOwner(c.owner); own = c.xl->GetByType<RE::ExtraOwnership>(); }   // SetOwner refuses a dynamic form
                         if (!own || !own->owner) {
-                            spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} has no stampable owner ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
-                                         c.owner ? c.owner->GetFormID() : 0u);
-                            how = "unstamped";
+                            spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} stays in the chest: its extra list has no owner and none can be stamped ({:08X})",
+                                         a_fid, a_cid, obj->GetFormID(), c.n, c.owner ? c.owner->GetFormID() : 0u);
+                            leftInChest = true; break;
                         }
+                    }
+                    TheftGate::NoteAction(a_fid, TheftGate::Road::Steal, a_cid, "take (owned chest item)");
+                    const char* how = "xOwn";
+                    const std::int32_t before = CountIn(chest, obj);
+                    std::int32_t moved = 0;
+                    if (c.xl) {
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, c.xl, f);
                         moved = before - CountIn(chest, obj);
-                    } else if (plainStamp) {
+                    } else {   // plainStamp (every other plain stack left above)
                         // a plain stack arrives with NO owner (RemoveItem moves base + count only), which would launder the theft: remove it
                         // and add what left the chest to the follower WITH an ExtraOwnership of its owner, on a list built here.
                         const ListSeatT& seat = ListSeat();   // ok: checked above
@@ -545,8 +553,7 @@ namespace MFO::Logistics::Steal {
                                              "the new ownership list was not adopted and is destroyed (engine destructor + free)", a_fid, a_cid, obj->GetFormID(), moved);
                             } else if (landed == Landed::Merged) {
                                 spdlog::info("[steal] F={:08X} chest={:08X}: item {:08X}x{} merged into a stack he already held with that owner -- "
-                                             "on 1.5.97 the engine destroys the new ownership list itself (not touched here; it only keeps it, unfreed, while "
-                                             "BarterMenu is open)", a_fid, a_cid, obj->GetFormID(), moved);
+                                             "on 1.5.97 the engine frees the new ownership list itself (or leaks it while BarterMenu is open; not touched here)", a_fid, a_cid, obj->GetFormID(), moved);
                             } else if (landed == Landed::Unknown) {   // never guessed: destroying a list something else holds is worse than one not reclaimed
                                 spdlog::error("[steal] F={:08X} chest={:08X}: item {:08X}x{}: the new ownership list is neither linked into his inventory nor "
                                               "merged into a stack he held (something moved the item during the add?) -- left alone{}", a_fid, a_cid,
@@ -554,12 +561,6 @@ namespace MFO::Logistics::Steal {
                             }
                             how = "stamped";
                         }
-                    } else {
-                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} has no stampable owner ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
-                                     c.owner ? c.owner->GetFormID() : 0u);
-                        chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, f);
-                        moved = before - CountIn(chest, obj);
-                        how = "unstamped";
                     }
                     if (moved <= 0) {   // nothing left the chest: no STOLE line, no count, and no second try at the same copy
                         spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} did NOT leave the chest (RemoveItem moved nothing; {} before and after) -- "
