@@ -20,6 +20,9 @@ METHOD (one value at a time, so every number in the table has its own evidence):
                 3. gates:   on train + holdout seeds, `--stealth off` and the game as shipped (`--stealth off --no-fill-swing
                             --no-estimates`) lose nothing: d >= -1 se and d >= -0.5 J (Thief and Mercenary -0.25 J)
               anything else is reported as "kept: does not beat noise" and the shared value stays.
+  progress    after every finished sweep ONE normal results file is written to the simulator's runs directory for the value the sweep
+              kept (the winner, else the baseline), its label naming the sweep and its verdict, so the dashboard shows the search
+              moving. The per-value runs write nothing. --no-emit-runs turns it off.
   order       per class the parameters are searched in a fixed order and each accepted value is carried into the next search.
 The final table is then held to the literal gates of iaus-sim-v2.md 31.11 (`gates`) and the Knight floor (`floor`) by the caller.
 """
@@ -28,8 +31,10 @@ import concurrent.futures as cf
 import json
 import math
 import re
+import os
 import subprocess
 import sys
+import threading
 
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
@@ -67,11 +72,33 @@ GLOBAL_PARAMS = {  # name: (shipped value, candidates)
 ARGS = None
 POOL = None
 CACHE = {}
+EMIT_LOCK = threading.Lock()
 
 
 def run_sim(extra):
     cmd = [ARGS.bin, "--no-json", "--threads", "1"] + (["--list", ARGS.list] if ARGS.list else []) + extra
     return subprocess.run(cmd, capture_output=True, text=True).stdout
+
+
+def emit_run(classes, label, curves=(), sets=None):
+    """ONE normal results file per finished sweep (marth 11-12: "have it write one JSON per sweep, so progress can be seen in dash"):
+    a class report run of the sweep's class (or set) at the value the sweep KEPT (the winner when accepted, else the baseline),
+    labelled with what was tested. Written to the simulator's default runs directory (~/.cache/mfo-iaus-sim/runs). The per-value
+    search runs stay --no-json. Small on purpose: 4 fights per cell, a 2 + 1 fight gap pass."""
+    if not ARGS.emit_runs:
+        return
+    cmd = [ARGS.bin, "--threads", "2", "--classes", classes, "--fights", "4", "--class-oracle", "2", "--gap-scenarios", "1", "--label", label]
+    cmd += (["--list", ARGS.list] if ARGS.list else [])
+    for c in curves:
+        cmd += ["--curve", c]
+    if sets:
+        cmd += ["--set", sets]
+    with EMIT_LOCK:   # one at a time: the run id is a timestamp
+        subprocess.run(cmd, capture_output=True, text=True)
+
+
+def world_name():
+    return os.path.basename(ARGS.list).split(".")[0] if ARGS.list else "builtin"
 
 
 def seeds_arg(seeds):
@@ -145,6 +172,7 @@ def search_class(cls):
                     row["accepted"], row["why"] = True, "accepted"
                     kept.append(spec)
         rows.append(row)
+        emit_run(cls, "sweep %s %s %s best %s (%s; train %+.2f J, se %.2f)" % (world_name(), cls, name, v, "ACCEPTED" if row["accepted"] else "rejected: " + row["why"], d, se), kept)
         print("%-11s %-26s shared %-6s best %-6s train %+6.2f (se %.2f)%s  %s" % (
             cls, name, shared, v, d, se, ("  hold %+5.2f (se %.2f)" % (row["hold_d"], row["hold_se"])) if "hold_d" in row else "",
             row["why"] + ("  off %+.2f shipped %+.2f" % (row.get("off_d", 0), row.get("shipped_d", 0)) if "off_d" in row else "")), flush=True)
@@ -209,6 +237,8 @@ def cmd_global():
                     row[cfg + "_d"], row[cfg + "_se"] = round(gd, 3), round(gse, 3)
                     if gd < -gse:
                         row["verdict"] = "beats noise at g3 but LOSES at %s" % cfg
+        emit_run(scope, "sweep %s global %s best %s (%s; train %+.2f J, se %.2f)" % (world_name(), name, best[2], row["verdict"], best[0], best[1]),
+                 curves, "%s=%s" % (name, best[2]) if row["verdict"].startswith("BEATS") else None)
         print("%-20s shipped %-7s best %-7s train %+5.2f (se %.2f)%s  %s   sweep %s" % (
             name, shared, best[2], best[0], best[1], ("  hold %+5.2f (se %.2f)" % (row["hold_d"], row["hold_se"])) if "hold_d" in row else "",
             row["verdict"] + ("  off %+.2f shipped %+.2f" % (row.get("off_d", 0), row.get("shipped_d", 0)) if "off_d" in row else ""),
@@ -276,6 +306,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=48, help="seeds in the train set and in the holdout set (default 48)")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--out")
+    ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one results JSON per finished sweep")
     ARGS = ap.parse_args()
     POOL = cf.ThreadPoolExecutor(max_workers=ARGS.jobs)
     return {"per-class": cmd_per_class, "global": cmd_global, "gates": cmd_gates, "floor": cmd_floor}[ARGS.mode]() or 0

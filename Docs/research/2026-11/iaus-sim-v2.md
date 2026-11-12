@@ -2150,8 +2150,36 @@ moved with it (76.96 -> 76.29, 79.45 -> 79.06) and were re-pinned with that reas
 
 | Edit | Checked against | Verdict |
 |---|---|---|
-| dodge-rate mirror (`RealClasses.cpp avoidThreat`, `Setup.h MfoPackage`) | `MFO_GenerateESP.py CLS_AVOID_THREAT`, `class_csty_params` | values and the stance order match (generator stance 1 / 2 / 3 = lab 0 / 1 / 2, the +0.10 lands on the missile stance). NOT MODELLED, already noted in the code: a follower in heavy body armor dodges not at all (`apmf/StyleClaims.cpp` claims the zero-avoid twin), while the lab dresses every melee-root class in heavy armor AND lets the Mercenary dodge at 0.35. Left as is: which armor the Mercenary line wears in the lab is a design question, and the dodge road is worth +0.03 J to him (31.3) |
+| dodge-rate mirror (`RealClasses.cpp avoidThreat`, `Setup.h MfoPackage`) | `MFO_GenerateESP.py CLS_AVOID_THREAT`, `class_csty_params`, `apmf/StyleClaims.cpp` | values and the stance order match (generator stance 1 / 2 / 3 = lab 0 / 1 / 2, the +0.10 lands on the missile stance). DEFECT, fixed (32.9): a follower in a heavy cuirass dodges not at all in the game, while the lab dressed every melee-root class in heavy armor AND let the Mercenary dodge at 0.35 |
 | Knight guard tally (`World.h` `inc2` / `guard2`) | `iaus/Generate.cpp` `tauntedOnMe`, `Policy.h` `tauntedByMe` | the tally counts every foe under a live taunt of his, without the gate's "has him as target, not paralysed, not fleeing" filter, and it counts the seconds in which the line is off by design (hurt with a potion). Its denominator is BROADER than the game's guard-line condition, so the share it prints is a lower bound for the 60% floor. Not changed |
 | `--hands`, the second-hand model, `TouchSpent` | `iaus/Candidates.cpp`, `Reposition.h HandsRange` | mirrors the native code, reads the class's own `touchSpentSec`. FOUND: the touch window never opens in the lab. `touchSpentSec` 0 against 3 gives the same J to the last digit for every casting cell on the built-in world, LoreRim and Tuxborn. The model ("the other hand holds the spell cast before the last") almost never pairs a touch spell with a distance spell, so the lab cannot rate this constant. Not fixed here (it needs a model of which two spells a mage equips, which is its own piece of work) |
 | `--curve` and the `RealClasses` profile build | `ClassCurves.h` | correct. Two things added (32.1): base-row slugs, and the refusal of `--opt c.N` next to a `--curve` on N. To know: a T1 row override also changes the T1 companions in every other class's fights (faithful to the game; the per-class gates catch a loss) |
 | found on the way | | `Setup.h BuildFight` drew a foe's two spread offsets inside one call's argument list, whose evaluation order C++ leaves open. Now two statements in the order g++ used: the same fights, on every compiler |
+
+### 32.9 Two model corrections every number below stands on: armor by the class card, and potions
+
+**Armor and the dodge.** FACT: `apmf/StyleClaims.cpp` (main fcbfec5) claims a class style's zero-avoid twin while his cuirass is
+heavy, and marth 11-12 ruled the same for a follower with no class style. FACT (class cards, `class-perks-packages.md`): L2 Heavy
+Armor is owned by Knight and Warrior, L5 Light Armor by Mercenary, Archer and Thief, L13 Arcane Robes by the mage line. The lab's
+"melee root = heavy" contradicted the Mercenary card. Now: a melee class whose card gives it an Avoid Threat above the vanilla
+0.20 (Mercenary 0.35, Blademaster 0.50, Living Legend 0.55) wears light armor, and a heavy cuirass means Avoid Threat 0 in every
+stance, tier 1 included. MODEL: what a follower actually wears is the player's choice; the lab dresses him by his card.
+
+| 6 seeds | g3 | `--stealth off` | shipped |
+|---|---|---|---|
+| mercenary | 81.83 -> 79.62 | 85.21 -> 80.98 | 85.35 -> 81.13 |
+| warrior (loses a 0.20 dodge) | 88.01 -> 87.97 | 87.96 -> 87.92 | 87.67 -> 87.65 |
+| the 12 | 79.53 -> 79.33 | 77.21 -> 76.94 | 77.25 -> 76.98 |
+| the 15 | 78.73 -> 78.54 | 76.61 -> 76.35 | 76.68 -> 76.43 |
+
+Every other class is identical. In the lab the Mercenary's dodge does not pay for his lighter armor: he is 2.2 to 4.2 J worse
+dressed by his card than he was in plate with a dodge the game would not have given him. That is a statement about the lab's
+armor and dodge models (a dodge is rolled only against projectiles, 31.2), not yet about the class.
+
+**Potions.** DEFECT, fixed: a list's `follower.potions` table is (magnitude, duration). The lab read the magnitude as a heal at
+once, and `compile_world.py` laddered fortify potions (archetype 34) and food into it. A health potion was 3% of his health on
+LoreRim and 0.5% on Tuxborn (20 to 27% on the built-in world, whose fixtures have no duration and are unchanged). Now the
+ladder holds restore potions only (archetype 0, at least 20 points in total) and a potion with a duration restores its
+magnitude per second for that long. LoreRim's health potion is 100 over 10 s, Tuxborn's 100 or 150 at once. The shared cache
+files were not overwritten: this section's list runs use corrected copies; the next `compile_world.py` run writes them so.
+Every list number that involves a drink and predates this is void for the drink line.
