@@ -433,6 +433,10 @@ namespace MFO::Classes {
     // ESL present but bClassTree = 0 the pass REMOVES the carrier abilities and zeroes the ranks instead (teardown).
     void RefreshCarriers(RE::FormID a_follower);
     void RefreshAllCarriers();
+    // Card G16 (off-class weapon rule). ANY thread. True = the follower holds a weapon outside his class's set only because he would
+    // otherwise be unarmed (logistics/EquipAuthority.cpp OffClassTick decides): his rank in MFOC_OffClassWeapon becomes 1, which switches
+    // the class add-on's ModAttackDamage x0.5 perk on; false = rank 0. Change-only, then one carrier refresh.
+    void SetOffClassWeapon(RE::FormID a_follower, bool a_held);
     // Drop the pending set / granted-perk memory and retire the pump (a new generation). ResetAllState / LoadCallback, via ClearAll.
     void ResetCarriers();
 

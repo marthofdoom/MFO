@@ -205,6 +205,8 @@ CLS_REQUIRED = {
     0xA82: ('SPEL', "MFOC_GuardedSpell",       ['EDID', 'SPIT', 'EFID', 'EFIT']),
     # Card C11: the add-on's own MCM Helper quest (start-game-enabled, NOT run-once, script MFOC_MCM) -- listed in SEQ/MFO_Classes.seq.
     0xA83: ('QUST', "MFOC_MCMQuest",           ['EDID', 'DNAM', 'VMAD']),
+    # Card G16: the off-class weapon damage penalty perk (ModAttackDamage x0.5 on rank >= 1 in MFOC_OffClassWeapon 0x830).
+    0xA84: ('PERK', "MFOC_OffClassHalf",       ['EDID', 'FULL', 'DESC', 'DATA', 'PRKE', 'EPFT', 'EPFD', 'PRKF']),
 }
 CLS_SEQ_EXPECTED = {0xA83}
 # Card C6 audit tables. Ability SPELs: 0xA50/0xA51 Mercenary, 0xA60-0xA73 Scout speed per level 1..20, 0xA74 Scout quarter.

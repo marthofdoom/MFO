@@ -2083,6 +2083,7 @@ def write_prog_mcm_files(out_dir):
 #   0xA40-0xA42 MGEF ability effects (stamina, stamina regen, speed)
 #   0xA50-0xA51 SPEL Mercenary full / quarter    0xA60-0xA73 SPEL Scout speed per level 1..20    0xA74 SPEL Scout quarter
 #   0xA80-0xA82 SPEL marker carriers (Marked / Flanked / Guarded)
+#   0xA84 PERK MFOC_OffClassHalf (card G16: ModAttackDamage x0.5 while the follower's rank in MFOC_OffClassWeapon is >= 1)
 #   0xA83 QUST MFOC_MCMQuest (card C11: the add-on's own MCM Helper quest, script MFOC_MCM, listed in SEQ/MFO_Classes.seq)
 OWN_CLS = 0x01000000
 CGID_MANIFEST_KYWD = OWN_CLS | 0x800
@@ -2121,7 +2122,8 @@ CGID_MARKED_SPELL      = OWN_CLS | 0xA80   # marker carrier SPELs (B619)
 CGID_FLANKED_SPELL     = OWN_CLS | 0xA81
 CGID_GUARDED_SPELL     = OWN_CLS | 0xA82
 CGID_MCM_QUEST     = OWN_CLS | 0xA83   # card C11
-CLS_NEXT_OBJECT_ID = 0xA84
+CGID_OFFCLASS_PERK = OWN_CLS | 0xA84   # card G16 (off-class weapon rule): granted by classes/Carriers.cpp to every follower with a class equipped
+CLS_NEXT_OBJECT_ID = 0xA85
 CLS_VERSION_STAMP  = 1.000
 
 # RANK SPACE (marth 11-10: caps T1 10 / T2 15 / T3 20 / T4 25; the T3 strong effect
@@ -2555,6 +2557,16 @@ def class_effect_entries(fx, faction_fid, cap):
     return out
 
 
+def make_offclass_perk():
+    """Card G16 (ClickUp 1dfcuabcn02): the off-class weapon damage penalty. ONE ModAttackDamage entry (entry point 35, tab 0 = the
+    perk owner, function 3 Multiply) of 0.5, conditioned on the owner's rank in MFOC_OffClassWeapon being >= 1. MFO writes that
+    rank (classes/Carriers.cpp SetOffClassWeapon) only while the follower HOLDS the fallback weapon the equip authority allowed
+    (an off-class weapon he carries because he would otherwise be unarmed). Rank 0 / not a member = the entry never fires."""
+    e = perk_entry(35, 3, 0.5, {0: [ctda(COND_GET_FACTION_RANK, CGID_OFFCLASS_FACT, '>=', 1.0, kind='owner')]})
+    return perk_record(CGID_OFFCLASS_PERK, "MFOC_OffClassHalf", "Off-class weapon",
+                       "Damage is halved while the follower fights with a weapon outside his class (he had no other).", [e])
+
+
 def make_class_passive_perks(table):
     """One PERK per class that has a perk effect. FULL = the passive's name, DESC = CLASS_CARRIER_NOTES."""
     recs, counts = b'', {}
@@ -2934,7 +2946,7 @@ def make_classes_esl():
                           [CGID_STYLE_MASK_BASE + row['idx']] + fids)
     data += group('FLST', flst)
     perks, perk_counts = make_class_passive_perks(table)
-    data += group('PERK', make_reference_perk() + perks)
+    data += group('PERK', make_reference_perk() + perks + make_offclass_perk())
     print(f"  class passives: {len(perk_counts)} perk(s), {sum(perk_counts.values())} entr(ies); "
           + ", ".join(f"{k} {v}" for k, v in perk_counts.items()))
     return data

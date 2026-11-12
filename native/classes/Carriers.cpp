@@ -24,6 +24,7 @@
 #include "MainThread.h"
 #include <bit>
 #include <set>
+#include <unordered_set>
 
 namespace MFO::Classes {
 
@@ -73,6 +74,8 @@ namespace MFO::Classes {
         constexpr RE::FormID kScoutBase = 0xA60;       // + (level - 1), level 1..20
         constexpr RE::FormID kScoutQuarter = 0xA74;
         constexpr RE::FormID kMarkerSpellBase = 0xA80; // Marked, Flanked, Guarded
+        constexpr RE::FormID kOffClassFaction = 0x830; // card G16: MFOC_OffClassWeapon (rank 1 while the fallback weapon is held)
+        constexpr RE::FormID kOffClassPerk    = 0xA84; // card G16: MFOC_OffClassHalf (ModAttackDamage x0.5 on that rank)
         constexpr int        kScoutLevels = 20;        // the T3 cap (Mastery.cpp LevelCap)
 
         // The classes that carry a perk (the generator's CLASS_PASSIVE_FX). A drift between this list and the ESL is logged by Resolve.
@@ -119,6 +122,8 @@ namespace MFO::Classes {
             RE::SpellItem* mercQuarter = nullptr;
             RE::SpellItem* scoutQuarter = nullptr;
             std::array<RE::SpellItem*, kScoutLevels> scout{};
+            RE::TESFaction* offFact = nullptr;   // card G16
+            RE::BGSPerk*    offPerk = nullptr;
         };
         Forms g_forms;   // main thread only
 
@@ -166,6 +171,8 @@ namespace MFO::Classes {
             int markers = 0;
             for (RE::FormID i = 0; i < 3; ++i)
                 if (want(dh->LookupForm<RE::SpellItem>(kMarkerSpellBase + i, file), kMarkerSpellBase + i, "marker carrier spell")) ++markers;
+            g_forms.offFact = want(dh->LookupForm<RE::TESFaction>(kOffClassFaction, file), kOffClassFaction, "off-class weapon faction");
+            g_forms.offPerk = want(dh->LookupForm<RE::BGSPerk>(kOffClassPerk, file), kOffClassPerk, "off-class weapon damage perk");
             g_forms.ok = (bad == 0);
             if (g_forms.ok)
                 spdlog::info("[classes] carriers: {} carrier class(es) resolved from {} ({} perk(s), {} ability spell(s), {} marker spell(s))",
@@ -227,6 +234,8 @@ namespace MFO::Classes {
         std::mutex g_pm;
         std::unordered_map<RE::FormID, Item> g_pending;
         std::unordered_map<RE::FormID, Mask> g_granted;   // perks granted this session (Mask over Id), written on the main thread
+        std::unordered_set<RE::FormID> g_offGranted;      // card G16: the off-class damage perk granted this session (under g_pm)
+        std::unordered_set<RE::FormID> g_offHeld;         // card G16: followers holding an off-class FALLBACK weapon (under g_pm)
         std::uint64_t g_gen = 0;
         bool g_pumpLive = false;
         std::set<std::uint64_t> g_loggedMismatch;         // (fid << 8 | class), main thread only
@@ -279,8 +288,37 @@ namespace MFO::Classes {
                 { std::scoped_lock lk(g_pm); g_granted[a_fid] = have; }
             }
 
+            // 1b. card G16: the off-class damage perk, once per session, for any follower with a class equipped
+            bool offHeld = false;
+            {
+                std::scoped_lock lk(g_pm);
+                offHeld = g_offHeld.count(a_fid) > 0;
+            }
+            if (classesOn && g_forms.offPerk) {
+                bool have = false;
+                { std::scoped_lock lk(g_pm); have = g_offGranted.count(a_fid) > 0; }
+                if (!have) {
+                    if (!base->GetPerkIndex(g_forms.offPerk).has_value()) { base->AddPerk(g_forms.offPerk, 1); ++granted; }
+                    live += ApplyLive(actor, g_forms.offPerk);
+                    std::scoped_lock lk(g_pm);
+                    g_offGranted.insert(a_fid);
+                }
+            }
+
             // 2. faction ranks (diff only; a class that is off and not a member is never added)
             int rankWrites = 0;
+            if (g_forms.offFact) {   // card G16: rank 1 only while the fallback weapon is held (and classes are on), else off
+                const int want = (!a_teardown && classesOn && offHeld) ? 1 : 0;
+                const int cur = actor->GetFactionRank(g_forms.offFact, false);
+                if (!(want == 0 ? cur <= 0 : cur == want)) {
+                    actor->AddToFaction(g_forms.offFact, static_cast<std::int8_t>(want));
+                    ++rankWrites;
+                    const int back = actor->GetFactionRank(g_forms.offFact, false);
+                    if (back != want && !(want == 0 && back <= 0))
+                        spdlog::error("[classes] carriers {:08X}: faction MFOC_OffClassWeapon rank write {} read back as {} -- the damage penalty "
+                                      "gate is NOT where the DLL thinks it is", a_fid, want, back);
+                }
+            }
             for (std::size_t c = 0; c < kClassCount; ++c) {
                 auto* f = g_forms.fact[c];
                 if (!f) continue;
@@ -372,6 +410,17 @@ namespace MFO::Classes {
         if (start) MainThread::Post([gen] { PumpTick(gen); });
     }
 
+    void SetOffClassWeapon(RE::FormID a_follower, bool a_held) {
+        if (a_follower == 0 || !Present()) return;
+        {
+            std::scoped_lock lk(g_pm);
+            const bool was = g_offHeld.count(a_follower) > 0;
+            if (was == a_held) return;
+            if (a_held) g_offHeld.insert(a_follower); else g_offHeld.erase(a_follower);
+        }
+        RefreshCarriers(a_follower);
+    }
+
     void RefreshAllCarriers() {
         if (!Present()) return;
         for (const RE::FormID fid : detail::StoredFollowerIds()) RefreshCarriers(fid);
@@ -383,6 +432,8 @@ namespace MFO::Classes {
         g_pumpLive = false;
         g_pending.clear();
         g_granted.clear();
+        g_offGranted.clear();
+        g_offHeld.clear();
     }
 
 #ifdef MFO_DEV_SELFTEST

@@ -7,6 +7,9 @@
 #include "Lotd.h"               // HoldFromSale: a museum-needed relic is never MFO's armor choice
 #include "PlayerGiven.h"        // ... unless the PLAYER gave it / put it on him
 #include "progression/ProgAllocator.h"   // ReapplyPending: defer the FIRST declaration until his perks are back
+#include "classes/Classes.h"   // card G16: the equipped class's weapon set, SetOffClassWeapon
+#include "i18n/Strings.h"      // card G16: the player notice
+#include <mutex>
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -217,7 +220,7 @@ namespace MFO::Logistics {
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || w == a_myWeap || IsCreatureWeapon(w) || w->IsBound()) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
-                if (NeverWieldWeapon(w, data.second.get())) continue;   // MFO-B308: never-wield, bLootSpecialItems or not
+                if (NeverWieldWeaponFor(a_follower, w, data.second.get())) continue;   // MFO-B308 + card G16 (off-class)
                 // the combat pick's relic rule (cast/Equip.cpp IsMuseumRelic), so the two agree
                 if (Lotd::HoldFromSale(id, w) && !PlayerGiven::IsPlayerEquipped(id, w->GetFormID())) continue;
                 if (w == leftForm && data.first < 2) continue;           // his only copy is in the left hand
@@ -334,6 +337,102 @@ namespace MFO::Logistics {
         bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry) {
             if (!a_weapon || !Catalog::IsExcluded(a_weapon->GetFormID()) || IsCreatureWeapon(a_weapon)) return false;
             return !(a_entry && IsQuestObjectInstance(a_entry));   // a quest-bound one is handed to the player instead
+        }
+
+        // ── OFF-CLASS WEAPON RULE (batch L, card G16) ──
+        namespace {
+            // The Classes::Weapon bit a weapon belongs to (0 = fists / unknown: never off-class).
+            std::uint16_t ClassWeaponBit(const RE::TESObjectWEAP* a_w) {
+                using W = RE::WEAPON_TYPE;
+                switch (a_w->GetWeaponType()) {
+                    case W::kOneHandDagger:                                   return Classes::Weapon::kDagger;
+                    case W::kOneHandSword: case W::kOneHandAxe: case W::kOneHandMace: return Classes::Weapon::kOneHand;
+                    case W::kTwoHandSword: case W::kTwoHandAxe:               return Classes::Weapon::kTwoHand;
+                    case W::kBow:                                             return Classes::Weapon::kBow;
+                    case W::kCrossbow:                                        return Classes::Weapon::kCrossbow;
+                    case W::kStaff:                                           return Classes::Weapon::kStaff;
+                    default:                                                  return 0;
+                }
+            }
+            // The follower's weapon set, 0 = unrestricted (no class, tree off, T1, Dragonborn).
+            std::uint16_t ClassSet(RE::FormID a_follower) {
+                if (!Classes::Active()) return 0;
+                const std::uint8_t eq = Classes::GetEquipped(a_follower);
+                if (eq >= Classes::kClassCount) return 0;
+                const std::uint16_t set = Classes::Get(static_cast<Classes::Id>(eq)).weapons;
+                return (set & Classes::Weapon::kUnrestricted) ? 0 : set;
+            }
+            bool OffClassBit(const RE::TESObjectWEAP* a_w, std::uint16_t a_set) {
+                if (!a_w || a_set == 0 || a_w->IsBound()) return false;
+                const std::uint16_t bit = ClassWeaponBit(a_w);
+                return bit != 0 && (a_set & bit) == 0;
+            }
+            // Does he carry at least one weapon INSIDE the set he could wield? Cached ~1 s per follower (the pick loops ask per item).
+            struct HasOnClass { std::chrono::steady_clock::time_point at{}; bool v = false; };
+            std::mutex g_ocMx;
+            std::unordered_map<RE::FormID, HasOnClass> g_oc;
+            bool CarriesOnClass(RE::Actor* a_follower, std::uint16_t a_set) {
+                const RE::FormID id = a_follower->GetFormID();
+                const auto now = std::chrono::steady_clock::now();
+                {
+                    std::scoped_lock lk(g_ocMx);
+                    auto it = g_oc.find(id);
+                    if (it != g_oc.end() && now - it->second.at < std::chrono::seconds(1)) return it->second.v;
+                }
+                bool any = false;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (!w || w->IsBound() || IsCreatureWeapon(w)) continue;
+                    if ((w->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable
+                    const std::uint16_t bit = ClassWeaponBit(w);
+                    if (bit == 0 || (a_set & bit) == 0) continue;
+                    if (NeverWieldWeapon(w, data.second.get())) continue;
+                    any = true; break;
+                }
+                std::scoped_lock lk(g_ocMx);
+                if (g_oc.size() > 64) g_oc.clear();
+                g_oc[id] = { now, any };
+                return any;
+            }
+        }
+
+        bool NeverWieldWeaponFor(RE::Actor* a_follower, const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry) {
+            if (NeverWieldWeapon(a_weapon, a_entry)) return true;
+            if (!a_follower || !a_weapon) return false;
+            const std::uint16_t set = ClassSet(a_follower->GetFormID());
+            return OffClassBit(a_weapon, set) && CarriesOnClass(a_follower, set);   // no in-set weapon carried: the fallback stands
+        }
+
+        void OffClassTick(RE::Actor* a_follower) {
+            if (!a_follower) return;
+            static std::unordered_map<RE::FormID, bool> s_held;   // worker-serial like g_lastDeclared
+            const RE::FormID id = a_follower->GetFormID();
+            const std::uint16_t set = ClassSet(id);
+            const RE::TESObjectWEAP* held = nullptr;
+            if (set != 0) {
+                for (bool left : { false, true }) {
+                    auto* eq = a_follower->GetEquippedObject(left);
+                    auto* w = eq ? eq->As<RE::TESObjectWEAP>() : nullptr;
+                    if (w && OffClassBit(w, set)) { held = w; break; }
+                }
+            }
+            const bool now = held != nullptr;
+            auto it = s_held.find(id);
+            const bool was = it != s_held.end() && it->second;
+            if (now == was) return;
+            s_held[id] = now;
+            Classes::SetOffClassWeapon(id, now);
+            if (now) {
+                spdlog::info("[equip-auth] {:08X}: OFF-CLASS fallback weapon '{}' held (he carries no weapon of his class) -- damage penalty ON", id,
+                             held->GetName() ? held->GetName() : "?");
+                std::string text = Str::Fmt(Str::K::Notice_OffClassWeapon, { a_follower->GetDisplayFullName() ? a_follower->GetDisplayFullName() : "?",
+                                                                            held->GetName() ? held->GetName() : "?" });
+                if (MainThread::IsInstalled())
+                    MainThread::Post([text = std::move(text)]() { RE::DebugNotification(text.c_str()); });
+            } else {
+                spdlog::info("[equip-auth] {:08X}: off-class fallback weapon no longer held -- damage penalty OFF", id);
+            }
         }
 
         // ── APMF EQUIP AUTHORITY: THE DECLARATION (feat/mfo-equip-authority, 2026-09-15) ──
@@ -919,6 +1018,7 @@ namespace MFO::Logistics {
                                      bool a_leftReserved, bool a_judgeArmor, const char* a_why) {
             if (!a_follower) return;
             const RE::FormID id = a_follower->GetFormID();
+            if (a_state.mfoEnabled) OffClassTick(a_follower);   // card G16: the fallback-held edge (notice + penalty rank)
             if (!a_state.mfoEnabled || !APMFBridge::EquipAuthoritySupported()) {
                 APMFBridge::ReleaseEquipAuthority(id);   // idempotent; logs only when a claim stood
                 g_lastDeclared.erase(id);
@@ -1640,7 +1740,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (!NeverWieldWeapon(w, data.second.get())) continue;   // the heal hands a quest-bound one over
+                    if (!NeverWieldWeaponFor(a_follower, w, data.second.get())) continue;   // the heal hands a quest-bound one over
                     const RE::FormID fid = obj->GetFormID();
                     const bool declared = std::any_of(decl.entries.begin(), decl.entries.end(),
                                                       [&](const APMF_API::APMF_EquipEntry& e) { return e.form == fid; });
