@@ -538,7 +538,19 @@ def audit_one(esp):
                 errors.append(f"class {i}: style mask {mask} invalid (bits 1/2 melee single/dual, 4 ranged, 8 cast; dual needs melee)")
             if fl[1].get('#LNAM', 0) != 1 + bin(mask).count('1'):
                 errors.append(f"class {i}: style FLST has {fl[1].get('#LNAM', 0)} entries, mask {mask} wants {1 + bin(mask).count('1')}")
-        for local, want in ((0x801, CLS_MANIFEST_ENTRIES), (0x802, CLS_PASSIVE_COUNT), (0x803, CLS_PASSIVE_COUNT)):
+        # Zero-avoid TWIN lists (0xB00+i, entries 35..69 of 0x803): the same shape as 0x880+i, each entry a CSTY whose
+        # avoidThreat is 0 (the twin of a style with Avoid Threat, or the style itself when it already has none).
+        for i in range(CLS_PASSIVE_COUNT):
+            tl, fl = by_local.get(0xB00 + i), by_local.get(0x880 + i)
+            if not tl or tl[0] != 'FLST' or not fl:
+                errors.append(f"class {i}: missing twin style FLST 0x{0xB00 + i:03X}")
+            elif tl[1].get('#LNAM', 0) != fl[1].get('#LNAM', 0):
+                errors.append(f"class {i}: twin style FLST has {tl[1].get('#LNAM', 0)} entries, the style FLST {fl[1].get('#LNAM', 0)}")
+        for local, (t, subs) in by_local.items():
+            if t == 'CSTY' and 0xA85 <= local < 0xB00 and 'CSGD' in subs \
+                    and struct.unpack('<f', subs['CSGD'][36:40])[0] != 0.0:
+                errors.append(f"CSTY 0x{local:03X}: a zero-avoid twin with a non-zero avoidThreat")
+        for local, want in ((0x801, CLS_MANIFEST_ENTRIES), (0x802, CLS_PASSIVE_COUNT), (0x803, 2 * CLS_PASSIVE_COUNT)):
             if local in by_local:
                 n = by_local[local][1].get('#LNAM', 0)
                 if n != want:
