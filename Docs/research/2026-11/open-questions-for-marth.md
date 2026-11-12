@@ -208,3 +208,6 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - Q-melee-4: give the power attack cooldown back when Harbinger refuses the move or the read-back fails.
 - IAUS melee: batch I gives IAUS the Harbinger block and the engine power attack as candidates (MFO-B800), modelled in the sim.
 - Q-SIM-4: stealth probes P1-P3 (g2-hide-design.md) join the T2 field session.
+- Harbinger invariants #0 (m) aversion, (l) block + power-attack amendments, (n) combat-style read: adopted at each branch's merge (after its Opus review).
+- Q104: Corpse: Within stays combat only (default confirmed).
+- Q94: aversion only from the EQUIPPED Conjurer/Healer class; a mastered, unequipped class gives none (was a quarter). Weight does not grow with level.
