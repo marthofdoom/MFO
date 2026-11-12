@@ -29,7 +29,7 @@ namespace Sim {
         float shareMax = -1.0f, shareMin = -1.0f;   // ClassDef::powerShareMax / powerShareMin (ch.18), -1 = not declared
         bool  leashScaled = false;                  // Flag::kShortLeash | kNearPlayer on a tier 2+ class: Classes::PackageLeashScale = fClassLeashMult (0.5)
         float avoidThreat = 0.0f;                   // MFO_GenerateESP.py CLS_AVOID_THREAT (the Mercenary 0.3): a floor on every stance's Avoid Threat
-        float aversion = 0.0f;                      // apmf/AversionClaims.cpp: fAversionConjurer / fAversionHealer 0.25 for the EQUIPPED class (Q93, Q94; Dragonborn: Q107)
+        float aversion = 0.0f;                      // apmf/AversionClaims.cpp: fAversionConjurer / fAversionHealer 0.25 for the EQUIPPED class (Q93, Q94; Dragonborn gives none: Q107)
         int   aimBudget = -1;                       // apmf/AimClaims.cpp: the ch.29 miss budget of a ranged class (Archer 5)
     };
     // --teach <token>: card "Teach Spells" (Board_Classes.cpp, batch I item 7). MODEL of its effect only: the subject of a casting class

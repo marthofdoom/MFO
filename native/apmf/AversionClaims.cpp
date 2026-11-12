@@ -9,7 +9,8 @@
 // The weight follows the class passive rules (classes/Carriers.cpp CarrierRanks, the same ranks the passive perks are gated on):
 //   the class EQUIPPED (any level; the weight does not grow with level)   the class weight   fAversionConjurer / fAversionHealer (0.25)
 //   the class MASTERED and not equipped                                    nothing            (marth 11-12, Q94: equipped class only)
-//   the class MASTERED while Dragonborn is equipped                        the class weight   (CarrierRanks: Dragonborn holds every mastered passive at full; Q107)
+//   the class MASTERED while Dragonborn is equipped                        nothing            (marth 11-12, Q107: aversion comes ONLY from an equipped Conjurer / Healer; CarrierRanks gives Dragonborn
+//                                                                                             every mastered passive at full, WeightFor excludes him from this one)
 //   both passives present                                            the larger of the two, never a sum
 // The stronger tiers (Necromancer, Priest, Arch-Mage, Saint) get their own weights with their own cards; until then they carry
 // what the rules above give them through an equipped Conjurer / Healer.
@@ -89,6 +90,7 @@ namespace MFO::APMFBridge {
             Classes::FollowerClasses fc;
             fc.equipped = Classes::GetEquipped(a_fid);
             if (fc.equipped == Classes::kNoClass) return 0.0f;   // classes OFF for him: nothing applies
+            if (fc.equipped == static_cast<std::uint8_t>(Classes::Id::Dragonborn)) return 0.0f;   // Q107: a mastered Conjurer / Healer under Dragonborn gives no aversion
             fc.mastered = Classes::GetMastered(a_fid);
             const auto ranks = Classes::CarrierRanks(fc);        // reads equipped, mastered and the equipped class's level (any level = active)
             const float w = std::max(
