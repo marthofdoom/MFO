@@ -78,9 +78,19 @@ namespace MFO::SelfTest {
             }
             add("ch.8b-reanimate-corpse(G7)", 42, APMFBridge::CorpseTargetSupported(), {});
             {
-                const auto d = APMFBridge::DevCanServeIntent(c.id, APMF_API::kIntent_CombatStyle, 0.0f);
-                add("ch.33-combat-style", 45, APMFBridge::StyleRoadSupported() && Installed(d),
-                    std::format("CanServe verdict {} refusal {} '{}'", d.verdict, d.refusal, d.why));
+                // ch.33 REQUIRES a TESCombatStyle form (APMF_API.h kIntent_CombatStyle): ask with the follower's own base combat style, so a
+                // BadRequest cannot masquerade as "installed". No style on his base = not judged (INFO), never a pass.
+                auto*              actor = RE::TESForm::LookupByID<RE::Actor>(c.id);
+                auto*              base  = actor ? actor->GetActorBase() : nullptr;
+                auto*              csty  = base ? base->GetCombatStyle() : nullptr;
+                const RE::FormID   sform = csty ? csty->GetFormID() : 0;
+                const auto d = APMFBridge::DevCanServeIntent(c.id, APMF_API::kIntent_CombatStyle, 0.0f, sform);
+                const bool judged = sform != 0 && d.verdict != APMF_API::kServe_Failed &&
+                                    !(d.verdict == APMF_API::kServe_Refused && d.refusal == APMF_API::kServeRefusal_BadRequest);
+                add("ch.33-combat-style", 45, APMFBridge::StyleRoadSupported() && judged && Installed(d),
+                    sform == 0 ? std::string("not judged: his base NPC has no combat style to ask with")
+                    : !judged  ? std::format("not judged: CanServe verdict {} refusal {} '{}'", d.verdict, d.refusal, d.why)
+                               : std::format("CanServe verdict {} refusal {} '{}'", d.verdict, d.refusal, d.why));
             }
             if (bad.empty()) return Step::Pass(std::format("Harbinger ABI {} serves every T2 road:{}", abi, ok));
             return Step::Info(std::format("Harbinger ABI {}: served:{} | NOT served:{} (an older Harbinger or an APMF.ini switch off: the documented degrade; the "
@@ -216,7 +226,7 @@ namespace MFO::SelfTest {
         }
 
         // ── main-thread bundles (cached under a leaf lock) ──────────────────────────────────────────────
-        struct MainRes { bool done = false; bool fail = false; std::string text; };
+        struct MainRes { bool done = false; bool fail = false; bool info = false; std::string text; };
         std::mutex                                     g_t2Mx;   // leaf
         std::unordered_map<std::string, MainRes>       g_t2Res;
         void SetRes(const std::string& a_key, MainRes a_r) {
@@ -238,14 +248,13 @@ namespace MFO::SelfTest {
         //      the player / PlayerFaction / the follower's own base chain. None nearby = noted, not a failure (an open field has none).
         //   c. TheftGate::GuardCheck on the main thread never answers Pending (it scans now); the worker's read of the same pair right after
         //      is Clear / Seen / Pending (a stale answer re-asks: the evidence says which, it is not judged).
-        //   d. Steal::CheckNow while he is NOT sneaking = Refused "the follower is not sneaking" (card G13; a sneaking follower is RETRY).
+        //   d. Steal::CheckNow while he is NOT sneaking = Refused "the follower is not sneaking" (card G13). A sneak-always follower (Thief line) or one with no 3D
+        //      cannot be judged: the test then ends INFO with a-c's results. NOTE: CheckNow logs a '[steal] F=.. item=00000007' line (the player ref is the stand-in item) - MFO-B836.
         Step TheftStep(Ctx& c) {
             const std::string key = std::format("theft:{:08X}", c.id);
             auto&             s   = *c.s;
             if (!s.b[0]) {
                 s.b[0] = true;
-                if (c.follower && c.follower->IsSneaking())
-                    return Step::Retry("he is sneaking right now (a Sneak row or the class stance): the not-sneaking refusal of Steal::Check cannot be exercised; retried later");
                 SetRes(key, MainRes{});
                 const RE::FormID fid = c.id;
                 MainThread::Post([fid, key]() {
@@ -292,12 +301,16 @@ namespace MFO::SelfTest {
                     if (g == TheftGate::GuardState::Pending) { r.fail = true; r.text += "(WRONG: a main-thread scan must never answer Pending); "; }
                     // d. Steal: not sneaking -> refused
                     if (f->IsSneaking()) {
-                        r.text += "d: he started sneaking, not judged; ";
+                        r.info = true;
+                        r.text += "d: NOT judged, he is sneaking (a sneak-always class such as the Thief, or a Sneak row): the not-sneaking refusal needs a standing follower (t2.manual_steal step 4); ";
                     } else {
                         std::string why;
                         const auto  v = Steal::CheckNow(f, pc, TheftGate::Road::Steal, &why);
                         r.text += std::format("d: Steal::CheckNow while not sneaking -> {} '{}'; ", v == Steal::Verdict::Refused ? "Refused" : v == Steal::Verdict::Take ? "TAKE" : "Pending", why);
-                        if (v != Steal::Verdict::Refused || why.find("not sneaking") == std::string::npos) {
+                        if (why.find("not loaded") != std::string::npos) {   // Evaluate refuses 'not loaded' before 'not sneaking': no 3D, nothing to judge
+                            r.info = true;
+                            r.text += "(d NOT judged: he has no loaded 3D, Evaluate refuses that before the sneak test); ";
+                        } else if (v != Steal::Verdict::Refused || why.find("not sneaking") == std::string::npos) {
                             r.fail = true;
                             r.text += "(WRONG: must be Refused 'the follower is not sneaking'); ";
                         }
@@ -313,6 +326,7 @@ namespace MFO::SelfTest {
             const auto w = Logistics::TheftGate::GuardCheck(c.follower, nullptr, Logistics::TheftGate::Road::Loose, false);
             r.text += std::format("worker GuardCheck = {}", w == Logistics::TheftGate::GuardState::Clear ? "Clear" : w == Logistics::TheftGate::GuardState::Seen ? "Seen" : "Pending (stale: re-asked, fail closed)");
             if (r.fail) return Step::Fail(r.text);
+            if (r.info) return Step::Info(r.text);   // a-c judged above; d could not be (sneak-always class, or no 3D)
             return Step::Pass(r.text);
         }
         Step TheftTimeout(Ctx& c) { return Step::Retry("the main-thread bundle did not answer in the window; " + c.s->note); }
@@ -485,7 +499,7 @@ namespace MFO::SelfTest {
               "'[spellbook] ... no IAUS candidate' once per script-only spell; Teach spells button on a Wizard/Evoker/Spellsword, two presses, '[board] taught ... consumed book'; gamepad D-pad/A/B work; a Knight has no button" },
             { "t2.manual_theft_field", "Theft gate 1-4", "needs Whiterun, guards and in-game days with bCrimeGoldProbe",
               "'[theft-gate] verdict=BARRED:' lines (guard / owned / off-limits door) and ZERO '[crime-probe] BOUNTY UP'; dungeon loot still taken ('verdict=take'); an owned shop door is not declared" },
-            { "t2.manual_steal", "Batch L 1-5 (G13)", "a witness, a line of sight and an owned item must exist in the world (t2.theft_gate judges the not-sneaking refusal)",
+            { "t2.manual_steal", "Batch L 1-5 (G13)", "a witness, a line of sight and an owned item must exist in the world (t2.theft_gate judges the not-sneaking refusal only for a follower who is NOT sneaking: a Thief-line follower is always sneaking, so step 4's refusal is yours to see)",
               "'[steal] ... verdict=take' + TOOK with no bounty when nobody is around; REFUSED:<name> senses the follower|player; owner in view refused; guard refused; 'take SKIPPED at the write'" },
             { "t2.manual_pick_and_offclass", "Batch L 6-9 (G14 / G16)", "needs a locked chest, a Thief, and an Archer with a two-hander",
               "'[lockpick] ... PICKED' then looted; owned lock 'REFUSED (owned)'; the crime ring names road=steal|pick if a bounty appears; off-class two-hander: 'OFF-CLASS fallback weapon ... penalty ON' and MFOC_OffClassWeapon rank 1" },
@@ -511,7 +525,7 @@ namespace MFO::SelfTest {
                    "(self-setup) a spawned fight so he draws his weapon; BlockHandsReason is compared with the 24m/24n hand rule for the loadout he carries",
                    60.0f, AlwaysPre, BlockFix, BlockStep, nullptr });
         Register({ "t2.theft_gate", "Theft gate 1-4, Batch L 4",
-                   "(self-setup) nothing: TakeBarred on a player-pack copy and on owned references of his cell, the main-thread guard scan, Steal::CheckNow while he is not sneaking",
+                   "(self-setup) nothing: TakeBarred on a player-pack copy and on owned references of his cell, the main-thread guard scan, Steal::CheckNow while he is not sneaking (INFO, not judged, for a sneak-always class)",
                    30.0f, AlwaysPre, nullptr, TheftStep, TheftTimeout });
         Register({ "t2.spell_weighing", "T2 batch I 7 / 8",
                    "(self-setup) nothing: every script-only spell record of the load order must be un-weighable, Healing must weigh",

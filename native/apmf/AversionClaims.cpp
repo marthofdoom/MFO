@@ -259,13 +259,14 @@ namespace MFO::APMFBridge {
         out.live = h != APMF_API::kInvalidHandle && api->IsClaimLive(h);
         return out;
     }
-    DevServeInfo DevCanServeIntent(RE::FormID a_actor, std::uint32_t a_intent, float a_fval) {
+    DevServeInfo DevCanServeIntent(RE::FormID a_actor, std::uint32_t a_intent, float a_fval, RE::FormID a_form) {
         DevServeInfo out;
         const auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < 35) return out;
         out.api = true;
         APMF_API::APMF_Param p{};
         p.fval = a_fval;
+        p.form = a_form;
         APMF_API::APMF_ServeQuery q{};
         q.size   = sizeof(q);
         q.call   = APMF_API::kServeCall_RequestEx;
