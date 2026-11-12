@@ -77,7 +77,7 @@ namespace Sim {
             if (colon == std::string::npos || eq == std::string::npos || eq < colon) { a_err = "bad --curve '" + sp + "' (use <class>:<family>.<cons>.<param>=<v> or <class>:scalar.<name>=<v>)"; return false; }
             const std::string slug = sp.substr(0, colon), path = sp.substr(colon + 1, eq - colon - 1);
             float v = 0.0f; try { v = std::stof(sp.substr(eq + 1)); } catch (...) { a_err = "bad value in --curve '" + sp + "'"; return false; }
-            long ci = BaseOffRow(slug); for (std::size_t i = 0; ci < 0 && i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);
+            long ci = -1; for (std::size_t i = 0; i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);
             if (ci < 0) { a_err = "unknown class '" + slug + "' in --curve (see --print-classes)"; return false; }
             CC::Row& row = g_curveTable[static_cast<std::size_t>(ci)];
             if (path.rfind("scalar.", 0) == 0) {
@@ -87,7 +87,6 @@ namespace Sim {
             if (d2 == std::string::npos) { a_err = "bad --curve path '" + path + "' (<family>.<cons>.<param>)"; return false; }
             const long fi = index(path.substr(0, d1), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
             const long ki = index(path.substr(d1 + 1, d2 - d1 - 1), MFO::Iaus::kCons, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Cons>(i)); });
-            if (ki >= 0) g_curveConsEdited.push_back(static_cast<std::size_t>(ki));
             if (fi < 0 || ki < 0) { a_err = "unknown family or consideration in --curve '" + sp + "'"; return false; }
             if (!CC::SetCurveParam(row, static_cast<Family>(fi), static_cast<Cons>(ki), a_shared.curve[static_cast<std::size_t>(ki)], path.substr(d2 + 1), v)) { a_err = "unknown curve param in --curve '" + sp + "' (a | b | floor | zeroAbove | zeroBelow)"; return false; }
         }

@@ -38,18 +38,6 @@ namespace Sim {
     inline std::vector<std::string> g_teach;
     inline constexpr float kLeashBase = 2256.0f, kLeashMin = 512.0f, kClassLeashMult = 0.5f;   // Confidence::LeashRadius at mid confidence between fLeashMin 512 and fLeashMax 4000 (MODEL: the lab has no confidence value); Config fClassLeashMult
 
-    // Per-class curves (ruling Q-class-curves): the sim's OWN copy of iaus/ClassCurves.h's table, which the class builders read for every class's
-    // Profile and edge constants. --curve edits it (ApplyCurveSpecs); untouched it is the shipped table, so scores are unchanged.
-    // The row of a cell name: a game class slug is its Classes::Id ordinal (RealClasses.cpp), melee / ranged / mage the T1 rows 0..2, and
-    // melee-off / ranged-off / mage-off the tree-OFF base rows (35..37). -1 = a name with no row.
-    inline MFO::Iaus::ClassCurves::Table g_curveTable = MFO::Iaus::ClassCurves::Defaults();
-    inline std::vector<std::size_t> g_curveConsEdited;   // the Cons indexes a --curve spec overrode (sim.cpp refuses --opt c.N on one of them)
-    inline int BaseOffRow(const std::string& a_name) {
-        static const char* const kOff[] = { "melee-off", "ranged-off", "mage-off" };
-        for (std::size_t i = 0; i < 3; ++i) if (a_name == kOff[i]) return static_cast<int>(MFO::Iaus::ClassCurves::kBaseOffFirst + i);
-        return -1;
-    }
-
     inline ClassGate MkGate(bool treeOn, bool spells, bool power, bool taunt, bool dis, bool melee, bool bow, bool xbow, bool staff) {
         ClassGate g; g.resolved = true; g.treeOn = treeOn; g.strict = false; g.spellsOnClass = spells; g.scrollUser = spells; g.powerAttack = power;
         g.powerCooldownSec = 0.0f; g.taunt = taunt; g.disengage = dis; g.weaponMelee = melee; g.weaponBow = bow; g.weaponCrossbow = xbow; g.weaponStaff = staff; return g; }
@@ -68,18 +56,14 @@ namespace Sim {
         add("mage-off", Cls::Mage, MkGate(false, true, true, true, true, true, true, true, true), kg, 1);
         add("knight-T2", Cls::Melee, MkGate(true, false, true, true, false, true, false, false, false), kit(true, false, false, false, true, true, false), 2);
         add("evoker-T2", Cls::Mage, MkGate(true, true, false, false, true, true, false, false, true), kg, 2);
-        for (SimClass& c : v) {   // the legacy cells read the table too: melee / ranged / mage = T1 rows 0..2, the *-off cells = the tree-OFF base rows; the T2 cells keep none
-            int row = BaseOffRow(c.name);
-            if (row < 0) row = c.name == "melee" ? 0 : c.name == "ranged" ? 1 : c.name == "mage" ? 2 : -1;
-            if (row < 0) continue;
-            const auto& crow = g_curveTable[static_cast<std::size_t>(row)];
-            MFO::Iaus::ClassCurves::Apply(crow, static_cast<std::uint8_t>(row), c.gate); c.profile = MFO::Iaus::ClassCurves::Build(crow);
-        }
         return v;
     }
 
     // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp). mechProfiles: the I8 mechanical profile.
     std::vector<SimClass> RealClasses(bool mechProfiles);
+    // Per-class curves (ruling Q-class-curves): the sim's OWN copy of iaus/ClassCurves.h's table, which RealClasses reads for every class's
+    // Profile and edge constants. --curve edits it (ApplyCurveSpecs); untouched it is the shipped table, so scores are unchanged.
+    inline MFO::Iaus::ClassCurves::Table g_curveTable = MFO::Iaus::ClassCurves::Defaults();
     // "<class slug>:<family>.<cons>.<a|b|floor|zeroAbove|zeroBelow>=<v>" or "<class slug>:scalar.<drinkHealthLine|touchSpentSec>=<v>".
     // <family> / <cons> are an index or a Name() (an index when several considerations share a display name). a_shared = the curve an
     // override starts from. False with a_err set on any bad token.

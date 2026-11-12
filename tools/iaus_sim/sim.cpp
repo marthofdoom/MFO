@@ -469,8 +469,7 @@ int main(int argc, char** argv) {
     if (listParams) { ListParams(); return 0; }
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
-    if (!curveSpecs.empty()) { std::string err; if (!ApplyCurveSpecs(curveSpecs, Tune().t, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
-        for (std::size_t ci : g_curveConsEdited) { const std::string tag = "c." + std::to_string(ci) + "."; if (("," + opt).find("," + tag) != std::string::npos) { std::fprintf(stderr, "--opt %s... together with a --curve on consideration %zu: the per-class override is a copy of the shared curve, so the search would not move it (refused)\n", tag.c_str(), ci); return 2; } } }
+    if (!curveSpecs.empty()) { std::string err; if (legacy) err = "--curve needs the real class table (not --classes legacy)"; if (!err.empty() || !ApplyCurveSpecs(curveSpecs, Tune().t, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; } }
     Data Dm = listPath ? LoadData(listPath) : BuiltinData();
     if (sneakProfile == "lorerim-like") sneakProfile = "steep";
     if (sneakProfile.empty()) sneakProfile = listPath ? "list" : "vanilla";   // the built-in world has no sneak data of its own: Skyrim.esm's
