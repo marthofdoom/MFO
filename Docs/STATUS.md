@@ -25,6 +25,12 @@
   behind `[Debug] bPowerAttackEngineRoad = 0` and for a Harbinger older than ABI 44. Every swing logs
   `[power-attack] ... road=harbinger|graph`. The outcome is asynchronous (`[combat-move] ... power attack ...`).
   Question Q-melee-4. Test steps 24q, 24r. Backlog MFO-B803.
+  **Item 3, power-attack floor: already built, no code.** The batch asked for a Harbinger ch.18 "Normal share max" so
+  the Warrior gets a power-attack FLOOR. That is ch.18's `powerShareMin` (ABI 34), live in Harbinger since v0.18.0
+  (`core/AttackSelect.cpp`: Normal is denied while his measured power share is below the minimum), and MFO already
+  declares it: `classes/ClassTable.cpp` gives Warrior, Champion and Living Legend a floor of 0.40 and
+  `apmf/AttackMix.cpp` files it. The manifest row (gap G-H2) was written from the 2026-11-08 draft, where the floor
+  was observe-only. Nothing changed in either repo. Question Q-melee-5. Test step 24s.
 
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense
