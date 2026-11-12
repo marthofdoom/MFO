@@ -156,6 +156,9 @@ namespace MFO::Config {
             else if (a_key == "iAimBudgetWitchhunter") { setI(g_aimBudgetWitchhunter, 0, 10); return; }
             else if (a_key == "iAimBudgetRanger")   { setI(g_aimBudgetRanger, 0, 10);      return; }   // marth 2026-11-10: at most 3
             else if (a_key == "iAimBudgetJaqspur")  { setI(g_aimBudgetJaqspur, 0, 10);     return; }   // marth 2026-11-10: at most 1 (0 ok)
+            else if (a_key == "bClassAversion")     { setB(g_classAversion); return; }   // default ON; INI-only; card H2 ch.32 aversion (Conjurer / Healer passive)
+            else if (a_key == "fAversionConjurer")  { setF(g_aversionConjurer, 0.0f, 0.95f); return; }   // default 0.5; 0 = off for that class
+            else if (a_key == "fAversionHealer")    { setF(g_aversionHealer, 0.0f, 0.95f);   return; }   // default 0.5
             else if (a_key == "bClassStyles")       { setB(g_classStyles);   return; }   // default ON; INI-only; card C8 per-class CSTY (tier 2+)
             else if (a_key == "bClassAttackMix")    { setB(g_classAttackMix); return; }  // default ON; INI-only; card C8 ch.18 class power share
             else if (a_key == "fClassLeashMult")    { setF(g_classLeashMult, 0.1f, 1.0f); return; }   // default 0.5; card C8 ch.23 short / near-player classes
@@ -524,6 +527,9 @@ namespace MFO::Config {
             g_aimBudgetScout     = 4;
             g_aimBudgetWitchhunter = 4;
             g_aimBudgetRanger    = 3;       //   marth 2026-11-10: at most 3 misses in 10
+            g_classAversion      = true;    // card H2 ch.32 aversion (inert without the ESL / Harbinger ABI >= 41)
+            g_aversionConjurer   = 0.5f;    //   Conjurer: "a low chance of being targeted" (marth; the number is a default, question 93)
+            g_aversionHealer     = 0.5f;    //   Healer: same shape as Conjurer (marth)
             g_classStyles        = true;    // card C8 per-class CSTY (inert without the ESL / tier 1)
             g_classAttackMix     = true;    // card C8 ch.18 class power share (inert without the ESL / Harbinger >= ABI 34)
             g_classLeashMult     = 0.5f;    // card C8 ch.23 factor for the short-leash / near-player classes

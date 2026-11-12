@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v40, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v41, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 40;
+    inline constexpr std::uint32_t kABIVersion = 41;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -742,6 +742,33 @@ namespace APMF_API {
                                      //       1.6.1170 / 1.5.97, a failed address row), the player, actor 0, no
                                      //       param, a move this ABI does not build (kCombatMove_Block is RESERVED).
                                      //       See "ABI v38: COMBAT MOVE" at the end of this header.
+        kIntent_Aversion = 32,       // ch.32 AVERSION (ABI v41, 2026-11-11, MFO class plan card H2). This actor is
+                                     //       LESS LIKELY TO BE TARGETED. Mode: WEIGHT at the source, never a pin and
+                                     //       never a deny of the foe. When another actor's STANDARD target
+                                     //       selection lands on the claimed actor, the engine's own scorer is run
+                                     //       again without it and that second answer is used, in a share of time
+                                     //       equal to the weight. The claimed actor stays a combat target and is
+                                     //       picked whenever the engine scored NO OTHER valid target: nothing is
+                                     //       invented, nobody outside the foe's own group targets is ever named,
+                                     //       and a lost or undetected target is never preferred to it.
+                                     //       Param: fval = the weight, strictly inside (0, 1) (REQUIRED): the
+                                     //       probability, drawn per {foe, this actor} per 6 s window, that the
+                                     //       foe's selection is averted from this actor during that window. form /
+                                     //       ival / target / pos not read. Basis: the usual arbitration between
+                                     //       claims on the same actor (the winning claim's weight applies).
+                                     //       Repoint changes the weight. RequestEx only.
+                                     //       WHAT IT DOES NOT COVER: a foe whose target is fixed by a script or a
+                                     //       package (the Fixed selector), a ch.20 pin on the foe (a declared
+                                     //       target outranks a weight), a target another DLL writes after the
+                                     //       selector, the first target of a new fight and the engine's cached
+                                     //       pick (up to 3 s), area effects. The Engine source is ranked on the
+                                     //       Target facet: the averted answer stands only while the claim's
+                                     //       priority is above Engine's (the defaults say yes).
+                                     //       REFUSED (kInvalidHandle, logged): APMF < v41 (no channel serves
+                                     //       intent 32), not installed ([Aversion] bAversion=0, VR, a runtime other
+                                     //       than exactly 1.6.1170 / 1.5.97 / 1.7.104, a failed address row or byte
+                                     //       window), the player, actor 0, no param, a weight outside (0, 1).
+                                     //       See "ABI v41: AVERSION" at the end of this header.
     };
 
     // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
@@ -1654,11 +1681,12 @@ namespace APMF_API {
     //   none   kIntent_PotionAllowance ABI v37: nothing read; the predicate is SetPotionAllowance's.
     //   ival   kIntent_CombatMove      ABI v38: a CombatMove (REQUIRED).
     //   target kIntent_CombatMove      ABI v38: the foe the move is meant for (optional; reported, never aimed at).
+    //   fval   kIntent_Aversion        ABI v41: the weight, strictly inside (0, 1) (REQUIRED). Nothing else read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
     // kIntent_PursuitLeash (ABI v16), kIntent_CombatApproach (ABI v19), kIntent_CastGuard (ABI v21),
-    // kIntent_CombatSubstrate (ABI v23) and kIntent_Place with kPlace_SetYaw (ABI v28);
+    // kIntent_CombatSubstrate (ABI v23), kIntent_Place with kPlace_SetYaw (ABI v28) and kIntent_Aversion (ABI v41);
     // it stays reserved for a future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target
     // is read by kIntent_PursuitLeash (ABI v16, the anchor), kIntent_CombatApproach (ABI v19, X) and
     // was by kIntent_SelectSpell (retired). pos is read by
@@ -3558,6 +3586,25 @@ namespace APMF_API {
         // APMF's own leaf lock, no game call). A throw inside returns kCombatMoveState_Unknown, nothing written.
         std::uint32_t (*GetCombatMoveState)(Handle handle, APMF_CombatMoveStateInfo* out);
     };
+
+    // ABI v41: AVERSION (kIntent_Aversion) -- "less likely to be targeted"
+    //
+    // NO new slot, struct or flag: one Intent value and the constant. A v41 client still holds an
+    // APMF_API_v38*. A client claims kIntent_Aversion on an NPC with RequestEx and param.fval = the weight in
+    // (0, 1), and releases it like any claim (Release, or the client's TTL / heartbeat habits; Harbinger drops
+    // every claim at a load). There is nothing to query: the effect is another actor's target choice.
+    //
+    // What the weight means. The engine's standard selector re-scores a foe's group targets about once a
+    // second (3 s after a switch). Each time that scoring picks the claimed actor, Harbinger looks at the draw
+    // for {that foe, the claimed actor} in the current 6 s window. In a share of windows equal to the weight
+    // the draw says "averted": the engine's scorer runs again with the claimed actor left out and its answer
+    // is used when there is one. So over a fight a foe that would otherwise sit on the claimed actor spends
+    // about `weight` of that time on its next best valid target, and two foes draw independently. With no
+    // other valid target the claimed actor is picked as always.
+    //
+    // Gate on `abiVersion >= 41` (INVARIANTS #14b) before asking: an older APMF has no channel for intent 32
+    // and REFUSES the request ("no channel serves intent 32"); the client's own degrade path runs (no
+    // aversion, logged once by the client).
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up
