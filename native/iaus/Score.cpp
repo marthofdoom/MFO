@@ -17,6 +17,12 @@ namespace MFO::Iaus {
             return fw * rw;
         }
 
+        float SchoolFactor(const Candidate& c, const Profile& p) {
+            // Mastered casting classes bump the wave at their own school, clamped at the peak weight 1.0 (+ 0 is exact: weights are <= 1).
+            return (c.school >= 0 && static_cast<std::size_t>(c.school) < kSchools)
+                ? (std::min)(1.0f, p.school[static_cast<std::size_t>(c.school)] + (std::max)(0.0f, c.schoolBump)) : 1.0f;
+        }
+
         float WeightFor(Family f, const Use& u, const Profile& p) {
             for (const auto& o : p.weights)
                 if (o.family == f && o.cons == u.cons) return o.w;
@@ -82,9 +88,7 @@ namespace MFO::Iaus {
             const float aw = fi < kFamilies ? t.actionWeight[fi] : 0.0f;
             out.focus = PlayerRelevant(c) ? t.focus[RankRow(rank)] : 1.0f;
             // School affinity: a multiplier only (1.0 when flat or no school), never a veto of its own.
-            // Mastered casting classes bump the wave at their own school, clamped at the peak weight 1.0 (+ 0 is exact: weights are <= 1).
-            const float schoolW = (c.school >= 0 && static_cast<std::size_t>(c.school) < kSchools)
-                ? (std::min)(1.0f, p.school[static_cast<std::size_t>(c.school)] + (std::max)(0.0f, c.schoolBump)) : 1.0f;
+            const float schoolW = SchoolFactor(c, p);
             const float base = aw * ClassWeight(c, p) * out.focus * boost * momentum * schoolW;
             if (!(base > 0.0f)) return veto(Cons::kCount);   // a zero weight disables the family
 

@@ -271,6 +271,12 @@ namespace MFO::Iaus {
     // THE SCHOOL CIRCLE (marth is still laying the order out): the ONE place that fixes which school sits next to which. The wave of
     // ClassCurves::SchoolWeight measures circular distance in steps along THIS array. To change the order, reorder these five.
     inline constexpr std::array<School, kSchools> kSchoolCircle = { kDestruction, kAlteration, kRestoration, kIllusion, kConjuration };
+    static_assert([] {   // a permutation of the five schools: each identity exactly once
+        std::array<int, kSchools> seen{};
+        for (const School s : kSchoolCircle) { if (s < 0 || static_cast<std::size_t>(s) >= kSchools) return false; ++seen[static_cast<std::size_t>(s)]; }
+        for (const int n : seen) if (n != 1) return false;
+        return true;
+    }(), "kSchoolCircle must list each of the five schools exactly once");
     struct Profile {
         struct WeightOverride { Family family; Cons cons; float w; };
         // Per-class CURVE override (ruling Q-class-curves, marth 11-12): a (family, consideration) pair scored with this curve
@@ -281,7 +287,7 @@ namespace MFO::Iaus {
         std::array<float, kRoleTags> role{};
         std::vector<WeightOverride> weights;
         std::vector<CurveOverride> curves;
-        // School affinity (ruling Q-school-affinity, marth 11-12): a score MULTIPLIER per magic school (SchoolIndex order),
+        // School affinity (ruling Q-school-affinity, marth 11-12): a score MULTIPLIER per magic school (School identity order),
         // a smooth wave over the school circle built from a ClassCurves row (School identity order). 1.0 everywhere = flat = bit-identical. Never a veto.
         std::array<float, kSchools> school{};
         Profile() { family.fill(1.0f); role.fill(1.0f); school.fill(1.0f); }

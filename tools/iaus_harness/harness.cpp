@@ -14,6 +14,7 @@
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
 
+#include <limits>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1608,6 +1609,13 @@ namespace {
         bool allOne = true; for (float x : CC::Build(flatRow).school) allOne = allOne && x == 1.0f;
         Check(allOne, "school affinity: floor 1.0 is exactly flat whatever the peak");
         Check(!CC::SetScalar(r, "schoolNope", 1.0f), "school affinity: a bad scalar name is refused");
+        CC::Row ext; CC::SetScalar(ext, "schoolPeak", 0.0f); CC::SetScalar(ext, "schoolFloor", 0.0f); CC::SetScalar(ext, "schoolShape", 500.0f);
+        bool pos = true; for (float x : CC::Build(ext).school) pos = pos && x > 0.0f;
+        Check(pos && ScoreOne(spell(2), m, CC::Build(ext), t, 3, 0.0f, nullptr) > 0.0f, "school affinity: floor 0 + a huge shape never reaches weight 0 (never a veto)");
+        Candidate none1 = spell(0); none1.school = -1;
+        Check(ScoreOne(none1, m, pr, t, 3, 0.0f, nullptr) == base[0], "school affinity: a no-school candidate is unaffected by a peaked Profile");
+        CC::Row nf; CC::SetScalar(nf, "schoolPeak", std::numeric_limits<float>::quiet_NaN());
+        Check(nf.scalars.schoolPeak == -1, "school affinity: a non-finite peak means none");
         // Arch-Mage: any school (a fixed rule), flat even with a floor set on a copy of its row
         CC::Row am = CC::Defaults()[CC::kArchMage];
         CC::SetScalar(am, "schoolFloor", 0.3f);

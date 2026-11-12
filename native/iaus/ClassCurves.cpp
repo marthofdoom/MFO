@@ -40,6 +40,8 @@ namespace MFO::Iaus::ClassCurves {
         return t;
     }
 
+    namespace { constexpr float kMinSchoolWeight = 1.0e-3f; }   // the lowest a school weight can be (a searched floor 0 or a huge shape must not veto)
+
     float SchoolWeight(const Scalars& a_s, std::size_t a_school) {
         if (a_s.schoolAny || a_s.schoolPeak < 0 || a_s.schoolPeak >= static_cast<int>(kSchools) || a_school >= kSchools) return 1.0f;
         if (a_s.schoolAny || !(a_s.schoolFloor < 1.0f)) return 1.0f;   // Arch-Mage (any school) / flat (also a NaN floor): exactly 1.0, no arithmetic
@@ -52,11 +54,12 @@ namespace MFO::Iaus::ClassCurves {
         const std::size_t diff = a_school > peak ? a_school - peak : peak - a_school;
         const std::size_t d = diff < kSchools - diff ? diff : kSchools - diff;
         if (d == 0) return 1.0f;
-        const float fl = a_s.schoolFloor > 0.0f ? a_s.schoolFloor : 0.0f;
+        const float fl = a_s.schoolFloor > kMinSchoolWeight ? a_s.schoolFloor : kMinSchoolWeight;   // never 0: affinity is a weight, never a veto
         const float shape = a_s.schoolShape > 0.0f ? a_s.schoolShape : 1.0f;
         constexpr double kTwoPi = 6.283185307179586;
         const double wave = 0.5 + 0.5 * std::cos(kTwoPi * static_cast<double>(d) / static_cast<double>(kSchools));
-        return fl + (1.0f - fl) * static_cast<float>(std::pow(wave, static_cast<double>(shape)));
+        const float w = fl + (1.0f - fl) * static_cast<float>(std::pow(wave, static_cast<double>(shape)));
+        return w > kMinSchoolWeight ? w : kMinSchoolWeight;
     }
 
     Profile Build(const Row& a_row) {
@@ -117,7 +120,7 @@ namespace MFO::Iaus::ClassCurves {
     bool SetScalar(Row& a_row, std::string_view a_name, float a_v) {
         if (a_name == "drinkHealthLine") { a_row.scalars.drinkHealthLine = a_v; a_row.scalars.drinkHealthLineSet = true; }
         else if (a_name == "touchSpentSec") a_row.scalars.touchSpentSec = a_v;
-        else if (a_name == "schoolPeak") a_row.scalars.schoolPeak = static_cast<std::int8_t>(a_v < 0.0f ? -1 : (a_v >= static_cast<float>(kSchools) ? -1 : static_cast<int>(a_v)));
+        else if (a_name == "schoolPeak") a_row.scalars.schoolPeak = static_cast<std::int8_t>(!std::isfinite(a_v) || a_v < 0.0f ? -1 : (a_v >= static_cast<float>(kSchools) ? -1 : static_cast<int>(a_v)));
         else if (a_name == "schoolFloor") a_row.scalars.schoolFloor = a_v;
         else if (a_name == "schoolShape") a_row.scalars.schoolShape = a_v;
         else if (a_name == "schoolMasteredBump") a_row.scalars.schoolMasteredBump = a_v;

@@ -470,8 +470,9 @@ namespace MFO::Iaus {
                         c.f.stock = e.count;
                     }
                     c.role = e.role;
-                    c.school = e.school;
-                    if (e.school >= 0 && static_cast<std::size_t>(e.school) < kSchools) c.schoolBump = x.g.schoolBump[static_cast<std::size_t>(e.school)];
+                    // marth 11-12: scrolls IGNORE school affinity (no wave, no mastery bump).
+                    if (!scroll) c.school = e.school;
+                    if (!scroll && e.school >= 0 && static_cast<std::size_t>(e.school) < kSchools) c.schoolBump = x.g.schoolBump[static_cast<std::size_t>(e.school)];
                     c.form = e.form;
                     c.formName = e.name;
                     if (priced) { c.f.cost = e.cost; c.f.magicka = pool; c.f.magickaMax = s.self.mpMax; }

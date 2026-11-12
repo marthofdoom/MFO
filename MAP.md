@@ -9109,7 +9109,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   `ClassCurves::ApplyMastered(masteredMask, gate)` (called by `SpellBook::GateFor`) adds each MASTERED class's `schoolMasteredBump` to `ClassGate::schoolBump[its peak]`;
   `Generate.cpp` copies it onto the candidate (per-follower, so NOT in the cached Profile). Arch-Mage (`kArchMage` 26, `Scalars::schoolAny`) is flat by rule, no SetScalar name.
   **What breaks:** the peak seeds address rows by `Classes::Id` ordinal (SpellBook.cpp static_asserts them); a Profile with a school below 1.0 changes scores, so shipped must stay
-  floor 1.0 / bump 0 until the sim batch fills values; reorder the circle ONLY in `kSchoolCircle` (School identities never change: they key Profile/Candidate/peaks).
+  floor 1.0 / bump 0 until the sim batch fills values; the mastered bump is HOME SCHOOL ONLY and a class with no peak gives none (marth 11-12: "No bump, and ONLY the main school should get a bump"); scrolls ignore affinity entirely (no wave, no bump; Generate.cpp); weights are floored at 1e-3 so a searched floor 0 / huge shape can never veto; reorder the circle ONLY in `kSchoolCircle` (School identities never change: they key Profile/Candidate/peaks).
 - `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
   `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
   (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.
