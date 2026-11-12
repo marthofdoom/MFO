@@ -145,3 +145,9 @@ Each: question, context, my recommended default (work proceeds on the default wh
 - Saved, default taken: Q97. G14 depends on G13's witness pre-check. Default: build the shared pre-check with G14; the G13 steal action itself stays in T3 unless marth says otherwise.
 - Saved, default taken: Q98. The combat sim has no world logistics. Default: G14 is simulated as its witness pre-check against the sim's engine detection model (Detect.h: every nearby NPC's senses must all be 0), not as a lockpicking walk.
 - Saved, default taken: Q99. G7 is listed for Necromancer and Arch-Mage (T3). Default: the cond.corpse_within selector ships as a base gambit usable at T2 (Conjurer has reanimate spells), class defaults stay with the Necromancer line.
+
+## Saved 2026-11-11 19:30 PT (T2 manifest pass, defaults taken; full list in t2-manifest.md)
+- Q97 default REVERSED: G13 steal is T2 (the Thief's default `act.steal` is missing); G13 and G14 ship together.
+- Q-T2-1: Block is built now (not after the bash road's field proof); bash and Block are field-tested together in T2.
+- Q-T2-2: ch.31 PowerAttack is built now; the Q82 probe runs in the same session and decides which road the gambit keeps.
+- Q-T2-3: Knight and Warrior hold the line by design; the Mercenary gets a back-off road (his class text asks for it).
