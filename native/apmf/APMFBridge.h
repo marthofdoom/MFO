@@ -1958,7 +1958,7 @@ namespace MFO::APMFBridge {
     // RangeCloseSupported: APMF present AND abiVersion >= 19. ServiceRangeClose: the IAUS lap's ask, once per lap in the spell phase: refreshes
     // or repoints a standing claim, and files a new one only when a_file (the foe stands beyond the range); never while a held heal's
     // approach or a disengage drive stands. TickRangeClose (once per combat service, beside ServiceGroundStep): ends a claim that is over or
-    // that nobody refreshed for 3.5 s. ReleaseRangeClose: combat end / retreat / dismissal / the source toggle / a disengage drive. Worker road;
+    // that nobody refreshed for 3.5 s. ReleaseRangeClose: combat end / retreat / dismissal / the source toggle / a disengage drive / a held-heal approach being filed / a step back. Worker road;
     // own leaf mutex, never g_mx. ClearRangeCloses: revert / load. Nothing is saved.
     bool RangeCloseSupported();
     bool RangeCloseStands(RE::FormID a_follower);

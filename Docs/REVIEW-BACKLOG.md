@@ -3233,3 +3233,5 @@ A combat flicker (gap over kFightGapSec) starts a new fight, so it counts one fo
 Hide, Flee, BackOff and Step share ONE pick slot per follower; Build asks for one kind per lap (hide/flee > back-off > step) but a changing want re-picks every 1.5 s.
 ### MFO-B831 (SEV-4, OPEN, Concealment.cpp Kind::Step bow pick, against dcca7d7, review F10)
 A bow Step candidate must still be at least 100 units nearer the foe, although only a line of fire matters; a line from the same distance is refused.
+### MFO-B832 (SEV-4, OPEN, apmf/RangeApproach.cpp ServiceRangeClose, against b0b7bb0, re-check of batch I)
+`ServiceRangeClose` has no `GroundStepStands` check: while a give-ground step stands (the earlier or later claim), the close can re-file and `RequestGroundStep` releases it again, so the close churns for the step's 2.5 s. Fix shape: ask whether a ground step stands before filing, as it asks `HealApproachStands`.

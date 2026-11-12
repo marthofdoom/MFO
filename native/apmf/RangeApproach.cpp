@@ -8,9 +8,11 @@
 // WHO CALLS IT: scheduler/IausSource.cpp, once per IAUS lap of a follower in the spell phase, with the foe and the radius
 // Reposition::RangeToHold derived. The call is the refresh: a claim nobody refreshes for kStaleMs is released by ServiceRangeClose.
 // PRECEDENCE (one ch.24 claim per follower, every MFO client files at kOwnBasis, the EARLIER claim keeps the channel): a held-heal approach
-// and a standing disengage drive outrank this (never filed while they stand); the offense approach (occlusion) and the give-ground step
-// are released by the drive, not by us -- if one owns the channel, ours never applies, which ServiceRangeClose sees and releases.
-// Threads: the pump's AddTask worker; its OWN leaf mutex, never g_mx and never nested with another approach mutex. Nothing is saved.
+// and a standing disengage drive outrank this (never filed while they stand). The EARLIER claim wins, so a standing close is RELEASED by the
+// later filer: ServiceHealApproach (on its filing branch only) and RequestGroundStep release it before they file, and RequestDisengage after
+// Harbinger accepted its drive. The offense approach (occlusion): if it owns the channel ours never applies, which TickRangeClose sees.
+// Threads: the pump's AddTask worker; its OWN leaf mutex, never g_mx. The one nesting is ServiceHealApproach: g_approachMx -> g_rangeMx
+// (ReleaseRangeClose); this file never takes g_approachMx under g_rangeMx. Nothing is saved.
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"

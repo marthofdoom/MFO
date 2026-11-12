@@ -166,7 +166,6 @@ namespace MFO::APMFBridge {
         // ONE ch.24 claim per follower: a held heal outranks the offense approach (apmf/OffenseApproach.cpp).
         // Released BEFORE g_approachMx is taken (the two tables never nest).
         ReleaseOffenseApproach(a_follower, "a held heal needs the ch.24 approach");
-        ReleaseRangeClose(a_follower, "a held heal needs the ch.24 approach");   // batch I F1: the EARLIER same-basis claim would own the channel
         const float radius = Config::g_healApproachRadius.load();
         if (!(radius > 0.0f) || !std::isfinite(radius)) return;   // Harbinger refuses these; never send one
 
@@ -192,6 +191,11 @@ namespace MFO::APMFBridge {
                 return;   // CombatEnded just ended one: not more than one re-file per few seconds
         }
         if (it == g_approach.end()) {
+            // batch I F1 (re-check of b0b7bb0): the spell-range close is the EARLIER same-basis claim and would keep the channel, so it ends
+            // HERE, on the branch that really files a heal approach, never on the early returns above (no approach is filed there, and the
+            // close would re-file every lap). The nesting g_approachMx -> g_rangeMx is safe: apmf/RangeApproach.cpp never takes g_approachMx
+            // while holding g_rangeMx (it asks HealApproachStands before its lock) and ReleaseRangeClose calls Harbinger outside its own.
+            ReleaseRangeClose(a_follower, "a held heal needs the ch.24 approach");
             APMF_API::APMF_Param prm{};
             prm.target = a_recipient;                 // X
             prm.fval   = TightRadius(a_follower, a_recipient, radius);   // R, game units (tightened: see kApproachMinRadius)
