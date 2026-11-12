@@ -3146,3 +3146,6 @@ A re-pick overwrites the current pick at once; native keeps the old pick while t
 
 ### MFO-B788 (SEV-5, OPEN, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
 `in.flying = outOfMeleeReach` stands in for "flying", giving a 3x max distance to any actor out of melee reach (a ledge). Errs pessimistic for the follower; unstated.
+
+### MFO-B797 (SEV-4, OPEN, Board_Classes.cpp PassiveLabel :45-50, against 2b7736d, Opus review of fix/aversion-tune, doubt 2)
+PassiveLabel(rank) shows Cl_PassiveQuarter "passive: 1/4" for any class at kRankMasteredUnequipped. Aversion is effectively the only Conjurer/Healer passive and now gives none when mastered and unequipped (Q94), so the label misleads for those two. Fix is logic, not a string: pass the class id and return no/none label for Conjurer/Healer at kRankMasteredUnequipped.

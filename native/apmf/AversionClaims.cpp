@@ -9,6 +9,7 @@
 // The weight follows the class passive rules (classes/Carriers.cpp CarrierRanks, the same ranks the passive perks are gated on):
 //   the class EQUIPPED (any level; the weight does not grow with level)   the class weight   fAversionConjurer / fAversionHealer (0.25)
 //   the class MASTERED and not equipped                                    nothing            (marth 11-12, Q94: equipped class only)
+//   the class MASTERED while Dragonborn is equipped                        the class weight   (CarrierRanks: Dragonborn holds every mastered passive at full; Q107)
 //   both passives present                                            the larger of the two, never a sum
 // The stronger tiers (Necromancer, Priest, Arch-Mage, Saint) get their own weights with their own cards; until then they carry
 // what the rules above give them through an equipped Conjurer / Healer.
