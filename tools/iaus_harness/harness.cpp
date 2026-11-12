@@ -1343,6 +1343,19 @@ namespace {
         Check(count(Generate(melee(), warrior, t), Family::Block) == 0, "item 4: a class with no Block row is never given one (Q-melee-2)");
         { Snapshot s = melee(); s.blockRoad = false; Check(count(Generate(s, knight, t), Family::Block) == 0, "item 4: no road -> no Block"); }
         { Snapshot s = melee(); s.foes[0].swinging = false; Check(count(Generate(s, knight, t), Family::Block) == 0, "item 4: no swing in the air -> no Block"); }
+        {   // Q-S-5: the guard line
+            Snapshot s = melee(); s.foes[0].swinging = false; s.foes[0].taunted = true;
+            s.foes.push_back(Actor("Bandit2", 0x3B611, 100, 100, 160, 0)); s.foes[1].targetId = 0x14F01; s.foes[1].taunted = true;
+            const Generated g = Generate(s, knight, t);
+            const Candidate* b = find(g, Family::Block);
+            Check(b && b->f.tauntedOnMe == 2 && !b->f.foeSwinging && score(g, Family::Block) > score(g, Family::Attack),
+                  "Q-S-5: two taunted foes on him, one in striking distance, no swing seen -> a Block that outranks the attack");
+            s.foes[1].taunted = false;
+            Check(count(Generate(s, knight, t), Family::Block) == 0, "Q-S-5: one taunted foe and no swing in the air -> no Block");
+            s.foes[1].taunted = true; s.guardHeld = true;
+            const Candidate* r = find(Generate(s, knight, t), Family::Block);
+            Check(r && r->f.hardCooldownSec == 0.0f, "Q-S-5: while the guard stands the renewal carries no row cooldown");
+        }
         {   // the held-guard gate (marth Q-melee-3)
             Snapshot s = melee(); s.guardHeld = true;
             const Generated g = Generate(s, knight, t);

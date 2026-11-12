@@ -3265,3 +3265,12 @@ The lab's `SpellEntry::reach` is the record's range from 300 up, else 4096 as a 
 The Necromancer's corpse row is still `Todo(kTodoCorpse, ...)` although card G7 (`cond.corpse_within`) is merged, so his default set does not get it. T3, not a T2 gate. Also from the lab: a corpse row rarely fires from a table (magicka is spent by the first kill, or the spell's level cap is under the corpse's), and IAUS has no Reanimate family (`iaus/Prune.h`: nature Unknown).
 ### MFO-B835 (SEV-5, OPEN, tools/iaus_sim World.h TryDodge / Land, T2 batch S, author's note)
 The dodge roll (one per projectile, 0.2 s flight gate, clears a non-area projectile) and the uncorrected miss chance (12% against a moving target) have no field anchor. The `[aim]` probe and field step 24x give the numbers to replace them. Foes do not dodge by their own style in the lab (they keep the flat miss).
+### MFO-B845 (SEV-5, OPEN, iaus/Reposition.h touchSpent, pre-T2 batch, author's note)
+`Snapshot::touchSpent` reads `Mind::firedAt` (the FIRST fire of the running decision) against a 3 s window, so a touch cast that keeps running as the same decision stops counting after 3 s and the range flips back to the touch spell. Fix shape: stamp the last cast time per form. The 3 s window (`kTouchSpentSec`) and the "touch is better" test (measured damage only) are CHOSEN, not searched.
+### MFO-B846 (SEV-5, OPEN, tools/iaus_sim World.h handSpell2, pre-T2 batch, author's note)
+The lab's second hand is "the spell cast before the last one"; a real follower's two hands are an equip choice (Loadout), so the Q-I-2 model is an approximation and the built-in fixtures hardly exercise a touch + distance pair.
+### MFO-B847 (SEV-5, OPEN, iaus/Generate.cpp Guards, Q-S-5, author's note)
+The guard line counts `Combatant::taunted` (a live pin by ANY taunter, Taunt::IsPinned) on foes that target him, not only his own taunts; a taunt by the player or another follower that pins two foes on him also raises it. Intended (the foes ARE on him), but unverified in the field. The ceiling of the share is Harbinger's guard constants (2.5 s hold, one renewal, 1.5 s rest).
+### MFO-B848 (SEV-5, OPEN, iaus/Catalogue.cpp BoostGuardLine, Q-S-5, author's note)
+`BoostGuardLine` x2.0 is flat above 1.5 in the lab and was only probed at 1, 1.5, 2, 3. It sits under a health potion (2.2) and a heal cast (2.4) on purpose; check in the field that a Knight at low health under taunt still drinks first.
+

@@ -204,10 +204,18 @@ namespace MFO::Iaus {
             const float strike = Estimate::StrikeDistance(s);
             const Combatant* nearOn = nullptr;      // the nearest foe that targets him and has to close
             const Combatant* swingOn = nullptr;     // a foe whose swing at him is in the air, in striking distance
+            const Combatant* lineOn = nullptr;      // Q-S-5: the nearest taunted foe on him in striking distance
+            std::uint8_t tauntedOnMe = 0;           // Q-S-5: taunted foes that have him as their target
             for (const Combatant& f : s.foes) {
                 if (!Readable(f) || f.targetId == 0 || f.targetId != s.self.id || f.paralysed || f.fleeing || !std::isfinite(f.dist)) continue;
                 if (Estimate::MustClose(f) && (!nearOn || f.dist < nearOn->dist)) nearOn = &f;
                 if (f.swinging && f.dist <= strike && (!swingOn || f.dist < swingOn->dist)) swingOn = &f;
+                // Q-S-5: foes under a live taunt (Combatant::taunted) that have him as their target; the nearest one in striking distance
+                // is the blow to guard against, swing seen or not (the swing flag needs bIausFillSwing, which ships OFF)
+                if (f.taunted) {
+                    if (tauntedOnMe < 255) ++tauntedOnMe;
+                    if (f.dist <= strike && (!lineOn || f.dist < lineOn->dist)) lineOn = &f;
+                }
             }
             if (s.groundRoad && nearOn) {
                 Candidate c = x.Make(Family::GiveGround, nearOn);
@@ -257,11 +265,18 @@ namespace MFO::Iaus {
                     x.Push(std::move(c));
                 }
             }
-            if (s.blockRoad && x.g.block && melee && swingOn) {
-                Candidate c = x.Make(Family::Block, swingOn);
-                c.f.foeSwinging = true;
+            // Q-S-5: the guard line = two or more taunted foes on him and one of them in striking distance: the block is generated for it
+            // whether or not a swing is seen in the air.
+            const bool guardLine = tauntedOnMe >= kGuardLineFoes && lineOn;
+            if (s.blockRoad && x.g.block && melee && (swingOn || guardLine)) {
+                Candidate c = x.Make(Family::Block, swingOn ? swingOn : lineOn);
+                c.f.foeSwinging = swingOn != nullptr;
+                c.f.tauntedOnMe = tauntedOnMe;
                 const float rowCd = (std::max)(0.0f, Finite(x.g.blockCooldownSec, 0.0f));
-                c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
+                // A guard that stands is asked again for its renewal (past 60% of the window, apmf/BlockClaims.cpp): that is the SAME hold, not a
+                // new block, so the row's cooldown (counted from the raise) must not veto it -- 2.0 s against a 2.5 s window left only the last
+                // half second to renew in (Q-S-5: sim share of guarded blows 56% with it, see iaus-sim-v2 31.12). The 1.5 s rest after a hold is Harbinger's.
+                c.f.hardCooldownSec = x.guard ? 0.0f : (rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f)));
                 x.Push(std::move(c));
             }
             if (s.bashRoad && melee && !x.guard)

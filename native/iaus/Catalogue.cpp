@@ -79,7 +79,7 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
-            "strike", "hold", "need", "flee_heal", "need",
+            "strike", "hold", "need", "flee_heal", "need", "guard_line",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -96,7 +96,7 @@ namespace MFO::Iaus {
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
-        case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal:
+        case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -349,6 +349,10 @@ namespace MFO::Iaus {
             at(Cons::GroundNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             at(Cons::BackOffNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);   // batch I, chosen (the sim tunes it): the input is already a 0..1 need
             at(Cons::BlockNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            // Q-S-5 (marth 2026-11-12: "the line should block at least 60% of attacks directed at them when 2+ foes are taunted"): while the
+            // Knight line holds two or more taunted foes a swing in the air makes the guard outrank every blow (x2.0 over Block's own
+            // 1.0 weight: above a blow, below a health potion 2.2 and a heal cast 2.4, so a hurt Knight still drinks). CHOSEN, tuned in the sim (iaus-sim-v2 section 31.12).
+            at(Cons::BoostGuardLine) = Bin(1.0f, 2.0f);
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -430,7 +434,7 @@ namespace MFO::Iaus {
             // batch I item 5: the hold row's own gates (hidden from every listed foe, no blow ready) + its pacing; the step is generated
             // only when a point is known, so the row it outranks is the one that stands still.
             constexpr U kStep[] = { { Cons::Unseen, 1 }, { Cons::HoldStill, 1 }, { Cons::ClassFit, 1 }, { Cons::CooldownHard, 1 } };
-            constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::BoostGuardLine, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::HoldStill, 1 }, { Cons::ClassFit, 1 } };   // G2 Layer 1: the hold row (Generate.cpp Holds)
@@ -645,6 +649,7 @@ namespace MFO::Iaus {
                 if (c.family != Family::Disengage) return In::Off();
                 return f.disengageFlee ? RetreatDangerOf(f, t) : Clamp(f.detectShare, 0.0f, 1.0f);
             case Cons::BoostFleeHeal: return B(f.fleeHeal);
+            case Cons::BoostGuardLine: return c.family == Family::Block ? In(B(f.tauntedOnMe >= kGuardLineFoes)) : In::Off();
             case Cons::DrinkNeed:
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
                 if (c.family == Family::DrinkMagicka) return f.selfMagicka;
@@ -722,7 +727,10 @@ namespace MFO::Iaus {
             case Cons::BackOffNeed:
                 return c.family == Family::BackOff ? In(Clamp(f.backOffNeed, 0.0f, 1.0f)) : In::Off();
             case Cons::BlockNeed:
-                if (c.family != Family::Block || !f.foeSwinging) return c.family == Family::Block ? In(0.0f) : In::Off();
+                if (c.family != Family::Block) return In::Off();
+                // Q-S-5: two or more taunted foes on the line = the full need whatever the time-to-live estimate says (it is unknown by default).
+                if (f.tauntedOnMe >= kGuardLineFoes) return 1.0f;
+                if (!f.foeSwinging) return In(0.0f);
                 // A swing is in the air: half the need for that alone, the rest by how few seconds he has.
                 return t.blockBase + (1.0f - t.blockBase) * (std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f);
             case Cons::BashNeed:

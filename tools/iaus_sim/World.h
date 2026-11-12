@@ -153,6 +153,7 @@ namespace Sim {
         long   foeCasts = 0, foeCastsInterrupted = 0, interruptsByFollowers = 0;
         long   elemCasts = 0, resistedCasts = 0, weakCasts = 0, weakOpp = 0, immuneCasts = 0;
         long   splashAllyHits = 0, areaCasts = 0;
+        long   inc2 = 0, guard2 = 0;   // Q-S-5: melee blows that LAND on the subject while two or more foes are taunted onto him, and how many met his guard
         long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0, regroups = 0, grounds = 0, blocks = 0, bashes = 0;
         double playerPressureSec = 0, peelSum = 0; long peelN = 0, peelMiss = 0;
         long   tgtSwitches = 0; double engagedSec = 0;
@@ -530,6 +531,8 @@ namespace Sim {
                 ForceDetect(a, d);
             }
             if (a.ctl == 0) { ++t.wpnHits; if (sneakAtk) ++t.sneakHits; if (flankAtk) ++t.flankHits; if (!t.firstHits) { t.firstHits = 1; t.sneakOpens = sneakAtk ? 1 : 0; } }
+            if (d.ctl == 0 && !ranged && a.role == Role::Foe) { int held = 0; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && o.tauntBy == d.c.id && now < o.tauntUntil) ++held;
+                if (held >= 2) { ++t.inc2; if (now < d.blockUntil) ++t.guard2; } }   // Q-S-5 tally (the guard is up when the blow lands: the same test as the block below)
             if (now < d.blockUntil && !ranged) {   // MODEL block: shield 0.45 + 0.30 x skill, weapon 0.30 + 0.20 x skill; a power attack halves it (fBlockPowerAttackMult)
                 const float sk = d.spec->Skill(kAvBlock) / 100.0f; float bf = d.spec->shield ? 0.45f + 0.30f * sk : 0.30f + 0.20f * sk;
                 if (power) bf *= r.blockPowMult;
