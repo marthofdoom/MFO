@@ -32,6 +32,7 @@ namespace Sim {
         float avoidThreat = -1.0f;                  // MFO_GenerateESP.py CLS_AVOID_THREAT (Q-S-3, marth 11-12: Mercenary line 0.35 / 0.50 / 0.55, Thief 0.25, Master Thief 0.30, Knight line 0, else the vanilla 0.20; -1 = a fixture class, untouched): SETS every stance's Avoid Threat, the ranged stance +0.10
         float aversion = 0.0f;                      // apmf/AversionClaims.cpp: fAversionConjurer / fAversionHealer 0.25 for the EQUIPPED class (Q93, Q94; Dragonborn gives none: Q107)
         int   aimBudget = -1;                       // apmf/AimClaims.cpp: the ch.29 miss budget of a ranged class (Archer 5)
+        int   csDisengage = -1;                     // the class STYLE's kDisengage offset (class_csty_params): -1 = as gate.disengage (a table class: the flag is both), 0 = none (a tree-OFF base cell: the gate opens Retreat, but there is no class and so no class style)
     };
     // --teach <token>: card "Teach Spells" (Board_Classes.cpp, batch I item 7). MODEL of its effect only: the subject of a casting class
     // also knows one spell of that token, drawn from the pool IAUS would weigh (an unweighable spell is never in the pool, so it cannot be taught).
@@ -59,11 +60,19 @@ namespace Sim {
         return v;
     }
 
-    // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp). mechProfiles: the I8 mechanical profile.
+    // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp), then the 3 tree-OFF base cells
+    // (melee-off / ranged-off / mage-off, line "Base", tier 1; indexes 35..37). mechProfiles: the I8 mechanical profile.
     std::vector<SimClass> RealClasses(bool mechProfiles);
     // Per-class curves (ruling Q-class-curves): the sim's OWN copy of iaus/ClassCurves.h's table, which RealClasses reads for every class's
     // Profile and edge constants. --curve edits it (ApplyCurveSpecs); untouched it is the shipped table, so scores are unchanged.
     inline MFO::Iaus::ClassCurves::Table g_curveTable = MFO::Iaus::ClassCurves::Defaults();
+    inline std::vector<std::size_t> g_curveConsEdited;   // the Cons indexes a --curve spec overrode (sim.cpp refuses --opt c.N on one of them: the override is a COPY of the shared curve, the search would not move it)
+    // The curve row of a tree-OFF base cell (melee-off / ranged-off / mage-off = ClassCurves::kBaseOffFirst + root), -1 for any other name.
+    inline int BaseOffRow(const std::string& a_name) {
+        static const char* const kOff[] = { "melee-off", "ranged-off", "mage-off" };
+        for (std::size_t i = 0; i < 3; ++i) if (a_name == kOff[i]) return static_cast<int>(MFO::Iaus::ClassCurves::kBaseOffFirst + i);
+        return -1;
+    }
     // "<class slug>:<family>.<cons>.<a|b|floor|zeroAbove|zeroBelow>=<v>" or "<class slug>:scalar.<drinkHealthLine|touchSpentSec>=<v>".
     // <family> / <cons> are an index or a Name() (an index when several considerations share a display name). a_shared = the curve an
     // override starts from. False with a_err set on any bad token.
@@ -127,7 +136,7 @@ namespace Sim {
         for (int s = 0; s < 3; ++s) { Style& y = c.pkg[s]; y = Style{}; y.off = csgd[s][0]; y.def = csgd[s][1]; y.groupOff = csgd[s][2]; y.wMelee = csgd[s][3]; y.wMagic = csgd[s][4]; y.wRanged = csgd[s][5]; y.wShout = csgd[s][6];
             y.wUnarmed = csgd[s][7]; y.wStaff = csgd[s][8]; y.avoidThreat = csgd[s][9]; y.circle = cscr[s][0]; y.fallback = cscr[s][1]; y.dueling = true;
             if (sc.shortLeash) { y.circle = std::max(0.0f, y.circle - 0.10f); y.fallback = std::max(0.0f, y.fallback - 0.15f); }
-            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0 && !(g_t2.c8 && sc.avoidThreat >= 0.0f)) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
+            if (sc.csDisengage >= 0 ? sc.csDisengage != 0 : sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0 && !(g_t2.c8 && sc.avoidThreat >= 0.0f)) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
             if (g_t2.c8 && sc.avoidThreat >= 0.0f) y.avoidThreat = sc.avoidThreat > 0.0f && s == 1 ? sc.avoidThreat + 0.10f : sc.avoidThreat; }   // class_csty_params: SET per class (Q-S-3), no longer a floor
         c.powerShare = 1.0f; c.leash = 0.0f;
         if (g_t2.c8) {   // card C8: the ch.18 rule and the ch.23 leash (every managed follower is leashed to the player; a wall or near-player class at half the radius, never under fLeashMin)

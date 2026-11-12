@@ -77,7 +77,7 @@ namespace Sim {
             if (colon == std::string::npos || eq == std::string::npos || eq < colon) { a_err = "bad --curve '" + sp + "' (use <class>:<family>.<cons>.<param>=<v> or <class>:scalar.<name>=<v>)"; return false; }
             const std::string slug = sp.substr(0, colon), path = sp.substr(colon + 1, eq - colon - 1);
             float v = 0.0f; try { v = std::stof(sp.substr(eq + 1)); } catch (...) { a_err = "bad value in --curve '" + sp + "'"; return false; }
-            long ci = -1; for (std::size_t i = 0; i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);
+            long ci = BaseOffRow(slug); for (std::size_t i = 0; ci < 0 && i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);   // a tree-OFF base cell (melee-off ...) is its own row, kBaseOffFirst + root
             if (ci < 0) { a_err = "unknown class '" + slug + "' in --curve (see --print-classes)"; return false; }
             CC::Row& row = g_curveTable[static_cast<std::size_t>(ci)];
             if (path.rfind("scalar.", 0) == 0) {
@@ -88,6 +88,7 @@ namespace Sim {
             const long fi = index(path.substr(0, d1), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
             const long ki = index(path.substr(d1 + 1, d2 - d1 - 1), MFO::Iaus::kCons, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Cons>(i)); });
             if (fi < 0 || ki < 0) { a_err = "unknown family or consideration in --curve '" + sp + "'"; return false; }
+            g_curveConsEdited.push_back(static_cast<std::size_t>(ki));   // sim.cpp refuses --opt c.<ki>.* next to it
             if (!CC::SetCurveParam(row, static_cast<Family>(fi), static_cast<Cons>(ki), a_shared.curve[static_cast<std::size_t>(ki)], path.substr(d2 + 1), v)) { a_err = "unknown curve param in --curve '" + sp + "' (a | b | floor | zeroAbove | zeroBelow)"; return false; }
         }
         return true;
@@ -163,11 +164,32 @@ namespace Sim {
             k.mageBlend = hybrid && c.fam != Cls::Mage ? 0.5f : 0.0f;   // MODEL: a hybrid's attributes and skills are half his school's
             out.push_back(std::move(c));
         }
+        // THE TREE-OFF BASE CELLS (marth 11-12: "I dont see the 3 base classes with no tree in the sim. I imagine theyd say Line: Base ... They do
+        // technically have weapon gates (mage knife etc), and should still loosely follow tree on versions. They just have all available options
+        // at thier disposal"). Each is built FROM its tree-ON T1 row (same family, kit, default kit rows, known-spell tokens: the mage keeps
+        // dagger + staff), then opened exactly as SpellBook::GateFor's tree-OFF branch opens it (iaus/SpellBook.cpp: any known spell, power
+        // attack, taunt, retreat; scrollUser by the T1 root; no row cooldown, so Generate applies the Tuning rowless floors; the gate's weapon
+        // categories open; no sneak class, no pressed back-off, no Block row). In the DLL the tree-OFF weapon choice is the stance's equip side,
+        // not the IAUS gate: the lab mirrors it through the T1 kit. Curve row = ClassCurves::kBaseOffFirst + root (its OWN row). No class
+        // package (tier 1) and no class flag: the style is MFO's stance style with the vanilla Avoid Threat 0.20, no kDisengage fallback offset.
+        // APPENDED after the 35 table rows, so every table class keeps its index (and so its fights, draw for draw).
+        static const char* const kOff[3] = { "melee-off", "ranged-off", "mage-off" };
+        for (std::size_t i = 0; i < 3; ++i) {
+            SimClass c = out[i]; const C::ClassDef& d = C::kTable[i];
+            c.name = kOff[i]; c.line = "Base"; c.tier = 1; c.planned = false; c.playstyle.clear(); c.forbid = 0;
+            ClassGate& g = c.gate; g = ClassGate{}; g.resolved = true; g.treeOn = false; g.strict = false;
+            g.spellsOnClass = true; g.scrollUser = Casting(d); g.powerAttack = true; g.taunt = true; g.disengage = true;
+            const std::size_t row = MFO::Iaus::ClassCurves::kBaseOffFirst + i;
+            MFO::Iaus::ClassCurves::Apply(g_curveTable[row], static_cast<std::uint8_t>(row), g); c.profile = MFO::Iaus::ClassCurves::Build(g_curveTable[row]);
+            c.csDisengage = 0; c.avoidThreat = 0.20f; c.shareMax = c.shareMin = -1.0f; c.leashScaled = false; c.aversion = 0.0f; c.aimBudget = -1;
+            c.sneakAlways = c.flank = c.cloak = c.nearPlayer = c.shortLeash = false; c.entryOdds = 0; c.sneakAtkClass = c.noiseClass = 1.0f;
+            out.push_back(std::move(c));
+        }
         return out;
     }
 
     void PrintClassTable(const std::vector<SimClass>& v) {
-        std::printf("classes from native/classes/ClassTable.cpp: %zu\n", v.size());
+        std::printf("classes from native/classes/ClassTable.cpp: %zu (+ the 3 tree-OFF base cells)\n", v.size() - 3);
         for (const SimClass& c : v)
             std::printf("  T%d %-16s %-6s spells=%d(mastered %d) power=%d(cd %.0f) taunt=%d disengage=%d  weapons m%d b%d x%d s%d  kit:%s%s%s%s%s%s%s\n", c.tier, c.name.c_str(),
                         c.fam == Cls::Melee ? "melee" : c.fam == Cls::Ranged ? "ranged" : "mage", int(c.gate.spellsOnClass), int(c.gate.spellsFromMastered), int(c.gate.powerAttack), c.gate.powerCooldownSec,
