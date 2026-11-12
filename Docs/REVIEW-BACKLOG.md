@@ -3064,14 +3064,17 @@ The old "no owner on this path, or form missing -> stance disabled ..." comment 
 ### MFO-B751 (SEV-5, OPEN, C8 author's spots, against 2628beb, same review)
 Accepted as documented: fClassLeashMult 0.5 is a tunable guess (floored at fLeashMin; field tunes it); dead followers are released on the not-managed path with the 30 s backoff for an ended claim; Harbinger absent = silent mix sweep (matches AimClaims); Dragonborn with no picked T4 uses its own tier-5 package; Templar vs-undead power floor not built (needs a conditional facet) and Ebony Warrior inherits 0.20 (not ruled).
 
-### MFO-B755 (SEV-3, OPEN, tools/iaus_sim headline fights, against a2e7336, Opus review of fix/iaus-sim-backlog)
+### MFO-B755 (SEV-3, FIXED, tools/iaus_sim headline fights, against a2e7336, Opus review of fix/iaus-sim-backlog)
 `hf = fightsGiven ? fights : 24` also changes the normal (non-`--seeds`) full-run headline J: before, it was always 24 fights; now `--fights N` computes it at N. The count is printed and in JSON (headline.fights), but `--compare` against an archived baseline made at another fight count would read the change as a J delta (unchecked whether --compare looks at headline.fights). Fix: back to 24 for non-`--seeds` runs, or make --compare refuse when headline fights/covers differ. The Fable tuning round must RE-BASELINE before tuning.
+FIXED on feat/iaus-sim-stealth: a full run's headline J is always 24 fights per scenario (a --seeds run still honours --fights). A --baseline file starts with a #meta line and --compare refuses a baseline whose line differs. CLI checks in run.sh.
 
-### MFO-B756 (SEV-4, OPEN, tools/iaus_sim JSON oracle_over, against a2e7336, same review)
+### MFO-B756 (SEV-4, FIXED, tools/iaus_sim JSON oracle_over, against a2e7336, same review)
 B712 incomplete: the JSON records covers and fights for the main J, but oracle_over has no covers field for the oracle headline (only the printed oracle line gained covers=).
+FIXED on feat/iaus-sim-stealth: headline.oracle_covers in the JSON. CLI check in run.sh.
 
-### MFO-B757 (SEV-5, OPEN, tools/iaus_sim jCovers, against a2e7336, same review)
+### MFO-B757 (SEV-5, FIXED, tools/iaus_sim jCovers, against a2e7336, same review)
 jCovers defaults to "all classes" even when hasJ is false (JSON can claim coverage for a J that was not computed), and fights is then 0. Cosmetic.
+FIXED on feat/iaus-sim-stealth: jCovers has no default, and headline.covers / headline.fights are null when no J was computed.
 
 ### MFO-B758 (SEV-5, OPEN, B714 notes, against a2e7336, same review)
 The B714 notes on paired-difference SE and on --classes vs --opt-class being different objectives are handled only in iaus-sim-v2.md; the backlog marks the whole of B714 FIXED.
