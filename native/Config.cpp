@@ -235,6 +235,7 @@ namespace MFO::Config {
             else if (a_key == "bIausFillMortal")    setB(g_iausFillMortal);
             else if (a_key == "bIausReachLearn")    setB(g_iausReachLearn);   // ruling Q68: the learned swing reach gates the power attack, INI-only, default OFF
             else if (a_key == "bCombatMoveProbe")   setB(g_combatMoveProbe);  // dev probe: a bash every 6 s in melee reach (Harbinger ch.31), INI-only, default OFF
+            else if (a_key == "bPowerAttackEngineRoad") setB(g_powerAttackEngineRoad);   // act.power_attack: Harbinger ch.31 (ABI 44) vs MFO's own animation event; INI-only, default ON
             else if (a_key == "bIausBashRoad")      setB(g_iausBashRoad);     // IAUS Bash family through Harbinger ch.31, INI-only, default OFF
             else if (a_key == "bIausGroundRoad")    setB(g_iausGroundRoad);   // IAUS GiveGround family through Harbinger ch.24 on a point, INI-only, default OFF
             else if (a_key == "bIausHideRoad")      setB(g_iausHideRoad);     // card G3: the hide run (Concealment.cpp + apmf/Disengage.cpp), INI-only, default OFF
@@ -472,6 +473,7 @@ namespace MFO::Config {
             g_iausFillMortal     = false;
             g_iausReachLearn     = false;   // ruling Q68: the learned swing reach -- OFF until its [iaus-fill] swing lines are field-proven
             g_combatMoveProbe    = false;   // the dev bash probe -- OFF everywhere by default
+            g_powerAttackEngineRoad = true;   // act.power_attack on Harbinger's real power attack when it serves ABI 44
             g_iausBashRoad       = false;   // the IAUS bash road -- OFF until the field proves Harbinger's combat move
             g_iausGroundRoad     = false;   // the IAUS give-ground road -- OFF until the field proves ch.24 on a point
             g_iausHideRoad       = false;   // card G3: the hide run -- OFF until the field proves the disengage drive

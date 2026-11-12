@@ -565,6 +565,11 @@ namespace MFO::Config {
     // combat whose combat target is inside melee reach asks Harbinger for a BASH every 6 s, whatever his gambits or
     // Sentient AI would do. DEV-ONLY: it proves the road (apmf/CombatMove.cpp CombatMoveProbeTick), nothing ships on it.
     inline std::atomic<bool>  g_combatMoveProbe{ false };
+    // POWER ATTACK ROAD ([Debug] bPowerAttackEngineRoad, INI-only, default ON; T2 batch M item 2, marth Q82). 1 = the
+    // "Power attack" gambit asks Harbinger for the engine's real power attack (ch.31 kCombatMove_PowerAttack, needs ABI
+    // 44); 0, or an older Harbinger = MFO's own animation event (attackPowerStartInPlace), the road before. Every power
+    // attack logs which road ran. Both stay selectable until the field probe (iaus-sim-v2 29.1) decides.
+    inline std::atomic<bool>  g_powerAttackEngineRoad{ true };
     // IAUS BASH ROAD ([Debug] bIausBashRoad, INI-only, default OFF until the field run proves the road). 1 = for a
     // follower on Sentient AI the Bash family is generated (Snapshot::bashRoad) while Harbinger serves ABI v38, and a
     // chosen bash is sent through apmf/CombatMove.cpp. Read by iaus/Candidates.cpp on the worker.

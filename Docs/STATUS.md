@@ -19,6 +19,12 @@
   `Foe: Targeting me (melee) -> Block` with a 4 s cooldown. `APMF_API.h` mirrors Harbinger's v43 byte for byte.
   Sentient AI followers do not block yet (MFO-B800). Questions Q-melee-1 and Q-melee-2. Test steps:
   `in-game-test-list.md` Part 3d. Backlog MFO-B800..B802.
+  **Item 2, Power attack (Harbinger ABI 44).** `act.power_attack` in reach now asks Harbinger for the engine's real power
+  attack (ch.31 `kCombatMove_PowerAttack`: his own power entry, started by the engine's start-of-attack action, so the
+  hit has power damage and the stamina cost). The road before (the animation event `attackPowerStartInPlace`) stays
+  behind `[Debug] bPowerAttackEngineRoad = 0` and for a Harbinger older than ABI 44. Every swing logs
+  `[power-attack] ... road=harbinger|graph`. The outcome is asynchronous (`[combat-move] ... power attack ...`).
+  Question Q-melee-4. Test steps 24q, 24r. Backlog MFO-B803.
 
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense

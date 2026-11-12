@@ -1892,6 +1892,11 @@ namespace MFO::APMFBridge {
     // melee reach asks for a bash every 6 s. Worker road; own leaf mutex, never g_mx; nothing is saved.
     bool          CombatMoveSupported();
     std::uint32_t RequestBash(RE::FormID a_follower, RE::FormID a_foe, bool a_power);
+    // POWER ATTACK (ABI v44, kCombatMove_PowerAttack; T2 batch M item 2, marth Q82): the engine's real right-hand power
+    // attack by the same action road (power damage and stamina are the engine's). PowerAttackRoadSupported: APMF present
+    // AND abiVersion >= 44. RequestPowerAttack: the same contract as RequestBash; the outcome lines read "power attack".
+    bool          PowerAttackRoadSupported();
+    std::uint32_t RequestPowerAttack(RE::FormID a_follower, RE::FormID a_foe);
     void          PollCombatMove(RE::FormID a_follower);
     void          CombatMoveProbeTick(RE::Actor* a_follower);
     // ── BLOCK (Harbinger ch.31, ABI v43, kCombatMove_Block / kCombatMove_BlockEnd) -- apmf/BlockClaims.cpp ────────────

@@ -544,10 +544,35 @@ namespace MFO::Actuation {
             // cleanly (§4.3, GAMBIT_FLOWS §3.6). `sent` still isn't proof the swing
             // landed; field-verify. Report Fired only on accept so a reject buys no
             // suppression window (Fable: Fired-on-reject went visibly passive).
+            //
+            // TWO ROADS (T2 batch M item 2, marth Q82; both stay selectable until the field probe decides):
+            //  * road=harbinger ([Debug] bPowerAttackEngineRoad = 1 and Harbinger ABI >= 44): the engine's REAL power
+            //    attack (ch.31 kCombatMove_PowerAttack, apmf/CombatMove.cpp). Harbinger starts one of his own power
+            //    entries by the engine's start-of-attack action on the game thread, so the hit carries the power
+            //    attack's damage and stamina cost. The outcome is asynchronous ("[combat-move]" lines by
+            //    PollCombatMove), so MFO tests here what it can read: an attack already in progress is the engine's
+            //    first refusal and is TRANSPARENT (nothing asked, nothing mutated).
+            //  * road=graph: MFO's own animation event, the road before. It plays the swing; whether the hit is a real
+            //    power attack is what the probe measures.
+            if (Config::g_powerAttackEngineRoad.load(std::memory_order_relaxed) && APMFBridge::PowerAttackRoadSupported()) {
+                if (a_follower->AsActorState()->GetAttackState() != RE::ATTACK_STATE_ENUM::kNone)
+                    return { Result::FailedOther, "power attack: an attack is already in progress", true };
+                const std::uint32_t h = APMFBridge::RequestPowerAttack(a_follower->GetFormID(), foe->GetFormID());
+                if (h == 0) return { Result::FailedOther, "power attack refused by Harbinger at the call", true };
+                Targeting::Command(a_follower->GetFormID(), a_choice.target);
+                spdlog::info("[power-attack] {:08X}: road=harbinger (ch.31 kCombatMove_PowerAttack, h={}) -> {:08X} '{}' at {:.0f}u",
+                             a_follower->GetFormID(), h, foe->GetFormID(), foeName, dist);
+                return { Result::Fired, std::format("power attack requested -> {} (road=harbinger, h={})", foeName, h) };
+            }
             if (!a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
                 return { Result::FailedOther, "power-attack anim rejected", true };
             Targeting::Command(a_follower->GetFormID(), a_choice.target);
-            return { Result::Fired, std::format("power attack -> {}", foeName) };
+            spdlog::info("[power-attack] {:08X}: road=graph (animation event attackPowerStartInPlace; {}) -> {:08X} '{}' at {:.0f}u",
+                         a_follower->GetFormID(),
+                         !Config::g_powerAttackEngineRoad.load(std::memory_order_relaxed) ? "bPowerAttackEngineRoad=0"
+                                                                                          : "Harbinger absent or older than ABI 44",
+                         foe->GetFormID(), foeName, dist);
+            return { Result::Fired, std::format("power attack -> {} (road=graph)", foeName) };
         }
 
         if (op == Vocab::kActBash) {

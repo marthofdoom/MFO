@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v43, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v44, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 43;
+    inline constexpr std::uint32_t kABIVersion = 44;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -745,6 +745,8 @@ namespace APMF_API {
                                      //       ABI v43: kCombatMove_Block is BUILT (a HELD guard: param.fval = the
                                      //       hold window in seconds) and kCombatMove_BlockEnd ends it. See "ABI
                                      //       v43: BLOCK" at the end of this header.
+                                     //       ABI v44: kCombatMove_PowerAttack (the engine's real power attack,
+                                     //       once). See "ABI v44: POWER ATTACK" at the end of this header.
         kIntent_Aversion = 32,       // ch.32 AVERSION (ABI v41, 2026-11-11, MFO class plan card H2). This actor is
                                      //       LESS LIKELY TO BE TARGETED. Mode: WEIGHT at the source, never a pin and
                                      //       never a deny of the foe. When another actor's STANDARD target
@@ -3516,6 +3518,8 @@ namespace APMF_API {
                                     //   ABI v43: BUILT, a held guard. See "ABI v43: BLOCK" below. An APMF older
                                     //   than v43 still refuses it at the call.
         kCombatMove_BlockEnd  = 4,  // ABI v43: lower the guard this client holds on the actor, now.
+        kCombatMove_PowerAttack = 5,  // ABI v44: a right-hand POWER ATTACK, by the engine's own start-of-attack
+                                    //   action. See "ABI v44: POWER ATTACK" below.
     };
 
     // What became of a combat move, per handle. APPEND-ONLY: never renumber.
@@ -3571,6 +3575,9 @@ namespace APMF_API {
         kCombatMoveWhy_HoldBroken     = 20,  // Ended: the hold could not be kept. The actor died, unloaded, ran out
                                              //   of stamina (the engine's own block rule), changed what is in his
                                              //   hands, sheathed, a combat substrate took him, or a load came
+        // ABI v44 (kCombatMove_PowerAttack):
+        kCombatMoveWhy_GuardHeld      = 21,  // Refused: a block hold stands on the actor. A power attack would
+                                             //   drop the guard: end the hold first (kCombatMove_BlockEnd)
     };
 
     inline constexpr std::uint32_t kCombatMoveInfo_HitSeen    = 1u << 0;  // a hit event with the Bash flag, caused by the
@@ -3734,6 +3741,46 @@ namespace APMF_API {
     inline constexpr float         kCombatBlockMaxS       = 10.0f;  // a longer window is cut to this (logged)
     inline constexpr std::uint32_t kCombatBlockMaxHolds   = 16;     // actors held at once
     inline constexpr std::uint32_t kCombatBlockReRaiseMs  = 250;    // the least wall ms between two raises of one hold
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v44: POWER ATTACK (kCombatMove_PowerAttack) -- the engine's real power attack, once
+    // ═════════════════════════════════════════════════════════════════════════════
+    // NO new slot or struct: one CombatMove value and one CombatMoveWhy value. A v44 client still holds an
+    // APMF_API_v38* and reads the outcome with GetCombatMoveState. A ONE-SHOT, exactly as the bash is.
+    //
+    // WHY. A power attack sent as a bare animation event plays the swing, but the engine sets an actor's attack
+    // data (the entry that carries the power flag, the damage multiplier and the stamina cost) only on its
+    // action road. This move takes that road: the same action the combat AI's own attack start processes
+    // (StartAttack: the Right Attack action form with the attack entry's event), for one of the actor's own
+    // right-hand POWER entries.
+    //
+    // RequestEx(actor, kIntent_CombatMove, basis, &param) with param.ival = kCombatMove_PowerAttack and
+    // param.target = the foe it is meant for (optional; checked and measured, never aimed at). On the game thread:
+    //   * the checks of a bash (loaded, alive, no attack in progress, the graph attack-ready, attacking not
+    //     disabled, no ch.7 Offense deny, no substrate, the client outranks Engine on CombatAction), plus: his
+    //     weapon is drawn (kCombatMoveWhy_NotReady) and no block hold stands on him (kCombatMoveWhy_GuardHeld);
+    //   * THE ENTRY. The actor base's attack entries with the Power flag, without the Bash flag, of the right
+    //     hand, with an attack chance above 0, in DESCENDING attack chance (ties: the lower event name), at most
+    //     kCombatPowerMaxTries. Each is offered to the engine's action until one is ACCEPTED. This is the engine's
+    //     own behaviour: its attack start draws an entry, and when the action refuses it (the behaviour graph has
+    //     no such attack for what he holds: a dual-wield or unarmed entry for a sword user) it removes that entry
+    //     and draws again. Harbinger's order is fixed, never random, and it weighs nothing: which power attack
+    //     plays is the first his graph accepts. kCombatMoveWhy_NoAttackData when he has no such entry,
+    //     kCombatMoveState_Failed / kCombatMoveWhy_EngineRefused when the engine accepted none (no stamina,
+    //     staggered, nothing in his graph);
+    //   * kCombatMoveState_Started only when his attack data reads back as the accepted entry and his attack
+    //     state as Draw or Swing (the states the engine's post-action step sets for a weapon attack).
+    // THE HIT. A hit caused by the actor with the PowerAttack flag and without the Bash flag, within
+    // kCombatMoveHitWindowMs of the start, sets kCombatMoveInfo_HitSeen (and HitBlocked / HitOnTarget). A bash
+    // hit never marks a power attack's record and the reverse.
+    //
+    // WHAT IT IS NOT. Not a directional choice: forward, standing, left, right and backward entries are tried by
+    // their attack chance and the graph takes the first that fits how he is moving. Not a left-hand or dual
+    // power attack. Not a deny of the engine's own attacks around it.
+    //
+    // Gate on `abiVersion >= 44` (INVARIANTS #14b). An older APMF refuses the value at the call ("not a
+    // CombatMove this ABI builds"). FIELD STATUS: built from the disassembly, not yet observed on a deck.
+    inline constexpr std::uint32_t kCombatPowerMaxTries = 8;   // entries offered to the engine per request
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

@@ -25,11 +25,12 @@ namespace MFO::APMFBridge {
 
     namespace {
         constexpr std::uint32_t kCombatMoveMinAbi = 38;   // the ABI that first serves intent 31 and carries GetCombatMoveState
+        constexpr std::uint32_t kPowerAttackMinAbi = 44;  // the ABI that builds kCombatMove_PowerAttack
 
         struct Last {
             std::uint32_t handle = 0;
             RE::FormID    foe = 0;
-            bool          power = false;
+            std::uint32_t move = APMF_API::kCombatMove_Bash;   // the CombatMove value that was requested
             bool          finalLogged = false;   // the Started / Refused / Failed line was written
             bool          hitLogged = false;     // the hit (or "no hit inside the window") line was written
             std::chrono::steady_clock::time_point at{};
@@ -45,15 +46,47 @@ namespace MFO::APMFBridge {
             case APMF_API::kCombatMoveWhy_Busy:           return "an attack is already in progress";
             case APMF_API::kCombatMoveWhy_NotAttackReady: return "the behaviour graph is not attack-ready";
             case APMF_API::kCombatMoveWhy_TargetGone:     return "the foe is gone";
-            case APMF_API::kCombatMoveWhy_NoAttackData:   return "he has no bash of that kind";
+            case APMF_API::kCombatMoveWhy_NoAttackData:   return "he has no attack entry of that kind";
             case APMF_API::kCombatMoveWhy_OffenseDenied:  return "a ch.7 claim denies his offense";
             case APMF_API::kCombatMoveWhy_SubstrateHeld:  return "a combat substrate holds him";
             case APMF_API::kCombatMoveWhy_Outranked:      return "MFO does not outrank Engine on CombatAction (Harbinger priorities)";
             case APMF_API::kCombatMoveWhy_EngineRefused:  return "the engine refused the action";
-            case APMF_API::kCombatMoveWhy_NotApplied:     return "the engine accepted it but his attack data / state are not the bash";
+            case APMF_API::kCombatMoveWhy_NotApplied:     return "the engine accepted it but his attack data / state are not this move";
+            case APMF_API::kCombatMoveWhy_GuardHeld:      return "a block hold stands on him (a power attack would drop the guard)";
             case APMF_API::kCombatMoveWhy_Error:          return "an error inside Harbinger";
             default:                                      return "no reason given";
             }
+        }
+        const char* MoveName(std::uint32_t a_move) {
+            switch (a_move) {
+            case APMF_API::kCombatMove_PowerBash:   return "power bash";
+            case APMF_API::kCombatMove_PowerAttack: return "power attack";
+            default:                                return "bash";
+            }
+        }
+
+        // One combat move request (the shared body of RequestBash and RequestPowerAttack).
+        std::uint32_t RequestMove(const APMF_API::APMF_API_v2* a_api, RE::FormID a_follower, RE::FormID a_foe, std::uint32_t a_move) {
+            PollCombatMove(a_follower);   // the previous move's outcome is written before its record is replaced
+            APMF_API::APMF_Param p{};
+            p.ival   = static_cast<std::int32_t>(a_move);
+            p.target = a_foe;
+            const std::uint32_t h = a_api->RequestEx(a_follower, APMF_API::kIntent_CombatMove, 0.0f, &p);   // basis is not read
+            if (h == APMF_API::kInvalidHandle) {
+                spdlog::warn("[combat-move] {:08X}: Harbinger refused the {} request at the call (its log says why)", a_follower,
+                             MoveName(a_move));
+                return h;
+            }
+            std::scoped_lock lk(g_moveMx);
+            auto& l = g_last[a_follower];
+            const auto probeNext = l.probeNext;
+            l = Last{};
+            l.handle = h;
+            l.foe = a_foe;
+            l.move = a_move;
+            l.at = std::chrono::steady_clock::now();
+            l.probeNext = probeNext;
+            return h;
         }
     }
 
@@ -65,26 +98,18 @@ namespace MFO::APMFBridge {
     std::uint32_t RequestBash(RE::FormID a_follower, RE::FormID a_foe, bool a_power) {
         const auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < kCombatMoveMinAbi) return APMF_API::kInvalidHandle;   // no road: the caller makes no move
-        PollCombatMove(a_follower);   // the previous move's outcome is written before its record is replaced
-        APMF_API::APMF_Param p{};
-        p.ival   = static_cast<std::int32_t>(a_power ? APMF_API::kCombatMove_PowerBash : APMF_API::kCombatMove_Bash);
-        p.target = a_foe;
-        const std::uint32_t h = api->RequestEx(a_follower, APMF_API::kIntent_CombatMove, 0.0f, &p);   // basis is not read
-        if (h == APMF_API::kInvalidHandle) {
-            spdlog::warn("[combat-move] {:08X}: Harbinger refused the {} request at the call (its log says why)", a_follower,
-                         a_power ? "power bash" : "bash");
-            return h;
-        }
-        std::scoped_lock lk(g_moveMx);
-        auto& l = g_last[a_follower];
-        const auto probeNext = l.probeNext;
-        l = Last{};
-        l.handle = h;
-        l.foe = a_foe;
-        l.power = a_power;
-        l.at = std::chrono::steady_clock::now();
-        l.probeNext = probeNext;
-        return h;
+        return RequestMove(api, a_follower, a_foe, a_power ? APMF_API::kCombatMove_PowerBash : APMF_API::kCombatMove_Bash);
+    }
+
+    bool PowerAttackRoadSupported() {
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= kPowerAttackMinAbi;
+    }
+
+    std::uint32_t RequestPowerAttack(RE::FormID a_follower, RE::FormID a_foe) {
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kPowerAttackMinAbi) return APMF_API::kInvalidHandle;   // no road: the caller keeps its own
+        return RequestMove(api, a_follower, a_foe, APMF_API::kCombatMove_PowerAttack);
     }
 
     void PollCombatMove(RE::FormID a_follower) {
@@ -102,7 +127,7 @@ namespace MFO::APMFBridge {
         const std::uint32_t st = reinterpret_cast<const APMF_API::APMF_API_v38*>(api)->GetCombatMoveState(l.handle, &info);
         if (st == APMF_API::kCombatMoveState_Queued) return;   // the game thread has not run it yet
         bool finalNow = false, hitNow = false;
-        const char* kind = l.power ? "power bash" : "bash";
+        const char* kind = MoveName(l.move);
         if (!l.finalLogged) {
             finalNow = true;
             if (st == APMF_API::kCombatMoveState_Started)
@@ -126,8 +151,8 @@ namespace MFO::APMFBridge {
         } else if (std::chrono::steady_clock::now() - l.at >
                    std::chrono::milliseconds(APMF_API::kCombatMoveHitWindowMs + 500)) {
             hitNow = true;
-            spdlog::info("[combat-move] {:08X}: {} h={} started but NO bash hit arrived inside {} ms (out of reach, facing away, or the "
-                         "swing was interrupted)", a_follower, kind, l.handle, APMF_API::kCombatMoveHitWindowMs);
+            spdlog::info("[combat-move] {:08X}: {} h={} started but NO hit of that kind arrived inside {} ms (out of reach, facing away, "
+                         "or the swing was interrupted)", a_follower, kind, l.handle, APMF_API::kCombatMoveHitWindowMs);
         }
         if (!finalNow && !hitNow) return;
         std::scoped_lock lk(g_moveMx);
