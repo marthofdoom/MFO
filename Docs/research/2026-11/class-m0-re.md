@@ -130,6 +130,12 @@ DETECTION (admission), and that is G2's road.
 **Probe.** At the existing ch.20 slot-6 seat, a rate-limited line (1/s per foe) whenever FindBest ran and a
 claimant was a candidate: foe, candidate count, admissible count, the pick, and whether the pick was the claimant.
 
+**UPDATE 2026-11-11 (card H2 built, Harbinger `feat/aversion`):** SE is PROVEN with its own seat: the scored path's handle
+lookup call at FindBest+0x2C9 (the null handle for the excluded claimant takes the engine's own unresolved skip). The
+pre-pass count was replaced by running the scorer twice (the engine decides whether another valid target exists), and a
+third seat on the fallback list's lookup rejects a lost-target pick. Full read: Harbinger
+`Docs/research/aversion-target-selector-re.md`.
+
 **Verdict.** FEASIBLE-WITH-RISK on 1.6.1170 and 1.7.104. SE UNPROVEN. **Estimate:** tier A, effort 4, plus 2 for
 the SE seat RE.
 

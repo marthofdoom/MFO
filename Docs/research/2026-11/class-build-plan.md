@@ -307,6 +307,14 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   answer for an actor that does not claim anything is a cross-actor deny, so the deny-completeness question is "who else
   writes a foe's target" (scripts via `SetTarget`, ch.20 pins of other clients).
 
+- **BUILT 2026-11-11, not merged, not field-run:** Harbinger `feat/aversion` (ch.32 `kIntent_Aversion`, ABI v41) and MFO
+  `feat/class-aversion` (`apmf/AversionClaims.cpp`, Conjurer and Healer). Vanilla lever: none (re-read on the three
+  executables). The gate is the claimant's ADMISSION to one scoring pass of the standard selector's scorer, not the output
+  answer: the engine's scorer runs, and when its pick is an averted claimant it runs again without him. The seat is on the
+  scorer's one call inside slot 0x06 (not the slot itself, which ch.20 keeps), with its own path on 1.5.97. RE:
+  Harbinger `Docs/research/aversion-target-selector-re.md`. Necromancer, Priest, Arch-Mage and Saint get their weights with
+  their own cards. Open questions 93-96.
+
 **H3. Disengage / reposition drive with regular movement mid-fight**
 - What: "thief and mage classes both can disengage, and use regular movement in combat to reposition faster". The
   follower turns and RUNS to a point (not a combat backpedal), then resumes fighting. Today ch.24 moves toward a
