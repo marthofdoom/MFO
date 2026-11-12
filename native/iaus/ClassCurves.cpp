@@ -51,11 +51,21 @@ namespace MFO::Iaus::ClassCurves {
         //     +0.109 (se 0.054); about 0.13 J of it is the stamina potion he no longer spends. But on the six fixed gate seeds of 31.11 the
         //     Warrior is -0.50 J and the 12-class mean falls by 0.04 at all three gates, and those gates are hard constraints.
 
+        // THE SEARCHED VALUES (per-class tuning, Docs/research/2026-11/iaus-sim-v2.md section 33; tools/iaus_sim/tune_driver.py).
+        // One statement per ACCEPTED value, pasted from the driver's summary.md ("Lines for ClassCurves.cpp"), each under a comment with
+        // its evidence: metric, seeds, worlds, delta. Runs AFTER the base rows are copied from the T1 rows, so a T1 value does not leak
+        // into a tree-OFF base row (the base cells are searched as their own cells). `sh` is the shared catalogue a curve override starts
+        // from. EMPTY = no searched value: every row scores with the shared catalogue (bit-identical).
+        void SeedSearchedValues([[maybe_unused]] Table& t) {
+            [[maybe_unused]] const Tuning& sh = DefaultTuning();
+        }
+
         Table MakeDefaults() {
             Table t{};
             SeedSchoolPeaks(t);
             t[kArchMage].scalars.schoolAny = true;   // marth 11-12: "obviously Arch mage gets any school"
             for (std::size_t i = 0; i < 3; ++i) t[kBaseOffFirst + i] = t[i];   // each tree-OFF base row starts as its T1 row
+            SeedSearchedValues(t);
             return t;
         }
     }

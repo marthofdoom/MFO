@@ -43,7 +43,7 @@ import threading
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
 BASE = ["melee-off", "ranged-off", "mage-off"]
-CASTERS = {"mage", "evoker", "conjurer", "healer", "warlock", "melee-off", "ranged-off", "mage-off"}   # gate.spellsOnClass in the lab
+CASTERS = {"mage", "evoker", "conjurer", "healer", "warlock", "mage-off"}   # by the cell's FAMILY: a melee / ranged base cell may know a spell, but its resource potion is stamina
 KNIGHTS = {"knight", "great-knight", "ebony-warrior"}
 TIGHT = {"thief", "mercenary"}   # 31.11: the two classes whose gate band is 0.5 J, not 1.0
 
@@ -173,10 +173,10 @@ def search_class(cls):
                     if min(fl.values()) < 60.0:
                         ok, row["why"] = False, "Knight guard floor under 60%"
                 if ok:
-                    row["accepted"], row["why"] = True, "accepted"
+                    row["accepted"], row["why"] = True, "passes on this world only (not a result: tune_driver.py)"
                     kept.append(spec)
         rows.append(row)
-        emit_run(cls, "sweep %s %s %s best %s (%s; train %+.2f J, se %.2f)" % (world_name(), cls, name, v, "ACCEPTED" if row["accepted"] else "rejected: " + row["why"], d, se), kept)
+        emit_run(cls, "sweep %s %s %s best %s (%s; train %+.2f J, se %.2f)" % (world_name(), cls, name, v, "passes on this world only" if row["accepted"] else "rejected: " + row["why"], d, se), kept)
         print("%-11s %-26s shared %-6s best %-6s train %+6.2f (se %.2f)%s  %s" % (
             cls, name, shared, v, d, se, ("  hold %+5.2f (se %.2f)" % (row["hold_d"], row["hold_se"])) if "hold_d" in row else "",
             row["why"] + ("  off %+.2f shipped %+.2f" % (row.get("off_d", 0), row.get("shipped_d", 0)) if "off_d" in row else "")), flush=True)
@@ -233,8 +233,20 @@ def all_knobs():
 
 
 def moved(v, k):
-    """A knob's value moved by factor k; a value near 0 moves by an absolute step instead (a factor of 0 is no move)."""
-    return round(v * k, 5) if abs(v) >= 0.2 else round(v + (0.15 if k > 1 else -0.15) * (2.0 if k in (0.5, 2.0) else 1.0), 5)
+    """A knob's value moved by factor k; a value near 0 moves by an absolute step instead (a factor of 0 is no move). The move never
+    leaves the value's side of 0: a small positive offset, floor or level stops at 0.02 (never 0 = a veto, never negative), and a
+    level above 1 (a boost) never goes under 1. tune_driver.py holds the full per-kind ranges; this is the single-sweep tool's guard."""
+    if abs(v) >= 0.2:
+        nv = v * k
+    else:
+        nv = v + (0.15 if k > 1 else -0.15) * (2.0 if k in (0.5, 2.0) else 1.0)
+        if v >= 0.0:
+            nv = max(0.02, nv)
+        else:
+            nv = min(-0.02, nv)
+    if v > 1.0:
+        nv = max(1.0, nv)
+    return round(nv, 5)
 
 
 def wide_class(cls):
@@ -286,10 +298,10 @@ def wide_class(cls):
                     if min(fl.values()) < 60.0:
                         ok, row["why"] = False, "Knight guard floor under 60%"
                 if ok:
-                    row["accepted"], row["why"] = True, "accepted on this world (still needs the fresh-seed three-world confirmatory and the 31.11 gates)"
+                    row["accepted"], row["why"] = True, "passes on this world ONLY: not a result (tune_driver.py runs the cross-world confirmatory and the many-seed gates)"
                     kept.append(spec)
         rows.append(row)
-        emit_run(cls, "wide %s %s %s %s -> %s (%s; train %+.2f J, se %.2f)" % (world_name(), cls, name, v, nv, "ACCEPTED here" if row["accepted"] else "rejected: " + row["why"], d, se), kept)
+        emit_run(cls, "wide %s %s %s %s -> %s (%s; train %+.2f J, se %.2f)" % (world_name(), cls, name, v, nv, "passes here only" if row["accepted"] else "rejected: " + row["why"], d, se), kept)
         print("%-11s %-34s probe %5.2f  shared %-8g best %-8g train %+6.2f (se %.2f)%s  %s" % (
             cls, name, sens, v, nv, d, se, ("  hold %+5.2f (se %.2f)" % (row["hold_d"], row["hold_se"])) if "hold_d" in row else "",
             row["why"] + ("  off %+.2f shipped %+.2f" % (row.get("off_d", 0), row.get("shipped_d", 0)) if "off_d" in row else "")), flush=True)
@@ -311,7 +323,7 @@ def cmd_wide():
     print("\nLIVENESS (six seeds, each parameter moved x0.67 and x1.5): parameters that changed any seed's J / all, then the %d most sensitive were searched" % ARGS.top)
     for r in res:
         print("  %-11s live %3d of %d   searched %2d   top: %s" % (r["class"], len(r["live"]), r["knobs"], r["searched"], " ".join("%s %.2f" % (n, x) for n, x in r["live"][:6])))
-    print("\nACCEPTED on this world (each still needs the fresh-seed three-world confirmatory and the literal 31.11 gates before it may be written):")
+    print("\nPASSED ON THIS WORLD ONLY (each still needs the fresh-seed three-world confirmatory and the literal 31.11 gates before it may be written):")
     for r in res:
         print("  %-11s %s" % (r["class"], " ".join(r["kept"]) if r["kept"] else "(none)"))
     print("%d values tried in %d sweeps" % (sum(r["values_tried"] for r in res), sum(r["searched"] for r in res)))
@@ -323,7 +335,7 @@ def cmd_per_class():
     classes = ARGS.classes.split(",") if ARGS.classes else BETA1_TREE + BASE
     res = list(POOL.map(search_class, classes))
     print("\n%d (class, parameter, value) candidates tried over %d parameters: with a 2 se bar on the best of each sweep, a few train passes are expected by chance alone; the holdout is what removes them" % (sum(r["values_tried"] for r in res), sum(len(r["rows"]) for r in res)))
-    print("\nACCEPTED per class (the --curve specs to carry into native/iaus/ClassCurves.cpp):")
+    print("\nPASSED ON THIS WORLD ONLY, per class. NOT a result and NOT to be written into native/iaus/ClassCurves.cpp: a value is accepted\nonly by tools/iaus_sim/tune_driver.py, whose accept path holds the fresh-seed cross-world confirmatory and the many-seed gates:")
     for r in res:
         print("  %-11s %s" % (r["class"], " ".join(r["kept"]) if r["kept"] else "(nothing beats noise: the shared values stay)"))
     if ARGS.out:
@@ -346,7 +358,7 @@ def cmd_global():
         best = max(cands)
         row = {"param": name, "shared": shared, "best": best[2], "train_d": round(best[0], 3), "train_se": round(best[1], 3),
                "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2])], "verdict": "kept: does not beat noise"}
-        if best[0] > 2 * best[1] and best[0] >= 0.15:
+        if best[0] > 2 * best[1] and best[0] >= 0.30:   # the SAME rule as a per-class value (the docstring's): 2 se and 0.30 J
             st = "%s=%s" % (name, best[2])
             hd, hse = paired(j_per_seed(scope, hold, "g3", curves), j_per_seed(scope, hold, "g3", curves, st))
             row["hold_d"], row["hold_se"] = round(hd, 3), round(hse, 3)
@@ -356,7 +368,7 @@ def cmd_global():
                 for cfg in ("off", "shipped"):
                     gd, gse = paired(j_per_seed(scope, train + hold, cfg, curves), j_per_seed(scope, train + hold, cfg, curves, st))
                     row[cfg + "_d"], row[cfg + "_se"] = round(gd, 3), round(gse, 3)
-                    if gd < -gse:
+                    if gd < -gse or gd < -0.5:
                         row["verdict"] = "beats noise at g3 but LOSES at %s" % cfg
         emit_run(scope, "sweep %s global %s best %s (%s; train %+.2f J, se %.2f)" % (world_name(), name, best[2], row["verdict"], best[0], best[1]),
                  curves, "%s=%s" % (name, best[2]) if row["verdict"].startswith("BEATS") else None)

@@ -188,7 +188,7 @@ namespace Sim {
         std::vector<ResultRow> rows; std::vector<ScenarioRow> scen;
         std::string mode = "iaus"; bool hasJ = false; double jVal = 0, jScen = 0, jNat = 0; int jFights = 0; std::string jCovers;   // the headline's scope (B712): which classes the objective covered and the fights per scenario
         bool hasOracleJ = false; double oracleJ = 0, oracleJScen = 0, oracleJNat = 0; int oracleFights = 0; std::string oracleOver, oracleCovers;   // B756: the oracle headline's own scope
-        std::vector<RatingRow> ratings; int ratingFights = 0;      // schema 2: the rating battery (fights per cell)
+        std::vector<RatingRow> ratings; int ratingFights = 0, ratingCells = 0;      // schema 2: the rating battery (fights per cell)
         std::vector<ClassGapRow> classGaps;                        // schema 2: the gap pass
         std::map<std::string, std::vector<std::string>> groups;    // schema 2: a gap ledger group name ("knight line", "casters" ...) -> the slugs of this run it covers
         std::string stealth = "off", sneakProfile = "list";   // the stealth / disengage roads modelled (World.h g_stealth) and the sneak data profile (Detect.h)   // the headline: J = half scenario + half natural-bracket utility, in this run's mode
@@ -234,7 +234,7 @@ namespace Sim {
             j += "],\n\"playstyles\":["; bool firstPs = true;
             for (std::size_t i = 0; i < Playstyles().size(); ++i) { const Playstyle& p = Playstyles()[i]; if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; const bool sep = !firstPs; firstPs = false;
                 j += std::string(sep ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(p.cls) + ",\"does\":" + JsonOut::Str(p.does) + ",\"never\":" + JsonOut::Str(p.never) + ",\"forbid\":" + std::to_string(p.forbid) + ",\"gaps\":" + JsonOut::Str(p.gaps) + "}"; }
-            j += "],\n\"rating\":{\"fights_per_cell\":" + std::to_string(ratingFights) + ",\"cells\":" + std::to_string(ratings.empty() ? 0 : 40) + ",\"classes\":[";
+            j += "],\n\"rating\":{\"fights_per_cell\":" + std::to_string(ratingFights) + ",\"cells\":" + std::to_string(ratings.empty() ? 0 : ratingCells) + ",\"classes\":[";
             for (std::size_t i = 0; i < ratings.size(); ++i) { const RatingRow& r = ratings[i];
                 j += std::string(i ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(r.cls) + ",\"tier\":" + std::to_string(r.tier) + ",\"fights\":" + std::to_string(r.fights) + ",\"score\":" + JsonOut::Num(r.score) + ",\"se\":" + JsonOut::Num(r.se)
                    + ",\"rank\":" + std::to_string(r.rank) + ",\"of\":" + std::to_string(r.of) + ",\"tier_mean\":" + JsonOut::Num(r.tierMean) + ",\"delta\":" + JsonOut::Num(r.delta) + ",\"below\":" + (r.below ? "true" : "false")

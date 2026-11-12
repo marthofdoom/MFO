@@ -2355,3 +2355,163 @@ gap (`class_gaps` of the newest full run: melee and the base cells are furthest 
 (3) `wide` on the built-in world for the 15 cells, then a fresh-seed three-world confirmatory and `gates` for each pass.
 (4) Decide with the coordinator whether the Warrior stamina value ships despite the six-seed gate. (5) Confirm the three
 `Tuning` winners on fresh seeds and on the lists, with a switching metric next to J for momentum.
+
+## 33. The per-class tuning: what was built, and the RUNBOOK for the run (2026-11-12)
+
+Branch `feat/class-tuning`. Fable author (the structural part only: marth 11-12 moved the run itself to a cheaper agent). This
+section is written for that agent. Nothing below is a tuning result: the run has not been made. FACT / MODEL as in 31.2.
+
+### 33.1 What changed in the lab and in native
+
+1. **Every curve is a knob now.** `ClassCurves::SetCurveParam` takes `px0..px5` / `py0..py5` for a Piece curve (one point's x or
+   y; refused on a curve that is not a Piece, on a point it does not have, on a non-finite value, on an x past a neighbour).
+   The 20 Piece curves of 32.13 gap 1 are searchable. Sim: `--curve <class>:<family>.<cons>.py1=0.6`.
+2. **Per-class weights (card I8) have a table surface.** `ClassCurves::Row` gains `weights` (a consideration's exponent for this
+   class's family, `Profile::weights`) and `families` (the class's multiplier on a whole family, `Profile::family`);
+   `SetWeight`, `SetFamilyWeight`; `Build` copies them into the Profile. Unset = bit-identical (harness: every shipped row
+   has no override, no weight and every family multiplier exactly 1.0). Sim: `--curve <class>:<family>.<cons>.w=<v>` and
+   `--curve <class>:family.<family>=<v>`. `ClassCurves.cpp` has an empty `SeedSearchedValues(Table&)` where accepted values go.
+3. **What a potion is worth is measured (marth, Q-potion-value: "Sim calibrates it").** Utility used to pay
+   2.5 / (potions carried) / (followers) for a potion left over, about 0.3 J. Now: `--potion-calib N` plays the same natural
+   fights with the subject's stock of one kind forced to 0..4 and prints what one more potion at the start of a fight buys
+   and how many he drinks; `potion_worth.py` turns that into the worth of the k-th potion left in the bag over a CHAIN of
+   fights (W_h(p) = U(p) + sum_u P[p][u] W_{h-1}(p - u); the mean over the 8 places of a chain of 8 fights between restocks);
+   Utility charges each potion drunk that worth (`Oracle.h PotionCost`). The table belongs to a world: the built-in one is the
+   generated `tools/iaus_sim/PotionWorth.h`, a list's is `--potion-worth <file>` (the driver measures it). `--potion-worth
+   legacy` is the old rate and reproduces the old J exactly. MODEL choices: the chain is 8 fights (the file prints 4 and 16
+   next to it); the measured d[k] is floored at 0; the fights are the natural bracket; end health and end magicka keep
+   their old terms (they regenerate between fights: a possible next step, not done).
+4. **The gate rule (marth, Q-gate-rule: "Gate on many seeds").** The no-class-worse gates are judged on the same seeds as the
+   search (train + holdout), paired, and a drop counts only beyond noise. The full rule is the `RULE` block of
+   `tune_driver.py`, copied in 33.3. It was written before any result of the driver was read.
+5. **Decision switching is visible next to J**: `--print-switch` prints the subject's decision switches and fight minutes
+   per seed. J does not price switching, so the driver reports the rate and never applies a shared value that raises it
+   by more than 10% for any class.
+6. **Why a blow found no guard**: `--guard-why` adds `ung2*%` metrics (staggered, the rest after a hold, hurt with a
+   potion = drink first, drinking, mid action, free) to the Knight line's tally.
+7. **Review fixes of the sim batch** (`edge_search.py`): a single-world pass is labelled "passes on this world only: not a
+   result" (the accept path is the driver's); `moved()` never crosses 0 and a boost never goes under 1; the potion kind follows
+   the cell's family (melee-off and ranged-off are stamina cells); `global` uses the per-class rule (2 se, 0.30 J, the band).
+   `Results.h` writes `kRatingCells`; the dashboard's Trend compares two gaps only when they come from the same source.
+
+### 33.2 Two findings that change what 32.11 said
+
+- **The Knight floor on LoreRim was measured on a world without LoreRim's combat mods.** The simulator reads
+  `<list>.combatmods.json` BESIDE the `.sim.json` and takes a missing file for "no such mod" (`Load.h`). The final-world list
+  runs of 32.11 used copies in a scratch directory, without that file. With it (the shared cache, re-compiled with the
+  corrected potion ladders): Knight, as shipped, 48 seeds: **63.1%** (six-seed groups 61.2 to 65.4); without it 58.5% (57.3
+  on seeds 1 to 6, the number of 32.11). So the shipped table is OVER the floor on LoreRim. Every LoreRim number of 32.11
+  has the same defect (Tuxborn's and Vanilla's files are empty, so those are unaffected). The driver refuses a list whose
+  companion file is missing.
+- **Where the unguarded blows go** (Knight, as shipped, 6 seeds, percent of all blows under two or more own-taunted foes):
+  built-in: the rest after a hold 18.4, mid action 8.4, staggered 2.6, drinking 1.9; LoreRim: rest 18.1, mid action 6.0,
+  staggered 4.9, drinking 4.0, drink-first 1.3; Tuxborn: rest 16.5, staggered 10.4, mid action 9.6. The 1.5 s rest after a
+  hold (Harbinger's) is the largest cause on every world: if the floor ever has to rise, that is the lever, and it is not a
+  table value.
+
+### 33.3 The rule (copied from `tune_driver.py`; the script is the authority)
+
+A number is ACCEPTED only when every line holds.
+
+- train: built-in world, default roads (g3), seeds 1..64: the best value of a sweep has paired d > 2.5 se and d >= 0.15 J.
+- holdout: seeds 1001..1064, never used to pick: d > 1.5 se.
+- gates (many seeds): on the 128 train + holdout seeds, with stealth off and as shipped, the class may not get worse, and
+  worse = d < -2 se and d < -0.05 J (when the 15 cells are judged at once: -2.5 se); never more than 0.5 J down (Thief,
+  Mercenary 0.25). A T1 row (melee / ranged / mage) is the companion in other classes' fights, so its value is gated on all
+  15 cells at all three configs.
+- cross-world: fresh seeds 4001..4096 on built-in, LoreRim, Tuxborn, Vanilla: the equal-weight mean of the four d is > 2 se,
+  no world is worse, and as shipped the mean is not worse and inside the band.
+- Knight line: the guard floor holds (>= 60%) on every world, default and as shipped.
+- fixed: the School Circle is never a knob; pure 0 / 1 gates and Step vetoes are never knobs; a knob never leaves its valid
+  range (no negative offset, floor or level; a boost never under 1; a Piece point at 0 stays a veto).
+
+Changes from 32.10, and why: 64 + 64 seeds instead of 48 + 48 (a run is 0.17 s per seed and class); the train bar is 2.5 se
+and 0.15 J instead of 2 se and 0.30 J (more seeds see smaller effects; the stricter se bar pays for the many more knobs);
+the holdout bar is 1.5 se instead of 1; the gates follow Q-gate-rule; Vanilla is a fourth world; the literal six-seed gates
+of 31.11 are gone (Q-gate-rule).
+
+### 33.4 RUNBOOK
+
+**Before the run** (once, about 2 minutes):
+
+```
+cd <repo>
+SIM_OUT=/tmp/claude-1000/class-tuning-bin/sim taskset -c 0-11 nice -n 10 tools/iaus_sim/run.sh --print-classes | head -3
+ls ~/.cache/mfo-list-balance/{LoreRim,Tuxborn,Vanilla}.{sim,combatmods}.json     # all six must exist
+```
+
+If a `.sim.json` is missing or older than `tools/list_balance/compile_world.py`: `python3 tools/list_balance/compile_world.py
+--name <List>`. `PotionWorth.h` is committed; re-measure it only if the sim's fights changed
+(`tools/iaus_sim/potion_worth.py --bin <sim> --out <file> --header`, about 25 minutes, then rebuild the sim).
+
+**Launch** (detached; the run directory must be durable for the length of the run):
+
+```
+OUT=<scratchpad>/tune/full
+mkdir -p $OUT
+setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py \
+    --bin /tmp/claude-1000/class-tuning-bin/sim --out $OUT --jobs 12 > $OUT/driver.out 2>&1 &
+```
+
+Do not poll it in a loop. `tail -3 $OUT/progress.log` shows the last finished step; the dashboard gets one results file
+per finished sweep. Expected length: hours (15 cells, up to 80 live knobs each, 2 passes).
+
+**Resume**: run the same command again. Everything finished is in `$OUT/cache.jsonl` and replays in seconds; never delete
+that file, never edit it. One stage only: add `--stages floor,rating,summary` (any subset, in order). One class only:
+`--classes knight` (with `--stages classes,summary`).
+
+**Where the result lands**: `$OUT/summary.md` (read this), `$OUT/summary.json` (every number), `$OUT/progress.log`. Both
+summaries are rewritten after every sweep, so a half-finished run can be read too (classes marked "(running)").
+
+**What each verdict means**
+
+| Verdict | Meaning | What the runner does |
+|---|---|---|
+| `ACCEPTED: holdout, many-seed gates, cross-world on fresh seeds` | passed every line of the rule | write it (33.5), unless an open decision names it |
+| `train: does not beat noise` / `beats noise but under 0.15 J` | nothing to see at 64 seeds | nothing; the shared value stays |
+| `holdout: not confirmed` | the train pick was chance | nothing |
+| `gate: <class> gets worse at <config>` | a real loss with stealth off or as shipped | nothing |
+| `cross-world: ...` | the gain does not hold on fresh seeds over the four worlds | nothing |
+| `Knight guard floor: ...` | the value pushes the Knight line under 60% | nothing |
+| globals `PASSES RULE` or `BEATS NOISE, NOT APPLIED` | a shared default would gain | ALWAYS an open decision: report, do not write |
+| consts `BEATS NOISE` | a compile-time constant would gain | open decision: report, do not write |
+| recalib `DOES NOT HOLD` | an accepted value loses under the re-measured potion worth | do not write it; report |
+| rating `BELOW` | a class is under its tier on that world | report |
+
+**Decisions the rule leaves open. The runner STOPS and reports these; it does not decide.** They are listed at the end of
+`summary.md` under OPEN DECISIONS with their numbers.
+
+1. Any shared `Tuning` default (`t.momentum`, `t.powerCd`, `t.postureMomentum`): a design value. `t.powerCd` is also a
+   ruling (10 s rows). `t.momentum` is the anti-thrash term and J does not price switching: whether switching needs a price
+   in Utility first is marth's or the coordinator's call. The driver gives J and the switching rate per class for 1.0, 1.05,
+   1.1, 1.15 and 1.2.
+2. Any compile-time constant that beats noise (`kCloseSlack`, `kMinimumFrac`, `kRangeVeto`, `kPostureDist`): a native edit
+   of its own (`kRangeVeto` is also three literals in `Catalogue.cpp`).
+3. The class-card read of every class with an accepted value: the driver lists the twelve largest changes in his play
+   (`play_changes_natural`). If a change takes him off his card (a Knight who stops taunting, a Warrior who power attacks
+   much less), report it with its gain instead of writing it; small deviations that measurably help are allowed, each listed.
+4. A Knight line under 60% on any world with the final table: a mechanism change (the guard's hold, renewal and rest, or a
+   taunt-count term), not a table value.
+5. A class flagged BELOW its tier by the rating battery.
+6. An accepted value that fails `recalib`.
+7. More than about ten accepted values for one class, or an accepted value on a consideration weight above x2 or under x0.5
+   of the catalogue's: report before writing (a sign the shared catalogue, not the class, is off).
+8. Anything the driver stops on (a missing input, a simulator error): report the last lines of `driver.out`. Do not edit
+   the driver's rule or thresholds to get past it; a rule change is written down first and is Fable's.
+
+### 33.5 Writing accepted values into native (mechanical)
+
+1. `summary.md` has a block "Lines for ClassCurves.cpp": one comment line with the evidence and one statement per accepted
+   value. Paste them into `SeedSearchedValues` in `native/iaus/ClassCurves.cpp`, after the `sh` line, grouped by class.
+   Do not write a value by hand and do not round it.
+2. Replace the "NO VALUE PASSED EVERYTHING" paragraph of that file's comment with one sentence naming the run (date, seeds,
+   worlds) and this section.
+3. `tools/iaus_harness/harness.cpp`: the check "every shipped row has no curve override ..." is now false for the rows that
+   took a value. Change it to skip exactly those rows (list their indexes in the check) and keep it for every other row.
+4. Prove the write: for each class with values, `<sim> --no-json --classes <class> --seeds 1,2,3` built from the edited
+   tree with NO `--curve` must print the same three SEED lines as the unedited tree with the accepted `--curve` specs.
+5. `tools/iaus_sim/run.sh --no-json --classes beta1 --baseline tools/iaus_sim/baseline_builtin.txt` (regenerated on
+   purpose; say which classes moved in the commit message), `SIM_CLITEST=1 tools/iaus_sim/run.sh` (re-pin only the pins of
+   classes that took a value), `tools/iaus_harness/run.sh` (0 failed), `tools/iaus_dash/test.sh`, the local MSVC build.
+6. Shared defaults and constants are NOT written by the runner (open decisions 1 and 2).
+7. The diff goes to an Opus review (tier B: values inside an existing mechanism).

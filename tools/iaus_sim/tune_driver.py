@@ -290,7 +290,7 @@ def knight_floor(world, cls, curves, sets=None):
                 cmd += ["--set", sets]
             txt = text_run("floor:" + json.dumps(cmd[1:]), cmd)
             rows = {}
-            for m in re.finditer(r"^%s\|([a-z0-9]+)\|(guard2%%|inc2/f|ung2[a-z]+%%)=([-0-9.e]+)" % re.escape(cls), txt, re.M):
+            for m in re.finditer(r"^%s\|([^|]+)\|(guard2%%|inc2/f|ung2[a-z]+%%)=([-0-9.e]+)" % re.escape(cls), txt, re.M):
                 rows.setdefault(m.group(1), {})[m.group(2)] = float(m.group(3))
             for r in rows.values():
                 n = r.get("inc2/f", 0.0)
@@ -396,6 +396,8 @@ def stage_prep():
         src = CACHE_DIR + w + ".sim.json"
         if not os.path.exists(src):
             raise SystemExit("missing %s: run tools/list_balance/compile_world.py --name %s" % (src, w))
+        if not os.path.exists(CACHE_DIR + w + ".combatmods.json"):   # the simulator reads it BESIDE the .sim.json and takes "absent" for "no such mod": a copied list file silently loses the list's combat mods
+            raise SystemExit("missing %s%s.combatmods.json (tools/list_balance/extract_combat_mods.py): without it the list's combat mods are not in the world" % (CACHE_DIR, w))
         tab = os.path.join(A.out, "potworth-%s.txt" % w)
         if not os.path.exists(tab):
             log("prep: measuring the potion worth of %s" % w)
@@ -520,6 +522,24 @@ def gap_order():
     except Exception as e:   # the order is a priority, never a result: fall back, and say so
         log("gap order unavailable (%s): the fixed order is used" % e)
         return CELLS
+
+
+def cpp_line(spec):
+    """The ClassCurves.cpp statement of an accepted --curve spec (pasted into SeedSearchedValues, with its evidence as a comment)."""
+    txt = text_run("print-classes", [A.bin, "--print-classes"])
+    slugs = [m.group(1) for m in re.finditer(r"^\s+T\d (\S+)", txt, re.M)]   # table order: rows 0..34, then the base cells 35..37
+    cls, rest = spec.split(":", 1)
+    path, val = rest.split("=")
+    row = "t[%d /* %s */]" % (slugs.index(cls), cls)
+    v = ("%s" % float(val)) + "f"
+    if path.startswith("scalar."):
+        return 'SetScalar(%s, "%s", %s);' % (row, path[7:], v)
+    if path.startswith("family."):
+        return "SetFamilyWeight(%s, static_cast<Family>(%s), %s);" % (row, path[7:], v)
+    f, c, param = path.split(".")
+    if param == "w":
+        return "SetWeight(%s, static_cast<Family>(%s), static_cast<Cons>(%s), %s);" % (row, f, c, v)
+    return 'SetCurveParam(%s, static_cast<Family>(%s), static_cast<Cons>(%s), sh.curve[%s], "%s", %s);' % (row, f, c, c, param, v)
 
 
 def final_curves():
@@ -713,6 +733,15 @@ def render_md():
                     st = row["steps"]
                     L.append("| %s | %s | %g -> %g | %+.2f (se %.2f) | %+.2f (se %.2f) | %+.2f (se %.2f) | %+.2f (se %.2f) |" % (c, row["knob"], row["shared"], row["best"], row["train"][0], row["train"][1],
                              st["holdout"][0], st["holdout"][1], st["cross_world"]["mean/g3"][0], st["cross_world"]["mean/g3"][1], st["cross_world"]["mean/shipped"][0], st["cross_world"]["mean/shipped"][1]))
+        L += ["", "### Lines for ClassCurves.cpp (SeedSearchedValues), one per accepted value", "", "```cpp"]
+        for c, r in s["classes"].items():
+            for row in r["rows"]:
+                if row["accepted"]:
+                    st = row["steps"]
+                    L.append("// %s %s %g -> %g: J %+.2f (se %.2f) on %d train seeds, holdout %+.2f (se %.2f), fresh-seed mean over %s %+.2f (se %.2f), as shipped %+.2f" % (c, row["knob"], row["shared"], row["best"],
+                             row["train"][0], row["train"][1], CFG["train"], st["holdout"][0], st["holdout"][1], "/".join(A.worlds), st["cross_world"]["mean/g3"][0], st["cross_world"]["mean/g3"][1], st["cross_world"]["mean/shipped"][0]))
+                    L.append(cpp_line(row["spec"]))
+        L += ["```"]
         L += ["", "### Closest rejected (train passed, a later step failed)", ""]
         for c, r in s["classes"].items():
             for row in r["rows"]:
