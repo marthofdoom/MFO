@@ -3110,3 +3110,4 @@ As handed to the author (the reviewer's own log was a two-line summary): "WatchL
 
 ### MFO-B764 (SEV-5, OPEN, apmf/HideClaims.cpp ServiceHideHold, against 05260d0, same review, finding F5d)
 As handed to the author: "FILED line repeats per stand-down." After every stand-down (and, since the F2 fix, every change of the deny's mask) `hadDeny` is false on the next lap, so the "ch.1 movement block + ch.7 ... deny FILED" line prints again next to the transition line that already says it.
+
