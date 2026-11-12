@@ -11,7 +11,7 @@
 //      point. marth 2026-11-11 ("the main purpose is to become hidden ... it ends when hidden is accomplished and then a sneak
 //      attack becomes the next step"): the run / hold ENDS as soon as G2's verdict says no listed foe detects him (the 12 s
 //      cap is only an upper bound and is logged when hit). The stance claim then STAYS for G2's hold row until the blow from
-//      stealth (NoteBlow), a reveal (a foe detects him again), the fight's end, dismissal, death or a load (Release).
+//      stealth RESOLVES (NoteBlow arms it on the pick, Service releases it on his hit or the swing's end), a reveal (a foe detects him again), the fight's end, dismissal, death or a load (Release).
 //   NON-SNEAK CLASSES (class tree ON, kDisengage, not kSneakAlways): the same drive is a FLEE to a point clearly farther from
 //      the foes (no cover needed). The IAUS keeps running during it (Service returns false): offense is not generated and his
 //      own heals are boosted (Snapshot::fleeRun). It ends when he is healed past the retreat's health line, on arrival, or on
@@ -20,7 +20,7 @@
 // The IAUS hard cooldown of the family counts from the END of the run (Iaus::Engine::NoteDisengageEnded).
 // Road switch: [Debug] bIausHideRoad (INI-only, default OFF until a field run proves the drive, principle 5).
 // Threads: Prepare / Begin / Service / Release on the pump's AddTask worker; the pick on the main thread through
-// MainThread::Post. Own leaf mutex, never held across an engine call or another module's lock. Nothing is saved.
+// MainThread::Post; the blow's hit sink on the engine's event thread (a marked bool under the leaf mutex). Own leaf mutex, never held across an engine call or another module's lock. Nothing is saved.
 
 namespace MFO::Concealment {
 
@@ -38,8 +38,17 @@ namespace MFO::Concealment {
     bool FleeRunning(RE::FormID a_follower);
 
     // WORKER (scheduler/IausSource.cpp Record). The pick that fired is a blow (attack, power attack, offense or control cast,
-    // exploit, bash): the hide hold's stance claim is released. No-op when no stance is held.
+    // exploit, bash). The hide hold's stance claim is NOT released here (review P1-G3 of 938f45f: the engine reads "the
+    // attacker is sneaking" when the hit LANDS, 0.3 s or more after the pick): the blow is ARMED, and Service releases the
+    // stance when it RESOLVES -- his first hit on an actor (the TESHitEvent sink below), or his attack state / own cast seen
+    // live after the pick and then back to none (plus a flight time for a shot or a cast), or the cap on one live swing
+    // (kBlowCapMs, counted from the lap the swing was first seen, never from the pick). While a swing is live the reveal road
+    // is not read; before it starts the hold is exactly what it was. No-op when no stance is held.
     void NoteBlow(RE::FormID a_follower);
+
+    // kDataLoaded, once (Diagnostics::Install, beside the other TESHitEvent sinks). The sink marks "his hit landed" on a held,
+    // armed stance: any thread, a FormID compare under the module's leaf mutex, nothing else.
+    void RegisterHitSink();
 
     // WORKER (cast/Fire.cpp, act.disengage). Starts the run to the fresh point. nullptr = started (a_desc says where);
     // otherwise why not (nothing was changed).
