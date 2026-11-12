@@ -22,7 +22,7 @@ if [[ -z "${SIM_NOBUILD:-}" ]]; then
     python3 -I "$ROOT/tools/iaus_sim/gen_vocab.py" "$ROOT/native/Vocabulary.h" "$GEN/Vocabulary.h"
     "${CXX:-g++}" -std=c++23 -O2 -pthread -Wall -Wextra -Wno-misleading-indentation -Wno-parentheses ${SIM_CXXFLAGS:-} \
         -I "$GEN" -I "$ROOT/tools/iaus_sim/stub" -I "$ROOT/native" -I "$ROOT/tools" \
-        "$ROOT/native/iaus/Curves.cpp" "$ROOT/native/iaus/Catalogue.cpp" "$ROOT/native/iaus/Score.cpp" \
+        "$ROOT/native/iaus/Curves.cpp" "$ROOT/native/iaus/Catalogue.cpp" "$ROOT/native/iaus/ClassCurves.cpp" "$ROOT/native/iaus/Score.cpp" \
         "$ROOT/native/iaus/Decide.cpp" "$ROOT/native/iaus/Explain.cpp" "$ROOT/native/iaus/Generate.cpp" \
         "$ROOT/native/classes/ClassTable.cpp" "$ROOT/tools/iaus_sim/RealClasses.cpp" \
         "$ROOT/tools/iaus_sim/sim.cpp" -o "$OUT"
@@ -51,6 +51,9 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     chk "T2 batch S: the headline names its roads"     '[[ "$(R --classes mage --seeds 1 | tail -1)" == *"t2=all" && "$(R --classes mage --seeds 1 --feet-stop --block off | tail -1)" == *"t2=feet-stop,block=off" ]]'
     chk "T2 batch S: the Knight's table row raises the held guard (MFO-B827)" 'B="$(mktemp)"; R --mode table --classes knight --fights 2 --baseline "$B" >/dev/null; G="$(grep "^knight|natural|guard%=" "$B" | cut -d= -f2)"; rm -f "$B"; awk -v g="$G" "BEGIN { exit !(g > 5) }"'
     chk "T2 batch S: --disengage-report and --steal-lab print their tables" 'R --disengage-report 2 --classes evoker | grep -q "^evoker     dnd" && R --steal-lab 500 | grep -q "^dark "'
+    chk "class curves: an unknown --curve class / family / param is an error" 'R --classes knight --curve nope:drink_health.need.b=0.9 | grep -q "unknown class" && R --classes knight --curve knight:nope.need.b=0.9 | grep -q "unknown family" && R --classes knight --curve knight:drink_health.need.zz=0.9 | grep -q "unknown curve param"'
+    chk "class curves: --curve changes that class's score and no other class's" '[[ "$(R --classes knight --seeds 1 --fights 4 --curve knight:drink_health.need.b=0.9 | head -1)" != "$(R --classes knight --seeds 1 --fights 4 | head -1)" && "$(R --classes mage --seeds 1 --fights 4 --curve knight:drink_health.need.b=0.9 | head -1)" == "$(R --classes mage --seeds 1 --fights 4 | head -1)" ]]'
+    chk "class curves: an override equal to the shared value is the baseline" '[[ "$(R --classes knight --seeds 1 --fights 4 --curve knight:scalar.drinkHealthLine=0.34 --curve knight:scalar.touchSpentSec=3 | head -1)" == "$(R --classes knight --seeds 1 --fights 4 | head -1)" ]]'
     chk "an unknown --sneak-profile is an error"  'R --sneak-profile nope --classes mage --seeds 1 | grep -q "unknown --sneak-profile"'
     if [[ $fail == 0 ]]; then echo "CLI-CHECKS PASS"; exit 0; else echo "CLI-CHECKS FAIL"; exit 1; fi
 fi

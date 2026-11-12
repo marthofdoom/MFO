@@ -51,6 +51,8 @@ namespace MFO::Iaus::detail {
     [[nodiscard]] float ClassWeight(const Candidate& a_c, const Profile& a_p);
     // A consideration's weight for this family: the Profile override, else the set's default.
     [[nodiscard]] float WeightFor(Family a_f, const Use& a_u, const Profile& a_p);
+    // A consideration's curve for this family: the Profile's per-class override, else the shared Tuning curve.
+    [[nodiscard]] const Curve& CurveFor(Family a_f, Cons a_c, const Profile& a_p, const Tuning& a_t);
 
     struct ScoreOut {
         float score = 0.0f;              // final (momentum included when a_momentum != 1)

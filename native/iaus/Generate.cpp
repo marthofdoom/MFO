@@ -267,9 +267,9 @@ namespace MFO::Iaus {
             }
             // Q-S-5: the guard line = two or more taunted foes on him and one of them in striking distance: the block is generated for it
             // whether or not a swing is seen in the air.
-            // marth "drink first when hurt": below the health potion's own line (kDrinkHealthLine) with a potion in stock the guard line is
+            // marth "drink first when hurt": below the health potion's own line (ClassGate::drinkHealthLine, default kDrinkHealthLine) with a potion in stock the guard line is
             // OFF (no boost, no full need): a held guard would otherwise score 2.0 x 1.25 momentum, above the potion's 2.2 x need.
-            const bool hurtWithPotion = x.selfHp < kDrinkHealthLine && s.book.kit.potionsHealth > 0;
+            const bool hurtWithPotion = x.selfHp < x.g.drinkHealthLine && s.book.kit.potionsHealth > 0;
             if (hurtWithPotion) tauntedOnMe = 0;
             const bool guardLine = tauntedOnMe >= kGuardLineFoes && lineOn;
             if (s.blockRoad && x.g.block && melee && (swingOn || guardLine)) {

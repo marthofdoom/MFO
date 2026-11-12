@@ -91,6 +91,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Cooldowns.cpp
     iaus/Curves.cpp
     iaus/Catalogue.cpp
+    iaus/ClassCurves.cpp
     iaus/Score.cpp
     iaus/Decide.cpp
     iaus/Explain.cpp

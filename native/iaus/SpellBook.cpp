@@ -8,6 +8,7 @@
 #include "PrecisionBridge.h"   // card I6 (marth Q64): the measured weapon length, main thread
 #include "Vocabulary.h"
 #include "cast/Actuation.h"
+#include "iaus/ClassCurves.h"
 #include "iaus/Fills.h"
 #include "logistics/Logistics.h"
 
@@ -20,6 +21,8 @@
 #include <unordered_set>
 
 namespace MFO::Iaus::SpellBook {
+
+    static_assert(ClassCurves::kRows == Classes::kClassCount, "one class-curve row per class");
 
     namespace {
 
@@ -467,6 +470,9 @@ namespace MFO::Iaus::SpellBook {
             mastered = Classes::GetMastered(a_follower);
         }
         if (!def) def = Classes::T1ForOverride(Followers::ResolvedClassFast(a_follower));
+        // Per-class curves (ruling Q-class-curves): the curve row is this class's (the tree-OFF base class when the tree is off or
+        // no class is equipped). IausSource scores with ClassCurves::ProfileFor(gate.curveClass); the edge constants land on the gate.
+        if (def) ClassCurves::Apply(static_cast<std::uint8_t>(def->id), g);
         if (!g.treeOn) {
             // THE CLASS TREE IS OFF: THE CLASS GATE RESTRICTS NOTHING (marth Q63, card I6; closes MFO-B657). Any
             // known spell, power attack, taunt and retreat are open, and no weapon category is gated, exactly as

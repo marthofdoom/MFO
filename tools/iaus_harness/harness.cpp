@@ -12,6 +12,7 @@
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
+#include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
 
 #include <algorithm>
 #include <chrono>
@@ -1511,6 +1512,50 @@ namespace {
             Check(sc && sc->f.hardCooldownSec == t.stepCooldownSec, "G18: the step carries its hard cooldown");
         }
     }
+
+    // Per-class curves (ruling Q-class-curves): the shipped table overrides nothing (every class scores bit-identically to the
+    // uncustomised catalogue), and an override changes ONLY the (family, consideration) it names, ONLY for the Profile that holds it.
+    void ClassCurveRows() {
+        namespace CC = MFO::Iaus::ClassCurves;
+        std::printf("\n=== per-class curves ===\n");
+        const Tuning& t = DefaultTuning();
+        const Foe bandit{ "Bandit", 0x0003DF21, 150.0f, 1.0f, 0.8f, true, false, false, false, true, false, false, 0.0f, 0.0f, 0.0f };
+        const Candidate drink = Drink(Family::DrinkHealth, "Health Potion", 0x0003EADD, 3, 0.45f, 1.0f, 1.0f);
+        const Candidate atk = Attack(Family::Attack, bandit, 200.0f, true);
+        const Mind m{};
+        const Profile none;
+        const float d0 = ScoreOne(drink, m, none, t, 3, 0.0f, nullptr), a0 = ScoreOne(atk, m, none, t, 3, 0.0f, nullptr);
+        Check(d0 > 0.0f && a0 > 0.0f, "class curves: the probe candidates score above 0");
+        bool same = true, empty = true;
+        for (std::size_t i = 0; i < CC::kRows; ++i) {
+            const Profile& p = CC::ProfileFor(static_cast<std::uint8_t>(i));
+            empty = empty && p.curves.empty();
+            same = same && ScoreOne(drink, m, p, t, 3, 0.0f, nullptr) == d0 && ScoreOne(atk, m, p, t, 3, 0.0f, nullptr) == a0;
+        }
+        Check(empty && same, "class curves: all 35 shipped rows are empty and score bit-identically to the default Profile");
+        Check(&CC::ProfileFor(0xFF) != nullptr && CC::ProfileFor(0xFF).curves.empty(), "class curves: no resolved class = the empty default Profile");
+        Check(&CC::ProfileFor(3) == &CC::ProfileFor(3), "class curves: a class's Profile is cached (the same object every call)");
+        ClassGate g; CC::Apply(3, g);
+        Check(g.curveClass == 3 && g.drinkHealthLine == kDrinkHealthLine && g.touchSpentSec == Reposition::kTouchSpentSec, "class curves: a shipped row's edge constants are the shared constants");
+        // an override equal to the shared curve changes nothing
+        CC::Row same1;
+        Check(CC::SetCurveParam(same1, Family::DrinkHealth, Cons::DrinkNeed, t.curve[static_cast<std::size_t>(Cons::DrinkNeed)], "a", t.curve[static_cast<std::size_t>(Cons::DrinkNeed)].a), "class curves: SetCurveParam creates an override");
+        Check(ScoreOne(drink, m, CC::Build(same1), t, 3, 0.0f, nullptr) == d0, "class curves: an override equal to the shared curve scores bit-identically");
+        // a different shape changes that family's score only
+        CC::Row knight;
+        CC::SetCurveParam(knight, Family::DrinkHealth, Cons::DrinkNeed, t.curve[static_cast<std::size_t>(Cons::DrinkNeed)], "b", 0.60f);   // the midpoint moves up: he drinks sooner
+        const Profile pk = CC::Build(knight);
+        const float dk = ScoreOne(drink, m, pk, t, 3, 0.0f, nullptr);
+        Check(dk > d0, "class curves: a DrinkNeed midpoint override changes the drink's score (up for a later midpoint)");
+        Check(ScoreOne(atk, m, pk, t, 3, 0.0f, nullptr) == a0, "class curves: ...and no other family's score");
+        Check(ScoreOne(drink, m, none, t, 3, 0.0f, nullptr) == d0 && ScoreOne(drink, m, CC::ProfileFor(3), t, 3, 0.0f, nullptr) == d0, "class curves: ...and no other Profile's (the override lives in that Profile only)");
+        Check(!CC::SetCurveParam(knight, Family::Attack, Cons::DrinkNeed, t.curve[0], "nope", 1.0f) && !CC::SetScalar(knight, "nope", 1.0f), "class curves: a bad param name is refused");
+        // the edge constant reaches the generator: a Knight below the (raised) line with a potion drops the guard line
+        CC::Row line; CC::SetScalar(line, "drinkHealthLine", 0.80f);
+        ClassGate gl; CC::Apply(line, 5, gl);
+        Check(gl.curveClass == 5 && gl.drinkHealthLine == 0.80f, "class curves: an edited row's edge constant lands on the gate");
+    }
+
 }
 
 int main() {
@@ -1531,6 +1576,7 @@ int main() {
     HideHold();
     DisengageRules();
     BatchI();
+    ClassCurveRows();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

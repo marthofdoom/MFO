@@ -266,9 +266,14 @@ namespace MFO::Iaus {
     // which is exactly the uncustomised catalogue.
     struct Profile {
         struct WeightOverride { Family family; Cons cons; float w; };
+        // Per-class CURVE override (ruling Q-class-curves, marth 11-12): a (family, consideration) pair scored with this curve
+        // instead of Tuning::curve[cons]. Empty = every pair uses the shared catalogue curve, which is bit-identical to today.
+        // Filled from iaus/ClassCurves.h (one table row per class). Score.cpp reads it (detail::CurveFor).
+        struct CurveOverride { Family family; Cons cons; Curve curve; };
         std::array<float, kFamilies> family{};
         std::array<float, kRoleTags> role{};
         std::vector<WeightOverride> weights;
+        std::vector<CurveOverride> curves;
         Profile() { family.fill(1.0f); role.fill(1.0f); }
     };
 

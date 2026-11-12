@@ -2,6 +2,7 @@
 // iaus_sim/Setup.h -- who is in a fight: the class cells, the party, the foes from the list's real encounters
 // (or the fixture groups), and the relative-strength brackets. HOST-ONLY.
 #include "iaus_sim/Table.h"
+#include "iaus/ClassCurves.h"
 
 namespace Sim {
 
@@ -60,6 +61,13 @@ namespace Sim {
 
     // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp). mechProfiles: the I8 mechanical profile.
     std::vector<SimClass> RealClasses(bool mechProfiles);
+    // Per-class curves (ruling Q-class-curves): the sim's OWN copy of iaus/ClassCurves.h's table, which RealClasses reads for every class's
+    // Profile and edge constants. --curve edits it (ApplyCurveSpecs); untouched it is the shipped table, so scores are unchanged.
+    inline MFO::Iaus::ClassCurves::Table g_curveTable = MFO::Iaus::ClassCurves::Defaults();
+    // "<class slug>:<family>.<cons>.<a|b|floor|zeroAbove|zeroBelow>=<v>" or "<class slug>:scalar.<drinkHealthLine|touchSpentSec>=<v>".
+    // <family> / <cons> are an index or a Name() (an index when several considerations share a display name). a_shared = the curve an
+    // override starts from. False with a_err set on any bad token.
+    bool ApplyCurveSpecs(const std::vector<std::string>& a_specs, const Tuning& a_shared, std::string& a_err);
     void PrintClassTable(const std::vector<SimClass>& v);
 
     struct Bracket { const char* name; float lo, hi; bool boss; };

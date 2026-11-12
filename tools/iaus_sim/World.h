@@ -667,7 +667,7 @@ namespace Sim {
             if (!g_t2.hands || !c.handSpell2) return false;
             const std::uint32_t tf = Reposition::HandsRange(c.book, c.handSpell, c.handSpell2, 100.0f, false, 0u).touchForm;
             const double ago = now - c.mind.firedAt;
-            return tf != 0 && c.mind.hasRunning && c.mind.running.form == tf && ago >= 0.0 && ago <= static_cast<double>(Reposition::kTouchSpentSec);
+            return tf != 0 && c.mind.hasRunning && c.mind.running.form == tf && ago >= 0.0 && ago <= static_cast<double>(c.gate.touchSpentSec);
         }
         // DODGE (Q-melee-7, MFO-B806). FACT (research in Harbinger Docs, batch M): the engine's side step (CombatBehaviorDodgeThreat) rolls
         // against the combat style's Avoid Threat chance, and since Harbinger v45 a CLASS style reaches the engine in full (Q-melee-6).

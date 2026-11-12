@@ -201,8 +201,8 @@ namespace MFO::Iaus::Candidates {
             const std::uint32_t tf = Reposition::HandsRange(s.book, s.equippedSpell, s.equippedSpellOther, s.meleeReach, false, 0u).touchForm;
             const Mind& m = Engine::MindFor(selfID);
             const double ago = std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - m.firedAt;
-            s.touchSpent = tf != 0 && m.hasRunning && m.running.form == tf && ago >= 0.0 &&
-                           ago <= static_cast<double>(Reposition::kTouchSpentSec);
+            s.touchAgo   = tf != 0 && m.hasRunning && m.running.form == tf && ago >= 0.0 ? ago : -1.0;
+            s.touchSpent = s.touchAgo >= 0.0 && s.touchAgo <= static_cast<double>(Reposition::kTouchSpentSec);   // Build re-derives it with the class's touchSpentSec
         }
         // The Bash family exists only while its road does: Harbinger's combat move (ch.31, ABI v38) and the switch that
         // stays OFF until the field run proves that road ([Debug] bIausBashRoad). Harbinger absent = no candidate.
@@ -392,6 +392,8 @@ namespace MFO::Iaus::Candidates {
         a_out.gen = Generated{};
         if (!Gather(a_follower, a_out.snap)) return false;
         a_out.gate = SpellBook::GateFor(a_out.snap.self.id);
+        // Per-class curves: the class's own touch window (the default row = Reposition::kTouchSpentSec, so unchanged until a row differs).
+        if (a_out.snap.touchAgo >= 0.0) a_out.snap.touchSpent = a_out.snap.touchAgo <= static_cast<double>(a_out.gate.touchSpentSec);
         // Card G3: the disengage exists only while its road does, and a point is asked for only when the generator could use
         // one: a sneak class that a foe has found (a hiding place), or a class-tree-ON non-sneak class under the flee's own
         // test (hurt and a foe on him: a point away from the foes). The pick runs on the main thread, spread over frames

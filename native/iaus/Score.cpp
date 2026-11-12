@@ -23,6 +23,12 @@ namespace MFO::Iaus {
             return u.w;
         }
 
+        const Curve& CurveFor(Family f, Cons k, const Profile& p, const Tuning& t) {
+            for (const auto& o : p.curves)
+                if (o.family == f && o.cons == k) return o.curve;
+            return t.curve[static_cast<std::size_t>(k)];
+        }
+
         ScoreOut Score(const Candidate& c, const Mind& m, const Profile& p, const Tuning& t, std::uint8_t rank,
                        float bestHeal, float momentum, float cutoff, std::vector<Term>* terms) {
             ScoreOut out;
@@ -43,7 +49,7 @@ namespace MFO::Iaus {
                 }
             }
 
-            auto curveOf = [&](Cons k) -> const Curve& { return t.curve[static_cast<std::size_t>(k)]; };
+            auto curveOf = [&](Cons k) -> const Curve& { return CurveFor(c.family, k, p, t); };
             auto veto = [&](Cons k) { out.vetoed = true; out.vetoBy = k; out.score = 0.0f; return out; };
 
             // (P4) hard gates first, and the boosts: both are one comparison each.

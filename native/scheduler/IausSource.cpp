@@ -14,6 +14,7 @@
 #include "apmf/APMFBridge.h"
 #include "Concealment.h"   // card G3: the hide run is released with the running decision
 #include "classes/Classes.h"   // batch I item 2: the Thief's free entry is spent by his first blow
+#include "iaus/ClassCurves.h"   // per-class curve rows (Q-class-curves)
 #include "iaus/Reposition.h"   // batch I H4: the spell range
 #include "cast/Actuation.h"
 #include "iaus/SpellBook.h"
@@ -28,10 +29,11 @@ namespace MFO::Scheduler {
         using Iaus::Family;
         using Iaus::PostureKind;
 
-        // The class profile is card I8's. Until it lands every follower scores with the uncustomised catalogue.
-        const Iaus::Profile& DefaultProfile() {
-            static const Iaus::Profile p;
-            return p;
+        // The class profile: his class's row of iaus/ClassCurves.h (ruling Q-class-curves), cached per class, never built per tick.
+        // The shipped rows override nothing, so every follower still scores with the uncustomised catalogue until the sim fills a row.
+        // (Card I8's weight derivation, BumpRow, is not wired: it changes scores; see MAP.md.)
+        const Iaus::Profile& ProfileOf(const Iaus::ClassGate& a_gate) {
+            return Iaus::ClassCurves::ProfileFor(a_gate.curveClass);
         }
 
         // Log channels for Engine::Paced.
@@ -164,12 +166,12 @@ namespace MFO::Scheduler {
         ServiceSpellRange(a_id, m_set.snap, m_set.gate);
         auto& acts = m_set.gen.actions;
         Iaus::Engine::FillCooldowns(a_id, acts, m_tick, T);
-        m_d = Iaus::Engine::Decide(a_id, acts, DefaultProfile(), T, m_tick, &m_ms);
+        m_d = Iaus::Engine::Decide(a_id, acts, ProfileOf(m_set.gate), T, m_tick, &m_ms);
         // The posture layer needs a fresh book (what he carries) and a readable foe to measure against. Without
         // either it has NO ANSWER, which the reconciliation reads as unknown, never as "no equip order wanted".
         m_postureKnown = m_set.snap.hasBook && !m_set.gen.selfUnreadable && m_set.gen.foesSeen > 0;
         if (m_postureKnown)
-            m_posture = Iaus::DecidePosture(Iaus::Engine::MindFor(a_id), m_set.gen.postures, DefaultProfile(), T,
+            m_posture = Iaus::DecidePosture(Iaus::Engine::MindFor(a_id), m_set.gen.postures, ProfileOf(m_set.gate), T,
                                             a_rapportRank);
         Iaus::Candidates::NoteDecision(a_id, m_d, acts);
 
@@ -200,7 +202,7 @@ namespace MFO::Scheduler {
         const char* name = m_self && m_self->GetName() ? m_self->GetName() : "?";
         // The [iaus] line (on change, plus every logRepeatSec; a NEW fall-past chain always). bIausExplain
         // (INI-only, card I7) adds the [iaus-why] per-candidate lines.
-        Iaus::Engine::Log(m_id, name, m_d, m_set.gen.actions, DefaultProfile(), T, m_tick, m_pickedStep, m_notes, m_ms,
+        Iaus::Engine::Log(m_id, name, m_d, m_set.gen.actions, ProfileOf(m_set.gate), T, m_tick, m_pickedStep, m_notes, m_ms,
                           /*a_explain=*/Config::g_iausExplain.load());
         // What was generated: the only view of the candidate set, rate-limited.
         if (Iaus::Engine::Paced(m_id, kChanDescribe, kDescribeSec, m_tick)) {
@@ -217,7 +219,7 @@ namespace MFO::Scheduler {
                          m_set.snap.tauntBusy ? 1 : 0, m_set.snap.book.kit.precisionWeaponLength, m_set.snap.meleeReach);
         }
         // The board's "Thinking" panel data (card I7 renders it).
-        Iaus::Engine::Publish(m_id, Iaus::MakeReadout(m_d, m_set.gen.actions, Iaus::Engine::MindFor(m_id), T, m_tick.in.now));
+        Iaus::Engine::Publish(m_id, Iaus::MakeReadout(m_d, m_set.gen.actions, Iaus::Engine::MindFor(m_id), T, m_tick.in.now, &ProfileOf(m_set.gate)));
     }
 
     bool IausSource::MakeChoice(const Item& a_item, Eval::Choice& a_out, std::string& a_whyNot) const {
@@ -456,7 +458,7 @@ namespace MFO::Scheduler {
         float bestScore = T.actFloor;
         for (const auto& c : set.gen.actions) {
             if (c.family != Family::CastHeal || c.target != 0) continue;   // himself only
-            const float s = Iaus::ScoreOne(c, mind, DefaultProfile(), T, a_rapportRank, 0.0f, nullptr);
+            const float s = Iaus::ScoreOne(c, mind, ProfileOf(set.gate), T, a_rapportRank, 0.0f, nullptr);
             if (s > bestScore) { bestScore = s; best = &c; }
         }
         if (!best) return;

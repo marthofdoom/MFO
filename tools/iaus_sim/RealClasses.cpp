@@ -11,7 +11,10 @@
 
 #include "iaus_sim/Setup.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 
 namespace Sim {
 
@@ -62,6 +65,34 @@ namespace Sim {
         }
     }
 
+    bool ApplyCurveSpecs(const std::vector<std::string>& a_specs, const Tuning& a_shared, std::string& a_err) {
+        namespace CC = MFO::Iaus::ClassCurves;
+        auto lower = [](std::string x) { for (char& ch : x) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); return x; };
+        auto index = [&](const std::string& tok, std::size_t n, auto nameOf) -> long {
+            if (!tok.empty() && std::all_of(tok.begin(), tok.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) { const long v = std::atol(tok.c_str()); return static_cast<std::size_t>(v) < n ? v : -1; }
+            for (std::size_t i = 0; i < n; ++i) if (lower(std::string(nameOf(i))) == lower(tok)) return static_cast<long>(i);
+            return -1; };
+        for (const std::string& sp : a_specs) {
+            const auto colon = sp.find(':'), eq = sp.find('=');
+            if (colon == std::string::npos || eq == std::string::npos || eq < colon) { a_err = "bad --curve '" + sp + "' (use <class>:<family>.<cons>.<param>=<v> or <class>:scalar.<name>=<v>)"; return false; }
+            const std::string slug = sp.substr(0, colon), path = sp.substr(colon + 1, eq - colon - 1);
+            float v = 0.0f; try { v = std::stof(sp.substr(eq + 1)); } catch (...) { a_err = "bad value in --curve '" + sp + "'"; return false; }
+            long ci = -1; for (std::size_t i = 0; i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);
+            if (ci < 0) { a_err = "unknown class '" + slug + "' in --curve (see --print-classes)"; return false; }
+            CC::Row& row = g_curveTable[static_cast<std::size_t>(ci)];
+            if (path.rfind("scalar.", 0) == 0) {
+                if (!CC::SetScalar(row, path.substr(7), v)) { a_err = "unknown scalar in --curve '" + sp + "' (drinkHealthLine | touchSpentSec)"; return false; }
+                continue; }
+            const auto d1 = path.find('.'), d2 = d1 == std::string::npos ? d1 : path.find('.', d1 + 1);
+            if (d2 == std::string::npos) { a_err = "bad --curve path '" + path + "' (<family>.<cons>.<param>)"; return false; }
+            const long fi = index(path.substr(0, d1), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
+            const long ki = index(path.substr(d1 + 1, d2 - d1 - 1), MFO::Iaus::kCons, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Cons>(i)); });
+            if (fi < 0 || ki < 0) { a_err = "unknown family or consideration in --curve '" + sp + "'"; return false; }
+            if (!CC::SetCurveParam(row, static_cast<Family>(fi), static_cast<Cons>(ki), a_shared.curve[static_cast<std::size_t>(ki)], path.substr(d2 + 1), v)) { a_err = "unknown curve param in --curve '" + sp + "' (a | b | floor | zeroAbove | zeroBelow)"; return false; }
+        }
+        return true;
+    }
+
     std::vector<SimClass> RealClasses(bool mechProfiles) {
         std::vector<SimClass> out;
         for (const C::ClassDef& d : C::kTable) {
@@ -94,6 +125,7 @@ namespace Sim {
             if (!inForce) {}
             else if (d.id == C::Id::Thief) { c.entryOdds = 5; c.noiseClass = 0.70f; }
             else if (d.id == C::Id::MasterThief || d.id == C::Id::Nightingale || d.id == C::Id::Listener) { c.entryOdds = 3; c.sneakAtkClass = 1.5f; c.flank = true; c.noiseClass = 0.925f; c.cloak = d.id == C::Id::Nightingale; }
+            { const auto& crow = g_curveTable[static_cast<std::size_t>(d.id)]; MFO::Iaus::ClassCurves::Apply(crow, static_cast<std::uint8_t>(d.id), g); c.profile = MFO::Iaus::ClassCurves::Build(crow); }   // per-class curves: this class's row (the shipped one unless --curve edited it)
             g.powerAttack = d.powerShareMax != C::kShareUnset || d.powerShareMin != C::kShareUnset;
             // T2 batch S: the package and claim data, straight from the class table (nothing copied by hand but the three values noted)
             c.shareMax = d.powerShareMax != C::kShareUnset ? d.powerShareMax : -1.0f; c.shareMin = d.powerShareMin != C::kShareUnset ? d.powerShareMin : -1.0f;

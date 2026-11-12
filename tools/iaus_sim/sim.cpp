@@ -389,6 +389,7 @@ namespace {
 
 int main(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
+    std::vector<std::string> curveSpecs;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
@@ -443,6 +444,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-ext")) oc.ext = false;
         else if (!std::strcmp(argv[i], "--json") && i + 1 < argc) jsonPath = argv[++i];
         else if (!std::strcmp(argv[i], "--no-json")) noJson = true;
+        else if (!std::strcmp(argv[i], "--curve") && i + 1 < argc) curveSpecs.push_back(argv[++i]);   // per-class curves: <class>:<family>.<cons>.<param>=<v> | <class>:scalar.<name>=<v>
         else if (!std::strcmp(argv[i], "--set") && i + 1 < argc) { if (!sets.empty()) sets += ","; sets += argv[++i]; }
         else if (!std::strcmp(argv[i], "--opt") && i + 1 < argc) opt = argv[++i];
         else if (!std::strcmp(argv[i], "--opt-passes") && i + 1 < argc) optPasses = std::atoi(argv[++i]);
@@ -463,10 +465,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) oc.K = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) oc.H = std::atof(argv[++i]);
-        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
+        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--curve <class>:<family>.<cons>.<param>=<v>] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
     if (listParams) { ListParams(); return 0; }
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
+    if (!curveSpecs.empty()) { std::string err; if (legacy) err = "--curve needs the real class table (not --classes legacy)"; if (!err.empty() || !ApplyCurveSpecs(curveSpecs, Tune().t, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; } }
     Data Dm = listPath ? LoadData(listPath) : BuiltinData();
     if (sneakProfile == "lorerim-like") sneakProfile = "steep";
     if (sneakProfile.empty()) sneakProfile = listPath ? "list" : "vanilla";   // the built-in world has no sneak data of its own: Skyrim.esm's
