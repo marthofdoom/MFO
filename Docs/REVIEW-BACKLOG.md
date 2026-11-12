@@ -3265,7 +3265,8 @@ The lab's `SpellEntry::reach` is the record's range from 300 up, else 4096 as a 
 The Necromancer's corpse row is still `Todo(kTodoCorpse, ...)` although card G7 (`cond.corpse_within`) is merged, so his default set does not get it. T3, not a T2 gate. Also from the lab: a corpse row rarely fires from a table (magicka is spent by the first kill, or the spell's level cap is under the corpse's), and IAUS has no Reanimate family (`iaus/Prune.h`: nature Unknown).
 ### MFO-B835 (SEV-5, OPEN, tools/iaus_sim World.h TryDodge / Land, T2 batch S, author's note)
 The dodge roll (one per projectile, 0.2 s flight gate, clears a non-area projectile) and the uncorrected miss chance (12% against a moving target) have no field anchor. The `[aim]` probe and field step 24x give the numbers to replace them. Foes do not dodge by their own style in the lab (they keep the flat miss).
-
+### MFO-B836 (SEV-5, OPEN, selftest/TestsT2.cpp t2.theft_gate part d, against bb0a728, Opus review S4)
+`Steal::CheckNow(f, pc, ...)` in the dev test writes a `[steal] F=<fol> item=00000007(...) ... verdict=REFUSED:the follower is not sneaking` line (the player ref is the stand-in item) and a Steal cache entry. Not distinguishable from a field line except by item=00000007. Grep field logs for `[steal]` lines with item=00000007 as selftest noise. Fix shape if wanted: a dev-only tag parameter on `Steal::Say`, outside selftest, so left.
 ### MFO-B840 (SEV-4, OPEN, native/logistics/Service.cpp owned-chest arrival + Steal.cpp TakeOwnedContents, feat/owned-pick, author's note)
 An owned chest whose steal take is CUT (a witness walks in) stays unlocked with its contents: act.pick_locks only seeks LOCKED chests, and the loot rules bar every owned copy, so it is not revisited. Items already moved stay moved (no refund, by ruling). A later pass could re-admit an unlocked owned chest that still holds steal kinds through Steal::Check.
 ### MFO-B841 (SEV-5, OPEN, native/logistics/LootScan.cpp pickOwned, feat/owned-pick, author's note)
@@ -3276,4 +3277,3 @@ act.pick_locks admits a locked owned chest on "not empty", exactly as for an uno
 Raised by the Opus review of feat/owned-pick 746b755 (finding F6). The verbatim finding text was NOT passed to the fixing agent: see Branch 1 of `scratchpad/agentlogs/review-ownedpick-selftest.md` and copy it here before the backlog drain.
 ### MFO-B844 (SEV-5, OPEN, native/logistics/Steal.cpp + Service.cpp owned chest, against 746b755, Opus review F7)
 Raised by the Opus review of feat/owned-pick 746b755 (finding F7). The verbatim finding text was NOT passed to the fixing agent: see Branch 1 of `scratchpad/agentlogs/review-ownedpick-selftest.md` and copy it here before the backlog drain.
-
