@@ -151,3 +151,4 @@ Each: question, context, my recommended default (work proceeds on the default wh
 - Q-T2-1: Block is built now (not after the bash road's field proof); bash and Block are field-tested together in T2.
 - Q-T2-2: ch.31 PowerAttack is built now; the Q82 probe runs in the same session and decides which road the gambit keeps.
 - Q-T2-3: Knight and Warrior hold the line by design; the Mercenary gets a back-off road (his class text asks for it).
+- marth 11-11 ~21:00: "We'll need harbinger to block crime alarms later, it may as well store that data for that task, it may even be needed for steal gambit". The town-theft RE (ClickUp 1dfcuabczbg) also maps the engine's crime-alarm road (ids/RVAs per runtime, cleanest seat) for a future Harbinger "deny crime alarm" facet; G13's no-witness pre-check reuses the engine's own witness decision from that note.
