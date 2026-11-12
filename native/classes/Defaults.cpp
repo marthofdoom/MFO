@@ -47,6 +47,10 @@ namespace MFO::Classes {
             SpellRole role = SpellRole::None;
         };
 
+        // Batch L (cards G13 / G14): the two class default actions that exist in the LOGISTICS table only. They sit in the class's
+        // DefaultGambit[] (one list per class) but are never part of its combat set.
+        bool IsLogisticsOnlyAct(std::string_view a_act) { return a_act == Vocab::kActSteal || a_act == Vocab::kActPickLocks; }
+
         // The class's FULL default combat set in priority order (not yet cut to a rank). nullopt = no default set is
         // shipped for this class (tier 3+, parked): the caller leaves the live table alone.
         std::optional<std::vector<DefaultRow>> FullDefaults(Id a_class) {
@@ -63,6 +67,7 @@ namespace MFO::Classes {
             for (std::size_t i = 0; i < def.gambitCount; ++i) {
                 const DefaultGambit& d = def.gambits[i];
                 if (!d.IsApplied() || d.pendingRuling) continue;   // a "todo.*" placeholder / a row a ruling holds back
+                if (IsLogisticsOnlyAct(d.act)) continue;           // batch L: act.steal / act.pick_locks belong to the LOGISTICS table
                 Gambit g{};
                 g.conditionOpcode = d.cond;
                 g.actionOpcode    = d.act;
@@ -341,6 +346,47 @@ namespace MFO::Classes {
             return true;
         }
 
+        // Batch L (G13 / G14): the first equip of a class that ships logistics defaults (the Thief line: Steal when dark, Pick locks)
+        // APPENDS them to the live logistics table, after a sneak row when the class sneaks always (kSneakAlways, card G1: the pre-check
+        // needs a sneaking follower, and act.sneak is TRANSPARENT so the rows below it still run). A row he already has (same condition
+        // and action) is not duplicated, and a full table keeps its rows (logged). Later equips restore the stored table: the player's
+        // edits stand. Works with the tree OFF as ordinary gambits, the player adds them from the board.
+        void LayLogisticsDefaults(RE::FormID a_follower, Id a_class, FollowerState& a_st) {
+            const ClassDef& def = Get(a_class);
+            std::vector<Gambit> rows;
+            auto add = [&](const char* a_c, const char* a_a) {
+                Gambit g{};
+                g.conditionOpcode = a_c;
+                g.actionOpcode    = a_a;
+                rows.push_back(std::move(g));
+            };
+            bool any = false;
+            for (std::size_t i = 0; i < def.gambitCount; ++i) {
+                const DefaultGambit& d = def.gambits[i];
+                if (d.IsApplied() && !d.pendingRuling && IsLogisticsOnlyAct(d.act)) any = true;
+            }
+            if (!any) return;
+            if (def.flags & Flag::kSneakAlways) add(Vocab::kCondAlways, Vocab::kActSneak);
+            for (std::size_t i = 0; i < def.gambitCount; ++i) {
+                const DefaultGambit& d = def.gambits[i];
+                if (d.IsApplied() && !d.pendingRuling && IsLogisticsOnlyAct(d.act)) add(d.cond, d.act);
+            }
+            auto& table = a_st.logistics();
+            const std::size_t slots = SlotsForRank(a_st.rank, Table::Logistics);
+            int added = 0, dup = 0, full = 0;
+            for (auto& g : rows) {
+                const bool have = std::any_of(table.begin(), table.end(), [&](const Gambit& t) {
+                    return t.conditionOpcode == g.conditionOpcode && t.actionOpcode == g.actionOpcode; });
+                if (have) { ++dup; continue; }
+                if (table.size() >= slots) { ++full; continue; }
+                g.uid = NextRuleUID();
+                table.push_back(std::move(g));
+                ++added;
+            }
+            spdlog::info("[classes] {:08X} ({}): default LOGISTICS rows laid down -- {} added, {} already present, {} did not fit rank {} ({} slot(s))",
+                         a_follower, def.slug, added, dup, full, static_cast<int>(a_st.rank), slots);
+        }
+
         // MFO-B567: a stored table may come from a record an older DLL kept verbatim across a load-order change, so its
         // FormIDs are not trusted. A cast row whose form is not a castable spell is DISABLED (the form is kept, shown on
         // the board), the check the live evaluator's cast paths make (LookupByID<SpellItem>).
@@ -366,6 +412,8 @@ namespace MFO::Classes {
         if (swap.logistics) {
             CheckRestored(a_follower, *swap.logistics, "logistics");
             a_st.logistics() = std::move(*swap.logistics);
+        } else {
+            LayLogisticsDefaults(a_follower, a_class, a_st);   // batch L: the Thief line's Steal / Pick locks (first equip only)
         }   // else: no class default exists for the logistics table; the live one carries over
         EquipResult res = EquipResult::Kept;
         if (swap.combat) {

@@ -64,7 +64,6 @@ namespace MFO::Classes {
 
         // Placeholder opcode names (NOT in Vocabulary.h; the plan card that appends each is the second column).
         constexpr const char* kTodoSneak        = "todo.act.sneak";                  // G1
-        constexpr const char* kTodoSteal        = "todo.act.steal";                  // G13
         constexpr const char* kTodoShout        = "todo.act.shout";                  // G8
         constexpr const char* kTodoMark         = "todo.act.mark";                   // H-MARK (class-gated, G15)
         constexpr const char* kTodoNoSummon     = "todo.cond.self_no_summon";        // G5 (cond.self_has_summon, negated)
@@ -125,12 +124,14 @@ namespace MFO::Classes {
             G(Vocab::kCondSelfOutOfArrows, Vocab::kActLootArrows, 1.0f),
             G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 150.0f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
-        // Sneak classes: sneak "regardless of player action" = an always-true row (G1); Steal is G13.
+        // Sneak classes: sneak "regardless of player action" = an always-true row (G1); Steal (G13) and Pick locks (G14) are LOGISTICS
+        // rows: Defaults.cpp keeps them out of the combat table and lays them in the logistics one (first equip of the class).
         constexpr DefaultGambit kThiefG[] = {
             Todo(Vocab::kCondAlways, kTodoSneak, "G1"),
             G(Vocab::kCondFoeLowestHp, Vocab::kActAttack),
             G(Vocab::kCondFoeFleeing, Vocab::kActAttack),
-            Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
+            G(Vocab::kCondDark, Vocab::kActSteal),        // card G13: LOGISTICS rows (Defaults.cpp lays them in the logistics table, first equip)
+            G(Vocab::kCondAlways, Vocab::kActPickLocks),  // card G14
             G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 150.0f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
         // Trimmed set (marth): fire weakness, nearest enemy, magicka potion.
@@ -192,7 +193,8 @@ namespace MFO::Classes {
             Todo(Vocab::kCondAlways, kTodoSneak, "G1"),
             G(Vocab::kCondFoeFleeing, Vocab::kActAttack),
             G(Vocab::kCondFoeLowestHp, Vocab::kActAttack),
-            Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
+            G(Vocab::kCondDark, Vocab::kActSteal),        // card G13: LOGISTICS rows (Defaults.cpp lays them in the logistics table, first equip)
+            G(Vocab::kCondAlways, Vocab::kActPickLocks),  // card G14
             G(Vocab::kCondFoeWithinRange, Vocab::kActEquipMelee, 150.0f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
         constexpr DefaultGambit kWizardG[] = {        // ward (new design), paralyze stronger foe, Evoker's set
@@ -270,14 +272,16 @@ namespace MFO::Classes {
             Todo(Vocab::kCondAlways, kTodoSneak, "G1"),
             G(Vocab::kCondFoeIsCaster, Vocab::kActAttack),
             G(Vocab::kCondFoeFleeing, Vocab::kActEquipMelee),
-            Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
+            G(Vocab::kCondDark, Vocab::kActSteal),        // card G13: LOGISTICS rows (Defaults.cpp lays them in the logistics table, first equip)
+            G(Vocab::kCondAlways, Vocab::kActPickLocks),  // card G14
             G(Vocab::kCondFoeAny, Vocab::kActEquipRanged) };
         constexpr DefaultGambit kListenerG[] = {
             Todo(Vocab::kCondAlways, kTodoSneak, "G1"),
             G(Vocab::kCondFoeLowestHp, Vocab::kActAttack),
             G(Vocab::kCondFoeHpBelow, Vocab::kActPowerAttack, 0.25f, SpellRole::None, kSelf, 10.0f),
             Ctl(Vocab::kCondFoeCountAtLeast, Vocab::kActCastTarget, 3.0f, SpellRole::Fear),
-            Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
+            G(Vocab::kCondDark, Vocab::kActSteal),        // card G13: LOGISTICS rows (Defaults.cpp lays them in the logistics table, first equip)
+            G(Vocab::kCondAlways, Vocab::kActPickLocks),  // card G14
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
         constexpr DefaultGambit kEbonyWarriorG[] = {
             G(Vocab::kCondFoeAttackingAlly, Vocab::kActTaunt),

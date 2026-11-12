@@ -359,6 +359,15 @@ namespace MFO::Vocab {
     // bLootLOTD is on; inert without Harbinger ABI v17. APPENDED -- a frozen
     // serialization string (#10) like every opcode above.
     inline constexpr const char* kActLootMuseum         = "act.loot_museum";
+    // STEAL (class plan card G13, ClickUp 1dfcuabczbg follow-up; logistics/Steal.cpp): the Thief's deliberate action. The loose-item loot
+    // selection as a superset that ALSO takes OWNED loose items, and ONLY when the witness pre-check proves nobody sees the
+    // follower or the player (Steal::Check, which G14 shares). Any hit = the take does not happen (never a refund after the
+    // fact). Pickpocket is cut. Logistics table only, no param. APPENDED, a frozen serialization string (#10).
+    inline constexpr const char* kActSteal              = "act.steal";
+    // PICK LOCKS (card G14, ClickUp 86e3t1gg0): seek nearby LOCKED chests on its own and open them with the existing chest
+    // lockpicking (logistics/Lockpick.cpp). An OWNED lock is picked only when Steal::Check passes; town doors stay barred.
+    // The opened chest is looted by his ordinary loot rules. Logistics table only, no param. APPENDED, frozen (#10).
+    inline constexpr const char* kActPickLocks          = "act.pick_locks";
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).

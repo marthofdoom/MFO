@@ -29,6 +29,7 @@
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 #include "Progression.h"  // perk STYLE votes (TallyStyleVotes) -- weapon/armor style by perks
 #include "TheftGate.h"    // the universal theft gate: every take road (ClickUp 1dfcuabczbg)
+#include "Steal.h"        // batch L: the witness pre-check shared by act.steal (G13) and owned locks (G14)
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
@@ -572,7 +573,9 @@ namespace MFO::Logistics {
         enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry, SoulGems, Lockpicks,
                                Ingredients, Valuables,
                                Museum,     // LOTD (logistics/Lotd.cpp) -- Valuables-tier dibs
-                               SmithMats };   // TOWN PHASE 2 R8: the smithing want list's materials, whatever his gambits (Errand::Smith); free tier
+                               SmithMats,  // TOWN PHASE 2 R8: the smithing want list's materials, whatever his gambits (Errand::Smith); free tier
+                               Steal,      // batch L, card G13 (act.steal): LOOSE items only, owned ones included; Steal::Check at arrival and at the write; free tier
+                               PickLocks };// batch L, card G14 (act.pick_locks): LOCKED chests only, opened for his ordinary loot rules; owned ones through Steal::Check
 
         // Category label for the [loot] diagnostic. Naming the scanned category is
         // the ONLY way to read the composition line: "empty=36" is meaningless
@@ -592,6 +595,8 @@ namespace MFO::Logistics {
             case Category::Valuables: return "valuables";
             case Category::Museum:    return "museum";
             case Category::SmithMats: return "smithmats";
+            case Category::Steal:     return "steal";
+            case Category::PickLocks: return "picklocks";
             default:                  return "?";
             }
         }
@@ -619,7 +624,8 @@ namespace MFO::Logistics {
         inline bool IsFreeTierCat(Category a_cat) {
             return a_cat == Category::Arrows || a_cat == Category::Bolts ||
                    a_cat == Category::Potions || a_cat == Category::Lockpicks ||
-                   a_cat == Category::Ingredients || a_cat == Category::SmithMats;
+                   a_cat == Category::Ingredients || a_cat == Category::SmithMats ||
+                   a_cat == Category::Steal || a_cat == Category::PickLocks;   // batch L: owned things are nobody's dibs; the witness pre-check is their gate
         }
 
         // Same ordering test at the OPCODE level, for the two gambit-table
@@ -643,7 +649,8 @@ namespace MFO::Logistics {
                    a_op == Vocab::kActLootEquipment      || a_op == Vocab::kActLootGold     ||
                    a_op == Vocab::kActLootJewelry        || a_op == Vocab::kActLootSoulGems ||
                    a_op == Vocab::kActLootLockpicks      || a_op == Vocab::kActLootIngredients ||
-                   a_op == Vocab::kActLootValuables      || a_op == Vocab::kActLootMuseum;
+                   a_op == Vocab::kActLootValuables      || a_op == Vocab::kActLootMuseum ||
+                   a_op == Vocab::kActSteal;   // batch L: the [L] glyph lights on a CONFIRMED steal too (act.pick_locks opens a lock, it takes nothing)
         }
 
 }
@@ -967,7 +974,10 @@ namespace MFO::Logistics {
     namespace Lockpick {
         // The scan's lock gate: may this follower attempt this locked ref? Logs each refusal
         // reason once per (follower, lock). Read-only.
-        bool Admit(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now);
+        // a_allowOwned (batch L, card G14, act.pick_locks only): an owned / off-limits CHEST is admitted through Steal::Check;
+        // a_pending is then set when the pre-check has no answer yet (no verdict: retry). Never a door.
+        bool Admit(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now,
+                   bool a_allowOwned = false, bool* a_pending = nullptr);
         enum class StepResult {
             kProceed,   // the lock is open (picked, keyed, or already unlocked): transfer now
             kHold,      // the attempt is in progress: do nothing else this tick
@@ -975,7 +985,7 @@ namespace MFO::Logistics {
         };
         // The excursion's ARRIVAL at a locked ref. a_excursionEnd = the excursion cap's end.
         StepResult Step(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now,
-                        Clock::time_point a_excursionEnd);
+                        Clock::time_point a_excursionEnd, bool a_allowOwned = false);
         // Abandon (release the hold, consume nothing) every job its excursion no longer drives.
         void SweepStale(Clock::time_point a_now);
         void Abort(RE::FormID a_follower, const char* a_why);
