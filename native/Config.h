@@ -901,11 +901,11 @@ namespace MFO::Config {
     //   bClassAversion (card H2, 2026-11-11, INI-only, default ON): a managed follower who carries the Conjurer or Healer class
     //     passive gets a Harbinger ch.32 aversion claim (ABI v41): when a foe's target selection lands on him, the foe picks its next
     //     best valid target instead in a share of time equal to the weight (apmf/AversionClaims.cpp). fAversionConjurer /
-    //     fAversionHealer = the class weight, 0..0.95 (0 = that class files nothing); a mastered, unequipped passive is a quarter.
+    //     fAversionHealer = the class weight, 0..0.95 (0 = that class files nothing); a mastered, unequipped passive gives none (equipped class only).
     //     Inert without the class add-on ESL, without Harbinger ABI >= 41, or when its seats refused.
     inline std::atomic<bool>  g_classAversion{ true };
-    inline std::atomic<float> g_aversionConjurer{ 0.5f };
-    inline std::atomic<float> g_aversionHealer{ 0.5f };
+    inline std::atomic<float> g_aversionConjurer{ 0.25f };
+    inline std::atomic<float> g_aversionHealer{ 0.25f };
     //   Card C8 (class combat packages, 2026-11-11), all INI-only. bClassStyles (default ON): a follower with a TIER 2+ class
     //     equipped fights on that class's own per-stance CSTY (MFO_Classes.esl) instead of MFO_*Style (CombatStyle.cpp); tier 1 and
     //     classes OFF are unchanged. bClassAttackMix (default ON): the class's ch.18 power-share ceiling / floor as a Harbinger

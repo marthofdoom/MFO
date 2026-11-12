@@ -195,7 +195,7 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - Theft fix release: ship with T2 (no separate hotfix).
 - Q105: smithing stations gated by the game's crime test (IsOffLimits), his own allowed (default confirmed).
 - Q102/Q103: strongest humanoid corpse, nearest on a tie (defaults confirmed).
-- Q93: aversion weight 0.25 (mild) for Conjurer and Healer (was 0.50). MFO.ini defaults fAversionConjurer / fAversionHealer change.
+- Q93: aversion weight 0.25 (mild) for Conjurer and Healer (was 0.50). MFO.ini defaults fAversionConjurer / fAversionHealer change. IMPLEMENTED on branch `fix/aversion-tune` (2026-11-12).
 - Q91: a spell MFO itself claims for him counts as declared and passes his own Offense-only deny (Harbinger change, own card). marth: "But MFO should hide spells we can't weight if we don't know what they do": a spell whose effects IAUS cannot weight (unknown / script-only effects) is hidden from IAUS candidates (and the teach page filter).
 - Q92: add Night Eye (always) and Dispel (when delivered to Self) to Harbinger's benign list.
 - Q-SIM-3: the hidden hold gets an exit: while hidden he steps to gain a strike or a line of fire, staying hidden (native round, gap G18).
@@ -210,5 +210,6 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - Q-SIM-4: stealth probes P1-P3 (g2-hide-design.md) join the T2 field session.
 - Harbinger invariants #0 (m) aversion, (l) block + power-attack amendments, (n) combat-style read: adopted at each branch's merge (after its Opus review).
 - Q104: Corpse: Within stays combat only (default confirmed).
-- Q94: aversion only from the EQUIPPED Conjurer/Healer class; a mastered, unequipped class gives none (was a quarter). Weight does not grow with level.
+- Q94: aversion only from the EQUIPPED Conjurer/Healer class; a mastered, unequipped class gives none (was a quarter). Weight does not grow with level. IMPLEMENTED on branch `fix/aversion-tune` (2026-11-12).
 - G3 disengage, conditional (marth 11-12): "Disengage may need a buff depending on how useful it shows itself to be. If it's not useful I'd consider having it work d&d style and drop the follower as a valid combat target for 6s". Decided after the T2 field session and the batch S sim show how useful the run is. Likely road if taken: Harbinger ch.32 aversion (v41) at full weight for a 6 s window on every foe, started by the disengage pick (no new engine seat), modelled in the sim first.
+- Q107 (aversion vs Dragonborn). Q94 says aversion only from the EQUIPPED Conjurer/Healer, but the standing Dragonborn rule holds every mastered passive at full rank, so a Dragonborn-equipped follower with a mastered Conjurer or Healer still gets the full 0.25 aversion. DEFAULT taken: Dragonborn wins (keeps its all-mastered-passives rule). Alternative: exclude aversion from Dragonborn's mastered passives.

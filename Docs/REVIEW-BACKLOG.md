@@ -3176,3 +3176,5 @@ When the main-thread pump is not installed (VR) `GuardCheck` runs `ScanGuards` o
 
 ### MFO-B796 (SEV-5, OPEN, logistics/TheftGate.cpp g_guard / g_rings / g_logAt, against 41ab1ec, same review, finding F8)
 None of the gate's three maps is cleared on a revert/load (FormID keys of the old session; the guard cache ages out in 2 s, the ring and log-throttle maps are bounded but stale). Fix shape: a `TheftGate::ClearTransientState()` called from `Logistics::ClearTransientState`.
+### MFO-B797 (SEV-4, OPEN, Board_Classes.cpp PassiveLabel :45-50, against 2b7736d, Opus review of fix/aversion-tune, doubt 2)
+PassiveLabel(rank) shows Cl_PassiveQuarter "passive: 1/4" for any class at kRankMasteredUnequipped. Aversion is effectively the only Conjurer/Healer passive and now gives none when mastered and unequipped (Q94), so the label misleads for those two. Fix is logic, not a string: pass the class id and return no/none label for Conjurer/Healer at kRankMasteredUnequipped.

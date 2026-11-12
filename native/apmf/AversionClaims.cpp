@@ -7,11 +7,12 @@
 // target selection lands on him, has the engine pick its next best valid target instead in that share of time (6 s windows); with
 // no other valid target he is picked as always. MFO never touches a foe, a target or a combat group: it only says WHO and HOW MUCH.
 // The weight follows the class passive rules (classes/Carriers.cpp CarrierRanks, the same ranks the passive perks are gated on):
-//   the class EQUIPPED (any level), or mastered under Dragonborn     the class weight   fAversionConjurer / fAversionHealer (0.5)
-//   the class MASTERED and not equipped                              a quarter of it    (marth: a mastered passive is 1/4)
+//   the class EQUIPPED (any level; the weight does not grow with level)   the class weight   fAversionConjurer / fAversionHealer (0.25)
+//   the class MASTERED and not equipped                                    nothing            (marth 11-12, Q94: equipped class only)
+//   the class MASTERED while Dragonborn is equipped                        the class weight   (CarrierRanks: Dragonborn holds every mastered passive at full; Q107)
 //   both passives present                                            the larger of the two, never a sum
 // The stronger tiers (Necromancer, Priest, Arch-Mage, Saint) get their own weights with their own cards; until then they carry
-// what the rules above give them through a mastered Conjurer / Healer.
+// what the rules above give them through an equipped Conjurer / Healer.
 //
 // LIFETIME: filed by the pump's sweep when the follower is managed, alive, the class add-on is active (Classes::Active: the ESL
 // present and bClassTree on), bClassAversion is on and his weight is above zero; re-filed when the weight changes (class equip,
@@ -46,7 +47,6 @@ namespace MFO::APMFBridge {
         // Harbinger takes a weight strictly inside (0, 1): the class weight is kept inside these.
         constexpr float kMinWeight = 0.05f;
         constexpr float kMaxWeight = 0.95f;
-        constexpr float kMasteredShare = 0.25f;         // a mastered, unequipped passive is a quarter (class rules)
 
         // Same never-live floor and retry backoff as the sibling tables (~30 s of 133 ms sweeps).
         constexpr std::uint32_t kNeverLiveSweeps = 15;
@@ -76,10 +76,10 @@ namespace MFO::APMFBridge {
             return ui && ui->GameIsPaused();
         }
 
-        // One class passive's share of its INI weight, from the passive rank (classes/Carriers.cpp rank space).
+        // One class passive's share of its INI weight (the equipped class only: a mastered, unequipped one gives none), from the passive rank (classes/Carriers.cpp rank space).
         float Share(std::uint8_t a_rank, float a_classWeight) {
-            if (a_rank == 0 || !(a_classWeight > 0.0f)) return 0.0f;
-            return a_rank == Classes::kRankMasteredUnequipped ? a_classWeight * kMasteredShare : a_classWeight;
+            if (a_rank == 0 || a_rank == Classes::kRankMasteredUnequipped || !(a_classWeight > 0.0f)) return 0.0f;   // equipped class only (Q94)
+            return a_classWeight;
         }
 
         // The follower's aversion weight by the class passive rules. 0 = none. Two cheap State reads (each takes the class State
@@ -88,7 +88,7 @@ namespace MFO::APMFBridge {
         float WeightFor(RE::FormID a_fid) {
             Classes::FollowerClasses fc;
             fc.equipped = Classes::GetEquipped(a_fid);
-            if (fc.equipped == Classes::kNoClass) return 0.0f;   // classes OFF for him: nothing applies, mastered quarters included
+            if (fc.equipped == Classes::kNoClass) return 0.0f;   // classes OFF for him: nothing applies
             fc.mastered = Classes::GetMastered(a_fid);
             const auto ranks = Classes::CarrierRanks(fc);        // reads equipped, mastered and the equipped class's level (any level = active)
             const float w = std::max(
