@@ -77,7 +77,7 @@ namespace Sim {
             if (colon == std::string::npos || eq == std::string::npos || eq < colon) { a_err = "bad --curve '" + sp + "' (use <class>:<family>.<cons>.<param>=<v> or <class>:scalar.<name>=<v>)"; return false; }
             const std::string slug = sp.substr(0, colon), path = sp.substr(colon + 1, eq - colon - 1);
             float v = 0.0f; try { v = std::stof(sp.substr(eq + 1)); } catch (...) { a_err = "bad value in --curve '" + sp + "'"; return false; }
-            long ci = -1; for (std::size_t i = 0; i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);
+            long ci = BaseOffRow(slug); for (std::size_t i = 0; ci < 0 && i < C::kClassCount; ++i) if (C::kTable[i].slug == slug) ci = static_cast<long>(i);   // a tree-OFF base cell (melee-off ...) is its own row, kBaseOffFirst + root
             if (ci < 0) { a_err = "unknown class '" + slug + "' in --curve (see --print-classes)"; return false; }
             CC::Row& row = g_curveTable[static_cast<std::size_t>(ci)];
             if (path.rfind("scalar.", 0) == 0) {
@@ -88,6 +88,7 @@ namespace Sim {
             const long fi = index(path.substr(0, d1), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
             const long ki = index(path.substr(d1 + 1, d2 - d1 - 1), MFO::Iaus::kCons, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Cons>(i)); });
             if (fi < 0 || ki < 0) { a_err = "unknown family or consideration in --curve '" + sp + "'"; return false; }
+            g_curveConsEdited.push_back(static_cast<std::size_t>(ki));   // sim.cpp refuses --opt c.<ki>.* next to it
             if (!CC::SetCurveParam(row, static_cast<Family>(fi), static_cast<Cons>(ki), a_shared.curve[static_cast<std::size_t>(ki)], path.substr(d2 + 1), v)) { a_err = "unknown curve param in --curve '" + sp + "' (a | b | floor | zeroAbove | zeroBelow)"; return false; }
         }
         return true;
@@ -105,6 +106,7 @@ namespace Sim {
             g.spellsOnClass = Casting(d);
             const C::Mask mastered = Mastered(d);
             for (std::size_t i = 0; i < C::kClassCount; ++i) if ((mastered & (C::Mask{ 1 } << i)) && Casting(C::kTable[i])) { g.spellsFromMastered = true; break; }
+            MFO::Iaus::ClassCurves::ApplyMastered(g_curveTable, mastered, g);   // SpellBook::GateFor: each mastered casting class bumps the weight at its home school (marth's fixed 0.15)
             g.scrollUser = g.spellsOnClass;
             const bool any = (d.weapons & C::Weapon::kUnrestricted) != 0;
             g.weaponMelee = any || (d.weapons & (C::Weapon::kDagger | C::Weapon::kOneHand | C::Weapon::kTwoHand)) != 0;
@@ -130,7 +132,7 @@ namespace Sim {
             // T2 batch S: the package and claim data, straight from the class table (nothing copied by hand but the three values noted)
             c.shareMax = d.powerShareMax != C::kShareUnset ? d.powerShareMax : -1.0f; c.shareMin = d.powerShareMin != C::kShareUnset ? d.powerShareMin : -1.0f;
             c.leashScaled = d.tier >= 2 && (d.flags & (C::Flag::kShortLeash | C::Flag::kNearPlayer)) != 0;   // Classes::PackageLeashScale
-            c.avoidThreat = d.id == C::Id::Knight || d.id == C::Id::GreatKnight || d.id == C::Id::EbonyWarrior ? 0.0f : d.id == C::Id::Mercenary ? 0.35f : d.id == C::Id::Blademaster ? 0.50f : d.id == C::Id::LivingLegend ? 0.55f : d.id == C::Id::Thief ? 0.25f : d.id == C::Id::MasterThief ? 0.30f : 0.20f;   // MFO_GenerateESP.py CLS_AVOID_THREAT / AVOID_THREAT_VANILLA (Q-S-3, marth 11-12), hand-mirrored; the ranged stance adds AVOID_THREAT_BOW_BOOST in Setup.h. NOT modelled: heavy body armor => 0 (runtime twin); Living Legend's H8 auto-block rule (card not built; the lab already skips a dodge behind any guard)
+            c.avoidThreat = d.id == C::Id::Knight || d.id == C::Id::GreatKnight || d.id == C::Id::EbonyWarrior ? 0.0f : d.id == C::Id::Mercenary ? 0.35f : d.id == C::Id::Blademaster ? 0.50f : d.id == C::Id::LivingLegend ? 0.55f : d.id == C::Id::Thief ? 0.25f : d.id == C::Id::MasterThief ? 0.30f : 0.20f;   // MFO_GenerateESP.py CLS_AVOID_THREAT / AVOID_THREAT_VANILLA (Q-S-3, marth 11-12), hand-mirrored; the ranged stance adds AVOID_THREAT_BOW_BOOST in Setup.h. Heavy body armor => 0 is modelled in Setup.h MfoPackage (the zero-avoid twin). NOT modelled: Living Legend's H8 auto-block rule (card not built; the lab already skips a dodge behind any guard)
             if (d.id == C::Id::Conjurer || d.id == C::Id::Healer) c.aversion = 0.25f;                         // Config fAversionConjurer / fAversionHealer (Q93), the EQUIPPED class (Q94), hand-mirrored
             // Q107 (marth 11-12): aversion comes ONLY from an equipped Conjurer / Healer; Dragonborn gives none (apmf/AversionClaims.cpp WeightFor)
             c.aimBudget = d.id == C::Id::Archer ? 5 : d.id == C::Id::Scout ? 4 : d.id == C::Id::Witchhunter ? 4 : d.id == C::Id::Ranger ? 3 : d.id == C::Id::Jaqspur ? 1 : -1;   // Config iAimBudget* defaults (apmf/AimClaims.cpp), hand-mirrored
@@ -154,6 +156,12 @@ namespace Sim {
                 k.bow = (d.weapons & C::Weapon::kBow) != 0; k.crossbow = (d.weapons & C::Weapon::kCrossbow) != 0 && !k.bow; k.staff = (d.weapons & C::Weapon::kStaff) != 0; k.shield = (d.weapons & C::Weapon::kShield) != 0;
                 k.heavy = c.fam == Cls::Melee; k.light = c.fam == Cls::Ranged;   // MODEL: armor weight by root line; mages wear cloth
             }
+            // THE ARMOR OF THE CLASS CARDS (class-perks-packages.md: L2 Heavy Armor is owned by Knight and Warrior, L5 Light Armor by Mercenary,
+            // Archer and Thief, L13 Arcane Robes by the mage line). The root-line model above put the MERCENARY line in heavy armor, against
+            // its card, while the game takes the dodge away from anyone in a heavy cuirass (Setup.h MfoPackage): the Mercenary line wears LIGHT.
+            // The line is read from the class's own Avoid Threat (CLS_AVOID_THREAT above): a melee class whose card gives it MORE than the
+            // vanilla 0.20 is a dodging class (Mercenary 0.35, Blademaster 0.50, Living Legend 0.55), and a dodge in a heavy cuirass is dead.
+            if (c.fam == Cls::Melee && c.avoidThreat > 0.20f) { k.heavy = false; k.light = true; }
             // T1 keeps TODAY'S KIT (marth 2026-11-09): the three combat rows every new follower gets, Followers::ApplyDefaultKit
             // (native/Followers.cpp:43-45). Hand-mirrored here (that file is engine code): drink at 30% health, attack the weakest foe, else wait.
             if (d.tier == 1) { c.rows.clear(); c.defaults = "default-kit";
@@ -163,16 +171,37 @@ namespace Sim {
             k.mageBlend = hybrid && c.fam != Cls::Mage ? 0.5f : 0.0f;   // MODEL: a hybrid's attributes and skills are half his school's
             out.push_back(std::move(c));
         }
+        // THE TREE-OFF BASE CELLS (marth 11-12: "I dont see the 3 base classes with no tree in the sim. I imagine theyd say Line: Base ... They do
+        // technically have weapon gates (mage knife etc), and should still loosely follow tree on versions. They just have all available options
+        // at thier disposal"). Each is built FROM its tree-ON T1 row (same family, kit, default kit rows, known-spell tokens: the mage keeps
+        // dagger + staff), then opened exactly as SpellBook::GateFor's tree-OFF branch opens it (iaus/SpellBook.cpp: any known spell, power
+        // attack, taunt, retreat; scrollUser by the T1 root; no row cooldown, so Generate applies the Tuning rowless floors; the gate's weapon
+        // categories open; no sneak class, no pressed back-off, no Block row). In the DLL the tree-OFF weapon choice is the stance's equip side,
+        // not the IAUS gate: the lab mirrors it through the T1 kit. Curve row = ClassCurves::kBaseOffFirst + root (its OWN row). No class
+        // package (tier 1) and no class flag: the style is MFO's stance style with the vanilla Avoid Threat 0.20, no kDisengage fallback offset.
+        // APPENDED after the 35 table rows, so every table class keeps its index (and so its fights, draw for draw).
+        static const char* const kOff[3] = { "melee-off", "ranged-off", "mage-off" };
+        for (std::size_t i = 0; i < 3; ++i) {
+            SimClass c = out[i]; const C::ClassDef& d = C::kTable[i];
+            c.name = kOff[i]; c.line = "Base"; c.tier = 1; c.planned = false; c.playstyle.clear(); c.forbid = 0;
+            ClassGate& g = c.gate; g = ClassGate{}; g.resolved = true; g.treeOn = false; g.strict = false;
+            g.spellsOnClass = true; g.scrollUser = Casting(d); g.powerAttack = true; g.taunt = true; g.disengage = true;
+            const std::size_t row = MFO::Iaus::ClassCurves::kBaseOffFirst + i;
+            MFO::Iaus::ClassCurves::Apply(g_curveTable[row], static_cast<std::uint8_t>(row), g); c.profile = MFO::Iaus::ClassCurves::Build(g_curveTable[row]);
+            c.csDisengage = 0; c.avoidThreat = 0.20f; c.shareMax = c.shareMin = -1.0f; c.leashScaled = false; c.aversion = 0.0f; c.aimBudget = -1;
+            c.sneakAlways = c.flank = c.cloak = c.nearPlayer = c.shortLeash = false; c.entryOdds = 0; c.sneakAtkClass = c.noiseClass = 1.0f;
+            out.push_back(std::move(c));
+        }
         return out;
     }
 
     void PrintClassTable(const std::vector<SimClass>& v) {
-        std::printf("classes from native/classes/ClassTable.cpp: %zu\n", v.size());
+        std::printf("classes from native/classes/ClassTable.cpp: %zu (+ the 3 tree-OFF base cells)\n", v.size() - 3);
         for (const SimClass& c : v)
             std::printf("  T%d %-16s %-6s spells=%d(mastered %d) power=%d(cd %.0f) taunt=%d disengage=%d  weapons m%d b%d x%d s%d  kit:%s%s%s%s%s%s%s\n", c.tier, c.name.c_str(),
                         c.fam == Cls::Melee ? "melee" : c.fam == Cls::Ranged ? "ranged" : "mage", int(c.gate.spellsOnClass), int(c.gate.spellsFromMastered), int(c.gate.powerAttack), c.gate.powerCooldownSec,
                         int(c.gate.taunt), int(c.gate.disengage), int(c.gate.weaponMelee), int(c.gate.weaponBow), int(c.gate.weaponCrossbow), int(c.gate.weaponStaff),
-                        c.kit.oneHand ? " 1H" : "", c.kit.twoHand ? " 2H" : "", c.kit.dagger ? " dagger" : "", c.kit.bow ? " bow" : "", c.kit.crossbow ? " xbow" : "", c.kit.staff ? " staff" : "", c.kit.shield ? " shield" : "");
+                        c.kit.oneHand ? " 1H" : "", c.kit.twoHand ? " 2H" : "", c.kit.dagger ? " dagger" : "", c.kit.bow ? " bow" : "", c.kit.crossbow ? " xbow" : "", c.kit.staff ? " staff" : "", c.kit.shield ? (c.kit.heavy ? " shield heavy" : c.kit.light ? " shield light" : " shield cloth") : (c.kit.heavy ? " heavy" : c.kit.light ? " light" : " cloth"));
     }
 
 }

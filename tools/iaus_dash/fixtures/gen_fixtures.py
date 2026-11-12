@@ -71,9 +71,51 @@ def build(rid, when, lst, branch, sha, label, prog, seed):
             "classes": classes, "scenarios": scen, "rulings": rul, "gaps": gaps, "unknown_future_field": {"x": 1}}
 
 
+ARCH = ["swarm", "archers", "mages", "healer", "boss", "undead", "beast", "ambush", "kite", "mixed"]
+GROUPS = {"knight line": ["Knight"], "casters": ["Mage", "Evoker", "Paladin"], "*": [c[0] for c in CLASSES]}
+
+
+def build2(rid, when, lst, branch, sha, label, prog, seed, with_slugs):
+    """A SCHEMA 2 run shaped like a normal class report run of the simulator: NO named scenario rows, a gap ledger that names
+    class GROUPS, the per-class oracle gaps (class_gaps) and the rating battery. with_slugs=False leaves gaps[].classes out,
+    so the dashboard's own group -> class fallback is exercised."""
+    d = build(rid, when, lst, branch, sha, label, prog, seed)
+    rnd = random.Random(seed * 7 + 1)
+    d["schema"] = 2
+    d["mode"], d["stealth"] = "iaus", "g3"
+    d["scenarios"] = []
+    d["gaps"] = [{"id": "G1", "family": "taunt", "class": "knight line", "desc": "no survivability term in the taunt", "delta_u": round(4.0 * (1 - 0.5 * prog), 2), "status": "open"},
+                 {"id": "G5", "family": "cast offense", "class": "casters", "desc": "no overkill term", "delta_u": round(2.0 * (1 - 0.5 * prog), 2), "status": "open"},
+                 {"id": "G9", "family": "attack target", "class": "*", "desc": "target switches above the field rate", "delta_u": None, "status": "closing"}]
+    if with_slugs:
+        for g in d["gaps"]:
+            g["classes"] = GROUPS[g["class"]]
+    d["class_gaps"] = [{"class": n, "gap": round(rnd.uniform(1, 9) * (1 - 0.4 * prog), 2), "se": round(rnd.uniform(0.5, 2), 2), "fights": 6,
+                        "natural_gap": 1.0, "natural_fights": 4, "scenario_gap": None, "scenario_fights": 0} for n, _, _, _ in CLASSES if n != "Paladin"]
+    rows = []
+    for n, tier, _, _ in CLASSES:
+        by = {a: round(rnd.uniform(55, 90), 1) for a in ARCH}
+        rows.append({"class": n, "tier": tier, "fights": 120, "score": round(sum(by.values()) / len(by), 2), "se": 1.1, "by_archetype": by})
+    for tier in (1, 2):
+        grp = sorted([r for r in rows if r["tier"] == tier], key=lambda r: -r["score"])
+        mean = sum(r["score"] for r in grp) / len(grp)
+        for i, r in enumerate(grp):
+            r.update({"rank": i + 1, "of": len(grp), "tier_mean": round(mean, 2), "delta": round(r["score"] - mean, 2),
+                      "below": r["score"] - mean < -2.2, "weakest": min(r["by_archetype"], key=r["by_archetype"].get), "weakest_delta": -3.0})
+    d["rating"] = {"fights_per_cell": 3, "cells": 40, "classes": rows}
+    return d
+
+
 RUNS = [("20261101-100000-fx1", "2026-11-01T10:00:00", "Vanilla", "fixture/a", "aaaa111", "FIXTURE baseline", 0.0, 11),
         ("20261105-143000-fx2", "2026-11-05T14:30:00", "Tuxborn", "fixture/b", "bbbb222", "FIXTURE other list, mid tuning", 0.5, 22),
         ("20261109-091500-fx3", "2026-11-09T09:15:00", "Vanilla", "fixture/c", "cccc333", "FIXTURE melee share fix", 1.0, 33)]
 for r in RUNS:
     with open(os.path.join(HERE, "run-%s.json" % r[0]), "w") as f:
         json.dump(build(*r), f, indent=1)
+
+RUNS2 = [("20261110-080000-fx4", "2026-11-10T08:00:00", "Vanilla", "fixture/d", "dddd444", "FIXTURE schema 2, ledger groups without slugs", 0.2, 44, False),
+         ("20261111-080000-fx5", "2026-11-11T08:00:00", "Tuxborn", "fixture/e", "eeee555", "FIXTURE schema 2, other list (not a trend base)", 0.5, 55, True),
+         ("20261112-080000-fx6", "2026-11-12T08:00:00", "Vanilla", "fixture/f", "ffff666", "FIXTURE schema 2, class report run", 0.9, 66, True)]
+for r in RUNS2:
+    with open(os.path.join(HERE, "run-%s.json" % r[0]), "w") as f:
+        json.dump(build2(*r), f, indent=1)

@@ -6,7 +6,7 @@
 //       w.<family>.<cons>     that family's weight on a consideration (Profile::WeightOverride)
 //       aw.<family>           the family's action weight
 //       c.<cons>.a | .b | .floor     the consideration's curve parameters (Core.h Curve)
-//       t.momentum | t.preempt | t.actFloor | t.softCd | t.tauntCd | t.powerCd | t.disengageCd (card G3's hard cooldown)
+//       t.<name>              a Tuning scalar (kTuneScalars below: momentum, preempt, actFloor, the cooldowns and holds, the heal lines; --list-params prints them)
 //     <family> / <cons> are INDEXES (--list-params prints them: several considerations share a display name).
 //   --opt <param>[,<param>...] [--opt-passes N] [--opt-fights N]
 //       coordinate search: each parameter in turn is tried at x0.5, x0.75, x1.33, x2 of its value (and +-0.15 for a
@@ -23,6 +23,17 @@ namespace Sim {
         std::map<std::string, float> pkg;   // st.<stance>.<field> / pk.power / pk.leash: the class package under search
     };
     inline TuneState& Tune() { static TuneState s; return s; }
+    // Every scalar of iaus/Core.h Tuning a search may move, by name (sim batch: the edge-number search reaches the cooldowns, holds and
+    // heal lines too, not only the ten the first tuning rounds used). One table, so --set, --opt and --list-params cannot disagree.
+    struct TuneScalar { const char* name; float Tuning::* m; };
+    inline constexpr TuneScalar kTuneScalars[] = {
+        { "t.momentum", &Tuning::momentum }, { "t.postureMomentum", &Tuning::postureMomentum }, { "t.preempt", &Tuning::preemptMargin }, { "t.actFloor", &Tuning::actFloor },
+        { "t.softCd", &Tuning::softCooldownSec }, { "t.occHold", &Tuning::occlusionHoldSec }, { "t.kite", &Tuning::kiteDistance }, { "t.blockBase", &Tuning::blockBase },
+        { "t.tauntCd", &Tuning::rowlessTauntCooldownSec }, { "t.powerCd", &Tuning::rowlessPowerCooldownSec }, { "t.disengageCd", &Tuning::disengageCooldownSec },
+        { "t.noHealDrink", &Tuning::noHealDrink }, { "t.noHealRetreat", &Tuning::noHealRetreat }, { "t.emergencyHpHigh", &Tuning::emergencyHpHigh }, { "t.emergencyHpLow", &Tuning::emergencyHpLow },
+        { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
+        { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
+    };
 
     inline void ApplyWeights(Profile& p) { for (const auto& o : Tune().weights) SetWeight(p, o.family, o.cons, o.w); }
 
@@ -37,9 +48,8 @@ namespace Sim {
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); if (dot == std::string::npos) return false; const std::size_t ci = idx(2); if (ci >= kCons) return false; Curve& c = s.t.curve[ci]; const std::string fld = name.substr(dot + 1);
             if (fld == "a") c.a = f; else if (fld == "b") c.b = f; else if (fld == "floor") c.floor = f; else return false; return true; }
         if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { s.pkg[name] = f; return true; }
-        if (name == "t.momentum") s.t.momentum = f; else if (name == "t.preempt") s.t.preemptMargin = f; else if (name == "t.actFloor") s.t.actFloor = f; else if (name == "t.softCd") s.t.softCooldownSec = f;
-        else if (name == "t.occHold") s.t.occlusionHoldSec = f; else if (name == "t.kite") s.t.kiteDistance = f; else if (name == "t.blockBase") s.t.blockBase = f; else if (name == "t.tauntCd") s.t.rowlessTauntCooldownSec = f; else if (name == "t.powerCd") s.t.rowlessPowerCooldownSec = f; else if (name == "t.disengageCd") s.t.disengageCooldownSec = f; else return false;
-        return true;
+        for (const TuneScalar& k : kTuneScalars) if (name == k.name) { s.t.*(k.m) = f; return true; }
+        return false;
     }
     inline double GetParam(const std::string& name, double unset = 1.0) {
         const TuneState& s = Tune();
@@ -49,8 +59,7 @@ namespace Sim {
         if (name.rfind("aw.", 0) == 0) return s.t.actionWeight[idx(3) % kFamilies];
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); const Curve& c = s.t.curve[idx(2) % kCons]; const std::string fld = dot == std::string::npos ? "" : name.substr(dot + 1); return fld == "a" ? c.a : fld == "b" ? c.b : c.floor; }
         if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { auto i = s.pkg.find(name); return i == s.pkg.end() ? unset : i->second; }
-        if (name == "t.momentum") return s.t.momentum; if (name == "t.preempt") return s.t.preemptMargin; if (name == "t.actFloor") return s.t.actFloor; if (name == "t.softCd") return s.t.softCooldownSec;
-        if (name == "t.occHold") return s.t.occlusionHoldSec; if (name == "t.kite") return s.t.kiteDistance; if (name == "t.blockBase") return s.t.blockBase; if (name == "t.tauntCd") return s.t.rowlessTauntCooldownSec; if (name == "t.powerCd") return s.t.rowlessPowerCooldownSec; if (name == "t.disengageCd") return s.t.disengageCooldownSec;
+        for (const TuneScalar& k : kTuneScalars) if (name == k.name) return s.t.*(k.m);
         return unset;
     }
     // The package overrides onto a follower (st.<0 melee|1 ranged|2 cast>.<off|def|avoid|fallback|circle|powBlock|powStag|bash>, pk.power, pk.leash).
@@ -73,7 +82,7 @@ namespace Sim {
     inline void ListParams() {
         std::printf("families:"); for (std::size_t i = 0; i < kFamilies; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Family>(i))).c_str());
         std::printf("\nconsiderations:"); for (std::size_t i = 0; i < kCons; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Cons>(i))).c_str());
-        std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor  t.momentum t.preempt t.actFloor t.softCd t.tauntCd t.powerCd t.occHold t.kite t.disengageCd\n");
+        std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor "); for (const TuneScalar& k : kTuneScalars) std::printf(" %s", k.name); std::printf("\n");
     }
 
 }

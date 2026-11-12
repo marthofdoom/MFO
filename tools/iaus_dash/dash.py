@@ -12,7 +12,8 @@ import os
 import sys
 import time
 
-SCHEMA = 1
+SCHEMA = 2            # written by the simulator today
+SCHEMAS = (1, 2)      # readable: 2 = 1 + "rating", "class_gaps" and gaps[].classes (all optional)
 DEFAULT_RUNS = os.path.expanduser("~/.cache/mfo-iaus-sim/runs")
 
 KNOWN_METRICS = [
@@ -83,8 +84,8 @@ def validate(doc):
     p = []
     if not isinstance(doc, dict):
         return ["top level is not an object"]
-    if doc.get("schema") != SCHEMA:
-        p.append("schema is %r, expected %d" % (doc.get("schema"), SCHEMA))
+    if doc.get("schema") not in SCHEMAS:
+        p.append("schema is %r, expected one of %s" % (doc.get("schema"), ", ".join(str(x) for x in SCHEMAS)))
     for k in ("run_id", "time", "list"):
         if not isinstance(doc.get(k), str) or not doc.get(k):
             p.append("missing or non-string %r" % k)
@@ -129,6 +130,35 @@ def validate(doc):
             p.append("gaps[%d] missing 'id'" % i)
         elif g.get("status") not in ("open", "closing", "closed", "limit", None):
             p.append("gaps[%d].status %r is not open|closing|closed|limit" % (i, g.get("status")))
+        elif "classes" in g and not (isinstance(g["classes"], list) and all(isinstance(x, str) for x in g["classes"])):
+            p.append("gaps[%d].classes is not a list of class names" % i)
+    # schema 2 (optional in any file): the rating battery and the per-class oracle gaps
+    rt = doc.get("rating")
+    if rt is not None:
+        if not isinstance(rt, dict) or not isinstance(rt.get("classes", []), list):
+            p.append("'rating' is not an object with a 'classes' list")
+        else:
+            for i, r in enumerate(rt.get("classes") or []):
+                if not isinstance(r, dict) or not r.get("class"):
+                    p.append("rating.classes[%d] has no 'class'" % i)
+                    continue
+                for fld in ("score", "tier", "rank", "of", "delta"):
+                    if not is_num(r.get(fld)):
+                        p.append("rating.classes[%d].%s is not a number" % (i, fld))
+                if "below" in r and not isinstance(r["below"], bool):
+                    p.append("rating.classes[%d].below is not a bool" % i)
+                if "by_archetype" in r and not (isinstance(r["by_archetype"], dict) and all(is_num(v) for v in r["by_archetype"].values())):
+                    p.append("rating.classes[%d].by_archetype is not an object of numbers" % i)
+    cg = doc.get("class_gaps")
+    if cg is not None:
+        if not isinstance(cg, list):
+            p.append("'class_gaps' is not a list")
+        else:
+            for i, g in enumerate(cg):
+                if not isinstance(g, dict) or not g.get("class"):
+                    p.append("class_gaps[%d] has no 'class'" % i)
+                elif not is_num(g.get("gap")):
+                    p.append("class_gaps[%d].gap is not a number" % i)
     return p
 
 
@@ -216,13 +246,90 @@ def rulings_for(run, cls):
     return [r for r in (run.get("rulings") or []) if isinstance(r, dict) and r.get("class") in (cls, "*", None)]
 
 
+# The gap ledger names a class GROUP ("knight line", "healers", "casters", "*"), never a slug. A schema-2 row carries the slugs it
+# covers in this run (gaps[].classes). For an older file the group is resolved here from what the file does say about the class.
+KNIGHT_LINE = ("knight", "great-knight", "ebony-warrior")
+
+
+def ledger_covers(run, g, cls):
+    """Does the ledger row g apply to the class slug cls?"""
+    if isinstance(g.get("classes"), list):
+        return cls in g["classes"]
+    grp = g.get("class")
+    if grp in (cls, "*", None):
+        return True
+    e = next((c for c in class_rows(run) if c.get("class") == cls), None)
+    line = str(e.get("line")) if e else ""
+    low = str(cls).lower()
+    if grp == "knight line":
+        return low in KNIGHT_LINE
+    if grp == "mage lines":
+        return line == "Mage"
+    if grp == "melee lines":
+        return line == "Melee"
+    if grp == "casters":
+        return line in ("Mage", "Hybrid")
+    if grp == "healers":
+        return "heal" in low or low in ("priest", "saint")
+    return False
+
+
 def class_gap(run, cls):
-    """Main gap of a class: mean scenario gap, else the summed ledger delta_u. None if neither."""
+    """Main gap of a class (oracle U minus IAUS U). First source that has a number wins:
+    1. class_gaps (schema 2: the gap pass of a class report run), 2. main_gap on the class's rows,
+    3. the mean gap of its scenarios, 4. the summed ledger delta_u of the rows that cover it. None if nothing."""
+    if run is None:
+        return None
+    for g in (run.get("class_gaps") or []):
+        if isinstance(g, dict) and g.get("class") == cls and is_num(g.get("gap")):
+            return g["gap"]
+    g = [c["main_gap"] for c in class_rows(run) if c.get("class") == cls and is_num(c.get("main_gap"))]
+    if g:
+        return sum(g) / len(g)
     g = [s["gap"] for s in (run.get("scenarios") or []) if isinstance(s, dict) and s.get("class") == cls and is_num(s.get("gap"))]
     if g:
         return sum(g) / len(g)
-    g = [x["delta_u"] for x in (run.get("gaps") or []) if isinstance(x, dict) and x.get("class") == cls and is_num(x.get("delta_u"))]
+    g = [x["delta_u"] for x in (run.get("gaps") or []) if isinstance(x, dict) and is_num(x.get("delta_u")) and ledger_covers(run, x, cls)]
     return sum(g) if g else None
+
+
+def comparable(a, b):
+    """Two runs whose numbers may be compared: the same list, and the same mode / stealth road when both say."""
+    if a.get("list") != b.get("list"):
+        return False
+    return all(a.get(k) is None or b.get(k) is None or a.get(k) == b.get(k) for k in ("mode", "stealth"))
+
+
+def prev_gap(runs, run, cls):
+    """(gap, run) of the nearest EARLIER comparable run that has a gap for this class, else (None, None).
+    Most runs in a runs directory are one-class probes: the run before this one usually does not hold this class at all."""
+    idx = runs.index(run) if run in runs else -1
+    for r in reversed(runs[:max(idx, 0)]):
+        if comparable(r, run):
+            g = class_gap(r, cls)
+            if g is not None:
+                return g, r
+    return None, None
+
+
+def rating_of(run, cls):
+    """The class's row of the rating battery (schema 2), else None."""
+    rt = run.get("rating") if run else None
+    for r in ((rt or {}).get("classes") or []) if isinstance(rt, dict) else []:
+        if isinstance(r, dict) and r.get("class") == cls:
+            return r
+    return None
+
+
+def rating_cell(r, uni=False):
+    """'T2 3/9 -2.1' (+ ' !' when the class is flagged below its tier) and its style."""
+    if not r or not is_num(r.get("score")):
+        return ("-", "dim")
+    d = r.get("delta")
+    txt = "T%s %s/%s %s" % (r.get("tier", "?"), r.get("rank", "?"), r.get("of", "?"), ("%+.1f" % d) if is_num(d) else "")
+    if r.get("below"):
+        return (txt + " !", "bad")
+    return (txt, "ok" if r.get("rank") == 1 and (r.get("of") or 0) > 1 else None)
 
 
 def prev_same_list(runs, run):
@@ -234,11 +341,18 @@ def prev_same_list(runs, run):
 
 
 def metric_value(run, metric, cls=None):
-    """Value for the trends view. Pseudo metrics: gap, rulings_pass_pct."""
+    """Value for the trends view. Pseudo metrics: gap, rating, rulings_pass_pct."""
+    if metric == "rating":
+        if cls:
+            r = rating_of(run, cls)
+            return r.get("score") if r else None
+        v = [r["score"] for r in ((run.get("rating") or {}).get("classes") or []) if isinstance(r, dict) and is_num(r.get("score"))]
+        return sum(v) / len(v) if v else None
     if metric == "gap":
         if cls:
             return class_gap(run, cls)
-        g = [s["gap"] for s in (run.get("scenarios") or []) if isinstance(s, dict) and is_num(s.get("gap"))]
+        g = [class_gap(run, c) for c in agg_classes(run)]
+        g = [x for x in g if x is not None]
         return sum(g) / len(g) if g else None
     if metric == "rulings_pass_pct":
         rs = rulings_for(run, cls) if cls else [r for r in (run.get("rulings") or []) if isinstance(r, dict)]
@@ -286,7 +400,7 @@ def table_classes(st):
     agg = agg_classes(run)
     bagg = agg_classes(base) if base else {}
     metrics = ordered_metrics({k for e in agg.values() for k in e["metrics"]})
-    headers = ["Class", "T", "Line", "Rul", "Gap", "Trend"] + [LABELS.get(m, m) for m in metrics]
+    headers = ["Class", "T", "Rating (Tx)", "Line", "Rul", "Gap", "Trend"] + [LABELS.get(m, m) for m in metrics]
     rows = []
     for cls, e in agg.items():
         if e["planned"] and not st.show_planned:
@@ -299,16 +413,20 @@ def table_classes(st):
         npass = sum(1 for r in rs if r.get("pass"))
         rul = ("%d/%d" % (npass, len(rs)), "bad" if npass < len(rs) else ("ok" if rs else "dim"))
         g = class_gap(run, cls)
-        pg = class_gap(base, cls) if base else None
+        # Trend = this gap against the compare run when one is on, else against the nearest earlier comparable run that HAS this class's gap
+        pg = class_gap(base, cls) if (base and st.cmp_on) else prev_gap(st.runs, run, cls)[0]
+        rt = rating_of(run, cls)
         if g is not None and pg is not None:
             d = g - pg
             arrow = ("v" if not st.uni else "▼") if d < -5e-4 else ("^" if not st.uni else "▲") if d > 5e-4 else "="
             trend = ("%s %s" % (arrow, fmt_delta(d)), "ok" if d < -5e-4 else "bad" if d > 5e-4 else "dim")
         else:
             trend = ("-", "dim")
-        cells = [cls + (" (planned)" if e["planned"] else ""), str(e["tier"] if e["tier"] is not None else "-"), str(e["line"] or "-"),
-                 rul, fmt(g), trend]
-        sort = [cls.lower(), e["tier"] or 0, str(e["line"]), npass - len(rs), g, g - pg if (g is not None and pg is not None) else None]
+        cells = [cls + (" (planned)" if e["planned"] else ""), str(e["tier"] if e["tier"] is not None else "-"), rating_cell(rt, st.uni),
+                 str(e["line"] or "-"), rul, fmt(g), trend]
+        # Rating sorts by tier, then by the class's distance from its tier's mean (so one tier reads top to bottom)
+        sort = [cls.lower(), e["tier"] or 0, ((rt.get("tier") or 0) * 1000.0 - (rt.get("delta") or 0.0)) if rt and is_num(rt.get("delta")) else None,
+                str(e["line"]), npass - len(rs), g, g - pg if (g is not None and pg is not None) else None]
         bm = bagg.get(cls, {}).get("metrics", {}) if st.cmp_on else {}
         for m in metrics:
             v = e["metrics"].get(m)
@@ -383,7 +501,7 @@ def trend_metric_list(st):
     names = set()
     for r in st.list_runs():
         names |= set(overall_metrics(r))
-    return ordered_metrics(names) + ["gap", "rulings_pass_pct"]
+    return ordered_metrics(names) + ["gap", "rating", "rulings_pass_pct"]
 
 
 def table_trends(st):
@@ -424,6 +542,22 @@ def detail_lines(st):
         return [("class %s not in this run" % cls, "bad")]
     L.append(("%s  tier %s  %s%s   run %s (%s)" % (cls, agg["tier"], agg["line"], " [planned]" if agg["planned"] else "",
                                                   run.get("run_id"), run.get("list")), "head"))
+    rt = rating_of(run, cls)
+    if rt:
+        txt, sty = rating_cell(rt, st.uni)
+        L.append(("RATING %s   score %s (se %s) over %s fights, tier mean %s%s" % (
+            txt, fmt(rt.get("score")), fmt(rt.get("se")), fmt(rt.get("fights")), fmt(rt.get("tier_mean")),
+            "   BELOW ITS TIER" if rt.get("below") else ""), sty or "info"))
+        ba = rt.get("by_archetype") or {}
+        if ba:
+            L.append(("  by foe archetype: " + "  ".join("%s %s" % (k, fmt(v)) for k, v in ba.items()), None))
+        if rt.get("weakest"):
+            L.append(("  weakest against: %s (%s vs its tier there)" % (rt.get("weakest"), fmt_delta(rt.get("weakest_delta"))), "warn"))
+    cgr = next((x for x in (run.get("class_gaps") or []) if isinstance(x, dict) and x.get("class") == cls), None)
+    if cgr:
+        L.append(("ORACLE GAP %s (se %s, %s fights: natural %s over %s, own scenarios %s over %s)" % (
+            fmt(cgr.get("gap")), fmt(cgr.get("se")), fmt(cgr.get("fights")), fmt(cgr.get("natural_gap")), fmt(cgr.get("natural_fights")),
+            fmt(cgr.get("scenario_gap")), fmt(cgr.get("scenario_fights"))), "info"))
     L.append(("", None))
     metrics = ordered_metrics({k for c in agg["rows"] for k in (c.get("metrics") or {})})
     bmap = {}
@@ -480,7 +614,7 @@ def detail_lines(st):
     for s in sorted(scs, key=lambda s: -(s.get("gap") or 0)):
         L.append(("  %-28s IAUS %s  oracle %s  gap %s" % (s.get("name"), fmt(s.get("iaus_u")), fmt(s.get("oracle_u")), fmt(s.get("gap"))), None))
     L.append(("", None))
-    gs = [g for g in (run.get("gaps") or []) if isinstance(g, dict) and g.get("class") in (cls, "*")]
+    gs = [g for g in (run.get("gaps") or []) if isinstance(g, dict) and ledger_covers(run, g, cls)]
     L.append(("GAPS (%d)" % len(gs), "info"))
     for g in gs:
         L.append(("  %-4s %-8s dU %-6s %-8s %s" % (g.get("id"), g.get("family", ""), fmt(g.get("delta_u")), g.get("status", ""), g.get("desc", "")),
@@ -951,6 +1085,15 @@ def report(args):
     print("\nCLASSES")
     h, rows = table_classes(st)
     print("\n".join(text_table(h, [r["cells"] for r in rows])))
+    rts = [r for r in ((run.get("rating") or {}).get("classes") or []) if isinstance(r, dict) and r.get("class")]
+    if rts:
+        archs = list((rts[0].get("by_archetype") or {}).keys())
+        print("\nRATING (Tx): one shared battery per tier, %s fight(s) per cell" % fmt((run.get("rating") or {}).get("fights_per_cell")))
+        rts.sort(key=lambda r: (r.get("tier") or 0, r.get("rank") or 0))
+        print("\n".join(text_table(["Class", "Rating (Tx)", "Score", "se", "Weakest"] + archs,
+                                   [[str(r["class"]), rating_cell(r), fmt(r.get("score")), fmt(r.get("se")),
+                                     ("%s %s" % (r.get("weakest"), fmt_delta(r.get("weakest_delta")))) if r.get("weakest") else "-"]
+                                    + [fmt((r.get("by_archetype") or {}).get(a)) for a in archs] for r in rts])))
     fails = [r for r in (run.get("rulings") or []) if isinstance(r, dict) and not r.get("pass")]
     print("\nFAILING RULINGS (%d of %d)" % (len(fails), len(run.get("rulings") or [])))
     for r in fails:
@@ -978,8 +1121,9 @@ def json_check(path):
         for p in probs:
             print("%s: %s" % (path, p))
         return 1
-    print("%s: ok (%d class rows, %d scenarios, %d rulings, %d gaps)" % (
-        path, len(doc.get("classes") or []), len(doc.get("scenarios") or []), len(doc.get("rulings") or []), len(doc.get("gaps") or [])))
+    print("%s: ok (schema %s: %d class rows, %d scenarios, %d rulings, %d gaps, %d ratings, %d class gaps)" % (
+        path, doc.get("schema"), len(doc.get("classes") or []), len(doc.get("scenarios") or []), len(doc.get("rulings") or []), len(doc.get("gaps") or []),
+        len((doc.get("rating") or {}).get("classes") or []), len(doc.get("class_gaps") or [])))
     return 0
 
 
@@ -989,7 +1133,7 @@ def main():
     ap.add_argument("--report", action="store_true", help="print a plain-text report and exit")
     ap.add_argument("--run", help="run id for --report (default newest)")
     ap.add_argument("--compare", help="run id to compare against in --report")
-    ap.add_argument("--json-check", metavar="FILE", help="validate one run file against schema v1")
+    ap.add_argument("--json-check", metavar="FILE", help="validate one run file against the schema (v1 or v2)")
     ap.add_argument("--ascii", action="store_true", help="ASCII bars and arrows instead of unicode blocks")
     args = ap.parse_args()
     if args.json_check:

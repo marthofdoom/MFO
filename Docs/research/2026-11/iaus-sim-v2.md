@@ -1968,3 +1968,390 @@ Do not tune against `--disengage-dnd`, `--c13 lever`, `--aim-scatter` or `--aim-
    Gates, 12 classes per gate (the 31.11 bands hold; Knight +0.1 / +0.1 / +0.0): g3 melee 80.03 ranged 65.71 mage 78.97 knight 70.38 warrior 88.25 mercenary 81.81 archer 78.33 thief 81.02 evoker 81.44 conjurer 74.51 healer 83.25 warlock 77.13; `--stealth off` 79.99 65.71 78.83 70.44 88.21 85.18 78.33 39.60 81.57 72.42 83.18 77.84; shipped 80.15 66.48 79.41 68.86 88.21 85.32 78.44 39.60 81.66 73.11 85.41 80.09.
 4. **Review round of 24b4421.** (a) The guard line is counted from the knight's OWN taunts (`Combatant::tauntedByMe`, `Taunt::TauntedBy`), as the sim tally; (b) it is OFF below `kDrinkHealthLine` (0.34) with a health potion in stock, so a hurt Knight drinks first; (c) the H4 touch range follows the cast IAUS chose on its last decision, not a damage proxy. Re-run: gates identical in the beta1 means (79.63 / 77.44 / 77.64), Knight 70.35 / 70.41 / 68.86; share of blows meeting the guard under 2+ taunted, 6 seeds, blows-weighted: knight 67.9, great-knight 67.9, ebony-warrior 67.5 (min over seeds 63.3); shipped config 67.6 / 68.7 / 68.6 (min 63.4).
 
+
+## 32. The sim batch: tree-OFF base cells, the rating battery, the per-class gap, health decline, the edge-number search (2026-11-12)
+
+Branch `feat/sim-batch` on main 9f328c6. Fable author (sim structure is Fable-only). Changes `tools/iaus_sim`, `tools/iaus_dash`
+and docs. Proof levels as in 31.2: FACT = read in the named source, MODEL = the lab's own choice. Nothing here is FIELD.
+
+### 32.1 The tree-OFF base cells
+
+marth 11-12: "I dont see the 3 base classes with no tree in the sim. I imagine theyd say Line: Base", "They do technically have
+weapon gates (mage knife etc), and should still loosely follow tree on versions. They just have all available options at thier
+disposal".
+
+`RealClasses.cpp` appends `melee-off`, `ranged-off`, `mage-off` after the 35 table rows (indexes 35 to 37, so every table class
+keeps its index and its fights). Line `Base`, tier 1. Each is a copy of its tree-ON T1 row (family, kit, default kit rows, the
+spell tokens of its rows: the mage keeps dagger and staff), then its gate is the tree-OFF branch of `SpellBook::GateFor`
+(FACT, `iaus/SpellBook.cpp`): any known spell, power attack, taunt, retreat, `scrollUser` by the T1 root, no row cooldown (the
+`Tuning` rowless floors apply), no sneak class, no pressed back-off, no Block row. Curve row = `ClassCurves::kBaseOffFirst` + root.
+MODEL: no class package and no class flag, so the style is MFO's stance style with the vanilla Avoid Threat 0.20 and without the
+`kDisengage` fallback offset (`SimClass::csDisengage`); tier 1 rolls no dodge in the lab, as every T1.
+
+`--classes beta1` is now 15 cells (the 12 and the 3 base cells). `--classes beta1-tree` is the 12: every J of sections 30 and 31
+is a `beta1-tree` number and the sim batch's own changes leave it unchanged (79.63 / 77.44 / 77.64, checked draw for draw on the
+built-in world and on LoreRim 64.21, Tuxborn 69.81, Vanilla 82.70 against the base binary). The School Circle then moves it by
+design (32.7). `--curve melee-off:...` addresses a base
+row. `--opt c.N` next to a `--curve` on consideration N is refused (the override is a copy of the shared curve).
+
+### 32.2 The rating battery and the Rating (Tx) column
+
+marth 11-12: "id also like the third comlumn to be a rating(Tx) column. so we can easily see if a class in a tier is less
+effective than another. which means scenarios will have to be even more diverse".
+
+`Rating.h`. A cell is (foe archetype, group size, level band): 10 archetypes (swarm, archers, mages, healer-backed, boss, undead,
+big creature, ambush, kite, mixed) x 2 sizes x 2 bands = 40 cells, N fights each (`--rating N`, 3 in a class report run).
+A fight is a function of the tier, the cell, the fight index and the seed, never of the class:
+
+| Identical for every class of a tier | How |
+|---|---|
+| level, and so the gear rung of every weapon and armor piece | the tier's band: T1 12 / 18, T2 22 / 28, T3 32 / 38, T4 42 / 48 (`Load.h LadderAt` reads the level only) |
+| potions, arrows | 2 health, 2 magicka, 1 stamina, 60 arrows |
+| the player, the second follower (large cells) | built from a stream the subject never draws from (`FightSpec::geoSeed`) |
+| the foes, their strength | picked by role from the loaded world, scaled ONCE against a reference party whose follower is the T1 melee row (`FightSpec::refCls`), so the scale never reads the rated class |
+| places, cover, light, the fight's opening random state | `geoSeed` |
+
+What differs is the class: gate, kit, package, curves, and the spells its own default rows name. MODEL: the archetype strength
+ratios (0.80 to 1.10) and the potion counts are the lab's choice. A list's actors are test input only: foes are picked by role
+(`Data::roles`), a missing role falls back to the next and then to the first spec, and the built-in fixtures cover every role.
+
+Score = mean Utility over the battery. Rank and distance from the tier mean are among the classes of the run. BELOW flag = under
+the tier mean by more than 2.0 U and by more than two standard errors of the per-fight paired difference.
+
+### 32.3 The per-class gap in every class report run
+
+CAUSE of the empty Gap and Trend columns (coordinator, confirmed): a normal class run wrote no scenario rows and no `main_gap`,
+and the ledger names groups. Now a run that writes a results file runs a GAP PASS by itself: per class 4 natural fights and 2 of
+each of its own named scenarios, played by IAUS and by the class oracle on the same fights. Price: the oracle at K=6, 90 s
+(the file records it), about 25 s of wall time for the 15 Beta 1 cells on 8 threads, 2 s for a one-class probe.
+`--class-oracle N` / `--gap-scenarios N` size it, 0 turns it off, `--no-json` runs skip it. Results schema 2 adds `class_gaps`,
+`rating` and `gaps[].classes` (the slugs of the run a ledger group covers). A 4-fight gap is noisy (se 1 to 20 U per class):
+read the Trend column as "same seed, same fights, did it move", not as a measurement of the gap's size.
+
+### 32.4 Health decline and the drink record
+
+`--decline N` (`sim.cpp DeclineReport`, tallies in `World.h Tally::dec*`). Per class and seed: N fights in each of the natural,
+balanced and strong1 brackets and N of every rating cell. Band k = his health in [k/10, (k+1)/10) of his maximum.
+MODEL choices: only seconds in which a foe has him as its target are counted; "too late to drink" = the damage of his last ~2 s
+(`Body::recentDmg`, a 2 s decaying sum) is at least the health he has left; a potion takes 0.6 s from the start of the gulp to
+its effect (`TM::drinkAt`) after a serve lap of up to about 1 s.
+
+### 32.5 Rating, built-in world (`--rating-only --rating 3 --classes beta1 --seeds 1,2,3,4,5,6`, 720 fights per class)
+
+| Tier | Class | Rating | se | Rank | vs tier mean | Flag | Weakest archetype (vs its tier there) |
+|---|---|---|---|---|---|---|---|
+| T1 | melee-off | 77.64 | 0.95 | 1/6 | +8.03 | | |
+| T1 | melee | 76.24 | 1.03 | 2/6 | +6.62 | | archers -0.4 |
+| T1 | mage-off | 72.51 | 1.14 | 3/6 | +2.89 | | boss -1.5 |
+| T1 | mage | 71.76 | 1.16 | 4/6 | +2.15 | | ambush -1.6 |
+| T1 | ranged-off | 62.45 | 1.35 | 5/6 | -7.16 | BELOW | beast -18.2 |
+| T1 | ranged | 57.08 | 1.44 | 6/6 | -12.53 | BELOW | beast -26.7 |
+| T2 | knight | 83.77 | 0.74 | 1/9 | +9.63 | | archers -1.1 |
+| T2 | warrior | 81.92 | 0.83 | 2/9 | +7.78 | | |
+| T2 | mercenary | 80.93 | 0.90 | 3/9 | +6.79 | | mixed -0.3 |
+| T2 | thief | 75.08 | 1.20 | 4/9 | +0.94 | | mages -9.9 |
+| T2 | healer | 74.36 | 1.18 | 5/9 | +0.22 | | kite -12.7 |
+| T2 | conjurer | 73.38 | 1.20 | 6/9 | -0.76 | | kite -9.4 |
+| T2 | evoker | 71.10 | 1.24 | 7/9 | -3.04 | BELOW | kite -16.7 |
+| T2 | warlock | 70.60 | 1.24 | 8/9 | -3.54 | BELOW | kite -15.1 |
+| T2 | archer | 56.12 | 1.44 | 9/9 | -18.02 | BELOW | beast -37.6 |
+
+What the table can and cannot carry:
+- The ranged line is last in both tiers, by 12 to 18 U, and it is the big creature and the brute on him that sink it (Archer 19.6
+  against a tier mean of 57 on `beast`, 8.4 on `kite`). This is the same weakness the headline J has shown since section 30
+  (ranged 65.7 against melee 80.0), now on fights that are the same for the tier. Whether the game's Archer is this weak is
+  NOT shown: the lab's bow model (12% miss on a mover, no kiting drive, C-H3 open) is the first suspect, not the class.
+- The base cells rate at or above their T1 rows on the battery (melee-off +1.4, mage-off +0.8, ranged-off +5.4), while their
+  headline J on natural fights is lower for melee-off and mage-off (74.3 against 80.0, 67.7 against 79.0, 6 seeds, se 3 to 4,
+  different fights for the two rows). The two measures disagree in sign for two of the three; neither difference is large
+  against its error. No claim is made about which of a T1 row and its base cell is stronger.
+
+### 32.6 Health decline, built-in world (`--decline 4 --classes beta1 --seeds 1,2,3,4,5,6`, 1032 fights per class)
+
+Share of his maximum health lost per second while a foe is on him, all bands together: knight 2.9, mercenary 3.2, warrior 3.4,
+melee 3.5, melee-off 3.6, archer 4.8, ranged-off 4.9, ranged 4.9, thief 5.2, healer 5.6, mage-off 5.6, warlock 6.0, mage 6.0,
+evoker 6.1, conjurer 6.2. The curve is flat from 70% down to 20% for the weapon classes (3.3 to 4.9 %/s) and peaks between
+60% and 40% for the mage line (7.5 to 8.4 %/s).
+
+"Too late to drink" (the last 2 s of damage would down him), share of the pressed seconds:
+
+| Health band | melee | knight | ranged | mage | evoker | conjurer |
+|---|---|---|---|---|---|---|
+| 40 to 50% | 0.2 | 0.1 | 0.1 | 2.0 | 2.2 | 3.1 |
+| 30 to 40% | 3.4 | 1.2 | 3.3 | 9.6 | 8.7 | 10.6 |
+| 20 to 30% | 16.9 | 10.5 | 18.9 | 27.1 | 23.3 | 31.3 |
+| 10 to 20% | 37.9 | 22.3 | 32.2 | 56.5 | 53.6 | 58.6 |
+
+Read off the curve: LAST-SAFE line (lowest tenth with under 10% too-late seconds) is 0.30 for every class but the Conjurer (0.40),
+and the NO-WASTE line (1 minus the potion's share of his health, potions are 20 to 27% of it) is 0.73 to 0.80. Nobody wastes a
+potion today (0.0% ran over). The shipped line, 0.34, sits just above LAST-SAFE: the curve does not ask for another line, it
+only bounds it to [0.30, 0.73].
+
+His drinks and downs:
+
+| Class | drinks/f | drinks at | his downs/f | of them with a health potion in the kit | self heal known | party downs (he or anyone) while he held an affordable heal for that member /f |
+|---|---|---|---|---|---|---|
+| melee | 0.82 | 34% | 0.17 | 0.035 | 33% | 0 |
+| knight | 0.71 | 34% | 0.09 | 0.025 | 33% | 0 |
+| ranged | 0.63 | 33% | 0.27 | 0.046 | 34% | 0 |
+| mage | 0.28 | 30% | 0.32 | 0.250 | 99% | 0.31 |
+| evoker | 0.18 | 30% | 0.30 | 0.261 | 87% | 0.31 |
+| conjurer | 0.15 | 30% | 0.19 | 0.172 | 87% | 0.21 |
+| healer | 0.20 | 31% | 0.21 | 0.199 | 99% | 0.28 |
+| warlock | 0.19 | 31% | 0.29 | 0.260 | 86% | 0.30 |
+
+marth 11-12: "I imagine any mage line with heals would be able to use them? Not specifically restoration line." CHECKED: the
+lab's mage-line cells already know a self heal in 86 to 99% of their fights (`BuildFollower` gives a mage-family caster one
+spell of every nature he can afford, Restoration line or not) and fire 4 to 7.6 heal decisions per fight. Nothing was added to
+the model.
+
+OBSERVED: a mage-line follower who goes down nearly always still holds a health potion (0.25 of the mage's 0.32 downs per
+fight, 0.26 of the evoker's 0.30). A weapon class almost never does (melee 0.035 of 0.17). The last column counts ANY party
+member's down, so it cannot be set against his own downs: it says only that an affordable heal was in his book at about that
+many downs per fight.
+NOT ESTABLISHED: why. Two readings were tested and neither is supported by the objective:
+1. "The potion is vetoed while a heal scores" (`Tuning::noHealDrink`): lifting the veto entirely (`t.noHealDrink=1.0`) is
+   worth +0.05 J over the 15 cells (se 0.01). Real, and far too small to be the cause.
+2. "He should drink earlier" (a later midpoint): section 32.7.
+Untested readings: the heal's cast time against a 6 to 8 %/s decline; a mage dies in the two bands (20 to 40%) where a quarter
+of his pressed seconds are already too late, so the error is made earlier, in where he stands, not in what he drinks.
+
+### 32.7 The School Circle is in the lab (a fixed design input, never searched)
+
+marth 11-12: "My settings there are truth. The school circle I just designed isn't something that should get tweaked".
+FACT (`native/iaus/ClassCurves.cpp SeedSchoolPeaks`, main 8d3620f + this branch): the 14 rows with a home school carry floor
+0.35, sharpness 1.5 and a mastered bump of 0.15; the Arch-Mage is any school; every other row is flat. On the circle
+Destruction, Alteration, Restoration, Illusion, Conjuration the weight is 1.0 at home, 0.694 one step away, 0.369 two steps away.
+Lab: `Load.h` fills `SpellEntry::school` from the spell record's skill (the costliest effect's, as the game reads it), and
+`RealClasses.cpp` calls `ClassCurves::ApplyMastered` with the classes his unlock rule requires. `edge_search.py` has no school
+parameter on purpose. Beta 1 home schools: Evoker Destruction, Conjurer Conjuration, Healer Restoration, Warlock Illusion.
+
+What it does to the lab's objective (6 seeds, the gates of 31.11; se of a class 1 to 4.5, of a set 0.3 to 0.45):
+
+| | g3 before | g3 with the circle | `--stealth off` | shipped |
+|---|---|---|---|---|
+| the 12 (`beta1-tree`) | 79.63 | 79.53 | 77.44 -> 77.21 | 77.64 -> 77.25 |
+| the 15 (`beta1`) | 78.83 | 78.73 | 76.82 -> 76.61 | 77.03 -> 76.68 |
+| evoker | 81.44 | 80.67 | 81.56 -> 80.76 | 81.68 -> 81.40 |
+| conjurer | 74.51 | 74.97 | 72.45 -> 73.87 | 73.30 -> 74.45 |
+| healer | 83.25 | 82.29 | 83.23 -> 81.78 | 85.41 -> 81.49 |
+| warlock | 77.13 | 76.70 | 78.63 -> 75.80 | 80.28 -> 79.15 |
+| knight | 70.35 | 71.33 | 70.41 -> 71.28 | 68.86 -> 69.92 |
+
+Mage, melee, ranged and the other weapon classes are unchanged to the last digit (no home school; the Knight moves because two
+of his scenarios hold a Healer). The circle is a design rule about who a class IS, not a tuning result, and the lab's objective
+prices only the fight's outcome: on it the circle costs the set 0.1 to 0.4 J and the Healer about 1 J at g3 and 3.9 J as
+shipped (85.41 se 1.5 against 81.49 se 2.2, the same six seeds; the "before" columns were re-measured on this branch's binary
+before the merge, so they differ by a few hundredths from the rows of 31.12). The Healer's loss is the largest single effect
+in this section and it comes from a fixed input: it is reported, not tuned around. These are the new gate rows. Every search below runs on top of the circle. The two `--t2 off` pins of the CLI checks
+moved with it (76.96 -> 76.29, 79.45 -> 79.06) and were re-pinned with that reason.
+
+### 32.8 Audit of the sim edits that were not Fable's (dodge rates, the Knight guard tally, `--hands`, `--curve`)
+
+| Edit | Checked against | Verdict |
+|---|---|---|
+| dodge-rate mirror (`RealClasses.cpp avoidThreat`, `Setup.h MfoPackage`) | `MFO_GenerateESP.py CLS_AVOID_THREAT`, `class_csty_params`, `apmf/StyleClaims.cpp` | values and the stance order match (generator stance 1 / 2 / 3 = lab 0 / 1 / 2, the +0.10 lands on the missile stance). DEFECT, fixed (32.9): a follower in a heavy cuirass dodges not at all in the game, while the lab dressed every melee-root class in heavy armor AND let the Mercenary dodge at 0.35 |
+| Knight guard tally (`World.h` `inc2` / `guard2`) | `iaus/Generate.cpp` `tauntedOnMe`, `Policy.h` `tauntedByMe` | the tally counts every foe under a live taunt of his, without the gate's "has him as target, not paralysed, not fleeing" filter, and it counts the seconds in which the line is off by design (hurt with a potion). Its denominator is BROADER than the game's guard-line condition, so the share it prints is a lower bound for the 60% floor. Not changed |
+| `--hands`, the second-hand model, `TouchSpent` | `iaus/Candidates.cpp`, `Reposition.h HandsRange` | mirrors the native code, reads the class's own `touchSpentSec`. FOUND: the touch window never opens in the lab. `touchSpentSec` 0 against 3 gives the same J to the last digit for every casting cell on the built-in world, LoreRim and Tuxborn. The model ("the other hand holds the spell cast before the last") almost never pairs a touch spell with a distance spell, so the lab cannot rate this constant. Not fixed here (it needs a model of which two spells a mage equips, which is its own piece of work) |
+| `--curve` and the `RealClasses` profile build | `ClassCurves.h` | correct. Two things added (32.1): base-row slugs, and the refusal of `--opt c.N` next to a `--curve` on N. To know: a T1 row override also changes the T1 companions in every other class's fights (faithful to the game; the per-class gates catch a loss) |
+| found on the way | | `Setup.h BuildFight` drew a foe's two spread offsets inside one call's argument list, whose evaluation order C++ leaves open. Now two statements in the order g++ used: the same fights, on every compiler |
+
+### 32.9 Two model corrections every number below stands on: armor by the class card, and potions
+
+**Armor and the dodge.** FACT: `apmf/StyleClaims.cpp` (main fcbfec5) claims a class style's zero-avoid twin while his cuirass is
+heavy, and marth 11-12 ruled the same for a follower with no class style. FACT (class cards, `class-perks-packages.md`): L2 Heavy
+Armor is owned by Knight and Warrior, L5 Light Armor by Mercenary, Archer and Thief, L13 Arcane Robes by the mage line. The lab's
+"melee root = heavy" contradicted the Mercenary card. Now: a melee class whose card gives it an Avoid Threat above the vanilla
+0.20 (Mercenary 0.35, Blademaster 0.50, Living Legend 0.55) wears light armor, and a heavy cuirass means Avoid Threat 0 in every
+stance, tier 1 included. MODEL: what a follower actually wears is the player's choice; the lab dresses him by his card.
+
+| 6 seeds | g3 | `--stealth off` | shipped |
+|---|---|---|---|
+| mercenary | 81.83 -> 79.62 | 85.21 -> 80.98 | 85.35 -> 81.13 |
+| warrior (loses a 0.20 dodge) | 88.01 -> 87.97 | 87.96 -> 87.92 | 87.67 -> 87.65 |
+| the 12 | 79.53 -> 79.33 | 77.21 -> 76.94 | 77.25 -> 76.98 |
+| the 15 | 78.73 -> 78.54 | 76.61 -> 76.35 | 76.68 -> 76.43 |
+
+Every other class is identical. In the lab the Mercenary's dodge does not pay for his lighter armor: he is 2.2 to 4.2 J worse
+dressed by his card than he was in plate with a dodge the game would not have given him. That is a statement about the lab's
+armor and dodge models (a dodge is rolled only against projectiles, 31.2), not yet about the class.
+
+**Potions.** DEFECT, fixed: a list's `follower.potions` table is (magnitude, duration). The lab read the magnitude as a heal at
+once, and `compile_world.py` laddered fortify potions (archetype 34) and food into it. A health potion was 3% of his health on
+LoreRim and 0.5% on Tuxborn (20 to 27% on the built-in world, whose fixtures have no duration and are unchanged). Now the
+ladder holds restore potions only (archetype 0, at least 20 points in total) and a potion with a duration restores its
+magnitude per second for that long. LoreRim's health potion is 100 over 10 s, Tuxborn's 100 or 150 at once. The shared cache
+files were not overwritten: this section's list runs use corrected copies; the next `compile_world.py` run writes them so.
+Every list number that involves a drink and predates this is void for the drink line.
+
+### 32.10 The edge-number search: method
+
+marth 11-12: "The sim should be used to find all the ideal edge case numbers, thats the point of a sim for iaus", and later:
+"sim and oracle decide everything about the curves (as long as it doesnt deviate from the class designs, but even that has
+small wiggle room for best class performance)".
+
+`tools/iaus_sim/edge_search.py`. The rule was fixed before the first search result was read, and was not loosened afterwards:
+
+- objective: J of `--classes <slug>` at the tuning target (g3), 48 fights per scenario and 24 natural fights per seed;
+- train: seeds 1..N (48 on the built-in world, 32 on a list). Per candidate value, the paired difference d against the shared
+  value on the same seeds, and its standard error;
+- accept the best value of a sweep only if: train d > 2 se and d >= 0.30 J; holdout (seeds 1001.., never used to pick) d > 0
+  and d > 1 se; `--stealth off` and the game as shipped on all seeds d >= -1 se and inside the 31.11 band; the Knight line's
+  guard floor >= 60%;
+- a value that passes on one world is not written unless it holds across worlds: either it also does not lose on the others
+  when it passed on the built-in world, or (for a pass on a list only) a confirmatory on FRESH seeds 3001..3096 whose
+  equal-weight mean over built-in, LoreRim and Tuxborn is > 2 se, with no world under -1 se. A list's actors are test input;
+  a number that is best on one list only may not be baked in;
+- every confirmatory and every side test below was written into the agent log with its pass condition BEFORE it was run.
+
+Per class the search covers what `ClassCurves` reaches: the health potion's `DrinkNeed` midpoint (10 values, 0.20 to 0.70)
+and slope (7 values), the magicka potion's midpoint (casting cells) or the stamina potion's (weapon cells), `touchSpentSec`
+(casting cells), and for the Knight the guard-line boost and an explicit `drinkHealthLine`. 55 sweeps, 412 values per world.
+With a 2 se bar on the best of 7 to 10 values, a handful of train passes per world are expected by chance; the holdout and the
+cross-world step are what remove them. Sensitivity: the paired se of a sweep is 0.05 to 0.25 J for most classes (0.3 to 0.4
+for the T1 and base cells), so the search can see an effect of about 0.3 to 0.5 J per class and cannot see less.
+
+The search was run three times, because the world under it changed twice while it ran: before the School Circle (32.7), with
+it, and with the armor and potion corrections (32.9). Only the last is the result. The earlier two are kept as history in 32.12.
+
+### 32.11 The edge-number search: results on the final world
+
+**Per class, built-in world (48 + 48 seeds): 412 values, 0 accepted, not one train pass.** Largest best-of-sweep deltas: knight
+stamina midpoint 0.40 +0.26 (se 0.09), warrior stamina midpoint 0.15 +0.23 (se 0.11), archer health midpoint 0.38 +0.13
+(se 0.06): over 2 se, under the 0.30 J floor. `touchSpentSec` is exactly 0.00 everywhere (32.8).
+
+**Per class, LoreRim (32 + 32 seeds, its health potion is 100 over 10 s): 412 values.**
+
+| Sweep | Best | Train | Holdout | off / shipped | Verdict |
+|---|---|---|---|---|---|
+| knight health midpoint | 0.70 (edge of the range; 0.55 +0.37, 0.60 +0.54) | +0.94 (se 0.19) | +0.89 (se 0.28) | +0.92 / +0.99 | rejected: the guard floor, already 61.7 / 57.3 on LoreRim with the shipped table, falls to 57.3 / 52.9 with the line coupled at 0.70; confirmatory with the line held at 0.34 below |
+| thief health midpoint | 0.70 (rises steadily from 0.38) | +0.39 (se 0.12) | +0.33 (se 0.15) | -0.14 / -0.16 | rejected: loses as shipped |
+| melee health midpoint | 0.30 (0.60 and 0.70 are -0.40) | +0.37 (se 0.17) | +0.20 (se 0.19) | +0.32 / +0.24 | passes on LoreRim; confirmatory below |
+| ranged-off health midpoint | 0.70 | +0.47 (se 0.22) | -0.16 (se 0.25) | | holdout: not confirmed |
+
+**Per class, Tuxborn (32 + 32 seeds, health potions 100 or 150 at once): 412 values.**
+
+| Sweep | Best | Train | Holdout | off / shipped | Verdict |
+|---|---|---|---|---|---|
+| thief health midpoint | 0.60 | +0.34 (se 0.16) | +0.10 (se 0.10) | +0.77 / +0.73 | passes on Tuxborn; confirmatory below |
+| mage health midpoint | 0.50 | +0.40 (se 0.19) | 0.00 (se 0.02) | | holdout: not confirmed |
+| melee-off health midpoint | 0.50 | +0.48 (se 0.20) | +0.10 (se 0.17) | | holdout: not confirmed |
+| knight health midpoint | every value from 0.38 up is NEGATIVE: 0.50 -0.43 (se 0.26), 0.70 -0.50 (se 0.27) | | | | the opposite of LoreRim |
+
+What the three worlds say together about the health line:
+- On the built-in world it is flat for every class between 0.20 and 0.70, inside 0.3 J.
+- The Knight wants 0.70 on LoreRim (+0.9 J, twice confirmed there) and 0.34 or lower on Tuxborn (0.70 is -0.5 J). The best
+  line is a property of the world, not of the class.
+- "It is the potion's delivery" was tested (declared first: built-in foes with every potion delivered over 10 s,
+  `--potion-over 10`, 48 seeds): the Knight's 0.70 is +0.34 (se 0.17) there against +0.08 with at-once potions, exactly 2.0 se
+  and a third of LoreRim's gain: not established at the bar. The Thief's 0.70 is -0.22 (se 0.14) there: refuted for him. One
+  thing is clear in every over-time run: a LOWER line loses (thief 0.20: -0.43, se 0.06).
+
+**Confirmatories, fresh seeds 3001..3096 (each declared with its pass condition before it ran).** d = paired J difference.
+
+| Value | built-in g3 | built-in off / shipped | LoreRim | Tuxborn | Mean of the three | Verdict |
+|---|---|---|---|---|---|---|
+| warrior stamina-potion midpoint 0.34 -> 0.15 | +0.287 (se 0.079) | +0.275 / +0.279 | +0.065 (se 0.031) | +0.109 (se 0.054) | +0.154 (se 0.030) | passes the search rule, FAILS the fixed 31.11 gates: see below |
+| mercenary stamina-potion midpoint -> 0.20 | +0.134 (se 0.082) | +0.141 / +0.140 | +0.008 | +0.075 | +0.072 (se 0.035) | fails (built-in under 2 se) |
+| conjurer health midpoint -> 0.25 | -0.090 (se 0.101) | -0.113 / -0.041 | -0.166 (se 0.077) | +0.095 | -0.054 (se 0.051) | fails |
+| thief health midpoint -> 0.60 | +0.153 (se 0.070) | **-0.284 (se 0.152)** / -0.150 | +0.123 (se 0.069) | +0.207 (se 0.083) | +0.161 (se 0.046) | fails: loses with stealth off, which is how the game ships |
+| knight health midpoint -> 0.70, guard-line cut-off held at 0.34 | +0.028 (se 0.120) | +0.098 / -0.015 | **+0.686 (se 0.116)** | **-0.371 (se 0.127)** | +0.114 (se 0.070) | fails: one list's gain is another's loss |
+| melee health midpoint -> 0.30 | +0.128 (se 0.115) | +0.129 / +0.142 | -0.001 | +0.072 | +0.066 (se 0.059) | fails |
+
+**The Warrior's stamina value, in full, because it is the one that came closest.** It replicated on four worlds and on two
+versions of the lab. Two things stand against it. (1) About 0.13 of its 0.29 J is Utility's "resources left" term: a stamina
+potion he no longer drinks counts as a gain (`--utility-no-resources`: +0.156, se 0.080, on the same seeds). With it he power
+attacks about 10% less often per minute (6.5 to 5.9 natural, 8.1 to 7.2 strong1), a small step off his card. (2) On the six
+fixed gate seeds of 31.11 he is -0.50 / -0.48 / -0.41 J and the 12-class mean falls by 0.04, 0.04 and 0.02. Those gates are
+hard constraints, so the value is NOT in `ClassCurves.cpp` (it was written, verified to reproduce the `--curve` run exactly,
+and reverted). It is recorded there as a comment with the exact line. To know about the gate itself: a six-seed set mean has
+a standard error of about 0.44 J, so "may not fall" on it rejects about half of all small real gains by chance.
+
+**RESULT: no per-class value passed everything. `ClassCurves.cpp` carries no searched override; the shared curves ship.**
+On the final world 1236 values were tried in 165 sweeps (and 2472 more on the two earlier versions of the world). What that
+supports: no drink-curve, guard-boost or drink-line value is worth more than about 0.3 to 0.5 J to a class on every world.
+What it does not support: that the shared values are optimal. Smaller gains are below what the search can see.
+
+**The Knight line's guard (marth: at least 60% under two or more of his own taunted foes).** Blows-weighted share, 6 seeds,
+default / as shipped, shipped table: built-in knight 67.5 / 67.4, great-knight 67.5 / 67.4, ebony-warrior 68.8 / 66.0;
+Tuxborn knight 61.8 / 60.8; **LoreRim knight 61.7 / 57.3: under the floor as shipped.** Boost on the built-in world: 1.0 gives
+61.9 / 62.3, 1.25 66.3, 1.5 67.1 / 67.2, 2.0 67.5 / 67.4, 3.0 and 4.0 the same: 2.0 is where the plateau starts and J is flat
+across it, so 2.0 stays, now with its curve. Nothing the table reaches lifts LoreRim's 57.3 (the ceiling is Harbinger's hold
+and rest times, 31.12). The tally's denominator is broader than the game's guard-line condition (32.8), so these are lower bounds.
+
+**Shared `Tuning` scalars (built-in, 24 + 24 seeds, the 15 cells pooled; 21 scalars, 66 values).** Beat noise with the holdout
+and both gates, in all three versions of the world:
+
+| Scalar | Shipped -> best (edge of the range tried) | Train | Holdout | off / shipped |
+|---|---|---|---|---|
+| `momentum` | 1.25 -> 1.0 | +0.56 (se 0.07) | +0.62 (se 0.08) | +0.71 / +0.28 |
+| `rowlessPowerCooldownSec` | 10 -> 5 | +0.32 (se 0.05) | +0.31 (se 0.04) | +0.36 / +0.33 |
+| `postureMomentum` | 1.5 -> 2.0 | +0.16 (se 0.04) | +0.17 (se 0.04) | +0.05 / +0.04 |
+
+NOT applied: they are `Core.h` initialisers, outside this branch's native scope, and each needs its own confirmation first.
+Momentum is the anti-switching term and J does not price switching: at 1.0 the decision switches per minute rise from 18.2
+to 26.9 (evoker), 16.6 to 25.4 (conjurer), 14.2 to 25.8 (melee-off), 7.5 to 10.2 (melee), while the gap ledger already lists
+target switching above the field rate (G9). The power cooldown is a ruling (10 s rows), not a tuning. `actFloor` 0.10 was
++0.18 before the School Circle and +0.13 (se 0.05) after: it does not hold. `noHealDrink` 1.0 is +0.06 (se 0.02). Exactly 0
+at every value (the road is off or nothing reads it in the lab): `groundCooldownSec`, `blockCooldownSec`, `bashCooldownSec`,
+`stepCooldownSec`, `regroupCooldownSec`, `kiteDistance`, `emergencyHpHigh` / `Low`, `rowlessTauntCooldownSec`.
+
+**Compile-time constants (`const_probe.sh`, 24 seeds, pooled, g3 / off / shipped).** `kFleeHealthLine` 0.30: 0.20 +0.03
+(se 0.03) / +0.03 / +0.04, 0.40 +0.03 (se 0.015), 0.50 +0.02: flat. `kGuardLineFoes` 2: 1 is -0.12 (se 0.016) / -0.15, 3 is
++0.02 (se 0.009): 2 holds. `kPressCount` 2: 1 is +0.01, 3 is -0.04 (se 0.014): 2 holds. NOT probed (the run was stopped):
+`kCloseSlack`, `kMinimumFrac`, `kRangeVeto`, `kPostureDist`. `kRangeVeto` 1.15 also exists as literals in three `Catalogue.cpp`
+curves, so a probe of the constant alone moves only the generator's half.
+
+**The drink line, the oracle and what J can say.** The class oracle drinks at 72 to 94% health and lets 33 to 81% of the
+potion run over, with 0 to 0.05 downs per fight. That is not a perfect drink time. Utility pays 5 points for the party's
+health at the end and charges 2.5 / (potions carried) for a potion, so a planner tops up; the Warrior's stamina value is the
+same exchange rate read the other way. How much a potion in the bag is worth against health in the body is a value choice in
+Utility, and the "best drink time" J returns moves with it. On the lists (corrected potions) the decline is steeper (LoreRim:
+melee 6.5 %/s, mage 14.8 %/s against 3.5 and 6.0 on the built-in world) and a potion is 45 to 58% of his health there.
+
+### 32.12 History: the two earlier versions of the world
+
+Before the School Circle (412 values per world): built-in 0 accepted (conjurer health midpoint 0.70 passed train +0.67, failed
+holdout +0.16); LoreRim 0; Tuxborn 2 single-world passes that lost elsewhere. A pooled test declared in advance (health
+midpoint 0.50 for all 15 cells, fresh seeds 2001..2048): +0.053 (se 0.030), failed. With the circle, before the armor and
+potion corrections: built-in 0, LoreRim 0, Tuxborn 3 single-world passes. Every list number of these two runs involving a
+drink is void (32.9): a health potion was 0.5 to 3% of his health there.
+
+### 32.13 HANDOFF to the per-class curve tuning (a fresh Fable takes it from here)
+
+**Tools.** Build: `SIM_OUT=<bin> tools/iaus_sim/run.sh --list-uses` (builds, prints the 190 (family, consideration) pairs).
+- `edge_search.py --bin <bin> per-class [--classes a,b] [--list L.sim.json] [--seeds 48]`: the narrow search of 32.10.
+- `edge_search.py --bin <bin> wide [--top 12] [--seeds 24]`: every curve parameter the table can move, per class: liveness on
+  six seeds (each parameter x0.67 and x1.5), then the most sensitive ones at x0.5 / x0.75 / x1.33 / x2, an accepted value
+  carried forward. **WRITTEN, NOT RUN END TO END** (only `--help`, the `--list-uses` parse and part of one liveness pass ran):
+  test it on one class first. Known weak spot: liveness runs with `--fights 48`, about 150 s per class.
+- `edge_search.py --bin <bin> global`, `gates --curves "<specs>"` (the literal 31.11 gates, class by class), `floor`.
+- After every sweep one normal results file goes to `~/.cache/mfo-iaus-sim/runs` (label `sweep ...` / `wide ...`), so the
+  dashboard shows progress (`--no-emit-runs` off). main's dashboard reads these files but its `--json-check` rejects schema 2.
+- `const_probe.sh <constant> <value> <out>`: a variant binary with one `constexpr` of `native/iaus` rewritten in a scratch copy.
+- Diagnostics: `--decline N [--oracle]`, `--rating-only`, `--utility-no-resources`, `--potion-over S`.
+- Worlds: built-in; LoreRim / Tuxborn / Vanilla need the potion-corrected inputs (re-run `tools/list_balance/compile_world.py
+  --name <L>`, which overwrites the shared cache file, or rebuild the ladders as 32.9 says). Seeds: train 1..N, holdout
+  1001.., confirmatory 3001..3096, pooled test 2001..2048 are USED; take new ranges for new confirmatories.
+
+**The acceptance rule** is 32.10, plus the literal 31.11 gates on the final table. Write every side test's pass condition down
+before running it.
+
+**Known gaps.**
+1. Piece curves (20: attack / power_attack / bash range, los and engaged, taunt survive and mortal, cast overkill and exploit,
+   heal urgency, regroup far) cannot be moved through `--curve` or `ClassCurves::SetCurveParam` (a, b, floor, zeroAbove,
+   zeroBelow only). Searching them needs a point-edit surface in `ClassCurves` (a native change, for review).
+2. Per-class family and role weights (card I8): `Profile::weights` exists, `ClassCurves::Row` has no field for them, nothing
+   in native fills them. The sim can move a weight only for everyone (`--set w.<f>.<c>`).
+3. `touchSpentSec` cannot be rated: the lab never opens a touch window (32.8). It needs a model of the two spells a mage holds.
+4. The 58 pure 0 / 1 gates are rules; the wide search never touches them.
+5. Utility's potion-against-health exchange rate decides every drink result (above). Settle it with marth before tuning drinks.
+6. The fixed gates are six seeds; a paired many-seed gate would stop them rejecting small real gains at random.
+7. The rating's ranged line (32.5) and the Mercenary in light armor (32.9) may be lab artefacts (bow and dodge models).
+8. School Circle: fixed, never searched. Its measured cost stands in 32.7 (Healer about -3.9 J as shipped).
+
+**Next steps, in order.** (1) Run `wide` on one class, read the liveness list, fix what it shows. (2) Use the per-class oracle
+gap (`class_gaps` of the newest full run: melee and the base cells are furthest from the oracle) to order the classes.
+(3) `wide` on the built-in world for the 15 cells, then a fresh-seed three-world confirmatory and `gates` for each pass.
+(4) Decide with the coordinator whether the Warrior stamina value ships despite the six-seed gate. (5) Confirm the three
+`Tuning` winners on fresh seeds and on the lists, with a switching metric next to J for momentum.

@@ -178,7 +178,8 @@ namespace Sim {
     }
 
     // Classes Beta 1 = tiers 1 and 2: the classes whose playstyles are in force (the --classes value of the class report).
-    inline constexpr const char* kBeta1Classes = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock";
+    inline constexpr const char* kBeta1TreeClasses = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock";   // --classes beta1-tree: the 12 tree-ON classes (every J quoted before the sim batch, sections 30 and 31)
+    inline constexpr const char* kBeta1Classes = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock,melee-off,ranged-off,mage-off";   // --classes beta1: + the 3 tree-OFF base cells (marth 11-12)
 
     inline const Playstyle* PlaystyleOf(const std::string& cls) {
         for (const Playstyle& p : Playstyles()) if (cls == p.cls) return &p;

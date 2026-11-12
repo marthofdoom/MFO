@@ -32,6 +32,7 @@ namespace Sim {
         float avoidThreat = -1.0f;                  // MFO_GenerateESP.py CLS_AVOID_THREAT (Q-S-3, marth 11-12: Mercenary line 0.35 / 0.50 / 0.55, Thief 0.25, Master Thief 0.30, Knight line 0, else the vanilla 0.20; -1 = a fixture class, untouched): SETS every stance's Avoid Threat, the ranged stance +0.10
         float aversion = 0.0f;                      // apmf/AversionClaims.cpp: fAversionConjurer / fAversionHealer 0.25 for the EQUIPPED class (Q93, Q94; Dragonborn gives none: Q107)
         int   aimBudget = -1;                       // apmf/AimClaims.cpp: the ch.29 miss budget of a ranged class (Archer 5)
+        int   csDisengage = -1;                     // the class STYLE's kDisengage offset (class_csty_params): -1 = as gate.disengage (a table class: the flag is both), 0 = none (a tree-OFF base cell: the gate opens Retreat, but there is no class and so no class style)
     };
     // --teach <token>: card "Teach Spells" (Board_Classes.cpp, batch I item 7). MODEL of its effect only: the subject of a casting class
     // also knows one spell of that token, drawn from the pool IAUS would weigh (an unweighable spell is never in the pool, so it cannot be taught).
@@ -59,11 +60,19 @@ namespace Sim {
         return v;
     }
 
-    // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp). mechProfiles: the I8 mechanical profile.
+    // The game's own 35 class rows (RealClasses.cpp, built from native/classes/ClassTable.cpp), then the 3 tree-OFF base cells
+    // (melee-off / ranged-off / mage-off, line "Base", tier 1; indexes 35..37). mechProfiles: the I8 mechanical profile.
     std::vector<SimClass> RealClasses(bool mechProfiles);
     // Per-class curves (ruling Q-class-curves): the sim's OWN copy of iaus/ClassCurves.h's table, which RealClasses reads for every class's
     // Profile and edge constants. --curve edits it (ApplyCurveSpecs); untouched it is the shipped table, so scores are unchanged.
     inline MFO::Iaus::ClassCurves::Table g_curveTable = MFO::Iaus::ClassCurves::Defaults();
+    inline std::vector<std::size_t> g_curveConsEdited;   // the Cons indexes a --curve spec overrode (sim.cpp refuses --opt c.N on one of them: the override is a COPY of the shared curve, the search would not move it)
+    // The curve row of a tree-OFF base cell (melee-off / ranged-off / mage-off = ClassCurves::kBaseOffFirst + root), -1 for any other name.
+    inline int BaseOffRow(const std::string& a_name) {
+        static const char* const kOff[] = { "melee-off", "ranged-off", "mage-off" };
+        for (std::size_t i = 0; i < 3; ++i) if (a_name == kOff[i]) return static_cast<int>(MFO::Iaus::ClassCurves::kBaseOffFirst + i);
+        return -1;
+    }
     // "<class slug>:<family>.<cons>.<a|b|floor|zeroAbove|zeroBelow>=<v>" or "<class slug>:scalar.<drinkHealthLine|touchSpentSec>=<v>".
     // <family> / <cons> are an index or a Name() (an index when several considerations share a display name). a_shared = the curve an
     // override starts from. False with a_err set on any bad token.
@@ -107,6 +116,10 @@ namespace Sim {
         std::vector<std::string> lateTags;
         float playerHp = 1, subjectHp = 1, subjectMp = 1;   // scenario start fractions
         int   playerPotions = 4; int subjectPotionsH = -1;  // -1 = the random kit
+        // The rating battery (Rating.h): everything a fight draws that must NOT depend on the rated class.
+        int   subjectPotionsM = -1, subjectPotionsS = -1, subjectArrows = -1;   // -1 = the random kit
+        const SimClass* refCls = nullptr;                   // targetRatio is met against a REFERENCE party whose subject is this class (same level, same seed), so the foes' scale never reads the rated class
+        std::uint64_t geoSeed = 0;                          // != 0: the second follower's build, the foes' places, the cover and the fight's opening random state come from this seed alone (0 = the fight's own stream, as always)
         float foeSpread = 250;
         std::vector<std::string> ensure, ensureOthers;      // spells the subject / the other followers must know (Load.h SpellIs)
         bool  onSubject = false;                            // every foe starts on the subject
@@ -127,8 +140,12 @@ namespace Sim {
         for (int s = 0; s < 3; ++s) { Style& y = c.pkg[s]; y = Style{}; y.off = csgd[s][0]; y.def = csgd[s][1]; y.groupOff = csgd[s][2]; y.wMelee = csgd[s][3]; y.wMagic = csgd[s][4]; y.wRanged = csgd[s][5]; y.wShout = csgd[s][6];
             y.wUnarmed = csgd[s][7]; y.wStaff = csgd[s][8]; y.avoidThreat = csgd[s][9]; y.circle = cscr[s][0]; y.fallback = cscr[s][1]; y.dueling = true;
             if (sc.shortLeash) { y.circle = std::max(0.0f, y.circle - 0.10f); y.fallback = std::max(0.0f, y.fallback - 0.15f); }
-            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0 && !(g_t2.c8 && sc.avoidThreat >= 0.0f)) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
-            if (g_t2.c8 && sc.avoidThreat >= 0.0f) y.avoidThreat = sc.avoidThreat > 0.0f && s == 1 ? sc.avoidThreat + 0.10f : sc.avoidThreat; }   // class_csty_params: SET per class (Q-S-3), no longer a floor
+            if (sc.csDisengage >= 0 ? sc.csDisengage != 0 : sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0 && !(g_t2.c8 && sc.avoidThreat >= 0.0f)) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
+            if (g_t2.c8 && sc.avoidThreat >= 0.0f) y.avoidThreat = sc.avoidThreat > 0.0f && s == 1 ? sc.avoidThreat + 0.10f : sc.avoidThreat;   // class_csty_params: SET per class (Q-S-3), no longer a floor
+            // HEAVY BODY ARMOR = NO DODGE (apmf/StyleClaims.cpp, merged fcbfec5: while his cuirass is heavy the class style's ZERO-AVOID TWIN is
+            // claimed, whatever his class; marth 11-12: for a follower with no class style the list's own dodge rules already stop a heavy
+            // dodger, so 0 there too). The kit's `heavy` is his cuirass (MODEL: RealClasses.cpp dresses a class by its card).
+            if (g_t2.c8 && sc.avoidThreat >= 0.0f && sc.kit.heavy) y.avoidThreat = 0.0f; }
         c.powerShare = 1.0f; c.leash = 0.0f;
         if (g_t2.c8) {   // card C8: the ch.18 rule and the ch.23 leash (every managed follower is leashed to the player; a wall or near-player class at half the radius, never under fLeashMin)
             c.shareMax = sc.shareMax; c.shareMin = sc.shareMin;
@@ -169,7 +186,7 @@ namespace Sim {
         c.active.resize(fb->spells.size()); c.summonUntil.assign(fb->spells.size(), 0.0); c.rank = static_cast<std::uint8_t>(rank); c.seed = R.g();
         c.window = 1.5 * (0.88 + 0.24 * R.U(0.0f, 1.0f));   // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick
         c.drawn = sc.fam == Cls::Ranged && fb->spec.ranged.Has() ? PostureKind::Bow : sc.fam == Cls::Mage ? PostureKind::None : fb->spec.melee.Has() ? PostureKind::Melee : PostureKind::None;
-        c.potH = fb->potH; c.potM = fb->potM; c.potS = fb->potS;
+        c.potH = fb->potH; c.potM = fb->potM; c.potS = fb->potS; for (int i = 0; i < 3; ++i) c.potDur[i] = fb->potDur[i];
         F.ctl.push_back(std::move(c));
     }
 
@@ -189,8 +206,9 @@ namespace Sim {
           Body& p = F.Add(Role::Player, ps, 0, 0); p.arrows = 80; p.potions = 4; if (fs.worn > 0) p.c.hp *= R.U(1.0f - fs.worn * 0.5f, 1.0f); }
         auto place = [&](Cls f) { return std::pair<float, float>{ f == Cls::Melee ? 220.0f : f == Cls::Ranged ? -300.0f : -250.0f, R.U(-220, 220) }; };
         { auto [x, y] = place(fs.cls->fam); AddFollower(F, D, *fs.cls, fs.level, fs.rank, x, y, R, fs.worn, fs.ensure.empty() ? nullptr : &fs.ensure); }
-        for (const SimClass* o : fs.others) { auto [x, y] = place(o->fam); AddFollower(F, D, *o, fs.level, 3, x, y, R, fs.worn, fs.ensureOthers.empty() ? nullptr : &fs.ensureOthers); }
-        const float ang = R.U(-0.4f, 0.4f), cx = fs.foeDist * std::cos(ang), cy = fs.foeDist * std::sin(ang);
+        Rng Gs; if (fs.geoSeed) Gs.g.seed(fs.geoSeed); Rng& G = fs.geoSeed ? Gs : R;   // the rating battery: a stream the subject's build never draws from
+        for (const SimClass* o : fs.others) { auto [x, y] = place(o->fam); AddFollower(F, D, *o, fs.level, 3, x, y, G, fs.worn, fs.ensureOthers.empty() ? nullptr : &fs.ensureOthers); }
+        const float ang = G.U(-0.4f, 0.4f), cx = fs.foeDist * std::cos(ang), cy = fs.foeDist * std::sin(ang);
         std::size_t ti = 0;
         auto addFoe = [&](std::shared_ptr<const ActorSpec> sp, float dx, float dy) {
             Body& f = F.Add(Role::Foe, std::move(sp), cx + std::clamp(dx, -700.0f, 700.0f), cy + std::clamp(dy, -700.0f, 700.0f));
@@ -201,11 +219,13 @@ namespace Sim {
             Body& nf = F.b.back(); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : 0.0f, ft ? ft->c.y : 0.0f);   // a foe starts facing its target, else the party
         };
         for (const auto& m : fs.foes) addFoe(std::shared_ptr<const ActorSpec>(std::shared_ptr<const ActorSpec>{}, &D.specs[static_cast<std::size_t>(m.first)]), m.second.first, m.second.second);
-        for (const auto& s : fs.customFoes) addFoe(s, R.U(-fs.foeSpread, fs.foeSpread), R.U(-fs.foeSpread, fs.foeSpread));
-        for (std::size_t i = 0; i < fs.late.size(); ++i) F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + R.U(-200, 200), cy + R.U(-200, 200), i < fs.lateTags.size() ? fs.lateTags[i] : std::string() });
+        for (const auto& s : fs.customFoes) { const float dy = G.U(-fs.foeSpread, fs.foeSpread), dx = G.U(-fs.foeSpread, fs.foeSpread); addFoe(s, dx, dy); }   // dy FIRST: the order the old call's arguments were drawn in (g++ evaluates them right to left), now fixed in the source so every compiler builds the same fights
+        for (std::size_t i = 0; i < fs.late.size(); ++i) { const float lx = G.U(-200, 200), ly = G.U(-200, 200); F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + lx, cy + ly, i < fs.lateTags.size() ? fs.lateTags[i] : std::string() }); }
         if (fs.targetRatio > 0) {   // late foes count toward the strength as if present
-            Fight T = F; for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y);
-            const float k = std::clamp(fs.targetRatio / std::max(0.01f, StrengthRatio(D, T)), 0.05f, 20.0f);
+            float ratio = 0.0f;
+            if (fs.refCls && fs.refCls != fs.cls) { FightSpec rs = fs; rs.cls = fs.refCls; rs.refCls = nullptr; rs.targetRatio = 0; rs.ensure.clear(); Fight T = BuildFight(D, rs, t1); for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y); ratio = StrengthRatio(D, T); }   // the reference party's fight: same seed, same foes
+            else { Fight T = F; for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y); ratio = StrengthRatio(D, T); }
+            const float k = std::clamp(fs.targetRatio / std::max(0.01f, ratio), 0.05f, 20.0f);
             for (Body& x : F.b) if (x.role == Role::Foe) { auto sp = std::make_shared<ActorSpec>(*x.spec); sp->hp *= k; x.spec = sp; x.c.hpMax *= k; x.c.hp *= k; x.dmgScale = k; }
             for (Spawn& s : F.late) { auto sp = std::make_shared<ActorSpec>(*s.spec); sp->hp *= k; s.spec = sp; s.dmgScale = k; }
         }
@@ -213,7 +233,8 @@ namespace Sim {
         F.t.foesFaced += static_cast<long>(F.late.size());
         for (const Spawn& s : F.late) F.foeHpTotal += s.spec->hp;
         F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
-        { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH; }
+        { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH;
+          if (fs.subjectPotionsM >= 0) F.ctl[0].book.kit.potionsMagicka = fs.subjectPotionsM; if (fs.subjectPotionsS >= 0) F.ctl[0].book.kit.potionsStamina = fs.subjectPotionsS; if (fs.subjectArrows >= 0 && s0.arrows > 0) s0.arrows = fs.subjectArrows; }
         for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
         F.interior = fs.interior;
         if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)
@@ -226,9 +247,10 @@ namespace Sim {
                 // NOTHING here; the draw above still happens so the stream is the same. --c13 lever = the H10 guarantee, which is not built.
                 if (free && !g_t2.c13built) x.cloakUntil = 1e9; }   // the lever: he opens undetected whatever the foes could sense; his first blow ends it
         }
-        const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);
-        for (int i = 0; i < no; ++i) { const float tt = R.U(0.3f, 0.75f); F.occ.push_back({ cx * tt + R.U(-350, 350), cy * tt + R.U(-350, 350), R.U(60, 140) }); }
+        const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? G.I(1, 3) : G.I(0, 1);
+        for (int i = 0; i < no; ++i) { const float tt = G.U(0.3f, 0.75f); const float ox = G.U(-350, 350), oy = G.U(-350, 350), orad = G.U(60, 140); F.occ.push_back({ cx * tt + ox, cy * tt + oy, orad }); }
         { const float ca = std::cos(ang), sa = std::sin(ang); for (const FightSpec::Cover& k : fs.cover) F.occ.push_back({ k.u * ca - k.v * sa, k.u * sa + k.v * ca, k.r }); }
+        if (fs.geoSeed) F.R.g.seed(fs.geoSeed * 0x9E3779B97F4A7C15ULL + 0x5851F42D4C957F2DULL);   // the fight opens on the same random state whatever the subject's build drew
         return F;
     }
 
