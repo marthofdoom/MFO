@@ -337,6 +337,8 @@ namespace MFO::Board {
         // LOTD awareness: listed only while LOTD is detected and bLootLOTD is on
         // (Board_FieldKit.cpp's picker skips it otherwise -- Lotd::GambitOffered).
         { Vocab::kActLootMuseum, Str::K::Act_LootMuseum },
+        { Vocab::kActSteal, Str::K::Act_Steal },            // card G13: owned loose items, witness pre-check (logistics/Steal.cpp)
+        { Vocab::kActPickLocks, Str::K::Act_PickLocks },    // card G14: seek locked chests (LP-M1), owned ones through the same pre-check
         { Vocab::kActEquipTorch, Str::K::Act_EquipTorch },
         // Cast in logistics (mage update): out-of-combat casting -- self-buffs,
         // candlelight, out-of-combat heals. Same opcodes as combat; the

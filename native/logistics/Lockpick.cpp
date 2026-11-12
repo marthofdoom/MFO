@@ -67,6 +67,7 @@
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace MFO::Logistics::Lockpick {
@@ -121,7 +122,7 @@ namespace MFO::Logistics::Lockpick {
             kNone, kOwned, kOffLimits, kNotChest, kRequiresKey, kNoPicks, kCreature,
             kNoHarbinger, kNoMainThread, kUnlockSeat, kSimFail, kTooLong, kNotLocked,
             kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot, kDoorInto, kFactionContainer,
-            kNotReady,
+            kNotReady, kWitness,
         };
         const char* ReasonName(Reason a_r) {
             switch (a_r) {
@@ -147,6 +148,7 @@ namespace MFO::Logistics::Lockpick {
             case Reason::kNoSweetSpot:  return "noSweetSpot";
             case Reason::kDoorInto:     return "doorDestinationBarred";
             case Reason::kNotReady:     return "combatOrWeaponDrawn";
+            case Reason::kWitness:      return "witnessPreCheck";
             }
             return "?";
         }
@@ -456,6 +458,7 @@ namespace MFO::Logistics::Lockpick {
         };
         std::mutex g_snapMx;
         std::unordered_map<std::uint64_t, Snap> g_snaps;   // by ticket; guarded by g_snapMx
+        std::unordered_set<RE::FormID> g_witnessSkipped;   // batch L: followers whose posted unlock the witness pre-check skipped; guarded by g_snapMx
         std::uint64_t g_nextTicket = 1;                    // worker-only
 
         enum class Phase : std::uint8_t { kSnapshot, kReady, kPicking, kUnlocking };
@@ -530,6 +533,7 @@ namespace MFO::Logistics::Lockpick {
             {
                 std::scoped_lock lk(g_snapMx);
                 g_snaps.erase(it->second.ticket);
+                g_witnessSkipped.erase(a_f);   // a skip flag never outlives its job
             }
             g_jobs.erase(it);
         }
@@ -589,14 +593,29 @@ namespace MFO::Logistics::Lockpick {
     }
 
     // ── Admit: the scan's lock gate (worker; read-only; inside the cell walk) ──────
-    bool Admit(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point /*a_now*/) {
+    bool Admit(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point /*a_now*/, bool a_allowOwned, bool* a_pending) {
         if (!a_follower || !a_ref) return false;
         const RE::FormID fid = a_follower->GetFormID();
         if (const Reason inert = InertReason(); inert != Reason::kNone) return false;
-        // #22e: the scan bars owned / off-limits refs before this gate; re-checked here so
-        // the judge's verdict never depends on the call order (and logs its reason).
-        if (a_ref->GetOwner()) { LogRefusal(fid, a_ref, Reason::kOwned, ""); return false; }
-        if (a_ref->IsOffLimits()) { LogRefusal(fid, a_ref, Reason::kOffLimits, ""); return false; }
+        // Batch L (card G14, act.pick_locks): an OWNED or off-limits lock is admitted ONLY through G13's witness pre-check
+        // (Steal::Check, follower AND player, sneaking, no guard, the owner not in line of sight), and NEVER a door: town
+        // and owned doors stay barred (crime ruling). Every other caller keeps #22e below exactly.
+        auto* baseEarly = a_ref->GetBaseObject();
+        const bool doorEarly = baseEarly && baseEarly->Is(RE::FormType::Door);
+        const bool ownedOrOff = a_ref->GetOwner() != nullptr || a_ref->IsOffLimits();
+        if (ownedOrOff && a_allowOwned && !doorEarly) {
+            std::string why;
+            switch (Steal::Check(a_follower, a_ref, TheftGate::Road::Pick, &why)) {
+                case Steal::Verdict::Take:    break;
+                case Steal::Verdict::Pending: if (a_pending) *a_pending = true; return false;   // no verdict: retry, log nothing
+                case Steal::Verdict::Refused: LogRefusal(fid, a_ref, Reason::kWitness, " -- " + why); return false;
+            }
+        } else {
+            // #22e: the scan bars owned / off-limits refs before this gate; re-checked here so
+            // the judge's verdict never depends on the call order (and logs its reason).
+            if (a_ref->GetOwner()) { LogRefusal(fid, a_ref, Reason::kOwned, ""); return false; }
+            if (a_ref->IsOffLimits()) { LogRefusal(fid, a_ref, Reason::kOffLimits, ""); return false; }
+        }
         // Batch L: a faction's vendor / stolen-goods / evidence container; never picked.
         if (IsFactionServiceContainer(a_ref)) { LogRefusal(fid, a_ref, Reason::kFactionContainer, ""); return false; }
         auto* base = a_ref->GetBaseObject();
@@ -645,7 +664,7 @@ namespace MFO::Logistics::Lockpick {
 
     // ── Step: the excursion's arrival at a LOCKED chest (worker) ──────────────────
     StepResult Step(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now,
-                    Clock::time_point a_excursionEnd) {
+                    Clock::time_point a_excursionEnd, bool a_allowOwned) {
         if (!a_follower || !a_ref) return StepResult::kRefused;
         const RE::FormID fid = a_follower->GetFormID();
         const RE::FormID rid = a_ref->GetFormID();
@@ -657,7 +676,10 @@ namespace MFO::Logistics::Lockpick {
         }
         if (jt == g_jobs.end()) {
             // A fresh attempt: the scan's gates again (state may have moved since the scan).
-            if (!Admit(a_follower, a_ref, a_now)) return StepResult::kRefused;
+            bool witnessPending = false;
+            if (!Admit(a_follower, a_ref, a_now, a_allowOwned, &witnessPending))
+                return witnessPending ? StepResult::kHold : StepResult::kRefused;   // pending: the pre-check answer is not back, retry next tick
+            { std::scoped_lock lk(g_snapMx); g_witnessSkipped.erase(fid); }   // a stale skip flag never carries into a new job
             Job j{};
             j.ref       = rid;
             j.phase     = Phase::kSnapshot;
@@ -931,7 +953,10 @@ namespace MFO::Logistics::Lockpick {
             APMFBridge::ReleaseLockpickHold(fid);
             j.holdFiled = false;
             const int remove = j.viaKey ? 0 : j.sim.broken;
-            MainThread::Post([fid, rid, remove]() {
+            // Batch L (G14): an owned / off-limits lock was admitted through the witness pre-check; it is proven AGAIN on the main
+            // thread right before the Unlock, so nothing changes between the proof and the act. A hit = nothing removed, not unlocked.
+            const bool ownedLock = a_ref->GetOwner() != nullptr || a_ref->IsOffLimits();
+            MainThread::Post([fid, rid, remove, ownedLock]() {
                 auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
                 auto* r = RE::TESForm::LookupByID<RE::TESObjectREFR>(rid);
                 // RE-VALIDATE on the main thread: the world moved since the worker decided.
@@ -947,6 +972,17 @@ namespace MFO::Logistics::Lockpick {
                                      : !r->Is3DLoaded() ? "not loaded" : "already unlocked");
                     return;
                 }
+                if (ownedLock) {
+                    std::string why;
+                    if (const auto v = Steal::CheckNow(f, r, TheftGate::Road::Pick, &why); v != Steal::Verdict::Take) {
+                        spdlog::info("[lockpick] {:08X}: pick of OWNED {:08X} SKIPPED at the write -- witness pre-check: {} (nothing removed, "
+                                     "not unlocked)", fid, rid, v == Steal::Verdict::Pending ? "not conclusive this frame" : why);
+                        std::scoped_lock lk(g_snapMx);
+                        g_witnessSkipped.insert(fid);
+                        return;
+                    }
+                }
+                TheftGate::NoteAction(fid, TheftGate::Road::Pick, rid, ownedLock ? "unlock (owned lock)" : "unlock");
                 if (remove > 0) {
                     const std::int32_t have = CountOf(f, LockpickObject());
                     const std::int32_t n = std::min<std::int32_t>(remove, have);
@@ -962,6 +998,17 @@ namespace MFO::Logistics::Lockpick {
         }
 
         // kUnlocking: wait for the posted Unlock to show on the ref.
+        {   // the write was skipped by the witness pre-check: a clean, transient end (no standing verdict, nothing was spent)
+            bool skipped = false;
+            {   // read and erase under the lock, then end the job OUTSIDE it: EndJob takes g_snapMx itself (non-recursive)
+                std::scoped_lock lk(g_snapMx);
+                skipped = g_witnessSkipped.erase(fid) > 0;
+            }
+            if (skipped) {
+                EndJob(fid, nullptr);
+                return StepResult::kRefused;
+            }
+        }
         if (!a_ref->IsLocked()) {
             spdlog::info("[lockpick] {:08X}: {} {:08X} ({} lock){} in {:.1f}s ({} replay(s)) -- transferring", fid,
                          j.viaKey ? "UNLOCKED with the key" : "PICKED", rid, LevelName(j.level),
@@ -1135,6 +1182,7 @@ namespace MFO::Logistics::Lockpick {
         {
             std::scoped_lock lk(g_snapMx);
             g_snaps.clear();
+            g_witnessSkipped.clear();
         }
     }
 

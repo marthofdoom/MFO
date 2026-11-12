@@ -378,3 +378,19 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
    else` for the chest copy; `owned (never steal)` for the loose ref).
 4. **Owned doors / stations.** A town shop or inn errand whose only way in is an owned or locked door is not declared
    (`[town-walk] ... locked or off-limits`; an owned but legal shop door stays usable). A smithing station is skipped only when the engine says using it is a crime; expect `via=station` lines only for off-limits ones (an owned but legal town smithy stays usable).
+
+## Batch L: Steal (G13), Pick locks (G14), off-class weapon (G16) (MFO `feat/batch-l`; pending review, not field run)
+
+Setup: DEV `MFO.dll` (for `sDevClassEquip`), `MFO_Classes.esl` REGENERATED (it now holds `MFOC_OffClassHalf` 0xA84; an old ESL makes the carriers log `carriers DISABLED ... off-class weapon damage perk not found`), `bClassTree=1`,
+`[Debug] bCrimeGoldProbe=1`, Harbinger ABI 33+ (equip deny) and ABI 18+ (SenseActor). Thief-line follower: `sDevClassEquip = Plugin.esp|HEX:thief:5` (log `[classes] ... default LOGISTICS rows laid down -- 3 added`), then check his
+Logistics tab shows `Always -> Sneak`, `Dark -> Steal (only unseen)`, `Always -> Pick nearby locks`. With the tree OFF add the same rows by hand from the board (they are ordinary gambits).
+1. **Steal, nobody around (G13).** At night or in a dark interior with no NPC in range, an OWNED loose item (coin, gem, potion on a shelf) near a sneaking Thief. `[steal] F= item= owner= witnesses=0 verdict=take`, then `[acquire] ... ACTIVATE (native/main-thread)` and `TOOK`. ZERO `[crime-probe] BOUNTY UP`. PASS = taken, no bounty.
+2. **Steal refused (G13).** Same item with an NPC (awake, facing the item or the follower, inside `iCrimeAlarmRecDistance`) in view, then with the NPC behind a wall but able to see the PLAYER. `[steal] ... verdict=REFUSED:<name> senses the follower` or `... sees the player`; he does not take it. With the NPC asleep in line of sight it is still refused (conservative, listed in the backlog). PASS = refused each time, no bounty.
+3. **Owner in view (G13).** Item owned by an NPC who is far away but in line of sight of either: `REFUSED:the owner <name> ... sees the follower|player`.
+4. **Not sneaking / guard (G13).** Switch his Sneak row off: `REFUSED:the follower is not sneaking`. Guard in sight: `REFUSED:a guard sees the follower or the item`.
+5. **Take skipped at the write.** If an NPC walks in during the walk: `[steal] F= ref=: take SKIPPED at the write -- ...` then `ACTIVATE NO-OP`. PASS = nothing taken, no bounty.
+6. **Pick nearby locks (G14).** Dungeon with an unowned locked chest in range: he walks over, `[lockpick] ... PICKED`, then loots it by his loot rules (`[loot] ... arrived -- looted`). No lockpicks: `refused noPicks` once. PASS = chest opened without any loot rule that wants its contents.
+7. **Owned lock is left alone (G14, Q-L-6).** An OWNED locked chest in range: act.pick_locks does not pick it (`[lockpick] ... REFUSED (owned)` once). Doors are never picked in a town. PASS = no pick of an owned lock, no bounty.
+8. **Crime ring.** If a `[crime-probe] BOUNTY UP` appears, the ring names `road=steal` or `road=pick` with `result=`. Send the block.
+9. **Off-class weapon (G16).** Archer (`archer:5`) carrying a bow and a two-hander: he never wields the two-hander; `[equip-auth] ... never-wield=` counts it. Drop the bow and the one-handers (leave only the two-hander): he equips it, the player sees "<name> has no weapon of his class and fights with <weapon>: his damage is halved.",
+   `MFO.log` `[equip-auth] ... OFF-CLASS fallback weapon ... damage penalty ON`, and his faction rank `MFOC_OffClassWeapon` reads 1 (damage is half). Give him a bow again: the two-hander is unequipped, `penalty OFF`. Dragonborn / no class: nothing changes. PASS = all of that.

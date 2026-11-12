@@ -414,6 +414,26 @@ namespace MFO::Logistics {
                                     !LooseSpecialItemBlocked(ref, base->GetFormID()))
                                     lootable = loose = true;
                                 break;
+                            case Category::Steal:
+                                // ACT.STEAL (card G13): the loose-item loot selection as a SUPERSET, owned items included. Every predicate is the
+                                // one the matching act.loot_* category runs on a loose ref (gold / coin items / purses, valuable MISC, jewellery,
+                                // soul gems, ingredients, any drinkable, lockpicks); equipment and ammo are the loot rules' business. A sneaking
+                                // follower only (the pre-check needs it anyway; this saves the walk). The owner bars are replaced by
+                                // Steal::LooseBarred + the witness pre-check at arrival and at the write.
+                                if (!a_follower->IsSneaking()) break;
+                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base) || IsCoinPurseFlora(ref, base) ||
+                                    base->GetFormID() == kLockpickRef) {
+                                    lootable = loose = true;
+                                } else if ((IsValuableMisc(base) || IsSoulGemItem(base) || IsIngredientItem(base)) &&
+                                           !LooseSpecialItemBlocked(ref, base->GetFormID())) {
+                                    lootable = loose = true;
+                                } else if (auto* armo = base->As<RE::TESObjectARMO>();
+                                           armo && IsJewelryPiece(armo) && !LooseSpecialItemBlocked(ref, armo->GetFormID())) {
+                                    lootable = loose = true;
+                                } else if (auto* alc = base->As<RE::AlchemyItem>(); alc && IsDrinkablePotion(alc)) {
+                                    lootable = loose = true;
+                                }
+                                break;
                             case Category::Museum:
                                 // LOTD (86e3f9pkg, marth: "people would see loose LoTD
                                 // items ignored"): a loose relic the museum still needs,
@@ -427,6 +447,13 @@ namespace MFO::Logistics {
                         }
                     }
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
+                    // batch L: act.steal takes LOOSE items only (a corpse or a container is the loot rules' road, and the
+                    // theft gate bars every owned copy there); act.pick_locks wants a LOCKED CONTAINER only (never a corpse,
+                    // never a loose ref, never an unlocked chest: nothing to pick).
+                    if (a_cat == Category::Steal && !loose) return RE::BSContainer::ForEachResult::kContinue;
+                    if (a_cat == Category::PickLocks &&
+                        (loose || ref->As<RE::Actor>() || !ref->IsLocked()))
+                        return RE::BSContainer::ForEachResult::kContinue;
                     ++dLootable;
 
                     // THE LOOSE-ITEM SOURCE BAR (86e3f9pkg, crime safety): the item is
@@ -437,7 +464,10 @@ namespace MFO::Logistics {
                     // Unconditional (no toggle opens it). Each ref's reason is logged
                     // ONCE (worker-only set, cleared at a cap).
                     if (loose) {
-                        if (const char* why = TheftGate::LooseBarred(a_follower, ref, ref->GetBaseObject() && ref->GetBaseObject()->Is(RE::FormType::Flora) ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ false)) {
+                        // act.steal (G13): the source bars only, NOT the owner bars; the witness pre-check runs at arrival.
+                        if (const char* why = a_cat == Category::Steal
+                                ? Steal::LooseBarred(a_follower, ref, /*a_arrival*/ false)
+                                : TheftGate::LooseBarred(a_follower, ref, ref->GetBaseObject() && ref->GetBaseObject()->Is(RE::FormType::Flora) ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ false)) {
                             static std::unordered_set<RE::FormID> s_barLogged;
                             if (s_barLogged.size() > 4096) s_barLogged.clear();
                             if (s_barLogged.insert(ref->GetFormID()).second) {
@@ -495,7 +525,9 @@ namespace MFO::Logistics {
                     // first (any explicit owner, including the player), then keep
                     // IsOffLimits() as the second bar for cell-owned/no-owner
                     // crime cases. No delay or waiver overrides this.
-                    if (auto* owner = ref->GetOwner()) {
+                    // batch L: act.steal (loose, checked by Steal::LooseBarred above) is the one deliberate exception. act.pick_locks keeps these
+                    // bars (Q-L-6: an owned chest yields nothing, TheftGate bars its copies, so G14 picks UNOWNED chests only for now).
+                    if (auto* owner = a_cat == Category::Steal ? nullptr : ref->GetOwner()) {
                         ++dOwned;
                         // REGRESSION GUARD [ownprobe]: the soak proved every owned drop
                         // was a shop/faction container -- but a KILLED corpse must never
@@ -513,13 +545,17 @@ namespace MFO::Logistics {
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                    if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
+                    if (a_cat != Category::Steal && ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
                     // Locked -- UNLESS the lockpick judge admits it (LP-M1,
                     // logistics/Lockpick.cpp): the excursion then picks it on
-                    // arrival before any transfer. Owned locks are already barred above.
+                    // arrival before any transfer. Owned locks are already barred above
+                    // (act.pick_locks alone may admit one, through Steal::Check inside Admit).
                     if (ref->IsLocked() && !Lockpick::Admit(a_follower, ref, a_now)) {
                         ++dLocked; return RE::BSContainer::ForEachResult::kContinue;
                     }
+                    // act.pick_locks on a chest nobody can see into is a wasted walk: it must hold something, and it must not be
+                    // owned by anyone unless the lock judge admitted it (a locked chest passed Admit just above; an unlocked one was skipped).
+                    if (a_cat == Category::PickLocks && ref->GetInventoryCounts().empty()) { ++dEmpty; return RE::BSContainer::ForEachResult::kContinue; }
                     // Beyond the confidence leash from the player -- too far for
                     // this follower's nerve right now. This is the invisible
                     // string: the same corpse is in-reach when they feel safe and
@@ -544,7 +580,7 @@ namespace MFO::Logistics {
                     // and it kills the "walk to an empty barrel and stall" trips.
                     // A LOOSE ref (route 2b) IS the loot -- it has no inventory
                     // for HasLoot to peek, so the gate does not apply.
-                    if (!loose && !HasLoot(a_follower, ref, a_cat, a_potionWant)) {
+                    if (!loose && a_cat != Category::PickLocks && !HasLoot(a_follower, ref, a_cat, a_potionWant)) {
                         // ARROW PROBE (temp, v0.8.17). marth: "multiple bodies with
                         // arrows available" yet the arrow scan calls every corpse
                         // empty. When an ARROW scan judges a lootable body empty,
@@ -1099,6 +1135,8 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, a_now, RE::ActorValue::kNone, LootMode::kExcursion);
                 else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, a_now, RE::ActorValue::kNone,   LootMode::kExcursion);
                 else if (op == Vocab::kActLootMuseum)         acted = LootNearby(a_follower, Category::Museum,  a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActSteal)              acted = LootNearby(a_follower, Category::Steal,   a_now, RE::ActorValue::kNone,    LootMode::kExcursion);   // batch L, G13
+                else if (op == Vocab::kActPickLocks)          acted = LootNearby(a_follower, Category::PickLocks, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);   // batch L, G14
                 else if (op == Vocab::kActWait) return false;   // Wait is the user's deliberate STOP
                                                          // gambit (#3.3): end the batch -- returning
                                                          // false with nothing "waiting" makes Holding

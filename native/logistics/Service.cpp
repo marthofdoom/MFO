@@ -911,7 +911,12 @@ namespace MFO::Logistics {
                         // harvested (someone -- the player -- may have harvested it mid-leg, which
                         // would turn the readback into a false "not credited" verdict).
                         bool guardPending = false;
-                        const char* arrivalBar = TheftGate::LooseBarred(a_follower, tref, flora ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ true, &guardPending);
+                        // act.steal (card G13): the leg was planned by the Steal category, so the owner bars give way to the
+                        // WITNESS PRE-CHECK (Steal::LooseBarred, its source bars + Steal::Check); every other leg keeps the theft gate.
+                        const bool stealLeg = tr.cat == Category::Steal;
+                        const char* arrivalBar = stealLeg
+                            ? Steal::LooseBarred(a_follower, tref, /*a_arrival*/ true, &guardPending)
+                            : TheftGate::LooseBarred(a_follower, tref, flora ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ true, &guardPending);
                         // THEFT GATE: the guard answer is not back yet (the scan runs on main, one frame): a retry next tick, NOT a verdict. No
                         // blocklist, no travel-fail, the phase is untouched so this arrival is re-entered.
                         if (guardPending) return;
@@ -949,9 +954,20 @@ namespace MFO::Logistics {
                         // MEO-aware: a loose item recognised as gemmed by its MEO title is probed after the pickup.
                         const bool gemLoose = GemRules::NoteLoosePickup(tref);
                         const bool gemSell  = gemLoose && GemRules::SellGambitActive();
-                        auto doActivate = [refID, folID, flora, gemLoose, gemSell]() {
+                        auto doActivate = [refID, folID, flora, gemLoose, gemSell, stealLeg]() {
                             auto* r = RE::TESForm::LookupByID<RE::TESObjectREFR>(refID);
                             auto* f = RE::TESForm::LookupByID<RE::Actor>(folID);
+                            // act.steal: the proof is re-run HERE, on the main thread, immediately before the take, so nothing can
+                            // change between the pre-check and the act. Anything but Take = the take does not happen (never a refund).
+                            if (r && f && stealLeg) {
+                                std::string why;
+                                if (const auto v = Steal::CheckNow(f, r, TheftGate::Road::Steal, &why); v != Steal::Verdict::Take) {
+                                    spdlog::info("[steal] F={:08X} ref={:08X}: take SKIPPED at the write -- {}", folID, refID,
+                                                 v == Steal::Verdict::Pending ? "the pre-check is not conclusive this frame" : why);
+                                    return;
+                                }
+                                TheftGate::NoteAction(folID, TheftGate::Road::Steal, refID, "take (owned item)");
+                            }
                             if (r && f) {
                                 // 86e3haxqx: the engine's pickup sound for THIS activation plays at the
                                 // follower, not as the player's (logistics/PickupSound.cpp).
@@ -998,7 +1014,7 @@ namespace MFO::Logistics {
                     // job's own cleanup run in Step's kUnlocking phase).
                     if (tref->IsLocked() || Lockpick::HasJob(id, tref->GetFormID())) {
                         const auto pick = Lockpick::Step(a_follower, tref, now,
-                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())));
+                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())));   // G14 picks UNOWNED chests only (Q-L-6)
                         if (pick == Lockpick::StepResult::kHold) return;   // the pick IS this tick's action
                         if (pick == Lockpick::StepResult::kRefused) {
                             MarkTravelFailed(tref->GetFormID(), now);        // transient skip, never sticky
@@ -1521,6 +1537,8 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, now);
             else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, now);
             else if (op == Vocab::kActLootMuseum)         acted = Lotd::RunGambit(a_follower, now);   // LOTD: museum loot (the deposit is PriorityDeposit, above)
+            else if (op == Vocab::kActSteal)              acted = LootNearby(a_follower, Category::Steal, now);       // batch L, card G13 (witness pre-check at arrival and at the write)
+            else if (op == Vocab::kActPickLocks)          acted = LootNearby(a_follower, Category::PickLocks, now);   // batch L, card G14 (existing LP-M1 pick; owned locks through Steal::Check)
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
             else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
                      op == Vocab::kActCastPlayer) {

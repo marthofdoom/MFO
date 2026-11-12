@@ -810,7 +810,8 @@ namespace MFO::Logistics {
                           const RE::NiPoint3& a_playerPos, Clock::time_point a_now) {
             if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
                 a_cat == Category::Potions || a_cat == Category::Lockpicks ||
-                a_cat == Category::Ingredients || a_cat == Category::SmithMats)
+                a_cat == Category::Ingredients || a_cat == Category::SmithMats ||
+                a_cat == Category::Steal || a_cat == Category::PickLocks)   // batch L: no player dibs on owned things
                 return true;
 
             const RE::FormID   srcId  = a_src->GetFormID();
@@ -888,6 +889,8 @@ namespace MFO::Logistics {
             case Category::Valuables: return LootValuables(a_follower, a_ref);
             case Category::Museum:    return LootMuseum(a_follower, a_ref);   // LOTD, logistics/Lotd.cpp
             case Category::SmithMats: return LootSmithMaterials(a_follower, a_ref);
+            case Category::Steal:     return false;   // batch L: loose refs only (Service.cpp's arrival); nothing is transferred out of an inventory
+            case Category::PickLocks: return false;   // batch L: it opens a lock; the ordinary loot rules take from the opened chest
             }
             return false;
         }
@@ -910,6 +913,8 @@ namespace MFO::Logistics {
             case Category::Valuables: return LootValuables(a_follower, a_ref, true);
             case Category::Museum:    return LootMuseum(a_follower, a_ref, true);
             case Category::SmithMats: return LootSmithMaterials(a_follower, a_ref, true);
+            case Category::Steal:     return false;
+            case Category::PickLocks: return false;
             }
             return false;
         }

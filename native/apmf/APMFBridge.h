@@ -2069,8 +2069,9 @@ namespace MFO::APMFBridge {
     // thread, unsupported service, bad/unloaded pair): the caller keeps its own test.
     // a_sightRange 0 => Harbinger's default; hearing/proximity ranges are left at 0
     // (Harbinger's defaults). a_anchor is the second listener (the player), 0 = none.
+    // a_hearRadius 0 => Harbinger's default hearing radius (APMF_AwarenessQuery::hearRadius, no ABI change).
     bool SenseOf(RE::FormID a_viewer, RE::FormID a_target, RE::FormID a_anchor, float a_sightRange,
-                 SenseReading& a_out);
+                 SenseReading& a_out, float a_hearRadius = 0.0f);
 
     // ── ch.26 EQUIP PREFERENCE (ABI v22, kIntent_EquipPreference) -- apmf/EquipPreference.cpp ──
     // Weighting phase 1, W1 (marth 2026-10-12: "Direct equip is going. Harbinger has all the

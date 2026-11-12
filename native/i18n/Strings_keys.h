@@ -353,6 +353,9 @@ MFO_STR(Act_LootLockpicks, "Loot lockpicks", 0)
 MFO_STR(Act_LootIngredients, "Loot ingredients", 0)
 MFO_STR(Act_LootValuables, "Loot valuables and gold (to sell)", 0)
 MFO_STR(Act_LootMuseum, "Loot museum items", 0)
+MFO_STR(Act_Steal, "Steal (only unseen)", 0)   // takes OWNED loose items, only when nobody can see him or the player (Thief line)
+MFO_STR(Notice_OffClassWeapon, "{1} has no weapon of his class and fights with {2}: his damage is halved.", 2)   // card G16; {1}=the follower, {2}=the weapon
+MFO_STR(Act_PickLocks, "Pick nearby locks", 0)   // opens nearby locked chests with his lockpicks; an owned lock only when nobody sees
 MFO_STR(Act_EquipTorch, "Equip torch", 0)
 MFO_STR(Act_CastPlayer, "Cast on player", 0)
 

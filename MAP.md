@@ -4191,6 +4191,24 @@ module. Module layout:
   action ring printed after `[crime-probe] BOUNTY UP` (`CrimeProbe.cpp`). Depended-on-by: every take road above, CrimeProbe. What breaks if you change
   it: a take road that bypasses `Take` is a theft hole; `Take`'s fast path must stay the one plain RemoveItem (other behaviour is unchanged);
   `IsAnOwner` (new address id) is deliberately NOT bound (tier A). Open findings: REVIEW-BACKLOG MFO-B790..
+- **STEAL / PICK LOCKS / OFF-CLASS WEAPON (batch L, 2026-11-12, `feat/batch-l`; cards G13, G14, G16; NO co-save, ABI or address change):**
+  `logistics/Steal.{h,cpp}` (new) is THE witness pre-check. `Steal::Check` (any thread, cached 1.5 s, posts the main-thread evaluation like `TheftGate::GuardCheck`) /
+  `CheckNow` (main): Take only when the follower is sneaking, `TheftGate::GuardCheck` is Clear, every loaded live non-teammate actor (animals included) within GMST
+  `iCrimeAlarmRecDistance` (read by name, floored at Harbinger's hearing default 1536) has all senses 0 toward the follower AND the player, sound included (`APMFBridge::SenseOf` with the same sight and hearing radius, Harbinger SenseActor ABI 18; a deferred or
+  unavailable ray = Pending, unreadable service = Refused), and the item's owner (base NPC or faction member), at any distance, is not in `Sightline::MeasureNow` view of either.
+  Log `[steal] F= item= owner= witnesses= verdict=take|REFUSED:` (30 s per follower/ref/verdict); `TheftGate::NoteAction` ring entries `Road::Steal` / `Road::Pick`.
+  `Steal::LooseBarred` = the source bars of `LooseRefBarred` MINUS the owner bars (+ the player's own side), plus `Check` at arrival.
+  G13 `act.steal` (Vocabulary.h `kActSteal`): `Category::Steal`, LOOSE refs only (LootScan.cpp loose switch = superset of the gold/valuables/jewellery/soul gem/ingredient/potion/lockpick
+  predicates, sneaking follower only); the arrival (Service.cpp, `stealLeg`) uses `Steal::LooseBarred(.., arrival)` and the posted `doActivate` re-runs `Steal::CheckNow` ON MAIN right before
+  `ActivateRef` (hit = `take SKIPPED at the write`, readback "ACTIVATE NO-OP"). G14 `act.pick_locks` (`kActPickLocks`): `Category::PickLocks` = locked CONTAINERS only (never corpses, doors, loose);
+  `Lockpick::Admit(.., a_allowOwned, &pending)` can admit an owned/off-limits chest ONLY through `Steal::Check` (never a door) but is PARKED: no caller passes it (Q-L-6, an owned chest yields nothing under TheftGate), so act.pick_locks picks UNOWNED chests only; the posted
+  Unlock still re-checks on main for an owned lock (`g_witnessSkipped` = clean transient end, no standing verdict, cleared by EndJob); once open his ordinary loot rules take. Both are free-tier, logistics table only.
+  `classes/Defaults.cpp LayLogisticsDefaults`: first equip of Thief / Master Thief / Nightingale / Listener appends `Always->Sneak`, `Dark->Steal`, `Always->Pick locks` to the LOGISTICS table (ClassTable.cpp rows
+  with those acts are kept out of the combat set by `IsLogisticsOnlyAct`). G16: `NeverWieldWeaponFor` (EquipAuthority.cpp) = `NeverWieldWeapon` OR off-class (class `weapons` set, `Active()`, a bound weapon never)
+  while he carries any in-set weapon; used by `cast/Equip.cpp`'s four pick loops, `EquipBestOwnedWeapon` and the ch.17 per-item deny list (ABI 33). `OffClassTick` (called from `RefreshEquipDeclaration`)
+  on the held-fallback edge writes `Classes::SetOffClassWeapon` (Carriers.cpp: faction `MFOC_OffClassWeapon` 0x830 rank 1 + perk `MFOC_OffClassHalf` 0xA84, ModAttackDamage x0.5, from `MFO_GenerateESP.py make_offclass_perk`)
+  and a player notice (`Notice_OffClassWeapon`). What breaks: the carriers need the REGENERATED ESL (a missing 0xA84/0x830 disables every class carrier); any other code that takes OWNED loose items must go through
+  `Steal`; `Category` is append-only. Open findings: REVIEW-BACKLOG MFO-B810..
 - **Loot side (was `Logistics_Loot.cpp`, wave-2 split into three):**
   `logistics/LootTake.cpp` (per-category looters `LootAmmo:75` -- a wrapper over
   `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:95`,

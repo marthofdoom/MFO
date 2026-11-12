@@ -129,6 +129,7 @@ namespace MFO::Logistics::TheftGate {
             case Road::Loose: return "loose"; case Road::Flora: return "flora"; case Road::Container: return "container";
             case Road::Corpse: return "corpse"; case Road::Swap: return "swap"; case Road::Gear: return "gear";
             case Road::Lotd: return "lotd"; case Road::Door: return "door"; case Road::Guard: return "guard";
+            case Road::Steal: return "steal"; case Road::Pick: return "pick";
         }
         return "?";
     }

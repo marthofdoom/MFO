@@ -93,7 +93,7 @@ namespace MFO::APMFBridge {
     }
 
     bool SenseOf(RE::FormID a_viewer, RE::FormID a_target, RE::FormID a_anchor, float a_sightRange,
-                 SenseReading& a_out) {
+                 SenseReading& a_out, float a_hearRadius) {
         if (!Config::g_apmfCast.load() || !a_viewer || !a_target) return false;
         const auto* api = ApiV18();
         if (!api || !api->SenseActor) return false;
@@ -102,7 +102,8 @@ namespace MFO::APMFBridge {
         q.viewer     = a_viewer;
         q.target     = a_target;
         q.anchor     = a_anchor;
-        q.sightRange = a_sightRange;   // hearRadius / proximityRadius / flags stay 0: Harbinger's defaults, all four senses
+        q.sightRange = a_sightRange;   // proximityRadius / flags stay 0: Harbinger's defaults, all four senses
+        q.hearRadius = a_hearRadius;   // 0 => Harbinger's default (1536)
         APMF_API::APMF_AwarenessResult r{};
         r.size = sizeof(r);
         const std::uint32_t st = api->SenseActor(&q, &r);

@@ -363,6 +363,16 @@ namespace MFO::Logistics {
     // RefreshEquipDeclaration sends to Harbinger (ABI >= 33). Whatever bLootSpecialItems says. Worker road.
     bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry);
 
+    // OFF-CLASS WEAPON RULE (batch L, card G16, ClickUp 1dfcuabcn02). With the class tree ACTIVE, a follower whose class restricts its
+    // weapons (Classes::Weapon bits; T1 and Dragonborn are unrestricted) never wields a weapon outside that set while he carries ANY
+    // weapon inside it. NeverWieldWeaponFor = NeverWieldWeapon OR that rule: the per-follower form every weapon PICK loop and the
+    // per-item deny list (ABI >= 33) use, so the declaration never names an off-class weapon and Harbinger refuses the engine's own
+    // equip of one. When he carries NO in-set weapon the rule stands down (he would otherwise be unarmed): the fallback is allowed,
+    // OffClassTick then tells the player once and switches the damage penalty on (faction MFOC_OffClassWeapon rank 1, the add-on's
+    // ModAttackDamage x0.5 perk). Bound weapons are never off-class. Worker road.
+    bool NeverWieldWeaponFor(RE::Actor* a_follower, const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry);
+    void OffClassTick(RE::Actor* a_follower);
+
     // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
     // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).
     bool EquipAuthorityLive(RE::FormID a_follower);

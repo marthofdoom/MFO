@@ -16,7 +16,8 @@
 // reads, INVARIANTS #72); until the first answer lands the verdict is BARRED (fail closed, never fail open).
 namespace MFO::Logistics::TheftGate {
 
-    enum class Road : std::uint8_t { Loose, Flora, Container, Corpse, Swap, Gear, Lotd, Door, Guard };
+    enum class Road : std::uint8_t { Loose, Flora, Container, Corpse, Swap, Gear, Lotd, Door, Guard,
+                                     Steal, Pick };   // batch L: act.steal's take, act.pick_locks' unlock (ring entries only)
     const char* RoadName(Road a_road);
 
     enum class GuardState : std::uint8_t { Clear, Seen, Pending };   // Pending = no fresh answer yet: RETRY, never blocklist

@@ -104,6 +104,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Upkeep.cpp
     logistics/Sinks.cpp
     logistics/TheftGate.cpp
+    logistics/Steal.cpp
     logistics/Service.cpp
     logistics/Cast.cpp
     logistics/ClassResolve.cpp
