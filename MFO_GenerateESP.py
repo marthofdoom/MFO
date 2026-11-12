@@ -2067,7 +2067,7 @@ def write_prog_mcm_files(out_dir):
 # LOCAL ID PLAN (ESL-legal 0x800-0xFFF; ADD ONLY, never renumber):
 #   0x800 KYWD manifest join key      0x801 FLST manifest (entry[0] = 0x800)
 #   0x802 FLST passive factions (35, in class-table order = the Id bit index)
-#   0x803 FLST class styles index: the 35 per-class style FLSTs in class-Id order
+#   0x803 FLST class styles index: the 35 per-class style FLSTs in class-Id order, then the 35 zero-avoid TWIN lists (0xB00 + i)
 #   0x880 + i  FLST MFOC_ClassStyles_<Name>: [mask GLOB, that class's CSTYs in slot-bit order]
 #   0x8C0 + i  GLOB MFOC_StyleMask_<Name>: bitmask 1 melee, 2 melee dual, 4 ranged, 8 cast
 #   0x808-0x80A KYWD Marked/Flanked/Guarded (carried by the three marker MGEFs)
@@ -2123,7 +2123,7 @@ CGID_FLANKED_SPELL     = OWN_CLS | 0xA81
 CGID_GUARDED_SPELL     = OWN_CLS | 0xA82
 CGID_MCM_QUEST     = OWN_CLS | 0xA83   # card C11
 CGID_OFFCLASS_PERK = OWN_CLS | 0xA84   # card G16 (off-class weapon rule): granted by classes/Carriers.cpp to every follower with a class equipped
-# Zero-avoid TWINS of the class CSTYs (heavy armor / Living Legend's held guard, see CLS_AVOID_THREAT). Add-only ids.
+# Zero-avoid TWINS of the class CSTYs (heavy armor, see CLS_AVOID_THREAT). Add-only ids.
 CGID_STYLE_TWIN_BASE = OWN_CLS | 0xA85         # one twin per class style with avoidThreat > 0 (<= 95: 0xA85-0xAE3)
 CGID_STYLE_TWIN_FLST_BASE = OWN_CLS | 0xB00    # + class Id: the twin lookup, SAME shape as MFOC_ClassStyles_<Name>
 CLS_NEXT_OBJECT_ID = 0xB23
@@ -2752,7 +2752,7 @@ def class_weapon_bits():
 
 # STYLE SLOTS: a class's styles are looked up through its OWN FLST, never by position in
 # a global run (card C8 consumes this; the DLL must not hard-code CSTY ids).
-#   MFOC_ClassStyles          (0x803)  35 entries, the per-class FLSTs in class-Id order
+#   MFOC_ClassStyles          (0x803)  70 entries: 35 per-class FLSTs in class-Id order, then 35 zero-avoid TWIN lists (0xB00+Id)
 #   MFOC_ClassStyles_<Name>   (0x880+Id) entry[0] = GLOB MFOC_StyleMask_<Name> (0x8C0+Id),
 #                              entry[1..] = that class's CSTYs in ASCENDING SLOT-BIT order,
 #                              exactly the slots the GLOB's bitmask names:
@@ -2974,7 +2974,7 @@ def make_classes_esl():
     flst += prog_flst(CGID_FACTION_LIST, "MFOC_PassiveFactions", faction_fids)
     # Per-class style lookup (see the STYLE SLOTS comment): entry[0] the mask GLOB, then the CSTYs.
     # Entries 35..69 (append-only): the zero-avoid TWIN lists, same class order and the same shape as the lists above; an
-    # entry equals its base style when that style has no Avoid Threat to remove. A DLL that reads only 35 entries is unharmed.
+    # entry equals its base style when that style has no Avoid Threat to remove. An OLDER DLL REJECTS the 70-entry list (it demands exactly 35) and turns the class CSTYs off, loudly; ship the DLL with the ESL.
     flst += prog_flst(CGID_STYLE_LIST, "MFOC_ClassStyles",
                       [CGID_STYLE_FLST_BASE + row['idx'] for row in table]
                       + [CGID_STYLE_TWIN_FLST_BASE + row['idx'] for row in table])

@@ -30,6 +30,7 @@
 #include "MainThread.h"
 #include "classes/Classes.h"
 
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -84,7 +85,14 @@ namespace MFO::APMFBridge {
         // Sweep side: the follower's heavy state (false+known when the main-thread pump is not live: VR, where the style hooks are
         // refused anyway), and the posting of a refresh when due. Returns false while the first answer is outstanding.
         bool HeavyKnown(RE::FormID a_fid, bool& a_heavy) {
-            if (!MainThread::IsInstalled()) { a_heavy = false; return true; }
+            if (!MainThread::IsInstalled()) {
+                static std::atomic<bool> s_said{ false };
+                if (!s_said.exchange(true))
+                    spdlog::warn("[wstyle] the main-thread pump is not installed (VR): the heavy-armor rule cannot read worn armor and "
+                                 "answers 'not heavy' for everyone");
+                a_heavy = false;
+                return true;
+            }
             bool post = false, known = false;
             {
                 std::scoped_lock lk(g_heavyMx);
@@ -156,6 +164,7 @@ namespace MFO::APMFBridge {
         CombatStyle::SnapshotStyleDesires(desires);
         struct Want { RE::FormID fid; RE::FormID style; std::uint32_t flags; };
         std::vector<Want> wants;
+        std::vector<RE::FormID> heavyPending;   // class-style followers whose first heavy-armor read is still outstanding
         wants.reserve(desires.size());
         for (const auto& d : desires) {
             // The two owners never mix (CombatStyle.h): a substrate-only controller takes the cast pair's style, a real
@@ -166,7 +175,7 @@ namespace MFO::APMFBridge {
                 RE::FormID style = d.tableStyle;
                 if (d.tableWide) {   // a class style: the no-dodge switch (see the file header)
                     bool heavy = false;
-                    if (!HeavyKnown(d.follower, heavy)) continue;   // first read outstanding: no claim yet (next sweep)
+                    if (!HeavyKnown(d.follower, heavy)) { heavyPending.push_back(d.follower); continue; }   // first read outstanding: no NEW claim; an existing one stands (step 1 skips it)
                     if (heavy) style = Classes::NoDodgeTwin(style);
                 }
                 wants.push_back({ d.follower, style, d.tableWide ? 0u : APMF_API::kCombatStyle_EquipChoiceOnly });
@@ -179,10 +188,22 @@ namespace MFO::APMFBridge {
         for (auto it = g_styles.begin(); it != g_styles.end();) {
             bool wanted = false;
             for (const Want& w : wants) wanted = wanted || w.fid == it->first;
+            for (const RE::FormID f : heavyPending) wanted = wanted || f == it->first;
             if (!wanted) {
                 if (it->second.handle != APMF_API::kInvalidHandle) ReleaseLocked(api, it->first, it->second, "no stance owns his style");
                 it = g_styles.erase(it);
             } else ++it;
+        }
+        // 1b. A follower with no want and no read outstanding is out of the fight: forget his heavy-armor state, so his next
+        //     fight waits for a fresh read (g_styleMx -> g_heavyMx, g_heavyMx is a leaf).
+        {
+            std::scoped_lock hl(g_heavyMx);
+            for (auto& [fid, h] : g_heavy) {
+                bool live = false;
+                for (const Want& w : wants) live = live || w.fid == fid;
+                for (const RE::FormID f : heavyPending) live = live || f == fid;
+                if (!live) { h.known = false; h.wait = 0; }
+            }
         }
         // 2. File, or re-point on a handoff (melee <-> ranged, a class style arriving, the scope changing).
         for (const Want& w : wants) {

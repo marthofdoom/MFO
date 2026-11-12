@@ -420,8 +420,7 @@ namespace MFO::Classes {
     // Immutable after kDataLoaded, so ANY thread.
     [[nodiscard]] RE::TESCombatStyle* PackageStyle(Id a_class, std::uint8_t a_stance, bool a_dual);
     // The zero-avoid TWIN of a class CSTY (same style, Avoid Threat 0), by the class style's FormID; the style itself when it has no
-    // Avoid Threat or no twin resolved. Used by apmf/StyleClaims.cpp while a follower wears heavy armor or Living Legend's guard is
-    // up. Immutable after kDataLoaded, so ANY thread.
+    // Avoid Threat or no twin resolved. Used by apmf/StyleClaims.cpp while a follower wears heavy armor. Immutable after kDataLoaded, so ANY thread.
     [[nodiscard]] RE::FormID NoDodgeTwin(RE::FormID a_classStyle);
     // ch.23: the factor on the confidence leash radius for this follower's package class (1.0 = none; Config::g_classLeashMult for a
     // class flagged Flag::kShortLeash / kNearPlayer). WORKER.

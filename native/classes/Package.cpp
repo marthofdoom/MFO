@@ -7,7 +7,7 @@
 //   - the ch.23 leash length       -> Scheduler ServiceLeashWithReachHold (PackageLeashScale below)
 // Packages never choose targets and never swap weapons (marth 2026-11-09). Tier 1 has NO package ("t1 behaves vanilla").
 //
-// THE CSTY LOOKUP (the C7 STYLE SLOTS contract, MFO_GenerateESP.py): manifest FLST entry[2] = MFOC_ClassStyles, 35 entries
+// THE CSTY LOOKUP (the C7 STYLE SLOTS contract, MFO_GenerateESP.py): manifest FLST entry[2] = MFOC_ClassStyles, 35 entries (70 with the zero-avoid twin lists, entries 35..69)
 // in class-Id order, each a per-class FLST whose entry[0] is a GLOB bitmask (1 melee single, 2 melee DUAL twin, 4 ranged, 8 cast;
 // the GLOB's VALUE persists at runtime, its editor-id does not) and whose entries[1..] are that class's CSTYs in ASCENDING slot-bit
 // order. Nothing here names a FormID: the DLL walks the lists. A shape that does not match (wrong count, a non-GLOB front,
@@ -33,7 +33,7 @@ namespace MFO::Classes {
             RE::TESCombatStyle* cast      = nullptr;
         };
         std::array<ClassStyles, kClassCount> g_styles{};   // written ONCE at kDataLoaded, read-only after
-        // Zero-avoid twin of a class CSTY (heavy armor / Living Legend's held guard: apmf/StyleClaims.cpp). Key = the class style's
+        // Zero-avoid twin of a class CSTY (heavy armor: apmf/StyleClaims.cpp). Key = the class style's
         // FormID, value = the twin's (the style itself when it has no Avoid Threat). Written ONCE at kDataLoaded, read-only after.
         std::unordered_map<RE::FormID, RE::FormID> g_noDodge;
     }
@@ -112,8 +112,8 @@ namespace MFO::Classes {
             for (std::size_t k = 1; k < cl->forms.size(); ++k) g_noDodge[cl->forms[k]->GetFormID()] = tl->forms[k]->GetFormID();
         }
         if (!hasTwins)
-            spdlog::warn("[classes] package styles: the class ESL has no zero-avoid twin lists -- heavy armor and Living Legend's "
-                         "guard cannot remove Avoid Threat (regenerate MFO_Classes.esl)");
+            spdlog::warn("[classes] package styles: the class ESL has no zero-avoid twin lists -- heavy armor cannot remove "
+                         "Avoid Threat (regenerate MFO_Classes.esl)");
         spdlog::info("[classes] package styles resolved: {} of {} classes, {} CSTY record(s) (bClassStyles = {})", resolved,
                      kClassCount, styles, Config::g_classStyles.load() ? 1 : 0);
     }
