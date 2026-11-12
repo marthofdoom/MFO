@@ -7,7 +7,7 @@
 // (read by Score.cpp through Profile::curves), and (b) the hand-picked EDGE constants that decide a class-relevant edge case
 // (Scalars). The shipped table is every class row PRESENT with NO override and the shared constants, so every score is
 // bit-identical to the uncustomised catalogue until the sim batch fills a row in. The tree-OFF base classes
-// (Classes::T1ForOverride: Melee / Ranged / Mage) are rows 0..2, the same rows the T1 classes use.
+// (Classes::T1ForOverride: Melee / Ranged / Mage) have their OWN rows 35..37, seeded from the T1 rows 0..2.
 //
 // THREADING: the shipped table and the profiles built from it are immutable after their first (thread-safe) use; any thread may
 // read them. The sim edits its own COPY of the table (Table), never the shipped one.
@@ -22,11 +22,14 @@
 
 namespace MFO::Iaus::ClassCurves {
 
-    inline constexpr std::size_t kRows = 35;   // Classes::kClassCount (SpellBook.cpp asserts it); the row index IS the Classes::Id ordinal
+    inline constexpr std::size_t kClassRows = 35;                  // Classes::kClassCount (SpellBook.cpp asserts it); rows 0..34: the row index IS the Classes::Id ordinal
+    inline constexpr std::size_t kBaseOffFirst = kClassRows;       // rows 35..37: the tree-OFF base classes (melee-off / ranged-off / mage-off), one per T1 root
+    inline constexpr std::size_t kRows = kClassRows + 3;           // marth: the tree-OFF bases are their OWN cells that loosely follow the tree-ON versions
 
     // The class-relevant edge constants. Defaults are the shared constants they replace.
     struct Scalars {
         float drinkHealthLine = kDrinkHealthLine;   // Generate.cpp: below it (health potion in stock) the Knight guard line is off, drink first
+        bool  drinkHealthLineSet = false;           // false: Apply derives it from the row's DrinkHealth/DrinkNeed midpoint override (b) when there is one
         float touchSpentSec   = 3.0f;               // Candidates.cpp: seconds after a touch cast that he is "backing out" (== Reposition::kTouchSpentSec)
     };
 

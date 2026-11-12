@@ -22,7 +22,8 @@
 
 namespace MFO::Iaus::SpellBook {
 
-    static_assert(ClassCurves::kRows == Classes::kClassCount, "one class-curve row per class");
+    static_assert(ClassCurves::kClassRows == Classes::kClassCount && ClassCurves::kRows == Classes::kClassCount + 3,
+                  "one class-curve row per class, plus the three tree-OFF base rows");
 
     namespace {
 
@@ -472,7 +473,11 @@ namespace MFO::Iaus::SpellBook {
         if (!def) def = Classes::T1ForOverride(Followers::ResolvedClassFast(a_follower));
         // Per-class curves (ruling Q-class-curves): the curve row is this class's (the tree-OFF base class when the tree is off or
         // no class is equipped). IausSource scores with ClassCurves::ProfileFor(gate.curveClass); the edge constants land on the gate.
-        if (def) ClassCurves::Apply(static_cast<std::uint8_t>(def->id), g);
+        if (def) {
+            // Tree OFF: def is the T1 root (T1ForOverride, id 0..2) and the follower scores with the tree-OFF base row of that root.
+            const auto row = static_cast<std::uint8_t>(g.treeOn ? static_cast<std::size_t>(def->id) : ClassCurves::kBaseOffFirst + static_cast<std::size_t>(def->id));
+            ClassCurves::Apply(row, g);
+        }
         if (!g.treeOn) {
             // THE CLASS TREE IS OFF: THE CLASS GATE RESTRICTS NOTHING (marth Q63, card I6; closes MFO-B657). Any
             // known spell, power attack, taunt and retreat are open, and no weapon category is gated, exactly as

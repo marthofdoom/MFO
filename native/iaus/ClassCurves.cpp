@@ -11,7 +11,11 @@ namespace MFO::Iaus::ClassCurves {
     namespace {
         // PLACEHOLDER STRUCTURE: one Row per class, nothing overridden. The sim batch fills a row here (a CurveOverride for a
         // (family, cons) pair and/or a Scalars value) with the evidence for it; until then the class scores with the shared catalogue.
-        Table MakeDefaults() { return Table{}; }
+        Table MakeDefaults() {
+            Table t{};
+            for (std::size_t i = 0; i < 3; ++i) t[kBaseOffFirst + i] = t[i];   // each tree-OFF base row starts as its T1 row
+            return t;
+        }
     }
 
     const Table& Defaults() {
@@ -36,7 +40,11 @@ namespace MFO::Iaus::ClassCurves {
 
     void Apply(const Row& a_row, std::uint8_t a_classId, ClassGate& a_gate) {
         a_gate.curveClass      = a_classId;
-        a_gate.drinkHealthLine = a_row.scalars.drinkHealthLine;
+        float line = a_row.scalars.drinkHealthLine;
+        if (!a_row.scalars.drinkHealthLineSet)   // the guard-line cut-off follows the row's own DrinkNeed midpoint unless a value was set
+            for (const auto& o : a_row.curves)
+                if (o.family == Family::DrinkHealth && o.cons == Cons::DrinkNeed && o.curve.kind == CurveKind::Logi) line = o.curve.b;
+        a_gate.drinkHealthLine = line;
         a_gate.touchSpentSec   = a_row.scalars.touchSpentSec;
     }
 
@@ -59,7 +67,7 @@ namespace MFO::Iaus::ClassCurves {
     }
 
     bool SetScalar(Row& a_row, std::string_view a_name, float a_v) {
-        if (a_name == "drinkHealthLine") a_row.scalars.drinkHealthLine = a_v;
+        if (a_name == "drinkHealthLine") { a_row.scalars.drinkHealthLine = a_v; a_row.scalars.drinkHealthLineSet = true; }
         else if (a_name == "touchSpentSec") a_row.scalars.touchSpentSec = a_v;
         else return false;
         return true;
