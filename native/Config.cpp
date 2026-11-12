@@ -363,6 +363,7 @@ namespace MFO::Config {
             else if (a_key == "fChaseMin")          setF(g_chaseMin,       64.0f, 8192.0f);
             else if (a_key == "fChaseMax")          setF(g_chaseMax,       64.0f, 8192.0f);
             else if (a_key == "fMeleeReach")        setF(g_meleeReach,     32.0f, 1024.0f);
+            else if (a_key == "fBlockHoldSeconds")  setF(g_blockHoldSeconds, 0.25f, 10.0f);   // act.block: the guard's window (Harbinger ch.31, ABI 43); INI-only
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -590,6 +591,7 @@ namespace MFO::Config {
             g_chaseMin           = 600.0f;
             g_chaseMax           = 3000.0f;
             g_meleeReach         = 200.0f;
+            g_blockHoldSeconds   = 2.5f;
         }
 
     }

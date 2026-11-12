@@ -177,6 +177,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ErrandClaims.cpp
     apmf/Place.cpp
     apmf/CombatMove.cpp
+    apmf/BlockClaims.cpp
     apmf/GroundApproach.cpp
     apmf/Disengage.cpp
     apmf/ErrandWork.cpp

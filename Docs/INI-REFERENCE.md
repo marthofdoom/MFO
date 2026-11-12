@@ -61,6 +61,7 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 - **`bCommandCast`** (default `0`). Probe only. DoCombatSpellApply is an instant SILENT apply, not an animated cast -- kept solely to measure whether it deducts magicka.
 - **`fSuppressWindow`** (default `1.5`). Seconds a follower stays quiet after a real action fires.
 - **`iCastSource`** (default `3`). Which caster a gambit spell uses. 3 = kInstant applies the effect but plays NO animation (proven). 1 = right hand is the candidate for a visible cast. 0 = left hand, 2 = other. Use the Probe tab to find which animates. PROVEN 2026-07-21: NO source animates. Left at 3 (kInstant) because the hand sources buy nothing and kInstant is the honest name for what happens.
+- **`fBlockHoldSeconds`** (default `2.5`, range 0.25 to 10). Plain INI, not in the MCM. How long, in seconds, one `Block` gambit holds the follower's guard up. Needs Harbinger with ABI 43. While the guard is up he does not attack or cast. The row's cooldown on the board (4 seconds on the Knight's default row) is the time from one raise to the next, so 2.5 and 4 mean a guard for 2.5 seconds and then 1.5 seconds of his normal fighting.
 
 ## [Debug]
 

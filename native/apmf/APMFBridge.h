@@ -1894,6 +1894,28 @@ namespace MFO::APMFBridge {
     std::uint32_t RequestBash(RE::FormID a_follower, RE::FormID a_foe, bool a_power);
     void          PollCombatMove(RE::FormID a_follower);
     void          CombatMoveProbeTick(RE::Actor* a_follower);
+    // ── BLOCK (Harbinger ch.31, ABI v43, kCombatMove_Block / kCombatMove_BlockEnd) -- apmf/BlockClaims.cpp ────────────
+    // The gambit action "Block" (act.block): a HELD guard for [Evaluator] fBlockHoldSeconds. Harbinger raises it by the
+    // engine's own Left Attack action, keeps it up for the window (his own offense and the engine's shorter block do not
+    // run meanwhile) and lowers it by Left Release. A one-shot request with a duration, never a claim; nothing is saved.
+    // BlockSupported: APMF present AND abiVersion >= 43. BlockHandsReason: MFO's own pre-gate, nullptr when his weapon is
+    // drawn and his hands would block (a shield or torch in the left hand, or a one-handed / two-handed melee weapon with
+    // nothing else in the left), else why not. ServiceBlock: ask (or renew past 60% of the window); a_handleOut = the
+    // handle that stands. PollBlock: writes each outcome to the log ONCE ("[block]" lines) and starts a 2 s back-off
+    // after a refusal or failure. ReleaseBlock: the dismissal / MFO-off road (kCombatMove_BlockEnd when a request is
+    // out). Worker road; own LEAF mutex, never g_mx.
+    enum class BlockAsk : std::uint8_t {
+        NoRoad,      // Harbinger absent or older than ABI 43
+        Requested,   // a new request (or a renewal) was sent
+        Held,        // a request is out or the hold has more than 40% of its window left: nothing sent
+        Backoff,     // inside the 2 s back-off after a refusal or failure: nothing sent
+        Refused,     // Harbinger refused at the call
+    };
+    bool        BlockSupported();
+    const char* BlockHandsReason(RE::Actor* a_follower);
+    BlockAsk    ServiceBlock(RE::FormID a_follower, std::uint32_t* a_handleOut = nullptr);
+    void        PollBlock(RE::FormID a_follower);
+    void        ReleaseBlock(RE::FormID a_follower, const char* a_why);
     // ── GIVE GROUND (Harbinger ch.24 on a POINT, ABI v39, kApproach_Point) -- apmf/GroundApproach.cpp ─────────────────
     // A short ch.24 claim whose centre is a point 400 units straight away from a_foe: the engine's own return-to-area
     // movement walks the follower there while he keeps fighting. GroundStepSupported: APMF present AND abiVersion >= 39.

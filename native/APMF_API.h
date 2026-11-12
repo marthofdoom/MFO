@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v42, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v43, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 42;
+    inline constexpr std::uint32_t kABIVersion = 43;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -742,6 +742,9 @@ namespace APMF_API {
                                      //       1.6.1170 / 1.5.97, a failed address row), the player, actor 0, no
                                      //       param, a move this ABI does not build (kCombatMove_Block is RESERVED).
                                      //       See "ABI v38: COMBAT MOVE" at the end of this header.
+                                     //       ABI v43: kCombatMove_Block is BUILT (a HELD guard: param.fval = the
+                                     //       hold window in seconds) and kCombatMove_BlockEnd ends it. See "ABI
+                                     //       v43: BLOCK" at the end of this header.
         kIntent_Aversion = 32,       // ch.32 AVERSION (ABI v41, 2026-11-11, MFO class plan card H2). This actor is
                                      //       LESS LIKELY TO BE TARGETED. Mode: WEIGHT at the source, never a pin and
                                      //       never a deny of the foe. When another actor's STANDARD target
@@ -1694,12 +1697,15 @@ namespace APMF_API {
     //   none   kIntent_PotionAllowance ABI v37: nothing read; the predicate is SetPotionAllowance's.
     //   ival   kIntent_CombatMove      ABI v38: a CombatMove (REQUIRED).
     //   target kIntent_CombatMove      ABI v38: the foe the move is meant for (optional; reported, never aimed at).
+    //   fval   kIntent_CombatMove      ABI v43: with kCombatMove_Block ONLY, the hold window in seconds (0 =
+    //                                  kCombatBlockDefaultS; clamped to [kCombatBlockMinS, kCombatBlockMaxS]).
     //   fval   kIntent_Aversion        ABI v41: the weight, strictly inside (0, 1) (REQUIRED). Nothing else read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
     // kIntent_PursuitLeash (ABI v16), kIntent_CombatApproach (ABI v19), kIntent_CastGuard (ABI v21),
-    // kIntent_CombatSubstrate (ABI v23), kIntent_Place with kPlace_SetYaw (ABI v28) and kIntent_Aversion (ABI v41);
+    // kIntent_CombatSubstrate (ABI v23), kIntent_Place with kPlace_SetYaw (ABI v28), kIntent_Aversion (ABI v41)
+    // and kIntent_CombatMove with kCombatMove_Block (ABI v43);
     // it stays reserved for a future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target
     // is read by kIntent_PursuitLeash (ABI v16, the anchor), kIntent_CombatApproach (ABI v19, X) and
     // was by kIntent_SelectSpell (retired). pos is read by
@@ -3507,6 +3513,9 @@ namespace APMF_API {
         kCombatMove_Block     = 3,  // RESERVED. Not built in ABI v38: REFUSED at the call. (The engine's block is
                                     //   the Left Attack action held and the Left Release action; it needs a
                                     //   window, a release and a deny of the actor's own offense for that window.)
+                                    //   ABI v43: BUILT, a held guard. See "ABI v43: BLOCK" below. An APMF older
+                                    //   than v43 still refuses it at the call.
+        kCombatMove_BlockEnd  = 4,  // ABI v43: lower the guard this client holds on the actor, now.
     };
 
     // What became of a combat move, per handle. APPEND-ONLY: never renumber.
@@ -3522,6 +3531,9 @@ namespace APMF_API {
         kCombatMoveState_Failed  = 4,  // the action was sent and the engine refused it (kCombatMoveWhy_EngineRefused),
                                        //   or it returned success without the attack data / state reading back
                                        //   (kCombatMoveWhy_NotApplied), or the step threw (kCombatMoveWhy_Error)
+        kCombatMoveState_Ended   = 5,  // ABI v43, kCombatMove_Block only: the guard WAS held (the record was
+                                       //   Started) and the hold is over. `why` says how: kCombatMoveWhy_HoldExpired,
+                                       //   _HoldEndedByClient, _HoldRenewed or _HoldBroken
     };
 
     // Why a combat move was refused or failed (APMF_CombatMoveStateInfo::why). APPEND-ONLY.
@@ -3542,6 +3554,23 @@ namespace APMF_API {
         kCombatMoveWhy_NotApplied     = 11,  // kCombatMoveState_Failed: it returned true, but the actor's attack
                                              //   data is not the entry or its attack state is not Bash
         kCombatMoveWhy_Error          = 12,  // kCombatMoveState_Failed: an exception inside Harbinger's step
+        // ABI v43 (kCombatMove_Block / kCombatMove_BlockEnd):
+        kCombatMoveWhy_NoBlockItem    = 13,  // Refused: the actor's hands would not block. The Left Attack action
+                                             //   blocks with a shield or a torch in the left hand, or with a
+                                             //   one-handed or two-handed melee weapon and nothing else in the
+                                             //   left. Anything else there (a weapon, spell, staff, bow, crossbow,
+                                             //   bare fists) makes that action an attack or a cast: never sent
+        kCombatMoveWhy_HeldByOther    = 14,  // Refused: another client's block hold stands on the actor (blocker =
+                                             //   its handle). Holds are short windows; ask again
+        kCombatMoveWhy_NoHold         = 15,  // Refused (kCombatMove_BlockEnd): this client holds no block on the actor
+        kCombatMoveWhy_HoldTableFull  = 16,  // Refused: kCombatBlockMaxHolds actors are already held
+        kCombatMoveWhy_HoldExpired    = 17,  // Ended: the window ran out; Harbinger lowered the guard
+        kCombatMoveWhy_HoldEndedByClient = 18,  // Ended: the client's kCombatMove_BlockEnd lowered it
+        kCombatMoveWhy_HoldRenewed    = 19,  // Ended: a newer kCombatMove_Block of the same client took the hold
+                                             //   over (the guard stayed up; read the newer handle from here on)
+        kCombatMoveWhy_HoldBroken     = 20,  // Ended: the hold could not be kept. The actor died, unloaded, ran out
+                                             //   of stamina (the engine's own block rule), changed what is in his
+                                             //   hands, sheathed, a combat substrate took him, or a load came
     };
 
     inline constexpr std::uint32_t kCombatMoveInfo_HitSeen    = 1u << 0;  // a hit event with the Bash flag, caused by the
@@ -3551,6 +3580,15 @@ namespace APMF_API {
     inline constexpr std::uint32_t kCombatMoveInfo_HitOnTarget = 1u << 2; // that hit landed on the named target
     inline constexpr std::uint32_t kCombatMoveInfo_InCombat   = 1u << 3;  // the actor was in combat at the send
     inline constexpr std::uint32_t kCombatMoveInfo_WeaponOut  = 1u << 4;  // the actor's weapon was drawn at the send
+    inline constexpr std::uint32_t kCombatMoveInfo_HoldLive   = 1u << 5;  // ABI v43, kCombatMove_Block: the guard is
+                                                                          //   held NOW (set at Started, cleared at Ended)
+    inline constexpr std::uint32_t kCombatMoveInfo_BlockedAHit = 1u << 6; // ABI v43, kCombatMove_Block: a hit ON the
+                                                                          //   actor carried the Blocked flag while the
+                                                                          //   guard was held (hitTarget = the attacker)
+    inline constexpr std::uint32_t kCombatMoveInfo_ReRaised   = 1u << 7;  // ABI v43, kCombatMove_Block: the engine
+                                                                          //   dropped the guard inside the window (a
+                                                                          //   stagger, a recoil, its own Block leaf
+                                                                          //   ending) and Harbinger raised it again
     inline constexpr std::uint32_t kCombatMoveHitWindowMs     = 2500;     // wall ms after the start in which a bash
                                                                           //   hit by the actor counts as this move's
     inline constexpr std::uint32_t kCombatMoveStateGraceMs    = 30000;    // a finished record stays until it has been
@@ -3639,6 +3677,63 @@ namespace APMF_API {
     //
     // Gate on `abiVersion >= 42` (INVARIANTS #14b). An older APMF ignores the bit: the claim then carries a
     // target the Reanimate caster never reads, and the engine picks its own corpse.
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v43: BLOCK (kCombatMove_Block, kCombatMove_BlockEnd) -- a held guard, by the engine's own block road
+    // ═════════════════════════════════════════════════════════════════════════════
+    // NO new slot or struct: two CombatMove values, one CombatMoveState, eight CombatMoveWhy values, three info
+    // bits and the constants below. A v43 client still holds an APMF_API_v38* and reads the outcome with
+    // GetCombatMoveState. Still a ONE-SHOT REQUEST, never a claim: the handle labels the request, Release and
+    // Repoint do nothing, IsClaimLive is false. What is new is that the move has a DURATION.
+    //
+    // THE ENGINE ROAD (read in the 1.6.1170, 1.5.97 and 1.7.104 executables). The combat AI's own Block leaf
+    // raises the guard by processing the LEFT ATTACK action for the actor (no animation event named: the engine
+    // picks the action's own idle, which for blocking hands is "blockStart"), and the engine's post-action step
+    // then sets the actor's WANT-BLOCK state, the one input that keeps the guard up. The leaf lowers it again
+    // with the LEFT RELEASE action ("blockStop", which clears that state). Harbinger sends those same two
+    // actions, and nothing else: no animation event of its own, no write to the actor.
+    //
+    // RequestEx(actor, kIntent_CombatMove, basis, &param) with param.ival = kCombatMove_Block and param.fval =
+    // the hold window in seconds. On the game thread, once:
+    //   * the checks of a combat move (loaded, alive, not in a kill move, no combat substrate, the calling
+    //     client outranks Engine on the CombatAction facet), plus: his weapon is drawn, no attack is in progress
+    //     (kCombatMoveWhy_Busy), and his HANDS WOULD BLOCK (kCombatMoveWhy_NoBlockItem). A ch.7 Offense deny does
+    //     NOT refuse a block (a guard is not offense);
+    //   * the Left Attack action. kCombatMoveState_Started only when the engine accepted it AND the actor's
+    //     want-block state reads back set; else kCombatMoveState_Failed (kCombatMoveWhy_EngineRefused, or
+    //     kCombatMoveWhy_NotApplied when the action ran as something other than a block, logged with the event).
+    // WHILE THE HOLD STANDS (kCombatMoveInfo_HoldLive), for that actor:
+    //   * HIS OWN OFFENSE IS DENIED: every Offense leaf of his combat tree (attack, bash, ranged attack, the cast
+    //     leaves, shout) fails at its entry, the ch.7 mechanism. Declared and undeclared casts alike: any of them
+    //     would drop the guard;
+    //   * THE ENGINE'S RELEASE IS DENIED AT ITS SOURCE: his tree's own Block and BlockAttack leaves fail at their
+    //     entry, so neither runs its own shorter timer and lowers the guard when it ends;
+    //   * if the engine drops the guard anyway (a stagger, a recoil, a Block leaf that was already running when
+    //     the hold began), Harbinger raises it again when he can block again (kCombatMoveInfo_ReRaised), at most
+    //     every kCombatBlockReRaiseMs.
+    // THE HOLD ENDS (kCombatMoveState_Ended) when the window runs out (Harbinger sends Left Release), on
+    // kCombatMove_BlockEnd from the same client, when a newer kCombatMove_Block of the same client takes it over
+    // (the way to keep a guard up: ask again before the window ends; the guard does not drop in between), or
+    // when it cannot be kept (kCombatMoveWhy_HoldBroken: dead, unloaded, stamina at 0, hands changed, sheathed,
+    // a substrate, a load). A client's own kCombatMove_Bash / _PowerBash during its hold is allowed: it is the
+    // client's declared move, and the engine bashes from the guard.
+    //
+    // WHAT IT IS NOT. Not a claim, so no arbitration between clients: the first hold on an actor stands and
+    // another client's request is refused (kCombatMoveWhy_HeldByOther). Not a movement hold: he walks, turns and
+    // closes as his AI decides. Not a deny of what is in his hands: the tree's equip leaves and other equip
+    // sources can still swap his shield away (the hold then ends, HoldBroken); a client that needs the guard to
+    // survive that holds ch.17 too. Not a ward: whether a hit is blocked is the engine's own angle and timing.
+    //
+    // Gate on `abiVersion >= 43` (INVARIANTS #14b). An older APMF refuses kCombatMove_Block at the call
+    // ("reserved") and does not know kCombatMove_BlockEnd ("not a CombatMove this ABI builds").
+    //
+    // FIELD STATUS: built from the disassembly, NOT yet observed on a deck. [Probe] bCombatMove logs the
+    // target's want-block state on every melee hit; a held guard logs its raise, every re-raise and its end.
+    inline constexpr float         kCombatBlockDefaultS   = 1.5f;   // param.fval 0
+    inline constexpr float         kCombatBlockMinS       = 0.25f;  // a shorter window is raised to this (logged)
+    inline constexpr float         kCombatBlockMaxS       = 10.0f;  // a longer window is cut to this (logged)
+    inline constexpr std::uint32_t kCombatBlockMaxHolds   = 16;     // actors held at once
+    inline constexpr std::uint32_t kCombatBlockReRaiseMs  = 250;    // the least wall ms between two raises of one hold
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

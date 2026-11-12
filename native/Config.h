@@ -1221,6 +1221,10 @@ namespace MFO::Config {
     // (GAMBIT_FLOWS §3.2/3.3, 150/200u). fMeleeReach -- tunable by editing the
     // synced INI with no rebuild.
     inline std::atomic<float> g_meleeReach{ 200.0f };
+    // act.block ([Evaluator] fBlockHoldSeconds, INI-only, 0.25..10, default 2.5): how long one "Block" gambit fire holds
+    // the follower's guard up (Harbinger ch.31 kCombatMove_Block, ABI 43; the same clamp as Harbinger's own). The row's
+    // cooldown (default 4 s on the class rows) is the time from one raise to the next.
+    inline std::atomic<float> g_blockHoldSeconds{ 2.5f };
 
     // Which caster a gambit spell goes through. PROVEN 2026-07-21: NO source
     // animates -- kLeftHand/kRightHand/kOther were all tried in the field and

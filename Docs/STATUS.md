@@ -10,6 +10,16 @@
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
+- **2026-11-11, MELEE BATCH (T2 batch M; `feat/melee-moves` on top of `feat/g7-reanimate` + `feat/class-aversion`, Harbinger
+  `feat/melee-moves`; NOT merged, NOT field run).** One paragraph per item.
+  **Item 1, Block (Harbinger ABI 43).** New gambit action `Block` (`act.block`, APPENDED): the follower holds his guard up
+  for `[Evaluator] fBlockHoldSeconds` (2.5 s). Harbinger's ch.31 `kCombatMove_Block` raises it by the engine's own block
+  action and denies his own offense and the engine's own release for the window. `apmf/BlockClaims.cpp` (new), a handler
+  in `cast/Fire.cpp`, the board row with a cooldown cell, and the Knight / Great Knight default row
+  `Foe: Targeting me (melee) -> Block` with a 4 s cooldown. `APMF_API.h` mirrors Harbinger's v43 byte for byte.
+  Sentient AI followers do not block yet (MFO-B800). Questions Q-melee-1 and Q-melee-2. Test steps:
+  `in-game-test-list.md` Part 3d. Backlog MFO-B800..B802.
+
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense
   deny). Card G3: `Concealment.cpp`, a sneak class a foe has found runs to a point no foe can see (MFO's own rays,

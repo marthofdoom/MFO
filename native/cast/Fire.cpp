@@ -568,6 +568,33 @@ namespace MFO::Actuation {
             return { Result::Fired, std::format("bash requested -> {} (h={})", foe->GetName() ? foe->GetName() : "?", h) };
         }
 
+        if (op == Vocab::kActBlock) {
+            // BLOCK (Harbinger ch.31 held guard, ABI v43; apmf/BlockClaims.cpp). MFO owns WHEN (the rule's condition) and
+            // for HOW LONG ([Evaluator] fBlockHoldSeconds); Harbinger raises the guard by the engine's own block action,
+            // denies his own offense and the engine's own release for the window, and lowers it. Everything before the
+            // request is TRANSPARENT: a block that cannot be asked for mutates nothing and the rows below run.
+            if (!APMFBridge::BlockSupported())
+                return { Result::FailedOther, "no block road (Harbinger absent or older than ABI 43)", true };
+            if (const char* why = APMFBridge::BlockHandsReason(a_follower))
+                return { Result::FailedSkill, std::format("block: {}", why), true };
+            std::uint32_t h = 0;
+            switch (APMFBridge::ServiceBlock(a_follower->GetFormID(), &h)) {
+            case APMFBridge::BlockAsk::Requested:
+                return { Result::Fired, std::format("guard up for {:.1f} s (h={})",
+                                                    Config::g_blockHoldSeconds.load(std::memory_order_relaxed), h) };
+            case APMFBridge::BlockAsk::Held:
+                // The guard is up (or its request is about to run): the tick is this rule's, as with a standing attack.
+                return { Result::NoOp, "holding his guard" };
+            case APMFBridge::BlockAsk::Backoff:
+                return { Result::FailedOther, "block: waiting after a refusal", true };
+            case APMFBridge::BlockAsk::Refused:
+                return { Result::FailedOther, "block refused by Harbinger at the call", true };
+            case APMFBridge::BlockAsk::NoRoad:
+            default:
+                return { Result::FailedOther, "no block road", true };
+            }
+        }
+
         if (op == Vocab::kActGiveGround) {
             // GIVE GROUND (Harbinger ch.24 on a point, ABI v39). MFO declares the point (straight away from the chosen foe);
             // the engine's own return-to-area movement walks him there while he keeps fighting. Transparent when no step can
