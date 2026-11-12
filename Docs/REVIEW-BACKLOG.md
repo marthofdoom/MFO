@@ -3096,3 +3096,12 @@ As handed to the author: "FILED line repeats per stand-down." After every stand-
 
 ### MFO-B765 (SEV-5, OPEN, apmf/AversionClaims.cpp FileLocked, against 5c77e8a, Opus tier-3 review of feat/class-aversion + Harbinger 0a052e1, finding H2-5)
 As handed to the author (the reviewer's full report was not on disk; this is the finding as the coordinator relayed it): "MFO AversionClaims.cpp FileLocked latches g_avSeatRefused for the session on any refusal and blames the seats (AimClaims has the same shape)". `FileLocked` sets `g_avSeatRefused` on the first refused `RequestEx`, whatever Harbinger's reason was (a weight out of range, an unloaded actor, the player), logs it as the seats not being installed, and files no aversion claim for anybody until the next process start. `apmf/AimClaims.cpp` has the same latch. Reasoning for SEV-5: today the only refusals MFO can draw are the seat-level ones (MFO clamps the weight inside (0, 1) and files for loaded followers only), so the blame is right in practice; the latch becomes wrong the day Harbinger adds a per-request refusal. The fix is to ask Harbinger why (a seat-state query, or the refusal reason) before latching.
+
+### MFO-B780 (SEV-4, OPEN, Concealment.cpp ServiceBlow :312-328 + NoteBlow :621-627, against c0cfe9a, Opus tier-3 re-review of the P1-G3 fix, finding 1)
+"Once a blow is armed, nothing bounds the hold until his swing, shot or cast is actually seen." If the approach never closes, the action is not an attack/cast, or a short miss swing falls between two laps with no re-detect, he stays crouched with the sneak claim for the rest of the fight (until a reveal or fight end). Reviewer: this is the pre-pick hide hold exactly; principle 9 forbids a timer from the pick; test 22's lines show it, so carve-out (b) does not apply.
+
+### MFO-B781 (SEV-5, OPEN, Concealment.cpp NoteBlow :623, against c0cfe9a, same review, finding 2)
+A later blow pick while one is armed returns early without resetting `armedAt`, so the "N ms after the pick" in the under-way / RESOLVED lines counts from the first pick and misleads a test-22 reader.
+
+### MFO-B782 (SEV-5, OPEN, Concealment.cpp ServiceBlow :301-317, against c0cfe9a, same review, finding 3)
+`OwnCastInFlight` is used without a family check, so any live own cast (a heal during the hold) counts as the blow: the reveal check is skipped for up to 6 s + 1.5 s and the stance is released as "a miss". Small and logged.
