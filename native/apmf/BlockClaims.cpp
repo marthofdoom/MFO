@@ -28,6 +28,13 @@ namespace MFO::APMFBridge {
         constexpr std::uint32_t kBlockMinAbi = 43;   // the ABI that builds kCombatMove_Block and knows kCombatMove_BlockEnd
         using Clock = std::chrono::steady_clock;
         constexpr auto kRefusedBackoff = std::chrono::seconds(2);   // after a refusal / failure: no new request for this long
+        // Review F2 of 88777f7 (marth Q-melee-3: a held guard denies ALL of his own offense, heals included). A guard must
+        // therefore always END, whatever the row's cooldown: one hold is renewed at most kMaxRenewals times (so at most
+        // (1 + kMaxRenewals) windows back to back), and after ANY hold ends no new guard is asked for kRest. With the class
+        // rows' 4 s cooldown neither bound is ever reached; a zero-cooldown Block row guards for two windows, then fights
+        // (and drinks, heals, attacks) for kRest. Q-melee-8.
+        constexpr std::uint32_t kMaxRenewals = 1;
+        constexpr auto          kRest        = std::chrono::milliseconds(1500);
 
         struct Row {
             std::uint32_t     handle = 0;        // the last kCombatMove_Block request (0 = none)
@@ -36,10 +43,20 @@ namespace MFO::APMFBridge {
             bool              live = false;      // Harbinger reported Started + HoldLive and no end yet
             bool              startLogged = false;
             bool              doneLogged = false;   // the Refused / Failed / Ended line was written
-            Clock::time_point backoffUntil{};
+            std::uint32_t     renewals = 0;         // how many times this guard was renewed (carried across handles)
+            Clock::time_point backoffUntil{};       // after a refusal / failure
+            Clock::time_point restUntil{};          // after a guard ended (kRest)
         };
         std::mutex g_blockMx;                          // LEAF
         std::unordered_map<RE::FormID, Row> g_rows;    // follower -> his last block request
+        std::atomic<std::uint32_t> g_out{ 0 };         // rows with a request out (queued or live): BlockHoldLive's fast path
+
+        void RecountOut() {   // g_blockMx held
+            std::uint32_t n = 0;
+            for (const auto& [fid, r] : g_rows)
+                if (r.handle != 0 && !r.doneLogged) ++n;
+            g_out.store(n, std::memory_order_release);
+        }
 
         const char* WhyName(std::uint32_t a_why) {
             switch (a_why) {
@@ -88,11 +105,16 @@ namespace MFO::APMFBridge {
         }
         const auto* weap = right ? right->As<RE::TESObjectWEAP>() : nullptr;
         if (!weap) return "no shield and no melee weapon in hand";
+        // GetEquippedObject answers the BASE form, so `left == right` is true for a two-handed weapon (one item, both
+        // hands) AND for two copies of the same one-handed weapon (dual wield). Only the first blocks: with a one-hander in
+        // each hand Left Attack swings the left weapon (review F1 of 88777f7). The same test as Harbinger's
+        // HandsWouldNotBlock (core/CombatMoveBlock.cpp); keep the two identical.
         switch (weap->GetWeaponType()) {
         case RE::WEAPON_TYPE::kOneHandSword:
         case RE::WEAPON_TYPE::kOneHandDagger:
         case RE::WEAPON_TYPE::kOneHandAxe:
         case RE::WEAPON_TYPE::kOneHandMace:
+            return left ? "the same one-handed weapon in both hands (dual wield: no block from those hands)" : nullptr;
         case RE::WEAPON_TYPE::kTwoHandSword:
         case RE::WEAPON_TYPE::kTwoHandAxe:
             return nullptr;
@@ -101,13 +123,21 @@ namespace MFO::APMFBridge {
         }
     }
 
+    bool BlockHoldLive(RE::FormID a_follower) {
+        if (g_out.load(std::memory_order_acquire) == 0) return false;
+        std::scoped_lock lk(g_blockMx);
+        const auto it = g_rows.find(a_follower);
+        return it != g_rows.end() && it->second.handle != 0 && !it->second.doneLogged;
+    }
+
     BlockAsk ServiceBlock(RE::FormID a_follower, std::uint32_t* a_handleOut) {
         if (a_handleOut) *a_handleOut = 0;
         const auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < kBlockMinAbi) return BlockAsk::NoRoad;
         PollBlock(a_follower);   // the previous request's state is current (and logged) before it is judged
-        const auto  now   = Clock::now();
-        const float holdS = Config::g_blockHoldSeconds.load(std::memory_order_relaxed);
+        const auto    now      = Clock::now();
+        const float   holdS    = Config::g_blockHoldSeconds.load(std::memory_order_relaxed);
+        std::uint32_t renewals = 0;
         {
             std::scoped_lock lk(g_blockMx);
             if (const auto it = g_rows.find(a_follower); it != g_rows.end()) {
@@ -115,13 +145,15 @@ namespace MFO::APMFBridge {
                 if (now < r.backoffUntil) return BlockAsk::Backoff;
                 if (r.handle != 0 && !r.doneLogged) {
                     // A request is out. Not yet run by the game thread, or a live hold with more than 40% of its
-                    // window left: nothing to ask. Past that mark a new request RENEWS the hold (no drop in between).
+                    // window left: nothing to ask. Past that mark a new request RENEWS the hold (no drop in between),
+                    // at most kMaxRenewals times: after that the guard runs out at its window (review F2).
+                    if (a_handleOut) *a_handleOut = r.handle;
                     if (!r.live) return BlockAsk::Held;
                     const float elapsed = std::chrono::duration<float>(now - r.at).count();
-                    if (elapsed < r.holdS * 0.6f) {
-                        if (a_handleOut) *a_handleOut = r.handle;
-                        return BlockAsk::Held;
-                    }
+                    if (elapsed < r.holdS * 0.6f || r.renewals >= kMaxRenewals) return BlockAsk::Held;
+                    renewals = r.renewals + 1;
+                } else if (now < r.restUntil) {
+                    return BlockAsk::Resting;
                 }
             }
         }
@@ -139,9 +171,11 @@ namespace MFO::APMFBridge {
         }
         // A renewed hold's older record ends "renewed" in Harbinger; this row now follows the newer handle only.
         r = Row{};
-        r.handle = h;
-        r.at     = now;
-        r.holdS  = holdS;
+        r.handle   = h;
+        r.at       = now;
+        r.holdS    = holdS;
+        r.renewals = renewals;
+        RecountOut();
         if (a_handleOut) *a_handleOut = h;
         return BlockAsk::Requested;
     }
@@ -173,8 +207,10 @@ namespace MFO::APMFBridge {
             if (st == APMF_API::kCombatMoveState_Ended) {
                 // A renewal is the same guard carried on by the newer request: not worth a line of its own.
                 if (info.why != APMF_API::kCombatMoveWhy_HoldRenewed)
-                    spdlog::info("[block] {:08X}: guard DOWN (h={}): {}; blocked a hit: {}{}", a_follower, r.handle, WhyName(info.why),
-                                 blocked ? "yes" : "no", reRaised ? "; the engine dropped it inside the window and Harbinger raised it again" : "");
+                    spdlog::info("[block] {:08X}: guard DOWN (h={}): {}; blocked a hit: {}{}; renewed {} time(s) (at most {}); no new "
+                                 "guard for {} ms", a_follower, r.handle, WhyName(info.why), blocked ? "yes" : "no",
+                                 reRaised ? "; the engine dropped it inside the window and Harbinger raised it again" : "",
+                                 r.renewals, kMaxRenewals, kRest.count());
             } else if (st == APMF_API::kCombatMoveState_Refused) {
                 backoff = true;
                 spdlog::info("[block] {:08X}: block h={} REFUSED: {}", a_follower, r.handle, WhyName(info.why));
@@ -193,6 +229,10 @@ namespace MFO::APMFBridge {
         it->second.startLogged = it->second.startLogged || startNow;
         it->second.doneLogged  = it->second.doneLogged || doneNow;
         if (backoff) it->second.backoffUntil = Clock::now() + kRefusedBackoff;
+        // Review F2: after a guard that really stood has ended, no new guard for kRest (his offense, heals and potions get
+        // their turn whatever the row's cooldown is).
+        if (doneNow && st == APMF_API::kCombatMoveState_Ended) it->second.restUntil = Clock::now() + kRest;
+        RecountOut();
     }
 
     void ReleaseBlock(RE::FormID a_follower, const char* a_why) {
@@ -204,6 +244,7 @@ namespace MFO::APMFBridge {
             if (it == g_rows.end()) return;
             r = it->second;
             g_rows.erase(it);
+            RecountOut();
         }
         if (!api || api->abiVersion < kBlockMinAbi || r.handle == 0 || r.doneLogged) return;
         // A request is out (queued, or a live hold): lower the guard now. Harbinger answers "no hold" when the request
@@ -219,5 +260,7 @@ namespace MFO::APMFBridge {
     void ClearBlockHolds() {
         std::scoped_lock lk(g_blockMx);
         g_rows.clear();   // Harbinger forgets every hold and record at its own load boundary
+        g_out.store(0, std::memory_order_release);
+        ResetCombatMoveServed();   // review F3: "is ch.31 served on this game" is asked again after a load
     }
 }

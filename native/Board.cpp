@@ -1470,8 +1470,10 @@ namespace MFO::Board {
                 const int tn = (table == 1) ? (int)std::size(kActsLogi)
                                             : (int)std::size(kActsCombat);
                 int n = cycleIdx(tab[i].actionOpcode, t, tn, (int)c.param);
+                const std::string prevOp = tab[i].actionOpcode;
                 tab[i].actionOpcode = t[n].op;
-                if (!CooldownExposed(tab[i].actionOpcode)) tab[i].cooldownTenths = 0;   // card G9: no hidden pacing
+                // card G9: no hidden pacing; a new Block row starts at 4 s (review F2 of 88777f7)
+                tab[i].cooldownTenths = CooldownAfterActionChange(prevOp, tab[i].actionOpcode, tab[i].cooldownTenths);
                 break; }
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
@@ -1538,10 +1540,12 @@ namespace MFO::Board {
                 const int tn = (table == 1) ? (int)std::size(kActsLogi)
                                             : (int)std::size(kActsCombat);
                 const int n = std::clamp((int)(c.param + 0.5f), 0, tn - 1);
+                const std::string prevOp = tab[i].actionOpcode;
                 tab[i].actionOpcode = t[n].op;
                 // Card G9: a row moved off a cooldown-exposed action loses its cooldown, so it is never paced by
-                // a value its row no longer shows (marth Q7: only power-attack rows show it).
-                if (!CooldownExposed(tab[i].actionOpcode)) tab[i].cooldownTenths = 0;
+                // a value its row no longer shows (marth Q7: only power-attack rows show it). A new Block row
+                // starts at 4 s (review F2 of 88777f7).
+                tab[i].cooldownTenths = CooldownAfterActionChange(prevOp, tab[i].actionOpcode, tab[i].cooldownTenths);
                 break; }
             // #68: absolute picks from the target popup, same shape as
             // SetCond/SetAct. Self/Player/NearestAlly CLEAR any stale

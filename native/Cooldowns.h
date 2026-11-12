@@ -44,6 +44,11 @@ namespace MFO::Cooldowns {
     [[nodiscard]] float Remaining(RE::FormID a_actor, Kind a_kind, std::uint64_t a_id, float a_cooldownSec,
                                   std::chrono::steady_clock::time_point a_now);
 
+    // Give a cooldown back: forget that (a_actor, a_kind, a_id) fired. For an action that was counted as fired when it was
+    // ASKED for and then did not happen (marth 2026-11-12, Q-melee-4: a power attack Harbinger refused, or whose read-back
+    // failed). Any thread (the store's own lock). A no-op when nothing is recorded.
+    void Forget(RE::FormID a_actor, Kind a_kind, std::uint64_t a_id);
+
     // Every entry, every actor. ResetAllState (after StopPump).
     void ClearAll();
 

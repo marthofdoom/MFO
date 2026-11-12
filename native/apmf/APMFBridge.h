@@ -1895,6 +1895,12 @@ namespace MFO::APMFBridge {
     // POWER ATTACK (ABI v44, kCombatMove_PowerAttack; T2 batch M item 2, marth Q82): the engine's real right-hand power
     // attack by the same action road (power damage and stamina are the engine's). PowerAttackRoadSupported: APMF present
     // AND abiVersion >= 44. RequestPowerAttack: the same contract as RequestBash; the outcome lines read "power attack".
+    // CombatMoveUnservedReason (review F3 of 88777f7): nullptr when Harbinger SERVES a_move (kCombatMove_Block or
+    // kCombatMove_PowerAttack) on this game, else why not (a string literal): absent / too old, or not installed for this
+    // runtime or by its INI. The second is asked once per load through the ABI v35 dry run with a_follower, latched and
+    // logged once; ResetCombatMoveServed clears the latch at the load boundary. Worker road.
+    const char*   CombatMoveUnservedReason(RE::FormID a_follower, std::uint32_t a_move);
+    void          ResetCombatMoveServed();
     bool          PowerAttackRoadSupported();
     std::uint32_t RequestPowerAttack(RE::FormID a_follower, RE::FormID a_foe);
     void          PollCombatMove(RE::FormID a_follower);
@@ -1915,7 +1921,12 @@ namespace MFO::APMFBridge {
         Held,        // a request is out or the hold has more than 40% of its window left: nothing sent
         Backoff,     // inside the 2 s back-off after a refusal or failure: nothing sent
         Refused,     // Harbinger refused at the call
+        Resting,     // a guard ended less than 1.5 s ago: nothing sent (review F2: a guard always ends and rests)
     };
+    // True while a block request of this follower is out (queued, or the guard is up). ANY thread; one atomic load while no
+    // follower blocks. cast/Fire.cpp skips his own offense, cast and weapon rows TRANSPARENTLY while it is true (marth
+    // Q-melee-3: a held guard denies all of his own offense, heals included).
+    bool        BlockHoldLive(RE::FormID a_follower);
     bool        BlockSupported();
     const char* BlockHandsReason(RE::Actor* a_follower);
     BlockAsk    ServiceBlock(RE::FormID a_follower, std::uint32_t* a_handleOut = nullptr);

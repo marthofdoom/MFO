@@ -13,6 +13,7 @@
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
 #include "Config.h"
+#include "Cooldowns.h"   // Forget: a power attack that did not happen gives its cooldown back (Q-melee-4)
 
 #include <atomic>
 #include <chrono>
@@ -57,6 +58,12 @@ namespace MFO::APMFBridge {
             default:                                      return "no reason given";
             }
         }
+        // Review F3 of 88777f7: is the move SERVED on this game at all? Harbinger refuses the whole of ch.31 by name on a
+        // runtime whose action road it has not read (1.7.104 today), with [CombatMove] bCombatMove=0, and the block with
+        // bBlock=0 or its deny not armed. Asked ONCE per load per move kind through the ABI v35 dry run (CanServe; nothing
+        // is filed), latched, logged once. 0 = not asked yet, 1 = served, 2 = not served.
+        std::atomic<int> g_servedBlock{ 0 }, g_servedPower{ 0 };
+
         const char* MoveName(std::uint32_t a_move) {
             switch (a_move) {
             case APMF_API::kCombatMove_PowerBash:   return "power bash";
@@ -101,6 +108,53 @@ namespace MFO::APMFBridge {
         return RequestMove(api, a_follower, a_foe, a_power ? APMF_API::kCombatMove_PowerBash : APMF_API::kCombatMove_Bash);
     }
 
+    const char* CombatMoveUnservedReason(RE::FormID a_follower, std::uint32_t a_move) {
+        const bool block = a_move == APMF_API::kCombatMove_Block;
+        const auto* api  = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < (block ? 43u : kPowerAttackMinAbi))
+            return block ? "Harbinger absent or older than ABI 43" : "Harbinger absent or older than ABI 44";
+        auto& latch = block ? g_servedBlock : g_servedPower;
+        int   s     = latch.load(std::memory_order_acquire);
+        if (s == 0) {
+            APMF_API::APMF_Param p{};
+            p.ival = static_cast<std::int32_t>(a_move);
+            APMF_API::APMF_ServeQuery q{};
+            q.size   = sizeof(q);
+            q.call   = APMF_API::kServeCall_RequestEx;
+            q.actor  = a_follower;
+            q.intent = APMF_API::kIntent_CombatMove;
+            q.param  = &p;
+            APMF_API::APMF_ServeInfo info{};
+            info.size = sizeof(info);
+            const std::uint32_t v = reinterpret_cast<const APMF_API::APMF_API_v35*>(api)->CanServe(&q, &info);
+            // Only "not installed" is a property of the game and the INI; every other answer (accepted, or a refusal
+            // about this actor or this moment) means the move is served.
+            const bool unserved = v == APMF_API::kServe_Refused && info.refusal == APMF_API::kServeRefusal_NotInstalled;
+            int expected = 0;
+            if (latch.compare_exchange_strong(expected, unserved ? 2 : 1, std::memory_order_acq_rel)) {
+                info.why[sizeof(info.why) - 1] = '\0';
+                if (unserved)
+                    spdlog::warn("[combat-move] Harbinger does NOT serve the {} on this game: {}. {} Said once per load.",
+                                 block ? "block (kCombatMove_Block)" : "power attack (kCombatMove_PowerAttack)", info.why,
+                                 block ? "The Block gambit is unavailable: its rows are skipped and the rows below run."
+                                       : "The Power attack gambit keeps MFO's own animation event (road=graph), because the "
+                                         "facet is not served here at all; it is never a fallback after a refusal.");
+                else
+                    spdlog::info("[combat-move] Harbinger serves the {} on this game (asked once per load).",
+                                 block ? "block" : "power attack");
+            }
+            s = latch.load(std::memory_order_acquire);
+        }
+        return s == 2 ? (block ? "Harbinger does not serve the block on this game (its log and MFO's said why)"
+                               : "Harbinger does not serve combat moves on this game")
+                      : nullptr;
+    }
+
+    void ResetCombatMoveServed() {
+        g_servedBlock.store(0, std::memory_order_release);
+        g_servedPower.store(0, std::memory_order_release);
+    }
+
     bool PowerAttackRoadSupported() {
         const auto* api = g_apmf.load(std::memory_order_relaxed);
         return api && api->abiVersion >= kPowerAttackMinAbi;
@@ -137,6 +191,14 @@ namespace MFO::APMFBridge {
                 spdlog::info("[combat-move] {:08X}: {} h={} REFUSED: {}", a_follower, kind, l.handle, WhyName(info.why));
             else if (st == APMF_API::kCombatMoveState_Failed)
                 spdlog::warn("[combat-move] {:08X}: {} h={} FAILED: {}", a_follower, kind, l.handle, WhyName(info.why));
+            // marth 2026-11-12 (Q-melee-4): a power attack Harbinger refused, or whose read-back failed, did not happen.
+            // The gambit counted as fired when MFO asked (cast/Fire.cpp), so its cooldown is given back: the one
+            // follower-wide power-attack slot every power row and the IAUS candidate share (Q73).
+            if (l.move == APMF_API::kCombatMove_PowerAttack &&
+                (st == APMF_API::kCombatMoveState_Refused || st == APMF_API::kCombatMoveState_Failed)) {
+                Cooldowns::Forget(a_follower, Cooldowns::Kind::Follower, Cooldowns::kFollowerPowerAttack);
+                spdlog::info("[combat-move] {:08X}: power attack h={} did not happen: its cooldown is given back", a_follower, l.handle);
+            }
             else
                 spdlog::warn("[combat-move] {:08X}: {} h={} has no record in Harbinger any more (a load, or it was read too late)",
                              a_follower, kind, l.handle);

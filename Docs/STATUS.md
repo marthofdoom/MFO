@@ -48,6 +48,18 @@
   until that value is set (MFO-B806, an ESL generator change outside this batch's files). No Harbinger ABI number was
   taken for a dodge. Notes: Harbinger `Docs/research/melee-moves-re.md` "DODGE". Question Q-melee-7.
 
+- **2026-11-12, MELEE BATCH FIX ROUND (`feat/melee-moves`, after the Opus tier-3 review of Harbinger 6f8f156 / MFO 88777f7 and
+  marth's 11-12 answers; NOT merged, NOT field run).** F1 (SEV-2): the same one-handed weapon in both hands no longer passes
+  the block hands test (it made Left Attack a left swing), in MFO and Harbinger. F2: while his guard is up MFO skips his own
+  attack, power attack, bash, taunt, cast and equip rows transparently; a guard is renewed at most once and is followed by
+  1.5 s of rest; a Block row added on the board starts at 4 s (Q-melee-8). F3: MFO asks Harbinger once per load whether it
+  serves the block and the power attack on this game; unserved = Block unavailable, power attack on the animation road
+  (Q-melee-9). F6: no new raise is asked for mid-attack. marth: Ebony Warrior gets the Block row (Q-melee-2), a refused
+  power attack gives its cooldown back (Q-melee-4, `Cooldowns::Forget`), the Mercenary's class style has Avoid Threat 0.3
+  (Q-melee-7; `MFO_GenerateESP.py` `CLS_AVOID_THREAT`, `MFO_Classes.esl` regenerated, audit PASS). Harbinger side: the
+  combat style slot table reads under a per-slot sequence (F5) and the engine refresh's threading argument is written
+  down, with its one unproven part (F4). Test steps 24v to 24y. Backlog MFO-B807, MFO-B808; B802 and B803 closed.
+
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense
   deny). Card G3: `Concealment.cpp`, a sneak class a foe has found runs to a point no foe can see (MFO's own rays,

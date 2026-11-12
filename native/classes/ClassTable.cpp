@@ -283,9 +283,10 @@ namespace MFO::Classes {
             Ctl(Vocab::kCondFoeCountAtLeast, Vocab::kActCastTarget, 3.0f, SpellRole::Fear),
             Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
-        constexpr DefaultGambit kEbonyWarriorG[] = {
+        constexpr DefaultGambit kEbonyWarriorG[] = {   // Knight line (marth 2026-11-12, Q-melee-2): carries the Block row too
             G(Vocab::kCondFoeAttackingAlly, Vocab::kActTaunt),
             G(Vocab::kCondFoeCountAtLeast, Vocab::kActTaunt, 2.0f),
+            G(Vocab::kCondFoeAttackingMeMelee, Vocab::kActBlock, 0.0f, SpellRole::None, kSelf, 4.0f),
             G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.40f, SpellRole::Heal),
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.70f, SpellRole::Heal),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
