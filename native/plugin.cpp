@@ -411,13 +411,13 @@ namespace {
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass
             MFO::ProgAllocator::Init();     // allocator economy + class lists from the addon ESL; inert if absent
+            MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades). BEFORE Classes::OnDataLoaded: the class add-on does not start without a usable Harbinger
             MFO::Classes::OnDataLoaded();   // class add-on ESL presence (logged once) + class table self-check; inert if absent
             MFO::Actuation::RunSpellShapeCensus();   // C0 [shape-census], log-only, gated by bSpellShapeCensus
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::Logistics::PrimeSilverRules();         // read the live SilverPerk / silver enchantment once ([silver] lines)
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Logistics::GemRules::LogStatus();   // [gems] rules ACTIVE / inactive (<why>)
-            MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades)
             MFO::Lotd::Detect();            // LOTD awareness: detect Legacy of the Dragonborn (after Forms + APMF)
             MFO::Diagnostics::RefreshFatalModules();   // [fatal]: every plugin DLL is loaded now -- resolve APMF.dll's range
             MFO::Followers::ResolveQuirks();

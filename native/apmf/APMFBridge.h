@@ -90,6 +90,8 @@ namespace MFO::APMFBridge {
 
     // Is the APMF interface live (present + ABI >= 2, so RequestEx is available)?
     bool Available();
+    // The acquired interface's abiVersion, 0 when Available() is false. Any thread (one atomic load).
+    std::uint32_t AbiVersion();
 
     // ── COMBAT SUBSTRATE IS NOT COMBAT (Harbinger ABI v26 GetSubstrateState; ClickUp 86e3pu939) ──
     // marth 2026-10-13, on whether MFO treats Harbinger's combat substrate as combat: "Certainly not. It only

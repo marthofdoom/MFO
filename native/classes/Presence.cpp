@@ -7,12 +7,17 @@
 // (the add-on is optional; Forms failure doctrine).
 #include "Classes_internal.h"
 #include "Config.h"
+#include "apmf/APMFBridge.h"
+#include "MainThread.h"
+#include "Rapport.h"
 
 namespace MFO::Classes {
 
     namespace {
         constexpr std::string_view kManifestKeywordSuffix = "_MFOClassesManifest";
         std::atomic<bool> g_present{ false };
+        std::atomic<bool> g_harbingerOk{ false };   // Harbinger acquired at ABI >= kMinHarbingerAbi; written ONCE at kDataLoaded
+        std::atomic<bool> g_noticed{ false };       // the in-game "did not start" notice went out this session
         RE::BGSListForm* g_manifestList = nullptr;   // the first manifest FLST found; written ONCE at kDataLoaded (card C8 reads its style lookup entry)
         std::string g_addonFile;   // the plugin the manifest came from (card C6 resolves its forms by local id). Written ONCE at kDataLoaded, read later.
 
@@ -52,10 +57,21 @@ namespace MFO::Classes {
     void OnDataLoaded() {
         const bool present = detail::DetectManifest();
         g_present.store(present);
+        const std::uint32_t abi = APMFBridge::AbiVersion();
+        const bool harbinger = abi >= kMinHarbingerAbi;
+        g_harbingerOk.store(harbinger);
         const bool tree   = Config::g_classTree.load();
         const bool strict = Config::g_classStrict.load();
         if (!present) {
             spdlog::info("[classes] class add-on ESL not loaded -- class tree inert, the three classes (Melee/Ranged/Mage) behave as before");
+        } else if (!harbinger) {
+            // Loud on purpose, never a silent degrade: the ESL is loaded but the add-on is refused (MCLS stays held, see State.cpp).
+            if (abi == 0)
+                spdlog::error("[classes] classes add-on not started: Harbinger (APMF.dll) missing or unusable (no interface acquired), "
+                              "the class tree needs ABI v{}. The stored class progress is kept untouched.", kMinHarbingerAbi);
+            else
+                spdlog::error("[classes] classes add-on not started: Harbinger ABI v{} < required v{}. "
+                              "The stored class progress is kept untouched.", abi, kMinHarbingerAbi);
         } else if (!tree) {
             spdlog::info("[classes] class add-on ESL loaded but bClassTree = 0 -- class tree inert, the three classes behave as before");
         } else {
@@ -73,6 +89,16 @@ namespace MFO::Classes {
     RE::BGSListForm* detail::ManifestList()  { return g_manifestList; }
 
     bool Present() { return g_present.load(); }
-    bool Active()  { return g_present.load() && Config::g_classTree.load(); }
+    bool HarbingerOk() { return g_harbingerOk.load(); }
+    bool Active()  { return g_present.load() && g_harbingerOk.load() && Config::g_classTree.load(); }
+    void MaybeNoticeNotStarted() {
+        if (g_noticed.load(std::memory_order_relaxed)) return;
+        if (!g_present.load() || g_harbingerOk.load() || !Config::g_classTree.load()) return;
+        if (Rapport::SessionMinutes() < 0.6) return;   // in the world, like the no-APMF toast
+        if (g_noticed.exchange(true)) return;
+        MainThread::Post([]() {
+            RE::DebugNotification("MFO classes did not start: they need Harbinger (APMF) installed and up to date.");
+        });
+    }
     bool Strict()  { return Active() && Config::g_classStrict.load(); }
 }
