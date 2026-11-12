@@ -506,6 +506,7 @@ namespace MFO::Followers {
         APMFBridge::ReleaseRetreatReentryDeny(id, "dismissed");
         APMFBridge::ReleasePursuitLeash(id, "dismissed");
         APMFBridge::ReleaseAimClaim(id, "dismissed");   // ch.29 class miss budget (card H5)
+        APMFBridge::ReleaseAversionClaim(id, "dismissed");   // ch.32 class aversion (card H2)
         APMFBridge::ReleaseAttackMix(id, "dismissed");  // ch.18 class attack mix (card C8)
         APMFBridge::ReleaseSneak(id, "dismissed");      // ch.3 act.sneak hold (card G1)
         APMFBridge::ReleaseHideHold(id, "dismissed");   // G2 hold row: ch.1 movement block + ch.7 deny

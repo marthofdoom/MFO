@@ -428,6 +428,9 @@ namespace MFO::APMFBridge {
         // ch.29 projectile-aim claim table (apmf/AimClaims.cpp, card H5): own mutex g_aimMx, same call shape.
         void SweepAimClaims();
         void ClearAimClaims();
+        // ch.32 class aversion claim table (apmf/AversionClaims.cpp, card H2): own mutex g_avMx, same call shape.
+        void SweepAversionClaims();
+        void ClearAversionClaims();
         // ch.18 class attack-mix claim table (apmf/AttackMix.cpp, card C8): own mutex g_mixMx, same call shape.
         void SweepAttackMixClaims();
         void ClearAttackMixClaims();

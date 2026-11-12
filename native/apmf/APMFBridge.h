@@ -634,6 +634,15 @@ namespace MFO::APMFBridge {
     // Worker-safe; its own mutex (never g_mx).
     void ReleaseAimClaim(RE::FormID a_follower, const char* a_why);
 
+    // ── ch.32 AVERSION (ABI v41, kIntent_Aversion): the class "less likely to be targeted" passive ──────
+    // apmf/AversionClaims.cpp (card H2). The pump's sweep files one standing claim per managed, living follower
+    // whose class state carries the Conjurer or Healer passive, with his weight (Config::g_aversionConjurer /
+    // g_aversionHealer; a mastered, unequipped passive is a quarter), re-files on a weight change and releases
+    // at weight zero or death. ReleaseAversionClaim is the dismissal / MFO-off road. No-op when Harbinger is
+    // absent, ABI < 41 (logged once), the class add-on is inactive, bClassAversion is off, or the seats refused.
+    // Worker-safe; its own mutex (never g_mx).
+    void ReleaseAversionClaim(RE::FormID a_follower, const char* a_why);
+
     // ── ch.18 ATTACK SELECTION (ABI v34, kIntent_AttackSelection): the class attack mix ──────
     // apmf/AttackMix.cpp (card C8). The pump's sweep files one standing claim per managed
     // follower whose package class (Classes::PackageClass: equipped tier 2+, Dragonborn = picked T4)
