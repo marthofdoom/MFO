@@ -90,6 +90,9 @@ namespace MFO::Iaus::ClassCurves {
     Profile Build(const Row& a_row) {
         Profile p;
         p.curves = a_row.curves;
+        p.weights = a_row.weights;
+        for (const FamilyWeight& fw : a_row.families)
+            if (static_cast<std::size_t>(fw.family) < kFamilies) p.family[static_cast<std::size_t>(fw.family)] = fw.w;
         for (std::size_t s = 0; s < kSchools; ++s) p.school[s] = SchoolWeight(a_row.scalars, s);
         return p;
     }
@@ -130,10 +133,20 @@ namespace MFO::Iaus::ClassCurves {
     }
 
     bool SetCurveParam(Row& a_row, Family a_f, Cons a_c, const Curve& a_shared, std::string_view a_param, float a_v) {
-        if (a_param != "a" && a_param != "b" && a_param != "floor" && a_param != "zeroAbove" && a_param != "zeroBelow") return false;
+        // A Piece point: px<i> / py<i>. Checked against the curve it will edit (the row's override, else the shared one) BEFORE an override is made.
+        const bool point = a_param.size() == 3 && a_param[0] == 'p' && (a_param[1] == 'x' || a_param[1] == 'y') && a_param[2] >= '0' && a_param[2] <= '5';
+        if (!point && a_param != "a" && a_param != "b" && a_param != "floor" && a_param != "zeroAbove" && a_param != "zeroBelow") return false;
+        if (point) {
+            const Curve* cur = &a_shared;
+            for (const auto& e : a_row.curves) if (e.family == a_f && e.cons == a_c) { cur = &e.curve; break; }
+            const std::size_t i = static_cast<std::size_t>(a_param[2] - '0');
+            if (cur->kind != CurveKind::Piece || i >= cur->np || !std::isfinite(a_v)) return false;
+            if (a_param[1] == 'x' && ((i > 0 && a_v < cur->px[i - 1]) || (i + 1 < cur->np && a_v > cur->px[i + 1]))) return false;
+        }
         Profile::CurveOverride* o = nullptr;
         for (auto& e : a_row.curves) if (e.family == a_f && e.cons == a_c) { o = &e; break; }
         if (!o) { a_row.curves.push_back({ a_f, a_c, a_shared }); o = &a_row.curves.back(); }
+        if (point) { (a_param[1] == 'x' ? o->curve.px : o->curve.py)[static_cast<std::size_t>(a_param[2] - '0')] = a_v; return true; }
         if (a_param == "a") o->curve.a = a_v;
         else if (a_param == "b") o->curve.b = a_v;
         else if (a_param == "floor") o->curve.floor = a_v;
@@ -150,6 +163,20 @@ namespace MFO::Iaus::ClassCurves {
         else if (a_name == "schoolShape") a_row.scalars.schoolShape = a_v;
         else if (a_name == "schoolMasteredBump") a_row.scalars.schoolMasteredBump = a_v;
         else return false;
+        return true;
+    }
+
+    bool SetWeight(Row& a_row, Family a_f, Cons a_c, float a_w) {
+        if (!std::isfinite(a_w) || !(a_w > 0.0f) || static_cast<std::size_t>(a_f) >= kFamilies || static_cast<std::size_t>(a_c) >= kCons) return false;
+        for (auto& e : a_row.weights) if (e.family == a_f && e.cons == a_c) { e.w = a_w; return true; }
+        a_row.weights.push_back({ a_f, a_c, a_w });
+        return true;
+    }
+
+    bool SetFamilyWeight(Row& a_row, Family a_f, float a_w) {
+        if (!std::isfinite(a_w) || !(a_w > 0.0f) || static_cast<std::size_t>(a_f) >= kFamilies) return false;
+        for (auto& e : a_row.families) if (e.family == a_f) { e.w = a_w; return true; }
+        a_row.families.push_back({ a_f, a_w });
         return true;
     }
 }

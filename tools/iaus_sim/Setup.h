@@ -76,6 +76,11 @@ namespace Sim {
     // "<class slug>:<family>.<cons>.<a|b|floor|zeroAbove|zeroBelow>=<v>" or "<class slug>:scalar.<drinkHealthLine|touchSpentSec>=<v>".
     // <family> / <cons> are an index or a Name() (an index when several considerations share a display name). a_shared = the curve an
     // override starts from. False with a_err set on any bad token.
+    // The potion-worth table (Oracle.h Utility): class cell -> worth rows. Built once before any fight (sim.cpp: PotionWorth.h for the
+    // built-in world, or --potion-worth <file> for a list), read-only afterwards. g_forcePot: --potion-calib sets the subject's stock of one kind.
+    inline std::map<std::string, PotWorth> g_potWorth;
+    inline int g_forcePot[3] = { -1, -1, -1 };
+    [[nodiscard]] inline const PotWorth* PotWorthFor(const std::string& cls) { const auto i = g_potWorth.find(cls); return i == g_potWorth.end() ? nullptr : &i->second; }
     bool ApplyCurveSpecs(const std::vector<std::string>& a_specs, const Tuning& a_shared, std::string& a_err);
     void PrintClassTable(const std::vector<SimClass>& v);
 
@@ -187,6 +192,7 @@ namespace Sim {
         c.window = 1.5 * (0.88 + 0.24 * R.U(0.0f, 1.0f));   // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick
         c.drawn = sc.fam == Cls::Ranged && fb->spec.ranged.Has() ? PostureKind::Bow : sc.fam == Cls::Mage ? PostureKind::None : fb->spec.melee.Has() ? PostureKind::Melee : PostureKind::None;
         c.potH = fb->potH; c.potM = fb->potM; c.potS = fb->potS; for (int i = 0; i < 3; ++i) c.potDur[i] = fb->potDur[i];
+        c.worth = PotWorthFor(sc.name);
         F.ctl.push_back(std::move(c));
     }
 
@@ -235,7 +241,8 @@ namespace Sim {
         F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
         { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH;
           if (fs.subjectPotionsM >= 0) F.ctl[0].book.kit.potionsMagicka = fs.subjectPotionsM; if (fs.subjectPotionsS >= 0) F.ctl[0].book.kit.potionsStamina = fs.subjectPotionsS; if (fs.subjectArrows >= 0 && s0.arrows > 0) s0.arrows = fs.subjectArrows; }
-        for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
+        { Kit& k0 = F.ctl[0].book.kit; if (g_forcePot[0] >= 0) k0.potionsHealth = g_forcePot[0]; if (g_forcePot[1] >= 0) k0.potionsMagicka = g_forcePot[1]; if (g_forcePot[2] >= 0) k0.potionsStamina = g_forcePot[2]; }   // --potion-calib
+        for (Ctl& c : F.ctl) { c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina; c.pot0[0] = c.book.kit.potionsHealth; c.pot0[1] = c.book.kit.potionsMagicka; c.pot0[2] = c.book.kit.potionsStamina; }
         F.interior = fs.interior;
         if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)
             Rng S; S.g.seed(fs.seed * 0x9E3779B97F4A7C15ULL + 77u);

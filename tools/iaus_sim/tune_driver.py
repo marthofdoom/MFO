@@ -1,0 +1,784 @@
+#!/usr/bin/env python3
+"""The whole per-class IAUS curve tuning, unattended and resumable (marth 11-12: "The sim should be used to find all the ideal edge
+case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
+
+    tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
+                                  [--stages prep,rejudge,classes,globals,consts,floor,rating,recalib,summary] [--jobs 12]
+
+Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
+
+RESUME    every simulator result is appended to <out>/cache.jsonl the moment it exists and every stage is a pure function of the
+          cache, so running the SAME command again continues where it died (finished work replays in seconds). <out>/progress.log
+          has one line per finished step; <out>/summary.json and <out>/summary.md are rewritten after every stage.
+WORLDS    built-in (no list data) and the lists of ~/.cache/mfo-list-balance (test input only). Every world prices a potion with ITS
+          OWN potion-worth table (potion_worth.py; the built-in one is tools/iaus_sim/PotionWorth.h).
+STAGES    prep      the world inputs exist, each list's potion-worth table is measured.
+          rejudge   values an earlier round left open, re-judged under RULE (default: the Warrior stamina-drink midpoint 0.15).
+          classes   per class: every knob the class table can move (curve parameters, Piece points, consideration weights, family
+                    weights, edge scalars) -> liveness screen -> coordinate descent over the live ones, most sensitive first, an
+                    accepted value carried into the next sweep -> holdout -> many-seed gates -> fresh-seed cross-world confirmatory
+                    -> Knight guard floor. One dashboard results file per finished sweep.
+          globals   the shared Tuning winners of the earlier round, confirmed on fresh seeds on every world with the per-class gate
+                    and the decision-switching rate next to J.
+          consts    the compile-time constants never probed (const_probe.sh variants).
+          floor     the Knight line's guard floor per world with the final table, and why the unguarded blows found no guard.
+          rating    the rating battery per world with the final table, classes under their tier flagged.
+          recalib   the built-in potion-worth table re-measured under the accepted values; each accepted value confirmed again with it.
+          summary   summary.json + summary.md.
+
+RULE (fixed before any result of this driver was read; a number is ACCEPTED only when every line holds):
+  train        built-in world, the default roads (g3), seeds 1..N: the best value of a sweep has paired d > 2.5 se and d >= 0.15 J.
+  holdout      seeds 1001.., never used to pick: d > 1.5 se.
+  gates        marth, Q-gate-rule "Gate on many seeds": judged on the train + holdout seeds, never on a six-seed set. With stealth
+               off and as shipped, no class may get WORSE, and a drop counts only beyond noise: worse = d < -2 se and d < -0.05 J
+               (when the 15 cells are judged at once, -2.5 se); and never more than 0.5 J down (Thief, Mercenary 0.25) whatever
+               the noise. A T1 row (melee / ranged / mage) is also the companion in other classes' fights, so its value is gated
+               on all 15 cells at all three configs; any other row moves its own class only.
+  cross-world  fresh seeds 4001.. on every world: the equal-weight mean of the worlds' d is > 2 se, no world is worse (d < -2 se),
+               and as shipped the mean over the worlds is not worse and inside the band. A list's actors are test input: a value
+               that is best on one list only is never accepted.
+  knight       the Knight line's guard floor (>= 60% under two or more own-taunted foes) holds on every world, default and as
+               shipped; where the shipped table is already under it, the value may not lower it by more than 0.5.
+  fixed        marth's School Circle (floor 0.35, shape 1.5, mastery bump 0.15, order, home schools) is never a knob. Pure 0 / 1
+               gates and Step vetoes are rules, never knobs. A knob never moves outside its valid range (no negative offset, floor
+               or level; a boost never under 1; a Piece point at 0 stays a veto and no other point may reach 0).
+"""
+import argparse
+import concurrent.futures as cf
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+
+CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
+BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
+BASE = ["melee-off", "ranged-off", "mage-off"]
+CELLS = BETA1_TREE + BASE
+T1 = {"melee", "ranged", "mage"}                 # also the companions in every other class's fights
+KNIGHTS = ["knight", "great-knight", "ebony-warrior"]
+TIGHT = {"thief", "mercenary"}
+CACHE_DIR = os.path.expanduser("~/.cache/mfo-list-balance/")
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=80, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
+            const_seeds=48, floor_seeds=6, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False)
+SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
+             const_seeds=2, floor_seeds=1, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True)
+
+A = None            # parsed arguments
+CFG = None          # FULL or SMOKE
+POOL = None
+CACHE = {}          # (key, seed) -> (J, switches, minutes)
+TEXT = {}           # key -> stdout (rating / floor / list-uses runs)
+LOCK = threading.Lock()
+SUMMARY = {"rule": __doc__[__doc__.index("RULE ("):].strip(), "open_decisions": [], "stages": {}}
+
+
+# ── plumbing ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+def log(msg):
+    line = "%s  %s" % (time.strftime("%m-%d %H:%M:%S"), msg)
+    print(line, flush=True)
+    with open(os.path.join(A.out, "progress.log"), "a") as f:
+        f.write(line + "\n")
+
+
+def world_args(world):
+    if world == "builtin":
+        return ["--potion-worth", A.builtin_worth] if A.builtin_worth else []
+    return ["--list", CACHE_DIR + world + ".sim.json", "--potion-worth", os.path.join(A.out, "potworth-%s.txt" % world)]
+
+
+def key_of(world, classes, cfg, curves, sets, binary):
+    return json.dumps([world, classes, cfg, sorted(curves), sets or "", binary or "", A.builtin_worth or ""], separators=(",", ":"))
+
+
+def sim_cmd(world, classes, cfg, curves, sets, binary):
+    cmd = [binary or A.bin, "--no-json", "--threads", "1", "--print-switch", "--classes", classes, "--fights", "48"] + world_args(world) + CONFIGS[cfg]
+    for c in curves:
+        cmd += ["--curve", c]
+    if sets:
+        cmd += ["--set", sets]
+    return cmd
+
+
+def run_chunk(k, cmd, seeds):
+    out = subprocess.run(cmd + ["--seeds", ",".join(str(s) for s in seeds)], capture_output=True, text=True).stdout
+    js = {int(m.group(1)): float(m.group(2)) for m in re.finditer(r"^SEED (\d+)  J=([-0-9.]+)", out, re.M)}
+    sw = {int(m.group(1)): (float(m.group(2)), float(m.group(3))) for m in re.finditer(r"^SWITCH (\d+) (\d+) ([0-9.]+)", out, re.M)}
+    if set(js) != set(seeds):
+        raise RuntimeError("sim gave seeds %s for %s: %s\n%s" % (sorted(js), seeds, " ".join(cmd), out[-600:]))
+    with LOCK:
+        with open(os.path.join(A.out, "cache.jsonl"), "a") as f:
+            for s in seeds:
+                v = (js[s], sw.get(s, (0.0, 0.0))[0], sw.get(s, (0.0, 0.0))[1])
+                CACHE[(k, s)] = v
+                f.write(json.dumps({"k": k, "s": s, "v": v}) + "\n")
+
+
+def jmany(reqs):
+    """reqs: list of (world, classes, cfg, curves, sets, binary, seeds). Runs what the cache lacks, all at once; returns per-request
+    lists of (J, switches, minutes), in seed order."""
+    futs = []
+    for world, classes, cfg, curves, sets, binary, seeds in reqs:
+        k = key_of(world, classes, cfg, curves, sets, binary)
+        miss = [s for s in seeds if (k, s) not in CACHE]
+        cmd = sim_cmd(world, classes, cfg, curves, sets, binary)
+        for i in range(0, len(miss), 8):
+            futs.append(POOL.submit(run_chunk, k, cmd, miss[i:i + 8]))
+    for f in futs:
+        f.result()
+    return [[CACHE[(key_of(w, c, g, cv, st, b), s)] for s in seeds] for w, c, g, cv, st, b, seeds in reqs]
+
+
+def req(world, classes, cfg, curves, seeds, sets=None, binary=None):
+    return (world, classes, cfg, tuple(curves), sets, binary, list(seeds))
+
+
+def text_run(key, cmd):
+    if key not in TEXT:
+        out = subprocess.run(cmd, capture_output=True, text=True).stdout
+        with LOCK:
+            TEXT[key] = out
+            with open(os.path.join(A.out, "cache.jsonl"), "a") as f:
+                f.write(json.dumps({"t": key, "v": out}) + "\n")
+    return TEXT[key]
+
+
+def load_cache():
+    p = os.path.join(A.out, "cache.jsonl")
+    if os.path.exists(p):
+        for line in open(p):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue   # a line cut off by a kill: that result is simply run again
+            if "k" in r:
+                CACHE[(r["k"], r["s"])] = tuple(r["v"])
+            elif "t" in r:
+                TEXT[r["t"]] = r["v"]
+
+
+def paired(a, b):
+    """(mean, se) of b - a over the J of two same-seed runs."""
+    d = [y[0] - x[0] for x, y in zip(a, b)]
+    n = len(d)
+    m = sum(d) / n
+    v = sum((x - m) ** 2 for x in d) / (n - 1) if n > 1 else 0.0
+    return m, math.sqrt(v / n)
+
+
+def sw_rate(a):
+    mins = sum(x[2] for x in a)
+    return sum(x[1] for x in a) / mins if mins > 0 else 0.0
+
+
+def worse(d, se, many=False):
+    """Q-gate-rule: a drop counts only beyond noise."""
+    return d < -(2.5 if many else 2.0) * se and d < -0.05
+
+
+def band(cls):
+    return 0.25 if cls in TIGHT else 0.5
+
+
+def emit_run(classes, label, curves=(), sets=None):
+    """ONE normal results file per finished sweep, so the dashboard shows the search moving (small on purpose)."""
+    if not A.emit_runs:
+        return
+    cmd = [A.bin, "--threads", "2", "--classes", classes, "--fights", "4", "--class-oracle", "2", "--gap-scenarios", "1", "--label", label]
+    for c in curves:
+        cmd += ["--curve", c]
+    if sets:
+        cmd += ["--set", sets]
+    subprocess.run(cmd, capture_output=True, text=True)
+
+
+def save_summary():
+    json.dump(SUMMARY, open(os.path.join(A.out, "summary.json"), "w"), indent=1)
+    open(os.path.join(A.out, "summary.md"), "w").write(render_md())
+
+
+def open_decision(what, evidence):
+    SUMMARY["open_decisions"].append({"what": what, "evidence": evidence})
+    log("OPEN DECISION (the runner stops and reports this, it does not decide): %s | %s" % (what, evidence))
+
+
+# ── knobs ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+def uniq(vals, shared):
+    out = []
+    for v in vals:
+        v = round(v, 5)
+        if abs(v - shared) > 1e-6 and v not in out:
+            out.append(v)
+    return out
+
+
+def all_knobs():
+    """Every knob a class row can carry, each with its candidate values INSIDE its valid range. From the simulator's --list-uses."""
+    txt = text_run("list-uses", [A.bin, "--list-uses"])
+    knobs, seen, gates, pieces = [], set(), 0, {}
+    for line in txt.splitlines():
+        p = line.split()
+        if p and p[0] == "PIECE":
+            pieces[(int(p[1]), int(p[2]))] = [(float(p[4 + 2 * i]), float(p[5 + 2 * i])) for i in range(int(p[3]))]
+    for line in txt.splitlines():
+        p = line.split()
+        if len(p) == 10 and p[0] == "USE":
+            f, fn, c, cn, kind, a, b, fl, w = int(p[1]), p[2], int(p[3]), p[4], p[5], float(p[6]), float(p[7]), float(p[8]), float(p[9])
+            if (f, c) in seen:
+                continue
+            seen.add((f, c))
+            name, pre = "%s.%s" % (fn, cn), "{c}:%d.%d." % (f, c)
+            add = lambda suffix, param, shared, vals: knobs.append((name + suffix, pre + param + "={v}", shared, uniq(vals, shared))) if uniq(vals, shared) else None
+            if kind == "Bin":
+                if {a, b} <= {0.0, 1.0}:
+                    gates += 1   # a pure 0 / 1 gate is a rule
+                else:
+                    for suffix, param, v in ((".lo", "a", a), (".hi", "b", b)):
+                        if v > 1.0:      # a boost: never under 1
+                            add(suffix, param, v, [1.0, 1.0 + 0.5 * (v - 1.0), 1.0 + 1.5 * (v - 1.0), 1.0 + 2.5 * (v - 1.0)])
+                        elif 0.0 < v < 1.0:   # a damped level: never 0 (a veto), never over 1
+                            add(suffix, param, v, [max(0.02, v * 0.5), v * 0.75, min(1.0, v * 1.33), min(1.0, v * 1.67)])
+            elif kind == "Piece":
+                pts = pieces.get((f, c), [])
+                top = max([1.0] + [y for _, y in pts])
+                for i, (x, y) in enumerate(pts):
+                    if y > 0.0:          # a point at 0 is a veto and stays one; no other point may reach 0
+                        add(".y%d" % i, "py%d" % i, y, [min(top, max(0.02, y + s)) for s in (-0.3, -0.15, 0.15, 0.3)])
+                    if 0 < i < len(pts) - 1:   # an interior point's x, a quarter of the way to either neighbour (the order is kept)
+                        add(".x%d" % i, "px%d" % i, x, [x - 0.25 * (x - pts[i - 1][0]), x + 0.25 * (pts[i + 1][0] - x)])
+            else:
+                if kind == "Lin":
+                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)])
+                    add(".b", "b", b, [max(min(b, 0.0), b + s) for s in (-0.2, -0.1, 0.1, 0.2)])   # an offset is never pushed under 0
+                elif kind == "Logi":
+                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)])
+                    add(".b", "b", b, [max(0.02, b * k) for k in (0.6, 0.8, 1.25, 1.6)] if abs(b) >= 0.2 else [max(0.02, b + s) for s in (-0.1, -0.05, 0.05, 0.1, 0.2)])
+                else:   # Pow / Inv: the exponent, always > 0
+                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)])
+                if fl > 0.0:
+                    add(".floor", "floor", fl, [max(0.01, fl * 0.5), min(1.0, fl * 1.5)])
+            if kind != "Bin" and w > 0.0:
+                add(".w", "w", w, [w * k for k in (0.5, 0.75, 1.5, 2.0)])   # the consideration's exponent for this class (inert on a gate or a boost: the liveness screen drops it)
+        elif len(p) == 4 and p[0] == "FAMILY" and float(p[3]) > 0.0 and p[2] not in ("use_scroll", "equip"):
+            knobs.append(("family." + p[2], "{c}:family.%s={v}" % p[1], 1.0, [0.75, 0.87, 1.15, 1.33]))   # the class's multiplier on a whole family: small on purpose (the class card)
+    return knobs, gates
+
+
+def class_knobs(cls, knobs):
+    out = list(knobs)
+    if cls in KNIGHTS:
+        out.append(("scalar.drinkHealthLine", "{c}:scalar.drinkHealthLine={v}", 0.34, [0.20, 0.25, 0.30, 0.40, 0.50]))
+    return out
+
+
+# ── the acceptance path (one place: sweeps, re-judgements and re-confirmations all go through it) ────────────────────────────
+def knight_floor(world, cls, curves, sets=None):
+    out = {}
+    for cfg in ("g3", "shipped"):
+        num = den = 0.0
+        why = [0.0] * 6
+        for seed in range(1, CFG["floor_seeds"] + 1):
+            cmd = [A.bin, "--no-json", "--threads", "1", "--classes", cls, "--seed", str(seed), "--fights", "8", "--rating", "0", "--guard-why", "--baseline", "/dev/stdout"] + world_args(world) + CONFIGS[cfg]
+            for c in curves:
+                cmd += ["--curve", c]
+            if sets:
+                cmd += ["--set", sets]
+            txt = text_run("floor:" + json.dumps(cmd[1:]), cmd)
+            rows = {}
+            for m in re.finditer(r"^%s\|([a-z0-9]+)\|(guard2%%|inc2/f|ung2[a-z]+%%)=([-0-9.e]+)" % re.escape(cls), txt, re.M):
+                rows.setdefault(m.group(1), {})[m.group(2)] = float(m.group(3))
+            for r in rows.values():
+                n = r.get("inc2/f", 0.0)
+                num += r.get("guard2%", 0.0) * n
+                den += n
+                for i, nm in enumerate(("ung2stagger%", "ung2rest%", "ung2hurt%", "ung2drink%", "ung2busy%", "ung2free%")):
+                    why[i] += r.get(nm, 0.0) * n
+        out[cfg] = round(num / den, 1) if den else -1.0
+        out[cfg + "_why"] = dict(zip(("staggered", "rest_after_hold", "hurt_drinks_first", "drinking", "mid_action", "free"), [round(x / den, 1) if den else 0.0 for x in why]))
+    return out
+
+
+def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, base_sets=None):
+    """Holdout, many-seed gates, cross-world confirmatory, Knight floor for ONE candidate (a --curve spec, or a --set string in `sets`)
+    on top of the kept specs. Returns the row; row["accepted"] is the verdict. forced (smoke runs, re-judgements): every step is
+    run and reported even after one fails, and the verdict is still the rule's."""
+    cur = kept + ([spec] if spec else [])
+    row = {"class": cls, "spec": spec or sets, "accepted": False, "why": "", "steps": {}}
+    fails = []
+    hold = range(1001, 1001 + CFG["hold"])
+    b, v = jmany([req("builtin", cls, "g3", kept, hold, base_sets), req("builtin", cls, "g3", cur, hold, sets)])
+    hd, hse = paired(b, v)
+    row["steps"]["holdout"] = [round(hd, 3), round(hse, 3)]
+    if not hd > 1.5 * hse:
+        fails.append("holdout: not confirmed")
+    if fails and not forced:
+        row["why"] = fails[0]
+        return row
+    # gates, on the train + holdout seeds (Q-gate-rule: many seeds)
+    seeds = list(range(1, CFG["train"] + 1)) + list(hold)
+    cells = CELLS if cls in T1 or cls == "beta1" else [cls]
+    cfgs = ("g3", "off", "shipped") if len(cells) > 1 else ("off", "shipped")
+    reqs = [req("builtin", c, g, kept if x == 0 else cur, seeds, base_sets if x == 0 else sets) for c in cells for g in cfgs for x in (0, 1)]
+    res = jmany(reqs)
+    gate = {}
+    for i, (c, g) in enumerate([(c, g) for c in cells for g in cfgs]):
+        d, se = paired(res[2 * i], res[2 * i + 1])
+        gate["%s/%s" % (c, g)] = [round(d, 3), round(se, 3)]
+        if worse(d, se, len(cells) > 1) or d < -band(c):
+            fails.append("gate: %s gets worse at %s (%+.2f, se %.2f)" % (c, g, d, se))
+    row["steps"]["gates"] = gate
+    if fails and not forced:
+        row["why"] = fails[0]
+        return row
+    # cross-world confirmatory, fresh seeds
+    fresh = range(fresh0, fresh0 + CFG["confirm"])
+    target = cls if cls != "beta1" else None
+    conf = {}
+    for g in ("g3", "shipped"):
+        ds = []
+        for w in A.worlds:
+            if target:
+                b, v = jmany([req(w, target, g, kept, fresh, base_sets), req(w, target, g, cur, fresh, sets)])
+                d, se = paired(b, v)
+            else:   # a global: the mean over the 15 cells
+                res = jmany([req(w, c, g, kept if x == 0 else cur, fresh, base_sets if x == 0 else sets) for c in CELLS for x in (0, 1)])
+                per = [[y[0] - x[0] for x, y in zip(res[2 * i], res[2 * i + 1])] for i in range(len(CELLS))]
+                dd = [sum(col) / len(col) for col in zip(*per)]
+                d = sum(dd) / len(dd)
+                se = math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0
+            conf["%s/%s" % (w, g)] = [round(d, 3), round(se, 3)]
+            ds.append((d, se))
+            if g == "g3" and worse(d, se):
+                fails.append("cross-world: worse on %s (%+.2f, se %.2f)" % (w, d, se))
+        md = sum(x[0] for x in ds) / len(ds)
+        mse = math.sqrt(sum(x[1] ** 2 for x in ds)) / len(ds)
+        conf["mean/" + g] = [round(md, 3), round(mse, 3)]
+        if g == "g3" and not md > 2.0 * mse:
+            fails.append("cross-world: the mean over the worlds does not beat noise (%+.2f, se %.2f)" % (md, mse))
+        if g == "shipped" and (worse(md, mse) or md < -band(cls)):
+            fails.append("cross-world: worse as shipped (%+.2f, se %.2f)" % (md, mse))
+    row["steps"]["cross_world"] = conf
+    if fails and not forced:
+        row["why"] = fails[0]
+        return row
+    if cls in KNIGHTS or cls in ("beta1", "melee"):   # the Knight line's floor (a T1 melee row and a global can move the Knight's fights too)
+        fl = {}
+        for kc in ([cls] if cls in KNIGHTS else ["knight"]):
+            for w in A.worlds:
+                o, n = knight_floor(w, kc, kept, base_sets), knight_floor(w, kc, cur, sets)
+                for g in ("g3", "shipped"):
+                    fl["%s/%s/%s" % (kc, w, g)] = [o[g], n[g]]
+                    if n[g] < 60.0 and (o[g] >= 60.0 or n[g] < o[g] - 0.5):
+                        fails.append("Knight guard floor: %s on %s %s %.1f -> %.1f" % (kc, w, g, o[g], n[g]))
+        row["steps"]["knight_floor"] = fl
+    row["accepted"] = not fails
+    row["why"] = "ACCEPTED: holdout, many-seed gates, cross-world on fresh seeds" if not fails else "; ".join(fails)
+    if train_d is not None:
+        row["train"] = train_d
+    return row
+
+
+# ── stages ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+def stage_prep():
+    st = {"worlds": {}}
+    hdr = open(os.path.join(HERE, "PotionWorth.h")).read()
+    if hdr.count('{ "') < 20 and not A.builtin_worth:
+        raise SystemExit("tools/iaus_sim/PotionWorth.h is not calibrated: run `tools/iaus_sim/potion_worth.py --bin %s --out <file> --header`, rebuild the simulator, start again" % A.bin)
+    for w in A.worlds:
+        if w == "builtin":
+            st["worlds"][w] = "PotionWorth.h" if not A.builtin_worth else A.builtin_worth
+            continue
+        src = CACHE_DIR + w + ".sim.json"
+        if not os.path.exists(src):
+            raise SystemExit("missing %s: run tools/list_balance/compile_world.py --name %s" % (src, w))
+        tab = os.path.join(A.out, "potworth-%s.txt" % w)
+        if not os.path.exists(tab):
+            log("prep: measuring the potion worth of %s" % w)
+            subprocess.run([sys.executable, os.path.join(HERE, "potion_worth.py"), "--bin", A.bin, "--list", src, "--seeds", str(CFG["list_calib_seeds"]),
+                            "--fights", str(CFG["calib_fights"]), "--jobs", str(A.jobs), "--out", tab + ".tmp"], check=True, capture_output=True)
+            os.replace(tab + ".tmp", tab)
+        st["worlds"][w] = tab
+    chk = text_run("print-classes", [A.bin, "--print-classes"])
+    st["school_circle_and_armor"] = {"mercenary_light": bool(re.search(r"T2 mercenary .* light", chk)), "warrior_heavy": bool(re.search(r"T2 warrior .* heavy", chk)),
+                                     "archer_light": bool(re.search(r"T2 archer .* light", chk)), "thief_light": bool(re.search(r"T2 thief .* light", chk))}
+    if not all(st["school_circle_and_armor"].values()):
+        raise SystemExit("the armor model is not the class cards': %s" % st["school_circle_and_armor"])
+    SUMMARY["stages"]["prep"] = st
+    log("prep: done %s" % st["worlds"])
+
+
+def stage_rejudge():
+    rows = []
+    for spec in A.rejudge.split():
+        cls = spec.split(":")[0]
+        train = range(1, CFG["train"] + 1)
+        b, v = jmany([req("builtin", cls, "g3", [], train), req("builtin", cls, "g3", [spec], train)])
+        d, se = paired(b, v)
+        row = judge(cls, [], spec, train_d=[round(d, 3), round(se, 3)], forced=True, fresh0=8001)
+        if not (d > 2.5 * se and d >= 0.15):
+            row["accepted"] = False
+            row["why"] = "train: does not beat noise under RULE (%+.2f, se %.2f); " % (d, se) + row["why"]
+        rows.append(row)
+        log("rejudge %s: %s" % (spec, row["why"]))
+    SUMMARY["stages"]["rejudge"] = rows
+
+
+def search_class(cls, knobs):
+    probe = range(1, CFG["probe_seeds"] + 1)
+    train = range(1, CFG["train"] + 1)
+    kn = class_knobs(cls, knobs)
+    # LIVENESS: the two outermost values of every knob on a few seeds; a knob that changes no seed's J is dead for this class
+    reqs = [req("builtin", cls, "g3", [], probe)]
+    for name, tmpl, shared, vals in kn:
+        for v in (vals[0], vals[-1]):
+            reqs.append(req("builtin", cls, "g3", [tmpl.format(c=cls, v=v)], probe))
+    res = jmany(reqs)
+    base, live, dead = res[0], [], []
+    for i, (name, tmpl, shared, vals) in enumerate(kn):
+        best = 0.0
+        for r in (res[1 + 2 * i], res[2 + 2 * i]):
+            d = [y[0] - x[0] for x, y in zip(base, r)]
+            if any(abs(x) > 1e-9 for x in d):
+                best = max(best, abs(sum(d) / len(d)), 1e-6)
+        (live if best > CFG["min_probe"] else dead).append((best, name, tmpl, shared, vals))
+    live.sort(key=lambda x: -x[0])
+    log("classes %s: %d knobs, %d live, %d dead" % (cls, len(kn), len(live), len(dead)))
+    kept, rows, done = [], [], set()
+    for ps in range(CFG["passes"]):
+        accepted_this_pass = False
+        for sens, name, tmpl, shared, vals in live[:CFG["max_knobs"]]:
+            if name in done:
+                continue   # a knob that took a value is not searched twice
+            res = jmany([req("builtin", cls, "g3", kept, train)] + [req("builtin", cls, "g3", kept + [tmpl.format(c=cls, v=v)], train) for v in vals])
+            cands = sorted(((paired(res[0], r) + (v,)) for r, v in zip(res[1:], vals)), key=lambda x: -x[0])
+            d, se, v = cands[0]
+            spec = tmpl.format(c=cls, v=v)
+            row = {"class": cls, "knob": name, "shared": shared, "best": v, "probe": round(sens, 3), "pass": ps + 1, "train": [round(d, 3), round(se, 3)],
+                   "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2])], "accepted": False, "spec": spec}
+            passed = d > 2.5 * se and d >= 0.15
+            if passed or (CFG["force"] and not rows):   # a smoke run pushes its first sweep through every later step
+                j = judge(cls, kept, spec, forced=not passed)
+                row["steps"], row["why"] = j["steps"], j["why"]
+                row["accepted"] = passed and j["accepted"]
+                if not passed:
+                    row["why"] = "train: does not beat noise (later steps were run for the smoke test only); " + j["why"]
+            else:
+                row["why"] = "train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J"
+            if row["accepted"]:
+                kept.append(spec)
+                done.add(name)
+                accepted_this_pass = True
+            rows.append(row)
+            emit_run(cls, "tune %s %s %s -> %s (%s; train %+.2f J, se %.2f)" % (cls, name, shared, v, "ACCEPTED" if row["accepted"] else "rejected", d, se), kept)
+            log("classes %s pass %d  %-34s %-8g -> %-8g train %+.2f (se %.2f)  %s" % (cls, ps + 1, name, shared, v, d, se, row["why"][:140]))
+            SUMMARY["stages"].setdefault("classes", {})[cls] = {"kept": kept, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": False}
+            save_summary()
+        if not accepted_this_pass:
+            break   # a second pass only looks again after something changed
+    out = {"kept": kept, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": True,
+           "not_searched": [n for _, n, _, _, _ in live[CFG["max_knobs"]:]]}
+    if kept:   # what the accepted values change in his play, for the class-card read (the runner reports it; a card deviation is an open decision)
+        b = text_run("metrics:" + cls, [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seeds", "1,2,3,4,5,6", "--rating", "0", "--baseline", "/dev/stdout"])
+        cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seeds", "1,2,3,4,5,6", "--rating", "0", "--baseline", "/dev/stdout"]
+        for c in kept:
+            cmd += ["--curve", c]
+        n = text_run("metrics:" + cls + ":" + " ".join(kept), cmd)
+        pick = lambda t: {m.group(1): float(m.group(2)) for m in re.finditer(r"^%s\|natural\|([^=]+)=([-0-9.e]+)" % re.escape(cls), t, re.M)}
+        ob, nb = pick(b), pick(n)
+        ch = sorted(((abs(nb[k] - ob[k]) / (abs(ob[k]) + 1.0), k, ob[k], nb[k]) for k in ob if k in nb and abs(nb[k] - ob[k]) > 1e-9), reverse=True)[:12]
+        out["play_changes_natural"] = [[k, o, w] for _, k, o, w in ch]
+        open_decision("class card read for %s" % cls, "accepted %s; the largest changes in his play are in summary.json stages.classes.%s.play_changes_natural: confirm none leaves his class card before writing" % (" ".join(kept), cls))
+    SUMMARY["stages"].setdefault("classes", {})[cls] = out
+    save_summary()
+    return out
+
+
+def stage_classes():
+    knobs, gates = all_knobs()
+    SUMMARY["stages"]["knobs"] = {"count": len(knobs), "pure_gates_never_touched": gates, "unrateable": ["scalar.touchSpentSec (the lab opens no touch window)"],
+                                  "fixed": ["School Circle: schoolPeak / schoolFloor / schoolShape / schoolMasteredBump"]}
+    order = A.classes.split(",") if A.classes else gap_order()
+    for cls in order:
+        search_class(cls, knobs)
+
+
+def gap_order():
+    """The classes furthest from the class oracle first (the per-class gap of a small report run), else the fixed order."""
+    try:
+        path = os.path.join(A.out, "gap-run.json")
+        if not os.path.exists(path):
+            subprocess.run([A.bin, "--threads", str(A.jobs), "--classes", "beta1", "--fights", "4", "--class-oracle", "4", "--gap-scenarios", "2", "--label", "tune_driver gap order", "--json", path], capture_output=True, text=True)
+        gaps = {g["class"]: g["gap"] for g in json.load(open(path)).get("class_gaps", []) if g.get("class") in CELLS}
+        order = sorted(CELLS, key=lambda c: -gaps.get(c, 0.0))
+        SUMMARY["stages"]["gap_order"] = [[c, gaps.get(c)] for c in order]
+        return order
+    except Exception as e:   # the order is a priority, never a result: fall back, and say so
+        log("gap order unavailable (%s): the fixed order is used" % e)
+        return CELLS
+
+
+def final_curves():
+    out = []
+    for cls, r in SUMMARY["stages"].get("classes", {}).items():
+        out += r.get("kept", [])
+    for r in SUMMARY["stages"].get("rejudge", []):
+        if r.get("accepted"):
+            out.append(r["spec"])
+    return out
+
+
+GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0])]
+
+
+def stage_globals():
+    curves = final_curves()
+    seeds = range(5001, 5001 + CFG["global_seeds"])
+    rows = []
+    for name, shipped, vals in (GLOBALS[:1] if CFG["force"] else GLOBALS):
+        for v in (vals[:1] if CFG["force"] else vals):
+            st = "%s=%s" % (name, v)
+            res = jmany([req("builtin", c, g, curves, seeds, s) for c in CELLS for g in CONFIGS for s in (None, st)])
+            row = {"set": st, "shipped": shipped, "per_class": {}, "switch_per_min": {}, "verdict": ""}
+            fails, i, pooled = [], 0, {}
+            for c in CELLS:
+                for g in CONFIGS:
+                    b, n = res[i], res[i + 1]
+                    i += 2
+                    d, se = paired(b, n)
+                    row["per_class"]["%s/%s" % (c, g)] = [round(d, 3), round(se, 3)]
+                    pooled.setdefault(g, []).append([y[0] - x[0] for x, y in zip(b, n)])
+                    if worse(d, se, True) or d < -2.0 * band(c):
+                        fails.append("%s worse at %s (%+.2f, se %.2f)" % (c, g, d, se))
+                    if g == "g3":
+                        row["switch_per_min"][c] = [round(sw_rate(b), 1), round(sw_rate(n), 1)]
+            for g in CONFIGS:
+                dd = [sum(col) / len(col) for col in zip(*pooled[g])]
+                d = sum(dd) / len(dd)
+                se = math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0
+                row["pooled_" + g] = [round(d, 3), round(se, 3)]
+            d, se = row["pooled_g3"]
+            rise = max((n / o - 1.0) if o > 0 else 0.0 for o, n in row["switch_per_min"].values())
+            row["max_switch_rise_pct"] = round(100.0 * rise, 1)
+            if not (d > 2.5 * se and d >= 0.15):
+                row["verdict"] = "KEPT: does not beat noise on fresh seeds"
+            elif fails:
+                row["verdict"] = "REJECTED: " + "; ".join(fails[:4])
+            else:
+                lists = {}
+                for w in [w for w in A.worlds if w != "builtin"]:
+                    ls = range(5001, 5001 + CFG["list_global_seeds"])
+                    r2 = jmany([req(w, c, "g3", curves, ls, s) for c in CELLS for s in (None, st)])
+                    per = [[y[0] - x[0] for x, y in zip(r2[2 * k], r2[2 * k + 1])] for k in range(len(CELLS))]
+                    dd = [sum(col) / len(col) for col in zip(*per)]
+                    ld = sum(dd) / len(dd)
+                    lse = math.sqrt(sum((x - ld) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0
+                    lists[w] = [round(ld, 3), round(lse, 3)]
+                    if worse(ld, lse):
+                        fails.append("worse on %s (%+.2f, se %.2f)" % (w, ld, lse))
+                row["lists_g3"] = lists
+                if fails:
+                    row["verdict"] = "REJECTED: " + "; ".join(fails)
+                elif rise > 0.10:
+                    row["verdict"] = "BEATS NOISE, NOT APPLIED: decision switching rises by %.0f%% for some class and J does not price switching" % (100.0 * rise)
+                else:
+                    row["verdict"] = "PASSES RULE"
+            rows.append(row)
+            emit_run("beta1", "tune global %s (%s; pooled %+.2f J, se %.2f)" % (st, row["verdict"][:40], d, se), curves, st)
+            log("globals %s: pooled g3 %+.2f (se %.2f) off %+.2f shipped %+.2f  max switching rise %.0f%%  %s" % (st, d, se, row["pooled_off"][0], row["pooled_shipped"][0], 100.0 * rise, row["verdict"]))
+            SUMMARY["stages"]["globals"] = rows
+            save_summary()
+    for r in rows:
+        if r["verdict"].startswith("PASSES") or r["verdict"].startswith("BEATS"):
+            open_decision("global %s" % r["set"], "%s; pooled g3 %+.2f (se %.2f), switching rise %.0f%%. A shared default is a design value: marth or the coordinator decides (t.powerCd is also a ruling: 10 s rows; t.momentum is the anti-thrash term)" % (r["verdict"], r["pooled_g3"][0], r["pooled_g3"][1], r["max_switch_rise_pct"]))
+    SUMMARY["stages"]["globals"] = rows
+
+
+CONSTS = [("kCloseSlack", 1.15, [1.0, 1.3]), ("kMinimumFrac", 0.4, [0.3, 0.5]), ("kRangeVeto", 1.15, [1.0, 1.3]), ("kPostureDist", 1200.0, [900.0, 1500.0])]
+
+
+def stage_consts():
+    curves = final_curves()
+    seeds = range(5001, 5001 + CFG["const_seeds"])
+    rows = []
+    for name, shipped, vals in (CONSTS[:1] if CFG["force"] else CONSTS):
+        for v in (vals[:1] if CFG["force"] else vals):
+            vb = os.path.join(A.out, "bin-%s-%s" % (name, v))
+            if not os.path.exists(vb):
+                r = subprocess.run([os.path.join(HERE, "const_probe.sh"), name, str(v), vb], capture_output=True, text=True)
+                if r.returncode != 0 or not os.path.exists(vb):
+                    rows.append({"const": name, "value": v, "verdict": "PROBE FAILED TO BUILD: " + r.stderr[-200:]})
+                    continue
+            res = jmany([req("builtin", c, g, curves, seeds, None, b) for c in CELLS for g in CONFIGS for b in (None, vb)])
+            row, i, pooled = {"const": name, "shipped": shipped, "value": v}, 0, {}
+            for c in CELLS:
+                for g in CONFIGS:
+                    pooled.setdefault(g, []).append([y[0] - x[0] for x, y in zip(res[i], res[i + 1])])
+                    i += 2
+            for g in CONFIGS:
+                dd = [sum(col) / len(col) for col in zip(*pooled[g])]
+                d = sum(dd) / len(dd)
+                se = math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0
+                row[g] = [round(d, 3), round(se, 3)]
+            d, se = row["g3"]
+            row["verdict"] = "BEATS NOISE" if d > 2.5 * se and d >= 0.15 and row["off"][0] > -2 * row["off"][1] and row["shipped"][0] > -2 * row["shipped"][1] else "the shipped value holds"
+            if row["verdict"] == "BEATS NOISE":
+                open_decision("constant %s %s -> %s" % (name, shipped, v), "pooled g3 %+.2f (se %.2f): a constexpr in native/iaus, changed only by its own reviewed edit (kRangeVeto also exists as literals in three Catalogue.cpp curves)" % (d, se))
+            rows.append(row)
+            log("consts %s=%s: g3 %+.2f (se %.2f) off %+.2f shipped %+.2f  %s" % (name, v, d, se, row["off"][0], row["shipped"][0], row["verdict"]))
+            SUMMARY["stages"]["consts"] = rows
+            save_summary()
+    SUMMARY["stages"]["consts"] = rows
+
+
+def stage_floor():
+    curves = final_curves()
+    out = {}
+    for w in A.worlds:
+        for cls in (KNIGHTS[:1] if CFG["force"] else KNIGHTS):
+            out["%s/%s" % (cls, w)] = fl = knight_floor(w, cls, curves)
+            log("floor %s on %s: default %.1f, as shipped %.1f  (why, as shipped: %s)" % (cls, w, fl["g3"], fl["shipped"], fl["shipped_why"]))
+            if 0.0 <= min(fl["g3"], fl["shipped"]) < 60.0:
+                open_decision("Knight guard floor under 60%%: %s on %s" % (cls, w), "default %.1f, as shipped %.1f; unguarded blows by cause (%% of all blows under 2+ own-taunted foes), as shipped: %s. marth's floor is a hard requirement (Q-S-5): the fix is a mechanism change (the hold / renewal / rest of the guard, or a taunt-count term), not a table value" % (fl["g3"], fl["shipped"], fl["shipped_why"]))
+    SUMMARY["stages"]["floor"] = out
+
+
+def stage_rating():
+    curves = final_curves()
+    out = {}
+    for w in A.worlds:
+        cmd = [A.bin, "--no-json", "--threads", str(A.jobs), "--rating-only", "--rating", "3" if not CFG["force"] else "1", "--classes", "beta1", "--seeds", ",".join(str(s) for s in range(1, CFG["rating_seeds"] + 1))] + world_args(w)
+        for c in curves:
+            cmd += ["--curve", c]
+        txt = text_run("rating:" + json.dumps(cmd[1:]), cmd)
+        rows = []
+        for m in re.finditer(r"^(\S+)\s+T(\d)\s+([-0-9.]+)\s+([-0-9.]+)\s+(\d+)/(\d+)\s+([-+0-9.]+)\s*(BELOW)?", txt, re.M):
+            rows.append({"class": m.group(1), "tier": int(m.group(2)), "rating": float(m.group(3)), "se": float(m.group(4)), "rank": "%s/%s" % (m.group(5), m.group(6)), "vs_tier": float(m.group(7)), "below": bool(m.group(8))})
+        out[w] = rows
+        below = [r["class"] for r in rows if r["below"]]
+        log("rating %s: %d classes, below their tier: %s" % (w, len(rows), ", ".join(below) or "none"))
+        for c in below:
+            open_decision("rating: %s is under its tier on %s" % (c, w), "see summary.json stages.rating.%s" % w)
+    SUMMARY["stages"]["rating"] = out
+
+
+def stage_recalib():
+    """The potion-worth table was measured under the shipped drink curves. Measure it again under the accepted values and confirm every
+    accepted value once more with the new table (fresh seeds 9001..). A value that fails is an open decision, never silently kept."""
+    curves = final_curves()
+    st = {"accepted": curves, "rows": []}
+    if curves:
+        tab = os.path.join(A.out, "potworth-builtin-final.txt")
+        if not os.path.exists(tab):
+            subprocess.run([sys.executable, os.path.join(HERE, "potion_worth.py"), "--bin", A.bin, "--seeds", str(CFG["calib_seeds"]), "--fights", str(CFG["calib_fights"]),
+                            "--jobs", str(A.jobs), "--curves", " ".join(curves), "--out", tab + ".tmp"], check=True, capture_output=True)
+            os.replace(tab + ".tmp", tab)
+        old = A.builtin_worth
+        A.builtin_worth = tab
+        seeds = range(9001, 9001 + CFG["confirm"])
+        for spec in curves:
+            cls = spec.split(":")[0]
+            rest = [c for c in curves if c != spec]
+            b, v = jmany([req("builtin", cls, "g3", rest, seeds), req("builtin", cls, "g3", curves, seeds)])
+            d, se = paired(b, v)
+            ok = not worse(d, se)
+            st["rows"].append({"spec": spec, "d": round(d, 3), "se": round(se, 3), "holds": ok})
+            log("recalib %s: %+.2f (se %.2f) with the re-measured potion worth: %s" % (spec, d, se, "holds" if ok else "DOES NOT HOLD"))
+            if not ok:
+                open_decision("accepted value %s loses with the re-measured potion worth" % spec, "%+.2f (se %.2f) on fresh seeds: do not write it; report" % (d, se))
+        A.builtin_worth = old
+        st["table"] = tab
+    SUMMARY["stages"]["recalib"] = st
+
+
+def render_md():
+    s = SUMMARY["stages"]
+    L = ["# IAUS per-class tuning: summary (%s%s)" % (time.strftime("%Y-%m-%d %H:%M"), ", SMOKE RUN: no number here is a result" if CFG["force"] else ""), "",
+         "Worlds: %s. Rule: tune_driver.py docstring (RULE) and iaus-sim-v2.md section 33." % ", ".join(A.worlds), ""]
+    if "rejudge" in s:
+        L += ["## Re-judged values", "", "| Spec | Train | Verdict |", "|---|---|---|"]
+        L += ["| `%s` | %+.2f (se %.2f) | %s |" % (r["spec"], r.get("train", [0, 0])[0], r.get("train", [0, 0])[1], r["why"]) for r in s["rejudge"]] + [""]
+    if "classes" in s:
+        L += ["## Per class", "", "| Class | Knobs live / dead | Sweeps | Accepted (write these) |", "|---|---|---|---|"]
+        for c, r in s["classes"].items():
+            L.append("| %s%s | %d / %d | %d | %s |" % (c, "" if r.get("complete") else " (running)", len(r["live"]), len(r["dead"]), len(r["rows"]), " ".join("`%s`" % k for k in r["kept"]) or "none"))
+        L += ["", "### Accepted values, with their evidence", "", "| Class | Knob | Shared -> new | Train | Holdout | Cross-world mean (g3) | As shipped |", "|---|---|---|---|---|---|---|"]
+        for c, r in s["classes"].items():
+            for row in r["rows"]:
+                if row["accepted"]:
+                    st = row["steps"]
+                    L.append("| %s | %s | %g -> %g | %+.2f (se %.2f) | %+.2f (se %.2f) | %+.2f (se %.2f) | %+.2f (se %.2f) |" % (c, row["knob"], row["shared"], row["best"], row["train"][0], row["train"][1],
+                             st["holdout"][0], st["holdout"][1], st["cross_world"]["mean/g3"][0], st["cross_world"]["mean/g3"][1], st["cross_world"]["mean/shipped"][0], st["cross_world"]["mean/shipped"][1]))
+        L += ["", "### Closest rejected (train passed, a later step failed)", ""]
+        for c, r in s["classes"].items():
+            for row in r["rows"]:
+                if not row["accepted"] and "steps" in row and row["train"][0] > 2.5 * row["train"][1]:
+                    L.append("- %s `%s`: train %+.2f (se %.2f); %s" % (c, row["spec"], row["train"][0], row["train"][1], row["why"]))
+        L += ["", "### Dead knobs per class (changed no seed's J in the liveness screen)", ""]
+        for c, r in s["classes"].items():
+            L.append("- %s: %d dead (full list in summary.json); live and not searched (over the cap): %s" % (c, len(r["dead"]), ", ".join(r.get("not_searched", [])) or "none"))
+        L.append("")
+    if "globals" in s:
+        L += ["## Shared Tuning scalars (fresh seeds 5001..)", "", "| Set | Pooled g3 | off | shipped | Max switching rise | Verdict |", "|---|---|---|---|---|---|"]
+        L += ["| `%s` | %+.2f (se %.2f) | %+.2f | %+.2f | %.0f%% | %s |" % (r["set"], r["pooled_g3"][0], r["pooled_g3"][1], r["pooled_off"][0], r["pooled_shipped"][0], r["max_switch_rise_pct"], r["verdict"]) for r in s["globals"]] + [""]
+    if "consts" in s:
+        L += ["## Compile-time constants", "", "| Constant | Shipped -> probed | g3 | off | shipped | Verdict |", "|---|---|---|---|---|---|"]
+        L += ["| %s | %s -> %s | %+.2f (se %.2f) | %+.2f | %+.2f | %s |" % (r["const"], r.get("shipped"), r["value"], r["g3"][0], r["g3"][1], r["off"][0], r["shipped"][0], r["verdict"]) if "g3" in r else "| %s | %s | | | | %s |" % (r["const"], r["value"], r["verdict"]) for r in s["consts"]] + [""]
+    if "floor" in s:
+        L += ["## Knight line guard floor (>= 60%)", "", "| Class / world | Default | As shipped | Unguarded as shipped, by cause |", "|---|---|---|---|"]
+        L += ["| %s | %.1f | %.1f | %s |" % (k, v["g3"], v["shipped"], ", ".join("%s %.1f" % kv for kv in v["shipped_why"].items())) for k, v in s["floor"].items()] + [""]
+    if "rating" in s:
+        L += ["## Rating (Tx) per world", ""]
+        for w, rows in s["rating"].items():
+            L += ["### %s" % w, "", "| Class | Tier | Rating | se | Rank | vs tier | |", "|---|---|---|---|---|---|---|"]
+            L += ["| %s | T%d | %.2f | %.2f | %s | %+.2f | %s |" % (r["class"], r["tier"], r["rating"], r["se"], r["rank"], r["vs_tier"], "BELOW" if r["below"] else "") for r in rows] + [""]
+    if "recalib" in s:
+        L += ["## Accepted values under the re-measured potion worth", ""] + ["- `%s`: %+.2f (se %.2f) %s" % (r["spec"], r["d"], r["se"], "holds" if r["holds"] else "DOES NOT HOLD") for r in s["recalib"]["rows"]] + [""]
+    L += ["## OPEN DECISIONS (the runner reports these and does not decide)", ""] + (["- **%s**: %s" % (d["what"], d["evidence"]) for d in SUMMARY["open_decisions"]] or ["- none"]) + [""]
+    return "\n".join(L)
+
+
+def main():
+    global A, CFG, POOL
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--bin", required=True, help="the built simulator (SIM_OUT of tools/iaus_sim/run.sh)")
+    ap.add_argument("--out", required=True, help="the run's directory: cache.jsonl, progress.log, summary.json, summary.md")
+    ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
+    ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
+    ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
+    ap.add_argument("--stages", default="prep,rejudge,classes,globals,consts,floor,rating,recalib,summary")
+    ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
+    ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
+    ap.add_argument("--jobs", type=int, default=12)
+    ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one dashboard results file per finished sweep")
+    A = ap.parse_args()
+    A.worlds = A.worlds.split(",")
+    A.bin = os.path.abspath(A.bin)
+    CFG = SMOKE if A.smoke else FULL
+    os.makedirs(A.out, exist_ok=True)
+    POOL = cf.ThreadPoolExecutor(max_workers=A.jobs)
+    load_cache()
+    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
+    log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
+    for name in A.stages.split(","):
+        if name == "summary":
+            continue
+        SUMMARY["open_decisions"] = [d for d in SUMMARY["open_decisions"] if d.get("stage") != name]
+        n0 = len(SUMMARY["open_decisions"])
+        stages[name]()
+        for d in SUMMARY["open_decisions"][n0:]:
+            d["stage"] = name
+        save_summary()
+        log("STAGE %s done" % name)
+    save_summary()
+    log("DONE: %s/summary.md, %d open decision(s)" % (A.out, len(SUMMARY["open_decisions"])))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
