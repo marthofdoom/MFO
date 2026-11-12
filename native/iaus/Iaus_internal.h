@@ -49,6 +49,8 @@ namespace MFO::Iaus::detail {
 
     // classWeight(candidate) = Profile::family[f] x Profile::role[tag] (section 4.9).
     [[nodiscard]] float ClassWeight(const Candidate& a_c, const Profile& a_p);
+    // School affinity factor: min(1, Profile::school[s] + Candidate::schoolBump); 1.0 with no school. A multiplier, never a veto.
+    [[nodiscard]] float SchoolFactor(const Candidate& a_c, const Profile& a_p);
     // A consideration's weight for this family: the Profile override, else the set's default.
     [[nodiscard]] float WeightFor(Family a_f, const Use& a_u, const Profile& a_p);
     // A consideration's curve for this family: the Profile's per-class override, else the shared Tuning curve.

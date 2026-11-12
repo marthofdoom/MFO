@@ -3,6 +3,8 @@
 
 #include "iaus/Reposition.h"
 
+#include <cmath>
+
 namespace MFO::Iaus::ClassCurves {
 
     static_assert(Scalars{}.touchSpentSec == Reposition::kTouchSpentSec, "Scalars::touchSpentSec is Reposition::kTouchSpentSec");
@@ -11,8 +13,26 @@ namespace MFO::Iaus::ClassCurves {
     namespace {
         // PLACEHOLDER STRUCTURE: one Row per class, nothing overridden. The sim batch fills a row here (a CurveOverride for a
         // (family, cons) pair and/or a Scalars value) with the evidence for it; until then the class scores with the shared catalogue.
+        // School peaks (home schools): marth's School Circle save 2026-11-12, https://claude.ai/artifact/2wzN86WzfTHoZpie1jxGrY
+        // Circle order: Destruction - Alteration - Restoration - Illusion - Conjuration (Core.h kSchoolCircle). Wizard, Mage and the other
+        // classes have NO home school (flat, no mastery bump); Arch-Mage is "any school" (schoolAny, below). Inert while schoolFloor
+        // stays 1.0: his page's starting shapes (floor 0.35, sharpness 1.5, bump 0.15) are for the sim search, NOT shipped.
+        void SeedSchoolPeaks(Table& t) {
+            using Id = std::size_t;
+            constexpr Id kEvoker = 8, kConjurer = 9, kHealer = 10, kWarlock = 11, kNecromancer = 18, kPriest = 19,
+                         kSpellsword = 20, kSorcerer = 21, kTemplar = 22, kNightblade = 23, kWitchhunter = 24, kScout = 25,
+                         kGrandBattlemage = 31, kSaint = 33;
+            t[kEvoker].scalars.schoolPeak = kDestruction;   t[kSpellsword].scalars.schoolPeak = kDestruction;   t[kGrandBattlemage].scalars.schoolPeak = kDestruction;
+            t[kConjurer].scalars.schoolPeak = kConjuration; t[kNecromancer].scalars.schoolPeak = kConjuration;  t[kSorcerer].scalars.schoolPeak = kConjuration;
+            t[kHealer].scalars.schoolPeak = kRestoration;   t[kPriest].scalars.schoolPeak = kRestoration;       t[kTemplar].scalars.schoolPeak = kRestoration;
+            t[kScout].scalars.schoolPeak = kRestoration;    t[kSaint].scalars.schoolPeak = kRestoration;
+            t[kWarlock].scalars.schoolPeak = kIllusion;     t[kNightblade].scalars.schoolPeak = kIllusion;      t[kWitchhunter].scalars.schoolPeak = kIllusion;
+        }
+
         Table MakeDefaults() {
             Table t{};
+            SeedSchoolPeaks(t);
+            t[kArchMage].scalars.schoolAny = true;   // marth 11-12: "obviously Arch mage gets any school"
             for (std::size_t i = 0; i < 3; ++i) t[kBaseOffFirst + i] = t[i];   // each tree-OFF base row starts as its T1 row
             return t;
         }
@@ -23,9 +43,32 @@ namespace MFO::Iaus::ClassCurves {
         return t;
     }
 
+    namespace { constexpr float kMinSchoolWeight = 1.0e-3f; }   // the lowest a school weight can be (a searched floor 0 or a huge shape must not veto)
+
+    float SchoolWeight(const Scalars& a_s, std::size_t a_school) {
+        if (a_s.schoolAny || a_s.schoolPeak < 0 || a_s.schoolPeak >= static_cast<int>(kSchools) || a_school >= kSchools) return 1.0f;
+        if (a_s.schoolAny || !(a_s.schoolFloor < 1.0f)) return 1.0f;   // Arch-Mage (any school) / flat (also a NaN floor): exactly 1.0, no arithmetic
+        auto pos = [](std::size_t a_id) {   // the school's seat on the circle
+            for (std::size_t i = 0; i < kSchools; ++i) if (static_cast<std::size_t>(kSchoolCircle[i]) == a_id) return i;
+            return std::size_t{ 0 };
+        };
+        const std::size_t peak = pos(static_cast<std::size_t>(a_s.schoolPeak));
+        a_school = pos(a_school);
+        const std::size_t diff = a_school > peak ? a_school - peak : peak - a_school;
+        const std::size_t d = diff < kSchools - diff ? diff : kSchools - diff;
+        if (d == 0) return 1.0f;
+        const float fl = a_s.schoolFloor > kMinSchoolWeight ? a_s.schoolFloor : kMinSchoolWeight;   // never 0: affinity is a weight, never a veto
+        const float shape = a_s.schoolShape > 0.0f ? a_s.schoolShape : 1.0f;
+        constexpr double kTwoPi = 6.283185307179586;
+        const double wave = 0.5 + 0.5 * std::cos(kTwoPi * static_cast<double>(d) / static_cast<double>(kSchools));
+        const float w = fl + (1.0f - fl) * static_cast<float>(std::pow(wave, static_cast<double>(shape)));
+        return w > kMinSchoolWeight ? w : kMinSchoolWeight;
+    }
+
     Profile Build(const Row& a_row) {
         Profile p;
         p.curves = a_row.curves;
+        for (std::size_t s = 0; s < kSchools; ++s) p.school[s] = SchoolWeight(a_row.scalars, s);
         return p;
     }
 
@@ -48,6 +91,17 @@ namespace MFO::Iaus::ClassCurves {
         a_gate.touchSpentSec   = a_row.scalars.touchSpentSec;
     }
 
+    void ApplyMastered(const Table& a_table, std::uint64_t a_mask, ClassGate& a_gate) {
+        for (std::size_t i = 0; i < kClassRows; ++i) {
+            if ((a_mask & (std::uint64_t{ 1 } << i)) == 0) continue;
+            const Scalars& sc = a_table[i].scalars;
+            if (sc.schoolPeak < 0 || sc.schoolPeak >= static_cast<int>(kSchools) || !(sc.schoolMasteredBump > 0.0f)) continue;
+            a_gate.schoolBump[static_cast<std::size_t>(sc.schoolPeak)] += sc.schoolMasteredBump;
+        }
+    }
+
+    void ApplyMastered(std::uint64_t a_mask, ClassGate& a_gate) { ApplyMastered(Defaults(), a_mask, a_gate); }
+
     void Apply(std::uint8_t a_classId, ClassGate& a_gate) {
         if (a_classId >= kRows) return;   // no class: the gate keeps the shared constants
         Apply(Defaults()[a_classId], a_classId, a_gate);
@@ -69,6 +123,10 @@ namespace MFO::Iaus::ClassCurves {
     bool SetScalar(Row& a_row, std::string_view a_name, float a_v) {
         if (a_name == "drinkHealthLine") { a_row.scalars.drinkHealthLine = a_v; a_row.scalars.drinkHealthLineSet = true; }
         else if (a_name == "touchSpentSec") a_row.scalars.touchSpentSec = a_v;
+        else if (a_name == "schoolPeak") a_row.scalars.schoolPeak = static_cast<std::int8_t>(!std::isfinite(a_v) || a_v < 0.0f ? -1 : (a_v >= static_cast<float>(kSchools) ? -1 : static_cast<int>(a_v)));
+        else if (a_name == "schoolFloor") a_row.scalars.schoolFloor = a_v;
+        else if (a_name == "schoolShape") a_row.scalars.schoolShape = a_v;
+        else if (a_name == "schoolMasteredBump") a_row.scalars.schoolMasteredBump = a_v;
         else return false;
         return true;
     }

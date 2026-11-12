@@ -24,6 +24,11 @@ namespace MFO::Iaus::SpellBook {
 
     static_assert(ClassCurves::kClassRows == Classes::kClassCount && ClassCurves::kRows == Classes::kClassCount + 3,
                   "one class-curve row per class, plus the three tree-OFF base rows");
+    // ClassCurves.cpp SeedSchoolPeaks addresses rows by ordinal (that file is pure and cannot include Classes.h).
+    static_assert(static_cast<std::size_t>(Classes::Id::Evoker) == 8 && static_cast<std::size_t>(Classes::Id::Warlock) == 11 &&
+                  static_cast<std::size_t>(Classes::Id::GrandBattlemage) == 31 && static_cast<std::size_t>(Classes::Id::Scout) == 25 &&
+                  static_cast<std::size_t>(Classes::Id::Saint) == 33 &&
+                  static_cast<std::size_t>(Classes::Id::ArchMage) == ClassCurves::kArchMage, "ClassCurves school-peak seeds use these Classes::Id ordinals");
 
     namespace {
 
@@ -183,6 +188,18 @@ namespace MFO::Iaus::SpellBook {
                     costliestHostile = eff->cost;
                     const auto rv = base->data.resistVariable;
                     e.resistAv = rv == RE::ActorValue::kNone ? -1 : static_cast<int>(rv);
+                }
+            }
+            // The school (ruling Q-school-affinity): the COSTLIEST effect's MGEF "Magic Skill" (the Loadout / Cast.cpp rule), as a
+            // School identity. Plain data for the snapshot; -1 for a spell with no school.
+            if (const auto* ce = a_sp->GetCostliestEffectItem(); ce && ce->baseEffect) {
+                switch (ce->baseEffect->data.associatedSkill) {
+                case RE::ActorValue::kDestruction: e.school = kDestruction; break;
+                case RE::ActorValue::kAlteration:  e.school = kAlteration; break;
+                case RE::ActorValue::kRestoration: e.school = kRestoration; break;
+                case RE::ActorValue::kIllusion:    e.school = kIllusion; break;
+                case RE::ActorValue::kConjuration: e.school = kConjuration; break;
+                default: break;
                 }
             }
             // The nature and the "never generated" verdict: ONE derivation, shared with the Teach Spells page (WouldWeigh).
@@ -500,6 +517,7 @@ namespace MFO::Iaus::SpellBook {
             const auto id = static_cast<Classes::Id>(i);
             if ((mastered & Classes::Bit(id)) != 0 && CastingClass(Classes::Get(id))) { g.spellsFromMastered = true; break; }
         }
+        ClassCurves::ApplyMastered(mastered, g);   // marth 11-12: each mastered casting class bumps the weight at its peak school (shipped 0)
         g.scrollUser = g.spellsOnClass;
         const bool any = (def->weapons & W::kUnrestricted) != 0;
         g.weaponMelee    = any || (def->weapons & (W::kDagger | W::kOneHand | W::kTwoHand)) != 0;

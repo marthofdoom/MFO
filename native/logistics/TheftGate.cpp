@@ -134,6 +134,13 @@ namespace MFO::Logistics::TheftGate {
         return "?";
     }
 
+    void LogOwnedCopy(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, const char* a_how) {
+        auto* own = a_src ? a_src->GetOwner() : nullptr;
+        Say(a_follower, Road::Steal, a_src, a_obj, a_count, own, a_how ? a_how : "-", nullptr);   // verdict=take; road=steal says WHICH road moved it
+        spdlog::info("[theft-gate] F={:08X} owned copy of {:08X}x{} moved by the STEAL road (witness pre-check Take, re-proved on main), not by Take",
+                     a_follower ? a_follower->GetFormID() : 0u, a_obj ? a_obj->GetFormID() : 0u, a_count);
+    }
+
     void NoteAction(RE::FormID a_follower, Road a_road, RE::FormID a_ref, const char* a_result) {
         std::scoped_lock lk(g_ringMx);
         if (g_rings.size() > 64) g_rings.clear();

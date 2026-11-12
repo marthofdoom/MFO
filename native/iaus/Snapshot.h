@@ -31,6 +31,7 @@ namespace MFO::Iaus {
         Prune::Nature nature = Prune::Nature::Unknown;
         Prune::Drop   drop = Prune::Drop::Keep; // why it is never a candidate (P1 + the "never generated" list)
         RoleTag       role = RoleTag::None;
+        std::int8_t   school = -1;              // magic school of the costliest effect, School identity (iaus/Core.h); -1 = none
         int           resistAv = -1;            // actor value of the costliest hostile effect's resist; -1 none
         float         cost = 0.0f;              // magicka cost for THIS caster (0 for scrolls and staves)
         float         reach = 0.0f;             // aimed reach in units; 0 = no cap of its own
@@ -93,6 +94,7 @@ namespace MFO::Iaus {
     // class when the class tree is on (else his T1 class). With the tree OFF nothing is class-gated (marth Q63,
     // card I6): every flag below is open, as the gambit table leaves it today.
     struct ClassGate {
+        std::array<float, kSchools> schoolBump{};   // marth 11-12: mastered casting classes add a small bump at their peak school (ClassCurves::ApplyMastered); 0 = none
         bool resolved = false;        // false: no class known yet -- weapons and spells are not gated
         bool treeOn = false;
         bool strict = false;          // strict adherence: the posture layer's weapon gate (G16)

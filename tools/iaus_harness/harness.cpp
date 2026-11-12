@@ -14,6 +14,7 @@
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
 
+#include <limits>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1569,6 +1570,74 @@ namespace {
         Check(gm.drinkHealthLine == 0.20f, "class curves: an explicit drinkHealthLine wins over the midpoint");
     }
 
+    // School affinity (ruling Q-school-affinity): a smooth wave over the school circle, a multiplier only.
+    void SchoolAffinityRows() {
+        namespace CC = MFO::Iaus::ClassCurves;
+        std::printf("\n=== school affinity ===\n");
+        const Tuning& t = DefaultTuning();
+        const Foe foe{ "Bandit", 0x0003DF30, 600.0f, 1.0f, 1.0f, false, false, false, false, true, false, false, 0.0f, 0.0f, 0.0f };
+        auto spell = [&](int a_school) {
+            Candidate c = Offense("Spell", 0x00012FCD0u + static_cast<std::uint32_t>(a_school), RoleTag::Fire, 30, 3000, foe, 0.0f, 100.0f, 100.0f);
+            c.school = static_cast<std::int8_t>(a_school);
+            return c;
+        };
+        const Mind m{};
+        const Profile none;
+        float base[5];
+        bool flat = true;
+        for (int s = 0; s < 5; ++s) base[s] = ScoreOne(spell(s), m, none, t, 3, 0.0f, nullptr);
+        for (std::size_t i = 0; i < CC::kRows; ++i)
+            for (int s = 0; s < 5; ++s) flat = flat && ScoreOne(spell(s), m, CC::ProfileFor(static_cast<std::uint8_t>(i)), t, 3, 0.0f, nullptr) == base[s];
+        Check(flat && base[0] > 0.0f, "school affinity: every shipped row (flat default) scores every school bit-identically to the default Profile");
+        Candidate noSchool = spell(0); noSchool.school = -1;
+        Check(ScoreOne(noSchool, m, none, t, 3, 0.0f, nullptr) == base[0], "school affinity: no school scores as before");
+        CC::Row r;   // a Destruction caster
+        CC::SetScalar(r, "schoolPeak", 0.0f); CC::SetScalar(r, "schoolFloor", 0.4f);
+        Check(!(CC::SetScalar(r, "schoolPeak", 9.0f) && r.scalars.schoolPeak >= 0), "school affinity: an out-of-range peak means none");
+        CC::SetScalar(r, "schoolPeak", 0.0f);
+        const Profile pr = CC::Build(r);
+        float w[5];
+        for (int s = 0; s < 5; ++s) w[s] = pr.school[static_cast<std::size_t>(s)];
+        Check(w[0] == 1.0f && w[1] == w[4] && w[2] == w[3] && w[1] > w[2] && w[2] >= 0.4f && w[1] < 1.0f, "school affinity: wave peaks at his school, is symmetric around the circle, falls to the far side, never below the floor");
+        Check(ScoreOne(spell(0), m, pr, t, 3, 0.0f, nullptr) == base[0], "school affinity: his own school scores unchanged");
+        Check(ScoreOne(spell(2), m, pr, t, 3, 0.0f, nullptr) < base[2] && ScoreOne(spell(2), m, pr, t, 3, 0.0f, nullptr) > 0.0f, "school affinity: a far school is weighted down, never vetoed");
+        Check(ScoreOne(spell(1), m, pr, t, 3, 0.0f, nullptr) > ScoreOne(spell(2), m, pr, t, 3, 0.0f, nullptr) * (base[1] / base[2]) , "school affinity: a near school keeps more than a far one");
+        Check(ScoreOne(spell(2), m, none, t, 3, 0.0f, nullptr) == base[2] && ScoreOne(spell(2), m, CC::ProfileFor(8), t, 3, 0.0f, nullptr) == base[2], "school affinity: ...and only that class's Profile");
+        CC::Row sharp = r; CC::SetScalar(sharp, "schoolShape", 3.0f);
+        Check(CC::Build(sharp).school[1] < w[1] && CC::Build(sharp).school[1] >= 0.4f, "school affinity: a higher shape narrows the peak");
+        CC::Row flatRow = r; CC::SetScalar(flatRow, "schoolFloor", 1.0f);
+        bool allOne = true; for (float x : CC::Build(flatRow).school) allOne = allOne && x == 1.0f;
+        Check(allOne, "school affinity: floor 1.0 is exactly flat whatever the peak");
+        Check(!CC::SetScalar(r, "schoolNope", 1.0f), "school affinity: a bad scalar name is refused");
+        CC::Row ext; CC::SetScalar(ext, "schoolPeak", 0.0f); CC::SetScalar(ext, "schoolFloor", 0.0f); CC::SetScalar(ext, "schoolShape", 500.0f);
+        bool pos = true; for (float x : CC::Build(ext).school) pos = pos && x > 0.0f;
+        Check(pos && ScoreOne(spell(2), m, CC::Build(ext), t, 3, 0.0f, nullptr) > 0.0f, "school affinity: floor 0 + a huge shape never reaches weight 0 (never a veto)");
+        Candidate none1 = spell(0); none1.school = -1;
+        Check(ScoreOne(none1, m, pr, t, 3, 0.0f, nullptr) == base[0], "school affinity: a no-school candidate is unaffected by a peaked Profile");
+        CC::Row nf; CC::SetScalar(nf, "schoolPeak", std::numeric_limits<float>::quiet_NaN());
+        Check(nf.scalars.schoolPeak == -1, "school affinity: a non-finite peak means none");
+        // Arch-Mage: any school (a fixed rule), flat even with a floor set on a copy of its row
+        CC::Row am = CC::Defaults()[CC::kArchMage];
+        CC::SetScalar(am, "schoolFloor", 0.3f);
+        bool amFlat = am.scalars.schoolAny; for (float x : CC::Build(am).school) amFlat = amFlat && x == 1.0f;
+        Check(amFlat && CC::Defaults()[CC::kArchMage].scalars.schoolAny && !CC::Defaults()[8].scalars.schoolAny, "school affinity: Arch-Mage is flat 1.0 over every school (fixed rule), other rows are not");
+        // mastered bump: shipped 0 = no bump; a set bump lands at the mastered class's peak, summed, and the score clamps at the peak weight
+        ClassGate g0; CC::ApplyMastered((1ull << 8) | (1ull << 10), g0);
+        bool zero = true; for (float x : g0.schoolBump) zero = zero && x == 0.0f;
+        Check(zero, "school affinity: shipped mastered bump is 0 (no bump from any mastered class)");
+        CC::Table tab = CC::Defaults();
+        CC::SetScalar(tab[8], "schoolMasteredBump", 0.15f);    // Evoker: Destruction
+        CC::SetScalar(tab[10], "schoolMasteredBump", 0.10f);   // Healer: Restoration
+        CC::SetScalar(tab[0], "schoolMasteredBump", 0.50f);    // Melee: no peak -> nothing
+        ClassGate gb; CC::ApplyMastered(tab, (1ull << 8) | (1ull << 10) | 1ull, gb);
+        Check(gb.schoolBump[kDestruction] == 0.15f && gb.schoolBump[kRestoration] == 0.10f && gb.schoolBump[kAlteration] == 0.0f, "school affinity: each mastered casting class bumps its own peak school only");
+        Candidate far = spell(kRestoration); far.schoolBump = gb.schoolBump[kRestoration];
+        const float bumped = ScoreOne(far, m, pr, t, 3, 0.0f, nullptr), unb = ScoreOne(spell(kRestoration), m, pr, t, 3, 0.0f, nullptr);
+        Check(bumped > unb && bumped <= base[2], "school affinity: a mastered bump raises the far school but never past the peak weight");
+        Candidate huge = spell(kRestoration); huge.schoolBump = 5.0f;
+        Check(ScoreOne(huge, m, pr, t, 3, 0.0f, nullptr) == base[2], "school affinity: the bump clamps at the peak weight 1.0");
+    }
+
 }
 
 int main() {
@@ -1590,6 +1659,7 @@ int main() {
     DisengageRules();
     BatchI();
     ClassCurveRows();
+    SchoolAffinityRows();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }
