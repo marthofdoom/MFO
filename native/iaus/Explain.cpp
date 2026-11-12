@@ -111,6 +111,7 @@ namespace MFO::Iaus {
         s += std::format(" | aw {:.2f} cw {:.2f}", fi < kFamilies ? t.actionWeight[fi] : 0.0f,
                          detail::ClassWeight(c, p));
         if (focus > 1.0f) s += std::format(" pf {:.2f}", focus);
+        if (const float sw = detail::SchoolFactor(c, p); sw != 1.0f) s += std::format(" sw {:.2f}", sw);
         return s;
     }
 
