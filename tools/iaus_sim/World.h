@@ -213,6 +213,7 @@ namespace Sim {
         float  aversion = 0.0f; int aimBudget = -1; std::uint8_t aimWin[10] = {}; int aimN = 0, aimAt = 0, aimFlying = 0;
         bool   pkgClass = false;
         std::uint32_t handSpell = 0;               // H4: the spell in his hand = the last book spell he cast (MODEL; Snapshot::equippedSpell)
+        std::uint32_t handSpell2 = 0;              // Q-I-2: the other hand = the spell cast before it, when it was a different one (MODEL; Snapshot::equippedSpellOther)
         int    blockRenewals = 0; double blockRestUntil = 0;   // apmf/BlockClaims.cpp: one renewal, then kRest 1.5 s after any hold ends
         double runSafeAt = -1; bool runMeasured = false;       // section 31.9: this run's time to safety
         std::vector<GRow> rows;            // table mode: his class's default gambit rows
@@ -653,11 +654,16 @@ namespace Sim {
         }
         // Card H4 (native/iaus/Reposition.h SpellRange, the game's own function): the distance the spell in his hand is fought at. 0 = none
         // (no spell in hand, a heal in hand, a weapon drawn, a class that does not cast): the engine's own movement, as before.
-        [[nodiscard]] float HandRange(const Body& x, const Ctl& c) const {
+        [[nodiscard]] float HandRange(const Body& x, const Ctl& c, const Body* tg = nullptr) const {
             if (!c.handSpell || !(c.drawn == PostureKind::None || c.drawn == PostureKind::Staff) || (c.gate.resolved && !c.gate.spellsOnClass)) return 0.0f;
-            for (const SpellEntry& e : c.book.entries) if (e.source == SpellSource::Spell && e.form == c.handSpell && (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control) && e.drop == Prune::Drop::Keep)
-                return Reposition::SpellRange(e, Reach(x)).desired;
-            return 0.0f;
+            return Reposition::HandsRange(c.book, c.handSpell, g_t2.hands ? c.handSpell2 : 0u, Reach(x), TouchSpent(c), tg ? &tg->c : nullptr).range.desired;   // Q-I-2: the touch spell is chosen on the foe he fights
+        }
+        // Q-I-2 (iaus/Candidates.cpp, mirrored): the touch spell of his hands fired within Reposition::kTouchSpentSec (Mind::firedAt, the last fired decision).
+        [[nodiscard]] bool TouchSpent(const Ctl& c) const {
+            if (!g_t2.hands || !c.handSpell2) return false;
+            const std::uint32_t tf = Reposition::HandsRange(c.book, c.handSpell, c.handSpell2, 100.0f, false, nullptr).touchForm;
+            const double ago = now - c.mind.firedAt;
+            return tf != 0 && c.mind.hasRunning && c.mind.running.form == tf && ago >= 0.0 && ago <= static_cast<double>(Reposition::kTouchSpentSec);
         }
         // DODGE (Q-melee-7, MFO-B806). FACT (research in Harbinger Docs, batch M): the engine's side step (CombatBehaviorDodgeThreat) rolls
         // against the combat style's Avoid Threat chance, and since Harbinger v45 a CLASS style reaches the engine in full (Q-melee-6).
@@ -824,7 +830,7 @@ namespace Sim {
         void StartCast(Body& x, int idx, const SimSpell& s, std::uint32_t target, float cost, bool fromIaus) {
             x.act = Act::Cast; x.actSpell = idx; x.actTarget = target; x.actCost = cost; x.actIaus = fromIaus;
             x.hitAt = now + s.castSec; x.actEnd = x.hitAt + TM::castRecover; x.c.caster = true; Action(x, dg.soundNormal);
-            if (x.ctl >= 0 && s.e.source == SpellSource::Spell) ctl[static_cast<std::size_t>(x.ctl)].handSpell = s.e.form;   // H4: the spell now in his hand (MODEL: a hand keeps the last spell cast from it)
+            if (x.ctl >= 0 && s.e.source == SpellSource::Spell) { Ctl& hc = ctl[static_cast<std::size_t>(x.ctl)]; if (hc.handSpell != s.e.form) hc.handSpell2 = hc.handSpell; hc.handSpell = s.e.form; }   // H4: the spell now in his hand (MODEL: a hand keeps the last spell cast from it)
             if (trace) std::fprintf(trace, "%7.2f  cast %s begins %s -> %u (%s, %.1fs, cost %.0f, mp %.0f)\n", now, x.c.name.c_str(), s.e.name.c_str(), target, fromIaus ? "decision" : "own AI", s.castSec, cost, x.c.mp);
             if (x.role == Role::Foe && (s.e.nature == Prune::Nature::Offense || s.e.nature == Prune::Nature::Heal || s.ctrl)) ++t.foeCasts;
             if (static_cast<std::size_t>(idx) < x.spellReady.size()) x.spellReady[static_cast<std::size_t>(idx)] = x.actEnd + std::max(0.0f, s.recovery);
@@ -940,7 +946,7 @@ namespace Sim {
                 if (anyAfford || (x.Party() && x.c.mp > 0.15f * x.c.mpMax)) {
                     const float want = 750.0f;
                     float far = want * 1.4f;   // the lab's standoff before card H4
-                    if (g_t2.range && c) { const float des = HandRange(x, *c); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
+                    if (g_t2.range && c) { const float des = HandRange(x, *c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
                     if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                     else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
                     return;
@@ -1001,7 +1007,7 @@ namespace Sim {
             const Body* tg = Find(c.steer ? c.steer : x.c.targetId); if (!tg || !Up(*tg) || tg->Party()) return;
             const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
             if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
-                float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
+                float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
                 if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                 else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
             } else if (c.drawn == PostureKind::Bow) {

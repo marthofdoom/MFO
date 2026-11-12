@@ -1394,6 +1394,19 @@ namespace {
             Check(!Reposition::RangeToHold(s2, mage, c), "H4: no spell in his hand -> no range to keep");
             ClassGate noCast = mage; noCast.spellsOnClass = false;
             Check(!Reposition::RangeToHold(caster(3000, firebolt), noCast, c), "H4: a class that does not cast never closes on a spell range");
+            // Q-I-2: the shortest range of one delivery type over BOTH hands; touch + distance = the distance range unless touch is the better cast
+            Snapshot two = caster(3000, firebolt); two.book.entries = { firebolt, flames }; two.equippedSpellOther = flames.form;
+            Check(Reposition::RangeToHold(two, mage, c) && std::fabs(c.radius - 480.0f) < 0.01f, "Q-I-2: two distance spells (aimed 1800, stream 480) -> the shortest range");
+            Snapshot mix = caster(3000, firebolt); mix.book.entries = { firebolt, touch }; mix.equippedSpellOther = touch.form;
+            Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 1800.0f) < 0.01f, "Q-I-2: touch + distance, touch not the better cast (unmeasured) -> the distance spell's range");
+            mix.book.entries[1].measured = true; mix.book.entries[1].damage = 500.0f; mix.book.entries[0].measured = true; mix.book.entries[0].damage = 40.0f;
+            Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 160.0f) < 0.01f && c.far, "Q-I-2: touch the better cast on the foe -> he closes for the touch range");
+            mix.touchSpent = true;
+            Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 1800.0f) < 0.01f, "Q-I-2: right after the touch cast the range is the distance spell's again");
+            mix.foes[0].dist = 100.0f; mix.foes[0].targetId = 0;   // the foe he just touched does not even have him as its target
+            Check(Reposition::BackOffNeed(mix, mage) > 0.5f, "Q-I-2: after the touch cast a foe inside the distance spell's minimum is a back-off reason, aimed at him or not");
+            mix.touchSpent = false;
+            Check(Reposition::BackOffNeed(mix, mage) == 0.0f, "Q-I-2: with the touch cast still wanted, and the foe not on him, there is no back-off");
         }
         // ---- items 1 and 3: the back-off ----
         {

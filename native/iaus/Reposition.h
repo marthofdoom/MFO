@@ -48,14 +48,58 @@ namespace MFO::Iaus::Reposition {
         return r;
     }
 
-    // The entry of the spell in his hand (Snapshot::equippedSpell), an offense / control spell of the book; nullptr when none.
-    [[nodiscard]] inline const SpellEntry* EquippedEntry(const Snapshot& a_s) {
-        if (a_s.equippedSpell == 0) return nullptr;
-        for (const SpellEntry& e : a_s.book.entries)
-            if (e.source == SpellSource::Spell && e.form == a_s.equippedSpell &&
+    // The entry of a spell in his hand (a form of the book), an offense / control spell that is kept; nullptr when none.
+    [[nodiscard]] inline const SpellEntry* ScoreableEntry(const Book& a_book, std::uint32_t a_form) {
+        if (a_form == 0) return nullptr;
+        for (const SpellEntry& e : a_book.entries)
+            if (e.source == SpellSource::Spell && e.form == a_form &&
                 (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control) && e.drop == Prune::Drop::Keep)
                 return &e;
         return nullptr;
+    }
+    // The entry of the spell in his hand (Snapshot::equippedSpell); nullptr when none.
+    [[nodiscard]] inline const SpellEntry* EquippedEntry(const Snapshot& a_s) { return ScoreableEntry(a_s.book, a_s.equippedSpell); }
+
+    // ── Q-I-2 (marth 2026-11-12): "shortest range of equipped distance type. If mismatched types (touch, and one distance), it
+    // shouldnt happen unless a touch spell is really one of the best choices, then have him get in and out quick" ───────────────
+    // The range he fights at comes from BOTH hands (equippedSpell = right else left, equippedSpellOther = the other hand when it holds a
+    // different spell): among the IAUS-scoreable spells with a known range, the SHORTEST of the same delivery type (touch, or distance =
+    // aimed / target actor / concentration / self-blast). With both types in his hands (`mixed`) the range follows the DISTANCE spell,
+    // unless the touch spell is the better cast on the foe (Estimate::SpellOn, measured only) and was not cast within kTouchSpentSec
+    // (Snapshot::touchSpent): then he closes for the touch cast; right after it the range is the distance spell's again and the back-off
+    // (MageBackOffNeed, the H3 run) takes him out to it.
+    inline constexpr float kTouchSpentSec = 3.0f;    // CHOSEN (the sim tunes it): how long after a touch cast he is "backing out"
+    struct HandRange {
+        Range range;                                // the range to keep (touch range = the melee reach x0.8, no minimum)
+        bool  mixed = false;                        // touch and distance spells in his hands together
+        bool  touchChosen = false;                  // mixed, and the range is the touch spell's
+        std::uint32_t touchForm = 0;                // the touch spell of his hands (the shortest), 0 = none
+    };
+    [[nodiscard]] inline HandRange HandsRange(const Book& a_book, std::uint32_t a_right, std::uint32_t a_other, float a_meleeReach,
+                                              bool a_touchSpent, const Combatant* a_foe) {
+        HandRange h;
+        Range touch, dist;
+        const SpellEntry* tEntry = nullptr;
+        const SpellEntry* dEntry = nullptr;
+        const std::uint32_t forms[2] = { a_right, a_other == a_right ? 0u : a_other };   // the same spell in both hands counts once
+        for (const std::uint32_t form : forms) {
+            if (form == 0) continue;
+            const SpellEntry* e = ScoreableEntry(a_book, form);
+            if (!e) continue;
+            const Range r = SpellRange(*e, a_meleeReach);
+            if (!r.Known()) continue;
+            if (e->touch) { if (!tEntry || r.desired < touch.desired) { touch = r; tEntry = e; } }
+            else          { if (!dEntry || r.desired < dist.desired)  { dist = r;  dEntry = e; } }
+        }
+        h.touchForm = tEntry ? tEntry->form : 0u;
+        h.mixed = tEntry && dEntry;
+        if (!h.mixed) { h.range = tEntry ? touch : dist; return h; }
+        h.touchChosen = !a_touchSpent && a_foe && Estimate::SpellOn(*tEntry, *a_foe) > Estimate::SpellOn(*dEntry, *a_foe);
+        h.range = h.touchChosen ? touch : dist;
+        return h;
+    }
+    [[nodiscard]] inline HandRange HandsRange(const Snapshot& a_s, const Combatant* a_foe) {
+        return HandsRange(a_s.book, a_s.equippedSpell, a_s.equippedSpellOther, a_s.meleeReach, a_s.touchSpent, a_foe);
     }
 
     // His hands hold spells or nothing (no weapon drawn, or a staff): the SPELL PHASE of a mage or a hybrid.
@@ -85,12 +129,10 @@ namespace MFO::Iaus::Reposition {
     };
     [[nodiscard]] inline bool RangeToHold(const Snapshot& a_s, const ClassGate& a_g, Close& a_out) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return false;
-        const SpellEntry* e = EquippedEntry(a_s);
-        if (!e) return false;
-        const Range r = SpellRange(*e, a_s.meleeReach);
-        if (!r.Known()) return false;
         const Combatant* foe = RangeFoe(a_s);
         if (!foe) return false;
+        const Range r = HandsRange(a_s, foe).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type
+        if (!r.Known()) return false;
         a_out.foe = foe->id;
         a_out.radius = r.desired;
         a_out.far = foe->dist > r.desired * kCloseSlack;
@@ -100,15 +142,19 @@ namespace MFO::Iaus::Reposition {
     // ── The back-off need (Cons::BackOffNeed's input, 0..1; 0 = no reason) ───────────────────────────────────────────────────
     // A MAGE (spell phase, a casting class, a spell with a minimum in hand): a foe that has to close and has him as its target stands
     // inside the minimum. The need is how far inside (at the foe's feet = 1).
+    // Q-I-2: with a touch spell and a distance spell in his hands and the distance spell's range kept, a foe inside the minimum is a reason
+    // to back out whether or not it has him as its target when he has just cast the touch spell (Snapshot::touchSpent): "in and out quick".
     [[nodiscard]] inline float MageBackOffNeed(const Snapshot& a_s, const ClassGate& a_g) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return 0.0f;
-        const SpellEntry* e = EquippedEntry(a_s);
-        if (!e) return 0.0f;
-        const Range r = SpellRange(*e, a_s.meleeReach);
+        const HandRange hr = HandsRange(a_s, RangeFoe(a_s));
+        const Range& r = hr.range;
         if (!(r.minimum > 0.0f)) return 0.0f;
+        const bool backingOut = hr.mixed && a_s.touchSpent;
         float need = 0.0f;
         for (const Combatant& f : a_s.foes) {
-            if (f.paralysed || f.fleeing || f.targetId == 0 || f.targetId != a_s.self.id || !Estimate::MustClose(f)) continue;
+            if (f.paralysed || f.fleeing) continue;
+            const bool presses = f.targetId != 0 && f.targetId == a_s.self.id && Estimate::MustClose(f);
+            if (!presses && !backingOut) continue;
             if (!std::isfinite(f.dist) || !(f.dist < r.minimum)) continue;
             need = (std::max)(need, std::clamp(1.0f - f.dist / r.minimum, 0.0f, 1.0f));
         }

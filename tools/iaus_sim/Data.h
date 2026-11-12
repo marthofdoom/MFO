@@ -37,13 +37,14 @@ namespace Sim {
         bool aim = true;         // card H5: ch.29 miss budget (a corrected shot when the window's misses reach the budget)
         bool block = true;       // ch.31 held guard: ClassGate::block from the class's Block row, 2.5 s held, the held-guard gate
         bool range = true;       // card H4: the distance a mage fights at follows the spell in his hand; the mage back-off
+        bool hands = true;       // Q-I-2 (marth 11-12): the range follows the shortest equipped spell of one delivery type over BOTH hands; touch + distance = the distance range, a touch cast closes and backs out (needs range)
         bool backoff = true;     // Q-T2-3: the Mercenary's back-off (two or more foes press him)
         bool step = true;        // gap G18: the hidden step
         bool c13built = true;    // card C13 AS BUILT (near-inert, Q112): no engine lever, so no free entry. false (--c13 lever) = the H10 guarantee the lab carried before
         bool unweighted = true;  // Q91: a spell with no effect IAUS can value is dropped (Prune::Drop::Unweighted)
         bool reanimate = true;   // card G7: reanimate spells are kept (table rows cast them at a corpse), corpses are raised
         bool dnd = false;        // --disengage-dnd (marth 11-12, NOT built in the game): a disengage makes him no valid target for 6 s
-        void AllOff() { feet = c8 = dodge = aversion = aim = block = range = backoff = step = c13built = unweighted = reanimate = false; }
+        void AllOff() { feet = c8 = dodge = aversion = aim = block = range = hands = backoff = step = c13built = unweighted = reanimate = false; }
     };
     inline T2 g_t2;
     inline float g_aimMiss = 0.12f;       // --aim-miss: the lab's chance that an UNCORRECTED aimed shot misses a moving target (MODEL; TM::aimMiss before)

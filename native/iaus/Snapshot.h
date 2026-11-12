@@ -202,6 +202,8 @@ namespace MFO::Iaus {
         // each point is a FRESH answer of Concealment's pick for that kind (asked only while the generator could use it).
         bool  backOffRoad = false, backOffPoint = false;
         bool  stepRoad = false, stepPoint = false;
+        std::uint32_t equippedSpellOther = 0; // Q-I-2: the spell in the OTHER hand when it holds a different one; 0 = none
+        bool  touchSpent = false;             // Q-I-2: the touch spell of his hands fired within Reposition::kTouchSpentSec (Mind::firedAt)
         std::uint32_t equippedSpell = 0;      // batch I H4: the spell in his right hand (else left); 0 = no spell in hand. Looked up in the book
         bool  freeEntry = false;              // batch I item 2: this fight is a guaranteed stealth-entry fight and the entry is not spent (the gather
                                               // already read foes the engine has no verdict on as unaware; logged by Classes::StealthEntry)

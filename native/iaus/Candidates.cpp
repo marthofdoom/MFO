@@ -15,6 +15,7 @@
 #include "cast/Actuation.h"
 #include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
 #include "iaus/Disengage.h"
+#include "iaus/Engine.h"    // Q-I-2: the Mind's last fired decision (touchSpent)
 #include "iaus/Fills.h"
 #include "iaus/Hide.h"
 #include "iaus/Reposition.h"   // batch I: H4, the back-off, the hidden step
@@ -179,8 +180,10 @@ namespace MFO::Iaus::Candidates {
         {
             auto* r = a_self->GetEquippedObject(false);
             auto* l = a_self->GetEquippedObject(true);
-            if (auto* rs = r ? r->As<RE::SpellItem>() : nullptr) s.equippedSpell = rs->GetFormID();
-            else if (auto* ls = l ? l->As<RE::SpellItem>() : nullptr) s.equippedSpell = ls->GetFormID();
+            auto* rs = r ? r->As<RE::SpellItem>() : nullptr;
+            auto* ls = l ? l->As<RE::SpellItem>() : nullptr;
+            if (rs) { s.equippedSpell = rs->GetFormID(); if (ls && ls != rs) s.equippedSpellOther = ls->GetFormID(); }
+            else if (ls) s.equippedSpell = ls->GetFormID();
         }
         s.meleeInRightHand = Taunt::MeleeInRightHand(a_self);
         s.meleeOnly        = Actuation::MeleeOnly(a_self);
@@ -190,6 +193,15 @@ namespace MFO::Iaus::Candidates {
         s.tauntBusy        = s.tauntEnabled && Taunt::Busy(selfID);   // card I6: act.taunt would refuse him now
         s.tauntReach       = Config::g_tauntRadius.load(std::memory_order_relaxed);
         s.meleeReach       = Config::g_meleeReach.load(std::memory_order_relaxed);
+        // Q-I-2: the touch spell of his hands (if any) cast within kTouchSpentSec = he is backing out to the distance spell's range.
+        // The Mind's running decision is the last fired one (worker-only, which this gather is).
+        if (s.equippedSpellOther != 0) {
+            const std::uint32_t tf = Reposition::HandsRange(s.book, s.equippedSpell, s.equippedSpellOther, s.meleeReach, false, nullptr).touchForm;
+            const Mind& m = Engine::MindFor(selfID);
+            const double ago = std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - m.firedAt;
+            s.touchSpent = tf != 0 && m.hasRunning && m.running.form == tf && ago >= 0.0 &&
+                           ago <= static_cast<double>(Reposition::kTouchSpentSec);
+        }
         // The Bash family exists only while its road does: Harbinger's combat move (ch.31, ABI v38) and the switch that
         // stays OFF until the field run proves that road ([Debug] bIausBashRoad). Harbinger absent = no candidate.
         s.bashRoad         = Config::g_iausBashRoad.load(std::memory_order_relaxed) && APMFBridge::CombatMoveSupported();

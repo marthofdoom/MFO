@@ -168,7 +168,7 @@ namespace {
     const char* StealthName() { static const char* n[] = { "off", "g1", "hide", "g3" }; return n[std::clamp(g_stealth, 0, 3)]; }
     // The T2 batch S switches of this run (section 31): "all" (the default), "off" (--t2 off), else what differs from the default.
     struct T2Flag { const char* name; bool T2::* m; };
-    inline constexpr T2Flag kT2Flags[] = { { "c8", &T2::c8 }, { "dodge", &T2::dodge }, { "aversion", &T2::aversion }, { "aim", &T2::aim }, { "block", &T2::block }, { "range", &T2::range },
+    inline constexpr T2Flag kT2Flags[] = { { "c8", &T2::c8 }, { "dodge", &T2::dodge }, { "aversion", &T2::aversion }, { "aim", &T2::aim }, { "block", &T2::block }, { "range", &T2::range }, { "hands", &T2::hands },
                                            { "backoff", &T2::backoff }, { "step", &T2::step }, { "unweighted", &T2::unweighted }, { "reanimate", &T2::reanimate } };
     std::string T2Name() {
         std::string o; bool anyOn = g_t2.feet || g_t2.c13built; for (const T2Flag& f : kT2Flags) anyOn |= g_t2.*(f.m);

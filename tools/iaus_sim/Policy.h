@@ -115,7 +115,7 @@ namespace Sim {
         // guardHeld = a request of his is out or the guard is up (APMFBridge::BlockHoldLive). --roads block keeps the older lab switch.
         sn.blockRoad = g_blockRoad || (g_t2.block && sn.meleeInRightHand && self.spec->melee.Has());
         sn.guardHeld = g_t2.block && self.act == Act::Block && self.actIaus && F.now < self.blockUntil;
-        sn.equippedSpell = g_t2.range ? c.handSpell : 0u;   // card H4: Snapshot::equippedSpell (MODEL: the last book spell he cast is the one in his hand)
+        sn.equippedSpell = g_t2.range ? c.handSpell : 0u; sn.equippedSpellOther = g_t2.range && g_t2.hands ? c.handSpell2 : 0u; sn.touchSpent = g_t2.range && F.TouchSpent(c);   // card H4: Snapshot::equippedSpell (MODEL: the last book spell he cast is the one in his hand)
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
