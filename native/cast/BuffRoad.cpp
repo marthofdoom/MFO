@@ -288,12 +288,16 @@ namespace MFO::Actuation {
     const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch) {
         if (!a_arch.rowApprox) return nullptr;
         const auto bit = [](EngineRow r) { return 1u << static_cast<std::uint32_t>(r); };
+        // CARD G7: Reanimate joins the set. Its caster is bounded by the ENGINE, not by Harbinger: its own 0x06 runs
+        // in full under a claim (a valid corpse is required and a raised corpse is no corpse), with or without the
+        // ABI v42 corpse seat. Without this a Reanimate spell that also carries an effect of another bounded row
+        // never reached the claim road, so its corpse rule fell on the direct roads (MFO-B769).
         const std::uint32_t bounded = bit(EngineRow::Light) | bit(EngineRow::Script) | bit(EngineRow::Armor) |
                                       bit(EngineRow::Cloak) | bit(EngineRow::Ward) | bit(EngineRow::Invisibility) |
-                                      bit(EngineRow::Summon) | bit(EngineRow::BoundItem);
+                                      bit(EngineRow::Summon) | bit(EngineRow::BoundItem) | bit(EngineRow::Reanimate);
         if (a_arch.rowMask & ~bounded)
             return "an ambiguous row with a candidate Harbinger does not bound (outside Light / Script / Armor / Cloak / "
-                   "Ward / Invisibility / Summon / BoundItem: a wrong caster could re-cast)";
+                   "Ward / Invisibility / Summon / BoundItem / Reanimate: a wrong caster could re-cast)";
         return nullptr;
     }
 
