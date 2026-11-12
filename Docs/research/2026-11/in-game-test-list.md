@@ -410,3 +410,6 @@ Setup: the DEV `MFO.dll`, `MFO_Classes.esl` on, `bClassTree=1`, the test followe
 
 ## Stealth probes P1-P3 in the T2 session (marth 11-12, Q-SIM-4: "Yes, in T2 session")
 `[Debug] bStealthProbe=1` (INI-only, passive). With a Thief-line follower sneaking (sDevClassEquip thief), fight 3+ times on each list. Capture `[stealth-probe] self` (P1 inputs, perk entry points 18/57/48), `seen` (P2 the foe group's detection record) and `hit` (P3 kSneakAttack flag + health drop vs plain hits, 5 of each per weapon) lines. They decide whether the lab's Thief numbers (iaus-sim-v2 section 30) hold and apply the Q87 rule (g2-hide-design.md section 3).
+
+## Aim probe in the T2 session (marth 11-12, Q-S-4)
+`[Debug] bAimProbe=1` (and Harbinger `[ProjectileAim] bProbe=1`). With an Archer-class follower, fight 3+ ranged fights per list; capture the `[aim]` lines so the follower miss rate feeds the lab's H5 miss budget model.
