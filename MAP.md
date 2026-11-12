@@ -8981,7 +8981,7 @@ and removes only what it added, and logs which tests are still pending. User doc
 `Docs/SELFTEST.md`.
 
 **Build gate.** CMake `option(MFO_DEV_SELFTEST ... OFF)` (`native/CMakeLists.txt`) adds `selftest/Runner.cpp`,
-`Fixtures.cpp`, `Record.cpp`, `Tests.cpp`, `TestsDrive.cpp`, `Setup.cpp` and defines `MFO_DEV_SELFTEST`. CI job `build-dev`
+`Fixtures.cpp`, `Record.cpp`, `Tests.cpp`, `TestsDrive.cpp`, `TestsT2.cpp`, `Setup.cpp` and defines `MFO_DEV_SELFTEST`. CI job `build-dev`
 (`.github/workflows/native.yml`, every push + plain dispatch, skipped for the noinline / noopt proof builds)
 uploads `MFO-dll-DEV-SELFTEST`; the shipped `MFO-dll` is the normal job. With the option OFF: `SelfTest.h`
 gives empty inlines and every other touch point below sits in `#ifdef MFO_DEV_SELFTEST`, so a release DLL has
@@ -9067,6 +9067,8 @@ and ledger (a mid-test save played on a release DLL keeps its fixture items).
 **What breaks (v2).** Removing the FLWR-writer skip (`HasRunRows / IsRunRow`): a mid-run save persists temp rows into the player's board. Registering a row AFTER inserting it (same gap). Restoring class state anywhere but through the State.cpp writers, or skipping the read-back compare. Spawning before `SpawnUnsafeReason` passes, or from the worker (it is a `MainThread::Post` closure). Changing `CostParity::Cost / BillOnMain` so they no longer call `DevNote` (the cost tests read nothing else). Moving the BuffRoad counters off the claim-filed / buff-is-up sites. Renaming any test id (the `'MFST'` key, #10). Bumping `kSelfTestVersion` without keeping the v1 and v2 readers.
 
 ---
+
+**T2 tests (`selftest/TestsT2.cpp`, `RegisterT2` called last from `RegisterAll`; `T2ManualItems()` appended to `ManualItems()`; cache cleared by `ClearT2State`).** `t2.harbinger_seats`, `t2.aversion_claim`, `t2.block_hands`, `t2.theft_gate`, `t2.spell_weighing`, `t2.reposition_rules` plus 16 `t2.manual_*` entries (Docs/SELFTEST.md section 4). Dev-only accessors added to `apmf/APMFBridge.h` + `apmf/AversionClaims.cpp` (`#ifdef MFO_DEV_SELFTEST`): `DevAbi`, `DevReadAversion`, `DevCanServeIntent`. **What breaks:** renaming `TheftGate::TakeBarred/GuardCheck`, `Steal::CheckNow`, `SpellBook::WouldWeigh`, `Reposition::*`, `BlockHandsReason`, `CarrierRanks` or `CombatMoveUnservedReason` breaks this file's compile (dev build only); changing their rules fails the matching `t2.*` test on purpose.
 
 **Dev class equip (card C5c, `feat/classes-c5c-dev-equip`).** `Runner.cpp` `DevClassEquipTick` (called from `Tick`, reset in `ClearAll`; worker-only) reads `[Debug] sDevClassEquip` (`Config.h` `g_devClassEquip` + mutex, `Config.cpp` key branch before the TOWN ERRANDS chain, both `#ifdef MFO_DEV_SELFTEST`) and applies each `<follower>:<slug>:<level>[:mastered]` entry once per load through `Classes::SetUnlocked / ActivateClass / ApplyLevel`. Writes MCLS (dev saves only). **What breaks:** renaming those three writers or `FindBySlug` / `LevelCap`; moving the key handler into the release path; the entry separator is a comma because `Config.cpp` ReadFile strips an inline comment at the first `;` or `#`. See `Docs/SELFTEST.md` section 10.
 

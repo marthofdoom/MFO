@@ -89,12 +89,18 @@ Pick order is the order below. **Setup** is what the runner puts in place and re
 | `prog.perk_entries_unique` | 1dfcuabcrqq | none | no entry-point entry live more than once on two reads 2 s apart | FAIL: a duplicate, naming the worst perk |
 | `census.shape_ran` | bbf90fd | none | the shape census reached its totals line at load (`DevShapeCensus`: castable total > 0, buckets > 0) | INFO when `bSpellShapeCensus = 0`; FAIL if it is on and never finished |
 | `census.hidden_perk_ran` | 92604e0 | none | **INFO** with the counts (summaries, treePerksHeld of tree size, held-in-no-tree) once the census summary is logged: BRING THE LIST TO MARTH before card C2 | FAIL when `treePerksHeld = 0` (an invalid census); RETRY when no summary in 90 s |
+| `t2.harbinger_seats` | T2 24a/24g/24m/24q/24t, Movement 2, batch I 1 | none | every road MFO files through is served by this Harbinger: ch.24 range close / ground step / disengage, ch.31 move + block + power attack (`CombatMoveUnservedReason`), ch.32 (CanServe dry run, seat installed), ch.8b corpse target, ch.33 style (CanServe dry run) | INFO naming each road not served (older ABI, or an APMF.ini switch off: the documented degrade); never FAIL; INFO when Harbinger is absent |
+| `t2.aversion_claim` | T2 24a/24e/24f (Q94) | class snapshot; the test applies, in turn, Conjurer L1, then a mastered Conjurer with Evoker L1 equipped, then Healer L1 (`ApplyClass`, restored afterwards). Needs the class add-on, Harbinger ABI 41, `bClassAversion` | the pure `CarrierRanks` rule first (equipped = active rank, mastered-unequipped = 100); then the standing ch.32 claim (`DevReadAversion`) is live at the INI weight for Conjurer, is gone for the mastered-unequipped one, and is filed again for Healer | FAIL after 8 s with the weight read; INFO when Harbinger refused the seats |
+| `t2.block_hands` | T2 24m/24n | spawn (he draws his weapon) | `BlockHandsReason` on the hands he really holds equals an independent restatement of the 24m/24n rule (shield/torch ok, other left hand refused, dual wield refused, two-hander ok, bow/staff/fists refused); the evidence names the loadout (only the carried loadout is judged per run) | FAIL on a mismatch; RETRY when the weapon is never drawn |
+| `t2.theft_gate` | Theft gate 1-4, Batch L 4 | none | `TakeBarred` of a plain player-pack copy is takeable; `TakeBarred` on up to 3 owned references of his cell follows the owner rule (player / PlayerFaction / his base chain are his side); the main-thread `GuardCheck` never answers Pending; `Steal::CheckNow` while he is not sneaking is Refused "not sneaking" | FAIL with the wrong verdict; RETRY when he is sneaking; no owned reference in an open field is noted, not failed |
+| `t2.spell_weighing` | T2 batch I 7/8 | none | over every `SpellItem` of the load order: each script-only spell is `WouldWeigh == false`; the control (Healing) weighs | FAIL naming up to 3 spells; INFO when the list has no script-only spell |
+| `t2.reposition_rules` | T2 batch I 1/2/3 | none | `iaus/Reposition.h` on fixture spells and foes: `SpellRange` (touch 0.8 x reach, concentration 0.8, aimed 0.9 with minimum 0.4, self blast 0.8 x area, none without a range), `PressedBackOffNeed` (2 foes 0.6, 3 0.8, 4 1.0, Knight/Warrior never), `MageBackOffNeed`, `RangeToHold` | FAIL listing each mismatch |
 
 ### MANUAL (listed, counted in ALL DONE, never run)
 
 Each is logged after every load as `[selftest]   MANUAL <id> (<ref>): the DLL cannot judge it (<why>). LOOK AT: <the exact thing>`. The table is `ManualItems()` in `Tests.cpp`:
 
-`retreat.flee_hold` (an engine Flee cannot be provoked without forcing the AI), `visual.animated_casts`, `visual.frame_hitches`, `ch18.power_floor`, `taunt.pull`, `substrate.ooc_timeouts`, `probe.m0_h3_g11_g7_h5miss`, `log.inactive_winner`, `iaus.scroll_probe`, `iaus.exploit_rows`, `g10.will_work`, `auto.control_target`, `g9.cooldown`, `tailor.compat`, `magicka.cost_capture`, `freeze.batch_a`, `play.batch8`. Several of these (`g10.will_work`, `auto.control_target`) could be automated with a dev counter on the board outcome; they are listed with that reason rather than faked.
+`retreat.flee_hold` (an engine Flee cannot be provoked without forcing the AI), `visual.animated_casts`, `visual.frame_hitches`, `ch18.power_floor`, `taunt.pull`, `substrate.ooc_timeouts`, `probe.m0_h3_g11_g7_h5miss`, `log.inactive_winner`, `iaus.scroll_probe`, `iaus.exploit_rows`, `g10.will_work`, `auto.control_target`, `g9.cooldown`, `tailor.compat`, `magicka.cost_capture`, `freeze.batch_a`, `play.batch8`, and the T2 field-session steps (`TestsT2.cpp` `T2ManualItems()`, each names its test-list step): `t2.manual_seat_lines`, `t2.manual_aversion_foes`, `t2.manual_reanimate`, `t2.manual_block_fight`, `t2.manual_block_board`, `t2.manual_power_attack`, `t2.manual_attack_mix`, `t2.manual_combat_style`, `t2.manual_movement_batch`, `t2.manual_h4_range`, `t2.manual_hidden_step`, `t2.manual_teach_spells`, `t2.manual_theft_field`, `t2.manual_steal`, `t2.manual_pick_and_offclass`, `t2.manual_probes`. Several of these (`g10.will_work`, `auto.control_target`) could be automated with a dev counter on the board outcome; they are listed with that reason rather than faked.
 
 ## 5. Fixtures (`Fixtures.cpp`)
 
@@ -135,7 +141,7 @@ Log: `[selftest] ...MFO_SelfTest.ini: reset generation 0 -> 1: cleared N result(
 ## 8. Adding a test
 
 1. Pick a FROZEN id (`area.what_is_checked`), it becomes the `'MFST'` key.
-2. In `native/selftest/TestsDrive.cpp` (or `Tests.cpp`), write the functions:
+2. In `native/selftest/TestsDrive.cpp` (`TestsT2.cpp` for the T2 field-session tests, or `Tests.cpp`), write the functions:
    * `const char* Pre(Ctx& c)`: `nullptr` when the test can start now, else a short static text of what is missing. Stash what you found in `c.s->set[]` / `c.s->n[]`.
    * `void Fix(Ctx& c, FixtureRequest& r)`: the self-setup (section 3): items, spells, `r.rows.push_back(Row(...))`, `r.cls.snapshot`, `r.spawn`, `r.probes`.
    * `Step St(Ctx& c)`: every 0.5 s. `Step::Continue()`, `Pass(e)`, `Fail(e)`, `Info(e)` (a measurement, complete) or `Retry(why)`. `c.hostile` is the live spawned hostile; `c.inCombat` includes the 10 s grace. A test may call the class writers through `ApplyClass()` after its `cls.snapshot`.
@@ -172,6 +178,7 @@ Layout (`selftest/Record.cpp` header; `Serialization.h` `kRecSelfTest` / `kSelfT
 | Where | What | Used by |
 |---|---|---|
 | `cast/CostParity.h/.cpp` | `DevEvents()` (the last 64 billing events: road, applies, P, E, spent) | `costparity.*` |
+| `apmf/APMFBridge.h`, `apmf/AversionClaims.cpp` | `DevAbi()`, `DevReadAversion(fid)` (the standing ch.32 claim), `DevCanServeIntent(actor, intent, fval)` (one CanServe dry run) | `t2.harbinger_seats`, `t2.aversion_claim` |
 | `cast/Actuation.h`, `cast/BuffRoad.cpp` | `DevBuffClaimCount / DevBuffLandedCount(spell)` | `buff.animated_claim_road` |
 | `cast/Actuation.h`, `cast/Archetype.cpp` | `DevShapeCensus()` | `census.shape_ran` |
 | `classes/Classes.h`, `classes/Carriers.cpp` | `DevReadCarriers(fid)` (main thread: faction ranks, ability spells, carrier perks on the base, live entries) | `class.c6_carriers`, `class.scout_speed` |

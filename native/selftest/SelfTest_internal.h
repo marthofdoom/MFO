@@ -135,6 +135,9 @@ namespace MFO::SelfTest {
     void                         RegisterSinks();
     void                         ClearTestState();
     void                         ClearDrivenState();   // TestsDrive.cpp: the driven tests' session caches (called by ClearTestState)
+    void                         RegisterT2();         // TestsT2.cpp: the T2 tests (called from RegisterAll, last)
+    void                         ClearT2State();       // TestsT2.cpp: their main-thread result cache (called by ClearTestState)
+    const std::vector<ManualItem>& T2ManualItems();    // TestsT2.cpp: the T2 steps a human must judge (appended to ManualItems())
 
     // ── shared read helpers (Runner.cpp) ─────────────────────────────────────────────────────────
     // Count of a_form in a_actor's own inventory (any thread the codebase already walks inventories
