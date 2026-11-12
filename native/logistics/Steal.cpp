@@ -40,6 +40,8 @@ namespace MFO::Logistics::Steal {
             return n && *n ? n : "?";
         }
 
+        void CollectChestOwners(RE::TESObjectREFR* a_ref, std::vector<RE::TESForm*>& a_out);   // below (owned chests)
+
         // The crime alarm range, by NAME at run time (a list may change it). Unreadable = 0 = the caller refuses.
         float AlarmRange() {
             auto* gsc = RE::GameSettingCollection::GetSingleton();
@@ -103,6 +105,12 @@ namespace MFO::Logistics::Steal {
             Ans ans; ans.at = SClock::now(); ans.posted = ans.at; ans.have = true; ans.unread = true;
             int witnesses = 0;
             auto* owner = a_ref ? a_ref->GetOwner() : nullptr;
+            // F4: a CONTAINER's owners: the chest's, the cell owner of an off-limits chest with none, and the owner of any copy that differs
+            std::vector<RE::TESForm*> owners;
+            if (a_ref && !a_ref->As<RE::Actor>() && a_ref->GetBaseObject() && a_ref->GetBaseObject()->Is(RE::FormType::Container)) {
+                CollectChestOwners(a_ref, owners);
+                if (!owner && !owners.empty()) owner = owners.front();
+            } else if (owner) owners.push_back(owner);
             auto refuse = [&](std::string a_why) { ans.v = Verdict::Refused; ans.why = std::move(a_why); };
             auto* pc = RE::PlayerCharacter::GetSingleton();
             auto* pl = RE::ProcessLists::GetSingleton();
@@ -140,7 +148,8 @@ namespace MFO::Logistics::Steal {
                         if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                         if (++scanned > kMaxWitnessScan) { refuse("too many actors in range to prove (fail closed)"); break; }
                         const auto  apos = a->GetPosition();
-                        const bool  isOwner = IsOwnerActor(a, owner);
+                        bool        isOwner = false;
+                        for (auto* o : owners) if (IsOwnerActor(a, o)) { isOwner = true; break; }
                         const float near = std::min({ apos.GetDistance(fpos), apos.GetDistance(ppos), apos.GetDistance(rpos) });
                         const bool  inRange = near <= range;
                         if (!inRange && !isOwner) continue;   // too far to witness; the owner is judged at any distance
@@ -283,7 +292,59 @@ namespace MFO::Logistics::Steal {
             it->second.posted = false; it->second.res = a_res; it->second.why = std::move(a_why);
         }
 
-        struct Grp { RE::ExtraDataList* xl; std::int32_t n; bool owned; };
+        // One owned-and-selectable copy of an item, read fresh from the live inventory (extra-list pointers are never reused across a RemoveItem).
+        struct Copy { RE::ExtraDataList* xl = nullptr; std::int32_t n = 0; RE::TESForm* owner = nullptr; bool found = false; };
+
+        RE::TESForm* CellOwner(RE::TESObjectREFR* a_chest) {
+            auto* cell = a_chest ? a_chest->GetParentCell() : nullptr;
+            return cell ? cell->GetOwner() : nullptr;
+        }
+
+        // The next copy of a_obj in a_chest that moves on the steal road: an extra-listed copy owned by someone else first, then the
+        // plain stack (unless an UNOWNED extra-listed copy shares the entry: RemoveItem cannot choose the copy of a plain stack).
+        // An off-limits chest with no explicit owner: every copy without its own ownership is the cell owner's.
+        Copy NextOwned(RE::Actor* a_f, RE::TESObjectREFR* a_chest, RE::TESBoundObject* a_obj, bool a_cellOwnedOnly) {
+            Copy c;
+            auto inv = a_chest->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
+            auto it = inv.find(a_obj);
+            if (it == inv.end() || it->second.first <= 0) return c;
+            RE::TESForm* const chestOwner = a_cellOwnedOnly ? CellOwner(a_chest) : a_chest->GetOwner();
+            std::int32_t xlTotal = 0;
+            bool unownedXl = false;
+            auto* e = it->second.second.get();
+            if (e && e->extraLists)
+                for (auto* xl : *e->extraLists) {
+                    if (!xl) continue;
+                    auto* cnt = xl->GetByType<RE::ExtraCount>();
+                    const std::int32_t n = cnt && cnt->count > 0 ? static_cast<std::int32_t>(cnt->count) : 1;
+                    auto* own = xl->GetByType<RE::ExtraOwnership>();
+                    const bool owned = TheftGate::TakeBarred(a_f, a_chest, a_obj, xl, TheftGate::Road::Steal) != nullptr || (a_cellOwnedOnly && !own);
+                    xlTotal += n;
+                    if (!owned) { unownedXl = true; continue; }
+                    if (!c.found) { c.found = true; c.xl = xl; c.n = n; c.owner = own && own->owner ? own->owner : chestOwner; }
+                }
+            if (c.found) return c;
+            const std::int32_t plain = std::max<std::int32_t>(0, it->second.first - xlTotal);
+            if (plain > 0 && !unownedXl &&
+                (TheftGate::TakeBarred(a_f, a_chest, a_obj, nullptr, TheftGate::Road::Steal) != nullptr || a_cellOwnedOnly)) {
+                c.found = true; c.xl = nullptr; c.n = plain; c.owner = chestOwner;
+            }
+            return c;
+        }
+
+        // The extra owners a witness check must also treat as "the owner": every distinct ExtraOwnership on a copy in the chest (a copy can
+        // differ from the chest's owner), and the CELL owner of an off-limits chest with no explicit owner.
+        void CollectChestOwners(RE::TESObjectREFR* a_ref, std::vector<RE::TESForm*>& a_out) {
+            auto add = [&](RE::TESForm* o) { if (o && a_out.size() < 8 && std::find(a_out.begin(), a_out.end(), o) == a_out.end()) a_out.push_back(o); };
+            if (a_ref->GetOwner()) add(a_ref->GetOwner());
+            else if (a_ref->IsOffLimits()) add(CellOwner(a_ref));
+            for (auto& [obj, data] : a_ref->GetInventory()) {
+                auto* e = data.second.get();
+                if (!obj || !e || !e->extraLists) continue;
+                for (auto* xl : *e->extraLists)
+                    if (xl) if (auto* own = xl->GetByType<RE::ExtraOwnership>()) add(own->owner);
+            }
+        }
 
         // MAIN THREAD. The whole take. Re-plans from the live inventory each call, so a Retry resumes where the last call stopped.
         void OwnedTakeOnMain(RE::FormID a_fid, RE::FormID a_cid) {
@@ -294,68 +355,54 @@ namespace MFO::Logistics::Steal {
             }
             if (chest->IsLocked()) { Finish(a_fid, a_cid, OwnedTake::Cut, "the chest reads locked again"); return; }
             if (const char* bar = OwnedChestBarred(f, chest)) { Finish(a_fid, a_cid, OwnedTake::Cut, bar); return; }
-            // an OFF-LIMITS chest with no explicit owner: every copy without its own ownership is the cell owner's (a crime to take)
             const bool cellOwnedOnly = chest->GetOwner() == nullptr && chest->IsOffLimits();
             std::vector<RE::TESBoundObject*> items;
             for (auto& [obj, data] : chest->GetInventory())
-                if (obj && data.first > 0 && StealKind(obj, data.second.get())) items.push_back(obj);
+                if (obj && data.first > 0 && StealKind(obj, data.second.get()) && NextOwned(f, chest, obj, cellOwnedOnly).found) items.push_back(obj);
+            if (items.empty()) { Finish(a_fid, a_cid, OwnedTake::Nothing, {}); return; }
+            // ONE proof for the whole take, on this thread, immediately before the first RemoveItem (the RemoveItems below run in this one
+            // main-thread call, so nothing can change between the proof and the act)
+            std::string why;
+            const auto v = CheckNow(f, chest, TheftGate::Road::Steal, &why);
+            if (v == Verdict::Pending) {
+                spdlog::info("[steal] F={:08X} chest={:08X}: owned take PAUSED -- the pre-check is not conclusive this frame", a_fid, a_cid);
+                Finish(a_fid, a_cid, OwnedTake::Retry, "pre-check not conclusive this frame"); return;
+            }
+            if (v == Verdict::Refused) {
+                spdlog::info("[steal] F={:08X} chest={:08X}: owned take CUT before the first item -- witness pre-check: {} (nothing moved)", a_fid, a_cid, why);
+                Finish(a_fid, a_cid, OwnedTake::Cut, why); return;
+            }
             std::int32_t movedTotal = 0;
             for (auto* obj : items) {
-                // plan this item's owned copies from the live inventory
-                std::vector<Grp> groups;
-                std::int32_t plain = 0;
-                bool plainOwned = false, unownedXl = false;
-                {
-                    auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
-                    auto it = inv.find(obj);
-                    if (it == inv.end() || it->second.first <= 0) continue;
-                    std::int32_t xlTotal = 0;
-                    auto* e = it->second.second.get();
-                    if (e && e->extraLists)
-                        for (auto* xl : *e->extraLists) {
-                            if (!xl) continue;
-                            auto* cnt = xl->GetByType<RE::ExtraCount>();
-                            const std::int32_t n = cnt && cnt->count > 0 ? static_cast<std::int32_t>(cnt->count) : 1;
-                            const bool hasOwn = xl->GetByType<RE::ExtraOwnership>() != nullptr;
-                            const bool owned = TheftGate::TakeBarred(f, chest, obj, xl, TheftGate::Road::Steal) != nullptr || (cellOwnedOnly && !hasOwn);
-                            groups.push_back({ xl, n, owned });
-                            if (!owned) unownedXl = true;
-                            xlTotal += n;
-                        }
-                    plain = std::max<std::int32_t>(0, it->second.first - xlTotal);
-                    plainOwned = plain > 0 && (TheftGate::TakeBarred(f, chest, obj, nullptr, TheftGate::Road::Steal) != nullptr || cellOwnedOnly);
-                }
-                // RemoveItem cannot choose the copy of a plain stack that shares an inventory entry with an unowned extra-listed copy
-                const bool plainOk = plainOwned && !unownedXl;
-                bool any = plainOk;
-                for (const auto& g : groups) if (g.owned) any = true;
-                if (!any) continue;
-                // ONE proof per item form, on this thread, immediately before its RemoveItems (nothing runs between them)
-                std::string why;
-                const auto v = CheckNow(f, chest, TheftGate::Road::Steal, &why);
-                if (v == Verdict::Pending) {
-                    spdlog::info("[steal] F={:08X} chest={:08X}: owned take PAUSED before item {:08X} -- the pre-check is not conclusive this frame ({} moved so far)",
-                                 a_fid, a_cid, obj->GetFormID(), movedTotal);
-                    Finish(a_fid, a_cid, OwnedTake::Retry, "pre-check not conclusive this frame"); return;
-                }
-                if (v == Verdict::Refused) {
-                    spdlog::info("[steal] F={:08X} chest={:08X}: owned take CUT before item {:08X} -- witness pre-check: {} ({} moved before the hit; nothing refunded)",
-                                 a_fid, a_cid, obj->GetFormID(), why, movedTotal);
-                    Finish(a_fid, a_cid, OwnedTake::Cut, why); return;
-                }
-                constexpr auto kReason = RE::ITEM_REMOVE_REASON::kStoreInContainer;
-                auto move = [&](std::int32_t a_n, RE::ExtraDataList* a_xl) {
-                    if (a_n <= 0) return;
-                    if (obj->GetFormID() != 0x0000000F && !IsCoinLoot(obj) && !FitsCarryWeight(f, obj->GetWeight() * a_n)) return;
+                for (int iter = 0; iter < 16; ++iter) {   // the inventory is re-read before EVERY RemoveItem: it invalidates the extra lists
+                    const Copy c = NextOwned(f, chest, obj, cellOwnedOnly);
+                    if (!c.found) break;
+                    if (obj->GetFormID() != 0x0000000F && !IsCoinLoot(obj) && !FitsCarryWeight(f, obj->GetWeight() * c.n)) break;
                     TheftGate::NoteAction(a_fid, TheftGate::Road::Steal, a_cid, "take (owned chest item)");
-                    chest->RemoveItem(obj, a_n, kReason, a_xl, f);
-                    movedTotal += a_n;
-                    TheftGate::LogOwnedCopy(f, chest, obj, a_n, a_xl ? "xOwn" : "container");
-                    spdlog::info("[steal] F={:08X} chest={:08X}: STOLE item={:08X}({}) x{} road=owned-chest (pick + witness pre-check Take, re-proved on main)",
-                                 a_fid, a_cid, obj->GetFormID(), NameOf(obj), a_n);
-                };
-                for (const auto& g : groups) if (g.owned) move(g.n, g.xl);
-                if (plainOk) move(plain, nullptr);
+                    const char* how = "xOwn";
+                    if (c.xl) {
+                        // keep the copy's own owner; a copy with none gets the chest's (or cell's) owner stamped before it moves
+                        if (!c.xl->GetByType<RE::ExtraOwnership>() && c.owner) c.xl->SetOwner(c.owner);
+                        chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, c.xl, f);
+                    } else if (c.owner && !c.owner->IsDynamicForm()) {
+                        // a plain stack arrives with NO owner (RemoveItem moves base + count only), which would launder the theft: remove it
+                        // and add it to the follower WITH an ExtraOwnership of its owner. The list is never freed here (the engine adopts or copies it).
+                        auto* xl2 = new RE::ExtraDataList();
+                        xl2->SetOwner(c.owner);
+                        chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                        f->AddObjectToContainer(obj, xl2, c.n, chest);
+                        how = "stamped";
+                    } else {
+                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} has no stampable owner ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
+                                     c.owner ? c.owner->GetFormID() : 0u);
+                        chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, f);
+                        how = "unstamped";
+                    }
+                    movedTotal += c.n;
+                    TheftGate::LogOwnedCopy(f, chest, obj, c.n, how);
+                    spdlog::info("[steal] F={:08X} chest={:08X}: STOLE item={:08X}({}) x{} road=owned-chest ownership={} owner={:08X} (pick + witness pre-check Take, proved on main)",
+                                 a_fid, a_cid, obj->GetFormID(), NameOf(obj), c.n, how, c.owner ? c.owner->GetFormID() : 0u);
+                }
                 // copies that were not owned by someone else follow the normal theft-gate road (a plain RemoveItem if none is barred)
                 if (TheftGate::Takeable(f, chest, obj)) {
                     auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
@@ -378,6 +425,11 @@ namespace MFO::Logistics::Steal {
         if (RefInPlayerStorage(a_chest)) return "player storage / player home (museum halls included)";
         if (IsQuestObjectRef(a_chest)) return "a quest container";
         if (IsFactionServiceContainer(a_chest)) return "a faction's vendor / stolen-goods / evidence container";
+        // F2: a chest owned by a FACTION the player or the follower is in is not stolen from either (steal road only; TheftGate unchanged)
+        if (auto* fac = a_chest->GetOwner() ? a_chest->GetOwner()->As<RE::TESFaction>() : nullptr) {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if ((pc && pc->IsInFaction(fac)) || a_follower->IsInFaction(fac)) return "owned by a faction the player or the follower is in";
+        }
         // owned by the player's side or the follower's own: not someone else's, so not this road (TheftGate::TakeBarred is null for it)
         if (a_chest->GetOwner() && !TheftGate::TakeBarred(a_follower, a_chest, nullptr, nullptr, TheftGate::Road::Steal))
             return "owned by the player's own side or the follower's";

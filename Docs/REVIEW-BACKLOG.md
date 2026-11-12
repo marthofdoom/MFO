@@ -3271,4 +3271,9 @@ An owned chest whose steal take is CUT (a witness walks in) stays unlocked with 
 ### MFO-B841 (SEV-5, OPEN, native/logistics/LootScan.cpp pickOwned, feat/owned-pick, author's note)
 act.pick_locks admits a locked owned chest on "not empty", exactly as for an unowned one: a chest holding only gear or ammo is picked (lockpicks spent) and yields nothing on the steal road, which takes the Q-L-1 kinds only. A peek for a steal kind before walking would save the pick.
 ### MFO-B842 (SEV-5, OPEN, native/logistics/Steal.cpp OwnedTakeOnMain, feat/owned-pick, author's note)
-One Steal::CheckNow per item FORM (all RemoveItems of that form run back to back on the one main-thread frame, so nothing changes between them); a chest with many steal-kind forms costs one witness evaluation each, and a sight ray deferred part-way ends the call as Retry and resumes next tick.
+(RESOLVED in the review round after 746b755, F5: one Steal::CheckNow per take, before the first RemoveItem; all RemoveItems run in that one main-thread call.)
+### MFO-B843 (SEV-5, OPEN, native/logistics/Steal.cpp + Service.cpp owned chest, against 746b755, Opus review F6)
+Raised by the Opus review of feat/owned-pick 746b755 (finding F6). The verbatim finding text was NOT passed to the fixing agent: see Branch 1 of `scratchpad/agentlogs/review-ownedpick-selftest.md` and copy it here before the backlog drain.
+### MFO-B844 (SEV-5, OPEN, native/logistics/Steal.cpp + Service.cpp owned chest, against 746b755, Opus review F7)
+Raised by the Opus review of feat/owned-pick 746b755 (finding F7). The verbatim finding text was NOT passed to the fixing agent: see Branch 1 of `scratchpad/agentlogs/review-ownedpick-selftest.md` and copy it here before the backlog drain.
+
