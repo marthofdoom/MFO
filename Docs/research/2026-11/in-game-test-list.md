@@ -336,7 +336,7 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
 
 1. **Whiterun, looting and town errands ON, `[Debug] bCrimeGoldProbe=1`.** Walk Whiterun with a follower for a few in-game days
    (market, Dragonsreach steps, Jorrvaskr, a guard post), with his loot gambits and the town errands live. Expected: `[theft-gate]`
-   lines with `verdict=BARRED:` (reasons: `guard`, `owned`, `this copy is owned by someone else`, `owned door`/`locked door`) and ZERO
+   lines with `verdict=BARRED:` (reasons: `guard`, `owned`, `this copy is owned by someone else`, `off-limits door`/`locked door`) and ZERO
    `[crime-probe] BOUNTY UP` lines. A guard in sight must stop his loose pickups, body strips and container takes (`road=guard`).
 2. **If a BOUNTY UP still appears** it is followed by `[crime-probe]   last MFO action F=... #1..#3 road= ref= ... result=` for each
    follower. Send the block: it names the last three things MFO had him do (the culprit hunt). Tuxborn vanilla trespass = 5 g,
@@ -345,4 +345,4 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
    A stolen item (drop one stolen ring on the floor and in a chest in a cave): he leaves it (`BARRED:this copy is owned by someone
    else` for the chest copy; `owned (never steal)` for the loose ref).
 4. **Owned doors / stations.** A town shop or inn errand whose only way in is an owned or locked door is not declared
-   (`[town-walk] ... locked or owned`). The Whiterun forge/smith station owned by its smith is skipped by the smithing errand.
+   (`[town-walk] ... locked or off-limits`; an owned but legal shop door stays usable). The Whiterun forge/smith station owned by its smith is skipped by the smithing errand.

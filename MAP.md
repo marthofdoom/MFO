@@ -4181,9 +4181,9 @@ module. Module layout:
   done), in `LootHere`, in `Take`, at the loose-ref ARRIVAL (`Service.cpp`, `TheftGate::LooseBarred(.., a_arrival=true)`) and the LOTD crate
   activation. `Actor::IsGuard` (boolBits kGuard, a data read), a main-thread ProcessLists walk + `Sightline::MeasureNow` (follower) /
   `PointSeenNow` (item), radius 3500 u, cached 2 s; unanswered = BARRED (fail closed). Remove the whole interim by deleting `GuardInterim`'s
-  callers. (3) DOORS / FURNITURE: `ErrandRest.cpp DoorLocked` now also returns true for an OWNED door (so `TownWalkBarredByLock`, the shop door
+  callers. (3) DOORS / FURNITURE: `ErrandRest.cpp DoorLocked` now also returns true for a door the engine calls a crime to activate (`IsOffLimits`; an owned but legal door stays usable) (so `TownWalkBarredByLock`, the shop door
   read and `FollowerSideDoorLocked` treat it as closed), `ErrandSmith.cpp FindStations` skips stations owned by anyone but null / player /
-  PlayerFaction, `StuckAtOrigin.cpp` never activates an owned load door; `Lockpick.cpp Admit/LoadDoorBar` already barred owned refs and
+  PlayerFaction, `StuckAtOrigin.cpp` never activates an off-limits load door; `Lockpick.cpp Admit/LoadDoorBar` already barred owned refs and
   destinations (unchanged). Log: `[theft-gate] F= road= src= item= owner= via= locked= verdict=` (30 s per follower/src/verdict) and the 3-deep
   action ring printed after `[crime-probe] BOUNTY UP` (`CrimeProbe.cpp`). Depended-on-by: every take road above, CrimeProbe. What breaks if you change
   it: a take road that bypasses `Take` is a theft hole; `Take`'s fast path must stay the one plain RemoveItem (other behaviour is unchanged);

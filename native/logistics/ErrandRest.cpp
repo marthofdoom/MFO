@@ -329,11 +329,11 @@ namespace MFO::Logistics::Errand::Rest {
         }
         bool DoorLocked(RE::TESObjectREFR* a_door, RE::TESObjectREFR* a_linked, RE::FormID& a_id, RE::LOCK_LEVEL& a_lvl) {
             if (PlayerOwned(a_door) || PlayerOwned(a_linked)) return false;
-            // THEFT GATE, door half (marth 2026-11-11, ClickUp 1dfcuabczbg): an OWNED door is closed to him too, locked or not. A teammate
-            // opening it is the engine's trespass road (5 g on Tuxborn, charged to the player). The owner is the door ref's own
-            // (GetOwner skips the cell fallback for a door), a_lvl is its real lock level ("unlocked" in the log = owned, not locked).
+            // THEFT GATE, door half (marth 2026-11-11, ClickUp 1dfcuabczbg: "a crime is the issue"): an owned door that is unlocked in open hours
+            // is legal (shops, homes), so ownership alone bars nothing. A door the engine's own test calls a crime to activate (IsOffLimits =
+            // IsCrimeToActivate, the road the RE note describes; already used by LooseRefBarred and Lockpick) is closed to him like a locked one.
             for (auto* d : { a_door, a_linked }) {
-                if (d && d->GetOwner()) { a_id = d->GetFormID(); a_lvl = d->GetLockLevel(); return true; }
+                if (d && d->IsOffLimits()) { a_id = d->GetFormID(); a_lvl = d->GetLockLevel(); return true; }
             }
             for (auto* d : { a_door, a_linked }) {
                 if (!d) continue;
@@ -1600,14 +1600,14 @@ namespace MFO::Logistics::Errand::Rest {
             first = g_twLogged.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | destCell->GetFormID()).second;
         }
         if (first) {
-            spdlog::info("[town-walk] {:08X}: {} {:08X} not declared: every door into its interior cell {:08X} is locked or owned (door {:08X}, {}) and "
-                         "a town trespass would be the player's bounty (marth 2026-11-02: no locked door in town; 2026-11-11: no owned door either)",
+            spdlog::info("[town-walk] {:08X}: {} {:08X} not declared: every door into its interior cell {:08X} is locked or off-limits (door {:08X}, {}) and "
+                         "a town trespass would be the player's bounty (marth 2026-11-02: no locked door in town; 2026-11-11: no crime-to-activate door)",
                          a_follower->GetFormID(), a_what, a_dest->GetFormID(), destCell->GetFormID(), lockedId, LockWordOf(lockLevel));
             auto* ld = lockedId ? RE::TESForm::LookupByID<RE::TESObjectREFR>(lockedId) : nullptr;
             spdlog::info("[theft-gate] F={:08X} road=door src={:08X}({:08X}) item=0x0 owner={:08X} via=door locked={} verdict=BARRED:{}",
                          a_follower->GetFormID(), lockedId, ld && ld->GetBaseObject() ? ld->GetBaseObject()->GetFormID() : 0u,
                          ld && ld->GetOwner() ? ld->GetOwner()->GetFormID() : 0u, lockLevel != 0 ? 1 : 0,
-                         ld && ld->GetOwner() ? "owned door" : "locked door");
+                         ld && ld->GetLockLevel() != RE::LOCK_LEVEL::kUnlocked ? "locked door (no key)" : "off-limits door (crime to activate)");
             TheftGate::NoteAction(a_follower->GetFormID(), TheftGate::Road::Door, lockedId, "barred: door");
         }
         return true;
