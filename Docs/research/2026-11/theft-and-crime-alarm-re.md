@@ -113,3 +113,11 @@ user report on v2.8.1, 5 g bounties in Whiterun, guards attack, stops with looti
   `[theft-gate] F=<fol> road=<...> src=<ref>(<base>) item=<base>x<n> owner=<id|0> via=<...> isOwner(fol)=<0|1>
   isOwner(pc)=<0|1> offLimits(pc)=<0|1> locked=<0|1> verdict=<take|BARRED:<reason>>`, plus a per-follower ring of the
   last 3 MFO world actions printed on every `[crime-probe] BOUNTY UP` (bCrimeGoldProbe ON in the next field run).
+
+## 7. Local list scan (2026-11-11, read-only, LoreRim + Tuxborn; diagnosis only, nothing here may become logic)
+
+- Crime GMSTs (enabled plugins, binary EDID scan; load order not read): Tuxborn has NO iCrimeGoldTrespass override (vanilla 5) and no steal/pickpocket overrides; only iCrimeAlarmRecDistance / LowRecDistance (NiftyAITweaksAIO 1000/500, USMP 1000/1000). LoreRim: trespass 500 (LoreRim - Economy Overhaul; Requiem 250), pickpocket 250, fCrimeGoldSteal 2.0 (Requiem), attack 500, murder 10000. So a 5 g trespass points at Tuxborn, or a vanilla-valued list.
+- No local script or SKSE plugin adds crime gold on teammate events. Papyrus hits for the alarm calls are player-bound quest/dialogue fragments.
+- LoreRim-only leads (none can give 5 g there): Store Entrance Doorbells `CH_Scr_Doorbell` (OnActivate on shop doors, calls SendTrespassAlarm; whether it is gated on the player is unread, a follower on a deposit/errand leg through a shop door could trigger it); Suspicious City Guards scene `sendTrespassAlarm(Game.GetPlayer())` (player sneaking/weapons drawn under guard watch); Pick Up Radius SKSE ("Allow Stealing", default off, player-side).
+- Not inspected: Doorbell bytecode, SCG ESP trigger conditions, other BSAs, compressed records, MCM settings.
+- Conclusion: vanilla engine trespass via the teammate-to-player redirect on a loot/errand route (section 1 ranking 1) remains the best fit. The fix's door/furniture gate and the BOUNTY UP world-action ring are what close and prove it.
