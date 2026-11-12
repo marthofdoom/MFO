@@ -166,6 +166,7 @@ namespace MFO::APMFBridge {
         // ONE ch.24 claim per follower: a held heal outranks the offense approach (apmf/OffenseApproach.cpp).
         // Released BEFORE g_approachMx is taken (the two tables never nest).
         ReleaseOffenseApproach(a_follower, "a held heal needs the ch.24 approach");
+        ReleaseRangeClose(a_follower, "a held heal needs the ch.24 approach");   // batch I F1: the EARLIER same-basis claim would own the channel
         const float radius = Config::g_healApproachRadius.load();
         if (!(radius > 0.0f) || !std::isfinite(radius)) return;   // Harbinger refuses these; never send one
 

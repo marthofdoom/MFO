@@ -69,6 +69,7 @@ namespace MFO::APMFBridge {
             if (const auto it = g_steps.find(id); it != g_steps.end() && it->second.handle != APMF_API::kInvalidHandle)
                 return false;   // one step at a time: the standing one is released by Service
         }
+        ReleaseRangeClose(id, "stepping back");   // batch I F1: a standing spell-range close is the earlier claim and would keep the channel
         const RE::NiPoint3 me = a_follower->GetPosition();
         const RE::NiPoint3 fp = a_foe->GetPosition();
         const float dx = me.x - fp.x, dy = me.y - fp.y;

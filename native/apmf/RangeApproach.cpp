@@ -70,6 +70,9 @@ namespace MFO::APMFBridge {
         if (!std::isfinite(a_radius) || !(a_radius > 0.0f)) return;
         const float radius = (std::max)(kMinRadius, a_radius);
         const auto  now = std::chrono::steady_clock::now();
+        // batch I F1: a held heal's approach is filed LATER than a standing close, and Harbinger breaks a same-basis tie for the earlier claim,
+        // so the close would starve it for as long as it is refreshed. Release the close (outside our lock) and ask for nothing this lap.
+        if (HealApproachStands(a_follower)) { ReleaseRangeClose(a_follower, "a held heal needs the ch.24 approach"); return; }
         {
             std::scoped_lock lk(g_rangeMx);
             if (const auto it = g_range.find(a_follower); it != g_range.end() && it->second.handle != APMF_API::kInvalidHandle) {
@@ -86,7 +89,6 @@ namespace MFO::APMFBridge {
             }
         }
         if (!a_file) return;                              // nothing stands and the caller does not want one filed yet
-        if (HealApproachStands(a_follower)) return;       // a held heal's walk to its recipient outranks a close
         if (DisengageStands(a_follower)) return;          // so does a standing H3 drive
         APMF_API::APMF_Param prm{};
         prm.target = a_foe;
@@ -128,9 +130,9 @@ namespace MFO::APMFBridge {
             APMF_API::APMF_CombatApproachInfo info{};
             info.size = sizeof(info);
             if (api->GetCombatApproachState) api->GetCombatApproachState(a_follower, &info);
-            if (info.ownerHandle == s.handle && info.state >= APMF_API::kApproachState_Arrived && info.state <= APMF_API::kApproachState_Refused &&
-                info.state != APMF_API::kApproachState_Arrived)
-                why = EndName(info.state);   // an Arrived Hold is the normal state of a claim that did its job: it stands until released
+            if (info.ownerHandle == s.handle && ((info.state >= APMF_API::kApproachState_Arrived && info.state <= APMF_API::kApproachState_Refused) ||
+                                                 info.state == APMF_API::kApproachState_Leashed))
+                why = EndName(info.state);   // batch I F4: Arrived and Leashed are END states (no zombie record); a live Hold reports Holding
             else if (now - s.filed > kApplyMs && info.ownerHandle != s.handle)
                 why = "another ch.24 claim owns him (ours never applied)";
             else if (now - s.lastAsk > kStaleMs)

@@ -8,11 +8,12 @@
 // guaranteed entry", Classes.h): no co-save field and no layout change here. A new fight (the IAUS gather's fight clock starts a new one)
 // counts one; the fight that would be the Nth is the GUARANTEED one and zeroes the counter.
 //
-// WHAT "GUARANTEED UNDETECTED" MEANS HERE (G1 + G2, no new lever): on a guaranteed fight the IAUS reads a foe the engine has no verdict
-// on yet (its group has no record of him: Hide::Verdict Unknown, the first laps of a fight) as UNAWARE, which is what lets G2's hold row
-// stand and a blow from stealth be struck from the first lap, where on any other fight Unknown means "not known" and passes nothing. It
-// is a read of the same input, not a result: the moment ANY foe's group record says it has him (verdict Yes) the entry is SPENT and
-// every foe is read by the engine alone again. It is also spent by his first blow and by the fight's end.
+// WHAT THIS DOES, EXACTLY (corrected after the Opus review of dcca7d7, F3): there is NO real guarantee here. Hide::Verdict already answers
+// No ("he is not detected") whenever the foe's combat group has no record of him, on EVERY fight; Unknown means only "this foe has no
+// combat group this lap" (iaus/Hide.h). So on the guaranteed fight the only difference is that such a foe is read as unaware instead of
+// not-known: near-inert. The fight is counted and logged, and the entry is spent by a Yes verdict, his first blow or the fight's end.
+// A true guarantee needs a lever that makes detection fail (card H10, an invisibility moment at engage), which is not built; marth is
+// being re-asked (Q-I-4).
 //
 // Threads: every entry point runs on the pump's AddTask worker (the IAUS gather, IausSource::Record, the combat-end teardown); the
 // map has its own leaf mutex, no engine call and no other lock is taken under it. Runtime-only; nothing is saved here (the counter is

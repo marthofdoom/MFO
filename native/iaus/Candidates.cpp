@@ -292,9 +292,9 @@ namespace MFO::Iaus::Candidates {
             s.foes.push_back(std::move(u));
         }
 
-        // ── batch I item 2: the Thief's free stealth entry (classes/StealthEntry.cpp). On the guaranteed fight a foe the engine has no verdict
-        // on yet (its group has no record of him) is read as UNAWARE, which lets G2's hold row stand from the first lap; the moment any foe's
-        // group record says it HAS him the entry is spent and the engine reads every foe alone. Not a result: the same input, read.
+        // ── batch I item 2: the Thief's free stealth entry (classes/StealthEntry.cpp). NEAR-INERT, said plainly (review F3): Hide::Verdict is
+        // already No when a foe's group has no record of him, on every fight; Unknown only means the foe has no combat group this lap. On the
+        // guaranteed fight such a foe is read as unaware; a Yes verdict spends the entry. A real guarantee needs the H10 lever (not built).
         s.freeEntry = Classes::StealthEntryLive(selfID, newFight);
         if (s.freeEntry) {
             bool anyYes = false;
