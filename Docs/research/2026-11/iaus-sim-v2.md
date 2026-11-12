@@ -1591,6 +1591,12 @@ sanitizer run of the scenarios and the class cells: clean.
 
 ### 30.10 Handoff to the tuning round (curves and weights only)
 
+**Updated by section 31 (T2 batch S, 2026-11-12).** The world this round tunes against is now the one of section 31: every T2
+road modelled and the feet stop removed. The baselines below (74.93, 80.27, 78.11, 76.69) are the `--t2 off` lab and are kept
+as the reference. The numbers to tune against are in 31.11, with the two gates the review of a645ca2 required:
+the `--stealth off` no-loss gate stays REQUIRED, and the feet asymmetry (MFO-B783) is GONE, so `aw.4` against `aw.21` and
+`c.63.*` may be searched again.
+
 The world is fixed for this round. Do not edit `tools/iaus_sim/*.h`, `sim.cpp` or `native/`. Search with `--set` and
 `--opt`, then report the values. A change is kept only when it holds on other seeds and does not lose on a list.
 
@@ -1632,3 +1638,324 @@ this round.
 
 Baseline runs for `tools/iaus_dash` are in `~/.cache/mfo-iaus-sim/runs/` with labels starting "sim-stealth baseline":
 six Beta 1 runs (seeds 1 to 6) and one run of the 22 scenarios with the oracle.
+
+## 31. T2 batch S: every T2 mechanism in the lab, the feet stop removed, a new baseline (2026-11-12)
+
+Branch `feat/iaus-sim-t2` on main 33c643f. Only `tools/iaus_sim` and docs change. `native/` is not touched and no curve or
+weight is tuned. This section closes the OPEN cells of the Sim column in `t2-manifest.md`.
+
+### 31.1 The switches
+
+Every mechanism is one switch, ON by default. `--t2 off` turns all of them off and restores the feet stop. That is the lab of
+section 30, draw for draw: all 12 Beta 1 classes over 6 seeds at both stealth levels give the same J as the base binary
+(78.11 at g3, 76.69 at `--stealth off`), and a full table run (`--classes beta1 --fights 3`, 7419 metrics) has 0 differences.
+A switch that is off never draws from the fight's random stream. The headline line and the `--baseline` meta line name the
+roads of the run (`t2=all`, `t2=off`, `t2=feet-stop,block=off`), and `--compare` refuses a baseline made with other roads.
+
+| Switch | What it models |
+|---|---|
+| `--feet-stop` | Q-SIM-5 off: a swap, a potion and a cast stop his feet again, except on a G3 run |
+| `--c8 off` | the ch.18 share window, the ch.23 leash, the engine's own power attacks for a class with no rule, the Mercenary's Avoid Threat |
+| `--dodge off` | the side step out of a projectile |
+| `--aversion off` | ch.32 aversion (Conjurer, Healer) |
+| `--aim off` | the ch.29 miss budget |
+| `--block off` | the held guard (the class row sets `ClassGate::block`, MFO-B827) |
+| `--range off` | H4: the distance a mage fights at, and the mage back-off |
+| `--backoff off` | the Mercenary's back-off |
+| `--step off` | the hidden step (gap G18) |
+| `--c13 lever` | the free stealth entry as a real guarantee (card H10, not built). Default `built` |
+| `--unweighted off` | spells with no effect IAUS can value stay in the pool |
+| `--reanimate off` | reanimate spells are dropped again |
+| `--disengage-dnd` | OFF by default. marth's variant: a disengage drops him as a valid target for 6 s. Not built in the game |
+
+Other new flags: `--aim-miss P`, `--aim-scatter P`, `--dodge-flight S`, `--no-fill-swing`, `--teach <token>`,
+`--disengage-report N`, `--steal-lab N`.
+
+### 31.2 The model, row by row
+
+FACT = read in the named source at 33c643f (code is a contract, not a field observation). MODEL = the lab's own choice.
+Nothing here is FIELD.
+
+| Mechanism | FACT and its source | MODEL |
+|---|---|---|
+| Feet (Q-SIM-5) | marth 11-11: "why wouldnt a follower be able to move and do an action. I believe he should". No game or MFO rule stops his feet | while his hands are busy with a swap, a potion or a cast he makes every deliberate movement the lab's engine AI would make: Retreat, a move order, a G3 run, the approach, the standoff and the fallback (`World.h Feet`). Full speed: no sourced slowdown value exists in Docs/research, so none is applied. Followers only. Foes are as before |
+| C8 style | the class CSTY applies in full with the tree on (Q-melee-6, Harbinger v45). Values from `MFO_GenerateESP.py class_csty_params` and `CLS_AVOID_THREAT` (Mercenary 0.3 on every stance, Q-melee-7). Tier 1 has no package | the lab already read the stance styles. Which style fields move the lab's engine AI is the model table of section 4 |
+| C8 ch.18 | `apmf/AttackMix.cpp`: deny only, over the last 8 STARTED attacks. Above the ceiling Power is denied (Knight 0.25, Mercenary 0.15, Thief 0.20). Under the floor Normal is denied, and that deny is lifted when no Power attack could be drawn (Warrior 0.40). A class with no rule files nothing | the engine's own power draw is the lab's (12% x the style, more against a blocking or staggered foe). Before this section the lab let only a class with a power row or share power attack by itself: that was the lab's assumption, and dropping it is not card C8. No share is read, so nothing is denied, until 8 started attacks fill the window (Harbinger's `Share()`, review F3; `--mix-partial` is the other reading). Under the floor a denied Normal BECOMES a Power attack whenever stamina can pay, which is the strongest reading: in the engine the roll among the undenied attacks can fail. A power attack IAUS asks for counts in the window and is not denied by it |
+| C8 ch.23 | `classes/Package.cpp PackageLeashScale`: `fClassLeashMult` 0.5 for a tier 2+ class flagged short leash or near player (Knight, Healer in T2), never under `fLeashMin` 512. Every managed follower is leashed to the player (`apmf/PursuitLeash.cpp`) | the radius before the factor is 2256, the middle of `fLeashMin` 512 and `fLeashMax` 4000: the lab has no confidence value. Outside it with his target outside it too, he walks back |
+| Dodge | batch M research (Q-melee-7): the engine's side step rolls against the style's Avoid Threat, and a class style reaches the engine since v45 | one roll per projectile launched at a follower with a class package. Not while his own blow, shot or cast is committed. The projectile must fly at least 0.2 s (`--dodge-flight`). A rolled step clears a non-area projectile and costs him 0.4 s. A blast, a stream and a touch are not stepped out of. Foes keep the old flat miss |
+| H2 aversion | `apmf/AversionClaims.cpp`: weight 0.25 for the EQUIPPED Conjurer or Healer (Q93, Q94), Dragonborn keeps a mastered one at full (Q107 default). Harbinger: when a foe's pick lands on him, in that share of 6 s windows it takes its next best valid target. With none he is picked as always. The next best must pass the game's own tests (H2-1, Q101) | the tests in the lab: up, not fleeing, reachable for a melee-only foe. The draw per foe, follower and window is a hash of the fight's seed, so it never moves another draw |
+| H5 miss budget | `apmf/AimClaims.cpp`: over his last 10 shots, when the misses plus the shots in flight reach the budget (Archer 5), the next launch is re-aimed at the engine's unscattered solution | a corrected shot skips the lab's miss roll (it still stops at a pillar). The UNCORRECTED miss chance stays the lab's own: 12% against a moving target (`--aim-miss`), plus `--aim-scatter P` for a flat scatter (default none). The engine's real scatter is not measured |
+| Block | `apmf/BlockClaims.cpp`, MFO.ini: one raise holds 2.5 s, the row's cooldown is 4 s, one renewal at most, 1.5 s of rest after any hold. A held guard denies all his own offense, casts included (Q-melee-3). Rows: Knight, Great Knight, Ebony Warrior (Q-melee-2). `iaus/Generate.cpp`: a Block candidate needs the class row, the road, a melee weapon and a foe's swing in the air. Its score is 0 unless the time-to-live estimate is known | "his hands can block" = a melee weapon is drawn. How much a guard takes off a hit is the lab's block row of section 4. The lab fills `swinging` and the estimates, which the game ships OFF (`bIausFillSwing`, `bIausFillHit`): `--no-fill-swing --no-estimates` is the game as shipped |
+| Power attack | Q82 and Q-melee-4: the move goes through Harbinger ch.31, and a refusal gives the cooldown back | the lab's power attack was already the engine's (real damage, real stamina). A refusal is a declined fire, which never stamped the cooldown. Refusals are now counted (`powRefused/f`) |
+| H4 range | `iaus/Reposition.h SpellRange`, called as is: touch = melee reach x0.8, a stream = range x0.8, aimed or lock-on = range x0.9, and a minimum of 0.4 of that for a spell cast from afar. Closing when the foe is beyond the distance x1.15 (`apmf/RangeApproach.cpp`). The claim is a BOUND ("stay inside R"): it can make him close, it never holds him back. The mage back-off is `MageBackOffNeed`, called as is | "the spell in his hand" = the last book spell he cast. The distance beyond which he closes is the SMALLER of the lab's own standoff and the H4 bound, so H4 only acts for a touch spell or a short stream. The lab's spell reach is the record's range from 300 up, else 4096 as a stand-in for the projectile's (not extracted) |
+| Mercenary back-off | `Reposition.h PressedBackOffNeed`, `SpellBook.cpp GateFor` (Mercenary only), `Concealment.cpp` Kind::BackOff: picked like a flee, denies nothing, ends on arrival or after 5 s, 6 s family cooldown | on the way he swings at a foe already inside his reach when his blade is free |
+| Hidden step (G18) | `Reposition.h StepTarget`, `Concealment.cpp PickStep` mirrored (10 candidates at 0, 25 and 50 degrees on rings of 200 and 420, at least 100 units nearer, never beside another foe, a bow needs a line from the foe's eye). Quiet, ends the moment a foe's group has him, on arrival, or after 8 s. 3 s family cooldown | the step moves at the lab's sneak run, so the detection formula scores it as running while crouched |
+| C13 as built | `classes/StealthEntry.cpp`, Q112: no engine lever. The counted fight only changes how MFO reads a foe with no combat group | the lab has no such foe (one group, a record from the first pass), so as built the entry does nothing. `--c13 lever` keeps the old guarantee for comparison |
+| Unweighted spells | `iaus/Prune.h EffectWeighable`, called as is: a spell with no effect of a known archetype is dropped | the built-in pool has none. LoreRim drops 35, Tuxborn 66, Vanilla 2 |
+| G7 corpse and reanimate | `Vocabulary.h cond.corpse_within`, questions 102 to 104: a dead humanoid in range, the spell must be able to raise it, highest level first, nearest on a tie, combat only. `iaus/Prune.h`: a Reanimate spell has no IAUS family | table mode only. Humanoid = not a creature, undead, daedra, dragon or animal. A body is raised once and one thrall stands at a time. The thrall is the dead foe's own spec at full health for the spell's duration. The built-in reanimate spells are fixtures with the shape of the vanilla ladder (caps 6, 13, 21, 30, 40) |
+| Teach Spells | `Board_Classes.cpp`: a tome the IAUS can weigh is taught to a casting class | `--teach <token>`: the subject of a casting class also knows one such spell from the weighable pool |
+| G13 / G14 pre-check | 31.8 | 31.8 |
+
+### 31.3 Baseline (built-in world, vanilla profile, `--seeds 1,2,3,4,5,6`, 24 fights per scenario)
+
+`old` is the base binary at 33c643f (equal to `--t2 off`). `new` is the default now. `shipped` is the game with its switches
+at their defaults: `--stealth off --no-fill-swing --no-estimates`. The last column is the default minus the default with that
+one road off, so it carries the road's interactions with the others.
+
+| Class | old g3 | new g3 | old `--stealth off` | new `--stealth off` | new shipped | What a road is worth in the default |
+|---|---|---|---|---|---|---|
+| melee | 79.08 | 79.99 | 79.08 | 79.99 | 80.15 | the engine's own power attacks +0.60 |
+| ranged | 63.18 | 65.71 | 63.18 | 65.71 | 66.48 | feet +2.50, power attacks and leash +1.05 |
+| mage | 77.47 | 78.81 | 77.47 | 78.83 | 79.41 | feet +1.41, power attacks and leash +0.80 |
+| knight | 68.80 | 70.26 | 68.52 | 70.36 | 68.83 | block +0.83, C8 +0.38, feet -0.28 |
+| warrior | 87.81 | 88.25 | 87.72 | 88.21 | 88.21 | C8 +0.35, feet -0.08 |
+| mercenary | 81.03 | 81.81 | 84.28 | 85.18 | 85.32 | feet -0.34, back-off -0.11, dodge +0.03, C8 -0.01 |
+| archer | 78.31 | 78.33 | 78.31 | 78.33 | 78.44 | C8 -0.53, feet -0.32. The miss budget never engages |
+| thief | 74.93 | 80.14 | 39.31 | 39.60 | 39.60 | the hidden step (+3.97 as the only road on, +0.33 in the default), feet +1.29 |
+| evoker | 80.27 | 81.44 | 80.63 | 81.57 | 81.66 | feet +0.30 |
+| conjurer | 70.26 | 74.50 | 69.30 | 72.42 | 73.16 | feet +2.55, power attacks and leash +2.42, aversion +1.70 |
+| healer | 81.50 | 83.26 | 81.30 | 83.20 | 85.41 | C8 -0.55, aversion -0.05, feet -0.04 |
+| warlock | 78.15 | 77.13 | 78.14 | 77.84 | 80.08 | feet -1.11, power attacks and leash +0.55 |
+| all 12 together | 78.11 | 79.52 | 76.69 | 77.44 | 77.64 | feet +0.22, C8 +0.16, block +0.08, aversion +0.06, step +0.06, H4 +0.02, dodge +0.01, back-off 0.00 |
+
+How to read the last column:
+- Standard errors are as in 30.6 (1.5 to 4.5 per class, 0.4 for the 12 together). Every one-road number for the 12 together is
+  UNDER that error, and so are most per-class ones. Read them as "no visible effect" unless they are well above 1.
+- The columns share seeds and fights, but the pairing is partial: once a road changes one draw, the fight's later draws
+  differ, so a paired difference still carries most of the fight-to-fight noise.
+- "Power attacks and leash" is the `--c8` switch on a class with NO ch.18 rule (every T1, the mage line, the Archer). What
+  moves those rows is the lab dropping its old assumption that such a class never power attacks by itself, plus the ch.23
+  leash. It is not an effect of card C8's packages. The card's own effect is the Knight, Warrior, Mercenary and Thief rows,
+  and it is small.
+
+The default with one road off, all 12 together: `--feet-stop` 79.30, `--c8 off` 79.36, `--dodge off` 79.51, `--aversion off`
+79.46, `--aim off` 79.52, `--block off` 79.44, `--range off` 79.50, `--backoff off` 79.52, `--step off` 79.46, `--c13 lever`
+79.50, `--unweighted off` and `--reanimate off` 79.52, `--mix-partial` 79.53. Only the feet road on over `--t2 off`: 79.15.
+The fills as shipped at g3 (`--no-fill-swing --no-estimates`): 79.73, Knight 69.36.
+
+Lists, Beta 1 set, seeds 1 to 3: LoreRim 64.20 (63.13 with `--t2 off`), Tuxborn 69.74 (68.06).
+
+Checks: `tools/iaus_sim/run.sh` PASS (BAD-FACTS 0, invalid picks 0) in IAUS mode, table mode, at `--stealth off`, with
+`--parked`, over all scenarios, and on LoreRim, Tuxborn and Vanilla. `SIM_CLITEST=1`: 19 checks PASS (6 new).
+`tools/iaus_harness/run.sh`: 0 failed. One address and undefined-behaviour sanitizer run of the Beta 1 cells on the final
+code: clean. The oracle is draw for draw with the base under `--t2 off` (three scenarios,
+byte-equal output), and so is `--t2 off --roads bash` (review F1: the foe-casting fill had slipped behind a comment).
+
+### 31.4 Findings
+
+1. **Moving feet are worth little in total, and up to 2.5 J either way per class.** Alone over the old lab the road is
+   +1.04 J. In the default it is +0.22: Conjurer +2.55, ranged +2.50, mage +1.41, Thief +1.29, Warlock -1.11. A mage who
+   closes while he casts is nearer the blades, and a mage out of magicka walks in with his dagger while he drinks, because
+   that is what the lab's engine AI does with a free body. The asymmetry of MFO-B783 is gone either way: Retreat, the flee,
+   the approach and the standoff all keep moving. The number depends on WHAT the feet do: a first version that kept a
+   caster's standoff during every cast, also with no magicka left, scored 0.75 J higher for the 12 together.
+2. **The Knight does not block under IAUS.** With the lab's fills ON he raises his guard 0.08 times a fight (0.5% of his
+   time), because `BlockNeed` is 0 until his time-to-live estimate says he is in danger (`t.blockBase` 0). With the fills as
+   shipped he never does. In TABLE mode his row guards 33% of his time and that costs him: natural U 76.33 with the row,
+   78.10 without (`--block off`), because a held guard denies his own offense for 2.5 s of every 4. "Blocks a lot" is
+   reachable by tuning `t.blockBase` and the Block family's weight, and the lab says it is not free. Question Q-S-5.
+3. **Aversion at 0.25 is mild.** It turns away 0.6 picks a fight for the Healer and 0.5 for the Conjurer (natural
+   bracket). Conjurer +1.70 J, Healer -0.05: the foes it turns away go to the player and the others, and the objective
+   counts the whole party, so a gain for him can be a loss for them.
+4. **The Archer's miss budget never engages in the lab.** The lab's own miss chance leaves him hitting 88 to 90% of his
+   shots, and a budget of 5 in 10 needs half of them to miss. With `--aim-scatter 0.5` about 11% of his shots are corrected
+   and the budget is worth +0.37 J (77.46 against 77.09), at 0.6 +1.31, at 0.3 +0.07. Whether the game's scatter is anywhere
+   near that is what the `[aim]` probe measures. Question Q-S-4.
+5. **The ch.18 rules barely act in lab fights, and this finding depends on the model.** Harbinger reads no share until 8
+   started attacks fill the window. A lab fight rarely gets that far with stamina left: the Warrior's floor denies Normal 0.6
+   times a fight and is lifted 1.6 times for want of stamina, and his power attacks stay at 14% of his time, the same as
+   with no rule. The Knight's ceiling denies 0.08 power attacks a fight, the Mercenary's 0.13. Under the other reading
+   (`--mix-partial`: the share is read from the first attack) the floor denies 1.5 times a fight and his power time is 26%,
+   for +0.11 J. And the lab's floor turns every denied Normal into a Power attack when stamina allows, where the engine's
+   roll can fail. So the lab cannot say how hard the floor bites in the game: field step 24s can.
+6. **H4 is neutral in the lab.** Native H4 is a bound: it can make a mage close, it never holds him back. The lab's own
+   standoff (close beyond 1050 units) is tighter than the bound for every aimed spell, so H4 only acts for a touch spell
+   or a short stream: 79.52 with it, 79.50 without, no class moves by more than 0.3. The mage back-off almost never fires (0
+   to 0.05 runs a fight: a foe that has to close must be inside 0.4 of the spell's distance, on him). The lab's spell
+   reach is still a stand-in (MFO-B833), which now matters only for that minimum.
+7. **The Mercenary's back-off arrives and shows no gain here.** 0.15 runs a fight, all reach the point, -0.11 J (noise). The
+   side step clears 31% of the projectiles it is rolled for (0.2 a fight), +0.03 J. `--dodge-flight` 0 / 0.2 / 0.35: 81.81 /
+   81.81 / 82.25. Under `--mix-partial` the same class reads 82.31, so the half J these two roads showed in the first run of
+   this section was the fight changing shape, not the roads.
+8. **The hidden step repairs gap G18.** As the only road on: Thief 74.93 to 78.90. In the default it adds +0.33 on top of
+   the moving feet, which remove much of the same standing still. 0.22 steps a fight in the natural bracket, 92% arrive, 8%
+   end because a foe's group found him on the way.
+9. **C13 as built is worth nothing either way.** Thief 80.14 as built, 80.05 with the lever: inside the noise. The lab cannot
+   show a case for card H10 at these numbers.
+10. **G7 almost never fires from a table.** IAUS has no Reanimate family, so only a table row casts it. In level-matched
+    fights the corpse row could not be paid for on 78% of the laps a humanoid corpse lay there (the attack row had spent the
+    magicka by the first kill), and on 22% the spell's level cap was under the corpse's. One raise in 120 strong fights. The
+    Necromancer's own default row is still a Todo row in `ClassTable.cpp` (T3, not T2): MFO-B834.
+
+### 31.5 What batch S did not model, and why
+
+- A slowdown of his feet while casting or drawing: no sourced engine value.
+- The engine's projectile scatter: not measured (31.4 finding 4).
+- Dodge for foes by their own style: they keep the lab's flat 12% miss, so the old numbers stay comparable.
+- A dodge framework's own dodge (Ultimate NPC Dodging on LoreRim): the lab models the vanilla side step only.
+- Pathing in the aversion's next-best test, and a second foe group.
+- G16 (equip only) and the theft fix: no combat model, n/a as in the manifest.
+- MFO-B786 and MFO-B787 stay open: fixing them changes the reference lab of section 30, which `--t2 off` must reproduce.
+
+### 31.6 G7 in table mode
+
+```
+rows="cond.corpse_within|act.cast_target|0|15|0;cond.foe_any|act.cast_target|0|1|0;cond.self_mp_pct_below|act.drink_magicka_potion|0.25|0|0"
+tools/iaus_sim/run.sh --no-json --mode table --parked --classes necromancer --fights 24 --teach reanimate --rows "necromancer=$rows"
+```
+
+`raise/f` is 0 in the natural bracket and 0.008 in the strong one (one raise in 120 fights). U moves by under 2 between the
+run with the spell and the run with `--reanimate off` (68.87 against 68.03 natural), which is his book being drawn
+differently, not the thrall.
+
+### 31.7 Sensitivity
+
+| Switch | Class | J |
+|---|---|---|
+| `--no-fill-swing --no-estimates` | knight | 69.36 (70.26 with the lab's fills) |
+| `--mix-partial` | warrior / mercenary / knight | 88.36 / 82.31 / 70.48 (88.25 / 81.81 / 70.26 in the default) |
+| `--aim-scatter 0.3 / 0.5 / 0.6` | archer | 77.85 / 77.46 / 77.45 with the budget, 77.78 / 77.09 / 76.14 with `--aim off` |
+| `--aim-miss 0.3 / 0.5` | archer | 78.19 / 77.90, the budget never engages |
+| `--dodge-flight 0 / 0.2 / 0.35` | mercenary | 81.81 / 81.81 / 82.25 |
+| `--c13 lever` | thief | 80.05 (80.14 as built) |
+
+### 31.8 Cards G13 and G14: the witness pre-check against the detection formula
+
+`tools/iaus_sim/StealLab.h`, `run.sh --steal-lab 20000`. The pre-check (`logistics/Steal.cpp Evaluate`) is geometric: a sight
+ray in a cone, a heard noise, plain nearness, the owner's line of sight, a guard. The engine decides a witness by detection.
+The lab draws town scenes (0 to 6 actors, 15% of them guards, an owner in half the scenes that have anyone, walls, the player
+200 to 1500 units away, sneaking or not) and asks both. FACT and MODEL are listed at the top of the file. The engine's
+witness loop is not read yet (`theft-and-crime-alarm-re.md`), so "the engine" here is the detection formula applied to
+every actor inside `iCrimeAlarmRecDistance`, for the follower and for the player.
+
+| Light | Scenes | Take | Take, an actor detects the follower | Take, an actor detects only the player | Refused | Refused with nobody detecting |
+|---|---|---|---|---|---|---|
+| dark (the Thief's row: Dark -> Steal) | 9402 | 16.8% | 0.00% | 1.46% | 83.2% | 44.5% |
+| dim | 6635 | 15.9% | 0.00% | 0.09% | 84.1% | 54.4% |
+| bright | 3963 | 16.3% | 0.00% | 1.71% | 83.7% | 11.8% |
+
+Refusals by reason (dark): a guard 38.5%, an actor senses the follower 37.9%, an actor senses the player 12.6%, he stands
+5% of the time by construction 6.0%, the owner sees 5.0%.
+
+Reading: the pre-check never let a take through that the formula says an actor detects the FOLLOWER for. That 0.00% is
+largely BY CONSTRUCTION and not evidence: both sides use the same view cone and the same line-of-sight geometry, and the
+formula's sight term needs exactly the cone and the line the pre-check already refused on. What the row can show is only
+that sound and the skill duel alone never detected a sneaking follower the geometry had cleared, in these scenes. In 1 to 2% of the
+allowed takes an actor detects the PLAYER by sound from behind a wall (he walks crouched: the lab's reading of Harbinger's
+hearing calls that silent, the engine's formula still scores it). That rests on two MODEL rows, so it is a question for the
+`bCrimeGoldProbe` field run and not a defect. The price of failing closed is high in the dark: about half the refusals
+would have gone unseen. At 1.3 sight pairs a check the 8-pairs-a-frame limit never bites. G14 opens unowned chests only
+(Q-L-6), and its owned-lock path asks this same check.
+
+### 31.9 How useful is card G3, and marth's D&D variant
+
+`run.sh --disengage-report 24 --seeds 1,2,3,4,5,6`. The same fights three ways: no hide run and no flee (every other road
+stands), the run as built, and `--disengage-dnd` (from the pick he is no valid target for 6 s while anyone else stands:
+ch.32 at full weight on every foe. Not built in the game). Each class plays 144 natural fights and 144 of each of its own
+scenarios. A fight is "touched" when a run began in it.
+
+| Class | Mode | U | Downs per fight | Taken per s | Runs per fight | Run length s | Safe within 20 s | Time to safe s | Health lost on the run | Touched fights | U change in touched | Touched fights that end differently | Downs change in touched |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| thief | none | 78.09 | 0.10 | 3.00 | | | | | | | | | |
+| thief | g3 | 77.97 | 0.10 | 2.84 | 0.30 | 0.70 | 100% | 0.05 | 0.0% | 29.9% | -0.45 | 7.9% | 0.00 |
+| thief | dnd | 77.98 | 0.10 | 2.84 | 0.30 | 0.70 | 100% | 0.06 | 0.0% | 29.9% | -0.41 | 7.9% | 0.00 |
+| evoker | none | 85.14 | 0.17 | 3.33 | | | | | | | | | |
+| evoker | g3 | 85.70 | 0.12 | 3.39 | 0.25 | 1.34 | 84.7% | 1.22 | 1.0% | 19.6% | +2.87 | 38.4% | -0.23 |
+| evoker | dnd | 86.28 | 0.04 | 2.83 | 0.26 | 1.34 | 93.2% | 0.68 | 1.1% | 19.6% | +5.82 | 56.6% | -0.62 |
+| conjurer | none | 71.60 | 0.10 | 5.89 | | | | | | | | | |
+| conjurer | g3 | 72.09 | 0.07 | 5.83 | 0.16 | 1.09 | 56.5% | 2.54 | 1.2% | 16.0% | +3.07 | 30.4% | -0.17 |
+| conjurer | dnd | 72.12 | 0.03 | 5.33 | 0.16 | 1.09 | 73.9% | 1.45 | 0.9% | 16.0% | +3.24 | 47.8% | -0.39 |
+| healer | none | 86.88 | 0.06 | 4.77 | | | | | | | | | |
+| healer | g3 | 86.96 | 0.05 | 4.77 | 0.10 | 1.17 | 61.9% | 2.41 | 3.0% | 9.7% | +0.73 | 19.0% | -0.10 |
+| healer | dnd | 87.40 | 0.02 | 4.60 | 0.10 | 1.12 | 81.8% | 1.68 | 2.4% | 10.0% | +5.26 | 46.5% | -0.47 |
+| warlock | none | 74.77 | 0.17 | 6.29 | | | | | | | | | |
+| warlock | g3 | 75.81 | 0.14 | 6.23 | 0.21 | 1.15 | 60.0% | 3.80 | 5.1% | 20.1% | +5.16 | 31.0% | -0.17 |
+| warlock | dnd | 74.86 | 0.06 | 6.16 | 0.20 | 1.27 | 82.8% | 2.81 | 4.3% | 20.1% | +0.46 | 51.7% | -0.59 |
+
+"Safe" = the first moment after the run began with no foe within 400 units of him, he still up, inside 20 s. The time is the
+mean over the runs that got there. Each class row is 288 or more paired fights and its touched fights number in the tens, so a U
+change in the touched fights under about 4 is not a finding by itself. The down counts are steadier.
+
+**The `dnd` rows are an UPPER BOUND on the variant, not a forecast of it.** The lab makes every foe that has him re-pick at
+once, at weight 1.0, and the 6 s window runs on after a short run has ended. Harbinger's aversion acts only when the engine
+next selects a target (its own 1 to 3 s cadence) and its weight is capped at 0.95. A built variant can do no better than
+these rows and will likely do less.
+
+Reading:
+- **As built the run is short and worth a little.** A flee lasts 1.1 to 1.3 s (it ends at the 30% health line, on arrival or
+  after 10 s) and begins in 10 to 20% of a caster's fights. Over all fights it moves U by +1.0 (Warlock), +0.6 (Evoker), +0.5
+  (Conjurer), +0.1 (Healer): inside the noise. What it does steadily is cut his own downs in the fights it touches, by
+  0.10 to 0.23. The Thief's hide run always ends hidden (the engine loses him on its next pass, 30.7 finding 3) and buys
+  nothing.
+- **He is often not safe after it.** Evoker 85% safe in 1.2 s. Conjurer 57%, Healer 62%, Warlock 60%, and those take 2.4 to
+  3.8 s: the foes follow him. He loses 1 to 5% of his health on the run and goes down on up to 13% of the runs.
+- **The D&D variant, at its upper bound, does what it says for HIM.** Safe more often (74 to 93%) and sooner (0.7 to 2.8 s),
+  and it cuts his downs in the touched fights two to five times as much as the run as built (-0.39 to -0.62).
+- **For the party it is mixed.** Against the run as built: Evoker +0.6 U, Healer +0.4, Conjurer level, Warlock -1.0. The foes
+  he sheds go to the player and the others. In the headline set the variant is 79.73 against 79.52 (Healer +1.12, Evoker
+  +0.35, Conjurer -0.89, Warlock -0.48).
+- **The numbers lean on the model.** Across three versions of the feet and range models in this round the Evoker's and the
+  Warlock's U changes switched sign. What held in all of them: short runs, he is often not safe after, the variant makes
+  him safer and cuts his downs by half or more. Whether that is worth building is a design call and the field session's,
+  not the lab's. Question Q-S-11.
+
+### 31.10 Gap ledger and backlog, changes
+
+| id | Change |
+|---|---|
+| C-C8, C-H2, C-H5, C-POWER, C-H4 | modelled here: closing, not proven in the field |
+| C-BLOCK | modelled. Open as a tuning item: IAUS never blocks at `t.blockBase` 0 (finding 2) |
+| C-NOFLEE | Mercenary: closed by the back-off. Knight and Warrior hold the line by design |
+| G18 | the hidden step is modelled and repairs it (finding 8) |
+| G19, G20, G22 | unchanged |
+| G21 | Mercenary closed (back-off). Other classes without the flag: by design |
+| C-G7 new | IAUS has no Reanimate family, and a table row rarely gets to cast it (finding 10). Open, T3 |
+| MFO-B783 | closed: the feet stop is gone, `--feet-stop` keeps the old lab |
+| MFO-B827 | closed: the class row sets `ClassGate::block` and its cooldown |
+| MFO-B784, B785, B788 | text corrected (the comments and this document) |
+| MFO-B786, B787 | open: fixing them would change the reference lab |
+| MFO-B833, B834, B835 new | The spell reach is a stand-in (now only the back-off minimum). The Necromancer row is still Todo. Dodge and miss models have no field anchor |
+
+Correction to 30.7 finding 4 (MFO-B784): main's 3db7882 keeps the stance until the blow RESOLVES, so the lab's default
+(the stance outlives the blow) is the game's behaviour and `--blow-stands` measures a reading the game does not have.
+Correction to 30.3 (MFO-B785): the `steep` profile's game settings are equal to the cached LoreRim extract. It is lab test
+input, nothing in `native/` reads it, and it should be read as "LoreRim's settings", not as a hand-written shape.
+Stated limit (MFO-B788): `Detect.h` takes "flying" from `outOfMeleeReach`, which triples the detection range against any
+actor out of melee reach. It errs against the follower.
+
+### 31.11 Handoff to the tuning round (replaces the numbers of 30.10)
+
+The world is fixed for this round. Do not edit `tools/iaus_sim/*.h`, `sim.cpp` or `native/`. Rules as in 30.10, with these
+baselines and gates:
+
+```
+# 0. build once, check the baselines
+tools/iaus_sim/run.sh --no-json --classes beta1 --seeds 1,2,3,4,5,6                 # 79.52
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --classes beta1 --seeds 1,2,3,4,5,6 --stealth off   # 77.44
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --classes beta1 --seeds 1,2,3,4,5,6 --stealth off --no-fill-swing --no-estimates   # 77.64 (the game as shipped)
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --classes beta1 --seeds 1,2,3,4,5,6 --t2 off        # 78.11 (the lab of section 30)
+# per class      melee ranged  mage knight warrior mercenary archer thief evoker conjurer healer warlock
+# g3 (default)   79.99  65.71 78.81  70.26   88.25     81.81  78.33 80.14  81.44    74.50  83.26   77.13
+# --stealth off  79.99  65.71 78.83  70.36   88.21     85.18  78.33 39.60  81.57    72.42  83.20   77.84
+# shipped        80.15  66.48 79.41  68.83   88.21     85.32  78.44 39.60  81.66    73.16  85.41   80.08
+```
+
+Gates on every kept change. All three are REQUIRED (review of a645ca2 and of 0880667):
+1. no loss at g3 (`--classes beta1`, 79.52): the tuning target.
+2. no loss on `--stealth off --classes beta1` (77.44): the game ships `bSneakInCombat` and `bIausHideRoad` OFF.
+3. no loss on the game AS SHIPPED, as its own gate: `--stealth off --no-fill-swing --no-estimates --classes beta1` (77.64).
+   Passing 2 and a fills-off run at g3 separately does not stand in for it.
+
+For every gate print the 12 classes one by one (`--classes <slug>` per class, same seeds) and hold each class to its own
+band: no class may fall more than 1.0 J under its row above, and the Thief and the Mercenary no more than 0.5 J. Those two
+have the largest gap between their columns (Thief 80.14 against 39.60, Mercenary 81.81 against 85.18), so a change that
+helps one column can hide a loss in the other inside the 12-class mean.
+
+The feet asymmetry is gone (MFO-B783 closed), so step 1 of 30.10 may search `aw.4` (Retreat) against `aw.21` (the flee)
+and `c.63.*` again. New things to search, in this order:
+1. Knight block: `t.blockBase`, the Block family's weight, the row's cooldown (`run.sh --list-params` for the indexes). Target: the
+   playstyle line `b.block` at least 15, without losing J. Check `--mode table` too (the row costs 1.8 U there).
+2. Mercenary back-off: the BackOff family's weight, `t.backOffCooldownSec`, the need table is a constant in `iaus/Reposition.h`.
+3. Hidden step: the Step family's weight, `t.stepCooldownSec`.
+4. The flee against Retreat (30.10 step 1), now on equal feet.
+Do not tune against `--disengage-dnd`, `--c13 lever`, `--aim-scatter` or `--aim-miss`: they are not the game.

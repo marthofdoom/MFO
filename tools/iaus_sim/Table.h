@@ -22,7 +22,7 @@ namespace Sim {
         std::vector<std::map<int, double>> rowFired;                // per follower: row -> last fired (row cooldowns)
 
         // The subject a condition picks: a foe, a friend, or "holds with no subject" (ok, nullptr).
-        struct Pick { bool ok = false; const Body* foe = nullptr; const Body* friendly = nullptr; };
+        struct Pick { bool ok = false; const Body* foe = nullptr; const Body* friendly = nullptr; const Body* corpse = nullptr; };
         static Pick Cond(const Fight& F, const Ctl& c, const Body& x, const GRow& r) {
             Pick p; const std::string& k = r.cond; const float v = r.param;
             auto foes = [&](auto pred, auto better) { const Body* best = nullptr; for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o) || Fight::Dist(x, o) > 4096.0f || !pred(o)) continue; if (!best || better(o, *best)) best = &o; } return best; };
@@ -67,6 +67,10 @@ namespace Sim {
                 const Body* tg = F.Find(c.steer ? c.steer : x.c.targetId); if (!tg || !Fight::Up(*tg)) tg = foes(any, nearer); if (!tg) return p;
                 const float d = Fight::Dist(x, *tg); p.ok = k == "cond.foe_within_range" ? d <= v : d > v; p.foe = tg; return p; }
             if (k == "cond.self_out_of_arrows" || k == "cond.self_out_of_bolts") { p.ok = static_cast<float>(x.arrows) < std::max(1.0f, v); p.friendly = &x; return p; }
+            if (k == "cond.corpse_within" && g_t2.reanimate) {   // card G7: a corpse selector. With a Reanimate spell he knows and can pay for, the pick skips a corpse that spell cannot raise (G10)
+                const SimSpell* sp = nullptr; for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.build->spells[i].reanimate && c.book.entries[i].cost <= x.c.mp && c.summonUntil[i] <= F.now && (!sp || c.build->spells[i].ctrlMaxLevel > sp->ctrlMaxLevel)) sp = &c.build->spells[i];
+                bool anyFoe = false; for (const Body& o : F.b) if (o.role == Role::Foe && Fight::Up(o)) { anyFoe = true; break; }   // question 104: combat only (a foe still stands)
+                p.corpse = anyFoe ? F.CorpseFor(x, v, sp) : nullptr; p.ok = p.corpse != nullptr; return p; }
             p.ok = false; return p;   // not modelled: the caller counts it
         }
         static bool Known(const std::string& cond) {
@@ -75,6 +79,7 @@ namespace Sim {
                 "cond.foe_fleeing", "cond.foe_blocking", "cond.foe_stronger_than_me", "cond.foe_weaker_than_me", "cond.foe_weak_fire", "cond.foe_weak_frost", "cond.foe_weak_shock", "cond.foe_attacking_player", "cond.foe_attacking_me",
                 "cond.foe_attacking_me_melee", "cond.foe_attacking_me_ranged", "cond.foe_attacking_ally", "cond.foe_count_at_least", "cond.foe_within_range", "cond.foe_beyond_range", "cond.self_out_of_arrows", "cond.self_out_of_bolts" };
             for (const char* s : k) if (cond == s) return true;
+            if (g_t2.reanimate && cond == "cond.corpse_within") return true;
             return false;
         }
         // His best known spell for a row's role (-1 = none he can pay for).
@@ -126,6 +131,15 @@ namespace Sim {
                     bool busy = x.act == Act::Taunt && F.now < x.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == x.c.id && F.now < o.tauntUntil) busy = true; if (busy) continue;
                     k.family = Family::Taunt; k.target = p.foe->c.id; fire(); }
                 else if (r.act == "act.flee") { k.family = Family::Retreat; fire(); }
+                else if (r.act == "act.block" && g_t2.block) {   // the Knight line's row (Foe: Targeting me (melee) -> Block, 4 s): the held guard, when his hands can block
+                    if (!(c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver)) continue; k.family = Family::Block; if (p.foe) k.target = p.foe->c.id; fire(); }
+                else if (p.corpse && r.role == kRoleReanimate && r.act == "act.cast_target") {   // card G7: the Reanimate spell is cast AT the corpse (Harbinger ABI v42 kCastFlag_CorpseTarget)
+                    if (!c.gate.spellsOnClass && !c.gate.spellsFromMastered) continue;
+                    int si = -1; for (std::size_t i = 0; i < c.book.entries.size(); ++i) { const SimSpell& s = c.build->spells[i];
+                        if (s.reanimate && c.book.entries[i].cost <= x.c.mp && c.summonUntil[i] <= F.now && static_cast<float>(p.corpse->c.level) <= s.ctrlMaxLevel && (si < 0 || s.ctrlMaxLevel > c.build->spells[static_cast<std::size_t>(si)].ctrlMaxLevel)) si = static_cast<int>(i); }
+                    if (si < 0 || x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd)) continue;
+                    F.StartCast(x, si, c.build->spells[static_cast<std::size_t>(si)], p.corpse->c.id, c.book.entries[static_cast<std::size_t>(si)].cost, true); fired = true;
+                    if (subj) { ++t.fired; ++t.hist[static_cast<std::size_t>(Family::CastSummon)]; } }
                 else if (r.act == "act.drink_health_potion") { if (c.book.kit.potionsHealth <= 0) continue; k.family = Family::DrinkHealth; fire(); }
                 else if (r.act == "act.drink_stamina_potion") { if (c.book.kit.potionsStamina <= 0) continue; k.family = Family::DrinkStamina; fire(); }
                 else if (r.act == "act.drink_magicka_potion") { if (c.book.kit.potionsMagicka <= 0) continue; k.family = Family::DrinkMagicka; fire(); }

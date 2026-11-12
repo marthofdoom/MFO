@@ -15,6 +15,7 @@
 #include "iaus_sim/Detect.h"
 
 #include "iaus/Reach.h"
+#include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step (the game's own pure functions)
 #include <unordered_map>
 #include "iaus_sim/Playstyles.h"
 
@@ -70,21 +71,22 @@ namespace Sim {
     //   2 hide : + G2 Layer 1's hold row (Snapshot::hideRoad) and the free stealth entry of card C13.
     //   3 g3   : + card G3 (Snapshot::concealRoad): the hide run of a sneak class and the flee of every other disengage class.
     inline int g_stealth = 3;   // the lab's default is every road T2 builds (the tuning target); --stealth off is the game with its switches at their defaults
-    // --blow-stands: the stance claim the hide hold keeps is dropped when the blow from stealth is PICKED (scheduler/IausSource.cpp
-    // NoteBlow). If nothing else holds the stance he stands before the hit lands and the engine's sneak attack (attacker sneaking)
-    // does not apply. false (default) = the design's intent: the stance outlives the blow. true measures the other reading.
+    // --blow-stands: a reading the game does NOT have (MFO-B784). Main's 3db7882 keeps the hide hold's stance claim until the blow
+    // RESOLVES (scheduler/IausSource.cpp NoteBlow), so false (default) is the game: the stance outlives the blow. true measures what an
+    // early release would cost: he stands before the hit lands and the engine's sneak attack (attacker sneaking) does not apply.
     inline bool g_blowStands = false;
     // --light-scale N: the engine's cached light level of an actor standing in full daylight (MODEL: 100). The level's real scale is
     // not known (iLightLevelMax is 300 in Skyrim.esm; probe P4 of g2-hide-design.md is not built), and the light term is the only
     // thing that can outweigh a high Sneak skill, so every stealth number should be read with this sensitivity in mind.
     inline float g_lightScale = 100.0f;
+    // The T2 batch S switches (g_t2) live in Data.h: the loader reads two of them.
     // Hybrid / T4 go-in rules (native/classes/Classes.h GoIn, same order).
     enum : int { kGoNone = 0, kGoNever, kGoBias, kGoSummons, kGoParty, kGoControlled };
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
     struct Effect { int kind = 0; float v = 0; int av = -1; double until = 0; std::uint32_t src = 0; };   // 0 dot, 1 hot, 2 armor, 3 resist
-    struct Shot { double at = 0; std::uint32_t src = 0, tgt = 0; float dmg = 0; int spell = -1; bool power = false, fromIaus = false; float x = 0, y = 0; float mag = 1; };
+    struct Shot { double at = 0; std::uint32_t src = 0, tgt = 0; float dmg = 0; int spell = -1; bool power = false, fromIaus = false; float x = 0, y = 0; float mag = 1; bool corrected = false, dodged = false; };
 
     struct Body {
         Combatant c;
@@ -122,6 +124,8 @@ namespace Sim {
         double movedAt = -1, cloakUntil = 0, cloakReady = 0, holdUntil = 0, standUntil = 0, noiseUntil = 0;
         float  noise = 0;               // his actionValue while now < noiseUntil: the sound of a swing, a shot, a cast (MODEL, Detect.h In::action)
         bool   ranLast = false;         // his last step was at the run speed (Detect.h In::running)
+        double dndUntil = 0;            // --disengage-dnd: no foe may pick him until then while another valid target stands (MODEL of a variant that is not built)
+        bool   corpseUsed = false;      // card G7: this corpse was raised once (a body is raised one time)
         float  hx = -1, hy = 0;         // where he faces (unit). A fighter faces his combat target; without one, the way he last moved
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
     };
@@ -167,6 +171,12 @@ namespace Sim {
         long   posN = 0, tgtDistN = 0, arrowsShot = 0, arrowsHit = 0;
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
+        // T2 batch S tallies of the subject (section 31)
+        long   dodgeTries = 0, dodges = 0, aimCorrected = 0, blockRenewals = 0, powRefused = 0, backOffs = 0, backOffArrived = 0, steps = 0, stepArrived = 0, stepRevealed = 0;
+        long   averted = 0, avertKept = 0, raises = 0, mixPowerDenied = 0, mixNormalDenied = 0, mixFloorLifted = 0, leashTurns = 0, engPower = 0, dndRuns = 0;
+        double guardSec = 0, feetSec = 0;
+        // card G3's usefulness (section 31.9): per run of the subject, the damage he took on it and how long until no foe stood within 400 units of him
+        long   runsBegun = 0, runsSafe = 0; double runDmg = 0, runSafeSec = 0, runLenSec = 0, runDmgAfter5 = 0;
         std::vector<std::string> killOrder;
     };
 
@@ -196,6 +206,15 @@ namespace Sim {
         // THE CLASS PACKAGE (card C8): the combat style the DLL swaps on per stance (0 melee, 1 ranged, 2 cast), the ch.18
         // power-attack share (a scale on the engine AI's own power attacks) and the ch.23 pursuit leash (units from the player, 0 = none).
         Style pkg[3]; float powerShare = 1.0f, leash = 0.0f;
+        // T2 batch S (section 31). The ch.18 rule of his class (-1 = none declared) and the window of his last 8 STARTED attacks
+        // (apmf/AttackMix.cpp: Power / (Power + Normal)); the ch.32 aversion weight; the ch.29 miss budget (-1 = none) and the
+        // outcome ring of his last 10 shots; whether a class package (tier 2+) is in force (the class CSTY applies in full, Q-melee-6).
+        float  shareMax = -1.0f, shareMin = -1.0f; std::uint8_t atkWin[8] = {}; int atkN = 0, atkAt = 0;
+        float  aversion = 0.0f; int aimBudget = -1; std::uint8_t aimWin[10] = {}; int aimN = 0, aimAt = 0, aimFlying = 0;
+        bool   pkgClass = false;
+        std::uint32_t handSpell = 0;               // H4: the spell in his hand = the last book spell he cast (MODEL; Snapshot::equippedSpell)
+        int    blockRenewals = 0; double blockRestUntil = 0;   // apmf/BlockClaims.cpp: one renewal, then kRest 1.5 s after any hold ends
+        double runSafeAt = -1; bool runMeasured = false;       // section 31.9: this run's time to safety
         std::vector<GRow> rows;            // table mode: his class's default gambit rows
         PostureKind drawn = PostureKind::None;
         std::map<std::uint64_t, double> firedAt;   // the Cooldowns store (Kind::IausAction): CooldownId -> last fired
@@ -218,9 +237,9 @@ namespace Sim {
         float armorWeight = 0;   // the weight of what he wears (MODEL: 9 per heavy piece, 3 per light one); his weapon's weight is added per stance
         // CARD G3 (native/Concealment.cpp, mirrored): the pick and the run. phase: 0 none, 1 hide run (on the way), 2 hiding at the
         // point, 3 flee run. stanceHeld = the hide ended HIDDEN and its stance claim stands (g_stances): no new pick until a blow or a reveal.
-        struct Pick { bool valid = false, flee = false; float x = 0, y = 0; double readyAt = -1e9, askedAt = -1e9; };
+        struct Pick { bool valid = false, flee = false; float x = 0, y = 0; double readyAt = -1e9, askedAt = -1e9; int kind = 0; std::uint32_t target = 0; };   // kind (batch I, Concealment::Kind): 0 hide, 1 flee, 2 back-off, 3 step. ONE slot per follower (MFO-B830)
         mutable Pick pick;
-        int    runPhase = 0, hiddenReads = 0; bool stanceHeld = false, runFromOracle = false;
+        int    runPhase = 0 /* 4 back-off, 5 hidden step (batch I) */, hiddenReads = 0; bool stanceHeld = false, runFromOracle = false;
         double runStart = 0, runArrive = 0, runServedAt = -1; float runX = 0, runY = 0, runHp = 0, fleeLine = 0.30f; bool runServedHold = false;
     };
 
@@ -240,6 +259,7 @@ namespace Sim {
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
         float light = 0.6f; bool interior = false; double nextDetect = 0; Detect::Gmst dg;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
+        std::uint64_t avSeed = 0;                  // ch.32: the per (foe, follower, 6 s window) draws come from a hash of this, never from R
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
         Tally t;
         std::uint32_t nextId = 1;
@@ -294,7 +314,7 @@ namespace Sim {
         }
         // The engine's level of (observer o, target x) right now: every input of calculate-detection-re.md section 4 the lab has.
         [[nodiscard]] Detect::Out Level(const Body& o, const Body& x) const {
-            Detect::In in; in.dist = Dist(o, x); in.angleDeg = AngleDeg(o, x); in.losGeom = Sees(o, x); in.exterior = !interior; in.flying = o.c.outOfMeleeReach || x.c.outOfMeleeReach;
+            Detect::In in; in.dist = Dist(o, x); in.angleDeg = AngleDeg(o, x); in.losGeom = Sees(o, x); in.exterior = !interior; in.flying = o.c.outOfMeleeReach || x.c.outOfMeleeReach;   // STAND-IN (MFO-B788): 'out of melee reach' is read as flying, which triples the range against an actor on a ledge too. It errs against the follower
             const Body* ot = Find(o.c.targetId); in.inCombatO = true; in.oHasTarget = ot && Up(*ot); in.targetIsOsTarget = ot == &x;
             const Ctl* c = x.ctl >= 0 ? &ctl[static_cast<std::size_t>(x.ctl)] : nullptr;
             in.skillO = o.spec->Skill(15); in.skillT = x.spec->Skill(15) + StealthCombine(D->sneakSkillRows, *x.spec, false);   // perk entry 57 (the list's rows add)
@@ -372,6 +392,31 @@ namespace Sim {
             }
             return have;
         }
+        // The HIDDEN STEP's pick (native/Concealment.cpp PickStep, Kind::Step, mirrored; gap G18): 10 candidates toward the foe the step is
+        // for, at 0, +-25 and +-50 degrees off the line to him on rings of 200 and 420 units; each a straight walk that stops at the first
+        // solid thing. Refused: a walk under 160 units, a point outside the leash margin, a point that is not at least 100 units nearer
+        // the foe, a point within 250 units of ANOTHER foe. A bow takes the shortest walk whose point that foe's eye can reach (a line
+        // of fire); a blade takes the point nearest the foe.
+        [[nodiscard]] bool StepPick(const Body& x, const Ctl& c, std::uint32_t target, bool bow, float& gx, float& gy) const {
+            const Body* tf = Find(target); if (!tf || !Up(*tf)) return false;
+            const float targetNow = Dist(x, *tf), base = std::atan2(tf->c.y - x.c.y, tf->c.x - x.c.x);
+            static constexpr float kOff[5] = { 0.0f, 0.4363f, -0.4363f, 0.8727f, -0.8727f };
+            bool have = false; float bestCost = 0, bestFoe = 0;
+            for (int i = 0; i < 10; ++i) {
+                const float ang = base + kOff[i % 5], want = i < 5 ? 200.0f : 420.0f, ux = std::cos(ang), uy = std::sin(ang);
+                float cost = 0; while (cost + 20.0f <= want && Standable(x.c.x + ux * (cost + 20.0f), x.c.y + uy * (cost + 20.0f))) cost += 20.0f;
+                if (cost < 160.0f) continue;
+                const float px = x.c.x + ux * cost, py = x.c.y + uy * cost;
+                if (c.leash > 0.0f && std::hypot(px - b[0].c.x, py - b[0].c.y) > c.leash - 200.0f) continue;
+                const float toTarget = std::hypot(tf->c.x - px, tf->c.y - py);
+                if (toTarget > targetNow - 100.0f) continue;
+                bool beside = false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && &o != tf && std::hypot(o.c.x - px, o.c.y - py) < 250.0f) { beside = true; break; }
+                if (beside) continue;
+                if (bow) { if (PointHidden(px, py, *tf)) continue; if (!have || cost < bestCost) { have = true; gx = px; gy = py; bestCost = cost; bestFoe = toTarget; } }
+                else if (!have || toTarget < bestFoe) { have = true; gx = px; gy = py; bestCost = cost; bestFoe = toTarget; }
+            }
+            return have;
+        }
 
         // ── building ──
         Body& Add(Role role, std::shared_ptr<const ActorSpec> sp, float x, float y, float hpPct = 1.0f) {
@@ -411,7 +456,8 @@ namespace Sim {
             if (fromIaus && by && by->ctl == 0) { t.iausDmg += dmg; t.overkill += dmg - dealt; }
             if (x.role == Role::Player) t.playerDmgTaken += dealt;
             if (x.Party()) t.partyDmgTaken += dealt;
-            if (x.ctl == 0) { t.dmgTaken += dealt; if (now < x.retreatUntil) t.kiteDmgTaken += dealt; }
+            if (x.ctl == 0) { t.dmgTaken += dealt; if (now < x.retreatUntil) t.kiteDmgTaken += dealt;
+                const Ctl& c0 = ctl[0]; if (c0.runPhase >= 1 && c0.runPhase <= 3) { const double fr = static_cast<double>(dealt / std::max(1.0f, x.c.hpMax)); t.runDmg += fr; if (now - c0.runStart > 5.0) t.runDmgAfter5 += fr; } }   // section 31.9: what a G3 run costs him
             if (x.c.hp <= 0) {
                 if (x.Party() && x.role != Role::Summon && !ctl.empty()) {   // could the subject have healed him?
                     const Ctl& c0 = ctl[0]; const Body& s0 = b[static_cast<std::size_t>(c0.body)];
@@ -547,7 +593,7 @@ namespace Sim {
             const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
         }
         [[nodiscard]] Body* PickTarget(Body& x) {
-            Body* best = nullptr; float bs = -1;
+            Body* best = nullptr; Body* second = nullptr; float bs = -1, bs2 = -1;
             const bool frenzy = now < x.frenzyUntil;
             for (auto& o : b) {
                 if (&o == &x || !Up(o)) continue;
@@ -559,8 +605,89 @@ namespace Sim {
                 if (x.role == Role::Player) s *= 1.0f + (1.0f - o.c.hp / std::max(1.0f, o.c.hpMax));   // the player model finishes what it started
                 if (o.c.outOfMeleeReach && !x.spec->ranged.Has() && x.spec->spells.empty()) s *= 0.1f;
                 s *= R.U(0.85f, 1.15f);
-                if (s > bs) { bs = s; best = &o; }
+                if (s > bs) { second = best; bs2 = bs; bs = s; best = &o; } else if (s > bs2) { bs2 = s; second = &o; }
             }
+            // ch.32 AVERSION (Harbinger ABI v41, apmf/AversionClaims.cpp; FACT = Harbinger's contract): when the foe's own selection lands on
+            // the claimant, in the claim's share of 6 s windows it takes its NEXT BEST valid target; with none he is picked as always.
+            // Review H2-1 / Q101: the next best is used only when it passes the game's own tests. In the lab those are: up (the loop),
+            // not fleeing, and reachable (a melee-only foe cannot take a target that is out of melee reach). Pathing is not modelled.
+            if (x.role == Role::Foe && best && AvertedNow(x, *best)) {
+                const bool ok = second && !second->c.fleeing && !(second->c.outOfMeleeReach && !x.spec->ranged.Has() && x.spec->spells.empty());
+                if (best->ctl == 0) ++(ok ? t.averted : t.avertKept);
+                if (ok) return second;
+            }
+            return best;
+        }
+        [[nodiscard]] static std::uint64_t Mix64(std::uint64_t z) { z += 0x9E3779B97F4A7C15ULL; z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
+        // His weight in a foe's selection right now: the class claim (card H2), or 1 during the D&D window (--disengage-dnd).
+        [[nodiscard]] float AversionOf(const Body& o) const { if (o.ctl < 0) return 0.0f; if (g_t2.dnd && now < o.dndUntil) return 1.0f; return g_t2.aversion ? ctl[static_cast<std::size_t>(o.ctl)].aversion : 0.0f; }
+        // Harbinger draws "averted or not" per (foe, follower) for a 6 s window (question 95), so the share of TIME is the weight. The
+        // draw is a hash of the fight's seed, the pair and the window: it never touches R, so a fight's other draws are the same with it on or off.
+        [[nodiscard]] bool AvertedNow(const Body& foe, const Body& o) const {
+            const float w = AversionOf(o); if (!(w > 0.0f)) return false; if (w >= 1.0f) return true;
+            const std::uint64_t h = Mix64(avSeed ^ Mix64(static_cast<std::uint64_t>(foe.c.id) * 0x10001ULL + o.c.id) ^ Mix64(static_cast<std::uint64_t>(now / 6.0) + 77u));
+            return static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0) < static_cast<double>(w);
+        }
+        // ch.18 ATTACK SELECTION (Harbinger ABI v34, apmf/AttackMix.cpp; FACT = that file's contract): DENY ONLY, over the follower's last 8
+        // STARTED attacks. Share above the ceiling: Power is denied. Share under the floor: Normal is denied, and that deny is lifted for
+        // a roll in which no undenied Power attack would be drawn (stamina cannot pay), so a regular attack still fires. Bash is not governed.
+        // MODEL: under the floor a denied Normal BECOMES a Power attack whenever stamina can pay. In the engine the roll among the undenied
+        // attacks can also come up empty or pick another class, so the lab's floor is the strongest reading of the rule.
+        [[nodiscard]] Act MixGate(Body& x, Ctl& c, Act drawn, const Weapon& w) {
+            if (c.shareMax < 0.0f && c.shareMin < 0.0f) return drawn;
+            if (c.atkN < 8 && !g_mixPartial) return drawn;   // no share, so no deny, until 8 started attacks fill the window
+            int p = 0; for (int i = 0; i < c.atkN; ++i) p += c.atkWin[i];
+            const float share = c.atkN ? static_cast<float>(p) / static_cast<float>(c.atkN) : 0.0f;
+            if (c.shareMax >= 0.0f && drawn == Act::Power && share > c.shareMax) { if (x.ctl == 0) ++t.mixPowerDenied; return Act::Swing; }
+            if (c.shareMin >= 0.0f && drawn == Act::Swing && share < c.shareMin) {
+                if (x.c.sp >= PowerStamina(D->rules, w)) { if (x.ctl == 0) ++t.mixNormalDenied; return Act::Power; }
+                if (x.ctl == 0) ++t.mixFloorLifted;
+            }
+            return drawn;
+        }
+        // ch.23 PURSUIT LEASH (apmf/PursuitLeash.cpp: anchor the player, no pursuit past the radius). true = he is outside it and so is
+        // his target: he walks back toward the player instead of closing.
+        [[nodiscard]] bool LeashTurn(Body& x, const Ctl* c, const Body& tg) {
+            if (!c || !(c->leash > 0.0f) || Dist(x, b[0]) <= c->leash || Dist(tg, b[0]) <= c->leash) return false;
+            Move(x, b[0].c.x, b[0].c.y, x.spec->run); if (x.ctl == 0) ++t.leashTurns; return true;
+        }
+        // Card H4 (native/iaus/Reposition.h SpellRange, the game's own function): the distance the spell in his hand is fought at. 0 = none
+        // (no spell in hand, a heal in hand, a weapon drawn, a class that does not cast): the engine's own movement, as before.
+        [[nodiscard]] float HandRange(const Body& x, const Ctl& c) const {
+            if (!c.handSpell || !(c.drawn == PostureKind::None || c.drawn == PostureKind::Staff) || (c.gate.resolved && !c.gate.spellsOnClass)) return 0.0f;
+            for (const SpellEntry& e : c.book.entries) if (e.source == SpellSource::Spell && e.form == c.handSpell && (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control) && e.drop == Prune::Drop::Keep)
+                return Reposition::SpellRange(e, Reach(x)).desired;
+            return 0.0f;
+        }
+        // DODGE (Q-melee-7, MFO-B806). FACT (research in Harbinger Docs, batch M): the engine's side step (CombatBehaviorDodgeThreat) rolls
+        // against the combat style's Avoid Threat chance, and since Harbinger v45 a CLASS style reaches the engine in full (Q-melee-6).
+        // MODEL: one roll per projectile launched at him, only for a follower with a class package, only when no blow of his own is committed and the
+        // projectile flies at least g_dodgeFlight seconds; a rolled step clears a NON-area projectile and costs him 0.4 s. A blast is not stepped out of.
+        void TryDodge(Shot& sh, double flight, bool area) {
+            if (!g_t2.dodge || area) return;
+            Body* d = Find(sh.tgt); if (!d || d->ctl < 0 || !Up(*d) || d->hitAt >= 0 || now < d->staggerUntil || now < d->ctrlUntil || d->act == Act::Block) return;   // MODEL: not while his own blow, shot or cast is committed, staggered, held, or behind his guard
+            Ctl& c = ctl[static_cast<std::size_t>(d->ctl)]; if (!c.pkgClass || c.runPhase == 1 || c.runPhase == 2 || c.runPhase == 5) return;
+            const float p = StyleOf(*d).avoidThreat; if (!(p > 0.0f) || flight < static_cast<double>(g_dodgeFlight)) return;
+            if (d->ctl == 0) ++t.dodgeTries;
+            if (!R.P(std::clamp(p, 0.0f, 1.0f))) return;
+            sh.dodged = true; if (d->ctl == 0) ++t.dodges;
+            const Body* a = Find(sh.src); float ux = 0, uy = 1; if (a) { const float dx = d->c.x - a->c.x, dy = d->c.y - a->c.y, l = std::max(1.0f, std::hypot(dx, dy)); ux = -dy / l; uy = dx / l; }
+            if (R.P(0.5f)) { ux = -ux; uy = -uy; }
+            if (Standable(d->c.x + ux * 90.0f, d->c.y + uy * 90.0f)) { d->c.x += ux * 90.0f; d->c.y += uy * 90.0f; d->movedAt = now; d->ranLast = true; }
+            d->act = Act::None; d->hitAt = -1; d->actEnd = now + 0.4;
+            if (trace) std::fprintf(trace, "%7.2f  DODGE %s side steps a projectile (avoid threat %.2f)\n", now, d->c.name.c_str(), p);
+        }
+        // CARD G7 (Vocabulary.h cond.corpse_within; Harbinger ABI v42 kCastFlag_CorpseTarget): the corpse a Reanimate spell is cast at.
+        // FACT (the opcode's contract, questions 102-104): a dead non-teammate HUMANOID within `within` units (0 = the scan radius), the
+        // spell must be able to raise it (its level cap), the highest level wins, the nearest on a tie. MODEL: humanoid = not a creature,
+        // undead, daedra, dragon or animal spec; a body is raised once; 4096 units stand for the scan radius.
+        [[nodiscard]] const Body* CorpseFor(const Body& x, float within, const SimSpell* s) const {
+            const Body* best = nullptr;
+            for (const Body& o : b) { if (o.role != Role::Foe || o.alive || o.corpseUsed) continue;
+                const ActorSpec& sp = *o.spec; if (sp.creature || sp.undead || sp.daedra || sp.dragon || sp.animal) continue;
+                const float d = Dist(x, o); if (d > 4096.0f || (within > 0.0f && d > within)) continue;
+                if (s && static_cast<float>(o.c.level) > s->ctrlMaxLevel) continue;
+                if (!best || o.c.level > best->c.level || (o.c.level == best->c.level && d < Dist(x, *best))) best = &o; }
             return best;
         }
         void StartSwing(Body& x, Body& tg, Act kind, bool fromIaus) {
@@ -570,6 +697,7 @@ namespace Sim {
             if (power) { dur *= TM::powerMult; hf = TM::powerHitFrac; x.c.sp = std::max(0.0f, x.c.sp - PowerStamina(D->rules, w)); x.regenAt[2] = now + D->rules.delaySp + dur; if (x.ctl == 0) ++t.powerAttacks; }
             if (kind == Act::Bash) { dur = TM::bash; hf = TM::bashHitFrac; x.c.sp = std::max(0.0f, x.c.sp - 20.0f); }
             x.act = kind; x.actTarget = tg.c.id; x.hitAt = now + dur * hf; x.actEnd = now + dur; x.actIaus = fromIaus; x.swingDist = Dist(x, tg);
+            if (x.ctl >= 0 && kind != Act::Bash) { Ctl& c = ctl[static_cast<std::size_t>(x.ctl)]; c.atkWin[c.atkAt] = power ? 1 : 0; c.atkAt = (c.atkAt + 1) % 8; c.atkN = std::min(8, c.atkN + 1); }   // ch.18: one STARTED attack
             Action(x, w.anim == 2 ? dg.soundSilent : dg.soundNormal);   // MODEL: a dagger's detection sound level is Silent, any other swing Normal
             // the defender may read the swing and block it (MODEL: 0.20 x defensive mult, + 0.25 with a shield)
             if (kind != Act::Bash && Up(tg) && !Busy(tg) && tg.spec->hasStyle && (tg.spec->shield || tg.spec->melee.Has()) && !tg.rangedMode && !tg.casterMode && tg.c.targetId == x.c.id) {
@@ -591,7 +719,14 @@ namespace Sim {
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
                 --x.arrows; if (x.ctl == 0) ++t.arrowsShot;
-                shots.push_back({ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, WeaponDamage(D->rules, *x.spec, x.spec->ranged, false), -1, false, x.actIaus, tg->c.x, tg->c.y, 1 });
+                Shot sh{ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, WeaponDamage(D->rules, *x.spec, x.spec->ranged, false), -1, false, x.actIaus, tg->c.x, tg->c.y, 1 };
+                // CARD H5 (ch.29, apmf/AimClaims.cpp; FACT = that file's contract): over his last 10 shots, when the misses plus the shots
+                // in flight reach the class's budget, the next launch is re-aimed at the engine's own unscattered solution.
+                if (x.ctl >= 0 && g_t2.aim) { Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
+                    if (c.aimBudget >= 0) { int miss = 0; for (int i = 0; i < c.aimN; ++i) miss += c.aimWin[i];
+                        if (miss + c.aimFlying >= c.aimBudget) { sh.corrected = true; if (x.ctl == 0) ++t.aimCorrected; } ++c.aimFlying; } }
+                TryDodge(sh, sh.at - now, false);
+                shots.push_back(sh);
             } else if (kind == Act::Cast) {
                 ReleaseCast(x, tg);
             } else if (kind == Act::Drink && x.ctl >= 0) {
@@ -621,6 +756,15 @@ namespace Sim {
                 else { x.c.mp = std::max(0.0f, x.c.mp - x.actCost); x.regenAt[1] = now + D->rules.delayMp; } }
             else { x.c.mp = std::max(0.0f, x.c.mp - x.actCost); x.regenAt[1] = now + D->rules.delayMp; }
             const bool iaus = x.actIaus; const Prune::Nature na = s->e.nature;
+            if (s->reanimate) {   // card G7: the corpse stands up as his thrall for the spell's duration (MODEL: the dead foe's own spec at full health)
+                if (!tg || tg->alive || tg->corpseUsed || tg->role != Role::Foe) { if (x.ctl == 0 && iaus) ++t.wastedCasts; return; }
+                tg->corpseUsed = true; const double until = now + s->summonDur; const auto sp = tg->spec; const float cx = tg->c.x, cy = tg->c.y; const bool party = x.Party();
+                if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].summonUntil[static_cast<std::size_t>(x.actSpell)] = until;
+                if (x.ctl == 0) ++t.raises;
+                if (trace) std::fprintf(trace, "%7.2f  RAISE %s raises %s (level %d) for %.0f s\n", now, x.c.name.c_str(), sp->name.c_str(), sp->level, s->summonDur);
+                Body& n = Add(party ? Role::Summon : Role::Foe, sp, cx, cy); n.downUntil = 0; n.airUntil = -until;   // `x`, `tg` are stale after Add
+                return;
+            }
             if (na == Prune::Nature::Heal) {
                 Body* r = (tg && !s->e.selfDelivery) ? tg : &x; if (!r->alive) r = &x;
                 if (iaus && x.ctl == 0) { ++t.healCasts; }
@@ -645,20 +789,28 @@ namespace Sim {
             }
             if (!tg) { if (x.ctl == 0 && iaus) ++t.wastedCasts; return; }
             if (x.ctl == 0 && iaus && (!Up(*tg) || !Sees(x, *tg))) ++t.wastedCasts;
-            shots.push_back({ now + (s->e.concentration || s->e.touch ? 0.0 : Dist(x, *tg) / TM::spellSpeed), x.c.id, tg->c.id, 0, x.actSpell, false, iaus, tg->c.x, tg->c.y, 1 });
+            Shot sh{ now + (s->e.concentration || s->e.touch ? 0.0 : Dist(x, *tg) / TM::spellSpeed), x.c.id, tg->c.id, 0, x.actSpell, false, iaus, tg->c.x, tg->c.y, 1 };
+            TryDodge(sh, sh.at - now, s->e.areaUnits > 0 || s->e.concentration || s->e.touch);
+            shots.push_back(sh);
         }
         void Land(const Shot& sh) {
             Body* a = Find(sh.src); Body* d = Find(sh.tgt); if (!a) return;
             if (sh.spell < 0) {   // an arrow
-                if (!d || !Up(*d)) return;
+                auto aimNote = [&](bool miss) { if (a->ctl < 0 || !g_t2.aim) return; Ctl& c = ctl[static_cast<std::size_t>(a->ctl)]; if (c.aimBudget < 0) return;
+                    c.aimFlying = std::max(0, c.aimFlying - 1); c.aimWin[c.aimAt] = miss ? 1 : 0; c.aimAt = (c.aimAt + 1) % 10; c.aimN = std::min(10, c.aimN + 1); };   // H5: a launch with no hit event is a miss
+                if (!d || !Up(*d)) { aimNote(true); return; }
+                if (sh.dodged) { aimNote(true); return; }
                 const float moved = std::hypot(d->c.x - sh.x, d->c.y - sh.y);
-                if (!Sees(*a, *d) || (moved > 40.0f && R.P(TM::aimMiss))) return;
+                if (!Sees(*a, *d) || (moved > 40.0f && !sh.corrected && R.P(a->ctl >= 0 ? g_aimMiss : TM::aimMiss))) { aimNote(true); return; }
+                if (g_aimScatter > 0.0f && a->ctl >= 0 && !sh.corrected && R.P(g_aimScatter)) { aimNote(true); return; }   // --aim-scatter: the engine's own random offset as a flat miss chance (MODEL, default none)
+                aimNote(false);
                 if (a->ctl == 0) ++t.arrowsHit;
                 Physical(*a, *d, sh.dmg, false, true, sh.fromIaus); return;
             }
             const SimSpell* s = SpellOf(*a, sh.spell); if (!s) return;
             if (!d) return;
             if (!s->e.concentration && !s->e.touch && (!Sees(*a, *d))) return;   // the bolt hit the pillar
+            if (sh.dodged) return;   // he stepped out of it (TryDodge)
             const bool aimedMiss = !s->e.concentration && s->e.areaUnits <= 0 && Up(*d) && std::hypot(d->c.x - sh.x, d->c.y - sh.y) > 40.0f && R.P(TM::aimMiss);
             if (s->e.areaUnits > 0) {   // everyone inside the blast, friend or foe (marth: never splash the party)
                 if (a->ctl == 0 && sh.fromIaus) ++t.areaCasts;
@@ -672,6 +824,7 @@ namespace Sim {
         void StartCast(Body& x, int idx, const SimSpell& s, std::uint32_t target, float cost, bool fromIaus) {
             x.act = Act::Cast; x.actSpell = idx; x.actTarget = target; x.actCost = cost; x.actIaus = fromIaus;
             x.hitAt = now + s.castSec; x.actEnd = x.hitAt + TM::castRecover; x.c.caster = true; Action(x, dg.soundNormal);
+            if (x.ctl >= 0 && s.e.source == SpellSource::Spell) ctl[static_cast<std::size_t>(x.ctl)].handSpell = s.e.form;   // H4: the spell now in his hand (MODEL: a hand keeps the last spell cast from it)
             if (trace) std::fprintf(trace, "%7.2f  cast %s begins %s -> %u (%s, %.1fs, cost %.0f, mp %.0f)\n", now, x.c.name.c_str(), s.e.name.c_str(), target, fromIaus ? "decision" : "own AI", s.castSec, cost, x.c.mp);
             if (x.role == Role::Foe && (s.e.nature == Prune::Nature::Offense || s.e.nature == Prune::Nature::Heal || s.ctrl)) ++t.foeCasts;
             if (static_cast<std::size_t>(idx) < x.spellReady.size()) x.spellReady[static_cast<std::size_t>(idx)] = x.actEnd + std::max(0.0f, s.recovery);
@@ -734,6 +887,11 @@ namespace Sim {
                 return;
             }
             x.c.fleeing = false;
+            if (c && c->runPhase == 4) {   // batch I back-off (Concealment Kind::BackOff): the drive walks him to the point and DENIES NOTHING. MODEL: he
+                RunMove(x, *c);            // moves every step, and a foe already inside his swing reach is still swung at when his blade is free
+                const Body* cur = Find(c->steer ? c->steer : x.c.targetId);
+                if (!(cur && Up(*cur) && !cur->Party() && now >= x.think && (c->drawn == PostureKind::Melee || c->drawn == PostureKind::Silver) && Dist(x, *cur) <= Reach(x) * 0.9f)) return;
+            } else
             if (c && c->runPhase) { RunMove(x, *c); return; }   // card G3: the H3 drive owns his body (ch.24 on the point + the ch.7 deny): he runs there and holds, no swing, no shot
             if (c && now < x.holdUntil) { if (x.ctl == 0) t.holdSec += TM::dt; return; }   // G2's hold row: still and quiet (ch.1 movement block + ch.7 deny)
             if (c && now < c->moveUntil) {   // a reposition order: he goes there first (sprint = x1.5, stamina 8 / s: MODEL)
@@ -752,6 +910,7 @@ namespace Sim {
             if (taunted) { Body* tb = Find(x.tauntBy); if (tb && Up(*tb)) tg = tb; else x.tauntUntil = 0; }
             else if (c && c->steer) { Body* s = Find(c->steer); if (s && Up(*s) && !s->Party()) tg = s; else c->steer = 0; }
             if (tg && x.role == Role::Foe && !taunted && !GroupHas(*tg)) tg = nullptr;   // its group lost him
+            if (tg && x.role == Role::Foe && !taunted && g_t2.dnd && now < tg->dndUntil) x.retargetAt = now;   // --disengage-dnd: he is no valid target now, the foe selects again (PickTarget keeps him only when nobody else stands)
             if (!tg || !Up(*tg) || (tg->Party() == x.Party() && now >= x.frenzyUntil) || (!taunted && !(c && c->steer) && now >= x.retargetAt)) {
                 tg = PickTarget(x); x.retargetAt = now + R.U(3, 7);
             }
@@ -780,14 +939,16 @@ namespace Sim {
                         if (s && s->e.nature == Prune::Nature::Offense && cost <= x.c.mp && !(x.ctl >= 0 && c->book.entries[i].source != SpellSource::Spell)) anyAfford = true; } }
                 if (anyAfford || (x.Party() && x.c.mp > 0.15f * x.c.mpMax)) {
                     const float want = 750.0f;
-                    if (!los || d > want * 1.4f) Move(x, tg->c.x, tg->c.y, x.spec->run);
+                    float far = want * 1.4f;   // the lab's standoff before card H4
+                    if (g_t2.range && c) { const float des = HandRange(x, *c); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
+                    if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                     else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
                     return;
                 }
                 x.casterMode = false;
             }
             if (x.rangedMode) {
-                if (!los || d > r.rangedDist * 1.6f) { Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
+                if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
                 if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; const float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + R.U(TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
@@ -805,11 +966,52 @@ namespace Sim {
             const bool tgBlocking = now < tg->blockUntil, tgStag = now < tg->staggerUntil, tgCasting = tg->act == Act::Cast && tg->hitAt >= 0;
             const Weapon& w = x.spec->melee;
             Act kind = Act::Swing;
-            const bool engPower = !c || c->gate.powerAttack || !c->gate.resolved;   // a class without a power share does not power attack on its own (the ch.18 share denies it)
+            // Before batch S the lab let only a class with a power row or share power attack on its own. Card C8 as built (apmf/AttackMix.cpp):
+            // a class with NO ch.18 rule files nothing, so the engine draws its own power attacks; a rule only denies (MixGate).
+            const bool mix = c && g_t2.c8;
+            const bool engPower = mix || !c || c->gate.powerAttack || !c->gate.resolved;
             if (x.spec->shield && (tgCasting || tgBlocking) && R.P(std::clamp(0.18f * st.bash, 0.0f, 0.6f)) && x.c.sp >= 20) kind = Act::Bash;
             else if (engPower && x.c.sp >= PowerStamina(r, w) && R.P(std::clamp(0.12f * st.off * (c ? c->powerShare : 1.0f) * (tgBlocking ? 1.5f * st.powBlocking : 1.0f) * (tgStag ? 1.3f * st.powStaggered : 1.0f), 0.0f, 0.6f))) kind = Act::Power;
+            if (mix && kind != Act::Bash) kind = MixGate(x, *c, kind, w);
+            if (x.ctl == 0 && kind == Act::Power) ++t.engPower;
             StartSwing(x, *tg, kind, false);
             x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) / std::max(0.25f, st.off);
+        }
+        // Q-SIM-5 (marth 11-11: "why wouldnt a follower be able to move and do an action. I believe he should"): what his FEET do while
+        // his hands are busy with a weapon swap, a potion or a cast. Every deliberate movement Brain() would make, and nothing else: no
+        // target pick, no action, no draw from R. No slowdown is applied: no sourced engine value for one exists in Docs/research (MODEL,
+        // question Q-S-1). --feet-stop never calls this.
+        void Feet(Body& x) {
+            Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
+            if (c.runPhase) { RunMove(x, c); return; }
+            if (x.ctl == 0) t.feetSec += TM::dt;
+            const Body* threat = nullptr; { float bd = 1e9f; for (const Body& o : b) if (Up(o) && o.Party() != x.Party()) { const float d = Dist(x, o); if (d < bd) { bd = d; threat = &o; } } }
+            if (!threat) return;
+            if (now < x.fleeUntil || now < x.retreatUntil) {
+                Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
+                if (now < x.retreatUntil && x.ctl == 0) t.retreatSec += TM::dt;
+                return;
+            }
+            if (now < x.holdUntil) return;
+            if (now < c.moveUntil) {
+                const float gd = std::hypot(c.goalX - x.c.x, c.goalY - x.c.y);
+                if (c.moveFight && gd <= 300.0f) c.moveUntil = 0;
+                else if (gd > 40.0f) { Move(x, c.goalX, c.goalY, x.spec->run); Face(x, c.goalX, c.goalY); if (x.ctl == 0) t.moveOrderSec += TM::dt; return; }
+            }
+            const Body* tg = Find(c.steer ? c.steer : x.c.targetId); if (!tg || !Up(*tg) || tg->Party()) return;
+            const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
+            if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
+                float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
+                if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
+                else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
+            } else if (c.drawn == PostureKind::Bow) {
+                if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
+                else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
+            } else if (c.drawn != PostureKind::Staff) {   // Melee, Silver, or bare hands (Brain's hasMelee)
+                const float reach = Reach(x);
+                if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }
+                if (d > reach * 0.9f && !tg->c.outOfMeleeReach) Move(x, tg->c.x, tg->c.y, x.spec->run);
+            }
         }
 
         // ── one 30 Hz step of the world (the followers' decision layer is served by the caller's policy) ──
@@ -875,7 +1077,13 @@ namespace Sim {
             }
             for (std::size_t i = 0; i < shots.size();) { if (shots[i].at <= now) { const Shot s = shots[i]; shots[i] = shots.back(); shots.pop_back(); Land(s); } else ++i; }
             for (std::size_t i = 0; i < b.size(); ++i) { Body& x = b[i]; if (!Up(x)) continue;
-                if (Busy(x)) { if (x.ctl >= 0 && ctl[static_cast<std::size_t>(x.ctl)].runPhase && (x.act == Act::Swap || x.act == Act::Drink || x.act == Act::Cast) && now >= x.staggerUntil && now >= x.ctrlUntil) RunMove(x, ctl[static_cast<std::size_t>(x.ctl)]); continue; }
+                if (Busy(x)) {
+                    if (x.ctl >= 0 && now < x.actEnd && (x.act == Act::Swap || x.act == Act::Drink || x.act == Act::Cast) && now >= x.staggerUntil && now >= x.ctrlUntil) {
+                        if (g_t2.feet) Feet(x);                                                           // Q-SIM-5: his feet go on under every deliberate movement
+                        else if (ctl[static_cast<std::size_t>(x.ctl)].runPhase) RunMove(x, ctl[static_cast<std::size_t>(x.ctl)]);   // --feet-stop: only a G3 run did (section 30.2)
+                    }
+                    if (x.ctl == 0 && x.act == Act::Block && x.actIaus) t.guardSec += TM::dt;
+                    continue; }
                 if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
             // tallies that integrate over time
             Body& pl = Player(); bool pressed = false; bool anyFoe = false, anyParty = false;
@@ -884,6 +1092,10 @@ namespace Sim {
             if (pl.alive) t.playerMinHp = std::min(t.playerMinHp, double(pl.c.hp / std::max(1.0f, pl.c.hpMax))); else t.playerMinHp = 0;
             if (!ctl.empty()) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; if (Up(s0)) { t.upSec += TM::dt; const std::size_t ai = now < s0.actEnd ? static_cast<std::size_t>(s0.act) : 0; t.bodySec[ai] += TM::dt; if (ai && s0.actIaus) t.bodyIausSec[ai] += TM::dt; } }
             if (!ctl.empty()) { Ctl& c0 = ctl[0]; const Body& s0 = b[static_cast<std::size_t>(c0.body)];
+                if (c0.runMeasured && c0.runSafeAt < 0) {   // section 31.9: the first moment after a G3 run began with no foe inside 400 units of him (20 s cap, or he went down)
+                    bool near = false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Dist(o, s0) < 400.0f) { near = true; break; }
+                    if (!Up(s0) || now - c0.runStart > 20.0) c0.runMeasured = false;
+                    else if (!near) { c0.runSafeAt = now; ++t.runsSafe; t.runSafeSec += now - c0.runStart; c0.runMeasured = false; } }
                 if (Up(s0)) PlaystyleTally(c0, s0);
                 if (pressed && c0.pressureSince < 0) c0.pressureSince = now; if (!pressed) c0.pressureSince = -1;
                 t.mpSum += s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1; t.hpSum += s0.c.hp / std::max(1.0f, s0.c.hpMax); t.spSum += s0.c.spMax > 0 ? s0.c.sp / s0.c.spMax : 1; ++t.resN;

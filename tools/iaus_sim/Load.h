@@ -3,6 +3,7 @@
 #include "iaus_sim/Data.h"
 
 #include <cstdio>
+#include <tuple>
 
 namespace Sim {
 
@@ -144,6 +145,10 @@ namespace Sim {
         SimSpell para = Fx("Paralyze", N::Control, kAvAlteration, -1, 450, 0, 0, 0, 0.5f, 75); para.ctrlPar = true; para.ctrlDur = 10;
         SimSpell atro = Fx("ConjureFlameAtronach", N::Summon, kAvConjuration, -1, 150, 0, 0, 0, 0.5f, 25);
         for (SimSpell* s : { &flames, &fb, &is, &lb, &fball, &heal, &fheal, &hh, &oak, &fear, &para, &atro }) { ++b.rawSpells; ++b.taughtSpells; AddPoolSpell(b, SimSpell(*s)); }
+        // card G7 fixtures (hand-written, the SHAPE of Skyrim.esm's Raise Zombie .. Dead Thrall ladder: a level cap that grows with the tier, 60 s; the numbers are fixtures, not read from the game)
+        if (g_t2.reanimate) for (const auto& rz : { std::tuple<const char*, float, float, int>{ "FixRaiseZombie", 103.0f, 6.0f, 0 }, { "FixReanimateCorpse", 144.0f, 13.0f, 25 }, { "FixRevenant", 235.0f, 21.0f, 50 }, { "FixDreadZombie", 314.0f, 30.0f, 75 }, { "FixDeadThrall", 1000.0f, 40.0f, 100 } }) {
+            SimSpell z = Fx(std::get<0>(rz), N::Unknown, kAvConjuration, -1, std::get<1>(rz), 0, 0, 0, 0.5f, std::get<3>(rz)); z.reanimate = true; z.ctrlMaxLevel = std::get<2>(rz); z.summonDur = 60; z.e.drop = Prune::Drop::UnknownNature;
+            ++b.rawSpells; ++b.taughtSpells; AddPoolSpell(b, std::move(z)); }
         b.foeSpells = { fb, is, lb, hh, flames, fball }; for (auto& s : b.foeSpells) s.e.cost = s.cost0;
         for (const SimSpell* s : { &fball, &fheal, &para, &lb }) { SimSpell sc = *s; sc.e.source = SpellSource::Scroll; sc.e.cost = 0; sc.cost0 = 0; sc.e.name = "Scroll" + s->e.name; b.scrolls.push_back(sc); }
         SimSpell breath = Fx("FireBreath", N::Offense, -1, kAvResistFire, 0, 60, 0, 12, 0.8f); breath.recovery = 8; breath.dot = 6; breath.dotDur = 5; b.foeSpells.push_back(breath);
@@ -203,7 +208,7 @@ namespace Sim {
         if (tok == "area") return off && s.e.areaUnits > 0 && !s.e.selfDelivery; if (tok == "paralyze") return s.ctrlPar; if (tok == "fear") return s.ctrlFlee && !s.turnUndead;
         if (tok == "heal") return s.e.nature == Prune::Nature::Heal && s.e.selfDelivery; if (tok == "healOther") return s.healOther;
         if (tok == "fire" || tok == "frost" || tok == "shock") return off && s.element == tok && s.e.areaUnits <= 0 && !s.e.touch && !s.e.selfDelivery;
-        if (tok == "armor") return s.armor > 0; if (tok == "summon") return s.summon;
+        if (tok == "armor") return s.armor > 0; if (tok == "summon") return s.summon; if (tok == "reanimate") return s.reanimate;
         return false;
     }
 
@@ -263,7 +268,7 @@ namespace Sim {
         if (ensure) for (const std::string& tok : *ensure) {   // a scenario needs him to know one: the dearest he can afford twice, else the cheapest
             bool have = false; for (const SimSpell& s : fb.spells) have |= SpellIs(s, tok); if (have) continue;
             const SimSpell* pick = nullptr; const SimSpell* cheap = nullptr;
-            for (const SimSpell& s : D.spells) { if (!SpellIs(s, tok)) continue; const float c0 = costOf(s); if (!cheap || c0 < costOf(*cheap)) cheap = &s; if (c0 <= a.mp * 0.45f && (!pick || c0 > costOf(*pick))) pick = &s; }
+            for (const SimSpell& s : (tok == "reanimate" ? D.reanimSpells : D.spells)) { if (!SpellIs(s, tok)) continue; const float c0 = costOf(s); if (!cheap || c0 < costOf(*cheap)) cheap = &s; if (c0 <= a.mp * 0.45f && (!pick || c0 > costOf(*pick))) pick = &s; }
             if (!pick) pick = cheap; if (pick) fb.spells.push_back(*pick);
         }
         if (kc.staff && withKit && R.I(0, 1) == 0) {   // a staff: an entry with no magicka cost and charges

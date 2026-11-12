@@ -49,12 +49,17 @@ namespace Sim {
 
     // Concealment::Prepare: true when a FRESH point is known (younger than 3 s, of the kind asked). At most one pick per 1.5 s;
     // its answer lands a few frames later (0.1 s), so the lap that asks never has it.
-    inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) {
+    // kind (Concealment::Kind, batch I): 0 hide, 1 flee, 2 back-off (picked like a flee: a point away, no cover), 3 the hidden step
+    // (its own candidates, for one foe). ONE pick slot per follower: a pick of another kind replaces the one before (MFO-B830).
+    inline bool PreparePickKind(const Fight& F, const Ctl& c, const Body& self, int kind, std::uint32_t target = 0, bool bow = false) {
         Ctl::Pick& p = c.pick;
-        const bool fresh = p.valid && p.flee == flee && F.now >= p.readyAt && F.now - p.readyAt < 3.0;
-        if (F.now - p.askedAt >= 1.5) { p.askedAt = F.now; float gx = 0, gy = 0; p.valid = F.ConcealPick(self, c, flee, gx, gy); p.flee = flee; p.x = gx; p.y = gy; p.readyAt = F.now + 0.1; return fresh && p.valid; }
+        const bool fresh = p.valid && p.kind == kind && (kind != 3 || p.target == target) && F.now >= p.readyAt && F.now - p.readyAt < 3.0;
+        if (F.now - p.askedAt >= 1.5) { p.askedAt = F.now; float gx = 0, gy = 0;
+            p.valid = kind == 3 ? F.StepPick(self, c, target, bow, gx, gy) : F.ConcealPick(self, c, kind != 0, gx, gy);
+            p.flee = kind == 1; p.kind = kind; p.target = target; p.x = gx; p.y = gy; p.readyAt = F.now + 0.1; return fresh && p.valid; }
         return fresh;
     }
+    inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) { return PreparePickKind(F, c, self, flee ? 1 : 0); }
 
     inline void MakeSnapshot(const Fight& F, int ci, Snapshot& sn) {
         const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& self = F.b[static_cast<std::size_t>(c.body)];
@@ -70,7 +75,7 @@ namespace Sim {
             if (&o == &self || !o.alive) continue;
             if (o.role == Role::Foe) {
                 if (o.c.downed) continue;
-                Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode; k.swinging = (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;
+                Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode; k.swinging = g_fillSwing && (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;   // swinging: [Debug] bIausFillSwing (--no-fill-swing = the shipped default)
                 if (!F.tauntVisible) k.taunted = false;
                 k.detectsMe = detects;
                 const Body* tg = F.Find(o.c.targetId);
@@ -105,7 +110,12 @@ namespace Sim {
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
         if (g_learnReach && c.reach[0].Known()) sn.swingReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
-        sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad; sn.groundRoad = g_groundRoad; sn.blockRoad = g_blockRoad; sn.bashRoad = g_bashRoad;
+        sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad; sn.groundRoad = g_groundRoad; sn.bashRoad = g_bashRoad;
+        // The held guard (iaus/Candidates.cpp): Harbinger serves ch.31 Block and his hands can block now (MODEL: a melee weapon is drawn).
+        // guardHeld = a request of his is out or the guard is up (APMFBridge::BlockHoldLive). --roads block keeps the older lab switch.
+        sn.blockRoad = g_blockRoad || (g_t2.block && sn.meleeInRightHand && self.spec->melee.Has());
+        sn.guardHeld = g_t2.block && self.act == Act::Block && self.actIaus && F.now < self.blockUntil;
+        sn.equippedSpell = g_t2.range ? c.handSpell : 0u;   // card H4: Snapshot::equippedSpell (MODEL: the last book spell he cast is the one in his hand)
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
@@ -115,11 +125,23 @@ namespace Sim {
         if (g_stealth > 0) {   // the stance, the hold road, card G3's road and its point (iaus/Candidates.cpp Prepare, mirrored)
             sn.selfSneaking = self.stealthy && self.sneaking; sn.hideRoad = g_stealth >= 2 && sn.selfSneaking;
             sn.concealRoad = g_stealth >= 3; sn.fleeRun = sn.concealRoad && c.runPhase == 3;
+            bool hideOrFlee = false;
             if (sn.concealRoad && c.runPhase == 0 && !c.stanceHeld) {
                 const float hpPct = self.c.hpMax > 0.0f ? self.c.hp / self.c.hpMax : 1.0f;
-                const bool hide = c.gate.sneakClass && c.gate.disengage && Disengage::Found(sn);
-                const bool flee = !c.gate.sneakClass && c.gate.treeOn && c.gate.disengage && hpPct <= Disengage::kFleeHealthLine && Disengage::Threatened(sn);
+                const bool hide = !g_noG3 && c.gate.sneakClass && c.gate.disengage && Disengage::Found(sn);
+                const bool flee = !g_noG3 && !c.gate.sneakClass && c.gate.treeOn && c.gate.disengage && hpPct <= Disengage::kFleeHealthLine && Disengage::Threatened(sn);
                 if (hide || flee) sn.concealPoint = PreparePick(F, c, self, !hide);
+                hideOrFlee = hide || flee;
+            }
+            if (sn.concealRoad && c.runPhase == 0) {   // a held stance (the hidden hold) does not bar these two: it is where the step is for
+                // BATCH I (iaus/Candidates.cpp, mirrored): the two other short H3 runs share the hide road's switch and the ONE pick slot. A pick
+                // is asked only while the generator could use it, and never while a hide or a flee is wanted.
+                sn.backOffRoad = (g_t2.range && c.gate.spellsOnClass) || (g_t2.backoff && c.gate.backOffPressed);   // the road is the hide road's; the lab's switches gate WHO has a need
+                sn.stepRoad = g_t2.step;
+                if (!hideOrFlee && !sn.foes.empty()) {
+                    if (sn.backOffRoad && Reposition::BackOffNeed(sn, c.gate) > 0.0f) sn.backOffPoint = PreparePickKind(F, c, self, 2);
+                    else if (sn.stepRoad) { if (const Combatant* tgt = Reposition::StepTarget(sn)) sn.stepPoint = PreparePickKind(F, c, self, 3, tgt->id, sn.drawn == PostureKind::Bow); }
+                }
             }
         }
         for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
@@ -153,6 +175,7 @@ namespace Sim {
     inline void EndRun(Fight& F, int ci, bool keepStance, int how) {   // how: 0 the purpose was met (hidden / healed), 1 ended without it (arrived / hit), 2 FAILED, 3 he went down on the run
         Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const bool flee = c.runPhase == 3; const Body& x = F.b[static_cast<std::size_t>(c.body)];
         if (F.trace) std::fprintf(F.trace, "%7.2f  G3 %s: %s run over (%s)%s\n", F.now, x.c.name.c_str(), flee ? "flee" : "hide", how == 0 ? (flee ? "healed past the line" : "hidden") : how == 1 ? (flee ? "arrived" : "hit at the point") : how == 3 ? "he went down" : "FAILED", keepStance ? ", the stance is kept for the hold row" : "");
+        if (ci == 0) F.t.runLenSec += F.now - c.runStart;
         if (ci == 0 && how == 3) ++F.t.runDowns;
         else if (ci == 0) { Tally& t = F.t; if (flee) { (how == 0 ? t.fleeHealed : how == 1 ? t.fleeArrived : t.fleeFail)++; t.fleeHpGain += static_cast<double>((x.c.hp - c.runHp) / std::max(1.0f, x.c.hpMax)); } else if (how == 0) ++t.hideOk; else if (how == 2) ++t.hideFail; }
         c.runPhase = 0; c.hiddenReads = 0; c.stanceHeld = keepStance; c.firedAt[CooldownId(DisengageKey())] = F.now;
@@ -160,13 +183,31 @@ namespace Sim {
     // fromOracle: the oracle's own flee may start above the 30% line; it then ends 15 points of health above where it began.
     inline bool BeginRun(Fight& F, int ci, bool flee, bool fromOracle = false) {
         Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)];
-        if (c.runPhase != 0 || !c.pick.valid || c.pick.flee != flee || !Fight::Up(x)) return false;
+        if (c.runPhase != 0 || !c.pick.valid || c.pick.kind != (flee ? 1 : 0) || !Fight::Up(x)) return false;
+        if (ci == 0) { ++F.t.runsBegun; c.runMeasured = true; c.runSafeAt = -1; }
+        if (g_t2.dnd) { x.dndUntil = F.now + 6.0; if (ci == 0) ++F.t.dndRuns; }   // --disengage-dnd: started by the disengage pick, 6 s, every foe
         c.runPhase = flee ? 3 : 1; c.runStart = F.now; c.runX = c.pick.x; c.runY = c.pick.y; c.hiddenReads = 0; c.runHp = x.c.hp; c.pick.valid = false;   // Begin consumes the pick
         c.steer = 0; c.moveUntil = 0; x.holdUntil = 0; x.retreatUntil = 0; c.runFromOracle = fromOracle;
         c.fleeLine = fromOracle ? std::max(Disengage::kFleeHealthLine, x.c.hp / std::max(1.0f, x.c.hpMax) + 0.15f) : Disengage::kFleeHealthLine;
         if (ci == 0) { if (flee) ++F.t.flees; else ++F.t.hides; }
         if (F.trace) std::fprintf(F.trace, "%7.2f  G3 %s: %s run begins -> (%.0f, %.0f), %.0f units\n", F.now, x.c.name.c_str(), flee ? "flee" : "hide", c.runX, c.runY, std::hypot(c.runX - x.c.x, c.runY - x.c.y));
         return true;
+    }
+    // BATCH I: the two short runs (Concealment Kind::BackOff / Kind::Step). They do not stamp the Disengage cooldown (their families pace
+    // themselves: Tuning::backOffCooldownSec / stepCooldownSec from the fire) and they are not counted as G3 runs.
+    inline bool BeginShortRun(Fight& F, int ci, int kind) {
+        Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)];
+        if (c.runPhase != 0 || !c.pick.valid || c.pick.kind != kind || !Fight::Up(x)) return false;
+        c.runPhase = kind == 2 ? 4 : 5; c.runStart = F.now; c.runX = c.pick.x; c.runY = c.pick.y; c.hiddenReads = 0; c.runHp = x.c.hp; c.pick.valid = false;
+        c.moveUntil = 0; x.holdUntil = 0; x.retreatUntil = 0; c.runFromOracle = false; if (kind == 3) c.steer = 0;
+        if (ci == 0) { if (kind == 2) ++F.t.backOffs; else ++F.t.steps; }
+        if (F.trace) std::fprintf(F.trace, "%7.2f  %s %s: run begins -> (%.0f, %.0f), %.0f units\n", F.now, kind == 2 ? "BACK-OFF" : "STEP", x.c.name.c_str(), c.runX, c.runY, std::hypot(c.runX - x.c.x, c.runY - x.c.y));
+        return true;
+    }
+    inline void EndShortRun(Fight& F, int ci, bool keepStance, const char* why) {
+        Ctl& c = F.ctl[static_cast<std::size_t>(ci)];
+        if (F.trace) std::fprintf(F.trace, "%7.2f  %s %s: run over (%s)\n", F.now, c.runPhase == 4 ? "BACK-OFF" : "STEP", F.b[static_cast<std::size_t>(c.body)].c.name.c_str(), why);
+        c.runPhase = 0; c.hiddenReads = 0; if (keepStance) c.stanceHeld = true;
     }
     // Once per lap of that follower, before his decision. true = the run holds him (his scan is skipped this lap).
     inline bool ServiceRunOnce(Fight& F, int ci);
@@ -178,8 +219,19 @@ namespace Sim {
     inline bool ServiceRunOnce(Fight& F, int ci) {
         Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)];
         if (c.runPhase == 0) { if (c.stanceHeld && F.GroupDetects(x)) c.stanceHeld = false; return false; }   // a reveal ends the hide hold's claim
-        if (!Fight::Up(x)) { EndRun(F, ci, false, 3); return false; }
+        if (!Fight::Up(x)) { if (c.runPhase >= 4) EndShortRun(F, ci, false, "he went down"); else EndRun(F, ci, false, 3); return false; }
         const float d = std::hypot(c.runX - x.c.x, c.runY - x.c.y);
+        if (c.runPhase == 4) {   // BACK-OFF: his scan is NOT skipped (he keeps fighting on the way). Ends on arrival or at the 5 s cap (kBackOffMaxMs)
+            if (d <= 90.0f) { if (ci == 0) ++F.t.backOffArrived; EndShortRun(F, ci, false, "backed off to the point; he fights on from there"); }
+            else if (F.now - c.runStart > 5.0) EndShortRun(F, ci, false, "he did not reach the point in 5 s");
+            return false;
+        }
+        if (c.runPhase == 5) {   // HIDDEN STEP: quiet (his scan is skipped, the drive denies every attack and cast). The moment a foe's group has him it stops
+            if (F.GroupDetects(x)) { if (ci == 0) ++F.t.stepRevealed; EndShortRun(F, ci, false, "a foe detects him: the step stops"); return false; }
+            if (d <= 90.0f) { if (ci == 0) ++F.t.stepArrived; EndShortRun(F, ci, true, "arrived: hidden at the new spot, the hold row looks again"); return false; }
+            if (F.now - c.runStart > 8.0) { EndShortRun(F, ci, false, "he did not reach the step's point in 8 s"); return false; }
+            return true;
+        }
         if (c.runPhase == 3) {
             if (x.c.hp > c.fleeLine * x.c.hpMax) EndRun(F, ci, false, 0);
             else if (d <= 90.0f) EndRun(F, ci, false, 1);
@@ -213,8 +265,11 @@ namespace Sim {
             if (subj && c.steer != tg->c.id && c.lastTarget && c.lastTarget != tg->c.id) {}
             c.steer = tg->c.id; c.lastTarget = tg->c.id; peel(); return Fired::Yes;
         case Family::PowerAttack: {
-            if (bodyHeld) return Fired::Declined;
-            if (x.c.sp < PowerStamina(F.D->rules, x.spec->melee)) return Fired::Declined;
+            // The engine's road (Harbinger ch.31 kCombatMove_PowerAttack, Q82): the move is asked, and when the game refuses it (an attack
+            // under way, staggered, no stamina) the gambit's cooldown is given back (Q-melee-4, Cooldowns::Forget). In the lab a refusal is
+            // Declined, which never stamps the cooldown: the same end state. The refusals are counted.
+            if (bodyHeld) { if (subj) ++t.powRefused; return Fired::Declined; }
+            if (x.c.sp < PowerStamina(F.D->rules, x.spec->melee)) { if (subj) ++t.powRefused; return Fired::Declined; }
             c.steer = tg->c.id; peel();
             if (Fight::Dist(x, *tg) > F.Reach(x) * 0.95f || tg->c.outOfMeleeReach) return Fired::Declined;   // closes first (the steer stands)
             F.StartSwing(x, *tg, Act::Power, true); return Fired::Yes; }
@@ -232,7 +287,22 @@ namespace Sim {
         case Family::GiveGround: { if (!tg || !Fight::Up(*tg)) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
             const float dx = x.c.x - tg->c.x, dy = x.c.y - tg->c.y, l = std::max(1.0f, std::hypot(dx, dy));
             c.goalX = x.c.x + dx / l * 500.0f; c.goalY = x.c.y + dy / l * 500.0f; c.moveUntil = F.now + 2.0; c.sprint = false; c.moveFight = false; if (subj) ++t.grounds; return Fired::Yes; }
-        case Family::Block: { if (bodyHeld) return Fired::Declined; x.act = Act::Block; x.blockUntil = F.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; if (subj) ++t.blocks; return Fired::Yes; }
+        case Family::Block: {
+            if (!g_t2.block) { if (bodyHeld) return Fired::Declined; x.act = Act::Block; x.blockUntil = F.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; if (subj) ++t.blocks; return Fired::Yes; }   // the lab's own 1.5 s guard of section 26 (--roads block before batch S)
+            // THE HELD GUARD (Harbinger ch.31 kCombatMove_Block, ABI v43; apmf/BlockClaims.cpp, Q-melee-1 / Q-melee-3). FACT (that file and
+            // MFO.ini): one raise holds fBlockHoldSeconds = 2.5 s; asking again past 60% of the window renews it, at most once
+            // (kMaxRenewals), and after ANY hold ends no new guard is asked for 1.5 s (kRest). While it stands his own offense does not
+            // run: his body is busy until blockUntil (World.h Busy) and Generate offers nothing that would drop it (Snapshot::guardHeld).
+            const bool live = x.act == Act::Block && x.actIaus && F.now < x.blockUntil;
+            if (live) {
+                if (c.blockRenewals >= 1 || F.now < x.blockUntil - 0.4 * 2.5) return Fired::Declined;
+                ++c.blockRenewals; x.blockUntil = F.now + 2.5; x.actEnd = x.blockUntil; c.blockRestUntil = x.blockUntil + 1.5; if (subj) ++t.blockRenewals; return Fired::Yes;
+            }
+            if (bodyHeld || F.now < c.blockRestUntil || !x.spec->melee.Has()) return Fired::Declined;
+            x.act = Act::Block; x.blockUntil = F.now + 2.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.blockRenewals = 0; c.blockRestUntil = x.blockUntil + 1.5;
+            if (subj) ++t.blocks; return Fired::Yes; }
+        case Family::BackOff: return BeginShortRun(F, ci, 2) ? Fired::Yes : Fired::Declined;
+        case Family::Step:    return BeginShortRun(F, ci, 3) ? Fired::Yes : Fired::Declined;
         case Family::Bash: { if (!tg || !Fight::Up(*tg) || tg->Party()) return Fired::Invalid; if (bodyHeld || x.c.sp < 20.0f || Fight::Dist(x, *tg) > F.Reach(x) * 1.1f) return Fired::Declined;
             F.StartSwing(x, *tg, Act::Bash, true); if (subj) ++t.bashes; return Fired::Yes; }
         case Family::Regroup: { if (!tg || !Fight::Up(*tg) || !tg->Party()) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
