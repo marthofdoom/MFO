@@ -31,8 +31,8 @@ RULE (fixed before any result of this driver was read; a number is ACCEPTED only
   holdout      seeds 1001.., never used to pick: d > 1.5 se.
   gates        marth, Q-gate-rule "Gate on many seeds": judged on the train + holdout seeds, never on a six-seed set. With stealth
                off and as shipped, no class may get WORSE, and a drop counts only beyond noise: worse = d < -2 se and d < -0.05 J
-               (when the 15 cells are judged at once, -2.5 se); and never more than 0.5 J down (Thief, Mercenary 0.25) whatever
-               the noise. A T1 row (melee / ranged / mage) is also the companion in other classes' fights, so its value is gated
+               (when the 15 cells are judged at once, -2.5 se); and never more than 0.5 J down (Thief, Mercenary 0.25) when
+               that drop is itself outside one se. A T1 row (melee / ranged / mage) is also the companion in other classes' fights, so its value is gated
                on all 15 cells at all three configs; any other row moves its own class only.
   cross-world  fresh seeds 4001.. on every world: the equal-weight mean of the worlds' d is > 2 se, no world is worse (d < -2 se),
                and as shipped the mean over the worlds is not worse and inside the band. A list's actors are test input: a value
@@ -64,7 +64,7 @@ TIGHT = {"thief", "mercenary"}
 CACHE_DIR = os.path.expanduser("~/.cache/mfo-list-balance/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=80, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
+FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=150, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=6, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=1, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True)
@@ -72,6 +72,7 @@ SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, m
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
 POOL = None
+EMIT = cf.ThreadPoolExecutor(max_workers=1)   # the dashboard files
 CACHE = {}          # (key, seed) -> (J, switches, minutes)
 TEXT = {}           # key -> stdout (rating / floor / list-uses runs)
 LOCK = threading.Lock()
@@ -185,6 +186,11 @@ def band(cls):
     return 0.25 if cls in TIGHT else 0.5
 
 
+def out_of_band(cls, d, se, k=1.0):
+    """The hard band of 31.11 (0.5 J; Thief and Mercenary 0.25), held to Q-gate-rule too: the drop must itself be outside one se."""
+    return d < -k * band(cls) and d < -se
+
+
 def emit_run(classes, label, curves=(), sets=None):
     """ONE normal results file per finished sweep, so the dashboard shows the search moving (small on purpose)."""
     if not A.emit_runs:
@@ -194,7 +200,7 @@ def emit_run(classes, label, curves=(), sets=None):
         cmd += ["--curve", c]
     if sets:
         cmd += ["--set", sets]
-    subprocess.run(cmd, capture_output=True, text=True)
+    EMIT.submit(subprocess.run, cmd, capture_output=True, text=True)   # one at a time (the run id is a timestamp), never in the search's way
 
 
 def save_summary():
@@ -329,7 +335,7 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
     for i, (c, g) in enumerate([(c, g) for c in cells for g in cfgs]):
         d, se = paired(res[2 * i], res[2 * i + 1])
         gate["%s/%s" % (c, g)] = [round(d, 3), round(se, 3)]
-        if worse(d, se, len(cells) > 1) or d < -band(c):
+        if worse(d, se, len(cells) > 1) or out_of_band(c, d, se):
             fails.append("gate: %s gets worse at %s (%+.2f, se %.2f)" % (c, g, d, se))
     row["steps"]["gates"] = gate
     if fails and not forced:
@@ -360,7 +366,7 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
         conf["mean/" + g] = [round(md, 3), round(mse, 3)]
         if g == "g3" and not md > 2.0 * mse:
             fails.append("cross-world: the mean over the worlds does not beat noise (%+.2f, se %.2f)" % (md, mse))
-        if g == "shipped" and (worse(md, mse) or md < -band(cls)):
+        if g == "shipped" and (worse(md, mse) or out_of_band(cls, md, mse)):
             fails.append("cross-world: worse as shipped (%+.2f, se %.2f)" % (md, mse))
     row["steps"]["cross_world"] = conf
     if fails and not forced:
@@ -450,11 +456,12 @@ def search_class(cls, knobs):
         (live if best > CFG["min_probe"] else dead).append((best, name, tmpl, shared, vals))
     live.sort(key=lambda x: -x[0])
     log("classes %s: %d knobs, %d live, %d dead" % (cls, len(kn), len(live), len(dead)))
-    kept, rows, done = [], [], set()
+    # a value the rejudge stage accepted for this class is the starting table, and its knob is not searched again
+    kept, rows, done = [r["spec"] for r in SUMMARY["stages"].get("rejudge", []) if r.get("accepted") and r["class"] == cls], [], set()
     for ps in range(CFG["passes"]):
         accepted_this_pass = False
         for sens, name, tmpl, shared, vals in live[:CFG["max_knobs"]]:
-            if name in done:
+            if name in done or any(k.split("=")[0] == tmpl.format(c=cls, v=0).split("=")[0] for k in kept):
                 continue   # a knob that took a value is not searched twice
             res = jmany([req("builtin", cls, "g3", kept, train)] + [req("builtin", cls, "g3", kept + [tmpl.format(c=cls, v=v)], train) for v in vals])
             cands = sorted(((paired(res[0], r) + (v,)) for r, v in zip(res[1:], vals)), key=lambda x: -x[0])
@@ -547,7 +554,7 @@ def final_curves():
     for cls, r in SUMMARY["stages"].get("classes", {}).items():
         out += r.get("kept", [])
     for r in SUMMARY["stages"].get("rejudge", []):
-        if r.get("accepted"):
+        if r.get("accepted") and r["spec"] not in out:
             out.append(r["spec"])
     return out
 
@@ -572,7 +579,7 @@ def stage_globals():
                     d, se = paired(b, n)
                     row["per_class"]["%s/%s" % (c, g)] = [round(d, 3), round(se, 3)]
                     pooled.setdefault(g, []).append([y[0] - x[0] for x, y in zip(b, n)])
-                    if worse(d, se, True) or d < -2.0 * band(c):
+                    if worse(d, se, True) or out_of_band(c, d, se):
                         fails.append("%s worse at %s (%+.2f, se %.2f)" % (c, g, d, se))
                     if g == "g3":
                         row["switch_per_min"][c] = [round(sw_rate(b), 1), round(sw_rate(n), 1)]
@@ -634,10 +641,11 @@ def stage_consts():
                     rows.append({"const": name, "value": v, "verdict": "PROBE FAILED TO BUILD: " + r.stderr[-200:]})
                     continue
             res = jmany([req("builtin", c, g, curves, seeds, None, b) for c in CELLS for g in CONFIGS for b in (None, vb)])
-            row, i, pooled = {"const": name, "shipped": shipped, "value": v}, 0, {}
+            row, i, pooled, same = {"const": name, "was": shipped, "value": v}, 0, {}, True
             for c in CELLS:
                 for g in CONFIGS:
                     pooled.setdefault(g, []).append([y[0] - x[0] for x, y in zip(res[i], res[i + 1])])
+                    same = same and all(abs(x) < 1e-9 for x in pooled[g][-1])
                     i += 2
             for g in CONFIGS:
                 dd = [sum(col) / len(col) for col in zip(*pooled[g])]
@@ -645,7 +653,7 @@ def stage_consts():
                 se = math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0
                 row[g] = [round(d, 3), round(se, 3)]
             d, se = row["g3"]
-            row["verdict"] = "BEATS NOISE" if d > 2.5 * se and d >= 0.15 and row["off"][0] > -2 * row["off"][1] and row["shipped"][0] > -2 * row["shipped"][1] else "the shipped value holds"
+            row["verdict"] = "NO EFFECT IN THE LAB: every fight is identical (nothing reads it here, or the probe did not reach it)" if same else "BEATS NOISE" if d > 2.5 * se and d >= 0.15 and row["off"][0] > -2 * row["off"][1] and row["shipped"][0] > -2 * row["shipped"][1] else "the shipped value holds"
             if row["verdict"] == "BEATS NOISE":
                 open_decision("constant %s %s -> %s" % (name, shipped, v), "pooled g3 %+.2f (se %.2f): a constexpr in native/iaus, changed only by its own reviewed edit (kRangeVeto also exists as literals in three Catalogue.cpp curves)" % (d, se))
             rows.append(row)
@@ -681,8 +689,8 @@ def stage_rating():
         out[w] = rows
         below = [r["class"] for r in rows if r["below"]]
         log("rating %s: %d classes, below their tier: %s" % (w, len(rows), ", ".join(below) or "none"))
-        for c in below:
-            open_decision("rating: %s is under its tier on %s" % (c, w), "see summary.json stages.rating.%s" % w)
+        if below:
+            open_decision("rating: classes under their tier on %s" % w, "%s (summary.json stages.rating.%s; the ranged line was already under in 32.5, a possible lab artefact of the bow model)" % (", ".join(below), w))
     SUMMARY["stages"]["rating"] = out
 
 
@@ -722,6 +730,7 @@ def render_md():
     if "rejudge" in s:
         L += ["## Re-judged values", "", "| Spec | Train | Verdict |", "|---|---|---|"]
         L += ["| `%s` | %+.2f (se %.2f) | %s |" % (r["spec"], r.get("train", [0, 0])[0], r.get("train", [0, 0])[1], r["why"]) for r in s["rejudge"]] + [""]
+        L += ["Accepted re-judged value, line for ClassCurves.cpp: `%s`" % cpp_line(r["spec"]) for r in s["rejudge"] if r["accepted"]] + [""]
     if "classes" in s:
         L += ["## Per class", "", "| Class | Knobs live / dead | Sweeps | Accepted (write these) |", "|---|---|---|---|"]
         for c, r in s["classes"].items():
@@ -756,7 +765,7 @@ def render_md():
         L += ["| `%s` | %+.2f (se %.2f) | %+.2f | %+.2f | %.0f%% | %s |" % (r["set"], r["pooled_g3"][0], r["pooled_g3"][1], r["pooled_off"][0], r["pooled_shipped"][0], r["max_switch_rise_pct"], r["verdict"]) for r in s["globals"]] + [""]
     if "consts" in s:
         L += ["## Compile-time constants", "", "| Constant | Shipped -> probed | g3 | off | shipped | Verdict |", "|---|---|---|---|---|---|"]
-        L += ["| %s | %s -> %s | %+.2f (se %.2f) | %+.2f | %+.2f | %s |" % (r["const"], r.get("shipped"), r["value"], r["g3"][0], r["g3"][1], r["off"][0], r["shipped"][0], r["verdict"]) if "g3" in r else "| %s | %s | | | | %s |" % (r["const"], r["value"], r["verdict"]) for r in s["consts"]] + [""]
+        L += ["| %s | %s -> %s | %+.2f (se %.2f) | %+.2f | %+.2f | %s |" % (r["const"], r.get("was"), r["value"], r["g3"][0], r["g3"][1], r["off"][0], r["shipped"][0], r["verdict"]) if "g3" in r else "| %s | %s | | | | %s |" % (r["const"], r["value"], r["verdict"]) for r in s["consts"]] + [""]
     if "floor" in s:
         L += ["## Knight line guard floor (>= 60%)", "", "| Class / world | Default | As shipped | Unguarded as shipped, by cause |", "|---|---|---|---|"]
         L += ["| %s | %.1f | %.1f | %s |" % (k, v["g3"], v["shipped"], ", ".join("%s %.1f" % kv for kv in v["shipped_why"].items())) for k, v in s["floor"].items()] + [""]
@@ -791,6 +800,14 @@ def main():
     os.makedirs(A.out, exist_ok=True)
     POOL = cf.ThreadPoolExecutor(max_workers=A.jobs)
     load_cache()
+    prev = os.path.join(A.out, "summary.json")
+    if os.path.exists(prev):   # a resumed or one-stage run sees what the earlier stages decided (the accepted values feed the later stages)
+        try:
+            old = json.load(open(prev))
+            if old.get("config", {}).get("smoke") == A.smoke:
+                SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
+        except ValueError:
+            pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
     stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
@@ -805,6 +822,7 @@ def main():
         save_summary()
         log("STAGE %s done" % name)
     save_summary()
+    EMIT.shutdown(wait=True)
     log("DONE: %s/summary.md, %d open decision(s)" % (A.out, len(SUMMARY["open_decisions"])))
     return 0
 

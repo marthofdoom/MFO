@@ -11,7 +11,8 @@ MEASURE   `<sim> --potion-calib N`: per class cell and potion kind (0 health, 1 
 CHAIN     A fight is one of CHAIN fights between two restocks, at a uniformly random place in it. With h fights still to come the
           bag's value is W_h(p) = U(p) + sum_u P[p][u] W_{h-1}(p - u), W_0 = 0, U(p) = d[1] + ... + d[p]. The k-th potion in the
           bag at the end of a fight is worth m_h[k] = W_h(k) - W_h(k - 1); the table holds its mean over h = 0 .. CHAIN - 1.
-          d[k] is floored at 0 (a potion cannot be worth less than nothing: he may leave it in the bag).
+          d[k] counts only when it beats its own noise (d > 2 se), else it is 0: a potion cannot be worth less than nothing (he
+          may leave it in the bag), and a worth the measurement cannot tell from 0 is priced 0, not at its noise.
 OUTPUT    one line per (class, kind): `<class> <kind> <m1> <m2> <m3> <m4>` in J. The simulator's Utility charges every potion drunk
           in a fight that worth (Oracle.h PotionCost). --header also rewrites tools/iaus_sim/PotionWorth.h (the built-in world's table).
 
@@ -36,11 +37,16 @@ def measure(a):
         cmd += ["--curve", c]
     if a.set:
         cmd += ["--set", a.set]
-    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    raw = a.out + ".raw"
+    if a.reuse_raw and os.path.exists(raw):
+        out = open(raw).read()
+    else:
+        out = subprocess.run(cmd, capture_output=True, text=True).stdout
+        open(raw, "w").write(out)   # the measurement is the expensive part: kept, so the table can be rebuilt (--reuse-raw, another --chain)
     rows = {}
     for line in out.splitlines():
         p = line.split()
-        if len(p) == 12 and p[0] == "POTCAL":
+        if len(p) == 13 and p[0] == "POTCAL":
             rows[(p[1], int(p[2]), int(p[3]))] = (int(p[4]), float(p[5]), float(p[6]), float(p[7]), [float(x) for x in p[8:13]])
     if not rows:
         raise SystemExit("no POTCAL lines from: %s\n%s" % (" ".join(cmd), out[-400:]))
@@ -48,7 +54,7 @@ def measure(a):
 
 
 def worth(rows, cls, kind, chain):
-    d = [0.0] + [max(0.0, rows[(cls, kind, k)][2]) for k in range(1, 5)]
+    d = [0.0] + [rows[(cls, kind, k)][2] if rows[(cls, kind, k)][2] > 2.0 * rows[(cls, kind, k)][3] else 0.0 for k in range(1, 5)]   # only what beats its own noise is a worth
     P = [rows[(cls, kind, k)][4] for k in range(0, 5)]
     U = [sum(d[1:p + 1]) for p in range(5)]
     W = [0.0] * 5
@@ -73,6 +79,7 @@ def main():
     ap.add_argument("--chain", type=int, default=CHAIN)
     ap.add_argument("--jobs", type=int, default=12)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--reuse-raw", action="store_true", help="rebuild the table from <out>.raw of an earlier measurement instead of measuring")
     ap.add_argument("--header", action="store_true", help="also rewrite tools/iaus_sim/PotionWorth.h (built-in world only)")
     a = ap.parse_args()
     if a.header and a.list:

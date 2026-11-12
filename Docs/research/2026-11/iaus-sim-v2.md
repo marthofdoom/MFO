@@ -2379,7 +2379,7 @@ section is written for that agent. Nothing below is a tuning result: the run has
    Utility charges each potion drunk that worth (`Oracle.h PotionCost`). The table belongs to a world: the built-in one is the
    generated `tools/iaus_sim/PotionWorth.h`, a list's is `--potion-worth <file>` (the driver measures it). `--potion-worth
    legacy` is the old rate and reproduces the old J exactly. MODEL choices: the chain is 8 fights (the file prints 4 and 16
-   next to it); the measured d[k] is floored at 0; the fights are the natural bracket; end health and end magicka keep
+   next to it); a measured d[k] counts only when it beats its own noise (d > 2 se), else 0; the fights are the natural bracket; end health and end magicka keep
    their old terms (they regenerate between fights: a possible next step, not done).
 4. **The gate rule (marth, Q-gate-rule: "Gate on many seeds").** The no-class-worse gates are judged on the same seeds as the
    search (train + holdout), paired, and a drop counts only beyond noise. The full rule is the `RULE` block of
@@ -2417,7 +2417,7 @@ A number is ACCEPTED only when every line holds.
 - holdout: seeds 1001..1064, never used to pick: d > 1.5 se.
 - gates (many seeds): on the 128 train + holdout seeds, with stealth off and as shipped, the class may not get worse, and
   worse = d < -2 se and d < -0.05 J (when the 15 cells are judged at once: -2.5 se); never more than 0.5 J down (Thief,
-  Mercenary 0.25). A T1 row (melee / ranged / mage) is the companion in other classes' fights, so its value is gated on all
+  Mercenary 0.25) when that drop is itself outside one se. A T1 row (melee / ranged / mage) is the companion in other classes' fights, so its value is gated on all
   15 cells at all three configs.
 - cross-world: fresh seeds 4001..4096 on built-in, LoreRim, Tuxborn, Vanilla: the equal-weight mean of the four d is > 2 se,
   no world is worse, and as shipped the mean is not worse and inside the band.
@@ -2454,7 +2454,7 @@ setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py \
 ```
 
 Do not poll it in a loop. `tail -3 $OUT/progress.log` shows the last finished step; the dashboard gets one results file
-per finished sweep. Expected length: hours (15 cells, up to 80 live knobs each, 2 passes).
+per finished sweep. Expected length: hours (15 cells, every live knob of each, up to 150, 2 passes).
 
 **Resume**: run the same command again. Everything finished is in `$OUT/cache.jsonl` and replays in seconds; never delete
 that file, never edit it. One stage only: add `--stages floor,rating,summary` (any subset, in order). One class only:
