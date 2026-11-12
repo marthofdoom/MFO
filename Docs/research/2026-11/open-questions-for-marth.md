@@ -190,3 +190,13 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - Q105 (theft F4). Town smithing stations (grindstone, workbench, forge) are almost all owned by the smith or the smithy cell, and the first theft-gate build skipped every station not owned by the player, which removes the smith errand's station half in most towns. DEFAULT taken (marth 11-11 "A crime is the issue"): a station is skipped only when the engine's own crime-to-activate test says using it is a crime (IsOffLimits, FURN branch), plus his own stations are allowed. Alternative: skip every station owned by anyone but the player (stricter, smith errands mostly stop).
 
 - Q106 [WITHDRAWN 11-12: marth scoped this to the IAUS teach page only; buy/learn roads unchanged] (class spell road). Tome buying only takes spells of the follower's top-2 skill schools; IAUS's class gate is school-blind (Mage/Hybrid line casts any school). DEFAULT taken: keep the top-2 school filter for buying (gold is limited) and add the class gate on top; teaching and auto-learn stay school-blind. Alternative: replace the school filter with the class rule.
+
+## ANSWERED 2026-11-12 (marth, AskUserQuestion, before bed)
+- Theft fix release: ship with T2 (no separate hotfix).
+- Q105: smithing stations gated by the game's crime test (IsOffLimits), his own allowed (default confirmed).
+- Q102/Q103: strongest humanoid corpse, nearest on a tie (defaults confirmed).
+- Q93: aversion weight 0.25 (mild) for Conjurer and Healer (was 0.50). MFO.ini defaults fAversionConjurer / fAversionHealer change.
+- Q91: a spell MFO itself claims for him counts as declared and passes his own Offense-only deny (Harbinger change, own card). marth: "But MFO should hide spells we can't weight if we don't know what they do": a spell whose effects IAUS cannot weight (unknown / script-only effects) is hidden from IAUS candidates (and the teach page filter).
+- Q92: add Night Eye (always) and Dispel (when delivered to Self) to Harbinger's benign list.
+- Q-SIM-3: the hidden hold gets an exit: while hidden he steps to gain a strike or a line of fire, staying hidden (native round, gap G18).
+- Cleanup: remove only clean, merged/pushed agent worktrees under .claude/worktrees; list the rest; mfo-wt-floor stays.
