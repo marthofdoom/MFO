@@ -848,7 +848,7 @@ namespace MFO::Classes {
         if (!Active() && !g_loggedInactiveKeep.exchange(true))
             spdlog::info("[classes] class add-on inactive ({}) -- class progress for {} follower(s) KEPT and written back unchanged "
                          "(marth Q9); nothing changes it until the add-on is active again",
-                         Present() ? "bClassTree = 0" : "MFO_Classes.esl not loaded", snap.size());
+                         !Present() ? "MFO_Classes.esl not loaded" : !HarbingerOk() ? "Harbinger missing or too old" : "bClassTree = 0", snap.size());
     }
 
     void CoLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version, std::uint32_t a_length) {

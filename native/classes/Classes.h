@@ -158,6 +158,15 @@ namespace MFO::Classes {
 
     // The class ESL's manifest was found this session.
     [[nodiscard]] bool Present();
+    // The class add-on does not start without a usable Harbinger (marth 2026-11-12): Active() is false (so every writer refuses and
+    // the stored MCLS data is held and written back unchanged) unless APMF.dll is acquired at ABI >= kMinHarbingerAbi. Decided ONCE
+    // at kDataLoaded (OnDataLoaded; APMFBridge::Acquire runs first). 45 = ch.33 combat style (APMF_API.h), the highest ABI any class
+    // claim uses (ch.18 attack mix is 34, StyleClaims.cpp is 45).
+    inline constexpr std::uint32_t kMinHarbingerAbi = 45;
+    [[nodiscard]] bool HarbingerOk();
+    // Tells the player ONCE per session, in game, that the add-on did not start (a corner notification), when the ESL is present,
+    // bClassTree = 1 and Harbinger is missing / too old. Cheap no-op otherwise. Called from the worker's heartbeat (Diagnostics.cpp).
+    void MaybeNoticeNotStarted();
     // The tree is live: ESL present AND bClassTree = 1. Everything the add-on does gates on this.
     [[nodiscard]] bool Active();
     // Strict adherence: Active() AND bClassStrict = 1.
