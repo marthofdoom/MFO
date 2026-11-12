@@ -77,9 +77,11 @@ These rows are in the results JSON `gaps`, one per (gap, class), and show on the
 
 | Id | Classes | What is missing | Road |
 |---|---|---|---|
-| C-G1 | Thief | No `act.sneak`: the stance is never taken | Card G1: Harbinger ch.3 stance + MFO's own re-assert. Tier B. Probe in combat first |
-| C-G2 | Thief | No hide-when-unseen, no detection input | H-DETECT, section 5. Tier A |
-| C-G3 | Thief | Cannot break off to a point no foe sees | Card G3: the H3 run + a concealment-point query, then the Sneak family's hide candidate |
+| C-G1 | Thief | The stance in a fight. BUILT (G1), `bSneakInCombat` 0 by default, unobserved in combat. Status closing | Probe P1 |
+| C-G2 | Thief | Hide-when-unseen. BUILT as G2 Layer 1 (the engine's own loss, read through the group record, the hold row, the blow from stealth). Layer 2 (the forced seat) is not built. Status closing | Probes P2, P3 |
+| C-G3 | Thief | The break-off to a point no foe sees. BUILT behind `bIausHideRoad` (default off). Status closing. What the decision code still cannot express: G18, G19 (`iaus-sim-v2.md` 30.8) | A field run |
+| C-FLEE2 | Evoker, Conjurer, Healer, Warlock | Card G3's flee. BUILT. Fixed 30% line, one run per 25 s, ends on arrival (G20). Status closing | A field run, then tuning |
+| C-NOFLEE | Knight, Warrior, Mercenary | No disengage flag: neither Retreat nor the flee is ever generated (G21) | A ruling: by design, or a road for the Mercenary's "backs away while fighting" |
 | C-G13 | Thief | Steal, pick locks | Cards G13 / G14: logistics, outside the combat lab |
 | C-BLOCK | Knight | No held guard, so "blocks near-constantly" cannot be played | The Harbinger block state (question Q83), then Block as a held action |
 | C-C8 | Knight, Warrior, Mercenary | Power share, circling, flanking and leash are the class package, not an IAUS decision | Card C8 (CSTY + ch.18 + ch.23) |
@@ -327,6 +329,13 @@ combat-move branches.
 
 ## 6. The stealth model in the lab
 
+> **SUPERSEDED 2026-11-11 by `iaus-sim-v2.md` section 30.** The lab now scores detection with the engine's own formula
+> (`calculate-detection-re.md`, `tools/iaus_sim/Detect.h`), IAUS reads the real facts (`detectsMe`, `selfSneaking`,
+> `hideRoad`, `concealRoad`) instead of the stand-ins described below, G3 is `native/Concealment.cpp` mirrored, and the
+> levels are `--stealth off | g1 | hide | g3` with g3 the default. The "close and in view = seen" rule, the 0.6 s
+> memory and `StealthInject` are gone. The text below and the numbers of section 7 and tables 4.3 to 4.5 describe the
+> OLD model and are kept as the record of what was measured then.
+
 `--stealth off | g1 | hide | aware` (World.h `g_stealth`). Off is the game today and reproduces main's headline J draw
 for draw (68.91 at 30 fights, all six list and seed values equal).
 
@@ -424,7 +433,7 @@ The T3 round starts from the cards again and may use these as a draft.
 
 ```
 tools/iaus_sim/run.sh --list ~/.cache/mfo-list-balance/LoreRim.sim.json --classes beta1 --class-kit \
-    --stealth off|g1|hide|aware --class-oracle 10 --oracle-k 6 --oracle-h 60 --fights 10 --scroll-road --label ".."
+    --stealth off|g1|hide|g3 --class-oracle 10 --oracle-k 6 --oracle-h 60 --fights 10 --scroll-road --label ".."
 tools/iaus_sim/run.sh --list ... --scenario all,ambush --oracle --class-rulings --oracle-k 6 --oracle-h 60 --fights 20 --stealth aware
 ```
 
@@ -434,8 +443,9 @@ tools/iaus_sim/run.sh --list ... --scenario all,ambush --oracle --class-rulings 
   the class gap) and the oracle's own persona.
 - `--class-rulings`: hold the oracle of `--oracle` / `--headline-oracle` / the scenarios to the class rulings (implied by `--class-oracle`). Without it every oracle is main's unconstrained one of `iaus-sim-v2.md`, and the headline oracle J equals main's. `--no-class-rulings` forces that even under `--class-oracle`.
 - `--parked`: the T3 / T4 / Dragonborn playstyles take effect (rulings, persona, forbid bits, the Master Thief / Nightingale / Listener stealth passives) and the four parked stealth scenarios (hit-and-hide, shadowcloak, flank, assassinate) become runnable. Without it only the 12 Beta 1 classes have a playstyle, whatever `--classes` says.
-- `--scenario all` is the 17 scenarios of the headline. `--scenario stealth` adds the stealth lab's. A stealth
-  scenario is never part of the headline J.
+- `--scenario all` is the headline's scenarios: the 17 of main, plus the stealth and disengage lab's while a road is
+  modelled (`--stealth g1` and above, the default is g3: `iaus-sim-v2.md` 30.5). `--scenario stealth` names the lab's
+  in any mode. Under `--stealth off` a stealth scenario is not part of the headline J.
 - The dashboard needs no change: class rulings, persona, class gaps and the per-class oracle gap ride fields it
   already reads.
 

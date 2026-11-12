@@ -388,7 +388,8 @@ First readings of the class table against the catalogue (to be confirmed, then a
 
 ## 12. GAP LEDGER
 
-Status: open = evidence exists, no design yet. Priority by oracle gap.
+Status: open = evidence exists, no design yet. Priority by oracle gap. Later rows: 24.7 (G12 to G17) and 30.8 (G18 to
+G22, the stealth and disengage lab).
 
 | id | Class | Family | Missing input or behaviour | Evidence | Closing action, or proven limit | Status |
 |---|---|---|---|---|---|---|
@@ -446,6 +447,10 @@ Fixed metric keys (the sim's own names are written beside them): `idle_pct`, `id
 in a melee swing), `taunt_per_min`, `power_per_min`, `follower_death_pct` (fights in which he went down),
 `player_death_pct`, `ttk_s` (time to the first kill), `damage_taken_per_foe`, `bad_facts`, `invalid`,
 `decide_us_mean`, `decide_us_max`. Added: `utility`, `win_pct`, `fight_s`, `splash_ally_hits_per_fight`.
+
+Added 2026-11-11 (section 30): top-level `"stealth": "off|g1|hide|g3"` and `"sneak_profile"`, a `"headline"` object
+(`covers`, `fights`, `j`, `j_scenarios`, `j_natural`, `oracle_j` ..., `oracle_fights`, `oracle_over`, `oracle_covers`,
+with `covers` and `fights` null when no J was computed), and the G3 / G2 metrics listed in 30.9.
 
 Rulings checked today (`Results.h Rulings()`): R-MAGE-MELEE-T1 (`mage` melee_share_pct <= 5), R-MAGE-MELEE-T2+
 (pure mage line, tier 2 and up, <= 3), R-NO-SPLASH (0 ally hits per fight), R-BAD-FACTS, R-INVALID, R-BUDGET
@@ -1385,3 +1390,245 @@ From 26.1 (40 fights, the same weight on every list): give ground + bash +0.39 J
 runs, block + bash +0.31, all three +0.37. The oracle earns +30 to +46 U on the scenarios these roads were built for
 with the same actions, so the remaining gap is the TIMING inputs, which is lab work on the considerations.
 
+
+## 30. Stealth and disengage in the lab: the engine's detection formula, G2 and G3 (sim structure only, 2026-11-11)
+
+Branch `feat/iaus-sim-stealth`, on top of `feat/g3-disengage` (G2 Layer 1 + G3 + the ch.7 adoption). `native/` is not
+touched. Nothing here tunes a curve or a weight: this section changes the WORLD the decision code is measured in, and
+hands a baseline to the tuning round (30.8).
+
+It replaces the lab stealth model of `iaus-classes.md` section 6 (a hand-written skill duel with a "close and in view
+= seen" rule and stand-in considerations) and the numbers of its section 7.
+
+### 30.1 What changed
+
+| Piece | Before | Now |
+|---|---|---|
+| Detection | a lab formula of unproven shape, one yes/no per foe | the engine's formula of `calculate-detection-re.md` sections 3 and 4, per (foe, follower) pair, per detection pass: `tools/iaus_sim/Detect.h` |
+| What a foe group knows | "sensed him in the last 0.6 s" | the group's own record by section 5 of the card: level, stealth points, known, lost, last known time and place (`World.h` `Body::Rec`, `DetectPass`) |
+| Facts IAUS reads | stand-ins (`foeHelpless` for the blow, a hand-made Sneak candidate) | the real ones: `Combatant::detectsMe`, `Snapshot::selfSneaking`, `hideRoad`, `concealRoad`, `concealPoint`, `fleeRun`. The real `Generate` makes the hold row, the blow from stealth and the Disengage family |
+| G3 | a 5 s move order behind a random pillar | `native/Concealment.cpp` mirrored: the pick, the run, the hold, every end, the cooldown from the end (`Policy.h` `PreparePick`, `BeginRun`, `ServiceRun`) |
+| Stealth scenarios | never in the headline J | in the headline J while a road is modelled (30.5) |
+
+### 30.2 The model, row by row
+
+Grades as in the RE card. DISASM = read on 1.6.1170, which proves a path exists and not that it runs. MODEL = the lab's
+own choice. Nothing below is FIELD yet: probes P1 to P3 of `g2-hide-design.md` have not run.
+
+| Row | Model | Source and grade |
+|---|---|---|
+| Range | `fSneakMaxDistance` x exterior x flying, x `fDetectionCombatNonTargetDistanceMult` when he is not that foe's own target, shrunk past `fDetectionLOSDistanceAngle`. Outside it the sight road does not run | card section 3, DISASM |
+| Score | `fSneakBaseValue` + sound + light + skill, every term as the card writes it. Level = the truncated score, 0 becomes -1 | card section 4, DISASM |
+| Game settings | read by name from the list. Fallback = what Skyrim.esm ships, which is NOT the executable's image default the card quotes: base -15 (image -25), max distance 2500 (1500), light mult 0.33 (1.4), alert mod 0 (0.2), action mult 2 (1), sneak light mod 15 (0), light level max 300 (100) | the three cached `sim.json` files agree on the vanilla values. A list overrides them at run time |
+| Group record | notice above the bar (70 sneaking, 25 not) while stealth points are above 0, any positive level after. Lost after `fCombatDetectionLostTimeLimit` without a positive level, at once when a foe has him in its view cone and scores below 0, or when a foe within 256 units of the last known point scores below 0 | card section 5, DISASM. The view-cone byte is LIKELY |
+| One group | every foe of a fight shares one record | MODEL: an encounter is one combat group. It is also what `Hide::Read` returns in the game: the GROUP's record |
+| Stealth points refill | full again `fCombatStealthPointRegenLostWaitTime` (10 s) after the group lost him | MODEL from the setting's name. The card: UNREAD (risk R4). The drain the settings name (`fCombatStealthPointDrainMult`) is not modelled |
+| Pass cadence | every `fDetectionUpdateTimeMin` (1 s vanilla) | MODEL from the setting's name. The job's cadence is UNREAD |
+| Sneak attack | he sneaks and THAT foe's own last level of him is 0 or below: x the weapon's `fCombatSneak*Mult` x the list's entry 18 rows | `iaus-classes.md` 5.2, PROVEN path. The second road through the group is not modelled |
+| A hit reveals | ForceDetect: the group has him at level 100. The next pass scores the pair again, so a shot from the dark can be lost again a second later | hit is one of the 9 callers (class-m0-re.md). What happens between is the formula's |
+| Sound of an action | swing 50 (Normal), dagger and bow 10 (Silent), cast 50, for `fDetectionActionTimer` (1.2 s) | MODEL. The card: "which actions set it and how loud: UNREAD" |
+| Movement | combat movement is at the run speed and counts as running, crouched too (x0.55 speed). A backpedal does not | MODEL. Probe P1 logs IsRunning |
+| Light | the cell's light on him 0 to 1, times `--light-scale` (100) as the cached light level | MODEL. The real scale is unknown (probe P4 is not built). Sensitivity in 30.6 |
+| Skill | his Sneak actor value plus the list's entry 57 rows his skill reaches. Counts only while he sneaks | card (entry 57, owner the follower). Which perks he holds is MODEL |
+| Equipped weight | 3 per light piece, 9 per heavy piece, plus the weapon in his hands | MODEL |
+| Facing | a fighter faces his combat target. With none, the way he last moved | MODEL |
+| Not modelled | the noise road and the projectile road (their scorer was read by its strings only, and a positive level there stores the noise point, not his position), NightEye, blindness, sleep, ambush packages, race size, entries 47 and 15, foes searching the last known point | stated limits |
+| Who is modelled | sneak classes under `--stealth g1` and above. Everyone else is always known to the foes, as before | MODEL |
+| Free stealth entry | one fight in five nobody has him until his first blow (card C13) | W Thief, unchanged |
+
+Card G3 (`native/Concealment.cpp`, each number copied from it): 24 candidates on rings of 320 and 600 units, each a
+straight walk that stops at the first solid thing. Refused: a walk under 160 units, a point within 250 units of a foe,
+a point within 200 units of the leash edge. Hide: every listed foe's line to the point is cut by geometry, the nearest
+wins. Flee: at least 150 units farther from the nearest foe, the farthest wins. One pick per 1.5 s, fresh for 3 s, its
+answer lands 0.1 s after the ask. Arrival inside 90 units. Hide run: ends hidden after two consecutive laps on which
+the group does not detect him, or hit at the point, or failed after 10 s on the way or 12 s at the point. Flee: his
+decisions go on (no offense generated, his own heals x2), it ends above 30% health, on arrival, or failed after 10 s.
+The 25 s cooldown counts from the end. Retreat and the flee are both generated and the score decides.
+
+Two lab choices inside G3, both MODEL:
+- The stance is held through the hide run (a crouched run). G1 holds it for a sneak class all fight.
+- On a G3 run his feet keep going through a weapon swap, a potion and a cast. Elsewhere in the lab those three still
+  hold the body, as before, so that `--stealth off` stays draw for draw. Saved as Q-SIM-5.
+
+### 30.3 Road levels
+
+`--stealth off | g1 | hide | g3` (`aware` still means g3). **The default is now g3**: every road T2 builds, which is
+what the tuning round must tune against. `off` is the game with its switches at their defaults (`bSneakInCombat=0`,
+`bIausHideRoad=0`).
+
+| Level | Modelled as ON |
+|---|---|
+| off | nothing. Equal to the lab before this section, draw for draw (checked: all 12 Beta 1 classes, 6 seeds, 30.6) |
+| g1 | the stance in combat. The engine hides him and multiplies his blows. IAUS reads the verdict and boosts the blow |
+| hide | + G2's hold row and the free stealth entry |
+| g3 | + the hide run of a sneak class and the flee of the other disengage classes |
+
+Sneak data: `--sneak-profile vanilla | steep | list`. The built-in world has no sneak data of its own, so it takes
+`vanilla` (Skyrim.esm: Backstab, Assassin's Blade, Deadly Aim, the five Stealth ranks). `steep` (alias
+`lorerim-like`) is a hand-written profile with the SHAPE of a Requiem-style list: a flatter skill duel, light and
+movement count for more, a 160 degree view cone, a dagger tree up to x4 on the weapon's x3. It is lab test input in
+`Detect.h`. It is not read from a list's files and nothing in `native/` sees it. With `--list` the list's own values
+stand.
+
+Other switches: `--light-scale N`, `--blow-stands` (30.7 finding 3).
+
+### 30.4 Scenarios added
+
+All four are stealth-lab scenarios (in J only while a road is modelled). Geometry is in the fight's own frame
+(`FightSpec::cover`).
+
+| Scenario | Class | What it isolates |
+|---|---|---|
+| thief-cover | thief | three bandits have found him in a lit hall with three large pillars: cover exists |
+| thief-open | thief | the same three at noon on open ground: no point exists, so no hide run can be generated |
+| caster-flee | evoker | 27% health, a heal, no potion, three blades on him: the flee and the heal on the way |
+| melee-flee | mercenary | 27% health, one potion, no healer, two foes on him: a class without the disengage flag |
+
+### 30.5 What J covers now
+
+With a road modelled the headline's scenario half is the 17 of main plus `ambush`, `thief-cover`, `thief-open`,
+`caster-flee`, `melee-flee` (22). The 17 keep their indexes, so their fights are the same in every level. A class's J
+therefore moves for two reasons, and the table separates them: its scenario SET changed (Thief 1 to 5 scenarios, Evoker
+6 to 7, Mercenary 1 to 2), and its BEHAVIOUR changed.
+
+### 30.6 Baseline (built-in world, vanilla profile, `--seeds 1,2,3,4,5,6`, 24 fights per scenario)
+
+| Class | before (= off now) | g1 | hide | g3 (default) | Why it moved |
+|---|---|---|---|---|---|
+| melee | 79.08 | 79.08 | 79.08 | 79.08 | |
+| ranged | 63.18 | 63.18 | 63.18 | 63.18 | |
+| mage | 77.47 | 77.47 | 77.47 | 77.47 | |
+| knight | 68.52 | 68.52 | 68.52 | 68.80 | the healer beside him in knight-boss-healer flees |
+| warrior | 87.72 | 87.72 | 87.72 | 87.81 | the evoker beside him in control-setup flees |
+| mercenary | 84.28 | 81.03 | 81.03 | 81.03 | set only: melee-flee joined. His behaviour is unchanged |
+| archer | 78.31 | 78.31 | 78.31 | 78.31 | |
+| thief | 39.31 | 80.25 | 75.03 | 74.93 | set (kite alone before) and behaviour. Natural bracket 68.43 to 78.50 |
+| evoker | 80.63 | 79.71 | 79.71 | 80.27 | set -0.92 (caster-flee joined), the flee +0.56 |
+| conjurer | 69.30 | 69.30 | 69.30 | 70.26 | the flee +0.96 |
+| healer | 81.30 | 81.30 | 81.30 | 81.50 | the flee +0.20 |
+| warlock | 78.14 | 78.14 | 78.14 | 78.15 | the flee +0.01 |
+| all 12 together | 76.69 | | | 78.11 | |
+
+Standard errors over the 6 seeds are 1.5 to 4.5 per class (0.6 for the 12 together), so a difference under about 1 J
+inside one row is not a finding by itself. The seeds are the same in every column, which makes the columns paired.
+
+Thief, natural bracket, seed 1 (8 fights x 5 ranks):
+
+| Level | U | win % | dps | taken/s | hidden % | sneak hits % | damage from stealth % | still % | hide runs/min |
+|---|---|---|---|---|---|---|---|---|---|
+| off | 64.2 | 67.5 | 15.8 | 2.4 | 0 | 0 | 0 | 0 | 0 |
+| g1 | 78.1 | 80.0 | 33.8 | 0.9 | 81.1 | 75.8 | 97.0 | 0 | 0 |
+| hide | 73.4 | 72.5 | 27.2 | 0.6 | 86.8 | 83.8 | 98.0 | 8.7 | 0 |
+| g3 | 73.5 | 72.5 | 27.1 | 0.6 | 86.5 | 80.7 | 97.8 | 8.1 | 0.4 |
+
+Sensitivity of the Thief's J at g3 (74.93): `--light-scale 200` 73.52, `--light-scale 300` 72.61, `--sneak-profile
+steep` 72.01, `--blow-stands` 74.88.
+
+Scenarios with the oracle (K = 6, 60 s, 20 fights, seed 1, g3): thief-cover 88.0 (gap +4.4), thief-open 92.1 (-0.5),
+caster-flee 84.7 (+4.0), melee-flee 73.6 (+10.5), ambush 90.5 (+0.1), kite 9.2 (+12.6). Mean gap over the 22: +1.15.
+double-heal (-23.6) and knight-boss-healer (-11.7) are negative: the oracle at this K and horizon loses to IAUS there.
+double-heal reads -27.1 on the branch base as well, so that is not from this section.
+
+Checks: `tools/iaus_sim/run.sh` PASS (BAD-FACTS 0, invalid picks 0) at every level, in table mode, on LoreRim, Tuxborn
+and Vanilla. `SIM_CLITEST=1` 13 checks PASS. `tools/iaus_harness/run.sh` 0 failed. One address and undefined-behaviour
+sanitizer run of the scenarios and the class cells: clean.
+
+### 30.7 Findings
+
+1. **Under the engine's formula a perked sneak follower is very hard to detect.** The follower's Sneak skill enters
+   whole (the player's is scaled by `fPlayerDetectionSneakMult` 0.4, an NPC's is not), and the list's entry 57 rows add
+   20 to 40 on top. With a skill of about 90 against a bandit's 15 the skill term is about -40, and only bright light
+   close up plus the noise of a run or a swing brings the score above 0. So the Thief is hidden 80 to 87% of his time
+   and 97% of his damage comes out of stealth. This rests on two things nobody has observed: that the engine scores
+   foe to follower pairs this way (R2) and that a follower holds the perk rows his skill reaches. Read every Thief
+   number as "if the card's reading and the perk model hold".
+2. **The hold row costs him.** g1 80.25, hide 75.03. With the hold row he stands still 8% of his time and his damage
+   per second falls from 33.8 to 27.2. The cause is in `Generate`, not in a weight: while the hold stands no attack is
+   named on an unaware foe he cannot strike now, so nothing competes with the hold, and it has no exit but a foe
+   walking into his reach or his sight. Halving or doubling the Sneak family's weight changes nothing (tried as a
+   command check, not as tuning). Gap G18.
+3. **The hide run adds nothing at these numbers.** hide 75.03, g3 74.93. Every run ends hidden (100%), because the
+   engine loses him on its next pass anyway. His own blow reveals him (ForceDetect), the group record says found, the
+   need is 1, and he runs. Gap G19. The need is one bit: all foes of one group carry the same record.
+4. **The blow and the stance.** `scheduler/IausSource.cpp` releases the hide hold's stance claim when the blow is
+   PICKED (`Concealment::NoteBlow`). If nothing else holds the stance he may be on his feet when the hit lands, and the
+   engine's sneak attack needs the attacker sneaking. The lab keeps the stance by default. `--blow-stands` measures
+   the other reading: 74.88 against 74.93, small here because that claim only exists after a hide run. Saved as
+   Q-SIM-2 for the reviewer to settle in `native/`.
+5. **The flee is a small gain, and the oracle wants more.** Evoker +0.56 J, Conjurer +0.96. In caster-flee the oracle
+   is 4 U ahead: it heals before it runs, leaves earlier than 30%, and keeps stepping back after. Gap G20.
+6. **A class without the disengage flag has no way out.** melee-flee: the oracle is 10.5 U ahead with step back,
+   sprint back and "to the player". Gap G21.
+7. **Group record against pair level.** `Facts::foeUnaware` reads the group, the engine's multiplier reads the pair.
+   Blows the boost named that landed without the multiplier: 0.6 to 1.6% (`stealthMiss%`). Small. Gap G22.
+
+### 30.8 Gap ledger, changes
+
+| id | Change |
+|---|---|
+| G18 new | the hold row has no exit of its own (finding 2). Scenario thief-cover. Open. Not reachable by tuning |
+| G19 new | the hide run's need is one bit of group knowledge (finding 3). Open |
+| G20 new | the flee's fixed 30% line, one run per 25 s, the end on arrival, heal not ordered first. Scenario caster-flee. Open. The weight, the heal boost and the cooldown are tunable, the line is a constant in `iaus/Disengage.h` |
+| G21 new | no way out without the disengage flag. Scenario melee-flee. Open |
+| G22 new | group record against pair level. Measured small. Open |
+| C-G1, C-G2, C-G3 | status closing: built on `feat/g3-disengage`, modelled here, not proven in the field |
+| C-FLEE2 new | the flee of the disengage classes: closing |
+| C-NOFLEE new | knight, warrior, mercenary: no Retreat and no flee is ever generated. Open |
+
+### 30.9 Sim bugs fixed on the way
+
+- MFO-B755: a full run's headline J is always 24 fights per scenario again, whatever `--fights` says (a `--seeds` run
+  still honours `--fights`). A `--baseline` file now starts with a `#meta` line (cell size, seed, stealth level,
+  profile, class set) and `--compare` REFUSES a baseline whose line differs.
+- MFO-B756: the JSON headline has `oracle_covers`.
+- MFO-B757: with no J computed the JSON headline's `covers` and `fights` are null.
+- The committed `baseline_builtin.txt` could not be reproduced on the branch base (1385 metrics off, an older class
+  set). It is now `run.sh --no-json --classes beta1 --baseline tools/iaus_sim/baseline_builtin.txt`.
+- Results file, fields added: top-level `stealth` and `sneak_profile`, `headline.oracle_covers`. New metrics:
+  `hideOk%`, `hideFail%`, `flee/f`, `fleeHealed%`, `fleeFail%`, `fleeHpGain%`, `runDown%`, `stealthMiss%`, `run%`,
+  `still%`. The dashboard needs no change (`dash.py --json-check` passes on the new runs).
+- `Tune.h`: `t.disengageCd` (card G3's hard cooldown) can be set and searched.
+
+### 30.10 Handoff to the tuning round (curves and weights only)
+
+The world is fixed for this round. Do not edit `tools/iaus_sim/*.h`, `sim.cpp` or `native/`. Search with `--set` and
+`--opt`, then report the values. A change is kept only when it holds on other seeds and does not lose on a list.
+
+Indexes (`run.sh --list-params`): families 0 attack, 1 power_attack, 3 sneak (the hold row), 4 flee (Retreat),
+5 drink_health, 11 cast_heal, 21 disengage. Considerations 63 danger (RetreatDanger), 83 strike (BoostStrike),
+84 hold (HoldStill, a gate), 85 need (DisengageNeed), 86 flee_heal (BoostFleeHeal).
+
+Iterate first, in this order:
+1. Flee and the heal on the way (Evoker, Conjurer, Healer, Warlock): `aw.21`, `c.86.b`, `t.disengageCd`. Do NOT
+   search `aw.4` (Retreat) against `aw.21`, nor `c.63.*`, until the feet asymmetry is gone (review of a645ca2,
+   SEV-3: only a G3 run keeps his feet moving through a swap, potion or cast, so the lab favours the flee over Retreat;
+   Q-SIM-5, backlog MFO-B783).
+2. The blow from stealth (Thief): `c.83.b`, `aw.1` against `aw.0` for the dagger case.
+3. The hide run (Thief): `aw.21`, `c.85.a`, `c.85.b`, `t.disengageCd`. Expect little: findings 2 and 3 are structural.
+
+```
+# 0. build once, check the baseline is the one of 30.6
+tools/iaus_sim/run.sh --no-json --classes thief --seeds 1,2,3,4,5,6        # 74.93
+tools/iaus_sim/run.sh --no-json --classes evoker --seeds 1,2,3,4,5,6       # 80.27
+# 1. search one class on seeds 1 to 3 (about half a minute for four parameters and one pass)
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --opt-class evoker --opt aw.21,c.86.b,aw.4,c.63.a,c.63.b,t.disengageCd --seeds 1,2,3 --opt-fights 12 --opt-passes 2
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --opt-class thief  --opt c.83.b,aw.21,c.85.a,c.85.b,t.disengageCd --seeds 1,2,3 --opt-fights 12 --opt-passes 2
+# 2. validate the printed "--set ..." line on the held-out seeds, for that class and for all twelve
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --classes evoker --seeds 4,5,6 --set <line>
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --classes beta1  --seeds 1,2,3,4,5,6 --set <line>      # baseline 78.11
+# 2b. REQUIRED no-loss gate on the game AS SHIPPED (bSneakInCombat and bIausHideRoad ship OFF; review of a645ca2, SEV-3)
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --stealth off --classes beta1 --seeds 1,2,3,4,5,6 --set <line>   # baseline 76.69
+# 3. and on the lists and the other profile
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --list ~/.cache/mfo-list-balance/LoreRim.sim.json --classes beta1 --seeds 1,2,3 --set <line>
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --no-json --sneak-profile steep --classes thief --seeds 1,2,3,4,5,6 --set <line>
+# 4. what the change did to behaviour: one results file for the dashboard
+SIM_NOBUILD=1 tools/iaus_sim/run.sh --classes beta1 --seed 1 --set <line> --label "tuning: <what>"
+```
+
+`--opt-class` and `--classes` are different objectives (`--opt-class` adds the balanced and strong1 brackets), so
+compare a search's start and end with each other, and a validation with the 30.6 column. `tune_defaults.py`,
+`tune_packages.py` and `tune_prefix.py` search default rows and class packages in table mode: they are not part of
+this round.
+
+Baseline runs for `tools/iaus_dash` are in `~/.cache/mfo-iaus-sim/runs/` with labels starting "sim-stealth baseline":
+six Beta 1 runs (seeds 1 to 6) and one run of the 22 scenarios with the oracle.

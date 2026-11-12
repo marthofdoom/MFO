@@ -80,6 +80,12 @@ namespace Sim {
             { "G12", "power attack / bash", "melee lines", "a stagger is not used to interrupt a caster", "interrupt", "open" },
             { "G13", "control + attack", "*", "attacks do not follow an ally's control", "control-setup", "open" },
             { "G14", "attack target", "*", "the foe on the player is not handled first", "peel", "open" },
+            // The stealth / disengage lab (iaus-sim-v2.md section 30): what the decision code cannot express, measured against the engine's own detection formula
+            { "G18", "sneak (hold row)", "sneak classes", "the hold row has no exit of its own: hidden with no foe in reach (blade) or in sight (bow) he stays still for as long as nobody finds him. No step for a line of fire, no worth of the party's need", "thief-cover", "open" },
+            { "G19", "disengage (hide run)", "sneak classes", "the hide run's need is one bit of group knowledge (every foe of one group carries the same record, so detectShare is 0 or 1): his own blow reveals him and sends him running although the engine's next pass would lose him where he stands. Evidence is the Thief's J with and without the run (doc section 30), not one scenario", "", "open" },
+            { "G20", "disengage (flee)", "disengage classes", "the flee starts only at 30% health with a foe on him, runs once per 25 s and ends on arrival: no earlier leave, no keeping of the distance after it, and the heal is not ordered before the run", "caster-flee", "open" },
+            { "G21", "retreat / disengage", "classes without kDisengage", "a class without the disengage flag has no way out at all: neither Retreat nor the flee is generated, he drinks and trades until he drops", "melee-flee", "open" },
+            { "G22", "attack (blow from stealth)", "sneak classes", "Facts::foeUnaware reads the foe GROUP's record while the engine's sneak attack reads the PAIR's own level: a blow the boost named can land without the multiplier (metric stealthMiss%: under 2% of such blows in the lab, so small)", "", "open" },
         };
         return g;
     }
@@ -88,9 +94,9 @@ namespace Sim {
     struct ClassGap { const char* id; const char* family; const char* desc; const char* scenario; const char* status; };
     inline const std::vector<ClassGap>& ClassGaps() {
         static const std::vector<ClassGap> g = {
-            { "C-G1", "sneak", "no act.sneak: the sneak stance is never taken. Road: card G1 (Harbinger ch.3 stance + MFO's own re-assert), tier B, probe in combat first", "ambush", "open" },
-            { "C-G2", "sneak", "no hide-when-unseen and no detection input. Road: H-DETECT (a read of the foe group's detect level + the post-call gate on CalculateDetection, card G2), tier A", "hit-and-hide", "open" },
-            { "C-G3", "sneak", "cannot break off to a point no foe sees. Road: card G3 (H3 run + a concealment-point query) and the Sneak family's hide candidate", "hit-and-hide", "open" },
+            { "C-G1", "sneak", "the sneak stance in a fight (card G1): built, [Debug] bSneakInCombat is 0 by default and the stance in combat is unobserved (probe P1). Modelled as held under --stealth g1 and above. Status closing = built, not yet proven in the field", "ambush", "closing" },
+            { "C-G2", "sneak", "hide-when-unseen (card G2 Layer 1): the engine's own loss read through the foe group's record, the hold row and the blow from stealth are built and modelled (--stealth hide). The forced non-detection seat (Layer 2) is not built: the lab keeps the engine's 10 s unwatched loss", "thief-cover", "closing" },
+            { "C-G3", "sneak", "the break-off to a point no foe sees (card G3): built behind [Debug] bIausHideRoad (default off) and modelled (--stealth g3). What the decision code still cannot express is in the gap ledger: G18 (the hold has no exit), G19 (the run's need is one bit)", "thief-cover", "closing" },
             { "C-G4", "sneak", "no flanking half bonus. Road: card G4 (marker effect + class perk), tier B", "flank", "open" },
             { "C-H10", "sneak", "no Shadowcloak. Road: card H10 (a 3 s invisibility every 30 s), falls back to H-DETECT if invisibility does not drop detection", "shadowcloak", "open" },
             { "C-G13", "logistics", "steal and pick locks (cards G13 / G14) are logistics actions, outside the combat lab", "", "limit" },
@@ -113,6 +119,8 @@ namespace Sim {
             { "C-H11", "power attack", "a power attack that releases the off-hand spell (card H11): IAUS has no input for that spell's worth on the struck foe", "", "open" },
             { "C-C9", "movement", "the go-in rule is a movement decision IAUS does not own: goInBad% is his time in melee against the rule. Road: card C9 over H3 / H4", "", "open" },
             { "C-FLEE", "retreat", "Retreat (act.flee) is gated by the same kDisengage flag as the H3 reposition, so a line-holding hybrid runs from his line", "", "open" },
+            { "C-FLEE2", "disengage", "card G3's flee for the disengage classes: built and modelled (--stealth g3). Fixed 30% line, one run per 25 s, ends on arrival (gap G20)", "caster-flee", "closing" },
+            { "C-NOFLEE", "retreat", "no kDisengage flag: no Retreat and no flee is ever generated for him (gap G21)", "melee-flee", "open" },
             { "C-UNDEAD", "attack target", "anti-undead aggression: no class term that values an undead foe. Road: a class profile weight on FoeUnholy + the C8 package", "", "open" },
             { "C-AURA", "passive", "the Saint's aura (card C11) is not modelled", "", "open" },
             { "C-ROOT", "class table", "the Listener's table root is Ranged (a bow kit) while his card and default rows are a blade executioner: a question for the C12 card", "assassinate", "open" },
@@ -157,6 +165,7 @@ namespace Sim {
             { "peel.s", "lower", "s" }, { "press%", "lower", "%" }, { "prio%", "higher", "%" }, { "waste%", "lower", "%" }, { "dwh/f", "lower", "" }, { "wwDecl/min", "lower", "/min" },
             { "dry%", "lower", "%" }, { "downs/f", "lower", "" }, { "pMinHp%", "higher", "%" }, { "ctlFocus%", "higher", "%" }, { "taken/s", "lower", "" }, { "pTaken/s", "lower", "" },
             { "persona", "higher", "" }, { "sneak%", "neutral", "%" }, { "hidden%", "neutral", "%" }, { "sneakAtk%", "higher", "%" }, { "sneakDmg%", "higher", "%" }, { "opener%", "higher", "%" }, { "flank%", "neutral", "%" }, { "hide/min", "neutral", "/min" },
+            { "hideOk%", "higher", "%" }, { "hideFail%", "lower", "%" }, { "flee/f", "neutral", "" }, { "fleeHealed%", "higher", "%" }, { "fleeFail%", "lower", "%" }, { "fleeHpGain%", "higher", "%" }, { "stealthMiss%", "lower", "%" }, { "runDown%", "lower", "%" }, { "run%", "neutral", "%" }, { "still%", "neutral", "%" },
             { "tgtDist", "neutral", "" }, { "pDist", "neutral", "" }, { "contact%", "neutral", "%" }, { "goInBad%", "lower", "%" }, { "summonUp%", "higher", "%" }, { "healAt%", "neutral", "%" }, { "miss%", "lower", "%" }, { "powShare%", "neutral", "%" }, { "undeadDmg%", "neutral", "%" },
             { "dps", "higher", "" }, { "loss%", "lower", "%" }, { "timeout%", "lower", "%" }, { "tntDown%", "lower", "%" }, { "b.cast", "neutral", "%" }, { "b.shoot", "neutral", "%" }, { "b.free", "neutral", "%" },
         };
@@ -167,8 +176,9 @@ namespace Sim {
     struct Results {
         std::string runId, list, label, oracleKind = "none"; std::uint64_t seed = 1; int fights = 0, oracleK = 0; double oracleH = 0;
         std::vector<ResultRow> rows; std::vector<ScenarioRow> scen;
-        std::string mode = "iaus"; bool hasJ = false; double jVal = 0, jScen = 0, jNat = 0; int jFights = 0; std::string jCovers = "all classes";   // the headline's scope (B712): which classes the objective covered and the fights per scenario
-        bool hasOracleJ = false; double oracleJ = 0, oracleJScen = 0, oracleJNat = 0; int oracleFights = 0; std::string oracleOver;   // the headline: J = half scenario + half natural-bracket utility, in this run's mode
+        std::string mode = "iaus"; bool hasJ = false; double jVal = 0, jScen = 0, jNat = 0; int jFights = 0; std::string jCovers;   // the headline's scope (B712): which classes the objective covered and the fights per scenario
+        bool hasOracleJ = false; double oracleJ = 0, oracleJScen = 0, oracleJNat = 0; int oracleFights = 0; std::string oracleOver, oracleCovers;   // B756: the oracle headline's own scope
+        std::string stealth = "off", sneakProfile = "list";   // the stealth / disengage roads modelled (World.h g_stealth) and the sneak data profile (Detect.h)   // the headline: J = half scenario + half natural-bracket utility, in this run's mode
         void Write(std::string path) const {
             namespace fs = std::filesystem;
             const std::string id = !runId.empty() ? runId : RunId(list);
@@ -176,7 +186,7 @@ namespace Sim {
             std::error_code ec; fs::create_directories(fs::path(path).parent_path(), ec);
             const char* br = std::getenv("SIM_BRANCH"); const char* sha = std::getenv("SIM_SHA");
             std::string j = "{\"schema\":1,\"run_id\":" + JsonOut::Str(id) + ",\"time\":" + JsonOut::Str(IsoNow()) + ",\"branch\":" + JsonOut::Str(br ? br : "") + ",\"sha\":" + JsonOut::Str(sha ? sha : "")
-                          + ",\"list\":" + JsonOut::Str(list) + ",\"seed\":" + std::to_string(seed) + ",\"fights_per_cell\":" + std::to_string(fights) + ",\"label\":" + JsonOut::Str(label) + ",\"mode\":" + JsonOut::Str(mode) + ",\"headline\":{\"covers\":" + JsonOut::Str(jCovers) + ",\"fights\":" + std::to_string(jFights) + ",\"j\":" + (hasJ ? JsonOut::Num(jVal) : "null") + ",\"j_scenarios\":" + (hasJ ? JsonOut::Num(jScen) : "null") + ",\"j_natural\":" + (hasJ ? JsonOut::Num(jNat) : "null") + ",\"oracle_j\":" + (hasOracleJ ? JsonOut::Num(oracleJ) : "null") + ",\"oracle_j_scenarios\":" + (hasOracleJ ? JsonOut::Num(oracleJScen) : "null") + ",\"oracle_j_natural\":" + (hasOracleJ ? JsonOut::Num(oracleJNat) : "null") + ",\"oracle_fights\":" + std::to_string(oracleFights) + ",\"oracle_over\":" + JsonOut::Str(oracleOver) + "}"
+                          + ",\"list\":" + JsonOut::Str(list) + ",\"seed\":" + std::to_string(seed) + ",\"fights_per_cell\":" + std::to_string(fights) + ",\"label\":" + JsonOut::Str(label) + ",\"mode\":" + JsonOut::Str(mode) + ",\"stealth\":" + JsonOut::Str(stealth) + ",\"sneak_profile\":" + JsonOut::Str(sneakProfile) + ",\"headline\":{\"covers\":" + (hasJ ? JsonOut::Str(jCovers) : std::string("null")) + ",\"fights\":" + (hasJ ? std::to_string(jFights) : std::string("null")) + ",\"j\":" + (hasJ ? JsonOut::Num(jVal) : "null") + ",\"j_scenarios\":" + (hasJ ? JsonOut::Num(jScen) : "null") + ",\"j_natural\":" + (hasJ ? JsonOut::Num(jNat) : "null") + ",\"oracle_j\":" + (hasOracleJ ? JsonOut::Num(oracleJ) : "null") + ",\"oracle_j_scenarios\":" + (hasOracleJ ? JsonOut::Num(oracleJScen) : "null") + ",\"oracle_j_natural\":" + (hasOracleJ ? JsonOut::Num(oracleJNat) : "null") + ",\"oracle_fights\":" + std::to_string(oracleFights) + ",\"oracle_over\":" + JsonOut::Str(oracleOver) + ",\"oracle_covers\":" + (hasOracleJ ? JsonOut::Str(oracleCovers) : std::string("null")) + "}"
                           + ",\"oracle\":{\"k\":" + std::to_string(oracleK) + ",\"horizon_s\":" + JsonOut::Num(oracleH) + ",\"kind\":" + JsonOut::Str(oracleKind) + "},\n\"classes\":[";
             for (std::size_t i = 0; i < rows.size(); ++i) { const ResultRow& r = rows[i]; std::map<std::string, double> mix, met;
                 for (const auto& kv : SchemaMetrics(r.metrics)) { if (kv.first.rfind("a.", 0) == 0) mix[kv.first.substr(2)] = kv.second; else met[kv.first] = kv.second; }
