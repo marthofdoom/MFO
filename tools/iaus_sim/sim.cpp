@@ -43,7 +43,7 @@ namespace {
             S(elemCasts); S(resistedCasts); S(weakCasts); S(weakOpp); S(immuneCasts); S(splashAllyHits); S(areaCasts);
             S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks); S(powerWhiffs); S(regroups); S(grounds); S(blocks); S(bashes);
             S(playerPressureSec); S(peelSum); S(peelN); S(peelMiss); S(tgtSwitches); S(tauntsOutmatched); S(tauntThenDown); S(tauntSaves);
-            S(arrowsShot); S(arrowsHit); S(wpnHits); S(sneakHits); S(flankHits); S(hides); S(firstHits); S(sneakOpens); S(healAtN); S(sneakDmg); S(hiddenSec); S(sneakSec); S(tgtDistSum); S(playerDistSum); S(contactSec); S(goInBadSec); S(summonSec); S(undeadDmg); S(healAtSum); S(cloakSec); S(posN); S(tgtDistN);
+            S(arrowsShot); S(arrowsHit); S(wpnHits); S(sneakHits); S(flankHits); S(hides); S(hideOk); S(hideFail); S(flees); S(fleeHealed); S(fleeArrived); S(fleeFail); S(runDowns); S(stealthTry); S(stealthMiss); S(runSec); S(holdSec); S(fleeHpGain); S(firstHits); S(sneakOpens); S(healAtN); S(sneakDmg); S(hiddenSec); S(sneakSec); S(tgtDistSum); S(playerDistSum); S(contactSec); S(goInBadSec); S(summonSec); S(undeadDmg); S(healAtSum); S(cloakSec); S(posN); S(tgtDistN);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -90,6 +90,10 @@ namespace {
         { const double up = std::max(1e-9, s.upSec);
           m["sneak%"] = 100.0 * s.sneakSec / up; m["hidden%"] = 100.0 * s.hiddenSec / up; m["sneakAtk%"] = pct(double(s.sneakHits), double(s.wpnHits)); m["sneakDmg%"] = pct(s.sneakDmg, s.dmgDone);
           m["opener%"] = pct(double(s.sneakOpens), double(s.firstHits)); m["flank%"] = pct(double(s.flankHits), double(s.wpnHits)); m["hide/min"] = double(s.hides) / mins;
+          // card G3 / G2: hide runs that ended hidden, runs that failed, flees per fight and how they ended, the blows MFO's group read called
+          // "unaware" that the engine's per-pair level refused the multiplier, his time on a run and in the hold row
+          m["hideOk%"] = pct(double(s.hideOk), double(s.hides)); m["hideFail%"] = pct(double(s.hideFail), double(s.hides)); m["flee/f"] = double(s.flees) / n; m["fleeHealed%"] = pct(double(s.fleeHealed), double(s.flees)); m["fleeFail%"] = pct(double(s.fleeFail), double(s.flees));
+          m["fleeHpGain%"] = s.flees ? 100.0 * s.fleeHpGain / double(s.flees) : -1; m["stealthMiss%"] = pct(double(s.stealthMiss), double(s.stealthTry)); m["runDown%"] = pct(double(s.runDowns), double(s.hides + s.flees)); m["run%"] = 100.0 * s.runSec / up; m["still%"] = 100.0 * s.holdSec / up;
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
           m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
@@ -100,7 +104,7 @@ namespace {
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
         const std::vector<Scenario> all = AllScenarios(true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "all,stealth" = both
-        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.stealth && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
+        for (const Scenario& s : all) if (!(s.parked && !g_parked) && (((!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; };
@@ -150,10 +154,14 @@ namespace {
         return bad == 0 && inv == 0 ? 0 : 1;
     }
 
+    // The headline's scenarios: the 17 of main, and while a stealth road is modelled (--stealth g1|hide|g3, the default is g3) the
+    // stealth / disengage scenarios that are not parked. The 17 keep their indexes, so their fights are the same in every mode.
+    std::vector<Scenario> HeadlineScenarios() { std::vector<Scenario> v; for (Scenario& s : AllScenarios(g_stealth > 0)) if (!s.parked || g_parked) v.push_back(std::move(s)); return v; }
+    const char* StealthName() { static const char* n[] = { "off", "g1", "hide", "g3" }; return n[std::clamp(g_stealth, 0, 3)]; }
     // Mean utility of IAUS (no oracle) over the scenarios and the natural bracket of every class: the search objective.
     std::string g_optClass;   // --opt-class <slug>: the objective is that class only (its natural / balanced / strong1 brackets and its scenarios)
     double ObjectiveClass(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU, double* natU) {
-        const std::vector<Scenario> all = AllScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
+        const std::vector<Scenario> all = HeadlineScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         int ci = -1; for (std::size_t i = 0; i < classes.size(); ++i) if (classes[i].name == g_optClass) ci = static_cast<int>(i); if (ci < 0) return 0;
         std::vector<int> mine; { Rng R; R.g.seed(1); for (std::size_t i = 0; i < all.size(); ++i) { FightSpec fs = all[i].make(D, classes, R); if (fs.cls->name == g_optClass) mine.push_back(static_cast<int>(i)); } }
         const int br[3] = { 0, 1, 3 }; const int nb = 3 * fights, ns = static_cast<int>(mine.size()) * fights; std::atomic<int> next{ 0 }; std::vector<double> u(static_cast<std::size_t>(ns + nb), 0.0);
@@ -170,7 +178,7 @@ namespace {
     std::string g_objScope;   // --classes a,b: the headline J and the --opt objective cover those classes only (empty = all; --opt-class wins)
     double Objective(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU = nullptr, double* natU = nullptr) {
         if (!g_optClass.empty()) return ObjectiveClass(D, classes, seed, fights, threads, scenU, natU);
-        const std::vector<Scenario> all0 = AllScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
+        const std::vector<Scenario> all0 = HeadlineScenarios(); const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         std::vector<Scenario> all; std::vector<int> allIdx; std::vector<int> cls;   // the scenarios and the natural-bracket classes the objective covers
         const auto inScope = [&](const std::string& n) { return g_objScope.empty() || ("," + g_objScope + ",").find("," + n + ",") != std::string::npos; };
         if (g_objScope.empty()) { all = all0; for (std::size_t i = 0; i < all0.size(); ++i) allIdx.push_back(static_cast<int>(i)); for (std::size_t i = 0; i < classes.size(); ++i) cls.push_back(static_cast<int>(i)); }
@@ -316,7 +324,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -331,7 +339,10 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-estimates")) estimates = false;
         else if (!std::strcmp(argv[i], "--calm-holds")) g_calmBreaks = false;
         else if (!std::strcmp(argv[i], "--roads") && i + 1 < argc) { const std::string v = argv[++i]; g_groundRoad = v.find("ground") != std::string::npos; g_blockRoad = v.find("block") != std::string::npos; g_bashRoad = v.find("bash") != std::string::npos; }
-        else if (!std::strcmp(argv[i], "--stealth") && i + 1 < argc) { const char* v = argv[++i]; g_stealth = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "g1") ? 1 : !std::strcmp(v, "hide") ? 2 : !std::strcmp(v, "aware") ? 3 : std::atoi(v); }   // the stealth roads modelled as existing (World.h g_stealth)
+        else if (!std::strcmp(argv[i], "--stealth") && i + 1 < argc) { const char* v = argv[++i]; g_stealth = !std::strcmp(v, "off") ? 0 : !std::strcmp(v, "g1") ? 1 : !std::strcmp(v, "hide") ? 2 : (!std::strcmp(v, "g3") || !std::strcmp(v, "aware")) ? 3 : std::clamp(std::atoi(v), 0, 3); }   // the stealth / disengage roads modelled as existing (World.h g_stealth); default g3
+        else if (!std::strcmp(argv[i], "--sneak-profile") && i + 1 < argc) sneakProfile = argv[++i];   // vanilla | steep (lorerim-like) | list: synthetic sneak data laid over the loaded world (Detect.h ApplyProfile)
+        else if (!std::strcmp(argv[i], "--light-scale") && i + 1 < argc) g_lightScale = static_cast<float>(std::atof(argv[++i]));   // the light level of full daylight (World.h g_lightScale, MODEL 100)
+        else if (!std::strcmp(argv[i], "--blow-stands")) g_blowStands = true;         // the blow from stealth is struck standing (World.h g_blowStands)
         else if (!std::strcmp(argv[i], "--class-rulings")) g_classRulings = true;      // the oracle is held to the class playstyles (Playstyles.h); OFF by default, --class-oracle turns it on
         else if (!std::strcmp(argv[i], "--no-class-rulings")) { g_classRulings = false; noClassRulings = true; }   // ... and stays unconstrained even with --class-oracle
         else if (!std::strcmp(argv[i], "--parked")) g_parked = true;                  // the PARKED rows (T3+ playstyles, passives, stealth scenarios) take effect; Beta 1 = T1 + T2 only without it
@@ -375,7 +386,11 @@ int main(int argc, char** argv) {
     if (listParams) { ListParams(); return 0; }
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
-    const Data D = listPath ? LoadData(listPath) : BuiltinData();
+    Data Dm = listPath ? LoadData(listPath) : BuiltinData();
+    if (sneakProfile == "lorerim-like") sneakProfile = "steep";
+    if (sneakProfile.empty()) sneakProfile = listPath ? "list" : "vanilla";   // the built-in world has no sneak data of its own: Skyrim.esm's
+    if (!Detect::ApplyProfile(Dm, sneakProfile)) { std::fprintf(stderr, "unknown --sneak-profile '%s' (vanilla | steep | lorerim-like | list)\n", sneakProfile.c_str()); return 2; }
+    const Data& D = Dm;
     std::vector<SimClass> allClasses = legacy ? LegacyClasses() : RealClasses(mech);
     if (!rowsText.empty()) { const auto eq = rowsText.find('='); bool ok = eq != std::string::npos; std::vector<GRow> rows;
         if (ok) ok = ParseRows(rowsText.substr(eq + 1), rows); bool found = false;
@@ -394,20 +409,22 @@ int main(int argc, char** argv) {
     if (optPrefix) return OptimisePrefix(D, allClasses, seed, optFights > 0 ? optFights : fights, threads);
     if (g_optClass.empty() && !only.empty()) g_objScope = only;   // --classes scopes the headline J and the objective (--opt-class wins)
     if (!opt.empty()) return Optimise(D, allClasses, opt, seed, optFights > 0 ? optFights : fights, threads, optPasses);
-    const int hf = fightsGiven ? fights : 24;   // fights per scenario for the headline J (B710: --fights is honoured when given, 24 otherwise, and the HEADLINE line says which)
+    // Fights per scenario for the headline J. B710: a --seeds run honours --fights. B755: a full run's headline is ALWAYS 24, whatever
+    // --fights says (that flag sizes the class cells), so two archived full runs never differ in J because of their cell size.
+    const int hf = !g_seeds.empty() && fightsGiven ? fights : 24;
     if (!g_seeds.empty()) {   // J per seed, mean and standard error; no full tables
         std::vector<double> js; for (std::uint64_t sd : g_seeds) { double a = 0, b = 0; js.push_back(Objective(D, allClasses, sd, hf, threads, &a, &b)); std::printf("SEED %llu  J=%.2f (scenarios %.2f, natural %.2f)\n", (unsigned long long)sd, js.back(), a, b); }
         double m = 0; for (double x : js) m += x; m /= double(js.size()); double v = 0; for (double x : js) v += (x - m) * (x - m);
         const double se = js.size() > 1 ? std::sqrt(v / double(js.size() - 1) / double(js.size())) : -1.0;   // n=1 has no spread: print n/a
         char seb[32]; if (se < 0) std::snprintf(seb, sizeof seb, "n/a"); else std::snprintf(seb, sizeof seb, "%.2f", se);
-        std::printf("HEADLINE  J mean=%.2f  se=%s  n=%zu seeds  fights=%d per scenario  covers=%s  mode=%s\n", m, seb, js.size(), hf, ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus"); return 0; }
-    Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus";
+        std::printf("HEADLINE  J mean=%.2f  se=%s  n=%zu seeds  fights=%d per scenario  covers=%s  mode=%s  stealth=%s\n", m, seb, js.size(), hf, ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus", StealthName()); return 0; }
+    Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus"; R.stealth = StealthName(); R.sneakProfile = sneakProfile;
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (!noJson && opt.empty() && headlineOracle > 0) {   // the oracle on the first fights of the same seeds
-        g_oracleMode = true; g_oc = oc; R.oracleJ = Objective(D, allClasses, seed, headlineOracle, threads, &R.oracleJScen, &R.oracleJNat); g_oracleMode = false; R.hasOracleJ = true; R.oracleFights = headlineOracle;
+        g_oracleMode = true; g_oc = oc; R.oracleJ = Objective(D, allClasses, seed, headlineOracle, threads, &R.oracleJScen, &R.oracleJNat); g_oracleMode = false; R.hasOracleJ = true; R.oracleFights = headlineOracle; R.oracleCovers = ObjectiveCovers();
         R.oracleOver = std::string("rollout oracle (K=") + std::to_string(oc.K) + ", " + std::to_string(int(oc.H)) + " s, " + (oc.ext ? "extended" : "catalogue") + " actions) planning over " + (g_tableMode ? "IAUS (table mode is not planned over)" : estimates ? "IAUS with estimates" : "IAUS as on main") + (sets.empty() ? "" : " + --set");
         std::printf("HEADLINE  ORACLE J=%.2f (scenarios %.2f, natural %.2f)  %d fights per scenario, %d per class natural  covers=%s  [%s]\n", R.oracleJ, R.oracleJScen, R.oracleJNat, headlineOracle, std::max(1, headlineOracle / 2), ObjectiveCovers().c_str(), R.oracleOver.c_str()); }
-    if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, hf, threads, &R.jScen, &R.jNat); R.hasJ = true; R.jFights = hf; R.jCovers = ObjectiveCovers(); std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  fights=%d per scenario  mode=%s  covers=%s\n", R.jVal, R.jScen, R.jNat, hf, R.mode.c_str(), R.jCovers.c_str()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
+    if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, hf, threads, &R.jScen, &R.jNat); R.hasJ = true; R.jFights = hf; R.jCovers = ObjectiveCovers(); std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  fights=%d per scenario  mode=%s  covers=%s  stealth=%s\n", R.jVal, R.jScen, R.jNat, hf, R.mode.c_str(), R.jCovers.c_str(), StealthName()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
     if (!scenario.empty()) {
         std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
         if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
@@ -482,10 +499,15 @@ int main(int argc, char** argv) {
     for (int c = 0; c < nc; ++c) for (int rk = 0; rk < 5; ++rk) { const Agg& A = rankCell[static_cast<std::size_t>(c * 5 + rk)]; const double t = std::max<double>(1, double(A.s.ticks));
         std::printf("  %-12s rank%d  idle %.1f%%  hold %.1f%%  sw/min %.1f\n", classes[static_cast<std::size_t>(c)].name.c_str(), rk + 1, 100.0 * double(A.s.idle) / t, 100.0 * double(A.s.hold) / t, double(A.s.switches) / std::max(1e-9, A.durSum / 60.0)); }
     std::printf("\nCHECKS: BAD-FACTS ticks=%ld (must be 0)  invalid picks=%ld (must be 0)  => %s\n", totalBad, totalInvalid, totalBad == 0 && totalInvalid == 0 ? "PASS" : "FAIL");
-    if (outBase) { std::ofstream o(outBase); for (auto& kv : all) for (auto& m : kv.second) if (m.first.find("dec.") == std::string::npos) o << kv.first << "|" << m.first << "=" << m.second << "\n"; std::printf("baseline written: %s\n", outBase); }
+    char meta[160]; std::snprintf(meta, sizeof meta, "#meta fights=%d seed=%llu stealth=%s profile=%s classes=%s", fights, (unsigned long long)seed, StealthName(), sneakProfile.c_str(), only.empty() ? (legacy ? "legacy" : "real") : only.c_str());
+    if (outBase) { std::ofstream o(outBase); o << meta << "\n"; for (auto& kv : all) for (auto& m : kv.second) if (m.first.find("dec.") == std::string::npos) o << kv.first << "|" << m.first << "=" << m.second << "\n"; std::printf("baseline written: %s\n", outBase); }
     if (cmp) {
         std::ifstream f(cmp); std::string line; int diffs = 0; std::printf("\nCOMPARE vs %s (|delta| > max(0.5, 5%%)):\n", cmp);
-        while (std::getline(f, line)) { const auto eq = line.rfind('='); if (eq == std::string::npos) continue; const std::string k = line.substr(0, eq); const double old = std::atof(line.c_str() + eq + 1);
+        while (std::getline(f, line)) {
+            if (!line.empty() && line[0] == '#') {   // B755: a baseline made at another cell size, seed, stealth road or class set is not comparable: refuse, never print a delta
+                if (line != meta) { std::printf("COMPARE REFUSED: the baseline was made with\n  %s\nthis run is\n  %s\n", line.c_str(), meta); return 2; }
+                continue; }
+            const auto eq = line.rfind('='); if (eq == std::string::npos) continue; const std::string k = line.substr(0, eq); const double old = std::atof(line.c_str() + eq + 1);
             const auto p = k.rfind('|'); const auto ci = all.find(k.substr(0, p)); double nv = 0; if (ci != all.end()) { auto mi = ci->second.find(k.substr(p + 1)); if (mi != ci->second.end()) nv = mi->second; }
             if (k.find("dec.") != std::string::npos) continue;
             if (std::fabs(nv - old) > std::max(0.5, 0.05 * std::fabs(old))) { std::printf("  %-34s %9.2f -> %9.2f\n", k.c_str(), old, nv); ++diffs; } }
