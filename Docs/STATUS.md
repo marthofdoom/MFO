@@ -11,14 +11,14 @@
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 - **2026-11-11, THEFT GATE (`fix/theft-gate`, ClickUp 1dfcuabczbg, SEV-1: a v2.8.1 player got 5 g theft bounties in Whiterun from follower
-  looting and the guards attacked; NOT merged, NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
+  looting and the guards attacked; merged to main 2026-11-12 (9414150), NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
   an item copy owned by anyone but null / the player / PlayerFaction / his own side, from any source (per-copy ExtraOwnership, else the
   container's owner; the xList is passed to RemoveItem). (2) Interim, until the culprit is found (marth): no take of any kind while a guard can
   see the follower or the item (`TheftGate::GuardInterim`). (3) Door / furniture: a door that is a crime to activate (locked, or the engine off-limits test) is closed to errand and loot legs, off-limits smithing stations are skipped, the stuck-at-origin rescue never opens an off-limits door. Proof lines `[theft-gate]` plus a 3-action ring after every
   `[crime-probe] BOUNTY UP`. The culprit is still not pinned (RE note: vanilla trespass 5 g, probably a teammate opening a locked owned door or
   using owned furniture; marth suspects a crime-altering mod). Test step: `in-game-test-list.md` "Theft gate". Backlog MFO-B790...
 - **2026-11-11, MELEE BATCH (T2 batch M; `feat/melee-moves` on top of `feat/g7-reanimate` + `feat/class-aversion`, Harbinger
-  `feat/melee-moves`; NOT merged, NOT field run).** One paragraph per item.
+  `feat/melee-moves`; merged to main 2026-11-12, NOT field run).** One paragraph per item.
   **Item 1, Block (Harbinger ABI 43).** New gambit action `Block` (`act.block`, APPENDED): the follower holds his guard up
   for `[Evaluator] fBlockHoldSeconds` (2.5 s). Harbinger's ch.31 `kCombatMove_Block` raises it by the engine's own block
   action and denies his own offense and the engine's own release for the window. `apmf/BlockClaims.cpp` (new), a handler
