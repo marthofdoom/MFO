@@ -381,6 +381,7 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
 - What: a perk entry `ModIncomingDamage x0` (or x the block fraction) conditioned on the subject `IsAttacking == 1` and
   `GetRandomPercent < 40`, plus a block hit sound or spark if feasible.
 - Classes: Living Legend.
+- **REQUIREMENT (marth 2026-11-12, Q-S-3 dodge):** Living Legend's class style has Avoid Threat 0.55, but "it only triggers when his block does not": the dodge must fire only on an attack this auto-block passive did NOT stop. The H8 build ties the two together (the roll order is block first, the dodge only on a miss of the block roll); nothing in the generator or StyleClaims does this today.
 - Tier B, effort 2. **Field: yes.**
 - Feasibility: LIKELY. `ModIncomingDamage` is E. Whether `GetRandomPercent` re-rolls per hit inside a perk entry
   condition is to be observed. Ask marth whether "automatically blocked" needs a visible block reaction
