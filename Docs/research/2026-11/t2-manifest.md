@@ -53,6 +53,8 @@ Status: DONE = merged to main. FLIGHT = branch in review or being written. OPEN 
 | All, sim | Health-decline curves and the best drink time (marth 11-12 Q-knight-drink: "the sim should help come up with health decline curves and perfect drinking times as well. If it uses real enemies and such"). The sim measures each class's health-decline curve against real enemies (the list's actors, never hard-coded list data in logic) and searches the drink line (DrinkNeed curve, the Knight guard-line cutoff) for the best outcome; the native defaults follow the result | MFO sim (Sonnet), in the same sim batch as the dash and base-cell rows | OPEN | the row itself |
 | Conjurer | Summon placed at a ground point (memory "summons target ground XYZ", packages Conjurer block) | Harbinger ch.8b pos road | OPEN, needed only if the field shows summons spawning badly | n/a |
 
+RULE (marth 11-12): "The sim should be used to find all the ideal edge case numbers, thats the point of a sim for iaus". Every IAUS constant that decides an edge case (curve knees, boosts, health/magicka lines, hold/rest and touch-spent windows, cooldowns, ranges) is found by a sim search against real enemies before it ships; a hand value is a labelled placeholder with a row here. Current placeholders: the Knight guard-line boost 2.0 and its drink cutoff (~0.34, DrinkNeed), the 3 s touch-spent window (kTouchSpentSec), the 2.5 s / 1.5 s guard hold and rest. The sim batch adds a constant-search pass over them (and an inventory of every other hand-picked IAUS constant, each searched or listed).
+
 ## 3. Defaults taken (saved as questions; marth may overrule)
 
 - Q97 REVERSED: G13 steal IS T2 (the Thief's own default gambit `act.steal` is missing). G13 and G14 ship together.
