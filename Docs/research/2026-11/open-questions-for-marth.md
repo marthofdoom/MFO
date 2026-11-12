@@ -139,3 +139,9 @@ Each: question, context, my recommended default (work proceeds on the default wh
 - Flee deny: "wouldn't it be non offense cast": Harbinger ch.7 Offense now means hostile actions only (ABI v40, feat/ch7-hostile-offense).
 - Tuning: Fable fixes the sim and makes real sim changes; pure curve training goes to a cheap agent (Haiku medium, coordinator's pick).
 - Open, with defaults taken (from the movement and ch.7 runs): MB1, MB4, MB6, MB7, MB-F1..F4, CH7-Q1..Q5 (see the agents' reports and the backlog entries B740..B762).
+
+## ANSWERED 2026-11-11 18:36 PT (marth, chat)
+- T2 scope grows: asked "g2 g7 g9 g14, are those done?" (G2 Layer 1 and G9 merged; G7 and G14 not started), marth: "Looks like we need some of these for t2, all probably. and they need to be in sim". So G7 corpse target / reanimate and G14 pick nearby locks join the T2 build, and G2, G7, G9 and G14 must all be modelled in tools/iaus_sim. G9 cooldowns are already in the sim; G2 is going in now (feat/iaus-sim-stealth).
+- Saved, default taken: Q97. G14 depends on G13's witness pre-check. Default: build the shared pre-check with G14; the G13 steal action itself stays in T3 unless marth says otherwise.
+- Saved, default taken: Q98. The combat sim has no world logistics. Default: G14 is simulated as its witness pre-check against the sim's engine detection model (Detect.h: every nearby NPC's senses must all be 0), not as a lockpicking walk.
+- Saved, default taken: Q99. G7 is listed for Necromancer and Arch-Mage (T3). Default: the cond.corpse_within selector ships as a base gambit usable at T2 (Conjurer has reanimate spells), class defaults stay with the Necromancer line.
