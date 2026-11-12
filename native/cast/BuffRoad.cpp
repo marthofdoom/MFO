@@ -291,7 +291,7 @@ namespace MFO::Actuation {
         // CARD G7: Reanimate joins the set. Its caster is bounded by the ENGINE, not by Harbinger: its own 0x06 runs
         // in full under a claim (a valid corpse is required and a raised corpse is no corpse), with or without the
         // ABI v42 corpse seat. Without this a Reanimate spell that also carries an effect of another bounded row
-        // never reached the claim road, so its corpse rule fell on the direct roads (MFO-B769).
+        // never reached the claim road, so its corpse rule fell on the direct roads (MFO-B770).
         const std::uint32_t bounded = bit(EngineRow::Light) | bit(EngineRow::Script) | bit(EngineRow::Armor) |
                                       bit(EngineRow::Cloak) | bit(EngineRow::Ward) | bit(EngineRow::Invisibility) |
                                       bit(EngineRow::Summon) | bit(EngineRow::BoundItem) | bit(EngineRow::Reanimate);
