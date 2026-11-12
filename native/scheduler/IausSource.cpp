@@ -230,6 +230,7 @@ namespace MFO::Scheduler {
         case Family::Bash:         c.actionOpcode = Vocab::kActBash; break;    // Harbinger ch.31 (generated only behind Snapshot::bashRoad)
         case Family::GiveGround:   c.actionOpcode = Vocab::kActGiveGround; break;   // Harbinger ch.24 on a point (Snapshot::groundRoad)
         case Family::Disengage:    c.actionOpcode = Vocab::kActDisengage; break;    // card G3 (Concealment.cpp; Snapshot::concealRoad)
+        case Family::Block:        c.actionOpcode = Vocab::kActBlock; break;        // batch I item 4: Harbinger ch.31 held guard (Snapshot::blockRoad + the class's Block row)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
@@ -264,8 +265,8 @@ namespace MFO::Scheduler {
         case Family::Posture:
         case Family::Scroll:
         case Family::Exploit:
-        case Family::Regroup:      // the road families with no executor yet: generated only behind Snapshot::*Road,
-        case Family::Block:        // which no engine code sets for them (a regroup client, the Harbinger block)
+        case Family::Regroup:      // the road family with no executor yet: generated only behind Snapshot::regroupRoad,
+                                   // which no engine code sets (a regroup client)
         case Family::kCount:
             a_whyNot = "no action road for this family yet";
             return false;

@@ -467,6 +467,9 @@ namespace MFO::Iaus::SpellBook {
             if (act == Vocab::kActPowerAttack) {
                 g.powerAttack = true;
                 g.powerCooldownSec = (std::max)(g.powerCooldownSec, row.cooldownSec);
+            } else if (act == Vocab::kActBlock) {
+                g.block = true;   // batch I item 4 (MFO-B800): the class's Block row is what lets IAUS raise the guard
+                g.blockCooldownSec = (std::max)(g.blockCooldownSec, row.cooldownSec);
             } else if (act == Vocab::kActTaunt) {
                 g.taunt = true;
                 g.tauntCooldownSec = (std::max)(g.tauntCooldownSec, row.cooldownSec);   // card I6: the row's own, 0 today

@@ -9,6 +9,7 @@
 #include "Targeting.h"
 #include "Taunt.h"
 #include "Vocabulary.h"
+#include "APMF_API.h"
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
 #include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
@@ -181,6 +182,13 @@ namespace MFO::Iaus::Candidates {
         // The Bash family exists only while its road does: Harbinger's combat move (ch.31, ABI v38) and the switch that
         // stays OFF until the field run proves that road ([Debug] bIausBashRoad). Harbinger absent = no candidate.
         s.bashRoad         = Config::g_iausBashRoad.load(std::memory_order_relaxed) && APMFBridge::CombatMoveSupported();
+        // The held guard (batch I item 4, marth 11-12, MFO-B800): Harbinger serves the move on this game (asked once per load,
+        // the ABI v35 dry run) and his hands can block now. The CLASS row decides who may (ClassGate::block); guardHeld is the
+        // held-guard gate Generate reads (a guard that stands denies his own offense, marth Q-melee-3).
+        s.guardHeld        = APMFBridge::BlockHoldLive(selfID);
+        s.blockRoad        = APMFBridge::BlockSupported() &&
+                             APMFBridge::CombatMoveUnservedReason(selfID, APMF_API::kCombatMove_Block) == nullptr &&
+                             APMFBridge::BlockHandsReason(a_self) == nullptr;
         // The same for a step back: Harbinger's ch.24 on a point (ABI v39) and [Debug] bIausGroundRoad.
         s.groundRoad       = Config::g_iausGroundRoad.load(std::memory_order_relaxed) && APMFBridge::GroundStepSupported();
 

@@ -48,6 +48,7 @@ namespace MFO::Iaus {
             bool hold = false;          // the hold row stands: unseen Yes, a weapon posture
             bool strikeReady = false;   // some unaware foe is in reach (melee) or in sight (bow): the blow from stealth is ready
             bool holdQuiet = false;     // hold && !strikeReady: nothing LOUD is generated (no taunt, no cast whose sound the engine emits)
+            bool guard = false;         // batch I item 4: a held guard stands (Snapshot::guardHeld): nothing that would drop it is generated
             bool fleeRun = false;       // card G3: a non-sneak flee run stands: no offense is generated, his own heals are boosted
             // An unaware foe he could strike now. Melee: inside the swing reach and not airborne beyond it; bow: in the
             // follower's own ray and inside the chase cap. A caster's posture (None / Staff) never holds or strikes.
@@ -127,6 +128,7 @@ namespace MFO::Iaus {
                 // can strike now. An unaware foe still out of reach is waited for, not chased: the chase is the noise.
                 const bool holdsOff = x.hold && foe->detectsMe == Tri::No && !x.StrikeReady(*foe);
                 // Today's reach gate: a melee-only follower never names a foe airborne out of his swing.
+                if (x.guard) break;   // a held guard: no blow, no taunt (Fire refuses them; his Retreat below is not one)
                 if (!holdsOff && !(s.meleeOnly && foe->outOfMeleeReach)) {
                     Candidate c = x.Make(Family::Attack, foe);
                     x.Foe(c.f, *foe, ranged);
@@ -234,13 +236,17 @@ namespace MFO::Iaus {
                     x.Push(std::move(c));
                 }
             }
-            if (s.blockRoad && melee && swingOn) {
+            // BLOCK (batch I item 4, marth 11-12 MFO-B800): only for a class whose table carries the Block row (Q-melee-2:
+            // Knight, Great Knight, Ebony Warrior; everyone else blocks by the engine's own style). Generated while the guard
+            // stands too, so the renewal past 60% of the window is asked for (ServiceBlock).
+            if (s.blockRoad && x.g.block && melee && swingOn) {
                 Candidate c = x.Make(Family::Block, swingOn);
                 c.f.foeSwinging = true;
-                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
+                const float rowCd = (std::max)(0.0f, Finite(x.g.blockCooldownSec, 0.0f));
+                c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
                 x.Push(std::move(c));
             }
-            if (s.bashRoad && melee)
+            if (s.bashRoad && melee && !x.guard)
                 for (const Combatant* foe : x.top) {
                     if (foe->outOfMeleeReach) continue;
                     Candidate c = x.Make(Family::Bash, foe);
@@ -325,6 +331,7 @@ namespace MFO::Iaus {
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
         void Postures(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
+            if (x.guard) return;   // a held guard: no weapon change (cast/Fire.cpp refuses the equips)
             const Kit&      k = s.book.kit;
             const Combatant* tgt = nullptr;
             for (const Combatant* f : a_foes)
@@ -357,6 +364,7 @@ namespace MFO::Iaus {
         // ── casts ────────────────────────────────────────────────────────────────────────────────────────
         void Casts(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
+            if (x.guard) return;   // a held guard denies all his own casts, heals included (marth Q-melee-3)
             const bool anyBusy  = s.handBusyLeft || s.handBusyRight;
             const bool bothBusy = s.handBusyLeft && s.handBusyRight;
             const float pool    = Finite(s.self.mp, 0.0f);
@@ -548,6 +556,7 @@ namespace MFO::Iaus {
         x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
         x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
         x.fleeRun = a_s.fleeRun;
+        x.guard = a_s.guardHeld;
         for (const Combatant& a : a_s.allies)
             if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }
 

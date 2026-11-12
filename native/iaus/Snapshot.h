@@ -100,6 +100,8 @@ namespace MFO::Iaus {
         bool scrollUser = true;       // ruling Q36
         bool powerAttack = false;     // a ch.18 power share or a power-attack default row
         float powerCooldownSec = 0.0f;   // that row's cooldown (10 s); 0 = none declared
+        bool block = false;           // a Block default row (act.block; Q-melee-2: Knight, Great Knight, Ebony Warrior). false with the tree OFF
+        float blockCooldownSec = 0.0f;   // that row's cooldown (4 s); 0 = none declared (Tuning::blockCooldownSec then)
         bool taunt = false;           // a taunt default row
         float tauntCooldownSec = 0.0f;   // that row's cooldown; 0 = none declared (Tuning::rowlessTauntCooldownSec then)
         bool disengage = false;       // Flag::kDisengage (Retreat)
@@ -193,7 +195,9 @@ namespace MFO::Iaus {
         bool  concealPoint = false;          // ...and Concealment knows a fresh point (hidden from every listed foe; a flee: away from them)
         bool  fleeRun = false;               // card G3: a NON-sneak flee run stands (Concealment::FleeRunning): no offense is generated,
                                              // his own heals and health potions are boosted
-        bool  blockRoad = false;          // Harbinger can make him raise his guard now (lab only today)
+        bool  blockRoad = false;          // Harbinger serves the held guard (ch.31 kCombatMove_Block) and his hands can block now (batch I item 4)
+        bool  guardHeld = false;          // a block request of his is out or his guard is up (APMFBridge::BlockHoldLive): the held-guard gate
+                                          // (marth Q-melee-3) -- no attack, power attack, bash, taunt, cast or weapon change is generated
         bool  bashRoad = false;           // Harbinger can make him bash now (lab only today)
         bool  regroupRoad = false;        // the ch.24 regroup client exists (close on the player / a healer while fighting).
                                           // false (today): no regroup candidate is made
