@@ -1014,7 +1014,8 @@ namespace MFO::Logistics {
                     // job's own cleanup run in Step's kUnlocking phase).
                     if (tref->IsLocked() || Lockpick::HasJob(id, tref->GetFormID())) {
                         const auto pick = Lockpick::Step(a_follower, tref, now,
-                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())));   // G14 picks UNOWNED chests only (Q-L-6)
+                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())),
+                            /*a_allowOwned*/ tr.cat == Category::PickLocks);   // G14: an owned chest only through Steal::Check (Q-L-6)
                         if (pick == Lockpick::StepResult::kHold) return;   // the pick IS this tick's action
                         if (pick == Lockpick::StepResult::kRefused) {
                             MarkTravelFailed(tref->GetFormID(), now);        // transient skip, never sticky
@@ -1023,6 +1024,23 @@ namespace MFO::Logistics {
                             return;
                         }
                         // kProceed: open now -> the transfer below
+                    }
+                    // ── OWNED CHEST picked by act.pick_locks (Q-L-6, marth 2026-11-12): its loot-kind contents are STOLEN, on main, behind a fresh
+                    // Steal::CheckNow before each item batch. The loot rules below never touch it (the theft gate bars every owned copy there), and
+                    // neither does StripCorpse: an owned chest is done here. Posted / Retry = ask again next tick (the phase is untouched).
+                    if (tr.cat == Category::PickLocks && !Lockpick::IsDoor(tref) && Steal::IsOwnedChest(tref)) {
+                        std::string stealWhy;
+                        const auto st = Steal::TakeOwnedContents(a_follower, tref, &stealWhy);
+                        if (st == Steal::OwnedTake::Posted || st == Steal::OwnedTake::Retry) return;
+                        if (st == Steal::OwnedTake::Took) { MarkJustLooted(id, now); StuckAtOriginResetRun(id); }
+                        spdlog::info("[loot] {:08X}: arrived at OWNED chest {:08X} -- {}{}{}", id, tref->GetFormID(),
+                                     st == Steal::OwnedTake::Took ? "stole its contents" : st == Steal::OwnedTake::Nothing ? "nothing of the steal kinds to take"
+                                                                                                                         : "steal CUT (nothing more moves)",
+                                     stealWhy.empty() ? "" : ": ", stealWhy);
+                        MarkTravelFailed(tref->GetFormID(), now);   // done (Took / Nothing) or a transient skip (Cut): never sticky
+                        tr.phase = TravelPhase::Holding;
+                        tr.lingerUntil = now + BatchLingerDur();
+                        return;
                     }
                     // A DOOR leg (LP-M2) has nothing to transfer: once it is open (picked,
                     // keyed, or unlocked by someone else meanwhile) the leg is done, the gate

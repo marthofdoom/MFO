@@ -262,6 +262,6 @@ Q-I-8. Block in IAUS. DEFAULT taken: a Block candidate exists only for a class w
 
 ## ANSWERED 2026-11-12 (marth, AskUserQuestion, during the tuning round)
 - Q-S-5: "I would lean towards lab score, but the line should block at least 60% of attacks directed at them when 2+ foes are taunted." Knight line (Knight, Great Knight, Ebony Warrior), Sentient AI: tune for the lab score, with a floor: at least 60% of incoming attacks are guarded while he holds 2+ taunted foes. Passed to the tuning round; if parameters cannot reach it, it becomes a code card (a taunt-count term in BlockNeed).
-- Q-L-6: owned chests are picked when the steal witness check passes, and their loot-kind contents are taken as a steal (same no-witness rule, Thief line). Follow-up change.
+- Q-L-6: owned chests are picked when the steal witness check passes, and their loot-kind contents are taken as a steal (same no-witness rule, Thief line). Follow-up change. IMPLEMENTED 2026-11-12 on `feat/owned-pick` (not merged, not field run).
 - Q-S-8: reanimate stays T3 (Necromancer card adds an IAUS family and a magicka reserve).
 - Q-L-4: no exemption for player-given weapons (default confirmed).

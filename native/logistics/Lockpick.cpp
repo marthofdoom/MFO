@@ -604,6 +604,9 @@ namespace MFO::Logistics::Lockpick {
         const bool doorEarly = baseEarly && baseEarly->Is(RE::FormType::Door);
         const bool ownedOrOff = a_ref->GetOwner() != nullptr || a_ref->IsOffLimits();
         if (ownedOrOff && a_allowOwned && !doorEarly) {
+            // the source bars of the steal road (player storage, quest / faction containers, the player's own side's chest): refused here
+            // too, so the judge never depends on the scan having run them
+            if (const char* bar = Steal::OwnedChestBarred(a_follower, a_ref)) { LogRefusal(fid, a_ref, Reason::kOwned, std::string(" -- ") + bar); return false; }
             std::string why;
             switch (Steal::Check(a_follower, a_ref, TheftGate::Road::Pick, &why)) {
                 case Steal::Verdict::Take:    break;
@@ -1010,9 +1013,11 @@ namespace MFO::Logistics::Lockpick {
             }
         }
         if (!a_ref->IsLocked()) {
-            spdlog::info("[lockpick] {:08X}: {} {:08X} ({} lock){} in {:.1f}s ({} replay(s)) -- transferring", fid,
+            spdlog::info("[lockpick] {:08X}: {} {:08X} ({} lock){} in {:.1f}s ({} replay(s)) -- {}", fid,
                          j.viaKey ? "UNLOCKED with the key" : "PICKED", rid, LevelName(j.level),
-                         j.viaKey ? "" : std::format(", broke {} pick(s)", j.sim.broken), j.window, j.replays);
+                         j.viaKey ? "" : std::format(", broke {} pick(s)", j.sim.broken), j.window, j.replays,
+                         Steal::IsOwnedChest(a_ref) ? "OWNED chest: its loot-kind contents go by the STEAL road (re-proved on main), never the loot rules"
+                                                    : "transferring");
             g_openedByUs[fid] = rid;   // LP-M2: the door leg's F-L3 check reads it once
             EndJob(fid, nullptr);
             return StepResult::kProceed;
@@ -1179,6 +1184,7 @@ namespace MFO::Logistics::Lockpick {
         g_fail.clear();
         g_logged.clear();
         g_openedByUs.clear();
+        Steal::ClearOwnedTakes();
         {
             std::scoped_lock lk(g_snapMx);
             g_snaps.clear();

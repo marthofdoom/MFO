@@ -248,4 +248,168 @@ namespace MFO::Logistics::Steal {
         s_why = "witness pre-check: " + s_why;
         return s_why.c_str();
     }
+
+    // ═══ OWNED CHESTS (act.pick_locks, Q-L-6): the source bars and the steal take ═══════════════════════════════════════════════
+
+    namespace {
+        struct OwnedJob {
+            RE::FormID  chest = 0;
+            bool        posted = true;               // true = the main-thread take has not answered yet
+            OwnedTake   res = OwnedTake::Posted;
+            std::string why;
+        };
+        std::mutex g_otMx;                            // its own lock (never g_snapMx); held only around this map
+        std::unordered_map<RE::FormID, OwnedJob> g_ot;   // follower -> the one take in flight / its answer
+
+        // The loot kinds act.steal takes from the floor (Q-L-1), judged on an INVENTORY item with the predicates the container loot
+        // categories run (LootGold / Lockpicks / Valuables / SoulGems / Ingredients / Jewelry / Potions). Equipment and ammo are not here.
+        bool StealKind(RE::TESBoundObject* a_obj, RE::InventoryEntryData* a_entry) {
+            constexpr RE::FormID kGold001 = 0x0000000F, kLockpick = 0x0000000A;
+            if (!a_obj) return false;
+            if (a_entry && IsQuestObjectInstance(a_entry)) return false;   // a quest item never moves, whatever the toggle
+            const RE::FormID id = a_obj->GetFormID();
+            if (id == kGold001 || id == kLockpick || IsCoinLoot(a_obj)) return true;
+            const bool excluded = !Config::g_lootSpecialItems.load() && Catalog::IsExcluded(id);
+            if (IsValuableMisc(a_obj) || IsSoulGemItem(a_obj) || IsIngredientItem(a_obj)) return !excluded;
+            if (auto* armo = a_obj->As<RE::TESObjectARMO>(); armo && IsJewelryPiece(armo)) return !excluded;
+            if (auto* alc = a_obj->As<RE::AlchemyItem>(); alc && IsDrinkablePotion(alc)) return true;
+            return false;
+        }
+
+        void Finish(RE::FormID a_f, RE::FormID a_chest, OwnedTake a_res, std::string a_why) {
+            std::scoped_lock lk(g_otMx);
+            auto it = g_ot.find(a_f);
+            if (it == g_ot.end() || it->second.chest != a_chest) return;   // abandoned / replaced (a revert cleared it): drop
+            it->second.posted = false; it->second.res = a_res; it->second.why = std::move(a_why);
+        }
+
+        struct Grp { RE::ExtraDataList* xl; std::int32_t n; bool owned; };
+
+        // MAIN THREAD. The whole take. Re-plans from the live inventory each call, so a Retry resumes where the last call stopped.
+        void OwnedTakeOnMain(RE::FormID a_fid, RE::FormID a_cid) {
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+            auto* chest = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_cid);
+            if (!f || !chest || f->IsDead() || chest->IsDisabled() || chest->IsMarkedForDeletion() || !chest->Is3DLoaded()) {
+                Finish(a_fid, a_cid, OwnedTake::Cut, "the follower or the chest is gone, dead or not loaded"); return;
+            }
+            if (chest->IsLocked()) { Finish(a_fid, a_cid, OwnedTake::Cut, "the chest reads locked again"); return; }
+            if (const char* bar = OwnedChestBarred(f, chest)) { Finish(a_fid, a_cid, OwnedTake::Cut, bar); return; }
+            // an OFF-LIMITS chest with no explicit owner: every copy without its own ownership is the cell owner's (a crime to take)
+            const bool cellOwnedOnly = chest->GetOwner() == nullptr && chest->IsOffLimits();
+            std::vector<RE::TESBoundObject*> items;
+            for (auto& [obj, data] : chest->GetInventory())
+                if (obj && data.first > 0 && StealKind(obj, data.second.get())) items.push_back(obj);
+            std::int32_t movedTotal = 0;
+            for (auto* obj : items) {
+                // plan this item's owned copies from the live inventory
+                std::vector<Grp> groups;
+                std::int32_t plain = 0;
+                bool plainOwned = false, unownedXl = false;
+                {
+                    auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
+                    auto it = inv.find(obj);
+                    if (it == inv.end() || it->second.first <= 0) continue;
+                    std::int32_t xlTotal = 0;
+                    auto* e = it->second.second.get();
+                    if (e && e->extraLists)
+                        for (auto* xl : *e->extraLists) {
+                            if (!xl) continue;
+                            auto* cnt = xl->GetByType<RE::ExtraCount>();
+                            const std::int32_t n = cnt && cnt->count > 0 ? static_cast<std::int32_t>(cnt->count) : 1;
+                            const bool hasOwn = xl->GetByType<RE::ExtraOwnership>() != nullptr;
+                            const bool owned = TheftGate::TakeBarred(f, chest, obj, xl, TheftGate::Road::Steal) != nullptr || (cellOwnedOnly && !hasOwn);
+                            groups.push_back({ xl, n, owned });
+                            if (!owned) unownedXl = true;
+                            xlTotal += n;
+                        }
+                    plain = std::max<std::int32_t>(0, it->second.first - xlTotal);
+                    plainOwned = plain > 0 && (TheftGate::TakeBarred(f, chest, obj, nullptr, TheftGate::Road::Steal) != nullptr || cellOwnedOnly);
+                }
+                // RemoveItem cannot choose the copy of a plain stack that shares an inventory entry with an unowned extra-listed copy
+                const bool plainOk = plainOwned && !unownedXl;
+                bool any = plainOk;
+                for (const auto& g : groups) if (g.owned) any = true;
+                if (!any) continue;
+                // ONE proof per item form, on this thread, immediately before its RemoveItems (nothing runs between them)
+                std::string why;
+                const auto v = CheckNow(f, chest, TheftGate::Road::Steal, &why);
+                if (v == Verdict::Pending) {
+                    spdlog::info("[steal] F={:08X} chest={:08X}: owned take PAUSED before item {:08X} -- the pre-check is not conclusive this frame ({} moved so far)",
+                                 a_fid, a_cid, obj->GetFormID(), movedTotal);
+                    Finish(a_fid, a_cid, OwnedTake::Retry, "pre-check not conclusive this frame"); return;
+                }
+                if (v == Verdict::Refused) {
+                    spdlog::info("[steal] F={:08X} chest={:08X}: owned take CUT before item {:08X} -- witness pre-check: {} ({} moved before the hit; nothing refunded)",
+                                 a_fid, a_cid, obj->GetFormID(), why, movedTotal);
+                    Finish(a_fid, a_cid, OwnedTake::Cut, why); return;
+                }
+                constexpr auto kReason = RE::ITEM_REMOVE_REASON::kStoreInContainer;
+                auto move = [&](std::int32_t a_n, RE::ExtraDataList* a_xl) {
+                    if (a_n <= 0) return;
+                    if (obj->GetFormID() != 0x0000000F && !IsCoinLoot(obj) && !FitsCarryWeight(f, obj->GetWeight() * a_n)) return;
+                    TheftGate::NoteAction(a_fid, TheftGate::Road::Steal, a_cid, "take (owned chest item)");
+                    chest->RemoveItem(obj, a_n, kReason, a_xl, f);
+                    movedTotal += a_n;
+                    TheftGate::LogOwnedCopy(f, chest, obj, a_n, a_xl ? "xOwn" : "container");
+                    spdlog::info("[steal] F={:08X} chest={:08X}: STOLE item={:08X}({}) x{} road=owned-chest (pick + witness pre-check Take, re-proved on main)",
+                                 a_fid, a_cid, obj->GetFormID(), NameOf(obj), a_n);
+                };
+                for (const auto& g : groups) if (g.owned) move(g.n, g.xl);
+                if (plainOk) move(plain, nullptr);
+                // copies that were not owned by someone else follow the normal theft-gate road (a plain RemoveItem if none is barred)
+                if (TheftGate::Takeable(f, chest, obj)) {
+                    auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
+                    if (auto it = inv.find(obj); it != inv.end() && it->second.first > 0)
+                        movedTotal += TheftGate::Take(f, chest, obj, it->second.first, TheftGate::Road::Container);
+                }
+            }
+            Finish(a_fid, a_cid, movedTotal > 0 ? OwnedTake::Took : OwnedTake::Nothing, {});
+        }
+    }
+
+    bool IsOwnedChest(RE::TESObjectREFR* a_chest) {
+        return a_chest && (a_chest->GetOwner() != nullptr || a_chest->IsOffLimits());
+    }
+
+    const char* OwnedChestBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_chest) {
+        if (!a_follower || !a_chest) return "no chest";
+        if (Lotd::IsDisplayRef(a_chest->GetFormID())) return "a LOTD museum display";
+        if (IsLOTDDropOff(a_chest)) return "a LOTD drop-off / sell box";
+        if (RefInPlayerStorage(a_chest)) return "player storage / player home (museum halls included)";
+        if (IsQuestObjectRef(a_chest)) return "a quest container";
+        if (IsFactionServiceContainer(a_chest)) return "a faction's vendor / stolen-goods / evidence container";
+        // owned by the player's side or the follower's own: not someone else's, so not this road (TheftGate::TakeBarred is null for it)
+        if (a_chest->GetOwner() && !TheftGate::TakeBarred(a_follower, a_chest, nullptr, nullptr, TheftGate::Road::Steal))
+            return "owned by the player's own side or the follower's";
+        return nullptr;
+    }
+
+    OwnedTake TakeOwnedContents(RE::Actor* a_follower, RE::TESObjectREFR* a_chest, std::string* a_why) {
+        if (!a_follower || !a_chest) { if (a_why) *a_why = "unresolved actor or chest"; return OwnedTake::Cut; }
+        const RE::FormID fid = a_follower->GetFormID(), cid = a_chest->GetFormID();
+        {
+            std::scoped_lock lk(g_otMx);
+            if (auto it = g_ot.find(fid); it != g_ot.end() && it->second.chest == cid) {
+                if (it->second.posted) return OwnedTake::Posted;
+                const OwnedTake r = it->second.res;
+                if (a_why) *a_why = std::move(it->second.why);
+                g_ot.erase(it);   // read once; a Retry re-posts on the next call
+                return r;
+            }
+            g_ot[fid] = OwnedJob{ cid, true, OwnedTake::Posted, {} };
+        }
+        if (!MainThread::IsInstalled()) {   // VR: no main-thread reads, so no proof, so no steal (fail closed)
+            std::scoped_lock lk(g_otMx);
+            g_ot.erase(fid);
+            if (a_why) *a_why = "no main-thread pump (the witness pre-check cannot run)";
+            return OwnedTake::Cut;
+        }
+        MainThread::Post([fid, cid]() { OwnedTakeOnMain(fid, cid); });
+        return OwnedTake::Posted;
+    }
+
+    void ClearOwnedTakes() {
+        std::scoped_lock lk(g_otMx);
+        g_ot.clear();
+    }
 }

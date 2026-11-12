@@ -47,6 +47,9 @@ namespace MFO::Logistics::TheftGate {
     const char* LooseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Road a_road, bool a_arrival, bool* a_pending = nullptr);
     // a_pending (arrival): set when the only reason is a guard answer not back yet; the caller skips the tick and must NOT travel-fail.
 
+    // The proof line for an OWNED copy that moved on the steal road (Steal::TakeOwnedContents), not through Take: `via=steal-road`.
+    void LogOwnedCopy(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, const char* a_how);
+
     // The per-follower ring of the last 3 MFO world actions; printed on every [crime-probe] BOUNTY UP.
     void NoteAction(RE::FormID a_follower, Road a_road, RE::FormID a_ref, const char* a_result);
     void LogRings();
