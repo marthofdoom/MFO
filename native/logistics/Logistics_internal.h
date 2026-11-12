@@ -28,6 +28,7 @@
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 #include "Progression.h"  // perk STYLE votes (TallyStyleVotes) -- weapon/armor style by perks
+#include "TheftGate.h"    // the universal theft gate: every take road (ClickUp 1dfcuabczbg)
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread

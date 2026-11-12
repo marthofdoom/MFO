@@ -910,7 +910,7 @@ namespace MFO::Logistics {
                         // flag). The same source bar as the scan, and for a purse: still NOT
                         // harvested (someone -- the player -- may have harvested it mid-leg, which
                         // would turn the readback into a false "not credited" verdict).
-                        const char* arrivalBar = LooseRefBarred(tref);
+                        const char* arrivalBar = TheftGate::LooseBarred(a_follower, tref, flora ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ true);
                         if (!arrivalBar && flora &&
                             (tref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0)
                             arrivalBar = "already harvested on arrival";

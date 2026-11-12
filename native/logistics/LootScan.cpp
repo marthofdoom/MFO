@@ -86,6 +86,8 @@ namespace MFO::Logistics {
             // STUCK AT HIS OWN ORIGIN (field 2026-10-19): a cooldown after N different targets all blocked at
             // one spot -- no new excursion from that box (StuckAtOrigin.cpp). Quiet: the trigger logged loudly.
             if (StuckAtOriginCooldown(a_follower, a_now)) return false;
+            // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): no looting while a guard can see him. TheftGate.cpp.
+            if (TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard)) return false;
             // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
             // immediately cancel a loot excursion and pull followers back").
             // A follower must never BEGIN or CONTINUE a loot action while the
@@ -435,7 +437,7 @@ namespace MFO::Logistics {
                     // Unconditional (no toggle opens it). Each ref's reason is logged
                     // ONCE (worker-only set, cleared at a cap).
                     if (loose) {
-                        if (const char* why = LooseRefBarred(ref)) {
+                        if (const char* why = TheftGate::LooseBarred(a_follower, ref, ref->GetBaseObject() && ref->GetBaseObject()->Is(RE::FormType::Flora) ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ false)) {
                             static std::unordered_set<RE::FormID> s_barLogged;
                             if (s_barLogged.size() > 4096) s_barLogged.clear();
                             if (s_barLogged.insert(ref->GetFormID()).second) {
@@ -992,6 +994,11 @@ namespace MFO::Logistics {
         bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                          RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
                          bool* a_leftWaiting) {
+            // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): waiting, not done -- the body is revisited once no guard sees him.
+            if (TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
+                if (a_leftWaiting) *a_leftWaiting = true;
+                return false;
+            }
             bool moved = false, stopped = false;
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : a_follower->GetPosition();

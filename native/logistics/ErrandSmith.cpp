@@ -45,6 +45,7 @@
 // THREADING: see Errand_internal.h (Smith). One leaf mutex; the engine, Papyrus and TradeBridge are never called under it.
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "TheftGate.h"   // owned-station bar (ClickUp 1dfcuabczbg)
 #include "Logistics.h"   // ForEachLoadedRefInRange (the station search)
 #include "TradePerks.h"
 #include "Config.h"
@@ -511,6 +512,17 @@ namespace MFO::Logistics::Errand::Smith {
             ForEachLoadedRefInRange(at, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
                 auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
                 auto* fur = base ? base->As<RE::TESFurniture>() : nullptr;
+                // THEFT GATE, furniture half (marth 2026-11-11, ClickUp 1dfcuabczbg): a station someone else owns (the smith's own forge) is a
+                // trespass when a teammate uses it. Owner = the ref's, else its cell's (the bed rule, ErrandRest.cpp); only null / the
+                // player / PlayerFaction pass.
+                if (fur && fur->HasKeywordID(a_keyword) && a_ref) {
+                    auto* own = a_ref->GetOwner();
+                    if (!own) { auto* c = a_ref->GetParentCell(); own = c ? c->GetOwner() : nullptr; }
+                    if (own && own->GetFormID() != 0x00000007u && own->GetFormID() != 0x00000014u && own->GetFormID() != 0x00000DB1u) {
+                        TheftGate::NoteAction(a_f->GetFormID(), TheftGate::Road::Door, a_ref->GetFormID(), "barred: owned station");
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                }
                 if (fur && fur->HasKeywordID(a_keyword) && !a_ref->IsDisabled() && !a_ref->IsMarkedForDeletion() && found.size() < 16)
                     found.emplace_back(a_ref->GetPosition().GetDistance(at), a_ref->GetFormID());
                 return RE::BSContainer::ForEachResult::kContinue;

@@ -1206,6 +1206,12 @@ namespace MFO::Lotd {
                 spdlog::info("[lotd] {:08X}: crate {:08X} is '{}' -- not re-activated", a_follower, a_crate, st);
                 return;
             }
+            // THEFT GATE (ClickUp 1dfcuabczbg): TESObjectCONT::Activate is a steal-alarm producer. A crate someone else owns, or one a guard
+            // can see him open, is not activated by him (the deliveries still land by RemoveItem, which raises no crime).
+            if (TheftGate::TakeBarred(f, c, nullptr, nullptr, TheftGate::Road::Lotd) || TheftGate::GuardInterim(f, c, TheftGate::Road::Lotd)) {
+                spdlog::info("[lotd] {:08X}: crate {:08X} NOT activated -- owned by someone else or a guard sees him (theft gate)", a_follower, a_crate);
+                return;
+            }
             c->ActivateRef(f, 0, nullptr, 1, false);   // full processing: the script's OnActivate runs
             spdlog::info("[lotd] {:08X}: crate {:08X} was '{}' -- activated so it takes deliveries", a_follower,
                          a_crate, st.empty() ? "unreadable" : st);
@@ -1883,6 +1889,7 @@ namespace MFO::Logistics {
             if (it == needs.uncoveredAll.end() || it->second <= 0) continue;
             if (IsQuestObjectInstance(data.second.get())) continue;
             if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+            if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
             if (a_peek) return true;
             takes.push_back({ obj, std::min<std::int32_t>(data.first, it->second) });
         }
@@ -1890,8 +1897,9 @@ namespace MFO::Logistics {
         bool moved = false;
         for (const auto& t : takes) {
             if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-            a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
-            needs.uncoveredAll[t.obj->GetFormID()] -= t.count;   // this cache window must not take it twice
+            const std::int32_t got = TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Lotd);
+            if (got <= 0) continue;
+            needs.uncoveredAll[t.obj->GetFormID()] -= got;   // this cache window must not take it twice
             moved = true;
             spdlog::info("[lotd] {:08X}: looted museum item '{}' x{} from {:08X}", a_follower->GetFormID(),
                          Lotd::NameOf(t.obj), t.count, a_src->GetFormID());

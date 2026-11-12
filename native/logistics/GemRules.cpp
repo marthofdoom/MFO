@@ -278,6 +278,7 @@ namespace MFO::Logistics::GemRules {
             for (auto* xl : *e->extraLists) {
                 const auto uid = UidOf(xl);
                 if (uid == 0 || !NamedGemmed(xl, obj)) continue;   // only MEO-titled (socketed) instances are worth a take
+                if (TheftGate::TakeBarred(a_follower, a_src, obj, xl, TheftGate::Road::Gear)) continue;   // theft gate: this very copy may be stolen goods
                 if (g_probed.contains({ a_src->GetFormID(), obj->GetFormID(), uid })) continue;
                 return { obj, xl, uid };
             }
@@ -289,6 +290,8 @@ namespace MFO::Logistics::GemRules {
         if (!a_follower || !a_src || !a_c.obj) return false;
         const RE::FormID fol = a_follower->GetFormID(), base = a_c.obj->GetFormID(), src = a_src->GetFormID();
         const std::uint16_t uid = a_c.uid;
+        if (TheftGate::GuardInterim(a_follower, a_src, TheftGate::Road::Gear) ||
+            TheftGate::TakeBarred(a_follower, a_src, a_c.obj, a_c.xl, TheftGate::Road::Gear)) return false;   // theft gate
         g_probed.insert({ src, base, uid });   // never re-taken, whatever the probe decides
         std::int32_t v = 0;
         a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, a_c.xl, a_follower);

@@ -6,6 +6,7 @@
 #include "Diagnostics.h"
 #include "Runtime.h"
 #include "logistics/Errand.h"
+#include "logistics/TheftGate.h"
 #include <mutex>
 
 // See CrimeProbe.h. READ-ONLY EVERYWHERE.
@@ -97,7 +98,7 @@ namespace MFO::CrimeProbe {
                     logged = true;
                 }
             }
-            if (logged) LogFollowers(pc);
+            if (logged) { LogFollowers(pc); Logistics::TheftGate::LogRings(); }   // the last 3 MFO world actions per follower (ClickUp 1dfcuabczbg)
         }
 
     }

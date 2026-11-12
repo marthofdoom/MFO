@@ -102,6 +102,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp
+    logistics/TheftGate.cpp
     logistics/Service.cpp
     logistics/Cast.cpp
     logistics/ClassResolve.cpp

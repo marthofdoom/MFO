@@ -850,9 +850,8 @@ namespace MFO::Logistics {
                 if (oldItem) fromBase = oldItem->GetFormID();
             }
 
-            if (a_src)
-                a_src->RemoveItem(a_item, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
+            if (a_src && TheftGate::Take(a_follower, a_src, a_item, 1, TheftGate::Road::Gear) <= 0)
+                return false;   // theft gate: nothing he may own moved, so nothing is equipped or stocked
 
             // Equip-IN-PLACE: a weapon only enters a hand already holding the same
             // role (else stock for the combat gambit); armor always equips its slot.

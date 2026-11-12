@@ -572,6 +572,7 @@ namespace MFO::Logistics {
                 if (!am || AmmoIsBolt(am) != a_wantBolt || !AmmoSwapEligible(am)) continue;
                 auto* entry = data.second.get();
                 if (IsQuestObjectInstance(entry)) continue;   // quest ammo stays where it is
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 AmmoStack s;
                 s.obj = obj; s.count = static_cast<std::int32_t>(data.first); s.dmg = AmmoDamage(am);
                 s.value   = entry ? entry->GetValue() : 0;
@@ -595,8 +596,7 @@ namespace MFO::Logistics {
             std::int32_t taken = 0;
             for (const auto& b : take) {
                 if (!FitsCarryWeight(a_follower, b.obj->GetWeight() * b.count)) continue;
-                a_src->RemoveItem(b.obj, b.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
-                taken += b.count;
+                taken += TheftGate::Take(a_follower, a_src, b.obj, b.count, TheftGate::Road::Swap);
             }
             if (taken == 0) return false;
 

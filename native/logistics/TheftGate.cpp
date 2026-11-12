@@ -1,0 +1,307 @@
+// logistics/TheftGate.cpp -- the universal theft gate. See TheftGate.h for the rules and the RE note.
+#include "Logistics_internal.h"
+#include "TheftGate.h"
+#include "Sightline.h"        // the guard's line of sight (MeasureNow / PointSeenNow, main thread)
+#include "MainThread.h"
+#include <array>
+#include <mutex>
+
+namespace MFO::Logistics::TheftGate {
+
+    namespace {
+        using SClock = std::chrono::steady_clock;
+
+        // The guard radius: a guard farther than this from BOTH the follower and the source is not asked. 3500 u is about 50 m,
+        // past the distance at which a guard in a street or a hall notices a sneaking player in the base game's detection
+        // formula, and well inside the high-process list the scan walks. Inside it the line of sight decides.
+        constexpr float kGuardRadius   = 3500.0f;
+        constexpr auto  kGuardFresh    = std::chrono::milliseconds(2000);   // a cached guard verdict is trusted this long
+        constexpr auto  kGuardRepost   = std::chrono::milliseconds(500);    // and re-asked no faster than this per (follower, src)
+        constexpr auto  kLogEvery      = std::chrono::seconds(30);          // [theft-gate] per (follower, src, verdict)
+        constexpr RE::FormID kPlayerBaseNpc = 0x00000007;
+        constexpr RE::FormID kPlayerFaction = 0x00000DB1;
+
+        const char* NameOf(const RE::TESForm* a_f) {
+            const char* n = a_f ? a_f->GetName() : nullptr;
+            return n && *n ? n : "?";
+        }
+
+        bool InFaction(RE::Actor* a_actor, const RE::TESFaction* a_fac) {
+            bool in = false;
+            a_actor->VisitFactions([&](RE::TESFaction* f, std::int8_t rank) {
+                if (f == a_fac && rank >= 0) { in = true; return true; }
+                return false;
+            });
+            return in;
+        }
+
+        // The owner of a copy is the follower's side when it is the player's base NPC, PlayerFaction, the follower's own base NPC
+        // (or its template chain), or a faction he is a member of. ExtraOwnership.owner is a BASE form (TESNPC / TESFaction), the
+        // same rule ErrandShops.cpp StolenOwner reads for the sale (a data-only read, so no seat row). Anything else is someone
+        // else's: the copy is stolen goods, or an owned container's.
+        bool OtherOwner(RE::TESForm* a_owner, RE::Actor* a_follower) {
+            if (!a_owner) return false;
+            const RE::FormID id = a_owner->GetFormID();
+            if (id == kPlayerBaseNpc || id == kPlayerFaction) return false;
+            RE::TESForm* b = a_follower->GetActorBase();
+            for (int i = 0; b && i < 8; ++i) {
+                if (b == a_owner) return false;
+                auto* npc = b->As<RE::TESNPC>();
+                b = npc ? npc->baseTemplateForm : nullptr;
+            }
+            if (auto* f = a_owner->As<RE::TESFaction>()) return !InFaction(a_follower, f);
+            return true;
+        }
+
+        // ── the rate-limited proof line ──
+        std::mutex g_logMx;
+        std::unordered_map<std::string, SClock::time_point> g_logAt;
+
+        void Say(RE::Actor* a_f, Road a_road, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_n,
+                 RE::TESForm* a_owner, const char* a_via, const char* a_barred) {
+            const RE::FormID fid = a_f ? a_f->GetFormID() : 0u;
+            const RE::FormID sid = a_src ? a_src->GetFormID() : 0u;
+            const std::string verdict = a_barred ? std::string("BARRED:") + a_barred : std::string("take");
+            const std::string key = std::format("{:08X}|{:08X}|{}", fid, sid, verdict);
+            {
+                std::scoped_lock lk(g_logMx);
+                const auto now = SClock::now();
+                if (g_logAt.size() > 512) g_logAt.clear();
+                auto& at = g_logAt[key];
+                if (at.time_since_epoch().count() != 0 && now - at < kLogEvery) return;
+                at = now;
+            }
+            auto* sb = a_src ? a_src->GetBaseObject() : nullptr;
+            spdlog::info("[theft-gate] F={:08X} road={} src={:08X}({:08X}) item={:08X}x{} owner={:08X} via={} locked={} verdict={}",
+                         fid, RoadName(a_road), sid, sb ? sb->GetFormID() : 0u, a_obj ? a_obj->GetFormID() : 0u, a_n,
+                         a_owner ? a_owner->GetFormID() : 0u, a_via ? a_via : "-", a_src && a_src->IsLocked() ? 1 : 0, verdict);
+        }
+
+        // ── the action ring ──
+        struct Act { Road road = Road::Loose; RE::FormID ref = 0; SClock::time_point at{}; const char* result = ""; };
+        struct Ring { std::array<Act, 3> a{}; std::uint32_t n = 0; };
+        std::mutex g_ringMx;
+        std::unordered_map<RE::FormID, Ring> g_rings;
+
+        // ── the guard cache ──
+        struct GuardAns { SClock::time_point at{}, posted{}; bool seen = true; RE::FormID guard = 0; const char* how = "pending"; bool have = false; };
+        std::mutex g_gMx;
+        std::unordered_map<std::uint64_t, GuardAns> g_guard;   // (follower, src) -> the last scan
+
+        std::uint64_t GKey(RE::FormID a_f, RE::FormID a_src) { return (static_cast<std::uint64_t>(a_f) << 32) | a_src; }
+
+        // MAIN THREAD (or the VR no-pump caller). Does any live guard in the high-process list see the follower or the source?
+        // Seen = Visible, or Unknown (the sight could not be measured: fail closed). Teammates and the player are never guards here.
+        void ScanGuards(RE::FormID a_fid, RE::FormID a_srcId) {
+            GuardAns ans; ans.at = SClock::now(); ans.posted = ans.at; ans.have = true; ans.seen = false; ans.how = "none";
+            auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+            auto* src = a_srcId ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a_srcId) : nullptr;
+            auto* pl  = RE::ProcessLists::GetSingleton();
+            if (!f || !pl) { ans.seen = true; ans.how = "unreadable"; }
+            else {
+                const auto fpos = f->GetPosition();
+                const auto spos = src ? src->GetPosition() : fpos;
+                for (auto& hh : pl->highActorHandles) {
+                    auto  ptr = hh.get();
+                    auto* g   = ptr.get();
+                    if (!g || g == f || !g->IsGuard()) continue;
+                    if (g->IsPlayerRef() || g->IsPlayerTeammate()) continue;
+                    if (g->IsDead() || g->IsDisabled() || !g->Is3DLoaded()) continue;
+                    const auto  gpos = g->GetPosition();
+                    const float df = gpos.GetDistance(fpos), ds = src ? gpos.GetDistance(spos) : 1.0e9f;
+                    if (df > kGuardRadius && ds > kGuardRadius) continue;
+                    if (df <= kGuardRadius) {
+                        const auto v = Sightline::MeasureNow(g->GetFormID(), a_fid, Sightline::Basis::Engine);
+                        if (v != Sightline::Verdict::Occluded) {
+                            ans.seen = true; ans.guard = g->GetFormID();
+                            ans.how = v == Sightline::Verdict::Visible ? "guard sees follower" : "guard in range, sight unmeasurable";
+                            break;
+                        }
+                    }
+                    if (src && ds <= kGuardRadius) {
+                        const auto ps = Sightline::PointSeenNow(g, spos, 40.0f);
+                        if (ps != Sightline::PointSight::Hidden) {
+                            ans.seen = true; ans.guard = g->GetFormID();
+                            ans.how = ps == Sightline::PointSight::Seen ? "guard sees the item" : "guard in range, item sight unmeasurable";
+                            break;
+                        }
+                    }
+                }
+            }
+            std::scoped_lock lk(g_gMx);
+            if (g_guard.size() > 256) g_guard.clear();
+            g_guard[GKey(a_fid, a_srcId)] = ans;
+        }
+    }
+
+    const char* RoadName(Road a_road) {
+        switch (a_road) {
+            case Road::Loose: return "loose"; case Road::Flora: return "flora"; case Road::Container: return "container";
+            case Road::Corpse: return "corpse"; case Road::Swap: return "swap"; case Road::Gear: return "gear";
+            case Road::Lotd: return "lotd"; case Road::Door: return "door"; case Road::Guard: return "guard";
+        }
+        return "?";
+    }
+
+    void NoteAction(RE::FormID a_follower, Road a_road, RE::FormID a_ref, const char* a_result) {
+        std::scoped_lock lk(g_ringMx);
+        if (g_rings.size() > 64) g_rings.clear();
+        auto& r = g_rings[a_follower];
+        r.a[r.n % 3] = Act{ a_road, a_ref, SClock::now(), a_result ? a_result : "" };
+        ++r.n;
+    }
+
+    void LogRings() {
+        std::scoped_lock lk(g_ringMx);
+        const auto now = SClock::now();
+        for (auto& [fid, r] : g_rings) {
+            const std::uint32_t cnt = std::min<std::uint32_t>(r.n, 3);
+            for (std::uint32_t i = 0; i < cnt; ++i) {   // newest first
+                const auto& a = r.a[(r.n - 1 - i) % 3];
+                spdlog::info("[crime-probe]   last MFO action F={:08X} #{}: road={} ref={:08X} {:.1f}s ago result={}", fid, i + 1,
+                             RoadName(a.road), a.ref, std::chrono::duration<float>(now - a.at).count(), a.result);
+            }
+        }
+    }
+
+    bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road) {
+        if (!a_follower) return true;
+        const RE::FormID fid = a_follower->GetFormID(), sid = a_src ? a_src->GetFormID() : 0u;
+        const auto now = SClock::now();
+        bool post = false, seen = true;
+        const char* how = "pending";
+        RE::FormID guard = 0;
+        {
+            std::scoped_lock lk(g_gMx);
+            auto& e = g_guard[GKey(fid, sid)];
+            if (e.have && now - e.at < kGuardFresh) { seen = e.seen; how = e.how; guard = e.guard; }
+            if ((!e.have || now - e.at >= kGuardFresh) && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= kGuardRepost)) {
+                e.posted = now; post = true;
+            }
+        }
+        if (post) {
+            if (MainThread::IsInstalled()) MainThread::Post([fid, sid]() { ScanGuards(fid, sid); });
+            else                           ScanGuards(fid, sid);   // VR: no pump, the other main-thread reads fall back the same way
+        }
+        if (!seen) return false;
+        if (guard) {
+            auto* g = RE::TESForm::LookupByID<RE::Actor>(guard);
+            Say(a_follower, a_road == Road::Loose || a_road == Road::Flora ? a_road : Road::Guard, a_src, nullptr, 0, g ? static_cast<RE::TESForm*>(g->GetActorBase()) : nullptr, how, "guard");
+        } else {
+            Say(a_follower, Road::Guard, a_src, nullptr, 0, nullptr, how, "guard");
+        }
+        NoteAction(fid, Road::Guard, sid, "barred: guard");
+        return true;
+    }
+
+    const char* TakeBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj,
+                           RE::ExtraDataList* a_xList, Road a_road) {
+        (void)a_obj; (void)a_road;
+        if (!a_follower || !a_src) return "no follower or source";
+        if (a_xList) {
+            if (auto* own = a_xList->GetByType<RE::ExtraOwnership>(); own && own->owner)
+                return OtherOwner(own->owner, a_follower) ? "this copy is owned by someone else (stolen goods)" : nullptr;
+        }
+        if (auto* co = a_src->GetOwner(); co && OtherOwner(co, a_follower)) return "the container's owner is someone else";
+        return nullptr;
+    }
+
+    namespace {
+        struct Cp { RE::ExtraDataList* xl; std::int32_t n; const char* bar; RE::TESForm* owner; };
+        struct Plan {
+            std::vector<Cp> copies;
+            std::int32_t clean = 0;            // copies with no extra list
+            const char*  cleanBar = nullptr;   // why the plain copies are barred
+            bool anyBarred = false;            // any copy (extra-listed or plain) barred
+            RE::TESForm* contOwner = nullptr;
+            bool found = false;
+        };
+        Plan Analyse(RE::Actor* a_f, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, Road a_road) {
+            Plan p;
+            auto inv = a_src->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
+            auto it = inv.find(a_obj);
+            if (it == inv.end() || it->second.first <= 0) return p;
+            p.found = true;
+            p.contOwner = a_src->GetOwner();
+            std::int32_t xlTotal = 0;
+            auto* e = it->second.second.get();
+            if (e && e->extraLists)
+                for (auto* xl : *e->extraLists) {
+                    if (!xl) continue;
+                    auto* cnt = xl->GetByType<RE::ExtraCount>();
+                    const std::int32_t n = cnt && cnt->count > 0 ? static_cast<std::int32_t>(cnt->count) : 1;
+                    auto* own = xl->GetByType<RE::ExtraOwnership>();
+                    const char* bar = TakeBarred(a_f, a_src, a_obj, xl, a_road);
+                    p.copies.push_back({ xl, n, bar, own ? own->owner : p.contOwner });
+                    xlTotal += n;
+                    if (bar) p.anyBarred = true;
+                }
+            p.clean = std::max<std::int32_t>(0, it->second.first - xlTotal);
+            if (p.clean > 0) {
+                p.cleanBar = TakeBarred(a_f, a_src, a_obj, nullptr, a_road);
+                if (p.cleanBar) p.anyBarred = true;
+            }
+            return p;
+        }
+    }
+
+    bool Takeable(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj) {
+        if (!a_follower || !a_src || !a_obj) return false;
+        const Plan p = Analyse(a_follower, a_src, a_obj, Road::Container);
+        if (!p.found) return false;
+        if (!p.anyBarred) return true;
+        for (const auto& c : p.copies) if (!c.bar) return true;   // an extra-listed copy we can name
+        return false;   // only plain copies are left and either barred, or (mixed) not selectable
+    }
+
+    std::int32_t Take(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, Road a_road) {
+        if (!a_follower || !a_src || !a_obj || a_count <= 0) return 0;
+        if (a_road == Road::Container && a_src->As<RE::Actor>()) a_road = Road::Corpse;
+        if (GuardInterim(a_follower, a_src, a_road)) return 0;
+        constexpr auto kReason = RE::ITEM_REMOVE_REASON::kStoreInContainer;
+        std::int32_t moved = 0;
+        for (int iter = 0; iter < 16 && moved < a_count; ++iter) {   // re-read the inventory each time: a RemoveItem invalidates its extra lists
+            const Plan p = Analyse(a_follower, a_src, a_obj, a_road);
+            if (!p.found) break;
+            if (!p.anyBarred && iter == 0) {   // the unchanged road: one plain RemoveItem, exactly as every caller always made it
+                a_src->RemoveItem(a_obj, a_count, kReason, nullptr, a_follower);
+                Say(a_follower, a_road, a_src, a_obj, a_count, p.contOwner, p.contOwner ? "container" : "none", nullptr);
+                NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "take");
+                return a_count;
+            }
+            const Cp* pick = nullptr;
+            for (const auto& c : p.copies) if (!c.bar) { pick = &c; break; }
+            if (!pick) {
+                const char* why = p.copies.empty() ? (p.cleanBar ? p.cleanBar : "no copy")
+                                  : "only plain copies are left and a barred copy shares the stack (RemoveItem cannot choose the copy)";
+                if (moved == 0) {
+                    Say(a_follower, a_road, a_src, a_obj, a_count, p.contOwner, p.cleanBar ? "container" : "copy", why);
+                    NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "barred: stolen");
+                }
+                break;
+            }
+            const std::int32_t n = std::min(pick->n, a_count - moved);
+            a_src->RemoveItem(a_obj, n, kReason, pick->xl, a_follower);
+            moved += n;
+            Say(a_follower, a_road, a_src, a_obj, n, pick->owner, "xOwn", nullptr);
+            NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "take (clean copy)");
+        }
+        return moved;
+    }
+
+    const char* LooseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Road a_road, bool a_arrival) {
+        if (!a_follower || !a_ref) return "no ref";
+        auto* base = a_ref->GetBaseObject();
+        if (const char* why = LooseRefBarred(a_ref)) {   // any owner, off-limits, quest, civilised-owned cell, ... (stricter than the engine's pickup test)
+            NoteAction(a_follower->GetFormID(), a_road, a_ref->GetFormID(), "barred: ownership");
+            // the caller logs its own SKIPPED line once per ref; this is the proof line, rate-limited
+            Say(a_follower, a_road, a_ref, base, 1, a_ref->GetOwner(), a_ref->GetOwner() ? "xOwn" : "cell", why);
+            return why;
+        }
+        if (!a_arrival) return nullptr;   // the scan: the guard gate ran once for the follower at the top of LootNearby, and a take line per candidate would flood
+        if (GuardInterim(a_follower, a_ref, a_road)) return "a guard can see the follower or the item (interim ruling)";
+        Say(a_follower, a_road, a_ref, base, 1, nullptr, "none", nullptr);
+        NoteAction(a_follower->GetFormID(), a_road, a_ref->GetFormID(), "take");
+        return nullptr;
+    }
+}

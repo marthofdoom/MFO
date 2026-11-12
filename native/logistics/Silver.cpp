@@ -452,6 +452,7 @@ namespace MFO::Logistics {
             if (!am || AmmoIsBolt(am) != a_wantBolt || !IsSilverAmmo(am)) continue;
             auto* entry = data.second.get();
             if (IsQuestObjectInstance(entry)) continue;   // quest ammo stays where it is
+            if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
             const float        dmg = AmmoDamage(am);
             const std::int32_t val = entry ? entry->GetValue() : 0;
             if (!best || AmmoRankAbove(dmg, val, bestDmg, bestVal)) {
@@ -464,7 +465,8 @@ namespace MFO::Logistics {
         while (qty > 0 && !FitsCarryWeight(a_follower, best->GetWeight() * static_cast<float>(qty))) qty /= 2;
         if (qty <= 0) return false;
         if (a_peek) return true;
-        a_src->RemoveItem(best, qty, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
+        qty = TheftGate::Take(a_follower, a_src, best, qty, TheftGate::Road::Swap);
+        if (qty <= 0) return false;
         spdlog::info("[silver] {:08X}: SILVER AMMO restock -- took '{}' x{} from {:08X}", a_follower->GetFormID(),
                      best->GetName() ? best->GetName() : "?", qty, a_src->GetFormID());
         return true;
