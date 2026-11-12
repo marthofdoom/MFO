@@ -2246,3 +2246,112 @@ What the three worlds say together about the health line:
   `--potion-over 10`, 48 seeds): the Knight's 0.70 is +0.34 (se 0.17) there against +0.08 with at-once potions, exactly 2.0 se
   and a third of LoreRim's gain: not established at the bar. The Thief's 0.70 is -0.22 (se 0.14) there: refuted for him. One
   thing is clear in every over-time run: a LOWER line loses (thief 0.20: -0.43, se 0.06).
+
+**Confirmatories, fresh seeds 3001..3096 (each declared with its pass condition before it ran).** d = paired J difference.
+
+| Value | built-in g3 | built-in off / shipped | LoreRim | Tuxborn | Mean of the three | Verdict |
+|---|---|---|---|---|---|---|
+| warrior stamina-potion midpoint 0.34 -> 0.15 | +0.287 (se 0.079) | +0.275 / +0.279 | +0.065 (se 0.031) | +0.109 (se 0.054) | +0.154 (se 0.030) | passes the search rule, FAILS the fixed 31.11 gates: see below |
+| mercenary stamina-potion midpoint -> 0.20 | +0.134 (se 0.082) | +0.141 / +0.140 | +0.008 | +0.075 | +0.072 (se 0.035) | fails (built-in under 2 se) |
+| conjurer health midpoint -> 0.25 | -0.090 (se 0.101) | -0.113 / -0.041 | -0.166 (se 0.077) | +0.095 | -0.054 (se 0.051) | fails |
+| thief health midpoint -> 0.60 | +0.153 (se 0.070) | **-0.284 (se 0.152)** / -0.150 | +0.123 (se 0.069) | +0.207 (se 0.083) | +0.161 (se 0.046) | fails: loses with stealth off, which is how the game ships |
+| knight health midpoint -> 0.70, guard-line cut-off held at 0.34 | +0.028 (se 0.120) | +0.098 / -0.015 | **+0.686 (se 0.116)** | **-0.371 (se 0.127)** | +0.114 (se 0.070) | fails: one list's gain is another's loss |
+| melee health midpoint -> 0.30 | +0.128 (se 0.115) | +0.129 / +0.142 | -0.001 | +0.072 | +0.066 (se 0.059) | fails |
+
+**The Warrior's stamina value, in full, because it is the one that came closest.** It replicated on four worlds and on two
+versions of the lab. Two things stand against it. (1) About 0.13 of its 0.29 J is Utility's "resources left" term: a stamina
+potion he no longer drinks counts as a gain (`--utility-no-resources`: +0.156, se 0.080, on the same seeds). With it he power
+attacks about 10% less often per minute (6.5 to 5.9 natural, 8.1 to 7.2 strong1), a small step off his card. (2) On the six
+fixed gate seeds of 31.11 he is -0.50 / -0.48 / -0.41 J and the 12-class mean falls by 0.04, 0.04 and 0.02. Those gates are
+hard constraints, so the value is NOT in `ClassCurves.cpp` (it was written, verified to reproduce the `--curve` run exactly,
+and reverted). It is recorded there as a comment with the exact line. To know about the gate itself: a six-seed set mean has
+a standard error of about 0.44 J, so "may not fall" on it rejects about half of all small real gains by chance.
+
+**RESULT: no per-class value passed everything. `ClassCurves.cpp` carries no searched override; the shared curves ship.**
+On the final world 1236 values were tried in 165 sweeps (and 2472 more on the two earlier versions of the world). What that
+supports: no drink-curve, guard-boost or drink-line value is worth more than about 0.3 to 0.5 J to a class on every world.
+What it does not support: that the shared values are optimal. Smaller gains are below what the search can see.
+
+**The Knight line's guard (marth: at least 60% under two or more of his own taunted foes).** Blows-weighted share, 6 seeds,
+default / as shipped, shipped table: built-in knight 67.5 / 67.4, great-knight 67.5 / 67.4, ebony-warrior 68.8 / 66.0;
+Tuxborn knight 61.8 / 60.8; **LoreRim knight 61.7 / 57.3: under the floor as shipped.** Boost on the built-in world: 1.0 gives
+61.9 / 62.3, 1.25 66.3, 1.5 67.1 / 67.2, 2.0 67.5 / 67.4, 3.0 and 4.0 the same: 2.0 is where the plateau starts and J is flat
+across it, so 2.0 stays, now with its curve. Nothing the table reaches lifts LoreRim's 57.3 (the ceiling is Harbinger's hold
+and rest times, 31.12). The tally's denominator is broader than the game's guard-line condition (32.8), so these are lower bounds.
+
+**Shared `Tuning` scalars (built-in, 24 + 24 seeds, the 15 cells pooled; 21 scalars, 66 values).** Beat noise with the holdout
+and both gates, in all three versions of the world:
+
+| Scalar | Shipped -> best (edge of the range tried) | Train | Holdout | off / shipped |
+|---|---|---|---|---|
+| `momentum` | 1.25 -> 1.0 | +0.56 (se 0.07) | +0.62 (se 0.08) | +0.71 / +0.28 |
+| `rowlessPowerCooldownSec` | 10 -> 5 | +0.32 (se 0.05) | +0.31 (se 0.04) | +0.36 / +0.33 |
+| `postureMomentum` | 1.5 -> 2.0 | +0.16 (se 0.04) | +0.17 (se 0.04) | +0.05 / +0.04 |
+
+NOT applied: they are `Core.h` initialisers, outside this branch's native scope, and each needs its own confirmation first.
+Momentum is the anti-switching term and J does not price switching: at 1.0 the decision switches per minute rise from 18.2
+to 26.9 (evoker), 16.6 to 25.4 (conjurer), 14.2 to 25.8 (melee-off), 7.5 to 10.2 (melee), while the gap ledger already lists
+target switching above the field rate (G9). The power cooldown is a ruling (10 s rows), not a tuning. `actFloor` 0.10 was
++0.18 before the School Circle and +0.13 (se 0.05) after: it does not hold. `noHealDrink` 1.0 is +0.06 (se 0.02). Exactly 0
+at every value (the road is off or nothing reads it in the lab): `groundCooldownSec`, `blockCooldownSec`, `bashCooldownSec`,
+`stepCooldownSec`, `regroupCooldownSec`, `kiteDistance`, `emergencyHpHigh` / `Low`, `rowlessTauntCooldownSec`.
+
+**Compile-time constants (`const_probe.sh`, 24 seeds, pooled, g3 / off / shipped).** `kFleeHealthLine` 0.30: 0.20 +0.03
+(se 0.03) / +0.03 / +0.04, 0.40 +0.03 (se 0.015), 0.50 +0.02: flat. `kGuardLineFoes` 2: 1 is -0.12 (se 0.016) / -0.15, 3 is
++0.02 (se 0.009): 2 holds. `kPressCount` 2: 1 is +0.01, 3 is -0.04 (se 0.014): 2 holds. NOT probed (the run was stopped):
+`kCloseSlack`, `kMinimumFrac`, `kRangeVeto`, `kPostureDist`. `kRangeVeto` 1.15 also exists as literals in three `Catalogue.cpp`
+curves, so a probe of the constant alone moves only the generator's half.
+
+**The drink line, the oracle and what J can say.** The class oracle drinks at 72 to 94% health and lets 33 to 81% of the
+potion run over, with 0 to 0.05 downs per fight. That is not a perfect drink time. Utility pays 5 points for the party's
+health at the end and charges 2.5 / (potions carried) for a potion, so a planner tops up; the Warrior's stamina value is the
+same exchange rate read the other way. How much a potion in the bag is worth against health in the body is a value choice in
+Utility, and the "best drink time" J returns moves with it. On the lists (corrected potions) the decline is steeper (LoreRim:
+melee 6.5 %/s, mage 14.8 %/s against 3.5 and 6.0 on the built-in world) and a potion is 45 to 58% of his health there.
+
+### 32.12 History: the two earlier versions of the world
+
+Before the School Circle (412 values per world): built-in 0 accepted (conjurer health midpoint 0.70 passed train +0.67, failed
+holdout +0.16); LoreRim 0; Tuxborn 2 single-world passes that lost elsewhere. A pooled test declared in advance (health
+midpoint 0.50 for all 15 cells, fresh seeds 2001..2048): +0.053 (se 0.030), failed. With the circle, before the armor and
+potion corrections: built-in 0, LoreRim 0, Tuxborn 3 single-world passes. Every list number of these two runs involving a
+drink is void (32.9): a health potion was 0.5 to 3% of his health there.
+
+### 32.13 HANDOFF to the per-class curve tuning (a fresh Fable takes it from here)
+
+**Tools.** Build: `SIM_OUT=<bin> tools/iaus_sim/run.sh --list-uses` (builds, prints the 190 (family, consideration) pairs).
+- `edge_search.py --bin <bin> per-class [--classes a,b] [--list L.sim.json] [--seeds 48]`: the narrow search of 32.10.
+- `edge_search.py --bin <bin> wide [--top 12] [--seeds 24]`: every curve parameter the table can move, per class: liveness on
+  six seeds (each parameter x0.67 and x1.5), then the most sensitive ones at x0.5 / x0.75 / x1.33 / x2, an accepted value
+  carried forward. **WRITTEN, NOT RUN END TO END** (only `--help`, the `--list-uses` parse and part of one liveness pass ran):
+  test it on one class first. Known weak spot: liveness runs with `--fights 48`, about 150 s per class.
+- `edge_search.py --bin <bin> global`, `gates --curves "<specs>"` (the literal 31.11 gates, class by class), `floor`.
+- After every sweep one normal results file goes to `~/.cache/mfo-iaus-sim/runs` (label `sweep ...` / `wide ...`), so the
+  dashboard shows progress (`--no-emit-runs` off). main's dashboard reads these files but its `--json-check` rejects schema 2.
+- `const_probe.sh <constant> <value> <out>`: a variant binary with one `constexpr` of `native/iaus` rewritten in a scratch copy.
+- Diagnostics: `--decline N [--oracle]`, `--rating-only`, `--utility-no-resources`, `--potion-over S`.
+- Worlds: built-in; LoreRim / Tuxborn / Vanilla need the potion-corrected inputs (re-run `tools/list_balance/compile_world.py
+  --name <L>`, which overwrites the shared cache file, or rebuild the ladders as 32.9 says). Seeds: train 1..N, holdout
+  1001.., confirmatory 3001..3096, pooled test 2001..2048 are USED; take new ranges for new confirmatories.
+
+**The acceptance rule** is 32.10, plus the literal 31.11 gates on the final table. Write every side test's pass condition down
+before running it.
+
+**Known gaps.**
+1. Piece curves (20: attack / power_attack / bash range, los and engaged, taunt survive and mortal, cast overkill and exploit,
+   heal urgency, regroup far) cannot be moved through `--curve` or `ClassCurves::SetCurveParam` (a, b, floor, zeroAbove,
+   zeroBelow only). Searching them needs a point-edit surface in `ClassCurves` (a native change, for review).
+2. Per-class family and role weights (card I8): `Profile::weights` exists, `ClassCurves::Row` has no field for them, nothing
+   in native fills them. The sim can move a weight only for everyone (`--set w.<f>.<c>`).
+3. `touchSpentSec` cannot be rated: the lab never opens a touch window (32.8). It needs a model of the two spells a mage holds.
+4. The 58 pure 0 / 1 gates are rules; the wide search never touches them.
+5. Utility's potion-against-health exchange rate decides every drink result (above). Settle it with marth before tuning drinks.
+6. The fixed gates are six seeds; a paired many-seed gate would stop them rejecting small real gains at random.
+7. The rating's ranged line (32.5) and the Mercenary in light armor (32.9) may be lab artefacts (bow and dodge models).
+8. School Circle: fixed, never searched. Its measured cost stands in 32.7 (Healer about -3.9 J as shipped).
+
+**Next steps, in order.** (1) Run `wide` on one class, read the liveness list, fix what it shows. (2) Use the per-class oracle
+gap (`class_gaps` of the newest full run: melee and the base cells are furthest from the oracle) to order the classes.
+(3) `wide` on the built-in world for the 15 cells, then a fresh-seed three-world confirmatory and `gates` for each pass.
+(4) Decide with the coordinator whether the Warrior stamina value ships despite the six-seed gate. (5) Confirm the three
+`Tuning` winners on fresh seeds and on the lists, with a switching metric next to J for momentum.
