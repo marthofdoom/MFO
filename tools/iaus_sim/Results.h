@@ -1,7 +1,7 @@
 #pragma once
 // iaus_sim/Results.h -- one JSON results file per run, for the dashboard (tools/iaus_dash). HOST-ONLY.
 //
-// SCHEMA 1 (stable: fields are added, never renamed). Default path ~/.cache/mfo-iaus-sim/runs/<run_id>.json (cache
+// SCHEMA 2 (stable: fields are added, never renamed; 2 = schema 1 + "rating", "class_gaps" and gaps[].classes). Default path ~/.cache/mfo-iaus-sim/runs/<run_id>.json (cache
 // only, never committed). The schema is written out in Docs/research/2026-11/iaus-sim-v2.md "Results file".
 #include <cstdio>
 #include <cstdlib>
@@ -171,6 +171,16 @@ namespace Sim {
         };
         return v;
     }
+    // The rating battery's row of one class (Rating.h): its score on the shared battery and its place inside its tier.
+    struct RatingRow {
+        std::string cls; int tier = 1; long fights = 0; double score = 0, se = 0;   // mean Utility over the battery and its standard error
+        std::map<std::string, double> byArch;                                       // foe archetype -> mean Utility
+        int rank = 0, of = 0; double tierMean = 0, delta = 0; bool below = false;   // inside its tier, among the classes of this run
+        std::string weakest; double weakestDelta = 0;                               // the archetype where it is furthest under its tier's mean there
+    };
+    // The per-class oracle gap of a class report run (sim.cpp, the gap pass): oracle U minus IAUS U over the class's natural fights and
+    // its own named scenarios, the same fights played both ways.
+    struct ClassGapRow { std::string cls; double gap = 0, se = 0, natGap = 0, scenGap = 0; long fights = 0, natFights = 0, scenFights = 0; };
     struct ScenarioRow { std::string name, cls; double iausU = 0, oracleU = 0, gap = 0; bool hasOracle = false; std::map<std::string, double> metrics, oracleMetrics; };
 
     struct Results {
@@ -178,6 +188,9 @@ namespace Sim {
         std::vector<ResultRow> rows; std::vector<ScenarioRow> scen;
         std::string mode = "iaus"; bool hasJ = false; double jVal = 0, jScen = 0, jNat = 0; int jFights = 0; std::string jCovers;   // the headline's scope (B712): which classes the objective covered and the fights per scenario
         bool hasOracleJ = false; double oracleJ = 0, oracleJScen = 0, oracleJNat = 0; int oracleFights = 0; std::string oracleOver, oracleCovers;   // B756: the oracle headline's own scope
+        std::vector<RatingRow> ratings; int ratingFights = 0;      // schema 2: the rating battery (fights per cell)
+        std::vector<ClassGapRow> classGaps;                        // schema 2: the gap pass
+        std::map<std::string, std::vector<std::string>> groups;    // schema 2: a gap ledger group name ("knight line", "casters" ...) -> the slugs of this run it covers
         std::string stealth = "off", sneakProfile = "list";   // the stealth / disengage roads modelled (World.h g_stealth) and the sneak data profile (Detect.h)   // the headline: J = half scenario + half natural-bracket utility, in this run's mode
         void Write(std::string path) const {
             namespace fs = std::filesystem;
@@ -185,7 +198,7 @@ namespace Sim {
             if (path.empty()) { const char* h = std::getenv("HOME"); path = std::string(h ? h : ".") + "/.cache/mfo-iaus-sim/runs/" + id + ".json"; }
             std::error_code ec; fs::create_directories(fs::path(path).parent_path(), ec);
             const char* br = std::getenv("SIM_BRANCH"); const char* sha = std::getenv("SIM_SHA");
-            std::string j = "{\"schema\":1,\"run_id\":" + JsonOut::Str(id) + ",\"time\":" + JsonOut::Str(IsoNow()) + ",\"branch\":" + JsonOut::Str(br ? br : "") + ",\"sha\":" + JsonOut::Str(sha ? sha : "")
+            std::string j = "{\"schema\":2,\"run_id\":" + JsonOut::Str(id) + ",\"time\":" + JsonOut::Str(IsoNow()) + ",\"branch\":" + JsonOut::Str(br ? br : "") + ",\"sha\":" + JsonOut::Str(sha ? sha : "")
                           + ",\"list\":" + JsonOut::Str(list) + ",\"seed\":" + std::to_string(seed) + ",\"fights_per_cell\":" + std::to_string(fights) + ",\"label\":" + JsonOut::Str(label) + ",\"mode\":" + JsonOut::Str(mode) + ",\"stealth\":" + JsonOut::Str(stealth) + ",\"sneak_profile\":" + JsonOut::Str(sneakProfile) + ",\"headline\":{\"covers\":" + (hasJ ? JsonOut::Str(jCovers) : std::string("null")) + ",\"fights\":" + (hasJ ? std::to_string(jFights) : std::string("null")) + ",\"j\":" + (hasJ ? JsonOut::Num(jVal) : "null") + ",\"j_scenarios\":" + (hasJ ? JsonOut::Num(jScen) : "null") + ",\"j_natural\":" + (hasJ ? JsonOut::Num(jNat) : "null") + ",\"oracle_j\":" + (hasOracleJ ? JsonOut::Num(oracleJ) : "null") + ",\"oracle_j_scenarios\":" + (hasOracleJ ? JsonOut::Num(oracleJScen) : "null") + ",\"oracle_j_natural\":" + (hasOracleJ ? JsonOut::Num(oracleJNat) : "null") + ",\"oracle_fights\":" + std::to_string(oracleFights) + ",\"oracle_over\":" + JsonOut::Str(oracleOver) + ",\"oracle_covers\":" + (hasOracleJ ? JsonOut::Str(oracleCovers) : std::string("null")) + "}"
                           + ",\"oracle\":{\"k\":" + std::to_string(oracleK) + ",\"horizon_s\":" + JsonOut::Num(oracleH) + ",\"kind\":" + JsonOut::Str(oracleKind) + "},\n\"classes\":[";
             for (std::size_t i = 0; i < rows.size(); ++i) { const ResultRow& r = rows[i]; std::map<std::string, double> mix, met;
@@ -202,20 +215,34 @@ namespace Sim {
                 const auto sm = SchemaMetrics(row.metrics); double val = 0; if (!RulingValue(sm, r.metric, val)) continue;
                 j += std::string(first ? "\n" : ",\n") + "{\"id\":" + JsonOut::Str(r.id) + ",\"text\":" + JsonOut::Str(r.text) + ",\"class\":" + JsonOut::Str(row.cls) + ",\"metric\":" + JsonOut::Str(r.metric) + ",\"op\":" + JsonOut::Str(r.op)
                    + ",\"target\":" + JsonOut::Num(r.target) + ",\"value\":" + JsonOut::Num(val) + ",\"pass\":" + (RulingPass(r, val) ? "true" : "false") + "}"; first = false; }
+            // schema 2: the slugs of THIS run a ledger row's class group covers (the dashboard matches a class by slug, never by the group's name)
+            auto slugs = [&](const std::string& group) { std::string o = "["; auto it = groups.find(group); bool f1 = true;
+                if (it != groups.end()) for (const std::string& sl : it->second) { o += std::string(f1 ? "" : ",") + JsonOut::Str(sl); f1 = false; }
+                else for (const ResultRow& row : rows) if (row.cls == group && row.bracket == "natural") { o += JsonOut::Str(row.cls); }
+                return o + "]"; };
             j += "],\n\"gaps\":[";
             for (std::size_t i = 0; i < GapRows().size(); ++i) { const GapRow& g = GapRows()[i]; double dU = 0; bool has = false;
                 for (const ScenarioRow& s : scen) if (s.hasOracle && s.name == g.scenario) { dU = s.gap; has = true; }
                 j += std::string(i ? ",\n" : "\n") + "{\"id\":" + JsonOut::Str(g.id) + ",\"family\":" + JsonOut::Str(g.family) + ",\"class\":" + JsonOut::Str(g.cls) + ",\"desc\":" + JsonOut::Str(g.desc) + ",\"scenario\":" + JsonOut::Str(g.scenario)
-                   + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + "}"; }
+                   + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + ",\"classes\":" + slugs(g.cls) + "}"; }
             auto ran = [&](const char* cls) { for (const ResultRow& row : rows) if (row.cls == cls) return true; return false; };   // only the classes this run played
             for (const Playstyle& p : Playstyles()) { if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; std::string ids = std::string(",") + p.gaps + ",";   // the class gap ledger: one row per (gap, class)
                 for (const ClassGap& g : ClassGaps()) { if (ids.find(std::string(",") + g.id + ",") == std::string::npos) continue; double dU = 0; bool has = false;
                     for (const ScenarioRow& s : scen) if (s.hasOracle && s.name == g.scenario) { dU = s.gap; has = true; }
                     j += std::string(",\n") + "{\"id\":" + JsonOut::Str(g.id) + ",\"family\":" + JsonOut::Str(g.family) + ",\"class\":" + JsonOut::Str(p.cls) + ",\"desc\":" + JsonOut::Str(g.desc) + ",\"scenario\":" + JsonOut::Str(g.scenario)
-                       + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + "}"; } }
+                       + ",\"delta_u\":" + (has ? JsonOut::Num(dU) : "null") + ",\"status\":" + JsonOut::Str(g.status) + ",\"classes\":[" + JsonOut::Str(p.cls) + "]}"; } }
             j += "],\n\"playstyles\":["; bool firstPs = true;
             for (std::size_t i = 0; i < Playstyles().size(); ++i) { const Playstyle& p = Playstyles()[i]; if (!ran(p.cls) || !PlaystyleInForce(p.cls)) continue; const bool sep = !firstPs; firstPs = false;
                 j += std::string(sep ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(p.cls) + ",\"does\":" + JsonOut::Str(p.does) + ",\"never\":" + JsonOut::Str(p.never) + ",\"forbid\":" + std::to_string(p.forbid) + ",\"gaps\":" + JsonOut::Str(p.gaps) + "}"; }
+            j += "],\n\"rating\":{\"fights_per_cell\":" + std::to_string(ratingFights) + ",\"cells\":" + std::to_string(ratings.empty() ? 0 : 40) + ",\"classes\":[";
+            for (std::size_t i = 0; i < ratings.size(); ++i) { const RatingRow& r = ratings[i];
+                j += std::string(i ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(r.cls) + ",\"tier\":" + std::to_string(r.tier) + ",\"fights\":" + std::to_string(r.fights) + ",\"score\":" + JsonOut::Num(r.score) + ",\"se\":" + JsonOut::Num(r.se)
+                   + ",\"rank\":" + std::to_string(r.rank) + ",\"of\":" + std::to_string(r.of) + ",\"tier_mean\":" + JsonOut::Num(r.tierMean) + ",\"delta\":" + JsonOut::Num(r.delta) + ",\"below\":" + (r.below ? "true" : "false")
+                   + ",\"weakest\":" + JsonOut::Str(r.weakest) + ",\"weakest_delta\":" + JsonOut::Num(r.weakestDelta) + ",\"by_archetype\":" + JsonOut::Map(r.byArch) + "}"; }
+            j += "]},\n\"class_gaps\":[";
+            for (std::size_t i = 0; i < classGaps.size(); ++i) { const ClassGapRow& g = classGaps[i];
+                j += std::string(i ? ",\n" : "\n") + "{\"class\":" + JsonOut::Str(g.cls) + ",\"gap\":" + JsonOut::Num(g.gap) + ",\"se\":" + JsonOut::Num(g.se) + ",\"fights\":" + std::to_string(g.fights)
+                   + ",\"natural_gap\":" + (g.natFights ? JsonOut::Num(g.natGap) : "null") + ",\"natural_fights\":" + std::to_string(g.natFights) + ",\"scenario_gap\":" + (g.scenFights ? JsonOut::Num(g.scenGap) : "null") + ",\"scenario_fights\":" + std::to_string(g.scenFights) + "}"; }
             j += "],\n\"metric_info\":{";
             for (std::size_t i = 0; i < MetricInfos().size(); ++i) { const MetricInfo& mi = MetricInfos()[i]; j += std::string(i ? "," : "") + JsonOut::Str(mi.name) + ":{\"better\":" + JsonOut::Str(mi.better) + ",\"unit\":" + JsonOut::Str(mi.unit) + "}"; }
             j += "}}\n";

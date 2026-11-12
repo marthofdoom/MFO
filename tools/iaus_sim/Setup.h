@@ -116,6 +116,10 @@ namespace Sim {
         std::vector<std::string> lateTags;
         float playerHp = 1, subjectHp = 1, subjectMp = 1;   // scenario start fractions
         int   playerPotions = 4; int subjectPotionsH = -1;  // -1 = the random kit
+        // The rating battery (Rating.h): everything a fight draws that must NOT depend on the rated class.
+        int   subjectPotionsM = -1, subjectPotionsS = -1, subjectArrows = -1;   // -1 = the random kit
+        const SimClass* refCls = nullptr;                   // targetRatio is met against a REFERENCE party whose subject is this class (same level, same seed), so the foes' scale never reads the rated class
+        std::uint64_t geoSeed = 0;                          // != 0: the second follower's build, the foes' places, the cover and the fight's opening random state come from this seed alone (0 = the fight's own stream, as always)
         float foeSpread = 250;
         std::vector<std::string> ensure, ensureOthers;      // spells the subject / the other followers must know (Load.h SpellIs)
         bool  onSubject = false;                            // every foe starts on the subject
@@ -198,8 +202,9 @@ namespace Sim {
           Body& p = F.Add(Role::Player, ps, 0, 0); p.arrows = 80; p.potions = 4; if (fs.worn > 0) p.c.hp *= R.U(1.0f - fs.worn * 0.5f, 1.0f); }
         auto place = [&](Cls f) { return std::pair<float, float>{ f == Cls::Melee ? 220.0f : f == Cls::Ranged ? -300.0f : -250.0f, R.U(-220, 220) }; };
         { auto [x, y] = place(fs.cls->fam); AddFollower(F, D, *fs.cls, fs.level, fs.rank, x, y, R, fs.worn, fs.ensure.empty() ? nullptr : &fs.ensure); }
-        for (const SimClass* o : fs.others) { auto [x, y] = place(o->fam); AddFollower(F, D, *o, fs.level, 3, x, y, R, fs.worn, fs.ensureOthers.empty() ? nullptr : &fs.ensureOthers); }
-        const float ang = R.U(-0.4f, 0.4f), cx = fs.foeDist * std::cos(ang), cy = fs.foeDist * std::sin(ang);
+        Rng Gs; if (fs.geoSeed) Gs.g.seed(fs.geoSeed); Rng& G = fs.geoSeed ? Gs : R;   // the rating battery: a stream the subject's build never draws from
+        for (const SimClass* o : fs.others) { auto [x, y] = place(o->fam); AddFollower(F, D, *o, fs.level, 3, x, y, G, fs.worn, fs.ensureOthers.empty() ? nullptr : &fs.ensureOthers); }
+        const float ang = G.U(-0.4f, 0.4f), cx = fs.foeDist * std::cos(ang), cy = fs.foeDist * std::sin(ang);
         std::size_t ti = 0;
         auto addFoe = [&](std::shared_ptr<const ActorSpec> sp, float dx, float dy) {
             Body& f = F.Add(Role::Foe, std::move(sp), cx + std::clamp(dx, -700.0f, 700.0f), cy + std::clamp(dy, -700.0f, 700.0f));
@@ -210,11 +215,13 @@ namespace Sim {
             Body& nf = F.b.back(); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : 0.0f, ft ? ft->c.y : 0.0f);   // a foe starts facing its target, else the party
         };
         for (const auto& m : fs.foes) addFoe(std::shared_ptr<const ActorSpec>(std::shared_ptr<const ActorSpec>{}, &D.specs[static_cast<std::size_t>(m.first)]), m.second.first, m.second.second);
-        for (const auto& s : fs.customFoes) addFoe(s, R.U(-fs.foeSpread, fs.foeSpread), R.U(-fs.foeSpread, fs.foeSpread));
-        for (std::size_t i = 0; i < fs.late.size(); ++i) F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + R.U(-200, 200), cy + R.U(-200, 200), i < fs.lateTags.size() ? fs.lateTags[i] : std::string() });
+        for (const auto& s : fs.customFoes) { const float dy = G.U(-fs.foeSpread, fs.foeSpread), dx = G.U(-fs.foeSpread, fs.foeSpread); addFoe(s, dx, dy); }   // dy FIRST: the order the old call's arguments were drawn in (g++ evaluates them right to left), now fixed in the source so every compiler builds the same fights
+        for (std::size_t i = 0; i < fs.late.size(); ++i) { const float lx = G.U(-200, 200), ly = G.U(-200, 200); F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + lx, cy + ly, i < fs.lateTags.size() ? fs.lateTags[i] : std::string() }); }
         if (fs.targetRatio > 0) {   // late foes count toward the strength as if present
-            Fight T = F; for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y);
-            const float k = std::clamp(fs.targetRatio / std::max(0.01f, StrengthRatio(D, T)), 0.05f, 20.0f);
+            float ratio = 0.0f;
+            if (fs.refCls && fs.refCls != fs.cls) { FightSpec rs = fs; rs.cls = fs.refCls; rs.refCls = nullptr; rs.targetRatio = 0; rs.ensure.clear(); Fight T = BuildFight(D, rs, t1); for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y); ratio = StrengthRatio(D, T); }   // the reference party's fight: same seed, same foes
+            else { Fight T = F; for (const Spawn& s : T.late) T.Add(Role::Foe, s.spec, s.x, s.y); ratio = StrengthRatio(D, T); }
+            const float k = std::clamp(fs.targetRatio / std::max(0.01f, ratio), 0.05f, 20.0f);
             for (Body& x : F.b) if (x.role == Role::Foe) { auto sp = std::make_shared<ActorSpec>(*x.spec); sp->hp *= k; x.spec = sp; x.c.hpMax *= k; x.c.hp *= k; x.dmgScale = k; }
             for (Spawn& s : F.late) { auto sp = std::make_shared<ActorSpec>(*s.spec); sp->hp *= k; s.spec = sp; s.dmgScale = k; }
         }
@@ -222,7 +229,8 @@ namespace Sim {
         F.t.foesFaced += static_cast<long>(F.late.size());
         for (const Spawn& s : F.late) F.foeHpTotal += s.spec->hp;
         F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
-        { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH; }
+        { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH;
+          if (fs.subjectPotionsM >= 0) F.ctl[0].book.kit.potionsMagicka = fs.subjectPotionsM; if (fs.subjectPotionsS >= 0) F.ctl[0].book.kit.potionsStamina = fs.subjectPotionsS; if (fs.subjectArrows >= 0 && s0.arrows > 0) s0.arrows = fs.subjectArrows; }
         for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
         F.interior = fs.interior;
         if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)
@@ -235,9 +243,10 @@ namespace Sim {
                 // NOTHING here; the draw above still happens so the stream is the same. --c13 lever = the H10 guarantee, which is not built.
                 if (free && !g_t2.c13built) x.cloakUntil = 1e9; }   // the lever: he opens undetected whatever the foes could sense; his first blow ends it
         }
-        const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);
-        for (int i = 0; i < no; ++i) { const float tt = R.U(0.3f, 0.75f); F.occ.push_back({ cx * tt + R.U(-350, 350), cy * tt + R.U(-350, 350), R.U(60, 140) }); }
+        const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? G.I(1, 3) : G.I(0, 1);
+        for (int i = 0; i < no; ++i) { const float tt = G.U(0.3f, 0.75f); const float ox = G.U(-350, 350), oy = G.U(-350, 350), orad = G.U(60, 140); F.occ.push_back({ cx * tt + ox, cy * tt + oy, orad }); }
         { const float ca = std::cos(ang), sa = std::sin(ang); for (const FightSpec::Cover& k : fs.cover) F.occ.push_back({ k.u * ca - k.v * sa, k.u * sa + k.v * ca, k.r }); }
+        if (fs.geoSeed) F.R.g.seed(fs.geoSeed * 0x9E3779B97F4A7C15ULL + 0x5851F42D4C957F2DULL);   // the fight opens on the same random state whatever the subject's build drew
         return F;
     }
 

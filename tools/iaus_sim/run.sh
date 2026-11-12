@@ -6,6 +6,10 @@
 #        [--t2 off] (every road off + the feet stop = the lab of section 30: 78.11 at g3, 76.69 at --stealth off for --classes beta1)
 #        [--feet-stop] [--c8|--dodge|--aversion|--aim|--block|--range|--backoff|--step|--unweighted|--reanimate off|on] [--c13 built|lever]
 #        [--disengage-dnd] [--mix-partial] [--aim-miss P] [--aim-scatter P] [--dodge-flight S] [--no-fill-swing] [--teach <token>]
+#        Sim batch (iaus-sim-v2.md section 32): [--classes beta1 (12 classes + the 3 tree-OFF base cells) | beta1-tree (the 12)]
+#        [--rating N] (fights per cell of the rating battery, default 3; 0 = off) [--rating-only] (the Rating (Tx) table over --seeds, nothing else)
+#        [--class-oracle N] [--gap-scenarios N] (the per-class oracle gap; a run that writes a results file runs 4 + 2 by itself, 0 = off)
+#        [--decline] (health-decline curves and the best drink line per class) [--curve <class>:<family>.<cons>.<param>=<v>]
 #        [--disengage-report N] (card G3's usefulness: the same fights without the run, with it, and with the D&D variant)
 #        [--steal-lab N] (cards G13 / G14: the witness pre-check against the engine's detection formula)
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,
@@ -57,6 +61,8 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     chk "sim batch: --opt c.N next to a --curve on consideration N is refused" 'R --classes knight --curve knight:drink_health.32.b=0.5 --opt c.32.b | grep -q "refused" && ! R --classes knight --curve knight:drink_health.32.b=0.5 --opt c.31.b --opt-fights 1 --opt-passes 1 | grep -q "refused"'
     chk "sim batch: the tree-OFF base cells are real cells with their own curve rows" 'R --print-classes | grep -q "melee-off" && [[ "$(R --classes melee-off --seeds 1 --fights 4 --curve melee-off:scalar.touchSpentSec=3 | head -1)" == "$(R --classes melee-off --seeds 1 --fights 4 | head -1)" ]] && [[ "$(R --classes melee-off --seeds 1 --fights 4 --curve melee-off:drink_health.32.b=0.9 | head -1)" != "$(R --classes melee-off --seeds 1 --fights 4 | head -1)" ]] && [[ "$(R --classes melee --seeds 1 --fights 4 --curve melee-off:drink_health.32.b=0.9 | head -1)" == "$(R --classes melee --seeds 1 --fights 4 | head -1)" ]]'
     chk "sim batch: beta1 is the 12 tree-ON classes and the 3 base cells; beta1-tree is the 12" '[[ "$(R --classes beta1 --seeds 1 | tail -1)" == *"warlock,melee-off,ranged-off,mage-off "* && "$(R --classes beta1-tree --seeds 1 | tail -1)" == *"healer,warlock "* ]]'
+    chk "sim batch: the rating battery plays the same fights for a tier whatever else runs" 'A="$(R --rating-only --rating 1 --classes knight | awk "\$1==\"knight\"{print \$3}")"; B="$(R --rating-only --rating 1 --classes knight,healer,archer | awk "\$1==\"knight\"{print \$3}")"; [[ -n "$A" && "$A" == "$B" ]]'
+    chk "sim batch: a class report run writes the rating, the per-class gap and the ledger slugs (schema 2)" 'J="$(mktemp)"; "$OUT" --classes knight,evoker --fights 1 --threads 8 --class-oracle 1 --gap-scenarios 0 --oracle-k 1 --oracle-h 5 --rating 1 --json "$J" >/dev/null 2>&1; grep -q "^{\"schema\":2" "$J" && grep -q "\"class_gaps\":\[" "$J" && grep -q "{\"class\":\"knight\",\"gap\":" "$J" && grep -q "\"rating\":{\"fights_per_cell\":1" "$J" && grep -q "\"class\":\"knight line\".*\"classes\":\[\"knight\"\]" "$J" && python3 "'"$ROOT"'/tools/iaus_dash/dash.py" --json-check "$J" >/dev/null; rc=$?; rm -f "$J"; [[ $rc == 0 ]]'
     chk "an unknown --sneak-profile is an error"  'R --sneak-profile nope --classes mage --seeds 1 | grep -q "unknown --sneak-profile"'
     if [[ $fail == 0 ]]; then echo "CLI-CHECKS PASS"; exit 0; else echo "CLI-CHECKS FAIL"; exit 1; fi
 fi

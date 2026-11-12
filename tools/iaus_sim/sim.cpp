@@ -6,6 +6,7 @@
 // reads it. Models, sources and proof levels: Docs/research/2026-11/iaus-sim-v2.md.
 #include "iaus_sim/Results.h"
 #include "iaus_sim/Scenarios.h"
+#include "iaus_sim/Rating.h"
 #include "iaus_sim/Tune.h"
 #include "iaus_sim/StealLab.h"
 
@@ -260,6 +261,55 @@ namespace {
         g_stealth = keepStealth; g_t2.dnd = keepDnd; g_noG3 = false; return 0;
     }
 
+    // ── THE RATING BATTERY (Rating.h): every class of the run plays its tier's battery, the same fights for the whole tier ──
+    // seeds: one battery per seed (the run's --seeds, else --seed). Fills `out` (ranked inside each tier) and prints the table.
+    // Returns the BAD-FACTS + invalid pick count of the battery's fights (must be 0, as everywhere).
+    long RatingPass(const Data& D, const std::vector<SimClass>& all, const std::vector<int>& cls, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad, std::vector<RatingRow>& out, bool print = true) {
+        const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
+        const int perClass = kRatingCells * n * static_cast<int>(seeds.size()), jobs = static_cast<int>(cls.size()) * perClass;
+        std::vector<std::vector<double>> u(cls.size(), std::vector<double>(static_cast<std::size_t>(perClass), 0.0)); std::atomic<int> next{ 0 }; std::atomic<long> bad{ 0 };
+        auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int ci = job / perClass, k = job % perClass, si = k / (kRatingCells * n), cell = (k / n) % kRatingCells, f = k % n;
+            const SimClass& sc = all[static_cast<std::size_t>(cls[static_cast<std::size_t>(ci)])];
+            Rng R; R.g.seed(seeds[static_cast<std::size_t>(si)] * 0x9E3779B97F4A7C15ULL + std::uint64_t(sc.tier) * 1000003ULL + std::uint64_t(cell) * 7919ULL + std::uint64_t(f) * 104729ULL + 0xBA77E21ULL);   // tier, cell, fight, seed: NEVER the class
+            FightSpec fs = RatingFight(D, sc, all, cell, f, R); Fight F = BuildFight(D, fs, t1); F.estimates = estimates; F.scrollRoad = scrollRoad; RunMode(F);
+            u[static_cast<std::size_t>(ci)][static_cast<std::size_t>(k)] = Utility(F); bad += F.t.badFacts + F.t.invalid; } };
+        { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
+        out.clear();
+        for (std::size_t ci = 0; ci < cls.size(); ++ci) { const SimClass& sc = all[static_cast<std::size_t>(cls[ci])]; RatingRow r; r.cls = sc.name; r.tier = sc.tier; r.fights = perClass;
+            double m = 0; for (double x : u[ci]) m += x; m /= std::max(1, perClass); double v = 0; for (double x : u[ci]) v += (x - m) * (x - m);
+            r.score = m; r.se = perClass > 1 ? std::sqrt(v / double(perClass - 1) / double(perClass)) : 0.0;
+            for (int a = 0; a < kRatingArchN; ++a) { double am = 0; long an = 0; for (int k = 0; k < perClass; ++k) if (((k / n) % kRatingCells) / 4 == a) { am += u[ci][static_cast<std::size_t>(k)]; ++an; } r.byArch[kRatingArch[a].name] = an ? am / double(an) : 0.0; }
+            out.push_back(std::move(r)); }
+        RankRatings(out, u);
+        if (print) {
+            std::printf("\nRATING (Tx): one shared battery per tier (%d cells = %d foe archetypes x 2 group sizes x 2 level bands, %d fight(s) per cell, %zu seed(s); the same fights for every class of a tier)\n%-17s %-3s %6s %5s %6s %7s %-5s", kRatingCells, kRatingArchN, n, seeds.size(), "class", "T", "rating", "se", "rank", "vs tier", "flag");
+            for (int a = 0; a < kRatingArchN; ++a) std::printf(" %7s", kRatingArch[a].name); std::printf("  weakest (vs tier there)\n");
+            std::vector<std::size_t> order(out.size()); for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+            std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return out[a].tier != out[b].tier ? out[a].tier < out[b].tier : out[a].rank < out[b].rank; });
+            for (std::size_t i : order) { const RatingRow& r = out[i]; char rk[16]; std::snprintf(rk, sizeof rk, "%d/%d", r.rank, r.of);
+                std::printf("%-17s T%-2d %6.2f %5.2f %6s %+7.2f %-5s", r.cls.c_str(), r.tier, r.score, r.se, rk, r.delta, r.below ? "BELOW" : "");
+                for (int a = 0; a < kRatingArchN; ++a) std::printf(" %7.1f", r.byArch.at(kRatingArch[a].name));
+                if (!r.weakest.empty()) std::printf("  %s %+.1f", r.weakest.c_str(), r.weakestDelta); std::printf("\n"); }
+            std::printf("flag BELOW = under the tier's mean by more than 2.0 U and by more than two standard errors of the paired difference\n");
+        }
+        return bad.load();
+    }
+
+    // The slugs of a run that a gap-ledger class group covers (Results.h GapRows: "knight line", "casters" ...). A group is a rule over
+    // the class cell (its line, gate and flags), never a list of names, except the Knight line, which IS three named classes.
+    bool InGapGroup(const SimClass& c, const std::string& g) {
+        if (g == "*") return true;
+        if (g == "knight line") return c.name == "knight" || c.name == "great-knight" || c.name == "ebony-warrior";
+        if (g == "healers") return std::find(c.ensure.begin(), c.ensure.end(), "healOther") != c.ensure.end();
+        if (g == "casters") return c.gate.spellsOnClass;
+        if (g == "mage lines") return c.line == "Mage";
+        if (g == "melee lines") return c.line == "Melee";
+        if (g == "sneak classes") return c.sneakAlways;
+        if (g == "disengage classes") return c.gate.treeOn && c.gate.disengage;
+        if (g == "classes without kDisengage") return c.gate.treeOn && !c.gate.disengage;
+        return c.name == g;
+    }
+
     std::vector<std::uint64_t> g_seeds;   // --seeds a,b,c: the objective is the mean over these seeds (empty = the single --seed)
     double ObjectiveMulti(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU = nullptr, double* natU = nullptr) {
         if (g_seeds.empty()) return Objective(D, classes, seed, fights, threads, scenU, natU);
@@ -390,7 +440,7 @@ namespace {
 int main(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -429,7 +479,10 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-class-rulings")) { g_classRulings = false; noClassRulings = true; }   // ... and stays unconstrained even with --class-oracle
         else if (!std::strcmp(argv[i], "--parked")) g_parked = true;                  // the PARKED rows (T3+ playstyles, passives, stealth scenarios) take effect; Beta 1 = T1 + T2 only without it
         else if (!std::strcmp(argv[i], "--class-kit")) g_classKit = true;              // the subject knows the spells his class's default rows name
-        else if (!std::strcmp(argv[i], "--class-oracle") && i + 1 < argc) { classOracle = std::atoi(argv[++i]); if (!noClassRulings) g_classRulings = true; }   // N natural fights per class with the class-constrained oracle: the per-class oracle gap
+        else if (!std::strcmp(argv[i], "--class-oracle") && i + 1 < argc) { classOracle = std::max(0, std::atoi(argv[++i])); if (classOracle > 0 && !noClassRulings) g_classRulings = true; }   // N natural fights per class with the class-constrained oracle: the per-class oracle gap
+        else if (!std::strcmp(argv[i], "--gap-scenarios") && i + 1 < argc) gapScen = std::max(0, std::atoi(argv[++i]));   // the gap pass: N fights of each of a class's own named scenarios (default 2; 0 = natural fights only)
+        else if (!std::strcmp(argv[i], "--rating") && i + 1 < argc) ratingN = std::max(0, std::atoi(argv[++i]));        // the rating battery: N fights per cell (default 3 in a class report run; 0 = off)
+        else if (!std::strcmp(argv[i], "--rating-only")) ratingOnly = true;                                               // print the rating table of --classes (over --seeds) and stop: no class cells, no results file
         else if (!std::strcmp(argv[i], "--regroup-road")) g_regroupRoad = true;       // the ch.24 regroup client is modelled as existing
         else if (!std::strcmp(argv[i], "--follower-death")) g_followerDeath = true;   // a follower at 0 health is dead for good (LoreRim's default)
         else if (!std::strcmp(argv[i], "--mortal-blind")) g_mortalKnown = false;       // ... and IAUS is not told (Snapshot::mortal stays false)   // the first control model: a Calm is never broken by a blow
@@ -463,9 +516,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--list-params")) listParams = true;
         else if (!std::strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
-        else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) oc.K = std::atoi(argv[++i]);
-        else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) oc.H = std::atof(argv[++i]);
-        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--curve <class>:<family>.<cons>.<param>=<v>] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); ocGiven = true; }
+        else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); ocGiven = true; }
+        else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--curve <class>:<family>.<cons>.<param>=<v>] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--class-oracle N] [--gap-scenarios N] [--rating N] [--rating-only] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
     if (listParams) { ListParams(); return 0; }
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
@@ -498,6 +551,18 @@ int main(int argc, char** argv) {
     if (optPrefix) return OptimisePrefix(D, allClasses, seed, optFights > 0 ? optFights : fights, threads);
     if (g_optClass.empty() && !only.empty()) g_objScope = only;   // --classes scopes the headline J and the objective (--opt-class wins)
     if (!opt.empty()) return Optimise(D, allClasses, opt, seed, optFights > 0 ? optFights : fights, threads, optPasses);
+    // A CLASS REPORT RUN (the default mode, writing a results file) always fills the per-class gap and the rating, at a small price:
+    // 4 natural fights per class and 2 of each of its own scenarios under the oracle, and 3 fights per rating cell. --no-json runs
+    // (searches, baselines) skip the gap pass unless --class-oracle asks for it; --class-oracle 0 / --rating 0 turn a pass off.
+    bool autoGap = false; if (classOracle < 0) { classOracle = noJson || !scenario.empty() ? 0 : 4; autoGap = classOracle > 0; }
+    // PRICE of the automatic gap pass: the oracle is ~2 CPU s per fight at its full setting (K=8, 150 s). The automatic pass runs it at
+    // K=6, 90 s unless --oracle-k / --oracle-h say otherwise (the results file records the setting): about 25 s of wall time for the 15
+    // Beta 1 cells on 8 threads, 2 s for a one-class probe. An explicit --class-oracle N keeps the full setting, as before.
+    if (autoGap && !ocGiven) { oc.K = 6; oc.H = 90.0; }
+    if (ratingN < 0) ratingN = !scenario.empty() ? 0 : 3;
+    if (ratingOnly) { std::vector<int> ci; for (std::size_t i = 0; i < allClasses.size(); ++i) if (only.empty() || ("," + only + ",").find("," + allClasses[i].name + ",") != std::string::npos) ci.push_back(static_cast<int>(i));
+        std::vector<RatingRow> rr; const long bad = RatingPass(D, allClasses, ci, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, std::max(1, ratingN), threads, estimates, scrollRoad, rr);
+        std::printf("CHECKS: BAD-FACTS + invalid picks=%ld (must be 0)  => %s\n", bad, bad == 0 ? "PASS" : "FAIL"); return bad == 0 ? 0 : 1; }
     // Fights per scenario for the headline J. B710: a --seeds run honours --fights. B755: a full run's headline is ALWAYS 24, whatever
     // --fights says (that flag sizes the class cells), so two archived full runs never differ in J because of their cell size.
     const int hf = !g_seeds.empty() && fightsGiven ? fights : 24;
@@ -552,21 +617,44 @@ int main(int argc, char** argv) {
     for (int c = 0; c < nc; ++c) for (int b = 0; b < kNB; ++b) { const Agg& A = cell[static_cast<std::size_t>(c * kNB + b)];
         all[classes[static_cast<std::size_t>(c)].name + "|" + kBrackets[b].name] = Metrics(A); totalBad += A.s.badFacts; totalInvalid += A.s.invalid;
         { const SimClass& sc = classes[static_cast<std::size_t>(c)]; ResultRow rr; rr.cls = sc.name; rr.line = sc.line; rr.tier = sc.tier; rr.planned = sc.planned; rr.bracket = kBrackets[b].name; rr.fights = A.fights; rr.metrics = Metrics(A); rr.metrics["persona"] = Persona(sc.name, SchemaMetrics(rr.metrics)); rr.mode = g_tableMode ? "table" : "iaus"; rr.package = sc.package; rr.defaults = sc.defaults; R.rows.push_back(std::move(rr)); } }
-    if (classOracle > 0) {   // THE PER-CLASS ORACLE GAP: the same natural fights played by IAUS and by the oracle held to the class's rulings
-        struct CO { double uI = 0, uO = 0; Agg orc; }; std::vector<CO> co(static_cast<std::size_t>(nc)); std::atomic<int> nx{ 0 }; const int jobs = nc * classOracle;
-        auto w2 = [&]() { for (;;) { const int job = nx.fetch_add(1); if (job >= jobs) return; const int c = job / classOracle, f = job % classOracle;
-            Rng R; R.g.seed(seed * 1000003ULL + std::uint64_t(c) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL);
-            Fight F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight Gf = F;
-            RunMode(F); OraclePolicy O; O.cfg = oc; RunFight(Gf, O);
-            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.uI += Utility(F); r.uO += Utility(Gf); r.orc.uSum += Utility(Gf); r.orc.Add(Gf.t, false); } };
+    long ratingBad = 0;
+    if (ratingN > 0) {   // THE RATING BATTERY: every class of the run on its tier's shared fights (Rating.h)
+        std::vector<int> ci; for (const SimClass& c : classes) for (std::size_t i = 0; i < allClasses.size(); ++i) if (allClasses[i].name == c.name) ci.push_back(static_cast<int>(i));
+        ratingBad = RatingPass(D, allClasses, ci, { seed }, ratingN, threads, estimates, scrollRoad, R.ratings); R.ratingFights = ratingN;
+    }
+    for (const GapRow& g : GapRows()) { auto& v = R.groups[g.cls]; if (v.empty()) for (const SimClass& c : classes) if (InGapGroup(c, g.cls)) v.push_back(c.name); }
+    if (autoGap && !noClassRulings) g_classRulings = true;   // the automatic gap pass is the class oracle (rulings in force), as --class-oracle is
+    if (classOracle > 0) {   // THE GAP PASS: per class, the SAME fights played by IAUS and by the oracle held to the class's rulings: its natural fights and its own named scenarios
+        const std::vector<Scenario> hs = HeadlineScenarios(); std::vector<std::pair<int, int>> sj;   // (headline scenario index, class index in `classes`)
+        if (gapScen > 0) { Rng R0; R0.g.seed(1); for (std::size_t i = 0; i < hs.size(); ++i) { FightSpec fs = hs[i].make(D, allClasses, R0); for (int c = 0; c < nc; ++c) if (classes[static_cast<std::size_t>(c)].name == fs.cls->name) sj.push_back({ static_cast<int>(i), c }); } }
+        struct CO { double uI = 0, uO = 0; Agg orc; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; }; std::vector<CO> co(static_cast<std::size_t>(nc));
+        struct SO { double uI = 0, uO = 0; Agg iaus, orc; }; std::vector<SO> so(sj.size());
+        std::vector<int> gidx(static_cast<std::size_t>(nc), 0); for (int c = 0; c < nc; ++c) for (std::size_t i = 0; i < allClasses.size(); ++i) if (allClasses[i].name == classes[static_cast<std::size_t>(c)].name) gidx[static_cast<std::size_t>(c)] = static_cast<int>(i);
+        std::atomic<int> nx{ 0 }; const int natJobs = nc * classOracle, jobs = natJobs + static_cast<int>(sj.size()) * gapScen;
+        auto w2 = [&]() { for (;;) { const int job = nx.fetch_add(1); if (job >= jobs) return; Rng R; Fight F; int c = 0, sidx = -1;
+            if (job < natJobs) { c = job / classOracle; const int f = job % classOracle;   // seeded by the class's index in the FULL table, so a class's gap fights do not depend on what else --classes named
+                R.g.seed(seed * 1000003ULL + std::uint64_t(gidx[static_cast<std::size_t>(c)]) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL);
+                F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); }
+            else { sidx = (job - natJobs) / gapScen; const int f = (job - natJobs) % gapScen, si = sj[static_cast<std::size_t>(sidx)].first; c = sj[static_cast<std::size_t>(sidx)].second;
+                R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919); FightSpec fs = hs[static_cast<std::size_t>(si)].make(D, allClasses, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; F = BuildFight(D, fs, t1); }
+            F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight Gf = F;
+            RunMode(F); OraclePolicy O; O.cfg = oc; RunFight(Gf, O); const double uI = Utility(F), uO = Utility(Gf);
+            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI);
+            if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); }
+            else { r.sI += uI; r.sO += uO; ++r.sN; SO& q = so[static_cast<std::size_t>(sidx)]; q.uI += uI; q.uO += uO; q.iaus.uSum += uI; q.iaus.Add(F.t, false); q.orc.uSum += uO; q.orc.Add(Gf.t, false); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(w2); for (auto& x : th) x.join(); }
-        std::printf("\nCLASS ORACLE (%d natural fights per class, class rulings %s, K=%d H=%.0fs)\n%-17s %7s %7s %7s  %7s %7s   (persona: the oracle's own play against the class signature)\n", classOracle, g_classRulings ? "IN FORCE" : "off", oc.K, oc.H, "class", "IAUS U", "orc U", "gap", "pers.I", "pers.O");
+        std::printf("\nCLASS ORACLE GAP (%d natural fights per class + %d of each of its own scenarios, class rulings %s, K=%d H=%.0fs)\n%-17s %7s %7s %7s  %7s %7s  %7s %5s %6s   (gap = oracle U - IAUS U over all of the class's gap fights; persona: the oracle's own play against the class signature)\n", classOracle, gapScen, g_classRulings ? "IN FORCE" : "off", oc.K, oc.H, "class", "IAUS U", "orc U", "nat gap", "pers.I", "pers.O", "GAP", "se", "fights");
         R.oracleKind = std::string("rollout over IAUS, extended action set") + (g_classRulings ? ", class rulings in force" : ""); R.oracleK = oc.K; R.oracleH = oc.H;
         for (int c = 0; c < nc; ++c) { const SimClass& sc = classes[static_cast<std::size_t>(c)]; const CO& r = co[static_cast<std::size_t>(c)]; const double n = classOracle;
             ScenarioRow sr; sr.name = "class:" + sc.name; sr.cls = sc.name; sr.iausU = r.uI / n; sr.oracleU = r.uO / n; sr.gap = sr.oracleU - sr.iausU; sr.hasOracle = true; sr.oracleMetrics = Metrics(r.orc);
             const double pO = Persona(sc.name, SchemaMetrics(sr.oracleMetrics)); sr.oracleMetrics["persona"] = pO; double pI = -1;
-            for (ResultRow& rr : R.rows) if (rr.cls == sc.name && rr.bracket == "natural") { rr.hasGap = true; rr.mainGap = sr.gap; pI = rr.metrics["persona"]; sr.metrics = rr.metrics; }
-            std::printf("%-17s %7.2f %7.2f %+7.2f  %7.1f %7.1f\n", sc.name.c_str(), sr.iausU, sr.oracleU, sr.gap, pI, pO); R.scen.push_back(std::move(sr)); }
+            ClassGapRow cg; cg.cls = sc.name; cg.fights = static_cast<long>(r.d.size()); cg.natFights = classOracle; cg.natGap = sr.gap; cg.scenFights = r.sN; cg.scenGap = r.sN ? (r.sO - r.sI) / double(r.sN) : 0.0;
+            { double m = 0; for (double x : r.d) m += x; m /= std::max<double>(1, double(r.d.size())); double v = 0; for (double x : r.d) v += (x - m) * (x - m); cg.gap = m; cg.se = r.d.size() > 1 ? std::sqrt(v / double(r.d.size() - 1) / double(r.d.size())) : 0.0; }
+            for (ResultRow& rr : R.rows) if (rr.cls == sc.name && rr.bracket == "natural") { rr.hasGap = true; rr.mainGap = cg.gap; pI = rr.metrics["persona"]; sr.metrics = rr.metrics; }
+            std::printf("%-17s %7.2f %7.2f %+7.2f  %7.1f %7.1f  %+7.2f %5.2f %6ld\n", sc.name.c_str(), sr.iausU, sr.oracleU, sr.gap, pI, pO, cg.gap, cg.se, cg.fights); R.scen.push_back(std::move(sr)); R.classGaps.push_back(std::move(cg)); }
+        for (std::size_t i = 0; i < sj.size(); ++i) { const Scenario& scn = hs[static_cast<std::size_t>(sj[i].first)]; const SO& q = so[i]; const double n = gapScen;
+            ScenarioRow sr; sr.name = scn.name; sr.cls = classes[static_cast<std::size_t>(sj[i].second)].name; sr.iausU = q.uI / n; sr.oracleU = q.uO / n; sr.gap = sr.oracleU - sr.iausU; sr.hasOracle = true; sr.metrics = Metrics(q.iaus); sr.oracleMetrics = Metrics(q.orc);
+            std::printf("  %-18s %-12s IAUS %6.2f  oracle %6.2f  gap %+6.2f\n", scn.name, sr.cls.c_str(), sr.iausU, sr.oracleU, sr.gap); R.scen.push_back(std::move(sr)); }
     }
     if (!noJson) R.Write(jsonPath);
     auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? 0.0 : i->second; };
@@ -592,6 +680,7 @@ int main(int argc, char** argv) {
     std::printf("\nIdle%% by rapport rank (all brackets):\n");
     for (int c = 0; c < nc; ++c) for (int rk = 0; rk < 5; ++rk) { const Agg& A = rankCell[static_cast<std::size_t>(c * 5 + rk)]; const double t = std::max<double>(1, double(A.s.ticks));
         std::printf("  %-12s rank%d  idle %.1f%%  hold %.1f%%  sw/min %.1f\n", classes[static_cast<std::size_t>(c)].name.c_str(), rk + 1, 100.0 * double(A.s.idle) / t, 100.0 * double(A.s.hold) / t, double(A.s.switches) / std::max(1e-9, A.durSum / 60.0)); }
+    totalBad += ratingBad;   // the rating battery's fights are held to the same two checks
     std::printf("\nCHECKS: BAD-FACTS ticks=%ld (must be 0)  invalid picks=%ld (must be 0)  => %s\n", totalBad, totalInvalid, totalBad == 0 && totalInvalid == 0 ? "PASS" : "FAIL");
     char meta[480]; std::snprintf(meta, sizeof meta, "#meta fights=%d seed=%llu stealth=%s profile=%s classes=%s t2=%s", fights, (unsigned long long)seed, StealthName(), sneakProfile.c_str(), only.empty() ? (legacy ? "legacy" : "real") : only.c_str(), T2Name().c_str());
     if (outBase) { std::ofstream o(outBase); o << meta << "\n"; for (auto& kv : all) for (auto& m : kv.second) if (m.first.find("dec.") == std::string::npos) o << kv.first << "|" << m.first << "=" << m.second << "\n"; std::printf("baseline written: %s\n", outBase); }
