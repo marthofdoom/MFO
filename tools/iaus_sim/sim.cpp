@@ -46,6 +46,8 @@ namespace {
             S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks); S(powerWhiffs); S(inc2); S(guard2); S(regroups); S(grounds); S(blocks); S(bashes);
             S(playerPressureSec); S(peelSum); S(peelN); S(peelMiss); S(tgtSwitches); S(tauntsOutmatched); S(tauntThenDown); S(tauntSaves);
             S(arrowsShot); S(arrowsHit); S(dodgeTries); S(dodges); S(aimCorrected); S(blockRenewals); S(powRefused); S(backOffs); S(backOffArrived); S(steps); S(stepArrived); S(stepRevealed); S(averted); S(avertKept); S(raises); S(mixPowerDenied); S(mixNormalDenied); S(mixFloorLifted); S(leashTurns); S(engPower); S(dndRuns); S(guardSec); S(feetSec); S(runsBegun); S(runsSafe); S(runDmg); S(runSafeSec); S(runLenSec); S(runDmgAfter5); S(wpnHits); S(sneakHits); S(flankHits); S(hides); S(hideOk); S(hideFail); S(flees); S(fleeHealed); S(fleeArrived); S(fleeFail); S(runDowns); S(stealthTry); S(stealthMiss); S(runSec); S(holdSec); S(fleeHpGain); S(firstHits); S(sneakOpens); S(healAtN); S(sneakDmg); S(hiddenSec); S(sneakSec); S(tgtDistSum); S(playerDistSum); S(contactSec); S(goInBadSec); S(summonSec); S(undeadDmg); S(healAtSum); S(cloakSec); S(posN); S(tgtDistN);
+            for (std::size_t i = 0; i < 10; ++i) { s.decBandSec[i] += t.decBandSec[i]; s.decBandLoss[i] += t.decBandLoss[i]; s.decLethal[i] += t.decLethal[i]; s.decToDownSec[i] += t.decToDownSec[i]; s.decCross[i] += t.decCross[i]; s.decDownAfter[i] += t.decDownAfter[i]; }
+            S(drinksH); S(downsWithPotH); S(downsMidDrink); S(potFracN); S(drinkAtSum); S(potHeal); S(potWaste); S(potFracSum);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -106,6 +108,8 @@ namespace {
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
           m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
+        // sim batch (section 32): the drink record (the full decline curve is the --decline report)
+        m["drinkH/f"] = double(s.drinksH) / n; m["drinkAt%"] = s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1; m["potWaste%"] = pct(s.potWaste, s.potHeal); m["dnPot/f"] = double(s.downsWithPotH) / n; m["dnMidDrink/f"] = double(s.downsMidDrink) / n;
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
     }
@@ -259,6 +263,55 @@ namespace {
         }
         std::printf("\ncolumns: run/f runs begun per fight; len.s mean run length; safe%% runs after which no foe stood within 400 units inside 20 s (he still up); safe.s the mean time to that; runDmg%% the share of his health lost on the run; late%% of it after the run's 5th second; runDn%% runs he went down on;\n         touch%% fights with a run; dU.tch mean utility change of those fights against 'none'; flip%% touched fights whose result or down count differs; dDn.tch mean change of his downs in them\n");
         g_stealth = keepStealth; g_t2.dnd = keepDnd; g_noG3 = false; return 0;
+    }
+
+    // ── HEALTH-DECLINE CURVES AND THE DRINK LINE (marth 11-12: "the sim should help come up with health decline curves and perfect
+    //    drinking times as well. If it uses real enemies and such") ────────────────────────────────────────────────────────────
+    // Per class: n fights per seed in each of the natural, balanced and strong1 brackets (the loaded world's own encounters: a list's
+    // real actors with --list, the fixtures without) and n per seed of every rating cell. Printed per class:
+    //   the DECLINE CURVE (share of his maximum health lost per second while a foe is on him, by the tenth of health he is in),
+    //   the share of those seconds in which the last 2 s of damage would down him (too late to drink),
+    //   what followed a first fall under 70 / 50 / 40 / 30 / 20 / 10 percent (how often he went down, and how long it took),
+    //   his drinks (where he drank, how much of the potion ran over, downs with a potion in the kit, downs mid-gulp),
+    //   and two lines read off the curve: NO-WASTE (1 - potion / max health: above it part of the potion is lost) and LAST-SAFE (the
+    //   lowest tenth in which under 10% of the pressed seconds were lethal-in-2-s: under it a potion comes too late too often).
+    // The best line itself is SEARCHED (tools/iaus_sim/edge_search.py over --curve <class>:drink_health.32.b): this report says where to look.
+    int DeclineReport(const Data& D, const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
+        const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
+        std::vector<int> cls; for (std::size_t i = 0; i < all.size(); ++i) if (only.empty() || ("," + only + ",").find("," + all[i].name + ",") != std::string::npos) cls.push_back(static_cast<int>(i));
+        const int br[3] = { 0, 1, 3 }, perSeed = 3 * n + kRatingCells * n, perClass = perSeed * static_cast<int>(seeds.size()), jobs = perClass * static_cast<int>(cls.size());
+        std::vector<Agg> agg(cls.size()); std::atomic<int> next{ 0 }; std::mutex mx;
+        struct Heals { long self = 0, other = 0, castSelf = 0; }; std::vector<Heals> heals(cls.size());   // fights in which he KNOWS a self heal / a heal for others, and his self-heal casts
+        auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int ci = job / perClass, k = job % perClass, si = k / perSeed, j = k % perSeed; const std::uint64_t seed = seeds[static_cast<std::size_t>(si)];
+            const int gi = cls[static_cast<std::size_t>(ci)]; const SimClass& sc = all[static_cast<std::size_t>(gi)]; Rng R; Fight F;
+            if (j < 3 * n) { const int b = br[j / n], f = j % n; R.g.seed(seed * 1000003ULL + std::uint64_t(gi) * 7919 + std::uint64_t(b) * 104729 + std::uint64_t(f) * 32452843ULL + 0xDEC11ULL); F = RandomFight(D, sc, 1 + f % 5, kBrackets[b], R, t1); }
+            else { const int q = j - 3 * n, cell = q / n, f = q % n; R.g.seed(seed * 0x9E3779B97F4A7C15ULL + std::uint64_t(sc.tier) * 1000003ULL + std::uint64_t(cell) * 7919ULL + std::uint64_t(f) * 104729ULL + 0xBA77E21ULL); FightSpec fs = RatingFight(D, sc, all, cell, f, R); F = BuildFight(D, fs, t1); }
+            bool hs = false, ho = false; for (const SimSpell& sp : F.ctl[0].build->spells) { if (sp.e.source != SpellSource::Spell) continue; hs |= sp.e.nature == Prune::Nature::Heal && sp.e.selfDelivery; ho |= sp.healOther; }
+            F.estimates = estimates; F.scrollRoad = scrollRoad; RunMode(F); const double u = Utility(F);
+            std::scoped_lock lk(mx); agg[static_cast<std::size_t>(ci)].uSum += u; agg[static_cast<std::size_t>(ci)].Add(F.t, false); heals[static_cast<std::size_t>(ci)].self += hs; heals[static_cast<std::size_t>(ci)].other += ho; heals[static_cast<std::size_t>(ci)].castSelf += F.t.hist[static_cast<std::size_t>(Family::CastHeal)]; } };
+        { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
+        std::printf("HEALTH DECLINE AND THE DRINK LINE  list=%s  seeds=%zu  per class and seed: %d natural + %d balanced + %d strong1 fights and %d of each of the %d rating cells  stealth=%s t2=%s\n", D.name.c_str(), seeds.size(), n, n, n, n, kRatingCells, StealthName(), T2Name().c_str());
+        std::printf("\nDECLINE CURVE: %% of his maximum health lost per second while a foe is on him, by the tenth of health he is in (pressed seconds per fight in brackets under 5)\n%-12s", "class"); for (int k = 9; k >= 0; --k) std::printf(" %3d-%-3d", k * 10, k * 10 + 10); std::printf("   all\n");
+        for (std::size_t ci = 0; ci < cls.size(); ++ci) { const Tally& s = agg[ci].s; std::printf("%-12s", all[static_cast<std::size_t>(cls[ci])].name.c_str()); double ts = 0, tl = 0;
+            for (int k = 9; k >= 0; --k) { ts += s.decBandSec[k]; tl += s.decBandLoss[k]; if (s.decBandSec[k] > 1.0) std::printf(" %7.2f", 100.0 * s.decBandLoss[k] / s.decBandSec[k]); else std::printf(" %7s", "-"); } std::printf(" %5.2f\n", ts > 0 ? 100.0 * tl / ts : 0.0); }
+        std::printf("\nTOO LATE TO DRINK: %% of the pressed seconds in which the damage of his last 2 s is at least the health he has left\n%-12s", "class"); for (int k = 9; k >= 0; --k) std::printf(" %3d-%-3d", k * 10, k * 10 + 10); std::printf("\n");
+        for (std::size_t ci = 0; ci < cls.size(); ++ci) { const Tally& s = agg[ci].s; std::printf("%-12s", all[static_cast<std::size_t>(cls[ci])].name.c_str());
+            for (int k = 9; k >= 0; --k) { if (s.decBandSec[k] > 1.0) std::printf(" %7.1f", 100.0 * s.decLethal[k] / s.decBandSec[k]); else std::printf(" %7s", "-"); } std::printf("\n"); }
+        std::printf("\nAFTER HE FIRST FALLS UNDER A LINE: %% of fights that reach it | then %% that end with him down | seconds from the line to the down\n%-12s", "class"); for (int k : { 7, 5, 4, 3, 2, 1 }) std::printf("   under %2d%%: reach  down    s", k * 10); std::printf("\n");
+        for (std::size_t ci = 0; ci < cls.size(); ++ci) { const Tally& s = agg[ci].s; const double nf = std::max<double>(1, double(agg[ci].fights)); std::printf("%-12s", all[static_cast<std::size_t>(cls[ci])].name.c_str());
+            for (int k : { 7, 5, 4, 3, 2, 1 }) std::printf("              %5.1f %5.1f %4.1f", 100.0 * double(s.decCross[k]) / nf, s.decCross[k] ? 100.0 * double(s.decDownAfter[k]) / double(s.decCross[k]) : -1.0, s.decDownAfter[k] ? s.decToDownSec[k] / double(s.decDownAfter[k]) : -1.0); std::printf("\n"); }
+        std::printf("\nHIS DRINKS, AND THE TWO LINES THE CURVE GIVES\n%-12s %6s %7s %8s %7s %7s %8s %8s %6s | %8s %9s %9s\n", "class", "U", "drink/f", "drinkAt%", "pot%hp", "waste%", "dnPot/f", "dnMid/f", "dn/f", "no-waste", "last-safe", "line now");
+        for (std::size_t ci = 0; ci < cls.size(); ++ci) { const Tally& s = agg[ci].s; const SimClass& sc = all[static_cast<std::size_t>(cls[ci])]; const double nf = std::max<double>(1, double(agg[ci].fights));
+            const double pot = s.potFracN ? s.potFracSum / double(s.potFracN) : -1.0; int safe = 0; for (int k = 0; k < 10; ++k) { if (s.decBandSec[k] > 1.0 && s.decLethal[k] / s.decBandSec[k] < 0.10) { safe = k; break; } safe = k + 1; }
+            std::printf("%-12s %6.2f %7.2f %8.1f %7.1f %7.1f %8.3f %8.3f %6.2f | %8.2f %9.2f %9.2f\n", sc.name.c_str(), agg[ci].uSum / nf, double(s.drinksH) / nf, s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1.0, 100.0 * pot, s.potHeal > 0 ? 100.0 * s.potWaste / s.potHeal : -1.0,
+                        double(s.downsWithPotH) / nf, double(s.downsMidDrink) / nf, double(s.downs) / nf, pot >= 0 ? 1.0 - pot : -1.0, 0.1 * safe, static_cast<double>(sc.gate.drinkHealthLine)); }
+        std::printf("\nTHE HEALS HE KNOWS (marth 11-12: any mage line with heals can use them, not only the Restoration line)\n%-12s %9s %10s %9s %8s\n", "class", "selfHeal%", "healOther%", "healDec/f", "dwh/f");
+        for (std::size_t ci = 0; ci < cls.size(); ++ci) { const double nf = std::max<double>(1, double(agg[ci].fights));
+            std::printf("%-12s %9.1f %10.1f %9.2f %8.3f\n", all[static_cast<std::size_t>(cls[ci])].name.c_str(), 100.0 * double(heals[ci].self) / nf, 100.0 * double(heals[ci].other) / nf, double(heals[ci].castSelf) / nf, double(agg[ci].s.deathsWithHeal) / nf); }
+        std::printf("columns: selfHeal%% / healOther%% fights in which his book holds a heal on himself / on others; healDec/f heal decisions fired per fight; dwh/f times a party member (he included) went down while he had an affordable heal for him\n");
+        std::printf("\ncolumns: drink/f health potions begun per fight; drinkAt%% his health when he began; pot%%hp the potion as a share of his maximum; waste%% the part of the potions that ran over his maximum; dnPot/f downs with a health potion still in his kit;\n         dnMid/f downs between the start of a gulp and its effect; no-waste = 1 - pot%%hp; last-safe = the lowest tenth of health in which under 10%% of the pressed seconds were too late to drink; line now = his ClassCurves drink line\n");
+        long bad = 0; for (const Agg& a : agg) bad += a.s.badFacts + a.s.invalid;
+        std::printf("CHECKS: BAD-FACTS + invalid picks=%ld (must be 0)  => %s\n", bad, bad == 0 ? "PASS" : "FAIL"); return bad == 0 ? 0 : 1;
     }
 
     // ── THE RATING BATTERY (Rating.h): every class of the run plays its tier's battery, the same fights for the whole tier ──
@@ -440,7 +493,7 @@ namespace {
 int main(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false; int declineN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -482,6 +535,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--class-oracle") && i + 1 < argc) { classOracle = std::max(0, std::atoi(argv[++i])); if (classOracle > 0 && !noClassRulings) g_classRulings = true; }   // N natural fights per class with the class-constrained oracle: the per-class oracle gap
         else if (!std::strcmp(argv[i], "--gap-scenarios") && i + 1 < argc) gapScen = std::max(0, std::atoi(argv[++i]));   // the gap pass: N fights of each of a class's own named scenarios (default 2; 0 = natural fights only)
         else if (!std::strcmp(argv[i], "--rating") && i + 1 < argc) ratingN = std::max(0, std::atoi(argv[++i]));        // the rating battery: N fights per cell (default 3 in a class report run; 0 = off)
+        else if (!std::strcmp(argv[i], "--decline") && i + 1 < argc) declineN = std::max(1, std::atoi(argv[++i]));         // the health-decline curves and the drink record of --classes over --seeds: N fights per bracket and rating cell per seed
         else if (!std::strcmp(argv[i], "--rating-only")) ratingOnly = true;                                               // print the rating table of --classes (over --seeds) and stop: no class cells, no results file
         else if (!std::strcmp(argv[i], "--regroup-road")) g_regroupRoad = true;       // the ch.24 regroup client is modelled as existing
         else if (!std::strcmp(argv[i], "--follower-death")) g_followerDeath = true;   // a follower at 0 health is dead for good (LoreRim's default)
@@ -560,6 +614,7 @@ int main(int argc, char** argv) {
     // Beta 1 cells on 8 threads, 2 s for a one-class probe. An explicit --class-oracle N keeps the full setting, as before.
     if (autoGap && !ocGiven) { oc.K = 6; oc.H = 90.0; }
     if (ratingN < 0) ratingN = !scenario.empty() ? 0 : 3;
+    if (declineN > 0) return DeclineReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, declineN, threads, estimates, scrollRoad);
     if (ratingOnly) { std::vector<int> ci; for (std::size_t i = 0; i < allClasses.size(); ++i) if (only.empty() || ("," + only + ",").find("," + allClasses[i].name + ",") != std::string::npos) ci.push_back(static_cast<int>(i));
         std::vector<RatingRow> rr; const long bad = RatingPass(D, allClasses, ci, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, std::max(1, ratingN), threads, estimates, scrollRoad, rr);
         std::printf("CHECKS: BAD-FACTS + invalid picks=%ld (must be 0)  => %s\n", bad, bad == 0 ? "PASS" : "FAIL"); return bad == 0 ? 0 : 1; }

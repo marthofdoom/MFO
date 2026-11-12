@@ -9,7 +9,7 @@
 #        Sim batch (iaus-sim-v2.md section 32): [--classes beta1 (12 classes + the 3 tree-OFF base cells) | beta1-tree (the 12)]
 #        [--rating N] (fights per cell of the rating battery, default 3; 0 = off) [--rating-only] (the Rating (Tx) table over --seeds, nothing else)
 #        [--class-oracle N] [--gap-scenarios N] (the per-class oracle gap; a run that writes a results file runs 4 + 2 by itself, 0 = off)
-#        [--decline] (health-decline curves and the best drink line per class) [--curve <class>:<family>.<cons>.<param>=<v>]
+#        [--decline N] (health-decline curves and the best drink line per class) [--curve <class>:<family>.<cons>.<param>=<v>]
 #        [--disengage-report N] (card G3's usefulness: the same fights without the run, with it, and with the D&D variant)
 #        [--steal-lab N] (cards G13 / G14: the witness pre-check against the engine's detection formula)
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,

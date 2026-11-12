@@ -312,6 +312,7 @@ namespace Sim {
             Kit& kit = c.book.kit; std::int32_t& n = fam == Family::DrinkHealth ? kit.potionsHealth : fam == Family::DrinkStamina ? kit.potionsStamina : kit.potionsMagicka;
             if (n <= 0) return Fired::Invalid;
             if (bodyHeld) return Fired::Declined;
+            if (subj && fam == Family::DrinkHealth) { ++t.drinksH; t.drinkAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); t.potFracSum += c.potH / std::max(1.0f, x.c.hpMax); ++t.potFracN; }   // the decline record: when he drinks
             --n; take(Act::Drink, TM::drink, TM::drinkAt); x.actSpell = fam == Family::DrinkHealth ? 0 : fam == Family::DrinkMagicka ? 1 : 2; return Fired::Yes; }
         case Family::Scroll:
         case Family::CastOffense: case Family::CastControl: case Family::CastHeal: case Family::CastBuff: case Family::CastSummon: case Family::CastWard: {

@@ -178,6 +178,18 @@ namespace Sim {
         double guardSec = 0, feetSec = 0;
         // card G3's usefulness (section 31.9): per run of the subject, the damage he took on it and how long until no foe stood within 400 units of him
         long   runsBegun = 0, runsSafe = 0; double runDmg = 0, runSafeSec = 0, runLenSec = 0, runDmgAfter5 = 0;
+        // SIM BATCH (section 32): THE SUBJECT'S HEALTH-DECLINE RECORD. Band k = his health in [k/10, (k+1)/10) of his maximum.
+        //   decBandSec / decBandLoss: seconds he spent in the band while a foe had him as its target, and the health (as a share of his
+        //     maximum) he lost there: loss / sec = how fast he falls at that health = the decline curve.
+        //   decLethal: of those seconds, the ones in which the damage of his last ~2 s (Body::recentDmg) was at least the health he had
+        //     left: at that pace he is down inside the time a potion needs (the serve lap + the 0.6 s to the gulp).
+        //   decCross[k] / decDownAfter[k] / decToDownSec[k]: fights in which he first fell under line k/10, in how many of those he then
+        //     went down, and the summed seconds from the crossing to that first down.
+        //   drinks: health potions begun, his health share when he began, the share of the potion that ran over his maximum, his downs
+        //     with a health potion still in his kit, and his downs between the start of a gulp and its effect. potFrac: potion / max health.
+        double decBandSec[10] = {}, decBandLoss[10] = {}, decLethal[10] = {}, decToDownSec[10] = {};
+        long   decCross[10] = {}, decDownAfter[10] = {};
+        long   drinksH = 0, downsWithPotH = 0, downsMidDrink = 0, potFracN = 0; double drinkAtSum = 0, potHeal = 0, potWaste = 0, potFracSum = 0;
         std::vector<std::string> killOrder;
     };
 
@@ -258,6 +270,7 @@ namespace Sim {
         std::vector<Spawn> late;
         float foeHpTotal = 0;                      // every foe's full health, late ones included (Utility)
         double now = 0, nextPump = 0, maxSec = 150;
+        double decCrossAt[10] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }; bool decDowned = false;   // the decline record's per-fight state (Tally::decCross)
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
@@ -445,7 +458,9 @@ namespace Sim {
             else {
                 x.c.downed = true; x.downUntil = now + TM::downSec; x.c.hp = 0; x.act = Act::None; x.hitAt = -1; x.actEnd = now; ++t.partyDowns;
                 if (g_followerDeath) { x.alive = false; x.downUntil = 1e18; t.partyDowns += 2; }   // dead for good: three downs' worth in Utility
-                if (x.ctl == 0) { ++t.downs; if (now - lastTauntBy0 < 8.0) ++t.tauntThenDown; }
+                if (x.ctl == 0) { ++t.downs; if (now - lastTauntBy0 < 8.0) ++t.tauntThenDown;
+                    if (ctl[0].book.kit.potionsHealth > 0) ++t.downsWithPotH;
+                    if (!decDowned) { decDowned = true; for (int k = 1; k < 10; ++k) if (decCrossAt[k] >= 0) { ++t.decDownAfter[k]; t.decToDownSec[k] += now - decCrossAt[k]; } } }
             }
             (void)by;
         }
@@ -460,6 +475,9 @@ namespace Sim {
             if (x.role == Role::Player) t.playerDmgTaken += dealt;
             if (x.Party()) t.partyDmgTaken += dealt;
             if (x.ctl == 0) { t.dmgTaken += dealt; if (now < x.retreatUntil) t.kiteDmgTaken += dealt;
+                { const float hm = std::max(1.0f, x.c.hpMax); t.decBandLoss[std::clamp(static_cast<int>(before / hm * 10.0f), 0, 9)] += static_cast<double>(dealt / hm);   // the decline record: the loss is booked to the band he was in
+                  const float fr = std::max(0.0f, x.c.hp) / hm; for (int k = 9; k >= 1; --k) if (fr < static_cast<float>(k) * 0.1f && decCrossAt[k] < 0) { decCrossAt[k] = now; ++t.decCross[k]; }
+                  if (x.act == Act::Drink && x.actSpell == 0 && x.hitAt >= 0 && x.c.hp <= 0) ++t.downsMidDrink; }
                 const Ctl& c0 = ctl[0]; if (c0.runPhase >= 1 && c0.runPhase <= 3) { const double fr = static_cast<double>(dealt / std::max(1.0f, x.c.hpMax)); t.runDmg += fr; if (now - c0.runStart > 5.0) t.runDmgAfter5 += fr; } }   // section 31.9: what a G3 run costs him
             if (x.c.hp <= 0) {
                 if (x.Party() && x.role != Role::Summon && !ctl.empty()) {   // could the subject have healed him?
@@ -741,7 +759,7 @@ namespace Sim {
                 ReleaseCast(x, tg);
             } else if (kind == Act::Drink && x.ctl >= 0) {
                 const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
-                if (x.actSpell == 0) Heal(x, c.potH, nullptr, false); else if (x.actSpell == 1) x.c.mp = std::min(x.c.mpMax, x.c.mp + c.potM); else x.c.sp = std::min(x.c.spMax, x.c.sp + c.potS);
+                if (x.actSpell == 0) { if (x.ctl == 0) { t.potHeal += c.potH; t.potWaste += std::max(0.0f, c.potH - (x.c.hpMax - x.c.hp)); } Heal(x, c.potH, nullptr, false); } else if (x.actSpell == 1) x.c.mp = std::min(x.c.mpMax, x.c.mp + c.potM); else x.c.sp = std::min(x.c.spMax, x.c.sp + c.potS);
             } else if (kind == Act::Taunt) {
                 // ONE attempt rolls on EVERY candidate foe (Taunt.cpp): the foes fighting the party inside the radius that can sense him.
                 // p = 0.5 + 0.05 per level he has over the foe, in [0.1, 0.9] (the executor's own rule, Estimate::TauntChance).
@@ -1107,6 +1125,8 @@ namespace Sim {
                     if (!Up(s0) || now - c0.runStart > 20.0) c0.runMeasured = false;
                     else if (!near) { c0.runSafeAt = now; ++t.runsSafe; t.runSafeSec += now - c0.runStart; c0.runMeasured = false; } }
                 if (Up(s0)) PlaystyleTally(c0, s0);
+                if (Up(s0)) { bool onHim = false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && o.c.targetId == s0.c.id) { onHim = true; break; }   // the decline record: only while a foe is on him
+                    if (onHim) { const int k = std::clamp(static_cast<int>(s0.c.hp / std::max(1.0f, s0.c.hpMax) * 10.0f), 0, 9); t.decBandSec[k] += TM::dt; if (s0.recentDmg >= s0.c.hp) t.decLethal[k] += TM::dt; } }
                 if (pressed && c0.pressureSince < 0) c0.pressureSince = now; if (!pressed) c0.pressureSince = -1;
                 t.mpSum += s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1; t.hpSum += s0.c.hp / std::max(1.0f, s0.c.hpMax); t.spSum += s0.c.spMax > 0 ? s0.c.sp / s0.c.spMax : 1; ++t.resN;
                 if (c0.gate.spellsOnClass && Up(s0)) { float cheapest = 1e9f; for (const auto& e : c0.book.entries) if (e.source == SpellSource::Spell && e.cost > 0 && e.drop == Prune::Drop::Keep) cheapest = std::min(cheapest, e.cost); if (cheapest < 1e8f && s0.c.mp < cheapest) t.mpDrySec += TM::dt; } }
