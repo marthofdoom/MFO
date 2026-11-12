@@ -1188,9 +1188,12 @@ namespace APMF_API {
     // the four cast leaves. Up to v39 the Offense bit denied every cast (heals and buffs included). From v40 it
     // denies a cast only when the spell (or shout) the leaf is about to cast is HOSTILE: an effect flagged
     // Hostile or Detrimental, an enemy-control archetype (Calm, Frenzy, Demoralize, Paralysis, TurnUndead), or a
-    // cloak whose spell is hostile. A spell whose record does not declare a nature (no readable effect, or every
-    // effect a script and not cast on self) COUNTS AS HOSTILE and is logged. A declared non-hostile cast (heal,
-    // buff, ward, on self or an ally) is NOT Offense: it passes a mask that names Offense alone. The attack leaves
+    // cloak whose spell is hostile. BENEFICIAL IS AN ALLOW-LIST: a cast passes a mask that names Offense alone
+    // only when every effect of its spell is a known benign archetype (value modifiers, cures, light,
+    // invisibility, bound weapon, rally, slow time, ethereal, detect life, guide, enhance weapon, summon,
+    // reanimate, a cloak whose spell passes the same rule) with neither flag. Everything else (no readable
+    // effect, ANY script effect on any delivery, any other archetype) COUNTS AS HOSTILE and is logged. The exact
+    // list is FACETS ch.7. A heal, a buff or a ward on self or an ally is NOT Offense. The attack leaves
     // are unchanged. kCombatActionCat_Cast is unchanged: it denies EVERY cast, so `Offense | Cast` is the v39
     // meaning of Offense, on every version. A client that wants the hostile-only deny must see abiVersion >= 40:
     // an older APMF denies every cast under Offense (stronger than asked, never weaker). On a runtime or a leaf
