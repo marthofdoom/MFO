@@ -329,6 +329,7 @@ namespace MFO::Logistics {
                 // governs; default ON lifts it -- leave the rest for the player.
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own (stolen goods), no candidate
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                     // Never loot a NON-PLAYABLE creature "skin" armor (MNC's

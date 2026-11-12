@@ -114,6 +114,7 @@ namespace MFO::Logistics {
                 }
                 const float mag = alc ? PotionMagnitude(alc) : 0.0f;
                 if (floor > 0.0f && mag > 0.0f && mag < floor) continue;   // low power -> ignore
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 takes.push_back({ obj, data.first, mag });
             }
 
@@ -127,9 +128,7 @@ namespace MFO::Logistics {
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                moved = true;
+                if (TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container) > 0) moved = true;
             }
             return moved;
         }
@@ -292,10 +291,12 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kGold001 && !IsCoinLoot(obj)) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
             if (a_peek || takes.empty()) return false;
+            bool moved = false;
             for (const auto& t : takes) {
                 // Log a matched coin PURSE/coin once per form (never plain Gold001,
                 // which would flood): surfaces exactly what the OCF rule caught.
@@ -307,10 +308,9 @@ namespace MFO::Logistics {
                                      t.obj->GetFormID(),
                                      t.obj->GetName() ? t.obj->GetName() : "?", t.count);
                 }
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
+                if (TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container) > 0) moved = true;
             }
-            return true;
+            return moved;
         }
 
         // Take all the lockpicks on a corpse/container. Same shape as LootGold:
@@ -324,10 +324,9 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kLockpick) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
-                a_src->RemoveItem(obj, data.first, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                return true;
+                return TheftGate::Take(a_follower, a_src, obj, data.first, TheftGate::Road::Container) > 0;
             }
             return false;
         }
@@ -366,6 +365,7 @@ namespace MFO::Logistics {
                 // catalog exclusion below is what the toggle governs.
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -373,9 +373,7 @@ namespace MFO::Logistics {
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                moved = true;
+                if (TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container) > 0) moved = true;
             }
             return moved;
         }
@@ -404,6 +402,7 @@ namespace MFO::Logistics {
                 // catalog exclusion below is what the toggle governs.
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -411,9 +410,7 @@ namespace MFO::Logistics {
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                moved = true;
+                if (TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container) > 0) moved = true;
             }
             return moved;
         }
@@ -431,6 +428,7 @@ namespace MFO::Logistics {
                 const std::int32_t want = Errand::Smith::Wanted(fid, obj->GetFormID());
                 if (want <= 0) continue;
                 if (IsQuestObjectInstance(data.second.get())) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
                 takes.push_back({ obj, std::min(data.first, want) });
             }
@@ -438,8 +436,9 @@ namespace MFO::Logistics {
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
-                Errand::Smith::NoteTaken(fid, t.obj->GetFormID(), t.count);
+                const std::int32_t got = TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container);
+                if (got <= 0) continue;
+                Errand::Smith::NoteTaken(fid, t.obj->GetFormID(), got);
                 moved = true;
             }
             return moved;
@@ -468,6 +467,7 @@ namespace MFO::Logistics {
                 // exclusion below is what the toggle governs.
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -475,9 +475,7 @@ namespace MFO::Logistics {
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                moved = true;
+                if (TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container) > 0) moved = true;
             }
             return moved;
         }
@@ -532,6 +530,7 @@ namespace MFO::Logistics {
                 // catalog exclusion below is what the toggle governs.
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -539,9 +538,7 @@ namespace MFO::Logistics {
             bool moved = LootGold(a_follower, a_src, false);   // proven take, see banner above
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                moved = true;
+                if (TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Container) > 0) moved = true;
             }
             return moved;
         }
@@ -876,6 +873,8 @@ namespace MFO::Logistics {
             if (a_ref && a_ref->IsLocked()) return false;
             // Nor out of a faction's vendor / stolen-goods / evidence container (batch L; the scan bars it first).
             if (a_ref && IsFactionServiceContainer(a_ref)) return false;
+            // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): every container / corpse transfer passes here.
+            if (a_ref && TheftGate::GuardInterim(a_follower, a_ref, TheftGate::Road::Container)) return false;
             switch (a_cat) {
             case Category::Arrows:    return LootAmmo(a_follower, a_ref, false);
             case Category::Bolts:     return LootAmmo(a_follower, a_ref, true);

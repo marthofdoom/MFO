@@ -4168,6 +4168,26 @@ module. Module layout:
   route it through `IsHeadSlotMask` / `WornInLogicalSlot(0)`; `ArmorIsBetter`'s
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
+- **THEFT GATE (2026-11-11, ClickUp 1dfcuabczbg; `fix/theft-gate`, not merged until reviewed + field run):** `logistics/TheftGate.{h,cpp}`
+  (declared in `Logistics_internal.h`, so every logistics TU sees `TheftGate::`). Rules: (1) BAR ALL STOLEN: `TheftGate::Take` replaces every
+  `RemoveItem(..., nullptr, follower)` take road (`LootTake.cpp` Potions / Gold / Lockpicks / Jewelry / SoulGems / SmithMats / Ingredients /
+  Valuables, `SwapUp.cpp` SwapUpAmmoFrom, `Silver.cpp` TakeSilverAmmoFrom, `Gear.cpp` AcquireEquip, `Lotd.cpp` LootMuseum); the peek paths and
+  `LootEquipment.cpp` candidate loop call `TheftGate::Takeable`; `GemRules.cpp` TakeAndProbe uses `TakeBarred` on its own xList. Per copy owner =
+  the copy's ExtraOwnership, else the container's `GetOwner()`; only null / player 0x7 / PlayerFaction 0xDB1 / the follower's own base chain pass (`OtherOwner`, no faction he merely belongs to, the
+  `ErrandShops.cpp StolenOwner` rule, duplicated: that one is file-local). A stack with a barred copy moves only its named clean copies (the xList
+  is passed to RemoveItem); a plain copy sharing a stack with a barred one is NOT taken (RemoveItem cannot choose the copy). A stack with no
+  barred copy is the unchanged single plain RemoveItem. (2) INTERIM GUARD GATE `TheftGate::GuardInterim` (marth: "disable looting anything in
+  front of guards for every follower for now until we find the exact culprit"): called at the top of `LootNearby`, in `StripCorpse` (waiting, not
+  done), in `LootHere`, in `Take`, at the loose-ref ARRIVAL (`Service.cpp`, `TheftGate::LooseBarred(.., a_arrival=true)`) and the LOTD crate
+  activation. `Actor::IsGuard` (boolBits kGuard, a data read), a main-thread ProcessLists walk + `Sightline::MeasureNow` (follower) /
+  `PointSeenNow` (item), radius 3500 u, cached 2 s; unanswered = BARRED (fail closed). Remove the whole interim by deleting `GuardInterim`'s
+  callers. (3) DOORS / FURNITURE: `ErrandRest.cpp DoorLocked` now also returns true for a door the engine calls a crime to activate (`IsOffLimits`; an owned but legal door stays usable) (so `TownWalkBarredByLock`, the shop door
+  read and `FollowerSideDoorLocked` treat it as closed), `ErrandSmith.cpp FindStations` skips a station the engine calls a crime to use (`IsOffLimits`, unless
+  his own); an owned legal smithy stays usable, `StuckAtOrigin.cpp` never activates an off-limits load door; `Lockpick.cpp Admit/LoadDoorBar` already barred owned refs and
+  destinations (unchanged). Log: `[theft-gate] F= road= src= item= owner= via= locked= verdict=` (30 s per follower/src/verdict) and the 3-deep
+  action ring printed after `[crime-probe] BOUNTY UP` (`CrimeProbe.cpp`). Depended-on-by: every take road above, CrimeProbe. What breaks if you change
+  it: a take road that bypasses `Take` is a theft hole; `Take`'s fast path must stay the one plain RemoveItem (other behaviour is unchanged);
+  `IsAnOwner` (new address id) is deliberately NOT bound (tier A). Open findings: REVIEW-BACKLOG MFO-B790..
 - **Loot side (was `Logistics_Loot.cpp`, wave-2 split into three):**
   `logistics/LootTake.cpp` (per-category looters `LootAmmo:75` -- a wrapper over
   `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:95`,

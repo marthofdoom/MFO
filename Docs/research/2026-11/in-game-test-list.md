@@ -343,3 +343,18 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
    leash, another ch.24 claim, 10 s). Send the line. The 25 s cooldown counts from the END of the run.
 5. **No hitch.** While a Thief is being attacked the pick runs about every 1.5 s. Watch the frame time on the Deck.
 
+
+## Theft gate (MFO `fix/theft-gate`, ClickUp 1dfcuabczbg; pending review, not field run)
+
+1. **Whiterun, looting and town errands ON, `[Debug] bCrimeGoldProbe=1`.** Walk Whiterun with a follower for a few in-game days
+   (market, Dragonsreach steps, Jorrvaskr, a guard post), with his loot gambits and the town errands live. Expected: `[theft-gate]`
+   lines with `verdict=BARRED:` (reasons: `guard`, `owned`, `this copy is owned by someone else`, `off-limits door`/`locked door`) and ZERO
+   `[crime-probe] BOUNTY UP` lines. A guard in sight must stop his loose pickups, body strips and container takes (`road=guard`).
+2. **If a BOUNTY UP still appears** it is followed by `[crime-probe]   last MFO action F=... #1..#3 road= ref= ... result=` for each
+   follower. Send the block: it names the last three things MFO had him do (the culprit hunt). Tuxborn vanilla trespass = 5 g,
+   LoreRim = 500 g (`iCrimeGoldTrespass`); a different amount points to a crime-altering mod.
+3. **Away from guards the loot still works.** A dungeon corpse: gold, arrows, potions taken as before (`[theft-gate] ... verdict=take`).
+   A stolen item (drop one stolen ring on the floor and in a chest in a cave): he leaves it (`BARRED:this copy is owned by someone
+   else` for the chest copy; `owned (never steal)` for the loose ref).
+4. **Owned doors / stations.** A town shop or inn errand whose only way in is an owned or locked door is not declared
+   (`[town-walk] ... locked or off-limits`; an owned but legal shop door stays usable). A smithing station is skipped only when the engine says using it is a crime; expect `via=station` lines only for off-limits ones (an owned but legal town smithy stays usable).

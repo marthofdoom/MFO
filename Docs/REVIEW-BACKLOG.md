@@ -3129,6 +3129,27 @@ A later blow pick while one is armed returns early without resetting `armedAt`, 
 ### MFO-B782 (SEV-5, OPEN, Concealment.cpp ServiceBlow :301-317, against c0cfe9a, same review, finding 3)
 `OwnCastInFlight` is used without a family check, so any live own cast (a heal during the hold) counts as the blow: the reveal check is skipped for up to 6 s + 1.5 s and the stance is released as "a miss". Small and logged.
 
+### MFO-B790 (SEV-4, OPEN, logistics/TheftGate.cpp GuardInterim, against the theft-gate round, author's note)
+The interim guard gate treats ANY live, non-teammate guard within 3500 u whose sight to the follower or item is Visible or UNMEASURABLE as
+seeing him (it does not test the guard's hostility, facing or detection formula, and a fresh MeasureNow runs per ask on the main thread).
+Over-barring is the point (marth 2026-11-11, interim), but a town with many guards costs one main-thread sightline pair per guard per
+(follower, source) every 2 s. Remove or replace when the culprit is found.
+
+### MFO-B791 (SEV-4, OPEN, logistics/TheftGate.cpp TakeBarred, against the theft-gate round, author's note)
+`IsAnOwner(ref, actor, useFaction, requiresOwner)` (AE id 20210, the engine's own pickup/steal test) is NOT bound: it is a new address id
+(tier A, needs a VerifiedAddresses row). The gate reads ExtraOwnership / `GetOwner()` data instead and bars ANY non-follower-side owner,
+which is stricter than the engine's test (the faction-rank rule is approximated by membership). Bind it only with a seat row.
+
+### MFO-B792 (SEV-5, OPEN, logistics/TheftGate.cpp Take, against the theft-gate round, author's note)
+A plain (extra-list-free) copy that shares a stack with a barred copy is never taken (RemoveItem cannot choose the copy), so one stolen
+arrow in a 20-arrow stack makes the whole plain remainder untakeable from that source. Same as the sale's "partly stolen" rule
+(ErrandShops NoteMixed). A per-copy pick would need the engine's own removal order proven.
+
+### MFO-B793 (SEV-5, OPEN, logistics/TheftGate.cpp Analyse / TakeBarred, against the theft-gate round, author's note)
+A corpse or chest in an OWNED cell (a house, an inn) reads the cell owner through `GetOwner()` and is barred whole for its plain copies,
+including what the player dropped there. Intended by "bar all stolen", but it also removes legitimate loot from owned interiors (bandit
+corpses in a rented room). No cell/location exemption was added.
+
 ### MFO-B783 (SEV-3 handled in the 30.10 handoff, OPEN, tools/iaus_sim/World.h StepWorld / RunMove, against a645ca2, Opus tier-2 review of feat/iaus-sim-stealth, finding 1)
 Only during a G3 run do his feet keep moving through a weapon swap, a potion or a cast; everywhere else (Retreat included) those still stop his body, so the lab "makes the flee look a little better than Retreat" (Q-SIM-5). The 30.10 handoff no longer searches `aw.4` against `aw.21` or `c.63.*` until the asymmetry is removed.
 
@@ -3146,3 +3167,12 @@ A re-pick overwrites the current pick at once; native keeps the old pick while t
 
 ### MFO-B788 (SEV-5, OPEN, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
 `in.flying = outOfMeleeReach` stands in for "flying", giving a 3x max distance to any actor out of melee reach (a ledge). Errs pessimistic for the follower; unstated.
+
+### MFO-B794 (SEV-4, OPEN, logistics/TheftGate.cpp ScanGuards (VR, no pump), against 41ab1ec, Opus review of fix/theft-gate, finding F5)
+When the main-thread pump is not installed (VR) `GuardCheck` runs `ScanGuards` on the worker, which walks `ProcessLists::highActorHandles` and runs the sightline off the main thread (INVARIANTS #72, the crash4 class). Today the VR looting road is mostly inert (ActivateRef has no pump) but the container strips still pass the gate. Fix shape: on VR, answer Seen/Pending-forever (fail closed) instead of scanning.
+
+### MFO-B795 (SEV-5, OPEN, logistics/TheftGate.cpp Takeable / Analyse, against 41ab1ec, same review, finding F6)
+`Takeable` runs a filtered `GetInventory` per candidate item, so a scan of one body costs O(items^2) inventory builds on the worker. Fix shape: one inventory pass per source per call, caching the per-object verdicts.
+
+### MFO-B796 (SEV-5, OPEN, logistics/TheftGate.cpp g_guard / g_rings / g_logAt, against 41ab1ec, same review, finding F8)
+None of the gate's three maps is cleared on a revert/load (FormID keys of the old session; the guard cache ages out in 2 s, the ring and log-throttle maps are bounded but stale). Fix shape: a `TheftGate::ClearTransientState()` called from `Logistics::ClearTransientState`.

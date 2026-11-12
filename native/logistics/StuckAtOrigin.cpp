@@ -125,6 +125,14 @@ namespace MFO::Logistics {
                 auto* et = r->extraList.GetByType<RE::ExtraTeleport>();
                 if (!et || !et->teleportData)   // a LOAD door only: a plain door just opens
                     return RE::BSContainer::ForEachResult::kContinue;
+                // THEFT GATE, door half (marth 2026-11-11, ClickUp 1dfcuabczbg): never a door that is a crime to activate (this one or the one
+                // it leads to): his activation is the engine's teammate-trespass road, charged to the player. Owned-but-legal doors stay usable.
+                {
+                    auto  lp = et->teleportData->linkedDoor.get();
+                    auto* ld = lp.get();
+                    if (r->IsOffLimits() || (ld && ld->IsOffLimits()))
+                        return RE::BSContainer::ForEachResult::kContinue;
+                }
                 const float d = r->GetPosition().GetDistance(S);
                 if (d < bestD) { bestD = d; best = r->GetHandle(); }
                 return RE::BSContainer::ForEachResult::kContinue;

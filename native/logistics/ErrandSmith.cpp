@@ -45,6 +45,7 @@
 // THREADING: see Errand_internal.h (Smith). One leaf mutex; the engine, Papyrus and TradeBridge are never called under it.
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "TheftGate.h"   // owned-station bar (ClickUp 1dfcuabczbg)
 #include "Logistics.h"   // ForEachLoadedRefInRange (the station search)
 #include "TradePerks.h"
 #include "Config.h"
@@ -511,6 +512,19 @@ namespace MFO::Logistics::Errand::Smith {
             ForEachLoadedRefInRange(at, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
                 auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
                 auto* fur = base ? base->As<RE::TESFurniture>() : nullptr;
+                // THEFT GATE, furniture half (marth 2026-11-11, ClickUp 1dfcuabczbg: "a crime is the issue"): an owned town smithy is legal to
+                // use, so ownership alone bars nothing. A station the engine calls a crime to activate (IsOffLimits = IsCrimeToActivate, its
+                // FURN branch; already used by LooseRefBarred and Lockpick) is skipped, unless the owner is his own base NPC. Beds: unchanged.
+                if (fur && fur->HasKeywordID(a_keyword) && a_ref && a_ref->IsOffLimits()) {
+                    auto* own = a_ref->GetOwner();
+                    if (!own || own != a_f->GetActorBase()) {
+                        spdlog::info("[theft-gate] F={:08X} road=door src={:08X}({:08X}) item=0x0 owner={:08X} via=station offLimits(pc)=1 locked=0 "
+                                     "verdict=BARRED:station is a crime to use (engine off-limits test)",
+                                     a_f->GetFormID(), a_ref->GetFormID(), fur->GetFormID(), own ? own->GetFormID() : 0u);
+                        TheftGate::NoteAction(a_f->GetFormID(), TheftGate::Road::Door, a_ref->GetFormID(), "barred: station off-limits");
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                }
                 if (fur && fur->HasKeywordID(a_keyword) && !a_ref->IsDisabled() && !a_ref->IsMarkedForDeletion() && found.size() < 16)
                     found.emplace_back(a_ref->GetPosition().GetDistance(at), a_ref->GetFormID());
                 return RE::BSContainer::ForEachResult::kContinue;

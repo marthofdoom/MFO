@@ -26,6 +26,7 @@
 #include "PCH.h"
 #include "Logistics.h"
 #include "Logistics_internal.h"
+#include "TheftGate.h"        // crate activation gate (ClickUp 1dfcuabczbg)
 #include "Errand.h"           // town door rule: Errand::Rest::TownWalkBarredByLock
 #include "GemRules.h"   // LootNearby, Category, SlotIndexOf, FitsCarryWeight, IsStockGear, ...
 #include "Lotd.h"
@@ -1120,6 +1121,13 @@ namespace MFO::Lotd {
                 spdlog::info("[lotd] shipping intro ({}): already in flight -- not activated twice", a_why);
                 return;
             }
+            // THEFT GATE (ClickUp 1dfcuabczbg): TESObjectCONT::Activate is a steal-alarm producer, same bar as ArriveOnMain. Main thread: answered now.
+            if (Logistics::TheftGate::TakeBarred(act, crate, nullptr, nullptr, Logistics::TheftGate::Road::Lotd) ||
+                Logistics::TheftGate::GuardCheck(act, crate, Logistics::TheftGate::Road::Lotd, /*a_onMain*/ true) != Logistics::TheftGate::GuardState::Clear) {
+                spdlog::info("[lotd] shipping intro ({}): crate {:08X} NOT activated -- owned by someone else or a guard sees {:08X} (theft gate)",
+                             a_why, crate->GetFormID(), act->GetFormID());
+                return;
+            }
             g_introPendingUntilMs.store(SteadyMs() + 600000);   // a floor: ShippingInitialised() flipping is what ends it
             crate->ActivateRef(act, 0, nullptr, 1, false);   // full processing: the script's OnActivate runs
             spdlog::info("[lotd] shipping intro ({}): activated crate {:08X} through {:08X} -- LOTD shows its Museum "
@@ -1204,6 +1212,13 @@ namespace MFO::Lotd {
             const std::string st = CrateState(c);
             if (st == "ready" || st == "waitingtoship") {
                 spdlog::info("[lotd] {:08X}: crate {:08X} is '{}' -- not re-activated", a_follower, a_crate, st);
+                return;
+            }
+            // THEFT GATE (ClickUp 1dfcuabczbg): TESObjectCONT::Activate is a steal-alarm producer. A crate someone else owns, or one a guard
+            // can see him open, is not activated by him (the deliveries still land by RemoveItem, which raises no crime).
+            if (Logistics::TheftGate::TakeBarred(f, c, nullptr, nullptr, Logistics::TheftGate::Road::Lotd) ||
+                Logistics::TheftGate::GuardCheck(f, c, Logistics::TheftGate::Road::Lotd, /*a_onMain*/ true) != Logistics::TheftGate::GuardState::Clear) {
+                spdlog::info("[lotd] {:08X}: crate {:08X} NOT activated -- owned by someone else or a guard sees him (theft gate)", a_follower, a_crate);
                 return;
             }
             c->ActivateRef(f, 0, nullptr, 1, false);   // full processing: the script's OnActivate runs
@@ -1883,6 +1898,7 @@ namespace MFO::Logistics {
             if (it == needs.uncoveredAll.end() || it->second <= 0) continue;
             if (IsQuestObjectInstance(data.second.get())) continue;
             if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+            if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
             if (a_peek) return true;
             takes.push_back({ obj, std::min<std::int32_t>(data.first, it->second) });
         }
@@ -1890,8 +1906,9 @@ namespace MFO::Logistics {
         bool moved = false;
         for (const auto& t : takes) {
             if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-            a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
-            needs.uncoveredAll[t.obj->GetFormID()] -= t.count;   // this cache window must not take it twice
+            const std::int32_t got = TheftGate::Take(a_follower, a_src, t.obj, t.count, TheftGate::Road::Lotd);
+            if (got <= 0) continue;
+            needs.uncoveredAll[t.obj->GetFormID()] -= got;   // this cache window must not take it twice
             moved = true;
             spdlog::info("[lotd] {:08X}: looted museum item '{}' x{} from {:08X}", a_follower->GetFormID(),
                          Lotd::NameOf(t.obj), t.count, a_src->GetFormID());
