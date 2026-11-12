@@ -31,13 +31,35 @@ namespace MFO::Iaus::ClassCurves {
         float drinkHealthLine = kDrinkHealthLine;   // Generate.cpp: below it (health potion in stock) the Knight guard line is off, drink first
         bool  drinkHealthLineSet = false;           // false: Apply derives it from the row's DrinkHealth/DrinkNeed midpoint override (b) when there is one
         float touchSpentSec   = 3.0f;               // Candidates.cpp: seconds after a touch cast that he is "backing out" (== Reposition::kTouchSpentSec)
+        // School affinity (ruling Q-school-affinity): the score multiplier of a spell of school s is a smooth wave over the school
+        // circle (Destruction - Alteration - Restoration - Illusion - Conjuration - back): SchoolWeight(). schoolFloor 1.0 = FLAT
+        // (every weight exactly 1.0, the shipped default), so schoolPeak only matters once a floor below 1 is set.
+        std::int8_t schoolPeak  = -1;               // School identity he peaks on (Core.h School); -1 = none (non-caster / all-rounder)
+        float       schoolFloor = 1.0f;             // the weight at the far side of the circle, 0..1; 1 = flat
+        float       schoolShape = 1.0f;             // sharpness: 1 = plain cosine wave, > 1 narrower peak
+        // marth 11-12: "cross class tweaks from mastered classes that boost the weight a bit". When a follower has MASTERED this class,
+        // his weight at THIS row's schoolPeak rises by this much (summed over mastered casting classes, clamped at the peak weight 1.0).
+        float       schoolMasteredBump = 0.0f;      // shipped 0 (scores identical); the sim searches it
+        // marth 11-12: "obviously Arch mage gets any school". A FIXED rule, not a searched param (no SetScalar name): flat 1.0 over every school.
+        bool        schoolAny = false;
     };
+
+    inline constexpr std::size_t kArchMage = 26;    // Classes::Id::ArchMage (SpellBook.cpp asserts it); its row is schoolAny
+
+    // weight(s) = floor + (1 - floor) * (0.5 + 0.5 * cos(2 pi d / kSchools))^shape, d = circular step distance from the peak along kSchoolCircle.
+    // Exactly 1.0 when flat (floor >= 1 or no peak) and at d = 0. Never below the floor, never above 1.
+    [[nodiscard]] float SchoolWeight(const Scalars& a_s, std::size_t a_school);   // a_school = School identity; distance is measured along Core.h kSchoolCircle
 
     struct Row {
         std::vector<Profile::CurveOverride> curves;
         Scalars scalars;
     };
     using Table = std::array<Row, kRows>;
+
+    // The mastered casting classes' bumps onto a gate: for each class in the mask (bit i = Classes::Id i) whose row has a peak school,
+    // gate.schoolBump[peak] += that row's schoolMasteredBump. The shipped table, and any Table (the sim's edited copy).
+    void ApplyMastered(std::uint64_t a_masteredMask, ClassGate& a_gate);
+    void ApplyMastered(const Table& a_table, std::uint64_t a_masteredMask, ClassGate& a_gate);
 
     // The shipped table (placeholder structure: every row present, no override, shared defaults).
     [[nodiscard]] const Table& Defaults();
@@ -54,7 +76,7 @@ namespace MFO::Iaus::ClassCurves {
     [[nodiscard]] Profile Build(const Row& a_row);
 
     // Sim / search edit surface. SetCurveParam: param is a | b | floor | zeroAbove | zeroBelow; the override is created as a copy of
-    // the shared curve a_shared when the (family, cons) pair has none. SetScalar: drinkHealthLine | touchSpentSec. False on a bad name.
+    // the shared curve a_shared when the (family, cons) pair has none. SetScalar: drinkHealthLine | touchSpentSec | schoolPeak | schoolFloor | schoolShape | schoolMasteredBump. False on a bad name.
     bool SetCurveParam(Row& a_row, Family a_f, Cons a_c, const Curve& a_shared, std::string_view a_param, float a_v);
     bool SetScalar(Row& a_row, std::string_view a_name, float a_v);
 }

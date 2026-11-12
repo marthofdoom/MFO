@@ -9101,6 +9101,15 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   `Input` and `Generate` without a gate), the `Tuning` cooldowns, card I8's `BumpRow` (changes scores; deliberately NOT wired). **What breaks:** `Scalars::drinkHealthLine` is the Knight guard-line cut-off AND the DrinkNeed curve's midpoint: `Apply` makes the scalar follow a row's DrinkHealth/DrinkNeed `b` override unless `drinkHealthLine` was set explicitly (`drinkHealthLineSet`), so one row never has a curve that drinks at 0.5 and a guard line that stands to 0.34; the three tree-OFF base classes are rows 35..37 (`kBaseOffFirst`, seeded from T1 rows 0..2; `GateFor` picks them when the tree is off), not the T1 rows; a new class-relevant
   constant must be a `Scalars` field AND a `ClassGate` field AND `Apply` AND the sim's `SetScalar` or the sim and the game disagree; adding a class needs a row
   (the static_assert fires); a `Profile` copy per tick would defeat the cache; `Tuning::curve` is still the ONLY source for a pair with no override.
+  **SCHOOL AFFINITY (ruling Q-school-affinity, marth 11-12; `feat/school-affinity`, tier B, NOT merged; NO co-save/ABI/address/ESP change).** `SpellEntry::school` (Snapshot.h;
+  `SpellBook::MakeEntry` from `GetCostliestEffectItem()->baseEffect->data.associatedSkill`, the Loadout/Cast.cpp rule) -> `Candidate::school` (Generate.cpp) ->
+  `Score.cpp` multiplies `base` by `min(1, Profile::school[s] + Candidate::schoolBump)`; a multiplier, never a veto. `Profile::school[5]` is built per class row by
+  `ClassCurves::SchoolWeight` (floor + (1-floor) * (0.5+0.5cos(2 pi d/5))^shape, d = steps along `Core.h kSchoolCircle`, THE one array that fixes the circle order) from
+  `Scalars::schoolPeak / schoolFloor / schoolShape` (SetScalar names the same; peaks seeded from the class cards in `SeedSchoolPeaks`, inert at floor 1.0). Cross-class bump:
+  `ClassCurves::ApplyMastered(masteredMask, gate)` (called by `SpellBook::GateFor`) adds each MASTERED class's `schoolMasteredBump` to `ClassGate::schoolBump[its peak]`;
+  `Generate.cpp` copies it onto the candidate (per-follower, so NOT in the cached Profile). Arch-Mage (`kArchMage` 26, `Scalars::schoolAny`) is flat by rule, no SetScalar name.
+  **What breaks:** the peak seeds address rows by `Classes::Id` ordinal (SpellBook.cpp static_asserts them); a Profile with a school below 1.0 changes scores, so shipped must stay
+  floor 1.0 / bump 0 until the sim batch fills values; reorder the circle ONLY in `kSchoolCircle` (School identities never change: they key Profile/Candidate/peaks).
 - `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
   `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
   (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.

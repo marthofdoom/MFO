@@ -264,6 +264,13 @@ namespace MFO::Iaus {
     // classWeight(candidate) = family[f] x role[tag]. A consideration weight override REPLACES that family's
     // default w (design: "that consideration's w becomes 1.3 for that family"). Default: all 1, no overrides,
     // which is exactly the uncustomised catalogue.
+    // The five schools, by IDENTITY (the index into Profile::school, Candidate::school, ClassCurves schoolPeak and the sim's
+    // `schoolPeak` scalar). The identity numbers never change; the ORDER ON THE CIRCLE is kSchoolCircle below.
+    enum School : std::int8_t { kDestruction = 0, kAlteration = 1, kRestoration = 2, kIllusion = 3, kConjuration = 4 };
+    inline constexpr std::size_t kSchools = 5;
+    // THE SCHOOL CIRCLE (marth is still laying the order out): the ONE place that fixes which school sits next to which. The wave of
+    // ClassCurves::SchoolWeight measures circular distance in steps along THIS array. To change the order, reorder these five.
+    inline constexpr std::array<School, kSchools> kSchoolCircle = { kDestruction, kAlteration, kRestoration, kIllusion, kConjuration };
     struct Profile {
         struct WeightOverride { Family family; Cons cons; float w; };
         // Per-class CURVE override (ruling Q-class-curves, marth 11-12): a (family, consideration) pair scored with this curve
@@ -274,7 +281,10 @@ namespace MFO::Iaus {
         std::array<float, kRoleTags> role{};
         std::vector<WeightOverride> weights;
         std::vector<CurveOverride> curves;
-        Profile() { family.fill(1.0f); role.fill(1.0f); }
+        // School affinity (ruling Q-school-affinity, marth 11-12): a score MULTIPLIER per magic school (SchoolIndex order),
+        // a smooth wave over the school circle built from a ClassCurves row (School identity order). 1.0 everywhere = flat = bit-identical. Never a veto.
+        std::array<float, kSchools> school{};
+        Profile() { family.fill(1.0f); role.fill(1.0f); school.fill(1.0f); }
     };
 
     // I8's mechanical derivation, one call per applied DefaultGambit[] row: adds 0.5 x (rows - index) / rows to
@@ -396,6 +406,8 @@ namespace MFO::Iaus {
         Family      family = Family::Attack;
         Family      scrollOf = Family::CastOffense;  // Scroll only: whose consideration set the spell uses
         RoleTag     role = RoleTag::None;
+        std::int8_t school = -1;                     // a spell / scroll's magic school (School identity 0..kSchools-1); -1 = none / not a spell
+        float       schoolBump = 0.0f;               // cross-class bump at this spell's school from the MASTERED casting classes (ClassGate::schoolBump); 0 = none
         std::uint32_t form = 0;                      // spell / scroll / potion FormID; 0 for attacks
         std::uint32_t target = 0;                    // explicit target FormID; 0 = self / none
         std::string_view formName;                   // display only; owned by the caller for the tick
