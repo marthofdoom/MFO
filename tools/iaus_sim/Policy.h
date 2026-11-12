@@ -77,6 +77,7 @@ namespace Sim {
                 if (o.c.downed) continue;
                 Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode; k.swinging = g_fillSwing && (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;   // swinging: [Debug] bIausFillSwing (--no-fill-swing = the shipped default)
                 if (!F.tauntVisible) k.taunted = false;
+                k.tauntedByMe = F.tauntVisible && o.tauntBy == self.c.id && F.now < o.tauntUntil;   // Taunt::TauntedBy(foe, self)
                 k.detectsMe = detects;
                 const Body* tg = F.Find(o.c.targetId);
                 k.targetIsAlly = tg && tg->Party() && tg->c.id != self.c.id && tg->role != Role::Player;
@@ -115,7 +116,7 @@ namespace Sim {
         // guardHeld = a request of his is out or the guard is up (APMFBridge::BlockHoldLive). --roads block keeps the older lab switch.
         sn.blockRoad = g_blockRoad || (g_t2.block && sn.meleeInRightHand && self.spec->melee.Has());
         sn.guardHeld = g_t2.block && self.act == Act::Block && self.actIaus && F.now < self.blockUntil;
-        sn.equippedSpell = g_t2.range ? c.handSpell : 0u; sn.equippedSpellOther = g_t2.range && g_t2.hands ? c.handSpell2 : 0u; sn.touchSpent = g_t2.range && F.TouchSpent(c);   // card H4: Snapshot::equippedSpell (MODEL: the last book spell he cast is the one in his hand)
+        sn.equippedSpell = g_t2.range ? c.handSpell : 0u; sn.equippedSpellOther = g_t2.range && g_t2.hands ? c.handSpell2 : 0u; sn.touchSpent = g_t2.range && F.TouchSpent(c); sn.chosenCast = g_t2.range && g_t2.hands ? c.chosenForm : 0u;   // card H4: Snapshot::equippedSpell (MODEL: the last book spell he cast is the one in his hand)
         sn.tauntEnabled = c.gate.taunt; sn.tauntReach = 600; sn.combatSec = static_cast<float>(F.now); sn.scrollRoad = F.scrollRoad;
         // card I6: no taunt candidate while his attempt is in flight or a foe is still pinned to him (Taunt::Busy)
         if (F.tauntVisible) { sn.tauntBusy = self.act == Act::Taunt && F.now < self.actEnd; for (const Body& o : F.b) if (o.role == Role::Foe && o.alive && o.tauntBy == self.c.id && F.now < o.tauntUntil) sn.tauntBusy = true; }
@@ -373,6 +374,7 @@ namespace Sim {
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);
+            c.chosenForm = 0; if (!sv.d.ranked.empty()) { const Candidate& top = sv.g.actions[sv.d.ranked.front().idx]; if (top.family == Family::CastOffense || top.family == Family::CastControl) c.chosenForm = top.form; }   // Q-I-2 (Candidates::NoteDecision, mirrored)
             if (F.trace && std::getenv("SIM_WHY")) {   // debug: SIM_WHY=1 with --trace prints why the top candidates and every heal scored as they did
                 std::fprintf(F.trace, "%7.2f  WHY %s: %zu candidates, %zu ranked, verdict %d, best heal %.3f\n", F.now, x.c.name.c_str(), sv.g.actions.size(), sv.d.ranked.size(), static_cast<int>(sv.d.verdict), sv.d.bestHeal);
                 for (std::size_t i = 0; i < sv.d.ranked.size() && i < 3; ++i) std::fprintf(F.trace, "           #%zu %s\n", i + 1, FormatWhy(sv.g.actions[sv.d.ranked[i].idx], c.mind, c.profile, *T, c.rank, sv.d.bestHeal).c_str());

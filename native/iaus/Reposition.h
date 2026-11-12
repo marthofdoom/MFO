@@ -65,8 +65,8 @@ namespace MFO::Iaus::Reposition {
     // The range he fights at comes from BOTH hands (equippedSpell = right else left, equippedSpellOther = the other hand when it holds a
     // different spell): among the IAUS-scoreable spells with a known range, the SHORTEST of the same delivery type (touch, or distance =
     // aimed / target actor / concentration / self-blast). With both types in his hands (`mixed`) the range follows the DISTANCE spell,
-    // unless the touch spell is the better cast on the foe (Estimate::SpellOn, measured only) and was not cast within kTouchSpentSec
-    // (Snapshot::touchSpent): then he closes for the touch cast; right after it the range is the distance spell's again and the back-off
+    // unless the touch spell is the cast IAUS chose on its last decision (Snapshot::chosenCast, marth: touch range only when the touch
+    // spell is the CHOSEN cast) and was not cast within kTouchSpentSec (Snapshot::touchSpent): then he closes for the touch cast; right after it the range is the distance spell's again and the back-off
     // (MageBackOffNeed, the H3 run) takes him out to it.
     inline constexpr float kTouchSpentSec = 3.0f;    // CHOSEN (the sim tunes it): how long after a touch cast he is "backing out"
     struct HandRange {
@@ -76,7 +76,7 @@ namespace MFO::Iaus::Reposition {
         std::uint32_t touchForm = 0;                // the touch spell of his hands (the shortest), 0 = none
     };
     [[nodiscard]] inline HandRange HandsRange(const Book& a_book, std::uint32_t a_right, std::uint32_t a_other, float a_meleeReach,
-                                              bool a_touchSpent, const Combatant* a_foe) {
+                                              bool a_touchSpent, std::uint32_t a_chosenCast) {
         HandRange h;
         Range touch, dist;
         const SpellEntry* tEntry = nullptr;
@@ -94,12 +94,12 @@ namespace MFO::Iaus::Reposition {
         h.touchForm = tEntry ? tEntry->form : 0u;
         h.mixed = tEntry && dEntry;
         if (!h.mixed) { h.range = tEntry ? touch : dist; return h; }
-        h.touchChosen = !a_touchSpent && a_foe && Estimate::SpellOn(*tEntry, *a_foe) > Estimate::SpellOn(*dEntry, *a_foe);
+        h.touchChosen = !a_touchSpent && a_chosenCast != 0 && a_chosenCast == tEntry->form;
         h.range = h.touchChosen ? touch : dist;
         return h;
     }
-    [[nodiscard]] inline HandRange HandsRange(const Snapshot& a_s, const Combatant* a_foe) {
-        return HandsRange(a_s.book, a_s.equippedSpell, a_s.equippedSpellOther, a_s.meleeReach, a_s.touchSpent, a_foe);
+    [[nodiscard]] inline HandRange HandsRange(const Snapshot& a_s) {
+        return HandsRange(a_s.book, a_s.equippedSpell, a_s.equippedSpellOther, a_s.meleeReach, a_s.touchSpent, a_s.chosenCast);
     }
 
     // His hands hold spells or nothing (no weapon drawn, or a staff): the SPELL PHASE of a mage or a hybrid.
@@ -131,7 +131,7 @@ namespace MFO::Iaus::Reposition {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return false;
         const Combatant* foe = RangeFoe(a_s);
         if (!foe) return false;
-        const Range r = HandsRange(a_s, foe).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type
+        const Range r = HandsRange(a_s).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type
         if (!r.Known()) return false;
         a_out.foe = foe->id;
         a_out.radius = r.desired;
@@ -146,7 +146,7 @@ namespace MFO::Iaus::Reposition {
     // to back out whether or not it has him as its target when he has just cast the touch spell (Snapshot::touchSpent): "in and out quick".
     [[nodiscard]] inline float MageBackOffNeed(const Snapshot& a_s, const ClassGate& a_g) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return 0.0f;
-        const HandRange hr = HandsRange(a_s, RangeFoe(a_s));
+        const HandRange hr = HandsRange(a_s);
         const Range& r = hr.range;
         if (!(r.minimum > 0.0f)) return 0.0f;
         const bool backingOut = hr.mixed && a_s.touchSpent;

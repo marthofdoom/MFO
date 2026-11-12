@@ -140,6 +140,7 @@ namespace MFO::Iaus {
         bool  undead = false;               // race keyword ActorTypeUndead
         bool  unholy = false;               // what the load order's silver hits
         bool  taunted = false;              // already under a live taunt (any taunter)
+        bool  tauntedByMe = false;          // under a live taunt of THIS follower (Taunt::TauntedBy; the Knight line's guard count, Q-S-5)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
         // G2 Layer 1 (iaus/Hide.h): the FOE's combat group's record of the follower. Yes = a live, positive detect level;
         // No = absent / lost / detect level <= 0 (hidden from this foe); Unknown = the foe has no group (and every actor that is not a foe).
@@ -203,6 +204,7 @@ namespace MFO::Iaus {
         bool  backOffRoad = false, backOffPoint = false;
         bool  stepRoad = false, stepPoint = false;
         std::uint32_t equippedSpellOther = 0; // Q-I-2: the spell in the OTHER hand when it holds a different one; 0 = none
+        std::uint32_t chosenCast = 0;         // Q-I-2: the form of the cast IAUS ranked first on its LAST decision (Candidates::NoteDecision); 0 = none
         bool  touchSpent = false;             // Q-I-2: the touch spell of his hands fired within Reposition::kTouchSpentSec (Mind::firedAt)
         std::uint32_t equippedSpell = 0;      // batch I H4: the spell in his right hand (else left); 0 = no spell in hand. Looked up in the book
         bool  freeEntry = false;              // batch I item 2: this fight is a guaranteed stealth-entry fight and the entry is not spent (the gather

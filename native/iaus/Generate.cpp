@@ -210,9 +210,9 @@ namespace MFO::Iaus {
                 if (!Readable(f) || f.targetId == 0 || f.targetId != s.self.id || f.paralysed || f.fleeing || !std::isfinite(f.dist)) continue;
                 if (Estimate::MustClose(f) && (!nearOn || f.dist < nearOn->dist)) nearOn = &f;
                 if (f.swinging && f.dist <= strike && (!swingOn || f.dist < swingOn->dist)) swingOn = &f;
-                // Q-S-5: foes under a live taunt (Combatant::taunted) that have him as their target; the nearest one in striking distance
-                // is the blow to guard against, swing seen or not (the swing flag needs bIausFillSwing, which ships OFF)
-                if (f.taunted) {
+                // Q-S-5: foes under a live taunt of HIS (Combatant::tauntedByMe) that have him as their target; the nearest one in striking
+                // distance is the blow to guard against, swing seen or not (the swing flag needs bIausFillSwing, which ships OFF)
+                if (f.tauntedByMe) {
                     if (tauntedOnMe < 255) ++tauntedOnMe;
                     if (f.dist <= strike && (!lineOn || f.dist < lineOn->dist)) lineOn = &f;
                 }
@@ -267,6 +267,10 @@ namespace MFO::Iaus {
             }
             // Q-S-5: the guard line = two or more taunted foes on him and one of them in striking distance: the block is generated for it
             // whether or not a swing is seen in the air.
+            // marth "drink first when hurt": below the health potion's own line (kDrinkHealthLine) with a potion in stock the guard line is
+            // OFF (no boost, no full need): a held guard would otherwise score 2.0 x 1.25 momentum, above the potion's 2.2 x need.
+            const bool hurtWithPotion = x.selfHp < kDrinkHealthLine && s.book.kit.potionsHealth > 0;
+            if (hurtWithPotion) tauntedOnMe = 0;
             const bool guardLine = tauntedOnMe >= kGuardLineFoes && lineOn;
             if (s.blockRoad && x.g.block && melee && (swingOn || guardLine)) {
                 Candidate c = x.Make(Family::Block, swingOn ? swingOn : lineOn);

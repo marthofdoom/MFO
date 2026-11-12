@@ -214,6 +214,7 @@ namespace Sim {
         float  aversion = 0.0f; int aimBudget = -1; std::uint8_t aimWin[10] = {}; int aimN = 0, aimAt = 0, aimFlying = 0;
         bool   pkgClass = false;
         std::uint32_t handSpell = 0;               // H4: the spell in his hand = the last book spell he cast (MODEL; Snapshot::equippedSpell)
+        std::uint32_t chosenForm = 0;              // Q-I-2: the cast ranked first on his last decision (Snapshot::chosenCast)
         std::uint32_t handSpell2 = 0;              // Q-I-2: the other hand = the spell cast before it, when it was a different one (MODEL; Snapshot::equippedSpellOther)
         int    blockRenewals = 0; double blockRestUntil = 0;   // apmf/BlockClaims.cpp: one renewal, then kRest 1.5 s after any hold ends
         double runSafeAt = -1; bool runMeasured = false;       // section 31.9: this run's time to safety
@@ -657,14 +658,14 @@ namespace Sim {
         }
         // Card H4 (native/iaus/Reposition.h SpellRange, the game's own function): the distance the spell in his hand is fought at. 0 = none
         // (no spell in hand, a heal in hand, a weapon drawn, a class that does not cast): the engine's own movement, as before.
-        [[nodiscard]] float HandRange(const Body& x, const Ctl& c, const Body* tg = nullptr) const {
+        [[nodiscard]] float HandRange(const Body& x, const Ctl& c, const Body* = nullptr) const {
             if (!c.handSpell || !(c.drawn == PostureKind::None || c.drawn == PostureKind::Staff) || (c.gate.resolved && !c.gate.spellsOnClass)) return 0.0f;
-            return Reposition::HandsRange(c.book, c.handSpell, g_t2.hands ? c.handSpell2 : 0u, Reach(x), TouchSpent(c), tg ? &tg->c : nullptr).range.desired;   // Q-I-2: the touch spell is chosen on the foe he fights
+            return Reposition::HandsRange(c.book, c.handSpell, g_t2.hands ? c.handSpell2 : 0u, Reach(x), TouchSpent(c), c.chosenForm).range.desired;   // Q-I-2: the touch range only while the touch spell is the cast IAUS chose
         }
         // Q-I-2 (iaus/Candidates.cpp, mirrored): the touch spell of his hands fired within Reposition::kTouchSpentSec (Mind::firedAt, the last fired decision).
         [[nodiscard]] bool TouchSpent(const Ctl& c) const {
             if (!g_t2.hands || !c.handSpell2) return false;
-            const std::uint32_t tf = Reposition::HandsRange(c.book, c.handSpell, c.handSpell2, 100.0f, false, nullptr).touchForm;
+            const std::uint32_t tf = Reposition::HandsRange(c.book, c.handSpell, c.handSpell2, 100.0f, false, 0u).touchForm;
             const double ago = now - c.mind.firedAt;
             return tf != 0 && c.mind.hasRunning && c.mind.running.form == tf && ago >= 0.0 && ago <= static_cast<double>(Reposition::kTouchSpentSec);
         }

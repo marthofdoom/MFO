@@ -32,6 +32,7 @@
 namespace MFO::Iaus {
 
     inline constexpr float kInf = std::numeric_limits<float>::infinity();
+    inline constexpr float kDrinkHealthLine = 0.34f;     // Cons::DrinkNeed's midpoint (Catalogue.cpp Logi(-11, 0.34)): below it a health potion is a real option
     inline constexpr std::uint8_t kGuardLineFoes = 2;   // Q-S-5: taunted foes on the Knight line from which the guard outranks his blows
 
     // ── Identity ─────────────────────────────────────────────────────────────────────────────────────────

@@ -350,8 +350,10 @@ namespace MFO::Iaus {
             at(Cons::BackOffNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);   // batch I, chosen (the sim tunes it): the input is already a 0..1 need
             at(Cons::BlockNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // Q-S-5 (marth 2026-11-12: "the line should block at least 60% of attacks directed at them when 2+ foes are taunted"): while the
-            // Knight line holds two or more taunted foes a swing in the air makes the guard outrank every blow (x2.0 over Block's own
-            // 1.0 weight: above a blow, below a health potion 2.2 and a heal cast 2.4, so a hurt Knight still drinks). CHOSEN, tuned in the sim (iaus-sim-v2 section 31.12).
+            // Knight line holds two or more foes taunted by HIM the guard outranks his blows (x2.0 over Block's own 1.0 weight). It does NOT
+            // outrank a health potion by weight alone (a held guard is 2.0 x 1.25 momentum = 2.5, the potion at most 2.2): Generate turns the
+            // line OFF (tauntedOnMe 0) below kDrinkHealthLine with a health potion in stock, so a hurt Knight drinks first. CHOSEN, tuned
+            // in the sim (iaus-sim-v2 section 31.12).
             at(Cons::BoostGuardLine) = Bin(1.0f, 2.0f);
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
