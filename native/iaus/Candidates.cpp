@@ -15,6 +15,7 @@
 #include "cast/Actuation.h"
 #include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
 #include "iaus/Disengage.h"
+#include "iaus/Engine.h"    // Q-I-2: the Mind's last fired decision (touchSpent)
 #include "iaus/Fills.h"
 #include "iaus/Hide.h"
 #include "iaus/Reposition.h"   // batch I: H4, the back-off, the hidden step
@@ -41,6 +42,7 @@ namespace MFO::Iaus::Candidates {
             Clock::time_point seen{};
         };
         std::unordered_map<RE::FormID, Fight>                    g_fights;
+        std::unordered_map<RE::FormID, std::uint32_t>             g_chosenCast;   // Q-I-2: the cast form ranked first on the last decision
         std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
 
         // A Gather this long after the last one starts a NEW fight clock when card I6 did not call CombatEnded.
@@ -179,8 +181,10 @@ namespace MFO::Iaus::Candidates {
         {
             auto* r = a_self->GetEquippedObject(false);
             auto* l = a_self->GetEquippedObject(true);
-            if (auto* rs = r ? r->As<RE::SpellItem>() : nullptr) s.equippedSpell = rs->GetFormID();
-            else if (auto* ls = l ? l->As<RE::SpellItem>() : nullptr) s.equippedSpell = ls->GetFormID();
+            auto* rs = r ? r->As<RE::SpellItem>() : nullptr;
+            auto* ls = l ? l->As<RE::SpellItem>() : nullptr;
+            if (rs) { s.equippedSpell = rs->GetFormID(); if (ls && ls != rs) s.equippedSpellOther = ls->GetFormID(); }
+            else if (ls) s.equippedSpell = ls->GetFormID();
         }
         s.meleeInRightHand = Taunt::MeleeInRightHand(a_self);
         s.meleeOnly        = Actuation::MeleeOnly(a_self);
@@ -190,6 +194,16 @@ namespace MFO::Iaus::Candidates {
         s.tauntBusy        = s.tauntEnabled && Taunt::Busy(selfID);   // card I6: act.taunt would refuse him now
         s.tauntReach       = Config::g_tauntRadius.load(std::memory_order_relaxed);
         s.meleeReach       = Config::g_meleeReach.load(std::memory_order_relaxed);
+        // Q-I-2: the touch spell of his hands (if any) cast within kTouchSpentSec = he is backing out to the distance spell's range.
+        // The Mind's running decision is the last fired one (worker-only, which this gather is).
+        if (const auto cc = g_chosenCast.find(selfID); cc != g_chosenCast.end()) s.chosenCast = cc->second;
+        if (s.equippedSpellOther != 0) {
+            const std::uint32_t tf = Reposition::HandsRange(s.book, s.equippedSpell, s.equippedSpellOther, s.meleeReach, false, 0u).touchForm;
+            const Mind& m = Engine::MindFor(selfID);
+            const double ago = std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - m.firedAt;
+            s.touchSpent = tf != 0 && m.hasRunning && m.running.form == tf && ago >= 0.0 &&
+                           ago <= static_cast<double>(Reposition::kTouchSpentSec);
+        }
         // The Bash family exists only while its road does: Harbinger's combat move (ch.31, ABI v38) and the switch that
         // stays OFF until the field run proves that road ([Debug] bIausBashRoad). Harbinger absent = no candidate.
         s.bashRoad         = Config::g_iausBashRoad.load(std::memory_order_relaxed) && APMFBridge::CombatMoveSupported();
@@ -272,6 +286,7 @@ namespace MFO::Iaus::Candidates {
             }
             if (auto* race = foe->GetRace()) u.undead = race->HasKeywordString("ActorTypeUndead");
             u.unholy = Logistics::IsUnholy(foe);
+            u.tauntedByMe = Taunt::TauntedBy(fid, selfID);
             u.taunted = Taunt::IsPinned(fid);   // card I6 (R1): the Taunt module's own live pin by ANY taunter (Q69), not an engine read
             u.outOfMeleeReach = CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, nullptr, selfHeight);
             // G2 Layer 1: the foe's OWN group's record of him (iaus/Hide.h). The follower's group lock above is released, so this
@@ -423,12 +438,20 @@ namespace MFO::Iaus::Candidates {
     void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands) {
         auto& asked = g_wants[a_follower];
         asked = NextAskList(asked, TopSpellPairs(a_d, a_cands), NowSec(), kRefusedKeepSec);
+        // Q-I-2: the first-ranked candidate, when it is a cast (a spell form), is "the cast IAUS chose" for the touch range.
+        std::uint32_t chosen = 0;
+        if (!a_d.ranked.empty() && a_d.ranked.front().idx < a_cands.size()) {
+            const Candidate& top = a_cands[a_d.ranked.front().idx];
+            if (top.family == Family::CastOffense || top.family == Family::CastControl) chosen = top.form;
+        }
+        g_chosenCast[a_follower] = chosen;
     }
 
     void CombatEnded(RE::FormID a_follower) {
         Classes::StealthEntryForget(a_follower);   // batch I item 2: the next fight is counted afresh
         g_fights.erase(a_follower);
         g_wants.erase(a_follower);
+        g_chosenCast.erase(a_follower);
     }
 
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }
@@ -437,6 +460,7 @@ namespace MFO::Iaus::Candidates {
         Classes::StealthEntryClear();
         g_fights.clear();
         g_wants.clear();
+        g_chosenCast.clear();
         Fills::Clear();   // the fills' tracker and pending hit records: the same domain and the same moment
     }
 
