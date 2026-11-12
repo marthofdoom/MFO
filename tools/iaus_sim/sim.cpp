@@ -43,7 +43,7 @@ namespace {
             S(elemCasts); S(resistedCasts); S(weakCasts); S(weakOpp); S(immuneCasts); S(splashAllyHits); S(areaCasts);
             S(ctrlCasts); S(ctrlFails); S(ctrlOnControlled); S(hitsOnControlled); S(powOnControlled); S(powerAttacks); S(powerWhiffs); S(regroups); S(grounds); S(blocks); S(bashes);
             S(playerPressureSec); S(peelSum); S(peelN); S(peelMiss); S(tgtSwitches); S(tauntsOutmatched); S(tauntThenDown); S(tauntSaves);
-            S(arrowsShot); S(arrowsHit); S(wpnHits); S(sneakHits); S(flankHits); S(hides); S(hideOk); S(hideFail); S(flees); S(fleeHealed); S(fleeArrived); S(fleeFail); S(runDowns); S(stealthTry); S(stealthMiss); S(runSec); S(holdSec); S(fleeHpGain); S(firstHits); S(sneakOpens); S(healAtN); S(sneakDmg); S(hiddenSec); S(sneakSec); S(tgtDistSum); S(playerDistSum); S(contactSec); S(goInBadSec); S(summonSec); S(undeadDmg); S(healAtSum); S(cloakSec); S(posN); S(tgtDistN);
+            S(arrowsShot); S(arrowsHit); S(dodgeTries); S(dodges); S(aimCorrected); S(blockRenewals); S(powRefused); S(backOffs); S(backOffArrived); S(steps); S(stepArrived); S(stepRevealed); S(averted); S(avertKept); S(raises); S(mixPowerDenied); S(mixNormalDenied); S(mixFloorLifted); S(leashTurns); S(engPower); S(dndRuns); S(guardSec); S(feetSec); S(runsBegun); S(runsSafe); S(runDmg); S(runSafeSec); S(runLenSec); S(runDmgAfter5); S(wpnHits); S(sneakHits); S(flankHits); S(hides); S(hideOk); S(hideFail); S(flees); S(fleeHealed); S(fleeArrived); S(fleeFail); S(runDowns); S(stealthTry); S(stealthMiss); S(runSec); S(holdSec); S(fleeHpGain); S(firstHits); S(sneakOpens); S(healAtN); S(sneakDmg); S(hiddenSec); S(sneakSec); S(tgtDistSum); S(playerDistSum); S(contactSec); S(goInBadSec); S(summonSec); S(undeadDmg); S(healAtSum); S(cloakSec); S(posN); S(tgtDistN);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -93,6 +93,13 @@ namespace {
           // card G3 / G2: hide runs that ended hidden, runs that failed, flees per fight and how they ended, the blows MFO's group read called
           // "unaware" that the engine's per-pair level refused the multiplier, his time on a run and in the hold row
           m["hideOk%"] = pct(double(s.hideOk), double(s.hides)); m["hideFail%"] = pct(double(s.hideFail), double(s.hides)); m["flee/f"] = double(s.flees) / n; m["fleeHealed%"] = pct(double(s.fleeHealed), double(s.flees)); m["fleeFail%"] = pct(double(s.fleeFail), double(s.flees));
+          // T2 batch S (section 31)
+          m["dodge%"] = pct(double(s.dodges), double(s.dodgeTries)); m["dodge/f"] = double(s.dodges) / n; m["aimFix%"] = pct(double(s.aimCorrected), double(s.arrowsShot)); m["arrowHit%"] = pct(double(s.arrowsHit), double(s.arrowsShot));
+          m["guard%"] = 100.0 * s.guardSec / up; m["block/f"] = double(s.blocks) / n; m["powRefused/f"] = double(s.powRefused) / n; m["backOff/f"] = double(s.backOffs) / n; m["backOffOk%"] = pct(double(s.backOffArrived), double(s.backOffs));
+          m["step/f"] = double(s.steps) / n; m["stepOk%"] = pct(double(s.stepArrived), double(s.steps)); m["stepSeen%"] = pct(double(s.stepRevealed), double(s.steps)); m["averted/f"] = double(s.averted) / n; m["avertKept/f"] = double(s.avertKept) / n;
+          m["raise/f"] = double(s.raises) / n; m["mixPowDeny/f"] = double(s.mixPowerDenied) / n; m["mixNormDeny/f"] = double(s.mixNormalDenied) / n; m["mixLift/f"] = double(s.mixFloorLifted) / n; m["leashTurn/f"] = double(s.leashTurns) / n; m["engPower/f"] = double(s.engPower) / n; m["feet%"] = 100.0 * s.feetSec / up;
+          m["run/f"] = double(s.runsBegun) / n; m["runSafe%"] = pct(double(s.runsSafe), double(s.runsBegun)); m["runSafe.s"] = s.runsSafe ? s.runSafeSec / double(s.runsSafe) : -1; m["runLen.s"] = s.runsBegun ? s.runLenSec / double(s.runsBegun) : -1;
+          m["runDmg"] = s.runsBegun ? s.runDmg / double(s.runsBegun) : -1; m["runDmgLate"] = s.runsBegun ? s.runDmgAfter5 / double(s.runsBegun) : -1;   // health points he lost per G3 run (and after its 5th second)
           m["fleeHpGain%"] = s.flees ? 100.0 * s.fleeHpGain / double(s.flees) : -1; m["stealthMiss%"] = pct(double(s.stealthMiss), double(s.stealthTry)); m["runDown%"] = pct(double(s.runDowns), double(s.hides + s.flees)); m["run%"] = 100.0 * s.runSec / up; m["still%"] = 100.0 * s.holdSec / up;
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
@@ -158,6 +165,18 @@ namespace {
     // stealth / disengage scenarios that are not parked. The 17 keep their indexes, so their fights are the same in every mode.
     std::vector<Scenario> HeadlineScenarios() { std::vector<Scenario> v; for (Scenario& s : AllScenarios(g_stealth > 0)) if (!s.parked || g_parked) v.push_back(std::move(s)); return v; }
     const char* StealthName() { static const char* n[] = { "off", "g1", "hide", "g3" }; return n[std::clamp(g_stealth, 0, 3)]; }
+    // The T2 batch S switches of this run (section 31): "all" (the default), "off" (--t2 off), else what differs from the default.
+    struct T2Flag { const char* name; bool T2::* m; };
+    inline constexpr T2Flag kT2Flags[] = { { "c8", &T2::c8 }, { "dodge", &T2::dodge }, { "aversion", &T2::aversion }, { "aim", &T2::aim }, { "block", &T2::block }, { "range", &T2::range },
+                                           { "backoff", &T2::backoff }, { "step", &T2::step }, { "unweighted", &T2::unweighted }, { "reanimate", &T2::reanimate } };
+    std::string T2Name() {
+        std::string o; bool anyOn = g_t2.feet || g_t2.c13built; for (const T2Flag& f : kT2Flags) anyOn |= g_t2.*(f.m);
+        if (!anyOn) o = "off";
+        else { if (!g_t2.feet) o += "feet-stop,"; for (const T2Flag& f : kT2Flags) if (!(g_t2.*(f.m))) o += std::string(f.name) + "=off,"; if (!g_t2.c13built) o += "c13=lever,";
+            if (o.empty()) o = "all"; else o.pop_back(); }
+        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (!g_fillSwing) o += "+no-fill-swing";
+        return o;
+    }
     // Mean utility of IAUS (no oracle) over the scenarios and the natural bracket of every class: the search objective.
     std::string g_optClass;   // --opt-class <slug>: the objective is that class only (its natural / balanced / strong1 brackets and its scenarios)
     double ObjectiveClass(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int fights, int threads, double* scenU, double* natU) {
@@ -324,9 +343,24 @@ namespace {
 }
 
 int main(int argc, char** argv) {
+    int disengageReport = 0, stealLab = 0;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = 0;
     for (int i = 1; i < argc; ++i) {
-        if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
+        // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
+        bool t2Arg = false;
+        for (const T2Flag& f : kT2Flags) if (!std::strcmp(argv[i] + (argv[i][0] == '-' && argv[i][1] == '-' ? 2 : 0), f.name) && argv[i][0] == '-' && i + 1 < argc && (!std::strcmp(argv[i + 1], "off") || !std::strcmp(argv[i + 1], "on"))) { g_t2.*(f.m) = !std::strcmp(argv[++i], "on"); t2Arg = true; break; }
+        if (t2Arg) continue;
+        if (!std::strcmp(argv[i], "--t2") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_t2.AllOff(); else if (!std::strcmp(v, "on")) g_t2 = T2{}; else { std::fprintf(stderr, "--t2 off|on\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--feet-stop")) g_t2.feet = false;                 // Q-SIM-5: the lab before (a swap, a potion and a cast stop his feet)
+        else if (!std::strcmp(argv[i], "--c13") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "built")) g_t2.c13built = true; else if (!std::strcmp(v, "lever")) g_t2.c13built = false; else { std::fprintf(stderr, "--c13 built|lever\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--disengage-dnd")) g_t2.dnd = true;               // marth 11-12: a disengage drops him as a valid target for 6 s (NOT built in the game)
+        else if (!std::strcmp(argv[i], "--aim-miss") && i + 1 < argc) g_aimMiss = static_cast<float>(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--dodge-flight") && i + 1 < argc) g_dodgeFlight = static_cast<float>(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--no-fill-swing")) g_fillSwing = false;           // [Debug] bIausFillSwing OFF (the shipped default): no Block candidate
+        else if (!std::strcmp(argv[i], "--teach") && i + 1 < argc) g_teach.push_back(argv[++i]);
+        else if (!std::strcmp(argv[i], "--disengage-report") && i + 1 < argc) disengageReport = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--steal-lab") && i + 1 < argc) stealLab = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--list") && i + 1 < argc) listPath = argv[++i];
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
         else if (!std::strcmp(argv[i], "--fights") && i + 1 < argc) { fights = std::atoi(argv[++i]); fightsGiven = true; }
         else if (!std::strcmp(argv[i], "--threads") && i + 1 < argc) threads = std::max(1, std::atoi(argv[++i]));
@@ -417,7 +451,7 @@ int main(int argc, char** argv) {
         double m = 0; for (double x : js) m += x; m /= double(js.size()); double v = 0; for (double x : js) v += (x - m) * (x - m);
         const double se = js.size() > 1 ? std::sqrt(v / double(js.size() - 1) / double(js.size())) : -1.0;   // n=1 has no spread: print n/a
         char seb[32]; if (se < 0) std::snprintf(seb, sizeof seb, "n/a"); else std::snprintf(seb, sizeof seb, "%.2f", se);
-        std::printf("HEADLINE  J mean=%.2f  se=%s  n=%zu seeds  fights=%d per scenario  covers=%s  mode=%s  stealth=%s\n", m, seb, js.size(), hf, ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus", StealthName()); return 0; }
+        std::printf("HEADLINE  J mean=%.2f  se=%s  n=%zu seeds  fights=%d per scenario  covers=%s  mode=%s  stealth=%s  t2=%s\n", m, seb, js.size(), hf, ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus", StealthName(), T2Name().c_str()); return 0; }
     Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus"; R.stealth = StealthName(); R.sneakProfile = sneakProfile;
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (!noJson && opt.empty() && headlineOracle > 0) {   // the oracle on the first fights of the same seeds
@@ -499,7 +533,7 @@ int main(int argc, char** argv) {
     for (int c = 0; c < nc; ++c) for (int rk = 0; rk < 5; ++rk) { const Agg& A = rankCell[static_cast<std::size_t>(c * 5 + rk)]; const double t = std::max<double>(1, double(A.s.ticks));
         std::printf("  %-12s rank%d  idle %.1f%%  hold %.1f%%  sw/min %.1f\n", classes[static_cast<std::size_t>(c)].name.c_str(), rk + 1, 100.0 * double(A.s.idle) / t, 100.0 * double(A.s.hold) / t, double(A.s.switches) / std::max(1e-9, A.durSum / 60.0)); }
     std::printf("\nCHECKS: BAD-FACTS ticks=%ld (must be 0)  invalid picks=%ld (must be 0)  => %s\n", totalBad, totalInvalid, totalBad == 0 && totalInvalid == 0 ? "PASS" : "FAIL");
-    char meta[160]; std::snprintf(meta, sizeof meta, "#meta fights=%d seed=%llu stealth=%s profile=%s classes=%s", fights, (unsigned long long)seed, StealthName(), sneakProfile.c_str(), only.empty() ? (legacy ? "legacy" : "real") : only.c_str());
+    char meta[240]; std::snprintf(meta, sizeof meta, "#meta fights=%d seed=%llu stealth=%s profile=%s classes=%s t2=%s", fights, (unsigned long long)seed, StealthName(), sneakProfile.c_str(), only.empty() ? (legacy ? "legacy" : "real") : only.c_str(), T2Name().c_str());
     if (outBase) { std::ofstream o(outBase); o << meta << "\n"; for (auto& kv : all) for (auto& m : kv.second) if (m.first.find("dec.") == std::string::npos) o << kv.first << "|" << m.first << "=" << m.second << "\n"; std::printf("baseline written: %s\n", outBase); }
     if (cmp) {
         std::ifstream f(cmp); std::string line; int diffs = 0; std::printf("\nCOMPARE vs %s (|delta| > max(0.5, 5%%)):\n", cmp);

@@ -84,7 +84,7 @@ namespace Sim {
             if (const Playstyle* ps = ActivePlaystyle(c.name)) { c.forbid = ps->forbid; c.playstyle = ps->does; }
             for (std::size_t i = 0; i < d.gambitCount; ++i) { using R = C::SpellRole; const char* tok = nullptr; const char* tok2 = nullptr;   // the roles his own rows name (todo rows too: the card names them)
                 switch (d.gambits[i].role) { case R::Fire: tok = "fire"; break; case R::Frost: tok = "frost"; break; case R::Shock: tok = "shock"; break; case R::Heal: tok = "healOther"; tok2 = "heal"; break;
-                    case R::Summon: tok = "summon"; break; case R::Armor: tok = "armor"; break; case R::Paralyze: tok = "paralyze"; break; case R::Fear: tok = "fear"; break; default: break; }
+                    case R::Summon: tok = "summon"; break; case R::Armor: tok = "armor"; break; case R::Paralyze: tok = "paralyze"; break; case R::Fear: tok = "fear"; break; case R::Reanimate: if (g_t2.reanimate) tok = "reanimate"; break; default: break; }
                 for (const char* t : { tok, tok2 }) if (t && std::find(c.ensure.begin(), c.ensure.end(), t) == c.ensure.end()) c.ensure.push_back(t); }
             // The stealth passives and packages the class cards rule (class-walkthrough-decisions.md Thief / Master Thief / Nightingale /
             // Listener; our own design data, at full strength = the class mastered). Thief: sneaking 30% quieter, a free stealth entry 1
@@ -95,6 +95,14 @@ namespace Sim {
             else if (d.id == C::Id::Thief) { c.entryOdds = 5; c.noiseClass = 0.70f; }
             else if (d.id == C::Id::MasterThief || d.id == C::Id::Nightingale || d.id == C::Id::Listener) { c.entryOdds = 3; c.sneakAtkClass = 1.5f; c.flank = true; c.noiseClass = 0.925f; c.cloak = d.id == C::Id::Nightingale; }
             g.powerAttack = d.powerShareMax != C::kShareUnset || d.powerShareMin != C::kShareUnset;
+            // T2 batch S: the package and claim data, straight from the class table (nothing copied by hand but the three values noted)
+            c.shareMax = d.powerShareMax != C::kShareUnset ? d.powerShareMax : -1.0f; c.shareMin = d.powerShareMin != C::kShareUnset ? d.powerShareMin : -1.0f;
+            c.leashScaled = d.tier >= 2 && (d.flags & (C::Flag::kShortLeash | C::Flag::kNearPlayer)) != 0;   // Classes::PackageLeashScale
+            if (d.id == C::Id::Mercenary) c.avoidThreat = 0.3f;                                               // MFO_GenerateESP.py CLS_AVOID_THREAT (Q-melee-7), hand-mirrored
+            if (d.id == C::Id::Conjurer || d.id == C::Id::Healer) c.aversion = 0.25f;                         // Config fAversionConjurer / fAversionHealer (Q93), the EQUIPPED class (Q94), hand-mirrored
+            else if (d.id == C::Id::Dragonborn && (Mastered(d) & (C::Mask{ 1 } << static_cast<std::size_t>(C::Id::Conjurer) | C::Mask{ 1 } << static_cast<std::size_t>(C::Id::Healer)))) c.aversion = 0.25f;   // Q107 default: Dragonborn holds a mastered passive at full
+            c.aimBudget = d.id == C::Id::Archer ? 5 : d.id == C::Id::Scout ? 4 : d.id == C::Id::Witchhunter ? 4 : d.id == C::Id::Ranger ? 3 : d.id == C::Id::Jaqspur ? 1 : -1;   // Config iAimBudget* defaults (apmf/AimClaims.cpp), hand-mirrored
+            if (g_t2.backoff) g.backOffPressed = d.id == C::Id::Mercenary;                                    // SpellBook::GateFor (iaus/SpellBook.cpp:502)
             int applied = 0; for (std::size_t i = 0; i < d.gambitCount; ++i) if (d.gambits[i].act && d.gambits[i].IsApplied() && !d.gambits[i].pendingRuling) ++applied;
             int idx = 0;
             for (std::size_t i = 0; i < d.gambitCount; ++i) {
@@ -102,6 +110,7 @@ namespace Sim {
                 const std::string_view act{ row.act };
                 if (act == V::kActPowerAttack) { g.powerAttack = true; g.powerCooldownSec = std::max(g.powerCooldownSec, row.cooldownSec); }
                 else if (act == V::kActTaunt) { g.taunt = true; g.tauntCooldownSec = std::max(g.tauntCooldownSec, row.cooldownSec); }
+                else if (act == V::kActBlock && g_t2.block) { g.block = true; g.blockCooldownSec = std::max(g.blockCooldownSec, row.cooldownSec); }   // SpellBook::GateFor (iaus/SpellBook.cpp:512; MFO-B827)
                 if (row.IsApplied() && !row.pendingRuling) { if (mechProfiles) Bump(c.profile, row, idx, applied); ++idx; }
                 if (row.IsApplied() && row.cond) { GRow gr; gr.cond = row.cond; gr.act = row.act; gr.param = row.condParam; gr.role = static_cast<int>(row.role); gr.cooldown = row.cooldownSec; gr.applied = !row.pendingRuling; c.rows.push_back(std::move(gr)); }
             }

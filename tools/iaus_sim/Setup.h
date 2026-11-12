@@ -25,7 +25,17 @@ namespace Sim {
         float sneakAtkClass = 1.0f, noiseClass = 1.0f;
         unsigned forbid = 0;                 // Playstyles.h: the class's oracle constraint bits
         std::vector<std::string> ensure;     // the spells its own default rows name (Load.h SpellIs tokens): a Conjurer knows a summon
+        // T2 batch S (RealClasses.cpp fills them from the game's class table; section 31)
+        float shareMax = -1.0f, shareMin = -1.0f;   // ClassDef::powerShareMax / powerShareMin (ch.18), -1 = not declared
+        bool  leashScaled = false;                  // Flag::kShortLeash | kNearPlayer on a tier 2+ class: Classes::PackageLeashScale = fClassLeashMult (0.5)
+        float avoidThreat = 0.0f;                   // MFO_GenerateESP.py CLS_AVOID_THREAT (the Mercenary 0.3): a floor on every stance's Avoid Threat
+        float aversion = 0.0f;                      // apmf/AversionClaims.cpp: fAversionConjurer / fAversionHealer 0.25 for the EQUIPPED class (Q93, Q94; Dragonborn: Q107)
+        int   aimBudget = -1;                       // apmf/AimClaims.cpp: the ch.29 miss budget of a ranged class (Archer 5)
     };
+    // --teach <token>: card "Teach Spells" (Board_Classes.cpp, batch I item 7). MODEL of its effect only: the subject of a casting class
+    // also knows one spell of that token, drawn from the pool IAUS would weigh (an unweighable spell is never in the pool, so it cannot be taught).
+    inline std::vector<std::string> g_teach;
+    inline constexpr float kLeashBase = 2256.0f, kLeashMin = 512.0f, kClassLeashMult = 0.5f;   // Confidence::LeashRadius at mid confidence between fLeashMin 512 and fLeashMax 4000 (MODEL: the lab has no confidence value); Config fClassLeashMult
 
     inline ClassGate MkGate(bool treeOn, bool spells, bool power, bool taunt, bool dis, bool melee, bool bow, bool xbow, bool staff) {
         ClassGate g; g.resolved = true; g.treeOn = treeOn; g.strict = false; g.spellsOnClass = spells; g.scrollUser = spells; g.powerAttack = power;
@@ -109,8 +119,15 @@ namespace Sim {
         for (int s = 0; s < 3; ++s) { Style& y = c.pkg[s]; y = Style{}; y.off = csgd[s][0]; y.def = csgd[s][1]; y.groupOff = csgd[s][2]; y.wMelee = csgd[s][3]; y.wMagic = csgd[s][4]; y.wRanged = csgd[s][5]; y.wShout = csgd[s][6];
             y.wUnarmed = csgd[s][7]; y.wStaff = csgd[s][8]; y.avoidThreat = csgd[s][9]; y.circle = cscr[s][0]; y.fallback = cscr[s][1]; y.dueling = true;
             if (sc.shortLeash) { y.circle = std::max(0.0f, y.circle - 0.10f); y.fallback = std::max(0.0f, y.fallback - 0.15f); }
-            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); } }
+            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
+            if (g_t2.c8 && sc.avoidThreat > 0.0f) y.avoidThreat = std::max(y.avoidThreat, sc.avoidThreat); }   // class_csty_params: never lowering a base
         c.powerShare = 1.0f; c.leash = 0.0f;
+        if (g_t2.c8) {   // card C8: the ch.18 rule and the ch.23 leash (every managed follower is leashed to the player; a wall or near-player class at half the radius, never under fLeashMin)
+            c.shareMax = sc.shareMax; c.shareMin = sc.shareMin;
+            c.leash = std::max(kLeashMin, kLeashBase * (sc.leashScaled ? kClassLeashMult : 1.0f));
+        }
+        c.pkgClass = sc.tier >= 2;   // Classes::PackageClass: tier 1 has no package ("t1 behaves vanilla")
+        c.aversion = sc.aversion; c.aimBudget = sc.aimBudget;
     }
     inline void (*&PackageHook())(Ctl&) { static void (*h)(Ctl&) = nullptr; return h; }
 
@@ -120,6 +137,8 @@ namespace Sim {
     inline int g_rowPrefix = 0, g_forceRank = 0;
     [[nodiscard]] inline int CombatSlotsForRank(int rank) { static constexpr int k[6] = { 0, 3, 5, 7, 9, 12 }; return k[std::clamp(rank, 1, 5)]; }
     inline void AddFollower(Fight& F, const Data& D, const SimClass& sc, int level, int rank, float x, float y, Rng& R, float worn, const std::vector<std::string>* ensure = nullptr) {
+        std::vector<std::string> taught;   // --teach: the subject only, a casting class only
+        if (F.ctl.empty() && !g_teach.empty() && sc.gate.spellsOnClass) { if (ensure) taught = *ensure; for (const std::string& t : g_teach) taught.push_back(t); ensure = &taught; }
         auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R, true, ensure));
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
         Body& b = F.Add(Role::Follower, spec, x, y); b.ctl = static_cast<int>(F.ctl.size()); b.arrows = fb->book.kit.arrows + fb->book.kit.bolts;
@@ -155,7 +174,7 @@ namespace Sim {
     inline float StrengthRatio(const Data& D, const Fight& F);
 
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
-        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); Rng& R = F.R;
+        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
         const SimClass& pc = t1[static_cast<std::size_t>(fs.playerFam)];
         { auto pb = BuildFollower(D, pc.fam, pc.kit, pc.gate, fs.level, R); auto ps = std::make_shared<ActorSpec>(pb.spec); ps->name = "Player"; ps->spells.clear();
@@ -194,7 +213,10 @@ namespace Sim {
             F.light = fs.light >= 0 ? fs.light : fs.interior ? S.U(0.15f, 0.6f) : S.P(0.35f) ? 0.2f : 0.9f;
             for (std::size_t i = 0; i < F.ctl.size(); ++i) { const Ctl& c = F.ctl[i]; Body& x = F.b[static_cast<std::size_t>(c.body)]; if (!x.stealthy || c.entryOdds <= 0 || g_stealth < 2) continue;
                 const bool free = i == 0 && fs.freeEntry >= 0 ? fs.freeEntry == 1 : S.P(1.0f / static_cast<float>(c.entryOdds));
-                if (free) x.cloakUntil = 1e9; }   // card C13: he opens undetected whatever the foes could sense; his first blow ends it
+                // Card C13 AS BUILT (classes/StealthEntry.cpp, Q112): the engine has no lever, so the counted fight changes only how MFO reads a foe
+                // with no combat group yet. The lab has no such foe (one group, a record from the first pass), so as built the entry does
+                // NOTHING here; the draw above still happens so the stream is the same. --c13 lever = the H10 guarantee, which is not built.
+                if (free && !g_t2.c13built) x.cloakUntil = 1e9; }   // the lever: he opens undetected whatever the foes could sense; his first blow ends it
         }
         const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);
         for (int i = 0; i < no; ++i) { const float tt = R.U(0.3f, 0.75f); F.occ.push_back({ cx * tt + R.U(-350, 350), cy * tt + R.U(-350, 350), R.U(60, 140) }); }

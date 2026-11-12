@@ -26,6 +26,30 @@ namespace Sim {
 
     using namespace MFO::Iaus;
 
+    // ── T2 BATCH S (iaus-sim-v2.md section 31): every T2 mechanism the manifest's Sim column listed as OPEN. Each is ONE switch,
+    // ON by default. With every switch off (`--t2 off`, which includes `--feet-stop`) the lab is the one of section 30, draw for draw
+    // (78.11 at g3 / 76.69 at --stealth off for the Beta 1 set). A switch never draws from the fight's random stream while it is off.
+    struct T2 {
+        bool feet = true;        // Q-SIM-5: a weapon swap, a potion and a cast do not stop his feet (false = --feet-stop, the lab before)
+        bool c8 = true;          // card C8: ch.18 share window (ceiling / floor), ch.23 leash, the engine's own power attacks for a class with no rule
+        bool dodge = true;       // Q-melee-7: the class style's Avoid Threat rolls a side step against an incoming projectile
+        bool aversion = true;    // card H2: ch.32 aversion (Conjurer, Healer 0.25, equipped class)
+        bool aim = true;         // card H5: ch.29 miss budget (a corrected shot when the window's misses reach the budget)
+        bool block = true;       // ch.31 held guard: ClassGate::block from the class's Block row, 2.5 s held, the held-guard gate
+        bool range = true;       // card H4: the distance a mage fights at follows the spell in his hand; the mage back-off
+        bool backoff = true;     // Q-T2-3: the Mercenary's back-off (two or more foes press him)
+        bool step = true;        // gap G18: the hidden step
+        bool c13built = true;    // card C13 AS BUILT (near-inert, Q112): no engine lever, so no free entry. false (--c13 lever) = the H10 guarantee the lab carried before
+        bool unweighted = true;  // Q91: a spell with no effect IAUS can value is dropped (Prune::Drop::Unweighted)
+        bool reanimate = true;   // card G7: reanimate spells are kept (table rows cast them at a corpse), corpses are raised
+        bool dnd = false;        // --disengage-dnd (marth 11-12, NOT built in the game): a disengage makes him no valid target for 6 s
+        void AllOff() { feet = c8 = dodge = aversion = aim = block = range = backoff = step = c13built = unweighted = reanimate = false; }
+    };
+    inline T2 g_t2;
+    inline float g_aimMiss = 0.12f;       // --aim-miss: the lab's chance that an UNCORRECTED aimed shot misses a moving target (MODEL; TM::aimMiss before)
+    inline float g_dodgeFlight = 0.35f;   // MODEL: a side step clears a projectile only when it flies at least this long (0.2 s to react + 60 units at the run speed)
+    inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships OFF; without it no Block candidate exists)
+
     // Actor values (CommonLib RE::ActorValue, the same numbers the records store).
     inline constexpr int kAvOneHanded = 6, kAvTwoHanded = 7, kAvMarksman = 8, kAvBlock = 9, kAvHeavy = 11, kAvLight = 12,
                          kAvAlteration = 18, kAvConjuration = 19, kAvDestruction = 20, kAvIllusion = 21, kAvRestoration = 22,
@@ -157,6 +181,8 @@ namespace Sim {
         std::vector<int> buckets;
         std::vector<SimSpell> spells;   // the castable pool a follower's book is drawn from (taught by a BOOK)
         std::vector<SimSpell> scrolls;  // SCRL records (the list's scrolls a follower may carry)
+        std::vector<SimSpell> reanimSpells;   // card G7: the list's Reanimate spells (table rows only; AddPoolSpell)
+        int keptReanim = 0, dropUnweighted = 0;
         std::vector<FRace> races;
         FClass cls[3];                  // melee, ranged, mage
         std::vector<Weapon> wOneHand, wDagger, wTwoHand, wBow, wCrossbow;
@@ -228,7 +254,7 @@ namespace Sim {
     // ── spell classification (one reader for the follower pool and the foes' spells) ────────────────────
     inline void Classify(const J& sp, SimSpell& out) {
         const auto& fx = sp["effects"].a; SpellEntry& e = out.e;
-        bool summon = false, reanimate = false, ward = false, control = false, cloak = false, hostileAny = false, heal = false;
+        bool summon = false, reanimate = false, ward = false, control = false, cloak = false, hostileAny = false, heal = false, weighable = false;
         double autoCost = 0, topCost = -1, topHostCost = -1; int topArch = -1, resist = -1;
         const std::string& dl = sp["delivery"].s; const bool self = dl == "Self";
         const bool conc = sp["castType"].s == "Concentration";
@@ -242,7 +268,8 @@ namespace Sim {
             if (ec > topCost) { topCost = ec; topArch = arch; out.skillReq = static_cast<int>(x["minSkill"].num());
                 auto si = kSchool.find(x["skill"].s); out.school = si == kSchool.end() ? -1 : si->second; }
             if (arch == kArSummon) { summon = true; out.summonDur = static_cast<float>(d > 0 ? d : 60); }
-            if (arch == kArReanimate) reanimate = true;
+            if (arch == kArReanimate) { reanimate = true; out.ctrlMaxLevel = static_cast<float>(mag); out.summonDur = static_cast<float>(d > 0 ? d : 60); }   // card G7: the magnitude is the highest level it raises
+            weighable |= Prune::EffectWeighable(arch);
             if (arch == kArCalm || arch == kArDemoralize || arch == kArFrenzy || arch == kArParalysis || arch == kArTurnUndead) {
                 control = true; out.ctrlDur = std::max(out.ctrlDur, static_cast<float>(d));
                 if (arch == kArParalysis) out.ctrlPar = true; else out.ctrlMaxLevel = static_cast<float>(mag);
@@ -291,6 +318,8 @@ namespace Sim {
         e.reach = (e.selfDelivery || e.touch) ? 0.0f : static_cast<float>(sp["range"].num()) >= 300.0f ? static_cast<float>(sp["range"].num()) : 4096.0f;
         if (dl == "TargetLocation") e.drop = Prune::Drop::Placement;
         if (sp["castType"].s == "ConstantEffect") e.drop = Prune::Drop::NotCastable;
+        // Q91 (batch I item 6, Prune::WeighableSpell): no effect IAUS can value (Script, a scripted spawn, kNone, an unknown id) = hidden from IAUS
+        if (g_t2.unweighted && e.drop == Prune::Drop::Keep && !fx.empty() && !weighable) e.drop = Prune::Drop::Unweighted;
         out.healOther = heal && !self;
         out.cost0 = static_cast<float>(sp["cost"].num());
         if (out.cost0 <= 0 && sp["autoCalc"].yes()) out.cost0 = static_cast<float>(autoCost);   // APPROXIMATION, only when the record stores 0 and does not override
@@ -334,7 +363,11 @@ namespace Sim {
 
     inline void AddPoolSpell(Data& b, SimSpell&& s) {
         if (s.e.drop == Prune::Drop::Keep) { ++b.natures[static_cast<int>(s.e.nature)]; b.spells.push_back(std::move(s)); }
-        else { ++b.natures[0]; switch (s.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; default: ++(s.reanimate ? b.dropReanim : b.dropUnknown); } }
+        // Card G7: a Reanimate spell is KEPT, in its own list. IAUS still has no family for it (Prune: nature Unknown, as in the game), so
+        // its book entry stays dropped for IAUS; a table row with cond.corpse_within casts it at a corpse. It enters a book only by name
+        // (a class row's Reanimate role, --teach reanimate), never by the random draw, so no other class's book changes.
+        else if (s.reanimate && g_t2.reanimate && s.e.drop == Prune::Drop::UnknownNature) { ++b.keptReanim; b.reanimSpells.push_back(std::move(s)); }
+        else { ++b.natures[0]; switch (s.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; case Prune::Drop::Unweighted: ++b.dropUnweighted; break; default: ++(s.reanimate ? b.dropReanim : b.dropUnknown); } }
     }
 
     inline void TagRoles(Data& d) {
