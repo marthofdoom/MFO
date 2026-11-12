@@ -191,6 +191,9 @@ namespace MFO::APMFBridge {
                 spdlog::info("[combat-move] {:08X}: {} h={} REFUSED: {}", a_follower, kind, l.handle, WhyName(info.why));
             else if (st == APMF_API::kCombatMoveState_Failed)
                 spdlog::warn("[combat-move] {:08X}: {} h={} FAILED: {}", a_follower, kind, l.handle, WhyName(info.why));
+            else
+                spdlog::warn("[combat-move] {:08X}: {} h={} has no record in Harbinger any more (a load, or it was read too late)",
+                             a_follower, kind, l.handle);
             // marth 2026-11-12 (Q-melee-4): a power attack Harbinger refused, or whose read-back failed, did not happen.
             // The gambit counted as fired when MFO asked (cast/Fire.cpp), so its cooldown is given back: the one
             // follower-wide power-attack slot every power row and the IAUS candidate share (Q73).
@@ -199,9 +202,6 @@ namespace MFO::APMFBridge {
                 Cooldowns::Forget(a_follower, Cooldowns::Kind::Follower, Cooldowns::kFollowerPowerAttack);
                 spdlog::info("[combat-move] {:08X}: power attack h={} did not happen: its cooldown is given back", a_follower, l.handle);
             }
-            else
-                spdlog::warn("[combat-move] {:08X}: {} h={} has no record in Harbinger any more (a load, or it was read too late)",
-                             a_follower, kind, l.handle);
         }
         if (st != APMF_API::kCombatMoveState_Started) {
             hitNow = true;   // no hit line belongs to a move that never started

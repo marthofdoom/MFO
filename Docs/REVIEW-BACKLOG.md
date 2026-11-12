@@ -3175,3 +3175,6 @@ A re-pick overwrites the current pick at once; native keeps the old pick while t
 
 ### MFO-B788 (SEV-5, OPEN, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
 `in.flying = outOfMeleeReach` stands in for "flying", giving a 3x max distance to any actor out of melee reach (a ledge). Errs pessimistic for the follower; unstated.
+
+### MFO-B809 (SEV-5, OPEN, Harbinger core/CombatStyle.cpp:494 Heartbeat WriteSlot, against 6b297a2, Opus re-review of the batch M fix round, F5 note)
+Heartbeat now runs WriteSlot on every redecide even when nothing changed, opening a few-store seqlock window every 5 s per claim (the old code did one atomic store); a reader preempted inside it misses one read (gets the engine's own style). Optional: skip the write when the flags are unchanged. Also: APMF-B298 item (3) (controller lifetime across EngineRefresh's UpdateCombatStyle) must be CLOSED before the release cut (re-review verdict: not a merge blocker).
