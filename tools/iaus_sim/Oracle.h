@@ -132,7 +132,7 @@ namespace Sim {
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
     struct RolloutPolicy : Policy {
         IausPolicy iaus;
-        void Serve(Fight& F, int ci) override { if (F.now < F.ctl[static_cast<std::size_t>(ci)].commitUntil) return; iaus.Serve(F, ci); }
+        void Serve(Fight& F, int ci) override { if (ServiceRun(F, ci)) return; if (F.now < F.ctl[static_cast<std::size_t>(ci)].commitUntil) return; iaus.Serve(F, ci); }   // card G3's run is serviced every lap, committed or not
     };
 
     struct OraclePolicy : Policy {
@@ -166,7 +166,7 @@ namespace Sim {
                     if (SeesFrom(G, gx, gy, *tg)) return move(gx, gy, 2.5, false); }
                 return false; }
             case Ext::Hide: case Ext::Flee: { const bool fl = o.ext == Ext::Flee; float gx = 0, gy = 0; if (c.runPhase != 0 || !G.ConcealPick(x, c, fl, gx, gy)) return false;
-                c.pick.valid = true; c.pick.flee = fl; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }
+                c.pick.valid = true; c.pick.flee = fl; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl, true)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }
             case Ext::Block: if (held) return false; x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.commitUntil = x.actEnd; return true;
             case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f) return false; G.StartSwing(x, *tg, Act::Bash, true); c.commitUntil = x.actEnd; return true; }
             case Ext::Scroll: { if (held || o.idx < 0 || c.book.entries[static_cast<std::size_t>(o.idx)].count <= 0) return false;

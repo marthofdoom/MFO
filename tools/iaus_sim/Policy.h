@@ -157,23 +157,31 @@ namespace Sim {
         else if (ci == 0) { Tally& t = F.t; if (flee) { (how == 0 ? t.fleeHealed : how == 1 ? t.fleeArrived : t.fleeFail)++; t.fleeHpGain += static_cast<double>((x.c.hp - c.runHp) / std::max(1.0f, x.c.hpMax)); } else if (how == 0) ++t.hideOk; else if (how == 2) ++t.hideFail; }
         c.runPhase = 0; c.hiddenReads = 0; c.stanceHeld = keepStance; c.firedAt[CooldownId(DisengageKey())] = F.now;
     }
-    inline bool BeginRun(Fight& F, int ci, bool flee) {
+    // fromOracle: the oracle's own flee may start above the 30% line; it then ends 15 points of health above where it began.
+    inline bool BeginRun(Fight& F, int ci, bool flee, bool fromOracle = false) {
         Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)];
         if (c.runPhase != 0 || !c.pick.valid || c.pick.flee != flee || !Fight::Up(x)) return false;
         c.runPhase = flee ? 3 : 1; c.runStart = F.now; c.runX = c.pick.x; c.runY = c.pick.y; c.hiddenReads = 0; c.runHp = x.c.hp; c.pick.valid = false;   // Begin consumes the pick
-        c.steer = 0; c.moveUntil = 0; x.holdUntil = 0; x.retreatUntil = 0;
+        c.steer = 0; c.moveUntil = 0; x.holdUntil = 0; x.retreatUntil = 0; c.runFromOracle = fromOracle;
+        c.fleeLine = fromOracle ? std::max(Disengage::kFleeHealthLine, x.c.hp / std::max(1.0f, x.c.hpMax) + 0.15f) : Disengage::kFleeHealthLine;
         if (ci == 0) { if (flee) ++F.t.flees; else ++F.t.hides; }
         if (F.trace) std::fprintf(F.trace, "%7.2f  G3 %s: %s run begins -> (%.0f, %.0f), %.0f units\n", F.now, x.c.name.c_str(), flee ? "flee" : "hide", c.runX, c.runY, std::hypot(c.runX - x.c.x, c.runY - x.c.y));
         return true;
     }
     // Once per lap of that follower, before his decision. true = the run holds him (his scan is skipped this lap).
-    inline bool ServiceRun(Fight& F, int ci) {
+    inline bool ServiceRunOnce(Fight& F, int ci);
+    inline bool ServiceRun(Fight& F, int ci) {   // idempotent within one world step (a rollout policy and the policy under it both ask)
+        Ctl& c = F.ctl[static_cast<std::size_t>(ci)];
+        if (c.runServedAt != F.now) { c.runServedAt = F.now; c.runServedHold = ServiceRunOnce(F, ci); }
+        return c.runServedHold;
+    }
+    inline bool ServiceRunOnce(Fight& F, int ci) {
         Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)];
         if (c.runPhase == 0) { if (c.stanceHeld && F.GroupDetects(x)) c.stanceHeld = false; return false; }   // a reveal ends the hide hold's claim
         if (!Fight::Up(x)) { EndRun(F, ci, false, 3); return false; }
         const float d = std::hypot(c.runX - x.c.x, c.runY - x.c.y);
         if (c.runPhase == 3) {
-            if (x.c.hp > Disengage::kFleeHealthLine * x.c.hpMax) EndRun(F, ci, false, 0);
+            if (x.c.hp > c.fleeLine * x.c.hpMax) EndRun(F, ci, false, 0);
             else if (d <= 90.0f) EndRun(F, ci, false, 1);
             else if (F.now - c.runStart > 10.0) EndRun(F, ci, false, 2);
             return false;

@@ -221,7 +221,7 @@ namespace Sim {
         struct Pick { bool valid = false, flee = false; float x = 0, y = 0; double readyAt = -1e9, askedAt = -1e9; };
         mutable Pick pick;
         int    runPhase = 0, hiddenReads = 0; bool stanceHeld = false, runFromOracle = false;
-        double runStart = 0, runArrive = 0; float runX = 0, runY = 0, runHp = 0;
+        double runStart = 0, runArrive = 0, runServedAt = -1; float runX = 0, runY = 0, runHp = 0, fleeLine = 0.30f; bool runServedHold = false;
     };
 
     struct Policy;   // decides for one follower when he is served (Policy.h)
