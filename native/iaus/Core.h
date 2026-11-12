@@ -32,6 +32,8 @@
 namespace MFO::Iaus {
 
     inline constexpr float kInf = std::numeric_limits<float>::infinity();
+    inline constexpr float kDrinkHealthLine = 0.34f;     // Cons::DrinkNeed's midpoint (Catalogue.cpp Logi(-11, 0.34)): below it a health potion is a real option
+    inline constexpr std::uint8_t kGuardLineFoes = 2;   // Q-S-5: taunted foes on the Knight line from which the guard outranks his blows
 
     // ── Identity ─────────────────────────────────────────────────────────────────────────────────────────
     // Action families (design section 2). APPEND ONLY: the value is in log lines I9 parses and in the
@@ -132,6 +134,8 @@ namespace MFO::Iaus {
         BoostFleeHeal,      // multiplier: a heal or a health potion for HIMSELF while a non-sneak flee runs (heal as soon as possible)
         BackOffNeed,        // back off (batch I): a mage = how far inside the minimum range of his equipped spell a foe on him stands;
                             // a Mercenary = how many foes press him (two or more)
+        BoostGuardLine,     // multiplier x2.0 (APPENDED, Q-S-5): the Knight line holds two or more taunted foes and a swing at him is in the air:
+                            // the guard outranks his own blows (marth: the line blocks at least 60% of the attacks aimed at it then)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -337,6 +341,7 @@ namespace MFO::Iaus {
         Tri   unseen = Tri::Unknown;      // no foe has me in sight (G2 Layer 1: he sneaks and every listed foe's group record says he is not detected)
         bool  selfSneaking = false;       // Snapshot::selfSneaking
         Tri   foeUnaware = Tri::Unknown;  // THIS candidate's foe does not detect him (Combatant::detectsMe == No -> Yes)
+        std::uint8_t tauntedOnMe = 0;     // Q-S-5: foes under a live taunt that have him as their target (Generate counts, Block candidates only)
         float backOffNeed = 0.0f;         // batch I: Cons::BackOffNeed's input, 0..1 (Generate fills it; iaus/Reposition.h)
         bool  strikeReady = false;        // the hold row: a blow from stealth is ready now (an unaware foe in reach / in sight)
         bool  disengageClass = false;     // Flag::kDisengage

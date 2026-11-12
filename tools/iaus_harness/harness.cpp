@@ -1343,6 +1343,28 @@ namespace {
         Check(count(Generate(melee(), warrior, t), Family::Block) == 0, "item 4: a class with no Block row is never given one (Q-melee-2)");
         { Snapshot s = melee(); s.blockRoad = false; Check(count(Generate(s, knight, t), Family::Block) == 0, "item 4: no road -> no Block"); }
         { Snapshot s = melee(); s.foes[0].swinging = false; Check(count(Generate(s, knight, t), Family::Block) == 0, "item 4: no swing in the air -> no Block"); }
+        {   // Q-S-5: the guard line
+            Snapshot s = melee(); s.foes[0].swinging = false; s.foes[0].taunted = true;
+            s.foes.push_back(Actor("Bandit2", 0x3B611, 100, 100, 160, 0)); s.foes[1].targetId = 0x14F01; s.foes[1].taunted = true; s.foes[0].tauntedByMe = s.foes[1].tauntedByMe = true;
+            const Generated g = Generate(s, knight, t);
+            const Candidate* b = find(g, Family::Block);
+            Check(b && b->f.tauntedOnMe == 2 && !b->f.foeSwinging && score(g, Family::Block) > score(g, Family::Attack),
+                  "Q-S-5: two taunted foes on him, one in striking distance, no swing seen -> a Block that outranks the attack");
+            s.foes[0].tauntedByMe = s.foes[1].tauntedByMe = true;
+            const Generated g2 = Generate(s, knight, t);
+            Check(count(g2, Family::Block) == 1, "Q-S-5: counted by his OWN taunts (tauntedByMe)");
+            { Snapshot o = s; o.foes[0].tauntedByMe = o.foes[1].tauntedByMe = false;
+              Check(count(Generate(o, knight, t), Family::Block) == 0, "Q-S-5: foes pinned by another taunter do not make the guard line"); }
+            { Snapshot h = s; h.self.hp = 30; h.self.hpMax = 200; h.book.kit.potionsHealth = 2;
+              Check(count(Generate(h, knight, t), Family::Block) == 0, "Q-S-5: hurt (below the drink line) with a health potion -> no guard line, he drinks first");
+              h.book.kit.potionsHealth = 0;
+              Check(count(Generate(h, knight, t), Family::Block) == 1, "Q-S-5: hurt with NO potion -> the guard line stands"); }
+            s.foes[1].taunted = false; s.foes[1].tauntedByMe = false;
+            Check(count(Generate(s, knight, t), Family::Block) == 0, "Q-S-5: one taunted foe and no swing in the air -> no Block");
+            s.foes[1].taunted = s.foes[1].tauntedByMe = true; s.guardHeld = true;
+            const Candidate* r = find(Generate(s, knight, t), Family::Block);
+            Check(r && r->f.hardCooldownSec == 0.0f, "Q-S-5: while the guard stands the renewal carries no row cooldown");
+        }
         {   // the held-guard gate (marth Q-melee-3)
             Snapshot s = melee(); s.guardHeld = true;
             const Generated g = Generate(s, knight, t);
@@ -1394,6 +1416,19 @@ namespace {
             Check(!Reposition::RangeToHold(s2, mage, c), "H4: no spell in his hand -> no range to keep");
             ClassGate noCast = mage; noCast.spellsOnClass = false;
             Check(!Reposition::RangeToHold(caster(3000, firebolt), noCast, c), "H4: a class that does not cast never closes on a spell range");
+            // Q-I-2: the shortest range of one delivery type over BOTH hands; touch + distance = the distance range unless touch is the better cast
+            Snapshot two = caster(3000, firebolt); two.book.entries = { firebolt, flames }; two.equippedSpellOther = flames.form;
+            Check(Reposition::RangeToHold(two, mage, c) && std::fabs(c.radius - 480.0f) < 0.01f, "Q-I-2: two distance spells (aimed 1800, stream 480) -> the shortest range");
+            Snapshot mix = caster(3000, firebolt); mix.book.entries = { firebolt, touch }; mix.equippedSpellOther = touch.form;
+            Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 1800.0f) < 0.01f, "Q-I-2: touch + distance, the touch spell not the chosen cast -> the distance spell's range");
+            mix.chosenCast = touch.form;
+            Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 160.0f) < 0.01f && c.far, "Q-I-2: the touch spell is the cast IAUS chose -> he closes for the touch range");
+            mix.touchSpent = true;
+            Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 1800.0f) < 0.01f, "Q-I-2: right after the touch cast the range is the distance spell's again");
+            mix.foes[0].dist = 100.0f; mix.foes[0].targetId = 0;   // the foe he just touched does not even have him as its target
+            Check(Reposition::BackOffNeed(mix, mage) > 0.5f, "Q-I-2: after the touch cast a foe inside the distance spell's minimum is a back-off reason, aimed at him or not");
+            mix.touchSpent = false;
+            Check(Reposition::BackOffNeed(mix, mage) == 0.0f, "Q-I-2: with the touch cast still wanted, and the foe not on him, there is no back-off");
         }
         // ---- items 1 and 3: the back-off ----
         {
