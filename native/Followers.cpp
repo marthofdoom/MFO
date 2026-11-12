@@ -510,6 +510,7 @@ namespace MFO::Followers {
         APMFBridge::ReleaseAttackMix(id, "dismissed");  // ch.18 class attack mix (card C8)
         APMFBridge::ReleaseSneak(id, "dismissed");      // ch.3 act.sneak hold (card G1)
         APMFBridge::ReleaseBlock(id, "dismissed");      // ch.31 act.block held guard (ABI v43)
+        APMFBridge::ReleaseStyleClaim(id, "dismissed"); // ch.33 combat style claim (ABI v45)
         APMFBridge::ReleaseHideHold(id, "dismissed");   // G2 hold row: ch.1 movement block + ch.7 deny
         APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         APMFBridge::ReleaseOffenseApproach(id, "dismissed", true);   // ch.24 offense approach

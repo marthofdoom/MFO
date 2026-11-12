@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v44, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v45, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 44;
+    inline constexpr std::uint32_t kABIVersion = 45;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -774,6 +774,26 @@ namespace APMF_API {
                                      //       than exactly 1.6.1170 / 1.5.97 / 1.7.104, a failed address row or byte
                                      //       window), the player, actor 0, no param, a weight outside (0, 1).
                                      //       See "ABI v41: AVERSION" at the end of this header.
+        kIntent_CombatStyle = 33,    // ch.33 COMBAT STYLE (ABI v45, 2026-11-11, MFO T2 batch M item 5). This actor
+                                     //       FIGHTS BY THE COMBAT STYLE THE CLIENT NAMES. Mode: SUBSTITUTE at the
+                                     //       source, the engine's own read of the actor's combat style. Harbinger
+                                     //       writes nothing: not the controller, not the reference, not the base
+                                     //       record. While the claim is live the engine's style read answers the
+                                     //       claimed style, and on release it answers its own again.
+                                     //       Param: form = the TESCombatStyle's FormID (REQUIRED). ival = a
+                                     //       CombatStyleFlags mask (0 = actor-wide). fval / target / pos not read.
+                                     //       Basis: the usual arbitration between claims on the same actor (the
+                                     //       winning claim's style applies). Repoint changes the style or the
+                                     //       scope. RequestEx only. The Engine source is ranked on the CombatAction
+                                     //       facet: the style is answered only while the claim's priority is above
+                                     //       Engine's (the defaults say yes).
+                                     //       REFUSED (kInvalidHandle, logged): APMF < v45 (no channel serves intent
+                                     //       33), not installed ([CombatStyle] bCombatStyle=0, VR, a runtime other
+                                     //       than exactly 1.6.1170 / 1.5.97 / 1.7.104, a failed address row or byte
+                                     //       window), the player, actor 0, no param, form 0, an unknown flag bit.
+                                     //       A form that is not a combat style is found on the game thread: the
+                                     //       claim then stands INERT and Harbinger says so in its log.
+                                     //       See "ABI v45: COMBAT STYLE" at the end of this header.
     };
 
     // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
@@ -1702,6 +1722,8 @@ namespace APMF_API {
     //   fval   kIntent_CombatMove      ABI v43: with kCombatMove_Block ONLY, the hold window in seconds (0 =
     //                                  kCombatBlockDefaultS; clamped to [kCombatBlockMinS, kCombatBlockMaxS]).
     //   fval   kIntent_Aversion        ABI v41: the weight, strictly inside (0, 1) (REQUIRED). Nothing else read.
+    //   form   kIntent_CombatStyle     ABI v45: the TESCombatStyle's FormID (REQUIRED).
+    //   ival   kIntent_CombatStyle     ABI v45: a CombatStyleFlags mask (0 = actor-wide).
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
@@ -3781,6 +3803,45 @@ namespace APMF_API {
     // Gate on `abiVersion >= 44` (INVARIANTS #14b). An older APMF refuses the value at the call ("not a
     // CombatMove this ABI builds"). FIELD STATUS: built from the disassembly, not yet observed on a deck.
     inline constexpr std::uint32_t kCombatPowerMaxTries = 8;   // entries offered to the engine per request
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v45: COMBAT STYLE (kIntent_CombatStyle) -- the actor fights by the style the client named
+    // ═════════════════════════════════════════════════════════════════════════════
+    // NO new slot or struct: one Intent, one flag enum, one constant. A v45 client still holds an APMF_API_v38*.
+    // A client claims kIntent_CombatStyle on an NPC with RequestEx, param.form = a TESCombatStyle and param.ival =
+    // CombatStyleFlags. A normal claim: arbitration by basis, Repoint, Release, IsClaimLive, GetClaimEndReason.
+    //
+    // THE ENGINE (read in the 1.6.1170, 1.5.97 and 1.7.104 executables). An actor's combat style is read through
+    // ONE function (the reference's own override, else its current package's style, else its base record's), by
+    // the whole family of style accessors the combat AI uses: the offensive and defensive multipliers, the attack,
+    // power attack, bash and block chances, the circle, fallback and avoid-threat fields, the flight fields, the
+    // ranged and unarmed multipliers. The CombatController also keeps a CACHED copy of that answer. The cache is
+    // refreshed when the controller is built, when the actor's package changes and when the game's own
+    // SetCombatStyle runs. The cache is what the combat inventory reads to score which weapon, spell, shout or
+    // staff the AI equips.
+    //
+    // WHAT A CLAIM DOES.
+    //   ACTOR-WIDE (ival 0): the engine's read answers the claimed style, so everything above follows it, and the
+    //     controller's cache follows it too. This is the strict form: the actor's package and base styles have no
+    //     say while the claim is live.
+    //   kCombatStyle_EquipChoiceOnly: only the controller's cache answers the claimed style. The equipment choice
+    //     follows it; movement, attack and block behaviour stay the engine's own. (This is the reach a client had
+    //     by writing the controller's style field itself, without the write.)
+    //   At engage, owner change and release Harbinger has the ENGINE refresh the controller's cache by its own
+    //   function, so the change applies at once in a running fight.
+    //
+    // WHAT IT DOES NOT COVER. A style read that does not go through that one function (none was found beside the
+    // cache; an inlined package or base read would be one). Values the engine derived from the old style BEFORE
+    // the claim and keeps (a running behaviour's timers, the equipment already in hand). Another DLL writing the
+    // controller's style field directly: its write stands until the engine's next refresh. The player.
+    //
+    // Gate on `abiVersion >= 45` (INVARIANTS #14b). An older APMF has no channel for intent 33 and refuses the
+    // request: the client keeps its own road. FIELD STATUS: built from the disassembly, not yet observed on a deck.
+    enum CombatStyleFlags : std::uint32_t {
+        kCombatStyle_EquipChoiceOnly = 1u << 0,   // only the CombatController's cached style answers the claim
+    };
+    inline constexpr std::uint32_t kCombatStyleMaxClaims = 64;   // actors with a winning claim at once; more are
+                                                                 //   inert and logged
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

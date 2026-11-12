@@ -1921,6 +1921,14 @@ namespace MFO::APMFBridge {
     BlockAsk    ServiceBlock(RE::FormID a_follower, std::uint32_t* a_handleOut = nullptr);
     void        PollBlock(RE::FormID a_follower);
     void        ReleaseBlock(RE::FormID a_follower, const char* a_why);
+    // ── COMBAT STYLE (Harbinger ch.33, ABI v45, kIntent_CombatStyle) -- apmf/StyleClaims.cpp ───────────────────────────
+    // T2 batch M item 5: MFO's combat-style desire (CombatStyle.cpp: the stance style, the class package's CSTY, the
+    // substrate cast pair's style) as ONE standing claim per follower, filed by the pump's sweep. The class's own style is
+    // claimed ACTOR-WIDE (strict class style); an MFO_*Style is claimed kCombatStyle_EquipChoiceOnly (the reach the old
+    // direct write had). StyleRoadSupported: APMF present AND abiVersion >= 45; ANY thread, one atomic load (the combat
+    // thread's ApplyTick asks it and then writes nothing). ReleaseStyleClaim: the dismissal / MFO-off road. Own mutex.
+    bool StyleRoadSupported();
+    void ReleaseStyleClaim(RE::FormID a_follower, const char* a_why);
     // ── GIVE GROUND (Harbinger ch.24 on a POINT, ABI v39, kApproach_Point) -- apmf/GroundApproach.cpp ─────────────────
     // A short ch.24 claim whose centre is a point 400 units straight away from a_foe: the engine's own return-to-area
     // movement walks the follower there while he keeps fighting. GroundStepSupported: APMF present AND abiVersion >= 39.

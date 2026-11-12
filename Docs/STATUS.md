@@ -31,6 +31,22 @@
   declares it: `classes/ClassTable.cpp` gives Warrior, Champion and Living Legend a floor of 0.40 and
   `apmf/AttackMix.cpp` files it. The manifest row (gap G-H2) was written from the 2026-11-08 draft, where the floor
   was observe-only. Nothing changed in either repo. Question Q-melee-5. Test step 24s.
+  **Item 5, combat style through Harbinger (ABI 45).** Finding: `CombatController::combatStyle` is a cached copy the
+  engine reads only to score equipment, so MFO's own write never applied a class style's movement and attack fields.
+  Harbinger's new ch.33 `kIntent_CombatStyle` answers the engine's own read of the style instead. MFO files one claim
+  per follower (`apmf/StyleClaims.cpp`, new; `CombatStyle::SnapshotStyleDesires`): the equipped class's own style
+  ACTOR-WIDE (strict class style, tree ON), an MFO stance style for the equipment choice only (the old reach).
+  `CombatStyle::ApplyTick` writes nothing when Harbinger serves ABI 45; its write stays as the degrade for an absent or
+  older Harbinger. A class follower now really fights by his class's style: a behaviour change to look at in the field.
+  Question Q-melee-6. Test steps 24t, 24u. Backlog MFO-B804, MFO-B805.
+  **Item 4, dodge: no separate facet built; the road is the combat style facet.** The engine's own side step
+  (CombatBehaviorDodgeThreat) rolls against the style's `avoidThreatChance`, read through `Actor::GetCombatStyle`
+  (condition function AE 47801 -> accessor AE 50706 -> 38536), which Harbinger's ch.33 now answers for an actor-wide
+  claim. Ultimate NPC Dodging scores from the same style fields. So a class style with an Avoid Threat chance is the
+  list-agnostic dodge: the vanilla side step without a dodge mod, the framework's own dodge with one. NOT done: every
+  melee class CSTY has `avoidThreatChance` 0 (`MFO_GenerateESP.py` `CLS_CSGD[1]`), so the Mercenary does not dodge
+  until that value is set (MFO-B806, an ESL generator change outside this batch's files). No Harbinger ABI number was
+  taken for a dodge. Notes: Harbinger `Docs/research/melee-moves-re.md` "DODGE". Question Q-melee-7.
 
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense

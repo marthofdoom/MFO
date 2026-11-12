@@ -121,6 +121,23 @@ namespace MFO::CombatStyle {
     // fight) -- only the substrate-cast bit is applied, as Stance::Cast.
     void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc, bool a_substrateOnly = false);
 
+    // HARBINGER ROAD (T2 batch M item 5, Harbinger ch.33 kIntent_CombatStyle, ABI v45). With a Harbinger that serves the
+    // combat-style facet, ApplyTick writes NOTHING: apmf/StyleClaims.cpp files one claim per follower from the desire
+    // below and Harbinger answers the style at the engine's own read. ApplyTick's own write of the controller's field
+    // remains only as the Harbinger-absent (or older than ABI 45) degrade.
+    // SnapshotStyleDesires: every owned entry's desire, appended to a_out. ANY thread (takes this file's mutex, calls
+    // nothing under it). tableStyle = the combat table's stance style (0 = no table stance, or its form is missing);
+    // tableWide = that style is the equipped CLASS's own CSTY (actor-wide, strict class style), false = an MFO_*Style
+    // (the equipment choice only, the reach the direct write had); substrateStyle = MFO_CastStyle while an OOC substrate
+    // cast pair owns its bit (applied only while his combat is substrate-only).
+    struct StyleDesire {
+        RE::FormID follower       = 0;
+        RE::FormID tableStyle     = 0;
+        bool       tableWide      = false;
+        RE::FormID substrateStyle = 0;
+    };
+    void SnapshotStyleDesires(std::vector<StyleDesire>& a_out);
+
     // Lock-free fast-path gate for the hook: true iff any follower currently
     // owns a stance. Keeps the common no-op combat tick off the mutex.
     bool AnyActive();
