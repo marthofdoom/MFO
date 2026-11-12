@@ -15,8 +15,12 @@ namespace MFO::Iaus::ClassCurves {
         // (family, cons) pair and/or a Scalars value) with the evidence for it; until then the class scores with the shared catalogue.
         // School peaks (home schools): marth's School Circle save 2026-11-12, https://claude.ai/artifact/2wzN86WzfTHoZpie1jxGrY
         // Circle order: Destruction - Alteration - Restoration - Illusion - Conjuration (Core.h kSchoolCircle). Wizard, Mage and the other
-        // classes have NO home school (flat, no mastery bump); Arch-Mage is "any school" (schoolAny, below). Inert while schoolFloor
-        // stays 1.0: his page's starting shapes (floor 0.35, sharpness 1.5, bump 0.15) are for the sim search, NOT shipped.
+        // classes have NO home school (flat, no mastery bump); Arch-Mage is "any school" (schoolAny, below).
+        // THE WAVE'S SHAPE IS SHIPPED AND FIXED: floor 0.35, sharpness 1.5, mastery bump 0.15 on every row that has a home school
+        // (marth's School Circle save 2026-11-12; marth: "My settings there are truth. The school circle I just designed isn't something
+        // that should get tweaked"). A fixed design input: NEVER searched, never adjusted by the sim (tools/iaus_sim/edge_search.py has no
+        // school parameter on purpose). Weights on the circle from a peak: 1.0 at home, 0.694 one step away, 0.369 two steps away.
+        constexpr float kSchoolFloor = 0.35f, kSchoolShape = 1.5f, kSchoolMasteredBump = 0.15f;
         void SeedSchoolPeaks(Table& t) {
             using Id = std::size_t;
             constexpr Id kEvoker = 8, kConjurer = 9, kHealer = 10, kWarlock = 11, kNecromancer = 18, kPriest = 19,
@@ -27,6 +31,8 @@ namespace MFO::Iaus::ClassCurves {
             t[kHealer].scalars.schoolPeak = kRestoration;   t[kPriest].scalars.schoolPeak = kRestoration;       t[kTemplar].scalars.schoolPeak = kRestoration;
             t[kScout].scalars.schoolPeak = kRestoration;    t[kSaint].scalars.schoolPeak = kRestoration;
             t[kWarlock].scalars.schoolPeak = kIllusion;     t[kNightblade].scalars.schoolPeak = kIllusion;      t[kWitchhunter].scalars.schoolPeak = kIllusion;
+            for (Row& r : t)   // every row with a home school carries marth's fixed shape (a row without one stays flat: SchoolWeight ignores the floor)
+                if (r.scalars.schoolPeak >= 0) { r.scalars.schoolFloor = kSchoolFloor; r.scalars.schoolShape = kSchoolShape; r.scalars.schoolMasteredBump = kSchoolMasteredBump; }
         }
 
         Table MakeDefaults() {

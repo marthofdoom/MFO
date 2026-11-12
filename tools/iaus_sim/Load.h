@@ -280,6 +280,10 @@ namespace Sim {
         if (withKit && gate.scrollUser && !D.scrolls.empty()) for (int i = R.I(0, 2); i > 0; --i) { SimSpell sc = D.scrolls[static_cast<std::size_t>(R.I(0, static_cast<int>(D.scrolls.size()) - 1))]; sc.e.count = R.I(1, 2); fb.spells.push_back(sc); }   // ruling Q36: a casting class reads scrolls
         for (std::size_t i = 0; i < fb.spells.size(); ++i) {
             SimSpell& s = fb.spells[i]; s.e.form = 0x1000u + static_cast<std::uint32_t>(i); s.e.onClass = gate.spellsOnClass;
+            // School affinity (iaus/SpellBook.cpp: SpellEntry::school = the costliest effect's magic skill as a School identity, -1 = none).
+            // SimSpell::school is that skill's actor value (18 Alteration .. 22 Restoration); a staff entry has none. Generate.cpp ignores it for a scroll.
+            { static constexpr std::int8_t kId[5] = { MFO::Iaus::kAlteration, MFO::Iaus::kConjuration, MFO::Iaus::kDestruction, MFO::Iaus::kIllusion, MFO::Iaus::kRestoration };
+              s.e.school = s.school >= 18 && s.school <= 22 ? kId[s.school - 18] : static_cast<std::int8_t>(-1); }
             if (static_cast<int>(i) != fb.staffIdx && i < firstScroll) {
                 s.e.cost = costOf(s);
                 static const char* sn[5] = { "Alteration", "Conjuration", "Destruction", "Illusion", "Restoration" };

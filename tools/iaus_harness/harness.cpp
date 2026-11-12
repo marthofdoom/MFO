@@ -1586,9 +1586,17 @@ namespace {
         float base[5];
         bool flat = true;
         for (int s = 0; s < 5; ++s) base[s] = ScoreOne(spell(s), m, none, t, 3, 0.0f, nullptr);
-        for (std::size_t i = 0; i < CC::kRows; ++i)
-            for (int s = 0; s < 5; ++s) flat = flat && ScoreOne(spell(s), m, CC::ProfileFor(static_cast<std::uint8_t>(i)), t, 3, 0.0f, nullptr) == base[s];
-        Check(flat && base[0] > 0.0f, "school affinity: every shipped row (flat default) scores every school bit-identically to the default Profile");
+        // SHIPPED (marth's School Circle save 2026-11-12, a fixed design input): a row with no home school and the Arch-Mage are flat;
+        // a home-school row carries floor 0.35, sharpness 1.5, mastered bump 0.15, scores its own school unchanged and every other lower.
+        bool shaped = true; int homes = 0;
+        for (std::size_t i = 0; i < CC::kRows; ++i) {
+            const CC::Scalars& sc = CC::Defaults()[i].scalars; const Profile& pi = CC::ProfileFor(static_cast<std::uint8_t>(i));
+            if (sc.schoolPeak < 0 || sc.schoolAny) { for (int s = 0; s < 5; ++s) flat = flat && ScoreOne(spell(s), m, pi, t, 3, 0.0f, nullptr) == base[s]; continue; }
+            ++homes; shaped = shaped && sc.schoolFloor == 0.35f && sc.schoolShape == 1.5f && sc.schoolMasteredBump == 0.15f;
+            for (int s = 0; s < 5; ++s) { const float v = ScoreOne(spell(s), m, pi, t, 3, 0.0f, nullptr); shaped = shaped && (s == sc.schoolPeak ? v == base[s] : (v < base[s] && v > 0.0f)); }
+        }
+        Check(flat && base[0] > 0.0f, "school affinity: every shipped row with no home school (and the Arch-Mage) scores every school bit-identically to the default Profile");
+        Check(shaped && homes == 14, "school affinity: the 14 home-school rows ship marth's fixed shape (floor 0.35, sharpness 1.5, bump 0.15): home school unchanged, every other school lower, none vetoed");
         Candidate noSchool = spell(0); noSchool.school = -1;
         Check(ScoreOne(noSchool, m, none, t, 3, 0.0f, nullptr) == base[0], "school affinity: no school scores as before");
         CC::Row r;   // a Destruction caster
@@ -1602,7 +1610,7 @@ namespace {
         Check(ScoreOne(spell(0), m, pr, t, 3, 0.0f, nullptr) == base[0], "school affinity: his own school scores unchanged");
         Check(ScoreOne(spell(2), m, pr, t, 3, 0.0f, nullptr) < base[2] && ScoreOne(spell(2), m, pr, t, 3, 0.0f, nullptr) > 0.0f, "school affinity: a far school is weighted down, never vetoed");
         Check(ScoreOne(spell(1), m, pr, t, 3, 0.0f, nullptr) > ScoreOne(spell(2), m, pr, t, 3, 0.0f, nullptr) * (base[1] / base[2]) , "school affinity: a near school keeps more than a far one");
-        Check(ScoreOne(spell(2), m, none, t, 3, 0.0f, nullptr) == base[2] && ScoreOne(spell(2), m, CC::ProfileFor(8), t, 3, 0.0f, nullptr) == base[2], "school affinity: ...and only that class's Profile");
+        Check(ScoreOne(spell(2), m, none, t, 3, 0.0f, nullptr) == base[2] && ScoreOne(spell(2), m, CC::ProfileFor(0), t, 3, 0.0f, nullptr) == base[2], "school affinity: ...and only that class's Profile");
         CC::Row sharp = r; CC::SetScalar(sharp, "schoolShape", 3.0f);
         Check(CC::Build(sharp).school[1] < w[1] && CC::Build(sharp).school[1] >= 0.4f, "school affinity: a higher shape narrows the peak");
         CC::Row flatRow = r; CC::SetScalar(flatRow, "schoolFloor", 1.0f);
@@ -1623,8 +1631,9 @@ namespace {
         Check(amFlat && CC::Defaults()[CC::kArchMage].scalars.schoolAny && !CC::Defaults()[8].scalars.schoolAny, "school affinity: Arch-Mage is flat 1.0 over every school (fixed rule), other rows are not");
         // mastered bump: shipped 0 = no bump; a set bump lands at the mastered class's peak, summed, and the score clamps at the peak weight
         ClassGate g0; CC::ApplyMastered((1ull << 8) | (1ull << 10), g0);
-        bool zero = true; for (float x : g0.schoolBump) zero = zero && x == 0.0f;
-        Check(zero, "school affinity: shipped mastered bump is 0 (no bump from any mastered class)");
+        bool ship = g0.schoolBump[kDestruction] == 0.15f && g0.schoolBump[kRestoration] == 0.15f && g0.schoolBump[kAlteration] == 0.0f && g0.schoolBump[kIllusion] == 0.0f && g0.schoolBump[kConjuration] == 0.0f;
+        ClassGate gn; CC::ApplyMastered(1ull | (1ull << 2) | (1ull << CC::kArchMage), gn); for (float x : gn.schoolBump) ship = ship && x == 0.0f;
+        Check(ship, "school affinity: a mastered home-school class ships a 0.15 bump at its own school only; a mastered class with no home school gives none");
         CC::Table tab = CC::Defaults();
         CC::SetScalar(tab[8], "schoolMasteredBump", 0.15f);    // Evoker: Destruction
         CC::SetScalar(tab[10], "schoolMasteredBump", 0.10f);   // Healer: Restoration

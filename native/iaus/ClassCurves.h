@@ -33,13 +33,14 @@ namespace MFO::Iaus::ClassCurves {
         float touchSpentSec   = 3.0f;               // Candidates.cpp: seconds after a touch cast that he is "backing out" (== Reposition::kTouchSpentSec)
         // School affinity (ruling Q-school-affinity): the score multiplier of a spell of school s is a smooth wave over the school
         // circle (Destruction - Alteration - Restoration - Illusion - Conjuration - back): SchoolWeight(). schoolFloor 1.0 = FLAT
-        // (every weight exactly 1.0, the shipped default), so schoolPeak only matters once a floor below 1 is set.
+        // (every weight exactly 1.0: a row with no home school), so schoolPeak only matters with a floor below 1. A home-school row
+        // SHIPS marth's fixed shape (floor 0.35, sharpness 1.5, mastered bump 0.15; ClassCurves.cpp SeedSchoolPeaks, never searched).
         std::int8_t schoolPeak  = -1;               // School identity he peaks on (Core.h School); -1 = none (non-caster / all-rounder)
         float       schoolFloor = 1.0f;             // the weight at the far side of the circle, 0..1; 1 = flat
         float       schoolShape = 1.0f;             // sharpness: 1 = plain cosine wave, > 1 narrower peak
         // marth 11-12: "cross class tweaks from mastered classes that boost the weight a bit". When a follower has MASTERED this class,
         // his weight at THIS row's schoolPeak rises by this much (summed over mastered casting classes, clamped at the peak weight 1.0).
-        float       schoolMasteredBump = 0.0f;      // shipped 0 (scores identical); the sim searches it
+        float       schoolMasteredBump = 0.0f;      // 0 on a row with no home school; a home-school row ships marth's fixed 0.15 (ClassCurves.cpp, never searched)
         // marth 11-12: "obviously Arch mage gets any school". A FIXED rule, not a searched param (no SetScalar name): flat 1.0 over every school.
         bool        schoolAny = false;
     };

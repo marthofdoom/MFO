@@ -106,6 +106,7 @@ namespace Sim {
             g.spellsOnClass = Casting(d);
             const C::Mask mastered = Mastered(d);
             for (std::size_t i = 0; i < C::kClassCount; ++i) if ((mastered & (C::Mask{ 1 } << i)) && Casting(C::kTable[i])) { g.spellsFromMastered = true; break; }
+            MFO::Iaus::ClassCurves::ApplyMastered(g_curveTable, mastered, g);   // SpellBook::GateFor: each mastered casting class bumps the weight at its home school (marth's fixed 0.15)
             g.scrollUser = g.spellsOnClass;
             const bool any = (d.weapons & C::Weapon::kUnrestricted) != 0;
             g.weaponMelee = any || (d.weapons & (C::Weapon::kDagger | C::Weapon::kOneHand | C::Weapon::kTwoHand)) != 0;

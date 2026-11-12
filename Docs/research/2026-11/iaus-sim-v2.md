@@ -1989,7 +1989,9 @@ MODEL: no class package and no class flag, so the style is MFO's stance style wi
 `kDisengage` fallback offset (`SimClass::csDisengage`); tier 1 rolls no dodge in the lab, as every T1.
 
 `--classes beta1` is now 15 cells (the 12 and the 3 base cells). `--classes beta1-tree` is the 12: every J of sections 30 and 31
-is a `beta1-tree` number and is unchanged (79.63 / 77.44 / 77.64, checked draw for draw). `--curve melee-off:...` addresses a base
+is a `beta1-tree` number and the sim batch's own changes leave it unchanged (79.63 / 77.44 / 77.64, checked draw for draw on the
+built-in world and on LoreRim 64.21, Tuxborn 69.81, Vanilla 82.70 against the base binary). The School Circle then moves it by
+design (32.7). `--curve melee-off:...` addresses a base
 row. `--opt c.N` next to a `--curve` on consideration N is refused (the override is a copy of the shared curve).
 
 ### 32.2 The rating battery and the Rating (Tx) column
@@ -2113,3 +2115,33 @@ NOT ESTABLISHED: why. Two readings were tested and neither is supported by the o
 2. "He should drink earlier" (a later midpoint): section 32.7.
 Untested readings: the heal's cast time against a 6 to 8 %/s decline; a mage dies in the two bands (20 to 40%) where a quarter
 of his pressed seconds are already too late, so the error is made earlier, in where he stands, not in what he drinks.
+
+### 32.7 The School Circle is in the lab (a fixed design input, never searched)
+
+marth 11-12: "My settings there are truth. The school circle I just designed isn't something that should get tweaked".
+FACT (`native/iaus/ClassCurves.cpp SeedSchoolPeaks`, main 8d3620f + this branch): the 14 rows with a home school carry floor
+0.35, sharpness 1.5 and a mastered bump of 0.15; the Arch-Mage is any school; every other row is flat. On the circle
+Destruction, Alteration, Restoration, Illusion, Conjuration the weight is 1.0 at home, 0.694 one step away, 0.369 two steps away.
+Lab: `Load.h` fills `SpellEntry::school` from the spell record's skill (the costliest effect's, as the game reads it), and
+`RealClasses.cpp` calls `ClassCurves::ApplyMastered` with the classes his unlock rule requires. `edge_search.py` has no school
+parameter on purpose. Beta 1 home schools: Evoker Destruction, Conjurer Conjuration, Healer Restoration, Warlock Illusion.
+
+What it does to the lab's objective (6 seeds, the gates of 31.11; se of a class 1 to 4.5, of a set 0.3 to 0.45):
+
+| | g3 before | g3 with the circle | `--stealth off` | shipped |
+|---|---|---|---|---|
+| the 12 (`beta1-tree`) | 79.63 | 79.53 | 77.44 -> 77.21 | 77.64 -> 77.25 |
+| the 15 (`beta1`) | 78.83 | 78.73 | 76.82 -> 76.61 | 77.03 -> 76.68 |
+| evoker | 81.44 | 80.67 | 81.56 -> 80.76 | 81.68 -> 81.40 |
+| conjurer | 74.51 | 74.97 | 72.45 -> 73.87 | 73.30 -> 74.45 |
+| healer | 83.25 | 82.29 | 83.23 -> 81.78 | 85.41 -> 81.49 |
+| warlock | 77.13 | 76.70 | 78.63 -> 75.80 | 80.28 -> 79.15 |
+| knight | 70.35 | 71.33 | 70.41 -> 71.28 | 68.86 -> 69.92 |
+
+Mage, melee, ranged and the other weapon classes are unchanged to the last digit (no home school; the Knight moves because two
+of his scenarios hold a Healer). The circle is a design rule about who a class IS, not a tuning result, and the lab's objective
+prices only the fight's outcome: on it the circle costs the set 0.1 to 0.4 J and the Healer about 1 J at g3 and 3.9 J as
+shipped (85.41 se 1.5 against 81.49 se 2.2, the same six seeds; the "before" columns were re-measured on this branch's binary
+before the merge, so they differ by a few hundredths from the rows of 31.12). The Healer's loss is the largest single effect
+in this section and it comes from a fixed input: it is reported, not tuned around. These are the new gate rows. Every search below runs on top of the circle. The two `--t2 off` pins of the CLI checks
+moved with it (76.96 -> 76.29, 79.45 -> 79.06) and were re-pinned with that reason.
