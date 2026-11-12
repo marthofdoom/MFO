@@ -213,6 +213,10 @@ namespace Sim {
         return false;
     }
 
+    // --potion-over S (EXPERIMENT): every at-once restore potion of the loaded world is delivered over S seconds instead (the same total).
+    // The built-in potions are at once and LoreRim's are 100 over 10 s: this separates "the potion's delivery" from "the list's foes"
+    // when a drink line behaves differently on two worlds. 0 = the world's own potions.
+    inline float g_potionOver = 0.0f;
     inline FollowerBuild BuildFollower(const Data& D, Cls fam, const KitChoice& kc, const ClassGate& gate, int level, Rng& R, bool withKit = true, const std::vector<std::string>* ensure = nullptr) {
         FollowerBuild fb; ActorSpec& a = fb.spec; const Rules& r = D.rules;
         const FRace& rc = D.races[static_cast<std::size_t>(R.I(0, static_cast<int>(D.races.size()) - 1))]; FClass c = D.cls[static_cast<int>(fam)];
@@ -244,7 +248,8 @@ namespace Sim {
         if (a.melee.Has()) { a.atkMult = PerkBest(D.pAttack, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); a.powMult = PerkBest(D.pPower, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); }
         a.hasStyle = true; a.st.wMagic = fam == Cls::Mage ? 3.0f : 0.5f; a.st.wRanged = fam == Cls::Ranged ? 3.0f : 1.0f; a.conf = 3;   // the player model's style; a follower's is his class package (Setup.h MfoPackage)
         k.potionsHealth = R.I(0, 4); k.potionsStamina = R.I(0, 2); k.potionsMagicka = R.I(0, 3);
-        for (int i = 0; i < 3; ++i) if (!D.pots[i].empty()) { const auto& pt = LadderAt(D.pots[i], level, 0.9f); (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = pt.first; fb.potDur[i] = pt.second; }   // (magnitude, duration): a restore-over-time potion is magnitude PER SECOND for its duration (sim batch: the duration was dropped, so a list's 5-per-second potion healed 5)
+        for (int i = 0; i < 3; ++i) if (!D.pots[i].empty()) { const auto& pt = LadderAt(D.pots[i], level, 0.9f); (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = pt.first; fb.potDur[i] = pt.second;
+            if (g_potionOver > 0.0f && !(fb.potDur[i] > 0.0f)) { (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = pt.first / g_potionOver; fb.potDur[i] = g_potionOver; } }   // (magnitude, duration): a restore-over-time potion is magnitude PER SECOND for its duration (sim batch: the duration was dropped, so a list's 5-per-second potion healed 5)
         // spells: what he could plausibly have learnt (tier within reach of his skill, affordable), as sim v1 chose them
         auto costOf = [&](const SimSpell& s) { const float sk = s.school >= 0 ? a.Skill(s.school) : 15.0f;
             float m = SkillCostMult(r, sk);

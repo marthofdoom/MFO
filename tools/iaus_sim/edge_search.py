@@ -5,6 +5,10 @@ marth 11-12: "The sim should be used to find all the ideal edge case numbers, th
 HOST-ONLY, standard library only. Drives the built simulator binary; never read by the DLL.
 
     tools/iaus_sim/edge_search.py --bin <sim binary> per-class [--classes a,b] [--list L.sim.json] [--out result.json]
+    tools/iaus_sim/edge_search.py --bin <sim binary> wide      [--classes a,b] [--top 12] [--list L.sim.json] [--out result.json]
+        every (family, consideration) curve the catalogue scores, per class: a liveness probe on six seeds drops the parameters that
+        change nothing for that class, then the most sensitive ones are searched in order (x0.5, x0.75, x1.33, x2), an accepted
+        value carried into the next sweep. Same acceptance rule as per-class.
     tools/iaus_sim/edge_search.py --bin <sim binary> global    [--params t.momentum,t.softCd] [--out result.json]
     tools/iaus_sim/edge_search.py --bin <sim binary> gates --curves "<class>:<spec> ..."      # the three 31.11 gates, class by class
     tools/iaus_sim/edge_search.py --bin <sim binary> floor --curves "..."                     # the Knight line's guard floor
@@ -198,6 +202,123 @@ def knight_floor(cls, curves):
     return out
 
 
+# ── WIDE: every (family, consideration) curve a class's families read (marth 11-12: "Does it know it can do per class curves") ──
+def all_knobs():
+    """Every curve parameter a per-class override can move, from the simulator's --list-uses (the catalogue's own sets).
+    Lin: a (slope) and b (offset). Logi: a (steepness) and b (midpoint). Pow / Inv: a. Bin: a two-level curve; a pure 0 / 1 gate is
+    never touched (it is a rule, not a shape), otherwise the level that is not 0 or 1 is the knob (a boost's multiplier, a floor's
+    low level). Piece: its points are not reachable through ClassCurves::SetCurveParam, so it is listed as UNSEARCHED."""
+    knobs, piece, gates = [], [], 0
+    for line in run_sim(["--list-uses"]).splitlines():
+        p = line.split()
+        if len(p) != 10 or p[0] != "USE":
+            continue
+        f, fn, c, cn, kind, a, b = int(p[1]), p[2], int(p[3]), p[4], p[5], float(p[6]), float(p[7])
+        name = "%s.%s" % (fn, cn)
+        if kind == "Piece":
+            piece.append(name)
+        elif kind == "Bin":
+            if {a, b} <= {0.0, 1.0}:
+                gates += 1
+                continue
+            if a not in (0.0, 1.0):
+                knobs.append((name + ".lo", "{c}:%d.%d.a={v}" % (f, c), a))
+            if b not in (0.0, 1.0):
+                knobs.append((name + ".hi", "{c}:%d.%d.b={v}" % (f, c), b))
+        else:
+            knobs.append((name + ".a", "{c}:%d.%d.a={v}" % (f, c), a))
+            if kind in ("Lin", "Logi"):
+                knobs.append((name + ".b", "{c}:%d.%d.b={v}" % (f, c), b))
+    return knobs, piece, gates
+
+
+def moved(v, k):
+    """A knob's value moved by factor k; a value near 0 moves by an absolute step instead (a factor of 0 is no move)."""
+    return round(v * k, 5) if abs(v) >= 0.2 else round(v + (0.15 if k > 1 else -0.15) * (2.0 if k in (0.5, 2.0) else 1.0), 5)
+
+
+def wide_class(cls):
+    knobs, _, _ = KNOBS
+    probe = [1, 2, 3, 4, 5, 6]
+    base = j_per_seed(cls, probe, "g3")
+    live = []
+    for name, tmpl, v in knobs:   # LIVENESS: does moving the knob change ANY of six seeds' J, and by how much
+        best = 0.0
+        for k in (0.67, 1.5):
+            d = [y - x for x, y in zip(base, j_per_seed(cls, probe, "g3", [tmpl.format(c=cls, v=moved(v, k))]))]
+            if any(abs(x) > 1e-9 for x in d):
+                best = max(best, abs(sum(d) / len(d)), 1e-6)
+        if best > 0.0:
+            live.append((best, name, tmpl, v))
+    live.sort(reverse=True)
+    dead = len(knobs) - len(live)
+    train, hold = list(range(1, ARGS.seeds + 1)), list(range(1001, 1001 + ARGS.seeds))
+    kept, rows = [], []
+    for sens, name, tmpl, v in live[:ARGS.top]:   # most sensitive first; an accepted value is carried into the next sweep
+        base_t = j_per_seed(cls, train, "g3", kept)
+        cands = []
+        for k in (0.5, 0.75, 1.33, 2.0):
+            nv = moved(v, k)
+            spec = tmpl.format(c=cls, v=nv)
+            d, se = paired(base_t, j_per_seed(cls, train, "g3", kept + [spec]))
+            cands.append((d, se, nv, spec))
+        cands.sort(key=lambda x: -x[0])
+        d, se, nv, spec = cands[0]
+        row = {"class": cls, "param": name, "shared": v, "best": nv, "probe": round(sens, 3), "train_d": round(d, 3), "train_se": round(se, 3),
+               "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2])], "accepted": False, "why": "", "spec": spec}
+        if not (d > 2 * se and d >= 0.30):
+            row["why"] = "train: over 2 se but under the 0.30 J floor" if (d > 2 * se and se > 0) else "train: does not beat noise"
+        else:
+            hd, hse = paired(j_per_seed(cls, hold, "g3", kept), j_per_seed(cls, hold, "g3", kept + [spec]))
+            row["hold_d"], row["hold_se"] = round(hd, 3), round(hse, 3)
+            if not (hd > 0 and hd > hse):
+                row["why"] = "holdout: not confirmed"
+            else:
+                ok, allseeds = True, train + hold
+                for cfg in ("off", "shipped"):
+                    gd, gse = paired(j_per_seed(cls, allseeds, cfg, kept), j_per_seed(cls, allseeds, cfg, kept + [spec]))
+                    row[cfg + "_d"], row[cfg + "_se"] = round(gd, 3), round(gse, 3)
+                    if gd < -gse or gd < (-0.25 if cls in TIGHT else -0.5):
+                        ok, row["why"] = False, "gate %s: loses" % cfg
+                if ok and cls in KNIGHTS:
+                    fl = knight_floor(cls, kept + [spec])
+                    row["guard_floor"] = fl
+                    if min(fl.values()) < 60.0:
+                        ok, row["why"] = False, "Knight guard floor under 60%"
+                if ok:
+                    row["accepted"], row["why"] = True, "accepted on this world (still needs the fresh-seed three-world confirmatory and the 31.11 gates)"
+                    kept.append(spec)
+        rows.append(row)
+        emit_run(cls, "wide %s %s %s %s -> %s (%s; train %+.2f J, se %.2f)" % (world_name(), cls, name, v, nv, "ACCEPTED here" if row["accepted"] else "rejected: " + row["why"], d, se), kept)
+        print("%-11s %-34s probe %5.2f  shared %-8g best %-8g train %+6.2f (se %.2f)%s  %s" % (
+            cls, name, sens, v, nv, d, se, ("  hold %+5.2f (se %.2f)" % (row["hold_d"], row["hold_se"])) if "hold_d" in row else "",
+            row["why"] + ("  off %+.2f shipped %+.2f" % (row.get("off_d", 0), row.get("shipped_d", 0)) if "off_d" in row else "")), flush=True)
+    return {"class": cls, "kept": kept, "rows": rows, "knobs": len(knobs), "dead": dead, "live": [[n, round(x, 3)] for x, n, _, _ in live],
+            "searched": len(rows), "values_tried": 4 * len(rows)}
+
+
+KNOBS = None
+
+
+def cmd_wide():
+    global KNOBS
+    KNOBS = all_knobs()
+    knobs, piece, gates = KNOBS
+    classes = ARGS.classes.split(",") if ARGS.classes else BETA1_TREE + BASE
+    print("WIDE per-class curve search  world=%s  %d curve parameters over the catalogue's (family, consideration) pairs; never touched: %d pure 0/1 gates; UNSEARCHED (not reachable through SetCurveParam): %d Piece curves: %s" % (
+        world_name(), len(knobs), gates, len(piece), " ".join(piece)), flush=True)
+    res = list(POOL.map(wide_class, classes))
+    print("\nLIVENESS (six seeds, each parameter moved x0.67 and x1.5): parameters that changed any seed's J / all, then the %d most sensitive were searched" % ARGS.top)
+    for r in res:
+        print("  %-11s live %3d of %d   searched %2d   top: %s" % (r["class"], len(r["live"]), r["knobs"], r["searched"], " ".join("%s %.2f" % (n, x) for n, x in r["live"][:6])))
+    print("\nACCEPTED on this world (each still needs the fresh-seed three-world confirmatory and the literal 31.11 gates before it may be written):")
+    for r in res:
+        print("  %-11s %s" % (r["class"], " ".join(r["kept"]) if r["kept"] else "(none)"))
+    print("%d values tried in %d sweeps" % (sum(r["values_tried"] for r in res), sum(r["searched"] for r in res)))
+    if ARGS.out:
+        json.dump({"knobs": len(knobs), "piece_unsearched": piece, "gates_untouched": gates, "classes": res}, open(ARGS.out, "w"), indent=1)
+
+
 def cmd_per_class():
     classes = ARGS.classes.split(",") if ARGS.classes else BETA1_TREE + BASE
     res = list(POOL.map(search_class, classes))
@@ -296,7 +417,8 @@ def cmd_floor():
 def main():
     global ARGS, POOL
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["per-class", "global", "gates", "floor"])
+    ap.add_argument("mode", choices=["per-class", "wide", "global", "gates", "floor"])
+    ap.add_argument("--top", type=int, default=12, help="wide: how many of a class's most sensitive live parameters are searched (default 12)")
     ap.add_argument("--bin", required=True, help="the built simulator (run.sh's SIM_OUT)")
     ap.add_argument("--list", help="a <list>.sim.json (test input only); default the built-in world")
     ap.add_argument("--classes", help="comma list (per-class); default the 12 Beta 1 classes + the 3 base cells")
@@ -309,7 +431,7 @@ def main():
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one results JSON per finished sweep")
     ARGS = ap.parse_args()
     POOL = cf.ThreadPoolExecutor(max_workers=ARGS.jobs)
-    return {"per-class": cmd_per_class, "global": cmd_global, "gates": cmd_gates, "floor": cmd_floor}[ARGS.mode]() or 0
+    return {"per-class": cmd_per_class, "wide": cmd_wide, "global": cmd_global, "gates": cmd_gates, "floor": cmd_floor}[ARGS.mode]() or 0
 
 
 if __name__ == "__main__":

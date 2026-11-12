@@ -11,8 +11,8 @@ namespace MFO::Iaus::ClassCurves {
     static_assert(ClassGate{}.touchSpentSec == Reposition::kTouchSpentSec, "ClassGate::touchSpentSec is Reposition::kTouchSpentSec");
 
     namespace {
-        // PLACEHOLDER STRUCTURE: one Row per class, nothing overridden. The sim batch fills a row here (a CurveOverride for a
-        // (family, cons) pair and/or a Scalars value) with the evidence for it; until then the class scores with the shared catalogue.
+        // One Row per class. A row holds only what a search or a design ruling put there, each with its evidence; everything else scores
+        // with the shared catalogue.
         // School peaks (home schools): marth's School Circle save 2026-11-12, https://claude.ai/artifact/2wzN86WzfTHoZpie1jxGrY
         // Circle order: Destruction - Alteration - Restoration - Illusion - Conjuration (Core.h kSchoolCircle). Wizard, Mage and the other
         // classes have NO home school (flat, no mastery bump); Arch-Mage is "any school" (schoolAny, below).
@@ -34,6 +34,22 @@ namespace MFO::Iaus::ClassCurves {
             for (Row& r : t)   // every row with a home school carries marth's fixed shape (a row without one stays flat: SchoolWeight ignores the floor)
                 if (r.scalars.schoolPeak >= 0) { r.scalars.schoolFloor = kSchoolFloor; r.scalars.schoolShape = kSchoolShape; r.scalars.schoolMasteredBump = kSchoolMasteredBump; }
         }
+
+        // THE EDGE-NUMBER SEARCH (sim batch 2026-11-12, Docs/research/2026-11/iaus-sim-v2.md section 32; tools/iaus_sim/edge_search.py).
+        // Rule: a value is written here only if it beats noise on the seeds it was picked on, on seeds it was not, on fresh seeds across the
+        // built-in world and two lists' real enemies, loses nothing with stealth off or as shipped, AND passes the three fixed gates of
+        // section 31.11. Searched per class for the 12 Beta 1 classes and the 3 base rows: the health potion's DrinkNeed midpoint and
+        // slope, the magicka / stamina potion's midpoint, touchSpentSec, the Knight's guard-line boost and drink line (1236 values in 165
+        // sweeps on three worlds). NO VALUE PASSED EVERYTHING, so no row carries a searched override:
+        //   - the health line is flat between 0.20 and 0.70 on the built-in world and its best value differs by list (the Knight wants 0.70
+        //     on one list and 0.34 or lower on another): no class gets its own;
+        //   - the Knight's guard-line boost is on its plateau at the shared 2.0 (guard share 61.9 % at 1.0, 67.1 at 1.5, 67.5 from 2.0 up);
+        //   - touchSpentSec could not be rated (the lab never opens a touch window): its 3 s is still a hand value;
+        //   - CLOSEST CANDIDATE, not shipped: Warrior, stamina potion DrinkNeed midpoint 0.34 -> 0.15
+        //       (SetCurveParam(t[4], Family::DrinkStamina, Cons::DrinkNeed, DefaultTuning().curve[Cons::DrinkNeed], "b", 0.15f)).
+        //     96 fresh seeds: built-in +0.287 J (se 0.079), stealth off +0.275, as shipped +0.279, LoreRim +0.065 (se 0.031), Tuxborn
+        //     +0.109 (se 0.054); about 0.13 J of it is the stamina potion he no longer spends. But on the six fixed gate seeds of 31.11 the
+        //     Warrior is -0.50 J and the 12-class mean falls by 0.04 at all three gates, and those gates are hard constraints.
 
         Table MakeDefaults() {
             Table t{};

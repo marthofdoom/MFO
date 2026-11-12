@@ -2183,3 +2183,66 @@ ladder holds restore potions only (archetype 0, at least 20 points in total) and
 magnitude per second for that long. LoreRim's health potion is 100 over 10 s, Tuxborn's 100 or 150 at once. The shared cache
 files were not overwritten: this section's list runs use corrected copies; the next `compile_world.py` run writes them so.
 Every list number that involves a drink and predates this is void for the drink line.
+
+### 32.10 The edge-number search: method
+
+marth 11-12: "The sim should be used to find all the ideal edge case numbers, thats the point of a sim for iaus", and later:
+"sim and oracle decide everything about the curves (as long as it doesnt deviate from the class designs, but even that has
+small wiggle room for best class performance)".
+
+`tools/iaus_sim/edge_search.py`. The rule was fixed before the first search result was read, and was not loosened afterwards:
+
+- objective: J of `--classes <slug>` at the tuning target (g3), 48 fights per scenario and 24 natural fights per seed;
+- train: seeds 1..N (48 on the built-in world, 32 on a list). Per candidate value, the paired difference d against the shared
+  value on the same seeds, and its standard error;
+- accept the best value of a sweep only if: train d > 2 se and d >= 0.30 J; holdout (seeds 1001.., never used to pick) d > 0
+  and d > 1 se; `--stealth off` and the game as shipped on all seeds d >= -1 se and inside the 31.11 band; the Knight line's
+  guard floor >= 60%;
+- a value that passes on one world is not written unless it holds across worlds: either it also does not lose on the others
+  when it passed on the built-in world, or (for a pass on a list only) a confirmatory on FRESH seeds 3001..3096 whose
+  equal-weight mean over built-in, LoreRim and Tuxborn is > 2 se, with no world under -1 se. A list's actors are test input;
+  a number that is best on one list only may not be baked in;
+- every confirmatory and every side test below was written into the agent log with its pass condition BEFORE it was run.
+
+Per class the search covers what `ClassCurves` reaches: the health potion's `DrinkNeed` midpoint (10 values, 0.20 to 0.70)
+and slope (7 values), the magicka potion's midpoint (casting cells) or the stamina potion's (weapon cells), `touchSpentSec`
+(casting cells), and for the Knight the guard-line boost and an explicit `drinkHealthLine`. 55 sweeps, 412 values per world.
+With a 2 se bar on the best of 7 to 10 values, a handful of train passes per world are expected by chance; the holdout and the
+cross-world step are what remove them. Sensitivity: the paired se of a sweep is 0.05 to 0.25 J for most classes (0.3 to 0.4
+for the T1 and base cells), so the search can see an effect of about 0.3 to 0.5 J per class and cannot see less.
+
+The search was run three times, because the world under it changed twice while it ran: before the School Circle (32.7), with
+it, and with the armor and potion corrections (32.9). Only the last is the result. The earlier two are kept as history in 32.12.
+
+### 32.11 The edge-number search: results on the final world
+
+**Per class, built-in world (48 + 48 seeds): 412 values, 0 accepted, not one train pass.** Largest best-of-sweep deltas: knight
+stamina midpoint 0.40 +0.26 (se 0.09), warrior stamina midpoint 0.15 +0.23 (se 0.11), archer health midpoint 0.38 +0.13
+(se 0.06): over 2 se, under the 0.30 J floor. `touchSpentSec` is exactly 0.00 everywhere (32.8).
+
+**Per class, LoreRim (32 + 32 seeds, its health potion is 100 over 10 s): 412 values.**
+
+| Sweep | Best | Train | Holdout | off / shipped | Verdict |
+|---|---|---|---|---|---|
+| knight health midpoint | 0.70 (edge of the range; 0.55 +0.37, 0.60 +0.54) | +0.94 (se 0.19) | +0.89 (se 0.28) | +0.92 / +0.99 | rejected: the guard floor, already 61.7 / 57.3 on LoreRim with the shipped table, falls to 57.3 / 52.9 with the line coupled at 0.70; confirmatory with the line held at 0.34 below |
+| thief health midpoint | 0.70 (rises steadily from 0.38) | +0.39 (se 0.12) | +0.33 (se 0.15) | -0.14 / -0.16 | rejected: loses as shipped |
+| melee health midpoint | 0.30 (0.60 and 0.70 are -0.40) | +0.37 (se 0.17) | +0.20 (se 0.19) | +0.32 / +0.24 | passes on LoreRim; confirmatory below |
+| ranged-off health midpoint | 0.70 | +0.47 (se 0.22) | -0.16 (se 0.25) | | holdout: not confirmed |
+
+**Per class, Tuxborn (32 + 32 seeds, health potions 100 or 150 at once): 412 values.**
+
+| Sweep | Best | Train | Holdout | off / shipped | Verdict |
+|---|---|---|---|---|---|
+| thief health midpoint | 0.60 | +0.34 (se 0.16) | +0.10 (se 0.10) | +0.77 / +0.73 | passes on Tuxborn; confirmatory below |
+| mage health midpoint | 0.50 | +0.40 (se 0.19) | 0.00 (se 0.02) | | holdout: not confirmed |
+| melee-off health midpoint | 0.50 | +0.48 (se 0.20) | +0.10 (se 0.17) | | holdout: not confirmed |
+| knight health midpoint | every value from 0.38 up is NEGATIVE: 0.50 -0.43 (se 0.26), 0.70 -0.50 (se 0.27) | | | | the opposite of LoreRim |
+
+What the three worlds say together about the health line:
+- On the built-in world it is flat for every class between 0.20 and 0.70, inside 0.3 J.
+- The Knight wants 0.70 on LoreRim (+0.9 J, twice confirmed there) and 0.34 or lower on Tuxborn (0.70 is -0.5 J). The best
+  line is a property of the world, not of the class.
+- "It is the potion's delivery" was tested (declared first: built-in foes with every potion delivered over 10 s,
+  `--potion-over 10`, 48 seeds): the Knight's 0.70 is +0.34 (se 0.17) there against +0.08 with at-once potions, exactly 2.0 se
+  and a third of LoreRim's gain: not established at the bar. The Thief's 0.70 is -0.22 (se 0.14) there: refuted for him. One
+  thing is clear in every over-time run: a LOWER line loses (thief 0.20: -0.43, se 0.06).

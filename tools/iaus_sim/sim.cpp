@@ -9,6 +9,7 @@
 #include "iaus_sim/Rating.h"
 #include "iaus_sim/Tune.h"
 #include "iaus_sim/StealLab.h"
+#include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
 #include <cstring>
@@ -180,7 +181,7 @@ namespace {
         if (!anyOn) o = "off";
         else { if (!g_t2.feet) o += "feet-stop,"; for (const T2Flag& f : kT2Flags) if (!(g_t2.*(f.m))) o += std::string(f.name) + "=off,"; if (!g_t2.c13built) o += "c13=lever,";
             if (o.empty()) o = "all"; else o.pop_back(); }
-        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (g_aimScatter > 0.0f) o += "+aim-scatter"; if (g_dodgeFlight != 0.2f) o += "+dodge-flight"; if (!g_teach.empty()) o += "+teach"; if (!g_fillSwing) o += "+no-fill-swing"; if (g_mixPartial) o += "+mix-partial"; if (!g_utilResources) o += "+utility-no-resources";
+        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (g_aimScatter > 0.0f) o += "+aim-scatter"; if (g_dodgeFlight != 0.2f) o += "+dodge-flight"; if (!g_teach.empty()) o += "+teach"; if (!g_fillSwing) o += "+no-fill-swing"; if (g_mixPartial) o += "+mix-partial"; if (!g_utilResources) o += "+utility-no-resources"; if (g_potionOver > 0.0f) o += "+potion-over";
         return o;
     }
     // Mean utility of IAUS (no oracle) over the scenarios and the natural bracket of every class: the search objective.
@@ -493,7 +494,7 @@ namespace {
 int main(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false; int declineN = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false; int declineN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -537,6 +538,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--rating") && i + 1 < argc) ratingN = std::max(0, std::atoi(argv[++i]));        // the rating battery: N fights per cell (default 3 in a class report run; 0 = off)
         else if (!std::strcmp(argv[i], "--decline") && i + 1 < argc) declineN = std::max(1, std::atoi(argv[++i]));         // the health-decline curves and the drink record of --classes over --seeds: N fights per bracket and rating cell per seed
         else if (!std::strcmp(argv[i], "--utility-no-resources")) g_utilResources = false;                              // DIAGNOSTIC: Utility without its "resources left" term (Oracle.h); never a gate, never a baseline
+        else if (!std::strcmp(argv[i], "--potion-over") && i + 1 < argc) g_potionOver = static_cast<float>(std::atof(argv[++i]));   // EXPERIMENT: at-once potions are delivered over S seconds (Load.h g_potionOver)
         else if (!std::strcmp(argv[i], "--rating-only")) ratingOnly = true;                                               // print the rating table of --classes (over --seeds) and stop: no class cells, no results file
         else if (!std::strcmp(argv[i], "--regroup-road")) g_regroupRoad = true;       // the ch.24 regroup client is modelled as existing
         else if (!std::strcmp(argv[i], "--follower-death")) g_followerDeath = true;   // a follower at 0 health is dead for good (LoreRim's default)
@@ -569,12 +571,19 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--row-cap") && i + 1 < argc) rowCap = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--row-evals") && i + 1 < argc) rowEvals = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--list-params")) listParams = true;
+        else if (!std::strcmp(argv[i], "--list-uses")) listUses = true;
         else if (!std::strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); ocGiven = true; }
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); ocGiven = true; }
         else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--curve <class>:<family>.<cons>.<param>=<v>] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--class-oracle N] [--gap-scenarios N] [--rating N] [--rating-only] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
     if (listParams) { ListParams(); return 0; }
+    if (listUses) {   // one line per (family, consideration) the catalogue scores: what a per-class curve override can reach (tools/iaus_sim/edge_search.py wide)
+        static const char* kn[] = { "Lin", "Pow", "Logi", "Inv", "Bin", "Piece" }; const Tuning& t0 = MFO::Iaus::DefaultTuning();
+        for (std::size_t f = 0; f < kFamilies; ++f) { if (static_cast<Family>(f) == Family::Scroll) continue;
+            for (const MFO::Iaus::detail::Use& u : MFO::Iaus::detail::SetFor(static_cast<Family>(f), static_cast<Family>(f))) { const Curve& c = t0.curve[static_cast<std::size_t>(u.cons)];
+                std::printf("USE %zu %s %zu %s %s %g %g %g %g\n", f, std::string(Name(static_cast<Family>(f))).c_str(), static_cast<std::size_t>(u.cons), std::string(Name(u.cons)).c_str(), kn[static_cast<std::size_t>(c.kind)], static_cast<double>(c.a), static_cast<double>(c.b), static_cast<double>(c.floor), static_cast<double>(u.w)); } }
+        return 0; }
     ActiveTuning() = &Tune().t; ProfileHook() = &ApplyWeights; PackageHook() = &ApplyPackage;
     if (!sets.empty() && !ParseSets(sets.c_str())) return 2;
     if (!curveSpecs.empty()) { std::string err; if (legacy) err = "--curve needs the real class table (not --classes legacy)"; if (!err.empty() || !ApplyCurveSpecs(curveSpecs, Tune().t, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }

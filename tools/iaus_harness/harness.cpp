@@ -1531,13 +1531,15 @@ namespace {
         const Profile none;
         const float d0 = ScoreOne(drink, m, none, t, 3, 0.0f, nullptr), a0 = ScoreOne(atk, m, none, t, 3, 0.0f, nullptr);
         Check(d0 > 0.0f && a0 > 0.0f, "class curves: the probe candidates score above 0");
+        // The shipped table after the sim batch (2026-11-12): the edge-number search found no curve override that passed every gate, so
+        // every row still has none (the school shape is a Scalars value, checked below) and scores these probes bit-identically.
         bool same = true, empty = true;
         for (std::size_t i = 0; i < CC::kRows; ++i) {
             const Profile& p = CC::ProfileFor(static_cast<std::uint8_t>(i));
             empty = empty && p.curves.empty();
             same = same && ScoreOne(drink, m, p, t, 3, 0.0f, nullptr) == d0 && ScoreOne(atk, m, p, t, 3, 0.0f, nullptr) == a0;
         }
-        Check(empty && same, "class curves: all 35 shipped rows are empty and score bit-identically to the default Profile");
+        Check(empty && same, "class curves: every shipped row has no curve override and scores the drink probes bit-identically to the default Profile");
         Check(&CC::ProfileFor(0xFF) != nullptr && CC::ProfileFor(0xFF).curves.empty(), "class curves: no resolved class = the empty default Profile");
         Check(&CC::ProfileFor(3) == &CC::ProfileFor(3), "class curves: a class's Profile is cached (the same object every call)");
         ClassGate g; CC::Apply(3, g);
