@@ -51,8 +51,12 @@ goes real through a target of its own, a hit, or the party's fight (the three tr
 Movement Selector's Return To Combat Area takes the Movement half and paths him there at RUN speed (class-m0-re.md
 section 1: speed enum 3 on all three runtimes, static proof). MFO's client is `apmf/Disengage.cpp`:
 - ch.24 with `kApproach_Point | kApproach_Hold` (he stays inside R after he arrives, until MFO releases),
-- a ch.7 Offense deny for the leg (optional): no swing, bash or cast on the way. Two claims, two facets. No combined
+- a ch.7 deny for the leg (optional): no swing, bash or cast on the way. Two claims, two facets. No combined
   Harbinger flag was added: its intents stay orthogonal.
+  Since 2026-11-11 the deny is declared per run (`APMFBridge::DisengageDeny`). The HIDE RUN files Offense | Cast: attacks
+  and every cast. The FLEE files Offense alone, which from Harbinger ABI 40 means hostile actions only (marth: "wouldn't it
+  be non offense cast"): attacks and hostile casts are denied and his own heals, buffs and wards land. On a Harbinger
+  below ABI 40 Offense would also deny his heals, so the flee files no ch.7 claim there and logs that once.
 
 **Facing is not known, and the drive does not depend on it.** The static RE could not say whether the body faces
 along the path or keeps facing its target. Harbinger now logs it (`[ch.24] ... GAIT PROBE`: speed, the angle between

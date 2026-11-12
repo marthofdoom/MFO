@@ -3075,3 +3075,15 @@ jCovers defaults to "all classes" even when hasJ is false (JSON can claim covera
 
 ### MFO-B758 (SEV-5, OPEN, B714 notes, against a2e7336, same review)
 The B714 notes on paired-difference SE and on --classes vs --opt-class being different objectives are handled only in iaus-sim-v2.md; the backlog marks the whole of B714 FIXED.
+
+### MFO-B759 (SEV-4, OPEN, apmf/SneakClaims.cpp:236-243 HoldSneakForHide, against ba1328c, Opus re-review of the G3 fix round)
+F3. A hideHeld sneak claim that Harbinger refused at the hidden end is never refiled: HoldSneakForHide answers "Harbinger refused the sneak claim (retrying)" while retryIn > 0, and nothing calls it again once the run has ended, so G2's hold row then has no stance claim. Refile from the stance watch (Concealment::Service, the no-run branch) or from the sweep.
+
+### MFO-B760 (SEV-4, OPEN, Concealment.cpp flee end, against ba1328c, same review)
+F4. The flee ends with no hysteresis the moment health is above 0.30 (kFleeHealthLine), so a follower hovering at the line can end a flee and qualify for the next one at once. Bounded by the family's 25 s cooldown, counted from the end of the run. A second, higher line for the end would remove the flap.
+
+### MFO-B761 (SEV-4, RULED, Retreat vs flee below 0.30 health, against ba1328c, same review)
+F5. Below 0.30 health the Retreat family and the non-sneak flee are both generated and compete on score. marth 2026-11-11: "Score decides". Recorded as ruled, not a defect: the sim tunes the two weights.
+
+### MFO-B762 (SEV-5, NOTED, scheduler/CombatScan.cpp death branch, against ba1328c, same review)
+Out of brief in the G3 fix round: the CombatScan follower-down branch also calls APMFBridge::ReleaseHideHold (a G2 claim). Harmless (idempotent, and the right thing for a dead follower). Noted so the diff is explained.

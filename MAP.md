@@ -9132,7 +9132,16 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   table's sneak rule or the sweep release a hide-held claim in combat; stamping the Disengage cooldown at the fire; sending a target with `kApproach_Point`; a new `Family` value anywhere but the END of the enum (its
   number is in log lines and the cooldown id). The harness models the gate and the pacing (`DisengageRules`); `tools/iaus_sim`
   does not model this family (the sim's `Policy.h` falls to its `default`); its weight 1.0 and cooldown were chosen, not
-  searched. OPEN review findings for this subsystem: `Docs/REVIEW-BACKLOG.md` MFO-B740..B743.
+  searched. THE LEG'S ch.7 DENY IS DECLARED PER RUN (2026-11-11, Harbinger ABI v40 "Offense means hostile",
+  `APMFBridge::DisengageDeny`, `apmf/Disengage.cpp`): the FLEE files Offense alone (attacks and hostile casts, his heals
+  land) and files NO ch.7 claim on a Harbinger below ABI 40 (one warn); the HIDE RUN files Offense | Cast (every cast). What
+  breaks: filing Offense alone on ABI < 40 (it denies his heals there: the SEV-2 of the ba1328c re-review); dropping Cast
+  from the hide run (the engine's own beneficial casts then run on the way). The hidden end and the reveal watch read
+  `WatchList` (his CURRENT group foes by the gather's set tests plus the pick's foes, no cap) and the run ends only after
+  `kHiddenReads` = 2 consecutive hidden laps: reading only `run.foes` again is the re-review's F2. G2's hold
+  (`apmf/HideClaims.cpp`) releases its ch.7 Offense | Cast claim while MFO's own cast claim is live for him
+  (`IsOwnedCastActive` / `IsHealCastActive`, read BEFORE `g_hideMx`), or it force-fails the silent cast MFO itself claimed.
+  OPEN review findings for this subsystem: `Docs/REVIEW-BACKLOG.md` MFO-B740..B743, MFO-B759..B762.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

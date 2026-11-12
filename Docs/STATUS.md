@@ -20,6 +20,11 @@
   `Docs/research/2026-11/g3-disengage.md`. Fix round (marth 2026-11-11): merged with G2 Layer 1; the hide run ends when the
   engine says no foe detects him and G2's hold / sneak attack follows (stance held, MB5); non-sneak classes FLEE and heal
   instead (tree ON only); the cooldown counts from the end; review fixes. Test steps: `in-game-test-list.md` "Movement batch".
+  Re-review round (2026-11-11, marth "wouldn't it be non offense cast"): with Harbinger ABI 40 (`feat/ch7-hostile-offense`,
+  Offense means hostile) the FLEE denies attacks and hostile casts only, so his heals land (below ABI 40 it files no ch.7
+  deny and says so once); the hide run denies attacks and every cast (Offense | Cast); G2's hold releases its ch.7 deny while
+  MFO's own cast claim is delivered; the hidden end reads his current foes each lap and needs two hidden laps in a row.
+  Backlog MFO-B759..B762. NOT merged, NOT field run.
 
 
 - **2026-11-11 `feat/class-xp-mcm` (class update cards C4 class XP + C11 class MCM, ClickUp 86e3dhbd3; tier B; NOT merged, NOT field-run; NO co-save, ABI or Forms change, MCLS stays v2):** class XP from fights won (kills, assists, observed heals, summon uptime) to the EQUIPPED class, curve sized 3 / 6 / 10 / 13 h per tier at ~10 fights an hour, `fClassXpRate` multiplier; the class add-on's own MCM (`MFO_Classes`: tree, strict, XP rate, class-info key, Priest sun / Saint heal / Saint undead per second). The Priest sun and Saint aura abilities do not exist in the ESL yet, so those three values are held and logged only. In-game checks: `Docs/research/2026-11/class-build-plan.md` cards C4 and C11.
