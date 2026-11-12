@@ -564,16 +564,30 @@ namespace MFO::Actuation {
         // the road choosers it asks must not run for an out-of-combat caller (MFO-B173).
         void NoteUnanimatedRoadWhy(RE::Actor* a_follower, const char* a_road, RE::SpellItem* a_spell,
                                    RE::Actor* a_recipient, const char* a_prefix = nullptr);
-        SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
+        // a_corpse (CARD G7): the corpse a Reanimate rule's selector chose (cond.corpse_within), else null. With
+        // Harbinger ABI >= 42 (APMFBridge::CorpseTargetSupported) the claim's target is that corpse (the bridge sets
+        // kCastFlag_CorpseTarget) and the never-fired / fired sets are keyed by the CORPSE, so one corpse the engine
+        // refuses does not hold the spell off every other corpse. Below ABI 42, or with no corpse, nothing changes:
+        // target 0, the engine picks its own corpse, the sets stay keyed by the caster.
+        SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
+                           RE::Actor* a_corpse = nullptr);
         SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
         std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                                               RE::Actor* a_recipient = nullptr);
+                                               RE::Actor* a_recipient = nullptr, RE::Actor* a_corpse = nullptr);
         bool BuffPlacementSpell(RE::SpellItem* a_spell);
+        // CARD G7. BuffCorpseTarget: the FormID a Reanimate claim names for a_corpse: the corpse when a_spell has a
+        // Reanimate effect, a_corpse is a dead actor other than the caster and Harbinger serves corpse targets
+        // (ABI >= 42); else 0 (the pre-G7 target-0 claim). The ONE answer CastOn's dry run, BuffClaim and the
+        // per-corpse keys share. BuffCorpseHeldOff: this follower's claim of a_spell on a_corpse never fired this
+        // fight (g_neverFired); the selector (cast/Corpse.cpp) skips that corpse. Worker-serial (#4).
+        RE::FormID BuffCorpseTarget(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_corpse);
+        bool       BuffCorpseHeldOff(RE::FormID a_follower, RE::FormID a_corpse, RE::FormID a_spell);
         // BuffUpTransparent: true when the claim road would take this fire-and-forget buff but it is
         // already up on the recipient (a main-thread-latched read), so CastOn's self / ally fork returns
         // transparent BEFORE commitPreempt (a lower-ranked claim must not be torn down every lap, review F2).
         // ResetBuffRoad: clears the road's session state (from ClearCastLocks).
-        bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient = nullptr);
+        bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient = nullptr,
+                               RE::Actor* a_corpse = nullptr);
         void ResetBuffRoad();
         // cast/SubstrateRoad.cpp (slice S3): its pacing / log-dedup maps, on revert / load (ClearCastLocks).
         void ResetSubstrateRoad();

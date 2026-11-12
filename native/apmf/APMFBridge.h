@@ -356,6 +356,15 @@ namespace MFO::APMFBridge {
     // on an older Harbinger such a claim never fires and the never-fired release has no direct fallback.
     bool CastSeatsSupported();
 
+    // CARD G7 (Harbinger ABI v42, kCastFlag_CorpseTarget). Does the resolved Harbinger aim a Reanimate claim at the
+    // corpse the claim names (its Reanimate caster seats, core/ReanimateSeat.cpp)? abiVersion >= 42 AND
+    // Config::g_apmfCast. True: ClaimOffenseCast of a Reanimate-effect spell at another actor is filed with
+    // kCastFlag_CorpseTarget (the request builder sets it; no caller passes a flag). False: the caller keeps the
+    // target-0 claim and the engine picks its own corpse (the documented degrade on an older Harbinger). Harbinger
+    // refuses the bit when its seat is not installed (VR, an unverified build, [CastSeats] EnableReanimateSeat=0):
+    // that is a refusal like any other, logged, never routed around. Any thread.
+    bool CorpseTargetSupported();
+
     // Worker-safe. Release the offense-cast claim(s) now (the combat-target claim, if
     // any, is left alone) on BOTH hands -- releasing one hand must never disturb the
     // other's independent claim, so a caller that wants only ONE hand released again

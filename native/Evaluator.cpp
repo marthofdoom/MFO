@@ -979,6 +979,16 @@ namespace MFO::Eval {
                 if (g.actionOpcode == Vocab::kActAttack ||
                     g.actionOpcode == Vocab::kActPowerAttack)
                     continue;
+            } else if (g.conditionOpcode == Vocab::kCondCorpseWithin) {
+                // CARD G7, the CORPSE SELECTOR (cast/Corpse.cpp PickCorpse): true exactly when a corpse is found.
+                // Only "Cast at target" takes the corpse as its target (a Reanimate spell is cast AT it), and then
+                // the pick already skipped a corpse the row's spell cannot raise. For every other action the
+                // condition is a gate only: no action ever swings at, or aims anything else at, a corpse.
+                const bool castAt = g.actionOpcode == Vocab::kActCastTarget;
+                const RE::ActorHandle corpse =
+                    Actuation::PickCorpse(a_follower, g.conditionParam, castAt ? g.actionParamForm : 0);
+                if (!corpse) continue;
+                if (castAt) chosen = corpse;
             } else if (!ConditionTrue(g, a_follower, player)) {
                 continue;
             }

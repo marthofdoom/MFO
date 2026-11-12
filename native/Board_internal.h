@@ -200,6 +200,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeAttackingPlayer, Str::K::Cond_FoeAttackingPlayer, ParamKind::None },
         { Vocab::kCondFoeAttackingAlly, Str::K::Cond_FoeAttackingAlly, ParamKind::None   },
         { Vocab::kCondFoeAttackingMySummon, Str::K::Cond_FoeAttackingMySummon, ParamKind::None },   // card G6
+        { Vocab::kCondCorpseWithin, Str::K::Cond_CorpseWithin, ParamKind::Distance },               // card G7
         { Vocab::kCondFoeAttackingMe, Str::K::Cond_FoeAttackingMe,     ParamKind::None    },
         { Vocab::kCondFoeAttackingMeMelee, Str::K::Cond_FoeAttackingMeMelee,  ParamKind::None },
         { Vocab::kCondFoeAttackingMeRanged, Str::K::Cond_FoeAttackingMeRanged, ParamKind::None },
