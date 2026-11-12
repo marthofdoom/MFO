@@ -3167,3 +3167,12 @@ A re-pick overwrites the current pick at once; native keeps the old pick while t
 
 ### MFO-B788 (SEV-5, OPEN, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
 `in.flying = outOfMeleeReach` stands in for "flying", giving a 3x max distance to any actor out of melee reach (a ledge). Errs pessimistic for the follower; unstated.
+
+### MFO-B794 (SEV-4, OPEN, logistics/TheftGate.cpp ScanGuards (VR, no pump), against 41ab1ec, Opus review of fix/theft-gate, finding F5)
+When the main-thread pump is not installed (VR) `GuardCheck` runs `ScanGuards` on the worker, which walks `ProcessLists::highActorHandles` and runs the sightline off the main thread (INVARIANTS #72, the crash4 class). Today the VR looting road is mostly inert (ActivateRef has no pump) but the container strips still pass the gate. Fix shape: on VR, answer Seen/Pending-forever (fail closed) instead of scanning.
+
+### MFO-B795 (SEV-5, OPEN, logistics/TheftGate.cpp Takeable / Analyse, against 41ab1ec, same review, finding F6)
+`Takeable` runs a filtered `GetInventory` per candidate item, so a scan of one body costs O(items^2) inventory builds on the worker. Fix shape: one inventory pass per source per call, caching the per-object verdicts.
+
+### MFO-B796 (SEV-5, OPEN, logistics/TheftGate.cpp g_guard / g_rings / g_logAt, against 41ab1ec, same review, finding F8)
+None of the gate's three maps is cleared on a revert/load (FormID keys of the old session; the guard cache ages out in 2 s, the ring and log-throttle maps are bounded but stale). Fix shape: a `TheftGate::ClearTransientState()` called from `Logistics::ClearTransientState`.

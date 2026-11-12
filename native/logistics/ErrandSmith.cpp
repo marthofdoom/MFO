@@ -512,14 +512,16 @@ namespace MFO::Logistics::Errand::Smith {
             ForEachLoadedRefInRange(at, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
                 auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
                 auto* fur = base ? base->As<RE::TESFurniture>() : nullptr;
-                // THEFT GATE, furniture half (marth 2026-11-11, ClickUp 1dfcuabczbg): a station someone else owns (the smith's own forge) is a
-                // trespass when a teammate uses it. Owner = the ref's, else its cell's (the bed rule, ErrandRest.cpp); only null / the
-                // player / PlayerFaction pass.
-                if (fur && fur->HasKeywordID(a_keyword) && a_ref) {
+                // THEFT GATE, furniture half (marth 2026-11-11, ClickUp 1dfcuabczbg: "a crime is the issue"): an owned town smithy is legal to
+                // use, so ownership alone bars nothing. A station the engine calls a crime to activate (IsOffLimits = IsCrimeToActivate, its
+                // FURN branch; already used by LooseRefBarred and Lockpick) is skipped, unless the owner is his own base NPC. Beds: unchanged.
+                if (fur && fur->HasKeywordID(a_keyword) && a_ref && a_ref->IsOffLimits()) {
                     auto* own = a_ref->GetOwner();
-                    if (!own) { auto* c = a_ref->GetParentCell(); own = c ? c->GetOwner() : nullptr; }
-                    if (own && own->GetFormID() != 0x00000007u && own->GetFormID() != 0x00000014u && own->GetFormID() != 0x00000DB1u) {
-                        TheftGate::NoteAction(a_f->GetFormID(), TheftGate::Road::Door, a_ref->GetFormID(), "barred: owned station");
+                    if (!own || own != a_f->GetActorBase()) {
+                        spdlog::info("[theft-gate] F={:08X} road=door src={:08X}({:08X}) item=0x0 owner={:08X} via=station offLimits(pc)=1 locked=0 "
+                                     "verdict=BARRED:station is a crime to use (engine off-limits test)",
+                                     a_f->GetFormID(), a_ref->GetFormID(), fur->GetFormID(), own ? own->GetFormID() : 0u);
+                        TheftGate::NoteAction(a_f->GetFormID(), TheftGate::Road::Door, a_ref->GetFormID(), "barred: station off-limits");
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
                 }

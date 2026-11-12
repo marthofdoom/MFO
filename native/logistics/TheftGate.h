@@ -19,6 +19,10 @@ namespace MFO::Logistics::TheftGate {
     enum class Road : std::uint8_t { Loose, Flora, Container, Corpse, Swap, Gear, Lotd, Door, Guard };
     const char* RoadName(Road a_road);
 
+    enum class GuardState : std::uint8_t { Clear, Seen, Pending };   // Pending = no fresh answer yet: RETRY, never blocklist
+    // Full answer. a_onMain = the caller is on the main thread already (scans now, so it is never Pending).
+    GuardState GuardCheck(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road, bool a_onMain);
+
     // INTERIM GUARD GATE. TRUE = refuse (a guard sees the follower or a_src, or the answer is not back yet).
     // a_src may be null (a follower-only check, the scan's). Logs `[theft-gate] ... BARRED:guard` rate-limited.
     bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road);
@@ -39,7 +43,8 @@ namespace MFO::Logistics::TheftGate {
     // LOOSE REF: LooseRefBarred (any owner, off-limits, ...), and at ARRIVAL (a_arrival) the guard gate too. nullptr = may be taken.
     // a_road Loose or Flora. Any owner is barred, which is stricter than the engine's own pickup test (IsAnOwner needs a new
     // address id, so it is not bound: tier A).
-    const char* LooseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Road a_road, bool a_arrival);
+    const char* LooseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Road a_road, bool a_arrival, bool* a_pending = nullptr);
+    // a_pending (arrival): set when the only reason is a guard answer not back yet; the caller skips the tick and must NOT travel-fail.
 
     // The per-follower ring of the last 3 MFO world actions; printed on every [crime-probe] BOUNTY UP.
     void NoteAction(RE::FormID a_follower, Road a_road, RE::FormID a_ref, const char* a_result);

@@ -14,8 +14,7 @@
   looting and the guards attacked; NOT merged, NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
   an item copy owned by anyone but null / the player / PlayerFaction / his own side, from any source (per-copy ExtraOwnership, else the
   container's owner; the xList is passed to RemoveItem). (2) Interim, until the culprit is found (marth): no take of any kind while a guard can
-  see the follower or the item (`TheftGate::GuardInterim`). (3) Door / furniture: a door that is a crime to activate (locked, or the engine off-limits test) is closed to errand and loot legs, owned smithing
-  stations are skipped, the stuck-at-origin rescue never opens an off-limits door. Proof lines `[theft-gate]` plus a 3-action ring after every
+  see the follower or the item (`TheftGate::GuardInterim`). (3) Door / furniture: a door that is a crime to activate (locked, or the engine off-limits test) is closed to errand and loot legs, off-limits smithing stations are skipped, the stuck-at-origin rescue never opens an off-limits door. Proof lines `[theft-gate]` plus a 3-action ring after every
   `[crime-probe] BOUNTY UP`. The culprit is still not pinned (RE note: vanilla trespass 5 g, probably a teammate opening a locked owned door or
   using owned furniture; marth suspects a crime-altering mod). Test step: `in-game-test-list.md` "Theft gate". Backlog MFO-B790...
 

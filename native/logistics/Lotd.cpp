@@ -1121,6 +1121,13 @@ namespace MFO::Lotd {
                 spdlog::info("[lotd] shipping intro ({}): already in flight -- not activated twice", a_why);
                 return;
             }
+            // THEFT GATE (ClickUp 1dfcuabczbg): TESObjectCONT::Activate is a steal-alarm producer, same bar as ArriveOnMain. Main thread: answered now.
+            if (Logistics::TheftGate::TakeBarred(act, crate, nullptr, nullptr, Logistics::TheftGate::Road::Lotd) ||
+                Logistics::TheftGate::GuardCheck(act, crate, Logistics::TheftGate::Road::Lotd, /*a_onMain*/ true) != Logistics::TheftGate::GuardState::Clear) {
+                spdlog::info("[lotd] shipping intro ({}): crate {:08X} NOT activated -- owned by someone else or a guard sees {:08X} (theft gate)",
+                             a_why, crate->GetFormID(), act->GetFormID());
+                return;
+            }
             g_introPendingUntilMs.store(SteadyMs() + 600000);   // a floor: ShippingInitialised() flipping is what ends it
             crate->ActivateRef(act, 0, nullptr, 1, false);   // full processing: the script's OnActivate runs
             spdlog::info("[lotd] shipping intro ({}): activated crate {:08X} through {:08X} -- LOTD shows its Museum "
@@ -1210,7 +1217,7 @@ namespace MFO::Lotd {
             // THEFT GATE (ClickUp 1dfcuabczbg): TESObjectCONT::Activate is a steal-alarm producer. A crate someone else owns, or one a guard
             // can see him open, is not activated by him (the deliveries still land by RemoveItem, which raises no crime).
             if (Logistics::TheftGate::TakeBarred(f, c, nullptr, nullptr, Logistics::TheftGate::Road::Lotd) ||
-                Logistics::TheftGate::GuardInterim(f, c, Logistics::TheftGate::Road::Lotd)) {
+                Logistics::TheftGate::GuardCheck(f, c, Logistics::TheftGate::Road::Lotd, /*a_onMain*/ true) != Logistics::TheftGate::GuardState::Clear) {
                 spdlog::info("[lotd] {:08X}: crate {:08X} NOT activated -- owned by someone else or a guard sees him (theft gate)", a_follower, a_crate);
                 return;
             }

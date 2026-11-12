@@ -910,7 +910,11 @@ namespace MFO::Logistics {
                         // flag). The same source bar as the scan, and for a purse: still NOT
                         // harvested (someone -- the player -- may have harvested it mid-leg, which
                         // would turn the readback into a false "not credited" verdict).
-                        const char* arrivalBar = TheftGate::LooseBarred(a_follower, tref, flora ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ true);
+                        bool guardPending = false;
+                        const char* arrivalBar = TheftGate::LooseBarred(a_follower, tref, flora ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ true, &guardPending);
+                        // THEFT GATE: the guard answer is not back yet (the scan runs on main, one frame): a retry next tick, NOT a verdict. No
+                        // blocklist, no travel-fail, the phase is untouched so this arrival is re-entered.
+                        if (guardPending) return;
                         if (!arrivalBar && flora &&
                             (tref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0)
                             arrivalBar = "already harvested on arrival";
