@@ -974,8 +974,9 @@ namespace MFO::Logistics {
     namespace Lockpick {
         // The scan's lock gate: may this follower attempt this locked ref? Logs each refusal
         // reason once per (follower, lock). Read-only.
-        // a_allowOwned (batch L, card G14, act.pick_locks only): an owned / off-limits CHEST is admitted through Steal::Check;
-        // a_pending is then set when the pre-check has no answer yet (no verdict: retry). Never a door.
+        // a_allowOwned (batch L, card G14): an owned / off-limits CHEST is admitted through Steal::Check; a_pending is then set when the
+        // pre-check has no answer yet (no verdict: retry). Never a door. PARKED: no caller passes it (Q-L-6, marth to decide), act.pick_locks
+        // picks UNOWNED chests only.
         bool Admit(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now,
                    bool a_allowOwned = false, bool* a_pending = nullptr);
         enum class StepResult {

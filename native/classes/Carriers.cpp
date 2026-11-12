@@ -171,8 +171,17 @@ namespace MFO::Classes {
             int markers = 0;
             for (RE::FormID i = 0; i < 3; ++i)
                 if (want(dh->LookupForm<RE::SpellItem>(kMarkerSpellBase + i, file), kMarkerSpellBase + i, "marker carrier spell")) ++markers;
-            g_forms.offFact = want(dh->LookupForm<RE::TESFaction>(kOffClassFaction, file), kOffClassFaction, "off-class weapon faction");
-            g_forms.offPerk = want(dh->LookupForm<RE::BGSPerk>(kOffClassPerk, file), kOffClassPerk, "off-class weapon damage perk");
+            // Card G16's two forms are OPTIONAL: an older MFO_Classes.esl lacks them, and only the off-class damage penalty may degrade
+            // (loudly, once), never the other carriers (no `bad` count here).
+            g_forms.offFact = dh->LookupForm<RE::TESFaction>(kOffClassFaction, file);
+            g_forms.offPerk = dh->LookupForm<RE::BGSPerk>(kOffClassPerk, file);
+            if (!g_forms.offFact || !g_forms.offPerk) {
+                g_forms.offFact = nullptr;   // both or neither: a half-resolved pair would grant a perk with no gate, or gate nothing
+                g_forms.offPerk = nullptr;
+                spdlog::error("[classes] carriers: the off-class weapon forms (FACT 0x{:03X}, PERK 0x{:03X}) are missing or mistyped in {} -- the "
+                              "off-class DAMAGE PENALTY is OFF (regenerate and redeploy MFO_Classes.esl); every other class carrier is unaffected",
+                              kOffClassFaction, kOffClassPerk, file);
+            }
             g_forms.ok = (bad == 0);
             if (g_forms.ok)
                 spdlog::info("[classes] carriers: {} carrier class(es) resolved from {} ({} perk(s), {} ability spell(s), {} marker spell(s))",

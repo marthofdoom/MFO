@@ -11,10 +11,10 @@
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 - **2026-11-12, BATCH L (`feat/batch-l`; cards G13 act.steal, G14 act.pick_locks, G16 off-class weapon; tier B; NOT merged, NOT field run; NO co-save, ABI or address-id change):** new `logistics/Steal.cpp`, the one
-  witness pre-check (follower sneaking, no guard, every non-teammate NPC in the crime alarm range senses neither the follower nor sees the player, the owner out of sight; any hit or unreadable answer = the take does not
-  happen, no refund; Pickpocket is cut). `act.steal` takes OWNED loose items; `act.pick_locks` opens nearby locked chests (owned ones only through the same pre-check, doors never); the Thief line gets them (and Sneak) as
+  witness pre-check (follower sneaking, no guard, every non-teammate actor in the witness radius senses neither the follower nor the player (sound included), the owner out of sight; any hit or unreadable answer = the take does not
+  happen, no refund; Pickpocket is cut). `act.steal` takes OWNED loose items; `act.pick_locks` opens nearby UNOWNED locked chests (owned-lock path parked, Q-L-6; doors never); the Thief line gets them (and Sneak) as
   logistics defaults on first equip. G16: with the tree on, a restricted class never wields an off-class weapon while it carries an in-set one (ch.17 per-item deny); with none it may, the player is told and damage is halved
-  (new perk `MFOC_OffClassHalf` in the regenerated `MFO_Classes.esl`). Field steps: `in-game-test-list.md` "Batch L". Defaults: open questions 107-111. Backlog MFO-B810..B813.
+  (new perk `MFOC_OffClassHalf` in the regenerated `MFO_Classes.esl`). Field steps: `in-game-test-list.md` "Batch L". Defaults: open questions Q-L-1..Q-L-6. Backlog MFO-B810..B813.
 - **2026-11-11, THEFT GATE (`fix/theft-gate`, ClickUp 1dfcuabczbg, SEV-1: a v2.8.1 player got 5 g theft bounties in Whiterun from follower
   looting and the guards attacked; merged to main 2026-11-12 (9414150), NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
   an item copy owned by anyone but null / the player / PlayerFaction / his own side, from any source (per-copy ExtraOwnership, else the

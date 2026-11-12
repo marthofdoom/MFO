@@ -533,6 +533,7 @@ namespace MFO::Logistics::Lockpick {
             {
                 std::scoped_lock lk(g_snapMx);
                 g_snaps.erase(it->second.ticket);
+                g_witnessSkipped.erase(a_f);   // a skip flag never outlives its job
             }
             g_jobs.erase(it);
         }
@@ -678,6 +679,7 @@ namespace MFO::Logistics::Lockpick {
             bool witnessPending = false;
             if (!Admit(a_follower, a_ref, a_now, a_allowOwned, &witnessPending))
                 return witnessPending ? StepResult::kHold : StepResult::kRefused;   // pending: the pre-check answer is not back, retry next tick
+            { std::scoped_lock lk(g_snapMx); g_witnessSkipped.erase(fid); }   // a stale skip flag never carries into a new job
             Job j{};
             j.ref       = rid;
             j.phase     = Phase::kSnapshot;

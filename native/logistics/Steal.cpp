@@ -83,16 +83,13 @@ namespace MFO::Logistics::Steal {
             return false;
         }
 
-        bool IsAnimal(RE::Actor* a_a) {
-            auto* race = a_a->GetRace();
-            return race && race->HasKeywordString("ActorTypeAnimal");   // wildlife cannot report a crime
-        }
 
         // One sense read, fail-closed. Out: a_seen = the viewer senses the target (or the read could not prove otherwise);
         // a_defer = a sight ray was deferred / unavailable this frame (retry). a_sightOnly: only the sight bit counts.
         void ReadSense(RE::Actor* a_viewer, RE::Actor* a_target, float a_range, bool a_sightOnly, bool& a_seen, bool& a_defer, bool& a_unreadable) {
             APMFBridge::SenseReading r{};
-            if (!APMFBridge::SenseOf(a_viewer->GetFormID(), a_target->GetFormID(), 0, a_range, r)) { a_unreadable = true; return; }
+            // the same radius for sight AND hearing: a noise the engine's witness loop could hear at the alarm distance is heard here too
+            if (!APMFBridge::SenseOf(a_viewer->GetFormID(), a_target->GetFormID(), 0, a_range, r, a_range)) { a_unreadable = true; return; }
             if (r.detail & (APMF_API::kAwareDetail_SightDeferred | APMF_API::kAwareDetail_SightUnavailable)) {
                 // out-of-range sight is a definitive NO (no ray); deferred / unavailable is UNKNOWN, never "not seen"
                 if (!(r.detail & APMF_API::kAwareDetail_SightOutOfRange) && !(r.senses & APMF_API::kSense_Sight)) a_defer = true;
@@ -102,7 +99,7 @@ namespace MFO::Logistics::Steal {
         }
 
         // MAIN THREAD. The whole evaluation.
-        Ans Evaluate(RE::Actor* a_f, RE::TESObjectREFR* a_ref, TheftGate::Road a_road) {
+        Ans Evaluate(RE::Actor* a_f, RE::TESObjectREFR* a_ref, TheftGate::Road /*a_road*/) {
             Ans ans; ans.at = SClock::now(); ans.posted = ans.at; ans.have = true; ans.unread = true;
             int witnesses = 0;
             auto* owner = a_ref ? a_ref->GetOwner() : nullptr;
@@ -118,7 +115,15 @@ namespace MFO::Logistics::Steal {
             } else if (float range = AlarmRange(); range <= 0.0f) {
                 refuse("GMST iCrimeAlarmRecDistance unreadable");
             } else {
-                range = std::min(range, kMaxSight);
+                // F2: the witness radius is the larger of the crime alarm distance and Harbinger's default hearing radius (a list may set the
+                // GMST below what an NPC hears). Past Harbinger's maximum the pre-check cannot ask, so it FAILS CLOSED (never clamps silently).
+                range = std::max(range, APMF_API::kAwareDefaultHearRadius);
+                if (range > kMaxSight) {
+                    static std::atomic<bool> s_said{ false };
+                    if (!s_said.exchange(true))
+                        spdlog::warn("[steal] witness radius {:.0f} exceeds Harbinger's SenseActor maximum {:.0f}: act.steal / owned locks stay REFUSED", range, kMaxSight);
+                    refuse("the witness radius exceeds what the sense service can ask (fail closed)");
+                } else {
                 const RE::FormID fid = a_f->GetFormID();
                 // 2. the guard gate (TheftGate): the follower, and the item/lock position.
                 const auto guard = TheftGate::GuardCheck(a_f, a_ref, TheftGate::Road::Guard, /*a_onMain*/ true);
@@ -139,15 +144,14 @@ namespace MFO::Logistics::Steal {
                         const float near = std::min({ apos.GetDistance(fpos), apos.GetDistance(ppos), apos.GetDistance(rpos) });
                         const bool  inRange = near <= range;
                         if (!inRange && !isOwner) continue;   // too far to witness; the owner is judged at any distance
-                        if (!isOwner && IsAnimal(a)) continue;
                         const char* who = NameOf(a->GetActorBase());
                         bool seen = false;
                         if (inRange) {
-                            // all senses toward the FOLLOWER, then the SIGHT bit toward the PLAYER (the redirected crime is his)
+                            // ALL senses toward the FOLLOWER, then ALL senses toward the PLAYER too (the redirected crime is judged for him, sound included)
                             ReadSense(a, a_f, range, /*sightOnly*/ false, seen, defer, unreadable);
                             if (seen) { ++witnesses; refuse(std::format("{} {:08X} senses the follower", who, a->GetFormID())); break; }
-                            ReadSense(a, pc, range, /*sightOnly*/ true, seen, defer, unreadable);
-                            if (seen) { ++witnesses; refuse(std::format("{} {:08X} sees the player", who, a->GetFormID())); break; }
+                            ReadSense(a, pc, range, /*sightOnly*/ false, seen, defer, unreadable);
+                            if (seen) { ++witnesses; refuse(std::format("{} {:08X} senses the player", who, a->GetFormID())); break; }
                         }
                         if (isOwner) {   // the owner, in line of sight of either, at any distance (Sightline: the engine basis, main thread)
                             for (RE::FormID tgt : { fid, pc->GetFormID() }) {
@@ -169,12 +173,10 @@ namespace MFO::Logistics::Steal {
                         else ans.v = Verdict::Take;
                     }
                 }
+                }
             }
             if (ans.v == Verdict::Pending && ans.why.empty()) ans.why = "pending";
             Say(a_f, a_ref, owner, witnesses, ans.v, ans.why);
-            if (a_f && a_ref && ans.v != Verdict::Pending)
-                TheftGate::NoteAction(a_f->GetFormID(), a_road, a_ref->GetFormID(),
-                                      ans.v == Verdict::Take ? "pre-check: clear" : "barred: witness");
             return ans;
         }
 

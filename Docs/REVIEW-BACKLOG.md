@@ -3213,11 +3213,23 @@ Heartbeat now runs WriteSlot on every redecide even when nothing changed, openin
 ### MFO-B810 (SEV-4, OPEN, logistics/Steal.cpp Evaluate, against batch-l, author note for the Opus review)
 The witness scan walks `ProcessLists::highActorHandles` on the main thread and calls `SenseOf` twice per NPC in range (follower, player). Harbinger caps synchronous sight rays at 8 pairs per frame; the rest come back deferred and the verdict is Pending until a later frame reuses the stored measurement. In a crowded town a steal can stay Pending for several 400 ms rounds. Fail-closed by design; the cost is latency, not safety. Fix shape: a per-follower witness-set cache refreshed by distance.
 
-### MFO-B811 (SEV-5, OPEN, logistics/Steal.cpp IsAnimal, author note)
-Wildlife is excluded by the race keyword `ActorTypeAnimal`; a creature race without it (some modded beasts) counts as a witness. Errs toward refusing.
+### MFO-B811 (SEV-5, RESOLVED in the fix round, logistics/Steal.cpp, author note)
+Superseded: animals are now counted as witnesses (no skip), so a wildlife-heavy exterior refuses more. Revisit when RE shows whether the engine's witness loop skips animals.
 
 ### MFO-B812 (SEV-5, OPEN, logistics/EquipAuthority.cpp CarriesOnClass, author note)
 `CarriesOnClass` is cached 1 s per follower; a weapon picked up or dropped inside that window is judged one second late. The deny list re-sends on change, so it converges. Also the cache and `OffClassTick`'s held map are not cleared on revert/load (FormID keys).
+
+### MFO-B814 (SEV-4, OPEN, logistics/Lockpick.cpp / Steal.cpp, Opus review of c05b277)
+The lockpick idle clip may break the follower's sneak while the pick runs, which then fails the sneaking half of the witness pre-check at the write and skips an otherwise clear pick. Fix shape: re-assert sneak after the idle or accept the skip as designed.
+
+### MFO-B815 (SEV-4, OPEN, logistics/EquipAuthority.cpp OffClassTick, Opus review of c05b277)
+The player notice says he "fights with" the fallback weapon even when the ch.17 deny list is not enforced (Harbinger below ABI 33): the off-class rule then does not stop an in-set swap. Wording only; the damage penalty follows the held weapon, not the deny.
+
+### MFO-B816 (SEV-4, OPEN, logistics/EquipAuthority.cpp CarriesOnClass, Opus review of c05b277)
+A LOTD museum relic counts as an in-set weapon ("armed") although he may not wield it, so the fallback may not open for him.
+
+### MFO-B817 (SEV-4, OPEN, logistics/Steal.cpp Evaluate, Opus review of c05b277)
+The witness scan walks ProcessLists::highActorHandles only; an NPC in the low or middle-low process list inside the radius is not asked.
 
 ### MFO-B813 (SEV-5, OPEN, logistics/Steal.cpp, author note)
 The steal arrival pre-check is per loose ref; the scan only applies the source bars. A follower may walk toward an item in a crowd and be refused at arrival (the leg is then transient-blocklisted 25 s). A scan-time witness read per candidate would stop the walk but multiplies SenseOf calls.

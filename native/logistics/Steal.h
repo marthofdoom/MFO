@@ -10,9 +10,10 @@
 // judges the witnesses FOR THE PLAYER. So a steal is allowed only when ALL of these hold at the moment of the take:
 //   1. the follower is sneaking (card G1 act.sneak state, Actor::IsSneaking);
 //   2. TheftGate::GuardCheck is Clear (no guard sees the follower or the item);
-//   3. every loaded, live, non-teammate, non-player NPC within the crime alarm range (GMST iCrimeAlarmRecDistance, read by name
-//      at run time, never a constant) has ALL senses 0 toward the FOLLOWER (APMFBridge::SenseOf, Harbinger SenseActor) AND cannot
-//      SEE the player (the sight bit; the redirected crime is judged for him);
+//   3. every loaded, live, non-teammate, non-player actor (animals included) within the witness radius, max(GMST iCrimeAlarmRecDistance,
+//      Harbinger's hearing default 1536), read by name at run time, never a constant, has ALL senses 0 toward the FOLLOWER AND ALL senses
+//      0 toward the PLAYER (APMFBridge::SenseOf with that radius for sight and hearing; the redirected crime is judged for the player and
+//      detection includes sound). A radius past Harbinger's maximum refuses (fail closed);
 //   4. the item's OWNER (an NPC base, or any member of an owning faction), when loaded, does not see the follower or the player,
 //      even beyond the alarm range.
 // Any unreadable answer (Harbinger below ABI 18, a sight ray deferred or unavailable, an unresolved actor) is NOT "clear": it is

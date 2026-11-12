@@ -1014,8 +1014,7 @@ namespace MFO::Logistics {
                     // job's own cleanup run in Step's kUnlocking phase).
                     if (tref->IsLocked() || Lockpick::HasJob(id, tref->GetFormID())) {
                         const auto pick = Lockpick::Step(a_follower, tref, now,
-                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())),
-                            /*a_allowOwned*/ tr.cat == Category::PickLocks);   // batch L (G14): an owned chest only through Steal::Check
+                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())));   // G14 picks UNOWNED chests only (Q-L-6)
                         if (pick == Lockpick::StepResult::kHold) return;   // the pick IS this tick's action
                         if (pick == Lockpick::StepResult::kRefused) {
                             MarkTravelFailed(tref->GetFormID(), now);        // transient skip, never sticky
