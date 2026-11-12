@@ -9120,8 +9120,17 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   reads `Hide::Verdict(Hide::Read(foe, handle))` != Yes for every listed foe (on the way or at the point; the 12 s cap is
   logged when hit); the G1 stance claim is then kept by `APMFBridge::HoldSneakForHide` (a `hideHeld` mark in
   `apmf/SneakClaims.cpp`: the in-combat refusal and table-lap aging do not apply to this owner) for G2's hold row, and is
-  released by `ReleaseSneakHide` on the blow (`Concealment::NoteBlow`, called from `IausSource::Record` when an attack /
-  power attack / offense or control cast / exploit / bash fires), on a reveal (a foe detects him again), at combat end,
+  released by `ReleaseSneakHide` when the blow from stealth RESOLVES, not at its pick (fix of review P1-G3 of 938f45f: the
+  engine reads the stance when the hit lands). `Concealment::NoteBlow` (called from `IausSource::Record` when an attack /
+  power attack / offense or control cast / exploit / bash fires) only ARMS `Stance::armed`; `ServiceBlow` (anon, called from
+  the stance branch of `Concealment::Service` every combat lap) releases on `Stance::hit` (set by `BlowHitSink`, a
+  `TESHitEvent` sink registered by `Concealment::RegisterHitSink` from `Diagnostics::Install`; any thread, FormID compare under
+  the leaf `g_mx`, filtered by `Followers::IsTrackedFast`), or once his attack state / `Actuation::OwnCastInFlight` was seen
+  live and is none again (+ `kBlowFlightMs` 1.5 s for a bow state or a cast), or at `kBlowCapMs` (6 s from the first live
+  lap, warned). While a swing is live `ServiceBlow` returns true and the reveal road is skipped; armed but not yet live =
+  the old hold with the reveal road. **What breaks:** releasing at the pick again (SneakStop one frame later, no sneak
+  multiplier); timing the hold from the PICK (the walk to the target has no fixed length, principle 9); an engine call or a
+  second lock inside the sink. Also released on a reveal (a foe detects him again), at combat end,
   dismissal, death (`CombatScan` dead branch), a stand-down and a load (`Release` / `ClearTransientState`). A NON-SNEAK class
   (class tree ON, kDisengage, not kSneakAlways) at or under 30% health with a foe on him FLEEs through the same drive to a
   point 150u+ farther from the nearest foe (no cover test): `Snapshot::fleeRun` (`Concealment::FleeRunning`) stops
