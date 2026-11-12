@@ -28,7 +28,7 @@ Status: DONE = merged to main. FLIGHT = branch in review or being written. OPEN 
 | G3 | Disengage to out-of-sight, flee, hide run | DONE (3d2ca76) | DONE (sim-stealth cfee1bf) |
 | H2 | Aversion, ABI v41 (Conjurer, Healer) | DONE (Harbinger 1b1ef40, MFO 057d93c) | OPEN (C-H2) |
 | H5 | Archer miss correction, ch.29 + MFO miss budgets | DONE | OPEN (C-H5: lab miss rate is one fixed number) |
-| G7 | Corpse target / reanimate | FLIGHT (review clean above SEV-3; F1 deny fix round) | OPEN (sim drops reanimate spells) |
+| G7 | Corpse target / reanimate | DONE (Harbinger 7407303, MFO a4a7e21) | OPEN (sim drops reanimate spells) |
 | T | Town theft fix (1dfcuabczbg): stolen-copy gate, guard gate, locked/owned door + furniture gate | FLIGHT (fix/theft-gate, Sonnet) | n/a |
 
 ## 2. Per-class needs found missing in this pass
