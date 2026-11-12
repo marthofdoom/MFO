@@ -69,13 +69,30 @@ namespace MFO::Iaus::Prune {
         bool roadUnsupported = false;    // Actuation::CastRoadUnsupported (the animation rule)
         bool targetLocation = false;     // Delivery::kTargetLocation, or a Rune / Wall / TLBurst shape
         Nature nature = Nature::Unknown;
+        bool weighable = true;           // WeighableSpell: at least one effect IAUS can value
     };
-    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature };
+    // An effect archetype IAUS can value, by RE::EffectArchetypes::ArchetypeID number (fork include/RE/E/EffectArchetypes.h:
+    // kNone -1, kScript 1, kSpawnScriptedRef 43, the last one the engine knows kVampireLord 46). A Script effect and a scripted
+    // spawn do whatever their script does, and an id past the last known one is not something we model: none of them has a value
+    // to weigh. Every other archetype has a meaning the spell's nature (offense / control / heal ...) rests on.
+    [[nodiscard]] inline bool EffectWeighable(int a_archetype) {
+        return a_archetype >= 0 && a_archetype <= 46 && a_archetype != 1 && a_archetype != 43;
+    }
+    // A spell is weighable when at least one of its effects is (an empty list, or null base effects only, is not).
+    [[nodiscard]] inline bool WeighableSpell(const std::vector<int>& a_archetypes) {
+        for (const int a : a_archetypes)
+            if (EffectWeighable(a)) return true;
+        return false;
+    }
+    // Unweighted (batch I item 6, marth 11-12 on Q91: "MFO should hide spells we can't weight if we don't know what they do"):
+    // the nature is stated but NO effect of the spell is one IAUS can value. APPENDED; the value is only logged, never saved.
+    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted };
     [[nodiscard]] inline Drop StaticDrop(const StaticIn& a_in) {
         if (!a_in.castable) return Drop::NotCastable;
         if (a_in.roadUnsupported) return Drop::Unanimated;
         if (a_in.targetLocation) return Drop::Placement;
         if (a_in.nature == Nature::Unknown) return Drop::UnknownNature;
+        if (!a_in.weighable) return Drop::Unweighted;
         return Drop::Keep;
     }
     [[nodiscard]] inline const char* DropName(Drop a_d) {
@@ -85,6 +102,7 @@ namespace MFO::Iaus::Prune {
         case Drop::Unanimated:    return "unanimated road only";
         case Drop::Placement:     return "target location";
         case Drop::UnknownNature: return "nature unknown";
+        case Drop::Unweighted:    return "its effects are script-only or unknown archetypes: IAUS cannot weight what it does";
         }
         return "?";
     }
