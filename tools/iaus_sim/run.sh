@@ -5,7 +5,7 @@
 #        T2 batch S (iaus-sim-v2.md section 31), every road ON by default:
 #        [--t2 off] (every road off + the feet stop = the lab of section 30: 78.11 at g3, 76.69 at --stealth off for --classes beta1)
 #        [--feet-stop] [--c8|--dodge|--aversion|--aim|--block|--range|--backoff|--step|--unweighted|--reanimate off|on] [--c13 built|lever]
-#        [--disengage-dnd] [--aim-miss P] [--aim-scatter P] [--dodge-flight S] [--no-fill-swing] [--teach <token>]
+#        [--disengage-dnd] [--mix-partial] [--aim-miss P] [--aim-scatter P] [--dodge-flight S] [--no-fill-swing] [--teach <token>]
 #        [--disengage-report N] (card G3's usefulness: the same fights without the run, with it, and with the D&D variant)
 #        [--steal-lab N] (cards G13 / G14: the witness pre-check against the engine's detection formula)
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,
@@ -47,6 +47,7 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     chk "stealth off is the lab before the stealth model (thief, seed 1)" '[[ "$(R --t2 off --stealth off --classes thief --seeds 1 | head -1)" == "SEED 1  J=42.47 (scenarios 15.35, natural 69.58)" ]]'
     chk "T2 batch S: --t2 off is the lab of section 30 at g3 (beta1, seed 1)" '[[ "$(R --t2 off --classes beta1 --seeds 1 | head -1)" == "SEED 1  J=76.96 (scenarios 80.76, natural 73.17)" ]]'
     chk "T2 batch S: every road off by name equals --t2 off" '[[ "$(R --feet-stop --c8 off --dodge off --aversion off --aim off --block off --range off --backoff off --step off --c13 lever --unweighted off --reanimate off --classes evoker,knight --seeds 2 | head -1)" == "$(R --t2 off --classes evoker,knight --seeds 2 | head -1)" ]]'
+    chk "T2 batch S: --t2 off --roads bash is the lab of section 30 (foe casting is filled; review F1)" '[[ "$(R --t2 off --roads bash --classes knight,warrior,mercenary --seeds 1 | head -1)" == "SEED 1  J=79.45 (scenarios 75.42, natural 83.49)" ]]'
     chk "T2 batch S: the headline names its roads"     '[[ "$(R --classes mage --seeds 1 | tail -1)" == *"t2=all" && "$(R --classes mage --seeds 1 --feet-stop --block off | tail -1)" == *"t2=feet-stop,block=off" ]]'
     chk "T2 batch S: the Knight's table row raises the held guard (MFO-B827)" 'B="$(mktemp)"; R --mode table --classes knight --fights 2 --baseline "$B" >/dev/null; G="$(grep "^knight|natural|guard%=" "$B" | cut -d= -f2)"; rm -f "$B"; awk -v g="$G" "BEGIN { exit !(g > 5) }"'
     chk "T2 batch S: --disengage-report and --steal-lab print their tables" 'R --disengage-report 2 --classes evoker | grep -q "^evoker     dnd" && R --steal-lab 500 | grep -q "^dark "'

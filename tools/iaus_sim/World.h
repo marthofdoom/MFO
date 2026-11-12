@@ -631,8 +631,11 @@ namespace Sim {
         // ch.18 ATTACK SELECTION (Harbinger ABI v34, apmf/AttackMix.cpp; FACT = that file's contract): DENY ONLY, over the follower's last 8
         // STARTED attacks. Share above the ceiling: Power is denied. Share under the floor: Normal is denied, and that deny is lifted for
         // a roll in which no undenied Power attack would be drawn (stamina cannot pay), so a regular attack still fires. Bash is not governed.
+        // MODEL: under the floor a denied Normal BECOMES a Power attack whenever stamina can pay. In the engine the roll among the undenied
+        // attacks can also come up empty or pick another class, so the lab's floor is the strongest reading of the rule.
         [[nodiscard]] Act MixGate(Body& x, Ctl& c, Act drawn, const Weapon& w) {
             if (c.shareMax < 0.0f && c.shareMin < 0.0f) return drawn;
+            if (c.atkN < 8 && !g_mixPartial) return drawn;   // no share, so no deny, until 8 started attacks fill the window
             int p = 0; for (int i = 0; i < c.atkN; ++i) p += c.atkWin[i];
             const float share = c.atkN ? static_cast<float>(p) / static_cast<float>(c.atkN) : 0.0f;
             if (c.shareMax >= 0.0f && drawn == Act::Power && share > c.shareMax) { if (x.ctl == 0) ++t.mixPowerDenied; return Act::Swing; }
@@ -937,7 +940,7 @@ namespace Sim {
                 if (anyAfford || (x.Party() && x.c.mp > 0.15f * x.c.mpMax)) {
                     const float want = 750.0f;
                     float far = want * 1.4f;   // the lab's standoff before card H4
-                    if (g_t2.range && c) { const float des = HandRange(x, *c); if (des > 0.0f) far = des * Reposition::kCloseSlack; }   // H4: he closes only when the foe stands beyond the spell's distance x the slack (ch.24, apmf/RangeApproach.cpp)
+                    if (g_t2.range && c) { const float des = HandRange(x, *c); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
                     if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                     else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
                     return;
@@ -998,7 +1001,7 @@ namespace Sim {
             const Body* tg = Find(c.steer ? c.steer : x.c.targetId); if (!tg || !Up(*tg) || tg->Party()) return;
             const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
             if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
-                float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c); if (des > 0.0f) far = des * Reposition::kCloseSlack; }
+                float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
                 if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                 else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
             } else if (c.drawn == PostureKind::Bow) {

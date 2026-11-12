@@ -175,7 +175,7 @@ namespace {
         if (!anyOn) o = "off";
         else { if (!g_t2.feet) o += "feet-stop,"; for (const T2Flag& f : kT2Flags) if (!(g_t2.*(f.m))) o += std::string(f.name) + "=off,"; if (!g_t2.c13built) o += "c13=lever,";
             if (o.empty()) o = "all"; else o.pop_back(); }
-        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (g_aimScatter > 0.0f) o += "+aim-scatter"; if (g_dodgeFlight != 0.2f) o += "+dodge-flight"; if (!g_teach.empty()) o += "+teach"; if (!g_fillSwing) o += "+no-fill-swing";
+        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (g_aimScatter > 0.0f) o += "+aim-scatter"; if (g_dodgeFlight != 0.2f) o += "+dodge-flight"; if (!g_teach.empty()) o += "+teach"; if (!g_fillSwing) o += "+no-fill-swing"; if (g_mixPartial) o += "+mix-partial";
         return o;
     }
     // Mean utility of IAUS (no oracle) over the scenarios and the natural bracket of every class: the search objective.
@@ -402,6 +402,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--aim-miss") && i + 1 < argc) g_aimMiss = static_cast<float>(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--aim-scatter") && i + 1 < argc) g_aimScatter = static_cast<float>(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--dodge-flight") && i + 1 < argc) g_dodgeFlight = static_cast<float>(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--mix-partial")) g_mixPartial = true;            // ch.18 denies on a window that is not full yet (not Harbinger's reading)
         else if (!std::strcmp(argv[i], "--no-fill-swing")) g_fillSwing = false;           // [Debug] bIausFillSwing OFF (the shipped default): no Block candidate
         else if (!std::strcmp(argv[i], "--teach") && i + 1 < argc) g_teach.push_back(argv[++i]);
         else if (!std::strcmp(argv[i], "--disengage-report") && i + 1 < argc) disengageReport = std::atoi(argv[++i]);

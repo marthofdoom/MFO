@@ -75,7 +75,7 @@ namespace Sim {
             if (&o == &self || !o.alive) continue;
             if (o.role == Role::Foe) {
                 if (o.c.downed) continue;
-                Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode; k.swinging = g_fillSwing && (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0;   // [Debug] bIausFillSwing (--no-fill-swing = the shipped default) k.casting = o.act == Act::Cast && o.hitAt >= 0;
+                Combatant k = o.c; k.dist = Fight::Dist(self, o); if (k.dist > sn.chaseCap) continue; k.rangedWeapon = o.rangedMode; k.swinging = g_fillSwing && (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;   // swinging: [Debug] bIausFillSwing (--no-fill-swing = the shipped default)
                 if (!F.tauntVisible) k.taunted = false;
                 k.detectsMe = detects;
                 const Body* tg = F.Find(o.c.targetId);
