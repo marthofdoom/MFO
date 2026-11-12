@@ -296,7 +296,7 @@ of a given change.
 ## The five things that corrupt saves or crash — verify before touching
 
 1. **Co-save layout** (`Serialization.cpp`, `ProgAllocator::CoSaveSave/Load`,
-   `State.h`, `Vocabulary.h`): 7 records FLWR v6 (card G9: per-rule cooldown in the gambit row) / MSTK v1 / PRGN v8 / FWPN v1 / PGIV v1 (player-given relics, `logistics/PlayerGiven.cpp`) / ERND v2 (town errands + their multi-stop itinerary, `logistics/Errand.h`; v1 reader kept) / MCLS v1 (class add-on, `classes/State.cpp`; its stored gambit rows use FLWR's row codec `GambitWire` in Serialization.cpp, so a FLWR row change is an MCLS change); plus MFST v1 in DEV builds only (`selftest/`, `MFO_DEV_SELFTEST`; a release DLL skips it as unknown)
+   `State.h`, `Vocabulary.h`): 7 records FLWR v6 (card G9: per-rule cooldown in the gambit row) / MSTK v1 / PRGN v8 / FWPN v1 / PGIV v1 (player-given relics, `logistics/PlayerGiven.cpp`) / ERND v2 (town errands + their multi-stop itinerary, `logistics/Errand.h`; v1 reader kept) / MCLS v2 (class add-on, `classes/State.cpp`; v2 appends per-class logistics tables, the picked T4 and the classes-OFF tables, v1 reader kept; its stored gambit rows use FLWR's row codec `GambitWire` in Serialization.cpp, so a FLWR row change is an MCLS change); plus MFST v1 in DEV builds only (`selftest/`, `MFO_DEV_SELFTEST`; a release DLL skips it as unknown)
    (`Serialization.h`). Changing a
    field order/type/count, bumping a version without a matching `if(version>=N)`
    reader, renaming a serialized opcode string, or renumbering the `Subject` /

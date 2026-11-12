@@ -17,7 +17,10 @@
 //     and a cast leaf carries both bits, so no mask of the two categories lets it through. For those laps the attack
 //     leaves are open too: that is the price of the cast he was told to make, and it is logged.
 //   * a HEAL claim alone (IsHealCastActive) on Harbinger ABI >= 40: the deny is REFILED as Offense ALONE. Attacks and
-//     hostile casts stay denied, the heal (a beneficial spell by Harbinger's allow-list) passes. Releasing everything
+//     hostile casts stay denied. The heal passes ONLY when its record is on Harbinger's allow-list of beneficial
+//     natures. A heal that carries a Script effect (or any archetype off that list) is UNDECLARED, which Harbinger
+//     counts as hostile BY RULE: it stays denied, APMF.log says `[ch.7] hostile-offense: ... nature UNDECLARED ...`,
+//     and MFO's heal claim does not land for those laps (review P1-1 of 938f45f; open question 91). Releasing everything
 //     here opened every attack leaf for the length of a heal (review F2 SEV-3). The cost, stated: for those laps a
 //     beneficial cast the ENGINE picks by itself also passes.
 //   * a HEAL claim on ABI < 40: Offense alone would deny the heal there, so the whole deny stands down, as for offense.
@@ -151,7 +154,8 @@ namespace MFO::APMFBridge {
         if (!api) return;
         auto& h = g_holds[fid];
         h.quietSweeps = 0;
-        const bool hadMove = h.move.h != APMF_API::kInvalidHandle, hadDeny = h.deny.h != APMF_API::kInvalidHandle;
+        const bool hadMove = h.move.h != APMF_API::kInvalidHandle;
+        bool       hadDeny = h.deny.h != APMF_API::kInvalidHandle;
         const bool okMove = EnsureLocked(api, fid, h.move, APMF_API::kIntent_MovementBlock, 0, "ch.1 movement block");
         const DenyMode mode = ownOffense ? DenyMode::StoodDown
                             : !ownHeal   ? DenyMode::Full
@@ -164,6 +168,7 @@ namespace MFO::APMFBridge {
             api->Release(h.deny.h);
             h.deny     = One{};
             h.denyCats = 0;
+            hadDeny    = false;   // the refiled deny is a new claim: its FILED line (with the new handle) is owed
         }
         if (mode != h.mode) {
             h.mode = mode;
@@ -176,7 +181,8 @@ namespace MFO::APMFBridge {
                 break;
             case DenyMode::OffenseOnly:
                 spdlog::info("[hide] {:08X}: his heal claim is being delivered: the ch.7 deny is refiled as Offense ALONE "
-                             "(attacks and hostile casts stay denied, the heal passes; ch.1 movement block {})", fid,
+                             "(attacks and hostile casts stay denied; a heal on Harbinger's beneficial allow-list passes, a heal with a "
+                             "script effect stays denied and APMF.log names it UNDECLARED; ch.1 movement block {})", fid,
                              okMove ? "held" : "REFUSED");
                 break;
             case DenyMode::Full:

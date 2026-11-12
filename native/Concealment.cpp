@@ -3,9 +3,11 @@
 
 #include "Confidence.h"          // LeashRadius: the pick stays inside the follower's leash
 #include "Config.h"
+#include "Followers.h"          // IsTrackedFast: the any-thread FormID mirror the hit sink filters on (#74)
 #include "MainThread.h"
 #include "Sightline.h"           // PointSeenNow: MFO's own ray from a foe's eye to a point
 #include "apmf/APMFBridge.h"     // the disengage drive (H3), FindStandPoint, the G1 stance claim
+#include "cast/Actuation.h"      // OwnCastInFlight: his own cast is in a live caster state (the one in-flight definition)
 #include "iaus/Disengage.h"       // kFleeHealthLine
 #include "iaus/Engine.h"         // NoteDisengageEnded: the cooldown counts from the end of the run
 #include "iaus/Hide.h"           // G2 Layer 1's verdict: does this foe's group still have him
@@ -32,6 +34,20 @@
 //                         he is hit there (he was found).
 //   kHiddenReads          the hide run ends only after this many CONSECUTIVE laps on which no foe detects him (re-review F2 of
 //                         ba1328c): one lap can fall between two of the engine's own detection updates.
+//   kBlowCapMs            THE BLOW FROM STEALTH (review P1-G3 of 938f45f). The stance is HELD from the pick until the blow
+//                         RESOLVES: the engine reads "attacker is sneaking" when the hit lands, and a swing needs 0.3 s or
+//                         more from the pick to its hit. Resolved = his first hit on an actor (TESHitEvent, cause = him), or
+//                         his attack state / own cast seen live after the pick and then back to none. The hold has NO
+//                         timer from the pick (the walk to the target has no fixed length: before the swing shows, the
+//                         stance is exactly the hide hold it was, with the reveal road intact). This cap counts only from
+//                         the lap the swing / cast was FIRST SEEN live, so it is a ceiling on one engine action, never
+//                         an expiry of a hold in use (principle 9): a melee swing or a bash is over in under 2 s, a drawn
+//                         bow or a charged cast is held a few seconds by the combat AI. 6 s is above those (chosen, not
+//                         measured: hitting it is logged as a warning so a field run can correct it).
+//   kBlowFlightMs         a shot's or a cast's projectile is in the air after the attack state is back to none. The
+//                         stance is kept this long after a RANGED or CAST blow leaves the hand, unless the hit event
+//                         comes first (it normally does). 1.5 s covers ~3000 u of arrow flight (chosen). A melee blow
+//                         lands inside the swing, so it has no tail.
 //   kFleeGain             a non-sneak FLEE point must stand this much farther from the nearest foe than he does now (chosen).
 //   kFleeHealthLine       the flee ends once he is healed past the retreat's own line (iaus/Disengage.h).
 namespace MFO::Concealment {
@@ -55,6 +71,8 @@ namespace MFO::Concealment {
         constexpr std::chrono::milliseconds kRunMaxMs{ 10000 };
         constexpr std::chrono::milliseconds kHideHoldMs{ 12000 };
         constexpr int kHiddenReads = 2;
+        constexpr std::chrono::milliseconds kBlowCapMs{ 6000 };
+        constexpr std::chrono::milliseconds kBlowFlightMs{ 1500 };
 
         struct Pick {
             RE::NiPoint3      point{};
@@ -76,8 +94,17 @@ namespace MFO::Concealment {
             int               hiddenReads = 0;           // consecutive laps on which no foe detected him (the hide run ends at kHiddenReads)
             std::vector<RE::FormID> foes;                // the pick's foes; every lap reads these AND his current foes (WatchList)
         };
-        struct Stance {                                  // the hide hold after a hidden run: the G1 claim stays until a blow / reveal / end
+        struct Stance {                                  // the hide hold after a hidden run: the G1 claim stays until a blow RESOLVES / reveal / end
             std::vector<RE::FormID> foes;
+            // The blow from stealth (NoteBlow arms it on the pick; Service resolves it; the hit sink marks the hit).
+            bool              armed = false;             // a blow was picked: the stance is held until it resolves
+            bool              live = false;              // his swing / shot / cast was seen in progress since the pick
+            bool              ranged = false;            // ... and it was a bow state or a cast (a projectile may still fly)
+            bool              idle = false;              // seen live, and now back to none (idleAt = the first such lap)
+            bool              hit = false;               // SINK: his hit on an actor landed since the pick
+            std::uint8_t      hitFlags = 0;              // SINK: TESHitEvent::Flag bits of that hit
+            RE::FormID        hitTarget = 0;             // SINK
+            Clock::time_point armedAt{}, liveAt{}, idleAt{}, hitAt{};
         };
         std::mutex                           g_mx;      // leaf: never held across an engine or Harbinger call
         std::unordered_map<RE::FormID, Pick> g_picks;
@@ -261,6 +288,109 @@ namespace MFO::Concealment {
         }
     }
 
+    namespace {
+        // WORKER, once per lap of a follower whose hide hold's stance stands and who is in combat. The blow from stealth:
+        // armed on the pick (NoteBlow), resolved HERE. Returns true when the stance was released by the blow's end or when
+        // a swing / shot / cast in progress holds it this lap (the reveal road is not read then: the engine applies the
+        // sneak multiplier against the TARGET's detection at the hit, and standing him up mid-swing because another foe
+        // saw him would throw the blow away). Returns false when no blow is armed or none has started yet: the caller's
+        // reveal road decides, exactly as before the pick.
+        // The attack state and the caster reads are plain loads on the worker, as iaus/Fills.cpp and cast/Hands.cpp make.
+        bool ServiceBlow(RE::Actor* a_follower, RE::FormID a_id) {
+            const auto* as    = a_follower->AsActorState();
+            const auto  atk   = as ? as->GetAttackState() : RE::ATTACK_STATE_ENUM::kNone;
+            const bool  cast  = Actuation::OwnCastInFlight(a_follower);
+            const bool  bow   = atk >= RE::ATTACK_STATE_ENUM::kBowDraw;
+            const bool  live  = atk != RE::ATTACK_STATE_ENUM::kNone || cast;
+            const auto  now   = Clock::now();
+            const char* why   = nullptr;
+            bool        warn = false, firstLive = false;
+            Stance      st;
+            {
+                std::scoped_lock lk(g_mx);
+                const auto it = g_stances.find(a_id);
+                if (it == g_stances.end() || !it->second.armed) return false;
+                Stance& s = it->second;
+                if (live) {
+                    if (!s.live) { s.live = true; s.liveAt = now; firstLive = true; }
+                    s.ranged = s.ranged || bow || cast;
+                    s.idle   = false;
+                } else if (s.live && !s.idle) {
+                    s.idle = true; s.idleAt = now;
+                }
+                if (s.hit) why = "his hit landed";
+                else if (live && now - s.liveAt > kBlowCapMs) { why = "the blow's CAP was hit with his attack or cast still live and no hit event"; warn = true; }
+                else if (s.live && s.idle && (!s.ranged || now - s.idleAt > kBlowFlightMs))
+                    why = s.ranged ? "his shot or cast ended and no hit event came inside the flight time (a miss)"
+                                   : "his swing ended with no hit event (a miss or a block the engine did not report)";
+                st = s;
+                if (why) g_stances.erase(it);
+                else if (!s.live) return false;   // picked, not started (he is closing in): the hold is as it was
+            }
+            const auto ms = [&](Clock::time_point a_from, Clock::time_point a_to) {
+                return std::chrono::duration_cast<std::chrono::milliseconds>(a_to - a_from).count();
+            };
+            if (!why) {
+                if (firstLive)
+                    spdlog::info("[conceal] {:08X}: the blow from stealth is under way {} ms after the pick (attack state {}, own cast "
+                                 "{}): the stance is kept through it, sneaking now = {}",
+                                 a_id, ms(st.armedAt, now), static_cast<int>(atk), cast ? "live" : "none",
+                                 a_follower->IsSneaking() ? "yes" : "NO");
+                return true;
+            }
+            APMFBridge::ReleaseSneakHide(a_id, "the blow from stealth resolved");
+            if (st.hit) {
+                using F = RE::TESHitEvent::Flag;
+                const auto f = st.hitFlags;
+                spdlog::info("[conceal] {:08X}: the blow from stealth RESOLVED: his hit landed on {:08X} {} ms after the pick with the "
+                             "stance held (sneak attack flag {}{}{}{}). The hide hold's stance is released now.",
+                             a_id, st.hitTarget, ms(st.armedAt, st.hitAt),
+                             (f & static_cast<std::uint8_t>(F::kSneakAttack)) ? "SET" : "NOT set",
+                             (f & static_cast<std::uint8_t>(F::kPowerAttack)) ? ", power" : "",
+                             (f & static_cast<std::uint8_t>(F::kBashAttack)) ? ", bash" : "",
+                             (f & static_cast<std::uint8_t>(F::kHitBlocked)) ? ", blocked" : "");
+            } else if (warn) {
+                spdlog::warn("[conceal] {:08X}: the blow from stealth did NOT resolve: {} ({} ms since it was first seen live, cap {} "
+                             "ms, attack state {}, own cast {}). The hide hold's stance is released.",
+                             a_id, why, ms(st.liveAt, now), kBlowCapMs.count(), static_cast<int>(atk), cast ? "live" : "none");
+            } else {
+                spdlog::info("[conceal] {:08X}: the blow from stealth RESOLVED without a hit: {} ({} ms after the pick, stance held "
+                             "until now). The hide hold's stance is released.", a_id, why, ms(st.armedAt, now));
+            }
+            return true;
+        }
+
+        // The engine posts TESHitEvent on whatever thread the hit resolves on. LEAF: a FormID compare under g_mx, no engine
+        // call, no other lock, no follower list (Followers::IsTrackedFast is the any-thread mirror, #74).
+        class BlowHitSink final : public RE::BSTEventSink<RE::TESHitEvent> {
+        public:
+            static BlowHitSink* GetSingleton() { static BlowHitSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_ev, RE::BSTEventSource<RE::TESHitEvent>*) override {
+                if (!a_ev || !a_ev->target || !a_ev->cause) return RE::BSEventNotifyControl::kContinue;
+                const RE::FormID cause = a_ev->cause->GetFormID();
+                if (!Followers::IsTrackedFast(cause)) return RE::BSEventNotifyControl::kContinue;
+                if (!a_ev->target->As<RE::Actor>()) return RE::BSEventNotifyControl::kContinue;   // a hit on an object is not the blow
+                const RE::FormID target = a_ev->target->GetFormID();
+                const auto       flags  = static_cast<std::uint8_t>(a_ev->flags.underlying());
+                std::scoped_lock lk(g_mx);
+                const auto it = g_stances.find(cause);
+                if (it == g_stances.end() || !it->second.armed || it->second.hit) return RE::BSEventNotifyControl::kContinue;
+                it->second.hit       = true;
+                it->second.hitFlags  = flags;
+                it->second.hitTarget = target;
+                it->second.hitAt     = Clock::now();
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
+    void RegisterHitSink() {
+        if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
+            holder->AddEventSink<RE::TESHitEvent>(BlowHitSink::GetSingleton());
+            spdlog::info("[conceal] hit sink registered (the blow from stealth resolves on his hit; it reads only a held stance)");
+        }
+    }
+
     bool RoadOpen() {
         return Config::g_iausHideRoad.load(std::memory_order_relaxed) && APMFBridge::DisengageSupported() &&
                MainThread::IsInstalled();
@@ -358,14 +488,24 @@ namespace MFO::Concealment {
                 if (st == g_stances.end()) return false;
                 foes = st->second.foes;
             }
-            const char* why = nullptr;
-            bool anyYes = false;
-            if (!APMFBridge::InCombat(a_follower)) why = "his combat ended";
-            else { NoFoeDetects(a_follower, WatchList(a_follower, foes), anyYes); if (anyYes) why = "a foe detects him again (revealed)"; }
-            if (why) {
+            if (!APMFBridge::InCombat(a_follower)) {
                 { std::scoped_lock lk(g_mx); g_stances.erase(id); }
-                APMFBridge::ReleaseSneakHide(id, why);
-                spdlog::info("[conceal] {:08X}: the hide hold's stance is released: {}", id, why);
+                APMFBridge::ReleaseSneakHide(id, "his combat ended");
+                spdlog::info("[conceal] {:08X}: the hide hold's stance is released: his combat ended", id);
+                return false;
+            }
+            // THE BLOW FROM STEALTH (armed by NoteBlow on the pick). The stance stays through the swing and its hit; it is
+            // released when the blow resolves. true = this lap is decided (held, or released here).
+            if (ServiceBlow(a_follower, id)) return false;
+            bool anyYes = false;
+            NoFoeDetects(a_follower, WatchList(a_follower, foes), anyYes);
+            if (anyYes) {
+                bool had = false;
+                { std::scoped_lock lk(g_mx); had = g_stances.erase(id) != 0; }
+                if (had) {
+                    APMFBridge::ReleaseSneakHide(id, "a foe detects him again (revealed)");
+                    spdlog::info("[conceal] {:08X}: the hide hold's stance is released: a foe detects him again (revealed)", id);
+                }
             }
             return false;   // G2's hold row / the blow from stealth belong to the IAUS: no scan is skipped
         }
@@ -479,10 +619,15 @@ namespace MFO::Concealment {
     void NoteBlow(RE::FormID a_follower) {
         {
             std::scoped_lock lk(g_mx);
-            if (g_stances.erase(a_follower) == 0) return;
+            const auto it = g_stances.find(a_follower);
+            if (it == g_stances.end() || it->second.armed) return;   // no stance, or this blow is already armed (logged once)
+            it->second.armed   = true;
+            it->second.armedAt = Clock::now();
         }
-        APMFBridge::ReleaseSneakHide(a_follower, "the blow from stealth");
-        spdlog::info("[conceal] {:08X}: the blow from stealth is picked: the hide hold's stance is released", a_follower);
+        // Review P1-G3 of 938f45f: NOT released here. The engine reads "the attacker is sneaking" when the hit LANDS, and the
+        // release reaches SneakStop about a frame later. Service (ServiceBlow) releases it when the blow resolves.
+        spdlog::info("[conceal] {:08X}: the blow from stealth is picked: the hide hold's stance is KEPT until the blow resolves "
+                     "(his hit, or his swing / shot / cast ending)", a_follower);
     }
 
     void Release(RE::FormID a_follower, const char* a_why) {

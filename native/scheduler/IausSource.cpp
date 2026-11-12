@@ -336,7 +336,8 @@ namespace MFO::Scheduler {
             // The disengage's cooldown counts from the END of its run (Concealment calls NoteDisengageEnded), not from the fire.
             Iaus::Engine::NoteFired(m_id, cand, step, m_tick, /*a_startCooldown=*/!a_outcome.approach && cand.family != Family::Disengage);
             // Card G3 (marth MB5): a blow ends the hide hold's stance. The pick that fired is the blow (the engine's own sneak
-            // attack, G2 Layer 1): release the stance claim the hide hold keeps.
+            // attack, G2 Layer 1): the blow is ARMED here and the stance claim is released when it RESOLVES (his hit, or the
+            // swing's end: Concealment::Service), because the engine reads the stance when the hit lands, not at the pick.
             switch (cand.family) {
             case Family::Attack: case Family::PowerAttack: case Family::CastOffense: case Family::CastControl:
             case Family::Exploit: case Family::Bash:
