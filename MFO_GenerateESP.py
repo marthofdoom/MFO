@@ -2067,7 +2067,7 @@ def write_prog_mcm_files(out_dir):
 # LOCAL ID PLAN (ESL-legal 0x800-0xFFF; ADD ONLY, never renumber):
 #   0x800 KYWD manifest join key      0x801 FLST manifest (entry[0] = 0x800)
 #   0x802 FLST passive factions (35, in class-table order = the Id bit index)
-#   0x803 FLST class styles index: the 35 per-class style FLSTs in class-Id order
+#   0x803 FLST class styles index: the 35 per-class style FLSTs in class-Id order, then the 35 zero-avoid TWIN lists (0xB00 + i)
 #   0x880 + i  FLST MFOC_ClassStyles_<Name>: [mask GLOB, that class's CSTYs in slot-bit order]
 #   0x8C0 + i  GLOB MFOC_StyleMask_<Name>: bitmask 1 melee, 2 melee dual, 4 ranged, 8 cast
 #   0x808-0x80A KYWD Marked/Flanked/Guarded (carried by the three marker MGEFs)
@@ -2123,7 +2123,10 @@ CGID_FLANKED_SPELL     = OWN_CLS | 0xA81
 CGID_GUARDED_SPELL     = OWN_CLS | 0xA82
 CGID_MCM_QUEST     = OWN_CLS | 0xA83   # card C11
 CGID_OFFCLASS_PERK = OWN_CLS | 0xA84   # card G16 (off-class weapon rule): granted by classes/Carriers.cpp to every follower with a class equipped
-CLS_NEXT_OBJECT_ID = 0xA85
+# Zero-avoid TWINS of the class CSTYs (heavy armor, see CLS_AVOID_THREAT). Add-only ids.
+CGID_STYLE_TWIN_BASE = OWN_CLS | 0xA85         # one twin per class style with avoidThreat > 0 (<= 95: 0xA85-0xAE3)
+CGID_STYLE_TWIN_FLST_BASE = OWN_CLS | 0xB00    # + class Id: the twin lookup, SAME shape as MFOC_ClassStyles_<Name>
+CLS_NEXT_OBJECT_ID = 0xB23
 CLS_VERSION_STAMP  = 1.000
 
 # RANK SPACE (marth 11-10: caps T1 10 / T2 15 / T3 20 / T4 25; the T3 strong effect
@@ -2701,11 +2704,25 @@ CLS_CSGD = {1: (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0),
             3: (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2)}
 
 
-# Per-class Avoid Threat chance (CSGD's tenth value), by class slug. marth 2026-11-12 (Q-melee-7, MFO-B806): the Mercenary
-# "steps out of incoming spells and arrows". The engine's own side step (CombatBehaviorDodgeThreat) rolls against this
+# Per-class Avoid Threat chance (CSGD's tenth value). The engine's own side step (CombatBehaviorDodgeThreat) rolls against this
 # chance, read through Actor::GetCombatStyle, which Harbinger ch.33 answers for the class's actor-wide style claim; a dodge
-# framework that scores from the style reads the same value. Applied to every stance of the class, never lowering a base.
-CLS_AVOID_THREAT = {'mercenary': 0.3}
+# framework that scores from the style reads the same value. Vanilla Skyrim.esm gives EVERY human combat style 0.20 (read
+# 2026-11-12: csHumanMeleeLvl1-7, csHumanMissile, csHumanMagic, the bosses, the WE* styles), so that is the default.
+# marth 2026-11-12 (Q-S-3, superseding the first numbers): "0.2 for both mage and archer (and any other valid combat style we
+# have), 0.35+ for mercenary line"; "the thief 0.25 and master thief 0.3"; "They can have a bow drawn boost, but not that high.
+# Knight line does not get dodging, no class with heavy armor equipped dodges".
+#   Mercenary line 0.35 / 0.50 / 0.55 (Mercenary, Blademaster, Living Legend; marth 11-12), Thief 0.25, Master Thief 0.30, the Knight
+#   line (Knight, Great Knight, Ebony Warrior) 0.0, every other class the vanilla 0.20. A SET, applied to every stance of the
+#   class (it replaces the MFO stance bases 0 / 0.5 / 0.2 and the old Disengage +0.20).
+#   BOW DRAWN: the ranged-stance style of a class with a value above 0 gets +AVOID_THREAT_BOW_BOOST (0.10, ADDED; marth 11-12).
+#   HEAVY ARMOR: a follower WEARING heavy body armor dodges not at all, whatever his class. That is runtime, not data: every
+#   style with an Avoid Threat above 0 has a ZERO-AVOID TWIN (same record, avoidThreat 0; make_class_styles) and
+#   apmf/StyleClaims.cpp claims the twin while he wears heavy armor.
+AVOID_THREAT_VANILLA = 0.20
+AVOID_THREAT_BOW_BOOST = 0.10
+CLS_AVOID_THREAT = {'mercenary': 0.35, 'blademaster': 0.50, 'living-legend': 0.55,
+                    'thief': 0.25, 'master-thief': 0.30,
+                    'knight': 0.0, 'great-knight': 0.0, 'ebony-warrior': 0.0}
 
 
 def class_csty_params(stance, flags, flagbits, slug=None):
@@ -2713,17 +2730,17 @@ def class_csty_params(stance, flags, flagbits, slug=None):
     table-driven positioning offsets. C7 BASELINE, not tuning: C8 / the field
     retune these (xEdit-editable, one record per class per wield).
       Flag.kShortLeash (the wall classes)  circle -0.10, fallback -0.15  (hold the line)
-      Flag.kDisengage  (Thief + mage line) fallback +0.15; non-melee also avoidThreat +0.20."""
+      Flag.kDisengage  (Thief + mage line) fallback +0.15.
+    Avoid Threat is SET per class (CLS_AVOID_THREAT, else the vanilla 0.20), +0.10 in the ranged stance when above 0."""
     csgd = list(CLS_CSGD[stance])
     circle, fallback, flank, stalk = struct.unpack('<4f', CLS_CSCR[stance])
     if flags & flagbits['kShortLeash']:
         circle, fallback = max(0.0, circle - 0.10), max(0.0, fallback - 0.15)
     if flags & flagbits['kDisengage']:
         fallback = min(1.0, fallback + 0.15)
-        if stance != 1:
-            csgd[9] = min(1.0, csgd[9] + 0.20)
-    if slug in CLS_AVOID_THREAT:
-        csgd[9] = max(csgd[9], CLS_AVOID_THREAT[slug])
+    csgd[9] = CLS_AVOID_THREAT.get(slug, AVOID_THREAT_VANILLA)
+    if stance == 2 and csgd[9] > 0.0:
+        csgd[9] += AVOID_THREAT_BOW_BOOST
     return tuple(csgd), struct.pack('<4f', circle, fallback, flank, stalk)
 
 
@@ -2735,7 +2752,7 @@ def class_weapon_bits():
 
 # STYLE SLOTS: a class's styles are looked up through its OWN FLST, never by position in
 # a global run (card C8 consumes this; the DLL must not hard-code CSTY ids).
-#   MFOC_ClassStyles          (0x803)  35 entries, the per-class FLSTs in class-Id order
+#   MFOC_ClassStyles          (0x803)  70 entries: 35 per-class FLSTs in class-Id order, then 35 zero-avoid TWIN lists (0xB00+Id)
 #   MFOC_ClassStyles_<Name>   (0x880+Id) entry[0] = GLOB MFOC_StyleMask_<Name> (0x8C0+Id),
 #                              entry[1..] = that class's CSTYs in ASCENDING SLOT-BIT order,
 #                              exactly the slots the GLOB's bitmask names:
@@ -2785,9 +2802,10 @@ def make_class_styles(table, flagbits):
             f"class CSTY base for {edid} drifted from make_csty -- update CLS_CSGD/CLS_CSCR with it"
     wb = class_weapon_bits()
     body, per_class, nxt = b'', {}, CGID_STYLE_BASE
+    body_tw, tnext = b'', CGID_STYLE_TWIN_BASE
     for row in table:
         nm = cls_edid_name(row)
-        mask, fids = 0, []
+        mask, fids, twins = 0, [], []
         for stance in class_stances(row, wb):
             csgd, cscr = class_csty_params(stance, row['flags'], flagbits, row['slug'])
             variants = ([(STYLE_SLOT_MELEE, "Melee", 1), (STYLE_SLOT_MELEE_DUAL, "MeleeDual", 1 | 4)]
@@ -2798,9 +2816,17 @@ def make_class_styles(table, flagbits):
                 mask |= slot
                 fids.append(nxt)
                 nxt += 1
-        per_class[row['idx']] = (mask, fids)
+                if csgd[9] > 0.0:   # the zero-avoid twin: byte-identical but avoidThreat 0 (the twin entry IS the style when none is needed)
+                    tcsgd = csgd[:9] + (0.0,)
+                    body_tw += _csty_record(f"MFOC_StyleNoDodge_{nm}_{label}", tnext, tcsgd, cscr, data_flags=df)
+                    twins.append(tnext)
+                    tnext += 1
+                else:
+                    twins.append(fids[-1])
+        per_class[row['idx']] = (mask, fids, twins)
     assert nxt <= OWN_CLS | 0xA00, "class CSTY run overran the 0xA00 perk id"
-    return body, per_class
+    assert tnext <= OWN_CLS | 0xB00, "class CSTY twin run overran the 0xB00 twin list ids"
+    return body + body_tw, per_class
 
 
 # ── the class add-on's OWN MCM (card C11) ───────────────────────────────────────────────────────────────
@@ -2947,12 +2973,17 @@ def make_classes_esl():
                      + [fid for fid, _e, _v, _f in CLS_GLOBS])
     flst += prog_flst(CGID_FACTION_LIST, "MFOC_PassiveFactions", faction_fids)
     # Per-class style lookup (see the STYLE SLOTS comment): entry[0] the mask GLOB, then the CSTYs.
+    # Entries 35..69 (append-only): the zero-avoid TWIN lists, same class order and the same shape as the lists above; an
+    # entry equals its base style when that style has no Avoid Threat to remove. An OLDER DLL REJECTS the 70-entry list (it demands exactly 35) and turns the class CSTYs off, loudly; ship the DLL with the ESL.
     flst += prog_flst(CGID_STYLE_LIST, "MFOC_ClassStyles",
-                      [CGID_STYLE_FLST_BASE + row['idx'] for row in table])
+                      [CGID_STYLE_FLST_BASE + row['idx'] for row in table]
+                      + [CGID_STYLE_TWIN_FLST_BASE + row['idx'] for row in table])
     for row in table:
-        mask, fids = per_class[row['idx']]
+        mask, fids, twins = per_class[row['idx']]
         flst += prog_flst(CGID_STYLE_FLST_BASE + row['idx'], "MFOC_ClassStyles_" + cls_edid_name(row),
                           [CGID_STYLE_MASK_BASE + row['idx']] + fids)
+        flst += prog_flst(CGID_STYLE_TWIN_FLST_BASE + row['idx'], "MFOC_ClassStylesNoDodge_" + cls_edid_name(row),
+                          [CGID_STYLE_MASK_BASE + row['idx']] + twins)
     data += group('FLST', flst)
     perks, perk_counts = make_class_passive_perks(table)
     data += group('PERK', make_reference_perk() + perks + make_offclass_perk())
