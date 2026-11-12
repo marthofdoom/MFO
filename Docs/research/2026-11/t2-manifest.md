@@ -24,11 +24,12 @@ Status: DONE = merged to main. FLIGHT = branch in review or being written. OPEN 
 | H1 ch.18 | Attack selection | DONE | via C8 row |
 | ch.7 v40 | Offense = hostile only, allow-list nature (Harbinger 337e688) | DONE | DONE (flee/hide deny) |
 | H3 | Disengage drive + anchor-leak fix (Harbinger 47962b2) | DONE | DONE (G3 run) |
-| G2 | Hide-when-unseen Layer 1 | DONE | FLIGHT (feat/iaus-sim-stealth, review queued) |
-| G3 | Disengage to out-of-sight, flee, hide run | FLIGHT (fix round: NoteBlow SEV-2) | FLIGHT (sim-stealth) |
-| H2 | Aversion, ABI v41 (Conjurer, Healer) | FLIGHT (fix round: H2-1..H2-3) | OPEN (C-H2) |
+| G2 | Hide-when-unseen Layer 1 | DONE | DONE (sim-stealth cfee1bf) |
+| G3 | Disengage to out-of-sight, flee, hide run | DONE (3d2ca76) | DONE (sim-stealth cfee1bf) |
+| H2 | Aversion, ABI v41 (Conjurer, Healer) | DONE (Harbinger 1b1ef40, MFO 057d93c) | OPEN (C-H2) |
 | H5 | Archer miss correction, ch.29 + MFO miss budgets | DONE | OPEN (C-H5: lab miss rate is one fixed number) |
-| G7 | Corpse target / reanimate | FLIGHT (Fable author) | OPEN (sim drops reanimate spells) |
+| G7 | Corpse target / reanimate | DONE (Harbinger 7407303, MFO a4a7e21) | OPEN (sim drops reanimate spells) |
+| T | Town theft fix (1dfcuabczbg): stolen-copy gate, guard gate, locked/owned door + furniture gate | FLIGHT (fix/theft-gate, Sonnet) | n/a |
 
 ## 2. Per-class needs found missing in this pass
 

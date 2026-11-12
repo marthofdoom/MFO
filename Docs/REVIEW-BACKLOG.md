@@ -2620,6 +2620,7 @@ Verbatim (reviewer): the magnitude misses the dual-cast scale, kPowerAffectsMagn
 
 ### MFO-B584 (SEV-5, OPEN, cast/WillWork.cpp, against 48be8b3) -- kReanimate is unreachable
 Verbatim (reviewer): kReanimate is unreachable, the IsSummonSpell branch in Fire.cpp returns first.
+- NOTE 2026-11-11 (feat/g7-reanimate, card G7): `PickCorpse` (cast/Corpse.cpp) and Fire's cast-at-target check now call WillWork with a corpse as the target, so the kReanimate cap is reached on that road. Left OPEN for the reviewer's original point until a field run shows a `[willwork]` line for a Reanimate spell.
 
 ### MFO-B585 (SEV-5, OPEN, cast/WillWork.cpp, against 48be8b3) -- the engine's MGEF condition site was not located
 Verbatim (reviewer): the engine's MGEF condition site was not located; the IsTrue(target, caster) order was confirmed from ActiveEffect::EvaluateConditions and vanilla data.
@@ -3064,14 +3065,17 @@ The old "no owner on this path, or form missing -> stance disabled ..." comment 
 ### MFO-B751 (SEV-5, OPEN, C8 author's spots, against 2628beb, same review)
 Accepted as documented: fClassLeashMult 0.5 is a tunable guess (floored at fLeashMin; field tunes it); dead followers are released on the not-managed path with the 30 s backoff for an ended claim; Harbinger absent = silent mix sweep (matches AimClaims); Dragonborn with no picked T4 uses its own tier-5 package; Templar vs-undead power floor not built (needs a conditional facet) and Ebony Warrior inherits 0.20 (not ruled).
 
-### MFO-B755 (SEV-3, OPEN, tools/iaus_sim headline fights, against a2e7336, Opus review of fix/iaus-sim-backlog)
+### MFO-B755 (SEV-3, FIXED, tools/iaus_sim headline fights, against a2e7336, Opus review of fix/iaus-sim-backlog)
 `hf = fightsGiven ? fights : 24` also changes the normal (non-`--seeds`) full-run headline J: before, it was always 24 fights; now `--fights N` computes it at N. The count is printed and in JSON (headline.fights), but `--compare` against an archived baseline made at another fight count would read the change as a J delta (unchecked whether --compare looks at headline.fights). Fix: back to 24 for non-`--seeds` runs, or make --compare refuse when headline fights/covers differ. The Fable tuning round must RE-BASELINE before tuning.
+FIXED on feat/iaus-sim-stealth: a full run's headline J is always 24 fights per scenario (a --seeds run still honours --fights). A --baseline file starts with a #meta line and --compare refuses a baseline whose line differs. CLI checks in run.sh.
 
-### MFO-B756 (SEV-4, OPEN, tools/iaus_sim JSON oracle_over, against a2e7336, same review)
+### MFO-B756 (SEV-4, FIXED, tools/iaus_sim JSON oracle_over, against a2e7336, same review)
 B712 incomplete: the JSON records covers and fights for the main J, but oracle_over has no covers field for the oracle headline (only the printed oracle line gained covers=).
+FIXED on feat/iaus-sim-stealth: headline.oracle_covers in the JSON. CLI check in run.sh.
 
-### MFO-B757 (SEV-5, OPEN, tools/iaus_sim jCovers, against a2e7336, same review)
+### MFO-B757 (SEV-5, FIXED, tools/iaus_sim jCovers, against a2e7336, same review)
 jCovers defaults to "all classes" even when hasJ is false (JSON can claim coverage for a J that was not computed), and fights is then 0. Cosmetic.
+FIXED on feat/iaus-sim-stealth: jCovers has no default, and headline.covers / headline.fights are null when no J was computed.
 
 ### MFO-B758 (SEV-5, OPEN, B714 notes, against a2e7336, same review)
 The B714 notes on paired-difference SE and on --classes vs --opt-class being different objectives are handled only in iaus-sim-v2.md; the backlog marks the whole of B714 FIXED.
@@ -3087,6 +3091,25 @@ F5. Below 0.30 health the Retreat family and the non-sneak flee are both generat
 
 ### MFO-B762 (SEV-5, NOTED, scheduler/CombatScan.cpp death branch, against ba1328c, same review)
 Out of brief in the G3 fix round: the CombatScan follower-down branch also calls APMFBridge::ReleaseHideHold (a G2 claim). Harmless (idempotent, and the right thing for a dead follower). Noted so the diff is explained.
+
+<!-- card G7 entries (MFO-B766..B770) sit here, above B763, so this file merges cleanly with the base branch's own appended entries -->
+### MFO-B766 (SEV-4, OPEN, cast/Corpse.cpp + cast/BuffRoad.cpp, raised by the author against feat/g7-reanimate, 2026-11-11)
+Card G7 is not field run. Unproven: (1) that a Reanimate claim fires at all under a claim (MFO-B232's N3 never got its field cast either); (2) that `WillWork`'s Yes and the engine's own keep test agree (Harbinger APMF-B285: whether the engine's validity test enforces the level cap is not read; MFO-B583: WillWork's cap misses dual-cast scale and two entry points). Where they disagree the claim never fires, Harbinger logs `REFUSED the claimed corpse`, the never-fired bound releases it after `kHoldLastSeenCapMs` and that corpse is held off for the fight; (3) the release after a successful raise: with the commanded-actor limit at 1 the up-read turns Blocked and ends the claim, with a higher limit the rule simply stops naming that corpse and the claim ages out unrefreshed. Reasoning: disassembly proves a path exists, not that it runs. Next field cycle exercises this (carve-out b), so it is listed, not deferred silently.
+
+### MFO-B767 (SEV-4, OPEN, cast/Corpse.cpp PickCorpse, same branch)
+The pick has no line-of-sight test. A vanilla Reanimate spell is an aimed projectile, so a corpse behind cover is cast at and missed. Bounded: the fire is observed, the corpse stays dead, and BuffRefreshGate's fired-but-never-landed bound releases the claim and holds that corpse off for the fight. Costs one cast of magicka per hidden corpse. Fix shape: `Sightline::Want` / `CheckWithin(Basis::Own)` on the candidates, as the offense road does for a foe.
+
+### MFO-B768 (SEV-5, OPEN, apmf/Bridge.cpp BuildCastRequestLocked, same branch)
+The builder sets `kCastFlag_CorpseTarget` for ANY claim of a spell with a Reanimate effect at another actor. A spell that has a Reanimate effect AND a hostile-flagged effect classifies Offense and is claimed at a LIVE foe on the offense road. If the engine builds the Reanimate caster for it, Harbinger's seat refuses the living target every poll and the claim never fires. Before G7 the engine raised its own corpse under that claim. No vanilla spell has that shape. Fix shape: also require the target to be dead in the builder (then the dry run, the replay and the claim identity must still agree across a raise).
+
+### MFO-B769 (SEV-5, OPEN, cast/Fire.cpp ResolveCastTarget rung 0, same branch)
+A "Corpse: Within -> Cast at target" row whose target was set to Self or Enemy on the board resolves to the caster or the commanded foe before the selector's corpse (rung 0 outranks `Choice::target`). Self then files the pre-G7 target-0 claim (the engine's corpse), Enemy casts a Reanimate at a living foe. The player chose it, so nothing is forced. The board could grey those two targets on a corpse row.
+
+### MFO-B770 (SEV-4, OPEN, cast/CastOn.cpp below the buff fork, same branch)
+With Harbinger absent or the claim road switched off, a corpse row falls past the buff claim fork onto the direct roads with a DEAD actor as the cast target (the AI-first hybrid, `ForceCast`). That road was never run at a corpse: before G7 a Reanimate rule could only reach it with a living target or the player (MFO-B84's history). It may raise the corpse unanimated (the documented "Harbinger absent" degrade) or do nothing. Not observed either way. The same road is reached WITH Harbinger when `ChooseBuffRoad` answers a Direct road for the spell (one `[buff] ... DIRECT road` line names why): an ambiguous row with an Unknown or NoRow effect beside the Reanimate one is still such a case. G7 only added `EngineRow::Reanimate` to `BuffAmbiguousRowWhy`'s bounded set.
+
+### MFO-B771 (SEV-5, OPEN, cast/Corpse.cpp, against 533d6ef, Opus tier-3 review of feat/g7-reanimate, finding F5)
+As handed to the author: "cast/Corpse.cpp uses IsDead() which accepts Dying; GetLifeState()==kDead would match StillCorpse." `IsDead()` is true for Dead, Dying and Recycle. Harbinger's seat (`core/ReanimateSeat.cpp` `StillCorpse`) and the engine's own keep test want life state Dead exactly, so a rule can pick an actor that is still dying and the seat answers NO for that poll (logged there). The claim stands and the next poll passes once the actor is dead.
 
 ### MFO-B763 (SEV-5, OPEN, Concealment.cpp WatchList, against 05260d0, Opus tier-3 review of the ch.7 v40 round, finding F5c)
 As handed to the author (the reviewer's own log was a two-line summary): "WatchList duplicates Gather's gates." The hidden-end / reveal watch re-implements the gather's foe set tests instead of sharing them, so a change to one can drift from the other. Reviewer's log: "WatchList mirrors Gather (lock order OK)".
@@ -3126,3 +3149,21 @@ arrow in a 20-arrow stack makes the whole plain remainder untakeable from that s
 A corpse or chest in an OWNED cell (a house, an inn) reads the cell owner through `GetOwner()` and is barred whole for its plain copies,
 including what the player dropped there. Intended by "bar all stolen", but it also removes legitimate loot from owned interiors (bandit
 corpses in a rented room). No cell/location exemption was added.
+
+### MFO-B783 (SEV-3 handled in the 30.10 handoff, OPEN, tools/iaus_sim/World.h StepWorld / RunMove, against a645ca2, Opus tier-2 review of feat/iaus-sim-stealth, finding 1)
+Only during a G3 run do his feet keep moving through a weapon swap, a potion or a cast; everywhere else (Retreat included) those still stop his body, so the lab "makes the flee look a little better than Retreat" (Q-SIM-5). The 30.10 handoff no longer searches `aw.4` against `aw.21` or `c.63.*` until the asymmetry is removed.
+
+### MFO-B784 (SEV-4, OPEN, iaus-sim-v2.md 30.7 finding 4 + World.h `g_blowStands` comment, against a645ca2, same review, finding 3)
+Both still say NoteBlow releases the stance when the blow is PICKED; main's 3db7882 keeps it until the blow resolves. Q-SIM-2 is marked resolved in the questions file; the two texts still need the same correction.
+
+### MFO-B785 (SEV-4, OPEN, tools/iaus_sim/Detect.h ApplyProfile("steep"), against a645ca2, same review, finding 4)
+Every GMST in the "steep" profile equals LoreRim.sim.json exactly (alias `lorerim-like`), while the doc and comment call it hand-written and not read from a list. Lab-only, nothing in native/ reads it, but the provenance claim is wrong next to the no-list-specific-data rule. Say where the values came from or make them generic.
+
+### MFO-B786 (SEV-5, OPEN, tools/iaus_sim/Policy.h Fire, against a645ca2, same review, finding 5)
+The lab's "blow" families for releasing the stance claim leave out Family::Exploit, which native IausSource.cpp:341-342 includes; only `stanceHeld` bookkeeping differs.
+
+### MFO-B787 (SEV-5, OPEN, tools/iaus_sim/Policy.h PreparePick, against a645ca2, same review, finding 6)
+A re-pick overwrites the current pick at once; native keeps the old pick while the new job is pending, so BeginRun can use a point not yet "landed" at the edge of the 1.5 s window (~0.1 s optimism).
+
+### MFO-B788 (SEV-5, OPEN, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
+`in.flying = outOfMeleeReach` stands in for "flying", giving a 3x max distance to any actor out of melee reach (a ledge). Errs pessimistic for the follower; unstated.

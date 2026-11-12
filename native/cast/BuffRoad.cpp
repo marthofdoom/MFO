@@ -245,6 +245,22 @@ namespace MFO::Actuation {
         return shape == SpellShape::Summon || shape == SpellShape::Reanimate;
     }
 
+    // CARD G7 (Actuation_internal.h). The effect test is Harbinger's own (core/CastClassify.cpp IsReanimateSpell:
+    // ANY effect with the Reanimate archetype), the same one the bridge's request builder uses to set the flag.
+    RE::FormID BuffCorpseTarget(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_corpse) {
+        if (!a_follower || !a_spell || !a_corpse || a_corpse == a_follower || !a_corpse->IsDead()) return 0;
+        if (!APMFBridge::CorpseTargetSupported()) return 0;
+        for (const auto* e : a_spell->effects)
+            if (e && e->baseEffect && e->baseEffect->GetArchetype() == RE::EffectArchetypes::ArchetypeID::kReanimate)
+                return a_corpse->GetFormID();
+        return 0;
+    }
+
+    bool BuffCorpseHeldOff(RE::FormID a_follower, RE::FormID a_corpse, RE::FormID a_spell) {
+        const auto nf = g_neverFired.find(a_follower);
+        return nf != g_neverFired.end() && nf->second.count(SK(a_corpse, a_spell)) != 0;
+    }
+
     // The static (spell-record-only) fallbacks of ChooseBuffRoad, shared with the board's spell picker
     // (cast/SpellSupport.cpp) so the two can never disagree. Declared in Actuation.h.
     // A SELF cast of a NON-kSelf, non-placement buff (marth 2026-10-05: "a self cast is valid if its needed, just
@@ -272,12 +288,16 @@ namespace MFO::Actuation {
     const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch) {
         if (!a_arch.rowApprox) return nullptr;
         const auto bit = [](EngineRow r) { return 1u << static_cast<std::uint32_t>(r); };
+        // CARD G7: Reanimate joins the set. Its caster is bounded by the ENGINE, not by Harbinger: its own 0x06 runs
+        // in full under a claim (a valid corpse is required and a raised corpse is no corpse), with or without the
+        // ABI v42 corpse seat. Without this a Reanimate spell that also carries an effect of another bounded row
+        // never reached the claim road, so its corpse rule fell on the direct roads (MFO-B770).
         const std::uint32_t bounded = bit(EngineRow::Light) | bit(EngineRow::Script) | bit(EngineRow::Armor) |
                                       bit(EngineRow::Cloak) | bit(EngineRow::Ward) | bit(EngineRow::Invisibility) |
-                                      bit(EngineRow::Summon) | bit(EngineRow::BoundItem);
+                                      bit(EngineRow::Summon) | bit(EngineRow::BoundItem) | bit(EngineRow::Reanimate);
         if (a_arch.rowMask & ~bounded)
             return "an ambiguous row with a candidate Harbinger does not bound (outside Light / Script / Armor / Cloak / "
-                   "Ward / Invisibility / Summon / BoundItem: a wrong caster could re-cast)";
+                   "Ward / Invisibility / Summon / BoundItem / Reanimate: a wrong caster could re-cast)";
         return nullptr;
     }
 
@@ -301,14 +321,16 @@ namespace MFO::Actuation {
         return nullptr;
     }
 
-    bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+    bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, RE::Actor* a_corpse) {
         if (!a_follower || !a_spell) return false;
         const bool other = a_recipient && a_recipient != a_follower;
         RE::Actor* recip = other ? a_recipient : a_follower;
         if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr) != BuffRoad::Claim) return false;
-        // A never-fired hold-off (F1) is transparent without a preempt too.
+        // A never-fired hold-off (F1) is transparent without a preempt too. G7: keyed by the corpse for a corpse claim.
+        const RE::FormID corpseTarget = BuffCorpseTarget(a_follower, a_spell, a_corpse);
         if (const auto nf = g_neverFired.find(a_follower->GetFormID());
-            nf != g_neverFired.end() && nf->second.count(SK(recip->GetFormID(), a_spell->GetFormID())))
+            nf != g_neverFired.end() &&
+            nf->second.count(SK(corpseTarget ? corpseTarget : recip->GetFormID(), a_spell->GetFormID())))
             return true;
         if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
         // nothing an up-read could see -- except a placement spell, whose "up" is SummonGate whatever its duration
@@ -401,13 +423,16 @@ namespace MFO::Actuation {
         return BuffRoad::Claim;
     }
 
-    SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+    SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, RE::Actor* a_corpse) {
         const bool other = a_recipient && a_recipient != a_follower;
         RE::Actor* recip = other ? a_recipient : a_follower;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
         const auto rid     = recip->GetFormID();
-        const auto sk      = SK(rid, spellID);
+        // CARD G7: a Reanimate claim that names its corpse (Harbinger ABI >= 42), else 0. The fired / never-fired
+        // sets are then keyed by the corpse; "up" stays SummonGate on the caster (recip).
+        const RE::FormID corpseTarget = BuffCorpseTarget(a_follower, a_spell, a_corpse);
+        const auto sk      = SK(corpseTarget ? corpseTarget : rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
         const bool placement = BuffPlacementSpell(a_spell);
         const bool instant   = !placement && InstantSpell(a_spell);   // a zero-duration summon still gets SummonGate
@@ -453,7 +478,9 @@ namespace MFO::Actuation {
         // APMF 85a8f2f, and a placement spell's target 0 to the claimant too); a buff at another recipient, or a
         // non-kSelf buff at the caster (explicitSelf), names that actor. LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
         const bool explicitSelf = !other && ExplicitSelfBuff(a_spell);
-        const RE::FormID target = (other || explicitSelf) ? rid : 0;
+        // G7: a corpse claim names the corpse; the bridge's request builder sets kCastFlag_CorpseTarget for a
+        // Reanimate spell claimed at another actor (apmf/Bridge.cpp BuildCastRequestLocked).
+        const RE::FormID target = corpseTarget ? corpseTarget : (other || explicitSelf) ? rid : 0;
         if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0)) {
             // Present and capable means APMF REFUSED: fail closed, loudly, never the direct road.
             LogApmfRefusal(id, "buff cast", spellID, target, "left");
@@ -466,9 +493,10 @@ namespace MFO::Actuation {
 #endif
         if (RoadLogDue(id, spellID, BuffRoad::Claim)) {
             const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
-            spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X} (animated; the engine's own {} caster "
+            spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X}{} (animated; the engine's own {} caster "
                          "decides when it fires)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
-                         ClaimLabel(arch, other), rid, EngineRowName(arch.row));
+                         ClaimLabel(arch, other), corpseTarget ? corpseTarget : rid,
+                         corpseTarget ? " (the rule's corpse, kCastFlag_CorpseTarget)" : "", EngineRowName(arch.row));
         }
         return SelfCast::Applied;
     }
@@ -477,7 +505,8 @@ namespace MFO::Actuation {
         return BuffClaim(a_follower, a_spell, nullptr);
     }
 
-    std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+    std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
+                                           RE::Actor* a_corpse) {
         const bool other = a_recipient && a_recipient != a_follower;
         RE::Actor* recip = other ? a_recipient : a_follower;
         const auto id      = a_follower->GetFormID();
@@ -494,7 +523,9 @@ namespace MFO::Actuation {
                 return std::nullopt;
         }
         const auto rid     = recip->GetFormID();
-        const auto sk      = SK(rid, spellID);
+        // CARD G7: a corpse claim's sets are keyed by the corpse (BuffClaim's rule, the same answer).
+        const RE::FormID corpseTarget = BuffCorpseTarget(a_follower, a_spell, a_corpse);
+        const auto sk      = SK(corpseTarget ? corpseTarget : rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
         const bool placement = BuffPlacementSpell(a_spell);
         const bool instant   = !placement && InstantSpell(a_spell);   // a zero-duration summon still gets SummonGate
@@ -557,7 +588,7 @@ namespace MFO::Actuation {
                              "nothing charging -- claim RELEASED and the rule held off until the next cast-rule "
                              "reset (no direct fallback; the engine's {} caster did not fire it: see "
                              "Harbinger's [ctcensus] verdict; rule {})",
-                             id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, rid, ageMs,
+                             id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, corpseTarget ? corpseTarget : rid, ageMs,
                              EngineRowName(ClassifyArchetype(a_spell, /*a_seat0=*/other || ExplicitSelfBuff(a_spell)).row), g_firingRule);
                 g_neverFired[id].insert(sk);
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
@@ -607,7 +638,7 @@ namespace MFO::Actuation {
                         spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} FIRED but NEVER LANDED: first fire observed "
                                      "{} ms ago, the buff is still not up -- claim RELEASED and the rule held off "
                                      "until the next cast-rule reset (no direct fallback; rule {})",
-                                     id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, rid, ageMs,
+                                     id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, corpseTarget ? corpseTarget : rid, ageMs,
                                      g_firingRule);
                         g_neverFired[id].insert(sk);
                         EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);

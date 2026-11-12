@@ -258,6 +258,17 @@ namespace MFO::APMFBridge {
         // the real RequestCast and the CanServeCast dry run (below) cannot build two different shapes.
         // `ownLos` reports whether kCastFlag_OwnLineOfSight was set (the caller's no-sight-line retry keys on it).
         // Pure: reads the api's abiVersion and LosSupported() only. Caller holds g_mx.
+        // Any effect of the spell has the Reanimate archetype (Harbinger's core/CastClassify.cpp IsReanimateSpell,
+        // the test its ApplyRequest warns on). Form data only; any thread.
+        bool ReanimateSpell(RE::FormID a_spell) {
+            auto* sp = a_spell ? RE::TESForm::LookupByID<RE::SpellItem>(a_spell) : nullptr;
+            if (!sp) return false;
+            for (const auto* e : sp->effects)
+                if (e && e->baseEffect && e->baseEffect->GetArchetype() == RE::EffectArchetypes::ArchetypeID::kReanimate)
+                    return true;
+            return false;
+        }
+
         APMF_API::APMF_CastRequest BuildCastRequestLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                                           RE::FormID wantSpell, RE::FormID wantTarget,
                                                           std::int32_t wantHand, bool wantConc,
@@ -296,7 +307,19 @@ namespace MFO::APMFBridge {
             // YES only while its own ray to the target is VISIBLE, so the claim is never cast into a
             // wall. RequestCast only (req.target set). MFO's own Sightline gating at the cast sites
             // stays for this field cycle. Below v18 the bit is not set and nothing changes.
-            ownLos = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
+            // CORPSE TARGET (ABI v42, APMF_API.h kCastFlag_CorpseTarget, class plan card G7): a spell with a
+            // Reanimate effect claimed at ANOTHER actor is a corpse claim: MFO only ever names another actor for
+            // such a spell when the rule's selector chose a corpse (cast/BuffRoad.cpp BuffCorpseTarget; before G7
+            // every Reanimate claim carried target 0). Decided HERE, from (spell, target) alone, so the real
+            // request, the CanServe dry run and a replayed refresh always build the same shape and the claim's
+            // identity (spell, target, hand, ...) needs no new member. Form data only. Below v42 the bit is not
+            // set (an older Harbinger ignores the target of a Reanimate claim: the engine picks its own corpse).
+            const bool corpse = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
+                                api->abiVersion >= kCorpseTargetAbi && ReanimateSpell(wantSpell);
+            if (corpse) req.flags |= APMF_API::kCastFlag_CorpseTarget;
+            // Never with a corpse claim: the Reanimate caster's seats do not read it, and Harbinger would
+            // measure rays at a corpse for nothing (and refuse the request while its service is disarmed).
+            ownLos = !wantDenyOnly && !corpse && wantTarget != 0 && wantTarget != follower &&
                                 api->abiVersion >= 18 && LosSupported();
             if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
             return req;

@@ -360,6 +360,10 @@ namespace MFO::APMFBridge {
         // MFO outbids APMF's mid-range test hotkeys (basis 100) so a real gambit wins
         // the hand/target over a tester's Numpad keys. Arbitrary among clients; > 100.
         inline constexpr float kOwnBasis = 200.0f;
+        // CARD G7: the first Harbinger ABI that serves kCastFlag_CorpseTarget (its Reanimate caster seats landed in
+        // the same commit as the constant). The request builder (Bridge.cpp) and CorpseTargetSupported
+        // (CastClaims.cpp) share this one number. The literal is that fact, not APMF_API::kABIVersion.
+        inline constexpr std::uint32_t kCorpseTargetAbi = 42;
 
         // The shared claim helpers (defined in apmf/Bridge.cpp; see their doc comments
         // there). Caller holds g_mx for all of them.

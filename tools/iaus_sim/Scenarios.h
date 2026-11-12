@@ -12,7 +12,7 @@ namespace Sim {
         const char* what;       // what a skilled player does here
         const char* metrics;    // comma list of metric keys to print (sim.cpp Metrics), first = the primary
         bool lowerBetter;       // for the primary metric
-        bool stealth = false;   // a class playstyle scenario of the stealth lab: never part of the headline J, run by name or by --scenario stealth
+        bool stealth = false;   // a scenario of the stealth / disengage lab (G1, G2, G3): part of the headline J and of "--scenario all" only while a stealth road is modelled (--stealth g1|hide|g3); by name or --scenario stealth always
         bool parked = false;    // a PARKED class's scenario (T3 / T4): excluded unless --parked
         std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> make;
         Scenario(const char* n, const char* w, const char* m, bool lb, std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> mk, bool st = false, bool pk = false) : name(n), what(w), metrics(m), lowerBetter(lb), stealth(st), parked(pk), make(std::move(mk)) {}
@@ -96,7 +96,23 @@ namespace Sim {
             "pdead%,U,taunt/min,downs/f", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "knight", 25, Cls::Mage);
                 f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 25, R, 1.5f, 1.2f)); f.foesOnPlayer = true; f.foeDist = 450; f.subjectHp = 0.30f; f.playerHp = 0.20f; f.playerPotions = 0; f.subjectPotionsH = 0; f.targetRatio = 0.60f; return f; } });
         if (!withStealth) return v;
-        // ── the stealth lab (iaus-classes.md): meaningful under --stealth g1 | hide | aware; under off they are plain fights ──
+        // ── the stealth and disengage lab (iaus-classes.md section 6, iaus-sim-v2.md section 30): meaningful under --stealth g1 | hide | g3; under off they are plain fights ──
+        v.push_back({ "thief-cover", "three bandits have found the thief among the pillars of a lit hall: break their line of sight behind cover, crouch until their group loses him, come back with blows from stealth",
+            "U,hideOk%,sneakDmg%,hidden%,taken/s,downs/f,hide/min,stealthMiss%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "thief", 25, Cls::Melee);
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 23, R)); f.foeTags = { "grunt", "grunt", "grunt" };
+                f.interior = true; f.light = 0.9f; f.occluders = 0; f.cover = { { -120, 430, 230 }, { -120, -430, 230 }, { -760, 0, 200 } }; f.freeEntry = 0; f.onSubject = true; f.foeDist = 800; f.targetRatio = 0.95f; return f; }, true });
+        v.push_back({ "thief-open", "the same three on the thief on open ground at noon, nothing to hide behind: no hide run exists, so he keeps his distance and shoots, and never stands still hoping to be lost",
+            "U,taken/s,downs/f,sneakDmg%,hidden%,retreat%,still%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "thief", 25, Cls::Melee);
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 23, R)); f.foeTags = { "grunt", "grunt", "grunt" };
+                f.interior = false; f.light = 0.9f; f.occluders = 0; f.freeEntry = 0; f.onSubject = true; f.foeDist = 800; f.targetRatio = 0.95f; return f; }, true });
+        v.push_back({ "caster-flee", "an evoker at a quarter of his health knows a heal, two blades are closing on him and the player is busy: get away from them, heal on the way, come back and cast",
+            "U,downs/f,flee/f,fleeHealed%,runDown%,taken/s,healed%,retreat%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 28, Cls::Ranged);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 26, R)); f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 26, R)); f.foeTags = { "grunt", "grunt", "grunt" };
+                f.ensure = { "heal", "fire" }; f.subjectHp = 0.27f; f.subjectPotionsH = 0; f.onSubject = true; f.foeDist = 550; f.foeSpread = 150; f.targetRatio = 0.85f; return f; }, true });
+        v.push_back({ "melee-flee", "a mercenary at a quarter of his health, no healer in the party, one potion, two foes on him: drink, give ground toward the player, do not die where he stands",
+            "U,downs/f,taken/s,flee/f,retreat%,healed%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "mercenary", 26, Cls::Ranged);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 26, R, 1.3f)); f.foeTags = { "grunt", "grunt" };
+                f.subjectHp = 0.27f; f.subjectPotionsH = 1; f.onSubject = true; f.foeDist = 450; f.foeSpread = 150; f.targetRatio = 0.85f; return f; }, true });
         v.push_back({ "ambush", "the thief's free stealth entry against a camp with a mage: the one sneak attack he gets for nothing goes into the mage, not into a grunt",
             "U,opener%,sneakDmg%,prio%,dur.s,win%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "thief", 25, Cls::Melee);
                 for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 22, R)); f.customFoes.push_back(Foe(D, { "bandit_mage", "mage" }, 24, R)); f.foeTags = { "grunt", "grunt", "caster" };

@@ -114,3 +114,10 @@ dropping reanimate spells), the G13/G14 witness pre-check against `Detect.h`, Bl
 dodge, H4 ranges, C13 stealth entry, Mercenary back-off. Each model states what is engine fact (with its source) and
 what is MODEL. Re-baseline all T1+T2 classes over 6 seeds; `--<road> off` must reproduce the previous baseline exactly.
 No curve tuning (that is the Haiku round after).
+
+Also (marth 11-11, Q-SIM-5): "why wouldnt a follower be able to move and do an action. I believe he should". Remove the
+lab's feet stop on a weapon swap, potion or cast for ALL deliberate movement (Retreat, approach, kite, flee), not only
+the G3 run (review of a645ca2 finding 1, MFO-B783). Any engine slowdown while casting or drawing is modelled only from a
+sourced engine value, else stated as MODEL. This changes every class a little: set the new baseline and keep a
+`--feet-stop` switch that reproduces 78.11 / 76.69 exactly. After it lands, 30.10 step 1 may search `aw.4` against
+`aw.21` again.

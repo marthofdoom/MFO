@@ -174,6 +174,14 @@ Effort is 1-5. Repos: **MFO base** (MFO.dll and MFO.esp, works with the class ad
   (CHANNEL-MAP row 8b). Read the `kIntent_Cast` refusals in FACETS ch.8b, and the engine's reanimate aim path
   (`ReanimateEffect` is already handled in `Summon.cpp:43`). If ch.8b refuses dead targets, it needs a Harbinger tier-A
   extension.
+- **STATUS 2026-11-11: BUILT on `feat/g7-reanimate` + Harbinger `feat/ch8b-dead-target` (ABI v42; tier A on the Harbinger
+  side; NOT merged, NOT field-run).** RE answer: ch.8b did NOT serve a dead target. The Reanimate caster was never seated
+  and aims itself (its 0x06 keeps or searches a corpse, its 0x0D searches again: the highest-level valid corpse in
+  range). Harbinger gained `kCastFlag_CorpseTarget` and two seats on that caster (`core/ReanimateSeat.cpp`): the claim's
+  corpse is handed to the engine's own keep test and the engine's own pick never casts under the claim. MFO: the
+  selector `cond.corpse_within` (`cast/Corpse.cpp`, a main-thread mirror, highest-level corpse `WillWork` accepts), the
+  corpse as the buff claim's target on ABI >= 42 (target 0 and the engine's pick below it), per-corpse hold-offs. Usable
+  by any class with a Reanimate spell (Q99). The Necromancer default row stays a placeholder. Questions 102-104.
 
 **G8. `act.shout` + a Harbinger shout DRIVE**
 - What: an appended action with param = a shout form. MFO equips the shout (`EquipShout`, Posted) and files ch.14. A NEW

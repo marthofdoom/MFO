@@ -517,6 +517,16 @@ namespace MFO::Actuation {
     float WillWorkClassLevelBonus(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect);
     void  WillWorkClear();   // drops the mirror (tests / load)
 
+    // CARD G7, "CORPSE: WITHIN" (cast/Corpse.cpp): the corpse a `cond.corpse_within -> act.cast_target` rule should
+    // raise, or an empty handle. A candidate is a dead, loaded, non-teammate humanoid (race keyword ActorTypeNPC)
+    // within a_units of a_follower (0 = the whole 4096-unit scan). With a_spell != 0 a corpse the spell cannot raise
+    // (WillWork No, or not measured yet this lap) and one whose claim never fired this fight are skipped. The
+    // highest-level corpse left wins, nearest on a tie. WORKER-SAFE: the high-actor walk runs on the main thread
+    // (one MainThread::Post per follower); this reads its mirror (1 s refresh, 5 s trust). No fresh measurement, or
+    // no pump (VR) = empty (fail closed). A pure read; never mutates.
+    RE::ActorHandle PickCorpse(RE::Actor* a_follower, float a_units, RE::FormID a_spell);
+    void            CorpseClear();   // drops the mirror (tests / load)
+
     // SUMMON LIVENESS (v1.1.1). A conjured familiar/atronach or a reanimated corpse
     // is a separate COMMANDED ACTOR, not a caster-side magic effect, so the OOC
     // cast routes' already-active guards (which read a magic effect on the cast

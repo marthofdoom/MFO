@@ -178,6 +178,14 @@ namespace MFO::Vocab {
     // SelfStatus::CommandedLive). No fresh mirror = no summon known = no candidate (fail closed).
     // APPENDED, a frozen serialization string (#10).
     inline constexpr const char* kCondFoeAttackingMySummon = "cond.foe_attacking_my_summon";
+    // "Corpse: Within" (class plan card G7): a CORPSE SELECTOR, param = units (0 = the whole scan radius). True when
+    // a dead, non-teammate humanoid lies within `param` of the follower; on an act.cast_target row that corpse
+    // becomes the rule's target (a Reanimate spell is then cast AT it: Harbinger ABI v42 kCastFlag_CorpseTarget),
+    // on any other action it is a gate only. With a spell on the row the pick skips a corpse the spell cannot
+    // raise (cast::WillWork, card G10) and one whose claim never fired this fight; the highest-level corpse left
+    // wins, nearest on a tie. Reads the cast/Corpse.cpp main-thread mirror (1 s refresh, 5 s trust); no fresh
+    // measurement = no corpse (fail closed). APPENDED, a frozen serialization string (#10).
+    inline constexpr const char* kCondCorpseWithin = "cond.corpse_within";            // param = units
     // SITUATIONAL STATE gates (ClickUp 86e3g81x0), APPENDED, frozen strings (#10). Self = the follower the rule belongs
     // to (no param, no target, kCondDark's shape). Underwater: the water surface is above his head (Waterbreathing).
     // Poisoned: a live poison is on him (Cure Poison). Player sneaking: the player's own sneak state.

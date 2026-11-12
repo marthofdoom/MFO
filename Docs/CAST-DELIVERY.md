@@ -1463,7 +1463,7 @@ except `SustainConcentrationEffect` and `DrawConcCap`, which are inline in
 
 A Buff-kind fire-and-forget cast on the COMBAT table is a ch.8b claim, cast by the follower's own AI, animated:
 self Armor / Cloak / Invisibility / BoundItem / Ward (native rows), and, only when `APMFBridge::CastSeatsSupported()`
-(ABI >= 19; no capability bit exists, Harbinger's order is ABI 18, the seats, ABI 19): summon / reanimate (target 0), a rowless
+(ABI >= 19; no capability bit exists, Harbinger's order is ABI 18, the seats, ABI 19): summon / reanimate (target 0; card G7, 2026-11-11: a Reanimate rule whose `cond.corpse_within` selector chose a corpse claims with target = that corpse and `kCastFlag_CorpseTarget` on Harbinger ABI >= 42, `BuffCorpseTarget` in cast/BuffRoad.cpp, NOT field-run), a rowless
 spell (Muffle, fortify / resist, Night Eye, Detect Life, cures, Courage; Harbinger serves it as Script), a kSelf Light
 (Candlelight), and a buff at an ally / the player (claim target = the recipient; AUTO's beneficial fan is a series, lowest HP
 first, one recipient per lap via CastOn). Out of combat, below ABI 19, aimed Light, a `rowApprox` row, a self cast of a non-Self

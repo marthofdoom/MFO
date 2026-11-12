@@ -37,9 +37,9 @@ namespace Sim {
     }
 
     // ── the extended action set ─────────────────────────────────────────────────────────────────────────
-    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, Hide, kCount };
+    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, Hide, Flee, kCount };
     inline const char* Name(Ext e) {
-        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll", "ext:hide" };
+        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll", "ext:hide", "ext:flee" };
         return n[static_cast<std::size_t>(e)];
     }
     struct Opt {                       // one thing he could do now
@@ -67,7 +67,15 @@ namespace Sim {
         for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o)) continue; const float d = Fight::Dist(x, o); if (d < nd) { nd = d; near = &o; }
             if (o.c.targetId == x.c.id && d < F.Reach(o) * 1.6f) onMe = &o; if (o.act == Act::Cast && o.hitAt >= 0 && d < F.Reach(x)) casting = &o; }
         if (!near) return;
-        if (CanHide(F, ci)) out.push_back({ nullptr, Ext::Hide, -1, 0 });   // G3: break off to a point no foe sees (stealth mode 2+)
+        // Card G3's two runs as a PERSON would use them, free of the generator's gates (class flag, "a foe has found him", the 30% health
+        // line): a hide run for anyone who sneaks and is detected, a flee for anyone with a foe on him and under 60% health. The road
+        // and the hard cooldown still bind (a cooldown binds a person too). What the oracle gains with them is the gates' cost.
+        if (g_stealth >= 3 && c.runPhase == 0) {
+            const auto it = c.firedAt.find(CooldownId(DisengageKey())); const bool cool = it == c.firedAt.end() || F.now - it->second >= static_cast<double>(ActiveTuning()->disengageCooldownSec);
+            float gx = 0, gy = 0;
+            if (cool && x.stealthy && !c.stanceHeld && F.GroupDetects(x) && F.ConcealPick(x, c, false, gx, gy)) out.push_back({ nullptr, Ext::Hide, -1, 0 });
+            if (cool && !x.stealthy && onMe && x.c.hp < 0.6f * x.c.hpMax && F.ConcealPick(x, c, true, gx, gy)) out.push_back({ nullptr, Ext::Flee, -1, 0 });
+        }
         if (nd < 900.0f) { out.push_back({ nullptr, Ext::StepBack, -1, near->c.id }); if (x.c.sp > 20.0f) out.push_back({ nullptr, Ext::SprintBack, -1, near->c.id }); }
         if (Fight::Dist(x, F.b[0]) > 350.0f && F.b[0].alive) out.push_back({ nullptr, Ext::ToPlayer, -1, 0 });
         for (const Ctl& o : F.ctl) { if (&o == &c) continue; const Body& ob = F.b[static_cast<std::size_t>(o.body)]; if (!Fight::Up(ob) || Fight::Dist(x, ob) < 300.0f) continue;
@@ -100,7 +108,8 @@ namespace Sim {
         if (k && k->f.hasArea && !k->f.splashSafe) return false;                                  // never splash the party (every class)
         const bool toMelee = k && k->family == Family::Posture && (k->f.posture == PostureKind::Melee || k->f.posture == PostureKind::Silver);
         const bool meleeAct = (k && (k->family == Family::PowerAttack || k->family == Family::Bash)) || o.ext == Ext::Bash;
-        const bool flee = k && k->family == Family::Retreat, back = o.ext == Ext::StepBack || (k && k->family == Family::GiveGround), run = o.ext == Ext::SprintBack, hide = o.ext == Ext::Hide || (k && k->family == Family::Sneak);
+        const bool flee = (k && k->family == Family::Retreat) || o.ext == Ext::Flee || (k && k->family == Family::Disengage && k->f.disengageFlee), back = o.ext == Ext::StepBack || (k && k->family == Family::GiveGround), run = o.ext == Ext::SprintBack,
+                   hide = o.ext == Ext::Hide || (k && k->family == Family::Disengage && !k->f.disengageFlee);
         if ((fb & kPsNoMelee) && (toMelee || meleeAct)) {   // the blade only when he has nothing else left
             bool other = c.book.kit.potionsMagicka > 0;
             for (const SpellEntry& e : c.book.entries) other |= e.nature == Prune::Nature::Offense && (e.source == SpellSource::Staff ? e.charged : e.source == SpellSource::Scroll ? e.count > 0 : e.cost <= x.c.mp);
@@ -123,7 +132,7 @@ namespace Sim {
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
     struct RolloutPolicy : Policy {
         IausPolicy iaus;
-        void Serve(Fight& F, int ci) override { if (F.now < F.ctl[static_cast<std::size_t>(ci)].commitUntil) return; iaus.Serve(F, ci); }
+        void Serve(Fight& F, int ci) override { if (ServiceRun(F, ci)) return; if (F.now < F.ctl[static_cast<std::size_t>(ci)].commitUntil) return; iaus.Serve(F, ci); }   // card G3's run is serviced every lap, committed or not
     };
 
     struct OraclePolicy : Policy {
@@ -156,7 +165,8 @@ namespace Sim {
                 for (float r : { 250.0f, 450.0f, 700.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
                     if (SeesFrom(G, gx, gy, *tg)) return move(gx, gy, 2.5, false); }
                 return false; }
-            case Ext::Hide: if (!DoHide(G, ci)) return false; c.commitUntil = c.moveUntil + 0.6; return true;
+            case Ext::Hide: case Ext::Flee: { const bool fl = o.ext == Ext::Flee; float gx = 0, gy = 0; if (c.runPhase != 0 || !G.ConcealPick(x, c, fl, gx, gy)) return false;
+                c.pick.valid = true; c.pick.flee = fl; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl, true)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }
             case Ext::Block: if (held) return false; x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.commitUntil = x.actEnd; return true;
             case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f) return false; G.StartSwing(x, *tg, Act::Bash, true); c.commitUntil = x.actEnd; return true; }
             case Ext::Scroll: { if (held || o.idx < 0 || c.book.entries[static_cast<std::size_t>(o.idx)].count <= 0) return false;
@@ -170,6 +180,7 @@ namespace Sim {
                 c.drawn = k->f.posture; x.act = Act::Swap; x.actEnd = G.now + TM::swap; x.hitAt = -1; x.actIaus = true; c.commitUntil = x.actEnd; return true;
             }
             if (Fire(G, ci, *k) != Fired::Yes) return false;
+            if (k->family == Family::Sneak) x.holdUntil = std::max(x.holdUntil, G.now + 0.45);   // the oracle decides every 0.4 s: its hold lasts until its next decision
             c.firedAt[CooldownId(KeyOf(*k))] = G.now;
             c.commitUntil = (k->family == Family::Attack || k->family == Family::Retreat) ? G.now + commit : std::max(G.now + 0.3, x.actEnd);
             return true;
@@ -178,9 +189,10 @@ namespace Sim {
             if (!cfg.allFollowers && ci != 0) { iaus.Serve(F, ci); return; }
             if (last.size() < F.ctl.size()) last.assign(F.ctl.size(), -1e9);
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; const bool subj = ci == 0;
+            if (ServiceRun(F, ci)) return;   // card G3: a hide run or its hold stands
             if (!Fight::Up(x)) return;
             const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil;
-            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T); if (g_stealth >= 3) StealthInject(F, ci, sv);
+            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T);
             FillCooldowns(c, sv.g.actions, F.now, *iaus.T); FillCooldowns(c, sv.g.postures, F.now, *iaus.T);
             TickIn in; in.now = F.now; in.rapportRank = 5; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *iaus.T, in);

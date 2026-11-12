@@ -95,6 +95,9 @@ namespace Sim {
         float targetRatio = 0;                              // > 0: the foes' health and damage are scaled so StrengthRatio lands here (a scenario must be winnable by good play on every list)
         float light = -1;                                   // stealth: the light on the party, 0 dark .. 1 daylight; < 0 = drawn (interior 0.15..0.6, outside day 0.9 / night 0.2)
         int   freeEntry = -1;                               // stealth: 1 = the subject's free stealth entry is this fight, 0 = it is not, -1 = rolled 1 in entryOdds
+        // Scenario geometry: solid cover placed by hand, in the fight's own frame (u = units from the player toward the foes' centre,
+        // v = units to the left of that line). Added to the random occluders (`occluders`).
+        struct Cover { float u, v, r; }; std::vector<Cover> cover;
     };
 
     // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
@@ -123,7 +126,8 @@ namespace Sim {
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
         Ctl c; c.body = static_cast<int>(F.b.size()) - 1; c.fam = sc.fam; c.gate = sc.gate; c.profile = sc.profile; if (ProfileHook()) ProfileHook()(c.profile);
         c.forbid = sc.forbid; c.sneakClass = sc.sneakAlways; c.flank = sc.flank; c.cloak = sc.cloak; c.nearPlayer = sc.nearPlayer; c.entryOdds = sc.entryOdds; c.goIn = sc.goIn; c.partyPct = sc.partyPct; c.sneakAtkClass = sc.sneakAtkClass; c.noiseClass = sc.noiseClass;
-        if (g_stealth > 0 && sc.sneakAlways) { b.stealthy = true; b.sneaking = true; }   // G1: the sneak classes hold the stance for the whole fight
+        if (g_stealth > 0 && sc.sneakAlways) { b.stealthy = true; b.sneaking = true; b.rec.sp = F.dg.spMax; }   // G1: the sneak classes hold the stance for the whole fight
+        c.armorWeight = static_cast<float>(fb->spec.pieces) * (sc.kit.heavy ? 9.0f : 3.0f);   // MODEL (Detect.h In::weight)
         { bool anyApplied = false; for (const GRow& r : sc.rows) anyApplied |= r.applied; for (const GRow& r : sc.rows) if (r.applied || !anyApplied) c.rows.push_back(r); }   /* T1: its data-only rows stand in for the kit of today */
         { const std::size_t cap = static_cast<std::size_t>(g_rowPrefix > 0 ? g_rowPrefix : CombatSlotsForRank(rank)); if (c.rows.size() > cap) c.rows.resize(cap); }   /* ruling Q74 */
         if (g_learnReach) {   // ruling Q68: start at the vanilla reach; warm = what this session's earlier swings taught him
@@ -151,7 +155,7 @@ namespace Sim {
     inline float StrengthRatio(const Data& D, const Fight& F);
 
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
-        Fight F; F.D = &D; F.R.g.seed(fs.seed); Rng& R = F.R;
+        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); Rng& R = F.R;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
         const SimClass& pc = t1[static_cast<std::size_t>(fs.playerFam)];
         { auto pb = BuildFollower(D, pc.fam, pc.kit, pc.gate, fs.level, R); auto ps = std::make_shared<ActorSpec>(pb.spec); ps->name = "Player"; ps->spells.clear();
@@ -165,7 +169,9 @@ namespace Sim {
             Body& f = F.Add(Role::Foe, std::move(sp), cx + std::clamp(dx, -700.0f, 700.0f), cy + std::clamp(dy, -700.0f, 700.0f));
             TagFoe(D, f); if (ti < fs.foeTags.size() && !fs.foeTags[ti].empty()) f.tag = fs.foeTags[ti]; ++ti;
             if (fs.foesOnPlayer) { f.c.targetId = 2; f.retargetAt = 6.0; }
-            if (fs.onSubject) { f.c.targetId = F.b[static_cast<std::size_t>(F.ctl[0].body)].c.id; f.retargetAt = 8.0; }
+            if (fs.onSubject) { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; f.c.targetId = s0.c.id; f.retargetAt = 8.0;
+                if (s0.stealthy) { s0.rec.level = 100; s0.rec.sp = 0.0f; s0.rec.known = true; s0.rec.lost = false; s0.rec.lastKnown = 0.0; s0.rec.lx = s0.c.x; s0.rec.ly = s0.c.y; } }   // "they are on him": their group has found him
+            Body& nf = F.b.back(); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : 0.0f, ft ? ft->c.y : 0.0f);   // a foe starts facing its target, else the party
         };
         for (const auto& m : fs.foes) addFoe(std::shared_ptr<const ActorSpec>(std::shared_ptr<const ActorSpec>{}, &D.specs[static_cast<std::size_t>(m.first)]), m.second.first, m.second.second);
         for (const auto& s : fs.customFoes) addFoe(s, R.U(-fs.foeSpread, fs.foeSpread), R.U(-fs.foeSpread, fs.foeSpread));
@@ -192,6 +198,7 @@ namespace Sim {
         }
         const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? R.I(1, 3) : R.I(0, 1);
         for (int i = 0; i < no; ++i) { const float tt = R.U(0.3f, 0.75f); F.occ.push_back({ cx * tt + R.U(-350, 350), cy * tt + R.U(-350, 350), R.U(60, 140) }); }
+        { const float ca = std::cos(ang), sa = std::sin(ang); for (const FightSpec::Cover& k : fs.cover) F.occ.push_back({ k.u * ca - k.v * sa, k.u * sa + k.v * ca, k.r }); }
         return F;
     }
 
