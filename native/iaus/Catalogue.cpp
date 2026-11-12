@@ -388,7 +388,7 @@ namespace MFO::Iaus {
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
             aw(Family::Disengage, 1.0f);   // card G3, chosen (not from the search): gated by its generator, paced by its hard cooldown
             aw(Family::BackOff, 1.0f);     // batch I, chosen: like the other moves, it has to be clearly worth it (the need's own veto and the hard cooldown pace it)
-            aw(Family::Step, 0.9f);        // batch I item 5, chosen: above the hold row it replaces (Sneak 0.6) and below a blow (a blow from stealth is generated at once when ready)
+            aw(Family::Step, 1.197f);      // batch I item 5, chosen 0.9; tuning round 2026-11-12 (iaus-sim-v2 31.11 gates) 1.197: above the hold row it replaces (Sneak 0.6) and below a blow (a blow from stealth is generated at once when ready)
             aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
