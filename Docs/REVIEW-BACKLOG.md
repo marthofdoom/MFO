@@ -3179,13 +3179,13 @@ A corpse or chest in an OWNED cell (a house, an inn) reads the cell owner throug
 including what the player dropped there. Intended by "bar all stolen", but it also removes legitimate loot from owned interiors (bandit
 corpses in a rented room). No cell/location exemption was added.
 
-### MFO-B783 (SEV-3 handled in the 30.10 handoff, OPEN, tools/iaus_sim/World.h StepWorld / RunMove, against a645ca2, Opus tier-2 review of feat/iaus-sim-stealth, finding 1)
+### MFO-B783 (SEV-3 handled in the 30.10 handoff, CLOSED by T2 batch S 2026-11-12: every deliberate movement keeps his feet going, `--feet-stop` is the old lab, tools/iaus_sim/World.h StepWorld / RunMove, against a645ca2, Opus tier-2 review of feat/iaus-sim-stealth, finding 1)
 Only during a G3 run do his feet keep moving through a weapon swap, a potion or a cast; everywhere else (Retreat included) those still stop his body, so the lab "makes the flee look a little better than Retreat" (Q-SIM-5). The 30.10 handoff no longer searches `aw.4` against `aw.21` or `c.63.*` until the asymmetry is removed.
 
-### MFO-B784 (SEV-4, OPEN, iaus-sim-v2.md 30.7 finding 4 + World.h `g_blowStands` comment, against a645ca2, same review, finding 3)
+### MFO-B784 (SEV-4, CLOSED by T2 batch S: the World.h comment and iaus-sim-v2.md 31.10 carry the correction, iaus-sim-v2.md 30.7 finding 4 + World.h `g_blowStands` comment, against a645ca2, same review, finding 3)
 Both still say NoteBlow releases the stance when the blow is PICKED; main's 3db7882 keeps it until the blow resolves. Q-SIM-2 is marked resolved in the questions file; the two texts still need the same correction.
 
-### MFO-B785 (SEV-4, OPEN, tools/iaus_sim/Detect.h ApplyProfile("steep"), against a645ca2, same review, finding 4)
+### MFO-B785 (SEV-4, CLOSED by T2 batch S: the Detect.h comment and iaus-sim-v2.md 31.10 state the provenance, tools/iaus_sim/Detect.h ApplyProfile("steep"), against a645ca2, same review, finding 4)
 Every GMST in the "steep" profile equals LoreRim.sim.json exactly (alias `lorerim-like`), while the doc and comment call it hand-written and not read from a list. Lab-only, nothing in native/ reads it, but the provenance claim is wrong next to the no-list-specific-data rule. Say where the values came from or make them generic.
 
 ### MFO-B786 (SEV-5, OPEN, tools/iaus_sim/Policy.h Fire, against a645ca2, same review, finding 5)
@@ -3194,7 +3194,7 @@ The lab's "blow" families for releasing the stance claim leave out Family::Explo
 ### MFO-B787 (SEV-5, OPEN, tools/iaus_sim/Policy.h PreparePick, against a645ca2, same review, finding 6)
 A re-pick overwrites the current pick at once; native keeps the old pick while the new job is pending, so BeginRun can use a point not yet "landed" at the edge of the 1.5 s window (~0.1 s optimism).
 
-### MFO-B788 (SEV-5, OPEN, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
+### MFO-B788 (SEV-5, CLOSED by T2 batch S: stated in World.h Level and iaus-sim-v2.md 31.10, tools/iaus_sim/World.h Level, against a645ca2, same review, finding 7)
 `in.flying = outOfMeleeReach` stands in for "flying", giving a 3x max distance to any actor out of melee reach (a ledge). Errs pessimistic for the follower; unstated.
 
 ### MFO-B794 (SEV-4, OPEN, logistics/TheftGate.cpp ScanGuards (VR, no pump), against 41ab1ec, Opus review of fix/theft-gate, finding F5)
@@ -3247,7 +3247,7 @@ The unweighted test is by archetype id only (Script, scripted spawn, kNone, past
 Both runs use the engine's own Return To Combat Area, which runs at the combat gait (the lab's x0.55 sneak gait is not applied by the engine to it, G3's open P1 question). A Step may therefore be noisier than a sneak walk; the engine's detection decides. The Step's pick has 10 candidates and no cover test (staying hidden is the engine's verdict, checked every lap by the run). A back-off to a point the engine cannot path to ends as a failure at 5 s.
 ### MFO-B826 (SEV-5, OPEN, iaus/Catalogue.cpp BackOffNeed / aw(Step) / aw(BackOff), same branch)
 BackOff weight 1.0, Step weight 0.9, the Mercenary need table (0.6 / 0.8 / 1.0) and the 6 s / 3 s cooldowns are chosen, not searched. Block's score (BlockNeed with blockBase 0) is 0 whenever the time-to-live estimate is unknown, which is the default (the engine fills are OFF), so Block NEVER fires with the fills off (no candidate: `Combatant::swinging` is filled only with `bIausFillSwing`): Q-I-8.
-### MFO-B827 (SEV-4, OPEN, tools/iaus_sim, against dcca7d7, Opus review F5)
+### MFO-B827 (SEV-4, CLOSED by T2 batch S: RealClasses.cpp sets `block` and `blockCooldownSec` from the class row, CLI check added, tools/iaus_sim, against dcca7d7, Opus review F5)
 The sim's ClassGate never sets `block`, so `--roads block` is dead after batch I. Batch S must set `ClassGate::block` (and `blockCooldownSec`) from the class rows' `act.block`.
 ### MFO-B828 (SEV-4, OPEN, iaus/Reposition.h MageBackOffNeed, against dcca7d7, review F6)
 `MustClose` reads `hit` / `hitIsMagic`, which are filled only with `bIausFillHit`; without it a mage's back-off can fire on archers and casters. Fix shape: require a known melee foe for the mage need.
@@ -3259,3 +3259,9 @@ Hide, Flee, BackOff and Step share ONE pick slot per follower; Build asks for on
 A bow Step candidate must still be at least 100 units nearer the foe, although only a line of fire matters; a line from the same distance is refused.
 ### MFO-B832 (SEV-4, OPEN, apmf/RangeApproach.cpp ServiceRangeClose, against b0b7bb0, re-check of batch I)
 `ServiceRangeClose` has no `GroundStepStands` check: while a give-ground step stands (the earlier or later claim), the close can re-file and `RequestGroundStep` releases it again, so the close churns for the step's 2.5 s. Fix shape: ask whether a ground step stands before filing, as it asks `HealApproachStands`.
+### MFO-B833 (SEV-4, OPEN, tools/iaus_sim/Data.h Classify + tools/list_balance, T2 batch S 2026-11-12, author's note)
+The lab's `SpellEntry::reach` is the record's range from 300 up, else 4096 as a stand-in for the projectile's range (never extracted). Card H4 (`Reposition::SpellRange`) therefore holds a mage at 0.9 x 4096 units for most aimed spells, and every H4 number in iaus-sim-v2.md 31 rests on that stand-in. Fix shape: extract the PROJ range in `tools/list_balance` and read it in `Classify`. Not a native/ defect.
+### MFO-B834 (SEV-4, OPEN, native/classes/ClassTable.cpp:212 kNecromancerG, T2 batch S, found while modelling G7)
+The Necromancer's corpse row is still `Todo(kTodoCorpse, ...)` although card G7 (`cond.corpse_within`) is merged, so his default set does not get it. T3, not a T2 gate. Also from the lab: a corpse row rarely fires from a table (magicka is spent by the first kill, or the spell's level cap is under the corpse's), and IAUS has no Reanimate family (`iaus/Prune.h`: nature Unknown).
+### MFO-B835 (SEV-5, OPEN, tools/iaus_sim World.h TryDodge / Land, T2 batch S, author's note)
+The dodge roll (one per projectile, 0.2 s flight gate, clears a non-area projectile) and the uncorrected miss chance (12% against a moving target) have no field anchor. The `[aim]` probe and field step 24x give the numbers to replace them. Foes do not dodge by their own style in the lab (they keep the flat miss).

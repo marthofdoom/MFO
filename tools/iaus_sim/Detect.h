@@ -115,8 +115,10 @@ namespace Sim::Detect {
     // A profile is laid over the Data the run loaded. `vanilla` is what Skyrim.esm ships (the three sneak-attack perks and the
     // Stealth ranks); it is the built-in world's default. `steep` is a LoreRim-LIKE profile: the SHAPE of a Requiem-style list
     // (a flatter skill duel, light and movement count for more, a narrower view cone, a dagger tree up to x4 on the weapon's
-    // x3, a late bow perk). It is written here by hand as lab data so that a tuned curve can be checked against a list where a
-    // sneak attack is worth far more and hiding is harder; it is NOT read from a list's files, and nothing in native/ sees it.
+    // x3, a late bow perk). It is lab data so that a tuned curve can be checked against a list where a sneak attack is worth far
+    // more and hiding is harder. PROVENANCE (MFO-B785): its game-setting values are EQUAL to the cached LoreRim extract, typed in
+    // here. Read it as "LoreRim's settings", not as a hand-made shape. It is not read from a list's files at run time, and
+    // nothing in native/ sees it (the no-list-specific-data rule is about native/ logic, which this never reaches).
     // With --list the list's own values stand unless a profile is asked for by name.
     inline bool ApplyProfile(Data& D, const std::string& name) {
         auto rows = [](std::initializer_list<StealthRow> r) { return std::vector<StealthRow>(r); };

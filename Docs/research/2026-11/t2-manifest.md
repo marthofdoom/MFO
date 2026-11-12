@@ -15,7 +15,7 @@ Status: DONE = merged to main. FLIGHT = branch in review or being written. OPEN 
 | Card | What | Status | Sim |
 |---|---|---|---|
 | C1-C7 | Skeleton, data model, MCLS, XP, mastery, carriers, ESL generator | DONE | n/a |
-| C8 | Class combat packages: per-stance CSTY, ch.18 attack mixes, leash scale (5e69f06) | DONE | OPEN (C-C8: lab does not read the CSTY / ch.18 / ch.23 package) |
+| C8 | Class combat packages: per-stance CSTY, ch.18 attack mixes, leash scale (5e69f06) | DONE | DONE (batch S, iaus-sim-v2 31: ch.18 window, ch.23 leash, the engine's own power attacks) |
 | C10, C11, C12 | Classes tab, MCM, defaults (Priest/Saint auras are T3, card C11b) | DONE | n/a |
 | G1 | act.sneak | DONE | DONE |
 | G5, G6 | Summon gates, foe attacking my summon | DONE | DONE |
@@ -26,27 +26,27 @@ Status: DONE = merged to main. FLIGHT = branch in review or being written. OPEN 
 | H3 | Disengage drive + anchor-leak fix (Harbinger 47962b2) | DONE | DONE (G3 run) |
 | G2 | Hide-when-unseen Layer 1 | DONE | DONE (sim-stealth cfee1bf) |
 | G3 | Disengage to out-of-sight, flee, hide run | DONE (3d2ca76) | DONE (sim-stealth cfee1bf) |
-| H2 | Aversion, ABI v41 (Conjurer, Healer) | DONE (Harbinger 1b1ef40, MFO 057d93c) | OPEN (C-H2) |
-| H5 | Archer miss correction, ch.29 + MFO miss budgets | DONE | OPEN (C-H5: lab miss rate is one fixed number) |
-| G7 | Corpse target / reanimate | DONE (Harbinger 7407303, MFO a4a7e21) | OPEN (sim drops reanimate spells) |
+| H2 | Aversion, ABI v41 (Conjurer, Healer) | DONE (Harbinger 1b1ef40, MFO 057d93c) | DONE (batch S: weight 0.25, equipped class, 6 s windows) |
+| H5 | Archer miss correction, ch.29 + MFO miss budgets | DONE | DONE (batch S: the budget window. The uncorrected miss rate stays a lab number, `--aim-miss` / `--aim-scatter`, until the `[aim]` probe) |
+| G7 | Corpse target / reanimate | DONE (Harbinger 7407303, MFO a4a7e21) | DONE (batch S: kept, raised from a table row. IAUS has no Reanimate family: gap C-G7) |
 | T | Town theft fix (1dfcuabczbg): stolen-copy gate, guard gate, locked/owned door + furniture gate | DONE (merged to main; ships with T2 per marth 11-12) | n/a |
 
 ## 2. Per-class needs found missing in this pass
 
 | Class | Need (source) | Card / owner | Status | Sim |
 |---|---|---|---|---|
-| Knight | "Blocks a lot": a held guard. No `act.block`, ch.31 `kCombatMove_Block` is RESERVED (class block, C-BLOCK, Q83 "build next") | Harbinger ch.31 Block (tier A) + MFO `act.block` | DONE (melee batch, Harbinger c522f3c / MFO merged 11-12) | OPEN |
-| Warrior | Power attacks that land as real power attacks: `act.power_attack` is still MFO's own graph drive (`cast/Fire.cpp:471`); Q82 "move to Harbinger" as ch.31 `kCombatMove_PowerAttack` | Harbinger ch.31 PowerAttack (tier A) + MFO port | DONE (melee batch, Harbinger c522f3c / MFO merged 11-12) | OPEN (C-POWER) |
-| Warrior | A power-attack FLOOR: ch.18 only has a ceiling; needs a "Normal share max" (gap G-H2) | Harbinger ch.18 extension (tier A, ABI) | DONE (already built: ch.18 powerShareMin v34, Q-melee-5) | OPEN |
-| Mercenary | Dodge: "steps out of incoming spells and arrows", a list-agnostic dodge (gap G-H3, "the biggest risk in tier 2") | Harbinger dodge facet (tier A, RE first: list dodge framework when present, else the vanilla side step) | DONE via the style facet (side step rolls the CSTY Avoid Threat; Mercenary 0.3, Q-melee-7), field step 24x | OPEN |
-| Mercenary | "Backs off when two foes press, then darts in again"; the lab finds no way out for Knight/Warrior/Mercenary (C-NOFLEE, G21) | MFO IAUS: a Mercenary back-off road on H3 | DONE (batch I merge) (Family::BackOff, Q-I-3) | OPEN (sim: batch S) |
-| Evoker (all mages) | Range follows the equipped spell (H4, C-H4) | MFO tier B on ch.24 + H3 back-off | DONE (batch I merge) (Reposition.h, RangeApproach.cpp, Q-I-1/2) | OPEN (sim: batch S) |
-| Thief | Stealth entry, 1 fight in 5 opens undetected (C13) | MFO tier B | DONE (batch I merge) (classes/StealthEntry.cpp, Q-I-4) | OPEN (sim: batch S) |
-| Thief | `act.steal` default gambit is MISSING from Vocabulary (G13, crime pre-check) | MFO tier B | DONE (01a0e04) | OPEN (pre-check vs Detect.h) |
-| Thief | Pick nearby locks (G14) | MFO tier B, with G13 | DONE (01a0e04; unowned chests only, owned parked per Q-L-6) | OPEN (pre-check) |
+| Knight | "Blocks a lot": a held guard. No `act.block`, ch.31 `kCombatMove_Block` is RESERVED (class block, C-BLOCK, Q83 "build next") | Harbinger ch.31 Block (tier A) + MFO `act.block` | DONE (melee batch, Harbinger c522f3c / MFO merged 11-12) | DONE (batch S: 2.5 s held, 4 s row, the held-guard gate. IAUS barely blocks: 31.4 finding 2) |
+| Warrior | Power attacks that land as real power attacks: `act.power_attack` is still MFO's own graph drive (`cast/Fire.cpp:471`); Q82 "move to Harbinger" as ch.31 `kCombatMove_PowerAttack` | Harbinger ch.31 PowerAttack (tier A) + MFO port | DONE (melee batch, Harbinger c522f3c / MFO merged 11-12) | DONE (batch S: the lab's power attack was the engine's. Refusals counted, no cooldown spent) |
+| Warrior | A power-attack FLOOR: ch.18 only has a ceiling; needs a "Normal share max" (gap G-H2) | Harbinger ch.18 extension (tier A, ABI) | DONE (already built: ch.18 powerShareMin v34, Q-melee-5) | DONE (batch S: floor 0.40 with the stamina lift) |
+| Mercenary | Dodge: "steps out of incoming spells and arrows", a list-agnostic dodge (gap G-H3, "the biggest risk in tier 2") | Harbinger dodge facet (tier A, RE first: list dodge framework when present, else the vanilla side step) | DONE via the style facet (side step rolls the CSTY Avoid Threat; Mercenary 0.3, Q-melee-7), field step 24x | DONE (batch S: a side step roll per projectile, MODEL) |
+| Mercenary | "Backs off when two foes press, then darts in again"; the lab finds no way out for Knight/Warrior/Mercenary (C-NOFLEE, G21) | MFO IAUS: a Mercenary back-off road on H3 | DONE (batch I merge) (Family::BackOff, Q-I-3) | DONE (batch S) |
+| Evoker (all mages) | Range follows the equipped spell (H4, C-H4) | MFO tier B on ch.24 + H3 back-off | DONE (batch I merge) (Reposition.h, RangeApproach.cpp, Q-I-1/2) | DONE (batch S. The lab's spell reach is a stand-in: MFO-B833) |
+| Thief | Stealth entry, 1 fight in 5 opens undetected (C13) | MFO tier B | DONE (batch I merge) (classes/StealthEntry.cpp, Q-I-4) | DONE (batch S: as built it does nothing in the lab, `--c13 lever` is the H10 guarantee) |
+| Thief | `act.steal` default gambit is MISSING from Vocabulary (G13, crime pre-check) | MFO tier B | DONE (01a0e04) | DONE (batch S: `--steal-lab`, iaus-sim-v2 31.8) |
+| Thief | Pick nearby locks (G14) | MFO tier B, with G13 | DONE (01a0e04; unowned chests only, owned parked per Q-L-6) | DONE (batch S: the same check, nothing passes its owned path today) |
 | Archer | Off-class weapon rule: one-handed only, two-hander only if otherwise unarmed, half damage (G16) | MFO tier B on equip authority | DONE (01a0e04) | n/a (equip) |
 | All, tree ON | Strict class style: "would need a combat style slider in harbinger" (packages 0.5). MFO writes `CombatController::combatStyle` itself today, against the Harbinger-first rule | Harbinger combat-style facet (tier A) + MFO C8 adoption | DONE (melee batch, Harbinger c522f3c / MFO merged 11-12) | n/a |
-| All mage-line | Teach spells with IAUS on (marth 11-12: "I'm only concerned about the iaus issue. The class page will need a teach spell page for mage line and it will filter out spells that aren't weighted"). Today the only teach entry is a cast row's spell cell in the gambit table, which IAUS mode does not use (and Q37 hides). | MFO tier B (Sonnet): a Teach Spells page on the Classes tab, shown for mage-line followers; lists the player's castable tomes the follower does not know, filtered to spells IAUS would weight for his class (the iaus/SpellBook.cpp ClassGate / class_fit path; an unweighted spell is not listed); teaching consumes the tome and adds the spell (the existing TeachSpell edit). Buy and auto-learn roads unchanged | DONE on `feat/batch-i` (Board_Classes.cpp Teach Spells page, SpellBook::WouldWeigh) | OPEN (sim: a taught spell enters the book) |
+| All mage-line | Teach spells with IAUS on (marth 11-12: "I'm only concerned about the iaus issue. The class page will need a teach spell page for mage line and it will filter out spells that aren't weighted"). Today the only teach entry is a cast row's spell cell in the gambit table, which IAUS mode does not use (and Q37 hides). | MFO tier B (Sonnet): a Teach Spells page on the Classes tab, shown for mage-line followers; lists the player's castable tomes the follower does not know, filtered to spells IAUS would weight for his class (the iaus/SpellBook.cpp ClassGate / class_fit path; an unweighted spell is not listed); teaching consumes the tome and adds the spell (the existing TeachSpell edit). Buy and auto-learn roads unchanged | DONE on `feat/batch-i` (Board_Classes.cpp Teach Spells page, SpellBook::WouldWeigh) | DONE (batch S: `--teach <token>`, from the weighable pool only) |
 | Conjurer | Summon placed at a ground point (memory "summons target ground XYZ", packages Conjurer block) | Harbinger ch.8b pos road | OPEN, needed only if the field shows summons spawning badly | n/a |
 
 ## 3. Defaults taken (saved as questions; marth may overrule)

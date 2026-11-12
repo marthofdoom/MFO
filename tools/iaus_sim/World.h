@@ -71,9 +71,9 @@ namespace Sim {
     //   2 hide : + G2 Layer 1's hold row (Snapshot::hideRoad) and the free stealth entry of card C13.
     //   3 g3   : + card G3 (Snapshot::concealRoad): the hide run of a sneak class and the flee of every other disengage class.
     inline int g_stealth = 3;   // the lab's default is every road T2 builds (the tuning target); --stealth off is the game with its switches at their defaults
-    // --blow-stands: the stance claim the hide hold keeps is dropped when the blow from stealth is PICKED (scheduler/IausSource.cpp
-    // NoteBlow). If nothing else holds the stance he stands before the hit lands and the engine's sneak attack (attacker sneaking)
-    // does not apply. false (default) = the design's intent: the stance outlives the blow. true measures the other reading.
+    // --blow-stands: a reading the game does NOT have (MFO-B784). Main's 3db7882 keeps the hide hold's stance claim until the blow
+    // RESOLVES (scheduler/IausSource.cpp NoteBlow), so false (default) is the game: the stance outlives the blow. true measures what an
+    // early release would cost: he stands before the hit lands and the engine's sneak attack (attacker sneaking) does not apply.
     inline bool g_blowStands = false;
     // --light-scale N: the engine's cached light level of an actor standing in full daylight (MODEL: 100). The level's real scale is
     // not known (iLightLevelMax is 300 in Skyrim.esm; probe P4 of g2-hide-design.md is not built), and the light term is the only
@@ -314,7 +314,7 @@ namespace Sim {
         }
         // The engine's level of (observer o, target x) right now: every input of calculate-detection-re.md section 4 the lab has.
         [[nodiscard]] Detect::Out Level(const Body& o, const Body& x) const {
-            Detect::In in; in.dist = Dist(o, x); in.angleDeg = AngleDeg(o, x); in.losGeom = Sees(o, x); in.exterior = !interior; in.flying = o.c.outOfMeleeReach || x.c.outOfMeleeReach;
+            Detect::In in; in.dist = Dist(o, x); in.angleDeg = AngleDeg(o, x); in.losGeom = Sees(o, x); in.exterior = !interior; in.flying = o.c.outOfMeleeReach || x.c.outOfMeleeReach;   // STAND-IN (MFO-B788): 'out of melee reach' is read as flying, which triples the range against an actor on a ledge too. It errs against the follower
             const Body* ot = Find(o.c.targetId); in.inCombatO = true; in.oHasTarget = ot && Up(*ot); in.targetIsOsTarget = ot == &x;
             const Ctl* c = x.ctl >= 0 ? &ctl[static_cast<std::size_t>(x.ctl)] : nullptr;
             in.skillO = o.spec->Skill(15); in.skillT = x.spec->Skill(15) + StealthCombine(D->sneakSkillRows, *x.spec, false);   // perk entry 57 (the list's rows add)
@@ -997,14 +997,14 @@ namespace Sim {
             }
             const Body* tg = Find(c.steer ? c.steer : x.c.targetId); if (!tg || !Up(*tg) || tg->Party()) return;
             const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
-            if (x.act == Act::Cast || x.casterMode) {
+            if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
                 float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c); if (des > 0.0f) far = des * Reposition::kCloseSlack; }
                 if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                 else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
             } else if (c.drawn == PostureKind::Bow) {
                 if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
                 else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
-            } else if (c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver) {
+            } else if (c.drawn != PostureKind::Staff) {   // Melee, Silver, or bare hands (Brain's hasMelee)
                 const float reach = Reach(x);
                 if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }
                 if (d > reach * 0.9f && !tg->c.outOfMeleeReach) Move(x, tg->c.x, tg->c.y, x.spec->run);
