@@ -244,6 +244,16 @@ namespace MFO::Classes {
                                                                     TableKind a_kind = TableKind::Combat);
     [[nodiscard]] std::uint8_t GetPickedT4(RE::FormID a_follower);   // marth Q60; kNoClass if none
 
+    // ── card C13 (batch I item 2): the Thief's free stealth entry, classes/StealthEntry.cpp ───────────────────────────────────────
+    // WORKER, once per lap of the IAUS gather. a_newFight = this lap starts a new fight (the gather's fight clock). Counts the fight in the
+    // MCLS counters (thiefFights / masterThiefFights: no layout change) and returns true while THIS fight is the guaranteed one (Thief 1 in
+    // 5, Master Thief 1 in 3) and the entry is not spent. False for every other class and with classes off.
+    bool StealthEntryLive(RE::FormID a_follower, bool a_newFight);
+    // The entry is used up: his first blow, a foe's group record has him, ... Idempotent; a no-op without a live entry.
+    void StealthEntrySpend(RE::FormID a_follower, const char* a_why);
+    void StealthEntryForget(RE::FormID a_follower);   // combat end, dismissal
+    void StealthEntryClear();                          // revert / load (pump drained)
+
     // Writes (false = refused: not Writable(), a 0xFF follower id, an Id out of range, or a table over
     // kMaxStoredRows). Masks drop bits beyond the roster.
     bool SetEquipped(RE::FormID a_follower, Id a_class);

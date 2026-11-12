@@ -141,7 +141,10 @@ namespace MFO::Board {
         // (consumes the book) on confirm. Same precomputed tooltip metrics.
         struct Teachable { RE::FormID spell = 0; RE::FormID book = 0; std::string name;
                            int magickaCost = 0; std::string tooltip;
-                           int school = 5; std::string effectKey; };
+                           int school = 5; std::string effectKey;
+                           // batch I item 7: the Classes tab's Teach Spells page lists only a spell IAUS would weigh for his class
+                           // (iaus/SpellBook.h WouldWeigh: class fit + an effect list it can weight). The gambit picker lists all.
+                           bool iausWeighed = false; };
         std::vector<Teachable> teachableSpells;
         // #68: the cast-target picker's option list -- the PLAYER's live
         // name and every OTHER active follower by name (never this row's

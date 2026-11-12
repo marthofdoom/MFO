@@ -4,6 +4,7 @@
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
+#include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step
 
 #include <algorithm>
 #include <cmath>
@@ -48,17 +49,11 @@ namespace MFO::Iaus {
             bool hold = false;          // the hold row stands: unseen Yes, a weapon posture
             bool strikeReady = false;   // some unaware foe is in reach (melee) or in sight (bow): the blow from stealth is ready
             bool holdQuiet = false;     // hold && !strikeReady: nothing LOUD is generated (no taunt, no cast whose sound the engine emits)
+            bool guard = false;         // batch I item 4: a held guard stands (Snapshot::guardHeld): nothing that would drop it is generated
             bool fleeRun = false;       // card G3: a non-sneak flee run stands: no offense is generated, his own heals are boosted
             // An unaware foe he could strike now. Melee: inside the swing reach and not airborne beyond it; bow: in the
             // follower's own ray and inside the chase cap. A caster's posture (None / Staff) never holds or strikes.
-            [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const {
-                if (a_foe.detectsMe != Tri::No || !std::isfinite(a_foe.dist)) return false;
-                if (s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver)
-                    return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, Finite(s.meleeReach, 0.0f));
-                if (s.drawn == PostureKind::Bow)
-                    return a_foe.sight == Sight::Visible && a_foe.dist <= (std::max)(0.0f, Finite(s.chaseCap, 0.0f));
-                return false;
-            }
+            [[nodiscard]] bool StrikeReady(const Combatant& a_foe) const { return Reposition::StrikeReady(s, a_foe); }
 
             void Push(Candidate&& a_c) {
                 ++out.perFamily[static_cast<std::size_t>(a_c.family)];
@@ -127,6 +122,7 @@ namespace MFO::Iaus {
                 // can strike now. An unaware foe still out of reach is waited for, not chased: the chase is the noise.
                 const bool holdsOff = x.hold && foe->detectsMe == Tri::No && !x.StrikeReady(*foe);
                 // Today's reach gate: a melee-only follower never names a foe airborne out of his swing.
+                if (x.guard) break;   // a held guard: no blow, no taunt (Fire refuses them; his Retreat below is not one)
                 if (!holdsOff && !(s.meleeOnly && foe->outOfMeleeReach)) {
                     Candidate c = x.Make(Family::Attack, foe);
                     x.Foe(c.f, *foe, ranged);
@@ -185,6 +181,18 @@ namespace MFO::Iaus {
             if (!x.hold) return;
             Candidate c = x.Make(Family::Sneak, nullptr);
             x.Push(std::move(c));
+            // G18 (batch I item 5, marth 11-12 Q-SIM-3): the hold row has no exit. Hidden with no blow ready, he steps quietly toward a foe
+            // that does not detect him to gain a strike (blade) or a line of fire (bow), staying hidden: a short H3 run (Concealment Kind::Step)
+            // to a point the main thread picked. Only with a fresh point; it outranks the hold row (Catalogue aw), so the hold stands only
+            // when there is no step to take. Never a reveal by design: the run denies every attack and cast and ends the moment a foe has him.
+            if (x.s.stepRoad && x.s.stepPoint && !x.strikeReady) {
+                if (const Combatant* tgt = Reposition::StepTarget(x.s)) {
+                    Candidate st = x.Make(Family::Step, tgt);
+                    st.form = Reposition::kStepForm;
+                    st.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.stepCooldownSec, 0.0f));
+                    x.Push(std::move(st));
+                }
+            }
         }
 
         // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
@@ -234,13 +242,29 @@ namespace MFO::Iaus {
                     x.Push(std::move(c));
                 }
             }
-            if (s.blockRoad && melee && swingOn) {
+            // BLOCK (batch I item 4, marth 11-12 MFO-B800): only for a class whose table carries the Block row (Q-melee-2:
+            // Knight, Great Knight, Ebony Warrior; everyone else blocks by the engine's own style). Generated while the guard
+            // stands too, so the renewal past 60% of the window is asked for (ServiceBlock).
+            // BACK OFF (batch I): a short H3 run to a point farther from the foes, then he fights on. A mage inside the minimum range of the spell
+            // in his hand (H4), or a Mercenary two or more foes press (Q-T2-3). Only with the road open and a fresh point. Not during a held guard.
+            if (s.backOffRoad && s.backOffPoint && !x.guard) {
+                const float need = Reposition::BackOffNeed(s, x.g);
+                if (need > 0.0f) {
+                    Candidate c = x.Make(Family::BackOff, nullptr);
+                    c.form = Reposition::kBackOffForm;
+                    c.f.backOffNeed = need;
+                    c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.backOffCooldownSec, 0.0f));
+                    x.Push(std::move(c));
+                }
+            }
+            if (s.blockRoad && x.g.block && melee && swingOn) {
                 Candidate c = x.Make(Family::Block, swingOn);
                 c.f.foeSwinging = true;
-                c.f.hardCooldownSec = (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
+                const float rowCd = (std::max)(0.0f, Finite(x.g.blockCooldownSec, 0.0f));
+                c.f.hardCooldownSec = rowCd > 0.0f ? rowCd : (std::max)(0.0f, Finite(x.t.blockCooldownSec, 0.0f));
                 x.Push(std::move(c));
             }
-            if (s.bashRoad && melee)
+            if (s.bashRoad && melee && !x.guard)
                 for (const Combatant* foe : x.top) {
                     if (foe->outOfMeleeReach) continue;
                     Candidate c = x.Make(Family::Bash, foe);
@@ -325,6 +349,7 @@ namespace MFO::Iaus {
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
         void Postures(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
+            if (x.guard) return;   // a held guard: no weapon change (cast/Fire.cpp refuses the equips)
             const Kit&      k = s.book.kit;
             const Combatant* tgt = nullptr;
             for (const Combatant* f : a_foes)
@@ -357,6 +382,7 @@ namespace MFO::Iaus {
         // ── casts ────────────────────────────────────────────────────────────────────────────────────────
         void Casts(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
+            if (x.guard) return;   // a held guard denies all his own casts, heals included (marth Q-melee-3)
             const bool anyBusy  = s.handBusyLeft || s.handBusyRight;
             const bool bothBusy = s.handBusyLeft && s.handBusyRight;
             const float pool    = Finite(s.self.mp, 0.0f);
@@ -548,6 +574,7 @@ namespace MFO::Iaus {
         x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
         x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
         x.fleeRun = a_s.fleeRun;
+        x.guard = a_s.guardHeld;
         for (const Combatant& a : a_s.allies)
             if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }
 

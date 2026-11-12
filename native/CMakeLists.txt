@@ -144,6 +144,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     classes/Package.cpp
     classes/Presence.cpp
     classes/State.cpp
+    classes/StealthEntry.cpp
     classes/Xp.cpp
     Loadout.cpp
     Papyrus.cpp
@@ -178,6 +179,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/Deposit.cpp
     apmf/ErrandClaims.cpp
     apmf/Place.cpp
+    apmf/RangeApproach.cpp
     apmf/CombatMove.cpp
     apmf/BlockClaims.cpp
     apmf/StyleClaims.cpp

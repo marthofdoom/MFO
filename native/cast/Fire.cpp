@@ -664,7 +664,9 @@ namespace MFO::Actuation {
             // MFO's own rays) and the run (apmf/Disengage.cpp: Harbinger ch.24 on that point + a ch.7 Offense deny).
             // Transparent when no run can start (no road, no fresh point, a heal approach stands): nothing was mutated.
             std::string desc;
-            if (const char* why = Concealment::Begin(a_follower, desc)) return { Result::FailedOther, why, true };
+            // The kind (batch I): 0 = the hide run or the flee, 1 = a back-off, 2 = the hidden step (Candidate::form via IausSource).
+            if (const char* why = Concealment::Begin(a_follower, desc, Concealment::KindOfForm(a_choice.actionParam)))
+                return { Result::FailedOther, why, true };
             return { Result::Fired, desc };
         }
 

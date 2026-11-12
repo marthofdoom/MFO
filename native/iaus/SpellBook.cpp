@@ -80,6 +80,62 @@ namespace MFO::Iaus::SpellBook {
         // per area spell and per staff; PostRefresh logs each form ONCE per session, outside the leaf mutex.
         using Probes = std::vector<std::pair<RE::FormID, std::string>>;
 
+        // The STATIC verdict on one spell record: its nature and whether it is ever an IAUS candidate (the "never generated"
+        // list, P1, and the batch I item 6 test: an effect list IAUS cannot weight). Form data only, any thread. MakeEntry and
+        // WouldWeigh (the Teach Spells page) both call it, so the book and the page can never disagree.
+        struct Static {
+            Prune::Nature nature = Prune::Nature::Unknown;
+            Prune::Drop   drop = Prune::Drop::Keep;
+        };
+        Static StaticOf(RE::SpellItem* a_sp, Source a_source, const Actuation::SpellArchetype& a_arch) {
+            using Arch = RE::EffectArchetypes::ArchetypeID;
+            const auto delivery = a_sp->GetDelivery();
+            const bool selfDelivery = delivery == RE::MagicSystem::Delivery::kSelf;
+            Prune::NatureIn in;
+            switch (CasterConsent::ClassifySpell(a_sp)) {
+            case CasterConsent::SpellKind::Offense: in.kind = Prune::Kind::Offense; break;
+            case CasterConsent::SpellKind::Heal:    in.kind = Prune::Kind::Heal; break;
+            case CasterConsent::SpellKind::Buff:    in.kind = Prune::Kind::Buff; break;
+            }
+            std::vector<int> archetypes;   // every effect's archetype id, for Prune::WeighableSpell
+            for (auto* eff : a_sp->effects) {
+                auto* base = eff ? eff->baseEffect : nullptr;
+                if (!base) continue;
+                archetypes.push_back(static_cast<int>(base->GetArchetype()));
+                switch (base->GetArchetype()) {
+                case Arch::kTurnUndead:
+                case Arch::kCalm:
+                case Arch::kFrenzy:
+                case Arch::kDemoralize:
+                case Arch::kParalysis:  in.control = true; break;
+                default: break;
+                }
+            }
+            in.summon           = Actuation::IsSummonSpell(a_sp);
+            in.reanimate        = a_arch.shape == Actuation::SpellShape::Reanimate;
+            in.ward             = a_arch.shape == Actuation::SpellShape::Ward;
+            in.selfCloak        = a_arch.shape == Actuation::SpellShape::Cloak && selfDelivery;
+            in.scriptCostliest  = a_arch.shape == Actuation::SpellShape::Script;
+            in.natureUndeclared = Actuation::SpellNatureUndeclared(a_sp);
+            Static out;
+            out.nature = Prune::ClassifyNature(in);
+
+            Prune::StaticIn st;
+            st.castable = a_source == Source::Spell
+                              ? Vocab::IsCastableSpell(a_sp)
+                              : a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
+            // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
+            st.roadUnsupported = a_source == Source::Spell && Actuation::CastRoadUnsupported(a_sp);
+            st.targetLocation  = delivery == RE::MagicSystem::Delivery::kTargetLocation ||
+                                 a_arch.shape == Actuation::SpellShape::Rune ||
+                                 a_arch.shape == Actuation::SpellShape::Wall ||
+                                 a_arch.shape == Actuation::SpellShape::TLBurst;
+            st.nature    = out.nature;
+            st.weighable = Prune::WeighableSpell(archetypes);
+            out.drop     = Prune::StaticDrop(st);
+            return out;
+        }
+
         Entry MakeEntry(RE::Actor* a_actor, RE::SpellItem* a_sp, Source a_source, const ClassGate& a_gate,
                         const std::vector<RE::Actor*>& a_party, Probes& a_probes) {
             using Arch = RE::EffectArchetypes::ArchetypeID;
@@ -92,15 +148,10 @@ namespace MFO::Iaus::SpellBook {
             const auto delivery = a_sp->GetDelivery();
             e.selfDelivery  = delivery == RE::MagicSystem::Delivery::kSelf;
             e.touch         = delivery == RE::MagicSystem::Delivery::kTouch;
+            e.targetActor   = delivery == RE::MagicSystem::Delivery::kTargetActor;   // batch I H4 (iaus/Reposition.h SpellRange)
             e.twoHanded     = arch.twoHanded;
             e.concentration = arch.casting == RE::MagicSystem::CastingType::kConcentration;
 
-            Prune::NatureIn in;
-            switch (CasterConsent::ClassifySpell(a_sp)) {
-            case CasterConsent::SpellKind::Offense: in.kind = Prune::Kind::Offense; break;
-            case CasterConsent::SpellKind::Heal:    in.kind = Prune::Kind::Heal; break;
-            case CasterConsent::SpellKind::Buff:    in.kind = Prune::Kind::Buff; break;
-            }
             float costliestHostile = -1.0f;
             // The BLAST: the effect's own explosion (MGEF data.explosion) and its projectile's (BGSProjectile
             // data.explosionType) carry the real damage radius in world units (BGSExplosion data.radius). It can
@@ -120,14 +171,7 @@ namespace MFO::Iaus::SpellBook {
             for (auto* eff : a_sp->effects) {
                 auto* base = eff ? eff->baseEffect : nullptr;
                 if (!base) continue;
-                switch (base->GetArchetype()) {
-                case Arch::kTurnUndead: e.undeadOnly = true; [[fallthrough]];
-                case Arch::kCalm:
-                case Arch::kFrenzy:
-                case Arch::kDemoralize:
-                case Arch::kParalysis:  in.control = true; break;
-                default: break;
-                }
+                if (base->GetArchetype() == Arch::kTurnUndead) e.undeadOnly = true;
                 noteExplosion(base->data.explosion, "effect");
                 if (const auto* proj = base->data.projectileBase) noteExplosion(proj->data.explosionType, "projectile");
                 // The element (design fact 7, section 3.1 exploit): the COSTLIEST hostile effect's resist AV.
@@ -137,28 +181,12 @@ namespace MFO::Iaus::SpellBook {
                     e.resistAv = rv == RE::ActorValue::kNone ? -1 : static_cast<int>(rv);
                 }
             }
-            in.summon           = Actuation::IsSummonSpell(a_sp);
-            in.reanimate        = arch.shape == Actuation::SpellShape::Reanimate;
-            in.ward             = arch.shape == Actuation::SpellShape::Ward;
-            in.selfCloak        = arch.shape == Actuation::SpellShape::Cloak && e.selfDelivery;
-            in.scriptCostliest  = arch.shape == Actuation::SpellShape::Script;
-            in.natureUndeclared = Actuation::SpellNatureUndeclared(a_sp);
-            e.nature = Prune::ClassifyNature(in);
+            // The nature and the "never generated" verdict: ONE derivation, shared with the Teach Spells page (WouldWeigh).
+            const Static stat = StaticOf(a_sp, a_source, arch);
+            e.nature = stat.nature;
             e.role   = Prune::RoleOf(e.nature, e.resistAv);
             if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) e.resistAv = -1;
-
-            Prune::StaticIn st;
-            st.castable = a_source == Source::Spell
-                              ? Vocab::IsCastableSpell(a_sp)
-                              : a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
-            // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
-            st.roadUnsupported = a_source == Source::Spell && Actuation::CastRoadUnsupported(a_sp);
-            st.targetLocation  = delivery == RE::MagicSystem::Delivery::kTargetLocation ||
-                                 arch.shape == Actuation::SpellShape::Rune ||
-                                 arch.shape == Actuation::SpellShape::Wall ||
-                                 arch.shape == Actuation::SpellShape::TLBurst;
-            st.nature = e.nature;
-            e.drop    = Prune::StaticDrop(st);
+            e.drop   = stat.drop;
 
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
@@ -397,6 +425,16 @@ namespace MFO::Iaus::SpellBook {
 
     }
 
+    bool WouldWeigh(RE::SpellItem* a_spell, const ClassGate& a_gate, const char** a_why) {
+        const auto no = [&](const char* a_text) { if (a_why) *a_why = a_text; return false; };
+        if (!a_spell) return no("no spell");
+        const Static st = StaticOf(a_spell, Source::Spell, Actuation::ClassifyArchetype(a_spell));
+        if (st.drop != Prune::Drop::Keep) return no(Prune::DropName(st.drop));
+        // Ruling Q34, the SAME bits Generate reads (Casts): a casting class, or a mastered one, or no class known yet.
+        if (a_gate.resolved && !a_gate.spellsOnClass && !a_gate.spellsFromMastered) return no("not a spell his class casts (Q34)");
+        return true;
+    }
+
     const char* NatureName(Prune::Nature a_n) {
         switch (a_n) {
         case Prune::Nature::Unknown: return "unknown";
@@ -459,6 +497,9 @@ namespace MFO::Iaus::SpellBook {
         g.weaponStaff    = any || (def->weapons & W::kStaff) != 0;
         g.disengage   = (def->flags & Classes::Flag::kDisengage) != 0;
         g.sneakClass  = (def->flags & Classes::Flag::kSneakAlways) != 0;   // card G3: only a sneak class runs to hide
+        // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no way out BY DESIGN; the
+        // Blademaster (its T3, "Mercenary, more extreme") is NOT included: a default taken, asked in the questions file.
+        g.backOffPressed = def->id == Classes::Id::Mercenary;
         g.powerAttack = def->powerShareMax != Classes::kShareUnset || def->powerShareMin != Classes::kShareUnset;
         for (std::size_t i = 0; i < def->gambitCount; ++i) {
             const auto& row = def->gambits[i];
@@ -467,6 +508,9 @@ namespace MFO::Iaus::SpellBook {
             if (act == Vocab::kActPowerAttack) {
                 g.powerAttack = true;
                 g.powerCooldownSec = (std::max)(g.powerCooldownSec, row.cooldownSec);
+            } else if (act == Vocab::kActBlock) {
+                g.block = true;   // batch I item 4 (MFO-B800): the class's Block row is what lets IAUS raise the guard
+                g.blockCooldownSec = (std::max)(g.blockCooldownSec, row.cooldownSec);
             } else if (act == Vocab::kActTaunt) {
                 g.taunt = true;
                 g.tauntCooldownSec = (std::max)(g.tauntCooldownSec, row.cooldownSec);   // card I6: the row's own, 0 today

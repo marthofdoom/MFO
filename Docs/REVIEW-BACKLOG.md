@@ -3233,3 +3233,29 @@ The witness scan walks ProcessLists::highActorHandles only; an NPC in the low or
 
 ### MFO-B813 (SEV-5, OPEN, logistics/Steal.cpp, author note)
 The steal arrival pre-check is per loose ref; the scan only applies the source bars. A follower may walk toward an item in a crowd and be refused at arrival (the leg is then transient-blocklisted 25 s). A scan-time witness read per candidate would stop the walk but multiplies SenseOf calls.
+### MFO-B820 (SEV-4, OPEN, iaus/Reposition.h SpellRange / kMinimumFrac, raised by the author against feat/batch-i, 2026-11-12)
+The 0.4 minimum, the 0.8 / 0.9 factors and the 15 percent close slack are the brief's words plus a chosen fraction; none is measured. "Cone" is read as "concentration" (the record has no cone flag), so a fire-and-forget cone (Fire Breath style) is treated as aimed. The sim tunes them (batch S models H4 ranges).
+### MFO-B821 (SEV-4, OPEN, apmf/RangeApproach.cpp, same branch)
+The ch.24 close is `kApproach_Hold` X = foe, R up to ~1800 units. Hold on a FOE with a large R was only field-proven for the held-heal and occlusion approaches (R about 1024 / 128). Unverified: that a large R does not pin him to the foe's side, and how the Return To Combat Area behaves when the foe flies. The `[range]` lines plus Harbinger's ch.24 log answer it in the field. A claim nobody refreshes is released after 3.5 s; an `Arrived` Hold stands until then.
+### MFO-B822 (SEV-4, OPEN, classes/StealthEntry.cpp + iaus/Candidates.cpp, same branch)
+The free entry reads `Hide::Verdict` Unknown as unaware on the guaranteed fight. CORRECTED (review F3 of dcca7d7): Hide::Verdict already answers No when a foe's group has no record of him on EVERY fight; Unknown only means the foe has no combat group this lap, so the guaranteed fight is near-inert. A real guarantee needs the H10 invisibility lever (Q-I-4, re-asked). The counter counts only fights the IAUS fight clock saw (Sentient AI followers); a table-mode Thief never counts.
+### MFO-B823 (SEV-5, OPEN, Board.cpp (2100+ lines), Board_Classes.cpp, same branch)
+Board.cpp is past the ~1500 line "plan a split" mark; the Teach Spells batch added a 25 line helper (`TeachSpellNow`) there instead of splitting (scope rule 1). A split brief should move the follower-row snapshot builder. The page shows for casting hybrids too (Q-I-7).
+### MFO-B824 (SEV-5, OPEN, iaus/Prune.h EffectWeighable, same branch)
+The unweighted test is by archetype id only (Script, scripted spawn, kNone, past the last known). It does not look at magnitudes or at whether the engine fills ran, so an unusual-but-known archetype (a Rally, a Banish) stays a candidate scored on its nature alone.
+### MFO-B825 (SEV-4, OPEN, Concealment.cpp Kind::Step / BackOff, same branch)
+Both runs use the engine's own Return To Combat Area, which runs at the combat gait (the lab's x0.55 sneak gait is not applied by the engine to it, G3's open P1 question). A Step may therefore be noisier than a sneak walk; the engine's detection decides. The Step's pick has 10 candidates and no cover test (staying hidden is the engine's verdict, checked every lap by the run). A back-off to a point the engine cannot path to ends as a failure at 5 s.
+### MFO-B826 (SEV-5, OPEN, iaus/Catalogue.cpp BackOffNeed / aw(Step) / aw(BackOff), same branch)
+BackOff weight 1.0, Step weight 0.9, the Mercenary need table (0.6 / 0.8 / 1.0) and the 6 s / 3 s cooldowns are chosen, not searched. Block's score (BlockNeed with blockBase 0) is 0 whenever the time-to-live estimate is unknown, which is the default (the engine fills are OFF), so Block NEVER fires with the fills off (no candidate: `Combatant::swinging` is filled only with `bIausFillSwing`): Q-I-8.
+### MFO-B827 (SEV-4, OPEN, tools/iaus_sim, against dcca7d7, Opus review F5)
+The sim's ClassGate never sets `block`, so `--roads block` is dead after batch I. Batch S must set `ClassGate::block` (and `blockCooldownSec`) from the class rows' `act.block`.
+### MFO-B828 (SEV-4, OPEN, iaus/Reposition.h MageBackOffNeed, against dcca7d7, review F6)
+`MustClose` reads `hit` / `hitIsMagic`, which are filled only with `bIausFillHit`; without it a mage's back-off can fire on archers and casters. Fix shape: require a known melee foe for the mage need.
+### MFO-B829 (SEV-4, OPEN, iaus/Candidates.cpp fight clock, against dcca7d7, review F8)
+A combat flicker (gap over kFightGapSec) starts a new fight, so it counts one for the C13 counter.
+### MFO-B830 (SEV-4, OPEN, Concealment.cpp g_picks, against dcca7d7, review F9)
+Hide, Flee, BackOff and Step share ONE pick slot per follower; Build asks for one kind per lap (hide/flee > back-off > step) but a changing want re-picks every 1.5 s.
+### MFO-B831 (SEV-4, OPEN, Concealment.cpp Kind::Step bow pick, against dcca7d7, review F10)
+A bow Step candidate must still be at least 100 units nearer the foe, although only a line of fire matters; a line from the same distance is refused.
+### MFO-B832 (SEV-4, OPEN, apmf/RangeApproach.cpp ServiceRangeClose, against b0b7bb0, re-check of batch I)
+`ServiceRangeClose` has no `GroundStepStands` check: while a give-ground step stands (the earlier or later claim), the close can re-file and `RequestGroundStep` releases it again, so the close churns for the step's 2.5 s. Fix shape: ask whether a ground step stands before filing, as it asks `HealApproachStands`.

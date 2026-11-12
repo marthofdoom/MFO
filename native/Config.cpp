@@ -238,6 +238,7 @@ namespace MFO::Config {
             else if (a_key == "bPowerAttackEngineRoad") setB(g_powerAttackEngineRoad);   // act.power_attack: Harbinger ch.31 (ABI 44) vs MFO's own animation event; INI-only, default ON
             else if (a_key == "bIausBashRoad")      setB(g_iausBashRoad);     // IAUS Bash family through Harbinger ch.31, INI-only, default OFF
             else if (a_key == "bIausGroundRoad")    setB(g_iausGroundRoad);   // IAUS GiveGround family through Harbinger ch.24 on a point, INI-only, default OFF
+            else if (a_key == "bIausSpellRange")    setB(g_iausSpellRange);   // batch I item 1 (H4): the spell-range ch.24 close, INI-only, default ON
             else if (a_key == "bIausHideRoad")      setB(g_iausHideRoad);     // card G3: the hide run (Concealment.cpp + apmf/Disengage.cpp), INI-only, default OFF
             else if (a_key == "bSpellShapeCensus")  setB(g_spellShapeCensus); // [shape-census] load-time spell shape counts, INI-only, default ON
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
@@ -476,6 +477,7 @@ namespace MFO::Config {
             g_powerAttackEngineRoad = true;   // act.power_attack on Harbinger's real power attack when it serves ABI 44
             g_iausBashRoad       = false;   // the IAUS bash road -- OFF until the field proves Harbinger's combat move
             g_iausGroundRoad     = false;   // the IAUS give-ground road -- OFF until the field proves ch.24 on a point
+            g_iausSpellRange     = true;    // batch I item 1 (H4): the spell-range close -- ON (ch.24 on a foe is field-proven)
             g_iausHideRoad       = false;   // card G3: the hide run -- OFF until the field proves the disengage drive
             g_heartbeat          = true;    // [hb] 5 s liveness line -- ON (1 line / 5 s; names the stopped thread on a freeze)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla

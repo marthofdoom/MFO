@@ -54,6 +54,13 @@ namespace MFO::Iaus::SpellBook {
     // and Dragonborn pair a weapon line with a magic school).
     [[nodiscard]] bool CastingClass(const Classes::ClassDef& a_def);
 
+    // Would IAUS weigh this spell for a follower with this class gate? (batch I item 7, the Teach Spells page.) The static
+    // verdict MakeEntry gives every book entry (castable, a road MFO can cast it by, not a placement spell, a nature the record
+    // states, an effect list IAUS can weight: item 6) plus the class fit of ruling Q34 (the live ClassGate's spellsOnClass /
+    // spellsFromMastered, exactly as Generate reads them). Form data only: any thread. a_why (optional) gets a static literal
+    // when the answer is no.
+    [[nodiscard]] bool WouldWeigh(RE::SpellItem* a_spell, const ClassGate& a_gate, const char** a_why = nullptr);
+
     // WORKER. The last measured book, or nullptr when there is none fresh enough (never read, older than
     // kTrustSec, VR). Posts ONE main-thread refresh when the book is missing, kRefreshSec old or dirty.
     [[nodiscard]] std::shared_ptr<const Book> Read(RE::Actor* a_follower);

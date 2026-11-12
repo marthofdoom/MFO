@@ -46,6 +46,8 @@ namespace MFO::Iaus {
         case Family::Block:        return "block";
         case Family::Bash:         return "bash";
         case Family::Disengage:    return "disengage";
+        case Family::BackOff:      return "back_off";
+        case Family::Step:         return "step";
         case Family::kCount:       break;
         }
         return "?";
@@ -77,7 +79,7 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
-            "strike", "hold", "need", "flee_heal",
+            "strike", "hold", "need", "flee_heal", "need",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -113,7 +115,7 @@ namespace MFO::Iaus {
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
-                            f.controlSec, f.castsWanted };
+                            f.controlSec, f.castsWanted, f.backOffNeed };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -345,6 +347,7 @@ namespace MFO::Iaus {
             at(Cons::PostureTrade) = Lin(0.7f, 0.3f);
             // give ground / block / bash need: see Input. Under 0.05 there is no reason: veto.
             at(Cons::GroundNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            at(Cons::BackOffNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);   // batch I, chosen (the sim tunes it): the input is already a 0..1 need
             at(Cons::BlockNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
@@ -384,6 +387,8 @@ namespace MFO::Iaus {
             aw(Family::CastBuff, 0.7f);    aw(Family::CastSummon, 0.9f);   aw(Family::CastWard, 0.8f);
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
             aw(Family::Disengage, 1.0f);   // card G3, chosen (not from the search): gated by its generator, paced by its hard cooldown
+            aw(Family::BackOff, 1.0f);     // batch I, chosen: like the other moves, it has to be clearly worth it (the need's own veto and the hard cooldown pace it)
+            aw(Family::Step, 0.9f);        // batch I item 5, chosen: above the hold row it replaces (Sneak 0.6) and below a blow (a blow from stealth is generated at once when ready)
             aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
@@ -421,6 +426,10 @@ namespace MFO::Iaus {
             };
             constexpr U kGiveGround[] = { { Cons::GroundNeed, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kDisengage[] = { { Cons::DisengageClass, 1 }, { Cons::DisengageNeed, 1 }, { Cons::CooldownHard, 1 } };   // card G3
+            constexpr U kBackOff[] = { { Cons::BackOffNeed, 1 }, { Cons::CooldownHard, 1 } };   // batch I (iaus/Reposition.h fills the need)
+            // batch I item 5: the hold row's own gates (hidden from every listed foe, no blow ready) + its pacing; the step is generated
+            // only when a point is known, so the row it outranks is the one that stands still.
+            constexpr U kStep[] = { { Cons::Unseen, 1 }, { Cons::HoldStill, 1 }, { Cons::ClassFit, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
@@ -523,6 +532,8 @@ namespace MFO::Iaus {
             case Family::Block:        return kBlock;
             case Family::Bash:         return kBash;
             case Family::Disengage:    return kDisengage;
+            case Family::BackOff:      return kBackOff;
+            case Family::Step:         return kStep;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;
@@ -624,7 +635,7 @@ namespace MFO::Iaus {
             case Cons::Unseen:
                 if (f.unseen == Tri::Unknown) return In::Off();
                 return B(f.unseen == Tri::Yes);
-            case Cons::HoldStill:     return c.family == Family::Sneak ? B(!f.strikeReady) : In::Off();
+            case Cons::HoldStill:     return (c.family == Family::Sneak || c.family == Family::Step) ? B(!f.strikeReady) : In::Off();
             case Cons::BoostStrike:   return B(f.selfSneaking && f.foeUnaware == Tri::Yes);
             case Cons::FightStart:    return (std::max)(0.0f, f.combatSec) / 6.0f;
             case Cons::RetreatHp:     return f.selfHp;
@@ -708,6 +719,8 @@ namespace MFO::Iaus {
                     need = (std::max)(need, Clamp(1.0f - f.meleeThreatDist / 450.0f, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f));
                 return need;
             }
+            case Cons::BackOffNeed:
+                return c.family == Family::BackOff ? In(Clamp(f.backOffNeed, 0.0f, 1.0f)) : In::Off();
             case Cons::BlockNeed:
                 if (c.family != Family::Block || !f.foeSwinging) return c.family == Family::Block ? In(0.0f) : In::Off();
                 // A swing is in the air: half the need for that alone, the rest by how few seconds he has.

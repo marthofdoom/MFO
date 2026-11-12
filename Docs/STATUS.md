@@ -15,6 +15,24 @@
   happen, no refund; Pickpocket is cut). `act.steal` takes OWNED loose items; `act.pick_locks` opens nearby UNOWNED locked chests (owned-lock path parked, Q-L-6; doors never); the Thief line gets them (and Sneak) as
   logistics defaults on first equip. G16: with the tree on, a restricted class never wields an off-class weapon while it carries an in-set one (ch.17 per-item deny); with none it may, the player is told and damage is halved
   (new perk `MFOC_OffClassHalf` in the regenerated `MFO_Classes.esl`). Field steps: `in-game-test-list.md` "Batch L". Defaults: open questions Q-L-1..Q-L-6. Backlog MFO-B810..B813.
+- **2026-11-12, T2 BATCH I (`feat/batch-i`; NOT merged, NOT field run; one commit per item).** Seven items, MFO only, no co-save / Vocabulary /
+  ABI change. **(1) H4 spell range:** `iaus/Reposition.h` derives the distance from the spell in his hand (touch / cone x0.8, aimed or lock-on
+  x0.9 of the furthest range, Self blast x0.8 of its area); `apmf/RangeApproach.cpp` closes with ch.24 (X = foe, R = that range, Hold) behind
+  `[Debug] bIausSpellRange` (default ON); a mage inside 0.4 of an aimed spell's range gets a `BackOff` candidate (H3, below). **(3) Mercenary
+  back-off:** two or more foes pressing him -> the same `BackOff` family (Knight and Warrior keep no way out). `Concealment.cpp` gained two
+  kinds of short H3 run, `BackOff` (no deny, the scan keeps running) and `Step`; both ride `act.disengage` with the kind in the action
+  parameter and follow `bIausHideRoad` (default OFF). **(2) C13 free stealth entry:** `classes/StealthEntry.cpp` counts fights in the
+  EXISTING MCLS counters (`thiefFights` / `masterThiefFights`, no layout change); on the guaranteed fight (Thief 1 in 5, Master Thief 1 in 3)
+  a foe the engine has no verdict on is read as unaware until a foe's own group record has him, his first blow, or the fight's end; every
+  other fight is the engine's own detection, untouched. **(4) Block + power attack in IAUS (MFO-B800):** `Family::Block` is generated for a
+  class whose table carries the Block row, behind the ch.31 road, with the held-guard gate (`Snapshot::guardHeld`); the power attack already
+  rode `act.power_attack` with the shared cooldown. **(5) G18 hidden step:** hidden with no blow ready, `Family::Step` walks him quietly
+  toward a foe that does not detect him (blade: into reach; bow: to a line of fire) and stops the moment any foe has him. **(6) Unweighted
+  spells (Q91):** `Prune::Drop::Unweighted`, a spell whose every effect is Script / a scripted spawn / an unknown archetype is never an IAUS
+  candidate (one `[spellbook]` line per spell). **(7) Teach Spells page** on the Classes tab for casting classes, filtered by
+  `SpellBook::WouldWeigh`; consumes the tome through the existing teach edit. Test steps: `in-game-test-list.md` "T2 batch I". Questions
+  Q-I-1..Q-I-8. Backlog MFO-B820..B826.
+
 - **2026-11-11, THEFT GATE (`fix/theft-gate`, ClickUp 1dfcuabczbg, SEV-1: a v2.8.1 player got 5 g theft bounties in Whiterun from follower
   looting and the guards attacked; merged to main 2026-11-12 (9414150), NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
   an item copy owned by anyone but null / the player / PlayerFaction / his own side, from any source (per-copy ExtraOwnership, else the

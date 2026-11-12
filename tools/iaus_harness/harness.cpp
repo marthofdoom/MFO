@@ -11,6 +11,7 @@
 #include "iaus/Reach.h"      // ruling Q68: the learned swing reach
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
+#include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 
 #include <algorithm>
 #include <chrono>
@@ -1290,6 +1291,193 @@ namespace {
     }
 }
 
+namespace {
+    // Batch I (T2): block as a candidate, unweighted spells, the spell range, the back-off, the hidden step, the free entry's read.
+    void BatchI() {
+        std::printf("\n== Batch I: block, unweighted spells, H4 range, back-off, hidden step ==\n");
+        const Tuning& t = DefaultTuning();
+        const auto count = [](const Generated& g, Family f) {
+            int n = 0;
+            for (const Candidate& c : g.actions) if (c.family == f) ++n;
+            return n;
+        };
+        const auto find = [](const Generated& g, Family f) -> const Candidate* {
+            for (const Candidate& c : g.actions) if (c.family == f) return &c;
+            return nullptr;
+        };
+        const auto score = [&](const Generated& g, Family f) {
+            for (const Candidate& c : g.actions)
+                if (c.family == f) return ScoreOne(c, Mind{}, Profile{}, t, 1, 0, nullptr);
+            return -1.0f;
+        };
+        // ---- item 6: effects IAUS cannot weight ----
+        Check(Prune::EffectWeighable(0) && Prune::EffectWeighable(4) && Prune::EffectWeighable(21) && Prune::EffectWeighable(46),
+              "item 6: value modifier, absorb, paralysis, the last known archetype are weighable");
+        Check(!Prune::EffectWeighable(1) && !Prune::EffectWeighable(43) && !Prune::EffectWeighable(-1) && !Prune::EffectWeighable(47) && !Prune::EffectWeighable(500),
+              "item 6: a Script effect, a scripted spawn, kNone and an archetype past the last known are not");
+        Check(Prune::WeighableSpell({ 1, 0 }) && !Prune::WeighableSpell({ 1, 43 }) && !Prune::WeighableSpell({}),
+              "item 6: one weighable effect makes the spell weighable; script-only and an empty list do not");
+        {
+            Prune::StaticIn in; in.nature = Prune::Nature::Offense; in.weighable = false;
+            Check(Prune::StaticDrop(in) == Prune::Drop::Unweighted, "item 6: a stated nature with nothing to weigh is dropped as Unweighted");
+            in.weighable = true;
+            Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "item 6: weighable -> kept");
+            in.nature = Prune::Nature::Unknown; in.weighable = false;
+            Check(Prune::StaticDrop(in) == Prune::Drop::UnknownNature, "item 6: an unknown nature keeps its own reason");
+        }
+        // ---- item 4: the block family ----
+        ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;
+        ClassGate warrior; warrior.resolved = true; warrior.treeOn = true;
+        const auto melee = [&]() {
+            Snapshot s;
+            s.self = Actor("Knight", 0x14F01, 100, 200, 0, 0);
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, 150, 0) };
+            s.foes[0].targetId = 0x14F01; s.foes[0].swinging = true;
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+            s.blockRoad = true;
+            return s;
+        };
+        Check(count(Generate(melee(), knight, t), Family::Block) == 1, "item 4: a class with the Block row + the road + a swing in the air -> a Block candidate");
+        Check(count(Generate(melee(), warrior, t), Family::Block) == 0, "item 4: a class with no Block row is never given one (Q-melee-2)");
+        { Snapshot s = melee(); s.blockRoad = false; Check(count(Generate(s, knight, t), Family::Block) == 0, "item 4: no road -> no Block"); }
+        { Snapshot s = melee(); s.foes[0].swinging = false; Check(count(Generate(s, knight, t), Family::Block) == 0, "item 4: no swing in the air -> no Block"); }
+        {   // the held-guard gate (marth Q-melee-3)
+            Snapshot s = melee(); s.guardHeld = true;
+            const Generated g = Generate(s, knight, t);
+            Check(count(g, Family::Attack) == 0 && count(g, Family::PowerAttack) == 0 && count(g, Family::Taunt) == 0 && count(g, Family::Bash) == 0,
+                  "item 4: while the guard stands no attack, power attack, taunt or bash is generated");
+            Check(count(g, Family::Block) == 1, "item 4: the Block row stays generated while the guard stands (the renewal)");
+        }
+        {   // the row's own cooldown
+            ClassGate k = knight; k.blockCooldownSec = 4.0f;
+            const Candidate* b = find(Generate(melee(), k, t), Family::Block);
+            Check(b && b->f.hardCooldownSec == 4.0f, "item 4: the class row's cooldown is the candidate's hard cooldown");
+        }
+        // ---- item 1: the spell range ----
+        SpellEntry firebolt = Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 2000, Prune::kAvResistFire);
+        SpellEntry flames = Spell("Flames", 0x12FCE, Prune::Nature::Offense, 5, 600, Prune::kAvResistFire); flames.concentration = true;
+        SpellEntry touch = Spell("Touch", 0x12FCF, Prune::Nature::Offense, 30, 0, Prune::kAvResistFire); touch.touch = true;
+        SpellEntry blast = Spell("Blast", 0x12FD1, Prune::Nature::Offense, 30, 0, Prune::kAvResistFire); blast.selfDelivery = true; blast.areaUnits = 500;
+        const Reposition::Range rf = Reposition::SpellRange(firebolt, 200.0f);
+        Check(std::fabs(rf.desired - 1800.0f) < 0.01f && std::fabs(rf.minimum - 720.0f) < 0.01f, "H4: aimed = the furthest range x0.9, minimum 0.4 of that");
+        const Reposition::Range rc = Reposition::SpellRange(flames, 200.0f);
+        Check(std::fabs(rc.desired - 480.0f) < 0.01f && rc.minimum == 0.0f, "H4: a concentration (cone) spell = its range x0.8, no minimum");
+        const Reposition::Range rt = Reposition::SpellRange(touch, 200.0f);
+        Check(std::fabs(rt.desired - 160.0f) < 0.01f && rt.minimum == 0.0f, "H4: touch = the melee reach x0.8, no minimum");
+        Check(std::fabs(Reposition::SpellRange(blast, 200.0f).desired - 400.0f) < 0.01f, "H4: a Self-delivered blast = its area x0.8");
+        SpellEntry none = Spell("None", 0x12FD2, Prune::Nature::Offense, 30, 0, Prune::kAvResistFire);
+        Check(!Reposition::SpellRange(none, 200.0f).Known(), "H4: a spell whose record gives no range keeps none");
+        ClassGate mage; mage.resolved = true; mage.treeOn = true; mage.spellsOnClass = true;
+        const auto caster = [&](float dist, const SpellEntry& sp) {
+            Snapshot s;
+            s.self = Actor("Mage", 0x14F01, 150, 200, 0, 0);
+            s.self.mp = 200; s.self.mpMax = 200;
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, dist, 0) };
+            s.foes[0].targetId = 0x14F01;
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::None; s.meleeReach = 200.0f;
+            s.book.entries = { sp };
+            s.equippedSpell = sp.form;
+            return s;
+        };
+        {
+            Reposition::Close c;
+            Check(Reposition::RangeToHold(caster(3000, firebolt), mage, c) && c.far && c.foe == 0x3B610 && std::fabs(c.radius - 1800.0f) < 0.01f,
+                  "H4: the foe beyond the range x1.15 -> close, R = the derived range");
+            Check(Reposition::RangeToHold(caster(1500, firebolt), mage, c) && !c.far, "H4: inside the range the bound is refreshed but nothing new is filed");
+            Snapshot s = caster(3000, firebolt); s.drawn = PostureKind::Melee;
+            Check(!Reposition::RangeToHold(s, mage, c), "H4: with a weapon drawn it is not the spell phase");
+            Snapshot s2 = caster(3000, firebolt); s2.equippedSpell = 0;
+            Check(!Reposition::RangeToHold(s2, mage, c), "H4: no spell in his hand -> no range to keep");
+            ClassGate noCast = mage; noCast.spellsOnClass = false;
+            Check(!Reposition::RangeToHold(caster(3000, firebolt), noCast, c), "H4: a class that does not cast never closes on a spell range");
+        }
+        // ---- items 1 and 3: the back-off ----
+        {
+            Snapshot s = caster(300, firebolt); s.backOffRoad = true; s.backOffPoint = true;
+            const Generated g = Generate(s, mage, t);
+            const Candidate* b = find(g, Family::BackOff);
+            Check(b && b->form == Reposition::kBackOffForm && std::fabs(b->f.backOffNeed - (1.0f - 300.0f / 720.0f)) < 0.001f && score(g, Family::BackOff) > 0.0f,
+                  "H4: a melee foe on a mage inside 0.4 of the spell's range -> a BackOff candidate whose need is how far inside");
+            Snapshot far = caster(900, firebolt); far.backOffRoad = true; far.backOffPoint = true;
+            Check(count(Generate(far, mage, t), Family::BackOff) == 0, "H4: outside the minimum -> no back-off");
+            Snapshot noRoad = caster(300, firebolt); noRoad.backOffRoad = true; noRoad.backOffPoint = false;
+            Check(count(Generate(noRoad, mage, t), Family::BackOff) == 0, "H4: no fresh point -> no back-off");
+            Snapshot cone = caster(100, flames); cone.backOffRoad = true; cone.backOffPoint = true;
+            Check(count(Generate(cone, mage, t), Family::BackOff) == 0, "H4: a cone / touch spell wants the foe near: no minimum, no back-off");
+            Snapshot rangedFoe = caster(300, firebolt); rangedFoe.backOffRoad = true; rangedFoe.backOffPoint = true; rangedFoe.foes[0].rangedWeapon = true;
+            Check(count(Generate(rangedFoe, mage, t), Family::BackOff) == 0, "H4: a foe that does not have to close does not push him back");
+            Snapshot held = caster(300, firebolt); held.backOffRoad = true; held.backOffPoint = true; held.guardHeld = true;
+            Check(count(Generate(held, mage, t), Family::BackOff) == 0, "item 4 x H4: not while a guard stands");
+        }
+        ClassGate merc; merc.resolved = true; merc.treeOn = true; merc.backOffPressed = true;
+        const auto pressed = [&](int foes) {
+            Snapshot s;
+            s.self = Actor("Mercenary", 0x14F01, 150, 200, 0, 0);
+            s.playerId = 0x14;
+            for (int i = 0; i < foes; ++i) {
+                s.foes.push_back(Actor("Bandit", 0x3B610u + static_cast<std::uint32_t>(i), 100, 100, 120.0f + 20.0f * static_cast<float>(i), 0));
+                s.foes.back().targetId = 0x14F01;
+            }
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = PostureKind::Melee; s.meleeReach = 200.0f;
+            s.backOffRoad = true; s.backOffPoint = true;
+            return s;
+        };
+        {
+            Check(count(Generate(pressed(1), merc, t), Family::BackOff) == 0, "Q-T2-3: one foe on the Mercenary is a duel: no back-off");
+            const Candidate* two = find(Generate(pressed(2), merc, t), Family::BackOff);
+            Check(two && std::fabs(two->f.backOffNeed - 0.6f) < 0.001f, "Q-T2-3: two foes press the Mercenary -> a BackOff candidate, need 0.6");
+            const Candidate* four = find(Generate(pressed(4), merc, t), Family::BackOff);
+            Check(four && std::fabs(four->f.backOffNeed - 1.0f) < 0.001f, "Q-T2-3: four or more -> need 1.0");
+            ClassGate knightLike; knightLike.resolved = true; knightLike.treeOn = true;
+            Check(count(Generate(pressed(3), knightLike, t), Family::BackOff) == 0, "Q-T2-3: Knight and Warrior keep no way out by design");
+            Snapshot far = pressed(2); far.foes[0].dist = 900; far.foes[1].dist = 950;
+            Check(count(Generate(far, merc, t), Family::BackOff) == 0, "Q-T2-3: foes that are not within striking distance do not press him");
+        }
+        // ---- item 5: the hidden step ----
+        ClassGate thief; thief.resolved = true; thief.treeOn = true; thief.sneakClass = true; thief.disengage = true;
+        const auto hidden = [&](float dist, PostureKind pk) {
+            Snapshot s;
+            s.self = Actor("Thief", 0x14F01, 180, 200, 0, 0);
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B610, 100, 100, dist, 0) };
+            s.foes[0].detectsMe = Tri::No;
+            s.currentTargetId = 0x3B610; s.hasBook = true; s.combatSec = 3.0f;
+            s.drawn = pk; s.meleeReach = 200.0f;
+            s.selfSneaking = true; s.hideRoad = true;
+            s.stepRoad = true; s.stepPoint = true;
+            return s;
+        };
+        {
+            const Generated g = Generate(hidden(900, PostureKind::Melee), thief, t);
+            Check(count(g, Family::Step) == 1 && count(g, Family::Sneak) == 1, "G18: hidden, the blade foe out of reach, a point known -> a Step beside the hold row");
+            const Candidate* st = find(g, Family::Step);
+            Check(st && st->form == Reposition::kStepForm && st->target == 0x3B610, "G18: the step is for that foe and carries its kind");
+            Check(score(g, Family::Step) > score(g, Family::Sneak) && score(g, Family::Sneak) > 0.0f, "G18: the step outranks the hold row it replaces");
+            Check(count(Generate(hidden(150, PostureKind::Melee), thief, t), Family::Step) == 0, "G18: a blow is ready (foe in reach) -> the blow, not a step");
+            Snapshot noPt = hidden(900, PostureKind::Melee); noPt.stepPoint = false;
+            Check(count(Generate(noPt, thief, t), Family::Step) == 0 && count(Generate(noPt, thief, t), Family::Sneak) == 1, "G18: no fresh point -> the hold row stands still, as before");
+            Snapshot seen = hidden(900, PostureKind::Melee); seen.foes[0].detectsMe = Tri::Yes;
+            Check(count(Generate(seen, thief, t), Family::Step) == 0, "G18: a foe has him -> no step (the hide run is for that)");
+            Snapshot unk = hidden(900, PostureKind::Melee); unk.foes[0].detectsMe = Tri::Unknown;
+            Check(count(Generate(unk, thief, t), Family::Step) == 0, "G18: no verdict from the engine -> no step (not read as hidden)");
+            Check(count(Generate(hidden(900, PostureKind::None), thief, t), Family::Step) == 0, "G18: a caster's hands never step to strike");
+            Snapshot bow = hidden(1500, PostureKind::Bow); bow.foes[0].sight = Sight::Occluded;
+            Check(count(Generate(bow, thief, t), Family::Step) == 1, "G18: a bow with no line of fire on the unaware foe -> a Step");
+            Snapshot bowLine = hidden(1500, PostureKind::Bow); bowLine.foes[0].sight = Sight::Visible;
+            Check(count(Generate(bowLine, thief, t), Family::Step) == 0, "G18: a bow with a line of fire is a blow, not a step");
+            Snapshot cd = hidden(900, PostureKind::Melee);
+            const Generated gc = Generate(cd, thief, t);
+            const Candidate* sc = find(gc, Family::Step);
+            Check(sc && sc->f.hardCooldownSec == t.stepCooldownSec, "G18: the step carries its hard cooldown");
+        }
+    }
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -1307,6 +1495,7 @@ int main() {
     OcclusionHoldBound();
     HideHold();
     DisengageRules();
+    BatchI();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }
