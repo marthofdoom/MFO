@@ -200,3 +200,11 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - Q92: add Night Eye (always) and Dispel (when delivered to Self) to Harbinger's benign list.
 - Q-SIM-3: the hidden hold gets an exit: while hidden he steps to gain a strike or a line of fire, staying hidden (native round, gap G18).
 - Cleanup: remove only clean, merged/pushed agent worktrees under .claude/worktrees; list the rest; mfo-wt-floor stays.
+- Q-melee-1: Block 2.5 s held, 4 s cooldown (default confirmed).
+- Q-melee-3: a held guard denies all his own offense, heals included (default confirmed).
+- Q-melee-6: class style applies in full with the class tree on; no-class stance styles stay equip-choice only (default confirmed).
+- Q-melee-7: Mercenary Avoid Threat 0.3 (not the suggested 0.5), set in the class CSTY via MFO_GenerateESP.py (MFO-B806).
+- Q-melee-2: marth: "Ebony warrior is technically knight line. Other classes can block but at vanilla rates". Block row default: Knight, Great Knight and Ebony Warrior. Every other class blocks only by the engine's own style (vanilla rates), no MFO row.
+- Q-melee-4: give the power attack cooldown back when Harbinger refuses the move or the read-back fails.
+- IAUS melee: batch I gives IAUS the Harbinger block and the engine power attack as candidates (MFO-B800), modelled in the sim.
+- Q-SIM-4: stealth probes P1-P3 (g2-hide-design.md) join the T2 field session.
