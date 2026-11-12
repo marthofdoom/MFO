@@ -186,6 +186,32 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - **Q-SIM-5. [ANSWERED 11-11, marth: "why wouldnt a follower be able to move and do an action. I believe he should". The stop is a lab leftover kept only so the new baseline matched the old lab; no game or MFO rule stops his feet. Batch S makes every deliberate movement continue through a swap, potion or cast, with any engine slowdown measured, not assumed, and sets a new baseline]** In the lab a weapon swap, a potion and a cast still stop a follower's feet, except on a G3 run (the drive is a movement package). That keeps `--stealth off` equal to the old lab, and it makes the flee look a little better than Retreat. Make all deliberate movement behave like the G3 run? It would move every class's numbers a little and needs a new baseline. [not now]
 - **Q-SIM-6.** Knight, Warrior and Mercenary have no disengage flag, so neither Retreat nor the flee is ever generated for them. In the lab's melee-flee scenario (a Mercenary at 27% health, two foes on him, no healer) a person who steps back toward the player does 10.5 U better. By design for all three, or does the Mercenary's "backs away while still fighting" want a road (the give-ground step exists in the lab only)? [by design for now. Gap G21 is open]
 
+## Saved 2026-11-12 (theft-gate review, default taken; work proceeds on it)
+- Q105 (theft F4). Town smithing stations (grindstone, workbench, forge) are almost all owned by the smith or the smithy cell, and the first theft-gate build skipped every station not owned by the player, which removes the smith errand's station half in most towns. DEFAULT taken (marth 11-11 "A crime is the issue"): a station is skipped only when the engine's own crime-to-activate test says using it is a crime (IsOffLimits, FURN branch), plus his own stations are allowed. Alternative: skip every station owned by anyone but the player (stricter, smith errands mostly stop).
+
+- Q106 [WITHDRAWN 11-12: marth scoped this to the IAUS teach page only; buy/learn roads unchanged] (class spell road). Tome buying only takes spells of the follower's top-2 skill schools; IAUS's class gate is school-blind (Mage/Hybrid line casts any school). DEFAULT taken: keep the top-2 school filter for buying (gold is limited) and add the class gate on top; teaching and auto-learn stay school-blind. Alternative: replace the school filter with the class rule.
+
+## ANSWERED 2026-11-12 (marth, AskUserQuestion, before bed)
+- Theft fix release: ship with T2 (no separate hotfix).
+- Q105: smithing stations gated by the game's crime test (IsOffLimits), his own allowed (default confirmed).
+- Q102/Q103: strongest humanoid corpse, nearest on a tie (defaults confirmed).
+- Q93: aversion weight 0.25 (mild) for Conjurer and Healer (was 0.50). MFO.ini defaults fAversionConjurer / fAversionHealer change.
+- Q91: a spell MFO itself claims for him counts as declared and passes his own Offense-only deny (Harbinger change, own card). marth: "But MFO should hide spells we can't weight if we don't know what they do": a spell whose effects IAUS cannot weight (unknown / script-only effects) is hidden from IAUS candidates (and the teach page filter).
+- Q92: add Night Eye (always) and Dispel (when delivered to Self) to Harbinger's benign list.
+- Q-SIM-3: the hidden hold gets an exit: while hidden he steps to gain a strike or a line of fire, staying hidden (native round, gap G18).
+- Cleanup: remove only clean, merged/pushed agent worktrees under .claude/worktrees; list the rest; mfo-wt-floor stays.
+- Q-melee-1: Block 2.5 s held, 4 s cooldown (default confirmed).
+- Q-melee-3: a held guard denies all his own offense, heals included (default confirmed).
+- Q-melee-6: class style applies in full with the class tree on; no-class stance styles stay equip-choice only (default confirmed).
+- Q-melee-7: Mercenary Avoid Threat 0.3 (not the suggested 0.5), set in the class CSTY via MFO_GenerateESP.py (MFO-B806).
+- Q-melee-2: marth: "Ebony warrior is technically knight line. Other classes can block but at vanilla rates". Block row default: Knight, Great Knight and Ebony Warrior. Every other class blocks only by the engine's own style (vanilla rates), no MFO row.
+- Q-melee-4: give the power attack cooldown back when Harbinger refuses the move or the read-back fails.
+- IAUS melee: batch I gives IAUS the Harbinger block and the engine power attack as candidates (MFO-B800), modelled in the sim.
+- Q-SIM-4: stealth probes P1-P3 (g2-hide-design.md) join the T2 field session.
+- Harbinger invariants #0 (m) aversion, (l) block + power-attack amendments, (n) combat-style read: adopted at each branch's merge (after its Opus review).
+- Q104: Corpse: Within stays combat only (default confirmed).
+- Q94: aversion only from the EQUIPPED Conjurer/Healer class; a mastered, unequipped class gives none (was a quarter). Weight does not grow with level.
+- G3 disengage, conditional (marth 11-12): "Disengage may need a buff depending on how useful it shows itself to be. If it's not useful I'd consider having it work d&d style and drop the follower as a valid combat target for 6s". Decided after the T2 field session and the batch S sim show how useful the run is. Likely road if taken: Harbinger ch.32 aversion (v41) at full weight for a 6 s window on every foe, started by the disengage pick (no new engine seat), modelled in the sim first.
 ## From T2 batch M, the melee moves (2026-11-11, Harbinger feat/melee-moves + MFO feat/melee-moves; work proceeds on the default)
 Ids are Q-melee-N (the batch brief's convention), so they cannot collide with the numbered questions of other branches.
 Q-melee-1. The Knight's Block: how long and how often. DEFAULT taken: one raise holds the guard 2.5 seconds (`fBlockHoldSeconds` in MFO.ini) and the row's cooldown is 4 seconds from one raise to the next, so while a foe keeps swinging at him he guards for 2.5 s and fights for 1.5 s. The condition is "Foe: Targeting me (melee)". Alternative: a longer guard (4 s of 5), or a guard only against a power attack once a condition for that exists.
