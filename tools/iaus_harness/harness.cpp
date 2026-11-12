@@ -12,6 +12,7 @@
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
+#include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
 
 #include <algorithm>
 #include <chrono>
@@ -1359,6 +1360,11 @@ namespace {
               Check(count(Generate(h, knight, t), Family::Block) == 0, "Q-S-5: hurt (below the drink line) with a health potion -> no guard line, he drinks first");
               h.book.kit.potionsHealth = 0;
               Check(count(Generate(h, knight, t), Family::Block) == 1, "Q-S-5: hurt with NO potion -> the guard line stands"); }
+            {   // per-class curves: the Knight's own drink line decides it (hp 0.5, a health potion, two foes taunted by him)
+              Snapshot k = s; k.self.hp = 100; k.self.hpMax = 200; k.book.kit.potionsHealth = 1;
+              ClassGate kd = knight, kh = knight; kh.drinkHealthLine = 0.80f;
+              Check(count(Generate(k, kd, t), Family::Block) == 1, "per-class curves: hp 0.5 above the default 0.34 line -> the guard line stands");
+              Check(count(Generate(k, kh, t), Family::Block) == 0, "per-class curves: the same Knight with his line at 0.80 -> the guard line is off, he drinks first"); }
             s.foes[1].taunted = false; s.foes[1].tauntedByMe = false;
             Check(count(Generate(s, knight, t), Family::Block) == 0, "Q-S-5: one taunted foe and no swing in the air -> no Block");
             s.foes[1].taunted = s.foes[1].tauntedByMe = true; s.guardHeld = true;
@@ -1511,6 +1517,58 @@ namespace {
             Check(sc && sc->f.hardCooldownSec == t.stepCooldownSec, "G18: the step carries its hard cooldown");
         }
     }
+
+    // Per-class curves (ruling Q-class-curves): the shipped table overrides nothing (every class scores bit-identically to the
+    // uncustomised catalogue), and an override changes ONLY the (family, consideration) it names, ONLY for the Profile that holds it.
+    void ClassCurveRows() {
+        namespace CC = MFO::Iaus::ClassCurves;
+        std::printf("\n=== per-class curves ===\n");
+        const Tuning& t = DefaultTuning();
+        const Candidate drink = Drink(Family::DrinkHealth, "Health Potion", 0x0003EADD, 3, 0.45f, 1.0f, 1.0f);
+        const Candidate atk = Drink(Family::DrinkStamina, "Stamina Potion", 0x0003EADF, 3, 1.0f, 0.45f, 1.0f);   // a second family that reads the SAME Cons (DrinkNeed)
+        const Mind m{};
+        const Profile none;
+        const float d0 = ScoreOne(drink, m, none, t, 3, 0.0f, nullptr), a0 = ScoreOne(atk, m, none, t, 3, 0.0f, nullptr);
+        Check(d0 > 0.0f && a0 > 0.0f, "class curves: the probe candidates score above 0");
+        bool same = true, empty = true;
+        for (std::size_t i = 0; i < CC::kRows; ++i) {
+            const Profile& p = CC::ProfileFor(static_cast<std::uint8_t>(i));
+            empty = empty && p.curves.empty();
+            same = same && ScoreOne(drink, m, p, t, 3, 0.0f, nullptr) == d0 && ScoreOne(atk, m, p, t, 3, 0.0f, nullptr) == a0;
+        }
+        Check(empty && same, "class curves: all 35 shipped rows are empty and score bit-identically to the default Profile");
+        Check(&CC::ProfileFor(0xFF) != nullptr && CC::ProfileFor(0xFF).curves.empty(), "class curves: no resolved class = the empty default Profile");
+        Check(&CC::ProfileFor(3) == &CC::ProfileFor(3), "class curves: a class's Profile is cached (the same object every call)");
+        ClassGate g; CC::Apply(3, g);
+        Check(g.curveClass == 3 && g.drinkHealthLine == kDrinkHealthLine && g.touchSpentSec == Reposition::kTouchSpentSec, "class curves: a shipped row's edge constants are the shared constants");
+        // an override equal to the shared curve changes nothing
+        CC::Row same1;
+        Check(CC::SetCurveParam(same1, Family::DrinkHealth, Cons::DrinkNeed, t.curve[static_cast<std::size_t>(Cons::DrinkNeed)], "a", t.curve[static_cast<std::size_t>(Cons::DrinkNeed)].a), "class curves: SetCurveParam creates an override");
+        Check(ScoreOne(drink, m, CC::Build(same1), t, 3, 0.0f, nullptr) == d0, "class curves: an override equal to the shared curve scores bit-identically");
+        // a different shape changes that family's score only
+        CC::Row knight;
+        CC::SetCurveParam(knight, Family::DrinkHealth, Cons::DrinkNeed, t.curve[static_cast<std::size_t>(Cons::DrinkNeed)], "b", 0.60f);   // the midpoint moves up: he drinks sooner
+        const Profile pk = CC::Build(knight);
+        const float dk = ScoreOne(drink, m, pk, t, 3, 0.0f, nullptr);
+        Check(dk > d0, "class curves: a DrinkNeed midpoint override changes the drink's score (up for a later midpoint)");
+        Check(ScoreOne(atk, m, pk, t, 3, 0.0f, nullptr) == a0, "class curves: ...and no other family's score (a DrinkStamina candidate reads the same DrinkNeed Cons)");
+        Check(ScoreOne(drink, m, none, t, 3, 0.0f, nullptr) == d0 && ScoreOne(drink, m, CC::ProfileFor(3), t, 3, 0.0f, nullptr) == d0, "class curves: ...and no other Profile's (the override lives in that Profile only)");
+        Check(!CC::SetCurveParam(knight, Family::Attack, Cons::DrinkNeed, t.curve[0], "nope", 1.0f) && !CC::SetScalar(knight, "nope", 1.0f), "class curves: a bad param name is refused");
+        // the edge constant reaches the generator: a Knight below the (raised) line with a potion drops the guard line
+        CC::Row line; CC::SetScalar(line, "drinkHealthLine", 0.80f);
+        ClassGate gl; CC::Apply(line, 5, gl);
+        Check(gl.curveClass == 5 && gl.drinkHealthLine == 0.80f, "class curves: an edited row's edge constant lands on the gate");
+        // the tree-OFF base classes have their own rows, seeded from the T1 rows
+        Check(CC::kRows == CC::kClassRows + 3 && CC::Defaults()[CC::kBaseOffFirst].curves.empty() && &CC::ProfileFor(static_cast<std::uint8_t>(CC::kBaseOffFirst)) != &CC::ProfileFor(0),
+              "class curves: the three tree-OFF base classes have their own rows (35..37), apart from the T1 rows");
+        // the guard-line cut-off follows the row's own DrinkNeed midpoint unless a value is set
+        CC::Row mid; CC::SetCurveParam(mid, Family::DrinkHealth, Cons::DrinkNeed, t.curve[static_cast<std::size_t>(Cons::DrinkNeed)], "b", 0.55f);
+        ClassGate gm; CC::Apply(mid, 4, gm);
+        Check(gm.drinkHealthLine == 0.55f, "class curves: with no explicit scalar the edge line follows the row's DrinkNeed midpoint");
+        CC::SetScalar(mid, "drinkHealthLine", 0.20f); CC::Apply(mid, 4, gm);
+        Check(gm.drinkHealthLine == 0.20f, "class curves: an explicit drinkHealthLine wins over the midpoint");
+    }
+
 }
 
 int main() {
@@ -1531,6 +1589,7 @@ int main() {
     HideHold();
     DisengageRules();
     BatchI();
+    ClassCurveRows();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

@@ -113,6 +113,12 @@ namespace MFO::Iaus {
         bool weaponBow = true;
         bool weaponCrossbow = true;
         bool weaponStaff = true;
+        // Per-class curves (ruling Q-class-curves): which iaus/ClassCurves.h row this follower scores with (a Classes::Id ordinal;
+        // kNoCurveClass = none resolved = the shared defaults), and the two class-relevant edge constants that row carries.
+        // The defaults ARE the shared constants (Core.h kDrinkHealthLine, Reposition.h kTouchSpentSec: ClassCurves.cpp asserts it).
+        std::uint8_t curveClass = 0xFF;
+        float drinkHealthLine = kDrinkHealthLine;   // Generate.cpp: below it with a health potion in stock the Knight guard line is off
+        float touchSpentSec = 3.0f;                 // Candidates.cpp: how long after a touch cast he is "backing out"
     };
 
     // ── One actor ─────────────────────────────────────────────────────────────────────────────────────────
@@ -205,6 +211,7 @@ namespace MFO::Iaus {
         bool  stepRoad = false, stepPoint = false;
         std::uint32_t equippedSpellOther = 0; // Q-I-2: the spell in the OTHER hand when it holds a different one; 0 = none
         std::uint32_t chosenCast = 0;         // Q-I-2: the form of the cast IAUS ranked first on its LAST decision (Candidates::NoteDecision); 0 = none
+        double touchAgo = -1.0;               // seconds since the touch spell fired while it is the running decision; -1 = not applicable (Candidates::Build derives touchSpent from it with the class's touchSpentSec)
         bool  touchSpent = false;             // Q-I-2: the touch spell of his hands fired within Reposition::kTouchSpentSec (Mind::firedAt)
         std::uint32_t equippedSpell = 0;      // batch I H4: the spell in his right hand (else left); 0 = no spell in hand. Looked up in the book
         bool  freeEntry = false;              // batch I item 2: this fight is a guaranteed stealth-entry fight and the entry is not spent (the gather

@@ -9085,6 +9085,18 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
 - `iaus/Catalogue.cpp` — names, roles (Shape/Gate/Boost), `FactsFinite` `:99`, `DefaultTuning()` `:128` (EVERY curve parameter and weight,
   each with its reason; I9 tunes here, as data), the per-family consideration sets `SetFor` `:372`, the inputs `Input` `:406`
   (explicit applicability `In{on,x}`, never a NaN sentinel).
+- **`iaus/ClassCurves.h/.cpp` -- THE PER-CLASS CURVE TABLE (ruling Q-class-curves, marth 11-12; `feat/class-curves`, tier B, NOT merged, NOT field run; NO co-save, ABI, address or ESP change).**
+  PURE (no Classes.h; `SpellBook.cpp` static_asserts `kRows == Classes::kClassCount` 35). `Table` = one `Row` per class (the row index IS the `Classes::Id`
+  ordinal; Melee / Ranged / Mage = rows 0..2 are also the tree-OFF base classes via `T1ForOverride`): `Row::curves` (`Profile::CurveOverride{family, cons, Curve}`)
+  and `Row::scalars` (`drinkHealthLine`, `touchSpentSec`). SHIPPED = PLACEHOLDER: every row present, no override, shared defaults, so scores are bit-identical
+  (harness `ClassCurveRows`, sim `--compare` 0 changes). The sim batch fills rows in `MakeDefaults()`. `Score.cpp detail::CurveFor` reads `Profile::curves` (empty
+  = `Tuning::curve[cons]`). `SpellBook::GateFor` calls `ClassCurves::Apply` (sets `ClassGate::curveClass`, `drinkHealthLine`, `touchSpentSec`); `IausSource` scores
+  with `ClassCurves::ProfileFor(gate.curveClass)` (cached per class, never built per tick; the readout `MakeReadout` gets it too). `Generate.cpp` reads
+  `x.g.drinkHealthLine`; `Candidates::Build` re-derives `Snapshot::touchSpent` from `touchAgo` with `gate.touchSpentSec`. Sim: `--curve <class>:<family>.<cons>.<param>=<v>`
+  or `<class>:scalar.<name>=<v>` (`ApplyCurveSpecs`, `g_curveTable` in `tools/iaus_sim/Setup.h`/`RealClasses.cpp`). NOT per class yet: `kGuardLineFoes` (Core.h:36, read by
+  `Input` and `Generate` without a gate), the `Tuning` cooldowns, card I8's `BumpRow` (changes scores; deliberately NOT wired). **What breaks:** `Scalars::drinkHealthLine` is the Knight guard-line cut-off AND the DrinkNeed curve's midpoint: `Apply` makes the scalar follow a row's DrinkHealth/DrinkNeed `b` override unless `drinkHealthLine` was set explicitly (`drinkHealthLineSet`), so one row never has a curve that drinks at 0.5 and a guard line that stands to 0.34; the three tree-OFF base classes are rows 35..37 (`kBaseOffFirst`, seeded from T1 rows 0..2; `GateFor` picks them when the tree is off), not the T1 rows; a new class-relevant
+  constant must be a `Scalars` field AND a `ClassGate` field AND `Apply` AND the sim's `SetScalar` or the sim and the game disagree; adding a class needs a row
+  (the static_assert fires); a `Profile` copy per tick would defeat the cache; `Tuning::curve` is still the ONLY source for a pair with no override.
 - `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
   `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
   (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.
