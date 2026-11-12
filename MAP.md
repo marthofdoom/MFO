@@ -9105,7 +9105,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   `SpellBook::MakeEntry` from `GetCostliestEffectItem()->baseEffect->data.associatedSkill`, the Loadout/Cast.cpp rule) -> `Candidate::school` (Generate.cpp) ->
   `Score.cpp` multiplies `base` by `min(1, Profile::school[s] + Candidate::schoolBump)`; a multiplier, never a veto. `Profile::school[5]` is built per class row by
   `ClassCurves::SchoolWeight` (floor + (1-floor) * (0.5+0.5cos(2 pi d/5))^shape, d = steps along `Core.h kSchoolCircle`, THE one array that fixes the circle order) from
-  `Scalars::schoolPeak / schoolFloor / schoolShape` (SetScalar names the same; peaks seeded from the class cards in `SeedSchoolPeaks`, inert at floor 1.0). Cross-class bump:
+  `Scalars::schoolPeak / schoolFloor / schoolShape` (SetScalar names the same; home schools seeded from marth's School Circle save 2026-11-12 in `SeedSchoolPeaks`, inert at floor 1.0; Wizard and Mage have none). Cross-class bump:
   `ClassCurves::ApplyMastered(masteredMask, gate)` (called by `SpellBook::GateFor`) adds each MASTERED class's `schoolMasteredBump` to `ClassGate::schoolBump[its peak]`;
   `Generate.cpp` copies it onto the candidate (per-follower, so NOT in the cached Profile). Arch-Mage (`kArchMage` 26, `Scalars::schoolAny`) is flat by rule, no SetScalar name.
   **What breaks:** the peak seeds address rows by `Classes::Id` ordinal (SpellBook.cpp static_asserts them); a Profile with a school below 1.0 changes scores, so shipped must stay

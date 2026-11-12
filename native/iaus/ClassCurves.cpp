@@ -13,17 +13,20 @@ namespace MFO::Iaus::ClassCurves {
     namespace {
         // PLACEHOLDER STRUCTURE: one Row per class, nothing overridden. The sim batch fills a row here (a CurveOverride for a
         // (family, cons) pair and/or a Scalars value) with the evidence for it; until then the class scores with the shared catalogue.
-        // School peaks seeded from the class cards (Docs/research/2026-11/class-perks-packages.md, lines L9-L12 and the T3 hybrids).
-        // Inert while schoolFloor stays 1.0. Peaks are School identities (Core.h), not circle positions.
+        // School peaks (home schools): marth's School Circle save 2026-11-12, https://claude.ai/artifact/2wzN86WzfTHoZpie1jxGrY
+        // Circle order: Destruction - Alteration - Restoration - Illusion - Conjuration (Core.h kSchoolCircle). Wizard, Mage and the other
+        // classes have NO home school (flat, no mastery bump); Arch-Mage is "any school" (schoolAny, below). Inert while schoolFloor
+        // stays 1.0: his page's starting shapes (floor 0.35, sharpness 1.5, bump 0.15) are for the sim search, NOT shipped.
         void SeedSchoolPeaks(Table& t) {
             using Id = std::size_t;
-            constexpr Id kEvoker = 8, kConjurer = 9, kHealer = 10, kWarlock = 11, kWizard = 17, kNecromancer = 18, kPriest = 19,
-                         kSpellsword = 20, kSorcerer = 21, kTemplar = 22, kNightblade = 23, kWitchhunter = 24, kScout = 25, kSaint = 33;
-            t[kEvoker].scalars.schoolPeak = kDestruction;      t[kConjurer].scalars.schoolPeak = kConjuration;    t[kHealer].scalars.schoolPeak = kRestoration;
-            t[kWarlock].scalars.schoolPeak = kDestruction;     t[kWizard].scalars.schoolPeak = kDestruction;      t[kNecromancer].scalars.schoolPeak = kConjuration;
-            t[kPriest].scalars.schoolPeak = kRestoration;      t[kSpellsword].scalars.schoolPeak = kDestruction;  t[kSorcerer].scalars.schoolPeak = kConjuration;
-            t[kTemplar].scalars.schoolPeak = kRestoration;     t[kNightblade].scalars.schoolPeak = kIllusion;  t[kWitchhunter].scalars.schoolPeak = kIllusion;
-            t[kScout].scalars.schoolPeak = kRestoration;       t[kSaint].scalars.schoolPeak = kRestoration;
+            constexpr Id kEvoker = 8, kConjurer = 9, kHealer = 10, kWarlock = 11, kNecromancer = 18, kPriest = 19,
+                         kSpellsword = 20, kSorcerer = 21, kTemplar = 22, kNightblade = 23, kWitchhunter = 24, kScout = 25,
+                         kGrandBattlemage = 31, kSaint = 33;
+            t[kEvoker].scalars.schoolPeak = kDestruction;   t[kSpellsword].scalars.schoolPeak = kDestruction;   t[kGrandBattlemage].scalars.schoolPeak = kDestruction;
+            t[kConjurer].scalars.schoolPeak = kConjuration; t[kNecromancer].scalars.schoolPeak = kConjuration;  t[kSorcerer].scalars.schoolPeak = kConjuration;
+            t[kHealer].scalars.schoolPeak = kRestoration;   t[kPriest].scalars.schoolPeak = kRestoration;       t[kTemplar].scalars.schoolPeak = kRestoration;
+            t[kScout].scalars.schoolPeak = kRestoration;    t[kSaint].scalars.schoolPeak = kRestoration;
+            t[kWarlock].scalars.schoolPeak = kIllusion;     t[kNightblade].scalars.schoolPeak = kIllusion;      t[kWitchhunter].scalars.schoolPeak = kIllusion;
         }
 
         Table MakeDefaults() {

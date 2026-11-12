@@ -26,7 +26,7 @@ namespace MFO::Iaus::SpellBook {
                   "one class-curve row per class, plus the three tree-OFF base rows");
     // ClassCurves.cpp SeedSchoolPeaks addresses rows by ordinal (that file is pure and cannot include Classes.h).
     static_assert(static_cast<std::size_t>(Classes::Id::Evoker) == 8 && static_cast<std::size_t>(Classes::Id::Warlock) == 11 &&
-                  static_cast<std::size_t>(Classes::Id::Wizard) == 17 && static_cast<std::size_t>(Classes::Id::Scout) == 25 &&
+                  static_cast<std::size_t>(Classes::Id::GrandBattlemage) == 31 && static_cast<std::size_t>(Classes::Id::Scout) == 25 &&
                   static_cast<std::size_t>(Classes::Id::Saint) == 33 &&
                   static_cast<std::size_t>(Classes::Id::ArchMage) == ClassCurves::kArchMage, "ClassCurves school-peak seeds use these Classes::Id ordinals");
 
