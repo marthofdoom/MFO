@@ -3105,6 +3105,9 @@ A "Corpse: Within -> Cast at target" row whose target was set to Self or Enemy o
 ### MFO-B770 (SEV-4, OPEN, cast/CastOn.cpp below the buff fork, same branch)
 With Harbinger absent or the claim road switched off, a corpse row falls past the buff claim fork onto the direct roads with a DEAD actor as the cast target (the AI-first hybrid, `ForceCast`). That road was never run at a corpse: before G7 a Reanimate rule could only reach it with a living target or the player (MFO-B84's history). It may raise the corpse unanimated (the documented "Harbinger absent" degrade) or do nothing. Not observed either way. The same road is reached WITH Harbinger when `ChooseBuffRoad` answers a Direct road for the spell (one `[buff] ... DIRECT road` line names why): an ambiguous row with an Unknown or NoRow effect beside the Reanimate one is still such a case. G7 only added `EngineRow::Reanimate` to `BuffAmbiguousRowWhy`'s bounded set.
 
+### MFO-B771 (SEV-5, OPEN, cast/Corpse.cpp, against 533d6ef, Opus tier-3 review of feat/g7-reanimate, finding F5)
+As handed to the author: "cast/Corpse.cpp uses IsDead() which accepts Dying; GetLifeState()==kDead would match StillCorpse." `IsDead()` is true for Dead, Dying and Recycle. Harbinger's seat (`core/ReanimateSeat.cpp` `StillCorpse`) and the engine's own keep test want life state Dead exactly, so a rule can pick an actor that is still dying and the seat answers NO for that poll (logged there). The claim stands and the next poll passes once the actor is dead.
+
 ### MFO-B763 (SEV-5, OPEN, Concealment.cpp WatchList, against 05260d0, Opus tier-3 review of the ch.7 v40 round, finding F5c)
 As handed to the author (the reviewer's own log was a two-line summary): "WatchList duplicates Gather's gates." The hidden-end / reveal watch re-implements the gather's foe set tests instead of sharing them, so a change to one can drift from the other. Reviewer's log: "WatchList mirrors Gather (lock order OK)".
 
