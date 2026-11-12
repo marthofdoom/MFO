@@ -20,6 +20,7 @@ namespace Sim {
 
     // How good a fight state is for the party, 0..100. One objective for every policy: win, fast, the player and
     // the party healthy, nobody down, resources left.
+    inline bool g_utilResources = true;   // --utility-no-resources (DIAGNOSTIC): the "resources left" term is a constant 5, so a value's gain can be split into "fights better" and "kept a potion"
     inline double Utility(const Fight& F) {
         double foeHp = 0; for (const Body& x : F.b) if (x.role == Role::Foe && x.alive && x.airUntil >= 0) foeHp += std::max(0.0f, x.c.hp);
         for (const Spawn& s : F.late) foeHp += s.spec->hp;
@@ -33,7 +34,7 @@ namespace Sim {
             const int pots = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
             res += 0.5 * (x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0) + 0.5 * (c.potions0 > 0 ? double(pots) / c.potions0 : 1.0); }
         return 50.0 * removed + (win ? 15.0 * (1.0 - std::min(1.0, F.now / F.maxSec)) : 0.0) + 15.0 * pl.c.hp / std::max(1.0f, pl.c.hpMax)
-             + 10.0 * (1.0 - std::min(1.0, double(F.t.partyDowns) / nf)) + 5.0 * partyHp / nf + 5.0 * res / nf;
+             + 10.0 * (1.0 - std::min(1.0, double(F.t.partyDowns) / nf)) + 5.0 * partyHp / nf + (g_utilResources ? 5.0 * res / nf : 5.0);
     }
 
     // ── the extended action set ─────────────────────────────────────────────────────────────────────────

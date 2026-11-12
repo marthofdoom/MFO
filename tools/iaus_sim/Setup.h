@@ -141,7 +141,11 @@ namespace Sim {
             y.wUnarmed = csgd[s][7]; y.wStaff = csgd[s][8]; y.avoidThreat = csgd[s][9]; y.circle = cscr[s][0]; y.fallback = cscr[s][1]; y.dueling = true;
             if (sc.shortLeash) { y.circle = std::max(0.0f, y.circle - 0.10f); y.fallback = std::max(0.0f, y.fallback - 0.15f); }
             if (sc.csDisengage >= 0 ? sc.csDisengage != 0 : sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0 && !(g_t2.c8 && sc.avoidThreat >= 0.0f)) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
-            if (g_t2.c8 && sc.avoidThreat >= 0.0f) y.avoidThreat = sc.avoidThreat > 0.0f && s == 1 ? sc.avoidThreat + 0.10f : sc.avoidThreat; }   // class_csty_params: SET per class (Q-S-3), no longer a floor
+            if (g_t2.c8 && sc.avoidThreat >= 0.0f) y.avoidThreat = sc.avoidThreat > 0.0f && s == 1 ? sc.avoidThreat + 0.10f : sc.avoidThreat;   // class_csty_params: SET per class (Q-S-3), no longer a floor
+            // HEAVY BODY ARMOR = NO DODGE (apmf/StyleClaims.cpp, merged fcbfec5: while his cuirass is heavy the class style's ZERO-AVOID TWIN is
+            // claimed, whatever his class; marth 11-12: for a follower with no class style the list's own dodge rules already stop a heavy
+            // dodger, so 0 there too). The kit's `heavy` is his cuirass (MODEL: RealClasses.cpp dresses a class by its card).
+            if (g_t2.c8 && sc.avoidThreat >= 0.0f && sc.kit.heavy) y.avoidThreat = 0.0f; }
         c.powerShare = 1.0f; c.leash = 0.0f;
         if (g_t2.c8) {   // card C8: the ch.18 rule and the ch.23 leash (every managed follower is leashed to the player; a wall or near-player class at half the radius, never under fLeashMin)
             c.shareMax = sc.shareMax; c.shareMin = sc.shareMin;
@@ -182,7 +186,7 @@ namespace Sim {
         c.active.resize(fb->spells.size()); c.summonUntil.assign(fb->spells.size(), 0.0); c.rank = static_cast<std::uint8_t>(rank); c.seed = R.g();
         c.window = 1.5 * (0.88 + 0.24 * R.U(0.0f, 1.0f));   // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick
         c.drawn = sc.fam == Cls::Ranged && fb->spec.ranged.Has() ? PostureKind::Bow : sc.fam == Cls::Mage ? PostureKind::None : fb->spec.melee.Has() ? PostureKind::Melee : PostureKind::None;
-        c.potH = fb->potH; c.potM = fb->potM; c.potS = fb->potS;
+        c.potH = fb->potH; c.potM = fb->potM; c.potS = fb->potS; for (int i = 0; i < 3; ++i) c.potDur[i] = fb->potDur[i];
         F.ctl.push_back(std::move(c));
     }
 

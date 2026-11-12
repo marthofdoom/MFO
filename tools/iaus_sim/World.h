@@ -85,7 +85,7 @@ namespace Sim {
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
-    struct Effect { int kind = 0; float v = 0; int av = -1; double until = 0; std::uint32_t src = 0; };   // 0 dot, 1 hot, 2 armor, 3 resist
+    struct Effect { int kind = 0; float v = 0; int av = -1; double until = 0; std::uint32_t src = 0; };   // 0 dot, 1 hot, 2 armor, 3 resist, 4 magicka per second, 5 stamina per second (a restore-over-time potion)
     struct Shot { double at = 0; std::uint32_t src = 0, tgt = 0; float dmg = 0; int spell = -1; bool power = false, fromIaus = false; float x = 0, y = 0; float mag = 1; bool corrected = false, dodged = false; };
 
     struct Body {
@@ -238,7 +238,7 @@ namespace Sim {
         std::vector<SpellTarget> wwMirror;         // cast/WillWork's mirror: pairs with a measured verdict (the first ask or Fire is the prefetch)
         std::uint32_t steer = 0;                   // act.attack's target for the engine AI
         std::uint8_t rank = 3; std::uint64_t seed = 0; double window = 1.5;
-        float potH = 100, potM = 100, potS = 100;
+        float potH = 100, potM = 100, potS = 100, potDur[3] = { 0, 0, 0 };   // potDur > 0: pot* per second for that long (FollowerBuild::potDur)
         double lowSince = -1; bool lowHealed = false, lowHadCand = false;
         double pressureSince = -1;                 // the player came under attack at (peel latency)
         double commitUntil = 0;                    // oracle rollouts: he keeps the option he was given until then
@@ -759,7 +759,11 @@ namespace Sim {
                 ReleaseCast(x, tg);
             } else if (kind == Act::Drink && x.ctl >= 0) {
                 const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
-                if (x.actSpell == 0) { if (x.ctl == 0) { t.potHeal += c.potH; t.potWaste += std::max(0.0f, c.potH - (x.c.hpMax - x.c.hp)); } Heal(x, c.potH, nullptr, false); } else if (x.actSpell == 1) x.c.mp = std::min(x.c.mpMax, x.c.mp + c.potM); else x.c.sp = std::min(x.c.spMax, x.c.sp + c.potS);
+                // A potion with a duration restores its magnitude PER SECOND for that long (the record's ValueModifier effect); without one, at once.
+                const float dur = c.potDur[std::clamp(x.actSpell, 0, 2)];
+                if (dur > 0.0f) { x.fx.push_back({ x.actSpell == 0 ? 1 : x.actSpell == 1 ? 4 : 5, x.actSpell == 0 ? c.potH : x.actSpell == 1 ? c.potM : c.potS, -1, now + static_cast<double>(dur), x.c.id });
+                    if (x.ctl == 0 && x.actSpell == 0) t.potHeal += c.potH * dur; }   // what ran over his maximum is not tallied for a potion over time (potWaste counts the at-once ones)
+                else if (x.actSpell == 0) { if (x.ctl == 0) { t.potHeal += c.potH; t.potWaste += std::max(0.0f, c.potH - (x.c.hpMax - x.c.hp)); } Heal(x, c.potH, nullptr, false); } else if (x.actSpell == 1) x.c.mp = std::min(x.c.mpMax, x.c.mp + c.potM); else x.c.sp = std::min(x.c.spMax, x.c.sp + c.potS);
             } else if (kind == Act::Taunt) {
                 // ONE attempt rolls on EVERY candidate foe (Taunt.cpp): the foes fighting the party inside the radius that can sense him.
                 // p = 0.5 + 0.05 per level he has over the foe, in [0.1, 0.9] (the executor's own rule, Estimate::TauntChance).
@@ -1053,7 +1057,7 @@ namespace Sim {
             for (std::size_t i = 0; i < x.fx.size();) {
                 Effect& e = x.fx[i];
                 if (e.until <= now) { x.fx[i] = x.fx.back(); x.fx.pop_back(); continue; }
-                if (e.kind == 0) Hurt(x, e.v * TM::dt, Find(e.src)); else if (e.kind == 1) Heal(x, e.v * TM::dt, nullptr, false); else if (e.kind == 2) x.armorBuff = std::max(x.armorBuff, e.v);
+                if (e.kind == 0) Hurt(x, e.v * TM::dt, Find(e.src)); else if (e.kind == 1) Heal(x, e.v * TM::dt, nullptr, false); else if (e.kind == 4) x.c.mp = std::min(x.c.mpMax, x.c.mp + e.v * TM::dt); else if (e.kind == 5) x.c.sp = std::min(x.c.spMax, x.c.sp + e.v * TM::dt); else if (e.kind == 2) x.armorBuff = std::max(x.armorBuff, e.v);
                 ++i;
             }
         }

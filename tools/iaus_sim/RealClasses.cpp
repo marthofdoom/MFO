@@ -132,7 +132,7 @@ namespace Sim {
             // T2 batch S: the package and claim data, straight from the class table (nothing copied by hand but the three values noted)
             c.shareMax = d.powerShareMax != C::kShareUnset ? d.powerShareMax : -1.0f; c.shareMin = d.powerShareMin != C::kShareUnset ? d.powerShareMin : -1.0f;
             c.leashScaled = d.tier >= 2 && (d.flags & (C::Flag::kShortLeash | C::Flag::kNearPlayer)) != 0;   // Classes::PackageLeashScale
-            c.avoidThreat = d.id == C::Id::Knight || d.id == C::Id::GreatKnight || d.id == C::Id::EbonyWarrior ? 0.0f : d.id == C::Id::Mercenary ? 0.35f : d.id == C::Id::Blademaster ? 0.50f : d.id == C::Id::LivingLegend ? 0.55f : d.id == C::Id::Thief ? 0.25f : d.id == C::Id::MasterThief ? 0.30f : 0.20f;   // MFO_GenerateESP.py CLS_AVOID_THREAT / AVOID_THREAT_VANILLA (Q-S-3, marth 11-12), hand-mirrored; the ranged stance adds AVOID_THREAT_BOW_BOOST in Setup.h. NOT modelled: heavy body armor => 0 (runtime twin); Living Legend's H8 auto-block rule (card not built; the lab already skips a dodge behind any guard)
+            c.avoidThreat = d.id == C::Id::Knight || d.id == C::Id::GreatKnight || d.id == C::Id::EbonyWarrior ? 0.0f : d.id == C::Id::Mercenary ? 0.35f : d.id == C::Id::Blademaster ? 0.50f : d.id == C::Id::LivingLegend ? 0.55f : d.id == C::Id::Thief ? 0.25f : d.id == C::Id::MasterThief ? 0.30f : 0.20f;   // MFO_GenerateESP.py CLS_AVOID_THREAT / AVOID_THREAT_VANILLA (Q-S-3, marth 11-12), hand-mirrored; the ranged stance adds AVOID_THREAT_BOW_BOOST in Setup.h. Heavy body armor => 0 is modelled in Setup.h MfoPackage (the zero-avoid twin). NOT modelled: Living Legend's H8 auto-block rule (card not built; the lab already skips a dodge behind any guard)
             if (d.id == C::Id::Conjurer || d.id == C::Id::Healer) c.aversion = 0.25f;                         // Config fAversionConjurer / fAversionHealer (Q93), the EQUIPPED class (Q94), hand-mirrored
             // Q107 (marth 11-12): aversion comes ONLY from an equipped Conjurer / Healer; Dragonborn gives none (apmf/AversionClaims.cpp WeightFor)
             c.aimBudget = d.id == C::Id::Archer ? 5 : d.id == C::Id::Scout ? 4 : d.id == C::Id::Witchhunter ? 4 : d.id == C::Id::Ranger ? 3 : d.id == C::Id::Jaqspur ? 1 : -1;   // Config iAimBudget* defaults (apmf/AimClaims.cpp), hand-mirrored
@@ -156,6 +156,12 @@ namespace Sim {
                 k.bow = (d.weapons & C::Weapon::kBow) != 0; k.crossbow = (d.weapons & C::Weapon::kCrossbow) != 0 && !k.bow; k.staff = (d.weapons & C::Weapon::kStaff) != 0; k.shield = (d.weapons & C::Weapon::kShield) != 0;
                 k.heavy = c.fam == Cls::Melee; k.light = c.fam == Cls::Ranged;   // MODEL: armor weight by root line; mages wear cloth
             }
+            // THE ARMOR OF THE CLASS CARDS (class-perks-packages.md: L2 Heavy Armor is owned by Knight and Warrior, L5 Light Armor by Mercenary,
+            // Archer and Thief, L13 Arcane Robes by the mage line). The root-line model above put the MERCENARY line in heavy armor, against
+            // its card, while the game takes the dodge away from anyone in a heavy cuirass (Setup.h MfoPackage): the Mercenary line wears LIGHT.
+            // The line is read from the class's own Avoid Threat (CLS_AVOID_THREAT above): a melee class whose card gives it MORE than the
+            // vanilla 0.20 is a dodging class (Mercenary 0.35, Blademaster 0.50, Living Legend 0.55), and a dodge in a heavy cuirass is dead.
+            if (c.fam == Cls::Melee && c.avoidThreat > 0.20f) { k.heavy = false; k.light = true; }
             // T1 keeps TODAY'S KIT (marth 2026-11-09): the three combat rows every new follower gets, Followers::ApplyDefaultKit
             // (native/Followers.cpp:43-45). Hand-mirrored here (that file is engine code): drink at 30% health, attack the weakest foe, else wait.
             if (d.tier == 1) { c.rows.clear(); c.defaults = "default-kit";
@@ -195,7 +201,7 @@ namespace Sim {
             std::printf("  T%d %-16s %-6s spells=%d(mastered %d) power=%d(cd %.0f) taunt=%d disengage=%d  weapons m%d b%d x%d s%d  kit:%s%s%s%s%s%s%s\n", c.tier, c.name.c_str(),
                         c.fam == Cls::Melee ? "melee" : c.fam == Cls::Ranged ? "ranged" : "mage", int(c.gate.spellsOnClass), int(c.gate.spellsFromMastered), int(c.gate.powerAttack), c.gate.powerCooldownSec,
                         int(c.gate.taunt), int(c.gate.disengage), int(c.gate.weaponMelee), int(c.gate.weaponBow), int(c.gate.weaponCrossbow), int(c.gate.weaponStaff),
-                        c.kit.oneHand ? " 1H" : "", c.kit.twoHand ? " 2H" : "", c.kit.dagger ? " dagger" : "", c.kit.bow ? " bow" : "", c.kit.crossbow ? " xbow" : "", c.kit.staff ? " staff" : "", c.kit.shield ? " shield" : "");
+                        c.kit.oneHand ? " 1H" : "", c.kit.twoHand ? " 2H" : "", c.kit.dagger ? " dagger" : "", c.kit.bow ? " bow" : "", c.kit.crossbow ? " xbow" : "", c.kit.staff ? " staff" : "", c.kit.shield ? (c.kit.heavy ? " shield heavy" : c.kit.light ? " shield light" : " shield cloth") : (c.kit.heavy ? " heavy" : c.kit.light ? " light" : " cloth"));
     }
 
 }

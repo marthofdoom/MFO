@@ -323,7 +323,9 @@ def main():
     pots = {}
     for p in W.get('potions', []):
         fx = p['effects']
-        if len(fx) == 1 and fx[0]['av'] in (24, 25, 26) and fx[0]['archetype'] in (0, 34) and not fx[0]['hostile'] and not fx[0]['detrimental'] and 0 < fx[0]['mag'] <= 2000:
+        # A RESTORE potion only: archetype 0 (ValueModifier: mag at once, or mag per second for dur seconds). Archetype 34 (PeakValueModifier)
+        # is a FORTIFY potion (maximum +mag for dur): it used to sit in this ladder and the sim read its magnitude as a heal (sim batch 2026-11-12).
+        if len(fx) == 1 and fx[0]['av'] in (24, 25, 26) and fx[0]['archetype'] == 0 and not fx[0]['hostile'] and not fx[0]['detrimental'] and 0 < fx[0]['mag'] <= 2000 and fx[0]['mag'] * max(1, fx[0]['dur']) >= 20:   # MODEL: under 20 points in total is food (an ALCH record too), not a potion a follower is handed
             pots.setdefault(str(fx[0]['av']), []).append([round(fx[0]['mag'], 1), fx[0]['dur']])
     for k in pots: pots[k] = ladder(pots[k], lambda x: x[0] * max(1, x[1]), 10)
 

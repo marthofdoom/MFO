@@ -194,6 +194,7 @@ namespace Sim {
         Book book;
         std::vector<SimSpell> spells;   // parallel to book.entries
         float potH = 100, potM = 100, potS = 100;
+        float potDur[3] = { 0, 0, 0 };   // health / magicka / stamina: 0 = the potion restores at once, else pot* per second for this many seconds (the record's duration)
         int   staffIdx = -1;
     };
 
@@ -243,7 +244,7 @@ namespace Sim {
         if (a.melee.Has()) { a.atkMult = PerkBest(D.pAttack, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); a.powMult = PerkBest(D.pPower, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); }
         a.hasStyle = true; a.st.wMagic = fam == Cls::Mage ? 3.0f : 0.5f; a.st.wRanged = fam == Cls::Ranged ? 3.0f : 1.0f; a.conf = 3;   // the player model's style; a follower's is his class package (Setup.h MfoPackage)
         k.potionsHealth = R.I(0, 4); k.potionsStamina = R.I(0, 2); k.potionsMagicka = R.I(0, 3);
-        for (int i = 0; i < 3; ++i) if (!D.pots[i].empty()) (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = LadderAt(D.pots[i], level, 0.9f).first;
+        for (int i = 0; i < 3; ++i) if (!D.pots[i].empty()) { const auto& pt = LadderAt(D.pots[i], level, 0.9f); (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = pt.first; fb.potDur[i] = pt.second; }   // (magnitude, duration): a restore-over-time potion is magnitude PER SECOND for its duration (sim batch: the duration was dropped, so a list's 5-per-second potion healed 5)
         // spells: what he could plausibly have learnt (tier within reach of his skill, affordable), as sim v1 chose them
         auto costOf = [&](const SimSpell& s) { const float sk = s.school >= 0 ? a.Skill(s.school) : 15.0f;
             float m = SkillCostMult(r, sk);
