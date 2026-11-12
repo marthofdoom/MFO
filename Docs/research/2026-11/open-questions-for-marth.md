@@ -126,3 +126,16 @@ Each: question, context, my recommended default (work proceeds on the default wh
 88. [ANSWERED 11-11: read it, Harbinger deny as the fallback] Read CalculateDetection (AE 37774) as a read-only RE card beside G2. marth: "Yes read it, worst case we may need to add forced non detection blocks into harbinger on npcs who would otherwise detect if the game doesnt properly calculate npc to npc detection"
 89. [ANSWERED 11-11: cap it] (T3, parked) Cap the G4 flanking bonus (half the sneak bonus on a flanked foe is about x9 per hit on LoreRim multipliers).
 90. [ANSWERED 11-11: blade primary, bow fallback] (T4, parked) The Listener. marth: "Personality says they enjoy the blood of melee, but they will bow when needed" [blade primary, bow when needed]
+
+## ANSWERED 2026-11-11 (marth, AskUserQuestion; recorded here after a /tmp wipe lost the session copy)
+- T2 scope: "No point in t2 without hide and disengage, anchor leak too." G2, G3/H3 and the anchor-leak fix are in Classes Beta 1. Batch similar tasks per agent.
+- Engine effects: "harbinger is already capable of stopping movement, almost all the calls we are adding should be through harbinger" and "new harbinger facets being created to suit what was needed". Reads may stay in MFO.
+- MCLS v2 review: revert the sim's Warrior/Conjurer/Warlock default rows (done); keep and restore the classes-OFF tables (N1); logistics tables remembered per class, no defaults (B#29/N2).
+- G2: engine hide timing, no forced non-detection seat (Q-G2-1); point visibility through MFO's own rays for now, a Harbinger sight query joins the full-port list (Q-G2-2); the group-record read is tier B (Q-G2-3); P4 light probe only if P2 shows outdoor disagreement (Q-G2-4). "There is a perk for hidden casting in some lists": silent casters (EP 55 result 0) keep casts while hidden.
+- ch.24 combat area centred on a point: yes (already shipped as kApproach_Point, ABI v39).
+- B#37 old table: hidden and kept. B#34: "Emergency only heals otherwise gated" (off-class spells gated; heals get the emergency lift). B#35 player focus m: whatever the oracle shows works best. B#33: no emergency exemption for low-rapport randomness. Q68 reach: vanilla fMeleeReach until the probe.
+- B#36 scrolls: everyone may read scrolls; a non-mage may hand one to a mage; scrolls of known spells are traded to a follower who does not know the spell; all MCM options; a card after the T2 session.
+- G3 pacing: "the main purpose is to become hidden, and it simply doubles as a version of flee": sneak classes end the run when hidden, then sneak attack; anyone else flees and heals ASAP. Hide run for sneak classes only (MB3). IAUS holds G1's sneak claim while hiding (MB5). Anchor fix refuses every held-holder join (MB2). Retreat vs flee below 30%: score decides.
+- Flee deny: "wouldn't it be non offense cast": Harbinger ch.7 Offense now means hostile actions only (ABI v40, feat/ch7-hostile-offense).
+- Tuning: Fable fixes the sim and makes real sim changes; pure curve training goes to a cheap agent (Haiku medium, coordinator's pick).
+- Open, with defaults taken (from the movement and ch.7 runs): MB1, MB4, MB6, MB7, MB-F1..F4, CH7-Q1..Q5 (see the agents' reports and the backlog entries B740..B762).
