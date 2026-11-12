@@ -10,6 +10,15 @@
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
+- **2026-11-11, THEFT GATE (`fix/theft-gate`, ClickUp 1dfcuabczbg, SEV-1: a v2.8.1 player got 5 g theft bounties in Whiterun from follower
+  looting and the guards attacked; NOT merged, NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
+  an item copy owned by anyone but null / the player / PlayerFaction / his own side, from any source (per-copy ExtraOwnership, else the
+  container's owner; the xList is passed to RemoveItem). (2) Interim, until the culprit is found (marth): no take of any kind while a guard can
+  see the follower or the item (`TheftGate::GuardInterim`). (3) Door / furniture: an owned door is closed to errand and loot legs, owned smithing
+  stations are skipped, the stuck-at-origin rescue never opens an owned door. Proof lines `[theft-gate]` plus a 3-action ring after every
+  `[crime-probe] BOUNTY UP`. The culprit is still not pinned (RE note: vanilla trespass 5 g, probably a teammate opening a locked owned door or
+  using owned furniture; marth suspects a crime-altering mod). Test step: `in-game-test-list.md` "Theft gate". Backlog MFO-B790...
+
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense
   deny). Card G3: `Concealment.cpp`, a sneak class a foe has found runs to a point no foe can see (MFO's own rays,

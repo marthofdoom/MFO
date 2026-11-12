@@ -26,6 +26,7 @@
 #include "PCH.h"
 #include "Logistics.h"
 #include "Logistics_internal.h"
+#include "TheftGate.h"        // crate activation gate (ClickUp 1dfcuabczbg)
 #include "Errand.h"           // town door rule: Errand::Rest::TownWalkBarredByLock
 #include "GemRules.h"   // LootNearby, Category, SlotIndexOf, FitsCarryWeight, IsStockGear, ...
 #include "Lotd.h"
@@ -1208,7 +1209,8 @@ namespace MFO::Lotd {
             }
             // THEFT GATE (ClickUp 1dfcuabczbg): TESObjectCONT::Activate is a steal-alarm producer. A crate someone else owns, or one a guard
             // can see him open, is not activated by him (the deliveries still land by RemoveItem, which raises no crime).
-            if (TheftGate::TakeBarred(f, c, nullptr, nullptr, TheftGate::Road::Lotd) || TheftGate::GuardInterim(f, c, TheftGate::Road::Lotd)) {
+            if (Logistics::TheftGate::TakeBarred(f, c, nullptr, nullptr, Logistics::TheftGate::Road::Lotd) ||
+                Logistics::TheftGate::GuardInterim(f, c, Logistics::TheftGate::Road::Lotd)) {
                 spdlog::info("[lotd] {:08X}: crate {:08X} NOT activated -- owned by someone else or a guard sees him (theft gate)", a_follower, a_crate);
                 return;
             }

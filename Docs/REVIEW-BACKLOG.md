@@ -3105,3 +3105,24 @@ A later blow pick while one is armed returns early without resetting `armedAt`, 
 
 ### MFO-B782 (SEV-5, OPEN, Concealment.cpp ServiceBlow :301-317, against c0cfe9a, same review, finding 3)
 `OwnCastInFlight` is used without a family check, so any live own cast (a heal during the hold) counts as the blow: the reveal check is skipped for up to 6 s + 1.5 s and the stance is released as "a miss". Small and logged.
+
+### MFO-B790 (SEV-4, OPEN, logistics/TheftGate.cpp GuardInterim, against the theft-gate round, author's note)
+The interim guard gate treats ANY live, non-teammate guard within 3500 u whose sight to the follower or item is Visible or UNMEASURABLE as
+seeing him (it does not test the guard's hostility, facing or detection formula, and a fresh MeasureNow runs per ask on the main thread).
+Over-barring is the point (marth 2026-11-11, interim), but a town with many guards costs one main-thread sightline pair per guard per
+(follower, source) every 2 s. Remove or replace when the culprit is found.
+
+### MFO-B791 (SEV-4, OPEN, logistics/TheftGate.cpp TakeBarred, against the theft-gate round, author's note)
+`IsAnOwner(ref, actor, useFaction, requiresOwner)` (AE id 20210, the engine's own pickup/steal test) is NOT bound: it is a new address id
+(tier A, needs a VerifiedAddresses row). The gate reads ExtraOwnership / `GetOwner()` data instead and bars ANY non-follower-side owner,
+which is stricter than the engine's test (the faction-rank rule is approximated by membership). Bind it only with a seat row.
+
+### MFO-B792 (SEV-5, OPEN, logistics/TheftGate.cpp Take, against the theft-gate round, author's note)
+A plain (extra-list-free) copy that shares a stack with a barred copy is never taken (RemoveItem cannot choose the copy), so one stolen
+arrow in a 20-arrow stack makes the whole plain remainder untakeable from that source. Same as the sale's "partly stolen" rule
+(ErrandShops NoteMixed). A per-copy pick would need the engine's own removal order proven.
+
+### MFO-B793 (SEV-5, OPEN, logistics/TheftGate.cpp Analyse / TakeBarred, against the theft-gate round, author's note)
+A corpse or chest in an OWNED cell (a house, an inn) reads the cell owner through `GetOwner()` and is barred whole for its plain copies,
+including what the player dropped there. Intended by "bar all stolen", but it also removes legitimate loot from owned interiors (bandit
+corpses in a rented room). No cell/location exemption was added.
