@@ -277,3 +277,8 @@ Q-I-8. Block in IAUS. DEFAULT taken: a Block candidate exists only for a class w
 - Dodge update (marth 11-12): "I would put blademaster at 0.5 and living legend at 0.55 with the restriction that it only triggers when his block does not". Mercenary 0.35, Blademaster 0.50, Living Legend 0.55; Living Legend never side-steps while his guard is held.
 - Bow-drawn dodge boost (marth 11-12): +0.10 added (Thief 0.25 -> 0.35, a 0.20 class -> 0.30); Knight line and heavy armor stay 0.
 - Living Legend correction (marth 11-12): "For living legend that ruling is incorrect, I refer to his unique passive". His 0.55 dodge only triggers on an attack his H8 auto-block passive (40% of hostile attacks while he is attacking, T4) did NOT block; not tied to the held guard. Requirement recorded on card H8; no code before H8 is built.
+
+## Answered 2026-11-12 (heavy-armor no-dodge rule, after the dodge-rates review)
+
+- **Q-dodge-heavy-scope: ANSWERED "Everyone".** The no-dodge-in-heavy-armor rule covers every follower, not only T2+ class styles: tier-1 classes, classes OFF, the MFO stance styles (EquipChoiceOnly) and the Harbinger-absent degrade too. feat/dodge-rates ships the T2+ class part; the rest is a follow-up branch (manifest row "Heavy armor, everyone").
+- **Q-dodge-heavy-test: ANSWERED "Cuirass decides".** Heavy = the worn body-slot (cuirass) armor is heavy, as built.
