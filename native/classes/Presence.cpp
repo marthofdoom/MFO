@@ -7,7 +7,7 @@
 // (the add-on is optional; Forms failure doctrine).
 #include "Classes_internal.h"
 #include "Config.h"
-#include "APMFBridge.h"
+#include "apmf/APMFBridge.h"
 #include "MainThread.h"
 #include "Rapport.h"
 
