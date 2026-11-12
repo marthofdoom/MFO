@@ -2701,29 +2701,33 @@ CLS_CSGD = {1: (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0),
             3: (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2)}
 
 
-# Per-class Avoid Threat chance (CSGD's tenth value), by class slug. marth 2026-11-12 (Q-melee-7, MFO-B806): the Mercenary
-# "steps out of incoming spells and arrows". The engine's own side step (CombatBehaviorDodgeThreat) rolls against this
-# chance, read through Actor::GetCombatStyle, which Harbinger ch.33 answers for the class's actor-wide style claim; a dodge
-# framework that scores from the style reads the same value. Applied to every stance of the class, never lowering a base.
-CLS_AVOID_THREAT = {'mercenary': 0.3}
+# Per-class Avoid Threat chance (CSGD's tenth value). marth 2026-11-12 (Q-melee-7, MFO-B806; Q-S-3): the engine's own side step
+# (CombatBehaviorDodgeThreat) rolls against this chance, read through Actor::GetCombatStyle, which Harbinger ch.33 answers
+# for the class's actor-wide style claim; a dodge framework that scores from the style reads the same value. Vanilla Skyrim.esm
+# gives EVERY human combat style (csHumanMeleeLvl1-7, csHumanMissile, csHumanMagic, bosses, the WE* styles) 0.20, so that is
+# the default for a class nobody named. marth: "mage can be 0.25, archer 0.3 and mercenary 0.5 with mercenaries scored 0.15
+# above vanilla"; vanilla + 0.15 = 0.35, so the Mercenary is 0.35 (the 0.5 in the same sentence is flagged, not guessed).
+# Headroom is deliberate: the Mercenary line's higher tiers raise it via T3/T4 cards, not here. A SET, not a floor, applied to
+# every stance of the class (it replaces the MFO stance base 0.0 / 0.5 / 0.2 and the old Disengage +0.20).
+AVOID_THREAT_VANILLA = 0.20
+CLS_AVOID_THREAT_BY_LINE = {'Mage': 0.25}
+CLS_AVOID_THREAT = {'archer': 0.30, 'mercenary': AVOID_THREAT_VANILLA + 0.15}
 
 
-def class_csty_params(stance, flags, flagbits, slug=None):
+def class_csty_params(stance, flags, flagbits, slug=None, line=None):
     """(csgd tuple, cscr bytes) for a class: the stance base plus TWO small,
     table-driven positioning offsets. C7 BASELINE, not tuning: C8 / the field
     retune these (xEdit-editable, one record per class per wield).
       Flag.kShortLeash (the wall classes)  circle -0.10, fallback -0.15  (hold the line)
-      Flag.kDisengage  (Thief + mage line) fallback +0.15; non-melee also avoidThreat +0.20."""
+      Flag.kDisengage  (Thief + mage line) fallback +0.15.
+    Avoid Threat is SET per class (CLS_AVOID_THREAT / _BY_LINE, else the vanilla 0.20)."""
     csgd = list(CLS_CSGD[stance])
     circle, fallback, flank, stalk = struct.unpack('<4f', CLS_CSCR[stance])
     if flags & flagbits['kShortLeash']:
         circle, fallback = max(0.0, circle - 0.10), max(0.0, fallback - 0.15)
     if flags & flagbits['kDisengage']:
         fallback = min(1.0, fallback + 0.15)
-        if stance != 1:
-            csgd[9] = min(1.0, csgd[9] + 0.20)
-    if slug in CLS_AVOID_THREAT:
-        csgd[9] = max(csgd[9], CLS_AVOID_THREAT[slug])
+    csgd[9] = CLS_AVOID_THREAT.get(slug, CLS_AVOID_THREAT_BY_LINE.get(line, AVOID_THREAT_VANILLA))
     return tuple(csgd), struct.pack('<4f', circle, fallback, flank, stalk)
 
 
@@ -2789,7 +2793,7 @@ def make_class_styles(table, flagbits):
         nm = cls_edid_name(row)
         mask, fids = 0, []
         for stance in class_stances(row, wb):
-            csgd, cscr = class_csty_params(stance, row['flags'], flagbits, row['slug'])
+            csgd, cscr = class_csty_params(stance, row['flags'], flagbits, row['slug'], row['line'])
             variants = ([(STYLE_SLOT_MELEE, "Melee", 1), (STYLE_SLOT_MELEE_DUAL, "MeleeDual", 1 | 4)]
                         if stance == 1 else
                         [(STYLE_SLOT_RANGED, "Ranged", 1)] if stance == 2 else [(STYLE_SLOT_CAST, "Cast", 1)])

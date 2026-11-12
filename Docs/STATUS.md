@@ -10,6 +10,7 @@
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
+- **2026-11-12 `feat/dodge-rates` (Q-S-3, tier B/C, generator only, NO native/ change; NOT merged):** class CSTY Avoid Threat is now SET per class in `MFO_GenerateESP.py` (`CLS_AVOID_THREAT`, `CLS_AVOID_THREAT_BY_LINE`, `AVOID_THREAT_VANILLA`): Mercenary 0.35 (vanilla 0.20 + 0.15), Archer 0.30, mage line 0.25, every other class the vanilla 0.20 (vanilla Skyrim.esm human styles are all 0.20; marth's "mercenary 0.5" vs the +0.15 rule is flagged in Q-S-3). The Disengage +0.20 and the MFO stance bases no longer reach class styles (Thief with a bow 0.70 to 0.20). `MFO_Classes.esl` regenerated (the other three plugins byte-identical), audit PASS; the sim mirrors the values (`RealClasses.cpp`, `Setup.h`), baseline_builtin.txt re-baselined, test step 24x updated.
 - **2026-11-12 `feat/iaus-sim-t2` (T2 batch S, the sim; Fable author; lab and docs only, NO native/ change; NOT merged):** every OPEN cell of the Sim column in `t2-manifest.md` is modelled in `tools/iaus_sim`, each behind its own switch, ON by default: the feet stop is gone (Q-SIM-5), class packages (ch.18 window, ch.23 leash, the engine's own power attacks), dodge, H2 aversion, the H5 miss budget, the held guard, H4 range, the Mercenary back-off, the hidden step, C13 as built, unweighted spells, G7 reanimate (table rows), the G13 / G14 witness pre-check (`--steal-lab`) and a disengage usefulness report with marth's D&D variant (`--disengage-report`, `--disengage-dnd`). `--t2 off` reproduces the lab of section 30 draw for draw (Beta 1: 78.11 at g3, 76.69 at `--stealth off`). New baseline: 79.52 and 77.44 (77.64 for the game as shipped). No curve was tuned: the handoff for the tuning round is `iaus-sim-v2.md` 31.11. Findings in 31.4 and 31.9, questions Q-S-1 to Q-S-12, backlog MFO-B833 to B835 (B783, B784, B785, B788, B827 closed).
 - **2026-11-12, BATCH L (`feat/batch-l`; cards G13 act.steal, G14 act.pick_locks, G16 off-class weapon; tier B; NOT merged, NOT field run; NO co-save, ABI or address-id change):** new `logistics/Steal.cpp`, the one
   witness pre-check (follower sneaking, no guard, every non-teammate actor in the witness radius senses neither the follower nor the player (sound included), the owner out of sight; any hit or unreadable answer = the take does not
@@ -87,7 +88,7 @@
   serves the block and the power attack on this game; unserved = Block unavailable, power attack on the animation road
   (Q-melee-9). F6: no new raise is asked for mid-attack. marth: Ebony Warrior gets the Block row (Q-melee-2), a refused
   power attack gives its cooldown back (Q-melee-4, `Cooldowns::Forget`), the Mercenary's class style has Avoid Threat 0.3
-  (Q-melee-7; `MFO_GenerateESP.py` `CLS_AVOID_THREAT`, `MFO_Classes.esl` regenerated, audit PASS). Harbinger side: the
+  (Q-melee-7, later 0.35 and a per-class table by Q-S-3, see the top entry; `MFO_GenerateESP.py` `CLS_AVOID_THREAT`, `MFO_Classes.esl` regenerated, audit PASS). Harbinger side: the
   combat style slot table reads under a per-slot sequence (F5) and the engine refresh's threading argument is written
   down, with its one unproven part (F4). Test steps 24v to 24y. Backlog MFO-B807, MFO-B808; B802 and B803 closed.
 

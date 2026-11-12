@@ -28,7 +28,7 @@ namespace Sim {
         // T2 batch S (RealClasses.cpp fills them from the game's class table; section 31)
         float shareMax = -1.0f, shareMin = -1.0f;   // ClassDef::powerShareMax / powerShareMin (ch.18), -1 = not declared
         bool  leashScaled = false;                  // Flag::kShortLeash | kNearPlayer on a tier 2+ class: Classes::PackageLeashScale = fClassLeashMult (0.5)
-        float avoidThreat = 0.0f;                   // MFO_GenerateESP.py CLS_AVOID_THREAT (the Mercenary 0.3): a floor on every stance's Avoid Threat
+        float avoidThreat = 0.0f;                   // MFO_GenerateESP.py CLS_AVOID_THREAT (Q-S-3: Mercenary 0.35, Archer 0.30, mage line 0.25, else the vanilla 0.20): SETS every stance's Avoid Threat
         float aversion = 0.0f;                      // apmf/AversionClaims.cpp: fAversionConjurer / fAversionHealer 0.25 for the EQUIPPED class (Q93, Q94; Dragonborn: Q107)
         int   aimBudget = -1;                       // apmf/AimClaims.cpp: the ch.29 miss budget of a ranged class (Archer 5)
     };
@@ -112,15 +112,15 @@ namespace Sim {
 
     // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
     // mirrors) with the class offsets of class_csty_params (kShortLeash: circle -0.10, fallback -0.15; kDisengage: fallback +0.15,
-    // and avoidThreat +0.20 outside the melee stance). No attack mix, no leash (card C8 adds them).
+    // and, with the C8 road off, avoidThreat +0.20 outside the melee stance). No attack mix, no leash (card C8 adds them).
     inline void MfoPackage(const SimClass& sc, Ctl& c) {
         const float csgd[3][10] = { { 1.0f, 0.5f, 1.0f, 10.0f, 0.1f, 0.1f, 1.0f, 0.1f, 0.1f, 0.0f }, { 1.0f, 0.5f, 1.0f, 0.1f, 0.1f, 10.0f, 1.0f, 0.1f, 0.1f, 0.5f }, { 1.0f, 0.5f, 1.0f, 0.1f, 10.0f, 0.2f, 1.0f, 0.1f, 1.0f, 0.2f } };
         const float cscr[3][2] = { { 0.73f, 0.42f }, { 0.45f, 0.65f }, { 0.30f, 0.50f } };
         for (int s = 0; s < 3; ++s) { Style& y = c.pkg[s]; y = Style{}; y.off = csgd[s][0]; y.def = csgd[s][1]; y.groupOff = csgd[s][2]; y.wMelee = csgd[s][3]; y.wMagic = csgd[s][4]; y.wRanged = csgd[s][5]; y.wShout = csgd[s][6];
             y.wUnarmed = csgd[s][7]; y.wStaff = csgd[s][8]; y.avoidThreat = csgd[s][9]; y.circle = cscr[s][0]; y.fallback = cscr[s][1]; y.dueling = true;
             if (sc.shortLeash) { y.circle = std::max(0.0f, y.circle - 0.10f); y.fallback = std::max(0.0f, y.fallback - 0.15f); }
-            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
-            if (g_t2.c8 && sc.avoidThreat > 0.0f) y.avoidThreat = std::max(y.avoidThreat, sc.avoidThreat); }   // class_csty_params: never lowering a base
+            if (sc.gate.disengage) { y.fallback = std::min(1.0f, y.fallback + 0.15f); if (s != 0 && !(g_t2.c8 && sc.avoidThreat > 0.0f)) y.avoidThreat = std::min(1.0f, y.avoidThreat + 0.20f); }
+            if (g_t2.c8 && sc.avoidThreat > 0.0f) y.avoidThreat = sc.avoidThreat; }   // class_csty_params: SET per class (Q-S-3), no longer a floor
         c.powerShare = 1.0f; c.leash = 0.0f;
         if (g_t2.c8) {   // card C8: the ch.18 rule and the ch.23 leash (every managed follower is leashed to the player; a wall or near-player class at half the radius, never under fLeashMin)
             c.shareMax = sc.shareMax; c.shareMin = sc.shareMin;
