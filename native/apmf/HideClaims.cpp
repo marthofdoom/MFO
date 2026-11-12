@@ -7,6 +7,15 @@
 //   * ch.7 kIntent_CombatAction, ival = kCombatActionCat_Offense | kCombatActionCat_Cast: the combat behaviour tree may not
 //     draw an attack or a cast leaf. NOT APMFBridge::ClaimCombatActionDeny (Excursion.cpp): that one is loot-gated and its slot
 //     belongs to the excursion.
+// HIS OWN CAST (2026-11-11, with Harbinger ABI v40 "Offense means hostile"). G2 keeps a SILENT caster's cast candidates
+// while he holds (iaus/Generate.cpp holdQuiet: marth, "There is a perk for hidden casting"), and MFO's casts are delivered
+// by Harbinger through the AI's own cast leaves over several laps. A lap that picks the hold row again while that claim is
+// still being delivered would file Offense | Cast over it and force-fail the leaf: the cast MFO itself declared would never
+// land (the same shape as the G3 flee's heals). So while MFO holds a live cast claim for him (offense or heal,
+// IsOwnedCastActive / IsHealCastActive) the hold's ch.7 deny STANDS DOWN and only ch.1 is held; it is filed again on the
+// first hold lap after the claim is gone. What the hold denies is therefore: every attack leaf and every cast the ENGINE
+// would choose by itself (loud or not), never a cast MFO claimed. Offense alone is not used here: under v40 it would let
+// the engine's own beneficial casts through, and a cast is noise unless MFO measured it silent.
 // Whether ch.1 parks a follower who is IN COMBAT (the P1 moving= bits) is UNOBSERVED (principle 5); the field run reads it.
 // If it does not, the documented next step is ch.23 kIntent_PursuitLeash anchored on him (card G2). Not built here.
 //
@@ -57,6 +66,7 @@ namespace MFO::APMFBridge {
             One           deny;               // ch.7
             std::uint32_t quietSweeps = 0;    // sweeps since ServiceHideHold(want = true) last ran
             bool          refusedLogged = false;
+            bool          denyStoodDown = false;   // the ch.7 deny is released while MFO's own cast claim is being delivered
         };
         std::mutex                              g_hideMx;
         std::unordered_map<RE::FormID, Hold>    g_holds;   // guarded by g_hideMx
@@ -114,6 +124,8 @@ namespace MFO::APMFBridge {
         if (!a_follower) return;
         const RE::FormID fid = a_follower->GetFormID();
         const auto* api = HideApi();
+        // Read BEFORE g_hideMx (these take g_mx; this file never takes g_mx under its own lock).
+        const bool ownCast = a_want && (IsOwnedCastActive(fid) || IsHealCastActive(fid));
         std::scoped_lock lk(g_hideMx);
         if (!a_want) {
             const auto it = g_holds.find(fid);
@@ -127,6 +139,23 @@ namespace MFO::APMFBridge {
         h.quietSweeps = 0;
         const bool hadMove = h.move.h != APMF_API::kInvalidHandle, hadDeny = h.deny.h != APMF_API::kInvalidHandle;
         const bool okMove = EnsureLocked(api, fid, h.move, APMF_API::kIntent_MovementBlock, 0, "ch.1 movement block");
+        if (ownCast) {
+            // His own claimed cast is being delivered through the cast leaves: the ch.7 deny stands down for it.
+            if (h.deny.h != APMF_API::kInvalidHandle) {
+                api->Release(h.deny.h);
+                h.deny = One{};
+            }
+            if (!h.denyStoodDown) {
+                h.denyStoodDown = true;
+                spdlog::info("[hide] {:08X}: ch.7 offense/cast deny STANDS DOWN while his own cast claim is delivered (ch.1 "
+                             "movement block {})", fid, okMove ? "held" : "REFUSED");
+            }
+            return;
+        }
+        if (h.denyStoodDown) {
+            h.denyStoodDown = false;
+            spdlog::info("[hide] {:08X}: his cast claim is gone: the ch.7 offense/cast deny is filed again", fid);
+        }
         const bool okDeny = EnsureLocked(api, fid, h.deny, APMF_API::kIntent_CombatAction, static_cast<std::int32_t>(kHoldCats),
                                          "ch.7 offense/cast deny");
         if (!okMove || !okDeny) {

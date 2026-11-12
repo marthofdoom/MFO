@@ -4,9 +4,12 @@
 //     small disc (point, R). He is outside it, so the engine's own Return To Combat Area takes the Movement half and
 //     paths him there at its RUN speed (class-m0-re.md section 1: speed enum 3 on all three runtimes). kApproach_Hold
 //     keeps the bound after he arrives, so he stays inside R until MFO releases it.
-//   * ch.7 CombatAction deny of the Offense category (optional, a_denyOffense): the Action half's attack, bash and
-//     cast leaves are denied for the leg, so he does not stop to swing or cast on the way and does not strike from
-//     the point. Without it he fights the whole way (the give-ground step, apmf/GroundApproach.cpp).
+//   * ch.7 CombatAction deny (optional, a_deny; APMFBridge.h DisengageDeny): the HIDE RUN denies Offense | Cast (the
+//     attack, bash and every cast leaf: he does not stop to swing or cast on the way and does not strike from the
+//     point). The FLEE denies Offense alone, which from Harbinger ABI v40 means HOSTILE actions only (marth 2026-11-11):
+//     attacks and hostile casts are denied, his own heals land. Below ABI 40 Offense would deny his heals too, so the
+//     flee files NO ch.7 claim there (logged once). Without a deny he fights the whole way (the give-ground step,
+//     apmf/GroundApproach.cpp).
 // NOT CLAIMED: facing. Whether the engine runs him facing forward or keeps him facing his target (a strafe or a
 // backpedal) is NOT known (class-m0-re.md: "Facing: UNPROVEN"). Harbinger's passive gait probe answers it in the field
 // ([ch.24] GAIT PROBE lines, [CombatApproach] bApproachGaitProbe). The drive works either way: arrival is the engine's own
@@ -37,6 +40,8 @@ namespace MFO::APMFBridge {
     namespace {
         constexpr std::uint32_t kDisengageMinAbi = 39;   // the ABI that first reads kApproach_Point
         constexpr std::uint32_t kSpaceMinAbi     = 11;   // FindEmptySpace
+        constexpr std::uint32_t kHostileOffenseMinAbi = 40;   // ch.7: Offense means hostile (a beneficial cast passes)
+        std::atomic<bool> g_oldOffenseLogged{ false };
 
         struct Drive {
             APMF_API::Handle approach = APMF_API::kInvalidHandle;   // ch.24, the point
@@ -83,7 +88,7 @@ namespace MFO::APMFBridge {
         return g_drives.contains(a_follower);
     }
 
-    const char* RequestDisengage(RE::Actor* a_follower, const RE::NiPoint3& a_point, float a_radius, bool a_denyOffense) {
+    const char* RequestDisengage(RE::Actor* a_follower, const RE::NiPoint3& a_point, float a_radius, DisengageDeny a_deny) {
         const auto* api = DisengageApi();
         if (!a_follower) return "no follower";
         if (!api) return "no disengage road (Harbinger absent or older than ABI 39)";
@@ -109,13 +114,39 @@ namespace MFO::APMFBridge {
         // is what keeps cast/Fire.cpp's "transparent" answer true).
         ReleaseOffenseApproach(id, "disengaging");
         ReleaseGroundStep(id, "disengaging");
-        if (a_denyOffense) {
+        // The ch.7 deny of the leg. `said` is what the start line reports.
+        std::string said = "not asked";
+        std::uint32_t cats = 0;
+        if (a_deny == DisengageDeny::OffenseAndCast) {
+            cats = APMF_API::kCombatActionCat_Offense | APMF_API::kCombatActionCat_Cast;
+        } else if (a_deny == DisengageDeny::HostileOffense) {
+            if (api->abiVersion >= kHostileOffenseMinAbi) {
+                cats = APMF_API::kCombatActionCat_Offense;
+            } else {
+                // An older Harbinger denies EVERY cast under Offense, his heals included: not the deny this leg declares.
+                // No claim at all, said once; never a mask that does something else than asked (principle 7).
+                said = fmt::format("NOT FILED (Harbinger ABI {} < {})", api->abiVersion, kHostileOffenseMinAbi);
+                if (!g_oldOffenseLogged.exchange(true))
+                    spdlog::warn("[disengage] Harbinger ABI {} is older than {}: its ch.7 Offense deny also denies beneficial "
+                                 "casts, which would stop a fleeing follower's own heals. A flee files NO ch.7 deny on this "
+                                 "Harbinger: he runs to the point and may still swing or cast on the way (MFO itself names "
+                                 "no offense during a flee). Update Harbinger for the hostile-only deny. Said once.",
+                                 api->abiVersion, kHostileOffenseMinAbi);
+            }
+        }
+        if (cats != 0) {
+            const char* what = a_deny == DisengageDeny::OffenseAndCast ? "Offense|Cast (attacks and every cast)"
+                                                                       : "Offense (attacks and hostile casts; his heals pass)";
             APMF_API::APMF_Param deny{};
-            deny.ival = static_cast<std::int32_t>(APMF_API::kCombatActionCat_Offense);
+            deny.ival = static_cast<std::int32_t>(cats);
             d.deny = api->RequestEx(id, APMF_API::kIntent_CombatAction, kOwnBasis, &deny);
-            if (d.deny == APMF_API::kInvalidHandle)
-                spdlog::warn("[disengage] {:08X}: Harbinger refused the ch.7 Offense deny at the call (its log says why): he "
-                             "runs to the point but may still swing or cast on the way", id);
+            if (d.deny == APMF_API::kInvalidHandle) {
+                said = fmt::format("{} REFUSED", what);
+                spdlog::warn("[disengage] {:08X}: Harbinger refused the ch.7 deny {} at the call (its log says why): he "
+                             "runs to the point but may still swing or cast on the way", id, what);
+            } else {
+                said = fmt::format("{} h={}", what, d.deny);
+            }
         }
         d.point  = a_point;
         d.radius = a_radius;
@@ -126,11 +157,9 @@ namespace MFO::APMFBridge {
         }
         const RE::NiPoint3 me = a_follower->GetPosition();
         spdlog::info("[disengage] {:08X} '{}': running to {:.0f},{:.0f},{:.0f} ({:.0f}u away, R {:.0f}; ch.24 point+hold h={}, "
-                     "ch.7 Offense deny {})",
+                     "ch.7 deny: {})",
                      id, a_follower->GetName() ? a_follower->GetName() : "?", a_point.x, a_point.y, a_point.z,
-                     me.GetDistance(a_point), a_radius, d.approach,
-                     !a_denyOffense ? std::string("not asked") : d.deny != APMF_API::kInvalidHandle ? fmt::format("h={}", d.deny)
-                                                                                                    : std::string("REFUSED"));
+                     me.GetDistance(a_point), a_radius, d.approach, said);
         return nullptr;
     }
 

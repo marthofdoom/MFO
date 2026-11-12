@@ -30,6 +30,8 @@
 //                         fCombatDetectionLostTimeLimit (10 s, calculate-detection-re.md), a watched one at once; 12 s is
 //                         that floor plus a margin (principle 9). Hitting the cap is logged. The hold also ends early when
 //                         he is hit there (he was found).
+//   kHiddenReads          the hide run ends only after this many CONSECUTIVE laps on which no foe detects him (re-review F2 of
+//                         ba1328c): one lap can fall between two of the engine's own detection updates.
 //   kFleeGain             a non-sneak FLEE point must stand this much farther from the nearest foe than he does now (chosen).
 //   kFleeHealthLine       the flee ends once he is healed past the retreat's own line (iaus/Disengage.h).
 namespace MFO::Concealment {
@@ -52,6 +54,7 @@ namespace MFO::Concealment {
         constexpr std::chrono::milliseconds kFreshMs{ 3000 };
         constexpr std::chrono::milliseconds kRunMaxMs{ 10000 };
         constexpr std::chrono::milliseconds kHideHoldMs{ 12000 };
+        constexpr int kHiddenReads = 2;
 
         struct Pick {
             RE::NiPoint3      point{};
@@ -70,7 +73,8 @@ namespace MFO::Concealment {
             float             hpAtArrival = 0.0f;
             bool              sneakNoteLogged = false;
             bool              flee = false;              // a non-sneak flee: the IAUS keeps running (it heals), the scan is not skipped
-            std::vector<RE::FormID> foes;
+            int               hiddenReads = 0;           // consecutive laps on which no foe detected him (the hide run ends at kHiddenReads)
+            std::vector<RE::FormID> foes;                // the pick's foes; every lap reads these AND his current foes (WatchList)
         };
         struct Stance {                                  // the hide hold after a hidden run: the G1 claim stays until a blow / reveal / end
             std::vector<RE::FormID> foes;
@@ -227,6 +231,34 @@ namespace MFO::Concealment {
             }
             return resolved > 0;
         }
+
+        // WORKER. The foes to ask THIS lap (re-review F2 of ba1328c: the pick's list is frozen at pick time and holds 6 at
+        // most): every foe his own combat group lists now, by the gather's own set tests (iaus/Candidates.cpp Gather: not
+        // lost, not himself, not Harbinger's anchor, alive, enabled, loaded, hostile to him), with no cap, plus the pick's
+        // foes (one he has lost track of can still have him). The follower's group lock is released before any foe is read
+        // (NoFoeDetects takes each FOE's group lock, never nested).
+        std::vector<RE::FormID> WatchList(RE::Actor* a_follower, const std::vector<RE::FormID>& a_picked) {
+            std::vector<RE::FormID>      out = a_picked;
+            std::vector<RE::ActorHandle> raw;
+            if (auto* cc = a_follower->GetActorRuntimeData().combatController; cc && cc->combatGroup) {
+                RE::BSReadLockGuard lk(cc->combatGroup->lock);
+                for (const auto& t : cc->combatGroup->targets) {
+                    if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+                    raw.push_back(t.targetHandle);
+                }
+            }
+            for (const auto& h : raw) {
+                auto  ptr = h.get();   // HOLD the NiPointer
+                auto* foe = ptr.get();
+                if (!foe || foe == a_follower) continue;
+                const RE::FormID fid = foe->GetFormID();
+                if (APMFBridge::IsSubstrateAnchor(fid)) continue;
+                if (foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
+                if (!foe->IsHostileToActor(a_follower)) continue;
+                if (std::find(out.begin(), out.end(), fid) == out.end()) out.push_back(fid);
+            }
+            return out;
+        }
     }
 
     bool RoadOpen() {
@@ -286,7 +318,11 @@ namespace MFO::Concealment {
             foes = p->second.foes;
         }
         // The pick is consumed only once Harbinger has ACCEPTED the request (review of 1f59152 SEV-4: a refusal changed nothing).
-        if (const char* why = APMFBridge::RequestDisengage(a_follower, pt, kRadius, /*a_denyOffense=*/true)) return why;
+        // The leg's ch.7 deny (marth 2026-11-11, Offense means hostile): a FLEE denies hostile offense only, so his own
+        // heals land (Harbinger ABI >= 40; below it no ch.7 claim is filed, said once). A HIDE RUN denies attacks and every
+        // cast, as it always did.
+        const auto deny = flee ? APMFBridge::DisengageDeny::HostileOffense : APMFBridge::DisengageDeny::OffenseAndCast;
+        if (const char* why = APMFBridge::RequestDisengage(a_follower, pt, kRadius, deny)) return why;
         {
             std::scoped_lock lk(g_mx);
             if (const auto p = g_picks.find(id); p != g_picks.end()) p->second.valid = false;   // one run per answer
@@ -325,7 +361,7 @@ namespace MFO::Concealment {
             const char* why = nullptr;
             bool anyYes = false;
             if (!APMFBridge::InCombat(a_follower)) why = "his combat ended";
-            else { NoFoeDetects(a_follower, foes, anyYes); if (anyYes) why = "a foe detects him again (revealed)"; }
+            else { NoFoeDetects(a_follower, WatchList(a_follower, foes), anyYes); if (anyYes) why = "a foe detects him again (revealed)"; }
             if (why) {
                 { std::scoped_lock lk(g_mx); g_stances.erase(id); }
                 APMFBridge::ReleaseSneakHide(id, why);
@@ -380,9 +416,17 @@ namespace MFO::Concealment {
 
         // HIDE RUN (a sneak class). It ends AS SOON AS the engine says no foe detects him (G2 Layer 1's verdict), on the way or
         // at the point: the purpose is to become hidden, and then G2's hold / blow from stealth takes over.
+        // Read over his CURRENT foes plus the pick's (WatchList), and only after kHiddenReads consecutive laps that say so.
         {
-            bool anyYes = false;
-            if (NoFoeDetects(a_follower, run.foes, anyYes)) {
+            bool       anyYes = false;
+            const bool none   = NoFoeDetects(a_follower, WatchList(a_follower, run.foes), anyYes);
+            const int  reads  = none ? run.hiddenReads + 1 : 0;
+            if (reads != run.hiddenReads) {
+                run.hiddenReads = reads;
+                std::scoped_lock lk(g_mx);
+                if (const auto it = g_runs.find(id); it != g_runs.end()) it->second.hiddenReads = reads;
+            }
+            if (reads >= kHiddenReads) {
                 if (const char* why = APMFBridge::HoldSneakForHide(a_follower))
                     spdlog::warn("[conceal] {:08X}: hidden, but NOT sneaking: {}. G2's hold row needs the stance.", id, why);
                 return end(run.phase == Phase::Hiding ? "hidden at the point: no foe detects him (G2's verdict)"

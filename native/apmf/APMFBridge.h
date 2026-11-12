@@ -1891,17 +1891,27 @@ namespace MFO::APMFBridge {
     // ── THE DISENGAGE DRIVE (class plan card H3; Harbinger ch.24 on a POINT with the hold bit + ch.7 Offense deny) --
     // apmf/Disengage.cpp. He RUNS to a declared point mid-fight (the engine's own Return To Combat Area, at its run speed)
     // and stays inside R of it until released. DisengageSupported: APMF present AND abiVersion >= 39. RequestDisengage:
-    // nullptr = both claims filed (the Offense deny is optional and its refusal is only a warning); otherwise why nothing
+    // nullptr = the point approach is filed (the ch.7 deny follows a_deny, below; its refusal is only a warning); otherwise why nothing
     // was filed (no road, a held-heal approach stands, a drive already stands, Harbinger refused the point). It releases
     // the offense approach and the give-ground step first (one ch.24 claim per follower). ServiceDisengage (once per combat
     // service): None = no drive; Running; Arrived = the engine reports him inside the bound (the claims stay until
     // ReleaseDisengage); Failed = Harbinger ended it or it never owned the channel (a_why says which; the caller releases).
     // Facing is NOT claimed and not known (Harbinger's "[ch.24] GAIT PROBE" lines answer it in the field); the drive does
     // not depend on it. Worker road; own leaf mutex, never g_mx; nothing is saved.
+    // THE ch.7 DENY OF THE LEG (a_deny). marth 2026-11-11: Offense means HOSTILE actions (Harbinger ABI v40: a declared
+    // non-hostile cast passes an Offense deny; a Cast deny still denies every cast).
+    //   None            nothing is denied.
+    //   HostileOffense  the FLEE: ival = Offense alone. Attacks and hostile casts are denied, his own heals / buffs / wards
+    //                   land. Needs Harbinger ABI >= 40. On an older Harbinger the same mask would deny every cast, his heals
+    //                   included, so NO ch.7 claim is filed at all there and that is logged once (never a different deny than
+    //                   the one declared).
+    //   OffenseAndCast  the HIDE RUN: ival = Offense | Cast. Attacks and EVERY cast are denied (he does not stop to cast on
+    //                   the way and makes no cast sound at the point). The same deny on every Harbinger version.
+    enum class DisengageDeny : std::uint8_t { None, HostileOffense, OffenseAndCast };
     enum class DisengageState : std::uint8_t { None, Running, Arrived, Failed };
     bool           DisengageSupported();
     bool           DisengageStands(RE::FormID a_follower);
-    const char*    RequestDisengage(RE::Actor* a_follower, const RE::NiPoint3& a_point, float a_radius, bool a_denyOffense);
+    const char*    RequestDisengage(RE::Actor* a_follower, const RE::NiPoint3& a_point, float a_radius, DisengageDeny a_deny);
     DisengageState ServiceDisengage(RE::FormID a_follower, std::string& a_why);
     void           ReleaseDisengage(RE::FormID a_follower, const char* a_why);
     void           ClearDisengage();   // revert / load (pump drained)

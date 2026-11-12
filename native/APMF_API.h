@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v39, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v40, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 39;
+    inline constexpr std::uint32_t kABIVersion = 40;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -1183,15 +1183,30 @@ namespace APMF_API {
     // row lists them as never-denied by design until a real client need names
     // one. The in-combat pursuit LEASH is not a category here: it is its own
     // intent, kIntent_PursuitLeash (ch.23, ABI v16), on the same leaf seats).
+    //
+    // ── ABI v40: OFFENSE MEANS HOSTILE ── no bit, no field, no slot: the MEANING of kCombatActionCat_Offense on
+    // the four cast leaves. Up to v39 the Offense bit denied every cast (heals and buffs included). From v40 it
+    // denies a cast only when the spell (or shout) the leaf is about to cast is HOSTILE: an effect flagged
+    // Hostile or Detrimental, an enemy-control archetype (Calm, Frenzy, Demoralize, Paralysis, TurnUndead), or a
+    // cloak whose spell is hostile. A spell whose record does not declare a nature (no readable effect, or every
+    // effect a script and not cast on self) COUNTS AS HOSTILE and is logged. A declared non-hostile cast (heal,
+    // buff, ward, on self or an ally) is NOT Offense: it passes a mask that names Offense alone. The attack leaves
+    // are unchanged. kCombatActionCat_Cast is unchanged: it denies EVERY cast, so `Offense | Cast` is the v39
+    // meaning of Offense, on every version. A client that wants the hostile-only deny must see abiVersion >= 40:
+    // an older APMF denies every cast under Offense (stronger than asked, never weaker). On a runtime or a leaf
+    // where APMF could not prove its read of the spell (APMF.log "[ch.7] hostile-offense ... REFUSED", or
+    // [CombatAction] bHostileOnlyOffense=0) that leaf keeps the v39 behaviour. Reference: Docs/FACETS.md ch.7.
     enum CombatActionCategory : std::uint32_t {
         kCombatActionCat_None    = 0,
-        kCombatActionCat_Offense = 1u << 0,   // Attack/AttackLow/Bash/RangedAttack/SpecialAttack/
-                                               // GroundAttack/FlyingAttack/CastImmediateSpell/
-                                               // CastConcentrationSpell/CastShout/PrepareDualCast leaves
+        kCombatActionCat_Offense = 1u << 0,   // HOSTILE actions. Attack/AttackLow/Bash/RangedAttack/SpecialAttack/
+                                               // GroundAttack/FlyingAttack leaves always; the CastImmediateSpell/
+                                               // CastConcentrationSpell/CastShout/PrepareDualCast leaves only for
+                                               // a hostile (or undeclared) spell from ABI v40, for every cast
+                                               // before it (see above)
         kCombatActionCat_Cast    = 1u << 1,   // CastImmediateSpell, CastConcentrationSpell,
-                                               // PrepareDualCast, CastShout leaves (a leaf may carry
-                                               // several bits: the four cast leaves carry BOTH Offense
-                                               // and Cast). A kIntent_Cast claim denies ONLY these,
+                                               // PrepareDualCast, CastShout leaves, WHATEVER they cast (a leaf
+                                               // may carry several bits: the four cast leaves carry BOTH
+                                               // Offense and Cast). A mask of Cast alone denies ONLY these,
                                                // leaving attack/ranged/movement leaves firing.
     };
 
