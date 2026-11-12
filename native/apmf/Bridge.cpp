@@ -1082,6 +1082,10 @@ namespace MFO::APMFBridge {
     }
 
     bool Available() { return g_apmf.load(std::memory_order_relaxed) != nullptr; }
+    std::uint32_t AbiVersion() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api ? api->abiVersion : 0;
+    }
 
     // ABI v26 (ClickUp 86e3pu939): Harbinger's substrate state. A v26 interface's leading members are v2's, so the
     // cast from the stored v2 pointer is the documented up-cast after the abiVersion test.
