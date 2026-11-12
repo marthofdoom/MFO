@@ -282,3 +282,8 @@ Q-I-8. Block in IAUS. DEFAULT taken: a Block candidate exists only for a class w
 
 - **Q-dodge-heavy-scope: ANSWERED "Everyone".** The no-dodge-in-heavy-armor rule covers every follower, not only T2+ class styles: tier-1 classes, classes OFF, the MFO stance styles (EquipChoiceOnly) and the Harbinger-absent degrade too. feat/dodge-rates ships the T2+ class part; the rest is a follow-up branch (manifest row "Heavy armor, everyone").
 - **Q-dodge-heavy-test: ANSWERED "Cuirass decides".** Heavy = the worn body-slot (cuirass) armor is heavy, as built.
+
+## Answered 2026-11-12 (Knight guard line, after the iaus-pre-t2 review)
+
+- **Q-knight-drink: ANSWERED "Drink first when hurt".** A hurt Knight-line follower with a health potion drinks before holding the guard-line block (the guard boost turns off below the drink line). marth: "But the sim should help come up with health decline curves and perfect drinking times as well. If it uses real enemies and such". So the drink line is a sim-derived value: the sim measures health-decline curves against real enemies (the list's actors) and finds the best drink time; the native default follows it.
+- **Q-knight-taunter: ANSWERED.** marth: "Another followers taunt cannot pin to a different follower. Impossible." A foe pinned onto the Knight was pinned by the Knight. The guard line counts Taunt::TauntedBy(foe, him), the same rule the sim tally uses.
