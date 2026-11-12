@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v41, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v42, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 41;
+    inline constexpr std::uint32_t kABIVersion = 42;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -1525,6 +1525,19 @@ namespace APMF_API {
         // APMF_API::MakeStopPct(80).
         kCastFlag_StopPctShift  = 8,
         kCastFlag_StopPctMask   = 0xFFu << 8,
+
+        kCastFlag_CorpseTarget  = 1u << 16,  // ABI v42. `req.target` is a CORPSE and the spell is a Reanimate
+                                             //   spell: the engine's own reanimate cast is aimed at that corpse,
+                                             //   and only if the engine's own test accepts it (it resolves, is
+                                             //   dead, is not disabled or deleted, and the spell's effect can be
+                                             //   added to it). The engine's own corpse pick never casts while the
+                                             //   claim stands. RequestCast only, target required and not the
+                                             //   actor. Read by the Reanimate caster's seats only: on any other
+                                             //   spell the bit does nothing (logged). REFUSED (kInvalidHandle,
+                                             //   logged) when the seat is not installed, target is 0, or with
+                                             //   kCastFlag_DenyHandOnly. An APMF older than v42 IGNORES the bit
+                                             //   and the engine picks its own corpse: gate on abiVersion >= 42.
+                                             //   See "ABI v42: CORPSE TARGET" at the end of this header.
     };
 
     // Build the bits 8-15 stop-percent field for CastFlags (see above). `pct` is a
@@ -3605,6 +3618,27 @@ namespace APMF_API {
     // Gate on `abiVersion >= 41` (INVARIANTS #14b) before asking: an older APMF has no channel for intent 32
     // and REFUSES the request ("no channel serves intent 32"); the client's own degrade path runs (no
     // aversion, logged once by the client).
+
+    // ABI v42: CORPSE TARGET (kCastFlag_CorpseTarget) -- "raise THIS corpse"
+    //
+    // NO new slot, struct or field: one bit in the existing CastFlags word (bit 16, never used before) and the
+    // constant. A v42 client still holds an APMF_API_v38*.
+    //
+    // Before v42 a Reanimate spell is claimed with target 0 (ABI 19) and the ENGINE picks the corpse: the
+    // highest-level corpse in range that its own test accepts. With the bit, RequestCast's `target` is the
+    // corpse the client chose, and Harbinger makes the engine's own reanimate cast use it:
+    //   * WHETHER: the claim's corpse is handed to the engine's own keep test. Accepted -> the cast may start.
+    //     Refused -> NO for this poll, the claim stands, and the corpse the engine would have picked instead is
+    //     removed again. A claim on a corpse the spell cannot raise therefore never fires; bound it with the
+    //     claim's TTL as you do any cast claim.
+    //   * WHERE: the cast's corpse and aim are the claim's corpse. If it stopped being a corpse between the
+    //     two (raised by someone else, disabled), the cast has no corpse; the engine's pick is not used.
+    // The claim's other rules are unchanged (TTL, Repoint heartbeat, hand, deny-complete equip). Harbinger does
+    // not test the spell's level cap itself: the engine's own test is the only judge. A client that wants to
+    // skip a corpse the spell is too weak for tests that before asking.
+    //
+    // Gate on `abiVersion >= 42` (INVARIANTS #14b). An older APMF ignores the bit: the claim then carries a
+    // target the Reanimate caster never reads, and the engine picks its own corpse.
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

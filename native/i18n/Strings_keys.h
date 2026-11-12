@@ -288,6 +288,7 @@ MFO_STR(Cond_FoeIsMechanical, "Foe: Mechanical", 0)
 MFO_STR(Cond_FoeIsUnholy, "Foe targeted: Unholy", 0)   // the foe the follower is fighting is one the load order's silver weapons hurt more (undead, werewolves, vampires, ...)
 MFO_STR(Cond_FoeAttackingAlly, "Foe: Targeting an ally", 0)   // the nearest foe whose target is the player, a teammate or a summon they command, but not this follower
 MFO_STR(Cond_FoeAttackingMySummon, "Foe: Targeting my summon", 0)   // the nearest foe whose target is a creature or thrall this follower commands
+MFO_STR(Cond_CorpseWithin, "Corpse: Within", 0)   // a dead humanoid within this many units; a "Cast at target" rule raises it (a Reanimate spell)
 MFO_STR(Cond_FoeIsCaster, "Foe: Spellcaster", 0)
 MFO_STR(Cond_FoeIsRanged, "Foe: Ranged", 0)
 MFO_STR(Cond_FoeWeakerThanMe, "Foe: Weaker than me", 0)

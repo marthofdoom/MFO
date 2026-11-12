@@ -435,6 +435,11 @@ namespace MFO::Actuation {
             const bool buffKind = !healClaim && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Buff;
             RE::Actor* const buffRecip =
                 (buffKind && a_target && a_target != a_follower && !BuffPlacementSpell(spell)) ? a_target : nullptr;
+            // CARD G7: a Reanimate rule whose target is a corpse (the cond.corpse_within selector). The claim then
+            // names that corpse (BuffCorpseTarget: Harbinger ABI >= 42, else 0 and the engine picks its own).
+            RE::Actor* const buffCorpse =
+                (buffKind && a_target && a_target != a_follower && a_target->IsDead() && BuffPlacementSpell(spell))
+                    ? a_target : nullptr;
             // A SELF-DELIVERED BUFF AIMED AT A FOE (field 1006c: Inferno, claimed at a foe through the delivery-flip
             // proxy, 3 claims, none fired, left hand held ~13.5 s). The player chose the target, so it is neither
             // cast at the enemy nor silently self-cast: a transparent NoOp and one deduped warning.
@@ -670,7 +675,7 @@ namespace MFO::Actuation {
                 // claim once a fire-and-forget buff is up on its recipient, and bounds a concentration ward's
                 // stream (release + re-stream past the drawn cap). buffRecip is null for a self buff.
                 if (!healClaim && handPlan.left && !handPlan.right)
-                    if (auto out = BuffRefreshGate(a_follower, spell, buffRecip)) return *out;
+                    if (auto out = BuffRefreshGate(a_follower, spell, buffRecip, buffCorpse)) return *out;
                 if (healClaim && (handPlan.left || handPlan.right))   // review F2 / R2-2: proxy + never-observed gates (a dual heal's too: its LEFT slot)
                     if (auto out = HealRefreshGate(a_follower, planHand, a_spellID)) return *out;
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
@@ -873,18 +878,21 @@ namespace MFO::Actuation {
             // road falls on (restoration / concentration / the AI-first hybrid below), never a decline.
             if (buffKind && a_target && a_target != a_follower && g_firingRule != kNoRule &&
                 ChooseBuffRoad(a_follower, spell, /*a_log=*/true, buffRecip) == BuffRoad::Claim) {
-                if (BuffUpTransparent(a_follower, spell, buffRecip))   // before the preempt, like the self fork
+                if (BuffUpTransparent(a_follower, spell, buffRecip, buffCorpse))   // before the preempt, like the self fork
                     return { Result::NoOp, "buff already up on its recipient (or its read is pending)", true };
                 // MFO-B2: BuffClaim's ClaimOffenseCast (cast/BuffRoad.cpp): LEFT, stopPct 0, the recipient as
                 // target (buffRecip is never the caster here; with no recipient, a placement spell, BuffClaim
                 // files 0 or the caster -- neither sets OwnLineOfSight, so the verdict is the same).
+                // G7: a corpse claim asks about the corpse as its target (BuffCorpseTarget, BuffClaim's own answer).
                 if (HarbingerWouldRefuse(id, "buff cast", spell->GetFormID(),
-                                         buffRecip ? buffRecip->GetFormID() : 0, APMFBridge::kApmfHandLeft,
+                                         buffRecip ? buffRecip->GetFormID()
+                                                   : BuffCorpseTarget(a_follower, spell, buffCorpse),
+                                         APMFBridge::kApmfHandLeft,
                                          spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
                                          /*stopPct=*/0, /*heal=*/false, /*healDual=*/false, "left"))
                     return { Result::FailedOther, "Harbinger would refuse the buff claim (incumbent kept)", true };
                 commitPreempt();   // the claim happens inside BuffClaim
-                if (BuffClaim(a_follower, spell, buffRecip) == SelfCast::Applied) {
+                if (BuffClaim(a_follower, spell, buffRecip, buffCorpse) == SelfCast::Applied) {
                     lockHands(a_spellID, lockTargetKey);
                     return { Result::Fired, "buff claim (animated)" };
                 }

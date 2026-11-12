@@ -175,6 +175,14 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= 19 && Config::g_apmfCast.load();
     }
 
+    // See APMFBridge.h. The release boundary of Harbinger's Reanimate corpse seat: ABI v42 added
+    // kCastFlag_CorpseTarget and the seat in the same commit. kCorpseTargetAbi is the builder's own gate
+    // (apmf/Bridge.cpp BuildCastRequestLocked), so "supported" here and "the bit is set" there cannot drift.
+    bool CorpseTargetSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= kCorpseTargetAbi && Config::g_apmfCast.load();
+    }
+
     // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────
     // See APMFBridge.h for the contract. The implementation is deliberately a
     // REPLAY of the claim's OWN stored tuple rather than a second refresh path:
