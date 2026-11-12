@@ -999,8 +999,12 @@ namespace MFO::Logistics::Lockpick {
 
         // kUnlocking: wait for the posted Unlock to show on the ref.
         {   // the write was skipped by the witness pre-check: a clean, transient end (no standing verdict, nothing was spent)
-            std::scoped_lock lk(g_snapMx);
-            if (g_witnessSkipped.erase(fid) > 0) {
+            bool skipped = false;
+            {   // read and erase under the lock, then end the job OUTSIDE it: EndJob takes g_snapMx itself (non-recursive)
+                std::scoped_lock lk(g_snapMx);
+                skipped = g_witnessSkipped.erase(fid) > 0;
+            }
+            if (skipped) {
                 EndJob(fid, nullptr);
                 return StepResult::kRefused;
             }
@@ -1178,6 +1182,7 @@ namespace MFO::Logistics::Lockpick {
         {
             std::scoped_lock lk(g_snapMx);
             g_snaps.clear();
+            g_witnessSkipped.clear();
         }
     }
 
