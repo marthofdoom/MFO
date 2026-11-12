@@ -10,6 +10,12 @@
 //     exactly the reach the old direct write had (the equipment and spell choice).
 // Harbinger answers the style at the engine's own read and has the ENGINE refresh the controller's copy at engage and
 // release; nothing is written to the controller by anyone.
+// NO DODGE (marth 2026-11-12, Q-S-3): a CLASS style (actor-wide) is swapped for its zero-avoid TWIN (Classes::NoDodgeTwin, the
+// same CSTY with Avoid Threat 0, MFO_GenerateESP.py) while the follower WEARS HEAVY ARMOR, whatever his class: the rule is his
+// BODY slot (kBody, the cuirass), the one piece that is the armor class, and its vanilla armor type kHeavyArmor (list-agnostic, no
+// keyword or form id), read on the MAIN thread by a posted task about every 2 s, never on this worker. A changed style is the
+// existing Repoint. MFO styles (EquipChoiceOnly) carry no dodge and are never swapped. (Living Legend's "dodge only on an attack
+// his auto-block passive did not stop" is card H8's requirement, class-build-plan.md; nothing here ties dodge to a guard.)
 // Docs: Harbinger Docs/FACETS.md "ch.33 Combat style", APMF_API.h "ABI v45: COMBAT STYLE", INVARIANTS #0 (n).
 // DEGRADE (a documented contract, never a mask): Harbinger ABSENT, or older than ABI 45 = CombatStyle::ApplyTick keeps
 // writing the controller's field itself, as before. Harbinger v45+ present but REFUSING the claim (its seats are not
@@ -21,6 +27,8 @@
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
 #include "CombatStyle.h"
+#include "MainThread.h"
+#include "classes/Classes.h"
 
 #include <mutex>
 #include <unordered_map>
@@ -58,6 +66,50 @@ namespace MFO::APMFBridge {
             return ui && ui->GameIsPaused();
         }
 
+        // Heavy body armor, per follower: written by a MainThread::Post'd read (the worker never touches the actor's biped data),
+        // read by the sweep. Its OWN mutex g_heavyMx, a leaf (nothing is called under it). known=false until the first read lands:
+        // the sweep files no class-style claim for him before that, so a heavy-armored follower never starts out dodging.
+        constexpr std::uint32_t kHeavyRefreshSweeps = 15;   // ~2 s of 133 ms sweeps
+        struct HeavyState { bool known = false, heavy = false, pending = false; std::uint32_t wait = 0; };
+        std::mutex                                  g_heavyMx;
+        std::unordered_map<RE::FormID, HeavyState>  g_heavy;   // guarded by g_heavyMx
+
+        // MAIN THREAD only.
+        bool WearsHeavyBody(RE::FormID a_fid) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+            auto* body  = actor ? actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr;
+            return body && body->GetArmorType() == RE::BGSBipedObjectForm::ArmorType::kHeavyArmor;
+        }
+
+        // Sweep side: the follower's heavy state (false+known when the main-thread pump is not live: VR, where the style hooks are
+        // refused anyway), and the posting of a refresh when due. Returns false while the first answer is outstanding.
+        bool HeavyKnown(RE::FormID a_fid, bool& a_heavy) {
+            if (!MainThread::IsInstalled()) { a_heavy = false; return true; }
+            bool post = false, known = false;
+            {
+                std::scoped_lock lk(g_heavyMx);
+                auto& h = g_heavy[a_fid];
+                if (!h.pending) {
+                    if (h.wait > 0) --h.wait;
+                    else { h.pending = true; post = true; }
+                }
+                a_heavy = h.heavy;
+                known   = h.known;
+            }
+            if (post) {
+                MainThread::Post([a_fid]() {
+                    const bool heavy = WearsHeavyBody(a_fid);
+                    std::scoped_lock lk(g_heavyMx);
+                    auto& h = g_heavy[a_fid];
+                    if (h.known && heavy != h.heavy)
+                        spdlog::info("[wstyle] {:08X}: {} heavy body armor -> ch.33 style {}", a_fid, heavy ? "now wears" : "no longer wears",
+                                     heavy ? "NO-DODGE twin" : "class style");
+                    h.known = true; h.heavy = heavy; h.pending = false; h.wait = kHeavyRefreshSweeps;
+                });
+            }
+            return known;
+        }
+
         const char* ScopeName(std::uint32_t a_flags) {
             return (a_flags & APMF_API::kCombatStyle_EquipChoiceOnly) ? "equip choice only" : "actor-wide (class style)";
         }
@@ -90,6 +142,7 @@ namespace MFO::APMFBridge {
 
     void ClearStyleClaims() {
         std::scoped_lock lock(g_styleMx);
+        { std::scoped_lock hl(g_heavyMx); g_heavy.clear(); }   // a posted read is dropped by MainThread::Clear on the same boundary
         g_styles.clear();   // Harbinger drops every claim at its own load boundary; a stale Release would be a no-op
     }
 
@@ -110,7 +163,13 @@ namespace MFO::APMFBridge {
             if (SubstrateOnly(d.follower)) {
                 if (d.substrateStyle != 0) wants.push_back({ d.follower, d.substrateStyle, APMF_API::kCombatStyle_EquipChoiceOnly });
             } else if (d.tableStyle != 0) {
-                wants.push_back({ d.follower, d.tableStyle, d.tableWide ? 0u : APMF_API::kCombatStyle_EquipChoiceOnly });
+                RE::FormID style = d.tableStyle;
+                if (d.tableWide) {   // a class style: the no-dodge switch (see the file header)
+                    bool heavy = false;
+                    if (!HeavyKnown(d.follower, heavy)) continue;   // first read outstanding: no claim yet (next sweep)
+                    if (heavy) style = Classes::NoDodgeTwin(style);
+                }
+                wants.push_back({ d.follower, style, d.tableWide ? 0u : APMF_API::kCombatStyle_EquipChoiceOnly });
             }
         }
         const bool paused = StyleGamePaused();

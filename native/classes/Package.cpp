@@ -19,6 +19,7 @@
 #include "Config.h"
 
 #include <bit>
+#include <unordered_map>
 
 namespace MFO::Classes {
 
@@ -32,10 +33,14 @@ namespace MFO::Classes {
             RE::TESCombatStyle* cast      = nullptr;
         };
         std::array<ClassStyles, kClassCount> g_styles{};   // written ONCE at kDataLoaded, read-only after
+        // Zero-avoid twin of a class CSTY (heavy armor / Living Legend's held guard: apmf/StyleClaims.cpp). Key = the class style's
+        // FormID, value = the twin's (the style itself when it has no Avoid Threat). Written ONCE at kDataLoaded, read-only after.
+        std::unordered_map<RE::FormID, RE::FormID> g_noDodge;
     }
 
     void detail::ResolvePackageStyles() {
         g_styles = {};
+        g_noDodge.clear();
         auto* manifest = detail::ManifestList();
         if (!manifest || manifest->forms.size() < 3 || !manifest->forms[2]) {
             spdlog::error("[classes] package styles: the manifest has no style lookup entry (entry[2]) -- every class keeps "
@@ -43,11 +48,14 @@ namespace MFO::Classes {
             return;
         }
         auto* all = manifest->forms[2]->As<RE::BGSListForm>();
-        if (!all || all->forms.size() != kClassCount) {
+        // 35 entries = the class lists; 70 = those plus the zero-avoid TWIN lists (entries 35..69, the same shape). A list from before
+        // the twins has 35: every style then has no twin (a heavy-armored follower keeps the class Avoid Threat; said once below).
+        if (!all || (all->forms.size() != kClassCount && all->forms.size() != 2 * kClassCount)) {
             spdlog::error("[classes] package styles: the style lookup {:08X} is not a list of {} class lists ({} entries) -- every "
                           "class keeps today's MFO_*Style", manifest->forms[2]->GetFormID(), kClassCount, all ? all->forms.size() : 0);
             return;
         }
+        const bool hasTwins = all->forms.size() == 2 * kClassCount;
         std::size_t resolved = 0, styles = 0;
         for (std::size_t i = 0; i < kClassCount; ++i) {
             auto* cl = all->forms[i] ? all->forms[i]->As<RE::BGSListForm>() : nullptr;
@@ -90,7 +98,22 @@ namespace MFO::Classes {
             g_styles[i] = cs;
             ++resolved;
             styles += cl->forms.size() - 1;
+            if (!hasTwins) continue;
+            // The twin list: same length, same order; every entry a CSTY. A mismatch drops this class's twins only (loud).
+            auto* tl = all->forms[kClassCount + i] ? all->forms[kClassCount + i]->As<RE::BGSListForm>() : nullptr;
+            bool tok = tl && tl->forms.size() == cl->forms.size();
+            for (std::size_t k = 1; tok && k < cl->forms.size(); ++k)
+                tok = cl->forms[k] && tl->forms[k] && tl->forms[k]->As<RE::TESCombatStyle>();
+            if (!tok) {
+                spdlog::error("[classes] package styles: class {}'s zero-avoid twin list does not match its style list -- no twins "
+                              "for it", kTable[i].name);
+                continue;
+            }
+            for (std::size_t k = 1; k < cl->forms.size(); ++k) g_noDodge[cl->forms[k]->GetFormID()] = tl->forms[k]->GetFormID();
         }
+        if (!hasTwins)
+            spdlog::warn("[classes] package styles: the class ESL has no zero-avoid twin lists -- heavy armor and Living Legend's "
+                         "guard cannot remove Avoid Threat (regenerate MFO_Classes.esl)");
         spdlog::info("[classes] package styles resolved: {} of {} classes, {} CSTY record(s) (bClassStyles = {})", resolved,
                      kClassCount, styles, Config::g_classStyles.load() ? 1 : 0);
     }
@@ -116,6 +139,11 @@ namespace MFO::Classes {
             case 3:  return cs.cast;
             default: return nullptr;
         }
+    }
+
+    RE::FormID NoDodgeTwin(RE::FormID a_classStyle) {
+        const auto it = g_noDodge.find(a_classStyle);
+        return it != g_noDodge.end() ? it->second : a_classStyle;
     }
 
     float PackageLeashScale(RE::FormID a_follower) {
