@@ -45,6 +45,13 @@ line then ends `covers=...`; `--opt-class` still wins if both are given). `--opt
 of each search evaluation (default `--fights`). `--seeds a,b,c` runs the headline J once per seed and prints each, then
 the mean and standard error (no full tables); with `--opt` the objective is the mean over those seeds. Seed noise is
 about +-8 J at 60 fights, so a small keep rule needs several seeds. Single `--seed` runs are unchanged.
+The headline runs `--fights N` per scenario when `--fights` is given and 24 otherwise, and the HEADLINE line and the results
+JSON (`headline.covers`, `headline.fights`) record both; an unknown class slug in `--classes` / `--opt-class` is an error,
+`--opt-rows` and `--opt-prefix` honour `--seeds` and `--opt-fights`, and the printed SE is the between-seed SE of absolute J
+(n=1 prints `se=n/a`), looser than the paired-difference noise a keep decision needs. `--classes X` (0.5 scenarios / 0.5
+natural bracket only) and `--opt-class X` (0.35 / 0.65 over three brackets) are different objectives. A scoped run replays
+the all-class scenario fights (the scenario seed uses the original scenario index). `SIM_CLITEST=1 tools/iaus_sim/run.sh`
+runs the command-line assertions.
 
 Three data sets exist: `Vanilla` (the five base ESMs of the Tuxborn install), `Tuxborn` (SimonRim) and `LoreRim`
 (Requiem). With no `--list` the sim runs its BUILT-IN fixture set: Skyrim.esm's game-setting values plus a small
