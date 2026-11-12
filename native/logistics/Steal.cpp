@@ -347,45 +347,88 @@ namespace MFO::Logistics::Steal {
             }
         }
 
-        // ── the stamp road's engine seat: the ExtraDataList destructor, bound by id (the fork declares ~ExtraDataList, never defines it) ──
-        // void(ExtraDataList*), frees nothing of the object itself. 1.6.1170 id 11572 @0x1513D0 (~ExtraDataList, id 11584 @0x151EE0, is a
-        // bare jmp to it): restores the vtable, clears this thread's extra-lookup cache when it holds this list (TLS +0x18), deletes every
-        // BSExtraData of the chain (+0x08) through its vtable slot 0 with edx=1, Deallocates the presence bitfield (+0x10).
-        // 1.5.97 id 11438 @0x1076D0 = `mov dl,1; call 11427` (the same three steps on the 1.5.97 layout: chain +0x00, presence +0x08).
-        // The engine frees a list as this destructor, then its sized free (109588 -> 36098 / 102158 -> 11233), which is
-        // MemoryManager::Deallocate(ptr, false) = RE::free: 41 such pairs on 1.6.1170, 34 on 1.5.97, one inside
-        // Character::AddObjectToContainer itself (37525 @0x678FEE). Row "Steal.ExtraDataList.Destroy" in native/VerifiedAddresses.h.
+        // ── the stamp road's engine seats: the ExtraDataList constructor and destructor, per EXACT build ──
+        // The fork's `new ExtraDataList()` is not used: its GetRuntimeSize is a named fatal error on 1.7.104, and it declares
+        // ~ExtraDataList without defining it. A list is built here as the engine builds one: RE::malloc(the engine's size) + its ctor.
+        //                    ctor (row Steal.ExtraDataList.Construct)   dtor body                                        size   merged list
+        //   1.6.1170         id 11583 @0x151E90                         id 11572 @0x1513D0 (Steal.ExtraDataList.Destroy) 0x20   left to the caller
+        //   1.5.97           id 11437 @0x107690                         id 11438 @0x1076D0 (same row)                    0x18   FREED BY THE ENGINE
+        //   1.7.104          id 11583 @0x157420 (MIT id table)          raw base+0x156960 (...Destroy.1_7_104)           0x20   left to the caller
+        // ctor: ExtraDataList*(rcx = memory). dtor: void(rcx = list), frees nothing of the object itself: clears this thread's extra
+        // cache when it holds the list (TLS +0x18), deletes every BSExtraData of the chain through its vtable slot 0 with edx=1,
+        // Deallocates the presence bitfield. The engine frees a list as that destructor, then its sized free =
+        // MemoryManager::Deallocate(ptr, false) = RE::free (41 / 34 / 40 such pairs).
+        // "merged list" = what InventoryChanges' add does with the CALLER's list when it merges the count into an equivalent list the
+        // receiver already holds: 1.6.1170 (16053 @0x226A20) and 1.7.104 (@0x22C310, instruction-identical) skip a caller-made list
+        // (`cmp rsi,[rsp+0xF0]` at 0x227189 / 0x22CA79), so it stays ours to destroy; 1.5.97 (15815 @0x1D9E10) has no such guard and
+        // DESTROYS AND FREES it itself (0x1DA491: call 11438; mov edx,0x18; call 102158), except while BarterMenu is open
+        // (0x1DA46F), when it drops it unfreed. So on 1.5.97 the list is NEVER touched after the add.
+        // Evidence: Docs/VERIFIED-ADDRESSES.md rows + the layout fact "ExtraDataList allocation size".
+        using ListCtorFn = void*(void*);
         using ListDtorFn = void(RE::ExtraDataList*);
-        REL::Relocation<ListDtorFn>& ListDtorRel() {
-            static REL::Relocation<ListDtorFn> func{ REL::RelocationID(11438, 11572) };
-            return func;
-        }
-        // May a plain stack be stamped (a NEW ExtraDataList handed to AddObjectToContainer)? Only where a list this code made can also be
-        // destroyed by it. Exactly 1.6.1170 / 1.5.97: the fork's `new ExtraDataList()` is a named FATAL error on any other build
-        // (GetRuntimeSize), and id 11572 is not in the 1.7.104 id table (an id miss is fatal), so every other build is refused BEFORE
-        // anything is resolved or allocated. Refused = a plain stack moves UNSTAMPED, warned per item (never a leak, never a silent launder).
-        bool StampSeatOk() {
-            static const bool ok = [] {
-                if (!Runtime::IsVerified1_6_1170() && !Runtime::IsVerified1_5_97()) {
-                    spdlog::error("[steal] runtime {} ({}): the ExtraDataList constructor / destructor pair is verified on 1.6.1170 and 1.5.97 only "
-                                  "-- the stamp road is REFUSED: plain stacks stolen from owned chests move UNSTAMPED (no ownership mark)",
-                                  REL::Module::get().version().string("."), Runtime::BuildLabel());
-                    return false;
+        struct ListSeatT {
+            ListCtorFn* ctor = nullptr;
+            ListDtorFn* dtor = nullptr;
+            std::size_t size = 0;
+            bool destroyMerged = false;   // the engine leaves a merged caller list to the caller (1.6.1170, 1.7.104)
+            bool ok = false;
+        };
+        // Resolved once. Any refusal (a runtime that is not one of the three exact builds, VR included, or a row that did not verify)
+        // = the stamp road is OFF for the session: plain stacks STAY IN THE CHEST (never moved unstamped); copies that carry their own
+        // ExtraOwnership still move. Nothing is resolved before the exact-build gate (an id miss is fatal in the fork).
+        const ListSeatT& ListSeat() {
+            static const ListSeatT seat = [] {
+                ListSeatT t;
+                const bool ae = Runtime::IsVerified1_6_1170(), se = Runtime::IsVerified1_5_97(), v17 = Runtime::IsVerified1_7_104();
+                if (!ae && !se && !v17) {
+                    spdlog::error("[steal] runtime {} ({}): the ExtraDataList constructor / destructor are verified on 1.6.1170, 1.5.97 and 1.7.104 only "
+                                  "-- the stamp road is REFUSED: plain stacks in owned chests STAY IN THE CHEST (copies with their own owner mark still move)",
+                                  REL::Module::get().version().string("."), Runtime::GateReason());
+                    return t;
                 }
-                if (!Runtime::SeatVerified(ListDtorRel().address(), "Steal.ExtraDataList.Destroy")) {
-                    spdlog::error("[steal] the Steal.ExtraDataList.Destroy self-check row did not verify -- the stamp road is REFUSED: plain stacks "
-                                  "stolen from owned chests move UNSTAMPED (no ownership mark)");
-                    return false;
+                const std::uintptr_t ctor = REL::Relocation<ListCtorFn>{ REL::RelocationID(11437, 11583) }.address();
+                const std::uintptr_t dtor = v17 ? REL::Module::get().base() + 0x156960
+                                                : REL::Relocation<ListDtorFn>{ REL::RelocationID(11438, 11572) }.address();
+                const bool ctorOk = Runtime::SeatVerified(ctor, "Steal.ExtraDataList.Construct");
+                const bool dtorOk = Runtime::SeatVerified(dtor, v17 ? "Steal.ExtraDataList.Destroy.1_7_104" : "Steal.ExtraDataList.Destroy");
+                if (!ctorOk || !dtorOk) {
+                    spdlog::error("[steal] the Steal.ExtraDataList.* self-check rows did not verify (construct={} destroy={}) -- the stamp road is REFUSED: "
+                                  "plain stacks in owned chests STAY IN THE CHEST (copies with their own owner mark still move)", ctorOk, dtorOk);
+                    return t;
                 }
-                return true;
+                t.ctor = reinterpret_cast<ListCtorFn*>(ctor);
+                t.dtor = reinterpret_cast<ListDtorFn*>(dtor);
+                t.size = se ? 0x18 : 0x20;
+                t.destroyMerged = !se;
+                t.ok = true;
+                spdlog::info("[steal] stamp road ready on {}: ExtraDataList size 0x{:X}, a merged list is {}", Runtime::BuildLabel(), t.size,
+                             t.destroyMerged ? "destroyed here (the engine leaves it to the caller)" : "freed by the engine itself (never touched here)");
+                return t;
             }();
-            return ok;
+            return seat;
         }
 
-        // Where did the list handed to AddObjectToContainer land? InventoryChanges' add (16053 @0x226A20) LINKS the caller's list when
-        // the follower has no entry for the object, or no equivalent list in it (push-front 0x226EA4 / 0x22724B). When an equivalent list
-        // exists (compare 11594: same owner, ExtraCount ignored) it adds the count to THAT list (0x227071-0x227080) and neither links nor
-        // frees the caller's (0x227189 `cmp rsi,[rsp+0xF0]` skips the free for a caller-made list): Merged, the caller still owns it.
+        // A new, empty engine ExtraDataList. nullptr = the allocation failed (logged; the caller leaves the item). Only with ListSeat().ok.
+        RE::ExtraDataList* NewList(const ListSeatT& a_seat) {
+            void* mem = RE::malloc(a_seat.size);
+            if (!mem) { spdlog::error("[steal] ExtraDataList allocation of 0x{:X} bytes failed", a_seat.size); return nullptr; }
+            a_seat.ctor(mem);
+            return static_cast<RE::ExtraDataList*>(mem);
+        }
+
+        // Destroys a list NewList made that is still OURS: one never handed to the engine (any build), or one the engine merged and
+        // left to the caller (destroyMerged builds only, on Landed::Merged). The engine destructor, then RE::free: the engine's own
+        // pair. MAIN THREAD (the destructor clears the calling thread's extra cache; the list was only ever touched on this thread).
+        void DestroyList(const ListSeatT& a_seat, RE::ExtraDataList* a_xl) {
+            a_seat.dtor(a_xl);
+            RE::free(a_xl);
+        }
+
+        // Where did the list handed to AddObjectToContainer land? InventoryChanges' add (1.6.1170 16053 @0x226A20) LINKS the caller's
+        // list when the follower has no entry for the object, or no equivalent list in it (push-front 0x226EA4 / 0x22724B). When an
+        // equivalent list exists (compare 11594: same owner, ExtraCount ignored) it adds the count to THAT list (0x227071-0x227080) and
+        // does not link the caller's: Merged. Who then frees the caller's list differs per build (the table above). This function
+        // never dereferences a_xl (a pointer compare only), so it is safe on 1.5.97 too, where the engine may already have freed it.
         // Merged is claimed only on positive evidence (a list he held BEFORE the add now counts exactly `moved` more), never on "not
         // linked" alone: a container-changed sink of another plugin runs inside the add and may move the item on, list included.
         struct HeldList { const RE::ExtraDataList* xl; std::int32_t n; };
@@ -418,14 +461,6 @@ namespace MFO::Logistics::Steal {
                 }
             }
             return merged ? Landed::Merged : Landed::Unknown;
-        }
-
-        // Destroys a list THIS FILE allocated (new RE::ExtraDataList = RE::malloc + the engine ctor) that the engine did not adopt
-        // (Landed::Merged): the engine destructor, then RE::free, exactly the engine's own pair. Call only after StampSeatOk(). MAIN
-        // THREAD (the destructor clears the calling thread's extra cache; the list was only ever touched on this thread).
-        void DestroyUnadoptedList(RE::ExtraDataList* a_xl) {
-            ListDtorRel()(a_xl);
-            RE::free(a_xl);
         }
 
         // How many of a_obj the chest holds right now (the before / after of every RemoveItem).
@@ -463,10 +498,15 @@ namespace MFO::Logistics::Steal {
             }
             std::int32_t movedTotal = 0;
             for (auto* obj : items) {
+                bool leftInChest = false;   // a plain stack that could not be stamped stays: the theft-gate road below must not take it either
                 for (int iter = 0; iter < 16; ++iter) {   // the inventory is re-read before EVERY RemoveItem: it invalidates the extra lists
                     const Copy c = NextOwned(f, chest, obj, cellOwnedOnly);
                     if (!c.found) break;
                     if (obj->GetFormID() != 0x0000000F && !IsCoinLoot(obj) && !FitsCarryWeight(f, obj->GetWeight() * c.n)) break;
+                    // a plain stack with a stampable owner moves only on the stamp road: refused (logged once, by ListSeat) = it STAYS IN
+                    // THE CHEST, never moved unstamped. Copies with their own extra list are not affected.
+                    const bool plainStamp = !c.xl && c.owner && !c.owner->IsDynamicForm();
+                    if (plainStamp && !ListSeat().ok) { leftInChest = true; break; }
                     TheftGate::NoteAction(a_fid, TheftGate::Road::Steal, a_cid, "take (owned chest item)");
                     const char* how = "xOwn";
                     const std::int32_t before = CountIn(chest, obj);
@@ -482,38 +522,40 @@ namespace MFO::Logistics::Steal {
                         }
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, c.xl, f);
                         moved = before - CountIn(chest, obj);
-                    } else if (c.owner && !c.owner->IsDynamicForm() && StampSeatOk()) {
+                    } else if (plainStamp) {
                         // a plain stack arrives with NO owner (RemoveItem moves base + count only), which would launder the theft: remove it
-                        // and add what left the chest to the follower WITH an ExtraOwnership of its owner. The engine either ADOPTS the
-                        // new list (links it into his entry) or MERGES its count into an equivalent list he already holds and drops ours
-                        // unlinked and unfreed: then it is destroyed here (the engine's destructor + free), not leaked.
+                        // and add what left the chest to the follower WITH an ExtraOwnership of its owner, on a list built here.
+                        const ListSeatT& seat = ListSeat();   // ok: checked above
+                        auto* xl2 = NewList(seat);
+                        if (!xl2) { leftInChest = true; break; }
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                        moved = before - CountIn(chest, obj);
-                        if (moved > 0) {
+                        moved = std::min(before - CountIn(chest, obj), c.n);
+                        if (moved <= 0) {
+                            DestroyList(seat, xl2);   // never handed to the engine: still ours on every build
+                        } else {
                             std::vector<HeldList> held;
                             HeldLists(f, obj, held);
-                            auto* xl2 = new RE::ExtraDataList();
                             xl2->SetOwner(c.owner);
                             f->AddObjectToContainer(obj, xl2, moved, chest);
-                            switch (WhereListLanded(f, obj, xl2, held, moved)) {
-                                case Landed::Adopted: break;
-                                case Landed::Merged:
-                                    DestroyUnadoptedList(xl2);
-                                    spdlog::info("[steal] F={:08X} chest={:08X}: item {:08X}x{} merged into a stack he already held with that owner -- "
-                                                 "the new ownership list was not adopted and is destroyed (engine destructor + free)", a_fid, a_cid, obj->GetFormID(), moved);
-                                    break;
-                                case Landed::Unknown:   // never guessed: destroying a list something else holds is worse than one list not reclaimed
-                                    spdlog::error("[steal] F={:08X} chest={:08X}: item {:08X}x{}: the new ownership list is neither linked into his inventory nor "
-                                                  "merged into a stack he held (something moved the item during the add?) -- left alone, ONE ExtraDataList is not "
-                                                  "reclaimed", a_fid, a_cid, obj->GetFormID(), moved);
-                                    break;
+                            // From here xl2 is the engine's unless it MERGED it and this build leaves a merged list to the caller.
+                            const Landed landed = WhereListLanded(f, obj, xl2, held, moved);
+                            if (landed == Landed::Merged && seat.destroyMerged) {
+                                DestroyList(seat, xl2);
+                                spdlog::info("[steal] F={:08X} chest={:08X}: item {:08X}x{} merged into a stack he already held with that owner -- "
+                                             "the new ownership list was not adopted and is destroyed (engine destructor + free)", a_fid, a_cid, obj->GetFormID(), moved);
+                            } else if (landed == Landed::Merged) {
+                                spdlog::info("[steal] F={:08X} chest={:08X}: item {:08X}x{} merged into a stack he already held with that owner -- "
+                                             "on 1.5.97 the engine destroys the new ownership list itself (not touched here; it only keeps it, unfreed, while "
+                                             "BarterMenu is open)", a_fid, a_cid, obj->GetFormID(), moved);
+                            } else if (landed == Landed::Unknown) {   // never guessed: destroying a list something else holds is worse than one not reclaimed
+                                spdlog::error("[steal] F={:08X} chest={:08X}: item {:08X}x{}: the new ownership list is neither linked into his inventory nor "
+                                              "merged into a stack he held (something moved the item during the add?) -- left alone{}", a_fid, a_cid,
+                                              obj->GetFormID(), moved, seat.destroyMerged ? ", ONE ExtraDataList may not be reclaimed" : "");
                             }
                             how = "stamped";
                         }
                     } else {
-                        const bool stampable = c.owner && !c.owner->IsDynamicForm();
-                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} {} ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
-                                     stampable ? "cannot be stamped, the stamp road is refused on this runtime" : "has no stampable owner",
+                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} has no stampable owner ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
                                      c.owner ? c.owner->GetFormID() : 0u);
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, f);
                         moved = before - CountIn(chest, obj);
@@ -530,6 +572,7 @@ namespace MFO::Logistics::Steal {
                                  a_fid, a_cid, obj->GetFormID(), NameOf(obj), moved, how, c.owner ? c.owner->GetFormID() : 0u);
                 }
                 // copies that were not owned by someone else follow the normal theft-gate road (a plain RemoveItem if none is barred)
+                if (leftInChest) continue;
                 if (TheftGate::Takeable(f, chest, obj)) {
                     auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
                     if (auto it = inv.find(obj); it != inv.end() && it->second.first > 0)

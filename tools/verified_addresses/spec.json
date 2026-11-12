@@ -1036,8 +1036,23 @@
     "1.6.1170": "41 56 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 40 48 89 6C 24 48 48 89 74 24 50 48 89 7C 24 58 48 8B F1 48 8D 05 ?? ?? ?? ?? 48 89 01 8B 15 ?? ?? ?? ?? 65 48 8B 04 25 58 00 00 00 48 8B 2C D0",
     "1.5.97": "48 83 EC 38 48 C7 44 24 20 FE FF FF FF B2 01 E8 ?? ?? ?? ?? 90 48 83 C4 38 C3"
    },
-   "source": "native/logistics/Steal.cpp DestroyUnadoptedList (owned-chest steal road, main thread)",
-   "doc": "the engine's ExtraDataList destructor body, void(ExtraDataList* rcx), frees nothing of the object itself. 1.6.1170: id 11572 @0x1513D0 (ExtraDataList::~ExtraDataList id 11584 @0x151EE0 is a bare jmp to it): restores the vtable at +0x00, clears this thread's extra-lookup cache when it holds this list (TLS +0x18, memset 0x5B0 at +0x20), deletes every BSExtraData of the chain at +0x08 through its vtable slot 0 with edx=1, MemoryManager::Deallocate (68117) of the presence bitfield at +0x10. 1.5.97: id 11438 @0x1076D0 = mov dl,1 + call 11427 @0x106D60 (same cache clear, chain at +0x00 deleted the same way, Deallocate 66861 of the presence at +0x08). The engine frees a list as this destructor then its sized free (109588 -> 36098 / 102158 -> 11233 = MemoryManager::Deallocate(ptr, false), CommonLib RE::free): 41 such pairs with edx=0x20 on 1.6.1170, 34 with edx=0x18 on 1.5.97, one of them in Character::AddObjectToContainer itself (37525 @0x678FEE). 1.7.104: not in the id table, so no row and the stamp road is refused there (Steal.cpp StampSeatOk refuses before resolving the id)"
+   "source": "native/logistics/Steal.cpp ListSeat / DestroyList (owned-chest steal road, main thread)",
+   "doc": "the engine's ExtraDataList destructor body, void(ExtraDataList* rcx), frees nothing of the object itself. 1.6.1170: id 11572 @0x1513D0 (ExtraDataList::~ExtraDataList id 11584 @0x151EE0 is a bare jmp to it): restores the vtable at +0x00, clears this thread's extra-lookup cache when it holds this list (TLS +0x18, memset 0x5B0 at +0x20), deletes every BSExtraData of the chain at +0x08 through its vtable slot 0 with edx=1, MemoryManager::Deallocate (68117) of the presence bitfield at +0x10. 1.5.97: id 11438 @0x1076D0 = mov dl,1 + call 11427 @0x106D60 (same cache clear, chain at +0x00 deleted the same way, Deallocate 66861 of the presence at +0x08). The engine frees a list as this destructor then its sized free (109588 -> 36098 / 102158 -> 11233 = MemoryManager::Deallocate(ptr, false), CommonLib RE::free): 41 such pairs with edx=0x20 on 1.6.1170, 34 with edx=0x18 on 1.5.97. WHO FREES A LIST HANDED TO InventoryChanges' add WHEN IT MERGES: on 1.6.1170 (16053 @0x226A20) and 1.7.104 (@0x22C310, instruction-identical) nobody, the engine skips a caller-made list (cmp rsi,[rsp+0xF0] at 0x227189 / 0x22CA79), so Steal.cpp destroys it; on 1.5.97 (15815 @0x1D9E10) THE ENGINE destroys and frees the caller's list itself (0x1DA491: call 11438, mov edx,0x18, call 102158; skipped only while BarterMenu is open, 0x1DA46F), so Steal.cpp never touches it after the add there. On 1.5.97 this row is called only for a list that was built and never handed to the engine. 1.7.104: id 11572 is not in the id table; the raw row Steal.ExtraDataList.Destroy.1_7_104 carries it"
+  },
+  {
+   "seat": "Steal.ExtraDataList.Construct",
+   "kind": "function",
+   "construct": "REL::RelocationID(11437, 11583) (= the CommonLib fork's ExtraDataList::ExtraDataList, src/RE/E/ExtraDataList.cpp)",
+   "ids": {
+    "1.6.1170": 11583,
+    "1.5.97": 11437
+   },
+   "sig": {
+    "1.6.1170": "48 89 4C 24 08 53 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 8B D9 48 8D 05 ?? ?? ?? ?? 48 89 01 33 C0 48 89 41 08",
+    "1.5.97": "48 89 4C 24 08 53 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 8B D9 33 C0 48 89 01 48 89 41 08 48 83 C1 10"
+   },
+   "source": "native/logistics/Steal.cpp ListSeat / NewList (owned-chest steal road, main thread)",
+   "doc": "the engine's ExtraDataList constructor, ExtraDataList*(ExtraDataList* rcx), returns this. 1.6.1170 id 11583 @0x151E90 and 1.7.104 @0x157420 (same body): vtable at +0x00, zero +0x08 / +0x10, BSReadWriteLock ctor at +0x18. 1.5.97 id 11437 @0x107690: zero +0x00 / +0x08, lock ctor at +0x10. Steal.cpp allocates the engine's size for the exact build (layout fact 'ExtraDataList allocation size') with RE::malloc and calls this, instead of the fork's `new ExtraDataList()`, whose GetRuntimeSize is a named fatal error on 1.7.104"
   }
  ],
  "layout_facts": [
@@ -1166,6 +1181,13 @@
    "where": "cast/Summon.cpp SummonLimit / SummonOnMain",
    "verified_by": "disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C verified by ActiveEffect::Dispel (1.5.97 0x53E380 / 1.6.1170 0x5AC880: bts [+0x7C] bit 0x12 = kDispelled); kInactive bit 15 is the CommonLib declaration; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "cast paths: CastPathsVerified; main thread only; the skip-cap flag read is gated on the Actuation.SummonCap.* ripref rows"
+  },
+  {
+   "what": "ExtraDataList allocation size (the engine's own, per exact build) and who frees a caller's list that InventoryChanges' add merged",
+   "value": "0x20 / 0x18 / 0x20 (1.6.1170 / 1.5.97 / 1.7.104); merged caller list: left to the caller on 1.6.1170 and 1.7.104, destroyed and freed BY THE ENGINE on 1.5.97",
+   "where": "logistics/Steal.cpp ListSeat (size, destroyMerged)",
+   "verified_by": "size: the engine's own allocation before each constructor call (1.6.1170: lea edx,[r9+0x20] / lea edx,[rcx+0x20], the fork's GetRuntimeSize note; 1.5.97: 0x18 the same way; 1.7.104: 38 x lea edx,[r9+0x20] and 17 x mov ecx,0x20 before the 61 calls of 0x157420, and 40 destructor + sized-free pairs with edx=0x20). Merge rule: 1.6.1170 16053 @0x226A20 cmp rsi,[rsp+0xF0] at 0x227189 skips the free of a caller-made list; 1.7.104 @0x22C310 is instruction-identical for its first 600 instructions (guard at 0x22CA79); 1.5.97 15815 @0x1D9E10 has no guard: 0x1DA491 call 11438 + mov edx,0x18 + call 102158 on r14 = the caller's list (mov r14,r8 at 0x1D9E91), skipped only while BarterMenu is open (0x1DA46F, InterfaceStrings +0xF8)",
+   "gate": "ListSeat: exact 1.6.1170 / 1.5.97 / 1.7.104 + the Steal.ExtraDataList.* rows; main thread only"
   }
  ],
  "raw_rvas": [
@@ -1173,6 +1195,11 @@
    "seat": "PickupSound.Actor.PlayPickUpSound.1_7_104",
    "rva": "0x65FE90",
    "source": "native/logistics/PickupSound.cpp Install (1.7.104 only: Actor::PlayPickUpSound read from Character vtable slot 0xA3; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv)"
+  },
+  {
+   "seat": "Steal.ExtraDataList.Destroy.1_7_104",
+   "rva": "0x1513D0",
+   "source": "native/logistics/Steal.cpp ListSeat (1.7.104 only: the ExtraDataList destructor body at base + 0x156960; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv)"
   }
  ]
 }
