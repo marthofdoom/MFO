@@ -128,8 +128,8 @@ namespace Sim {
             bool hideOrFlee = false;
             if (sn.concealRoad && c.runPhase == 0 && !c.stanceHeld) {
                 const float hpPct = self.c.hpMax > 0.0f ? self.c.hp / self.c.hpMax : 1.0f;
-                const bool hide = c.gate.sneakClass && c.gate.disengage && Disengage::Found(sn);
-                const bool flee = !c.gate.sneakClass && c.gate.treeOn && c.gate.disengage && hpPct <= Disengage::kFleeHealthLine && Disengage::Threatened(sn);
+                const bool hide = !g_noG3 && c.gate.sneakClass && c.gate.disengage && Disengage::Found(sn);
+                const bool flee = !g_noG3 && !c.gate.sneakClass && c.gate.treeOn && c.gate.disengage && hpPct <= Disengage::kFleeHealthLine && Disengage::Threatened(sn);
                 if (hide || flee) sn.concealPoint = PreparePick(F, c, self, !hide);
                 hideOrFlee = hide || flee;
             }

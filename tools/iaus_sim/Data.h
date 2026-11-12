@@ -47,7 +47,10 @@ namespace Sim {
     };
     inline T2 g_t2;
     inline float g_aimMiss = 0.12f;       // --aim-miss: the lab's chance that an UNCORRECTED aimed shot misses a moving target (MODEL; TM::aimMiss before)
-    inline float g_dodgeFlight = 0.35f;   // MODEL: a side step clears a projectile only when it flies at least this long (0.2 s to react + 60 units at the run speed)
+    inline float g_dodgeFlight = 0.2f;    // MODEL: a side step clears a projectile only when it flies at least this long (a reaction time; --dodge-flight, sensitivity in section 31.4)
+    inline float g_aimScatter = 0.0f;     // --aim-scatter P: every UNCORRECTED follower shot also misses with this chance, moving target or not. The engine scatters by
+                                          // aimController+0xA0 x fCombatAimProjectileRandomOffset (class-m0-re.md); how often that misses is not measured, so the default is none
+    inline bool  g_noG3 = false;          // the disengage report's 'none' mode: card G3's hide run and flee are never asked for (every other road stands)
     inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships OFF; without it no Block candidate exists)
 
     // Actor values (CommonLib RE::ActorValue, the same numbers the records store).

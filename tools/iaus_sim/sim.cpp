@@ -7,6 +7,7 @@
 #include "iaus_sim/Results.h"
 #include "iaus_sim/Scenarios.h"
 #include "iaus_sim/Tune.h"
+#include "iaus_sim/StealLab.h"
 
 #include <atomic>
 #include <cstring>
@@ -99,7 +100,7 @@ namespace {
           m["step/f"] = double(s.steps) / n; m["stepOk%"] = pct(double(s.stepArrived), double(s.steps)); m["stepSeen%"] = pct(double(s.stepRevealed), double(s.steps)); m["averted/f"] = double(s.averted) / n; m["avertKept/f"] = double(s.avertKept) / n;
           m["raise/f"] = double(s.raises) / n; m["mixPowDeny/f"] = double(s.mixPowerDenied) / n; m["mixNormDeny/f"] = double(s.mixNormalDenied) / n; m["mixLift/f"] = double(s.mixFloorLifted) / n; m["leashTurn/f"] = double(s.leashTurns) / n; m["engPower/f"] = double(s.engPower) / n; m["feet%"] = 100.0 * s.feetSec / up;
           m["run/f"] = double(s.runsBegun) / n; m["runSafe%"] = pct(double(s.runsSafe), double(s.runsBegun)); m["runSafe.s"] = s.runsSafe ? s.runSafeSec / double(s.runsSafe) : -1; m["runLen.s"] = s.runsBegun ? s.runLenSec / double(s.runsBegun) : -1;
-          m["runDmg"] = s.runsBegun ? s.runDmg / double(s.runsBegun) : -1; m["runDmgLate"] = s.runsBegun ? s.runDmgAfter5 / double(s.runsBegun) : -1;   // health points he lost per G3 run (and after its 5th second)
+          m["runDmg%"] = s.runsBegun ? 100.0 * s.runDmg / double(s.runsBegun) : -1; m["runDmgLate%"] = s.runsBegun ? 100.0 * s.runDmgAfter5 / double(s.runsBegun) : -1;   // the share of his health he lost per G3 run (and after its 5th second)
           m["fleeHpGain%"] = s.flees ? 100.0 * s.fleeHpGain / double(s.flees) : -1; m["stealthMiss%"] = pct(double(s.stealthMiss), double(s.stealthTry)); m["runDown%"] = pct(double(s.runDowns), double(s.hides + s.flees)); m["run%"] = 100.0 * s.runSec / up; m["still%"] = 100.0 * s.holdSec / up;
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
@@ -174,7 +175,7 @@ namespace {
         if (!anyOn) o = "off";
         else { if (!g_t2.feet) o += "feet-stop,"; for (const T2Flag& f : kT2Flags) if (!(g_t2.*(f.m))) o += std::string(f.name) + "=off,"; if (!g_t2.c13built) o += "c13=lever,";
             if (o.empty()) o = "all"; else o.pop_back(); }
-        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (!g_fillSwing) o += "+no-fill-swing";
+        if (g_t2.dnd) o += "+dnd"; if (g_aimMiss != 0.12f) o += "+aim-miss"; if (g_aimScatter > 0.0f) o += "+aim-scatter"; if (g_dodgeFlight != 0.2f) o += "+dodge-flight"; if (!g_teach.empty()) o += "+teach"; if (!g_fillSwing) o += "+no-fill-swing";
         return o;
     }
     // Mean utility of IAUS (no oracle) over the scenarios and the natural bracket of every class: the search objective.
@@ -213,6 +214,50 @@ namespace {
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         double a = 0, b = 0; for (int i = 0; i < ns; ++i) a += u[static_cast<std::size_t>(i)]; for (int i = ns; i < ns + nb; ++i) b += u[static_cast<std::size_t>(i)];
         a /= std::max(1, ns); b /= std::max(1, nb); if (scenU) *scenU = a; if (natU) *natU = b; return ns ? 0.5 * (a + b) : b;   // a scope with no scenario is natural only (as ObjectiveClass), never half of it
+    }
+
+    // ── HOW USEFUL IS CARD G3 (marth 11-12; section 31.9) ─────────────────────────────────────────────────────────────────────
+    // The same fights three ways: no G3 run (--stealth hide), the run as built (g3), and the D&D variant (g3 + --disengage-dnd: he is
+    // no valid target for 6 s from the pick; NOT built in the game). Per class: its natural fights and its own scenarios, n of each
+    // per seed. A fight is "touched" when a run began in it under g3. Reported: J-style means, what the run costs and buys, and
+    // how many touched fights end differently (won / lost, or the number of times he went down).
+    struct DRow { double u = 0; bool won = false, lost = false; long downs = 0, runs = 0, safe = 0, runDowns = 0, flees = 0, fleeHealed = 0, fleeArrived = 0, fleeFail = 0, hides = 0, hideOk = 0; double runDmg = 0, safeSec = 0, runLen = 0, taken = 0, dur = 0, late = 0; };
+    int DisengageReport(const Data& D, const std::vector<SimClass>& classes, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
+        const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
+        const int keepStealth = g_stealth; const bool keepDnd = g_t2.dnd;
+        std::vector<int> cls; for (std::size_t i = 0; i < classes.size(); ++i) { const SimClass& c = classes[i];
+            if (only.empty() ? (c.gate.disengage && c.tier <= 2) : ("," + only + ",").find("," + c.name + ",") != std::string::npos) cls.push_back(static_cast<int>(i)); }
+        g_stealth = 3; const std::vector<Scenario> all = AllScenarios(true);
+        std::printf("DISENGAGE REPORT (card G3)  list=%s  seeds=%zu  n=%d natural fights + n of each own scenario per seed  t2=%s\n", D.name.c_str(), seeds.size(), n, T2Name().c_str());
+        std::printf("modes: none = g3 without the hide run and the flee, g3 = the run as built, dnd = g3 + --disengage-dnd (not a valid target for 6 s; NOT built)\n\n");
+        std::printf("%-10s %-5s %6s %6s %6s %7s %6s | %6s %7s %7s %8s %8s %7s %7s | %7s %7s %7s %7s\n", "class", "mode", "U", "win%", "dn/f", "tkn/s", "dur.s", "run/f", "len.s", "safe%", "safe.s", "runDmg%", "late%", "runDn%", "touch%", "dU.tch", "flip%", "dDn.tch");
+        for (int ci : cls) { const SimClass& sc = classes[static_cast<std::size_t>(ci)];
+            std::vector<int> mine; { Rng R; R.g.seed(1); for (std::size_t i = 0; i < all.size(); ++i) { if (all[i].parked && !g_parked) continue; FightSpec fs = all[i].make(D, classes, R); if (fs.cls->name == sc.name) mine.push_back(static_cast<int>(i)); } }
+            const int per = n * (1 + static_cast<int>(mine.size())), jobs = per * static_cast<int>(seeds.size());
+            std::vector<DRow> res[3]; for (auto& v : res) v.assign(static_cast<std::size_t>(jobs), DRow{});
+            for (int mode = 0; mode < 3; ++mode) {
+                g_noG3 = mode == 0; g_t2.dnd = mode == 2;   // 'none' keeps every other road of g3 (the back-off, the step): only the hide run and the flee are not asked for
+                std::atomic<int> next{ 0 };
+                auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const std::uint64_t seed = seeds[static_cast<std::size_t>(job / per)]; const int k = job % per, f = k % n, which = k / n; Rng R; Fight F;
+                    if (which == 0) { R.g.seed(seed * 1000003ULL + std::uint64_t(ci) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL); F = RandomFight(D, sc, 1 + f % 5, kBrackets[0], R, t1); }
+                    else { const int si = mine[static_cast<std::size_t>(which - 1)]; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919); FightSpec fs = all[static_cast<std::size_t>(si)].make(D, classes, R); fs.seed = R.g(); fs.rank = 1 + f % 5; F = BuildFight(D, fs, t1); }
+                    F.estimates = estimates; F.scrollRoad = scrollRoad; RunMode(F);
+                    DRow& r = res[mode][static_cast<std::size_t>(job)]; const Tally& t = F.t; r.u = Utility(F); r.won = t.won; r.lost = t.lost; r.downs = t.downs; r.runs = t.runsBegun; r.safe = t.runsSafe; r.runDowns = t.runDowns; r.runDmg = t.runDmg; r.late = t.runDmgAfter5; r.safeSec = t.runSafeSec; r.runLen = t.runLenSec;
+                    r.taken = t.dmgTaken; r.dur = t.dur; r.flees = t.flees; r.fleeHealed = t.fleeHealed; r.fleeArrived = t.fleeArrived; r.fleeFail = t.fleeFail; r.hides = t.hides; r.hideOk = t.hideOk; } };
+                std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join();
+            }
+            static const char* mn[3] = { "none", "g3", "dnd" };
+            for (int mode = 0; mode < 3; ++mode) { DRow a; long wins = 0, touched = 0, flips = 0; double dU = 0, dDn = 0;
+                for (int j = 0; j < jobs; ++j) { const DRow& r = res[mode][static_cast<std::size_t>(j)]; const DRow& base = res[0][static_cast<std::size_t>(j)];
+                    a.u += r.u; wins += r.won; a.downs += r.downs; a.runs += r.runs; a.safe += r.safe; a.runDowns += r.runDowns; a.runDmg += r.runDmg; a.late += r.late; a.safeSec += r.safeSec; a.runLen += r.runLen; a.taken += r.taken; a.dur += r.dur;
+                    if (mode > 0 && r.runs > 0) { ++touched; dU += r.u - base.u; dDn += static_cast<double>(r.downs - base.downs); if (r.won != base.won || r.lost != base.lost || r.downs != base.downs) ++flips; } }
+                const double nj = jobs, nr = std::max<double>(1, double(a.runs));
+                std::printf("%-10s %-5s %6.2f %6.1f %6.2f %7.2f %6.1f | %6.2f %7.2f %7.1f %8.2f %8.1f %7.1f %7.1f |", sc.name.c_str(), mn[mode], a.u / nj, 100.0 * double(wins) / nj, double(a.downs) / nj, a.taken / std::max(1e-9, a.dur), a.dur / nj,
+                            double(a.runs) / nj, a.runs ? a.runLen / nr : -1.0, a.runs ? 100.0 * double(a.safe) / nr : -1.0, a.safe ? a.safeSec / double(a.safe) : -1.0, a.runs ? 100.0 * a.runDmg / nr : -1.0, a.runs ? 100.0 * a.late / nr : -1.0, a.runs ? 100.0 * double(a.runDowns) / nr : -1.0);
+                if (mode > 0) std::printf(" %7.1f %+7.2f %7.1f %+7.2f\n", 100.0 * double(touched) / nj, touched ? dU / double(touched) : 0.0, touched ? 100.0 * double(flips) / double(touched) : 0.0, touched ? dDn / double(touched) : 0.0); else std::printf("\n"); }
+        }
+        std::printf("\ncolumns: run/f runs begun per fight; len.s mean run length; safe%% runs after which no foe stood within 400 units inside 20 s (he still up); safe.s the mean time to that; runDmg%% the share of his health lost on the run; late%% of it after the run's 5th second; runDn%% runs he went down on;\n         touch%% fights with a run; dU.tch mean utility change of those fights against 'none'; flip%% touched fights whose result or down count differs; dDn.tch mean change of his downs in them\n");
+        g_stealth = keepStealth; g_t2.dnd = keepDnd; g_noG3 = false; return 0;
     }
 
     std::vector<std::uint64_t> g_seeds;   // --seeds a,b,c: the objective is the mean over these seeds (empty = the single --seed)
@@ -355,6 +400,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--c13") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "built")) g_t2.c13built = true; else if (!std::strcmp(v, "lever")) g_t2.c13built = false; else { std::fprintf(stderr, "--c13 built|lever\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--disengage-dnd")) g_t2.dnd = true;               // marth 11-12: a disengage drops him as a valid target for 6 s (NOT built in the game)
         else if (!std::strcmp(argv[i], "--aim-miss") && i + 1 < argc) g_aimMiss = static_cast<float>(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--aim-scatter") && i + 1 < argc) g_aimScatter = static_cast<float>(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--dodge-flight") && i + 1 < argc) g_dodgeFlight = static_cast<float>(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--no-fill-swing")) g_fillSwing = false;           // [Debug] bIausFillSwing OFF (the shipped default): no Block candidate
         else if (!std::strcmp(argv[i], "--teach") && i + 1 < argc) g_teach.push_back(argv[++i]);
@@ -439,6 +485,8 @@ int main(int argc, char** argv) {
         if (!g_optClass.empty() && !known(g_optClass)) bad.push_back(g_optClass);
         if (!bad.empty()) { std::fprintf(stderr, "unknown class slug(s):"); for (const std::string& b : bad) std::fprintf(stderr, " %s", b.c_str()); std::fprintf(stderr, "  (see --print-classes)\n"); return 2; } }
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
+    if (stealLab > 0) return RunStealLab(D, allClasses, stealLab, seed);
+    if (disengageReport > 0) return DisengageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, disengageReport, threads, estimates, scrollRoad);
     if (optRows) return OptimiseRows(D, allClasses, seed, optFights > 0 ? optFights : fights, threads, rowCap, rowEvals);
     if (optPrefix) return OptimisePrefix(D, allClasses, seed, optFights > 0 ? optFights : fights, threads);
     if (g_optClass.empty() && !only.empty()) g_objScope = only;   // --classes scopes the headline J and the objective (--opt-class wins)
@@ -467,8 +515,8 @@ int main(int argc, char** argv) {
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
     if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
     std::printf("IAUS SIM v2  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s  mode=%s\n", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default", g_tableMode ? "table" : "iaus");
-    std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d\n",
-                D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown);
+    std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d unweighted=%d  kept for table rows: reanimate=%d\n",
+                D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown, D.dropUnweighted, D.keptReanim);
     const Rules& r = D.rules;
     std::printf("rules: dmgSkill %.2f..%.2f  armor %.3f/pt max %.0f%% +%.1f%%/piece  armorSkill %.2f..%.2f  power x%.2f  regen(combat) mp %.2f sp %.2f  cost(base %.4f mult %.2f scale %.2f)  hp/level %.1f  toPC x%.2f byPC x%.2f\n",
                 r.dmgSkillMin, r.dmgSkillMax, r.armorScale, r.armorMax, r.armorBasePiece * 100, r.armorSkillLo, r.armorSkillHi, 1 + r.powBonus, r.combatMp, r.combatSp, r.costBase, r.costMult, r.costScale, r.hpPerLevel, r.diffToPC, r.diffByPC);

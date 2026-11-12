@@ -457,7 +457,7 @@ namespace Sim {
             if (x.role == Role::Player) t.playerDmgTaken += dealt;
             if (x.Party()) t.partyDmgTaken += dealt;
             if (x.ctl == 0) { t.dmgTaken += dealt; if (now < x.retreatUntil) t.kiteDmgTaken += dealt;
-                const Ctl& c0 = ctl[0]; if (c0.runPhase >= 1 && c0.runPhase <= 3) { t.runDmg += dealt; if (now - c0.runStart > 5.0) t.runDmgAfter5 += dealt; } }   // section 31.9: what a G3 run costs him
+                const Ctl& c0 = ctl[0]; if (c0.runPhase >= 1 && c0.runPhase <= 3) { const double fr = static_cast<double>(dealt / std::max(1.0f, x.c.hpMax)); t.runDmg += fr; if (now - c0.runStart > 5.0) t.runDmgAfter5 += fr; } }   // section 31.9: what a G3 run costs him
             if (x.c.hp <= 0) {
                 if (x.Party() && x.role != Role::Summon && !ctl.empty()) {   // could the subject have healed him?
                     const Ctl& c0 = ctl[0]; const Body& s0 = b[static_cast<std::size_t>(c0.body)];
@@ -658,11 +658,11 @@ namespace Sim {
         }
         // DODGE (Q-melee-7, MFO-B806). FACT (research in Harbinger Docs, batch M): the engine's side step (CombatBehaviorDodgeThreat) rolls
         // against the combat style's Avoid Threat chance, and since Harbinger v45 a CLASS style reaches the engine in full (Q-melee-6).
-        // MODEL: one roll per projectile launched at him, only for a follower with a class package, only when his body is free and the
+        // MODEL: one roll per projectile launched at him, only for a follower with a class package, only when no blow of his own is committed and the
         // projectile flies at least g_dodgeFlight seconds; a rolled step clears a NON-area projectile and costs him 0.4 s. A blast is not stepped out of.
         void TryDodge(Shot& sh, double flight, bool area) {
             if (!g_t2.dodge || area) return;
-            Body* d = Find(sh.tgt); if (!d || d->ctl < 0 || !Up(*d) || Busy(*d)) return;
+            Body* d = Find(sh.tgt); if (!d || d->ctl < 0 || !Up(*d) || d->hitAt >= 0 || now < d->staggerUntil || now < d->ctrlUntil || d->act == Act::Block) return;   // MODEL: not while his own blow, shot or cast is committed, staggered, held, or behind his guard
             Ctl& c = ctl[static_cast<std::size_t>(d->ctl)]; if (!c.pkgClass || c.runPhase == 1 || c.runPhase == 2 || c.runPhase == 5) return;
             const float p = StyleOf(*d).avoidThreat; if (!(p > 0.0f) || flight < static_cast<double>(g_dodgeFlight)) return;
             if (d->ctl == 0) ++t.dodgeTries;
@@ -799,6 +799,7 @@ namespace Sim {
                 if (sh.dodged) { aimNote(true); return; }
                 const float moved = std::hypot(d->c.x - sh.x, d->c.y - sh.y);
                 if (!Sees(*a, *d) || (moved > 40.0f && !sh.corrected && R.P(a->ctl >= 0 ? g_aimMiss : TM::aimMiss))) { aimNote(true); return; }
+                if (g_aimScatter > 0.0f && a->ctl >= 0 && !sh.corrected && R.P(g_aimScatter)) { aimNote(true); return; }   // --aim-scatter: the engine's own random offset as a flat miss chance (MODEL, default none)
                 aimNote(false);
                 if (a->ctl == 0) ++t.arrowsHit;
                 Physical(*a, *d, sh.dmg, false, true, sh.fromIaus); return;
