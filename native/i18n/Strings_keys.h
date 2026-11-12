@@ -337,6 +337,7 @@ MFO_STR(Act_EquipSilver, "Switch to silver weapon", 0)   // puts the follower's 
 MFO_STR(Act_Taunt, "Taunt", 0)   // plays a taunt animation, then nearby foes roll to turn on this follower for a while. Only offered with a melee weapon in the right hand
 MFO_STR(Act_PowerAttack, "Power attack", 0)
 MFO_STR(Act_Flee, "Flee to player", 0)
+MFO_STR(Act_Block, "Block", 0)   // the follower holds his guard up for a few seconds. Needs a shield, or a melee weapon with a free left hand
 MFO_STR(Act_Sneak, "Sneak", 0)   // the follower crouches into sneak and stays in it while this rule holds
 MFO_STR(Act_LootArrows, "Loot arrows", 0)
 MFO_STR(Act_LootBolts, "Loot bolts", 0)

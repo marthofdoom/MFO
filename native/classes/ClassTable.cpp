@@ -100,8 +100,11 @@ namespace MFO::Classes {
             NotApplied(G(Vocab::kCondFoeAny, Vocab::kActCastTarget, 0.0f, SpellRole::Attack, kSelf)) };
 
         // T2
+        // Block (T2 batch M, Harbinger ch.31 held guard): "blocks a lot". A 2.5 s guard ([Evaluator] fBlockHoldSeconds)
+        // when a foe swings at him in melee, 4 s from one raise to the next (Q-melee-1).
         constexpr DefaultGambit kKnightG[] = {
             G(Vocab::kCondFoeAttackingAlly, Vocab::kActTaunt),
+            G(Vocab::kCondFoeAttackingMeMelee, Vocab::kActBlock, 0.0f, SpellRole::None, kSelf, 4.0f),
             G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack),
             G(Vocab::kCondSelfHpBelow, Vocab::kActDrinkHealthPotion, 0.35f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
@@ -164,6 +167,7 @@ namespace MFO::Classes {
         constexpr DefaultGambit kGreatKnightG[] = {   // Knight's set + taunt at 3+ foes
             G(Vocab::kCondFoeAttackingAlly, Vocab::kActTaunt),
             G(Vocab::kCondFoeCountAtLeast, Vocab::kActTaunt, 3.0f),
+            G(Vocab::kCondFoeAttackingMeMelee, Vocab::kActBlock, 0.0f, SpellRole::None, kSelf, 4.0f),
             G(Vocab::kCondFoeAttackingPlayer, Vocab::kActAttack),
             G(Vocab::kCondSelfHpBelow, Vocab::kActDrinkHealthPotion, 0.35f),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
@@ -279,9 +283,10 @@ namespace MFO::Classes {
             Ctl(Vocab::kCondFoeCountAtLeast, Vocab::kActCastTarget, 3.0f, SpellRole::Fear),
             Todo(Vocab::kCondAlways, kTodoSteal, "G13"),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };
-        constexpr DefaultGambit kEbonyWarriorG[] = {
+        constexpr DefaultGambit kEbonyWarriorG[] = {   // Knight line (marth 2026-11-12, Q-melee-2): carries the Block row too
             G(Vocab::kCondFoeAttackingAlly, Vocab::kActTaunt),
             G(Vocab::kCondFoeCountAtLeast, Vocab::kActTaunt, 2.0f),
+            G(Vocab::kCondFoeAttackingMeMelee, Vocab::kActBlock, 0.0f, SpellRole::None, kSelf, 4.0f),
             G(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, 0.40f, SpellRole::Heal),
             G(Vocab::kCondAllyHpBelow, Vocab::kActCastTarget, 0.70f, SpellRole::Heal),
             G(Vocab::kCondFoeAny, Vocab::kActEquipMelee) };

@@ -50,6 +50,11 @@ namespace MFO::Cooldowns {
         return left > 0.0f ? left : 0.0f;
     }
 
+    void Forget(RE::FormID a_actor, Kind a_kind, std::uint64_t a_id) {
+        std::scoped_lock lk(g_mx);
+        g_lastFired.erase(Key{ a_actor, a_kind, a_id });
+    }
+
     void ClearAll() {
         std::scoped_lock lk(g_mx);
         g_lastFired.clear();

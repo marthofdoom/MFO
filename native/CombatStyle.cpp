@@ -290,6 +290,27 @@ namespace MFO::CombatStyle {
                          "equipment claim made, so its t2a denies spell/staff re-arms (client mode)", id, weap);
     }
 
+    void SnapshotStyleDesires(std::vector<StyleDesire>& a_out) {
+        if (g_count.load(std::memory_order_relaxed) == 0) return;
+        std::lock_guard<std::mutex> lk(g_mx);
+        a_out.reserve(a_out.size() + g_owned.size());
+        for (const auto& [fid, o] : g_owned) {
+            StyleDesire d{};
+            d.follower = fid;
+            if (o.stance != Stance::None) {
+                // The same pick ApplyTick makes: the stance must have its MFO style (a missing form disables the stance),
+                // and the equipped class's own CSTY replaces it.
+                if (RE::TESCombatStyle* base = StyleFor(o.stance, o.stance == Stance::Melee && o.dual)) {
+                    d.tableStyle = (o.classStyle ? o.classStyle : base)->GetFormID();
+                    d.tableWide  = o.classStyle != nullptr;
+                }
+            }
+            if (o.substrateCast)
+                if (RE::TESCombatStyle* cast = StyleFor(Stance::Cast, false)) d.substrateStyle = cast->GetFormID();
+            if (d.tableStyle != 0 || d.substrateStyle != 0) a_out.push_back(d);
+        }
+    }
+
     void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc, bool a_substrateOnly) {
         if (!a_actor || !a_cc) return;
 
@@ -300,6 +321,12 @@ namespace MFO::CombatStyle {
         // dev running that experiment wants the probe's style, not ours. In the
         // shipping default (probe off) this branch is never taken.
         if (Config::g_probeCastStyle.load(std::memory_order_relaxed)) return;
+
+        // T2 batch M item 5: with a Harbinger that serves the combat-style facet (ch.33, ABI v45) MFO writes NOTHING
+        // here. The desire Want / WantSubstrateCast recorded is filed as a claim by apmf/StyleClaims.cpp's sweep and
+        // Harbinger answers it at the engine's own read of the style. Everything below is the Harbinger-absent degrade.
+        // (No restore can be pending on this road: ClearSubstrateCast arms one only after a write made here.)
+        if (APMFBridge::StyleRoadSupported()) return;
 
         const auto fid = a_actor->GetFormID();
 
