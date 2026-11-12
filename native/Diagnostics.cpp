@@ -25,6 +25,7 @@
 #include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
 #include "logistics/Errand.h"   // town errands: the owner-independent Sweep
 #include "CrimeProbe.h"   // [crime-probe]: passive bounty probe pulse
+#include "Concealment.h"  // card G3: the blow-from-stealth hit sink registration
 #include "iaus/Fills.h"   // [iaus-fill]: the passive hit sink registration
 #include "StealthProbe.h"   // [stealth-probe]: the passive hit sink registration (bStealthProbe)
 
@@ -1358,6 +1359,7 @@ namespace MFO::Diagnostics {
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
             CrimeProbe::RegisterHitSink();   // [crime-probe] passive friendly-hit sink, inert while bCrimeGoldProbe = 0
             Iaus::Fills::RegisterHitSink();  // [iaus-fill] passive hit sink (estimate against reality), inert while bIausFillProbe = 0
+            Concealment::RegisterHitSink();  // card G3: the blow from stealth resolves on his hit (reads only a held, armed stance)
             StealthProbe::RegisterHitSink(); // [stealth-probe] passive hit sink (G2 P3), inert while bStealthProbe = 0
             if (auto* ui = RE::UI::GetSingleton())
                 ui->AddEventSink<RE::MenuOpenCloseEvent>(MenuSink::GetSingleton());

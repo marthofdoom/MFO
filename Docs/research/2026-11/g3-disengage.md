@@ -134,7 +134,16 @@ edits in `Sightline.{h,cpp}` (PointSeenNow), `apmf/APMFBridge.h`, `apmf/Bridge.c
   failure. Need terms: hide = share of counted foes that found him, flee = RetreatDanger (low health) plus a foe on him.
   The 25 s hard cooldown counts from the end.
 - **MB3.** Class tree OFF: no hide run (`ClassGate::sneakClass` is false then) and no flee (the generator requires `treeOn`).
-- **MB5.** The stance claim is held for the hide from arrival (or from "hidden") through G2's hold, released on the blow, on a
+- **MB5.** The stance claim is held for the hide from arrival (or from "hidden") through G2's hold AND through the blow from
+  stealth itself (review P1-G3 of 938f45f: the engine reads "the attacker is sneaking" when the hit lands, so a release at the
+  pick stood him up before the hit and lost the multiplier every time). The pick only ARMS the blow (`Concealment::NoteBlow`).
+  `Concealment::Service` releases the stance when the blow RESOLVES: his first hit on an actor (a `TESHitEvent` sink, cause =
+  him; the log line prints the event's sneak attack flag), or his attack state / own cast seen live after the pick and then
+  back to none (a shot or a cast waits `kBlowFlightMs` 1.5 s more for the projectile), or `kBlowCapMs` (6 s, counted from the
+  lap the swing was FIRST SEEN live, never from the pick: a ceiling on one engine action, not an expiry of the hold). Before
+  the swing starts the hold is what it was (reveal road intact); while a swing is live the reveal road is not read. NOT
+  VERIFIED: whether a projectile's sneak multiplier is fixed at launch or read at impact (the flight tail covers both).
+  Otherwise released on a
   reveal, at combat end, dismissal, death, stand-down and load. API: `APMFBridge::HoldSneakForHide` / `ReleaseSneakHide`.
 - **Review fixes (1f59152).** `RequestDisengage` releases the offense approach and the give-ground step and `Begin` consumes the
   pick only after Harbinger accepted; the dead/disabled early return in `CombatScan` releases the run and the hold.
