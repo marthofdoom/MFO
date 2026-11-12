@@ -13,6 +13,7 @@
 
 #include "Board_internal.h"
 #include "classes/Classes.h"
+#include "iaus/SpellBook.h"   // CastingClass: the Teach Spells page is for casting classes
 
 namespace MFO::Board {
 
@@ -248,6 +249,14 @@ namespace MFO::Board {
         ImGui::EndDisabled();
         if (hasClass && !canReset && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", Str::Get(!canAct ? Str::K::Cl_TipReadOnly : Str::K::Cl_TipResetNone));
+        // TEACH SPELLS page (batch I item 7, marth 11-12): for a follower whose class casts (the mage line and the hybrids,
+        // Iaus::SpellBook::CastingClass). The IAUS reads the book, not the gambit table, so the table's spell cell (and its
+        // teach entry) is not where he learns now. Does not touch the class save, so it works on a read-only one too.
+        const bool teachPage = eq && Iaus::SpellBook::CastingClass(*eq);
+        if (teachPage) {
+            ImGui::SameLine();
+            if (Click::Button(Str::Label(Str::K::Cl_TeachBtn, "clsteach"))) ImGui::OpenPopup("##clsteach");
+        }
 
         ImGuiIO& io = ImGui::GetIO();
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -274,6 +283,62 @@ namespace MFO::Board {
             if (Click::Selectable(Str::Label(Str::K::Cl_ResetNo, "clsresetno"))) ImGui::CloseCurrentPopup();
             ImGui::SetItemDefaultFocus();   // land on Cancel, not the danger row
             ImGui::EndPopup();
+        }
+        if (teachPage) {
+            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2((std::max)(380.0f, io.DisplaySize.x * 0.30f), io.DisplaySize.y * 0.55f), ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("##clsteach")) {
+                a_pickerDrawn = true;
+                static RE::FormID s_teachArmed = 0;
+                if (ImGui::IsWindowAppearing()) s_teachArmed = 0;   // never open pre-armed
+                ImGui::PushFont(g_fontHead);
+                ImGui::PushStyleColor(ImGuiCol_Text, a_skin.accent);
+                ImGui::TextUnformatted(Str::Get(Str::K::Cl_TeachTitle));
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360.0f);
+                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Cl_TeachNote, { who->name, std::string(eq->name) }).c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::Separator();
+                int listed = 0;
+                for (const auto& t : who->teachableSpells) {
+                    if (!t.iausWeighed) continue;   // an unweighted spell is not listed (marth 11-12)
+                    ++listed;
+                    const bool armed = (s_teachArmed == t.book);
+                    if (armed) ImGui::PushStyleColor(ImGuiCol_Text, a_skin.danger);
+                    const std::string lbl = armed ? Str::Fmt(Str::K::Gb_TeachArmed, { t.name })
+                                                  : Str::Fmt(Str::K::Gb_Spellbook, { t.name });
+                    ImGui::PushID(static_cast<int>(t.book));   // duplicate names -> unique ids
+                    if (Click::Selectable(lbl.c_str(), false, ImGuiSelectableFlags_DontClosePopups)) {
+                        if (armed) {
+                            // uid 0 / table 0: a per-follower teach with no gambit row (Board.cpp ApplyEdits TeachSpellNow)
+                            EditCmd e{ EditKind::TeachSpell, fid, 0, 0u, 0.0f };
+                            e.spell = t.spell; e.book = t.book;
+                            QueueEdit(e);
+                            s_teachArmed = 0;
+                        } else {
+                            s_teachArmed = t.book;   // arm: show the warning first
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {   // the precomputed values, no actor read on the render thread (#4)
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted(Str::Fmt(Str::K::Gb_MagickaCost, { t.magickaCost }).c_str());
+                        if (!t.tooltip.empty()) {
+                            ImGui::Separator();
+                            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
+                            ImGui::TextUnformatted(t.tooltip.c_str());
+                            ImGui::PopTextWrapPos();
+                        }
+                        ImGui::EndTooltip();
+                    }
+                    ImGui::PopID();
+                    if (armed) ImGui::PopStyleColor();
+                }
+                if (listed == 0) ImGui::TextDisabled("%s", Str::Fmt(Str::K::Cl_TeachNone, { who->name }).c_str());
+                ImGui::Separator();
+                if (Click::Selectable(Str::Label(Str::K::Cl_TeachClose, "clsteachclose"))) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
         }
         ImGui::Separator();
 

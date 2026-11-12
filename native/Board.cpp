@@ -42,6 +42,7 @@
 #include "Vocabulary.h"
 #include "Taunt.h"   // MeleeInRightHand: act.taunt is offered only with a melee weapon in the right hand
 #include "Scheduler.h"
+#include "iaus/SpellBook.h"   // batch I item 7: WouldWeigh filters the Classes tab's Teach Spells page
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the focus-fire sink
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -1286,6 +1287,33 @@ namespace MFO::Board {
                     if (g.uid == 0) g.uid = NextRuleUID();
     }
 
+    namespace {
+        // #4: teach the spell (AddSpell) and CONSUME one spellbook from the player. Runs where every board edit runs -- the same
+        // task the evaluator drains, so RemoveItem is the blessed worker-safe inventory path (§0.32) and AddSpell is the same
+        // mutation class as the equips already issued here. GUARD against a stale snapshot: teach ONLY if the follower still lacks
+        // the spell AND the player still carries the book, so a double-queued edit never eats a second book or grants a free spell
+        // after the book was consumed/sold. Returns true when the follower KNOWS the spell afterwards (taught now, or already
+        // known: then no book is consumed); false = book gone AND spell unknown (the caller sets nothing).
+        // Shared by the gambit picker (a row) and the Classes tab's Teach Spells page (batch I item 7, no row).
+        bool TeachSpellNow(const EditCmd& c) {
+            auto* follower = c.fid ? RE::TESForm::LookupByID<RE::Actor>(c.fid) : nullptr;
+            auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
+            auto* book     = c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(c.book) : nullptr;
+            auto* pc       = RE::PlayerCharacter::GetSingleton();
+            bool hasBook = false;
+            if (pc && book)
+                for (auto& [o, d] : pc->GetInventory())
+                    if (o == book && d.first > 0) { hasBook = true; break; }
+            if (!follower || !spell) return false;
+            if (follower->HasSpell(spell)) return true;   // already learned (a prior edit taught it): never consume a second book
+            if (!hasBook) return false;
+            follower->AddSpell(spell);
+            pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+            spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}", c.fid, c.spell, c.book);
+            return true;
+        }
+    }
+
     void ApplyEdits() {
         std::vector<EditCmd> todo;
         { std::scoped_lock lk(g_editMx); todo.swap(g_edits); }
@@ -1446,6 +1474,13 @@ namespace MFO::Board {
                 continue;
             }
 
+            // batch I item 7: the Classes tab's Teach Spells page. A per-FOLLOWER teach with no gambit row (uid 0): the same
+            // guarded AddSpell + book consume as the picker's TeachSpell below, and nothing is assigned to a rule.
+            if (c.kind == EditKind::TeachSpell && c.uid == 0) {
+                TeachSpellNow(c);
+                continue;
+            }
+
             // Resolve by IDENTITY, not index (#31). A command whose rule is
             // gone -- deleted, reseeded -- is dropped, never misapplied.
             int i = -1;
@@ -1478,37 +1513,8 @@ namespace MFO::Board {
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             case EditKind::TeachSpell: {
-                // #4: teach the spell (AddSpell) and CONSUME one spellbook from
-                // the player, then set it as the gambit's spell. Runs where every
-                // board edit runs -- the same task the evaluator drains, so
-                // RemoveItem is the blessed worker-safe inventory path (§0.32) and
-                // AddSpell is the same mutation class as the equips already issued
-                // here. GUARD against a stale snapshot: teach ONLY if the follower
-                // still lacks the spell AND the player still carries the book, so
-                // a double-queued edit never eats a second book or grants a free
-                // spell after the book was consumed/sold.
-                auto* follower = c.fid ? RE::TESForm::LookupByID<RE::Actor>(c.fid) : nullptr;
-                auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
-                auto* book     = c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(c.book) : nullptr;
-                auto* pc       = RE::PlayerCharacter::GetSingleton();
-                bool hasBook = false;
-                if (pc && book)
-                    for (auto& [o, d] : pc->GetInventory())
-                        if (o == book && d.first > 0) { hasBook = true; break; }
-                if (follower && spell) {
-                    if (follower->HasSpell(spell)) {
-                        // already learned (a prior edit taught it) -> just assign,
-                        // never consume a second book.
-                        tab[i].actionParamForm = c.spell;
-                    } else if (hasBook) {
-                        follower->AddSpell(spell);
-                        pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                        spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}",
-                                     c.fid, c.spell, c.book);
-                        tab[i].actionParamForm = c.spell;
-                    }
-                    // else: book gone AND spell unknown -> do NOT set an uncastable spell.
-                }
+                // #4: teach the spell and CONSUME one spellbook (TeachSpellNow), then set it as the gambit's spell.
+                if (TeachSpellNow(c)) tab[i].actionParamForm = c.spell;
                 break;
             }
             case EditKind::SetCond: {
@@ -1819,6 +1825,7 @@ namespace MFO::Board {
                 // (a snapshot); the actual AddSpell + book consume runs in
                 // ApplyEdits on the main thread.
                 if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc) {
+                    const MFO::Iaus::ClassGate teachGate = MFO::Iaus::SpellBook::GateFor(a->GetFormID());   // once per row, not per tome
                     for (auto& [obj, data] : pc->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
@@ -1832,6 +1839,7 @@ namespace MFO::Board {
                                                   static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
                                                   Progression::SpellEffectsText(sp) };
                         t.school = SpellSchoolRank(sp, &t.effectKey);
+                        t.iausWeighed = MFO::Iaus::SpellBook::WouldWeigh(sp, teachGate);
                         r.teachableSpells.push_back(std::move(t));
                     }
                     std::stable_sort(r.teachableSpells.begin(), r.teachableSpells.end(),
