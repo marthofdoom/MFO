@@ -3176,3 +3176,15 @@ When the main-thread pump is not installed (VR) `GuardCheck` runs `ScanGuards` o
 
 ### MFO-B796 (SEV-5, OPEN, logistics/TheftGate.cpp g_guard / g_rings / g_logAt, against 41ab1ec, same review, finding F8)
 None of the gate's three maps is cleared on a revert/load (FormID keys of the old session; the guard cache ages out in 2 s, the ring and log-throttle maps are bounded but stale). Fix shape: a `TheftGate::ClearTransientState()` called from `Logistics::ClearTransientState`.
+
+### MFO-B810 (SEV-4, OPEN, logistics/Steal.cpp Evaluate, against batch-l, author note for the Opus review)
+The witness scan walks `ProcessLists::highActorHandles` on the main thread and calls `SenseOf` twice per NPC in range (follower, player). Harbinger caps synchronous sight rays at 8 pairs per frame; the rest come back deferred and the verdict is Pending until a later frame reuses the stored measurement. In a crowded town a steal can stay Pending for several 400 ms rounds. Fail-closed by design; the cost is latency, not safety. Fix shape: a per-follower witness-set cache refreshed by distance.
+
+### MFO-B811 (SEV-5, OPEN, logistics/Steal.cpp IsAnimal, author note)
+Wildlife is excluded by the race keyword `ActorTypeAnimal`; a creature race without it (some modded beasts) counts as a witness. Errs toward refusing.
+
+### MFO-B812 (SEV-5, OPEN, logistics/EquipAuthority.cpp CarriesOnClass, author note)
+`CarriesOnClass` is cached 1 s per follower; a weapon picked up or dropped inside that window is judged one second late. The deny list re-sends on change, so it converges. Also the cache and `OffClassTick`'s held map are not cleared on revert/load (FormID keys).
+
+### MFO-B813 (SEV-5, OPEN, logistics/Steal.cpp, author note)
+The steal arrival pre-check is per loose ref; the scan only applies the source bars. A follower may walk toward an item in a crowd and be refused at arrival (the leg is then transient-blocklisted 25 s). A scan-time witness read per candidate would stop the walk but multiplies SenseOf calls.
