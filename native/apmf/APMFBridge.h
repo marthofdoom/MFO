@@ -2137,5 +2137,16 @@ namespace MFO::APMFBridge {
         std::uint32_t windowFill = 0, windowMisses = 0, uncorrectable = 0, wouldCorrect = 0, rankStood = 0;
     };
     DevAimInfo DevReadAim(RE::FormID a_follower);
+
+    // DEV BUILDS ONLY (native/selftest/TestsT2.cpp): the T2 self-tests' read-only windows onto the Harbinger roads. Any thread; no state is changed.
+    //   DevAbi: the resolved Harbinger's abiVersion (0 = absent).
+    //   DevReadAversion (apmf/AversionClaims.cpp): the follower's standing ch.32 claim (weight 0 = none filed, live = Harbinger says it stands) and
+    //     whether the seats were refused this session.
+    //   DevCanServeIntent: one ABI v35 CanServe dry run of RequestEx(a_actor, a_intent, param.fval = a_fval): files nothing. api = ABI >= 35.
+    struct DevAversionInfo { bool api = false; float weight = 0.0f; bool live = false; bool seatRefused = false; };
+    struct DevServeInfo { bool api = false; std::uint32_t verdict = 0, refusal = 0; std::string why; };
+    std::uint32_t    DevAbi();
+    DevAversionInfo  DevReadAversion(RE::FormID a_follower);
+    DevServeInfo     DevCanServeIntent(RE::FormID a_actor, std::uint32_t a_intent, float a_fval);
 #endif
 }

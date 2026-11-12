@@ -207,6 +207,7 @@ if(MFO_DEV_SELFTEST)
         selftest/Record.cpp
         selftest/Tests.cpp
         selftest/TestsDrive.cpp
+        selftest/TestsT2.cpp
         selftest/Setup.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE MFO_DEV_SELFTEST=1)

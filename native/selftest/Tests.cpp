@@ -597,13 +597,14 @@ namespace MFO::SelfTest {
             g_perk.clear();
         }
         ClearDrivenState();
+        ClearT2State();
         std::lock_guard lk(g_hmsMx);
         g_hms.clear();
     }
 
     const std::vector<ManualItem>& ManualItems() {
         // What a human must look at, with the PASS condition from the in-game test list. Not run, only listed and counted in ALL DONE.
-        static const std::vector<ManualItem> k = {
+        static const std::vector<ManualItem> k = [] { std::vector<ManualItem> v = {
             { "retreat.flee_hold", "86e3kcvfk + Harbinger flee", "an engine Flee package cannot be provoked from the DLL without forcing the AI (it needs the engine's own flee decision)",
               "follower reaches the player at full HP while an engine Flee is current: log '[retreat] ... Flee package is still current ... holding', then 'engine Flee ended after Ns' + release; APMF [obs] current package = FECF983A, dPlayer <= 200 u" },
             { "visual.animated_casts", "bbf90fd / 1dfcuabbt0p", "an animation is a look", "Oakflesh, Lesser Ward and a Script-archetype spell (Cicero Arcane Pull) are visibly animated casts" },
@@ -623,6 +624,8 @@ namespace MFO::SelfTest {
             { "freeze.batch_a", "86e3h87hb", "if it recurs, keep the game frozen and capture stacks", "capture or no recurrence" },
             { "play.batch8", "86e3ednub", "a normal play session", "no regressions" },
         };
+            for (const auto& m : T2ManualItems()) v.push_back(m);   // TestsT2.cpp: the T2 field-session steps
+            return v; }();
         return k;
     }
 
@@ -648,6 +651,7 @@ namespace MFO::SelfTest {
                    "a follower enrolled in Progression with at least one MFO-granted rank, loaded nearby, 30 s in "
                    "the party",
                    60.0f, PerkPre, nullptr, PerkStep, PerkTimeout });
+        RegisterT2();   // TestsT2.cpp: the T2 field-session tests (quick, no spawn except t2.block_hands)
     }
 
 }

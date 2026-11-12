@@ -238,4 +238,49 @@ namespace MFO::APMFBridge {
         g_avs.clear();
     }
 
+#ifdef MFO_DEV_SELFTEST
+    // DEV BUILDS ONLY (selftest/TestsT2.cpp): read-only windows, see APMFBridge.h. Take g_avMx only for the claim read; no engine call under it.
+    std::uint32_t DevAbi() {
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api ? api->abiVersion : 0u;
+    }
+    DevAversionInfo DevReadAversion(RE::FormID a_follower) {
+        DevAversionInfo out;
+        const auto* api = AversionApi();
+        out.seatRefused = g_avSeatRefused.load(std::memory_order_relaxed);
+        if (!api) return out;
+        out.api = true;
+        APMF_API::Handle h = APMF_API::kInvalidHandle;
+        {
+            std::scoped_lock lock(g_avMx);
+            const auto it = g_avs.find(a_follower);
+            if (it != g_avs.end() && it->second.handle != APMF_API::kInvalidHandle) { h = it->second.handle; out.weight = it->second.weight; }
+        }
+        out.live = h != APMF_API::kInvalidHandle && api->IsClaimLive(h);
+        return out;
+    }
+    DevServeInfo DevCanServeIntent(RE::FormID a_actor, std::uint32_t a_intent, float a_fval) {
+        DevServeInfo out;
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < 35) return out;
+        out.api = true;
+        APMF_API::APMF_Param p{};
+        p.fval = a_fval;
+        APMF_API::APMF_ServeQuery q{};
+        q.size   = sizeof(q);
+        q.call   = APMF_API::kServeCall_RequestEx;
+        q.actor  = a_actor;
+        q.intent = a_intent;
+        q.basis  = kOwnBasis;
+        q.param  = &p;
+        APMF_API::APMF_ServeInfo info{};
+        info.size = sizeof(info);
+        out.verdict = reinterpret_cast<const APMF_API::APMF_API_v35*>(api)->CanServe(&q, &info);
+        out.refusal = info.refusal;
+        info.why[sizeof(info.why) - 1] = '\0';
+        out.why = info.why;
+        return out;
+    }
+#endif
+
 }
