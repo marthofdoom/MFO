@@ -115,6 +115,8 @@ dodge, H4 ranges, C13 stealth entry, Mercenary back-off. Each model states what 
 what is MODEL. Re-baseline all T1+T2 classes over 6 seeds; `--<road> off` must reproduce the previous baseline exactly.
 No curve tuning (that is the Haiku round after).
 
+Also (marth 11-12): measure how useful G3 disengage is (time to safety, damage taken while disengaging, fights it changes) and report it. If it is weak, marth's option is a D&D-style disengage: the follower is not a valid combat target for 6 s. Model that variant behind a switch (`--disengage-dnd`, ch.32 aversion at full weight for 6 s on every foe) so the field session and the lab can decide.
+
 Also (marth 11-11, Q-SIM-5): "why wouldnt a follower be able to move and do an action. I believe he should". Remove the
 lab's feet stop on a weapon swap, potion or cast for ALL deliberate movement (Retreat, approach, kite, flee), not only
 the G3 run (review of a645ca2 finding 1, MFO-B783). Any engine slowdown while casting or drawing is modelled only from a

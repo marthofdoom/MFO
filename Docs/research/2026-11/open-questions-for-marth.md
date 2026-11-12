@@ -211,3 +211,4 @@ Numbered 102-104: 97-99 are on main and 100-101 came with the base branch's fix 
 - Harbinger invariants #0 (m) aversion, (l) block + power-attack amendments, (n) combat-style read: adopted at each branch's merge (after its Opus review).
 - Q104: Corpse: Within stays combat only (default confirmed).
 - Q94: aversion only from the EQUIPPED Conjurer/Healer class; a mastered, unequipped class gives none (was a quarter). Weight does not grow with level.
+- G3 disengage, conditional (marth 11-12): "Disengage may need a buff depending on how useful it shows itself to be. If it's not useful I'd consider having it work d&d style and drop the follower as a valid combat target for 6s". Decided after the T2 field session and the batch S sim show how useful the run is. Likely road if taken: Harbinger ch.32 aversion (v41) at full weight for a 6 s window on every foe, started by the disengage pick (no new engine seat), modelled in the sim first.
