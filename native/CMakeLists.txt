@@ -154,6 +154,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     ComposedCast.cpp
     CombatStyle.cpp
     Sightline.cpp
+    Concealment.cpp
     ItemCatalog.cpp
     MEOBridge.cpp
     apmf/Bridge.cpp
@@ -175,6 +176,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/Place.cpp
     apmf/CombatMove.cpp
     apmf/GroundApproach.cpp
+    apmf/Disengage.cpp
     apmf/ErrandWork.cpp
     apmf/TauntClaims.cpp
     apmf/SneakClaims.cpp

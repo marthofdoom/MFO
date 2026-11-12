@@ -45,6 +45,7 @@ namespace MFO::Iaus {
         case Family::GiveGround:   return "give_ground";
         case Family::Block:        return "block";
         case Family::Bash:         return "bash";
+        case Family::Disengage:    return "disengage";
         case Family::kCount:       break;
         }
         return "?";
@@ -76,7 +77,7 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
-            "strike", "hold",
+            "strike", "hold", "need", "flee_heal",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -93,7 +94,7 @@ namespace MFO::Iaus {
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
-        case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike:
+        case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -210,6 +211,8 @@ namespace MFO::Iaus {
             at(Cons::FoeTaunted) = Bin(0.0f, 1.0f);       // gate: already taunted
             at(Cons::TauntSelfHp) = Logi(10.0f, 0.45f);   // doc: a hurt tank stops pulling aggro
             at(Cons::Unseen) = Bin(0.0f, 1.0f);           // gate: the hold row stands only while every listed foe's group record says he is not detected (Unknown = not applicable)
+            at(Cons::DisengageNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.001f);   // card G3: chosen (not searched); the input is already a 0..1 need
+            at(Cons::BoostFleeHeal) = Bin(1.0f, 2.0f);    // card G3, chosen: his own heal wins over a buff or a posture while he flees (offense is not generated then)
             at(Cons::HoldStill) = Bin(0.0f, 1.0f);        // gate: the hold row yields to the blow from stealth the moment one is ready
             at(Cons::FightStart) = Inv(1.0f);             // doc: x = combat seconds / 6, an opener only
             at(Cons::RetreatHp) = VetoAbove(Inv(3.0f), 0.30f);   // doc: only below 30% HP
@@ -380,6 +383,7 @@ namespace MFO::Iaus {
             aw(Family::CastOffense, 1.769f); aw(Family::CastControl, 3.6f); aw(Family::CastHeal, 2.4f);
             aw(Family::CastBuff, 0.7f);    aw(Family::CastSummon, 0.9f);   aw(Family::CastWard, 0.8f);
             aw(Family::Scroll, 0.9f);      aw(Family::Exploit, 1.0f);
+            aw(Family::Disengage, 1.0f);   // card G3, chosen (not from the search): gated by its generator, paced by its hard cooldown
             aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
@@ -416,6 +420,7 @@ namespace MFO::Iaus {
                 { Cons::TauntSurvive, 1.995f },   /* set A2 */ { Cons::BoostPlayerDying, 1 }, { Cons::TauntChance, 1 }, { Cons::MortalTaunt, 1 },
             };
             constexpr U kGiveGround[] = { { Cons::GroundNeed, 1 }, { Cons::CooldownHard, 1 } };
+            constexpr U kDisengage[] = { { Cons::DisengageClass, 1 }, { Cons::DisengageNeed, 1 }, { Cons::CooldownHard, 1 } };   // card G3
             constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
@@ -423,7 +428,7 @@ namespace MFO::Iaus {
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
-                { Cons::BoostMortalDanger, 1 },
+                { Cons::BoostMortalDanger, 1 }, { Cons::BoostFleeHeal, 1 },
             };
             constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 } };
             constexpr U kPosture[] = {
@@ -455,7 +460,7 @@ namespace MFO::Iaus {
             };
             constexpr U kHeal[] = {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
-                { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
+                { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::BoostFleeHeal, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
                 { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
                 { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 }, { Cons::HealClaimed, 1 }, { Cons::HealUrgency, 0.7f },
             };
@@ -485,7 +490,7 @@ namespace MFO::Iaus {
             };
             constexpr U kScrollHeal[] = {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
-                { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::AlreadyActive, 1 }, { Cons::ClassFit, 1 },
+                { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::BoostFleeHeal, 1 }, { Cons::AlreadyActive, 1 }, { Cons::ClassFit, 1 },
                 { Cons::Stock, 1 }, { Cons::ScrollStock, 1 }, { Cons::ScrollMpLow, 1 },
             };
             constexpr U kScrollBuff[] = {
@@ -517,6 +522,7 @@ namespace MFO::Iaus {
             case Family::GiveGround:   return kGiveGround;
             case Family::Block:        return kBlock;
             case Family::Bash:         return kBash;
+            case Family::Disengage:    return kDisengage;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;
@@ -531,6 +537,21 @@ namespace MFO::Iaus {
                                  (c.family == Family::Scroll &&
                                   (c.scrollOf == Family::CastHeal || c.scrollOf == Family::CastBuff));
             return (support && c.f.recipientIsPlayer) || c.f.foeOnPlayer || c.f.playerTarget;
+        }
+
+        // The retreat's danger (RetreatDanger) as one number: shared by the Retreat family and by card G3's non-sneak flee need.
+        float RetreatDangerOf(const Facts& f, const Tuning& t) {
+            // The 30% health gate as it was (1 - hp^3 under 0.30, nothing above), or seconds to live under 8.
+            const float hp = Clamp(f.selfHp, 0.0f, 1.0f);
+            const float byHp = hp <= 0.30f ? 1.0f - hp * hp * hp : 0.0f;
+            const float byTtl = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f;
+            // KITE: he fights at range and a foe that has to close is nearly on him. Distance alone is not danger (a
+            // skeever is no reason to stop shooting): it counts by how little he could afford the trade, 0 when he would
+            // live 20 s and more with the foes that target him on him, all of it under 8 s. Unknown = no kite.
+            float byKite = 0.0f;
+            if (t.kiteDistance > 0.0f && f.rangedDrawn && std::isfinite(f.meleeThreatDist) && std::isfinite(f.threatTtl))
+                byKite = Clamp(1.0f - f.meleeThreatDist / t.kiteDistance, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f);
+            return (std::max)((std::max)(byHp, byTtl), byKite);
         }
 
         In Input(Cons k, const Candidate& c, const Mind& m, float bestHeal, const Tuning& t) {
@@ -609,6 +630,10 @@ namespace MFO::Iaus {
             case Cons::RetreatHp:     return f.selfHp;
             case Cons::NoHealRetreat: return bestHeal > t.noHealRetreat ? 0.0f : 1.0f;
             case Cons::DisengageClass: return B(f.disengageClass);
+            case Cons::DisengageNeed:
+                if (c.family != Family::Disengage) return In::Off();
+                return f.disengageFlee ? RetreatDangerOf(f, t) : Clamp(f.detectShare, 0.0f, 1.0f);
+            case Cons::BoostFleeHeal: return B(f.fleeHeal);
             case Cons::DrinkNeed:
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
                 if (c.family == Family::DrinkMagicka) return f.selfMagicka;
@@ -660,19 +685,7 @@ namespace MFO::Iaus {
             case Cons::TauntSurvive:
                 if (!std::isfinite(f.tauntTtl)) return In::Off();
                 return Clamp(f.tauntTtl / 12.0f, 0.0f, 1.0f);
-            case Cons::RetreatDanger: {
-                // The 30% health gate as it was (1 - hp^3 under 0.30, nothing above), or seconds to live under 8.
-                const float hp = Clamp(f.selfHp, 0.0f, 1.0f);
-                const float byHp = hp <= 0.30f ? 1.0f - hp * hp * hp : 0.0f;
-                const float byTtl = std::isfinite(f.selfTtl) ? Clamp(1.0f - f.selfTtl / 8.0f, 0.0f, 1.0f) : 0.0f;
-                // KITE: he fights at range and a foe that has to close is nearly on him. Distance alone is not danger (a
-                // skeever is no reason to stop shooting): it counts by how little he could afford the trade, 0 when he would
-                // live 20 s and more with the foes that target him on him, all of it under 8 s. Unknown = no kite.
-                float byKite = 0.0f;
-                if (t.kiteDistance > 0.0f && f.rangedDrawn && std::isfinite(f.meleeThreatDist) && std::isfinite(f.threatTtl))
-                    byKite = Clamp(1.0f - f.meleeThreatDist / t.kiteDistance, 0.0f, 1.0f) * Clamp((20.0f - f.threatTtl) / 12.0f, 0.0f, 1.0f);
-                return (std::max)((std::max)(byHp, byTtl), byKite);
-            }
+            case Cons::RetreatDanger: return RetreatDangerOf(f, t);
             case Cons::HealSize:
                 if (!(f.expHeal > 0.0f)) return In::Off();
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);

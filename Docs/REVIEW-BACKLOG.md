@@ -3046,6 +3046,18 @@ If Harbinger refuses one of the two claims, the warning logs once but RequestEx 
 
 (Folded into the branch by the coordinator from the same review: F1 retreat lap now releases the hide hold, CombatScan.cpp; F4 a never-live handle is released before reset, HideClaims.cpp.)
 
+### MFO-B740 (SEV-4, OPEN, Concealment.cpp / Sightline::PointSeenNow worst-case cost, against 1f59152, Opus tier-3 review of the movement batch)
+The pick's worst case is about 432 picks plus 56 FindEmptySpace calls per frame per follower on the main thread. If the Deck hitches, add a per-frame ray budget (fewer candidates per frame, or a shared budget across followers).
+
+### MFO-B741 (SEV-4, OPEN, Concealment.cpp hold test, against 1f59152, same review)
+The hold's "he was hit" test (health drop since arrival) counts damage-over-time as "found". A poisoned or burning thief ends the hold early. Count only a hit event, or ignore a steady drain.
+
+### MFO-B742 (SEV-5, OPEN, Concealment.cpp duplicate pick after Release, against 1f59152, same review)
+A Release erases the follower's pick entry, so a pick job still in flight on the main thread can land after it (the epoch only guards a load) and a second pick can run for the same fight. Harmless today (one run per answer); a per-follower generation counter would close it.
+
+### MFO-B743 (SEV-5, OPEN, a sustained heal claim during the run, against 1f59152, same review)
+A sustained heal claim (the heal-hold records) is not released when the hide run starts; the run's ch.7 Offense deny and a standing heal approach (ch.24, which outranks a disengage) can contend. Observe in the field before changing. The non-sneak flee makes this more likely, since it wants heals during the run.
+
 ### MFO-B750 (SEV-5, OPEN, CombatStyle.cpp:341-345 comment, against 2628beb, Opus review of feat/class-packages)
 The old "no owner on this path, or form missing -> stance disabled ..." comment now trails the class-style line instead of the `if (!target) return;` line.
 
@@ -3063,3 +3075,22 @@ jCovers defaults to "all classes" even when hasJ is false (JSON can claim covera
 
 ### MFO-B758 (SEV-5, OPEN, B714 notes, against a2e7336, same review)
 The B714 notes on paired-difference SE and on --classes vs --opt-class being different objectives are handled only in iaus-sim-v2.md; the backlog marks the whole of B714 FIXED.
+
+### MFO-B759 (SEV-4, OPEN, apmf/SneakClaims.cpp:236-243 HoldSneakForHide, against ba1328c, Opus re-review of the G3 fix round)
+F3. A hideHeld sneak claim that Harbinger refused at the hidden end is never refiled: HoldSneakForHide answers "Harbinger refused the sneak claim (retrying)" while retryIn > 0, and nothing calls it again once the run has ended, so G2's hold row then has no stance claim. Refile from the stance watch (Concealment::Service, the no-run branch) or from the sweep.
+
+### MFO-B760 (SEV-4, OPEN, Concealment.cpp flee end, against ba1328c, same review)
+F4. The flee ends with no hysteresis the moment health is above 0.30 (kFleeHealthLine), so a follower hovering at the line can end a flee and qualify for the next one at once. Bounded by the family's 25 s cooldown, counted from the end of the run. A second, higher line for the end would remove the flap.
+
+### MFO-B761 (SEV-4, RULED, Retreat vs flee below 0.30 health, against ba1328c, same review)
+F5. Below 0.30 health the Retreat family and the non-sneak flee are both generated and compete on score. marth 2026-11-11: "Score decides". Recorded as ruled, not a defect: the sim tunes the two weights.
+
+### MFO-B762 (SEV-5, NOTED, scheduler/CombatScan.cpp death branch, against ba1328c, same review)
+Out of brief in the G3 fix round: the CombatScan follower-down branch also calls APMFBridge::ReleaseHideHold (a G2 claim). Harmless (idempotent, and the right thing for a dead follower). Noted so the diff is explained.
+
+### MFO-B763 (SEV-5, OPEN, Concealment.cpp WatchList, against 05260d0, Opus tier-3 review of the ch.7 v40 round, finding F5c)
+As handed to the author (the reviewer's own log was a two-line summary): "WatchList duplicates Gather's gates." The hidden-end / reveal watch re-implements the gather's foe set tests instead of sharing them, so a change to one can drift from the other. Reviewer's log: "WatchList mirrors Gather (lock order OK)".
+
+### MFO-B764 (SEV-5, OPEN, apmf/HideClaims.cpp ServiceHideHold, against 05260d0, same review, finding F5d)
+As handed to the author: "FILED line repeats per stand-down." After every stand-down (and, since the F2 fix, every change of the deny's mask) `hadDeny` is false on the next lap, so the "ch.1 movement block + ch.7 ... deny FILED" line prints again next to the transition line that already says it. Note 2026-11-11 (fix round on 938f45f, 5955a22): a deny refiled under another mask INSIDE one lap used to skip the FILED line (`hadDeny` was read before the release), so the new handle was never logged; that lap now prints it. The repeat this entry describes is unchanged and still open.
+

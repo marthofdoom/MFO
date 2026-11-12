@@ -7,6 +7,7 @@
 #include "Scheduler.h"    // ReachHoldSlack -- the reach gates read the hold's line (review U3)
 #include "Taunt.h"        // act.taunt (taunt S2): Taunt::Fire
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "Concealment.h"       // card G3: act.disengage starts the hide run
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
@@ -579,6 +580,15 @@ namespace MFO::Actuation {
             if (!APMFBridge::RequestGroundStep(a_follower, foe))
                 return { Result::FailedSkill, "give ground: no step filed (a heal approach or a step stands, or refused)", true };
             return { Result::Fired, std::format("giving ground from {}", foe->GetName() ? foe->GetName() : "?") };
+        }
+
+        if (op == Vocab::kActDisengage) {
+            // DISENGAGE TO OUT OF SIGHT, THEN SNEAK (card G3). Concealment owns the point (picked on the main thread with
+            // MFO's own rays) and the run (apmf/Disengage.cpp: Harbinger ch.24 on that point + a ch.7 Offense deny).
+            // Transparent when no run can start (no road, no fresh point, a heal approach stands): nothing was mutated.
+            std::string desc;
+            if (const char* why = Concealment::Begin(a_follower, desc)) return { Result::FailedOther, why, true };
+            return { Result::Fired, desc };
         }
 
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,

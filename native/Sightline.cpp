@@ -334,6 +334,69 @@ namespace MFO::Sightline {
         });
     }
 
+    // Card G3 (Concealment.cpp). MAIN THREAD ONLY. The picks are CustomRay's: the same filter, the same world lock.
+    PointSight PointSeenNow(RE::Actor* a_viewer, const RE::NiPoint3& a_point, float a_bodyHeight) {
+        if (!Runtime::Known() || !a_viewer || a_viewer->IsDead() || !a_viewer->Is3DLoaded()) return PointSight::Unavailable;
+        auto* cell = a_viewer->GetParentCell();
+        if (!cell) return PointSight::Unavailable;
+        auto* world = cell->GetbhkWorld();
+        if (!world) return PointSight::Unavailable;
+        std::uint32_t viewerFilter = 0;
+        if (auto* cc = a_viewer->GetCharController()) cc->GetCollisionFilterInfo(viewerFilter);
+        const std::uint32_t rayFilter = ((viewerFilter >> 16) << 16) | static_cast<std::uint32_t>(RE::COL_LAYER::kCharController);
+        RE::NiPoint3 eye{}, dir{};
+        a_viewer->GetEyeVector(eye, dir, false);
+        const float h = a_bodyHeight > 1.0f ? a_bodyHeight : 120.0f;
+        const RE::NiPoint3 samples[3] = {
+            { a_point.x, a_point.y, a_point.z + 16.0f },       // just off the ground
+            { a_point.x, a_point.y, a_point.z + h * 0.35f },   // a crouched torso
+            { a_point.x, a_point.y, a_point.z + h * 0.65f },   // a crouched head
+        };
+        const float scale = RE::bhkWorld::GetWorldScale();
+        RE::BSReadLockGuard lock(world->worldLock);
+        for (const auto& pt : samples) {
+            // ONLY SOLID WORLD GEOMETRY IS COVER. The character-controller ray also meets things that hide nobody:
+            // other actors' capsules (the follower himself often stands between the viewer and a point behind him),
+            // trigger and trap volumes, actor zones, stair helpers, collision boxes, invisible walls, glass. Harbinger's
+            // line of sight learned this in the field (its core/Sightline.cpp "THE HIT FILTER": stair helpers and overlap
+            // volumes read as walls). Here the rule is an ALLOW-LIST, because a point wrongly read as hidden is the
+            // defect and a point wrongly read as seen only costs a candidate: a hit is a wall only on STATIC,
+            // ANIMSTATIC, TREES, PROPS, TERRAIN or GROUND, and never when it is a phantom (an overlap volume). Any
+            // other hit is passed through: the ray goes on from 8 units past it. Six hits in a row without a wall read
+            // as Seen. PickObject's output is the CLOSEST hit (Harbinger core/SpaceQuery.cpp reads it the same way).
+            constexpr std::uint64_t kCover =
+                (1ull << static_cast<int>(RE::COL_LAYER::kStatic)) | (1ull << static_cast<int>(RE::COL_LAYER::kAnimStatic)) |
+                (1ull << static_cast<int>(RE::COL_LAYER::kTrees)) | (1ull << static_cast<int>(RE::COL_LAYER::kProps)) |
+                (1ull << static_cast<int>(RE::COL_LAYER::kTerrain)) | (1ull << static_cast<int>(RE::COL_LAYER::kGround));
+            constexpr std::int8_t kBroadPhasePhantom = 2;   // hkpWorldObject::BroadPhaseType (Harbinger core/Sightline.cpp:276)
+            RE::NiPoint3 from = eye;
+            bool         wall = false;
+            for (int pass = 0; pass < 6; ++pass) {
+                const RE::NiPoint3 seg = pt - from;
+                const float        len = seg.Length();
+                if (len <= 8.0f) break;
+                RE::bhkPickData pick;
+                pick.rayInput.from = from * scale;
+                pick.rayInput.to   = pt * scale;
+                pick.rayInput.enableShapeCollectionFilter = false;
+                pick.rayInput.filterInfo = rayFilter;
+                world->PickObject(pick);
+                if (!pick.rayOutput.HasHit()) break;   // nothing (more) between the eye and that part of him
+                const auto* coll  = pick.rayOutput.rootCollidable;
+                const auto  layer = static_cast<std::uint32_t>(coll->GetCollisionLayer());
+                if (coll->broadPhaseHandle.type != kBroadPhasePhantom && layer < 64 && (kCover & (1ull << layer)) != 0) {
+                    wall = true;
+                    break;
+                }
+                const float f = pick.rayOutput.hitFraction + 8.0f / len;
+                if (!(f < 1.0f)) break;                // what was hit stands at the point itself
+                from = { from.x + seg.x * f, from.y + seg.y * f, from.z + seg.z * f };
+            }
+            if (!wall) return PointSight::Seen;
+        }
+        return PointSight::Hidden;
+    }
+
     Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis) {
         if (!a_viewer || !a_target || !Runtime::Known()) return Verdict::Unknown;   // G1: exact builds only (was VR-only)
         if (a_basis == Basis::Own) {   // Harbinger's stored verdict (the first ask reads Unknown: fail-open)

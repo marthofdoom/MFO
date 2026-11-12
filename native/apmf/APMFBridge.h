@@ -663,6 +663,12 @@ namespace MFO::APMFBridge {
     // True while the follower holds G1's ch.3 stance claim (a handle stands). G2 reads it: with bSneakInCombat off the claim is
     // released in combat, so "his sneak is MFO's" and "bSneakInCombat or this" is the gate for the hold row. Worker-safe.
     bool        SneakClaimHeld(RE::FormID a_follower);
+    // Card G3 (Concealment): the hide run and the G2 hold after it OWN the stance. HoldSneakForHide files the claim if none stands
+    // and marks it hide-held: the in-combat refusal (bSneakInCombat off) and the table-lap aging do not apply to this owner.
+    // nullptr = held; otherwise why not (the caller logs it). ReleaseSneakHide drops the mark and the claim unless a table rule
+    // also wants it. Both: AddTask worker. Idempotent.
+    const char* HoldSneakForHide(RE::Actor* a_follower);
+    void        ReleaseSneakHide(RE::FormID a_follower, const char* a_why);
 
     // ── G2 Layer 1 HOLD ROW (apmf/HideClaims.cpp): ch.1 kIntent_MovementBlock + ch.7 kIntent_CombatAction (Offense | Cast) ──
     // HideHoldSupported: Harbinger (ABI >= 6) is present; false = the hold row is not generated at all (logged once, never a
@@ -1882,6 +1888,39 @@ namespace MFO::APMFBridge {
     bool RequestGroundStep(RE::Actor* a_follower, RE::Actor* a_foe);
     void ServiceGroundStep(RE::FormID a_follower);
     void ReleaseGroundStep(RE::FormID a_follower, const char* a_why);
+    // ── THE DISENGAGE DRIVE (class plan card H3; Harbinger ch.24 on a POINT with the hold bit + ch.7 Offense deny) --
+    // apmf/Disengage.cpp. He RUNS to a declared point mid-fight (the engine's own Return To Combat Area, at its run speed)
+    // and stays inside R of it until released. DisengageSupported: APMF present AND abiVersion >= 39. RequestDisengage:
+    // nullptr = the point approach is filed (the ch.7 deny follows a_deny, below; its refusal is only a warning); otherwise why nothing
+    // was filed (no road, a held-heal approach stands, a drive already stands, Harbinger refused the point). It releases
+    // the offense approach and the give-ground step first (one ch.24 claim per follower). ServiceDisengage (once per combat
+    // service): None = no drive; Running; Arrived = the engine reports him inside the bound (the claims stay until
+    // ReleaseDisengage); Failed = Harbinger ended it or it never owned the channel (a_why says which; the caller releases).
+    // Facing is NOT claimed and not known (Harbinger's "[ch.24] GAIT PROBE" lines answer it in the field); the drive does
+    // not depend on it. Worker road; own leaf mutex, never g_mx; nothing is saved.
+    // THE ch.7 DENY OF THE LEG (a_deny). marth 2026-11-11: Offense means HOSTILE actions (Harbinger ABI v40: a declared
+    // non-hostile cast passes an Offense deny; a Cast deny still denies every cast).
+    //   None            nothing is denied.
+    //   HostileOffense  the FLEE: ival = Offense alone. Attacks and hostile casts are denied, his own heals / buffs / wards
+    //                   land. Needs Harbinger ABI >= 40. On an older Harbinger the same mask would deny every cast, his heals
+    //                   included, so NO ch.7 claim is filed at all there and that is logged once (never a different deny than
+    //                   the one declared).
+    //   OffenseAndCast  the HIDE RUN: ival = Offense | Cast. Attacks and EVERY cast are denied (he does not stop to cast on
+    //                   the way and makes no cast sound at the point). The same deny on every Harbinger version.
+    enum class DisengageDeny : std::uint8_t { None, HostileOffense, OffenseAndCast };
+    enum class DisengageState : std::uint8_t { None, Running, Arrived, Failed };
+    bool           DisengageSupported();
+    bool           DisengageStands(RE::FormID a_follower);
+    const char*    RequestDisengage(RE::Actor* a_follower, const RE::NiPoint3& a_point, float a_radius, DisengageDeny a_deny);
+    DisengageState ServiceDisengage(RE::FormID a_follower, std::string& a_why);
+    void           ReleaseDisengage(RE::FormID a_follower, const char* a_why);
+    void           ClearDisengage();   // revert / load (pump drained)
+    // Harbinger's FindEmptySpace space query (ABI v11), MAIN THREAD ONLY (it casts rays): a standable, empty point
+    // a_distance units from the reference a_origin along a_heading (radians, 0 = +Y, clockwise), a wall on the way
+    // shortening the walk. True = a_out is that ground point. False = no point (a_status is the APMF_API::QueryStatus;
+    // kQuery_Unsupported also when Harbinger is absent or older than ABI 11).
+    bool FindStandPoint(RE::FormID a_origin, float a_heading, float a_distance, float a_clearance, RE::NiPoint3& a_out,
+                        std::uint32_t& a_status);
     // ── TOWN ERRAND WORK (TOWN PHASE 2 R7: inn + temple) -- apmf/ErrandWork.cpp ───────────────────────────────────────
     // The ch.9 package-offer claim of an errand's WORK (Forms.h MFO_ErrandActivate / Sandbox / Eat / Sleep, one record per kind
     // per follower slot): the shrine Activate, the inn's Sandbox (sit / stay), the Eat meal, the Sleep bed. MFO declares the work and its

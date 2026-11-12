@@ -244,6 +244,10 @@ namespace MFO::Vocab {
     // engine's own movement walks him there while he keeps fighting. Filed through apmf/GroundApproach.cpp. IAUS-ONLY, in
     // no board table and no class row, never serialized (the same note as act.bash).
     inline constexpr const char* kActGiveGround = "act.give_ground";
+    // DISENGAGE TO OUT OF SIGHT, THEN SNEAK (class plan card G3; Concealment.cpp + apmf/Disengage.cpp). IAUS-ONLY like
+    // act.bash and act.give_ground: produced by scheduler/IausSource.cpp for Iaus::Family::Disengage, in NO board table
+    // and no class row, so it is never serialized. If it ever joins the row vocabulary its string freezes (#10).
+    inline constexpr const char* kActDisengage = "act.disengage";
     // SNEAK (class plan card G1): enter and hold sneak while the rule stands. Files ONE Harbinger ch.3 kIntent_Stance
     // claim (ABI 1) and keeps it while the rule keeps being reached with its condition true. A rule that stops being
     // reached lets the claim go (apmf/SneakClaims.cpp). ch.3 does not re-assert, so MFO does: while the claim is live

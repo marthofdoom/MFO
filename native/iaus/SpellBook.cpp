@@ -458,6 +458,7 @@ namespace MFO::Iaus::SpellBook {
         g.weaponCrossbow = any || (def->weapons & W::kCrossbow) != 0;
         g.weaponStaff    = any || (def->weapons & W::kStaff) != 0;
         g.disengage   = (def->flags & Classes::Flag::kDisengage) != 0;
+        g.sneakClass  = (def->flags & Classes::Flag::kSneakAlways) != 0;   // card G3: only a sneak class runs to hide
         g.powerAttack = def->powerShareMax != Classes::kShareUnset || def->powerShareMin != Classes::kShareUnset;
         for (std::size_t i = 0; i < def->gambitCount; ++i) {
             const auto& row = def->gambits[i];

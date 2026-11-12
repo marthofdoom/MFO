@@ -7,6 +7,27 @@
 //   * ch.7 kIntent_CombatAction, ival = kCombatActionCat_Offense | kCombatActionCat_Cast: the combat behaviour tree may not
 //     draw an attack or a cast leaf. NOT APMFBridge::ClaimCombatActionDeny (Excursion.cpp): that one is loot-gated and its slot
 //     belongs to the excursion.
+// HIS OWN CAST (2026-11-11, with Harbinger ABI v40 "Offense means hostile"; narrowed the same day by tier-3 review F2).
+// G2 keeps a SILENT caster's cast candidates while he holds (iaus/Generate.cpp holdQuiet: marth, "There is a perk for
+// hidden casting"), and MFO's casts are delivered by Harbinger through the AI's own cast leaves over several laps. A lap
+// that picks the hold row again while that claim is still being delivered would file Offense | Cast over it and force-fail
+// the leaf: the cast MFO itself declared would never land (the same shape as the G3 flee's heals). What the hold's ch.7
+// deny does while MFO holds a live cast claim for him:
+//   * an OFFENSE cast claim (IsOwnedCastActive): the deny STANDS DOWN whole (nothing filed). A hostile spell is Offense
+//     and a cast leaf carries both bits, so no mask of the two categories lets it through. For those laps the attack
+//     leaves are open too: that is the price of the cast he was told to make, and it is logged.
+//   * a HEAL claim alone (IsHealCastActive) on Harbinger ABI >= 40: the deny is REFILED as Offense ALONE. Attacks and
+//     hostile casts stay denied. The heal passes ONLY when its record is on Harbinger's allow-list of beneficial
+//     natures. A heal that carries a Script effect (or any archetype off that list) is UNDECLARED, which Harbinger
+//     counts as hostile BY RULE: it stays denied, APMF.log says `[ch.7] hostile-offense: ... nature UNDECLARED ...`,
+//     and MFO's heal claim does not land for those laps (review P1-1 of 938f45f; open question 91). Releasing everything
+//     here opened every attack leaf for the length of a heal (review F2 SEV-3). The cost, stated: for those laps a
+//     beneficial cast the ENGINE picks by itself also passes.
+//   * a HEAL claim on ABI < 40: Offense alone would deny the heal there, so the whole deny stands down, as for offense.
+// The full Offense | Cast deny is filed again on the first hold lap after the claim is gone. With no claim live the hold
+// denies every attack leaf and every cast the engine would choose by itself (loud or not): Offense alone is not used
+// then, because under v40 it would let the engine's own beneficial casts through, and a cast is noise unless MFO
+// measured it silent.
 // Whether ch.1 parks a follower who is IN COMBAT (the P1 moving= bits) is UNOBSERVED (principle 5); the field run reads it.
 // If it does not, the documented next step is ch.23 kIntent_PursuitLeash anchored on him (card G2). Not built here.
 //
@@ -44,6 +65,9 @@ namespace MFO::APMFBridge {
         constexpr std::uint32_t kStaleSweeps = 30;
         constexpr auto          kPublishGrace = std::chrono::seconds(3);
         constexpr std::uint32_t kHoldCats = APMF_API::kCombatActionCat_Offense | APMF_API::kCombatActionCat_Cast;
+        constexpr std::uint32_t kHostileOffenseMinAbi = 40;   // ch.7: Offense alone means hostile (a beneficial cast passes)
+        // What the hold's ch.7 deny is this lap (see HIS OWN CAST above).
+        enum class DenyMode : std::uint8_t { Full, OffenseOnly, StoodDown };
 
         using Clock = std::chrono::steady_clock;
 
@@ -57,6 +81,8 @@ namespace MFO::APMFBridge {
             One           deny;               // ch.7
             std::uint32_t quietSweeps = 0;    // sweeps since ServiceHideHold(want = true) last ran
             bool          refusedLogged = false;
+            DenyMode      mode = DenyMode::Full;   // Full unless MFO's own cast claim is being delivered
+            std::uint32_t denyCats = 0;            // the category mask deny.h was filed with (0 = nothing filed)
         };
         std::mutex                              g_hideMx;
         std::unordered_map<RE::FormID, Hold>    g_holds;   // guarded by g_hideMx
@@ -114,6 +140,9 @@ namespace MFO::APMFBridge {
         if (!a_follower) return;
         const RE::FormID fid = a_follower->GetFormID();
         const auto* api = HideApi();
+        // Read BEFORE g_hideMx (these take g_mx; this file never takes g_mx under its own lock).
+        const bool ownOffense = a_want && IsOwnedCastActive(fid);
+        const bool ownHeal    = a_want && IsHealCastActive(fid);
         std::scoped_lock lk(g_hideMx);
         if (!a_want) {
             const auto it = g_holds.find(fid);
@@ -125,10 +154,46 @@ namespace MFO::APMFBridge {
         if (!api) return;
         auto& h = g_holds[fid];
         h.quietSweeps = 0;
-        const bool hadMove = h.move.h != APMF_API::kInvalidHandle, hadDeny = h.deny.h != APMF_API::kInvalidHandle;
+        const bool hadMove = h.move.h != APMF_API::kInvalidHandle;
+        bool       hadDeny = h.deny.h != APMF_API::kInvalidHandle;
         const bool okMove = EnsureLocked(api, fid, h.move, APMF_API::kIntent_MovementBlock, 0, "ch.1 movement block");
-        const bool okDeny = EnsureLocked(api, fid, h.deny, APMF_API::kIntent_CombatAction, static_cast<std::int32_t>(kHoldCats),
-                                         "ch.7 offense/cast deny");
+        const DenyMode mode = ownOffense ? DenyMode::StoodDown
+                            : !ownHeal   ? DenyMode::Full
+                            : api->abiVersion >= kHostileOffenseMinAbi ? DenyMode::OffenseOnly : DenyMode::StoodDown;
+        const std::uint32_t cats = mode == DenyMode::Full          ? kHoldCats
+                                 : mode == DenyMode::OffenseOnly   ? APMF_API::kCombatActionCat_Offense
+                                                                   : 0u;
+        // A filed deny with another mask than this lap's is released first (the mask is the claim's param).
+        if (h.deny.h != APMF_API::kInvalidHandle && h.denyCats != cats) {
+            api->Release(h.deny.h);
+            h.deny     = One{};
+            h.denyCats = 0;
+            hadDeny    = false;   // the refiled deny is a new claim: its FILED line (with the new handle) is owed
+        }
+        if (mode != h.mode) {
+            h.mode = mode;
+            switch (mode) {
+            case DenyMode::StoodDown:
+                spdlog::info("[hide] {:08X}: ch.7 deny STANDS DOWN whole while his own {} claim is delivered: attack leaves "
+                             "are open for these laps (ch.1 movement block {})", fid,
+                             ownOffense ? "offense cast" : "heal (Harbinger ABI < 40, Offense alone would deny the heal)",
+                             okMove ? "held" : "REFUSED");
+                break;
+            case DenyMode::OffenseOnly:
+                spdlog::info("[hide] {:08X}: his heal claim is being delivered: the ch.7 deny is refiled as Offense ALONE "
+                             "(attacks and hostile casts stay denied; a heal on Harbinger's beneficial allow-list passes, a heal with a "
+                             "script effect stays denied and APMF.log names it UNDECLARED; ch.1 movement block {})", fid,
+                             okMove ? "held" : "REFUSED");
+                break;
+            case DenyMode::Full:
+                spdlog::info("[hide] {:08X}: his cast claim is gone: the ch.7 offense/cast deny is filed again", fid);
+                break;
+            }
+        }
+        if (cats == 0) return;
+        const bool okDeny = EnsureLocked(api, fid, h.deny, APMF_API::kIntent_CombatAction, static_cast<std::int32_t>(cats),
+                                         mode == DenyMode::Full ? "ch.7 offense/cast deny" : "ch.7 offense deny");
+        if (okDeny) h.denyCats = cats;
         if (!okMove || !okDeny) {
             if (!h.refusedLogged) {
                 h.refusedLogged = true;
@@ -139,7 +204,8 @@ namespace MFO::APMFBridge {
         }
         h.refusedLogged = false;
         if (!hadMove || !hadDeny)
-            spdlog::info("[hide] {:08X}: ch.1 movement block (h={}) + ch.7 offense/cast deny (h={}) FILED", fid, h.move.h, h.deny.h);
+            spdlog::info("[hide] {:08X}: ch.1 movement block (h={}) + ch.7 {} deny (h={}) FILED", fid, h.move.h,
+                         mode == DenyMode::Full ? "offense/cast" : "offense-only", h.deny.h);
     }
 
     void ReleaseHideHold(RE::FormID a_follower, const char* a_why) {

@@ -15,6 +15,7 @@
 #include "CombatStyle.h"
 #include "cast/Actuation.h"   // T#76: revert drops the equip force-hold records
 #include "Sightline.h"
+#include "Concealment.h"   // card G3: runtime-only picks and runs, cleared with the other transient state
 #include "Packages.h"
 #include "Papyrus.h"
 #include "TradeBridge.h"
@@ -1187,6 +1188,7 @@ namespace MFO {
         Followers::g_active.clear();
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
+        Concealment::ClearTransientState(); // card G3: concealment picks and hide runs are runtime-only (own leaf mutex)
         Cooldowns::ClearAll();              // card G9: per-rule last-fired times are runtime-only (a load resets every cooldown)
         Logistics::ClearTransientState();   // logistics cadence clocks + loot LRUs (#22h)
         Logistics::ClearStyleMirror();      // perk-style mirror + its Post in-flight latches (Fable F4)

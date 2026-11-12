@@ -103,6 +103,7 @@ namespace MFO::Iaus {
         bool taunt = false;           // a taunt default row
         float tauntCooldownSec = 0.0f;   // that row's cooldown; 0 = none declared (Tuning::rowlessTauntCooldownSec then)
         bool disengage = false;       // Flag::kDisengage (Retreat)
+        bool sneakClass = false;      // Flag::kSneakAlways: a sneak class (card G3's hide run). false with the tree OFF
         bool weaponMelee = true;      // the class weapon set holds a melee weapon (dagger / 1H / 2H)
         bool weaponBow = true;
         bool weaponCrossbow = true;
@@ -188,6 +189,10 @@ namespace MFO::Iaus {
         bool  scrollRoad = false;         // card S3: a scroll can be READ as a cast (the actuation exists). false (today):
                                           // scrolls stay in the book and no scroll candidate is made
         bool  groundRoad = false;         // Harbinger can step him back from a point (lab only today)
+        bool  concealRoad = false;           // card G3: the hide run's road is open ([Debug] bIausHideRoad, Harbinger ABI 39)
+        bool  concealPoint = false;          // ...and Concealment knows a fresh point (hidden from every listed foe; a flee: away from them)
+        bool  fleeRun = false;               // card G3: a NON-sneak flee run stands (Concealment::FleeRunning): no offense is generated,
+                                             // his own heals and health potions are boosted
         bool  blockRoad = false;          // Harbinger can make him raise his guard now (lab only today)
         bool  bashRoad = false;           // Harbinger can make him bash now (lab only today)
         bool  regroupRoad = false;        // the ch.24 regroup client exists (close on the player / a healer while fighting).

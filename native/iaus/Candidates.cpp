@@ -11,6 +11,8 @@
 #include "Vocabulary.h"
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
+#include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
+#include "iaus/Disengage.h"
 #include "iaus/Fills.h"
 #include "iaus/Hide.h"
 #include "iaus/SpellBook.h"
@@ -341,6 +343,26 @@ namespace MFO::Iaus::Candidates {
         a_out.gen = Generated{};
         if (!Gather(a_follower, a_out.snap)) return false;
         a_out.gate = SpellBook::GateFor(a_out.snap.self.id);
+        // Card G3: the disengage exists only while its road does, and a point is asked for only when the generator could use
+        // one: a sneak class that a foe has found (a hiding place), or a class-tree-ON non-sneak class under the flee's own
+        // test (hurt and a foe on him: a point away from the foes). The pick runs on the main thread, spread over frames
+        // (Concealment.cpp); `concealPoint` is true once a fresh answer is in. A flee that already runs is a fact, not a pick.
+        a_out.snap.concealRoad  = Concealment::RoadOpen();
+        a_out.snap.concealPoint = false;
+        a_out.snap.fleeRun      = a_out.snap.concealRoad && Concealment::FleeRunning(a_out.snap.self.id);
+        if (a_out.snap.concealRoad && !a_out.snap.fleeRun) {
+            const Snapshot& sn = a_out.snap;
+            const float hpPct = sn.self.hpMax > 0.0f ? sn.self.hp / sn.self.hpMax : 1.0f;
+            const bool hide = a_out.gate.sneakClass && a_out.gate.disengage && Disengage::Found(sn);
+            const bool flee = !a_out.gate.sneakClass && a_out.gate.treeOn && a_out.gate.disengage &&
+                              hpPct <= Disengage::kFleeHealthLine && Disengage::Threatened(sn);
+            if (hide || flee) {
+                std::vector<RE::FormID> foes;
+                foes.reserve(sn.foes.size());
+                for (const auto& f : sn.foes) foes.push_back(f.id);
+                a_out.snap.concealPoint = Concealment::Prepare(a_follower, foes, /*a_flee=*/!hide);
+            }
+        }
         a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
         return true;
     }

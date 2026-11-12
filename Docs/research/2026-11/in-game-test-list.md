@@ -38,8 +38,9 @@ Nothing here was invented: each step quotes its source card. Steps marked (needs
 19. **G2 stealth, Thief-line follower (G2 steps 1-5).** Thief with a melee weapon or bow, `Always -> Sneak` combat rule, two bandits. (a) **P1**: `[stealth-probe] self 0x<id>: sneaking=true ... inCombat=true` once a second; `sneaking=false inCombat=true` every 5 s means the stance does not hold (leave `bSneakInCombat` OFF afterwards). Tail `entries (seed->result ...)` 57/48/47/18 differ from seeds for a perk owner. (b) **P2**: `[stealth-probe] seen foe ... group HELD|LOST|ABSENT detect=N ... MFO verdict: detects me = YES|NO (hidden)`; an unaware foe goes LOST after about 10 s. (c) **Hold row + strike**: `[iaus]` shows `hold 1`, pick `sneak`; unaware foe in reach makes the pick `attack`/`power_attack` with `strike` x1 in `[iaus-why]`. (d) **4b hold claim**: `[hide] <id>: ch.1 movement block (h=..) + ch.7 offense/cast deny (h=..) FILED` once, `RELEASED (...)` with a reason BEFORE the attack on the strike lap; hold lines match the `[iaus]` pick lap for lap; first blow lands on the strike lap; `REFUSED` or `the ch.1 movement block claim ended` = report. Read P1 `moving=` while the hold stands: `moving=false` = ch.1 parks him in combat, `moving=true` with a live claim = it does not (then next step is a ch.23 leash claim, not built). (e) **4c silent casting**: P1 line ends `castSilent=n/m`; with a hidden-casting perk the hold keeps his silent spells as candidates, without one no cast is generated while holding. (f) **P3/Q87**: after 5 sneak + 5 plain hits with one weapon type `[stealth-probe] q87 ...` says `WITHIN 25%` or `OUTSIDE 25%`; no sneak hit at all = the engine's sneak attack does not run for an NPC on this list. PASS = each sub-bullet observed or refuted in the log.
 20. **Anchor leak Q92 (Movement batch 1) (needs the G3 + ch.7 merge).** Two followers, one a caster with an out-of-combat buff (Candlelight). Kill the last near foe so the party drops out of combat while more foes are close. `APMF.log`: `HELD HOLDER GROUP JOIN REFUSED`, NO `ANCHOR LEAK` line, the other follower keeps fighting (no `combat ENDED` on him). Then once with `bSubstrateHolderJoinGuard=0`: `ANCHOR LEAK ... his fight is GENUINE`, then `REAL COMBAT (merged-into-a-genuine-fight ...)` for the caster, and still no `combat ENDED` on the other follower. PASS = as stated.
 21. **H3 gait probe (Movement batch 2) (needs the G3 + ch.7 merge).** Any ch.24 claim that moves a follower (hide run or give-ground). `[ch.24] 0x... GAIT PROBE (H3, passive): speed N u/s, heading-vs-velocity N deg = FORWARD|STRAFE|BACKPEDAL` once a second plus a `SUMMARY` line. PASS = summary lines captured; mostly FORWARD at 300+ u/s = a real run, mostly STRAFE/BACKPEDAL = he keeps facing his target (facing seat question B#16). Send the summaries.
-22. **G3 hide run, then the sneak attack (Movement batch 3) (needs the G3 + ch.7 merge).** Let a foe find the Thief near cover (pillar, rock, wall corner, doorway). `MFO.log`: `[conceal] ... concealment point x,y,z ... hidden from all N foe(s)`, `[iaus]` choosing `disengage`, `[disengage] ... running to ...`, `[disengage] ... ARRIVED` (or the run ends on the way), `[conceal] ... hide run over: hidden ... no foe detects him (G2's verdict)` as soon as the foes lose him, `[sneak] ... the hide hold (card G3) keeps the stance claim`, then `[conceal] ... the blow from stealth is picked: the hide hold's stance is released`. Watch: runs (not walks), stops attacking on the way, run ends the moment foes lose him (not after 12 s), first blow lands as a sneak attack. Cap: `hide run FAILED: the hold CAP (12 s) was hit ...`. Open ground with no cover: `NO concealment point` and no run. Re-detected before the blow: `a foe detects him again (revealed)`. PASS = as stated.
-23. **G3 flee, non-sneak class, tree ON (Movement batch 3b) (needs the G3 + ch.7 merge).** A fighter class that may disengage (kDisengage), `bIausHideRoad=1`. Get him under 30% health with a foe on him and a health potion or heal spell. `[conceal] ... FLEE point ...`, `disengage` chosen, `[disengage] ... running to ...`, during the run no swings or offense casts, a heal cast or potion as soon as possible, then `flee run over: healed past the retreat's health line` (or `arrived at the point away from the foes`). Tree OFF: he must never take this flee. PASS = as stated.
+22. **G3 hide run, then the sneak attack (Movement batch 3) (needs the G3 + ch.7 merge).** Let a foe find the Thief near cover (pillar, rock, wall corner, doorway). `MFO.log`: `[conceal] ... concealment point x,y,z ... hidden from all N foe(s)`, `[iaus]` choosing `disengage`, `[disengage] ... running to ...`, `[disengage] ... ARRIVED` (or the run ends on the way), `[conceal] ... hide run over: hidden ... no foe detects him (G2's verdict)` as soon as the foes lose him, `[sneak] ... the hide hold (card G3) keeps the stance claim`, then `[conceal] ... the blow from stealth is picked: the hide hold's stance is KEPT until the blow resolves`, `[conceal] ... the blow from stealth is under way N ms after the pick ... sneaking now = yes`, and `[conceal] ... the blow from stealth RESOLVED: his hit landed on <foe> N ms after the pick with the stance held (sneak attack flag SET)`. Only after that line may `[sneak]` / Harbinger show the stance released. A miss reads `RESOLVED without a hit: his swing ended ...`. FAIL lines to send back: `sneak attack flag NOT set`, `sneaking now = NO`, `did NOT resolve: the blow's CAP was hit` (6 s with the swing still live), or he stands up before the hit lands. Watch: runs (not walks), stops attacking on the way, run ends the moment foes lose him (not after 12 s), first blow lands as a sneak attack. Cap: `hide run FAILED: the hold CAP (12 s) was hit ...`. Open ground with no cover: `NO concealment point` and no run. Re-detected before the swing starts: `a foe detects him again (revealed)` (while a swing is live the reveal waits for the blow to resolve). PASS = as stated, with he stays crouched through the swing and the flag SET.
+23. **G3 flee, non-sneak class, tree ON (Movement batch 3b) (needs the G3 + ch.7 merge, Harbinger ABI 40).** A fighter class that may disengage (kDisengage), `bIausHideRoad=1`. Get him under 30% health with a foe on him and a health potion or heal spell. `[conceal] ... FLEE point ...`, `disengage` chosen, `[disengage] ... running to ... ch.7 deny: Offense (attacks and hostile casts; his heals pass) h=N`, during the run no swings or offense casts, a heal cast or potion as soon as possible (with a heal SPELL: `APMF.log` `[ch.7] hostile-offense: 0x... casts '<heal>' ... NOT Offense, passes the Offense deny`, and the heal lands), then `flee run over: healed past the retreat's health line` (or `arrived at the point away from the foes`). Tree OFF: he must never take this flee. PASS = as stated.
+23b. **FIELD WATCH: heals denied as UNDECLARED (review P1-1) (needs the G3 + ch.7 merge, Harbinger ABI 40).** During steps 19 (the G2 hold with a heal claim: `[hide] ... the ch.7 deny is refiled as Offense ALONE`) and 23 (the flee), search `APMF.log` for `[ch.7] hostile-offense: 0x... casts '<spell>' ... nature UNDECLARED by its record ... counted as HOSTILE, the Offense deny stands`. On LoreRim many heals from spell mods carry a script effect, and Harbinger denies those by rule (only heals on its beneficial allow-list pass; open question 91). Each such line during a hold or a flee is a heal that did NOT land. Send every UNDECLARED line with the spell name and whether the follower stayed unhealed. No line and the heal landed = the allow-list covered that spell. This is a watch item, not a pass / fail step.
 24. **G3 failures loud, no hitch (Movement batch 4-5) (needs the G3 + ch.7 merge).** If he never arrives: `[conceal] ... hide run FAILED: <why>` / `flee run FAILED` (no path, outside the leash, another ch.24 claim, 10 s). 25 s cooldown counts from the END of the run. While the Thief is attacked the pick runs about every 1.5 s: watch the Deck frame time. PASS = every failure carries a line, no hitch.
 
 ### PART 4: save/load round trip, then XP rate last
@@ -258,3 +259,63 @@ Needs BOTH DLLs from those branches. A follower with a shield (or any melee weap
 
 ### Saved question
 - Q61 (still OPEN): should scripts/console still make a "no drugs" follower drink? Default kept: allow.
+
+## Movement batch (Harbinger `feat/h3-disengage` + MFO `feat/g3-disengage`, pending review; g3-disengage.md)
+
+Setup: both DLLs from the two branches. Harbinger `APMF.ini`: `[CombatApproach] bApproachGaitProbe=1` (default),
+`[CombatSubstrate] bSubstrateHolderJoinGuard=1` (default). MFO.ini `[Debug]`: `bIausHideRoad=1`, `bSneakInCombat=1`,
+and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-line class equipped and Sentient AI ON.
+
+1. **Anchor leak Q92.** Fight a group with two followers, one of them a caster with an out-of-combat buff (Candlelight).
+   Kill the last near foe so the party drops out of combat for a moment while more foes are close.
+   Expect in `APMF.log`: `HELD HOLDER GROUP JOIN REFUSED` when the engine tries to pull the caster into the other
+   follower's fight, NO `ANCHOR LEAK` line, and the other follower keeps fighting (no `combat ENDED` on him).
+   Then once with `bSubstrateHolderJoinGuard=0`: `ANCHOR LEAK ... his fight is GENUINE`, then
+   `REAL COMBAT (merged-into-a-genuine-fight ...)` for the caster, and still no `combat ENDED` on the other follower.
+2. **H3 gait (also "class H3" above).** Any ch.24 claim that moves a follower: the give-ground step, or the hide run.
+   Expect `[ch.24] 0x... GAIT PROBE (H3, passive): speed N u/s, heading-vs-velocity N deg = FORWARD|STRAFE|BACKPEDAL`
+   once per second and a `SUMMARY` line at the end. Send the summary lines. Mostly FORWARD at 300+ u/s = a real run.
+   Mostly STRAFE or BACKPEDAL = he keeps facing his target (the facing seat question, B#16).
+3. **G3 hide run (sneak class), then the sneak attack.** Let a foe find the Thief near cover (a pillar, a rock, a wall corner,
+   a doorway). Expect in `MFO.log`: `[conceal] ... concealment point x,y,z ... hidden from all N foe(s)`, then `[iaus]` choosing
+   `disengage`, `[disengage] ... running to ...`, `[disengage] ... ARRIVED` (or the run ends on the way), and
+   `[conceal] ... hide run over: hidden ... no foe detects him (G2's verdict)` as soon as the foes lose him, with
+   `[sneak] ... the hide hold (card G3) keeps the stance claim`. Then G2's hold row keeps him still and the blow from stealth
+   follows. The stance is KEPT through the blow (fix of review P1-G3: the engine reads the stance when the hit lands):
+   `[conceal] ... the blow from stealth is picked: the hide hold's stance is KEPT until the blow resolves`, then
+   `[conceal] ... the blow from stealth is under way N ms after the pick (attack state N, own cast ...) ... sneaking now = yes`,
+   then `[conceal] ... the blow from stealth RESOLVED: his hit landed on <foe> N ms after the pick with the stance held (sneak
+   attack flag SET)`. He must stay crouched until that line. A miss reads `RESOLVED without a hit: his swing ended with no hit
+   event` (a shot or a cast waits 1.5 s more for its projectile). Send back any `sneak attack flag NOT set`, any
+   `sneaking now = NO`, and any `did NOT resolve: the blow's CAP was hit` (6 s with the swing still live). Watch: does he run (not walk),
+   does he stop attacking on the way, does the run end the moment the foes lose him (not after 12 s), does the first blow
+   land as a sneak attack. If the cap is hit expect `hide run FAILED: the hold CAP (12 s) was hit ...`. In the open with no
+   cover expect `NO concealment point` and no run. A foe that detects him again before his swing starts releases the stance
+   (`a foe detects him again (revealed)`); once the swing is live the reveal waits until the blow resolves.
+3b. **G3 flee (non-sneak class, tree ON).** A fighter class that may disengage (kDisengage), `bIausHideRoad=1`. Get him under 30%
+   health with a foe on him and a health potion or a heal spell. Expect `[conceal] ... FLEE point ...`, `disengage` chosen,
+   `[disengage] ... running to ...`, and during the run no swings or offense casts, a heal cast or a potion drunk as soon as
+   possible, then `flee run over: healed past the retreat's health line` (or `arrived at the point away from the foes`).
+   With the class tree OFF he must never take this flee.
+3c. **ch.7 Offense means hostile (Harbinger ABI 40, the flee's heals).** Same setup as 3b, the follower has a heal SPELL and
+   no potion. Startup, `APMF.log`: `[ch.7] hostile-offense (ABI v40) on 1.6.1170: CastImmediateSpell hostile-only,
+   CastConcentrationSpell hostile-only, PrepareDualCast hostile-only, CastShout hostile-only` (a `REFUSED` there = send the
+   line). During the flee, `MFO.log`: `[disengage] ... ch.7 deny: Offense (attacks and hostile casts; his heals pass) h=N`.
+   `APMF.log`: `[ch.7] hostile-offense: 0x... casts '<heal spell>' (0x...), declared non-hostile -- NOT Offense, passes the
+   Offense deny (h=N)`, and about every 30 s `[ch.7] hostile-offense H ... passed-beneficial=N denied-hostile=N ...`.
+   Watch: the heal animates and his health goes up while he runs, and he casts no offense spell and swings at nobody.
+   PASS = at least one heal lands during the flee and `denied-hostile` counts any offense cast the engine tried.
+   A spell line with `nature UNDECLARED ... counted as HOSTILE` names a script-only spell: send it.
+   Once with an old Harbinger DLL (ABI 39): `[disengage] Harbinger ABI 39 is older than 40 ... A flee files NO ch.7 deny`
+   once, and the start line says `ch.7 deny: NOT FILED`.
+3d. **Hide run and G2 hold keep every cast denied.** In step 3 the start line says `ch.7 deny: Offense|Cast (attacks and
+   every cast) h=N` and he casts nothing on the way. The run now ends after TWO laps in a row with no foe detecting him.
+   With a silent caster (Quiet Casting) who holds hidden and picks an OFFENSE spell: `[hide] ... ch.7 deny STANDS DOWN whole
+   while his own offense cast claim is delivered`, the cast lands, then `... the ch.7 offense/cast deny is filed again`.
+   When the pick is a HEAL: `[hide] ... his heal claim is being delivered: the ch.7 deny is refiled as Offense ALONE`, the
+   heal lands, he does NOT swing or shoot meanwhile, then `... filed again`. FAIL = an attack during the heal, or APMF.log
+   `nature UNDECLARED ... counted as HOSTILE` naming the heal (send the spell name: its record has a script effect).
+4. **G3 failures are loud.** If he never arrives: `[conceal] ... hide run FAILED: <why>` / `flee run FAILED` (no path, outside the
+   leash, another ch.24 claim, 10 s). Send the line. The 25 s cooldown counts from the END of the run.
+5. **No hitch.** While a Thief is being attacked the pick runs about every 1.5 s. Watch the frame time on the Deck.
+

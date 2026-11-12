@@ -32,6 +32,9 @@
 // water is not ours to send). The same gate holds at the FIRST file (ServiceSneakRule): the rule still stands, the
 // claim waits until he is on foot (review SEV-4 on a31f154).
 //
+// THE HIDE OWNER (card G3, marth MB5). Concealment.cpp keeps the claim through a hide run and G2's hold row
+// (HoldSneakForHide / ReleaseSneakHide): a `hideHeld` mark that bSneakInCombat's refusal, the in-combat sweep release and the
+// table-lap aging all skip. It is released on the blow, a reveal, the fight's end, dismissal, death or a load.
 // IN COMBAT IS UNOBSERVED (principle 5). Out of combat ch.3 is field-proven. Whether the combat behaviour tree
 // stands an NPC up mid-fight is not, so the in-combat road is the dev switch bSneakInCombat (MFO.ini, default OFF).
 // With it off, a follower in combat (APMFBridge::InCombat) gets no claim and a standing one is released at once.
@@ -85,6 +88,7 @@ namespace MFO::APMFBridge {
             std::uint32_t    refiles     = 0;       // re-files of this hold (for the log)
             bool             wanted      = false;   // the rule stood within kHoldLaps counted laps
             bool             inCombat    = false;   // the last lap that reached the rule was in combat
+            bool             hideHeld    = false;   // card G3 (Concealment): the hide run / G2 hold keeps the stance, in combat too
             int              lastSneak   = -1;      // last IsSneaking logged while claimed (-1 = none yet)
             bool             refusedLogged = false;
             // the rate limiter
@@ -152,11 +156,18 @@ namespace MFO::APMFBridge {
         }
     }
 
+    // Card G3: the hide run / G2 hold owns the stance (HoldSneakForHide), so the in-combat gate does not apply to it.
+    static bool HideStanceHeld(RE::FormID a_fid) {
+        std::scoped_lock lk(g_sneakMx);
+        const auto it = g_sneaks.find(a_fid);
+        return it != g_sneaks.end() && it->second.hideHeld;
+    }
+
     const char* ServiceSneakRule(RE::Actor* a_follower, SneakTable a_table) {
         if (!a_follower) return "no follower";
         const RE::FormID fid = a_follower->GetFormID();
         const bool inCombat = InCombat(a_follower);
-        if (inCombat && !Config::g_sneakInCombat.load(std::memory_order_relaxed)) {
+        if (inCombat && !Config::g_sneakInCombat.load(std::memory_order_relaxed) && !HideStanceHeld(fid)) {
             ReleaseSneak(fid, "in combat, bSneakInCombat off");
             return "sneak in combat is off (bSneakInCombat, dev switch)";
         }
@@ -192,6 +203,7 @@ namespace MFO::APMFBridge {
         const auto it = g_sneaks.find(a_follower);
         if (it == g_sneaks.end() || !it->second.wanted) return;
         auto& c = it->second;
+        if (c.hideHeld) return;   // card G3: the hide owner is not a table rule; laps never age it
         const bool counts = a_table == SneakTable::Logistics || c.owner == SneakTable::Combat || a_ownCombat;
         if (!counts || ++c.idleLaps < kHoldLaps) return;
         ReleaseLocked(g_apmf.load(std::memory_order_relaxed), a_follower, c,
@@ -206,7 +218,38 @@ namespace MFO::APMFBridge {
         const auto it = g_sneaks.find(a_follower);
         if (it == g_sneaks.end()) return;
         ReleaseLocked(api, a_follower, it->second, a_why);
-        it->second.wanted = false;
+        it->second.wanted   = false;
+        it->second.hideHeld = false;
+    }
+
+    const char* HoldSneakForHide(RE::Actor* a_follower) {
+        if (!a_follower) return "no follower";
+        const RE::FormID fid = a_follower->GetFormID();
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api) return "sneak needs Harbinger (ch.3)";
+        const bool inCombat = InCombat(a_follower);
+        std::scoped_lock lk(g_sneakMx);
+        auto& c = g_sneaks[fid];
+        if (!c.hideHeld && MayLogLocked(fid, c))
+            spdlog::info("[sneak] {:08X}: the hide hold (card G3) keeps the stance claim{}", fid,
+                         inCombat ? " in combat (it overrides bSneakInCombat for this owner only)" : "");
+        c.hideHeld = true;
+        c.inCombat = inCombat;
+        if (c.handle != APMF_API::kInvalidHandle) return nullptr;   // held
+        if (a_follower->AsActorState()->IsSwimming() || a_follower->IsOnMount()) return "swimming or riding";
+        if (c.retryIn > 0) return "Harbinger refused the sneak claim (retrying)";
+        c.refiles = 0;
+        return FileLocked(api, fid, c, true) ? nullptr : "Harbinger refused the sneak claim";
+    }
+
+    void ReleaseSneakHide(RE::FormID a_follower, const char* a_why) {
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        std::scoped_lock lk(g_sneakMx);
+        const auto it = g_sneaks.find(a_follower);
+        if (it == g_sneaks.end() || !it->second.hideHeld) return;
+        auto& c    = it->second;
+        c.hideHeld = false;
+        if (!c.wanted) ReleaseLocked(api, a_follower, c, a_why);   // a table rule that also wants it keeps the claim
     }
 
     bool SneakClaimHeld(RE::FormID a_follower) {
@@ -228,7 +271,7 @@ namespace MFO::APMFBridge {
             if (c.handle == APMF_API::kInvalidHandle) {
                 // Nothing held (released, or a refused Request waiting out its retry): forget the entry once the
                 // rule has stopped standing (NoteSneakTableLap, ReleaseSneak).
-                if (!c.wanted) { it = g_sneaks.erase(it); continue; }
+                if (!c.wanted && !c.hideHeld) { it = g_sneaks.erase(it); continue; }
                 ++it;
                 continue;
             }
@@ -237,10 +280,11 @@ namespace MFO::APMFBridge {
             const char* why = nullptr;
             // "The rule stopped standing" is not decided here: it is counted in table laps (NoteSneakTableLap).
             if (!a || a->IsDead() || !a->Is3DLoaded())      why = "follower gone, dead or unloaded";
-            else if (!combatRoad && InCombat(a))            why = "in combat, bSneakInCombat off";
+            else if (!combatRoad && !c.hideHeld && InCombat(a)) why = "in combat, bSneakInCombat off";
             if (why) {
                 ReleaseLocked(api, fid, c, why);
-                c.wanted = false;
+                c.wanted   = false;
+                c.hideHeld = false;
                 ++it;
                 continue;
             }

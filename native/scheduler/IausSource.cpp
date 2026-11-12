@@ -12,6 +12,7 @@
 #include "Targeting.h"
 #include "Vocabulary.h"
 #include "apmf/APMFBridge.h"
+#include "Concealment.h"   // card G3: the hide run is released with the running decision
 #include "cast/Actuation.h"
 #include "iaus/SpellBook.h"
 
@@ -117,6 +118,7 @@ namespace MFO::Scheduler {
             APMFBridge::ReleaseHealApproach(a_id, a_why);
             APMFBridge::ReleaseOffenseApproach(a_id, a_why);
             APMFBridge::ReleaseGroundStep(a_id, a_why);
+            Concealment::Release(a_id, a_why);   // card G3: a hide run and its drive
             // The WEAPON stays in his hand, but its hold's RANK is the old source's (review F1): a table row index
             // would outrank every IAUS heal on the left hand. Unranked until the new source's equip stamps its own.
             Actuation::UnrankForcedHold(a_id);
@@ -227,6 +229,7 @@ namespace MFO::Scheduler {
         case Family::Taunt:        c.actionOpcode = Vocab::kActTaunt; break;
         case Family::Bash:         c.actionOpcode = Vocab::kActBash; break;    // Harbinger ch.31 (generated only behind Snapshot::bashRoad)
         case Family::GiveGround:   c.actionOpcode = Vocab::kActGiveGround; break;   // Harbinger ch.24 on a point (Snapshot::groundRoad)
+        case Family::Disengage:    c.actionOpcode = Vocab::kActDisengage; break;    // card G3 (Concealment.cpp; Snapshot::concealRoad)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
@@ -330,7 +333,18 @@ namespace MFO::Scheduler {
             m_pickedStep = static_cast<int>(it->idx);
             // An approach leg (the power attack closing to melee) is the decision in effect, not the swing: it
             // must not start the hard cooldown of the swing it is closing for (the G9 rule, Outcome::approach).
-            Iaus::Engine::NoteFired(m_id, cand, step, m_tick, /*a_startCooldown=*/!a_outcome.approach);
+            // The disengage's cooldown counts from the END of its run (Concealment calls NoteDisengageEnded), not from the fire.
+            Iaus::Engine::NoteFired(m_id, cand, step, m_tick, /*a_startCooldown=*/!a_outcome.approach && cand.family != Family::Disengage);
+            // Card G3 (marth MB5): a blow ends the hide hold's stance. The pick that fired is the blow (the engine's own sneak
+            // attack, G2 Layer 1): the blow is ARMED here and the stance claim is released when it RESOLVES (his hit, or the
+            // swing's end: Concealment::Service), because the engine reads the stance when the hit lands, not at the pick.
+            switch (cand.family) {
+            case Family::Attack: case Family::PowerAttack: case Family::CastOffense: case Family::CastControl:
+            case Family::Exploit: case Family::Bash:
+                Concealment::NoteBlow(m_id);
+                break;
+            default: break;
+            }
             // MFO-B658: the book's buff / ward "already on", the live summon and the potion stock are up to 5 s
             // old and no container event covers the first three. Re-measure at once after such a fire.
             switch (cand.family) {

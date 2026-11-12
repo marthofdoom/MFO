@@ -3214,6 +3214,8 @@ the AI can't re-arm magic over a forced weapon.
   is byte-identical native enforcement.
 
 ### Sightline.cpp — line-of-sight split across threads (NOT a hook)
+
+- **`PointSeenNow` (card G3, 2026-11-11):** viewer -> a POINT, MAIN THREAD ONLY, uncached, no Harbinger call; consumer `Concealment.cpp`. See section 11 "THE DISENGAGE DRIVE + THE HIDE RUN".
 Raycast runs only on the main thread, results cached, worker reads the cache.
 - **TWO BASES (2026-09-30, `fix/mfo-heal-field0930`, marth: every spell and bow gets our LoS).** The engine's
   `Actor::HasLineOfSight` for an NPC viewer is a CACHED per-(viewer, target) bool (AIProcess), not a raycast, so it
@@ -9082,6 +9084,78 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   must say where it stands in that order. Never send a target with `kApproach_Point` (an older Harbinger would walk him
   to that target instead). The point is not navmesh-checked by MFO: a point the engine cannot path to costs the step's
   2.5 s and is logged, it is not retried.
+- **THE DISENGAGE DRIVE + THE HIDE RUN (cards H3 + G3, `feat/g3-disengage`, 2026-11-11; NOT field-run; research note
+  `Docs/research/2026-11/g3-disengage.md`).**
+  `apmf/Disengage.cpp` (NEW, card H3): `DisengageSupported` (ABI >= 39), `RequestDisengage(follower, point, R, denyOffense)`
+  = TWO Harbinger claims filed together: ch.24 `kApproach_Point | kApproach_Hold` (the engine's own Return To Combat Area
+  runs him to the point, the hold keeps him inside R) and, optional, a ch.7 `kCombatActionCat_Offense` deny for the leg.
+  `ServiceDisengage` -> `DisengageState` None / Running / Arrived (Harbinger `Holding` with the bound applied) / Failed
+  (Harbinger's own end, a claim that never owned the channel after 700 ms, or Yielded / Leashed / Disabled for 1.5 s).
+  `ReleaseDisengage` releases both. `FindStandPoint` = the one wrapper of Harbinger's `FindEmptySpace` (ABI v11, MAIN
+  THREAD ONLY). Own leaf mutex `g_disengageMx` (only nesting: `ClearTransientState`, `g_mx -> g_disengageMx`).
+  `Concealment.{h,cpp}` (NEW, card G3): `Prepare(follower, foes, flee)` (worker, the IAUS gather: true = a fresh point is
+  known; asks for a pick at most every 1.5 s), the PICK on the main thread (`PickStep`, 4 candidates per frame, re-Posts
+  itself; 24 candidates from `FindStandPoint`, each tested by `Sightline::PointSeenNow` from every listed foe), `Begin`
+  (from `cast/Fire.cpp` `act.disengage`), `Service(follower)` (once per combat service in `scheduler/CombatScan.cpp`,
+  right after `ServiceGroundStep`: true = a SNEAK run or its hold stands and the RULE SCAN IS SKIPPED this lap, as in a
+  retreat; a non-sneak FLEE returns false every lap so the IAUS keeps healing), `Release` (beside every `ReleaseGroundStep`: combat end, retreat, dismissal, `IausSource` `StandDown`),
+  `ClearTransientState` (`Serialization.cpp`, after `Scheduler::ClearTransientState`; an epoch drops a pick of the old
+  world). `Sightline::PointSeenNow(viewer, point, bodyHeight)` (`Sightline.h`, MAIN THREAD ONLY): MFO's own ray to a
+  POINT at three crouched heights; only solid world geometry stops it (an allow-list of six layers, everything else
+  and every phantom passed through); `Unavailable` is never hidden.
+  IAUS: `Family::Disengage` (APPENDED, `iaus/Core.h`), `Vocab::kActDisengage` (`act.disengage`, IAUS-ONLY like
+  `act.bash`), `ClassGate::sneakClass` (`Flag::kSneakAlways`, `iaus/SpellBook.cpp`; false with the tree OFF),
+  `Snapshot::concealRoad` / `concealPoint` / `fleeRun` (set in `Candidates::Build` after the gate; G2 owns `hideRoad`), `Tuning::disengageCooldownSec` (25 s),
+  generated in `Generate.cpp` `Guards` only when the road is open, a point is known, the class is a sneak class that may
+  disengage and `iaus/Disengage.h` `Found(snapshot)` is true. `[Debug] bIausHideRoad` (default OFF).
+  **G2 SEAM (done, merged with Layer 1):** `iaus/Disengage.h` `FoeHasFound` = `a_foe.detectsMe == Tri::Yes`; `Found`,
+  `DetectShare`, `Threatened`, `kFleeHealthLine` (0.30, the retreat's own line, `Cons::RetreatHp` / `RetreatDanger`).
+  **PACING (marth 2026-11-11, fix round on 1f59152):** a SNEAK class's run / hold ENDS the moment `Concealment::Service`
+  reads `Hide::Verdict(Hide::Read(foe, handle))` != Yes for every listed foe (on the way or at the point; the 12 s cap is
+  logged when hit); the G1 stance claim is then kept by `APMFBridge::HoldSneakForHide` (a `hideHeld` mark in
+  `apmf/SneakClaims.cpp`: the in-combat refusal and table-lap aging do not apply to this owner) for G2's hold row, and is
+  released by `ReleaseSneakHide` when the blow from stealth RESOLVES, not at its pick (fix of review P1-G3 of 938f45f: the
+  engine reads the stance when the hit lands). `Concealment::NoteBlow` (called from `IausSource::Record` when an attack /
+  power attack / offense or control cast / exploit / bash fires) only ARMS `Stance::armed`; `ServiceBlow` (anon, called from
+  the stance branch of `Concealment::Service` every combat lap) releases on `Stance::hit` (set by `BlowHitSink`, a
+  `TESHitEvent` sink registered by `Concealment::RegisterHitSink` from `Diagnostics::Install`; any thread, FormID compare under
+  the leaf `g_mx`, filtered by `Followers::IsTrackedFast`), or once his attack state / `Actuation::OwnCastInFlight` was seen
+  live and is none again (+ `kBlowFlightMs` 1.5 s for a bow state or a cast), or at `kBlowCapMs` (6 s from the first live
+  lap, warned). While a swing is live `ServiceBlow` returns true and the reveal road is skipped; armed but not yet live =
+  the old hold with the reveal road. **What breaks:** releasing at the pick again (SneakStop one frame later, no sneak
+  multiplier); timing the hold from the PICK (the walk to the target has no fixed length, principle 9); an engine call or a
+  second lock inside the sink. Also released on a reveal (a foe detects him again), at combat end,
+  dismissal, death (`CombatScan` dead branch), a stand-down and a load (`Release` / `ClearTransientState`). A NON-SNEAK class
+  (class tree ON, kDisengage, not kSneakAlways) at or under 30% health with a foe on him FLEEs through the same drive to a
+  point 150u+ farther from the nearest foe (no cover test): `Snapshot::fleeRun` (`Concealment::FleeRunning`) stops
+  `Generate` making attacks, power attacks, taunts, retreats, offense/control casts, guards and a second Disengage, and
+  `Cons::BoostFleeHeal` (x2) lifts his own heal casts and health potions. It ends when `Service` reads health over the line,
+  on arrival, or on failure. Need term `Cons::DisengageNeed` (APPENDED): hide = the share of the counted foes that have found
+  him, flee = `RetreatDangerOf` (the Retreat family's own RetreatDanger, extracted in `Catalogue.cpp`). The 25 s hard cooldown
+  counts from the END of the run (`Iaus::Engine::NoteDisengageEnded`; `IausSource::Record` stamps nothing at the fire).
+  **What breaks:** calling `PointSeenNow`, `FindStandPoint` or `Confidence::LeashRadius` on the wrong thread (the first
+  two are MAIN only, the leash is read on the WORKER in `Prepare` and carried in the job); reading `Unavailable` as
+  hidden (he "hides" in plain sight on a cold cell); dropping the `Concealment::Service` early return (a cast or attack
+  named under the run's own ch.7 Offense deny is refused by Harbinger every lap); releasing the offense approach and the give-ground step BEFORE Harbinger has accepted the drive (`RequestDisengage` releases them only after the
+  approach handle is granted; all MFO ch.24 clients file at `kOwnBasis`, the EARLIER claim keeps the channel); letting the combat
+  table's sneak rule or the sweep release a hide-held claim in combat; stamping the Disengage cooldown at the fire; sending a target with `kApproach_Point`; a new `Family` value anywhere but the END of the enum (its
+  number is in log lines and the cooldown id). The harness models the gate and the pacing (`DisengageRules`); `tools/iaus_sim`
+  does not model this family (the sim's `Policy.h` falls to its `default`); its weight 1.0 and cooldown were chosen, not
+  searched. THE LEG'S ch.7 DENY IS DECLARED PER RUN (2026-11-11, Harbinger ABI v40 "Offense means hostile",
+  `APMFBridge::DisengageDeny`, `apmf/Disengage.cpp`): the FLEE files Offense alone (attacks and hostile casts, his heals
+  land) and files NO ch.7 claim on a Harbinger below ABI 40 (one warn); the HIDE RUN files Offense | Cast (every cast). What
+  breaks: filing Offense alone on ABI < 40 (it denies his heals there: the SEV-2 of the ba1328c re-review); dropping Cast
+  from the hide run (the engine's own beneficial casts then run on the way). The hidden end and the reveal watch read
+  `WatchList` (his CURRENT group foes by the gather's set tests plus the pick's foes, no cap) and the run ends only after
+  `kHiddenReads` = 2 consecutive hidden laps: reading only `run.foes` again is the re-review's F2. G2's hold
+  (`apmf/HideClaims.cpp`, `DenyMode`) changes its ch.7 claim while MFO's own cast claim is live for him (`IsOwnedCastActive` /
+  `IsHealCastActive`, read BEFORE `g_hideMx`), or it force-fails the silent cast MFO itself claimed: an OFFENSE cast claim =
+  the deny stands down whole (attack leaves open for those laps, logged); a HEAL claim alone on ABI >= 40 = refiled as
+  Offense ALONE (attacks stay denied, the heal passes; tier-3 review F2, 2026-11-11); a heal on ABI < 40 = stands down
+  whole. What breaks: releasing everything for a heal again (opens every attack leaf); filing Offense alone with no claim
+  live (the engine's own beneficial casts then run while he hides); a heal whose record Harbinger's allow-list reads as
+  undeclared (any Script effect) is DENIED under Offense alone and does not land during the hold (open question CH7-Q6).
+  OPEN review findings for this subsystem: `Docs/REVIEW-BACKLOG.md` MFO-B740..B743, MFO-B759..B764.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

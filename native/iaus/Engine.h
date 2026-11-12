@@ -49,6 +49,10 @@ namespace MFO::Iaus::Engine {
     void NoteFired(RE::FormID a_actor, const Candidate& a_c, const Step& a_step, const Tick& a_tick,
                    bool a_startCooldown = true);
     void NotePostureFired(RE::FormID a_actor, const Candidate& a_c, const Tick& a_tick);
+    // Card G3 (marth 2026-11-11): the disengage's hard cooldown counts from the END of its run / hold, not from the fire.
+    // IausSource stamps nothing at the fire (NoteFired with a_startCooldown = false); Concealment calls this when the run ends
+    // (any way it ends). Any thread (the shared Cooldowns store has its own mutex).
+    void NoteDisengageEnded(RE::FormID a_actor);
 
     // The [iaus] line (on change, plus every logRepeatSec while it runs) and, when a_explain (bIausExplain), one
     // [iaus-why] line per top-3 candidate. a_pickedStep = the index into a_d.order that fired, -1 for none.

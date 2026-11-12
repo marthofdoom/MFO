@@ -9,6 +9,7 @@
 #include "cast/Actuation.h"       // T#76: dismissal releases the equip force-hold too
 #include "Packages.h"
 #include "apmf/APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
+#include "Concealment.h"       // card G3: a dismissed follower's hide run
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim
 #include "CastBounds.h"   // Disarm -- drop his MFO-executed-cast bound (§2 registry)
 #include "logistics/Logistics.h"
@@ -511,6 +512,7 @@ namespace MFO::Followers {
         APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         APMFBridge::ReleaseOffenseApproach(id, "dismissed", true);   // ch.24 offense approach
         APMFBridge::ReleaseGroundStep(id, "dismissed");              // ch.24 step back (a point claim)
+        Concealment::Release(id, "dismissed");                       // card G3: a hide run and its drive
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
         // serialized tail), but a dismissed follower's live heal-cast claim +
         // MFO-executed-cast bound must be released so neither outlives him. Both
