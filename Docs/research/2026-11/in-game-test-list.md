@@ -357,4 +357,4 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
    A stolen item (drop one stolen ring on the floor and in a chest in a cave): he leaves it (`BARRED:this copy is owned by someone
    else` for the chest copy; `owned (never steal)` for the loose ref).
 4. **Owned doors / stations.** A town shop or inn errand whose only way in is an owned or locked door is not declared
-   (`[town-walk] ... locked or off-limits`; an owned but legal shop door stays usable). The Whiterun forge/smith station owned by its smith is skipped by the smithing errand.
+   (`[town-walk] ... locked or off-limits`; an owned but legal shop door stays usable). A smithing station is skipped only when the engine says using it is a crime; expect `via=station` lines only for off-limits ones (an owned but legal town smithy stays usable).

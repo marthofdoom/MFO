@@ -16,6 +16,7 @@ namespace MFO::Logistics::TheftGate {
         // formula, and well inside the high-process list the scan walks. Inside it the line of sight decides.
         constexpr float kGuardRadius   = 3500.0f;
         constexpr auto  kGuardFresh    = std::chrono::milliseconds(2000);   // a cached guard verdict is trusted this long
+        constexpr auto  kGuardUnreadMax = std::chrono::seconds(10);        // an answer nobody has read yet is usable once up to this age
         constexpr auto  kGuardRepost   = std::chrono::milliseconds(500);    // and re-asked no faster than this per (follower, src)
         constexpr auto  kLogEvery      = std::chrono::seconds(30);          // [theft-gate] per (follower, src, verdict)
         constexpr RE::FormID kPlayerBaseNpc = 0x00000007;
@@ -73,7 +74,7 @@ namespace MFO::Logistics::TheftGate {
         std::unordered_map<RE::FormID, Ring> g_rings;
 
         // ── the guard cache ──
-        struct GuardAns { SClock::time_point at{}, posted{}; bool seen = true; RE::FormID guard = 0; const char* how = "pending"; bool have = false; };
+        struct GuardAns { SClock::time_point at{}, posted{}; bool seen = true; RE::FormID guard = 0; const char* how = "pending"; bool have = false; bool unread = false; };   // unread: posted by a reader that has not seen it yet
         std::mutex g_gMx;
         std::unordered_map<std::uint64_t, GuardAns> g_guard;   // (follower, src) -> the last scan
 
@@ -82,7 +83,7 @@ namespace MFO::Logistics::TheftGate {
         // MAIN THREAD (or the VR no-pump caller). Does any live guard in the high-process list see the follower or the source?
         // Seen = Visible, or Unknown (the sight could not be measured: fail closed). Teammates and the player are never guards here.
         void ScanGuards(RE::FormID a_fid, RE::FormID a_srcId) {
-            GuardAns ans; ans.at = SClock::now(); ans.posted = ans.at; ans.have = true; ans.seen = false; ans.how = "none";
+            GuardAns ans; ans.at = SClock::now(); ans.posted = ans.at; ans.have = true; ans.unread = true; ans.seen = false; ans.how = "none";
             auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_fid);
             auto* src = a_srcId ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a_srcId) : nullptr;
             auto* pl  = RE::ProcessLists::GetSingleton();
@@ -168,7 +169,9 @@ namespace MFO::Logistics::TheftGate {
         {
             std::scoped_lock lk(g_gMx);
             auto& e = g_guard[GKey(fid, sid)];
-            if (e.have && now - e.at < kGuardFresh) { have = true; seen = e.seen; how = e.how; guard = e.guard; }
+            // Fresh = younger than the TTL, OR never read yet: the service round-robin (N x 133 ms per follower, over 2 s from 16 actives) can
+            // revisit a follower later than the TTL, and an answer that was posted for that very reader must still be usable once.
+            if (e.have && (now - e.at < kGuardFresh || (e.unread && now - e.at < kGuardUnreadMax))) { have = true; seen = e.seen; how = e.how; guard = e.guard; e.unread = false; }
             if (!have && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= kGuardRepost)) { e.posted = now; post = true; }
         }
         if (post) {
