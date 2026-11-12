@@ -614,6 +614,7 @@ int main(int argc, char** argv) {
     // Beta 1 cells on 8 threads, 2 s for a one-class probe. An explicit --class-oracle N keeps the full setting, as before.
     if (autoGap && !ocGiven) { oc.K = 6; oc.H = 90.0; }
     if (ratingN < 0) ratingN = !scenario.empty() ? 0 : 3;
+    if (declineN > 0 && oracle) { g_oracleMode = true; g_oc = oc; if (!noClassRulings) g_classRulings = true; std::printf("PLAYED BY THE CLASS ORACLE (K=%d, %.0f s): where the oracle drinks is a second reading of the drink line\n", oc.K, oc.H); }
     if (declineN > 0) return DeclineReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, declineN, threads, estimates, scrollRoad);
     if (ratingOnly) { std::vector<int> ci; for (std::size_t i = 0; i < allClasses.size(); ++i) if (only.empty() || ("," + only + ",").find("," + allClasses[i].name + ",") != std::string::npos) ci.push_back(static_cast<int>(i));
         std::vector<RatingRow> rr; const long bad = RatingPass(D, allClasses, ci, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, std::max(1, ratingN), threads, estimates, scrollRoad, rr);

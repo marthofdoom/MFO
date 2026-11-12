@@ -1968,3 +1968,148 @@ Do not tune against `--disengage-dnd`, `--c13 lever`, `--aim-scatter` or `--aim-
    Gates, 12 classes per gate (the 31.11 bands hold; Knight +0.1 / +0.1 / +0.0): g3 melee 80.03 ranged 65.71 mage 78.97 knight 70.38 warrior 88.25 mercenary 81.81 archer 78.33 thief 81.02 evoker 81.44 conjurer 74.51 healer 83.25 warlock 77.13; `--stealth off` 79.99 65.71 78.83 70.44 88.21 85.18 78.33 39.60 81.57 72.42 83.18 77.84; shipped 80.15 66.48 79.41 68.86 88.21 85.32 78.44 39.60 81.66 73.11 85.41 80.09.
 4. **Review round of 24b4421.** (a) The guard line is counted from the knight's OWN taunts (`Combatant::tauntedByMe`, `Taunt::TauntedBy`), as the sim tally; (b) it is OFF below `kDrinkHealthLine` (0.34) with a health potion in stock, so a hurt Knight drinks first; (c) the H4 touch range follows the cast IAUS chose on its last decision, not a damage proxy. Re-run: gates identical in the beta1 means (79.63 / 77.44 / 77.64), Knight 70.35 / 70.41 / 68.86; share of blows meeting the guard under 2+ taunted, 6 seeds, blows-weighted: knight 67.9, great-knight 67.9, ebony-warrior 67.5 (min over seeds 63.3); shipped config 67.6 / 68.7 / 68.6 (min 63.4).
 
+
+## 32. The sim batch: tree-OFF base cells, the rating battery, the per-class gap, health decline, the edge-number search (2026-11-12)
+
+Branch `feat/sim-batch` on main 9f328c6. Fable author (sim structure is Fable-only). Changes `tools/iaus_sim`, `tools/iaus_dash`
+and docs. Proof levels as in 31.2: FACT = read in the named source, MODEL = the lab's own choice. Nothing here is FIELD.
+
+### 32.1 The tree-OFF base cells
+
+marth 11-12: "I dont see the 3 base classes with no tree in the sim. I imagine theyd say Line: Base", "They do technically have
+weapon gates (mage knife etc), and should still loosely follow tree on versions. They just have all available options at thier
+disposal".
+
+`RealClasses.cpp` appends `melee-off`, `ranged-off`, `mage-off` after the 35 table rows (indexes 35 to 37, so every table class
+keeps its index and its fights). Line `Base`, tier 1. Each is a copy of its tree-ON T1 row (family, kit, default kit rows, the
+spell tokens of its rows: the mage keeps dagger and staff), then its gate is the tree-OFF branch of `SpellBook::GateFor`
+(FACT, `iaus/SpellBook.cpp`): any known spell, power attack, taunt, retreat, `scrollUser` by the T1 root, no row cooldown (the
+`Tuning` rowless floors apply), no sneak class, no pressed back-off, no Block row. Curve row = `ClassCurves::kBaseOffFirst` + root.
+MODEL: no class package and no class flag, so the style is MFO's stance style with the vanilla Avoid Threat 0.20 and without the
+`kDisengage` fallback offset (`SimClass::csDisengage`); tier 1 rolls no dodge in the lab, as every T1.
+
+`--classes beta1` is now 15 cells (the 12 and the 3 base cells). `--classes beta1-tree` is the 12: every J of sections 30 and 31
+is a `beta1-tree` number and is unchanged (79.63 / 77.44 / 77.64, checked draw for draw). `--curve melee-off:...` addresses a base
+row. `--opt c.N` next to a `--curve` on consideration N is refused (the override is a copy of the shared curve).
+
+### 32.2 The rating battery and the Rating (Tx) column
+
+marth 11-12: "id also like the third comlumn to be a rating(Tx) column. so we can easily see if a class in a tier is less
+effective than another. which means scenarios will have to be even more diverse".
+
+`Rating.h`. A cell is (foe archetype, group size, level band): 10 archetypes (swarm, archers, mages, healer-backed, boss, undead,
+big creature, ambush, kite, mixed) x 2 sizes x 2 bands = 40 cells, N fights each (`--rating N`, 3 in a class report run).
+A fight is a function of the tier, the cell, the fight index and the seed, never of the class:
+
+| Identical for every class of a tier | How |
+|---|---|
+| level, and so the gear rung of every weapon and armor piece | the tier's band: T1 12 / 18, T2 22 / 28, T3 32 / 38, T4 42 / 48 (`Load.h LadderAt` reads the level only) |
+| potions, arrows | 2 health, 2 magicka, 1 stamina, 60 arrows |
+| the player, the second follower (large cells) | built from a stream the subject never draws from (`FightSpec::geoSeed`) |
+| the foes, their strength | picked by role from the loaded world, scaled ONCE against a reference party whose follower is the T1 melee row (`FightSpec::refCls`), so the scale never reads the rated class |
+| places, cover, light, the fight's opening random state | `geoSeed` |
+
+What differs is the class: gate, kit, package, curves, and the spells its own default rows name. MODEL: the archetype strength
+ratios (0.80 to 1.10) and the potion counts are the lab's choice. A list's actors are test input only: foes are picked by role
+(`Data::roles`), a missing role falls back to the next and then to the first spec, and the built-in fixtures cover every role.
+
+Score = mean Utility over the battery. Rank and distance from the tier mean are among the classes of the run. BELOW flag = under
+the tier mean by more than 2.0 U and by more than two standard errors of the per-fight paired difference.
+
+### 32.3 The per-class gap in every class report run
+
+CAUSE of the empty Gap and Trend columns (coordinator, confirmed): a normal class run wrote no scenario rows and no `main_gap`,
+and the ledger names groups. Now a run that writes a results file runs a GAP PASS by itself: per class 4 natural fights and 2 of
+each of its own named scenarios, played by IAUS and by the class oracle on the same fights. Price: the oracle at K=6, 90 s
+(the file records it), about 25 s of wall time for the 15 Beta 1 cells on 8 threads, 2 s for a one-class probe.
+`--class-oracle N` / `--gap-scenarios N` size it, 0 turns it off, `--no-json` runs skip it. Results schema 2 adds `class_gaps`,
+`rating` and `gaps[].classes` (the slugs of the run a ledger group covers). A 4-fight gap is noisy (se 1 to 20 U per class):
+read the Trend column as "same seed, same fights, did it move", not as a measurement of the gap's size.
+
+### 32.4 Health decline and the drink record
+
+`--decline N` (`sim.cpp DeclineReport`, tallies in `World.h Tally::dec*`). Per class and seed: N fights in each of the natural,
+balanced and strong1 brackets and N of every rating cell. Band k = his health in [k/10, (k+1)/10) of his maximum.
+MODEL choices: only seconds in which a foe has him as its target are counted; "too late to drink" = the damage of his last ~2 s
+(`Body::recentDmg`, a 2 s decaying sum) is at least the health he has left; a potion takes 0.6 s from the start of the gulp to
+its effect (`TM::drinkAt`) after a serve lap of up to about 1 s.
+
+### 32.5 Rating, built-in world (`--rating-only --rating 3 --classes beta1 --seeds 1,2,3,4,5,6`, 720 fights per class)
+
+| Tier | Class | Rating | se | Rank | vs tier mean | Flag | Weakest archetype (vs its tier there) |
+|---|---|---|---|---|---|---|---|
+| T1 | melee-off | 77.64 | 0.95 | 1/6 | +8.03 | | |
+| T1 | melee | 76.24 | 1.03 | 2/6 | +6.62 | | archers -0.4 |
+| T1 | mage-off | 72.51 | 1.14 | 3/6 | +2.89 | | boss -1.5 |
+| T1 | mage | 71.76 | 1.16 | 4/6 | +2.15 | | ambush -1.6 |
+| T1 | ranged-off | 62.45 | 1.35 | 5/6 | -7.16 | BELOW | beast -18.2 |
+| T1 | ranged | 57.08 | 1.44 | 6/6 | -12.53 | BELOW | beast -26.7 |
+| T2 | knight | 83.77 | 0.74 | 1/9 | +9.63 | | archers -1.1 |
+| T2 | warrior | 81.92 | 0.83 | 2/9 | +7.78 | | |
+| T2 | mercenary | 80.93 | 0.90 | 3/9 | +6.79 | | mixed -0.3 |
+| T2 | thief | 75.08 | 1.20 | 4/9 | +0.94 | | mages -9.9 |
+| T2 | healer | 74.36 | 1.18 | 5/9 | +0.22 | | kite -12.7 |
+| T2 | conjurer | 73.38 | 1.20 | 6/9 | -0.76 | | kite -9.4 |
+| T2 | evoker | 71.10 | 1.24 | 7/9 | -3.04 | BELOW | kite -16.7 |
+| T2 | warlock | 70.60 | 1.24 | 8/9 | -3.54 | BELOW | kite -15.1 |
+| T2 | archer | 56.12 | 1.44 | 9/9 | -18.02 | BELOW | beast -37.6 |
+
+What the table can and cannot carry:
+- The ranged line is last in both tiers, by 12 to 18 U, and it is the big creature and the brute on him that sink it (Archer 19.6
+  against a tier mean of 57 on `beast`, 8.4 on `kite`). This is the same weakness the headline J has shown since section 30
+  (ranged 65.7 against melee 80.0), now on fights that are the same for the tier. Whether the game's Archer is this weak is
+  NOT shown: the lab's bow model (12% miss on a mover, no kiting drive, C-H3 open) is the first suspect, not the class.
+- The base cells rate at or above their T1 rows on the battery (melee-off +1.4, mage-off +0.8, ranged-off +5.4), while their
+  headline J on natural fights is lower for melee-off and mage-off (74.3 against 80.0, 67.7 against 79.0, 6 seeds, se 3 to 4,
+  different fights for the two rows). The two measures disagree in sign for two of the three; neither difference is large
+  against its error. No claim is made about which of a T1 row and its base cell is stronger.
+
+### 32.6 Health decline, built-in world (`--decline 4 --classes beta1 --seeds 1,2,3,4,5,6`, 1032 fights per class)
+
+Share of his maximum health lost per second while a foe is on him, all bands together: knight 2.9, mercenary 3.2, warrior 3.4,
+melee 3.5, melee-off 3.6, archer 4.8, ranged-off 4.9, ranged 4.9, thief 5.2, healer 5.6, mage-off 5.6, warlock 6.0, mage 6.0,
+evoker 6.1, conjurer 6.2. The curve is flat from 70% down to 20% for the weapon classes (3.3 to 4.9 %/s) and peaks between
+60% and 40% for the mage line (7.5 to 8.4 %/s).
+
+"Too late to drink" (the last 2 s of damage would down him), share of the pressed seconds:
+
+| Health band | melee | knight | ranged | mage | evoker | conjurer |
+|---|---|---|---|---|---|---|
+| 40 to 50% | 0.2 | 0.1 | 0.1 | 2.0 | 2.2 | 3.1 |
+| 30 to 40% | 3.4 | 1.2 | 3.3 | 9.6 | 8.7 | 10.6 |
+| 20 to 30% | 16.9 | 10.5 | 18.9 | 27.1 | 23.3 | 31.3 |
+| 10 to 20% | 37.9 | 22.3 | 32.2 | 56.5 | 53.6 | 58.6 |
+
+Read off the curve: LAST-SAFE line (lowest tenth with under 10% too-late seconds) is 0.30 for every class but the Conjurer (0.40),
+and the NO-WASTE line (1 minus the potion's share of his health, potions are 20 to 27% of it) is 0.73 to 0.80. Nobody wastes a
+potion today (0.0% ran over). The shipped line, 0.34, sits just above LAST-SAFE: the curve does not ask for another line, it
+only bounds it to [0.30, 0.73].
+
+His drinks and downs:
+
+| Class | drinks/f | drinks at | his downs/f | of them with a health potion in the kit | self heal known | party downs (he or anyone) while he held an affordable heal for that member /f |
+|---|---|---|---|---|---|---|
+| melee | 0.82 | 34% | 0.17 | 0.035 | 33% | 0 |
+| knight | 0.71 | 34% | 0.09 | 0.025 | 33% | 0 |
+| ranged | 0.63 | 33% | 0.27 | 0.046 | 34% | 0 |
+| mage | 0.28 | 30% | 0.32 | 0.250 | 99% | 0.31 |
+| evoker | 0.18 | 30% | 0.30 | 0.261 | 87% | 0.31 |
+| conjurer | 0.15 | 30% | 0.19 | 0.172 | 87% | 0.21 |
+| healer | 0.20 | 31% | 0.21 | 0.199 | 99% | 0.28 |
+| warlock | 0.19 | 31% | 0.29 | 0.260 | 86% | 0.30 |
+
+marth 11-12: "I imagine any mage line with heals would be able to use them? Not specifically restoration line." CHECKED: the
+lab's mage-line cells already know a self heal in 86 to 99% of their fights (`BuildFollower` gives a mage-family caster one
+spell of every nature he can afford, Restoration line or not) and fire 4 to 7.6 heal decisions per fight. Nothing was added to
+the model.
+
+OBSERVED: a mage-line follower who goes down nearly always still holds a health potion (0.25 of the mage's 0.32 downs per
+fight, 0.26 of the evoker's 0.30). A weapon class almost never does (melee 0.035 of 0.17). The last column counts ANY party
+member's down, so it cannot be set against his own downs: it says only that an affordable heal was in his book at about that
+many downs per fight.
+NOT ESTABLISHED: why. Two readings were tested and neither is supported by the objective:
+1. "The potion is vetoed while a heal scores" (`Tuning::noHealDrink`): lifting the veto entirely (`t.noHealDrink=1.0`) is
+   worth +0.05 J over the 15 cells (se 0.01). Real, and far too small to be the cause.
+2. "He should drink earlier" (a later midpoint): section 32.7.
+Untested readings: the heal's cast time against a 6 to 8 %/s decline; a mage dies in the two bands (20 to 40%) where a quarter
+of his pressed seconds are already too late, so the error is made earlier, in where he stands, not in what he drinks.
