@@ -47,4 +47,27 @@ namespace MFO::Logistics::Steal {
     // nullptr = may be taken. a_pending: set when the only reason is that the pre-check has no answer yet (retry next tick,
     // never a travel-fail, never a blocklist). The returned text is valid until the caller's next call on this thread.
     const char* LooseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, bool a_arrival, bool* a_pending = nullptr);
+
+    // ── OWNED CHESTS for act.pick_locks (Q-L-6, marth 2026-11-12: "pick + steal contents") ──
+    // A Thief-line follower's act.pick_locks may pick an OWNED locked chest (never a door) when Check passes, and then takes its
+    // loot-kind contents (the kinds act.steal takes, Q-L-1: coin, lockpicks, valuable misc, soul gems, ingredients, jewellery, drinkable
+    // potions; never equipment or ammo) as a steal. Normal looting is untouched: it still never takes an owned copy.
+    // Owned = an explicit owner or an off-limits (cell-owned) container.
+    bool IsOwnedChest(RE::TESObjectREFR* a_chest);
+    // The source bars for an owned chest (the owner bars of the theft gate give way to the witness check, these do not): a LOTD
+    // drop-off / display, player storage, a quest container, a faction's vendor / stolen-goods / evidence container, and a chest owned
+    // by the player's own side or the follower's. nullptr = may be picked and stolen from. Worker or main thread (data-only reads).
+    const char* OwnedChestBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_chest);
+
+    enum class OwnedTake : std::uint8_t {
+        Posted,    // the main-thread take is in flight: do nothing else this tick, ask again next tick
+        Retry,     // a sight measurement was deferred (or the guard answer is not back): nothing more moved, ask again next tick
+        Took,      // finished: at least one owned copy moved
+        Nothing,   // finished: there was no owned loot-kind copy to take
+        Cut,       // stopped: the witness check refused (or a source bar, or the chest relocked): nothing more moves, there is no refund
+    };
+    // WORKER (the arrival). Drives one posted main-thread take per follower. The take re-runs CheckNow on the main thread right before
+    // each RemoveItem batch (one item form), so nothing changes between the proof and the act. a_why receives a Cut / Retry reason.
+    OwnedTake TakeOwnedContents(RE::Actor* a_follower, RE::TESObjectREFR* a_chest, std::string* a_why = nullptr);
+    void ClearOwnedTakes();   // revert / load
 }

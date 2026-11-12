@@ -525,9 +525,11 @@ namespace MFO::Logistics {
                     // first (any explicit owner, including the player), then keep
                     // IsOffLimits() as the second bar for cell-owned/no-owner
                     // crime cases. No delay or waiver overrides this.
-                    // batch L: act.steal (loose, checked by Steal::LooseBarred above) is the one deliberate exception. act.pick_locks keeps these
-                    // bars (Q-L-6: an owned chest yields nothing, TheftGate bars its copies, so G14 picks UNOWNED chests only for now).
-                    if (auto* owner = a_cat == Category::Steal ? nullptr : ref->GetOwner()) {
+                    // batch L: act.steal (loose, checked by Steal::LooseBarred above) is a deliberate exception, and so is act.pick_locks on a
+                    // LOCKED, owned, non-door chest (Q-L-6, marth 2026-11-12): it goes to Lockpick::Admit below, which admits it only through
+                    // Steal::OwnedChestBarred + Steal::Check, and its contents are taken by the steal road, never the loot rules.
+                    const bool pickOwned = a_cat == Category::PickLocks && ref->IsLocked() && Steal::IsOwnedChest(ref) && !Lockpick::IsDoor(ref);
+                    if (auto* owner = (a_cat == Category::Steal || pickOwned) ? nullptr : ref->GetOwner()) {
                         ++dOwned;
                         // REGRESSION GUARD [ownprobe]: the soak proved every owned drop
                         // was a shop/faction container -- but a KILLED corpse must never
@@ -545,13 +547,16 @@ namespace MFO::Logistics {
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                    if (a_cat != Category::Steal && ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
+                    if (a_cat != Category::Steal && !pickOwned && ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
                     // Locked -- UNLESS the lockpick judge admits it (LP-M1,
                     // logistics/Lockpick.cpp): the excursion then picks it on
                     // arrival before any transfer. Owned locks are already barred above
-                    // (act.pick_locks alone may admit one, through Steal::Check inside Admit).
-                    if (ref->IsLocked() && !Lockpick::Admit(a_follower, ref, a_now)) {
-                        ++dLocked; return RE::BSContainer::ForEachResult::kContinue;
+                    // (act.pick_locks alone may admit one, through Steal::Check inside Admit: pickOwned).
+                    if (ref->IsLocked()) {
+                        bool witnessPending = false;
+                        if (!Lockpick::Admit(a_follower, ref, a_now, pickOwned, &witnessPending)) {
+                            ++dLocked; return RE::BSContainer::ForEachResult::kContinue;   // pending: no verdict yet, skipped this scan, asked again next scan
+                        }
                     }
                     // act.pick_locks on a chest nobody can see into is a wasted walk: it must hold something, and it must not be
                     // owned by anyone unless the lock judge admitted it (a locked chest passed Admit just above; an unlocked one was skipped).
