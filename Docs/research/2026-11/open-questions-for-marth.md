@@ -127,6 +127,10 @@ Each: question, context, my recommended default (work proceeds on the default wh
 89. [ANSWERED 11-11: cap it] (T3, parked) Cap the G4 flanking bonus (half the sneak bonus on a flanked foe is about x9 per hit on LoreRim multipliers).
 90. [ANSWERED 11-11: blade primary, bow fallback] (T4, parked) The Listener. marth: "Personality says they enjoy the blood of melee, but they will bow when needed" [blade primary, bow when needed]
 
+## From the ch.7 v40 fix round (2026-11-11, Harbinger feat/ch7-hostile-offense + MFO feat/g3-disengage; work proceeds on the default)
+91. (CH7-Q6) Harbinger's "beneficial" is now an allow-list: any spell with a Script effect counts as hostile under an Offense-only deny. A heal from a spell mod that carries a script effect (a description or perk-hook effect beside the heal) is therefore DENIED while a follower flees (G3) or holds hidden with a heal claim (G2), and APMF.log names it. DEFAULT taken: leave it denied and logged (the safe side of the review's SEV-2). Alternative: a spell the SAME client holds a live cast claim for counts as declared by that client and passes its own Offense-only deny (a Harbinger change, its own card).
+92. (CH7-Q7) The benign list is exactly the one in the fix brief. NightEye, Dispel, Open, Lock, Darkness, ValueAndParts, Werewolf and VampireLord are NOT on it, so a Night Eye or a Dispel cast is denied under an Offense-only deny. DEFAULT taken: not on the list. Alternative: add NightEye (and Dispel when delivered to Self).
+
 ## From the IAUS sim stealth and disengage lab (2026-11-11, `feat/iaus-sim-stealth`, `iaus-sim-v2.md` section 30; none blocking, the default in brackets is in force)
 
 - **Q-SIM-1.** The lab's default road level is now g3: the stance in combat, G2's hold row and G3's hide run and flee are all modelled as ON, although in the game `bSneakInCombat` and `bIausHideRoad` are OFF by default. The curve tuning runs against g3. [tune against g3, because that is what T2 ships to be tested. `--stealth off` stays the game as shipped and equals the old lab draw for draw]

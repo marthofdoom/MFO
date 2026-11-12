@@ -9140,9 +9140,14 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   from the hide run (the engine's own beneficial casts then run on the way). The hidden end and the reveal watch read
   `WatchList` (his CURRENT group foes by the gather's set tests plus the pick's foes, no cap) and the run ends only after
   `kHiddenReads` = 2 consecutive hidden laps: reading only `run.foes` again is the re-review's F2. G2's hold
-  (`apmf/HideClaims.cpp`) releases its ch.7 Offense | Cast claim while MFO's own cast claim is live for him
-  (`IsOwnedCastActive` / `IsHealCastActive`, read BEFORE `g_hideMx`), or it force-fails the silent cast MFO itself claimed.
-  OPEN review findings for this subsystem: `Docs/REVIEW-BACKLOG.md` MFO-B740..B743, MFO-B759..B762.
+  (`apmf/HideClaims.cpp`, `DenyMode`) changes its ch.7 claim while MFO's own cast claim is live for him (`IsOwnedCastActive` /
+  `IsHealCastActive`, read BEFORE `g_hideMx`), or it force-fails the silent cast MFO itself claimed: an OFFENSE cast claim =
+  the deny stands down whole (attack leaves open for those laps, logged); a HEAL claim alone on ABI >= 40 = refiled as
+  Offense ALONE (attacks stay denied, the heal passes; tier-3 review F2, 2026-11-11); a heal on ABI < 40 = stands down
+  whole. What breaks: releasing everything for a heal again (opens every attack leaf); filing Offense alone with no claim
+  live (the engine's own beneficial casts then run while he hides); a heal whose record Harbinger's allow-list reads as
+  undeclared (any Script effect) is DENIED under Offense alone and does not land during the hold (open question CH7-Q6).
+  OPEN review findings for this subsystem: `Docs/REVIEW-BACKLOG.md` MFO-B740..B743, MFO-B759..B764.
 - **Candidate generation (card I4, `feat/iaus-i4-spellbook`, 2026-11-10; still nobody calls it, I6 wires it).** TWO LAYERS, so the
   off-line combat simulator (its own card) runs the game's own generator: an engine-side GATHER fills a plain `Snapshot`, a PURE
   `Generate` turns it into candidates. Research note `Docs/research/2026-11/iaus-i4-spellbook.md`.

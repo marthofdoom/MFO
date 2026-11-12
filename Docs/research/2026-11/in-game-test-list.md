@@ -303,8 +303,11 @@ and for step 2 `bIausGroundRoad=1`. Class tree ON, one follower with a Thief-lin
    once, and the start line says `ch.7 deny: NOT FILED`.
 3d. **Hide run and G2 hold keep every cast denied.** In step 3 the start line says `ch.7 deny: Offense|Cast (attacks and
    every cast) h=N` and he casts nothing on the way. The run now ends after TWO laps in a row with no foe detecting him.
-   With a silent caster (Quiet Casting) who holds hidden and picks a spell: `[hide] ... ch.7 offense/cast deny STANDS DOWN
-   while his own cast claim is delivered`, the cast lands, then `... the ch.7 offense/cast deny is filed again`.
+   With a silent caster (Quiet Casting) who holds hidden and picks an OFFENSE spell: `[hide] ... ch.7 deny STANDS DOWN whole
+   while his own offense cast claim is delivered`, the cast lands, then `... the ch.7 offense/cast deny is filed again`.
+   When the pick is a HEAL: `[hide] ... his heal claim is being delivered: the ch.7 deny is refiled as Offense ALONE`, the
+   heal lands, he does NOT swing or shoot meanwhile, then `... filed again`. FAIL = an attack during the heal, or APMF.log
+   `nature UNDECLARED ... counted as HOSTILE` naming the heal (send the spell name: its record has a script effect).
 4. **G3 failures are loud.** If he never arrives: `[conceal] ... hide run FAILED: <why>` / `flee run FAILED` (no path, outside the
    leash, another ch.24 claim, 10 s). Send the line. The 25 s cooldown counts from the END of the run.
 5. **No hitch.** While a Thief is being attacked the pick runs about every 1.5 s. Watch the frame time on the Deck.

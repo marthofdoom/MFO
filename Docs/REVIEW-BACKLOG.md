@@ -3090,3 +3090,10 @@ F5. Below 0.30 health the Retreat family and the non-sneak flee are both generat
 
 ### MFO-B762 (SEV-5, NOTED, scheduler/CombatScan.cpp death branch, against ba1328c, same review)
 Out of brief in the G3 fix round: the CombatScan follower-down branch also calls APMFBridge::ReleaseHideHold (a G2 claim). Harmless (idempotent, and the right thing for a dead follower). Noted so the diff is explained.
+
+### MFO-B763 (SEV-5, OPEN, Concealment.cpp WatchList, against 05260d0, Opus tier-3 review of the ch.7 v40 round, finding F5c)
+As handed to the author (the reviewer's own log was a two-line summary): "WatchList duplicates Gather's gates." The hidden-end / reveal watch re-implements the gather's foe set tests instead of sharing them, so a change to one can drift from the other. Reviewer's log: "WatchList mirrors Gather (lock order OK)".
+
+### MFO-B764 (SEV-5, OPEN, apmf/HideClaims.cpp ServiceHideHold, against 05260d0, same review, finding F5d)
+As handed to the author: "FILED line repeats per stand-down." After every stand-down (and, since the F2 fix, every change of the deny's mask) `hadDeny` is false on the next lap, so the "ch.1 movement block + ch.7 ... deny FILED" line prints again next to the transition line that already says it.
+
