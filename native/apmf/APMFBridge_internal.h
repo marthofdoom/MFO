@@ -441,6 +441,11 @@ namespace MFO::APMFBridge {
         // ch.3 stance claim table (apmf/SneakClaims.cpp, card G1): own mutex g_sneakMx, same call shape.
         void SweepSneakClaims();
         void ClearSneakClaims();
+        // ch.31 block rows (apmf/BlockClaims.cpp, ABI v43): own leaf mutex g_blockMx. No sweep: a hold ends by its window.
+        void ClearBlockHolds();
+        // ch.33 combat style claim table (apmf/StyleClaims.cpp, ABI v45): own mutex g_styleMx, same call shape.
+        void SweepStyleClaims();
+        void ClearStyleClaims();
         // G2 hold-row claims (apmf/HideClaims.cpp): own leaf mutex g_hideMx, same call shape.
         void SweepHideHolds();
         void ClearHideClaims();

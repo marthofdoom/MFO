@@ -157,8 +157,8 @@ namespace MFO::Config {
             else if (a_key == "iAimBudgetRanger")   { setI(g_aimBudgetRanger, 0, 10);      return; }   // marth 2026-11-10: at most 3
             else if (a_key == "iAimBudgetJaqspur")  { setI(g_aimBudgetJaqspur, 0, 10);     return; }   // marth 2026-11-10: at most 1 (0 ok)
             else if (a_key == "bClassAversion")     { setB(g_classAversion); return; }   // default ON; INI-only; card H2 ch.32 aversion (Conjurer / Healer passive)
-            else if (a_key == "fAversionConjurer")  { setF(g_aversionConjurer, 0.0f, 0.95f); return; }   // default 0.5; 0 = off for that class
-            else if (a_key == "fAversionHealer")    { setF(g_aversionHealer, 0.0f, 0.95f);   return; }   // default 0.5
+            else if (a_key == "fAversionConjurer")  { setF(g_aversionConjurer, 0.0f, 0.95f); return; }   // default 0.25; 0 = off for that class
+            else if (a_key == "fAversionHealer")    { setF(g_aversionHealer, 0.0f, 0.95f);   return; }   // default 0.25
             else if (a_key == "bClassStyles")       { setB(g_classStyles);   return; }   // default ON; INI-only; card C8 per-class CSTY (tier 2+)
             else if (a_key == "bClassAttackMix")    { setB(g_classAttackMix); return; }  // default ON; INI-only; card C8 ch.18 class power share
             else if (a_key == "fClassLeashMult")    { setF(g_classLeashMult, 0.1f, 1.0f); return; }   // default 0.5; card C8 ch.23 short / near-player classes
@@ -235,6 +235,7 @@ namespace MFO::Config {
             else if (a_key == "bIausFillMortal")    setB(g_iausFillMortal);
             else if (a_key == "bIausReachLearn")    setB(g_iausReachLearn);   // ruling Q68: the learned swing reach gates the power attack, INI-only, default OFF
             else if (a_key == "bCombatMoveProbe")   setB(g_combatMoveProbe);  // dev probe: a bash every 6 s in melee reach (Harbinger ch.31), INI-only, default OFF
+            else if (a_key == "bPowerAttackEngineRoad") setB(g_powerAttackEngineRoad);   // act.power_attack: Harbinger ch.31 (ABI 44) vs MFO's own animation event; INI-only, default ON
             else if (a_key == "bIausBashRoad")      setB(g_iausBashRoad);     // IAUS Bash family through Harbinger ch.31, INI-only, default OFF
             else if (a_key == "bIausGroundRoad")    setB(g_iausGroundRoad);   // IAUS GiveGround family through Harbinger ch.24 on a point, INI-only, default OFF
             else if (a_key == "bIausHideRoad")      setB(g_iausHideRoad);     // card G3: the hide run (Concealment.cpp + apmf/Disengage.cpp), INI-only, default OFF
@@ -363,6 +364,7 @@ namespace MFO::Config {
             else if (a_key == "fChaseMin")          setF(g_chaseMin,       64.0f, 8192.0f);
             else if (a_key == "fChaseMax")          setF(g_chaseMax,       64.0f, 8192.0f);
             else if (a_key == "fMeleeReach")        setF(g_meleeReach,     32.0f, 1024.0f);
+            else if (a_key == "fBlockHoldSeconds")  setF(g_blockHoldSeconds, 0.25f, 10.0f);   // act.block: the guard's window (Harbinger ch.31, ABI 43); INI-only
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -471,6 +473,7 @@ namespace MFO::Config {
             g_iausFillMortal     = false;
             g_iausReachLearn     = false;   // ruling Q68: the learned swing reach -- OFF until its [iaus-fill] swing lines are field-proven
             g_combatMoveProbe    = false;   // the dev bash probe -- OFF everywhere by default
+            g_powerAttackEngineRoad = true;   // act.power_attack on Harbinger's real power attack when it serves ABI 44
             g_iausBashRoad       = false;   // the IAUS bash road -- OFF until the field proves Harbinger's combat move
             g_iausGroundRoad     = false;   // the IAUS give-ground road -- OFF until the field proves ch.24 on a point
             g_iausHideRoad       = false;   // card G3: the hide run -- OFF until the field proves the disengage drive
@@ -528,8 +531,8 @@ namespace MFO::Config {
             g_aimBudgetWitchhunter = 4;
             g_aimBudgetRanger    = 3;       //   marth 2026-11-10: at most 3 misses in 10
             g_classAversion      = true;    // card H2 ch.32 aversion (inert without the ESL / Harbinger ABI >= 41)
-            g_aversionConjurer   = 0.5f;    //   Conjurer: "a low chance of being targeted" (marth; the number is a default, question 93)
-            g_aversionHealer     = 0.5f;    //   Healer: same shape as Conjurer (marth)
+            g_aversionConjurer   = 0.25f;    //   Conjurer: "a low chance of being targeted" (marth; the number is a default, question 93)
+            g_aversionHealer     = 0.25f;    //   Healer: same shape as Conjurer (marth)
             g_classStyles        = true;    // card C8 per-class CSTY (inert without the ESL / tier 1)
             g_classAttackMix     = true;    // card C8 ch.18 class power share (inert without the ESL / Harbinger >= ABI 34)
             g_classLeashMult     = 0.5f;    // card C8 ch.23 factor for the short-leash / near-player classes
@@ -590,6 +593,7 @@ namespace MFO::Config {
             g_chaseMin           = 600.0f;
             g_chaseMax           = 3000.0f;
             g_meleeReach         = 200.0f;
+            g_blockHoldSeconds   = 2.5f;
         }
 
     }

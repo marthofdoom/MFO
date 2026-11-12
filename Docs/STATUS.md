@@ -16,12 +16,61 @@
   logistics defaults on first equip. G16: with the tree on, a restricted class never wields an off-class weapon while it carries an in-set one (ch.17 per-item deny); with none it may, the player is told and damage is halved
   (new perk `MFOC_OffClassHalf` in the regenerated `MFO_Classes.esl`). Field steps: `in-game-test-list.md` "Batch L". Defaults: open questions 107-111. Backlog MFO-B810..B813.
 - **2026-11-11, THEFT GATE (`fix/theft-gate`, ClickUp 1dfcuabczbg, SEV-1: a v2.8.1 player got 5 g theft bounties in Whiterun from follower
-  looting and the guards attacked; NOT merged, NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
+  looting and the guards attacked; merged to main 2026-11-12 (9414150), NOT field run).** New `logistics/TheftGate.cpp`. (1) Bar all stolen (marth): a follower never takes
   an item copy owned by anyone but null / the player / PlayerFaction / his own side, from any source (per-copy ExtraOwnership, else the
   container's owner; the xList is passed to RemoveItem). (2) Interim, until the culprit is found (marth): no take of any kind while a guard can
   see the follower or the item (`TheftGate::GuardInterim`). (3) Door / furniture: a door that is a crime to activate (locked, or the engine off-limits test) is closed to errand and loot legs, off-limits smithing stations are skipped, the stuck-at-origin rescue never opens an off-limits door. Proof lines `[theft-gate]` plus a 3-action ring after every
   `[crime-probe] BOUNTY UP`. The culprit is still not pinned (RE note: vanilla trespass 5 g, probably a teammate opening a locked owned door or
   using owned furniture; marth suspects a crime-altering mod). Test step: `in-game-test-list.md` "Theft gate". Backlog MFO-B790...
+- **2026-11-11, MELEE BATCH (T2 batch M; `feat/melee-moves` on top of `feat/g7-reanimate` + `feat/class-aversion`, Harbinger
+  `feat/melee-moves`; merged to main 2026-11-12, NOT field run).** One paragraph per item.
+  **Item 1, Block (Harbinger ABI 43).** New gambit action `Block` (`act.block`, APPENDED): the follower holds his guard up
+  for `[Evaluator] fBlockHoldSeconds` (2.5 s). Harbinger's ch.31 `kCombatMove_Block` raises it by the engine's own block
+  action and denies his own offense and the engine's own release for the window. `apmf/BlockClaims.cpp` (new), a handler
+  in `cast/Fire.cpp`, the board row with a cooldown cell, and the Knight / Great Knight default row
+  `Foe: Targeting me (melee) -> Block` with a 4 s cooldown. `APMF_API.h` mirrors Harbinger's v43 byte for byte.
+  Sentient AI followers do not block yet (MFO-B800). Questions Q-melee-1 and Q-melee-2. Test steps:
+  `in-game-test-list.md` Part 3d. Backlog MFO-B800..B802.
+  **Item 2, Power attack (Harbinger ABI 44).** `act.power_attack` in reach now asks Harbinger for the engine's real power
+  attack (ch.31 `kCombatMove_PowerAttack`: his own power entry, started by the engine's start-of-attack action, so the
+  hit has power damage and the stamina cost). The road before (the animation event `attackPowerStartInPlace`) stays
+  behind `[Debug] bPowerAttackEngineRoad = 0` and for a Harbinger older than ABI 44. Every swing logs
+  `[power-attack] ... road=harbinger|graph`. The outcome is asynchronous (`[combat-move] ... power attack ...`).
+  Question Q-melee-4. Test steps 24q, 24r. Backlog MFO-B803.
+  **Item 3, power-attack floor: already built, no code.** The batch asked for a Harbinger ch.18 "Normal share max" so
+  the Warrior gets a power-attack FLOOR. That is ch.18's `powerShareMin` (ABI 34), live in Harbinger since v0.18.0
+  (`core/AttackSelect.cpp`: Normal is denied while his measured power share is below the minimum), and MFO already
+  declares it: `classes/ClassTable.cpp` gives Warrior, Champion and Living Legend a floor of 0.40 and
+  `apmf/AttackMix.cpp` files it. The manifest row (gap G-H2) was written from the 2026-11-08 draft, where the floor
+  was observe-only. Nothing changed in either repo. Question Q-melee-5. Test step 24s.
+  **Item 5, combat style through Harbinger (ABI 45).** Finding: `CombatController::combatStyle` is a cached copy the
+  engine reads only to score equipment, so MFO's own write never applied a class style's movement and attack fields.
+  Harbinger's new ch.33 `kIntent_CombatStyle` answers the engine's own read of the style instead. MFO files one claim
+  per follower (`apmf/StyleClaims.cpp`, new; `CombatStyle::SnapshotStyleDesires`): the equipped class's own style
+  ACTOR-WIDE (strict class style, tree ON), an MFO stance style for the equipment choice only (the old reach).
+  `CombatStyle::ApplyTick` writes nothing when Harbinger serves ABI 45; its write stays as the degrade for an absent or
+  older Harbinger. A class follower now really fights by his class's style: a behaviour change to look at in the field.
+  Question Q-melee-6. Test steps 24t, 24u. Backlog MFO-B804, MFO-B805.
+  **Item 4, dodge: no separate facet built; the road is the combat style facet.** The engine's own side step
+  (CombatBehaviorDodgeThreat) rolls against the style's `avoidThreatChance`, read through `Actor::GetCombatStyle`
+  (condition function AE 47801 -> accessor AE 50706 -> 38536), which Harbinger's ch.33 now answers for an actor-wide
+  claim. Ultimate NPC Dodging scores from the same style fields. So a class style with an Avoid Threat chance is the
+  list-agnostic dodge: the vanilla side step without a dodge mod, the framework's own dodge with one. NOT done: every
+  melee class CSTY has `avoidThreatChance` 0 (`MFO_GenerateESP.py` `CLS_CSGD[1]`), so the Mercenary does not dodge
+  until that value is set (MFO-B806, an ESL generator change outside this batch's files). No Harbinger ABI number was
+  taken for a dodge. Notes: Harbinger `Docs/research/melee-moves-re.md` "DODGE". Question Q-melee-7.
+
+- **2026-11-12, MELEE BATCH FIX ROUND (`feat/melee-moves`, after the Opus tier-3 review of Harbinger 6f8f156 / MFO 88777f7 and
+  marth's 11-12 answers; NOT merged, NOT field run).** F1 (SEV-2): the same one-handed weapon in both hands no longer passes
+  the block hands test (it made Left Attack a left swing), in MFO and Harbinger. F2: while his guard is up MFO skips his own
+  attack, power attack, bash, taunt, cast and equip rows transparently; a guard is renewed at most once and is followed by
+  1.5 s of rest; a Block row added on the board starts at 4 s (Q-melee-8). F3: MFO asks Harbinger once per load whether it
+  serves the block and the power attack on this game; unserved = Block unavailable, power attack on the animation road
+  (Q-melee-9). F6: no new raise is asked for mid-attack. marth: Ebony Warrior gets the Block row (Q-melee-2), a refused
+  power attack gives its cooldown back (Q-melee-4, `Cooldowns::Forget`), the Mercenary's class style has Avoid Threat 0.3
+  (Q-melee-7; `MFO_GenerateESP.py` `CLS_AVOID_THREAT`, `MFO_Classes.esl` regenerated, audit PASS). Harbinger side: the
+  combat style slot table reads under a per-slot sequence (F5) and the engine refresh's threading argument is written
+  down, with its one unproven part (F4). Test steps 24v to 24y. Backlog MFO-B807, MFO-B808; B802 and B803 closed.
 
 - **2026-11-11, MOVEMENT BATCH (`feat/g3-disengage`, Harbinger `feat/h3-disengage`; NOT merged, NOT field run).**
   Card H3: `apmf/Disengage.cpp`, the disengage drive (Harbinger ch.24 on a point with the hold bit + a ch.7 Offense
@@ -53,7 +102,7 @@
   sim. Local MSVC build green on both repos, harness and sim CHECKS pass. Test steps: `in-game-test-list.md` Part 3c
   (24g-24l). Backlog MFO-B766..B771. Defaults taken: questions 102-104 in `open-questions-for-marth.md`.
 
-- **2026-11-11 `feat/class-aversion` (class card H2, "less likely to be targeted"; on top of `feat/g3-disengage`; tier A on the Harbinger side, `feat/aversion`; NOT merged, NOT field-run; NO co-save or Forms change; `APMF_API.h` mirrored at Harbinger ABI v41):** a managed follower who carries the Conjurer or Healer class passive gets a Harbinger ch.32 aversion claim (`apmf/AversionClaims.cpp`, new): weight `fAversionConjurer` / `fAversionHealer` (default 0.5), a quarter for a mastered and unequipped passive, the larger of the two. Harbinger does the rest at the engine's target selector (when a foe's pick lands on him, the engine's next best valid target is answered instead in that share of 6 s windows; never when he is the only valid target). MFO touches no foe and no target. Released at weight zero (class unequipped, classes off), death, dismissal, add-on inactive, `bClassAversion=0`, load. Harbinger absent or older than ABI 41: one `[aversion]` line, no claim. Stronger tiers (Necromancer, Priest, Arch-Mage, Saint) are their own cards. Field steps: `in-game-test-list.md` T2 field session Part 3b (24a-24f), DEV DLL with `sDevClassEquip`. Open questions 93-96.
+- **2026-11-11 `feat/class-aversion` (class card H2, "less likely to be targeted"; on top of `feat/g3-disengage`; tier A on the Harbinger side, `feat/aversion`; NOT merged, NOT field-run; NO co-save or Forms change; `APMF_API.h` mirrored at Harbinger ABI v41):** a managed follower who carries the Conjurer or Healer class passive gets a Harbinger ch.32 aversion claim (`apmf/AversionClaims.cpp`, new): weight `fAversionConjurer` / `fAversionHealer` (default 0.25 since 2026-11-12, Q93), the EQUIPPED class only (a mastered, unequipped passive gives none, Q94; branch `fix/aversion-tune`), the larger of the two. Harbinger does the rest at the engine's target selector (when a foe's pick lands on him, the engine's next best valid target is answered instead in that share of 6 s windows; never when he is the only valid target). MFO touches no foe and no target. Released at weight zero (class unequipped, classes off), death, dismissal, add-on inactive, `bClassAversion=0`, load. Harbinger absent or older than ABI 41: one `[aversion]` line, no claim. Stronger tiers (Necromancer, Priest, Arch-Mage, Saint) are their own cards. Field steps: `in-game-test-list.md` T2 field session Part 3b (24a-24f), DEV DLL with `sDevClassEquip`. Open questions 93-96.
 - **2026-11-11 `feat/class-xp-mcm` (class update cards C4 class XP + C11 class MCM, ClickUp 86e3dhbd3; tier B; NOT merged, NOT field-run; NO co-save, ABI or Forms change, MCLS stays v2):** class XP from fights won (kills, assists, observed heals, summon uptime) to the EQUIPPED class, curve sized 3 / 6 / 10 / 13 h per tier at ~10 fights an hour, `fClassXpRate` multiplier; the class add-on's own MCM (`MFO_Classes`: tree, strict, XP rate, class-info key, Priest sun / Saint heal / Saint undead per second). The Priest sun and Saint aura abilities do not exist in the ESL yet, so those three values are held and logged only. In-game checks: `Docs/research/2026-11/class-build-plan.md` cards C4 and C11.
 - **2026-11-11 `feat/class-packages` (class update card C8, ClickUp 86e3dhbd3; tier B; NOT merged, NOT field-run; NO co-save, ABI or Forms.h change, no new Harbinger facet):** class combat packages. A follower with a tier 2+ class equipped fights on that class's own per-stance CSTY from `MFO_Classes.esl` (found through the ESL's lookup lists at runtime, `CombatStyle::Want` on the worker, `ApplyTick` writes it) instead of `MFO_*Style`; the class's ch.18 power share ceiling / floor (class table) goes to Harbinger as a `kIntent_AttackSelection` claim (new `apmf/AttackMix.cpp`, ABI >= 34, deny-only); a short-leash / near-player class scales the ch.23 leash by `fClassLeashMult`. Tier 1 and classes OFF are unchanged. New INI keys `bClassStyles`, `bClassAttackMix`, `fClassLeashMult`, `bAttackMixProbe`. In-game checks: `Docs/research/2026-11/class-build-plan.md` card C8.
 - **2026-11-11 `feat/class-gui` (class update card C10, ClickUp 86e3dhaba; tier B; on top of `feat/mcls-v2`; NOT merged, NOT field-run; NO co-save, ABI or INI change):** the Board's Classes tab (`native/Board_Classes.cpp`): class tree with level, mastery, locked reasons, Equip / Switch, Classes off and Reset to class defaults; actions run on the g_followers worker through `EditKind::ClassAction`. The Gambits-tab `Class:` pick is disabled while a class is equipped (C5b). The combat-GUI class-info toggle is NOT built. In-game checks: `Docs/research/2026-11/class-build-plan.md` card C10.

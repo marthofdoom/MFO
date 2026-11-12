@@ -1328,6 +1328,7 @@ namespace MFO::Scheduler {
         // Harbinger ch.31 combat move: write the outcome of his last bash once it is known, and run the DEV probe
         // ([Debug] bCombatMoveProbe, default OFF: a bash every 6 s while his combat target is in melee reach).
         APMFBridge::PollCombatMove(id);
+        APMFBridge::PollBlock(id);           // Harbinger ch.31 block (ABI v43): each outcome of his held guard, once
         APMFBridge::CombatMoveProbeTick(f);
         APMFBridge::ServiceGroundStep(id);   // Harbinger ch.24 on a point: end a step back that is over (one outcome line)
         // Card G3 (Concealment.cpp): a hide run holds him (running to the point, or the bounded hold at it). No rule scan

@@ -646,7 +646,7 @@ namespace MFO::APMFBridge {
     // ── ch.32 AVERSION (ABI v41, kIntent_Aversion): the class "less likely to be targeted" passive ──────
     // apmf/AversionClaims.cpp (card H2). The pump's sweep files one standing claim per managed, living follower
     // whose class state carries the Conjurer or Healer passive, with his weight (Config::g_aversionConjurer /
-    // g_aversionHealer; a mastered, unequipped passive is a quarter), re-files on a weight change and releases
+    // g_aversionHealer; a mastered, unequipped class gives none; Dragonborn holds mastered passives at full), re-files on a weight change and releases
     // at weight zero or death. ReleaseAversionClaim is the dismissal / MFO-off road. No-op when Harbinger is
     // absent, ABI < 41 (logged once), the class add-on is inactive, bClassAversion is off, or the seats refused.
     // Worker-safe; its own mutex (never g_mx).
@@ -1892,8 +1892,54 @@ namespace MFO::APMFBridge {
     // melee reach asks for a bash every 6 s. Worker road; own leaf mutex, never g_mx; nothing is saved.
     bool          CombatMoveSupported();
     std::uint32_t RequestBash(RE::FormID a_follower, RE::FormID a_foe, bool a_power);
+    // POWER ATTACK (ABI v44, kCombatMove_PowerAttack; T2 batch M item 2, marth Q82): the engine's real right-hand power
+    // attack by the same action road (power damage and stamina are the engine's). PowerAttackRoadSupported: APMF present
+    // AND abiVersion >= 44. RequestPowerAttack: the same contract as RequestBash; the outcome lines read "power attack".
+    // CombatMoveUnservedReason (review F3 of 88777f7): nullptr when Harbinger SERVES a_move (kCombatMove_Block or
+    // kCombatMove_PowerAttack) on this game, else why not (a string literal): absent / too old, or not installed for this
+    // runtime or by its INI. The second is asked once per load through the ABI v35 dry run with a_follower, latched and
+    // logged once; ResetCombatMoveServed clears the latch at the load boundary. Worker road.
+    const char*   CombatMoveUnservedReason(RE::FormID a_follower, std::uint32_t a_move);
+    void          ResetCombatMoveServed();
+    bool          PowerAttackRoadSupported();
+    std::uint32_t RequestPowerAttack(RE::FormID a_follower, RE::FormID a_foe);
     void          PollCombatMove(RE::FormID a_follower);
     void          CombatMoveProbeTick(RE::Actor* a_follower);
+    // ── BLOCK (Harbinger ch.31, ABI v43, kCombatMove_Block / kCombatMove_BlockEnd) -- apmf/BlockClaims.cpp ────────────
+    // The gambit action "Block" (act.block): a HELD guard for [Evaluator] fBlockHoldSeconds. Harbinger raises it by the
+    // engine's own Left Attack action, keeps it up for the window (his own offense and the engine's shorter block do not
+    // run meanwhile) and lowers it by Left Release. A one-shot request with a duration, never a claim; nothing is saved.
+    // BlockSupported: APMF present AND abiVersion >= 43. BlockHandsReason: MFO's own pre-gate, nullptr when his weapon is
+    // drawn and his hands would block (a shield or torch in the left hand, or a one-handed / two-handed melee weapon with
+    // nothing else in the left), else why not. ServiceBlock: ask (or renew past 60% of the window); a_handleOut = the
+    // handle that stands. PollBlock: writes each outcome to the log ONCE ("[block]" lines) and starts a 2 s back-off
+    // after a refusal or failure. ReleaseBlock: the dismissal / MFO-off road (kCombatMove_BlockEnd when a request is
+    // out). Worker road; own LEAF mutex, never g_mx.
+    enum class BlockAsk : std::uint8_t {
+        NoRoad,      // Harbinger absent or older than ABI 43
+        Requested,   // a new request (or a renewal) was sent
+        Held,        // a request is out or the hold has more than 40% of its window left: nothing sent
+        Backoff,     // inside the 2 s back-off after a refusal or failure: nothing sent
+        Refused,     // Harbinger refused at the call
+        Resting,     // a guard ended less than 1.5 s ago: nothing sent (review F2: a guard always ends and rests)
+    };
+    // True while a block request of this follower is out (queued, or the guard is up). ANY thread; one atomic load while no
+    // follower blocks. cast/Fire.cpp skips his own offense, cast and weapon rows TRANSPARENTLY while it is true (marth
+    // Q-melee-3: a held guard denies all of his own offense, heals included).
+    bool        BlockHoldLive(RE::FormID a_follower);
+    bool        BlockSupported();
+    const char* BlockHandsReason(RE::Actor* a_follower);
+    BlockAsk    ServiceBlock(RE::FormID a_follower, std::uint32_t* a_handleOut = nullptr);
+    void        PollBlock(RE::FormID a_follower);
+    void        ReleaseBlock(RE::FormID a_follower, const char* a_why);
+    // ── COMBAT STYLE (Harbinger ch.33, ABI v45, kIntent_CombatStyle) -- apmf/StyleClaims.cpp ───────────────────────────
+    // T2 batch M item 5: MFO's combat-style desire (CombatStyle.cpp: the stance style, the class package's CSTY, the
+    // substrate cast pair's style) as ONE standing claim per follower, filed by the pump's sweep. The class's own style is
+    // claimed ACTOR-WIDE (strict class style); an MFO_*Style is claimed kCombatStyle_EquipChoiceOnly (the reach the old
+    // direct write had). StyleRoadSupported: APMF present AND abiVersion >= 45; ANY thread, one atomic load (the combat
+    // thread's ApplyTick asks it and then writes nothing). ReleaseStyleClaim: the dismissal / MFO-off road. Own mutex.
+    bool StyleRoadSupported();
+    void ReleaseStyleClaim(RE::FormID a_follower, const char* a_why);
     // ── GIVE GROUND (Harbinger ch.24 on a POINT, ABI v39, kApproach_Point) -- apmf/GroundApproach.cpp ─────────────────
     // A short ch.24 claim whose centre is a point 400 units straight away from a_foe: the engine's own return-to-area
     // movement walks the follower there while he keeps fighting. GroundStepSupported: APMF present AND abiVersion >= 39.

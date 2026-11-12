@@ -7,6 +7,7 @@
 #include "Scheduler.h"    // ReachHoldSlack -- the reach gates read the hold's line (review U3)
 #include "Taunt.h"        // act.taunt (taunt S2): Taunt::Fire
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "APMF_API.h"          // kCombatMove_Block / kCombatMove_PowerAttack: the "served on this game" question (review F3)
 #include "Concealment.h"       // card G3: act.disengage starts the hide run
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
@@ -230,6 +231,18 @@ namespace MFO::Actuation {
         // it is a transparent no-op, never a wall (native/selftest/Runner.cpp owns the mechanism).
         if (op == Vocab::kActDevSelftest) return { Result::NoOp, "self-test runner marker", true };
 #endif
+
+        // HELD GUARD (review F2 of 88777f7; marth 2026-11-12 Q-melee-3: "a held guard denies all his own offense, heals
+        // included"). While MFO's own block request is out or his guard is up (apmf/BlockClaims.cpp), MFO asks for nothing
+        // that would drop it or that Harbinger's hold denies anyway: no attack latch, power attack, bash, taunt, cast of any
+        // kind, or weapon swap. TRANSPARENT: nothing is mutated, no cooldown starts, and the rows below (a potion, Wait,
+        // Flee) are still read. The guard ends by its window (at most two back to back, then 1.5 s of rest), never by MFO
+        // talking over it.
+        if (op != Vocab::kActBlock && APMFBridge::BlockHoldLive(a_follower->GetFormID()) &&
+            (op == Vocab::kActAttack || op == Vocab::kActPowerAttack || op == Vocab::kActBash || op == Vocab::kActTaunt ||
+             op == Vocab::kActCastSelf || op == Vocab::kActCastTarget || op == Vocab::kActCastPlayer ||
+             op == Vocab::kActEquipRanged || op == Vocab::kActEquipMelee || op == Vocab::kActEquipSilver))
+            return { Result::FailedOther, "holding his guard: no attack, cast or weapon change until it ends", true };
 
         if (op == Vocab::kActWait) {
             // Deliberately consumes the tick without acting -- the FFXII
@@ -544,10 +557,38 @@ namespace MFO::Actuation {
             // cleanly (§4.3, GAMBIT_FLOWS §3.6). `sent` still isn't proof the swing
             // landed; field-verify. Report Fired only on accept so a reject buys no
             // suppression window (Fable: Fired-on-reject went visibly passive).
+            //
+            // TWO ROADS (T2 batch M item 2, marth Q82; both stay selectable until the field probe decides):
+            //  * road=harbinger ([Debug] bPowerAttackEngineRoad = 1 and Harbinger ABI >= 44): the engine's REAL power
+            //    attack (ch.31 kCombatMove_PowerAttack, apmf/CombatMove.cpp). Harbinger starts one of his own power
+            //    entries by the engine's start-of-attack action on the game thread, so the hit carries the power
+            //    attack's damage and stamina cost. The outcome is asynchronous ("[combat-move]" lines by
+            //    PollCombatMove), so MFO tests here what it can read: an attack already in progress is the engine's
+            //    first refusal and is TRANSPARENT (nothing asked, nothing mutated).
+            //  * road=graph: MFO's own animation event, the road before. It plays the swing; whether the hit is a real
+            //    power attack is what the probe measures.
+            // Review F3: the engine road only where Harbinger SERVES the move on this game (asked once per load). Where it
+            // does not (1.7.104 today), road=graph is the documented degrade for an unserved facet; a refusal of a served
+            // request never falls back to it.
+            const char* const unserved = Config::g_powerAttackEngineRoad.load(std::memory_order_relaxed)
+                                             ? APMFBridge::CombatMoveUnservedReason(a_follower->GetFormID(), APMF_API::kCombatMove_PowerAttack)
+                                             : "bPowerAttackEngineRoad=0";
+            if (!unserved) {
+                if (a_follower->AsActorState()->GetAttackState() != RE::ATTACK_STATE_ENUM::kNone)
+                    return { Result::FailedOther, "power attack: an attack is already in progress", true };
+                const std::uint32_t h = APMFBridge::RequestPowerAttack(a_follower->GetFormID(), foe->GetFormID());
+                if (h == 0) return { Result::FailedOther, "power attack refused by Harbinger at the call", true };
+                Targeting::Command(a_follower->GetFormID(), a_choice.target);
+                spdlog::info("[power-attack] {:08X}: road=harbinger (ch.31 kCombatMove_PowerAttack, h={}) -> {:08X} '{}' at {:.0f}u",
+                             a_follower->GetFormID(), h, foe->GetFormID(), foeName, dist);
+                return { Result::Fired, std::format("power attack requested -> {} (road=harbinger, h={})", foeName, h) };
+            }
             if (!a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
                 return { Result::FailedOther, "power-attack anim rejected", true };
             Targeting::Command(a_follower->GetFormID(), a_choice.target);
-            return { Result::Fired, std::format("power attack -> {}", foeName) };
+            spdlog::info("[power-attack] {:08X}: road=graph (animation event attackPowerStartInPlace; {}) -> {:08X} '{}' at {:.0f}u",
+                         a_follower->GetFormID(), unserved, foe->GetFormID(), foeName, dist);
+            return { Result::Fired, std::format("power attack -> {} (road=graph)", foeName) };
         }
 
         if (op == Vocab::kActBash) {
@@ -566,6 +607,42 @@ namespace MFO::Actuation {
             const std::uint32_t h = APMFBridge::RequestBash(a_follower->GetFormID(), foe->GetFormID(), /*a_power=*/false);
             if (h == 0) return { Result::FailedOther, "bash refused by Harbinger at the call", true };
             return { Result::Fired, std::format("bash requested -> {} (h={})", foe->GetName() ? foe->GetName() : "?", h) };
+        }
+
+        if (op == Vocab::kActBlock) {
+            // BLOCK (Harbinger ch.31 held guard, ABI v43; apmf/BlockClaims.cpp). MFO owns WHEN (the rule's condition) and
+            // for HOW LONG ([Evaluator] fBlockHoldSeconds); Harbinger raises the guard by the engine's own block action,
+            // denies his own offense and the engine's own release for the window, and lowers it. Everything before the
+            // request is TRANSPARENT: a block that cannot be asked for mutates nothing and the rows below run.
+            // Review F3: "served on this game" is asked once per load (the ABI v35 dry run), so a runtime or an INI on which
+            // Harbinger refuses the block is one log line and a skipped row, never a request every 2 s.
+            if (const char* why = APMFBridge::CombatMoveUnservedReason(a_follower->GetFormID(), APMF_API::kCombatMove_Block))
+                return { Result::FailedOther, std::format("no block road: {}", why), true };
+            if (const char* why = APMFBridge::BlockHandsReason(a_follower))
+                return { Result::FailedSkill, std::format("block: {}", why), true };
+            // Review F6: the engine's own first refusal (an attack in progress), tested before a NEW raise is asked for, so
+            // a Busy refusal does not spend the row's cooldown. A standing guard is renewed whatever his attack state.
+            if (!APMFBridge::BlockHoldLive(a_follower->GetFormID()) &&
+                a_follower->AsActorState()->GetAttackState() != RE::ATTACK_STATE_ENUM::kNone)
+                return { Result::FailedOther, "block: an attack is in progress", true };
+            std::uint32_t h = 0;
+            switch (APMFBridge::ServiceBlock(a_follower->GetFormID(), &h)) {
+            case APMFBridge::BlockAsk::Requested:
+                return { Result::Fired, std::format("guard up for {:.1f} s (h={})",
+                                                    Config::g_blockHoldSeconds.load(std::memory_order_relaxed), h) };
+            case APMFBridge::BlockAsk::Held:
+                // The guard is up (or its request is about to run): the tick is this rule's, as with a standing attack.
+                return { Result::NoOp, "holding his guard" };
+            case APMFBridge::BlockAsk::Backoff:
+                return { Result::FailedOther, "block: waiting after a refusal", true };
+            case APMFBridge::BlockAsk::Resting:
+                return { Result::FailedOther, "block: resting after a guard", true };
+            case APMFBridge::BlockAsk::Refused:
+                return { Result::FailedOther, "block refused by Harbinger at the call", true };
+            case APMFBridge::BlockAsk::NoRoad:
+            default:
+                return { Result::FailedOther, "no block road", true };
+            }
         }
 
         if (op == Vocab::kActGiveGround) {

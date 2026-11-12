@@ -264,6 +264,14 @@ namespace MFO::Vocab {
     // dev-switch road (bSneakInCombat, default OFF) until a field run proves the combat AI keeps him crouched.
     // Combat AND logistics table. No param. APPENDED, a frozen serialization string (#10).
     inline constexpr const char* kActSneak = "act.sneak";
+    // BLOCK (T2 batch M item 1; Harbinger ch.31 kCombatMove_Block, ABI v43; apmf/BlockClaims.cpp): the follower holds
+    // his guard up for [Evaluator] fBlockHoldSeconds (default 2.5 s). Harbinger raises it by the engine's own block
+    // action and, while it stands, his own attacks and casts and the engine's own shorter block do not run. Needs a
+    // drawn weapon and hands that block (a shield or torch in the left hand, or a one-handed / two-handed melee weapon
+    // with nothing else in the left). TRANSPARENT when it cannot be asked for (no road, hands, back-off); a raise is
+    // Fired and starts the row's cooldown (the time from one raise to the next). Combat table. No param.
+    // APPENDED, a frozen serialization string (#10).
+    inline constexpr const char* kActBlock = "act.block";
 #ifdef MFO_DEV_SELFTEST
     // DEV BUILDS ONLY (CMake MFO_DEV_SELFTEST; ClickUp 1dfcuabcqr7, Docs/SELFTEST.md): "DEV: run self-tests".
     // A STANDING MARKER, never an action: an enabled combat rule holding it turns the self-test runner

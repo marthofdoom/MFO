@@ -52,7 +52,20 @@ namespace MFO::Board {
     // Card G9 (marth Q7, 2026-11-09: "cooldown on POWER-ATTACK rows only for now"): the actions whose rows show
     // the cooldown cell. The save field is general (any row may carry one); an edit that moves a row OFF these
     // actions clears its cooldown (ApplyEdits), so no row is ever paced by a value the board does not show.
-    inline bool CooldownExposed(std::string_view a_actOp) { return a_actOp == Vocab::kActPowerAttack; }
+    // T2 batch M: the Block rows too (a guard is a window; its cooldown is the time from one raise to the next).
+    inline bool CooldownExposed(std::string_view a_actOp) { return a_actOp == Vocab::kActPowerAttack || a_actOp == Vocab::kActBlock; }
+    // Review F2 of 88777f7: a row the player turns INTO a Block row starts with the class rows' 4 s (tenths) when it has no
+    // cooldown of its own, so a new Block row is never a zero-cooldown guard by accident. The player may still set 0.
+    inline constexpr std::uint16_t kBlockDefaultCooldownTenths = 40;
+    // The row's cooldown after its action changed from a_prevOp to a_newOp (ApplyEdits): none on an action that does not
+    // show the cell (card G9), none carried from a Block row onto another action (a guard's spacing means nothing there),
+    // the Block default on a row that becomes a Block row without one.
+    inline std::uint16_t CooldownAfterActionChange(std::string_view a_prevOp, std::string_view a_newOp, std::uint16_t a_have) {
+        if (!CooldownExposed(a_newOp)) return 0;
+        if (a_prevOp == Vocab::kActBlock && a_newOp != Vocab::kActBlock) return 0;
+        if (a_newOp == Vocab::kActBlock && a_have == 0) return kBlockDefaultCooldownTenths;
+        return a_have;
+    }
     // v1.1 Phase 6c: the verbs an EditKind::AddonAction can carry. The CARRIER
     // (EditKind/EditCmd) is add-on-agnostic; these ids + the dispatch in
     // ApplyEdits stay progression-shaped until Phase 7/9 routes verbs through
@@ -267,6 +280,7 @@ namespace MFO::Board {
         { Vocab::kActEquipSilver, Str::K::Act_EquipSilver },
         { Vocab::kActTaunt, Str::K::Act_Taunt },   // melee-only: the picker offers it only while a melee weapon is in the right hand
         { Vocab::kActPowerAttack, Str::K::Act_PowerAttack },
+        { Vocab::kActBlock, Str::K::Act_Block },   // Harbinger ch.31 held guard (ABI 43); transparent without the road or blocking hands
         { Vocab::kActFlee, Str::K::Act_Flee },
         { Vocab::kActSneak, Str::K::Act_Sneak },   // card G1: in combat only with bSneakInCombat (dev switch, default OFF)
 #ifdef MFO_DEV_SELFTEST

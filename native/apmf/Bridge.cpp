@@ -1146,6 +1146,7 @@ namespace MFO::APMFBridge {
         SweepAimClaims();             // ch.29 class miss budgets (apmf/AimClaims.cpp): own mutex, before g_mx
         SweepAversionClaims();        // ch.32 class aversion (apmf/AversionClaims.cpp, card H2): own mutex, before g_mx
         SweepAttackMixClaims();       // ch.18 class attack mix (apmf/AttackMix.cpp, card C8): own mutex, before g_mx
+        SweepStyleClaims();           // ch.33 combat style (apmf/StyleClaims.cpp, batch M): own mutex, before g_mx
         SweepSneakClaims();           // ch.3 act.sneak holds (apmf/SneakClaims.cpp, card G1): own mutex, before g_mx
         SweepHideHolds();             // G2 hold row: ch.1 + ch.7 (apmf/HideClaims.cpp): own mutex, before g_mx
         SweepHealApproaches();
@@ -1398,6 +1399,8 @@ namespace MFO::APMFBridge {
         ClearAversionClaims();        // ch.32 class aversion: same (own mutex; order g_mx -> g_avMx; Harbinger never saves them)
         ClearDisengage();             // H3 disengage drives: same (own leaf mutex g_disengageMx; Harbinger never saves a claim)
         ClearAttackMixClaims();       // ch.18 class attack mix: same (own mutex; order g_mx -> g_mixMx; Harbinger never saves them)
+        ClearStyleClaims();           // ch.33 combat style claims: same (own mutex; order g_mx -> g_styleMx; Harbinger never saves them)
+        ClearBlockHolds();            // ch.31 block rows: same (own leaf mutex g_blockMx; Harbinger forgets every hold at its own boundary)
         ClearSneakClaims();           // ch.3 act.sneak holds: same (own mutex, order g_mx -> g_sneakMx, Harbinger never saves them)
         ClearHideClaims();            // G2 hold row: same (own mutex, order g_mx -> g_hideMx, Harbinger never saves them)
         g_equipAuthRefused.clear();

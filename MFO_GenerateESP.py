@@ -2701,7 +2701,14 @@ CLS_CSGD = {1: (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0),
             3: (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2)}
 
 
-def class_csty_params(stance, flags, flagbits):
+# Per-class Avoid Threat chance (CSGD's tenth value), by class slug. marth 2026-11-12 (Q-melee-7, MFO-B806): the Mercenary
+# "steps out of incoming spells and arrows". The engine's own side step (CombatBehaviorDodgeThreat) rolls against this
+# chance, read through Actor::GetCombatStyle, which Harbinger ch.33 answers for the class's actor-wide style claim; a dodge
+# framework that scores from the style reads the same value. Applied to every stance of the class, never lowering a base.
+CLS_AVOID_THREAT = {'mercenary': 0.3}
+
+
+def class_csty_params(stance, flags, flagbits, slug=None):
     """(csgd tuple, cscr bytes) for a class: the stance base plus TWO small,
     table-driven positioning offsets. C7 BASELINE, not tuning: C8 / the field
     retune these (xEdit-editable, one record per class per wield).
@@ -2715,6 +2722,8 @@ def class_csty_params(stance, flags, flagbits):
         fallback = min(1.0, fallback + 0.15)
         if stance != 1:
             csgd[9] = min(1.0, csgd[9] + 0.20)
+    if slug in CLS_AVOID_THREAT:
+        csgd[9] = max(csgd[9], CLS_AVOID_THREAT[slug])
     return tuple(csgd), struct.pack('<4f', circle, fallback, flank, stalk)
 
 
@@ -2780,7 +2789,7 @@ def make_class_styles(table, flagbits):
         nm = cls_edid_name(row)
         mask, fids = 0, []
         for stance in class_stances(row, wb):
-            csgd, cscr = class_csty_params(stance, row['flags'], flagbits)
+            csgd, cscr = class_csty_params(stance, row['flags'], flagbits, row['slug'])
             variants = ([(STYLE_SLOT_MELEE, "Melee", 1), (STYLE_SLOT_MELEE_DUAL, "MeleeDual", 1 | 4)]
                         if stance == 1 else
                         [(STYLE_SLOT_RANGED, "Ranged", 1)] if stance == 2 else [(STYLE_SLOT_CAST, "Cast", 1)])
