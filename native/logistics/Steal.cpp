@@ -7,6 +7,7 @@
 #include "Sightline.h"            // MeasureNow: the owner's line of sight
 #include "MainThread.h"
 #include "Lotd.h"                // IsDisplayRef
+#include "Runtime.h"             // SeatVerified(): the mit-3.7 F1 self-check gate (Steal.ExtraDataList.Destroy row)
 #include <algorithm>
 #include <mutex>
 
@@ -346,6 +347,94 @@ namespace MFO::Logistics::Steal {
             }
         }
 
+        // ── the stamp road's engine seat: the ExtraDataList destructor, bound by id (the fork declares ~ExtraDataList, never defines it) ──
+        // void(ExtraDataList*), frees nothing of the object itself. 1.6.1170 id 11572 @0x1513D0 (~ExtraDataList, id 11584 @0x151EE0, is a
+        // bare jmp to it): restores the vtable, clears this thread's extra-lookup cache when it holds this list (TLS +0x18), deletes every
+        // BSExtraData of the chain (+0x08) through its vtable slot 0 with edx=1, Deallocates the presence bitfield (+0x10).
+        // 1.5.97 id 11438 @0x1076D0 = `mov dl,1; call 11427` (the same three steps on the 1.5.97 layout: chain +0x00, presence +0x08).
+        // The engine frees a list as this destructor, then its sized free (109588 -> 36098 / 102158 -> 11233), which is
+        // MemoryManager::Deallocate(ptr, false) = RE::free: 41 such pairs on 1.6.1170, 34 on 1.5.97, one inside
+        // Character::AddObjectToContainer itself (37525 @0x678FEE). Row "Steal.ExtraDataList.Destroy" in native/VerifiedAddresses.h.
+        using ListDtorFn = void(RE::ExtraDataList*);
+        REL::Relocation<ListDtorFn>& ListDtorRel() {
+            static REL::Relocation<ListDtorFn> func{ REL::RelocationID(11438, 11572) };
+            return func;
+        }
+        // May a plain stack be stamped (a NEW ExtraDataList handed to AddObjectToContainer)? Only where a list this code made can also be
+        // destroyed by it. Exactly 1.6.1170 / 1.5.97: the fork's `new ExtraDataList()` is a named FATAL error on any other build
+        // (GetRuntimeSize), and id 11572 is not in the 1.7.104 id table (an id miss is fatal), so every other build is refused BEFORE
+        // anything is resolved or allocated. Refused = a plain stack moves UNSTAMPED, warned per item (never a leak, never a silent launder).
+        bool StampSeatOk() {
+            static const bool ok = [] {
+                if (!Runtime::IsVerified1_6_1170() && !Runtime::IsVerified1_5_97()) {
+                    spdlog::error("[steal] runtime {} ({}): the ExtraDataList constructor / destructor pair is verified on 1.6.1170 and 1.5.97 only "
+                                  "-- the stamp road is REFUSED: plain stacks stolen from owned chests move UNSTAMPED (no ownership mark)",
+                                  REL::Module::get().version().string("."), Runtime::BuildLabel());
+                    return false;
+                }
+                if (!Runtime::SeatVerified(ListDtorRel().address(), "Steal.ExtraDataList.Destroy")) {
+                    spdlog::error("[steal] the Steal.ExtraDataList.Destroy self-check row did not verify -- the stamp road is REFUSED: plain stacks "
+                                  "stolen from owned chests move UNSTAMPED (no ownership mark)");
+                    return false;
+                }
+                return true;
+            }();
+            return ok;
+        }
+
+        // Where did the list handed to AddObjectToContainer land? InventoryChanges' add (16053 @0x226A20) LINKS the caller's list when
+        // the follower has no entry for the object, or no equivalent list in it (push-front 0x226EA4 / 0x22724B). When an equivalent list
+        // exists (compare 11594: same owner, ExtraCount ignored) it adds the count to THAT list (0x227071-0x227080) and neither links nor
+        // frees the caller's (0x227189 `cmp rsi,[rsp+0xF0]` skips the free for a caller-made list): Merged, the caller still owns it.
+        // Merged is claimed only on positive evidence (a list he held BEFORE the add now counts exactly `moved` more), never on "not
+        // linked" alone: a container-changed sink of another plugin runs inside the add and may move the item on, list included.
+        struct HeldList { const RE::ExtraDataList* xl; std::int32_t n; };
+        enum class Landed : std::uint8_t { Adopted, Merged, Unknown };
+
+        // Every extra list the follower holds for a_obj, with its count. Empty when he has none.
+        void HeldLists(RE::Actor* a_f, const RE::TESBoundObject* a_obj, std::vector<HeldList>& a_out) {
+            auto* changes = a_f->GetInventoryChanges(true);
+            if (!changes || !changes->entryList) return;
+            for (auto* e : *changes->entryList) {
+                if (!e || e->object != a_obj || !e->extraLists) continue;
+                for (auto* xl : *e->extraLists)
+                    if (xl) a_out.push_back({ xl, xl->GetCount() });
+            }
+        }
+
+        Landed WhereListLanded(RE::Actor* a_f, const RE::TESBoundObject* a_obj, const RE::ExtraDataList* a_xl, const std::vector<HeldList>& a_before,
+                               std::int32_t a_moved) {
+            auto* changes = a_f->GetInventoryChanges(true);
+            if (!changes || !changes->entryList) return Landed::Unknown;
+            bool merged = false;
+            for (auto* e : *changes->entryList) {   // EVERY entry, whatever its object: "linked anywhere" must never read as "not adopted"
+                if (!e || !e->extraLists) continue;
+                for (auto* xl : *e->extraLists) {
+                    if (!xl) continue;
+                    if (xl == a_xl) return Landed::Adopted;
+                    if (e->object != a_obj) continue;
+                    for (const auto& h : a_before)
+                        if (h.xl == xl && xl->GetCount() == h.n + a_moved) merged = true;
+                }
+            }
+            return merged ? Landed::Merged : Landed::Unknown;
+        }
+
+        // Destroys a list THIS FILE allocated (new RE::ExtraDataList = RE::malloc + the engine ctor) that the engine did not adopt
+        // (Landed::Merged): the engine destructor, then RE::free, exactly the engine's own pair. Call only after StampSeatOk(). MAIN
+        // THREAD (the destructor clears the calling thread's extra cache; the list was only ever touched on this thread).
+        void DestroyUnadoptedList(RE::ExtraDataList* a_xl) {
+            ListDtorRel()(a_xl);
+            RE::free(a_xl);
+        }
+
+        // How many of a_obj the chest holds right now (the before / after of every RemoveItem).
+        std::int32_t CountIn(RE::TESObjectREFR* a_chest, RE::TESBoundObject* a_obj) {
+            auto inv = a_chest->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
+            auto it = inv.find(a_obj);
+            return it == inv.end() ? 0 : std::max<std::int32_t>(0, it->second.first);
+        }
+
         // MAIN THREAD. The whole take. Re-plans from the live inventory each call, so a Retry resumes where the last call stopped.
         void OwnedTakeOnMain(RE::FormID a_fid, RE::FormID a_cid) {
             auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid);
@@ -380,28 +469,65 @@ namespace MFO::Logistics::Steal {
                     if (obj->GetFormID() != 0x0000000F && !IsCoinLoot(obj) && !FitsCarryWeight(f, obj->GetWeight() * c.n)) break;
                     TheftGate::NoteAction(a_fid, TheftGate::Road::Steal, a_cid, "take (owned chest item)");
                     const char* how = "xOwn";
+                    const std::int32_t before = CountIn(chest, obj);
+                    std::int32_t moved = 0;
                     if (c.xl) {
                         // keep the copy's own owner; a copy with none gets the chest's (or cell's) owner stamped before it moves
-                        if (!c.xl->GetByType<RE::ExtraOwnership>() && c.owner) c.xl->SetOwner(c.owner);
+                        auto* own = c.xl->GetByType<RE::ExtraOwnership>();
+                        if ((!own || !own->owner) && c.owner) { c.xl->SetOwner(c.owner); own = c.xl->GetByType<RE::ExtraOwnership>(); }   // SetOwner refuses a dynamic form
+                        if (!own || !own->owner) {
+                            spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} has no stampable owner ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
+                                         c.owner ? c.owner->GetFormID() : 0u);
+                            how = "unstamped";
+                        }
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, c.xl, f);
-                    } else if (c.owner && !c.owner->IsDynamicForm()) {
+                        moved = before - CountIn(chest, obj);
+                    } else if (c.owner && !c.owner->IsDynamicForm() && StampSeatOk()) {
                         // a plain stack arrives with NO owner (RemoveItem moves base + count only), which would launder the theft: remove it
-                        // and add it to the follower WITH an ExtraOwnership of its owner. The list is never freed here (the engine adopts or copies it).
-                        auto* xl2 = new RE::ExtraDataList();
-                        xl2->SetOwner(c.owner);
+                        // and add what left the chest to the follower WITH an ExtraOwnership of its owner. The engine either ADOPTS the
+                        // new list (links it into his entry) or MERGES its count into an equivalent list he already holds and drops ours
+                        // unlinked and unfreed: then it is destroyed here (the engine's destructor + free), not leaked.
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                        f->AddObjectToContainer(obj, xl2, c.n, chest);
-                        how = "stamped";
+                        moved = before - CountIn(chest, obj);
+                        if (moved > 0) {
+                            std::vector<HeldList> held;
+                            HeldLists(f, obj, held);
+                            auto* xl2 = new RE::ExtraDataList();
+                            xl2->SetOwner(c.owner);
+                            f->AddObjectToContainer(obj, xl2, moved, chest);
+                            switch (WhereListLanded(f, obj, xl2, held, moved)) {
+                                case Landed::Adopted: break;
+                                case Landed::Merged:
+                                    DestroyUnadoptedList(xl2);
+                                    spdlog::info("[steal] F={:08X} chest={:08X}: item {:08X}x{} merged into a stack he already held with that owner -- "
+                                                 "the new ownership list was not adopted and is destroyed (engine destructor + free)", a_fid, a_cid, obj->GetFormID(), moved);
+                                    break;
+                                case Landed::Unknown:   // never guessed: destroying a list something else holds is worse than one list not reclaimed
+                                    spdlog::error("[steal] F={:08X} chest={:08X}: item {:08X}x{}: the new ownership list is neither linked into his inventory nor "
+                                                  "merged into a stack he held (something moved the item during the add?) -- left alone, ONE ExtraDataList is not "
+                                                  "reclaimed", a_fid, a_cid, obj->GetFormID(), moved);
+                                    break;
+                            }
+                            how = "stamped";
+                        }
                     } else {
-                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} has no stampable owner ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
+                        const bool stampable = c.owner && !c.owner->IsDynamicForm();
+                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} {} ({:08X}): moved UNSTAMPED", a_fid, a_cid, obj->GetFormID(), c.n,
+                                     stampable ? "cannot be stamped, the stamp road is refused on this runtime" : "has no stampable owner",
                                      c.owner ? c.owner->GetFormID() : 0u);
                         chest->RemoveItem(obj, c.n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, f);
+                        moved = before - CountIn(chest, obj);
                         how = "unstamped";
                     }
-                    movedTotal += c.n;
-                    TheftGate::LogOwnedCopy(f, chest, obj, c.n, how);
+                    if (moved <= 0) {   // nothing left the chest: no STOLE line, no count, and no second try at the same copy
+                        spdlog::warn("[steal] F={:08X} chest={:08X}: item {:08X}x{} did NOT leave the chest (RemoveItem moved nothing; {} before and after) -- "
+                                     "this item is left", a_fid, a_cid, obj->GetFormID(), c.n, before);
+                        break;
+                    }
+                    movedTotal += moved;
+                    TheftGate::LogOwnedCopy(f, chest, obj, moved, how);
                     spdlog::info("[steal] F={:08X} chest={:08X}: STOLE item={:08X}({}) x{} road=owned-chest ownership={} owner={:08X} (pick + witness pre-check Take, proved on main)",
-                                 a_fid, a_cid, obj->GetFormID(), NameOf(obj), c.n, how, c.owner ? c.owner->GetFormID() : 0u);
+                                 a_fid, a_cid, obj->GetFormID(), NameOf(obj), moved, how, c.owner ? c.owner->GetFormID() : 0u);
                 }
                 // copies that were not owned by someone else follow the normal theft-gate road (a plain RemoveItem if none is barred)
                 if (TheftGate::Takeable(f, chest, obj)) {
@@ -425,13 +551,20 @@ namespace MFO::Logistics::Steal {
         if (RefInPlayerStorage(a_chest)) return "player storage / player home (museum halls included)";
         if (IsQuestObjectRef(a_chest)) return "a quest container";
         if (IsFactionServiceContainer(a_chest)) return "a faction's vendor / stolen-goods / evidence container";
-        // F2: a chest owned by a FACTION the player or the follower is in is not stolen from either (steal road only; TheftGate unchanged)
-        if (auto* fac = a_chest->GetOwner() ? a_chest->GetOwner()->As<RE::TESFaction>() : nullptr) {
-            auto* pc = RE::PlayerCharacter::GetSingleton();
+        // The EFFECTIVE owner: the chest's own, else the CELL owner of an off-limits chest (the owner the take stamps and the witness
+        // check reads). Both bars below apply to it (steal road only; TheftGate unchanged).
+        RE::TESForm* owner = a_chest->GetOwner();
+        if (!owner && a_chest->IsOffLimits()) owner = CellOwner(a_chest);
+        if (!owner) return nullptr;
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        // F2: a chest owned by a FACTION the player or the follower is in is not stolen from either
+        if (auto* fac = owner->As<RE::TESFaction>()) {
             if ((pc && pc->IsInFaction(fac)) || a_follower->IsInFaction(fac)) return "owned by a faction the player or the follower is in";
         }
-        // owned by the player's side or the follower's own: not someone else's, so not this road (TheftGate::TakeBarred is null for it)
-        if (a_chest->GetOwner() && !TheftGate::TakeBarred(a_follower, a_chest, nullptr, nullptr, TheftGate::Road::Steal))
+        // owned by the player's side or the follower's own (his base NPC or its template chain): not someone else's, so not this road
+        // (the same owners TheftGate::TakeBarred lets through)
+        constexpr RE::FormID kPlayerBaseNpc = 0x00000007, kPlayerFaction = 0x00000DB1;
+        if (owner->GetFormID() == kPlayerBaseNpc || owner->GetFormID() == kPlayerFaction || IsOwnerActor(pc, owner) || IsOwnerActor(a_follower, owner))
             return "owned by the player's own side or the follower's";
         return nullptr;
     }

@@ -1023,6 +1023,21 @@
    },
    "source": "native/logistics/TradePerks.cpp AliasRefHandle (callers native/Packages.cpp)",
    "doc": "ObjectRefHandle&(TESQuest* (rcx), ObjectRefHandle& out (rdx), u32 aliasID (r8d)): LockForRead(quest+0xD0 aliasAccessLock; 68233 / 66976), out = the invalid handle, refAliasMap lookup (quest+0x70 on 1.6.1170, +0x78 on 1.5.97) writing out, UnlockForRead (68239 / 66982), returns &out. The 1.5.97 ForceRefTo body calls it (Packages.cpp ForceRefTo note)"
+  },
+  {
+   "seat": "Steal.ExtraDataList.Destroy",
+   "kind": "function",
+   "construct": "REL::RelocationID(11438, 11572)",
+   "ids": {
+    "1.6.1170": 11572,
+    "1.5.97": 11438
+   },
+   "sig": {
+    "1.6.1170": "41 56 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 40 48 89 6C 24 48 48 89 74 24 50 48 89 7C 24 58 48 8B F1 48 8D 05 ?? ?? ?? ?? 48 89 01 8B 15 ?? ?? ?? ?? 65 48 8B 04 25 58 00 00 00 48 8B 2C D0",
+    "1.5.97": "48 83 EC 38 48 C7 44 24 20 FE FF FF FF B2 01 E8 ?? ?? ?? ?? 90 48 83 C4 38 C3"
+   },
+   "source": "native/logistics/Steal.cpp DestroyUnadoptedList (owned-chest steal road, main thread)",
+   "doc": "the engine's ExtraDataList destructor body, void(ExtraDataList* rcx), frees nothing of the object itself. 1.6.1170: id 11572 @0x1513D0 (ExtraDataList::~ExtraDataList id 11584 @0x151EE0 is a bare jmp to it): restores the vtable at +0x00, clears this thread's extra-lookup cache when it holds this list (TLS +0x18, memset 0x5B0 at +0x20), deletes every BSExtraData of the chain at +0x08 through its vtable slot 0 with edx=1, MemoryManager::Deallocate (68117) of the presence bitfield at +0x10. 1.5.97: id 11438 @0x1076D0 = mov dl,1 + call 11427 @0x106D60 (same cache clear, chain at +0x00 deleted the same way, Deallocate 66861 of the presence at +0x08). The engine frees a list as this destructor then its sized free (109588 -> 36098 / 102158 -> 11233 = MemoryManager::Deallocate(ptr, false), CommonLib RE::free): 41 such pairs with edx=0x20 on 1.6.1170, 34 with edx=0x18 on 1.5.97, one of them in Character::AddObjectToContainer itself (37525 @0x678FEE). 1.7.104: not in the id table, so no row and the stamp road is refused there (Steal.cpp StampSeatOk refuses before resolving the id)"
   }
  ],
  "layout_facts": [

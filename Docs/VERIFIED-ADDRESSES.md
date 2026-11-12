@@ -10,13 +10,13 @@ nothing when one does not. At startup `REL::SelfCheck::Run` repeats the comparis
 game actually loaded. A row that fails refuses THAT seat by name in the log; the expected RVA is never
 used in place of the library's answer.
 
-Offline result of this generation: 1.6.1170.0 64/64 verified, 0 refused, 1.5.97.0 64/64 verified, 0 refused.
+Offline result of this generation: 1.6.1170.0 65/65 verified, 0 refused, 1.5.97.0 65/65 verified, 0 refused.
 
 1.7.104.0 has NO Address Library. Its column is OUR OWN id map: the MIT id table of the CommonLibSSE-NG fork
-(`data/mit-idtable-v1-1-7-104-0.bin`, revision 3, 17751 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
+(`data/mit-idtable-v1-1-7-104-0.bin`, revision 4, 17770 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
 what SelfCheck queries at runtime; authoritative) with the evidence CSVs beside it, keyed by
 the 1.6.1170 id, re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script
-docstring). Offline result: 1.7.104.0 64/65 verified, 1 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
+docstring). Offline result: 1.7.104.0 64/66 verified, 2 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
 so `IsVerifiedAddress` is false and the seat is refused by name. The table of `Not verified on 1.7.104` is below.
 
 These rows prove the ADDRESSES. That each hooked slot holds the same function body on 1.7.104, and that every
@@ -90,6 +90,7 @@ CommonLib layout MFO reads is the same there, is proven separately in `Docs/ENGI
 | TradePerks.BGSEntryPoint.HandleEntryPoint | function | 23526 | 0x385F30 | 23073 | 0x32ECE0 | 23526 | 0x38CFF0 | signature (19 bytes, unique in .text) |  | native/logistics/TradePerks.cpp EntryPointValue | _evidence/2026-10-18-designs/TOWN-PHASE2-DESIGN.md R0-1: C-variadic void(u32 ep (ecx, movsxd; ep >= 0x5C returns), Actor* owner (rdx; null returns), condArg... (8-byte pointers, count = the engine's EP table row), float* value...); r8/r9 spilled to home slots, args read from the spill area. Engine callers: buy (8, player, vendorRef, &v) 1.6.1170 0x8EAFCA / 1.5.97 0x85214C, sell (0x3C, ...) 0x8EAFE5 / 0x852164, temper (0x4C, player, TESBoundObject*, &delta) 0x90BA85 / 0x863EE3 |
 | TradePerks.TESCondition.IsTrue | function | 29888 | 0x49F8F0 | 29074 | 0x4447A0 | 29888 | 0x4A6E20 | signature (16 bytes, unique in .text) |  | native/logistics/TradePerks.cpp ConditionTrue | bool(const TESCondition* (rcx), TESObjectREFR* action (rdx), TESObjectREFR* target (r8)): builds ConditionCheckParams {action, target, 0...} on its stack and calls the list evaluator (1.6.1170 0x49FA70 / 1.5.97 0x444920), which reads head = [rcx] (null head = true) and swaps the evaluation context in TLS; returns al |
 | TradePerks.TESQuest.CreateRefHandleByAliasID | function | 25066 | 0x3D14D0 | 24537 | 0x378760 | 25066 | 0x3D8590 | signature (19 bytes, unique in .text) |  | native/logistics/TradePerks.cpp AliasRefHandle (callers native/Packages.cpp) | ObjectRefHandle&(TESQuest* (rcx), ObjectRefHandle& out (rdx), u32 aliasID (r8d)): LockForRead(quest+0xD0 aliasAccessLock; 68233 / 66976), out = the invalid handle, refAliasMap lookup (quest+0x70 on 1.6.1170, +0x78 on 1.5.97) writing out, UnlockForRead (68239 / 66982), returns &out. The 1.5.97 ForceRefTo body calls it (Packages.cpp ForceRefTo note) |
+| Steal.ExtraDataList.Destroy | function | 11572 | 0x1513D0 | 11438 | 0x1076D0 | - | - | signature (67 bytes, unique in .text) |  | native/logistics/Steal.cpp DestroyUnadoptedList (owned-chest steal road, main thread) | the engine's ExtraDataList destructor body, void(ExtraDataList* rcx), frees nothing of the object itself. 1.6.1170: id 11572 @0x1513D0 (ExtraDataList::~ExtraDataList id 11584 @0x151EE0 is a bare jmp to it): restores the vtable at +0x00, clears this thread's extra-lookup cache when it holds this list (TLS +0x18, memset 0x5B0 at +0x20), deletes every BSExtraData of the chain at +0x08 through its vtable slot 0 with edx=1, MemoryManager::Deallocate (68117) of the presence bitfield at +0x10. 1.5.97: id 11438 @0x1076D0 = mov dl,1 + call 11427 @0x106D60 (same cache clear, chain at +0x00 deleted the same way, Deallocate 66861 of the presence at +0x08). The engine frees a list as this destructor then its sized free (109588 -> 36098 / 102158 -> 11233 = MemoryManager::Deallocate(ptr, false), CommonLib RE::free): 41 such pairs with edx=0x20 on 1.6.1170, 34 with edx=0x18 on 1.5.97, one of them in Character::AddObjectToContainer itself (37525 @0x678FEE). 1.7.104: not in the id table, so no row and the stamp road is refused there (Steal.cpp StampSeatOk refuses before resolving the id) |
 | PickupSound.Actor.PlayPickUpSound.1_7_104 | raw rva | - | - | - | - | - | 0x6728B0 | raw RVA: 1.6.1170 0x65FE90 signature (30 bytes) unique at the idmap RVA |  | native/logistics/PickupSound.cpp Install (1.7.104 only: Actor::PlayPickUpSound read from Character vtable slot 0xA3; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv) |  |
 
 ## Not verified on 1.7.104
@@ -100,6 +101,7 @@ for them and the seat is refused. Nothing here is a failure on 1.6.1170 or 1.5.9
 | seat | 1.6.1170 id | reason |
 |---|---|---|
 | PickupSound.Actor.PlayPickUpSound | 37196 | id 37196 is not in the idmap |
+| Steal.ExtraDataList.Destroy | 11572 | id 11572 is not in the idmap |
 
 ## Slots and offsets that are not Address Library ids
 
