@@ -189,8 +189,8 @@ namespace Sim {
             if (!cfg.allFollowers && ci != 0) { iaus.Serve(F, ci); return; }
             if (last.size() < F.ctl.size()) last.assign(F.ctl.size(), -1e9);
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; const bool subj = ci == 0;
-            if (!Fight::Up(x)) return;
             if (ServiceRun(F, ci)) return;   // card G3: a hide run or its hold stands
+            if (!Fight::Up(x)) return;
             const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil;
             Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T);
             FillCooldowns(c, sv.g.actions, F.now, *iaus.T); FillCooldowns(c, sv.g.postures, F.now, *iaus.T);

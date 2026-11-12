@@ -85,7 +85,7 @@ namespace Sim {
             { "G19", "disengage (hide run)", "sneak classes", "the hide run's need is one bit of group knowledge (every foe of one group carries the same record, so detectShare is 0 or 1): his own blow reveals him and sends him running although the engine's next pass would lose him where he stands", "thief-open", "open" },
             { "G20", "disengage (flee)", "disengage classes", "the flee starts only at 30% health with a foe on him, runs once per 25 s and ends on arrival: no earlier leave, no keeping of the distance after it, and the heal is not ordered before the run", "caster-flee", "open" },
             { "G21", "retreat / disengage", "classes without kDisengage", "a class without the disengage flag has no way out at all: neither Retreat nor the flee is generated, he drinks and trades until he drops", "melee-flee", "open" },
-            { "G22", "attack (blow from stealth)", "sneak classes", "Facts::foeUnaware reads the foe GROUP's record while the engine's sneak attack reads the PAIR's own level: a blow the boost named can land without the multiplier (metric stealthMiss%)", "", "measured, small" },
+            { "G22", "attack (blow from stealth)", "sneak classes", "Facts::foeUnaware reads the foe GROUP's record while the engine's sneak attack reads the PAIR's own level: a blow the boost named can land without the multiplier (metric stealthMiss%: under 2% of such blows in the lab, so small)", "", "open" },
         };
         return g;
     }
@@ -94,9 +94,9 @@ namespace Sim {
     struct ClassGap { const char* id; const char* family; const char* desc; const char* scenario; const char* status; };
     inline const std::vector<ClassGap>& ClassGaps() {
         static const std::vector<ClassGap> g = {
-            { "C-G1", "sneak", "the sneak stance in a fight (card G1): built, [Debug] bSneakInCombat is 0 by default and the stance in combat is unobserved (probe P1). Modelled as held under --stealth g1 and above", "ambush", "built, field unproven" },
-            { "C-G2", "sneak", "hide-when-unseen (card G2 Layer 1): the engine's own loss read through the foe group's record, the hold row and the blow from stealth are built and modelled (--stealth hide). The forced non-detection seat (Layer 2) is not built: the lab keeps the engine's 10 s unwatched loss", "thief-cover", "built, field unproven" },
-            { "C-G3", "sneak", "the break-off to a point no foe sees (card G3): built behind [Debug] bIausHideRoad (default off) and modelled (--stealth g3). What the decision code still cannot express is in the gap ledger: G18 (the hold has no exit), G19 (the run's need is one bit)", "thief-cover", "built, field unproven" },
+            { "C-G1", "sneak", "the sneak stance in a fight (card G1): built, [Debug] bSneakInCombat is 0 by default and the stance in combat is unobserved (probe P1). Modelled as held under --stealth g1 and above. Status closing = built, not yet proven in the field", "ambush", "closing" },
+            { "C-G2", "sneak", "hide-when-unseen (card G2 Layer 1): the engine's own loss read through the foe group's record, the hold row and the blow from stealth are built and modelled (--stealth hide). The forced non-detection seat (Layer 2) is not built: the lab keeps the engine's 10 s unwatched loss", "thief-cover", "closing" },
+            { "C-G3", "sneak", "the break-off to a point no foe sees (card G3): built behind [Debug] bIausHideRoad (default off) and modelled (--stealth g3). What the decision code still cannot express is in the gap ledger: G18 (the hold has no exit), G19 (the run's need is one bit)", "thief-cover", "closing" },
             { "C-G4", "sneak", "no flanking half bonus. Road: card G4 (marker effect + class perk), tier B", "flank", "open" },
             { "C-H10", "sneak", "no Shadowcloak. Road: card H10 (a 3 s invisibility every 30 s), falls back to H-DETECT if invisibility does not drop detection", "shadowcloak", "open" },
             { "C-G13", "logistics", "steal and pick locks (cards G13 / G14) are logistics actions, outside the combat lab", "", "limit" },
@@ -119,7 +119,7 @@ namespace Sim {
             { "C-H11", "power attack", "a power attack that releases the off-hand spell (card H11): IAUS has no input for that spell's worth on the struck foe", "", "open" },
             { "C-C9", "movement", "the go-in rule is a movement decision IAUS does not own: goInBad% is his time in melee against the rule. Road: card C9 over H3 / H4", "", "open" },
             { "C-FLEE", "retreat", "Retreat (act.flee) is gated by the same kDisengage flag as the H3 reposition, so a line-holding hybrid runs from his line", "", "open" },
-            { "C-FLEE2", "disengage", "card G3's flee for the disengage classes: built and modelled (--stealth g3). Fixed 30% line, one run per 25 s, ends on arrival (gap G20)", "caster-flee", "built, field unproven" },
+            { "C-FLEE2", "disengage", "card G3's flee for the disengage classes: built and modelled (--stealth g3). Fixed 30% line, one run per 25 s, ends on arrival (gap G20)", "caster-flee", "closing" },
             { "C-NOFLEE", "retreat", "no kDisengage flag: no Retreat and no flee is ever generated for him (gap G21)", "melee-flee", "open" },
             { "C-UNDEAD", "attack target", "anti-undead aggression: no class term that values an undead foe. Road: a class profile weight on FoeUnholy + the C8 package", "", "open" },
             { "C-AURA", "passive", "the Saint's aura (card C11) is not modelled", "", "open" },

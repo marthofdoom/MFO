@@ -707,6 +707,13 @@ namespace Sim {
             if (x.Party()) return 0.0f;
             switch (x.spec->conf) { case 0: return 0.75f; case 1: return 0.40f; case 2: return 0.20f; case 3: return 0.08f; default: return 0.0f; }
         }
+        // Card G3's drive, one step: to the point at the run speed, then stay. MODEL: the drive is a movement package, so his feet keep
+        // going through a weapon swap, a potion and a cast (upper-body actions; StepWorld calls this for a body busy with one of them).
+        // Everywhere else in the lab those three still hold the body, as before the stealth model.
+        void RunMove(Body& x, const Ctl& c) {
+            if (std::hypot(c.runX - x.c.x, c.runY - x.c.y) > 40.0f) { Move(x, c.runX, c.runY, x.spec->run); Face(x, c.runX, c.runY); }
+            if (x.ctl == 0) t.runSec += TM::dt;
+        }
         void Brain(Body& x) {
             const Rules& r = D->rules; const Style& st = StyleOf(x);
             if (x.spec->dragon) {   // MODEL: 12 s on the wing, 15 s on the ground
@@ -727,11 +734,7 @@ namespace Sim {
                 return;
             }
             x.c.fleeing = false;
-            if (c && c->runPhase) {   // card G3: the H3 drive owns his body (ch.24 on the point + the ch.7 deny): he runs there and holds, no swing, no shot
-                if (std::hypot(c->runX - x.c.x, c->runY - x.c.y) > 40.0f) { Move(x, c->runX, c->runY, x.spec->run); Face(x, c->runX, c->runY); }
-                if (x.ctl == 0) t.runSec += TM::dt;
-                return;
-            }
+            if (c && c->runPhase) { RunMove(x, *c); return; }   // card G3: the H3 drive owns his body (ch.24 on the point + the ch.7 deny): he runs there and holds, no swing, no shot
             if (c && now < x.holdUntil) { if (x.ctl == 0) t.holdSec += TM::dt; return; }   // G2's hold row: still and quiet (ch.1 movement block + ch.7 deny)
             if (c && now < c->moveUntil) {   // a reposition order: he goes there first (sprint = x1.5, stamina 8 / s: MODEL)
                 const float gd = std::hypot(c->goalX - x.c.x, c->goalY - x.c.y);
@@ -871,7 +874,9 @@ namespace Sim {
                 if (now >= nextDetect) { nextDetect = now + static_cast<double>(dg.updateMin); DetectPass(); }
             }
             for (std::size_t i = 0; i < shots.size();) { if (shots[i].at <= now) { const Shot s = shots[i]; shots[i] = shots.back(); shots.pop_back(); Land(s); } else ++i; }
-            for (std::size_t i = 0; i < b.size(); ++i) { Body& x = b[i]; if (!Up(x) || Busy(x)) continue; if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
+            for (std::size_t i = 0; i < b.size(); ++i) { Body& x = b[i]; if (!Up(x)) continue;
+                if (Busy(x)) { if (x.ctl >= 0 && ctl[static_cast<std::size_t>(x.ctl)].runPhase && (x.act == Act::Swap || x.act == Act::Drink || x.act == Act::Cast) && now >= x.staggerUntil && now >= x.ctrlUntil) RunMove(x, ctl[static_cast<std::size_t>(x.ctl)]); continue; }
+                if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
             // tallies that integrate over time
             Body& pl = Player(); bool pressed = false; bool anyFoe = false, anyParty = false;
             for (auto& x : b) { if (!Up(x)) continue; if (x.role == Role::Foe) { anyFoe = true; if (x.c.targetId == pl.c.id && Dist(x, pl) < 1500) pressed = true; } else if (x.role == Role::Player || x.role == Role::Follower) anyParty = true; }

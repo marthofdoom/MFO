@@ -295,8 +295,8 @@ namespace Sim {
         void Serve(Fight& F, int ci) override { Served sv; ServeWith(F, ci, sv); }
         void ServeWith(Fight& F, int ci, Served& sv) {
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; Tally& t = F.t; const bool subj = ci == 0;
+            if (ServiceRun(F, ci)) return;   // card G3: while a hide run or its hold stands his scan is skipped (Concealment::Service); a run ends when he goes down
             if (!Fight::Up(x)) return;
-            if (ServiceRun(F, ci)) return;   // card G3: while a hide run or its hold stands his scan is skipped (Concealment::Service)
             MakeSnapshot(F, ci, sv.sn);
             const auto t0 = timeIt ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             sv.g = Generate(sv.sn, c.gate, *T);
