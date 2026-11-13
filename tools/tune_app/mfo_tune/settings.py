@@ -11,17 +11,17 @@ _REPO = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 
 DEFAULTS = {
     "repo": _REPO,
-    "sim_bin": "/tmp/claude-1000/tune2111-bin/sim-r2",
+    "sim_bin": "",               # empty: the Launch / Sim run tabs prompt for it (Browse… or Build…)
     "runs_root": os.path.expanduser("~/mfo-tune-runs"),
-    "extra_run_roots": [],       # more directories scanned for run dirs (each dir with progress.log or summary.json)
+    "extra_run_roots": ["/tmp/claude-1000/-mnt-gaming-modlists-Projects-marth-follower-overhaul/a935cdde-4a9b-4a50-983f-339ce7b41062/scratchpad/tune"],   # more directories scanned for run dirs (each dir with progress.log or summary.json)
     "lorerim_tuning": "/mnt/gaming/modlists/LoreRim/mods/MFO/SKSE/Plugins/MFO_Tuning",
     "lorerim_log": "/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log",
     "deck_host": "deck@marthdeck",
     "deck_tuning": "/home/deck/Games/Tuxbornrc1/mods/MFO/SKSE/Plugins/MFO_Tuning",
     "deck_log": "/home/deck/Games/Tuxbornrc1/overwrite/SKSE/Plugins/MFO.log",
-    "taskset": "0-7",
+    "taskset": "",               # empty = all cores (no taskset)
     "nice": 10,
-    "jobs": 12,
+    "jobs": os.cpu_count() or 4,
     "scratch_files": os.path.expanduser("~/mfo-tune-runs/tuning-files"),
 }
 

@@ -33,11 +33,53 @@ def main():
               len(runreader.kept_specs(s)), (g.get("headline") or {}).get("j")), e and rows)
         check("%s: summary rows == log rows (shape)" % os.path.basename(d), True, "%d summary rows" % rows)
     # grammar + deploy round trip into a temp dir
-    s = {"stages": {"classes": {"mage": {"kept": ["mage:8.35.b=0.27"]}}, "globals": [{"set": "t.momentum=1.0", "verdict": "ACCEPTED"}, {"set": "worth.floor=2", "verdict": "ACCEPTED"}]}}
-    f = tuningfiles.generate(runreader.kept_specs(s), runreader.accepted_sets(s), "test")
-    check("generate -> files", sorted(f) == ["mage.txt", "potions.txt", "shared.txt"], sorted(f))
+    s = {"stages": {"classes": {"mage": {"kept": ["mage:8.35.b=0.27"], "complete": True}, "healer": {"kept": [], "complete": True},
+                                "thief": {"kept": ["thief:0.0.b=1"], "complete": False}},
+                    "globals": [{"set": "t.momentum=1.0", "verdict": "PASSES RULE"}, {"set": "t.kite=2", "verdict": "KEPT: x"},
+                                {"set": "t.actFloor=1", "verdict": "BEATS NOISE, NOT APPLIED: x"}, {"set": "worth.floor=0.5", "verdict": "PASSES RULE"}]}}
+    f = tuningfiles.generate(runreader.kept_specs(s), runreader.accepted_sets(s), "test", runreader.covered_classes(s))
+    check("generate -> files (complete classes only, header-only for an emptied class)", sorted(f) == ["healer.txt", "mage.txt", "potions.txt", "shared.txt"], sorted(f))
+    check("empty class file is header only", f["healer.txt"].strip() == "# test")
+    check("globals: only PASSES written", runreader.accepted_sets(s) == ["t.momentum=1.0", "worth.floor=0.5"])
     check("generated files validate", not any(tuningfiles.validate_text(k, v) for k, v in f.items()))
-    check("bad line is flagged", tuningfiles.validate_text("mage.txt", "nonsense=1\n"))
+    # final table precedence (tune_driver.final_curves)
+    s2 = {"stages": {"classes": {"mage": {"kept": ["mage:8.35.b=0.27"], "complete": True}}, "joint": {"table": ["mage:8.35.b=0.3"], "verdict": "PASS"},
+                     "rejudge": [{"spec": "mage:family.attack=2", "accepted": True}], "gap": {"kept": {"mage/x": ["mage:0.0.a=2"]}}}}
+    check("no recalib, joint passed -> joint.table", runreader.kept_specs(s2) == ["mage:8.35.b=0.3"])
+    s2["stages"]["joint"]["verdict"] = "FAIL: x"
+    check("joint failed -> per-class + rejudge + gap", runreader.kept_specs(s2) == ["mage:8.35.b=0.27", "mage:family.attack=2", "mage:0.0.a=2"], runreader.kept_specs(s2))
+    s2["stages"]["recalib"] = {"accepted": ["mage:8.35.b=0.27", "mage:0.0.a=2"], "rows": [{"spec": "mage:0.0.a=2", "holds": False}, {"spec": "mage:8.35.b=0.27", "holds": True}]}
+    check("recalib wins; a holds=false spec is dropped and listed", runreader.kept_specs(s2) == ["mage:8.35.b=0.27"] and runreader.recalib_dropped(s2) == ["mage:0.0.a=2"])
+    # validator = the in-game loader
+    V = tuningfiles.validate_text
+
+    def good(fn, line):
+        check("accepts %s: %s" % (fn, line), not V(fn, line + "\n"), V(fn, line + "\n"))
+
+    def bad(fn, line):
+        check("rejects %s: %s" % (fn, line), V(fn, line + "\n"))
+    for ln in ("mage:8.35.b=0.27", "8.35.b=0.27", "equip.ranged_dist.b=0.2", "equip.trade.w=2", "mage : equip.crossover = 0.3", "family.attack=+2", "scalar.schoolPeak=3",
+               "attack.range.px5=0.5", "attack.0.zeroAbove=1", "--curve mage:8.35.floor=0.1", "--curve 'mage:8.35.floor=0.1'", "ATTACK.RANGE.a=1  # c", "mage:family.power_attack=2"):
+        good("mage.txt", ln)
+    for ln in ("healer:8.35.b=0.27", "mage:8.35.px6=1", "mage:8.35.p=1", "mage:scalar.nope=1", "mage:family.nope=1", "mage:family.attack=0", "mage:8.35.w=0", "mage:8.94.a=1",
+               "mage:25.0.a=1", "mage:8.35.b=inf", "mage:8.35.b=nan", "mage:8.35.b=", "mage:8.35=1", "mage:8.35.b.c=1", "t.momentum=1", "mage:8.35.b=1,2", "mage:8.35.b=++1"):
+        bad("mage.txt", ln)
+    for ln in ("t.momentum=1", "t.emergencyHpHigh=0.9, w.8.35=2", "aw.8=1.5", "c.35.a=0.2", "c.35.floor=0.1,c.35.b=0.4", "--set t.kite=3", "t.kite=+3", "t.kite = 3"):
+        good("shared.txt", ln)
+    for ln in ("t.kite=-1", "t.emergencyHpLow=1.5", "t.nope=1", "t.kite=1,t.nope=1", "t.kite=1,", "w.8.35=0", "w.attack.range=1", "w.25.0=1", "aw.25=1", "c.94.a=1", "c.35.q=1",
+               "c.35=1", "st.x=1", "pk.x=1", "row.x=1", "worth.floor=0.5", "loot.gold=1", "mage:t.kite=1", "foo=1"):
+        bad("shared.txt", ln)
+    good("potions.txt", "worth.floor=0.5")
+    good("potions.txt", "worth.ratioCap=3")
+    for ln in ("t.kite=1", "worth.floor=2", "worth.ratioCap=0", "worth.nope=1"):
+        bad("potions.txt", ln)
+    good("looting.txt", "loot.takeThreshold=0.5")
+    good("looting.txt", "loot.soulGemTarget=4")
+    good("looting.txt", "loot.consumableSellRoad=1")
+    for ln in ("worth.floor=1", "loot.soulGemTarget=1.5", "loot.consumableSellRoad=2", "loot.roomKnee=0", "loot.nope=1"):
+        bad("looting.txt", ln)
+    check("unknown file name flagged", V("bogus.txt", "") and V("notes.md", ""))
+    check("off-base + shared names known", not V("melee-off.txt", "") and not V("great-knight.txt", ""))
     with tempfile.TemporaryDirectory() as t:
         r1 = tuningfiles.deploy_local(f, t)
         r2 = tuningfiles.deploy_local(f, t)

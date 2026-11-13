@@ -44,6 +44,17 @@ def _arg(args, name):
     return None
 
 
+def _classify(args):
+    """driver | sim | wrapper (a shell script running a driver, round.sh) | None."""
+    if any(a.endswith("tune_driver.py") or a.endswith("tune_driver.frozen.py") for a in args[:4]) and "python" in args[0]:
+        return "driver"
+    if os.path.basename(args[0]).startswith("sim") and ("--serve" in args or "--classes" in args or "--fights" in args or "--seeds" in args):
+        return "sim"
+    if os.path.basename(args[0]) in ("bash", "sh") and len(args) > 1 and args[1].endswith(".sh") and "tune" in args[1]:
+        return "wrapper"
+    return None
+
+
 def scan():
     """-> list of {pid, pgid, kind: driver|sim|wrapper, cmd, out, cpu_s, age_s}. wrapper = a shell script running a driver (round.sh)."""
     me = os.getpid()
@@ -57,13 +68,7 @@ def scan():
         if not args:
             continue
         joined = " ".join(args)
-        kind = None
-        if any(a.endswith("tune_driver.py") or a.endswith("tune_driver.frozen.py") for a in args[:4]) and "python" in args[0]:
-            kind = "driver"
-        elif os.path.basename(args[0]).startswith("sim") and ("--serve" in args or "--classes" in args or "--fights" in args or "--seeds" in args):
-            kind = "sim"
-        elif os.path.basename(args[0]) in ("bash", "sh") and len(args) > 1 and args[1].endswith(".sh") and "tune" in args[1]:
-            kind = "wrapper"
+        kind = _classify(args)
         if not kind:
             continue
         st = _stat(pid)
@@ -96,8 +101,41 @@ class CpuMeter:
         return rate
 
 
+def group_members(pgid):
+    """Every live process of the process group, from /proc (not only the ones scan() recognises): [{pid, cmd, kind, ok}].
+    ok = a run's own process: driver / sim / wrapper, or the taskset / nice launcher in front of them."""
+    res = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        st = _stat(pid)
+        if not st or st["pgid"] != pgid:
+            continue
+        args = _cmdline(pid)
+        kind = _classify(args) if args else None
+        launcher = bool(args) and os.path.basename(args[0]) in ("taskset", "nice")
+        res.append({"pid": int(pid), "cmd": " ".join(args) or "(no cmdline: exiting?)", "kind": kind or ("launcher" if launcher else None),
+                    "ok": bool(kind or launcher)})
+    return sorted(res, key=lambda m: m["pid"])
+
+
+def group_check(pgid):
+    """-> (safe, members, why). safe when every member is a run process, or the group leader itself is the driver / a wrapper."""
+    mem = group_members(pgid)
+    leader = next((m for m in mem if m["pid"] == pgid), None)
+    if leader and leader["kind"] in ("driver", "wrapper"):
+        return True, mem, ""
+    foreign = [m for m in mem if not m["ok"]]
+    if foreign:
+        return False, mem, "the group holds processes that are not part of a tuning run: " + "; ".join("%d %s" % (m["pid"], m["cmd"][:80]) for m in foreign)
+    return bool(mem), mem, "" if mem else "the group has no live process"
+
+
 def stop_group(pgid):
-    """SIGTERM the whole process group of a run. Refuses our own group and pgid <= 1."""
+    """SIGTERM the whole process group of a run. Refuses our own group, pgid <= 1 and any group that holds a process foreign to a tuning run."""
     if pgid <= 1 or pgid == os.getpgrp():
         raise ValueError("refusing to signal pgid %s" % pgid)
+    ok, _, why = group_check(pgid)
+    if not ok:
+        raise ValueError("refusing to signal pgid %s: %s" % (pgid, why))
     os.killpg(pgid, signal.SIGTERM)

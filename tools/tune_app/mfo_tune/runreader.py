@@ -200,26 +200,68 @@ def classes_of(summ):
     return list((summ.get("stages", {}).get("classes", {}) or {}).keys())
 
 
-def kept_specs(summ):
-    """The final accepted table: joint.table when the joint stage ran, else every class's kept list."""
+def covered_classes(summ):
+    """Classes of the 'classes' stage whose search finished (complete=True): only these may be written or cleared by a generated file."""
+    return [c for c, v in (summ.get("stages", {}).get("classes", {}) or {}).items() if isinstance(v, dict) and v.get("complete")]
+
+
+def _incomplete(summ):
+    return {c for c, v in (summ.get("stages", {}).get("classes", {}) or {}).items() if not (isinstance(v, dict) and v.get("complete"))}
+
+
+def _spec_class(spec):
+    return spec.split(":", 1)[0]
+
+
+def recalib_dropped(summ):
+    """Specs the recalib stage measured as NOT holding under the re-measured potion worth (the driver says: do not write them; open decisions)."""
+    rc = summ.get("stages", {}).get("recalib")
+    rows = rc.get("rows", []) if isinstance(rc, dict) else []
+    return [r["spec"] for r in rows if isinstance(r, dict) and r.get("holds") is False and r.get("spec")]
+
+
+def final_table(summ):
+    """The table tune_driver.py would ship (final_curves(), :712), restricted to finished classes:
+    recalib.accepted when the recalib stage ran, else joint.table when the joint verdict passed, else every finished class's kept list + accepted
+    rejudge specs + the gap stage's kept values. Specs of an unfinished class are never included."""
     st = summ.get("stages", {})
-    j = st.get("joint")
-    if isinstance(j, dict) and j.get("table"):
-        return list(j["table"])
-    out = []
-    for cls, c in (st.get("classes", {}) or {}).items():
-        out += c.get("kept", [])
-    return out
+    rc, j = st.get("recalib"), st.get("joint")
+    if isinstance(rc, dict) and "accepted" in rc:
+        base = list(rc["accepted"] or [])
+    elif isinstance(j, dict) and j.get("table") and str(j.get("verdict", "")).upper().startswith("PASS"):
+        base = list(j["table"])
+    else:
+        base = []
+        done = set(covered_classes(summ))
+        for cls, c in (st.get("classes", {}) or {}).items():
+            if cls in done:
+                base += c.get("kept", [])
+        for r in st.get("rejudge", []) or []:
+            if isinstance(r, dict) and r.get("accepted") and r.get("spec") and r["spec"] not in base:
+                base.append(r["spec"])
+        gap = st.get("gap", {})
+        for v in (gap.get("kept", {}) if isinstance(gap, dict) else {}).values():
+            base += [k for k in v if k not in base]
+    inc = _incomplete(summ)
+    return [s for s in base if _spec_class(s) not in inc]
+
+
+def kept_specs(summ):
+    """The final accepted table (final_table) without the values recalib says do not hold."""
+    drop = set(recalib_dropped(summ))
+    return [s for s in final_table(summ) if s not in drop]
 
 
 def accepted_sets(summ):
-    """--set specs of the shared stages (globals, worth, loot) whose verdict starts with ACCEPT."""
+    """--set specs the globals stage says to write: verdict 'PASSES RULE'. (KEPT / REJECTED / 'BEATS NOISE, NOT APPLIED' are not written; the
+    driver files the PASSES and BEATS rows as open decisions, a shared default being a design value, and this app writes only the PASSES.)
+    Other shared stage lists (worth, loot) are read the same way when a driver version emits them as [{set, verdict}]."""
     out = []
-    for stage in ("globals", "worth", "loot", "logistics"):
+    for stage in ("globals", "worth", "loot"):
         v = summ.get("stages", {}).get(stage)
         if isinstance(v, list):
             for it in v:
-                if isinstance(it, dict) and it.get("set") and str(it.get("verdict", "")).upper().startswith("ACCEPT"):
+                if isinstance(it, dict) and it.get("set") and str(it.get("verdict", "")).upper().startswith("PASSES"):
                     out.append(it["set"])
     return out
 

@@ -115,11 +115,14 @@ class FilesTab(QWidget):
         s = runreader.summary(d)
         kept, sets = runreader.kept_specs(s), runreader.accepted_sets(s)
         hdr = "generated from run %s (%s) by MFO Tuning Lab; one spec per line" % (os.path.basename(d), "joint table" if (s.get("stages", {}).get("joint") or {}).get("table") else "kept values")
-        files = tuningfiles.generate(kept, sets, hdr)
+        files = tuningfiles.generate(kept, sets, hdr, runreader.covered_classes(s))
         if not files:
-            QMessageBox.information(self, "Nothing kept", "This run has no kept (accepted) values.")
+            QMessageBox.information(self, "Nothing kept", "This run has no kept (accepted) values and no finished class.")
             return
         self.set_files(files)
+        dropped = runreader.recalib_dropped(s)
+        if dropped:
+            self.out.appendPlainText("OPEN DECISIONS (not written: they do not hold under the re-measured potion worth):\n  " + "\n  ".join(dropped))
 
     def load_deployed(self):
         f = tuningfiles.list_dir_local(self.ctx.s["lorerim_tuning"])

@@ -1,4 +1,6 @@
 """Settings: paths (repo, simulator, runs root, installs), persisted in ~/.config/mfo-tune-app/settings.json."""
+import os
+
 from PySide6.QtWidgets import QFormLayout, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget
 
 from .. import settings
@@ -28,7 +30,7 @@ class SettingsTab(QWidget):
         f.addRow("Default nice", self.nice)
         self.jobs = QSpinBox()
         self.jobs.setRange(1, 128)
-        self.jobs.setValue(int(ctx.s.get("jobs", 12)))
+        self.jobs.setValue(int(ctx.s.get("jobs") or os.cpu_count() or 4))
         f.addRow("Default jobs", self.jobs)
         self.roots = QPlainTextEdit("\n".join(ctx.s.get("extra_run_roots", [])))
         self.roots.setMaximumHeight(90)

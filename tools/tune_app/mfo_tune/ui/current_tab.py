@@ -82,6 +82,8 @@ class CurrentTab(QWidget):
         """Classes the run will search: its --classes, else the driver's gap_order (15 cells by default)."""
         for p in self.ctx.driver_procs_for(d):
             args = p["cmd"].split()
+            if "--for-class" in args:      # the new-class workflow searches exactly one class
+                return 1
             if "--classes" in args and args.index("--classes") + 1 < len(args):
                 return len(args[args.index("--classes") + 1].split(","))
         go = runreader.summary(d).get("stages", {}).get("gap_order")
@@ -185,9 +187,17 @@ class CurrentTab(QWidget):
         if not running:
             return
         pg = sorted({p["pgid"] for p in running})
-        n = sum(1 for p in self.ctx.procs if p["pgid"] in pg)
-        if QMessageBox.warning(self, "Stop run", "Send SIGTERM to process group(s) %s (%d processes: the driver, its simulators and any wrapper "
-                               "script)?\n\nThe run is resumable: running the same command again continues from cache.jsonl." % (pg, n),
+        lines, bad = [], []
+        for g in pg:
+            ok, mem, why = procs.group_check(g)
+            lines += ["group %d:" % g] + ["  %d  %s%s" % (m["pid"], m["cmd"][:110], "" if m["ok"] else "   <- NOT a tuning process") for m in mem]
+            if not ok:
+                bad.append(why)
+        if bad:
+            QMessageBox.critical(self, "Stop refused", "Nothing was signalled.\n\n" + "\n".join(bad) + "\n\n" + "\n".join(lines[:40]))
+            return
+        if QMessageBox.warning(self, "Stop run", "Send SIGTERM to every process of these group(s)?\n\n%s\n\nThe run is resumable: running the same command "
+                               "again continues from cache.jsonl." % "\n".join(lines[:40]),
                                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) != QMessageBox.Yes:
             return
         try:

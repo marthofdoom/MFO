@@ -73,7 +73,7 @@ class LaunchTab(QWidget):
         f.addRow("Built-in potion worth", widgets.path_row(self.bworth))
         self.jobs = QSpinBox()
         self.jobs.setRange(1, 128)
-        self.jobs.setValue(int(s.get("jobs", 12)))
+        self.jobs.setValue(int(s.get("jobs") or os.cpu_count() or 4))
         f.addRow("Jobs (--jobs)", self.jobs)
         self.taskset = QLineEdit(s.get("taskset", ""))
         self.taskset.setPlaceholderText("CPU core set for taskset -c, e.g. 0-7 (empty = any)")
@@ -185,14 +185,16 @@ class LaunchTab(QWidget):
         self.classes.setEnabled(not o["for_class"])
         self.preview.setPlainText(commands.shell(self.argv()))
         w = []
-        if not os.path.isfile(o["bin"]):
+        if not o["bin"]:
+            w.append("Set the simulator binary first (Browse… to an existing one, or Build…).")
+        elif not os.path.isfile(o["bin"]):
             w.append("The simulator binary does not exist (use Build…).")
         if self.ctx.is_running(o["out"]):
             w.append("A driver is already running on this out directory.")
         elif os.path.exists(os.path.join(o["out"], "cache.jsonl")):
             w.append("The out directory holds an earlier run: the driver RESUMES it (finished work replays from cache.jsonl).")
         self.warn.setText("\n".join(w))
-        self.go.setEnabled(bool(o["out"]) and not self.ctx.is_running(o["out"]))
+        self.go.setEnabled(bool(o["out"]) and os.path.isfile(o["bin"]) and not self.ctx.is_running(o["out"]))
 
     def build(self):
         out = self.bin.text().strip()
@@ -211,7 +213,8 @@ class LaunchTab(QWidget):
 
     def launch(self):
         o = self.options()
-        argv = self.argv()
+        o["out"] = os.path.abspath(os.path.expanduser(o["out"]))   # a relative out would resolve against cwd=repo for the driver but not for the launch files
+        argv = commands.driver_argv(o, self.ctx.s)
         if QMessageBox.question(self, "Launch run", "Launch this run detached?\n\n" + commands.shell(argv)) != QMessageBox.Yes:
             return
         try:
