@@ -3345,3 +3345,7 @@ Opus 5.5 full review of a444e159 (`feat/buff-potions`) vs b4533665. Verbatim:
 Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OPEN. Verbatim. (The same review's SEV-3 ESL new-CELL finding was FIXED, not deferred: the chest now lives in an override of vanilla CELL 001052FD, design doc section 0a.)
 - **SEV-4:** "Retrieval: ComputeKeepSet+BuildSaleKeepGates per fitting not-kept stored item every 5 s forever. SEV-4 perf."
 - **SEV-5:** "(2) SaleKeepsUnworn vs sell loop 868-876: weapon = keep && !offRole && !weapCannotEquip; armor = !blacklisted(forceSell for unworn) && keep && !armoCannotEquip. redundantInferior/deniedWorn are worn-only. No drift. Two combine sites remain (SEV-5 nit)."
+
+### feat/iaus-loot r2 review (raised against 0066bbbf, Opus 5.5, 2026-11-13; log scratchpad agentlogs/review-iaus-loot-r2.md)
+- **R2-1 (SEV-4, OPEN, native/iaus/LootNeed.h:226 / native/logistics/LootNeed.cpp:143):** verbatim: "the soul-gem need can never be met. MFO has no road that recharges a weapon. So carried gems never lower weaponNeedsCharge. A follower holding a drained enchanted weapon takes every soul gem until the room factor stops him." Fix: count carried soul gems against a small target (soulGemTarget = 3, NeedScore), or the recharge road (ClickUp 1dfcuabd356). Not exercised on MEO lists.
+- **R2-2 (SEV-5, OPEN, LootNeed.cpp:144):** verbatim: "GetEnchantmentCharge stops at the first extra list that has a charge, so in a stack of several copies a drained second copy is not seen. The result is a missed need, never a hoard."
