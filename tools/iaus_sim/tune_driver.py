@@ -392,6 +392,8 @@ def class_knobs(cls, knobs):
     if cls in KNIGHTS:
         out.append(("scalar.drinkHealthLine", "{c}:scalar.drinkHealthLine={v}", 0.34, [0.20, 0.25, 0.30, 0.40, 0.50]))
         KNOB_META["scalar.drinkHealthLine"] = ("add", 0.02, 0.98, False)
+    if getattr(A, "knobs", None):   # --knobs: a scoped search (batch 3: the posture edge); every gate of RULE is unchanged
+        out = [k for k in out if re.search(A.knobs, k[0])]
     return out
 
 
@@ -1450,6 +1452,8 @@ def main():
     ap.add_argument("--stages", default=DEFAULT_STAGES)
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
+    ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
+    ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
     ap.add_argument("--jobs", type=int, default=12)
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one dashboard results file per finished sweep")
     A = ap.parse_args()
@@ -1461,6 +1465,17 @@ def main():
     A.bin = os.path.abspath(A.bin)
     CFG = SMOKE if A.smoke else FULL
     os.makedirs(A.out, exist_ok=True)
+    if A.sim_flags:   # batch 3: one wrapper per (binary, flags); its text carries the binary's sha256, so ident() (sha of A.bin) keys on both
+        flags = A.sim_flags.split()
+        if any(f in ("--list", "--potion-worth", "--classes", "--seed", "--seeds", "--curve") for f in flags):
+            raise SystemExit("--sim-flags takes model switches only, never a world, a class, a seed or a curve")
+        body = "#!/bin/sh\n# tune_driver --sim-flags wrapper: binary sha256 %s\nexec %s %s \"$@\"\n" % (sha(A.bin), A.bin, " ".join(flags))
+        wrap = os.path.join(A.out, "sim-%s.sh" % hashlib.sha256(body.encode()).hexdigest()[:12])
+        if not os.path.exists(wrap) or open(wrap).read() != body:
+            with open(wrap, "w") as f:
+                f.write(body)
+            os.chmod(wrap, 0o755)
+        A.bin = wrap
     POOL = cf.ThreadPoolExecutor(max_workers=A.jobs)
     load_cache()
     prev = os.path.join(A.out, "summary.json")
@@ -1471,7 +1486,7 @@ def main():
                 SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
         except ValueError:
             pass   # cut off by a kill: every stage it held replays from the cache
-    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
+    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, knobs=A.knobs)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
     stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics}
     order = A.stages.split(",")

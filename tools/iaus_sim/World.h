@@ -171,6 +171,7 @@ namespace Sim {
         double runSec = 0, holdSec = 0, fleeHpGain = 0;
         double sneakDmg = 0, hiddenSec = 0, sneakSec = 0, tgtDistSum = 0, playerDistSum = 0, contactSec = 0, goInBadSec = 0, summonSec = 0, undeadDmg = 0, healAtSum = 0, cloakSec = 0;
         long   posN = 0, tgtDistN = 0, arrowsShot = 0, arrowsHit = 0;
+        double drawnSec[4] = { 0, 0, 0, 0 }, nearOnMeSec[3] = { 0, 0, 0 }, swapSec = 0; long drawSpoiled = 0, pointBlankShots = 0;   // --posture-report: bow / melee / other drawn; a foe ON HIM within 256 / 540 / beyond (time); draws a hit spoiled; shots under 256
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         // T2 batch S tallies of the subject (section 31)
@@ -575,6 +576,9 @@ namespace Sim {
             if (a.ctl == 0) { if (Controlled(d)) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; }
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
             const float dealt = Hurt(d, dmg, &a, fromIaus);
+            // --draw-spoil P (MODEL, no engine source: whether a plain hit interrupts an NPC's draw is not decoded; a stagger already does):
+            // a melee hit that lands on a body mid-draw spoils the draw with chance P (the arrow is not fired, he starts again).
+            if (g_drawSpoil > 0.0f && !ranged && Up(d) && d.act == Act::Shoot && d.hitAt >= 0 && R.P(g_drawSpoil)) { d.act = Act::None; d.hitAt = -1; d.actEnd = now; if (d.ctl == 0) ++t.drawSpoiled; }
             if (sneakAtk && a.ctl == 0) t.sneakDmg += dealt;
             if (trace) std::fprintf(trace, "%7.2f  hit  %s -> %s (%u) %.0f%s%s%s%s%s  hp %.0f/%.0f\n", now, a.c.name.c_str(), d.c.name.c_str(), d.c.id, dealt, power ? " POWER" : "", blocked ? " blocked" : "", ranged ? " arrow" : "", sneakAtk ? " SNEAK" : "", flankAtk ? " flank" : "", d.c.hp, d.c.hpMax);
             if (D->poise.on) PoiseHit(a, d, PoiseDamage(a, d, rawDmg, power, ranged, false, blockedFrac));
@@ -758,7 +762,12 @@ namespace Sim {
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
                 --x.arrows; if (x.ctl == 0) ++t.arrowsShot;
-                Shot sh{ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, WeaponDamage(D->rules, *x.spec, x.spec->ranged, false), -1, false, x.actIaus, tg->c.x, tg->c.y, 1 };
+                float shotDmg = WeaponDamage(D->rules, *x.spec, x.spec->ranged, false);
+                // --ranged-perks (FACT: a ModAttackDamage entry is conditioned on the weapon it fires for, Overdraw on a bow, Armsman on a
+                // one-hander; the lab applied the MELEE weapon's chain to every shot): the shot carries the bow skill's chain instead.
+                if (g_rangedPerks && x.spec->rangedAtkMult > 0.0f && x.spec->atkMult > 0.0f) shotDmg = shotDmg / x.spec->atkMult * x.spec->rangedAtkMult;
+                if (x.ctl == 0 && Dist(x, *tg) < D->rules.holdMinDist) ++t.pointBlankShots;
+                Shot sh{ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, shotDmg, -1, false, x.actIaus, tg->c.x, tg->c.y, 1 };
                 // CARD H5 (ch.29, apmf/AimClaims.cpp; FACT = that file's contract): over his last 10 shots, when the misses plus the shots
                 // in flight reach the class's budget, the next launch is re-aimed at the engine's own unscattered solution.
                 if (x.ctl >= 0 && g_t2.aim) { Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
@@ -817,9 +826,11 @@ namespace Sim {
             }
             if (na == Prune::Nature::Buff || na == Prune::Nature::Ward) {
                 Body* r = (tg && tg->Party() == x.Party()) ? tg : &x;
-                if (s->armor > 0) r->fx.push_back({ 2, s->armor, -1, now + std::max(30.0f, s->buffDur), x.c.id });
-                if (s->resistBuffAv >= 0) r->fx.push_back({ 3, s->resistBuff, s->resistBuffAv, now + std::max(30.0f, s->buffDur), x.c.id });
-                if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(x.actSpell)].push_back({ r->c.id, now + std::max(30.0, static_cast<double>(s->buffDur)) });
+                // --buff-dur real: up for the record's duration (a record with none keeps the lab's 30 s, MODEL); off: max(30 s, duration) as before
+                const float up = g_buffDurReal ? (s->buffDur > 0.0f ? s->buffDur : 30.0f) : std::max(30.0f, s->buffDur);
+                if (s->armor > 0) r->fx.push_back({ 2, s->armor, -1, now + up, x.c.id });
+                if (s->resistBuffAv >= 0) r->fx.push_back({ 3, s->resistBuff, s->resistBuffAv, now + up, x.c.id });
+                if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(x.actSpell)].push_back({ r->c.id, now + (g_buffDurReal ? static_cast<double>(up) : std::max(30.0, static_cast<double>(s->buffDur))) });
                 return;
             }
             if (na == Prune::Nature::Summon) {
@@ -994,7 +1005,10 @@ namespace Sim {
                 if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
                 if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); }
                 if (now >= x.think) {
-                    const Weapon& w = x.spec->ranged; const float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + R.U(TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
+                    const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + R.U(TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
+                    // --point-blank (GMST: the hold time has a minimum DISTANCE, 256, and an absolute minimum, 0.1 s; how the engine blends
+                    // them is not decoded, so MODEL: under the distance the hold is the absolute minimum). The draw above already took its R.U.
+                    if (g_pointBlank && w.anim != 9 && d < r.holdMinDist) draw = TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + r.holdAbsMin * 0.5f;
                     x.act = Act::Shoot; x.actTarget = tg->c.id; x.hitAt = now + draw; x.actEnd = x.hitAt + TM::bowRecover; x.actIaus = false; Action(x, dg.soundSilent);   // MODEL: a bow is Silent
                     x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) * 0.5f / std::max(0.25f, st.off);
                 }
@@ -1098,6 +1112,9 @@ namespace Sim {
             for (std::size_t i = 0; i < c.summonUntil.size(); ++i) if (c.summonUntil[i] > now) { t.summonSec += TM::dt; break; }
             if (x.sneaking) t.sneakSec += TM::dt; if (now < x.cloakUntil) t.cloakSec += TM::dt;
             if (Unseen(x)) t.hiddenSec += TM::dt;
+            t.drawnSec[c.drawn == PostureKind::Bow ? 0 : (c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver) ? 1 : c.drawn == PostureKind::None ? 2 : 3] += TM::dt;
+            { float nd = 1e9f; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && o.c.targetId == x.c.id) nd = std::min(nd, Dist(x, o));
+              t.nearOnMeSec[nd < 256.0f ? 0 : nd < 540.0f ? 1 : 2] += TM::dt; }
         }
         void StepWorld() {
             for (std::size_t i = 0; i < b.size(); ++i) {

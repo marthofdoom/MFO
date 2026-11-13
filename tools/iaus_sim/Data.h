@@ -54,6 +54,11 @@ namespace Sim {
     inline bool  g_mixPartial = false;    // --mix-partial: the ch.18 share is read on a window that is not full yet. Harbinger's Share() answers "no share" (no deny) until 8
                                           // attacks fill the window (review of 0880667, F3), so the default waits for 8. The switch measures the other reading
     inline bool  g_noG3 = false;          // the disengage report's 'none' mode: card G3's hide run and flee are never asked for (every other road stands)
+    // BATCH 3 ("sim decides the edge", iaus-sim-v2.md 35). Each switch OFF reproduces the earlier lab byte-identically.
+    inline bool  g_rangedPerks = false;   // --ranged-perks: a shot is multiplied by the ModAttackDamage perks of the BOW's skill (Archery), not the melee weapon's
+    inline bool  g_pointBlank = false;    // --point-blank: under fCombatRangedAttackHoldTimeMinDistance the bow hold is fCombatRangedAttackHoldTimeAbsoluteMin
+    inline float g_drawSpoil = 0.0f;      // --draw-spoil P: a melee hit that lands on a drawing archer spoils the draw with chance P (MODEL, no engine source)
+    inline bool  g_buffDurReal = false;   // --buff-dur real: a cast buff is up for its record duration (the lab used max(30 s, duration))
     inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships OFF; without it no Block candidate exists)
 
     // Actor values (CommonLib RE::ActorValue, the same numbers the records store).
@@ -131,6 +136,7 @@ namespace Sim {
         float run = 370, mass = 1;
         bool  undead = false, dragon = false, daedra = false, animal = false, creature = false, immunePar = false;
         float atkMult = 1, powMult = 1;  // perk multipliers (ModAttackDamage / ModPowerAttackDamage)
+        float rangedAtkMult = -1;        // ModAttackDamage at the BOW's skill (a follower build only; -1 = not computed): --ranged-perks
         [[nodiscard]] float Skill(int av) const { return av >= 6 && av < 24 ? skill[static_cast<std::size_t>(av - 6)] : 15.0f; }
         [[nodiscard]] float Resist(int av) const {
             return av == kAvResistFire ? rFire : av == kAvResistFrost ? rFrost : av == kAvResistShock ? rShock : av == kAvResistMagic ? rMagic : av == kAvPoisonResist ? rPoison : 0.0f; }
@@ -159,6 +165,7 @@ namespace Sim {
         float combatDistance = 128;                                           // fCombatDistance (reach unit)
         float blockPowMult = 0.5f;                                            // fBlockPowerAttackMult
         float rangedMin = 256, rangedDist = 1024;                             // fCombatRangedMinimumRange, fCombatRangedDistance
+        float holdMinDist = 256, holdAbsMin = 0.1f;                           // fCombatRangedAttackHoldTimeMinDistance, fCombatRangedAttackHoldTimeAbsoluteMin (--point-blank)
         float bleedoutDefault = 0.15f;                                        // fBleedoutDefault
     };
 
@@ -360,7 +367,7 @@ namespace Sim {
         r.combatMp = g("fCombatMagickaRegenRateMult", v.combatMp); r.combatSp = g("fCombatStaminaRegenRateMult", v.combatSp);
         r.delayHp = g("fDamagedHealthRegenDelay", v.delayHp); r.delayMp = g("fDamagedMagickaRegenDelay", v.delayMp); r.delaySp = g("fDamagedStaminaRegenDelay", v.delaySp);
         r.costBase = g("fMagicCasterSkillCostBase", v.costBase); r.costMult = g("fMagicCasterSkillCostMult", v.costMult); r.costScale = g("fMagicSkillCostScale", v.costScale);
-        r.bowDraw = g("fBowDrawTime", v.bowDraw); r.diffToPC = g("fDiffMultHPToPCN", v.diffToPC); r.diffByPC = g("fDiffMultHPByPCN", v.diffByPC);
+        r.holdMinDist = g("fCombatRangedAttackHoldTimeMinDistance", v.holdMinDist); r.holdAbsMin = g("fCombatRangedAttackHoldTimeAbsoluteMin", v.holdAbsMin); r.bowDraw = g("fBowDrawTime", v.bowDraw); r.diffToPC = g("fDiffMultHPToPCN", v.diffToPC); r.diffByPC = g("fDiffMultHPByPCN", v.diffByPC);
         r.hpPerLevel = g("fNPCHealthLevelBonus", v.hpPerLevel); r.hmsPerLevel = g("iAVDhmsLevelUp", v.hmsPerLevel); r.skillPerLevel = g("iAVDSkillsLevelUp", v.skillPerLevel);
         r.skillStart = g("iAVDSkillStart", v.skillStart); r.maxResist = g("fPlayerMaxResistance", v.maxResist); r.combatDistance = g("fCombatDistance", v.combatDistance);
         r.blockPowMult = g("fBlockPowerAttackMult", v.blockPowMult); r.rangedMin = g("fCombatRangedMinimumRange", v.rangedMin); r.rangedDist = g("fCombatRangedDistance", v.rangedDist);

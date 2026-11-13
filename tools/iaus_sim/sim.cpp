@@ -23,6 +23,7 @@ using namespace Sim;
 namespace {
 
     bool g_guardWhy = false;
+    bool g_postureReport = false;   // --posture-report: what he holds and how close the foes on him come (the archer study, batch 3); metrics pr.* and a POSTURE section
     bool g_objEstimates = true, g_objScrollRoad = false, g_tableMode = false;
     bool g_oracleMode = false; OracleCfg g_oc;   // --headline-oracle: the objective is played by the rollout oracle over the current IAUS
     void RunMode(Fight& F, bool timeIt = false) { if (g_oracleMode) { OraclePolicy O; O.cfg = g_oc; RunFight(F, O); } else if (g_tableMode) { TablePolicy P; RunFight(F, P); } else { IausPolicy P; P.timeIt = timeIt; RunFight(F, P); } }
@@ -52,6 +53,7 @@ namespace {
             S(arrowsShot); S(arrowsHit); S(dodgeTries); S(dodges); S(aimCorrected); S(blockRenewals); S(powRefused); S(backOffs); S(backOffArrived); S(steps); S(stepArrived); S(stepRevealed); S(averted); S(avertKept); S(raises); S(mixPowerDenied); S(mixNormalDenied); S(mixFloorLifted); S(leashTurns); S(engPower); S(dndRuns); S(guardSec); S(feetSec); S(runsBegun); S(runsSafe); S(runDmg); S(runSafeSec); S(runLenSec); S(runDmgAfter5); S(wpnHits); S(sneakHits); S(flankHits); S(hides); S(hideOk); S(hideFail); S(flees); S(fleeHealed); S(fleeArrived); S(fleeFail); S(runDowns); S(stealthTry); S(stealthMiss); S(runSec); S(holdSec); S(fleeHpGain); S(firstHits); S(sneakOpens); S(healAtN); S(sneakDmg); S(hiddenSec); S(sneakSec); S(tgtDistSum); S(playerDistSum); S(contactSec); S(goInBadSec); S(summonSec); S(undeadDmg); S(healAtSum); S(cloakSec); S(posN); S(tgtDistN);
             for (std::size_t i = 0; i < 10; ++i) { s.decBandSec[i] += t.decBandSec[i]; s.decBandLoss[i] += t.decBandLoss[i]; s.decLethal[i] += t.decLethal[i]; s.decToDownSec[i] += t.decToDownSec[i]; s.decCross[i] += t.decCross[i]; s.decDownAfter[i] += t.decDownAfter[i]; }
             S(drinksH); S(downsWithPotH); S(downsMidDrink); S(potFracN); S(drinkAtSum); S(potHeal); S(potWaste); S(potFracSum);
+            for (int k = 0; k < 4; ++k) S(drawnSec[k]); for (int k = 0; k < 3; ++k) S(nearOnMeSec[k]); S(drawSpoiled); S(pointBlankShots);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -109,6 +111,8 @@ namespace {
           m["run/f"] = double(s.runsBegun) / n; m["runSafe%"] = pct(double(s.runsSafe), double(s.runsBegun)); m["runSafe.s"] = s.runsSafe ? s.runSafeSec / double(s.runsSafe) : -1; m["runLen.s"] = s.runsBegun ? s.runLenSec / double(s.runsBegun) : -1;
           m["runDmg%"] = s.runsBegun ? 100.0 * s.runDmg / double(s.runsBegun) : -1; m["runDmgLate%"] = s.runsBegun ? 100.0 * s.runDmgAfter5 / double(s.runsBegun) : -1;   // the share of his health he lost per G3 run (and after its 5th second)
           m["fleeHpGain%"] = s.flees ? 100.0 * s.fleeHpGain / double(s.flees) : -1; m["stealthMiss%"] = pct(double(s.stealthMiss), double(s.stealthTry)); m["runDown%"] = pct(double(s.runDowns), double(s.hides + s.flees)); m["run%"] = 100.0 * s.runSec / up; m["still%"] = 100.0 * s.holdSec / up;
+          if (g_postureReport) { m["pr.bow%"] = 100.0 * s.drawnSec[0] / up; m["pr.melee%"] = 100.0 * s.drawnSec[1] / up; m["pr.on256%"] = 100.0 * s.nearOnMeSec[0] / up; m["pr.on540%"] = 100.0 * (s.nearOnMeSec[0] + s.nearOnMeSec[1]) / up;
+              m["pr.spoiled/f"] = double(s.drawSpoiled) / n; m["pr.pointBlank%"] = pct(double(s.pointBlankShots), double(s.arrowsShot)); }
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
           m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
@@ -589,6 +593,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--decline") && i + 1 < argc) declineN = std::max(1, std::atoi(argv[++i]));         // the health-decline curves and the drink record of --classes over --seeds: N fights per bracket and rating cell per seed
         else if (!std::strcmp(argv[i], "--potion-calib") && i + 1 < argc) potCalibN = std::max(1, std::atoi(argv[++i]));   // the potion-worth measurement of --classes over --seeds (PotionCalib above)
         else if (!std::strcmp(argv[i], "--potion-worth") && i + 1 < argc) potWorthPath = argv[++i];                          // a potion-worth table for this world (potion_worth.py), or "legacy" = the older fixed rate
+        else if (!std::strcmp(argv[i], "--posture-report")) g_postureReport = true;
+        else if (!std::strcmp(argv[i], "--ranged-perks")) g_rangedPerks = true;                                            // BATCH 3: a shot carries the bow skill's ModAttackDamage chain
+        else if (!std::strcmp(argv[i], "--point-blank")) g_pointBlank = true;                                              // BATCH 3: the hold under fCombatRangedAttackHoldTimeMinDistance
+        else if (!std::strcmp(argv[i], "--draw-spoil") && i + 1 < argc) g_drawSpoil = std::clamp(static_cast<float>(std::atof(argv[++i])), 0.0f, 1.0f);   // BATCH 3 MODEL
+        else if (!std::strcmp(argv[i], "--buff-dur") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "real")) g_buffDurReal = true; else if (std::strcmp(v, "lab")) { std::fprintf(stderr, "--buff-dur real|lab\n"); return 2; } }                                         // DIAGNOSTIC (batch 3, the archer study): POSTURE section + pr.* metrics
         else if (!std::strcmp(argv[i], "--guard-why")) g_guardWhy = true;                                                   // DIAGNOSTIC: the unguarded blows of GUARD UNDER TAUNT by cause, as ung2*% metrics (in --baseline output)
         else if (!std::strcmp(argv[i], "--print-switch")) g_printSwitch = true;                                             // after every SEED line: SWITCH <seed> <decision switches of the subject> <fight minutes>
         else if (!std::strcmp(argv[i], "--utility-no-resources")) g_utilResources = false;                              // DIAGNOSTIC: Utility without its "resources left" term (Oracle.h); never a gate, never a baseline
@@ -810,6 +819,8 @@ int main(int argc, char** argv) {
     std::printf("\nBODY (what he does, %% of the time he is up): the behaviour signature\n%-20s %6s %6s %6s %6s %6s %6s %6s %6s\n", "class|bracket", "melee", "power", "shoot", "cast", "castI", "block", "other", "free");
     for (auto& kv : all) { auto& m = kv.second;
         std::printf("%-20s %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f\n", kv.first.c_str(), G(m, "b.melee"), G(m, "b.power"), G(m, "b.shoot"), G(m, "b.cast"), G(m, "b.castIaus"), G(m, "b.block"), G(m, "b.other"), G(m, "b.free")); }
+    if (g_postureReport) { std::printf("\nPOSTURE (--posture-report: %% of the time he is up with the bow / a melee weapon drawn; a foe targeting HIM within 256 / 540 units; draws a hit spoiled per fight; shots fired under 256 units)\n%-20s %6s %6s %6s %6s %6s %6s %8s %6s\n", "class|bracket", "bow%", "melee%", "on256", "on540", "contct", "b.mel", "spoil/f", "pb%");
+        for (auto& kv : all) { auto& m = kv.second; std::printf("%-20s %6.1f %6.1f %6.1f %6.1f %6.1f %6.1f %8.2f %6.1f\n", kv.first.c_str(), G(m, "pr.bow%"), G(m, "pr.melee%"), G(m, "pr.on256%"), G(m, "pr.on540%"), G(m, "contact%"), G(m, "b.melee"), G(m, "pr.spoiled/f"), G(m, "pr.pointBlank%")); } }
     std::printf("\nGUARD UNDER TAUNT (Q-S-5: share of the melee blows that land on him that meet his guard, while two or more foes are taunted onto him; marth: >= 60%% for the Knight line)\n%-20s %8s %8s\n", "class|bracket", "guard2%", "blows/f");
     { std::map<std::string, std::pair<double, double>> agg;   // per class over its brackets (equal fights per bracket): blows-weighted share
       for (auto& kv : all) { auto& m = kv.second; if (G(m, "inc2/f") <= 0.0) continue; std::printf("%-20s %8.1f %8.2f\n", kv.first.c_str(), G(m, "guard2%"), G(m, "inc2/f"));
