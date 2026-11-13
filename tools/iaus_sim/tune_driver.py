@@ -3,7 +3,7 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,summary] [--jobs 12]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
 
@@ -29,6 +29,9 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
           floor     the Knight line's guard floor per world with the final table, and why the unguarded blows found no guard.
           rating    the rating battery per world with the final table, classes under their tier flagged.
           recalib   the built-in potion-worth table re-measured under the accepted values; each accepted value confirmed again with it.
+          gap       the oracle gap per class and world on the shipped and the final table, the divergences classified (a) curve /
+                    weight, (b) missing consideration or input, (c) missing behaviour, (d) modelling suspect; (a) drives a bounded
+                    extra search; (b)-(d) are open decisions and <out>/gap-ledger.md rows. Its RULE is stage_gap's docstring.
           summary   summary.json + summary.md.
 
 RULE (fixed before any result of this driver was read; a number is ACCEPTED only when every line holds):
@@ -74,9 +77,11 @@ CACHE_DIR = os.path.expanduser("~/.cache/mfo-list-balance/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
-            const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False)
+            const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
+            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
-             const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True)
+             const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
+             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1)
 
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
@@ -195,7 +200,7 @@ def req(world, classes, cfg, curves, seeds, sets=None, binary=None):
     return (world, classes, cfg, tuple(curves), sets, binary, list(seeds))
 
 
-def text_run(key, cmd, world=None):
+def text_run(key, cmd, world=None, check=None):
     """A cached text run. The key carries the identity of the binary and the world (ident). A run that fails is NEVER cached and
     never read as an empty result: it stops the driver with the command and the simulator's own message."""
     key = key + "#" + ident(world, cmd[0])   # cmd[0] is always the simulator binary that runs
@@ -204,6 +209,8 @@ def text_run(key, cmd, world=None):
         if r.returncode != 0:
             raise RuntimeError("the simulator failed (exit %d): %s\n%s\n%s" % (r.returncode, " ".join(cmd), r.stdout[-400:], r.stderr[-400:]))
         out = r.stdout
+        if check:
+            check(out)   # an output its reader rejects raises HERE, before it is cached: a bad output is never replayed
         with LOCK:
             TEXT[key] = out
             with open(os.path.join(A.out, "cache.jsonl"), "a") as f:
@@ -682,6 +689,8 @@ def final_curves():
     for r in SUMMARY["stages"].get("rejudge", []):
         if r.get("accepted") and r["spec"] not in out:
             out.append(r["spec"])
+    for cls, v in SUMMARY["stages"].get("gap", {}).get("kept", {}).items():   # the gap stage's (a) search
+        out += [k for k in v if k not in out]
     return out
 
 
@@ -822,6 +831,267 @@ def stage_edge():
 
 
 GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0])]
+
+
+# ── the gap stage ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# What an extended action of the oracle (Oracle.h Ext) corresponds to in the catalogue (None = no family), what road the game has for
+# it (iaus-sim-v2.md section 25), and where the oracle's version is known to be MORE FAVOURABLE than the game's (class d, with the
+# evidence). Edited only with a source; a label missing here is classified by the generic rule and says so.
+EXT_FAMILY = {"ext:block": "block", "ext:bash": "bash", "ext:hide": "disengage", "ext:flee": "disengage", "ext:scroll": "use_scroll", "ext:to_player": "regroup",
+              "ext:to_healer": "regroup", "ext:step_back": "give_ground", "ext:sprint_back": "back_off", "ext:get_sight": None}
+EXT_ROAD = {"ext:step_back": "no road today (section 25: PROVEN LIMIT; needs a Harbinger combat area centred on a point, tier A); GiveGround is lab-only",
+            "ext:sprint_back": "the BackOff family (batch I, H3 run) where its gate allows; otherwise no road (section 25)",
+            "ext:to_player": "ROAD EXISTS (Harbinger ch.24 CombatApproach): the Regroup family is built and never generated (Snapshot::regroupRoad, section 25.1)",
+            "ext:to_healer": "ROAD EXISTS (Harbinger ch.24): the Regroup family is built and never generated (section 25.1)",
+            "ext:get_sight": "ROAD EXISTS for casts only (apmf/OffenseApproach.cpp, ch.24); no IAUS family",
+            "ext:scroll": "card S3 (the lab's --scroll-road), planned", "ext:bash": "a timed bash has no road (section 25: PROVEN LIMIT); the Bash family needs the leaf promote",
+            "ext:block": "Harbinger held guard (batch S, Q-melee-1)", "ext:hide": "card G3 hide run (Disengage family, its class gate)", "ext:flee": "card G3 flee (Disengage family, its 30% line)"}
+FIDELITY = {"ext:block": "the oracle's guard (Oracle.h Apply, Ext::Block) is raised for 1.5 s at any moment with NO cooldown and NO rest after it; the game's "
+                         "Harbinger guard holds 2.5 s, its row cools 4 s and a 1.5 s rest follows a hold (Q-melee-1, section 33.2)",
+            "ext:bash": "the oracle's bash (Oracle.h Apply, Ext::Bash) has NO cooldown and lands on demand; IAUS's Bash family is held to Tuning::bashCooldownSec "
+                        "and the game has no road for a timed bash at all (section 25)"}
+GAP_SEEDS0 = 6001   # a fresh range (1.., 1001.., 3001.., 4001.., 5001.., 8001.., 9001.. are used by the other stages)
+
+
+def gap_cmd(world, cls, curves, seed, subject_only=True):
+    cmd = [A.bin, "--no-json", "--threads", "1", "--seed", str(seed), "--classes", cls, "--fights", "1", "--rating", "0",
+           "--class-oracle", str(CFG["gap_nat"]), "--gap-scenarios", str(CFG["gap_scen"]), "--gap-dump"] + (["--oracle-subject-only"] if subject_only else []) + world_args(world)
+    for c in curves:
+        cmd += ["--curve", c]
+    return cmd
+
+
+def gap_parse(txt, cls, seed):
+    """One gap run's dump. A run that printed no GAPFIGHT line for its class is an ERROR (never read as a gap of 0)."""
+    fights = [(m.group(1), int(m.group(2)), float(m.group(3)), float(m.group(4))) for m in re.finditer(r"^GAPFIGHT %s (\S+) (\d+) ([-0-9.]+) ([-0-9.]+)$" % re.escape(cls), txt, re.M)]
+    if len(fights) < CFG["gap_nat"]:
+        raise RuntimeError("gap run of %s seed %d printed %d fights (%d natural expected): a changed dump format or a failed pass:\n%s" % (cls, seed, len(fights), CFG["gap_nat"], txt[-600:]))
+    sit = {m.group(1): (int(m.group(2)), float(m.group(3))) for m in re.finditer(r"^GAPSIT %s (\S+) (\d+) ([-0-9.]+)$" % re.escape(cls), txt, re.M)}
+    gen = {m.group(1): int(m.group(2)) for m in re.finditer(r"^GAPGEN %s (\S+) (\d+)$" % re.escape(cls), txt, re.M)}
+    dec = re.search(r"^GAPDEC %s (\d+)$" % re.escape(cls), txt, re.M)
+    return {"fights": [(seed, j, k, ui, uo) for k, j, ui, uo in fights], "sit": sit, "gen": gen, "dec": int(dec.group(1)) if dec else 0}
+
+
+def gap_runs(tasks):
+    """tasks: (world, cls, curves, seed, subject_only). All at once on the pool; each run is a cached text run (resumable)."""
+    def one(t):
+        w, cls, curves, seed, so = t
+        cmd = gap_cmd(w, cls, curves, seed, so)
+        return gap_parse(text_run("gap:" + json.dumps(cmd[1:]), cmd, w, check=lambda t: gap_parse(t, cls, seed)), cls, seed)
+    return list(POOL.map(one, tasks))
+
+
+def mse(xs):
+    n = len(xs)
+    m = sum(xs) / n if n else 0.0
+    return m, (math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1) / n) if n > 1 else 0.0)
+
+
+def gap_merge(parts):
+    out = {"fights": [], "sit": {}, "gen": {}, "dec": 0}
+    for p in parts:
+        out["fights"] += p["fights"]
+        out["dec"] += p["dec"]
+        for k, (n, du) in p["sit"].items():
+            a = out["sit"].get(k, (0, 0.0))
+            out["sit"][k] = (a[0] + n, a[1] + du)
+        for k, n in p["gen"].items():
+            out["gen"][k] = out["gen"].get(k, 0) + n
+    return out
+
+
+def classify(label_i, label_o, kind, gen):
+    """(a) curve / weight, (b) missing consideration or input (a gate, a veto, a broken ruling), (c) missing behaviour (the oracle's
+    action has no candidate IAUS ever generates for this class), (d) a modelling suspect (the oracle's version of the action is known
+    to be more favourable than the game's: FIDELITY). Returns (class, why, families the (a) search may move)."""
+    fi = label_i.rstrip("!")
+    if label_o in FIDELITY:
+        return "d", FIDELITY[label_o], []
+    if label_i.endswith("!"):
+        return "b", "IAUS picked %s, which the class's rulings forbid at that moment (a missing gate in IAUS)" % fi, []
+    if kind == "ext":
+        fam = EXT_FAMILY.get(label_o, "?")
+        road = EXT_ROAD.get(label_o, "not in the road table: classified by the generic rule")
+        if fam and gen.get(fam, 0) > 0:
+            return "b", "the %s family exists and was offered %d times in these fights, but its gate did not offer it here; road: %s" % (fam, gen[fam], road), []
+        return "c", "IAUS never generates %s for this class (%s); road: %s" % (label_o, "no family" if not fam else "family %s offered 0 times" % fam, road), []
+    if kind == "unranked":
+        return "b", "IAUS generated %s and scored it under the floor or vetoed it (a veto, a gate or a missing consideration)" % label_o, []
+    fams = sorted({f for f in (fi, label_o) if f not in ("idle",) and not f.startswith("ext:")})
+    return "a", "%s: IAUS ranked the oracle's pick lower (%s)" % (kind, " / ".join(fams) or "the act floor"), fams
+
+
+def stage_gap():
+    """THE FINAL ORACLE GAP (marth 11-12: "getting close to oracle should be a goal"; re-scope: the driver itself iterates through what
+    needs it). Per class and world, on the shipped table and on the final table, the SAME fights (seeds 6001..) played by IAUS and by
+    the class oracle planning for the subject only (--oracle-subject-only: his companions play IAUS in both arms, so the gap is his own).
+    RULE of this stage (written before any of its results was read):
+      size     12 seeds x (4 natural + 1 of each of his own named scenarios); a cell with under 2 fights or whose final-table se > max(0.5 U, |gap| / 4) gets
+               12 more seeds, up to 48. The shipped table is measured on the same seeds, so the tuning's effect is a PAIRED difference.
+      classes  every divergence cluster of the subject (Oracle.h SitRec) is classified by `classify` (a / b / c / d) with its cost
+               (the oracle's dU summed per fight: an ordering, not an additive share of the gap).
+      (a)      the families of the (a) clusters that carry the most dU (up to 3 per class) drive a BOUNDED extra search: the class's live
+               knobs of those families that took no value (up to 12, most sensitive first), at the MIDPOINTS between the shared value
+               and each value already tried (inside the range: accepted under RULE like any sweep) and past the outermost ones
+               (widen: a pass is an open decision, never shipped). An accepted value re-runs the joint gate and re-measures that gap.
+      (b)-(d)  open decisions with their evidence; the ledger rows go to <out>/gap-ledger.md for the coordinator to paste."""
+    SUMMARY["stages"].pop("gap", None)   # this stage's own earlier values are decided again
+    order = A.classes.split(",") if A.classes else CELLS
+    shipped, final = [], final_curves()
+    tables = {"shipped": shipped, "final": final}
+    st = {"rule": stage_gap.__doc__[stage_gap.__doc__.index("RULE"):], "tables": {"final": final}, "cells": {}, "clusters": {}, "kept": {}, "search": {}}
+    nseeds = {(w, c): CFG["gap_seeds"] for w in A.worlds for c in order}
+    data = {}
+    while True:   # measure; then grow only the cells whose se is too wide, up to the cap
+        tasks = [(w, c, tables[t], s, True) for (w, c), n in nseeds.items() for t in ("shipped", "final") for s in range(GAP_SEEDS0, GAP_SEEDS0 + n) if t == "final" or final]
+        res = gap_runs(tasks)
+        for t, r in zip(tasks, res):
+            data[(t[0], t[1], "final" if t[2] is final else "shipped", t[3])] = r
+        grow = []
+        for (w, c), n in nseeds.items():
+            fin = gap_merge([data[(w, c, "final", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
+            g, se = mse([uo - ui for _, _, _, ui, uo in fin["fights"]])
+            if (len(fin["fights"]) < 2 or se > max(0.5, abs(g) / 4.0)) and n < CFG["gap_max_seeds"]:   # one fight has no se: it is never "small enough"
+                grow.append((w, c))
+        if not grow:
+            break
+        for k in grow:
+            nseeds[k] = min(CFG["gap_max_seeds"], nseeds[k] + CFG["gap_seeds"])
+        log("gap: %d cell(s) get more seeds (se too wide): %s" % (len(grow), ", ".join("%s/%s->%d" % (w, c, nseeds[(w, c)]) for w, c in grow)))
+    allf = gap_runs([("builtin", c, final, s, False) for c in order for s in range(GAP_SEEDS0, GAP_SEEDS0 + CFG["gap_seeds"])]) if "builtin" in A.worlds else []
+    for c in order:
+        pooled = []
+        for w in A.worlds:
+            n = nseeds[(w, c)]
+            fin = gap_merge([data[(w, c, "final", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
+            shp = gap_merge([data[(w, c, "final" if not final else "shipped", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
+            df = {(s, j): uo - ui for s, j, _, ui, uo in fin["fights"]}
+            ds = {(s, j): uo - ui for s, j, _, ui, uo in shp["fights"]}
+            g, se = mse(list(df.values()))
+            g0, se0 = mse(list(ds.values()))
+            ch, chse = mse([df[k] - ds[k] for k in df if k in ds])
+            nat = mse([uo - ui for _, _, k, ui, uo in fin["fights"] if k == "nat"])
+            cell = {"gap": round(g, 3), "se": round(se, 3), "fights": len(df), "seeds": n, "nat_gap": round(nat[0], 3), "shipped_gap": round(g0, 3), "shipped_se": round(se0, 3),
+                    "tuning_change": [round(ch, 3), round(chse, 3)], "iaus_u": round(mse([ui for *_, ui, _ in fin["fights"]])[0], 2), "oracle_u": round(mse([uo for *_, uo in fin["fights"]])[0], 2),
+                    "decisions": fin["dec"]}
+            if w == "builtin" and allf:
+                af = gap_merge([r for r, cc in zip(allf, [c2 for c2 in order for _ in range(CFG["gap_seeds"])]) if cc == c])
+                cell["all_followers_gap"] = [round(x, 3) for x in mse([uo - ui for *_, ui, uo in af["fights"]])]
+            st["cells"]["%s/%s" % (c, w)] = cell
+            pooled.append(fin)
+            log("gap %s on %s: %+.2f (se %.2f, %d fights) shipped %+.2f, tuning %+.2f (se %.2f)" % (c, w, g, se, len(df), g0, ch, chse))
+        # the divergences of the final table, pooled over the worlds, one row per (iaus pick, oracle pick, kind)
+        allp = gap_merge(pooled)
+        nf = max(1, len(allp["fights"]))
+        rows = {}
+        for key, (n, du) in allp["sit"].items():
+            li, lo, kind, sit = key.split("|")
+            r = rows.setdefault((li, lo, kind), {"iaus": li, "oracle": lo, "kind": kind, "n": 0, "dU_per_fight": 0.0, "situations": {}})
+            r["n"] += n
+            r["dU_per_fight"] += du / nf
+            r["situations"][sit] = r["situations"].get(sit, 0.0) + du / nf
+        tot = sum(r["dU_per_fight"] for r in rows.values()) or 1.0
+        out = []
+        for r in sorted(rows.values(), key=lambda r: -r["dU_per_fight"]):
+            cl, why, fams = classify(r["iaus"], r["oracle"], r["kind"], allp["gen"])
+            r.update({"class": cl, "why": why, "families": fams, "share": round(r["dU_per_fight"] / tot, 3), "dU_per_fight": round(r["dU_per_fight"], 3),
+                      "situations": [[k, round(v, 3)] for k, v in sorted(r["situations"].items(), key=lambda kv: -kv[1])[:3]]})
+            out.append(r)
+        st["clusters"][c] = {"fights": nf, "decisions": allp["dec"], "dU_per_fight": round(tot, 3), "by_class": {k: round(sum(r["dU_per_fight"] for r in out if r["class"] == k), 3) for k in "abcd"},
+                             "rows": out, "generated": allp["gen"]}
+        SUMMARY["stages"]["gap"] = st
+        save_summary()
+    gap_search(st, order)
+    gap_ledger(st, order)
+    SUMMARY["stages"]["gap"] = st
+
+
+def gap_search(st, order):
+    """(a): the bounded extra search of the knobs that drive the class's (a) divergences (RULE in stage_gap)."""
+    knobs, _ = all_knobs()
+    train = range(1, CFG["train"] + 1)
+    changed = []
+    for c in order:
+        cl = st["clusters"][c]
+        fam_du = {}
+        for r in cl["rows"]:
+            if r["class"] == "a":
+                for f in r["families"]:
+                    fam_du[f] = fam_du.get(f, 0.0) + r["dU_per_fight"]
+        fams = [f for f, _ in sorted(fam_du.items(), key=lambda kv: -kv[1])[:CFG["gap_families"]]]
+        live = SUMMARY["stages"].get("classes", {}).get(c, {}).get("live")
+        meta = {n: (t, sh, vals) for n, t, sh, vals in class_knobs(c, knobs)}
+        taken = {k.split("=")[0] for k in final_curves()}
+        if live is None:   # the class was not searched in this --out: its knobs' order is the liveness screen of the classes stage, which never ran
+            st["search"][c] = {"families": fams, "verdict": "NOT SEARCHED: the classes stage has not run for %s in this --out (no liveness list)" % c, "rows": []}
+            log("gap search %s: %s" % (c, st["search"][c]["verdict"]))
+            continue
+        cand = [n for n, _ in live if n in meta and any(n == "family." + f or n.startswith(f + ".") for f in fams) and meta[n][0].format(c=c, v=0).split("=")[0] not in taken][:CFG["gap_knobs"]]
+        srch = {"families": fams, "knobs": cand, "rows": []}
+        for name in cand:
+            tmpl, shared, tried = meta[name]
+            mids = [round(shared + (v - shared) / 2.0, 5) for v in tried]
+            wide = widen(name, shared, tried, "up") + widen(name, shared, tried, "down")
+            vals = [v for v in mids + wide if all(abs(v - t) > 1e-6 for t in tried + [shared])]
+            if not vals:
+                continue
+            base = final_curves()
+            res = jmany([req("builtin", c, "g3", base, train)] + [req("builtin", c, "g3", base + [tmpl.format(c=c, v=v)], train) for v in vals])
+            cands = sorted(((paired(res[0], x) + (v,)) for x, v in zip(res[1:], vals)), key=lambda x: -x[0])
+            d, se, v = cands[0]
+            far = v in wide
+            row = {"knob": name, "shared": shared, "best": v, "far": far, "train": [round(d, 3), round(se, 3)], "sweep": [[x[2], round(x[0], 3), round(x[1], 3)] for x in sorted(cands, key=lambda x: x[2])], "accepted": False}
+            passed = d > 2.5 * se and d >= 0.15
+            if passed or (CFG["force"] and not srch["rows"]):
+                spec = tmpl.format(c=c, v=v)
+                j = judge(c, base, spec, forced=not passed)
+                row["steps"], row["why"] = j["steps"], j["why"]
+                ok = passed and j["accepted"]
+                if ok and far:
+                    row["why"] = "PASSES THE RULE PAST THE RANGE TRIED: reported, never shipped"
+                    open_decision("gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f: far from the shared curve, marth or the coordinator decides (summary.json stages.gap.search.%s)" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], c))
+                elif ok:
+                    row["accepted"] = True
+                    st["kept"].setdefault(c, []).append(spec)
+                    changed.append(c)
+            else:
+                row["why"] = "train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J"
+            srch["rows"].append(row)
+            log("gap search %s %-30s %g -> %g train %+.2f (se %.2f) %s" % (c, name, shared, v, d, se, row["why"][:120]))
+            st["search"][c] = srch
+            SUMMARY["stages"]["gap"] = st
+            save_summary()
+        st["search"][c] = srch
+    if changed:   # the table moved: the joint gate again, and the gap of each class that took a value measured once more on the new table
+        SUMMARY["stages"]["gap"] = st
+        stage_joint()
+        st["joint_after_search"] = SUMMARY["stages"]["joint"]["verdict"]
+        final = final_curves()
+        for c in sorted(set(changed)):
+            open_decision("class card read for %s (gap search)" % c, "accepted %s in the gap stage's (a) search: confirm none leaves his class card before writing" % " ".join(st["kept"][c]))
+            for w in A.worlds:
+                n = st["cells"]["%s/%s" % (c, w)]["seeds"]
+                fin = gap_merge(gap_runs([(w, c, final, s, True) for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)]))
+                g, se = mse([uo - ui for *_, ui, uo in fin["fights"]])
+                st["cells"]["%s/%s" % (c, w)]["after_search"] = [round(g, 3), round(se, 3)]
+                log("gap %s on %s after the (a) search: %+.2f (se %.2f)" % (c, w, g, se))
+
+
+def gap_ledger(st, order):
+    """(b)-(d) as open decisions (the largest per class, with the evidence) and as ledger rows for iaus-classes.md section 3."""
+    L = ["# Oracle-gap ledger rows (tune_driver.py stage gap, %s)" % time.strftime("%Y-%m-%d %H:%M"), "",
+         "Paste into Docs/research/2026-11/iaus-classes.md section 3. dU/f = the oracle's per-decision advantage summed per fight (an ordering, not an additive share of the gap).", "",
+         "| Id | Classes | What is missing | Road |", "|---|---|---|---|"]
+    for c in order:
+        cl = st["clusters"][c]
+        gaps = ", ".join("%s %+.2f (se %.2f)" % (w, st["cells"]["%s/%s" % (c, w)]["gap"], st["cells"]["%s/%s" % (c, w)]["se"]) for w in A.worlds)
+        rows = [r for r in cl["rows"] if r["class"] in "bcd" and (r["share"] >= 0.05 or r is cl["rows"][0])][:5]
+        for i, r in enumerate(rows):
+            L.append("| O-%s-%d | %s | (%s) IAUS %s, oracle %s (%s): dU/f %.2f, %.0f%% of his divergence cost; most in %s. Gap %s | %s |" % (
+                c, i + 1, c, r["class"], r["iaus"], r["oracle"], r["kind"], r["dU_per_fight"], 100 * r["share"], r["situations"][0][0] if r["situations"] else "-", gaps, r["why"]))
+        if rows:
+            open_decision("oracle gap %s: %d divergence(s) of class b/c/d" % (c, len(rows)), "; ".join("(%s) %s -> %s dU/f %.2f: %s" % (r["class"], r["iaus"], r["oracle"], r["dU_per_fight"], r["why"]) for r in rows) + " (summary.json stages.gap.clusters.%s, <out>/gap-ledger.md)" % c)
+    open(os.path.join(A.out, "gap-ledger.md"), "w").write("\n".join(L) + "\n")
 
 
 def stage_globals():
@@ -1055,6 +1325,23 @@ def render_md():
             L += ["| %s | T%d | %.2f | %.2f | %s | %+.2f | %s |" % (r["class"], r["tier"], r["rating"], r["se"], r["rank"], r["vs_tier"], "BELOW" if r["below"] else "") for r in rows] + [""]
     if "recalib" in s:
         L += ["## Accepted values under the re-measured potion worth", ""] + ["- `%s`: %+.2f (se %.2f) %s" % (r["spec"], r["d"], r["se"], "holds" if r["holds"] else "DOES NOT HOLD") for r in s["recalib"]["rows"]] + [""]
+    if "gap" in s and s["gap"].get("cells"):
+        g = s["gap"]
+        L += ["## Oracle gap per class (subject-only class oracle, seeds %d.., gap = oracle U - IAUS U)" % GAP_SEEDS0, "",
+              "| Class | World | Gap final (se) | fights | Shipped | Tuning change (se) | All followers (built-in) | After (a) search | a / b / c / d dU/f |", "|---|---|---|---|---|---|---|---|---|"]
+        for k, v in g["cells"].items():
+            c = k.split("/")[0]
+            bc = g["clusters"].get(c, {}).get("by_class", {})
+            L.append("| %s | %s | %+.2f (%.2f) | %d | %+.2f | %+.2f (%.2f) | %s | %s | %s |" % (c, k.split("/")[1], v["gap"], v["se"], v["fights"], v["shipped_gap"], v["tuning_change"][0], v["tuning_change"][1],
+                     "%+.2f (%.2f)" % tuple(v["all_followers_gap"]) if "all_followers_gap" in v else "", "%+.2f (%.2f)" % tuple(v["after_search"]) if "after_search" in v else "",
+                     " / ".join("%.2f" % bc.get(x, 0.0) for x in "abcd")))
+        L += ["", "### Largest divergences per class (final table, all worlds pooled)", ""]
+        for c, cl in g["clusters"].items():
+            L.append("- **%s** (%d fights, %d decisions): " % (c, cl["fights"], cl["decisions"]) + "; ".join("(%s) %s -> %s [%s] %.2f/f" % (r["class"], r["iaus"], r["oracle"], r["kind"], r["dU_per_fight"]) for r in cl["rows"][:5]))
+        if g.get("kept"):
+            L += ["", "Accepted by the (a) search (in final_curves; joint gate re-run: %s): %s" % (g.get("joint_after_search", "?"), " ".join("`%s`" % k for v in g["kept"].values() for k in v))]
+            L += ["", "```cpp"] + [cpp_line(k) for v in g["kept"].values() for k in v] + ["```"]
+        L += ["", "Ledger rows: `gap-ledger.md` in the run directory.", ""]
     L += ["## OPEN DECISIONS (the runner reports these and does not decide)", ""] + (["- **%s**: %s" % (d["what"], d["evidence"]) for d in SUMMARY["open_decisions"]] or ["- none"]) + [""]
     return "\n".join(L)
 
@@ -1067,7 +1354,7 @@ def main():
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
-    ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,summary")
+    ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,summary")
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
     ap.add_argument("--jobs", type=int, default=12)
@@ -1089,7 +1376,7 @@ def main():
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
-    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap}
     for name in A.stages.split(","):
         if name == "summary":
             continue

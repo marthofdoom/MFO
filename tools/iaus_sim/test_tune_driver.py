@@ -61,5 +61,25 @@ class CheckWorld(unittest.TestCase):   # review F8
         T.check_world("builtin")
 
 
+class Gap(unittest.TestCase):
+    def test_classify(self):
+        self.assertEqual(T.classify("attack", "ext:bash", "ext", {"bash": 5})[0], "d")          # FIDELITY wins
+        self.assertEqual(T.classify("attack", "ext:to_player", "ext", {"regroup": 0})[0], "c")  # a family never offered
+        self.assertEqual(T.classify("attack", "ext:hide", "ext", {"disengage": 3})[0], "b")     # offered elsewhere, gated here
+        self.assertEqual(T.classify("attack", "ext:get_sight", "ext", {})[0], "c")              # no family at all
+        self.assertEqual(T.classify("attack!", "taunt", "ranked", {})[0], "b")                  # IAUS broke a class ruling
+        self.assertEqual(T.classify("attack", "drink_health", "unranked", {})[0], "b")
+        c, _, fams = T.classify("attack", "taunt", "ranked", {})
+        self.assertEqual((c, fams), ("a", ["attack", "taunt"]))
+        self.assertEqual(T.classify("power_attack", "idle", "idle", {})[2], ["power_attack"])
+
+    def test_parse_refuses_a_missing_dump(self):
+        T.CFG = dict(T.SMOKE)
+        with self.assertRaises(RuntimeError):
+            T.gap_parse("CLASS ORACLE GAP\n", "knight", 1)
+        r = T.gap_parse("GAPFIGHT knight nat 0 80.0 85.5\nGAPSIT knight attack|idle|idle|hp:hi,near:melee,foes:1 3 9.5\nGAPGEN knight block 4\nGAPDEC knight 50\n", "knight", 7)
+        self.assertEqual((r["fights"], r["sit"]["attack|idle|idle|hp:hi,near:melee,foes:1"], r["gen"]["block"], r["dec"]), ([(7, 0, "nat", 80.0, 85.5)], (3, 9.5), 4, 50))
+
+
 if __name__ == "__main__":
     unittest.main()

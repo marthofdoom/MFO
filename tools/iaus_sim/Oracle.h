@@ -142,6 +142,20 @@ namespace Sim {
         double iFoeHp = 0, oFoeHp = 0, iOnPlayer = 0, oOnPlayer = 0, iCaster = 0, oCaster = 0, iResist = 0, oResist = 0, iRecHp = 0, oRecHp = 0, selfHp = 0, selfMp = 0, foes = 0, sameTarget = 0, iDist = 0, oDist = 0, playerHp = 0, nearDist = 0;
     };
 
+    // THE GAP STAGE'S DUMP (tune_driver.py stage gap, iaus-sim-v2.md 34). g_oracleSubjectOnly (--oracle-subject-only): the oracle plans for
+    // the SUBJECT only and his companions play IAUS in both arms, so a class's gap is the gap of his own decisions (the default oracle
+    // drives every follower, and a class's gap then carries its T1 companions' gap too). SitRec: one divergence cluster of the subject,
+    // keyed "iaus pick|oracle pick|kind|situation" (kind: retarget = the same family on another target or form; ranked = the oracle took a candidate IAUS ranked lower; unranked = a candidate
+    // IAUS generated and scored under the floor or vetoed; posture; ext = an action the catalogue has no candidate for; idle).
+    inline bool g_oracleSubjectOnly = false;
+    struct SitRec { long n = 0; double dU = 0; };
+    [[nodiscard]] inline std::string Situation(const Body& x, const Snapshot& sn) {
+        float nd = 1e9f; for (const auto& f : sn.foes) nd = std::min(nd, f.dist);
+        const float hp = x.c.hp / std::max(1.0f, x.c.hpMax); const std::size_t n = sn.foes.size();
+        return std::string("hp:") + (hp < 0.3f ? "lo" : hp < 0.6f ? "mid" : "hi") + ",near:" + (n == 0 ? "none" : nd < 250.0f ? "melee" : nd < 900.0f ? "mid" : "far")
+             + ",foes:" + (n <= 1 ? std::to_string(n) : n <= 3 ? "2-3" : "4+");
+    }
+
     struct OracleCfg { int K = 8; double H = 150.0, every = 0.4, commit = 2.5; std::size_t maxOptions = 14; double minDU = 1.0; bool allFollowers = true, ext = true; };
 
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
@@ -158,6 +172,9 @@ namespace Sim {
         std::map<std::string, Disagreement>* log = nullptr;
         std::vector<double> last;
         long decisions = 0, disagreed = 0; double dUSum = 0;
+        std::map<std::string, SitRec>* sit = nullptr;          // --gap-dump: the subject's divergences (SitRec above)
+        std::array<long, kFamilies>* gen = nullptr;            // --gap-dump: candidates his generator offered per family, summed over the oracle's decisions for him
+        long subjDec = 0;                                      // --gap-dump: the oracle's decisions for the subject
 
         static void RunFor(Fight& G, Policy& P, double until) {
             while (!G.over && G.now < until) {
@@ -248,6 +265,19 @@ namespace Sim {
             ++decisions;
             // the disagreement with IAUS's own pick
             std::size_t ii = opt.size() - 1; if (iausPick) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == KeyOf(*iausPick)) { ii = i; break; }
+            if (subj && (sit || gen)) {
+                ++subjDec;
+                if (gen) for (const Candidate& k : acts) ++(*gen)[static_cast<std::size_t>(k.family)];
+                const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
+                if (sit && ii != best && dU >= cfg.minDU) {
+                    const bool iFound = !iausPick || ii != opt.size() - 1;   // IAUS's pick is among the options (idle is last and has no candidate)
+                    const Opt& ob = opt[best]; bool ranked = false;
+                    if (ob.k) for (const Scored& r : sv.d.ranked) if (r.idx < acts.size() && &acts[r.idx] == ob.k) { ranked = true; break; }
+                    const char* kind = ob.ext != Ext::None ? "ext" : !ob.k ? "idle" : ob.k->family == Family::Posture ? "posture" : iausPick && iausPick->family == ob.k->family ? "retarget" : ranked ? "ranked" : "unranked";
+                    const std::string il = iausPick ? std::string(MFO::Iaus::Name(iausPick->family)) + (iFound ? "" : "!") : std::string("idle");
+                    SitRec& r = (*sit)[il + "|" + ob.Label() + "|" + kind + "|" + Situation(x, sv.sn)]; ++r.n; r.dU += dU;
+                }
+            }
             if (log) {
                 const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
                 if (ii != best && dU >= cfg.minDU) {
