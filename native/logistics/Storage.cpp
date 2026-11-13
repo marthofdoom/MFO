@@ -5,22 +5,27 @@
 //   * co-save: 'STOR' is a NEW independent record. Readers for every shipped version forever (#12), every count bounded (#11),
 //     every FormID ResolveFormID'd with an unresolvable one DROPPED (#8), no 0xFF id written (#9). Snapshot under the mutex,
 //     write from the copy (never a lock across WriteRecordData).
-//   * threading: the worker owns the live path; the tables have their own LEAF mutex; no native inventory mutation of an
-//     unloaded container (the VM RemoveItem road, Papyrus::DispatchMoveItem).
-//   * no list-specific data: chests are found at runtime from record flags and ownership.
-//   * followers never commit detected crimes: only a container the player owns (or one in a cell he owns), moved by script
-//     RemoveItem, which reaches no steal alarm (Linux-Native-Tools crime-and-theft-alarms.md section 1, MFO_Trade precedent).
+//   * threading: the worker owns the live path; the table has its own LEAF mutex; no native inventory mutation of an unloaded
+//     container (the VM RemoveItem road, Papyrus::DispatchMoveItem).
+//   * no list-specific data: the chest is MFO's own record (MFO.esp 0x919).
+//   * followers never commit detected crimes: the chest is an unowned ref in an unowned MFO cell, moved by script RemoveItem,
+//     which reaches no steal alarm (Linux-Native-Tools crime-and-theft-alarms.md section 1, the MFO_Trade precedent).
 //   * never mask a failure: every move is confirmed from the follower's own count; a move that did not land is a WARN and the
 //     entry is dropped or retried by rule, never assumed.
+//
+// THE CHEST IS SHARED by every follower. Two followers may each store a copy of one base: each tracks his own entry and each
+// move is confirmed by HIS count, never by the chest's. A retrieval takes "one copy of the base" out of the chest, which is any
+// copy of that base in it: with identical base forms that is the same item, but instance data (a temper level, a gem) can
+// differ between two followers' copies of one base. That is the documented limit (design doc 0a).
 #include "PCH.h"
 #include "Storage.h"
 
-#include "Logistics_internal.h"   // ClassWeaponBit / ClassSet, ComputeWeaponRoles, WeaponScore, ArmorScore, the keep-set helpers
+#include "Logistics_internal.h"   // ClassWeaponBit / ClassSet, ComputeWeaponRoles, WeaponScore, ArmorScore, the keep set + its gates
 #include "Pricing.h"
 #include "Papyrus.h"
 #include "Config.h"
+#include "Forms.h"                // g_storageChest (MFO.esp 0x919)
 #include "Followers.h"            // IsPersistableID (#9)
-#include "LocationTypes.h"        // TownAnchor (informational)
 #include "Serialization.h"        // kRecStorage / kStorageVersion, CoSaveBuffer
 #include "apmf/APMFBridge.h"      // InCombat (a Harbinger substrate is not combat)
 #include "classes/Classes.h"
@@ -37,37 +42,33 @@ namespace MFO::Logistics::Storage {
 
     namespace {
         // #11 bounds of the record (writer and reader use the same ones).
-        constexpr std::uint32_t kMaxHomes            = 16;
         constexpr std::uint32_t kMaxSavedFollowers   = 4096;   // the FLWR / PGIV bound
         constexpr std::uint32_t kMaxItemsPerFollower = 16;     // one per Bucket (15 buckets)
         static_assert(static_cast<std::uint32_t>(Bucket::kCount) - 1 <= kMaxItemsPerFollower);
 
         // Cadences. A move is a VM dispatch: its confirm window is a FLOOR far above VM latency (a busy VM queues for a few
         // seconds; 30 s is what the smith stop's ExtraHealth read-back waits for its own dispatch).
-        constexpr auto kTickEvery      = std::chrono::seconds(2);
-        constexpr auto kRetrieveEvery  = std::chrono::seconds(5);
-        constexpr auto kConfirmWindow  = std::chrono::seconds(30);
-        constexpr auto kRetrieveBackoff = std::chrono::minutes(5);
+        constexpr auto kTickEvery        = std::chrono::seconds(2);
+        constexpr auto kRetrieveEvery    = std::chrono::seconds(5);
+        constexpr auto kConfirmWindow    = std::chrono::seconds(30);
+        constexpr auto kMenuHold         = std::chrono::seconds(10);   // a confirm window never runs out while a menu is open
+        constexpr auto kRetrieveBackoff  = std::chrono::minutes(5);
         constexpr int  kMaxRetrieveMisses = 3;
         constexpr auto kDecisionLogEvery = std::chrono::seconds(60);
-        // A cell is walked again at most once a minute while someone stands in it: a Hearthfire chest is DISABLED until the player
-        // builds it, and a house bought while he stands inside becomes his on the next walk.
-        constexpr auto kCellRecheck = std::chrono::seconds(60);
 
-        // An in-flight move (session-only; saved as an entry flag when a save lands in its window).
+        // An in-flight move (session-only; saved as an entry flag when a save lands in its window, and re-created from that flag
+        // after the load with a FRESH window, review F4).
         enum class OpKind : std::uint8_t {
-            Store,        // him -> chest (a new entry when his count falls)
-            Retrieve,     // chest -> him (the entry goes when his count rises)
-            MigrateOut,   // interim chest -> him, the first hop of interim -> home
-            MigrateIn     // him -> the home chest, the second hop
+            Store,           // him -> chest: a new entry when his count falls below `before`
+            Retrieve,        // chest -> him: the entry goes when his count rises above `before`
+            SettleStore,     // a load restored a store in flight (kUnverified): confirmed when he carries none, else dropped at the deadline
+            SettleRetrieve   // a load restored a retrieval in flight (kRetrieving): retrieved when he carries one, else stays stored
         };
         struct Op {
             OpKind            kind = OpKind::Store;
             RE::FormID        base = 0;
-            RE::FormID        chest = 0;        // Store / MigrateIn: the destination; Retrieve / MigrateOut: the source
-            RE::FormID        fromChest = 0;    // MigrateIn: the interim chest the entry still names
             std::int32_t      before = 0;       // his count of the base at dispatch
-            Clock::time_point at{};
+            Clock::time_point deadline{};       // 0 = not started (a settle op waits for his first loaded tick)
         };
         struct Miss { int misses = 0; Clock::time_point retryAt{}; };
 
@@ -75,15 +76,16 @@ namespace MFO::Logistics::Storage {
         std::mutex g_mx;
         Table      g_table;   // SAVED
         // Session-only (ClearTransientState).
-        std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, Clock::time_point>> g_wants;   // follower -> base -> held at
-        std::unordered_map<RE::FormID, std::vector<Op>>                                g_ops;
-        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>                 g_blocked;  // a store / migration that did not land
-        std::unordered_map<std::uint64_t, Miss>                                         g_miss;     // (follower, base) retrieval misses
-        std::unordered_map<RE::FormID, Clock::time_point>                               g_nextTick, g_nextRetrieve;
-        std::unordered_map<RE::FormID, std::uint8_t>                                    g_lastClass;
-        std::unordered_map<RE::FormID, Clock::time_point>                               g_cellCheckedAt;   // cell -> last walk
-        std::unordered_map<std::uint64_t, Clock::time_point>                            g_logNext;  // (follower, base) decision lines
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>        g_wants;    // follower -> bases held for storing
+        std::unordered_map<RE::FormID, std::vector<Op>>                       g_ops;
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>        g_blocked;  // a store that did not land / dispatch
+        std::unordered_map<std::uint64_t, Miss>                                g_miss;     // (follower, base) retrieval misses
+        std::unordered_map<RE::FormID, Clock::time_point>                      g_nextTick, g_nextRetrieve;
+        std::unordered_map<RE::FormID, std::uint8_t>                           g_lastClass;
+        std::unordered_set<RE::FormID>                                         g_settled;  // followers whose load flags became ops
+        std::unordered_map<std::uint64_t, Clock::time_point>                   g_logNext;  // (follower, base) decision lines
         bool g_marginOffLogged = false;
+        bool g_chestMissingLogged = false;
 
         std::uint64_t Key(RE::FormID a_a, RE::FormID a_b) { return (static_cast<std::uint64_t>(a_a) << 32) | a_b; }
 
@@ -92,6 +94,16 @@ namespace MFO::Logistics::Storage {
         const char* NameOf(const RE::TESForm* a_f) {
             const char* n = a_f ? a_f->GetName() : nullptr;
             return n && *n ? n : "?";
+        }
+
+        RE::TESObjectREFR* Chest() { return Forms::g_storageChest; }
+
+        // The player handles his inventory (container / gift / barter menu): a count change may be the player's, so no confirm
+        // reads it and no new move starts (review F5). UI::IsMenuOpen is the read the logistics worker already uses (LootScan.cpp).
+        bool InventoryMenuOpen() {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && (ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME) || ui->IsMenuOpen(RE::GiftMenu::MENU_NAME) ||
+                          ui->IsMenuOpen(RE::BarterMenu::MENU_NAME));
         }
 
         // ── piece classification ──────────────────────────────────────────────────────────────────────────────────
@@ -146,8 +158,8 @@ namespace MFO::Logistics::Storage {
             return p;
         }
 
-        // The STORE-side rank inside a storage bucket: the keep set's weapon ranks (SwapUp.cpp ComputeKeepSet), ArmorScore for a
-        // shield or rated armor (the skill-led judge), gold value for clothing.
+        // The STORE-side rank inside a storage bucket (only off-class pieces meet here): the keep set's weapon ranks (SwapUp.cpp
+        // ComputeKeepSet), ArmorScore for a shield or rated armor (the skill-led judge), gold value for clothing.
         float StoreRank(const WeaponRoles& a_roles, const ArmorPref& a_pref, RE::TESBoundObject* a_obj, const Piece& a_p) {
             if (auto* w = a_obj->As<RE::TESObjectWEAP>()) {
                 switch (a_p.bucket) {
@@ -164,54 +176,6 @@ namespace MFO::Logistics::Storage {
             return 0.0f;
         }
 
-        // The KEEP SET's own key and rank for a piece (a mirror of SwapUp.cpp ComputeKeepSet, so a retrieved piece is exactly
-        // the one the keep set then holds; a stored piece that would not be kept is never brought back to be sold).
-        struct KeepCtx {
-            WeaponRoles  roles;
-            ArmorPref    pref;
-            bool         mage = false;         // useMageApparel
-            std::uint8_t top2 = 0;
-            bool         strict = false, villain = false;
-        };
-        struct KeepRank { bool ok = false; int key = -1; float primary = 0.0f, secondary = 0.0f; };
-        KeepRank KeepRankOf(RE::Actor* a_actor, const KeepCtx& a_k, RE::TESBoundObject* a_obj) {
-            KeepRank r;
-            if (auto* w = a_obj->As<RE::TESObjectWEAP>()) {
-                if (IsCreatureWeapon(w)) return r;
-                using WT = RE::WEAPON_TYPE;
-                switch (w->GetWeaponType()) {
-                    case WT::kBow:            r.key = 3; r.primary = static_cast<float>(w->GetAttackDamage()); break;
-                    case WT::kCrossbow:       r.key = 4; r.primary = static_cast<float>(w->GetAttackDamage()); break;
-                    case WT::kStaff:          r.key = 5; r.primary = static_cast<float>(std::clamp<std::int32_t>(w->GetGoldValue(), 0, 0xFFFF)); break;
-                    case WT::kTwoHandSword:
-                    case WT::kTwoHandAxe:     r.key = 2; r.primary = WeaponScore(a_k.roles, w); break;
-                    case WT::kHandToHandMelee: return r;
-                    default:                  r.key = 1; r.primary = WeaponScore(a_k.roles, w); break;
-                }
-                r.ok = true;
-                return r;
-            }
-            auto* ar = a_obj->As<RE::TESObjectARMO>();
-            if (!ar || ArmorWontRender(a_actor, ar)) return r;
-            if (a_k.mage) {
-                const int cs = MageClothingSlot(ar);
-                if (cs < 0) return r;
-                int t = 0; std::int32_t m = 0;
-                if (ar->GetArmorRating() > 0.0f) { t = 0; m = std::max<std::int32_t>(ar->GetGoldValue(), 0); }
-                else if (!MageApparelBuyKey(ar, a_k.top2, a_k.strict, a_k.villain, t, m)) return r;
-                r.ok = true; r.key = 100 + cs; r.primary = static_cast<float>(t); r.secondary = static_cast<float>(m);
-                return r;
-            }
-            if (ar->GetArmorRating() <= 0.0f) return r;   // a non-mage's clothing: nothing wears it
-            int ls = ArmorSlot(ar);
-            if (ls < 0 && ar->IsShield()) ls = 4;
-            if (ls < 0) return r;
-            r.ok = true; r.key = 10 + ls;
-            r.primary   = ArmorScore(a_k.pref, ar);
-            r.secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
-            return r;
-        }
-
         std::int32_t CountOf(RE::Actor* a_actor, RE::TESBoundObject* a_obj) {
             if (!a_actor || !a_obj) return 0;
             const auto counts = a_actor->GetInventoryCounts([a_obj](RE::TESBoundObject& o) { return &o == a_obj; });
@@ -222,142 +186,6 @@ namespace MFO::Logistics::Storage {
             for (auto& [obj, data] : a_actor->GetInventory([a_obj](RE::TESBoundObject& o) { return &o == a_obj; }))
                 if (obj == a_obj && data.second && data.second->IsWorn()) return true;
             return false;
-        }
-
-        // ── chests ────────────────────────────────────────────────────────────────────────────────────────────────
-        bool IsPlayerOwnerId(RE::FormID a_id) { return a_id == 0x00000007 || a_id == 0x00000DB1; }   // Player, PlayerFaction (Skyrim.esm)
-
-        // The player's home: a cell owned by the Player / PlayerFaction, or an UNOWNED cell whose location chain carries
-        // LocTypePlayerHouse (000FC1A3) -- RefInPlayerStorage's two halves (LootTake.cpp), with an owner who is someone else
-        // ruling the keyword out. Base-game forms only.
-        bool IsPlayerHomeCell(RE::TESObjectCELL* a_cell, RE::Actor* a_in) {
-            if (auto* owner = a_cell->GetOwner()) return IsPlayerOwnerId(owner->GetFormID());
-            static RE::BGSKeyword* kwPlayerHouse = RE::TESForm::LookupByID<RE::BGSKeyword>(0x000FC1A3);
-            if (!kwPlayerHouse) return false;
-            int guard = 0;
-            for (auto* loc = a_in->GetCurrentLocation(); loc && guard < 8; loc = loc->parentLoc, ++guard)
-                if (loc->HasKeyword(kwPlayerHouse)) return true;
-            return false;
-        }
-
-        // A chest still usable (the live re-check at every use; the pick's own tests are in LearnFrom).
-        RE::TESObjectREFR* UsableChest(RE::FormID a_chest) {
-            auto* ref = a_chest ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a_chest) : nullptr;
-            if (!ref || !ref->IsPersistent() || ref->IsDisabled() || ref->IsDeleted() || ref->IsMarkedForDeletion()) return nullptr;
-            auto* base = ref->GetBaseObject();
-            return base && base->As<RE::TESObjectCONT>() ? ref : nullptr;
-        }
-
-        // Where a NEW piece goes: the first usable MAIN home chest (the first home learned is the main one), else the first
-        // usable INTERIM chest. 0 = no safe storage at all (no storing).
-        Home TargetHome() {
-            std::vector<Home> homes;
-            { std::scoped_lock lk(g_mx); homes = g_table.homes; }
-            for (const auto kind : { Home::kMain, Home::kInterim })
-                for (const auto& h : homes)
-                    if (h.kind == kind && UsableChest(h.chest)) return h;
-            return {};
-        }
-        std::uint8_t HomeKindOf(RE::FormID a_chest) {
-            std::scoped_lock lk(g_mx);
-            for (const auto& h : g_table.homes)
-                if (h.chest == a_chest) return h.kind;
-            return 0;
-        }
-
-        // Learn a chest from the cell the follower stands in (WORKER; a cell at most once per kCellRecheck). The follower's OWN attached
-        // interior cell is walked (the Economy / LootScan worker walk; collect-then-act, #2: ids inside the walk, reads after).
-        void LearnFrom(RE::Actor* a_follower, Clock::time_point a_now) {
-            auto* cell = a_follower->GetParentCell();
-            if (!cell || !cell->IsAttached() || !cell->IsInteriorCell()) return;
-            const RE::FormID cid = cell->GetFormID();
-            const bool home = IsPlayerHomeCell(cell, a_follower);
-            bool haveMain = false;
-            std::vector<Home> known;
-            {
-                std::scoped_lock lk(g_mx);
-                auto [it, fresh] = g_cellCheckedAt.try_emplace(cid, a_now);
-                if (!fresh) {
-                    if (a_now - it->second < kCellRecheck) return;
-                    it->second = a_now;
-                }
-                known = g_table.homes;
-            }
-            for (const auto& h : known) {
-                if (h.cell == cid && (!home || h.kind == Home::kMain) && UsableChest(h.chest)) return;   // this cell already serves
-                if (h.kind == Home::kMain) haveMain = true;
-            }
-            if (known.size() >= kMaxHomes) {
-                spdlog::warn("[storage] {} storage chests known already (the record's bound): cell {:08X} is not learned", kMaxHomes, cid);
-                return;
-            }
-            if (!home && haveMain) return;   // the main home is known: interim storage is no longer needed
-
-            std::vector<RE::FormID> ids;
-            cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
-                auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
-                if (base && base->As<RE::TESObjectCONT>()) ids.push_back(a_ref->GetFormID());
-                return RE::BSContainer::ForEachResult::kContinue;
-            });
-
-            struct Why { int notPersistent = 0, respawns = 0, locked = 0, disabled = 0, linked = 0, service = 0, ownedOther = 0, notPlayers = 0; } why;
-            RE::FormID pick = 0;
-            for (const RE::FormID id : ids) {
-                auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(id);
-                auto* cont = ref && ref->GetBaseObject() ? ref->GetBaseObject()->As<RE::TESObjectCONT>() : nullptr;
-                if (!cont) continue;
-                if (ref->IsDisabled() || ref->IsDeleted() || ref->IsMarkedForDeletion()) { ++why.disabled; continue; }
-                // From anywhere = the chest must stay in memory while its cell is unloaded: a PERSISTENT ref. (Evidence, 2026-11-13,
-                // Skyrim.esm: the vanilla city houses' PlayerHouseChest refs are TEMPORARY, so those homes have no usable chest.)
-                if (!ref->IsPersistent()) { ++why.notPersistent; continue; }
-                if (cont->data.flags.all(RE::CONT_DATA::Flag::kRespawn)) { ++why.respawns; continue; }   // it would empty itself
-                if (ref->IsLocked()) { ++why.locked; continue; }
-                // A ref with linked refs is part of a scripted setup (the vanilla PlayerBookShelfContainer: 19 XLKR + a script that
-                // hands every non-book back to the player). Never a storage chest.
-                if (ref->extraList.HasType(RE::ExtraDataType::kLinkedRef)) { ++why.linked; continue; }
-                if (IsLOTDDropOff(ref) || IsFactionServiceContainer(ref)) { ++why.service; continue; }
-                auto*            owner = ref->GetOwner();
-                const RE::FormID oid   = owner ? owner->GetFormID() : 0;
-                if (oid && !IsPlayerOwnerId(oid)) { ++why.ownedOther; continue; }
-                // Interim (not a home): only a container the player OWNS is safe storage (an unowned public container can be
-                // emptied by a quest script or claimed by its cell's owner later).
-                if (!home && !IsPlayerOwnerId(oid)) { ++why.notPlayers; continue; }
-                if (!pick || id < pick) pick = id;   // deterministic: the lowest FormID (no chest inventory is read)
-            }
-            const auto why_s = std::format("{} container(s): {} not persistent, {} respawn, {} locked, {} disabled, {} scripted (linked refs), "
-                                           "{} service / drop-off, {} owned by another{}",
-                                           ids.size(), why.notPersistent, why.respawns, why.locked, why.disabled, why.linked, why.service,
-                                           why.ownedOther, home ? std::string{} : std::format(", {} not the player's", why.notPlayers));
-            if (!pick) {
-                if (home)
-                    spdlog::warn("[storage] no usable chest in the player's home cell {:08X} ('{}'): {} -- a temporary container vanishes "
-                                 "when its cell unloads, so storing from anywhere needs a persistent one",
-                                 cid, NameOf(cell), why_s);
-                return;
-            }
-            const auto* town = LocationTypes::TownAnchor(a_follower->GetCurrentLocation());
-            Home h{ pick, cid, town ? town->GetFormID() : 0, home ? Home::kMain : Home::kInterim };
-            {
-                std::scoped_lock lk(g_mx);
-                for (auto& e : g_table.homes)
-                    if (e.chest == pick) {
-                        if (home && e.kind != Home::kMain) {   // an interim chest whose cell became his home: promote it
-                            e.kind = Home::kMain;
-                            spdlog::info("[storage] interim chest {:08X} is in the player's home now: promoted to the main home", pick);
-                        }
-                        return;
-                    }
-                if (home && !haveMain) {
-                    // the first main home goes FIRST: it is the preferred target from now on
-                    g_table.homes.insert(g_table.homes.begin(), h);
-                } else {
-                    g_table.homes.push_back(h);
-                }
-            }
-            auto* chest = RE::TESForm::LookupByID<RE::TESObjectREFR>(pick);
-            spdlog::info("[storage] {} chest CHOSEN: {:08X} '{}' in cell {:08X} '{}' (town {:08X}) -- {}{}",
-                         home ? "HOME" : "INTERIM (safe, player-owned)", pick, chest ? NameOf(chest->GetBaseObject()) : "?", cid, NameOf(cell),
-                         h.town, why_s, home && !haveMain ? " -- the main home: every interim piece moves here" : "");
         }
 
         bool DecisionLogDue(RE::FormID a_fid, RE::FormID a_base, Clock::time_point a_now) {
@@ -373,8 +201,9 @@ namespace MFO::Logistics::Storage {
             return (UsesMageClothing(a_state, a_follower) && Robes()) ? Kind::kClothing : Kind::kRated;
         }
 
-        // Drop every OTHER entry of a_base's bucket (the superseded piece is released to the player, never sold). Called under g_mx:
-        // it does form LOOKUPS only (TESForm::LookupByID, the form map's own reader lock; nothing takes g_mx under that lock).
+        // Drop every OTHER entry of a_keepBase's bucket (the superseded piece is released to the player in the chest, never sold).
+        // Called under g_mx: it does form LOOKUPS only (TESForm::LookupByID, the form map's own reader lock; nothing takes g_mx
+        // under that lock).
         void ReleaseSameBucket(std::vector<Item>& a_items, RE::FormID a_keepBase, RE::FormID a_fid) {
             const Piece kp = Classify(RE::TESForm::LookupByID<RE::TESBoundObject>(a_keepBase));
             if (kp.bucket == Bucket::None) return;
@@ -382,49 +211,39 @@ namespace MFO::Logistics::Storage {
                 if (i.base == a_keepBase) return false;
                 auto* o = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
                 if (!o || Classify(o).bucket != kp.bucket) return false;
-                spdlog::info("[storage] {:08X}: '{}' released to the player in chest {:08X} (a better {} is stored)", a_fid, NameOf(o),
-                             i.chest, BucketName(kp.bucket));
+                spdlog::info("[storage] {:08X}: '{}' released to the player in the MFO chest (a better {} is stored)", a_fid, NameOf(o),
+                             BucketName(kp.bucket));
                 return true;
             });
+        }
+
+        void DropEntry(RE::FormID a_fid, RE::FormID a_base) {   // under g_mx
+            if (auto it = g_table.stored.find(a_fid); it != g_table.stored.end()) {
+                std::erase_if(it->second, [&](const Item& e) { return e.base == a_base; });
+                if (it->second.empty()) g_table.stored.erase(it);
+            }
         }
 
         // ── codec (one template, two carriers: the SKSE interface and CoSaveBuffer) ────────────────────────────────────
         template <class W>
         void WriteBodyT(W& a_w, const Table& a_t, LoadStats& a_st) {
-            std::vector<Home> homes;
-            for (const auto& h : a_t.homes) {
-                if (homes.size() >= kMaxHomes) break;
-                if (!Followers::IsPersistableID(h.chest)) { ++a_st.skippedRuntime; continue; }   // #9
-                Home c = h;
-                if (!Followers::IsPersistableID(c.cell)) c.cell = 0;
-                if (!Followers::IsPersistableID(c.town)) c.town = 0;
-                homes.push_back(c);
-            }
             std::vector<std::pair<RE::FormID, std::vector<Item>>> fol;
             for (const auto& [fid, items] : a_t.stored) {
                 if (fol.size() >= kMaxSavedFollowers) break;
-                if (!Followers::IsPersistableID(fid)) { ++a_st.skippedRuntime; continue; }
+                if (!Followers::IsPersistableID(fid)) { ++a_st.skippedRuntime; continue; }   // #9
                 std::vector<Item> v;
                 for (const auto& i : items) {
                     if (v.size() >= kMaxItemsPerFollower) break;
-                    if (!Followers::IsPersistableID(i.base) || !Followers::IsPersistableID(i.chest)) { ++a_st.skippedRuntime; continue; }
+                    if (!Followers::IsPersistableID(i.base)) { ++a_st.skippedRuntime; continue; }
                     v.push_back(i);
                 }
                 if (!v.empty()) fol.emplace_back(fid, std::move(v));
-            }
-            a_w.WriteRecordData(static_cast<std::uint32_t>(homes.size()));
-            for (const auto& h : homes) {
-                a_w.WriteRecordData(h.chest);
-                a_w.WriteRecordData(h.cell);
-                a_w.WriteRecordData(h.town);
-                a_w.WriteRecordData(h.kind);
             }
             a_w.WriteRecordData(static_cast<std::uint32_t>(fol.size()));
             for (const auto& [fid, v] : fol) {
                 a_w.WriteRecordData(fid);
                 a_w.WriteRecordData(static_cast<std::uint32_t>(v.size()));
                 for (const auto& i : v) {
-                    a_w.WriteRecordData(i.chest);
                     a_w.WriteRecordData(i.base);
                     a_w.WriteRecordData(i.count);
                     a_w.WriteRecordData(static_cast<std::uint8_t>(i.flags & Item::kAllFlags));
@@ -437,59 +256,87 @@ namespace MFO::Logistics::Storage {
 
         template <class R>
         bool ReadBodyT(R& a_r, std::uint32_t /*a_version: v1 is the only one*/, Table& a_out, LoadStats& a_st) {
-            std::uint32_t homeCount = 0;
-            if (!Rd(a_r, homeCount)) { spdlog::error("[cosave] short read on STOR home count -- ABORTING storage load"); return false; }
-            if (homeCount > kMaxHomes) { spdlog::error("[cosave] implausible STOR home count {} -- ABORTING storage load", homeCount); return false; }
-            for (std::uint32_t i = 0; i < homeCount; ++i) {
-                Home h; RE::FormID rc = 0, rcell = 0, rtown = 0; std::uint8_t kind = 0;
-                if (!Rd(a_r, rc) || !Rd(a_r, rcell) || !Rd(a_r, rtown) || !Rd(a_r, kind)) {
-                    spdlog::error("[cosave] short read in STOR homes -- ABORTING (kept {} chest(s))", a_out.homes.size());
-                    return false;
-                }
-                RE::FormID chest = 0;
-                const bool       chestResolved = a_r.ResolveFormID(rc, chest);
-                RE::TESObjectREFR* ref  = chestResolved ? RE::TESForm::LookupByID<RE::TESObjectREFR>(chest) : nullptr;
-                RE::TESBoundObject* base = ref ? ref->GetBaseObject() : nullptr;
-                if (!base || !base->As<RE::TESObjectCONT>() || (kind != Home::kMain && kind != Home::kInterim)) { ++a_st.droppedHomes; continue; }
-                if (std::any_of(a_out.homes.begin(), a_out.homes.end(), [&](const Home& e) { return e.chest == chest; })) { ++a_st.droppedHomes; continue; }
-                h.chest = chest;
-                if (!rcell || !a_r.ResolveFormID(rcell, h.cell)) h.cell = 0;
-                if (!rtown || !a_r.ResolveFormID(rtown, h.town)) h.town = 0;
-                h.kind = kind;
-                a_out.homes.push_back(h);
-            }
             std::uint32_t followers = 0;
-            if (!Rd(a_r, followers)) { spdlog::error("[cosave] short read on STOR follower count -- ABORTING (kept the chests)"); return false; }
-            if (followers > kMaxSavedFollowers) { spdlog::error("[cosave] implausible STOR follower count {} -- ABORTING (kept the chests)", followers); return false; }
+            if (!Rd(a_r, followers)) { spdlog::error("[cosave] short read on STOR follower count -- ABORTING storage load"); return false; }
+            if (followers > kMaxSavedFollowers) { spdlog::error("[cosave] implausible STOR follower count {} -- ABORTING storage load", followers); return false; }
             for (std::uint32_t f = 0; f < followers; ++f) {
                 RE::FormID rawFid = 0; std::uint32_t n = 0;
                 if (!Rd(a_r, rawFid) || !Rd(a_r, n)) { spdlog::error("[cosave] short read in STOR -- ABORTING (kept what was parsed)"); return false; }
                 if (n > kMaxItemsPerFollower) { spdlog::error("[cosave] implausible STOR item count {} -- ABORTING (kept what was parsed)", n); return false; }
-                RE::FormID fid = 0;
-                const bool fidOk = a_r.ResolveFormID(rawFid, fid);   // #8: unresolvable -> his items are read past and DROPPED
+                RE::FormID   fid   = 0;
+                const bool   fidOk = a_r.ResolveFormID(rawFid, fid);   // #8: unresolvable -> his items are read past and DROPPED
                 if (!fidOk) ++a_st.droppedFollowers;
                 for (std::uint32_t k = 0; k < n; ++k) {
-                    RE::FormID rc = 0, rb = 0; std::uint16_t count = 0; std::uint8_t flags = 0;
-                    if (!Rd(a_r, rc) || !Rd(a_r, rb) || !Rd(a_r, count) || !Rd(a_r, flags)) {
+                    RE::FormID rb = 0; std::uint16_t count = 0; std::uint8_t flags = 0;
+                    if (!Rd(a_r, rb) || !Rd(a_r, count) || !Rd(a_r, flags)) {
                         spdlog::error("[cosave] short read in STOR items -- ABORTING (kept what was parsed)");
                         return false;
                     }
                     if (!fidOk) { ++a_st.droppedItems; continue; }
-                    RE::FormID chest = 0, base = 0;
-                    const bool chestOk = a_r.ResolveFormID(rc, chest) &&
-                        std::any_of(a_out.homes.begin(), a_out.homes.end(), [&](const Home& e) { return e.chest == chest; });
-                    const bool   baseResolved = a_r.ResolveFormID(rb, base);
-                    RE::TESForm* bo = baseResolved ? RE::TESForm::LookupByID(base) : nullptr;
-                    if (!chestOk || !bo || !(bo->As<RE::TESObjectWEAP>() || bo->As<RE::TESObjectARMO>()) || count == 0) { ++a_st.droppedItems; continue; }
+                    RE::FormID   base   = 0;
+                    const bool   baseOk = a_r.ResolveFormID(rb, base);
+                    RE::TESForm* bo     = baseOk ? RE::TESForm::LookupByID(base) : nullptr;
+                    if (!bo || !(bo->As<RE::TESObjectWEAP>() || bo->As<RE::TESObjectARMO>()) || count == 0) { ++a_st.droppedItems; continue; }
                     if ((flags & ~Item::kAllFlags) != 0) { ++a_st.clampedFlags; flags &= Item::kAllFlags; }   // #11
                     if (count > 1) { ++a_st.clampedFlags; count = 1; }                                        // #11: one piece per entry
                     auto& v = a_out.stored[fid];
                     if (std::any_of(v.begin(), v.end(), [&](const Item& e) { return e.base == base; })) { ++a_st.droppedItems; continue; }
-                    v.push_back(Item{ chest, base, count, flags });
+                    v.push_back(Item{ base, count, flags });
                 }
             }
             return true;
         }
+
+#ifdef MFO_DEV_SELFTEST
+        struct DevRT {
+            RE::FormID        base = 0;
+            int               phase = 0;   // 0 wait for the fixture copy, 1 store hop, 2 retrieval hop, 3 done
+            std::int32_t      before = 0;
+            Clock::time_point deadline{};
+            DevRoundTrip      out;
+        };
+        std::unordered_map<RE::FormID, DevRT> g_devRT;   // under g_mx
+
+        // One step of the armed round trip (WORKER, from Tick). The moves are the live road's (Papyrus::DispatchMoveItem, each hop
+        // confirmed from his count), so a PASS proves both directions through the MFO chest, receiver binding included.
+        void DevStepRoundTrip(RE::Actor* a_follower, Clock::time_point a_now) {
+            const RE::FormID fid = a_follower->GetFormID();
+            DevRT rt;
+            {
+                std::scoped_lock lk(g_mx);
+                const auto it = g_devRT.find(fid);
+                if (it == g_devRT.end() || it->second.out.done) return;
+                rt = it->second;
+            }
+            auto* obj   = RE::TESForm::LookupByID<RE::TESBoundObject>(rt.base);
+            auto* chest = Chest();
+            const std::int32_t c = CountOf(a_follower, obj);
+            auto finish = [&](bool a_ok, std::string a_ev) { rt.phase = 3; rt.out.done = true; rt.out.ok = a_ok; rt.out.evidence = std::move(a_ev); };
+            if (!obj || !chest) finish(false, !chest ? "the MFO storage chest (MFO.esp 0x919) did not resolve" : "the fixture base does not resolve");
+            else if (rt.phase == 0) {
+                if (rt.deadline.time_since_epoch().count() == 0) rt.deadline = a_now + std::chrono::seconds(20);
+                if (c >= 1) {
+                    if (Papyrus::DispatchMoveItem(a_follower, obj, 1, chest)) { rt.phase = 1; rt.before = c; rt.deadline = a_now + kConfirmWindow; }
+                    else finish(false, "the store hop (him -> MFO chest) could not be dispatched");
+                } else if (a_now > rt.deadline) finish(false, "the fixture copy never reached his pack");
+            } else if (rt.phase == 1) {
+                if (c < rt.before) {
+                    if (Papyrus::DispatchMoveItem(chest, obj, 1, a_follower)) { rt.phase = 2; rt.before = c; rt.deadline = a_now + kConfirmWindow; }
+                    else finish(false, std::format("stored (his count {} -> {}), but the retrieval hop FROM the MFO chest could not be "
+                                                   "dispatched (the receiver binding, review F1)", rt.before, c));
+                } else if (a_now > rt.deadline) finish(false, std::format("the store hop did not land in 30 s (his count stays {})", c));
+            } else if (rt.phase == 2) {
+                if (c > rt.before) finish(true, std::format("round trip through the MFO chest {:08X}: stored (his count fell), retrieved "
+                                                            "(his count {} -> {}), both by Papyrus RemoveItem", chest->GetFormID(), rt.before, c));
+                else if (a_now > rt.deadline)
+                    finish(false, std::format("the retrieval hop from the MFO chest did not land in 30 s (his count stays {})", c));
+            }
+            if (rt.out.done)
+                spdlog::info("[storage] DEV round trip {:08X}: {} -- {}", fid, rt.out.ok ? "PASS" : "FAIL", rt.out.evidence);
+            std::scoped_lock lk(g_mx);
+            if (auto it = g_devRT.find(fid); it != g_devRT.end()) it->second = rt;
+        }
+#endif
     }
 
     // ── the pure decision ───────────────────────────────────────────────────────────────────────────────────────────
@@ -537,25 +384,30 @@ namespace MFO::Logistics::Storage {
         return p;
     }
 
+    bool PlannedOffClass(const StoreInput& a, const char** a_whyOut) {
+        const char* why = nullptr;
+        const bool weaponish = a.armorKind == 0;
+        if (!a.classesOn)                          why = "classes off (no storing)";
+        else if (a.bucket == Bucket::None)         why = "not a stored kind";
+        else if (weaponish && a.classBit == 0)     why = "not a stored kind";
+        else if (weaponish ? (a.currentSet == 0 || (a.classBit & a.currentSet)) : (a.armorKind == a.currentKind))
+                                                   why = "in his class now";
+        else if (weaponish ? !(a.classBit & a.plan.weapons) : !(a.armorKind & a.plan.kinds))
+                                                   why = "no mastered or future class of his uses it";
+        if (a_whyOut) *a_whyOut = why ? why : "";
+        return why == nullptr;
+    }
+
     StoreOutput DecideStore(const StoreInput& a) {
         StoreOutput o;
         o.useValue  = Pricing::Apply(a.value, a.buyMult);
         o.saleValue = Pricing::Apply(a.value, a.sellMult);
-        if (!a.classesOn)                { o.why = "classes off (no storing)"; return o; }
-        if (a.bucket == Bucket::None)    { o.why = "not a stored kind"; return o; }
-        if (!a.storageReady)             { o.why = "no safe storage known (no home, no player-owned chest)"; return o; }
-        const bool weaponish = a.armorKind == 0;
-        if (weaponish ? (a.classBit == 0) : false) { o.why = "not a stored kind"; return o; }
-        if (weaponish ? (a.currentSet == 0 || (a.classBit & a.currentSet)) : (a.armorKind == a.currentKind)) {
-            o.why = "in his class now"; return o;
-        }
-        if (weaponish ? !(a.classBit & a.plan.weapons) : !(a.armorKind & a.plan.kinds)) {
-            o.why = "no mastered or future class of his uses it"; return o;
-        }
+        if (!PlannedOffClass(a, &o.why)) return o;
+        if (!a.storageReady) { o.why = "no MFO storage chest (MFO.esp out of date?)"; return o; }
         if (!(a.rank > a.bestOtherRank || (a.rank == a.bestOtherRank && !a.tieLoses))) {
             o.why = "a better one of its kind is carried or stored"; return o;
         }
-        if (!a.singleCopy)               { o.why = "he carries more than one copy (a store could not be told from a sale)"; return o; }
+        if (!a.singleCopy) { o.why = "he carries more than one copy (a store could not be told from a sale)"; return o; }
         if (!(o.useValue > o.saleValue && o.useValue - o.saleValue >= a.minMargin)) {
             o.why = "selling now beats buying it back later"; return o;
         }
@@ -571,27 +423,37 @@ namespace MFO::Logistics::Storage {
         if (a.bucket == Bucket::None)                                          why = "not a stored kind";
         else if (weaponish ? !(a.currentSet == 0 || (a.classBit & a.currentSet)) : (a.armorKind != a.currentKind))
                                                                                why = "not his class now";
-        else if (!a.roleKeeps)                                                 why = "his roles do not use it";
-        else if (!(a.rank > a.bestCarriedRank || (a.rank == a.bestCarriedRank && a.tieWins)))
-                                                                               why = "what he carries is as good";
+        else if (!a.saleKeeps)                                                 why = "the sale path would not keep it (not better than what he carries)";
         else { ok = true; why = a.classChanged ? "class change" : "better than what he carries"; }
         if (a_whyOut) *a_whyOut = why;
         return ok;
     }
 
     // ── live seats ───────────────────────────────────────────────────────────────────────────────────────────────
-    bool Enabled() { return Config::g_offClassStorage.load(); }
+    bool Enabled() {
+        if (!Config::g_offClassStorage.load()) return false;
+        if (!Chest()) {
+            if (!g_chestMissingLogged) {   // worker-serial
+                g_chestMissingLogged = true;
+                spdlog::error("[storage] the MFO storage chest (MFO.esp 0x919 MFO_StorageChestRef) did not resolve -- off-class storage is OFF "
+                              "(install the MFO.esp that ships with this DLL)");
+            }
+            return false;
+        }
+        return true;
+    }
 
     std::int32_t HoldFromSale(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_obj,
                               RE::InventoryEntryData* a_entry, std::int32_t a_count, std::int32_t a_value) {
-        if (!Enabled() || !a_follower || !a_obj || a_count <= 0) return 0;
+        // CHEAP CHECKS FIRST (review F7): no inventory walk, no roles, no price until the piece is a planned off-class one.
+        if (!a_follower || !a_obj || a_count <= 0 || !Enabled()) return 0;
         if (a_entry && a_entry->IsWorn()) return 0;   // a worn force-sell row: storage never takes anything off him
-        const RE::FormID fid = a_follower->GetFormID();
+        const RE::FormID fid  = a_follower->GetFormID();
         const RE::FormID base = a_obj->GetFormID();
         if (!Followers::IsPersistableID(base)) return 0;   // a runtime (0xFF) form could never be saved (#9)
         const Piece pc = Classify(a_obj);
         if (pc.bucket == Bucket::None) return 0;
-        const auto now = Clock::now();
+        if (pc.armor && Config::g_dollsMode.load()) return 0;   // the player dresses him (dolls mode): his apparel is not ours
         std::vector<Item> mine;
         {
             std::scoped_lock lk(g_mx);
@@ -601,7 +463,14 @@ namespace MFO::Logistics::Storage {
             if (const auto it = g_blocked.find(fid); it != g_blocked.end() && it->second.count(base)) return 0;
             if (const auto it = g_table.stored.find(fid); it != g_table.stored.end()) mine = it->second;
         }
-        if (pc.armor && Config::g_dollsMode.load()) return 0;   // the player dresses him (dolls mode): his apparel is not ours
+        const auto now = Clock::now();
+        // Review F8: a copy of this base is stored already -- never a second entry of one base (and never replace it: the stored
+        // copy would be orphaned in the chest). This copy sells as today.
+        if (std::any_of(mine.begin(), mine.end(), [&](const Item& i) { return i.base == base; })) {
+            if (DecisionLogDue(fid, base, now))
+                spdlog::info("[storage] {:08X} '{}': '{}' sells -- a copy of it is already stored", fid, NameOf(a_follower), NameOf(a_obj));
+            return 0;
+        }
 
         StoreInput in;
         in.bucket = pc.bucket; in.classBit = pc.armor ? 0 : pc.classBit; in.armorKind = pc.armor ? pc.kind : 0;
@@ -612,8 +481,9 @@ namespace MFO::Logistics::Storage {
             in.currentKind = KindOf(static_cast<Classes::Id>(eq), Robes());
             in.plan        = PlannedFor(eq, Classes::GetMastered(fid), Robes());
         }
-        const Home target = TargetHome();
-        in.storageReady = target.chest != 0;
+        if (!PlannedOffClass(in)) return 0;   // the common case: in his class, or no planned class uses it -- sells, nothing read
+
+        in.storageReady = Chest() != nullptr;
         in.singleCopy = a_count == 1;
         in.value = a_value;
         in.minMargin = Config::g_errandMinSellGold.load();
@@ -639,27 +509,24 @@ namespace MFO::Logistics::Storage {
             const std::int32_t myV = std::max<std::int32_t>(a_value, 0);
             in.tieLoses = bestOtherValue > myV || (bestOtherValue == myV && bestOtherId < base);
         }
-        if (in.classesOn && in.storageReady) {
-            const auto quote = Pricing::Resolve(a_follower->GetHandle(), RE::ActorHandle{}, 0);
-            in.buyMult = quote.buy; in.sellMult = quote.sell;
-            if (!quote.modelOn && !g_marginOffLogged) {
-                g_marginOffLogged = true;   // worker-serial
-                spdlog::info("[storage] the barter model is off (bSpeechPricing 0 or a GMST unreadable): buying back costs what selling "
-                             "pays, so nothing is worth storing and every off-class piece sells");
-            }
+        const auto quote = Pricing::Resolve(a_follower->GetHandle(), RE::ActorHandle{}, 0);
+        in.buyMult = quote.buy; in.sellMult = quote.sell;
+        if (!quote.modelOn && !g_marginOffLogged) {
+            g_marginOffLogged = true;   // worker-serial
+            spdlog::info("[storage] the barter model is off (bSpeechPricing 0 or a GMST unreadable): buying back costs what selling "
+                         "pays, so nothing is worth storing and every off-class piece sells");
         }
         const StoreOutput out = DecideStore(in);
         const bool logIt = DecisionLogDue(fid, base, now);
         if (out.verdict == Verdict::Store) {
             {
                 std::scoped_lock lk(g_mx);
-                g_wants[fid].try_emplace(base, now);
+                g_wants[fid].insert(base);
             }
             if (logIt)
-                spdlog::info("[storage] {:08X} '{}': HOLD '{}' ({}) for chest {:08X} ({}) -- planned for {:X}, top of its kind (rank {:.1f} vs {:.1f}), "
-                             "use {}g vs sale {}g (margin {}g >= {}g, a placeholder)",
-                             fid, NameOf(a_follower), NameOf(a_obj), BucketName(pc.bucket), target.chest,
-                             target.kind == Home::kMain ? "home" : "interim", in.plan.classes, in.rank, in.bestOtherRank,
+                spdlog::info("[storage] {:08X} '{}': HOLD '{}' ({}) for the MFO chest -- planned for classes {:X}, top of its kind (rank {:.1f} vs "
+                             "{:.1f}), use {}g vs sale {}g (margin {}g >= {}g, a placeholder)",
+                             fid, NameOf(a_follower), NameOf(a_obj), BucketName(pc.bucket), in.plan.classes, in.rank, in.bestOtherRank,
                              out.useValue, out.saleValue, out.useValue - out.saleValue, in.minMargin);
             return 1;
         }
@@ -667,14 +534,14 @@ namespace MFO::Logistics::Storage {
             std::scoped_lock lk(g_mx);
             if (auto it = g_wants.find(fid); it != g_wants.end()) it->second.erase(base);
         }
-        if (logIt && in.classesOn)
+        if (logIt)
             spdlog::info("[storage] {:08X} '{}': '{}' ({}) sells -- {} (use {}g vs sale {}g)", fid, NameOf(a_follower), NameOf(a_obj),
                          BucketName(pc.bucket), out.why, out.useValue, out.saleValue);
         return 0;
     }
 
     void Tick(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
-        if (!Enabled() || !a_follower || !a_follower->Is3DLoaded()) return;
+        if (!a_follower || !a_follower->Is3DLoaded()) return;
         const RE::FormID fid = a_follower->GetFormID();
         {
             std::scoped_lock lk(g_mx);
@@ -683,8 +550,11 @@ namespace MFO::Logistics::Storage {
             n = a_now + kTickEvery;
         }
         if (APMFBridge::InCombat(a_follower)) return;
-
-        LearnFrom(a_follower, a_now);
+#ifdef MFO_DEV_SELFTEST
+        DevStepRoundTrip(a_follower, a_now);
+#endif
+        if (!Enabled()) return;
+        auto* chest = Chest();
 
         const std::uint8_t eq = Classes::Active() ? Classes::GetEquipped(fid) : Classes::kNoClass;
         bool classChanged = false;
@@ -692,161 +562,114 @@ namespace MFO::Logistics::Storage {
             std::scoped_lock lk(g_mx);
             auto [it, fresh] = g_lastClass.try_emplace(fid, eq);
             if (!fresh && it->second != eq) { classChanged = true; it->second = eq; }
+            // 0. A LOAD'S FLAGS BECOME OPS (review F4): an entry saved mid-move gets a settle op with a FRESH window, started on
+            //    this, his first loaded tick (never judged on the first pass). Once per follower per session.
+            if (g_settled.insert(fid).second)
+                if (const auto st = g_table.stored.find(fid); st != g_table.stored.end())
+                    for (const auto& i : st->second)
+                        if (i.flags) g_ops[fid].push_back(Op{ (i.flags & Item::kRetrieving) ? OpKind::SettleRetrieve : OpKind::SettleStore,
+                                                              i.base, 0, a_now + kConfirmWindow });
         }
 
-        // 1. SETTLE what a load restored mid-move (flags are only ever set by a save that landed in a move's window).
-        std::vector<Item> items;
-        {
-            std::scoped_lock lk(g_mx);
-            if (const auto it = g_table.stored.find(fid); it != g_table.stored.end()) items = it->second;
-        }
-        for (const auto& i : items) {
-            if (!i.flags) continue;
-            auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
-            const std::int32_t c = CountOf(a_follower, obj);
-            std::scoped_lock lk(g_mx);
-            auto& v = g_table.stored[fid];
-            const auto it = std::find_if(v.begin(), v.end(), [&](const Item& e) { return e.base == i.base; });
-            if (it == v.end()) continue;
-            if (i.flags & Item::kRetrieving) {
-                if (c >= 1) {
-                    spdlog::info("[storage] {:08X}: RETRIEVED '{}' (the move was in flight at the save; he carries it now)", fid, NameOf(obj));
-                    v.erase(it);
-                    continue;
-                }
-                it->flags &= static_cast<std::uint8_t>(~Item::kRetrieving);
-            }
-            if (it->flags & Item::kUnverified) {
-                if (c == 0) {
-                    it->flags &= static_cast<std::uint8_t>(~Item::kUnverified);
-                    spdlog::info("[storage] {:08X}: store of '{}' in {:08X} CONFIRMED after the load (he no longer carries it)", fid, NameOf(obj), it->chest);
-                    const RE::FormID keep = it->base;
-                    ReleaseSameBucket(v, keep, fid);
-                } else {
-                    spdlog::warn("[storage] {:08X}: store of '{}' NOT confirmed after the load (he still carries {}) -- entry dropped", fid, NameOf(obj), c);
-                    v.erase(it);
-                }
-            }
-        }
-
-        // 2. CONFIRM in-flight moves from HIS count (the only count read: never a chest inventory).
+        const bool menu = InventoryMenuOpen();
         std::vector<Op> ops;
         {
             std::scoped_lock lk(g_mx);
             if (const auto it = g_ops.find(fid); it != g_ops.end()) ops = it->second;
         }
         std::vector<Op> keepOps;
-        for (const auto& op : ops) {
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(kConfirmWindow).count();
+
+        // 1. CONFIRM in-flight moves from HIS count (the only count read: never the shared chest's). While the player has an
+        //    inventory menu open nothing is confirmed (his count may be the player's doing) and no window runs out (review F5).
+        for (auto op : ops) {
+            if (menu) { op.deadline = std::max(op.deadline, a_now + kMenuHold); keepOps.push_back(op); continue; }
             auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(op.base);
             const std::int32_t c = CountOf(a_follower, obj);
-            const bool timedOut = a_now - op.at > kConfirmWindow;
-            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(kConfirmWindow).count();
+            const bool timedOut = a_now > op.deadline;
+            std::scoped_lock lk(g_mx);
             switch (op.kind) {
                 case OpKind::Store:
-                case OpKind::MigrateIn:
                     if (c < op.before) {
-                        std::scoped_lock lk(g_mx);
                         auto& v = g_table.stored[fid];
-                        if (op.kind == OpKind::MigrateIn) {
-                            for (auto& e : v) if (e.base == op.base) e.chest = op.chest;
-                            if (std::none_of(v.begin(), v.end(), [&](const Item& e) { return e.base == op.base; })) v.push_back(Item{ op.chest, op.base, 1, 0 });
-                            spdlog::info("[storage] {:08X}: MOVED '{}' from interim chest {:08X} to the home chest {:08X} (verified: it left his pack)",
-                                         fid, NameOf(obj), op.fromChest, op.chest);
-                        } else {
-                            std::erase_if(v, [&](const Item& e) { return e.base == op.base; });
-                            v.push_back(Item{ op.chest, op.base, 1, 0 });
-                            spdlog::info("[storage] {:08X} '{}': STORED '{}' in chest {:08X} (verified: it left his pack)", fid, NameOf(a_follower),
-                                         NameOf(obj), op.chest);
-                        }
+                        v.push_back(Item{ op.base, 1, 0 });
                         ReleaseSameBucket(v, op.base, fid);
                         if (auto w = g_wants.find(fid); w != g_wants.end()) w->second.erase(op.base);
+                        spdlog::info("[storage] {:08X} '{}': STORED '{}' in the MFO chest (verified: it left his pack)", fid, NameOf(a_follower), NameOf(obj));
                     } else if (timedOut) {
-                        std::scoped_lock lk(g_mx);
                         g_blocked[fid].insert(op.base);
                         if (auto w = g_wants.find(fid); w != g_wants.end()) w->second.erase(op.base);
-                        if (op.kind == OpKind::MigrateIn) {
-                            auto& v = g_table.stored[fid];
-                            std::erase_if(v, [&](const Item& e) { return e.base == op.base; });
-                            spdlog::warn("[storage] {:08X}: '{}' did NOT reach the home chest {:08X} within {} s -- he still carries it; entry dropped, "
-                                         "no more storing of it this session (it goes back to the sale path)", fid, NameOf(obj), op.chest, secs);
-                        } else {
-                            spdlog::warn("[storage] {:08X}: '{}' did NOT leave his pack within {} s (chest {:08X}) -- not recorded, no more storing "
-                                         "of it this session (it sells as before)", fid, NameOf(obj), secs, op.chest);
-                        }
-                    } else {
-                        keepOps.push_back(op);
-                    }
+                        spdlog::warn("[storage] {:08X}: '{}' did NOT leave his pack within {} s -- not recorded, no more storing of it this "
+                                     "session (it sells as before)", fid, NameOf(obj), secs);
+                    } else keepOps.push_back(op);
                     break;
                 case OpKind::Retrieve:
-                case OpKind::MigrateOut:
                     if (c > op.before) {
-                        std::scoped_lock lk(g_mx);
                         g_miss.erase(Key(fid, op.base));
-                        if (op.kind == OpKind::Retrieve) {
-                            std::erase_if(g_table.stored[fid], [&](const Item& e) { return e.base == op.base; });
-                            spdlog::info("[storage] {:08X} '{}': RETRIEVED '{}' from chest {:08X}", fid, NameOf(a_follower), NameOf(obj), op.chest);
-                        } else {
-                            keepOps.push_back(op);   // the second hop is dispatched below, outside the lock
-                        }
+                        DropEntry(fid, op.base);
+                        spdlog::info("[storage] {:08X} '{}': RETRIEVED '{}' from the MFO chest", fid, NameOf(a_follower), NameOf(obj));
                     } else if (timedOut) {
-                        std::scoped_lock lk(g_mx);
                         auto& m = g_miss[Key(fid, op.base)];
                         ++m.misses;
                         if (m.misses >= kMaxRetrieveMisses) {
-                            auto& v = g_table.stored[fid];
-                            std::erase_if(v, [&](const Item& e) { return e.base == op.base; });
+                            DropEntry(fid, op.base);
                             g_miss.erase(Key(fid, op.base));
-                            spdlog::warn("[storage] {:08X}: '{}' did not arrive from chest {:08X} ({} tries) -- it is no longer in the chest (the "
-                                         "player took it?); entry dropped", fid, NameOf(obj), op.chest, kMaxRetrieveMisses);
+                            spdlog::warn("[storage] {:08X}: '{}' did not arrive from the MFO chest ({} tries) -- it is no longer in the chest; "
+                                         "entry dropped", fid, NameOf(obj), kMaxRetrieveMisses);
                         } else {
                             m.retryAt = a_now + kRetrieveBackoff;
-                            spdlog::warn("[storage] {:08X}: '{}' did not arrive from chest {:08X} within {} s (try {}/{}) -- retry in 5 min",
-                                         fid, NameOf(obj), op.chest, secs, m.misses, kMaxRetrieveMisses);
+                            spdlog::warn("[storage] {:08X}: '{}' did not arrive from the MFO chest within {} s (try {}/{}) -- retry in 5 min",
+                                         fid, NameOf(obj), secs, m.misses, kMaxRetrieveMisses);
                         }
-                    } else {
-                        keepOps.push_back(op);
-                    }
+                    } else keepOps.push_back(op);
                     break;
+                case OpKind::SettleStore: {
+                    auto st = g_table.stored.find(fid);
+                    if (st == g_table.stored.end()) break;   // gone meanwhile
+                    auto it = std::find_if(st->second.begin(), st->second.end(), [&](const Item& e) { return e.base == op.base; });
+                    if (it == st->second.end()) break;
+                    if (c == 0) {
+                        it->flags &= static_cast<std::uint8_t>(~Item::kUnverified);
+                        spdlog::info("[storage] {:08X}: store of '{}' (in flight at the save) CONFIRMED -- he no longer carries it", fid, NameOf(obj));
+                        ReleaseSameBucket(st->second, op.base, fid);
+                    } else if (timedOut) {
+                        spdlog::warn("[storage] {:08X}: store of '{}' (in flight at the save) NOT confirmed within {} s -- he still carries {}; entry "
+                                     "dropped", fid, NameOf(obj), secs, c);
+                        DropEntry(fid, op.base);
+                    } else keepOps.push_back(op);
+                    break;
+                }
+                case OpKind::SettleRetrieve: {
+                    auto st = g_table.stored.find(fid);
+                    if (st == g_table.stored.end()) break;
+                    auto it = std::find_if(st->second.begin(), st->second.end(), [&](const Item& e) { return e.base == op.base; });
+                    if (it == st->second.end()) break;
+                    if (c >= 1) {
+                        spdlog::info("[storage] {:08X}: RETRIEVED '{}' (the move was in flight at the save; he carries it now)", fid, NameOf(obj));
+                        DropEntry(fid, op.base);
+                    } else if (timedOut) {
+                        it->flags &= static_cast<std::uint8_t>(~Item::kRetrieving);   // still in the chest: an ordinary entry again
+                        spdlog::info("[storage] {:08X}: the retrieval of '{}' in flight at the save did not land -- it stays stored", fid, NameOf(obj));
+                    } else keepOps.push_back(op);
+                    break;
+                }
             }
         }
-        // The migration's second hop: the piece is in his pack now (verified); send it to the home chest.
-        for (auto& op : keepOps) {
-            if (op.kind != OpKind::MigrateOut) continue;
-            auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(op.base);
-            const std::int32_t c = CountOf(a_follower, obj);
-            if (c <= op.before) continue;   // still waiting for the first hop
-            const Home home = TargetHome();
-            auto* chest = home.kind == Home::kMain ? UsableChest(home.chest) : nullptr;
-            if (chest && Papyrus::DispatchMoveItem(a_follower, obj, 1, chest)) {
-                op = Op{ OpKind::MigrateIn, op.base, home.chest, op.chest, c, a_now };
-            } else {
-                std::scoped_lock lk(g_mx);
-                auto& v = g_table.stored[fid];
-                std::erase_if(v, [&](const Item& e) { return e.base == op.base; });
-                spdlog::warn("[storage] {:08X}: '{}' came out of interim chest {:08X} but the move to the home chest could not be dispatched -- "
-                             "he carries it; entry dropped (the sale path judges it again)", fid, NameOf(obj), op.chest);
-                op.base = 0;   // drop this op
-            }
-        }
-        std::erase_if(keepOps, [](const Op& o) { return o.base == 0; });
 
-        // 3. DISPATCH wanted stores (the sale path held them).
+        // 2. DISPATCH wanted stores (the sale path held them). Never while a menu is open.
         std::vector<RE::FormID> wants;
-        {
+        if (!menu) {
             std::scoped_lock lk(g_mx);
             if (const auto it = g_wants.find(fid); it != g_wants.end())
-                for (const auto& [b, at] : it->second)
+                for (const RE::FormID b : it->second)
                     if (std::none_of(keepOps.begin(), keepOps.end(), [&](const Op& o) { return o.base == b; })) wants.push_back(b);
         }
         for (const RE::FormID b : wants) {
             auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(b);
             const std::int32_t c = CountOf(a_follower, obj);
-            const Home target = TargetHome();
-            auto* chest = UsableChest(target.chest);
             const char* drop = nullptr;
-            if (c != 1)                         drop = c == 0 ? "he no longer carries it" : "he carries more than one copy now";
+            if (c != 1)                          drop = c == 0 ? "he no longer carries it" : "he carries more than one copy now";
             else if (IsWornNow(a_follower, obj)) drop = "he wears it now";
-            else if (!chest)                     drop = "no usable chest any more";
             if (drop) {
                 std::scoped_lock lk(g_mx);
                 if (auto w = g_wants.find(fid); w != g_wants.end()) w->second.erase(b);
@@ -854,109 +677,71 @@ namespace MFO::Logistics::Storage {
                 continue;
             }
             if (Papyrus::DispatchMoveItem(a_follower, obj, 1, chest)) {
-                keepOps.push_back(Op{ OpKind::Store, b, target.chest, 0, c, a_now });
+                keepOps.push_back(Op{ OpKind::Store, b, c, a_now + kConfirmWindow });
             } else {
                 std::scoped_lock lk(g_mx);
                 if (auto w = g_wants.find(fid); w != g_wants.end()) w->second.erase(b);
                 g_blocked[fid].insert(b);
-                spdlog::warn("[storage] {:08X}: the move of '{}' to chest {:08X} could not be dispatched (VM / handle) -- not stored, it sells as before",
-                             fid, NameOf(obj), target.chest);
+                spdlog::warn("[storage] {:08X}: the move of '{}' to the MFO chest could not be dispatched (VM / handle / binding) -- not stored, "
+                             "no more tries this session (it sells as before)", fid, NameOf(obj));
             }
         }
 
-        // 4. RETRIEVE (one per pass, its own cadence) or MIGRATE an interim piece to the main home.
+        // 3. RETRIEVE one piece per pass (own cadence), never while a menu is open or another move of his is in flight.
         bool due = false;
-        {
+        if (!menu && keepOps.empty()) {
             std::scoped_lock lk(g_mx);
             auto& n = g_nextRetrieve[fid];
             if (n.time_since_epoch().count() == 0 || a_now >= n) { due = true; n = a_now + kRetrieveEvery; }
         }
-        if (due && keepOps.empty()) {
+        if (due) {
+            std::vector<Item> items;
             {
                 std::scoped_lock lk(g_mx);
-                items.clear();
                 if (const auto it = g_table.stored.find(fid); it != g_table.stored.end()) items = it->second;
             }
-            if (!items.empty()) {
-                KeepCtx k;
-                k.roles   = ComputeWeaponRoles(a_follower, a_state);
-                k.pref    = ArmorPrefFor(a_follower);
-                k.mage    = UsesMageClothing(a_state, a_follower) && Robes();
-                k.top2    = k.mage ? TopTwoSchoolMask(a_follower) : 0;
-                k.strict  = Config::g_mageApparelStrictSchool.load();
-                k.villain = k.mage && IsNecromancerFollower(a_state);
-                const std::uint16_t curSet  = ClassSet(fid);
-                const std::uint8_t  curKind = CurrentKind(a_follower, a_state, eq);
-                const Home main = TargetHome();
-                // his carried keep-set ranks, per keep key
-                std::unordered_map<int, std::pair<float, float>> carried;
-                for (auto& [o, data] : a_follower->GetInventory([](RE::TESBoundObject& b) { return b.IsWeapon() || b.IsArmor(); })) {
-                    if (!o || data.first <= 0) continue;
-                    const KeepRank kr = KeepRankOf(a_follower, k, o);
-                    if (!kr.ok) continue;
-                    auto [it, fresh] = carried.try_emplace(kr.key, kr.primary, kr.secondary);
-                    if (!fresh && (kr.primary > it->second.first || (kr.primary == it->second.first && kr.secondary > it->second.second)))
-                        it->second = { kr.primary, kr.secondary };
+            const std::uint16_t curSet  = ClassSet(fid);
+            const std::uint8_t  curKind = items.empty() ? 0 : CurrentKind(a_follower, a_state, eq);
+            for (const auto& i : items) {
+                if (i.flags) continue;
+                {
+                    std::scoped_lock lk(g_mx);
+                    if (const auto m = g_miss.find(Key(fid, i.base)); m != g_miss.end() && a_now < m->second.retryAt) continue;
                 }
-                for (const auto& i : items) {
-                    if (i.flags) continue;
-                    {
-                        std::scoped_lock lk(g_mx);
-                        if (const auto m = g_miss.find(Key(fid, i.base)); m != g_miss.end() && a_now < m->second.retryAt) continue;
-                    }
-                    auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
-                    auto* chest = UsableChest(i.chest);
-                    if (!obj || !chest) {
-                        std::scoped_lock lk(g_mx);
-                        auto& v = g_table.stored[fid];
-                        std::erase_if(v, [&](const Item& e) { return e.base == i.base; });
-                        spdlog::warn("[storage] {:08X}: entry {:08X} dropped -- {} (the piece, if any, stays there as the player's)", fid, i.base,
-                                     !obj ? "its form no longer resolves" : "its chest is no longer a usable persistent container");
-                        continue;
-                    }
-                    if (CountOf(a_follower, obj) != 0) continue;   // a copy in his pack would make the confirm ambiguous
-                    const Piece pc = Classify(obj);
-                    RetrieveInput r;
-                    r.bucket = pc.bucket; r.classBit = pc.armor ? 0 : pc.classBit; r.armorKind = pc.armor ? pc.kind : 0;
-                    r.currentSet = curSet; r.currentKind = curKind; r.classChanged = classChanged;
-                    switch (pc.bucket) {
-                        case Bucket::Dagger: case Bucket::OneHand: r.roleKeeps = k.roles.melee == WepClass::OneHand; break;
-                        case Bucket::TwoHand:                      r.roleKeeps = k.roles.melee == WepClass::TwoHand; break;
-                        case Bucket::Bow: case Bucket::Crossbow:
-                            r.roleKeeps = k.roles.doRanged && RangedInFamily(obj->As<RE::TESObjectWEAP>(), k.roles.wantCrossbow); break;
-                        case Bucket::Staff:                        r.roleKeeps = true; break;
-                        case Bucket::Shield:                       r.roleKeeps = k.roles.melee == WepClass::OneHand && k.roles.offHand != 2; break;
-                        default:                                   r.roleKeeps = true; break;
-                    }
-                    const KeepRank kr = KeepRankOf(a_follower, k, obj);
-                    if (!kr.ok) r.roleKeeps = false;   // the keep set would not hold it: never brought back to be sold
-                    r.rank = kr.primary;
-                    if (const auto c = carried.find(kr.key); kr.ok && c != carried.end()) {
-                        r.bestCarriedRank = c->second.first;
-                        r.tieWins = kr.secondary > c->second.second;
-                    }
-                    const char* why = "";
-                    if (DecideRetrieve(r, &why)) {
-                        if (Papyrus::DispatchMoveItem(chest, obj, 1, a_follower)) {
-                            keepOps.push_back(Op{ OpKind::Retrieve, i.base, i.chest, 0, 0, a_now });
-                            spdlog::info("[storage] {:08X} '{}': RETRIEVE '{}' from chest {:08X} -- {} (rank {:.1f} vs {:.1f})", fid, NameOf(a_follower),
-                                         NameOf(obj), i.chest, why, r.rank, r.bestCarriedRank);
-                        } else {
-                            spdlog::warn("[storage] {:08X}: the retrieval of '{}' from chest {:08X} could not be dispatched (VM / handle)", fid, NameOf(obj), i.chest);
-                        }
-                        break;
-                    }
-                    if (main.kind == Home::kMain && main.chest != i.chest && HomeKindOf(i.chest) == Home::kInterim) {
-                        if (Papyrus::DispatchMoveItem(chest, obj, 1, a_follower)) {
-                            keepOps.push_back(Op{ OpKind::MigrateOut, i.base, i.chest, 0, 0, a_now });
-                            spdlog::info("[storage] {:08X}: MOVING '{}' from interim chest {:08X} to the home chest {:08X} (through his pack, each hop verified)",
-                                         fid, NameOf(obj), i.chest, main.chest);
-                        } else {
-                            spdlog::warn("[storage] {:08X}: the move of '{}' out of interim chest {:08X} could not be dispatched (VM / handle)", fid, NameOf(obj), i.chest);
-                        }
-                        break;
-                    }
+                auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
+                if (!obj) {
+                    std::scoped_lock lk(g_mx);
+                    DropEntry(fid, i.base);
+                    spdlog::warn("[storage] {:08X}: entry {:08X} dropped -- its form no longer resolves", fid, i.base);
+                    continue;
                 }
+                if (CountOf(a_follower, obj) != 0) continue;   // a copy in his pack would make the confirm ambiguous
+                const Piece pc = Classify(obj);
+                RetrieveInput r;
+                r.bucket = pc.bucket; r.classBit = pc.armor ? 0 : pc.classBit; r.armorKind = pc.armor ? pc.kind : 0;
+                r.currentSet = curSet; r.currentKind = curKind; r.classChanged = classChanged;
+                // The cheap class half first; the keep set only for a piece that fits his class now.
+                const bool fits = r.armorKind == 0 ? (curSet == 0 || (r.classBit & curSet)) : (r.armorKind == curKind);
+                if (!fits || r.bucket == Bucket::None) continue;
+                // Review F2: the SALE PATH's own verdict, as if he carried it: the keep set with this piece added plus the sell loop's
+                // gates (Economy.cpp SaleKeepsUnworn). A piece it would not keep is never brought back to be sold.
+                const KeepSet       ks    = ComputeKeepSet(a_follower, a_state, obj);
+                const SaleKeepGates gates = BuildSaleKeepGates(a_follower, a_state);
+                r.saleKeeps = SaleKeepsUnworn(ks, gates, obj);
+                const char* why = "";
+                if (!DecideRetrieve(r, &why)) continue;
+                if (Papyrus::DispatchMoveItem(chest, obj, 1, a_follower)) {
+                    keepOps.push_back(Op{ OpKind::Retrieve, i.base, 0, a_now + kConfirmWindow });
+                    spdlog::info("[storage] {:08X} '{}': RETRIEVE '{}' from the MFO chest -- {}", fid, NameOf(a_follower), NameOf(obj), why);
+                } else {
+                    // Review F1: a dispatch failure is a miss with the same backoff (never a WARN every 5 s), counted toward nothing:
+                    // the piece is still in the chest, so the entry stays.
+                    std::scoped_lock lk(g_mx);
+                    g_miss[Key(fid, i.base)].retryAt = a_now + kRetrieveBackoff;
+                    spdlog::warn("[storage] {:08X}: the retrieval of '{}' from the MFO chest could not be dispatched (VM / handle / binding) -- "
+                                 "retry in 5 min", fid, NameOf(obj));
+                }
+                break;
             }
         }
 
@@ -978,11 +763,6 @@ namespace MFO::Logistics::Storage {
         return it != g_table.stored.end() ? it->second : std::vector<Item>{};
     }
 
-    std::vector<Home> Homes() {
-        std::scoped_lock lk(g_mx);
-        return g_table.homes;
-    }
-
     void Forget(RE::FormID a_follower) {
         std::size_t n = 0;
         {
@@ -993,7 +773,7 @@ namespace MFO::Logistics::Storage {
             g_blocked.erase(a_follower);
             g_lastClass.erase(a_follower);
         }
-        if (n) spdlog::info("[storage] {:08X}: {} stored piece(s) released to the player (roster removal)", a_follower, n);
+        if (n) spdlog::info("[storage] {:08X}: {} stored piece(s) released to the player in the MFO chest (roster removal)", a_follower, n);
     }
 
     // ── the 'STOR' record ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1006,9 +786,9 @@ namespace MFO::Logistics::Storage {
     }
 
     void CoSave(SKSE::SerializationInterface* a_intfc) {
-        // SNAPSHOT under the lock, write from the copy. A move in flight is written as its entry with a flag, so a load can settle
-        // it from his count: a store -> the new entry kUnverified; a retrieval / the first migration hop -> kRetrieving; the second
-        // migration hop -> the entry at the home chest, kUnverified.
+        // SNAPSHOT under the lock, write from the copy. A move in flight is written as its entry with a flag, so the load settles it
+        // in a fresh window from his count: a store -> a new entry kUnverified; a retrieval -> kRetrieving. A settle op still running
+        // keeps its flag.
         Table snap;
         {
             std::scoped_lock lk(g_mx);
@@ -1019,31 +799,28 @@ namespace MFO::Logistics::Storage {
                     auto it = std::find_if(v.begin(), v.end(), [&](const Item& e) { return e.base == op.base; });
                     switch (op.kind) {
                         case OpKind::Store:
-                            if (it == v.end()) v.push_back(Item{ op.chest, op.base, 1, Item::kUnverified });
-                            else { it->chest = op.chest; it->flags |= Item::kUnverified; }
-                            break;
-                        case OpKind::MigrateIn:
-                            if (it != v.end()) { it->chest = op.chest; it->flags |= Item::kUnverified; }
+                            if (it == v.end()) v.push_back(Item{ op.base, 1, Item::kUnverified });
                             break;
                         case OpKind::Retrieve:
-                        case OpKind::MigrateOut:
                             if (it != v.end()) it->flags |= Item::kRetrieving;
                             break;
+                        case OpKind::SettleStore:
+                        case OpKind::SettleRetrieve:
+                            break;   // the entry still carries its own flag
                     }
                 }
             std::erase_if(snap.stored, [](const auto& kv) { return kv.second.empty(); });
         }
-        if (snap.homes.empty() && snap.stored.empty()) return;   // written ONLY when there is something to keep
+        if (snap.stored.empty()) return;   // written ONLY when there is something to keep
         if (!a_intfc->OpenRecord(kRecStorage, kStorageVersion)) {
-            spdlog::error("[cosave] OpenRecord('STOR') failed -- off-class storage NOT saved (the pieces stay in the chests as the player's)");
+            spdlog::error("[cosave] OpenRecord('STOR') failed -- off-class storage NOT saved (the pieces stay in the MFO chest untracked)");
             return;
         }
         LoadStats st;
         WriteBodyT(*a_intfc, snap, st);
         std::size_t pieces = 0;
         for (const auto& [f, v] : snap.stored) pieces += v.size();
-        spdlog::info("[cosave] saved {} storage chest(s), {} stored piece(s) for {} follower(s), schema v{}{}", snap.homes.size(), pieces,
-                     snap.stored.size(), kStorageVersion,
+        spdlog::info("[cosave] saved {} stored piece(s) for {} follower(s), schema v{}{}", pieces, snap.stored.size(), kStorageVersion,
                      st.skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) id(s)", st.skippedRuntime) : std::string{});
     }
 
@@ -1051,15 +828,17 @@ namespace MFO::Logistics::Storage {
         Table t;
         LoadStats st;
         const bool complete = ReadBodyT(*a_intfc, a_version, t, st);
-        std::size_t pieces = 0;
-        for (const auto& [f, v] : t.stored) pieces += v.size();
-        const std::size_t chests = t.homes.size();
+        std::size_t pieces = 0, flagged = 0;
+        for (const auto& [f, v] : t.stored)
+            for (const auto& i : v) { ++pieces; if (i.flags) ++flagged; }
+        const std::size_t followers = t.stored.size();
         {
             std::scoped_lock lk(g_mx);
             g_table = std::move(t);
         }
-        spdlog::info("[cosave] loaded {} storage chest(s), {} stored piece(s){}; dropped {} chest(s), {} follower(s), {} piece(s), {} clamped field(s)",
-                     chests, pieces, complete ? "" : " (record ABORTED, kept what was parsed)", st.droppedHomes, st.droppedFollowers,
+        spdlog::info("[cosave] loaded {} stored piece(s) for {} follower(s){}, {} in flight at the save (settled on each follower's first "
+                     "loaded tick); dropped {} follower(s), {} piece(s), {} clamped field(s)",
+                     pieces, followers, complete ? "" : " (record ABORTED, kept what was parsed)", flagged, st.droppedFollowers,
                      st.droppedItems, st.clampedFlags);
     }
 
@@ -1077,8 +856,31 @@ namespace MFO::Logistics::Storage {
         g_nextTick.clear();
         g_nextRetrieve.clear();
         g_lastClass.clear();
-        g_cellCheckedAt.clear();
+        g_settled.clear();
         g_logNext.clear();
         g_marginOffLogged = false;
+#ifdef MFO_DEV_SELFTEST
+        g_devRT.clear();
+#endif
     }
+
+#ifdef MFO_DEV_SELFTEST
+    void DevArmRoundTrip(RE::FormID a_follower, RE::FormID a_base) {
+        std::scoped_lock lk(g_mx);
+        DevRT rt;
+        rt.base = a_base;
+        rt.out.armed = true;
+        g_devRT[a_follower] = rt;
+        spdlog::info("[storage] DEV round trip ARMED for {:08X}: base {:08X} through the MFO chest", a_follower, a_base);
+    }
+    void DevDisarmRoundTrip(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        g_devRT.erase(a_follower);
+    }
+    DevRoundTrip DevReadRoundTrip(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_devRT.find(a_follower);
+        return it != g_devRT.end() ? it->second.out : DevRoundTrip{};
+    }
+#endif
 }

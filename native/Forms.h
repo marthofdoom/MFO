@@ -64,6 +64,14 @@ namespace MFO::Forms {
     // written only for a follower whose perks vote dual wield; this twin (DATA 1, same scoring/CSCR) is the melee
     // stance for everyone else. Appended at 0x916 (0x833 keeps its id and meaning; frozen contract).
     inline constexpr RE::FormID kMeleeSingleStyle = 0x916;
+    // OFF-CLASS STORAGE (ClickUp 86e3t212u, marth 2026-11-13: "Give the followers thier own mfo storage they can access."): the
+    // followers' OWN chest. A base CONT (no respawn), an interior holding CELL nobody visits and ONE PERSISTENT REFR of the chest in
+    // it, so the ref stays in memory while its cell is unloaded and a script RemoveItem reaches it from anywhere (logistics/
+    // Storage.cpp). Mirror MFO_GenerateESP.py FID_STORAGE_CHEST_CONT / FID_STORAGE_CELL / FID_STORAGE_CHEST_REF. A miss (old
+    // ESP) = no storing, one error line at load.
+    inline constexpr RE::FormID kStorageChestBase = 0x917;
+    inline constexpr RE::FormID kStorageCell      = 0x918;
+    inline constexpr RE::FormID kStorageChestRef  = 0x919;
     // FORCED SELF-CAST (Docs/SPEC-self-cast-forced.md): the dedicated no-QNAM
     // targType-6 self package, delivered by MFO_CommandQuest's own alias 2.
     // §0.22 proved probe 6's t6+no-QNAM self-cast casts cleanly (REVOKED #67);
@@ -223,6 +231,7 @@ namespace MFO::Forms {
     // combat-thread apply only ever READS settled pointers. A miss disables
     // that one stance with a named log line -- never a crash.
     inline RE::TESCombatStyle* g_meleeStyle  = nullptr;         // 0x833, DATA 1|4: dual-wield-allowed melee
+    inline RE::TESObjectREFR*  g_storageChest = nullptr;       // 0x919, the followers' storage chest (persistent); any thread after kDataLoaded
     inline RE::TESCombatStyle* g_meleeSingleStyle = nullptr;    // 0x916, DATA 1: the default melee stance
     inline RE::TESCombatStyle* g_rangedStyle = nullptr;
     // The Cast stance's pure-mage style. Reuses the existing MFO_CastStyle CSTY

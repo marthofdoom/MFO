@@ -225,26 +225,22 @@ namespace MFO {
     inline constexpr std::uint32_t kErrandVersion = 2;
 
     // OFF-CLASS STORAGE (feat/offclass-storage, ClickUp 86e3t212u): an independent record (logistics/Storage.cpp owns the codec,
-    // the bounds and the lock). The storage chests (the player's home, or an interim player-owned container until a home is known)
-    // and, per follower, the off-class pieces he keeps in them. Written ONLY when a chest or a piece exists; a save without it
+    // the bounds and the lock). Per follower, the off-class pieces he keeps in the followers' OWN chest (MFO.esp 0x919, one
+    // persistent MFO container shared by every follower, marth 2026-11-13). Written ONLY when a piece exists; a save without it
     // loads with nothing. An older DLL meets an unknown record type, skips it and drops it on its next save: the pieces then stay
-    // in the chests as the player's (the documented downgrade).
+    // in the MFO chest untracked (the documented downgrade).
     //   v1 - little-endian, in this order:
-    //          u32 homeCount                <= 16 (more = the record is aborted, #11)
-    //          per home:   u32 chest        REFR FormID (unresolvable, or no longer a container ref -> the home AND its items DROPPED, #8)
-    //                      u32 cell         CELL FormID, informational (unresolvable -> 0)
-    //                      u32 town         BGSLocation FormID, informational (0 = none; unresolvable -> 0)
-    //                      u8  kind         1 main home, 2 interim safe storage (any other value -> the home is DROPPED)
-    //          u32 followerCount            <= 4096
-    //          per follower: u32 follower   Actor FormID (unresolvable -> his items are read past and DROPPED)
+    //          u32 followerCount            <= 4096 (more = the record is aborted, #11)
+    //          per follower: u32 follower   Actor FormID (unresolvable -> his items are read past and DROPPED, #8)
     //                        u32 itemCount  <= 16 (one per storage bucket)
-    //                        per item: u32 chest   REFR FormID, must name a home that loaded (else DROPPED)
-    //                                  u32 base    WEAP / ARMO FormID (unresolvable or another type -> DROPPED)
+    //                        per item: u32 base    WEAP / ARMO FormID (unresolvable or another type -> DROPPED; a second entry of one base -> DROPPED)
     //                                  u16 count   1; 0 -> DROPPED; more is clamped to 1 (#11)
-    //                                  u8  flags   0x01 a store was in flight at the save, 0x02 a retrieval was; other bits masked (#11)
+    //                                  u8  flags   0x01 a store was in flight at the save, 0x02 a retrieval was (each settled in a fresh
+    //                                              30 s window from his count on his first loaded tick); other bits masked (#11)
     //        A short read or an implausible count aborts THIS record only; what was parsed is kept. No 0xFF id is written (#9).
     //        Version 0 is no schema: skipped. v1 is the only version; a later one APPENDS and gates on version >= N, and the v1
-    //        reader stays forever (#12).
+    //        reader stays forever (#12). (Before it shipped, v1 was redesigned on 2026-11-13: the chest table it once carried is
+    //        gone with the home search; no DLL ever wrote the older shape outside a dev build.)
     inline constexpr std::uint32_t kRecStorage     = 'STOR';
     inline constexpr std::uint32_t kStorageVersion = 1;
 

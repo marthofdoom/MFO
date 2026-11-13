@@ -619,18 +619,9 @@ namespace MFO::Logistics {
             // class as one he is holding is an upgrade; his other-class weapon (an archer's sheathed sword, a
             // fighter's spare bow) is his loadout, which the engine still switches between, and stays kept. A
             // shield ranks on EquipWeapon (Harbinger's FacetForEquipCats: it holds the left hand).
-            const bool equipWeaponOn = APMFBridge::EquipWeaponEnabled();
-            const bool equipArmorOn  = APMFBridge::EquipArmorEnabled();
-            RE::TESObjectWEAP* heldWeap[2] = { nullptr, nullptr };   // right, left
-            if (!equipWeaponOn)
-                for (int hand = 0; hand < 2; ++hand)
-                    if (auto* eq = a_follower->GetEquippedObject(hand == 1)) heldWeap[hand] = eq->As<RE::TESObjectWEAP>();
-            auto upgradesHeld = [&](RE::TESObjectWEAP* a_w) {
-                for (auto* hw : heldWeap)
-                    if (hw && hw != a_w && WeaponClassOf(hw->GetWeaponType()) == WeaponClassOf(a_w->GetWeaponType()))
-                        return true;
-                return false;
-            };
+            // The per-follower inputs of the keep gates below (EquipWeapon / EquipArmor, held weapons, the MFO-B24 mage mode) live in
+            // SaleKeepGates (end of this file) so logistics/Storage.cpp judges a stored piece by the SAME gates (86e3t212u review F2).
+            const SaleKeepGates gates = BuildSaleKeepGates(a_follower, a_state);
 
             int purse = 0;
             // GEM HANDLING (marth: NEVER HOARD -- ungem-then-sell where possible,
@@ -868,20 +859,12 @@ namespace MFO::Logistics {
                 // The caster clause is the NARROW MFO-B24 mageMode the keep set and the loot judge use
                 // (SwapUp.cpp ComputeKeepSet / BuildEquipmentContext), NOT buy's broad IsCasterFollower: an
                 // explicit Ranged-class follower with a heal gambit keeps his bow (else sell/loot loop).
-                const bool wantsRangedGambit = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
-                const bool wantsMeleeGambit  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
-                const std::uint8_t effPickB24 = EffectiveClassPick(a_follower->GetFormID(), a_state);
-                const bool mageModeB24 = IsCasterFollower(a_state) &&
-                    (effPickB24 == 3 || (effPickB24 == 0 && !wantsMeleeGambit && !wantsRangedGambit));
-                const bool offRoleLauncher = weap && WeaponClassOf(weap->GetWeaponType()) == WepClass::Ranged &&
-                    (!keepRoles.doRanged || (mageModeB24 && !wantsRangedGambit) ||
-                     !RangedInFamily(weap, keepRoles.wantCrossbow));
+                const bool offRoleLauncher = OffRoleLauncher(gates, keepRoles, weap);
                 const bool unworn = !(data.second && data.second->IsWorn());
                 // Harbinger EquipWeapon / EquipArmor = 0 for MFO (block above): an unworn upgrade is not kept.
-                const bool weapCannotEquip = weap && !equipWeaponOn && unworn && upgradesHeld(weap);
+                const bool weapCannotEquip = WeapCannotEquip(gates, weap, unworn);
                 // Review F2: with "Wear helmets" OFF every helmet he CARRIES stays in the bag (86e3phy41, marth 10-12).
-                const bool armoCannotEquip = armo && unworn && !(armo->IsShield() ? equipWeaponOn : equipArmorOn) &&
-                                             !(IsHelmetPiece(armo) && !WearsHelmets(&a_state));
+                const bool armoCannotEquip = ArmoCannotEquip(gates, armo, unworn);
                 if (weap && keepWeapons.count(obj) && !offRoleLauncher) {
                     if (!weapCannotEquip) { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                     sdiag(obj, "keepWeap bypassed: Harbinger EquipWeapon is 0 for MFO, an unworn upgrade sells");
@@ -1453,5 +1436,58 @@ namespace MFO::Logistics {
         out_tier   = (ApparelFortifiedSchool(a_armo) == RE::ActorValue::kNone) ? 1 : 0;  // plain > off-school
         out_metric = value;
         return true;
+    }
+
+    // ── THE SALE PATH'S KEEP GATES (86e3t212u review F2: shared with logistics/Storage.cpp) ─────────────────────────────────
+    // Moved VERBATIM out of EconomyProbeImpl's sell loop (they were per-item expressions over per-follower inputs), so the off-class
+    // storage's retrieval asks the very same question the sell loop asks: "would this unworn piece be kept?".
+    SaleKeepGates BuildSaleKeepGates(RE::Actor* a_follower, const FollowerState& a_state) {
+        SaleKeepGates g;
+        g.equipWeaponOn = APMFBridge::EquipWeaponEnabled();
+        g.equipArmorOn  = APMFBridge::EquipArmorEnabled();
+        if (!g.equipWeaponOn)
+            for (int hand = 0; hand < 2; ++hand)
+                if (auto* eq = a_follower->GetEquippedObject(hand == 1)) g.heldWeap[hand] = eq->As<RE::TESObjectWEAP>();
+        g.wantsRangedGambit = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
+        const bool wantsMeleeGambit  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+        const std::uint8_t effPickB24 = EffectiveClassPick(a_follower->GetFormID(), a_state);
+        g.mageModeB24 = IsCasterFollower(a_state) &&
+            (effPickB24 == 3 || (effPickB24 == 0 && !wantsMeleeGambit && !g.wantsRangedGambit));
+        g.wearsHelmets = WearsHelmets(&a_state);
+        return g;
+    }
+
+    // OFF-ROLE LAUNCHER (marth 2026-10-18: "off-role weapons go to SELL"): a bow / crossbow outside the ranged role or the ammo family.
+    bool OffRoleLauncher(const SaleKeepGates& a_g, const WeaponRoles& a_roles, const RE::TESObjectWEAP* a_weap) {
+        return a_weap && WeaponClassOf(a_weap->GetWeaponType()) == WepClass::Ranged &&
+            (!a_roles.doRanged || (a_g.mageModeB24 && !a_g.wantsRangedGambit) ||
+             !RangedInFamily(a_weap, a_roles.wantCrossbow));
+    }
+
+    // Harbinger EquipWeapon = 0 for MFO: an unworn weapon of the SAME class as one he is holding is an upgrade he can never put on.
+    bool WeapCannotEquip(const SaleKeepGates& a_g, RE::TESObjectWEAP* a_weap, bool a_unworn) {
+        if (!a_weap || a_g.equipWeaponOn || !a_unworn) return false;
+        for (auto* hw : a_g.heldWeap)
+            if (hw && hw != a_weap && WeaponClassOf(hw->GetWeaponType()) == WeaponClassOf(a_weap->GetWeaponType()))
+                return true;
+        return false;
+    }
+
+    // Harbinger EquipArmor (EquipWeapon for a shield) = 0 for MFO: an unworn piece is not kept; a helmet with "Wear helmets" OFF is.
+    bool ArmoCannotEquip(const SaleKeepGates& a_g, RE::TESObjectARMO* a_armo, bool a_unworn) {
+        return a_armo && a_unworn && !(a_armo->IsShield() ? a_g.equipWeaponOn : a_g.equipArmorOn) &&
+               !(IsHelmetPiece(a_armo) && !a_g.wearsHelmets);
+    }
+
+    // The sell loop's KEEP verdict for an UNWORN weapon / armor piece that is not a player pick, stock gear, relic or force-sell row:
+    // kept by the keep set and not bypassed by an off-role launcher or a Harbinger equip facet at 0. (A blacklisted apparel piece is a
+    // force-sell row: never kept.)
+    bool SaleKeepsUnworn(const KeepSet& a_keep, const SaleKeepGates& a_g, RE::TESBoundObject* a_obj) {
+        if (!a_obj) return false;
+        if (auto* w = a_obj->As<RE::TESObjectWEAP>())
+            return a_keep.weapons.count(a_obj) && !OffRoleLauncher(a_g, a_keep.roles, w) && !WeapCannotEquip(a_g, w, true);
+        if (auto* a = a_obj->As<RE::TESObjectARMO>())
+            return !IsBlacklistedApparel(a) && a_keep.armor.count(a_obj) && !ArmoCannotEquip(a_g, a, true);
+        return false;
     }
 }

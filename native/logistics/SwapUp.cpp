@@ -67,9 +67,20 @@ namespace MFO::Logistics {
         // ONCE into out.armorJudged (the loot drop must know whether armor was
         // judged at all -- with the gate off keepArmor is empty and nothing may be
         // read as superseded from it).
-        KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state) {
+        KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_extra) {
             KeepSet out;
             out.armorJudged = Config::g_economyBuyGear.load();
+            // What he carries, read ONCE for every bucket walk below (was one GetInventory per walk; same worker, same tick, so the
+            // same contents). a_extra (off-class storage, 86e3t212u): a piece he does NOT carry, judged AS IF he carried one unworn
+            // copy -- logistics/Storage.cpp asks "would the sale path keep it?" before it brings a stored piece back, through this
+            // very set instead of a copy of its rules. nullptr (the sale path, the loot side) = exactly the carried inventory.
+            std::vector<std::pair<RE::TESBoundObject*, std::int32_t>> carried;
+            for (auto& [obj, data] : a_follower->GetInventory()) carried.emplace_back(obj, data.first);
+            if (a_extra) {   // at the place the inventory map (ordered by form pointer) would hold it, so a rank TIE resolves as if carried
+                const auto at = std::upper_bound(carried.begin(), carried.end(), a_extra,
+                    [](RE::TESBoundObject* a_x, const auto& a_e) { return std::less<RE::TESBoundObject*>{}(a_x, a_e.first); });
+                carried.emplace(at, a_extra, 1);
+            }
 
             // KEEP THE LOADOUT: a follower who fights with a bow AND a melee weapon
             // only ever has ONE worn at a time, so the sheathed other reads unworn
@@ -137,8 +148,8 @@ namespace MFO::Logistics {
                 const bool keepDoRanged = (keepMageMode && !keepWantsRanged) ? false : keepRoles.doRanged;
                 struct OneHander { RE::TESBoundObject* obj; float rank; std::int32_t count; };
                 std::vector<OneHander> oneHanders;   // bucket 1, for the dual-wield runner-up
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
+                for (auto& [obj, cnt] : carried) {
+                    if (!obj || cnt <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
                     if (!w || IsCreatureWeapon(w)) continue;
                     const int b = bucketOf(w->GetWeaponType());
@@ -171,7 +182,7 @@ namespace MFO::Logistics {
                     auto& slot = offRoleMelee ? gatedBest[b] : best[b];
                     if (!slot.first || rank >= slot.second)
                         slot = { obj, rank };
-                    if (!offRoleMelee && keepSecond1H && b == 1) oneHanders.push_back({ obj, rank, data.first });
+                    if (!offRoleMelee && keepSecond1H && b == 1) oneHanders.push_back({ obj, rank, cnt });
                 }
                 for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
                 // NEVER-DISARM FLOOR: with no in-role weapon carried at all, the best carried melee weapon
@@ -258,8 +269,8 @@ namespace MFO::Logistics {
                 };
                 struct Best { RE::TESBoundObject* obj = nullptr; float primary = -1e9f; float secondary = -1e9f; };
                 std::unordered_map<int, Best> best;   // key: clothing 0..5, rated armor 10..14
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
+                for (auto& [obj, cnt] : carried) {
+                    if (!obj || cnt <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ArmorWontRender(a_follower, ar)) continue;   // wont-render armor is never kept: it sells
                     int key = -1; float primary = 0.0f, secondary = 0.0f;
@@ -310,8 +321,8 @@ namespace MFO::Logistics {
             // 2026-10-12), whether or not armor is judged (bEconomyBuyGear). No new one is looted or bought
             // while OFF, so this only holds what he had. Economy's sell loop is the only keep.armor reader.
             if (!WearsHelmets(&a_state)) {
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
+                for (auto& [obj, cnt] : carried) {
+                    if (!obj || cnt <= 0) continue;
                     if (auto* ar = obj->As<RE::TESObjectARMO>(); ar && IsHelmetPiece(ar)) keepArmor.insert(obj);
                 }
             }
@@ -328,8 +339,8 @@ namespace MFO::Logistics {
                 if (ctx.wantBackup) {
                     RE::TESBoundObject* backup = nullptr;
                     std::uint16_t       backupDmg = 0;
-                    for (auto& [obj, data] : a_follower->GetInventory()) {
-                        if (!obj || data.first <= 0) continue;
+                    for (auto& [obj, cnt] : carried) {
+                        if (!obj || cnt <= 0) continue;
                         auto* w = obj->As<RE::TESObjectWEAP>();
                         if (!w || IsCreatureWeapon(w) ||
                             (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID()))) continue;

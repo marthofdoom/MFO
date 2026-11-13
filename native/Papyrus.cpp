@@ -174,6 +174,18 @@ namespace MFO::Papyrus {
         auto* vm = VM();
         if (!vm) { ++g_failures; return false; }
 
+        // THE RECEIVER MUST HAVE A BOUND SCRIPT OBJECT (review F1, 86e3t212u). DispatchMethodCall2 resolves the receiver through its
+        // bound script object, and a ref with no script attached has none: the call returns false (Linux-Native-Tools actor-ai-
+        // and-packages.md section 3, field-proven on a scriptless alias). The MFO storage chest has no script. CommonLib's own
+        // argument packing binds a fresh native-class object for exactly this case (PackHandle, fork src/RE/P/PackUnpack.cpp:
+        // FindBoundObject, else CreateObject + BindID), so the receiver is run through the same road first; the destination is
+        // bound by that same road when the arguments are packed below. An actor receiver (a follower) normally has one already.
+        {
+            RE::BSScript::Variable bound;
+            RE::BSScript::PackHandle(&bound, a_from, static_cast<RE::VMTypeID>(a_from->GetFormType()));
+            if (bound.IsNoneObject()) { ++g_failures; return false; }
+        }
+
         RE::VMHandle handle{};
         if (!HandleFor(a_from, handle)) { ++g_failures; return false; }
 

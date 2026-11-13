@@ -7,11 +7,16 @@
 //   storage.class_sets       PlannedFor over the real class table: mastered + future-in-line, unrestricted sets excluded.
 //   storage.record_roundtrip the 'STOR' v1 codec on a CoSaveBuffer: identical round trip, 0xFF ids never written, flags masked,
 //                            an implausible item count aborts and keeps what was parsed.
-//   storage.home_pick        INFO only: the storage chests known this session and the pieces stored for this follower.
+//   storage.chest            the MFO chest (MFO.esp 0x919) resolves, is PERSISTENT, enabled, and its base does not respawn.
+//   storage.chest_roundtrip  review F1: a REAL round trip of one Iron Dagger (the runner's fixture) through the MFO chest by the live
+//                            road (Papyrus::DispatchMoveItem both ways, each hop confirmed from his count), run by Storage::Tick
+//                            while the runner's probe bit kProbeStorageMove arms it. The retrieval hop is the one whose receiver
+//                            (the scriptless chest) needed the binding fix.
 
 #include "selftest/SelfTest_internal.h"
 #include "logistics/Storage.h"
 #include "Serialization.h"
+#include "Forms.h"
 
 #include <format>
 
@@ -23,10 +28,10 @@ namespace MFO::SelfTest {
         namespace W = Classes::Weapon;
 
         // Skyrim.esm forms (load-order agnostic through VanillaForm). Verified 2026-11-13 with Linux-Native-Tools/tools/esp_query.py
-        // on the Tuxborn Skyrim.esm: 000DF5A9 is a PERSISTENT NobleWardrobe01 REFR in WindhelmHjerim (so it resolves while unloaded).
-        constexpr RE::FormID kHjerimWardrobeLocal = 0x000DF5A9;
+        // on the Tuxborn Skyrim.esm.
         constexpr RE::FormID kIronSwordLocal      = 0x00012EB7;   // WEAP IronSword
         constexpr RE::FormID kIronArmorLocal      = 0x00012E49;   // ARMO ArmorIronCuirass
+        constexpr RE::FormID kIronDaggerLocal     = 0x0001397E;   // WEAP IronDagger (the round-trip fixture)
 
         St::StoreInput StoreBase() {
             St::StoreInput in;
@@ -72,18 +77,15 @@ namespace MFO::SelfTest {
 
         Step DecideRetrieveStep(Ctx&) {
             St::RetrieveInput b;
-            b.bucket = St::Bucket::TwoHand; b.classBit = W::kTwoHand; b.currentSet = W::kTwoHand; b.roleKeeps = true;
-            b.rank = 30.0f; b.bestCarriedRank = 20.0f;
+            b.bucket = St::Bucket::TwoHand; b.classBit = W::kTwoHand; b.currentSet = W::kTwoHand; b.saleKeeps = true;
             struct Row { const char* name; St::RetrieveInput in; bool want; };
             std::vector<Row> rows;
             auto add = [&](const char* n, auto&& f, bool w) { St::RetrieveInput in = b; f(in); rows.push_back({ n, in, w }); };
-            add("in class, role keeps, outranks", [](St::RetrieveInput&) {}, true);
+            add("in class, the sale path keeps it", [](St::RetrieveInput&) {}, true);
             add("off-class now", [](St::RetrieveInput& i) { i.currentSet = W::kBow; }, false);
             add("unrestricted set", [](St::RetrieveInput& i) { i.currentSet = 0; }, true);
-            add("carried is better", [](St::RetrieveInput& i) { i.bestCarriedRank = 40.0f; }, false);
-            add("carried equal, tie lost", [](St::RetrieveInput& i) { i.bestCarriedRank = 30.0f; }, false);
-            add("carried equal, tie won", [](St::RetrieveInput& i) { i.bestCarriedRank = 30.0f; i.tieWins = true; }, true);
-            add("role does not keep it", [](St::RetrieveInput& i) { i.roleKeeps = false; }, false);
+            add("the sale path would not keep it", [](St::RetrieveInput& i) { i.saleKeeps = false; }, false);
+            add("bucket none", [](St::RetrieveInput& i) { i.bucket = St::Bucket::None; }, false);
             add("armor of his kind", [](St::RetrieveInput& i) { i.bucket = St::Bucket::BodyRated; i.classBit = 0; i.armorKind = St::Kind::kRated; i.currentKind = St::Kind::kRated; }, true);
             add("armor of the other kind", [](St::RetrieveInput& i) { i.bucket = St::Bucket::BodyRated; i.classBit = 0; i.armorKind = St::Kind::kRated; i.currentKind = St::Kind::kClothing; }, false);
             std::string bad;
@@ -125,23 +127,20 @@ namespace MFO::SelfTest {
         }
 
         const char* RoundtripPre(Ctx& c) {
-            const RE::FormID chest = VanillaForm(kHjerimWardrobeLocal);
             const RE::FormID sword = VanillaForm(kIronSwordLocal);
             const RE::FormID armor = VanillaForm(kIronArmorLocal);
-            if (!chest || !RE::TESForm::LookupByID<RE::TESObjectREFR>(chest)) return "Skyrim.esm persistent REFR 000DF5A9 resolvable";
             if (!sword || !armor) return "Skyrim.esm IronSword 00012EB7 + ArmorIronCuirass 00012E49 resolvable";
-            c.s->set[0] = { chest, sword, armor };
+            c.s->set[0] = { sword, armor };
             return nullptr;
         }
 
         Step RoundtripStep(Ctx& c) {
-            const RE::FormID chest = c.s->set[0][0], sword = c.s->set[0][1], armor = c.s->set[0][2];
+            const RE::FormID sword = c.s->set[0][0], armor = c.s->set[0][1];
             constexpr RE::FormID kFol = 0x00012345, kRuntimeFol = 0xFF000801;
             St::Table t;
-            t.homes.push_back(St::Home{ chest, 0, 0, St::Home::kMain });
-            t.homes.push_back(St::Home{ 0xFF000123, 0, 0, St::Home::kInterim });   // runtime: never written
-            t.stored[kFol] = { St::Item{ chest, sword, 1, 0 }, St::Item{ chest, armor, 1, St::Item::kUnverified } };
-            t.stored[kRuntimeFol] = { St::Item{ chest, sword, 1, 0 } };            // runtime follower: never written
+            t.stored[kFol] = { St::Item{ sword, 1, 0 }, St::Item{ armor, 1, St::Item::kUnverified } };
+            t.stored[kRuntimeFol] = { St::Item{ sword, 1, 0 } };   // runtime follower: never written
+            t.stored[0x00012347] = { St::Item{ 0xFF000123, 1, 0 } };  // runtime base: never written (and the follower with it)
             CoSaveBuffer buf;
             St::LoadStats ws;
             St::WriteBody(buf, t, &ws);
@@ -151,20 +150,18 @@ namespace MFO::SelfTest {
             std::string bad;
             if (!ok) bad += "[the round trip aborted] ";
             if (ws.skippedRuntime != 2) bad += std::format("[{} runtime ids skipped, want 2] ", ws.skippedRuntime);
-            if (back.homes.size() != 1 || back.homes[0].chest != chest || back.homes[0].kind != St::Home::kMain) bad += "[homes differ] ";
             if (back.stored.size() != 1 || back.stored[kFol].size() != 2) bad += "[stored differ] ";
             else {
                 const auto& v = back.stored[kFol];
-                if (v[0].base != sword || v[0].flags != 0 || v[1].base != armor || v[1].flags != St::Item::kUnverified || v[0].chest != chest)
-                    bad += "[items differ] ";
+                if (v[0].base != sword || v[0].flags != 0 || v[1].base != armor || v[1].flags != St::Item::kUnverified) bad += "[items differ] ";
             }
-            // Hand-built body: flags 0xFF reads as 0x03; count 7 clamps to 1; then an item count of 17 aborts and keeps what was parsed.
+            // Hand-built body: flags 0xFF reads as 0x03; count 7 clamps to 1; a duplicate base is dropped; then an item count of 17
+            // aborts and keeps what was parsed.
             CoSaveBuffer raw;
-            raw.WriteRecordData(std::uint32_t{ 1 });
-            raw.WriteRecordData(chest); raw.WriteRecordData(RE::FormID{ 0 }); raw.WriteRecordData(RE::FormID{ 0 }); raw.WriteRecordData(std::uint8_t{ 1 });
             raw.WriteRecordData(std::uint32_t{ 2 });
-            raw.WriteRecordData(kFol); raw.WriteRecordData(std::uint32_t{ 1 });
-            raw.WriteRecordData(chest); raw.WriteRecordData(sword); raw.WriteRecordData(std::uint16_t{ 7 }); raw.WriteRecordData(std::uint8_t{ 0xFF });
+            raw.WriteRecordData(kFol); raw.WriteRecordData(std::uint32_t{ 2 });
+            raw.WriteRecordData(sword); raw.WriteRecordData(std::uint16_t{ 7 }); raw.WriteRecordData(std::uint8_t{ 0xFF });
+            raw.WriteRecordData(sword); raw.WriteRecordData(std::uint16_t{ 1 }); raw.WriteRecordData(std::uint8_t{ 0 });
             raw.WriteRecordData(RE::FormID{ 0x00012346 }); raw.WriteRecordData(std::uint32_t{ 17 });
             raw.Rewind();
             St::Table r2; St::LoadStats s2;
@@ -172,19 +169,48 @@ namespace MFO::SelfTest {
             if (ok2) bad += "[an item count of 17 did not abort] ";
             if (r2.stored[kFol].size() != 1 || r2.stored[kFol][0].flags != St::Item::kAllFlags || r2.stored[kFol][0].count != 1)
                 bad += "[the masked / clamped item was not kept as parsed] ";
+            if (s2.droppedItems != 1) bad += std::format("[{} dropped item(s), want 1 (the duplicate base)] ", s2.droppedItems);
             if (!bad.empty()) return Step::Fail("STOR v1 codec: " + bad);
             return Step::Pass(std::format("STOR v1 round trip identical ({} bytes), {} runtime ids skipped, flags 0xFF -> 0x{:02X}, count 7 -> 1, "
-                                          "itemCount 17 aborted with {} piece(s) kept", buf.Bytes().size(), ws.skippedRuntime,
+                                          "duplicate base dropped, itemCount 17 aborted with {} piece(s) kept", buf.Bytes().size(), ws.skippedRuntime,
                                           r2.stored[kFol].empty() ? 0 : r2.stored[kFol][0].flags, r2.stored[kFol].size()));
         }
 
-        Step HomePickStep(Ctx& c) {
-            const auto homes = St::Homes();
-            std::string h;
-            for (const auto& e : homes)
-                h += std::format("{:08X} ({}, cell {:08X}) ", e.chest, e.kind == St::Home::kMain ? "home" : "interim", e.cell);
-            const auto mine = St::StoredOf(c.id);
-            return Step::Info(std::format("storage chests known: {} [{}]; stored for {:08X}: {} piece(s)", homes.size(), h, c.id, mine.size()));
+        Step ChestStep(Ctx& c) {
+            auto* ref = Forms::g_storageChest;
+            if (!ref) return Step::Fail("MFO.esp 0x919 MFO_StorageChestRef did not resolve (old MFO.esp?)");
+            auto* base = ref->GetBaseObject();
+            auto* cont = base ? base->As<RE::TESObjectCONT>() : nullptr;
+            if (!cont) return Step::Fail("the storage chest ref's base is not a container");
+            if (!ref->IsPersistent()) return Step::Fail("the storage chest ref is NOT persistent (it would leave memory with its cell)");
+            if (ref->IsDisabled() || ref->IsDeleted()) return Step::Fail("the storage chest ref is disabled or deleted");
+            if (cont->data.flags.all(RE::CONT_DATA::Flag::kRespawn)) return Step::Fail("the storage chest's base RESPAWNS (it would empty itself)");
+            auto* cell = ref->GetParentCell();
+            return Step::Pass(std::format("MFO chest {:08X} (base {:08X} '{}'), persistent, no respawn, cell {:08X}; stored for {:08X}: {} piece(s)",
+                                          ref->GetFormID(), cont->GetFormID(), cont->GetName() ? cont->GetName() : "?",
+                                          cell ? cell->GetFormID() : 0u, c.id, St::StoredOf(c.id).size()));
+        }
+
+        const char* ChestRoundTripPre(Ctx& c) {
+            if (!Forms::g_storageChest) return "MFO.esp 0x919 MFO_StorageChestRef resolvable";
+            const RE::FormID dagger = VanillaForm(kIronDaggerLocal);
+            if (!dagger) return "Skyrim.esm IronDagger 0001397E resolvable";
+            if (c.inCombat) return "out of combat (Storage::Tick runs in the idle branch)";
+            c.s->set[1] = { dagger };
+            return nullptr;
+        }
+        void ChestRoundTripFix(Ctx& c, FixtureRequest& r) {
+            r.items.push_back({ c.s->set[1][0], 1 });
+            r.probes |= kProbeStorageMove;
+        }
+        Step ChestRoundTripStep(Ctx& c) {
+            const auto rt = St::DevReadRoundTrip(c.id);
+            if (!rt.armed) {
+                if (c.elapsed > 10.0f) return Step::Fail("the round trip was never armed (probe kProbeStorageMove not applied)");
+                return Step::Continue();
+            }
+            if (!rt.done) return Step::Continue();
+            return rt.ok ? Step::Pass(rt.evidence) : Step::Fail(rt.evidence);
         }
     }
 
@@ -194,7 +220,12 @@ namespace MFO::SelfTest {
         Register({ "storage.class_sets", "86e3t212u", "(pure) PlannedFor over the real class table", 10.0f, nullptr, nullptr, ClassSetsStep, nullptr });
         Register({ "storage.record_roundtrip", "86e3t212u", "(pure) the STOR v1 codec on a byte buffer (Skyrim.esm forms resolvable)", 10.0f,
                    RoundtripPre, nullptr, RoundtripStep, nullptr });
-        Register({ "storage.home_pick", "86e3t212u", "(info) the storage chests known this session", 10.0f, nullptr, nullptr, HomePickStep, nullptr });
+        Register({ "storage.chest", "86e3t212u", "(pure) the MFO storage chest (MFO.esp 0x919) resolves, persistent, no respawn", 10.0f, nullptr, nullptr,
+                   ChestStep, nullptr });
+        Register({ "storage.chest_roundtrip", "86e3t212u review F1",
+                   "(self-setup) one Iron Dagger is added to his pack; Storage::Tick moves it into the MFO chest and back by Papyrus RemoveItem, "
+                   "each hop confirmed from his count (out of combat, idle)",
+                   120.0f, ChestRoundTripPre, ChestRoundTripFix, ChestRoundTripStep, nullptr });
     }
 
 }

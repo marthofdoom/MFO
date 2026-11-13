@@ -68,7 +68,7 @@ namespace MFO::SelfTest {
         int         respawns = 3;             // re-spawned when the hostile dies while the test still runs
     };
     // Log-only probe flags switched on IN MEMORY for the run (never the INI file) and put back.
-    enum ProbeBit : unsigned { kProbeAim = 1u << 0 };
+    enum ProbeBit : unsigned { kProbeAim = 1u << 0, kProbeStorageMove = 1u << 1 };   // kProbeStorageMove: storage.chest_roundtrip (86e3t212u)
 
     // What a test needs present on the follower for its run. The runner adds only what is MISSING
     // and records exactly that in the fixture ledger (Fixtures.cpp).

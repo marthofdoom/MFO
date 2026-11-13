@@ -120,14 +120,23 @@ FID_ERRAND_SANDBOX_0  = OWN | 0x90A   # 0x90A-0x90D
 FID_ERRAND_EAT_0      = OWN | 0x90E   # 0x90E-0x911
 FID_ERRAND_SLEEP_0    = OWN | 0x912   # 0x912-0x915
 ERRAND_WORK_SLOTS     = 4
-NEXT_OBJECT_ID     = 0x917         # first never-used local id (0x916 since R7: the sixteen work packages are always emitted;
+# OFF-CLASS STORAGE (ClickUp 86e3t212u, marth 2026-11-13: "Give the followers thier own mfo storage they can access."): ONE
+# MFO-owned container the followers keep their off-class pieces in, reached from anywhere by a script RemoveItem. A base CONT
+# (no respawn, no inventory), an interior holding CELL nobody visits, and ONE PERSISTENT REFR of the chest in it (persistent =
+# the ref stays in memory while the cell is unloaded, which is what "from anywhere" needs). Unowned ref in an unowned cell: a
+# script move into or out of it is never a crime. Mirrors vanilla ThievesGuildHoldingCell 000C0BBA + TGHoldingSafe 000C0BDA
+# (persistent SafewithLock 000800E0 REFR, no owner), dumped 2026-11-13. native/Forms.h kStorageChest* mirrors these ids.
+FID_STORAGE_CHEST_CONT = OWN | 0x917   # CONT  MFO_StorageChest
+FID_STORAGE_CELL       = OWN | 0x918   # CELL  MFO_StorageHoldingCell (interior)
+FID_STORAGE_CHEST_REF  = OWN | 0x919   # REFR  MFO_StorageChestRef (persistent, in the holding cell)
+NEXT_OBJECT_ID     = 0x91A         # first never-used local id (0x917-0x919 = the storage chest; 0x916 since R7: the sixteen work packages are always emitted;
                                    # was 0x904. 0x836-0x839 = APMF loot-travel packages,
                                    # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
                                    # 0x900-0x902 = P7 travel packages, 0x903 = MFO_LOTDDetected)
                                    # 0x904/0x905 are CLAIMED by the lockpick SNDRs (Forms.h) but only
                                    # emitted once LOCKPICK_SNDR_PENDING is complete; main() then writes
                                    # NEXT_OBJECT_ID_WITH_SNDR into the header.
-NEXT_OBJECT_ID_WITH_SNDR = 0x917
+NEXT_OBJECT_ID_WITH_SNDR = 0x91A
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -1197,6 +1206,47 @@ def make_pack():
     body += make_retreat_package()
     body += make_errand_work_packages()   # R7: 16 town-errand work packages (Activate / Sandbox / Eat / Sleep x 4 slots)
     return group('PACK', body)
+
+
+# ── OFF-CLASS STORAGE: the followers' own chest (CONT + holding CELL + persistent REFR) ───────────────────────
+def group_typed(label_bytes, gtype, data):
+    # A GRUP whose label is NOT a record type: interior block / sub-block (type 2 / 3, label = the int), cell children /
+    # persistent children (type 6 / 8, label = the cell FormID). Same 24-byte header as group(); stamp / version 0.
+    return (b'GRUP' + struct.pack('<I', 24 + len(data)) + label_bytes + struct.pack('<iII', gtype, 0, 0) + data)
+
+
+def make_storage_cont():
+    # Mirrors vanilla SafewithLock 000800E0 (EDID OBND FULL MODL ... DATA), minus its CNTO/COCT loot (the chest starts EMPTY)
+    # and MODT (optional texture hashes). DATA = u8 flags 0 (NO kRespawn: a respawning container would empty itself) + f32 weight.
+    body = subrec('EDID', zstr("MFO_StorageChest"))
+    body += subrec('OBND', struct.pack('<6h', -22, -22, 0, 23, 22, 66))   # SafewithLock's bounds
+    body += subrec('FULL', zstr("MFO Follower Storage"))
+    body += subrec('MODL', zstr("Clutter\\Containers\\SafeandLock01.nif"))
+    body += subrec('DATA', struct.pack('<Bf', 0, 0.0))
+    return group('CONT', record('CONT', FID_STORAGE_CHEST_CONT, 0, body))
+
+
+def make_storage_cell():
+    # The CELL top group: block (type 2, label = last decimal digit of the cell's object id) > sub-block (type 3, second-to-
+    # last digit) > the CELL record > its children (type 6, label = the cell FormID) > persistent children (type 8) > the REFR.
+    # The CELL mirrors ThievesGuildHoldingCell 000C0BBA: EDID, DATA u16 0x0001 (interior), XCLL lighting (copied), LTMP 0. No
+    # owner (XOWN), no location (XLCN), no water (XCLW): nothing in it is anyone's, and nobody goes there.
+    xcll = bytes.fromhex(
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000803fffffffffffff"
+        "ffffffffffffffffffffffffffffffffffff000000000000803f000000000000803f00000000000000009f070000")
+    assert len(xcll) == 92
+    cell = record('CELL', FID_STORAGE_CELL, 0,
+                  subrec('EDID', zstr("MFO_StorageHoldingCell")) + subrec('DATA', struct.pack('<H', 0x0001))
+                  + subrec('XCLL', xcll) + subrec('LTMP', struct.pack('<I', 0)))
+    # REFR flag 0x400 = Persistent (vanilla TGHoldingSafe carries exactly that). DATA = position xyz + rotation xyz (6 floats).
+    ref = record('REFR', FID_STORAGE_CHEST_REF, 0x00000400,
+                 subrec('EDID', zstr("MFO_StorageChestRef")) + subrec('NAME', struct.pack('<I', FID_STORAGE_CHEST_CONT))
+                 + subrec('DATA', struct.pack('<6f', 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)))
+    cell_fid = struct.pack('<I', FID_STORAGE_CELL)
+    children = group_typed(cell_fid, 6, group_typed(cell_fid, 8, ref))
+    obj = FID_STORAGE_CELL & 0xFFFFFF
+    block, sub = obj % 10, (obj // 10) % 10
+    return group('CELL', group_typed(struct.pack('<i', block), 2, group_typed(struct.pack('<i', sub), 3, cell + children)))
 
 
 # ── CSTY: MFO's combat styles (stance ownership) ───────────────────────────
@@ -3008,6 +3058,9 @@ def main():
     data += group('GLOB', globs)
     data += make_mgef()
     data += make_spel()
+    # Off-class storage: CONT then CELL, vanilla's top-group order (Skyrim.esm: ... SPEL ... CONT ... CELL ... QUST ...).
+    data += make_storage_cont()
+    data += make_storage_cell()
     data += make_qust()
     data += make_pack()
     # CSTY after PACK -- vanilla's own top-group order (Skyrim.esm: ... QUST,
@@ -3085,6 +3138,9 @@ def main():
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{next_id:03X}")
     print(f"  KYWD  0x{FID_GRANTED_KYWD & 0xFFF:03X}        MFO_GrantedSpell")
+    print(f"  CONT  0x{FID_STORAGE_CHEST_CONT & 0xFFF:03X}        MFO_StorageChest (no respawn, empty)")
+    print(f"  CELL  0x{FID_STORAGE_CELL & 0xFFF:03X}        MFO_StorageHoldingCell (interior, unowned)")
+    print(f"  REFR  0x{FID_STORAGE_CHEST_REF & 0xFFF:03X}        MFO_StorageChestRef (PERSISTENT, in the holding cell): the followers' storage")
     print(f"  MGEF  0x{FID_ORDERS_MGEF & 0xFFF:03X}        MFO_FieldOrdersMGEF")
     print(f"  SPEL  0x{FID_ORDERS_SPELL & 0xFFF:03X}        MFO_FieldOrdersPower (lesser power)")
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
