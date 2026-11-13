@@ -1899,8 +1899,15 @@ namespace {
               !ScoreLootKind(LootKind::SoulGems, stockedAll).take && !ScoreLootKind(LootKind::Lockpicks, stockedAll).take,
               "stocked default follower leaves ammo, ingredients, gems, lockpicks (F2/F3)");
         // Soul gems: a USE value only while an enchanted weapon is below max charge (marth 2026-11-13).
-        LootInv charger = stockedAll; charger.weaponNeedsCharge = true;
-        Check(ScoreLootKind(LootKind::SoulGems, charger).take && !ScoreLootKind(LootKind::SoulGems, stockedAll).take, "soul gems: taken for a weapon that needs charge, else left");
+        LootInv charger = stockedAll; charger.weaponChargeFrac = 0.4f;
+        Check(ScoreLootKind(LootKind::SoulGems, charger).take && !ScoreLootKind(LootKind::SoulGems, stockedAll).take, "soul gems: taken for a weapon below 50% charge, else left");
+        // marth 2026-11-13: cap em, and a weapon at or above 50% charge triggers no looting of gems.
+        LootInv half = charger; half.weaponChargeFrac = 0.5f;
+        Check(!ScoreLootKind(LootKind::SoulGems, half).take, "soul gems: a weapon at 50% charge does not trigger gem looting");
+        LootInv capped = charger; capped.soulGems = LootTuning{}.soulGemTarget - 1;
+        Check(ScoreLootKind(LootKind::SoulGems, capped).take, "soul gems: one short of the cap still taken");
+        capped.soulGems = LootTuning{}.soulGemTarget;
+        Check(!ScoreLootKind(LootKind::SoulGems, capped).take && ScoreLootKind(LootKind::SoulGems, capped).score == 0.0f, "soul gems: need drops to 0 at the cap");
     }
 }
 

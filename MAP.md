@@ -4992,7 +4992,7 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
   the stock side (`ReadLootInv`), so they cannot disagree: restore family = `PotionRestores` (catalog first, never food) + `PotionMagnitude`,
   buff kinds = `ConsumableBuffs`; a FOOD never makes a restore need (F1). No sell road => no sale score: Economy sells only WEAP, ARMO and valuable
   MISC, so potions / food / poisons / ammo / ingredients / soul gems score NEED or USE only (`LootTuning::consumableSellRoad`, F2/F3). Soul gems:
-  USE value while he carries an enchanted weapon below max charge (`LootInv::weaponNeedsCharge`, `InventoryEntryData::GetEnchantmentCharge`). The
+  NEED (NeedScore against `LootTuning::soulGemTarget` = 3 gems carried) only while any copy of a carried enchanted weapon is below `LootTuning::gemChargeTrigger` = 50% of its max charge (`LootInv::weaponChargeFrac` = lowest over every extra list, `LowestChargeFrac` in `LootNeed.cpp`; `LootInv::soulGems` counts filled and empty via `IsSoulGemItem`). The
   inventory is read once per tick (`CachedLootInv`, key `g_svcSeq`, `IausLootInvDirty` after a take, F4). The IAUS pass runs at the FIRST skipped
   loot row of each walk, else after it (F5). Loose potions use `IausLooseConsumableWanted` (F7); the `[iaus-loot]` item line is a real-decision log
   only (F8).

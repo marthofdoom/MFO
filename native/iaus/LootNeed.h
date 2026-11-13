@@ -53,9 +53,12 @@ namespace MFO::Iaus {
         std::array<int, kRestoreFamilies> restore{};   // restore potions carried per family (CountPotions)
         std::array<int, kBuffKinds>       buff{};      // consumables carried that hold each buff kind
         int   poisons = 0;                             // poisons carried (ALCH with the poison flag)
-        // SOUL GEMS' USE (marth 2026-11-13): he carries an enchanted weapon whose current charge is below its maximum (runtime read of the
-        // item's own charge, never a mod or list name). false = a soul gem has no use for him.
-        bool  weaponNeedsCharge = false;
+        // SOUL GEMS' USE (marth 2026-11-13: "cap em, but better is a weapon charge check a weapon with a charge below 50% triggers the
+        // looting of gems"): the LOWEST charge, as a fraction of its maximum, over every copy of every enchanted weapon he carries (runtime
+        // read of each copy's own charge, never a mod or list name; 1 = none carried / all full), and the soul gems he carries (filled or
+        // empty). A gem has a use only while weaponChargeFrac < LootTuning::gemChargeTrigger, up to LootTuning::soulGemTarget gems.
+        float weaponChargeFrac = 1.0f;
+        int   soulGems = 0;
     };
 
     // One consumable (an ALCH: potion, food or drink) as the scorer sees it: EVERY beneficial effect read (catalog row first, the
@@ -79,9 +82,12 @@ namespace MFO::Iaus {
         float roomKnee = 0.25f;
         // PLACEHOLDER. Sale value: gold per unit weight that scores 1 (before saleWeight and the room factor).
         float saleGoldPerWeight = 50.0f, saleWeight = 0.7f;
-        // PLACEHOLDER. Category bases (times the room factor): gold is weightless coin. soulGemUse: a soul gem's carry value while he
-        // carries a weapon that needs charging.
-        float gold = 1.0f, equipment = 0.8f, valuables = 0.75f, jewelry = 0.75f, soulGemUse = 0.8f;
+        // PLACEHOLDER. Category bases (times the room factor): gold is weightless coin.
+        float gold = 1.0f, equipment = 0.8f, valuables = 0.75f, jewelry = 0.75f;
+        // marth 2026-11-13: a soul gem is wanted only while a carried enchanted weapon is below gemChargeTrigger of its max charge (a fraction),
+        // and only up to soulGemTarget gems carried (PLACEHOLDER 3, sim-search later). NeedScore does the rest.
+        float gemChargeTrigger = 0.5f;
+        int   soulGemTarget = 3;
         // A SALE score counts only where MFO has a sell road for the form type (review F2): Economy.cpp sells WEAP, ARMO (jewellery
         // included) and valuable MISC only. No ALCH / INGR / AMMO road exists today, so a consumable's sale value is 0 until one does;
         // flip this when an economy road sells ALCH. Never a sale floor that clears takeThreshold on its own (review F3).
@@ -221,11 +227,16 @@ namespace MFO::Iaus {
         case LootKind::Valuables:   v.score = a_t.valuables * room;  std::snprintf(buf, sizeof buf, "sale gold vs weight, room=%.2f", static_cast<double>(room)); break;
         case LootKind::Jewelry:     v.score = a_t.jewelry * room;    std::snprintf(buf, sizeof buf, "sale gold vs weight, room=%.2f", static_cast<double>(room)); break;
         case LootKind::SoulGems:
-            // marth 2026-11-13: a gem is for charging a weapon. USE value while he carries an enchanted weapon below its max charge;
-            // otherwise 0 (Economy's valuable-MISC road excludes soul gems: IsValuableMisc, so there is no sale value to keep).
-            v.score = a_inv.weaponNeedsCharge ? a_t.soulGemUse * room : 0.0f;
-            std::snprintf(buf, sizeof buf, a_inv.weaponNeedsCharge ? "use: an enchanted weapon below max charge, room=%.2f" : "no weapon to charge, no sell road for gems (room=%.2f)",
-                          static_cast<double>(room));
+            // marth 2026-11-13: a gem is for charging a weapon. NEED (up to soulGemTarget carried) only while he carries an enchanted weapon
+            // below gemChargeTrigger of its max charge; otherwise 0 (Economy's valuable-MISC road excludes soul gems: IsValuableMisc, so
+            // there is no sale value to keep).
+            if (a_inv.weaponChargeFrac < a_t.gemChargeTrigger) {
+                v.score = NeedScore(a_inv.soulGems, a_t.soulGemTarget, a_t);
+                std::snprintf(buf, sizeof buf, "use: a weapon below %.0f%% charge, gems %d/%d", static_cast<double>(a_t.gemChargeTrigger) * 100.0, a_inv.soulGems, a_t.soulGemTarget);
+            } else {
+                v.score = 0.0f;
+                std::snprintf(buf, sizeof buf, "no weapon below %.0f%% charge, no sell road for gems", static_cast<double>(a_t.gemChargeTrigger) * 100.0);
+            }
             break;
         case LootKind::Ingredients: v.score = 0.0f; std::snprintf(buf, sizeof buf, "no use, no sell road for ingredients"); break;
         case LootKind::kCount:      buf[0] = '\0'; break;
