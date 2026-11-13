@@ -73,7 +73,7 @@ namespace MFO::SelfTest {
             foe.id = 0x00000F01; foe.hp = foe.hpMax = 100.0f; foe.dist = 300.0f; foe.level = 10; foe.targetId = c.id;
             foe.caster = true; foe.incomingAv = 41;   // a fire mage on him (RE::ActorValue::kResistFire)
             s.foes.push_back(foe);
-            const Iaus::ClassGate gate;   // unresolved: nothing class-gated
+            const Iaus::ClassGate gate{};   // unresolved: nothing class-gated
 
             const float fire = ResistFireScore(s, gate);
             s.foes[0].caster = false; s.foes[0].incomingAv = -1;

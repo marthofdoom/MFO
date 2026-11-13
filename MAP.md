@@ -5488,7 +5488,14 @@ into resolved-FormID tables. `Catalog::Load()` (`:57`) — sole caller `plugin.c
 **must run at/after kDataLoaded** (rows resolve via `LookupForm` after load-order
 offset) — before that, silent empty catalog. Fail-open: callers OR the catalog with
 their own heuristic; making an accessor authoritative-on-miss re-opens the #20 bug.
-`IsExcluded` widely used (Logistics + `TradeBridge.cpp:141`). **Dead API:**
+**Schema 2 (feat/buff-potions, ClickUp 1dfcuabd18f):** the patcher writes `"schema": 2` and an `fx` list on EVERY non-food, non-poison potion row
+(possibly empty = "classified, no kind"; `Catalog.cs` `ClassifyFx` `:306`), one `{kind, mag, dur, av?}` per beneficial effect that is not a plain
+restore (resist fire/frost/shock/poison/magic, fortify health/stamina/magicka/skill/attack, regen, invisibility, water breathing, cures), read
+from the MGEF archetype + actor value, never a name. `Catalog::PotionEffects` (`ItemCatalog.cpp:153`; nullptr = no `fx` row: schema-1 file,
+uncatalogued form, no patcher run) feeds `Logistics::PotionBuffs` (`logistics/PotionFx.cpp:81`), which falls back to `ClassifyRuntime` (the SAME rule
+read off the potion's records). **What breaks:** the rule is written THREE times (`Catalog.cs ClassifyFx`, `PotionFx.cpp KindOf`, the kind names in
+`iaus/PotionBuff.h BuffName`): change one, change all, and bump `schema`; the native reader must keep reading schema 1 (old files have no `fx`);
+a catalogued potion with an empty `fx` is NOT re-guessed at run time (that is the point of writing the empty row). `IsExcluded` widely used (Logistics + `TradeBridge.cpp:141`). **Dead API:**
 `Loaded()`, `PotionCures/CuresPoison/CuresDisease` have zero call sites (the
 cure-poison gambit consumer doesn't exist yet).
 
@@ -9110,6 +9117,21 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   `Generate.cpp` copies it onto the candidate (per-follower, so NOT in the cached Profile). Arch-Mage (`kArchMage` 26, `Scalars::schoolAny`) is flat by rule, no SetScalar name.
   **What breaks:** the peak seeds address rows by `Classes::Id` ordinal (SpellBook.cpp static_asserts them); a Profile with a school below 1.0 changes scores, so shipped must stay
   floor 1.0 / bump 0 until the sim batch fills values; the mastered bump is HOME SCHOOL ONLY and a class with no peak gives none (marth 11-12: "No bump, and ONLY the main school should get a bump"); scrolls ignore affinity entirely (no wave, no bump; Generate.cpp); weights are floored at 1e-3 so a searched floor 0 / huge shape can never veto; reorder the circle ONLY in `kSchoolCircle` (School identities never change: they key Profile/Candidate/peaks).
+- **BUFF POTIONS -- `Family::DrinkBuff`, `iaus/PotionBuff.h` (feat/buff-potions, ClickUp 1dfcuabd18f, 2026-11-12; NOT field run, NO co-save / ABI / address / ESP change; every number is a labelled PLACEHOLDER for the sim search).**
+  marth: "use mfo_items.json to add all valid potions to the weighting". `iaus/PotionBuff.h` (PURE) = `BuffKind` (17 kinds, APPEND ONLY), `PotionFx`, `PotionBuff`/`BuffStock`, the skill-group rule. `Kit::buff[kind]`
+  (`iaus/Snapshot.h`): potions carried that hold the kind, the best one (magnitude, then duration), and `active` = ANY live potion effect of the kind on him
+  (`SpellBook.cpp` `LiveBuffKinds:90` reads his whole active-effect list on the main thread; `NoteBuffPotion:107` fills the stock in `Measure`;
+  the `[spellbook]` signature prints `buff-potions kind=n(live)`). `Combatant::incomingAv` = the resist actor value of the spell a foe holds or is casting
+  (`Candidates.cpp` `FoeElementAv:127`, worker; NOT read: enchanted weapons, shouts / breath, innate creature attacks). Generate (`Generate.cpp`
+  `BuffPotions:389`, `ElementShare:377`, called after `Drinks`): one candidate per kind he carries, `Candidate::form` = the potion, `Facts::buffKind`; resist = the share of kept
+  foes whose element it answers (a foe on him counts 1, else 0.5; Resist Magic answers any caster); fortify = an opener (reuses `Cons::FightStart`, curve
+  untouched); regen = the resource's pct through `Cons::DrinkNeed` (curve untouched); invisibility = stealth intent (`selfSneaking` or `ClassGate::sneakClass`);
+  water breathing and the cures are catalogued, never candidates. NEW: `Family::DrinkBuff`, `Cons::BuffThreat` (`VetoBelow(Lin(1,0), 0.05)`), `Cons::BuffStealth` (gate), `aw(DrinkBuff) 0.5`
+  (`Catalogue.cpp:359/407/462`), all APPENDED. The road: `Vocab::kActDrinkBuffPotion` (`act.drink_buff_potion`, IAUS-only, param = the potion form, never serialized) from
+  `IausSource.cpp:347` to `cast/Fire.cpp:695` -> `Logistics::DrinkPotionForm` (`logistics/PotionFx.cpp:88`, EquipObject like `DrinkBest`, a per-(follower, potion) duration gate `g_buffUntil`,
+  cleared by `ClearTransientState`). Log: `[iaus] buff-potion` per pick, paced 5 s per follower (`IausSource.cpp` `LogBuffPick`). Harness batch 14, DEV self-test `buffpotion.resist_scores` (`selftest/TestsBuffPotion.cpp`).
+  **DRINK-ROAD DENY AUDIT (any potion form):** (1) the v8 equip authority governs only ARMO / WEAP / AMMO / LIGH, never an ALCH (MAP "equip authority"); (2) MFO files NO ch.30 potion allowance (grep `PotionAllowance`: only `APMF_API.h`), so Harbinger's DrinkPotion seat refuses nothing of ours; (3) the ch.8 spell allow-list (`apmf/SpellAllowList.cpp`, potions trimmed to the best of each category) is on the combat AI's `CombatInventoryItemMagicT` SELECTION seats, and MFO's direct EquipObject "is not on this channel" (same road, field-proven, as `act.drink_health_potion`); (4) a drug (Hostile / Detrimental effect), poison or food has no kind (`PotionBuffs` empty), and `DrinkPotionForm` re-judges the FORM at the drink; (5) no loop: the potion's own duration gate, the kind's live read, a hard cooldown from `NoteFired`, and the count falls on drinking. Static reading only: a field run must show the `[iaus] buff-potion ... drank it` line with the potion leaving his pack.
+  **What breaks:** reading `Kit::buff` from anywhere but `Measure` (main thread) / the snapshot; renumbering `BuffKind` (the catalog stores NAMES, logs the number); a regen / fortify candidate whose input is not n/a at its sentinel changes `n` for the compensation (an input that is ON counts); adding a Shape term to the invisibility set changes its constant 0.5; `Generate`'s foe element is `incomingAv` only, so a foe that hits with an enchanted weapon or a shout reads as no element (the resist potions then stay unoffered, never wrongly drunk). Open: cures and water breathing have no consideration (no snapshot fact says he is poisoned, diseased or under water); the weights, the opener window and the relevance rules are placeholders (the post-T2 sim wave sets them, Q-potion-value).
 - `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
   `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
   (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.
