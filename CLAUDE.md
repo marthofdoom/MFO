@@ -293,6 +293,12 @@ of a given change.
     needed; solve the root cause. If a compromise is genuinely unavoidable, FLAG it
     explicitly and record why — never bury it.
 
+12. **DESIGN FOR FUTURE TWEAKS (marth 2026-11-13: "we should design with future tweaks in mind. It should always be easy to make these kind of changes").**
+    Every tunable lives in one named table (e.g. `LootTuning`, `ClassCurves`); every item/effect kind is classified by ONE
+    shared reader that all consumers call (two readers of the same thing is how the 11-13 loot hoarding bug was born); a
+    new kind, ruling or sell road is a table row or one function. MAP.md names the extension point for each mechanism
+    ("to add X, edit Y"). Briefs ask for it and reviews check it.
+
 ## The five things that corrupt saves or crash — verify before touching
 
 1. **Co-save layout** (`Serialization.cpp`, `logistics/Storage.cpp`, `ProgAllocator::CoSaveSave/Load`,
