@@ -2623,3 +2623,58 @@ re-measures everything a stage needs (the list potion-worth tables included: `pr
 binary replays. The T1 rows must be complete in that `--out` (their values are the new class's baseline). The other classes'
 accepted values, rows, gap cells and open decisions stay (scoped stages merge; `open_decision(cls=)`). `cells()` adds the new class
 to the joint gate and to a T1 value's gate. A fresh `--out` runs the whole pipeline (the T1 rows first).
+
+### 34.6 The logistics world (marth 11-12: "Might as well add whats needed for logistics sentient ai testing now as well")
+
+`tools/iaus_sim/Logistics.h`, `--logistics N` (episodes per seed and class), `--logi-k K` (the oracle's sampled futures, default 8),
+`--logi-policy` (only `baseline`; `iaus` is REFUSED until the post-T2 loot scorer exists, ClickUp 1dfcuabd18f). Driver stage
+`logistics` (seeds 7001..7012, 8 episodes each, per class). Spec of today's rules, every one with its file:line, read from native at
+f178d8bf: scratchpad `logistics-spec.md` (the rules below are its sections 1 to 5).
+
+An EPISODE: 8 stops (the potion chain's length) of bodies and a chest, then the town. Each found stack is TAKE or LEAVE.
+- BASELINE = today's rules. The 4 default logistics rows (`Followers.cpp:48-51`): `loot_potions` while under 2 restore-health potions
+  (the catch-all drinkable take, weakest tier ignored: `Upkeep.cpp ComputeWeakPotionFloor`, first magnitude over 1.25 x the minimum),
+  `loot_arrows` while under 10 arrows (restock: not worse than his worst held rank, `SwapUp.cpp`), `loot_equipment` always (strict
+  upgrades of his class only, `LootEquipment.cpp`; an upgrade is equipped). No default row takes gold, gems, jewelry, ingredients or
+  junk. Carry: the WHOLE stack must fit, no reserve (`LootTake.cpp:40-46`). Town: an errand runs when its sell rows pay at least
+  100 g (capped by the chest's gold), carry is over 80%, or a row needs something (`ErrandTrip.cpp`); BUY first (the rows' needs, the
+  dearest line first, potions capped at half the purse: `TradeBridge.cpp PlanBuy`), then SELL (unkept gear, MISC with value / weight
+  at least 20, highest value first, while the chest's gold lasts: `MFO_Trade.psc RunTrade`). Prices: `Pricing.cpp` with the Skyrim.esm
+  GMSTs (fBarterMax 2.4, fBarterMin 1.4, fBarterBuyMin 1.05, fBarterSellMax 0.95, fMinBuyMult / fMaxSellMult 1.0; exe 1.6.1170).
+- ORACLE: per stack TAKE or LEAVE, per stop start a SELL RUN (to town and back, the stop's loot unseen), each option scored by K
+  rollouts of the baseline over futures resampled after the current stop, streams shared across options; a tie keeps the baseline's
+  choice. Any lootable stack may be taken (the surface an IAUS scorer will have).
+- VALUE (MODEL, open decision): the potion worth of the bag at the end, from the COMBAT world (`PotionWorth.h`, his class) + kGoldJ x
+  gold-equivalent (purse + the buy price of his worn gear and of his arrows up to the keep target 50), kGoldJ = J per gold where gold
+  buys the most J (the first potion of a kind / the buy price of its cheapest potion). Gold is valued LINEARLY.
+- FIXTURE: item values, damages, armor ratings and potion magnitudes are Skyrim.esm records read from the Vanilla extract; armor and
+  potion weights, gems, jewelry, ingredients, clutter, his carry weight (300), Speech (15), the vendor's gold (750) and the loot
+  shape of a stop are MODEL (no extract has them), each marked in `Logistics.h`.
+- LISTS: REFUSED, with the reason: the list extracts hold no containers, no gold / MISC / gems / ingredients, no vendor chests or gold
+  and no armor or potion weights. Building that into `tools/list_balance` is its own piece of work (open decision).
+- CHECKS (`LOGI-CHECKS`, CLI-CHECK): prices pinned (RestoreHealth01 at Speech 15: buy 38, sell 8), every sell unit under its buy unit,
+  the potion floor 50, carry never exceeded by either arm, the baseline takes only what its rows name, an episode is deterministic.
+
+First measurement (binary sha256 658ca6396c5f76fb, `sim --logistics 8 --seeds 1,2,3,4,5,6 --classes beta1`, 48 episodes per class, K = 8):
+
+| Class | Gap J_log (se) | of it potions (J) | of it gold-equivalent (g) | sell runs (48 episodes) |
+|---|---|---|---|---|
+| melee | +45.71 (1.14) | 2.5312 | 1111.4 | 54 |
+| ranged | +34.71 (1.10) | 1.2163 | 1155.3 | 50 |
+| mage | +23.81 (1.20) | 0.8069 | 987.9 | 6 |
+| knight | +61.53 (1.54) | 2.7985 | 1114.9 | 53 |
+| warrior | +51.45 (1.34) | 3.3319 | 1104.4 | 56 |
+| mercenary | +64.64 (1.72) | 2.8837 | 1104.3 | 55 |
+| archer | +31.76 (1.00) | 1.3728 | 1155.3 | 50 |
+| thief | +14.02 (0.45) | 0.1924 | 1155.3 | 50 |
+| evoker | +25.50 (1.22) | 1.3208 | 981.3 | 38 |
+| conjurer | +14.21 (0.67) | 0.8096 | 981.3 | 38 |
+| healer | +10.75 (0.53) | 0.2536 | 981.3 | 38 |
+| warlock | +8.17 (0.38) | 0.5939 | 981.3 | 38 |
+| melee-off | +63.09 (1.58) | 2.6618 | 1114.9 | 53 |
+| ranged-off | +26.12 (0.82) | 1.0583 | 1155.3 | 50 |
+| mage-off | +22.60 (1.14) | 0.7413 | 987.9 | 6 |
+
+Read: today's rules leave about 1000 to 1150 gold of value per 8-stop dungeon on the floor, and 0.2 to 3.3 J of potions; the largest
+divergences are (c), behaviours today's rules do not have: gold, gems and gear gathered to sell (no default row takes them) and
+mid-dungeon sell runs. How much of that the IAUS loot scorer should chase depends on the VALUE function, which is marth's call.
