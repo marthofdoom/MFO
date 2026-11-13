@@ -853,6 +853,15 @@ namespace MFO::ComposedCast {
         return HealRoad::Claim;
     }
 
+    bool HealClaimRoadOpen(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell) return false;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return false;
+        if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
+            !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load())
+            return false;
+        return a_follower->GetActorRuntimeData().combatController != nullptr;
+    }
+
     void NoteOocDirectHeal(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         if (!a_follower || !a_spell) return;
         if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return;

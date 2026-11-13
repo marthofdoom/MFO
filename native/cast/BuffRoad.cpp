@@ -405,6 +405,13 @@ namespace MFO::Actuation {
         // the claim road's up-read can ever see it up on an ally; the self-apply lockout does not cover a claim. Never offered.
         const auto shape = ClassifyArchetype(a_spell, /*a_seat0=*/true).shape;
         if (shape == SpellShape::SelfHazard || shape == SpellShape::ScriptRider) return false;
+        // 1dfcuabd309: a CONCENTRATION Self buff at another recipient is not this chooser's claim (it answers DirectNoSeat for
+        // it), but CastOn still serves it: its concentration fork (ConcentrationCast -> CastTargetDirect) claims it through
+        // Harbinger's concentration cast claim (its delivery-flip proxy) in combat, else streams MFO's own delivery-flipped
+        // ConcProxy (Direct.cpp DeliverySpell). The proxy is minted on the main thread only (none under VR).
+        if (a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf &&
+            a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+            return CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Buff && MainThread::IsInstalled();
         return ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, a_recipient) == BuffRoad::Claim;
     }
 

@@ -54,8 +54,10 @@ namespace MFO::Iaus {
         float         charge = 0.0f;            // staff: current charge
         bool          charged = true;           // staff: at least one cast left
         std::vector<std::uint32_t> activeOn;    // Buff / Ward: party members this spell's effect is live on
-        bool          allyRoad = false;         // Buff, Self delivery: the ch.8b claim road (Harbinger's delivery-flip proxy) serves it at an ally NOW
-                                                // (Actuation::BuffServedAtAlly, filled by iaus/Candidates.cpp each lap, never by the book). false = himself only
+        bool          allyRoad = false;         // Buff / Heal, Self delivery: a proxy road serves it at an ally NOW (1dfcuabd309): Harbinger's
+                                                // delivery-flip proxy on the claim road, or MFO's ConcProxy for a concentration spell
+                                                // (Actuation::BuffServedAtAlly / HealServedAtAlly, filled by iaus/Candidates.cpp each lap,
+                                                // never by the book). false = himself only
         // Estimates (iaus/Estimate.h): one cast on an unresisting target, after his perks. 0 = not measured.
         float         damage = 0.0f;            // health damage (a damage-over-time effect counted for its duration)
         float         heal = 0.0f;              // healing

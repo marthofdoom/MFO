@@ -659,6 +659,21 @@ namespace {
         Check(CountFam(g, Family::CastControl) == 2 && turnOk, "Turn Undead only on the two undead foes, target_cond = Yes");
         // Healing (self only): he is at 90%. Heal Other: himself and the player (50%); Lydia is full.
         Check(CountFam(g, Family::CastHeal) == 3, "heals: hurt recipients only, a self-delivery heal on himself only");
+        {   // 1dfcuabd309: the PROXIED version of a Self heal (a proxy road serves it at an ally: allyRoad) is a candidate at
+            // the hurt player, keyed to the SOURCE form; Lydia is full, so still no candidate on her.
+            Snapshot sp = s;
+            for (auto& e : sp.book.entries) if (e.form == 0x12FCC) e.allyRoad = true;
+            const Generated gp = Generate(sp, mage, t);
+            bool atPlayer = false, atLydia = false, dyn = false;
+            for (const auto& c : gp.actions) {
+                if (c.family != Family::CastHeal) continue;
+                if (c.form == 0x12FCC && c.target == 0x14) atPlayer = true;
+                if (c.form == 0x12FCC && c.target == 0xA2C94) atLydia = true;
+                if ((c.form >> 24) == 0xFFu) dyn = true;
+            }
+            Check(CountFam(gp, Family::CastHeal) == 4 && atPlayer && !atLydia && !dyn,
+                  "a Self heal a proxy road serves (allyRoad) is offered at the hurt player, keyed to the source spell");
+        }
         Check(CountFam(g, Family::CastBuff) == 0, "Oakflesh already active on him: no buff candidate");
         Check(CountFam(g, Family::CastSummon) == 1 && CountFam(g, Family::CastWard) == 1, "one summon, one ward");
         Check(CountFam(g, Family::DrinkHealth) == 1 && CountFam(g, Family::DrinkMagicka) == 1 &&

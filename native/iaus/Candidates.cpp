@@ -221,7 +221,18 @@ namespace MFO::Iaus::Candidates {
             // fix/mage-buff-loop, on the snapshot's own COPY of the book (the shared one stays immutable).
             auto* player = RE::PlayerCharacter::GetSingleton();
             for (auto& e : s.book.entries) {
-                if (e.source != SpellSource::Spell || e.nature != Prune::Nature::Buff || e.drop != Prune::Drop::Keep) continue;
+                if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                // 1dfcuabd309 (marth 11-13: "proxied spell versions need to be considered as well"): a Self-delivery HEAL is
+                // offered to an ally where a proxy road serves it (Harbinger's heal-claim delivery-flip proxy, or MFO's
+                // ConcProxy for a concentration heal). The candidate stays keyed to the SOURCE spell; the proxy is minted by
+                // the road at fire time and never enters the book (SpellBook skips 0xFF forms).
+                if (e.nature == Prune::Nature::Heal) {
+                    if (e.selfDelivery && player && player != a_self)
+                        if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(e.form))
+                            e.allyRoad = Actuation::HealServedAtAlly(a_self, sp, player);
+                    continue;
+                }
+                if (e.nature != Prune::Nature::Buff) continue;
                 // Item 1: a buff he applied to himself and whose effect leaves no active effect of its own (SelfHazard /
                 // ScriptRider) is invisible to the book's activeOn. The recast lockout stands in for it while it lasts.
                 if (Actuation::SelfBuffRecastLocked(selfID, e.form) &&
@@ -231,7 +242,8 @@ namespace MFO::Iaus::Candidates {
                         spdlog::info("[iaus] {:08X} buff {} ({:08X}) dropped as a candidate: recast lockout (he applied it to himself "
                                      "and its authored life has not run out; once per spell per fight)", selfID, e.name, e.form);
                 }
-                // Item 5: a Self-delivery buff is offered to an ally only where the claim road serves it.
+                // Item 5: a Self-delivery buff is offered to an ally only where a proxy road serves it (the claim road's flip
+                // proxy, or for a concentration buff CastOn's concentration fork: Harbinger's claim / MFO's ConcProxy).
                 if (e.selfDelivery && player && player != a_self)
                     if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(e.form))
                         e.allyRoad = Actuation::BuffServedAtAlly(a_self, sp, player);
