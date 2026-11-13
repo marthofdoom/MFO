@@ -18,7 +18,7 @@
 # beats guessing their type at runtime (Requiem-proof).
 cmake_minimum_required(VERSION 3.21)
 
-project(MFO VERSION 2.10.0 LANGUAGES CXX)
+project(MFO VERSION 2.11.0 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
@@ -103,6 +103,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Hide.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
+    logistics/PotionFx.cpp
     logistics/Sinks.cpp
     logistics/TheftGate.cpp
     logistics/Steal.cpp
@@ -209,6 +210,7 @@ if(MFO_DEV_SELFTEST)
         selftest/Tests.cpp
         selftest/TestsDrive.cpp
         selftest/TestsT2.cpp
+        selftest/TestsBuffPotion.cpp
         selftest/Setup.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE MFO_DEV_SELFTEST=1)

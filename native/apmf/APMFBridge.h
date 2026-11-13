@@ -734,6 +734,11 @@ namespace MFO::APMFBridge {
     // The selector saw a candidate foe MEASURED Visible (not Unknown: that is neutral and not passed here): ends the all-occluded run; releases a standing claim once
     // sight has held the dwell (apmf/OffenseApproach.cpp kSightDwellMs).
     void NoteOffenseSight(RE::FormID a_follower);
+    // READ-ONLY (fix/sight-wins-buff-release; no behaviour): OffenseApproachStands = a ch.24 offense approach is filed for the follower.
+    // OffenseApproachCannotFile = ServiceOffenseApproach could not file one at a_foe: the offense seat is refused / below ABI 19, or a_foe is
+    // in the follower's blocked set this fight. Worker-safe; own mutex (g_offMx).
+    bool OffenseApproachStands(RE::FormID a_follower);
+    bool OffenseApproachCannotFile(RE::FormID a_follower, RE::FormID a_foe);
 
     // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
     // The pick window's two claims, filed together when a follower standing at a locked

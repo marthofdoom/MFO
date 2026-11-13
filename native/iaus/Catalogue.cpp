@@ -48,6 +48,7 @@ namespace MFO::Iaus {
         case Family::Disengage:    return "disengage";
         case Family::BackOff:      return "back_off";
         case Family::Step:         return "step";
+        case Family::DrinkBuff:    return "drink_buff";
         case Family::kCount:       break;
         }
         return "?";
@@ -79,7 +80,9 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
-            "strike", "hold", "need", "flee_heal", "need", "guard_line", "threat", "perks",
+            "strike", "hold", "need", "flee_heal", "need", "guard_line",
+            "buff_threat", "buff_stealth",
+            "buff_foes", "perks",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -92,7 +95,7 @@ namespace MFO::Iaus {
         case Cons::HandFree: case Cons::SplashSafe: case Cons::FoeTaunted: case Cons::Unseen:
         case Cons::NoHealRetreat: case Cons::DisengageClass: case Cons::Stock: case Cons::NoHealDrink:
         case Cons::Ammo: case Cons::StaffCharge: case Cons::MeleeReach: case Cons::ClassWeapon:
-        case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive: case Cons::HoldStill:
+        case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive: case Cons::HoldStill: case Cons::BuffStealth:
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
@@ -116,7 +119,7 @@ namespace MFO::Iaus {
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
-                            f.controlSec, f.castsWanted, f.backOffNeed };
+                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -350,6 +353,13 @@ namespace MFO::Iaus {
             at(Cons::GroundNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             at(Cons::BackOffNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);   // batch I, chosen (the sim tunes it): the input is already a 0..1 need
             at(Cons::BlockNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            // BUFF POTIONS (feat/buff-potions, ClickUp 1dfcuabd18f). PLACEHOLDERS, NOT SEARCHED: no number below came from the sim or the oracle.
+            // The sim search and the oracle set them later (marth: "sim calibrates it", Q-potion-value); until then each is the plainest shape
+            // that does its job. buff_threat: x = the share of the kept foes whose incoming element the resist potion answers (already 0..1);
+            // under 0.05 there is nothing to resist, veto. buff_stealth: a gate (he sneaks, or is a sneak class). fight_start (existing, curve
+            // untouched) and need (existing DrinkNeed curve, untouched) are reused for the fortify and regen kinds.
+            at(Cons::BuffThreat) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
+            at(Cons::BuffStealth) = Bin(0.0f, 1.0f);
             // Q-S-5 (marth 2026-11-12: "the line should block at least 60% of attacks directed at them when 2+ foes are taunted"): while the
             // Knight line holds two or more foes taunted by HIM the guard outranks his blows (x2.0 over Block's own 1.0 weight). It does NOT
             // outrank a health potion by weight alone (a held guard is 2.0 x 1.25 momentum = 2.5, the potion at most 2.2): Generate turns the
@@ -409,6 +419,9 @@ namespace MFO::Iaus {
             aw(Family::Disengage, 1.0f);   // card G3, chosen (not from the search): gated by its generator, paced by its hard cooldown
             aw(Family::BackOff, 1.0f);     // batch I, chosen: like the other moves, it has to be clearly worth it (the need's own veto and the hard cooldown pace it)
             aw(Family::Step, 1.197f);      // batch I item 5, chosen 0.9; tuning round 2026-11-12 (iaus-sim-v2 31.11 gates) 1.197: above the hold row it replaces (Sneak 0.6) and below a blow (a blow from stealth is generated at once when ready)
+            aw(Family::DrinkBuff, 0.5f);   // PLACEHOLDER (feat/buff-potions): NOT from the sim, not hand-tuned. MEASURED (harness, lap one, Knight melee): a fortify
+                                           // or resist candidate scores 0.500 against an Attack's 0.42 (weight 0.8), so on the first lap a buff potion CAN outrank a
+                                           // blow; Generate.cpp gates fortify on a foe worth it (kBuffFortifyFoeRatio). The sim / oracle search sets the real number.
             aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
@@ -458,6 +471,13 @@ namespace MFO::Iaus {
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
                 { Cons::BoostMortalDanger, 1 }, { Cons::BoostFleeHeal, 1 },
+            };
+            // feat/buff-potions: ONE family, one candidate per carried buff kind (Facts::buffKind); a consideration that does not apply to the kind
+            // is not applicable (Input returns Off), so a resist potion is scored by buff_threat alone, a fortify by fight_start, a regen by need,
+            // an invisibility by buff_stealth. already_active, stock and the hard cooldown apply to all.
+            constexpr U kDrinkBuff[] = {
+                { Cons::BuffThreat, 1 }, { Cons::FightStart, 1 }, { Cons::BuffStealth, 1 }, { Cons::DrinkNeed, 1 },
+                { Cons::AlreadyActive, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 },
             };
             constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 } };
             constexpr U kPosture[] = {
@@ -539,6 +559,7 @@ namespace MFO::Iaus {
             case Family::DrinkHealth:  return kDrinkHealth;
             case Family::DrinkStamina:
             case Family::DrinkMagicka: return kDrinkOther;
+            case Family::DrinkBuff:    return kDrinkBuff;
             case Family::Posture:      return kPosture;
             case Family::CastOffense:  return kOffense;
             case Family::CastControl:  return kControl;
@@ -657,7 +678,9 @@ namespace MFO::Iaus {
                 return B(f.unseen == Tri::Yes);
             case Cons::HoldStill:     return (c.family == Family::Sneak || c.family == Family::Step) ? B(!f.strikeReady) : In::Off();
             case Cons::BoostStrike:   return B(f.selfSneaking && f.foeUnaware == Tri::Yes);
-            case Cons::FightStart:    return (std::max)(0.0f, f.combatSec) / 6.0f;
+            case Cons::FightStart:
+                if (c.family == Family::DrinkBuff && !f.buffOpener) return In::Off();   // a fortify only; the resist / regen / stealth kinds are not openers
+                return (std::max)(0.0f, f.combatSec) / 6.0f;
             case Cons::RetreatHp:     return f.selfHp;
             case Cons::NoHealRetreat: return bestHeal > t.noHealRetreat ? 0.0f : 1.0f;
             case Cons::DisengageClass: return B(f.disengageClass);
@@ -666,9 +689,12 @@ namespace MFO::Iaus {
                 return f.disengageFlee ? RetreatDangerOf(f, t) : Clamp(f.detectShare, 0.0f, 1.0f);
             case Cons::BoostFleeHeal: return B(f.fleeHeal);
             case Cons::BoostGuardLine: return c.family == Family::Block ? In(B(f.tauntedOnMe >= kGuardLineFoes)) : In::Off();
+            case Cons::BuffThreat:    return (c.family == Family::DrinkBuff && f.buffThreat >= 0.0f) ? In(Clamp(f.buffThreat, 0.0f, 1.0f)) : In::Off();
+            case Cons::BuffStealth:   return (c.family == Family::DrinkBuff && f.buffStealth != Tri::Unknown) ? In(B(f.buffStealth == Tri::Yes)) : In::Off();
             case Cons::BoostPosturePerks: return c.family == Family::Posture && f.perkShare >= 0.0f ? In(f.perkShare) : In::Off();
             case Cons::BoostBuffThreat: return c.family == Family::CastBuff ? In(static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f) : In::Off();
             case Cons::DrinkNeed:
+                if (c.family == Family::DrinkBuff) return f.buffRegenPct >= 0.0f ? In(Clamp(f.buffRegenPct, 0.0f, 1.0f)) : In::Off();   // a regen kind reads its resource's pct
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
                 if (c.family == Family::DrinkMagicka) return f.selfMagicka;
                 return f.selfHp;

@@ -365,6 +365,99 @@ namespace MFO::Iaus {
             }
         }
 
+        // ── buff potions (feat/buff-potions, ClickUp 1dfcuabd18f): every beneficial potion effect that is not a restore ───────────────
+        // One candidate per KIND he carries (Kit::buff, iaus/PotionBuff.h), the best potion of the kind. PLACEHOLDER relevance rules, NOT searched
+        // (the sim / oracle set them later; marth Q-potion-value "sim calibrates it"): which kinds are worth offering when, and the 0.5 foe weight
+        // below. Each kind fills ONLY the fact its consideration reads (Core.h Facts::buff*); the others stay at their n/a sentinel.
+        //   resist_*      the share of the kept foes whose incoming element it answers (a foe on him counts 1, a foe on someone else 0.5)
+        //   fortify_*     an opener (FightStart): offered when he can use the stat (a weapon in hand, a spell he casts, a skill of his line)
+        //   regen_*       the resource's pct now (DrinkNeed's curve: low = need), same relevance as the fortify of that resource
+        //   invisibility  stealth intent: he sneaks, or his class is a sneak class
+        //   waterbreathing, cure_*  catalogued, never a candidate (nothing in the snapshot says he is under water, poisoned or diseased)
+        float ElementShare(const Ctx& x, BuffKind a_kind) {
+            const int av = ResistAvOf(a_kind);
+            float num = 0.0f, den = 0.0f;
+            for (const Combatant* foe : x.top) {
+                const float w = (foe->targetId != 0 && foe->targetId == x.s.self.id) ? 1.0f : 0.5f;
+                den += w;
+                // Resist Magic answers every spell; an element potion answers the element the foe's spell names.
+                const bool match = a_kind == BuffKind::ResistMagic ? (foe->caster || foe->incomingAv >= 0) : foe->incomingAv == av;
+                if (match) num += w;
+            }
+            return den > 0.0f ? num / den : 0.0f;
+        }
+        // PLACEHOLDER (review F3, not searched): a fortify is offered only when some kept foe is at least this level ratio (foe level / his level),
+        // the fact Cons::FoeThreat reads, so a mudcrab fight burns none. The sim search sets it.
+        constexpr float kBuffFortifyFoeRatio = 1.0f;
+        void BuffPotions(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (x.fleeRun) return;   // card G3: during the flee he heals and runs
+            const Kit& k = s.book.kit;
+            const bool weapon = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver || s.drawn == PostureKind::Bow;
+            bool casts = false;
+            std::array<bool, kSchools> school{};
+            for (const SpellEntry& e : s.book.entries) {
+                if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep || !e.onClass) continue;
+                casts = true;
+                if (e.school >= 0 && static_cast<std::size_t>(e.school) < kSchools) school[static_cast<std::size_t>(e.school)] = true;
+            }
+            for (std::size_t i = 0; i < kBuffKinds; ++i) {
+                const PotionBuff& p = k.buff[i];
+                if (p.count <= 0 || p.form == 0) continue;   // P2: no stock, no candidate
+                const auto kind = static_cast<BuffKind>(i);
+                Candidate c = x.Make(Family::DrinkBuff, nullptr);
+                c.form = p.form;
+                c.formName = p.name;
+                c.f.stock = p.count;
+                c.f.alreadyActive = p.active;
+                c.f.buffKind = static_cast<std::uint8_t>(i);
+                if (IsResist(kind)) {
+                    c.f.buffThreat = ElementShare(x, kind);
+                } else if (IsFortify(kind) || IsRegen(kind)) {
+                    bool useful = false;
+                    float pct = 1.0f;
+                    switch (kind) {
+                    case BuffKind::FortifyHealth: useful = true; break;
+                    case BuffKind::FortifyStamina: useful = weapon; break;
+                    case BuffKind::FortifyMagicka: useful = casts; break;
+                    case BuffKind::FortifyAttack: useful = weapon; break;
+                    case BuffKind::FortifySkill:
+                        switch (SkillGroupOf(p.av)) {
+                        case SkillGroup::Melee:   useful = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver; break;
+                        case SkillGroup::Ranged:  useful = s.drawn == PostureKind::Bow; break;
+                        case SkillGroup::Magic: {
+                            const int sc = SkillSchoolOf(p.av);
+                            useful = sc >= 0 && school[static_cast<std::size_t>(sc)];
+                            break;
+                        }
+                        case SkillGroup::Stealth: useful = s.selfSneaking; break;
+                        case SkillGroup::Other:   break;
+                        }
+                        break;
+                    case BuffKind::RegenHealth:  useful = true; pct = x.selfHp; break;
+                    case BuffKind::RegenStamina: useful = weapon; pct = x.selfSp; break;
+                    case BuffKind::RegenMagicka: useful = casts; pct = x.selfMp; break;
+                    default: break;
+                    }
+                    if (!useful) continue;
+                    if (IsFortify(kind)) {
+                        bool worth = false;
+                        for (const Combatant* foe : x.top)
+                            if (SafeRatio(static_cast<float>(foe->level), static_cast<float>(s.self.level), 1.0f) >= kBuffFortifyFoeRatio) { worth = true; break; }
+                        if (!worth) continue;
+                    }
+                    if (IsRegen(kind)) c.f.buffRegenPct = pct;
+                    else               c.f.buffOpener = true;
+                } else if (kind == BuffKind::Invisibility) {
+                    if (!s.selfSneaking) continue;   // review F1/F2: stealth intent = he sneaks NOW (a sneak class alone would drink it in open melee)
+                    c.f.buffStealth = Tri::Yes;
+                } else {
+                    continue;   // water breathing and the cures: catalogued only
+                }
+                x.Push(std::move(c));
+            }
+        }
+
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
         void Postures(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
@@ -534,7 +627,9 @@ namespace MFO::Iaus {
                     const bool heal = e.nature == Prune::Nature::Heal;
                     for (const Combatant* r : party) {
                         const bool self = r == &s.self;
-                        if (!self && e.selfDelivery) continue;   // self-delivery = himself only (design section 2)
+                        // self-delivery = himself only (design section 2), except a BUFF the claim road serves at an ally right now
+                        // (e.allyRoad: Harbinger's delivery-flip proxy; fix/mage-buff-loop item 5). A Self HEAL stays himself-only.
+                        if (!self && e.selfDelivery && (heal || !e.allyRoad)) continue;
                         const float hp = self ? x.selfHp : Pct(r->hp, r->hpMax);
                         if (heal && !Prune::Hurt(hp)) continue;   // hurt targets only
                         if (!heal && std::find(e.activeOn.begin(), e.activeOn.end(), r->id) != e.activeOn.end()) {
@@ -658,6 +753,7 @@ namespace MFO::Iaus {
         Guards(x);
         if (a_s.hasBook) {
             Drinks(x);
+            BuffPotions(x);
             Postures(x, foes);
             Casts(x, foes);
         }

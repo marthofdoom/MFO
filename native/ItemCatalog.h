@@ -1,6 +1,10 @@
 #pragma once
 #include <RE/Skyrim.h>
 
+#include "iaus/PotionBuff.h"   // the pure kind enum and the effect row (no engine type)
+
+#include <vector>
+
 // The load-order ITEM CATALOG. The MFO.Synthesis patcher classifies every item
 // in the user's load order from its REAL record (effects, flags, slots,
 // enchantments) and writes Data/SKSE/Plugins/MFO/mfo_items.json. This module
@@ -29,6 +33,13 @@ namespace MFO::Catalog {
     Cure PotionCures(RE::FormID a_potion);
     bool CuresPoison(RE::FormID a_potion);    // kPoison or kBoth
     bool CuresDisease(RE::FormID a_potion);   // kDisease or kBoth
+
+    // The beneficial NON-RESTORE effects of a potion by kind (resist / fortify / regen / invisibility / water breathing / cures), with the
+    // magnitude and duration, from the patcher's schema-2 `fx` row (feat/buff-potions, ClickUp 1dfcuabd18f). nullptr = the potion has no
+    // `fx` row (an uncatalogued form, a schema-1 catalog, or no patcher run): the caller reads the potion's own records instead
+    // (logistics/PotionFx.cpp PotionBuffs). A catalogued potion with NO kind has a row with an empty list, which is NOT nullptr: the
+    // patcher saw it and it has none (a drug, a plain restore), so the runtime fallback is not asked.
+    const std::vector<Iaus::PotionFx>* PotionEffects(RE::FormID a_potion);
 
     // Arrow-vs-bolt from the record's real flag. Runtime TESAmmo::IsBolt() is
     // unreliable in practice (vanilla arrows report IsBolt()==true here: the fork's

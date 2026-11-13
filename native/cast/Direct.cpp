@@ -19,6 +19,107 @@ namespace MFO::Actuation {
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
     namespace {
+        // SELF-BUFF RECAST LOCKOUT (fix/mage-buff-loop, see Actuation.h NoteSelfBuffApplied). Written on the MAIN thread
+        // (ApplySelfEffect), read on the worker (Candidates gather) and by SelfCastReconcile: a LEAF mutex, no engine
+        // call and no spdlog call under it (the SpellBook / g_summonMx pattern). key = (follower << 32) | spell.
+        std::mutex g_buffLockMx;
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_buffLockUntil;
+        // The item-7 read-back: a recorded apply is read back ~1 s later, once per (follower, spell) per fight. Pending =
+        // key -> when due (written on main, drained on the worker by PumpSelfBuffReadback); logged = the once-per-fight set.
+        constexpr float kBuffReadbackSec = 1.0f;
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_buffReadbackDue;
+        std::unordered_set<std::uint64_t>                        g_buffReadbackLogged;
+        constexpr std::uint64_t BuffLockKey(RE::FormID a_follower, RE::FormID a_spell) {
+            return (static_cast<std::uint64_t>(a_follower) << 32) | a_spell;
+        }
+        // The lockout length: the COSTLIEST effect's authored duration (the effect the already-active guard reads), and
+        // 5 s when that is 0 or the record gives none: the book's refresh period (iaus/SpellBook.cpp kRefreshSec), the
+        // shortest interval at which IAUS could learn anything new about a buff it cannot read.
+        constexpr float kBuffLockFloorSec = 5.0f;
+        void EraseBuffLock(RE::FormID a_follower, RE::FormID a_spell) {
+            std::scoped_lock lk(g_buffLockMx);
+            g_buffLockUntil.erase(BuffLockKey(a_follower, a_spell));
+        }
+        float BuffLockSec(RE::SpellItem* a_sp) {
+            auto* ei = a_sp ? a_sp->GetCostliestEffectItem() : nullptr;
+            const float d = ei ? static_cast<float>(ei->GetDuration()) : 0.0f;
+            return (std::isfinite(d) && d > 0.0f) ? d : kBuffLockFloorSec;
+        }
+    }
+
+    void NoteSelfBuffApplied(RE::FormID a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell) return;
+        const auto until = SelfClock::now() + std::chrono::duration_cast<SelfClock::duration>(
+                                                  std::chrono::duration<float>(BuffLockSec(a_spell)));
+        const auto key = BuffLockKey(a_follower, a_spell->GetFormID());
+        std::scoped_lock lk(g_buffLockMx);
+        g_buffLockUntil[key] = until;
+        if (!g_buffReadbackLogged.count(key))
+            g_buffReadbackDue[key] = SelfClock::now() + std::chrono::duration_cast<SelfClock::duration>(
+                                                            std::chrono::duration<float>(kBuffReadbackSec));
+    }
+
+    // WORKER, once per tick (SelfCastReconcile). Posts the main-thread read-back of every apply that has aged past
+    // kBuffReadbackSec: the follower's live active effects of that spell, logged once per spell per fight (passive: no
+    // hotkey, no effect on any decision). The point is evidence: which effects an applied buff really leaves on him.
+    void PumpSelfBuffReadback() {
+        std::vector<std::uint64_t> due;
+        {
+            std::scoped_lock lk(g_buffLockMx);
+            if (g_buffReadbackDue.empty()) return;
+            const auto now = SelfClock::now();
+            for (auto it = g_buffReadbackDue.begin(); it != g_buffReadbackDue.end();) {
+                if (now >= it->second) {
+                    due.push_back(it->first);
+                    g_buffReadbackLogged.insert(it->first);
+                    it = g_buffReadbackDue.erase(it);
+                } else ++it;
+            }
+        }
+        for (const auto key : due)
+            MainThread::Post([key] {
+                const auto fid = static_cast<RE::FormID>(key >> 32);
+                const auto sid = static_cast<RE::FormID>(key & 0xFFFFFFFFu);
+                auto* a  = RE::TESForm::LookupByID<RE::Actor>(fid);
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sid);
+                if (!a || !sp) return;
+                auto* mt   = a->AsMagicTarget();
+                auto* list = mt ? mt->GetActiveEffectList() : nullptr;
+                int n = 0;
+                if (list)
+                    for (auto* ae : *list) {
+                        if (!ae || ae->spell != sp) continue;
+                        auto* mg = ae->effect ? ae->effect->baseEffect : nullptr;
+                        spdlog::info("[buff-readback] {:08X} {} ({:08X}) ~{:.0f}s after the apply: active effect form {:08X} mgef {:08X} "
+                                     "duration {:.1f}s elapsed {:.1f}s flags {:#x}",
+                                     fid, sp->GetName() ? sp->GetName() : "?", sid, kBuffReadbackSec,
+                                     ae->spell ? ae->spell->GetFormID() : 0u, mg ? mg->GetFormID() : 0u,
+                                     ae->duration, ae->elapsedSeconds, static_cast<std::uint32_t>(ae->flags.underlying()));
+                        ++n;
+                    }
+                if (n == 0)
+                    spdlog::info("[buff-readback] {:08X} {} ({:08X}) ~{:.0f}s after the apply: NO active effect of this spell on him "
+                                 "(its effect leaves none of its own: recast is held by the lockout, not by the already-active read)",
+                                 fid, sp->GetName() ? sp->GetName() : "?", sid, kBuffReadbackSec);
+            });
+    }
+
+    bool SelfBuffRecastLocked(RE::FormID a_follower, RE::FormID a_spell) {
+        std::scoped_lock lk(g_buffLockMx);
+        const auto it = g_buffLockUntil.find(BuffLockKey(a_follower, a_spell));
+        return it != g_buffLockUntil.end() && SelfClock::now() < it->second;
+    }
+
+    void ClearSelfBuffLocks(RE::FormID a_follower) {
+        std::scoped_lock lk(g_buffLockMx);
+        if (a_follower == 0) { g_buffLockUntil.clear(); g_buffReadbackDue.clear(); g_buffReadbackLogged.clear(); return; }
+        const auto mine = [a_follower](std::uint64_t a_key) { return static_cast<RE::FormID>(a_key >> 32) == a_follower; };
+        std::erase_if(g_buffLockUntil, [&](const auto& kv) { return mine(kv.first); });
+        std::erase_if(g_buffReadbackDue, [&](const auto& kv) { return mine(kv.first); });
+        std::erase_if(g_buffReadbackLogged, [&](std::uint64_t k) { return mine(k); });
+    }
+
+    namespace {
         // OocHealWaitsForClaim's line dedup (MFO-B173): one per follower per 5 s.
         // Worker-serial, no lock (#4); cleared on revert in ClearSelfCasts.
         std::unordered_map<RE::FormID, SelfClock::time_point> g_oocHealWaitLog;
@@ -441,6 +542,15 @@ namespace MFO::Actuation {
                              a_id, a->GetName() ? a->GetName() : "?",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, before, after, cost,
                              a_chargeSec, spend);
+                // fix/mage-buff-loop item 1: a landed fire-and-forget Buff is locked against a recast for its authored life.
+                // The lock stands in for the up-read ONLY where the effect cannot be read: a buff whose post-cast read found its
+                // effect on him (HealAttach::Present: Candlelight) is already covered by the book's activeOn and the
+                // HasMagicEffect guards, and a lock there would outlive a dispel from anywhere else. Absent / Instant = nothing
+                // readable (SelfHazard, ScriptRider) -> lock. (Chosen over a shape gate: it follows the real read, not a list.)
+                if (!concMomentary && sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
+                    CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Buff &&
+                    attach != HealAttach::Present)
+                    NoteSelfBuffApplied(a_id, sp);
                 if (heal) {
                     NoteHealLanded(a_id, a_id, a_spellID);   // [bleed] attribution
                     HealObsNote(a, a, sp, sp, "direct self", hpBefore, attach);
@@ -453,10 +563,23 @@ namespace MFO::Actuation {
         // The self-cast NEVER equips or channels, so there is nothing to unequip,
         // interrupt, or sheathe -- and doing any of those would touch the
         // follower's OWN combat draw/equip state, which is not ours to change.
-        void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID) {
-            MainThread::Post([a_id, a_spellID] {
+        //   a_keepLiveBuff (fix/mage-buff-loop): the release is a stale / switch one (not a heal-full / magicka-out /
+        //   caster-down / cap END). A FIRE-AND-FORGET Buff-kind spell then lives its authored life: it is NOT dispelled. That is
+        //   its own rule (decided inside the posted lambda, FIFO after the apply, from the spell record), independent of the
+        //   recast lockout. The rule going quiet is how IAUS reaches the next choice once the buff is up, so a dispel here tore
+        //   every one-shot buff down about 2 s after it was cast and the next lap cast it again. Concentration, heal,
+        //   magicka-out, cap and caster-down releases are unchanged. A real dispel also erases that (follower, spell) lock.
+        void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID, bool a_keepLiveBuff) {
+            MainThread::Post([a_id, a_spellID, a_keepLiveBuff] {
                 if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id)) {
-                    DispelSpellEffectsOn(a, a_spellID);
+                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                    const bool keep = a_keepLiveBuff && sp &&
+                                      sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
+                                      CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Buff;
+                    if (!keep) {
+                        DispelSpellEffectsOn(a, a_spellID);
+                        EraseBuffLock(a_id, a_spellID);
+                    }
                     // A SELF concentration channel also drains the caster per-second
                     // via the engine -- interrupt it so a self-heal/ward channel truly
                     // ends (no runaway self-drain), same as the target path.
@@ -725,6 +848,7 @@ namespace MFO::Actuation {
         // Revert/load: drop the channels. No engine call -- the world is being
         // replaced, and the self-cast holds no equip/debt to undo.
         g_selfCast.clear();
+        ClearSelfBuffLocks(0);        // fix/mage-buff-loop: the recast lockout is session-scoped too
         g_targetCast.clear();         // on-target direct-force streams, likewise
         g_autoCast.clear();           // AUTO fan-out pacing is session-scoped too
         g_autoConcFan.clear();        // M2: AUTO concentration fan clocks likewise

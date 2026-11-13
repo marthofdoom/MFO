@@ -42,8 +42,15 @@ namespace MFO::Iaus::Candidates {
             Clock::time_point seen{};
         };
         std::unordered_map<RE::FormID, Fight>                    g_fights;
+        std::unordered_set<std::uint64_t>                        g_lockLogged;   // (follower << 32 | spell): the recast-lockout drop line, once per spell per fight
         std::unordered_map<RE::FormID, std::uint32_t>             g_chosenCast;   // Q-I-2: the cast form ranked first on the last decision
         std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
+
+        // fix/mage-buff-loop: drop a follower's self-buff recast lockout and its once-per-fight log marks. Worker domain.
+        void ClearBuffLockState(RE::FormID a_follower) {
+            Actuation::ClearSelfBuffLocks(a_follower);
+            std::erase_if(g_lockLogged, [a_follower](std::uint64_t k) { return static_cast<RE::FormID>(k >> 32) == a_follower; });
+        }
 
         // A Gather this long after the last one starts a NEW fight clock when card I6 did not call CombatEnded.
         // Sized from the cadence (principle 9): one follower is served every 133 ms x party, about 1.3 s for ten,
@@ -106,6 +113,40 @@ namespace MFO::Iaus::Candidates {
             a_cur = std::clamp(cur, 0.0f, mx);
         }
 
+        // feat/buff-potions: the resist actor value of a spell's COSTLIEST hostile effect (SpellBook's rule for the book's element), -1 = none.
+        int SpellResistAv(const RE::MagicItem* a_sp) {
+            if (!a_sp) return -1;
+            float best = -1.0f;
+            int   av = -1;
+            for (const auto* eff : a_sp->effects) {
+                const auto* base = eff ? eff->baseEffect : nullptr;
+                if (!base || !(base->IsHostile() || base->IsDetrimental()) || !(eff->cost > best)) continue;
+                best = eff->cost;
+                const auto rv = base->data.resistVariable;
+                av = rv == RE::ActorValue::kNone ? -1 : static_cast<int>(rv);
+            }
+            return av;
+        }
+
+        // feat/buff-potions: the element a foe hits with, for the resist potions' threat term: the spell in a hand, else the one it is casting
+        // right now (plain loads of the combat thread's fields, the Fills.cpp reads: a stale answer is one lap old, never corrupt). -1 = none known.
+        // The magicCasters loop covers every caster slot including the shout / power slot, so a breath or shout being cast IS read while it casts.
+        // Not read: an enchanted weapon, an innate creature attack, a power not being cast this lap.
+        int FoeElementAv(RE::Actor* a_foe) {
+            for (const bool left : { false, true }) {
+                auto* o = a_foe->GetEquippedObject(left);
+                if (const int av = SpellResistAv(o ? o->As<RE::SpellItem>() : nullptr); av >= 0) return av;
+            }
+            for (std::size_t i = 0; i < RE::Actor::SlotTypes::kTotal; ++i) {
+                const RE::MagicCaster* c = a_foe->GetActorRuntimeData().magicCasters[i];
+                if (!c) continue;
+                const auto cs = c->state.get();
+                if (cs == RE::MagicCaster::State::kNone || cs == RE::MagicCaster::State::kUnk08 || cs == RE::MagicCaster::State::kUnk09) continue;
+                if (const int av = SpellResistAv(c->currentSpell); av >= 0) return av;
+            }
+            return -1;
+        }
+
         // The reads every unit shares. a_self == a_actor for the follower himself.
         void FillUnit(Combatant& u, RE::Actor* a_actor, RE::Actor* a_self) {
             u.id   = a_actor->GetFormID();
@@ -165,7 +206,10 @@ namespace MFO::Iaus::Candidates {
             auto& fight = g_fights[selfID];
             const bool fresh = fight.seen.time_since_epoch().count() != 0 &&
                                std::chrono::duration<double>(now - fight.seen).count() <= kFightGapSec;
-            if (!fresh) { fight.start = now; newFight = true; }
+            if (!fresh) {
+                fight.start = now; newFight = true;
+                ClearBuffLockState(selfID);   // fix/mage-buff-loop: the lockout and its log are per fight
+            }
             fight.seen = now;
             s.combatSec = static_cast<float>(std::chrono::duration<double>(now - fight.start).count());
         }
@@ -174,6 +218,24 @@ namespace MFO::Iaus::Candidates {
         if (const auto book = SpellBook::Read(a_self)) {
             s.book = *book;
             s.hasBook = true;
+            // fix/mage-buff-loop, on the snapshot's own COPY of the book (the shared one stays immutable).
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            for (auto& e : s.book.entries) {
+                if (e.source != SpellSource::Spell || e.nature != Prune::Nature::Buff || e.drop != Prune::Drop::Keep) continue;
+                // Item 1: a buff he applied to himself and whose effect leaves no active effect of its own (SelfHazard /
+                // ScriptRider) is invisible to the book's activeOn. The recast lockout stands in for it while it lasts.
+                if (Actuation::SelfBuffRecastLocked(selfID, e.form) &&
+                    std::find(e.activeOn.begin(), e.activeOn.end(), selfID) == e.activeOn.end()) {
+                    e.activeOn.push_back(selfID);
+                    if (g_lockLogged.insert((static_cast<std::uint64_t>(selfID) << 32) | e.form).second)
+                        spdlog::info("[iaus] {:08X} buff {} ({:08X}) dropped as a candidate: recast lockout (he applied it to himself "
+                                     "and its authored life has not run out; once per spell per fight)", selfID, e.name, e.form);
+                }
+                // Item 5: a Self-delivery buff is offered to an ally only where the claim road serves it.
+                if (e.selfDelivery && player && player != a_self)
+                    if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(e.form))
+                        e.allyRoad = Actuation::BuffServedAtAlly(a_self, sp, player);
+            }
         }
         s.drawn            = Drawn(a_self);
         // H4 (batch I): the spell in his hand, right first (a one-handed cast comes from it; a dual cast holds the same in both). The book
@@ -284,6 +346,7 @@ namespace MFO::Iaus::Candidates {
                 auto* l = foe->GetEquippedObject(true);
                 u.caster = (r && r->As<RE::SpellItem>()) || (l && l->As<RE::SpellItem>());   // Evaluator's FoeIsCaster
             }
+            u.incomingAv = FoeElementAv(foe);   // feat/buff-potions: the element its spell hits with (resist potions' threat term)
             if (auto* race = foe->GetRace()) u.undead = race->HasKeywordString("ActorTypeUndead");
             u.unholy = Logistics::IsUnholy(foe);
             u.tauntedByMe = Taunt::TauntedBy(fid, selfID);
@@ -450,6 +513,7 @@ namespace MFO::Iaus::Candidates {
     }
 
     void CombatEnded(RE::FormID a_follower) {
+        ClearBuffLockState(a_follower);   // fix/mage-buff-loop
         Classes::StealthEntryForget(a_follower);   // batch I item 2: the next fight is counted afresh
         g_fights.erase(a_follower);
         g_wants.erase(a_follower);
@@ -459,6 +523,8 @@ namespace MFO::Iaus::Candidates {
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }
 
     void Clear() {
+        Actuation::ClearSelfBuffLocks(0);   // (ClearSelfCasts does the same; the pair stays whole on its own)
+        g_lockLogged.clear();
         Classes::StealthEntryClear();
         g_fights.clear();
         g_wants.clear();
@@ -469,11 +535,11 @@ namespace MFO::Iaus::Candidates {
     std::string Describe(const Set& a_set) {
         const auto& g = a_set.gen;
         const auto n = [&](Family f) { return g.perFamily[static_cast<std::size_t>(f)]; };
-        return std::format("foes {}/{} | attack {} power {} taunt {} retreat {} drink {}/{}/{} posture {} | offense {} "
+        return std::format("foes {}/{} | attack {} power {} taunt {} retreat {} drink {}/{}/{} buff-potion {} posture {} | offense {} "
                            "control {} heal {} buff {} summon {} ward {} hold {} | dropped cost {} class {} hand {} target {} | "
                            "book {} emergency {:.2f}{}",
                            g.foesKept, g.foesSeen, n(Family::Attack), n(Family::PowerAttack), n(Family::Taunt),
-                           n(Family::Retreat), n(Family::DrinkHealth), n(Family::DrinkStamina), n(Family::DrinkMagicka),
+                           n(Family::Retreat), n(Family::DrinkHealth), n(Family::DrinkStamina), n(Family::DrinkMagicka), n(Family::DrinkBuff),
                            n(Family::Posture), n(Family::CastOffense), n(Family::CastControl), n(Family::CastHeal),
                            n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), n(Family::Sneak), g.droppedCost,
                            g.droppedClass, g.droppedHand, g.droppedTarget, a_set.snap.hasBook ? "yes" : "NO",

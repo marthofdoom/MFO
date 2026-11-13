@@ -68,6 +68,8 @@ namespace MFO::Iaus {
                       // minimum range of his equipped spell, or a Mercenary two or more foes press. Behind Snapshot::backOffRoad + a point
         Step,         // batch I item 5 (gap G18): hidden with no blow ready, a short quiet H3 run toward a foe that does not detect him,
                       // to gain a strike (blade) or a line of fire (bow) and stay hidden. Behind Snapshot::stepRoad + a point
+        DrinkBuff,    // feat/buff-potions (ClickUp 1dfcuabd18f): a carried potion whose effect is not a restore (resist, fortify, regen,
+                      // invisibility). One candidate per kind he carries (iaus/PotionBuff.h); Candidate::form = the potion, Facts::buffKind = the kind
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -136,6 +138,8 @@ namespace MFO::Iaus {
                             // a Mercenary = how many foes press him (two or more)
         BoostGuardLine,     // multiplier x2.0 (APPENDED, Q-S-5): the Knight line holds two or more taunted foes and a swing at him is in the air:
                             // the guard outranks his own blows (marth: the line blocks at least 60% of the attacks aimed at it then)
+        BuffThreat,         // buff potion (resist kinds): the share of the foes whose incoming element is the one this potion resists
+        BuffStealth,        // buff potion (invisibility): gate, he sneaks or is a sneak class (stealth intent)
         BoostBuffThreat,    // multiplier (APPENDED, batch 3 "sim decides the edge"): a buff cast, by the foes in the fight (x = min(foes, 4) / 4).
                             // Ships FLAT 1.0 at every x (bit-identical); a class row's curve override is the searched knob (iaus-sim-v2.md 35)
         BoostPosturePerks,  // multiplier (APPENDED, batch 3 part C): a weapon posture by its side's share of his weapon-damage perk multipliers (Facts::perkShare).
@@ -408,6 +412,12 @@ namespace MFO::Iaus {
         bool  anchorSafer = false;        // regroup: the anchor stands clearly farther from what is hitting him than he does
         bool  foeSwinging = false;        // block / bash: this foe's swing at him is in the air
         bool  foeCasting = false;         // bash: this foe is charging a spell right now
+        // buff potions (Family::DrinkBuff; iaus/PotionBuff.h). Each is "not applicable" at its sentinel, so the consideration that reads it drops out.
+        std::uint8_t buffKind = 0xFF;     // the BuffKind this candidate drinks for; 0xFF = not a buff potion
+        float buffThreat = -1.0f;         // resist kinds: 0..1 share of the kept foes whose incoming element the potion resists; < 0 = n/a
+        float buffRegenPct = -1.0f;       // regen kinds: the resource's pct now (feeds DrinkNeed); < 0 = n/a
+        bool  buffOpener = false;         // fortify kinds: FightStart applies (a fortify is an opener, drunk before the fight is old)
+        Tri   buffStealth = Tri::Unknown; // invisibility: Yes = stealth intent stands, No = it does not (a gate); Unknown = n/a
         bool  foeHelpless = false;        // BoostControlled: the foe is PARALYSED (he cannot answer a blow). Not a fleeing foe:
                                           // foeControlled also covers fleeing (the control-cast gate), and a boost on a runner
                                           // pulled followers after him (review of 303c14d, F2)

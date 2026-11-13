@@ -11,6 +11,7 @@
 #include "iaus/ClassCurves.h"
 #include "iaus/Fills.h"
 #include "logistics/Logistics.h"
+#include "logistics/PotionFx.h"   // feat/buff-potions: the buff kinds of a carried / live potion
 
 #include <algorithm>
 #include <chrono>
@@ -81,6 +82,43 @@ namespace MFO::Iaus::SpellBook {
                 return true;
             }
             return false;
+        }
+
+        // MAIN THREAD (feat/buff-potions): the buff kinds live on a_actor now, whatever potion they came from. A live, undispelled effect whose
+        // source is an AlchemyItem is classified by the SAME rule as a carried potion (Logistics::PotionBuffs), so drinking a Resist Fire 25 keeps
+        // a carried Resist Fire 50 from being offered while the 25 works (EffectLive above reads one named spell; this reads the whole list).
+        std::array<bool, kBuffKinds> LiveBuffKinds(RE::Actor* a_actor) {
+            std::array<bool, kBuffKinds> live{};
+            auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            auto* list = mt ? mt->GetActiveEffectList() : nullptr;
+            if (!list) return live;
+            for (auto* ae : *list) {
+                if (!ae || !ae->spell || ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled)) continue;
+                auto* alc = ae->spell->As<RE::AlchemyItem>();
+                if (!alc) continue;
+                for (const auto& fx : Logistics::PotionBuffs(alc))
+                    if (static_cast<std::size_t>(fx.kind) < kBuffKinds) live[static_cast<std::size_t>(fx.kind)] = true;
+            }
+            return live;
+        }
+
+        // One carried potion into the kit's per-kind stock: the count of potions that hold the kind, and the BEST such potion (largest
+        // magnitude, then the longer). One potion counts once per kind however many effects of that kind it has.
+        void NoteBuffPotion(RE::AlchemyItem* a_alc, std::int32_t a_count, Kit& a_kit) {
+            std::array<bool, kBuffKinds> seen{};
+            for (const auto& fx : Logistics::PotionBuffs(a_alc)) {
+                const auto i = static_cast<std::size_t>(fx.kind);
+                if (i >= kBuffKinds) continue;
+                PotionBuff& b = a_kit.buff[i];
+                if (!seen[i]) { b.count += a_count; seen[i] = true; }
+                const bool better = b.form == 0 || fx.magnitude > b.magnitude || (fx.magnitude == b.magnitude && fx.duration > b.duration);
+                if (!better) continue;
+                b.form      = a_alc->GetFormID();
+                b.magnitude = fx.magnitude;
+                b.duration  = fx.duration;
+                b.av        = fx.av;
+                b.name      = a_alc->GetName() ? a_alc->GetName() : "?";
+            }
         }
 
         // MAIN THREAD. One spell or scroll record -> its entry. The NATURE is cast/'s classifiers' answer fed to
@@ -297,13 +335,18 @@ namespace MFO::Iaus::SpellBook {
                 ++n[static_cast<int>(e.nature)];
             }
             const auto& k = a_b.kit;
+            std::string buffs;   // feat/buff-potions: " | buff-potions resist_fire=2(live) ..." only for a kind he carries
+            for (std::size_t i = 0; i < kBuffKinds; ++i)
+                if (k.buff[i].count > 0)
+                    buffs += std::format("{}{}={}{}", buffs.empty() ? " | buff-potions " : " ", BuffName(static_cast<BuffKind>(i)), k.buff[i].count,
+                                         k.buff[i].active ? "(live)" : "");
             return std::format("spells offense={} control={} heal={} buff={} summon={} ward={} not-candidates={} | "
                                "scrolls={} staves={}{} | potions H{} S{} M{} | carries melee={} silver={} bow={} "
-                               "crossbow={} arrows={} bolts={}",
+                               "crossbow={} arrows={} bolts={}{}",
                                n[1], n[2], n[3], n[4], n[5], n[6], dropped, scrolls, staves,
                                k.staff ? (k.staffCharged ? " (charged)" : " (EMPTY)") : "",
                                k.potionsHealth, k.potionsStamina, k.potionsMagicka, k.melee ? 1 : 0, k.silver ? 1 : 0,
-                               k.bow ? 1 : 0, k.crossbow ? 1 : 0, k.arrows, k.bolts);
+                               k.bow ? 1 : 0, k.crossbow ? 1 : 0, k.arrows, k.bolts, buffs);
         }
 
         // MAIN THREAD ONLY.
@@ -348,6 +391,13 @@ namespace MFO::Iaus::SpellBook {
             a_actor->VisitSpells(vis);
             for (auto* sp : vis.out) {
                 if (!Vocab::IsCastableSpell(sp)) continue;   // abilities, powers, constant effects: never an entry
+                // fix/mage-buff-loop item 6: a runtime-minted (0xFF__ dynamic) spell is never a spell he KNOWS. Harbinger mints its
+                // delivery-flip proxy for a claim and TEACHES it to the actor (cast/HealRoad.cpp ProxyUnlearnedRelease: "mints and
+                // teaches it again"), so VisitSpells lists it while the claim stands; it then reached the generator as a
+                // candidate (the field's FF000992) and CastOn refused it ("follower does not know this spell"). MFO's own
+                // ConcProxy forms are the same 0xFF slots (cast/Direct.cpp, never on a spell list). A dynamic form renumbers every
+                // save and is never a book entry (cast/Archetype.cpp reads it uncached for the same reason).
+                if (sp->IsDynamicForm()) continue;
                 book->entries.push_back(MakeEntry(a_actor, sp, Source::Spell, gate, party, a_probes));
             }
 
@@ -399,7 +449,12 @@ namespace MFO::Iaus::SpellBook {
                     case RE::ActorValue::kMagicka: book->kit.potionsMagicka += data.first; break;
                     default: break;
                     }
+                    NoteBuffPotion(alc, data.first, book->kit);   // feat/buff-potions: every other beneficial effect, by kind
                 }
+            }
+            {
+                const auto live = LiveBuffKinds(a_actor);
+                for (std::size_t i = 0; i < kBuffKinds; ++i) book->kit.buff[i].active = live[i];
             }
             for (auto& e : scrolls) book->entries.push_back(std::move(e));
             for (auto& e : staves) book->entries.push_back(std::move(e));

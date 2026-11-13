@@ -1679,6 +1679,128 @@ namespace {
 
 }
 
+// ── feat/buff-potions (ClickUp 1dfcuabd18f): the DrinkBuff family on a hand-built kit. The VALUES scored are labelled placeholders (not searched); what is
+// pinned is the SHAPE: which kind is offered when, and that a follower with no buff potion generates exactly what he did before. ──────────────────────────
+namespace {
+    Snapshot BuffFight(BuffKind a_kind, float a_mag = 50.0f, float a_dur = 60.0f, int a_av = -1) {
+        Snapshot s;
+        s.self = Actor("Knight", 0x14F00, 180, 200, 0, 0);
+        s.self.sp = 100; s.self.spMax = 100; s.self.mp = 100; s.self.mpMax = 100;
+        s.playerId = 0x14;
+        Combatant foe = Actor("Mage", 0x3B600, 100, 100, 400, 0);
+        foe.targetId = s.self.id; foe.caster = true; foe.incomingAv = Prune::kAvResistFire;
+        s.foes.push_back(foe);
+        s.drawn = PostureKind::Melee;
+        s.hasBook = true;
+        PotionBuff& b = s.book.kit.buff[static_cast<std::size_t>(a_kind)];
+        b.form = 0x3EAE9; b.count = 1; b.magnitude = a_mag; b.duration = a_dur; b.av = a_av; b.name = "Potion";
+        return s;
+    }
+    // The score of the first DrinkBuff candidate of that kind, -1 when none is generated.
+    float BuffScore(const Snapshot& a_s, BuffKind a_kind, ClassGate a_gate = ClassGate{}) {
+        const Tuning& t = DefaultTuning();
+        const Generated g = Generate(a_s, a_gate, t);
+        for (const auto& c : g.actions)
+            if (c.family == Family::DrinkBuff && c.f.buffKind == static_cast<std::uint8_t>(a_kind))
+                return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr);
+        return -1.0f;
+    }
+}
+
+static void BuffPotions() {
+    std::printf("\n=== 14. Buff potions (feat/buff-potions): the DrinkBuff family, placeholder values ===\n");
+    const Tuning& t = DefaultTuning();
+    {
+        Snapshot s = BuffFight(BuffKind::ResistFire);
+        const float on = BuffScore(s, BuffKind::ResistFire);
+        std::printf("   resist fire vs a fire mage on him: %.3f (act floor %.2f)\n", on, t.actFloor);
+        Check(on > t.actFloor, "a resist potion scores above the act floor against a foe whose spell is that element");
+        s.foes[0].incomingAv = Prune::kAvResistFrost;
+        Check(BuffScore(s, BuffKind::ResistFire) <= 0.0f, "...and not against a frost mage (buff_threat vetoes)");
+        s.foes[0].incomingAv = -1; s.foes[0].caster = false;
+        Check(BuffScore(s, BuffKind::ResistFire) <= 0.0f, "...and not against a plain brawler");
+        s.foes[0].caster = true; s.foes[0].incomingAv = Prune::kAvResistFrost;
+        s.book.kit.buff[static_cast<std::size_t>(BuffKind::ResistMagic)] = s.book.kit.buff[static_cast<std::size_t>(BuffKind::ResistFire)];
+        Check(BuffScore(s, BuffKind::ResistMagic) > t.actFloor, "resist magic answers any caster, whatever its element");
+        s = BuffFight(BuffKind::ResistFire);
+        s.book.kit.buff[static_cast<std::size_t>(BuffKind::ResistFire)].active = true;
+        Check(BuffScore(s, BuffKind::ResistFire) <= 0.0f, "a kind already live on him is not offered again (already_active)");
+        s = BuffFight(BuffKind::ResistFire);
+        s.book.kit.buff[static_cast<std::size_t>(BuffKind::ResistFire)].count = 0;
+        Check(BuffScore(s, BuffKind::ResistFire) < 0.0f, "no stock, no candidate (P2)");
+    }
+    {
+        Snapshot s = BuffFight(BuffKind::FortifyHealth);
+        s.combatSec = 0.0f;
+        const float open = BuffScore(s, BuffKind::FortifyHealth);
+        s.combatSec = 12.0f;
+        Check(open > t.actFloor, "a fortify is offered at the start of the fight");
+        Check(BuffScore(s, BuffKind::FortifyHealth) <= 0.0f, "...and not twelve seconds in (fight_start is an opener only)");
+        s = BuffFight(BuffKind::FortifyMagicka);
+        Check(BuffScore(s, BuffKind::FortifyMagicka) < 0.0f, "fortify magicka is not offered to a follower who casts nothing");
+        s = BuffFight(BuffKind::FortifySkill, 20.0f, 60.0f, 8);
+        Check(BuffScore(s, BuffKind::FortifySkill) < 0.0f, "fortify archery is not offered with a melee weapon drawn");
+        s.drawn = PostureKind::Bow;
+        Check(BuffScore(s, BuffKind::FortifySkill) > t.actFloor, "...and is with a bow drawn");
+        Check(BaseSkillAv(149) == 20 && BaseSkillAv(137) == 8 && BaseSkillAv(98) == 8 && BaseSkillAv(11) == 11 && BaseSkillAv(152) == 23 && BaseSkillAv(24) == -1 &&
+              BaseSkillAv(153) == -1, "a PowerModifier / *Modifier skill actor value maps to its base skill (Destruction 149 -> 20, Marksman 137 -> 8, 98 -> 8)");
+        s = BuffFight(BuffKind::FortifySkill, 20.0f, 60.0f, BaseSkillAv(149));
+        s.book.entries.push_back(SpellEntry{});   // a Destruction spell he casts
+        s.book.entries.back().drop = Prune::Drop::Keep; s.book.entries.back().school = kDestruction;
+        s.drawn = PostureKind::None;
+        Check(BuffScore(s, BuffKind::FortifySkill) > t.actFloor, "a fortify-Destruction potion (the PowerModifier value) is offered to a Destruction caster");
+        s = BuffFight(BuffKind::FortifyHealth);
+        s.foes[0].level = 3;
+        Check(BuffScore(s, BuffKind::FortifyHealth) < 0.0f, "no fortify against a foe far below him (mudcrab)");
+        s = BuffFight(BuffKind::FortifySkill, 20.0f, 60.0f, 10);
+        Check(BuffScore(s, BuffKind::FortifySkill) < 0.0f, "fortify smithing is never a combat candidate");
+    }
+    {
+        Snapshot s = BuffFight(BuffKind::RegenHealth);
+        s.self.hp = s.self.hpMax;
+        Check(BuffScore(s, BuffKind::RegenHealth) <= 0.0f, "regen health at full health scores nothing (need is vetoed at full)");
+        s.self.hp = 30;
+        Check(BuffScore(s, BuffKind::RegenHealth) > 0.0f, "...and scores when he is hurt");
+        const float low = BuffScore(s, BuffKind::RegenHealth);
+        s.self.hp = 80;
+        Check(BuffScore(s, BuffKind::RegenHealth) < low, "...more the lower his health");
+    }
+    {
+        Snapshot s = BuffFight(BuffKind::Invisibility);
+        Check(BuffScore(s, BuffKind::Invisibility) < 0.0f, "invisibility is not offered without stealth intent");
+        s.selfSneaking = true;
+        Check(BuffScore(s, BuffKind::Invisibility) > t.actFloor, "...and is while he sneaks");
+        s.selfSneaking = false;
+        ClassGate g; g.sneakClass = true;
+        Check(BuffScore(s, BuffKind::Invisibility, g) < 0.0f, "...but a sneak class alone, not sneaking, does not drink it (never in open melee)");
+    }
+    {
+        Snapshot s = BuffFight(BuffKind::WaterBreathing);
+        Check(BuffScore(s, BuffKind::WaterBreathing) < 0.0f, "water breathing is catalogued, never a candidate");
+        s = BuffFight(BuffKind::CurePoison);
+        Check(BuffScore(s, BuffKind::CurePoison) < 0.0f, "a cure is catalogued, never a candidate");
+    }
+    {
+        // Bit-identical for a follower who carries no buff potion: the family adds no candidate and no term to anything else.
+        Snapshot with = BuffFight(BuffKind::ResistFire);
+        with.book.kit.buff[static_cast<std::size_t>(BuffKind::ResistFire)] = PotionBuff{};
+        const Generated g = Generate(with, ClassGate{}, t);
+        Check(CountFam(g, Family::DrinkBuff) == 0, "no buff potion carried: no DrinkBuff candidate at all");
+        Check(Name(Family::DrinkBuff) == "drink_buff" && Name(Cons::BuffThreat) == "buff_threat" && Name(Cons::BuffStealth) == "buff_stealth", "the new names");
+        Check(static_cast<std::size_t>(Family::DrinkBuff) == static_cast<std::size_t>(Family::Step) + 1 &&
+              static_cast<std::size_t>(Cons::BuffThreat) == static_cast<std::size_t>(Cons::BoostGuardLine) + 1, "the new family and considerations are APPENDED");
+    }
+    {
+        // The pure kind rules the catalog and the runtime fallback share.
+        BuffKind k = BuffKind::kCount;
+        Check(BuffFromName("resist_fire", k) && k == BuffKind::ResistFire && BuffName(BuffKind::FortifySkill) == "fortify_skill", "kind names round-trip");
+        Check(!BuffFromName("nope", k), "an unknown kind is refused (a newer patcher)");
+        Check(SkillGroupOf(8) == SkillGroup::Ranged && SkillGroupOf(6) == SkillGroup::Melee && SkillGroupOf(20) == SkillGroup::Magic &&
+              SkillGroupOf(15) == SkillGroup::Stealth && SkillGroupOf(10) == SkillGroup::Other && SkillSchoolOf(20) == kDestruction &&
+              SkillSchoolOf(19) == kConjuration && SkillSchoolOf(8) == -1, "skill groups and schools");
+    }
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -1699,6 +1821,7 @@ int main() {
     BatchI();
     ClassCurveRows();
     SchoolAffinityRows();
+    BuffPotions();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

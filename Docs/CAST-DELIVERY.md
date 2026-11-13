@@ -276,10 +276,15 @@ value so re-dispatch and stream stop agree. Sites: `Evaluator::ConditionTrue`
 top boundary is clamped (`min`); thresholds under 100% are unchanged.
 
 - **How a cap/stop ends a stream:** a **heal-full**, **magicka-out**, **stale** (gambit stopped
-  winning), or **gone** release is a true END-of-stream and dispels the sustained effect. A plain
+  winning), or **gone** release is a true END-of-stream and dispels the sustained effect, EXCEPT
+  that a **fire-and-forget Buff-kind** self spell (light, ward, fortify, rune-shaped buff) is never
+  dispelled by a **stale** or spell-**switch** release: it lives its authored life
+  (`fix/mage-buff-loop`: IAUS stops choosing a buff once it is up, so the old dispel removed it
+  ~2 s after the cast and it was cast again). A plain
   **cap** release on a still-wounded heal is release-only (no dispel) and the next winning tick
   re-streams it with a **fresh** random cap — varied human bursts, healing flows while wounded. A
-  sticky **Buff** (ward) dispels on any release and is re-served if still wanted.
+  **concentration** Buff (ward channel) is still dispelled on release and re-served if still
+  wanted; a fire-and-forget Buff is left to live (above), and a real dispel erases its recast lock.
 
 **FF affordability** is unchanged: `CastAuto`'s `affordable()` gate `break`s the fan the moment
 the running budget can't afford the next cast (all fan casts share one cost, so once one is

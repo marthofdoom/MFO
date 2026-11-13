@@ -274,6 +274,24 @@ namespace MFO::Actuation {
     // declines a self target and sends it there) hold a stream of exactly a_spell for a_follower? Worker-serial, the
     // same registry discipline as CastSelfDirect. A pure read.
     bool SelfStreamLive(RE::FormID a_follower, RE::FormID a_spell);
+    // SELF-BUFF RECAST LOCKOUT (fix/mage-buff-loop). A fire-and-forget Buff whose effect leaves no active effect carrying its
+    // own spell (a SelfHazard / ScriptRider shape: Circle of Strength, Mystic Wind) is invisible to the book's activeOn read
+    // and to HasMagicEffect, so IAUS re-chose it every lap. ApplySelfEffect (MAIN thread) records a successful self-apply
+    // here, for the costliest effect's authored duration (a 5 s floor when it is 0, the book's own refresh period).
+    // SelfBuffRecastLocked (ANY thread, leaf mutex, no engine call) is read by iaus/Candidates.cpp, which drops the
+    // candidate while it is true. ClearSelfBuffLocks: a_follower 0 = every follower (ClearSelfCasts), else one follower
+    // (combat end / dismissal, Iaus::Candidates::CombatEnded). The same lock makes SelfCastReconcile / the spell switch
+    // leave a still-living fire-and-forget buff alone (cast/DirectSelf.cpp).
+    void NoteSelfBuffApplied(RE::FormID a_follower, RE::SpellItem* a_spell);
+    bool SelfBuffRecastLocked(RE::FormID a_follower, RE::FormID a_spell);
+    void ClearSelfBuffLocks(RE::FormID a_follower);
+    // WORKER, once per tick (SelfCastReconcile): posts the item-7 `[buff-readback]` read of each apply that is ~1 s old.
+    void PumpSelfBuffReadback();
+    // WORKER (ChooseBuffRoad's state is worker-serial). Would a buff of a_spell cast at a_recipient (any actor other than
+    // a_follower) take the animated ch.8b CLAIM road (ChooseBuffRoad == Claim)? IAUS offers an ally a Self-delivery buff
+    // only where this is true (iaus/Generate.cpp via Candidates.cpp), because the claim's delivery-flip proxy is the road
+    // that lands a Self spell on someone else in combat.
+    bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
     // The CLAIM road (I4 review F1): does a standing Harbinger heal claim of a_follower, on either hand, name exactly
     // (a_spell, a_recipient)? a_recipient 0 or the follower himself = a SELF claim (the bridge reports a self claim's
     // target as 0). The same two reads Evaluator's PickAlly makes for the incumbent recipient
@@ -769,6 +787,12 @@ namespace MFO::Actuation {
     // alongside ReleaseOffenseCast/ComposedCast::ClearWatch -- the same release
     // points that claim already uses).
     void ClearCastLock(RE::FormID a_follower);
+    // The follower's fight has really ended (CombatScan's two-consecutive-party-OOC edge): ends BuffRoad's per-fight bounds (the
+    // never-fired hold-off g_neverFired and the fire-released window g_fireReleased). ClearCastLock's per-lap ResetBuffFollower leaves both.
+    void EndFightBuffBounds(RE::FormID a_follower);
+    // One call per combat lap (CombatScan): judges a fire-and-forget buff released at its fire. Landed (up-read Yes) -> done; the cap
+    // passed with no Yes -> the R2-1 WARN + g_neverFired hold-off; else it keeps waiting. Worker only.
+    void TickBuffLanded(RE::Actor* a_follower);
 
     // Revert/load: drop every follower's lock. No engine call -- the world is
     // being replaced (mirrors ClearForcedWeapons/ClearSelfCasts). Called from

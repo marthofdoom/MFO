@@ -5,6 +5,25 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.11.0 -- Classes beta groundwork, mage buffs and clothing, the theft gate and a smarter fight (PRERELEASE)
+
+This is a Deck test prerelease for the T2 field session. It needs Harbinger v0.20.0 (ABI v45). With an older Harbinger the base mod still works, but the classes add-on will not start (one log line and one notice say so, and its saved data is kept).
+
+**Save note.** The follower gambit data is still the FLWR v6 layout from 2.9.0. This build adds one new co-save version, MCLS v2 (the classes add-on record: per-class logistics tables, the picked tier 4 class and the classes-off tables). An older MFO cannot read a save that this build wrote with class data, and a v1 class record is read and written back as v2. The per-follower combat IAUS switch lives in a spare bit of the existing FLWR byte, so FLWR did not change. Keep a copy of your saves from before you try it.
+
+- **Mages wear clothing, and the class decides.** The mage line now wears clothing instead of armor, a worn relic never holds a slot when a follower is claimed again, and a rated piece from the wrong category no longer does either.
+- **Self buffs no longer loop.** A buff the game cannot read back is locked per spell after it is cast, casts are paced per follower, and a fire and forget buff lives out its authored life. Self buffs that other people can take are offered to allies through the proxy road. New log lines show the readback and each lockout.
+- **Buff, then bow.** A fire and forget self buff releases the hand at the moment it fires. A foe that reads fully occluded sends the follower in (the approach now outranks the spell range hold).
+- **The theft gate.** One check covers stolen copies, guards, locked and off limits doors and stations. Followers never commit a crime they would be seen doing, and a refused check never counts as theft. An owned copy a follower cannot carry stays in the chest.
+- **Followers can steal and pick locks on purpose.** Two new gambits, `act.steal` (with a witness check for the follower and for you) and `act.pick_locks` (unowned chests), plus the owned chest pick and steal take. A follower can also use an off class weapon on purpose.
+- **Melee moves.** `act.block` and power attacks now run through Harbinger, and a follower's class combat style comes through Harbinger too. Mercenary Avoid Threat is 0.3.
+- **Hiding, disengaging and corpses.** A follower can hide when he is unseen (stealth entry, a blow from stealth, silent casters keep casting). He can disengage to somewhere out of sight, and a held holder no longer drags a teammate's fight with him. A new condition `cond.corpse_within` and a corpse cast road let a follower raise the corpse you chose.
+- **Class aversion.** Conjurer and Healer line followers are less likely to be targeted (weight 0.25, only while the class is equipped).
+- **Class add-on, now playable for testing (still a beta, tiers 1 and 2).** Class combat packages (a combat style per stance, attack mixes, leash scale), class XP from fights won (kills, assists, observed heals, summon uptime, `fClassXpRate`), a Classes tab on the board, the class MCM, default gambits per class, per class dodge rates (heavy armor gets zero dodge twins) and a per class school wave over the School Circle. The add-on ships as its own archive (MFO-Classes-Addon-v1.0.0). Without Harbinger v0.20.0 it does not start.
+- **A smarter fight (Sentient AI).** The engine fills the AI's facts directly (armor, hits, losses, swings, casting, mortal, learned reach). Step weight is 1.197, the spell range hold uses the shortest range and the chosen cast, and knight line followers guard at a floor (their own taunts, and drink first when hurt). Aversion, occlusion holds, calm foe give up and target pin ends were fixed after the first field run. Every new constant was searched in the simulator against the real enemies.
+- **Dev builds only.** The DEV self-test gained the T2 tests (6 automatic, 16 manual). The release DLL has none of them.
+- **Under the hood.** The CommonLibSSE-NG fork is on registry c8b6612 with the member function return fix (id table revision 5).
+
 ## v2.10.0 -- Perk duplication fix, follower spell cost, animated wards and the first ranged miss budgets (PRERELEASE)
 
 This is a Deck test prerelease. It needs Harbinger v0.19.0 (ABI v36) for the ranged miss budgets. With an older Harbinger everything else works, and each new Harbinger call is gated on its ABI.

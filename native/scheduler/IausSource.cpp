@@ -40,7 +40,26 @@ namespace MFO::Scheduler {
         constexpr std::uint8_t kChanDescribe = 0;   // [iaus-gen]: what was generated
         constexpr std::uint8_t kChanNoBook   = 1;   // [iaus] no fresh spell book
         constexpr std::uint8_t kChanStaff    = 2;   // [iaus] staff posture has no equip road
+        constexpr std::uint8_t kChanBuffPotion = 3;   // [iaus] buff-potion: one line per pick, paced
         constexpr double       kDescribeSec  = 10.0;
+        constexpr double       kBuffLogSec   = 5.0;   // at most one buff-potion line per follower per 5 s (a refused drink repeats every lap)
+
+        // PASSIVE LOG (feat/buff-potions): the pick of a buff potion, the effect it is for and WHY (the facts its considerations read), and
+        // how the drink went. Reads the candidate and the snapshot's kit only; nothing is mutated.
+        void LogBuffPick(RE::FormID a_actor, const Iaus::Kit& a_kit, const Iaus::Candidate& a_c, const Actuation::Outcome& a_out) {
+            const std::size_t ki = a_c.f.buffKind;
+            if (ki >= Iaus::kBuffKinds) return;
+            const auto kind = static_cast<Iaus::BuffKind>(ki);
+            const Iaus::PotionBuff& p = a_kit.buff[ki];
+            std::string why;
+            if (Iaus::IsResist(kind)) why = std::format("{:.0f}% of the foes (a foe on him counts double) hit with the element it resists", a_c.f.buffThreat * 100.0f);
+            else if (Iaus::IsRegen(kind)) why = std::format("the resource is at {:.0f}%", a_c.f.buffRegenPct * 100.0f);
+            else if (Iaus::IsFortify(kind)) why = std::format("fight opener, {:.1f} s into the fight", a_c.f.combatSec);
+            else if (kind == Iaus::BuffKind::Invisibility) why = "stealth intent (he sneaks or his class sneaks)";
+            spdlog::info("[iaus] buff-potion {:08X} drinks '{}' ({:08X}) for {}: magnitude {:.0f} for {:.0f} s, {} carried, why: {} -> {}{}{}",
+                         a_actor, p.name.empty() ? "?" : p.name, a_c.form, Iaus::BuffName(kind), p.magnitude, p.duration, p.count, why,
+                         a_out.result == Actuation::Result::Fired ? "drank it" : "not drunk", a_out.reason.empty() ? "" : ": ", a_out.reason);
+        }
 
         [[nodiscard]] bool IsCastFamily(Family a_f) {
             // The families that hold a hand and a claim. A summon is a one-shot (the scan's own isCast excludes it).
@@ -121,6 +140,60 @@ namespace MFO::Scheduler {
             APMFBridge::ServiceRangeClose(a_id, c.foe, c.radius, c.far);
         }
 
+        // The foe the occluded approach would pin, or null when it files nothing: not a melee-only follower, every listed foe reads Occluded,
+        // and a foe resolves (the current combat target if it is a listed foe, else the target of the attack / offense candidate).
+        // A pure read of the snapshot, so the lap's ordering (SIGHT WINS) and the filing itself decide on the same state.
+        const Iaus::Combatant* OccludedFoe(const Iaus::Candidates::Set& a_set) {
+            const Iaus::Snapshot& s = a_set.snap;
+            if (s.meleeOnly || s.foes.empty()) return nullptr;
+            for (const auto& f : s.foes) if (f.sight != Iaus::Sight::Occluded) return nullptr;
+            auto listed = [&](std::uint32_t a_fid) -> const Iaus::Combatant* {
+                if (a_fid == 0) return nullptr;
+                for (const auto& f : s.foes) if (f.id == a_fid) return &f;
+                return nullptr;
+            };
+            if (const auto* foe = listed(s.currentTargetId)) return foe;
+            for (const auto& c : a_set.gen.actions) {
+                if (c.family != Family::Attack && c.family != Family::PowerAttack && c.family != Family::CastOffense) continue;
+                if (const auto* foe = listed(c.target)) return foe;
+            }
+            return nullptr;
+        }
+
+        // THE OCCLUDED APPROACH (fix/iaus-occluded-approach, field 11-12): the gambit selector (Evaluator.cpp PickFoe) files the ch.24 offense
+        // approach when every candidate foe reads Occluded on the follower's own ray, and ends it on a Visible read; IAUS never ran that selector,
+        // so a follower who sensed a foe she could not see (an archer with only buffs and summons to pick) never walked toward it. Same shape as
+        // ServiceSpellRange: a lap-level claim of MFO's own that is not a pick and names no action. The same Sightline verdicts (Basis::Own, which
+        // the snapshot carries as Combatant::sight), the same calls with the same arguments; the sight dwell, the standoff, the radius and the
+        // blocked / regular-movement bookkeeping all live in apmf/OffenseApproach.cpp, so this adds no constant. A melee-only follower reads the
+        // engine's ray in the gambit path (a_ownRay false) and files nothing there, so he files nothing here.
+        // The foe: the current combat target if it is a listed foe, else the target of the attack / offense candidate, else none.
+        void ServiceOccludedApproach(RE::FormID a_id, const Iaus::Candidates::Set& a_set) {
+            const Iaus::Snapshot& s = a_set.snap;
+            if (s.meleeOnly || s.foes.empty()) return;
+            // Mirror of Evaluator.cpp PickFoe: a Visible read from any listed foe is sight (NoteOffenseSight); the approach is filed only when
+            // EVERY listed foe reads Occluded (a Visible or Unknown foe means no approach).
+            bool anyVisible = false;
+            for (const auto& f : s.foes) if (f.sight == Iaus::Sight::Visible) anyVisible = true;
+            if (anyVisible) { APMFBridge::NoteOffenseSight(a_id); return; }
+            const Iaus::Combatant* foe = OccludedFoe(a_set);
+            if (!foe) return;
+            // ONE ch.24 claim per follower (apmf/RangeApproach.cpp banner): the H3 disengage drive holds the channel while it stands, so the
+            // offense approach yields to it and is released, never filed over it. (The H4 close is NOT a yield: SIGHT WINS, the lap releases it
+            // before this runs, see the constructor.)
+            if (APMFBridge::DisengageStands(a_id)) {
+                APMFBridge::ReleaseOffenseApproach(a_id, "a disengage drive holds the ch.24 channel");
+                return;
+            }
+            // A touch spell closes to touch range (Evaluator's a_touchSpell): the spell of his hands that IAUS would cast at him.
+            bool touch = false;
+            if (Iaus::Reposition::SpellPhase(s)) {
+                const auto h = Iaus::Reposition::HandsRange(s);
+                touch = h.touchForm != 0 && (!h.mixed || h.touchChosen);
+            }
+            APMFBridge::ServiceOffenseApproach(a_id, foe->id, touch);
+        }
+
         // RELEASE WHAT A RUNNING DECISION HOLDS (the toggle edge). Every call is the existing, idempotent release
         // the combat-end teardown and the `!castSeen` lap already make; nothing here is a new engine road.
         void StandDown(RE::FormID a_id, const char* a_why) {
@@ -163,7 +236,19 @@ namespace MFO::Scheduler {
         // member and is never moved while the candidates (string_views into its snapshot) are in use.
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
-        ServiceSpellRange(a_id, m_set.snap, m_set.gate);
+        // SIGHT WINS (marth 11-12: "for sure, and not having a bow doesn't matter if you don't have line of sight"): while EVERY listed foe
+        // reads Occluded and the offense approach would file, it outranks the H4 spell-range close, for casters and archers alike. The close is
+        // released and not asked for; the approach files. The decision is the all-Occluded state alone (no churn), and any Visible / Unknown
+        // read gives the channel back to H4 as before. A standing disengage drive still outranks both (it is checked in each service).
+        // H4 is released only when the approach could actually file at that foe (not blocked this fight, seat not refused); otherwise H4
+        // works as on main. While an offense approach stands H4 is not filed at all: the approach's own 1.5 s sight dwell is the hysteresis,
+        // so a flicker of sight does not swap the two claims every lap.
+        const Iaus::Combatant* occFoe = OccludedFoe(m_set);
+        if (occFoe && !APMFBridge::DisengageStands(a_id) && !APMFBridge::OffenseApproachCannotFile(a_id, occFoe->id))
+            APMFBridge::ReleaseRangeClose(a_id, "sight wins: every foe reads Occluded, the offense approach takes the ch.24 channel");
+        else if (!APMFBridge::OffenseApproachStands(a_id))
+            ServiceSpellRange(a_id, m_set.snap, m_set.gate);
+        ServiceOccludedApproach(a_id, m_set);
         auto& acts = m_set.gen.actions;
         Iaus::Engine::FillCooldowns(a_id, acts, m_tick, T);
         m_d = Iaus::Engine::Decide(a_id, acts, ProfileOf(m_set.gate), T, m_tick, &m_ms);
@@ -259,6 +344,7 @@ namespace MFO::Scheduler {
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
         case Family::DrinkMagicka: c.actionOpcode = Vocab::kActDrinkMagickaPotion; break;
+        case Family::DrinkBuff:    c.actionOpcode = Vocab::kActDrinkBuffPotion; c.actionParam = cand.form; break;   // the potion: Logistics::DrinkPotionForm
         case Family::CastOffense:
         case Family::CastControl:
         case Family::CastHeal:
@@ -269,7 +355,10 @@ namespace MFO::Scheduler {
             bool selfDelivery = false;
             for (const auto& e : m_set.snap.book.entries)
                 if (e.form == cand.form && e.source == Iaus::SpellSource::Spell) { selfDelivery = e.selfDelivery; break; }
-            if (cand.target == 0 || selfDelivery) {
+            // fix/mage-buff-loop item 5: a Self-delivery BUFF that Generate offered at an ally (Snapshot allyRoad: the claim road's
+            // delivery-flip proxy serves it) is a cast AT that ally; every other Self-delivery spell is himself.
+            const bool buffAtOther = cand.family == Family::CastBuff && cand.target != 0;
+            if (cand.target == 0 || (selfDelivery && !buffAtOther)) {
                 // Himself (a self heal, buff, ward, summon) or a Self-delivered blast centred on him.
                 c.actionOpcode = Vocab::kActCastSelf;
                 c.target = {};
@@ -354,6 +443,8 @@ namespace MFO::Scheduler {
         }
         const Iaus::Step& step = m_d.order[it->idx];
         const Iaus::Candidate& cand = m_set.gen.actions[step.idx];
+        if (cand.family == Family::DrinkBuff && Iaus::Engine::Paced(m_id, kChanBuffPotion, kBuffLogSec, m_tick))
+            LogBuffPick(m_id, m_set.snap.book.kit, cand, a_outcome);
         if (fired) {
             m_pickedStep = static_cast<int>(it->idx);
             // An approach leg (the power attack closing to melee) is the decision in effect, not the swing: it
@@ -375,7 +466,7 @@ namespace MFO::Scheduler {
             // old and no container event covers the first three. Re-measure at once after such a fire.
             switch (cand.family) {
             case Family::CastBuff: case Family::CastWard: case Family::CastSummon: case Family::Scroll:
-            case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka:
+            case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka: case Family::DrinkBuff:
                 Iaus::SpellBook::Invalidate(m_id);
                 break;
             default: break;
