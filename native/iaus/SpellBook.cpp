@@ -348,6 +348,13 @@ namespace MFO::Iaus::SpellBook {
             a_actor->VisitSpells(vis);
             for (auto* sp : vis.out) {
                 if (!Vocab::IsCastableSpell(sp)) continue;   // abilities, powers, constant effects: never an entry
+                // fix/mage-buff-loop item 6: a runtime-minted (0xFF__ dynamic) spell is never a spell he KNOWS. Harbinger mints its
+                // delivery-flip proxy for a claim and TEACHES it to the actor (cast/HealRoad.cpp ProxyUnlearnedRelease: "mints and
+                // teaches it again"), so VisitSpells lists it while the claim stands; it then reached the generator as a
+                // candidate (the field's FF000992) and CastOn refused it ("follower does not know this spell"). MFO's own
+                // ConcProxy forms are the same 0xFF slots (cast/Direct.cpp, never on a spell list). A dynamic form renumbers every
+                // save and is never a book entry (cast/Archetype.cpp reads it uncached for the same reason).
+                if (sp->IsDynamicForm()) continue;
                 book->entries.push_back(MakeEntry(a_actor, sp, Source::Spell, gate, party, a_probes));
             }
 
