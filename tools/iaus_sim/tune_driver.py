@@ -378,6 +378,11 @@ def all_knobs():
                     add(".floor", "floor", fl, [max(0.01, fl * 0.5), min(1.0, fl * 1.5)], ("mul", 0.01, 1.0, False))
             if kind != "Bin" and w > 0.0:
                 add(".w", "w", w, [w * k for k in (0.5, 0.75, 1.5, 2.0)], ("mul", -INF, INF, False))   # the consideration's exponent for this class (inert on a gate or a boost: the liveness screen drops it)
+            if (fn, cn) == ("equip", "melee_dist") and ("equip.ranged_dist.b") in KNOB_META and kind == "Logi":
+                # BATCH 3 (iaus-sim-v2.md 35): the posture EDGE as ONE knob, both midpoints at once (sim alias equip.crossover; written as the
+                # two SetCurveParam lines). A single midpoint moves the crossover only half way, so coordinate descent cannot reach a far edge.
+                knobs.append(("equip.crossover", "{c}:equip.crossover={v}", b, [round(b * k, 5) for k in (0.25, 0.35, 0.5, 0.75, 1.33)]))
+                KNOB_META["equip.crossover"] = ("mul", 0.02, 1.0, False)
         elif len(p) == 4 and p[0] == "FAMILY" and float(p[3]) > 0.0 and p[2] not in ("use_scroll", "equip"):
             knobs.append(("family." + p[2], "{c}:family.%s={v}" % p[1], 1.0, [0.75, 0.87, 1.15, 1.33]))   # the class's multiplier on a whole family: small on purpose (the class card)
             KNOB_META["family." + p[2]] = ("mul", -INF, INF, False)
@@ -694,6 +699,8 @@ def cpp_line(spec):
         return 'SetScalar(%s, "%s", %s);' % (row, path[7:], v)
     if path.startswith("family."):
         return "SetFamilyWeight(%s, static_cast<Family>(%s), %s);" % (row, path[7:], v)
+    if path == "equip.crossover":   # the posture edge: both distance curves' midpoint (Family::Posture 8, Cons 35 ranged_dist / 36 melee_dist)
+        return "\n".join('SetCurveParam(%s, static_cast<Family>(8), static_cast<Cons>(%d), sh.curve[%d], "b", %s);' % (row, k, k, v) for k in (35, 36))
     f, c, param = path.split(".")
     if param == "w":
         return "SetWeight(%s, static_cast<Family>(%s), static_cast<Cons>(%s), %s);" % (row, f, c, v)

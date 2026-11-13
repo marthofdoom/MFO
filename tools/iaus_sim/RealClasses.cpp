@@ -87,6 +87,11 @@ namespace Sim {
                 const long ff = index(path.substr(7), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
                 if (ff < 0 || !CC::SetFamilyWeight(row, static_cast<Family>(ff), v)) { a_err = "unknown family or bad weight in --curve '" + sp + "' (<class>:family.<family>=<v>, v > 0)"; return false; }
                 continue; }
+            if (path == "equip.crossover") {   // BATCH 3 (iaus-sim-v2.md 35): the posture EDGE, both distance curves' midpoint b at once (ranged_dist and melee_dist
+                // cross where both are 0.5, so equal midpoints put the swap at v x 1200 units). Native has no such param: it is the two SetCurveParam lines.
+                for (const Cons k : { Cons::PostureRanged, Cons::PostureMelee }) { g_curveConsEdited.push_back(static_cast<std::size_t>(k));
+                    if (!CC::SetCurveParam(row, Family::Posture, k, a_shared.curve[static_cast<std::size_t>(k)], "b", v)) { a_err = "bad value in --curve '" + sp + "'"; return false; } }
+                continue; }
             const auto d1 = path.find('.'), d2 = d1 == std::string::npos ? d1 : path.find('.', d1 + 1);
             if (d2 == std::string::npos) { a_err = "bad --curve path '" + path + "' (<family>.<cons>.<param>)"; return false; }
             const long fi = index(path.substr(0, d1), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
