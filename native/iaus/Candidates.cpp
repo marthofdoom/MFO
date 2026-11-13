@@ -123,7 +123,8 @@ namespace MFO::Iaus::Candidates {
 
         // feat/buff-potions: the element a foe hits with, for the resist potions' threat term: the spell in a hand, else the one it is casting
         // right now (plain loads of the combat thread's fields, the Fills.cpp reads: a stale answer is one lap old, never corrupt). -1 = none known.
-        // Not read: an enchanted weapon, a shout or breath (a power), an innate creature attack.
+        // The magicCasters loop covers every caster slot including the shout / power slot, so a breath or shout being cast IS read while it casts.
+        // Not read: an enchanted weapon, an innate creature attack, a power not being cast this lap.
         int FoeElementAv(RE::Actor* a_foe) {
             for (const bool left : { false, true }) {
                 auto* o = a_foe->GetEquippedObject(left);

@@ -53,8 +53,9 @@ namespace MFO::Logistics {
             case AV::kMagicka: if (!(a_recover || peak)) return false; a_kind = BuffKind::FortifyMagicka; return true;
             default: break;
             }
-            const int n = static_cast<int>(a_av);
-            if (n >= 6 && n <= 23) { a_kind = BuffKind::FortifySkill; a_skillAv = n; return true; }   // the 18 skills
+            // The 18 skills as the BASE skill number 6..23. Vanilla fortify-skill potions use the PowerModifier actor values 135..152
+            // (base + 129) and some the *Modifier values 96..113 (base + 90); only a few use the base value (fork ActorValues.h).
+            if (const int n = Iaus::BaseSkillAv(static_cast<int>(a_av)); n >= 0) { a_kind = BuffKind::FortifySkill; a_skillAv = n; return true; }
             return false;
         }
 

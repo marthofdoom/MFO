@@ -1714,6 +1714,16 @@ static void BuffPotions() {
         Check(BuffScore(s, BuffKind::FortifySkill) < 0.0f, "fortify archery is not offered with a melee weapon drawn");
         s.drawn = PostureKind::Bow;
         Check(BuffScore(s, BuffKind::FortifySkill) > t.actFloor, "...and is with a bow drawn");
+        Check(BaseSkillAv(149) == 20 && BaseSkillAv(137) == 8 && BaseSkillAv(98) == 8 && BaseSkillAv(11) == 11 && BaseSkillAv(152) == 23 && BaseSkillAv(24) == -1 &&
+              BaseSkillAv(153) == -1, "a PowerModifier / *Modifier skill actor value maps to its base skill (Destruction 149 -> 20, Marksman 137 -> 8, 98 -> 8)");
+        s = BuffFight(BuffKind::FortifySkill, 20.0f, 60.0f, BaseSkillAv(149));
+        s.book.entries.push_back(SpellEntry{});   // a Destruction spell he casts
+        s.book.entries.back().drop = Prune::Drop::Keep; s.book.entries.back().school = kDestruction;
+        s.drawn = PostureKind::None;
+        Check(BuffScore(s, BuffKind::FortifySkill) > t.actFloor, "a fortify-Destruction potion (the PowerModifier value) is offered to a Destruction caster");
+        s = BuffFight(BuffKind::FortifyHealth);
+        s.foes[0].level = 3;
+        Check(BuffScore(s, BuffKind::FortifyHealth) < 0.0f, "no fortify against a foe far below him (mudcrab)");
         s = BuffFight(BuffKind::FortifySkill, 20.0f, 60.0f, 10);
         Check(BuffScore(s, BuffKind::FortifySkill) < 0.0f, "fortify smithing is never a combat candidate");
     }
@@ -1734,7 +1744,7 @@ static void BuffPotions() {
         Check(BuffScore(s, BuffKind::Invisibility) > t.actFloor, "...and is while he sneaks");
         s.selfSneaking = false;
         ClassGate g; g.sneakClass = true;
-        Check(BuffScore(s, BuffKind::Invisibility, g) > t.actFloor, "...or when his class is a sneak class");
+        Check(BuffScore(s, BuffKind::Invisibility, g) < 0.0f, "...but a sneak class alone, not sneaking, does not drink it (never in open melee)");
     }
     {
         Snapshot s = BuffFight(BuffKind::WaterBreathing);

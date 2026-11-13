@@ -18,7 +18,8 @@
 //     Health / Stamina / Magicka WITH the Recover flag or the Peak archetype -> fortify (a plain restore is NOT a kind: the restore
 //                                                                      potions keep their own fields and families)
 //     HealRate / StaminaRate / MagickaRate (and the Mult actor values) -> regen kinds
-//     the 18 skills (actor values 6..23)                               -> FortifySkill (av = the skill)
+//     the 18 skills: base actor values 6..23, the PowerModifier values 135..152 (-129) and the *Modifier values 96..113 (-90)
+//                                                                      -> FortifySkill (av = the BASE skill number 6..23)
 //     AttackDamageMult / MeleeDamage / UnarmedDamage                   -> FortifyAttack
 //     WaterBreathing                                                   -> WaterBreathing
 #include <array>
@@ -86,6 +87,14 @@ namespace MFO::Iaus {
     }
     [[nodiscard]] inline bool IsRegen(BuffKind a_k) {
         return a_k == BuffKind::RegenHealth || a_k == BuffKind::RegenStamina || a_k == BuffKind::RegenMagicka;
+    }
+
+    // The BASE skill number 6..23 of a skill actor value as a potion's effect names it: the base value itself, the PowerModifier value (135..152, base + 129,
+    // what vanilla fortify-skill potions use) or the *Modifier value (96..113, base + 90). -1 = not a skill. The patcher (Catalog.cs) and KindOf write the same rule.
+    [[nodiscard]] inline int BaseSkillAv(int a_av) {
+        int n = a_av;
+        if (n >= 135 && n <= 152) n -= 129; else if (n >= 96 && n <= 113) n -= 90;
+        return (n >= 6 && n <= 23) ? n : -1;
     }
 
     // What a FortifySkill potion's skill is worth to the follower in a fight (the skill actor values 6..23).

@@ -9125,7 +9125,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   (`Candidates.cpp` `FoeElementAv:127`, worker; NOT read: enchanted weapons, shouts / breath, innate creature attacks). Generate (`Generate.cpp`
   `BuffPotions:389`, `ElementShare:377`, called after `Drinks`): one candidate per kind he carries, `Candidate::form` = the potion, `Facts::buffKind`; resist = the share of kept
   foes whose element it answers (a foe on him counts 1, else 0.5; Resist Magic answers any caster); fortify = an opener (reuses `Cons::FightStart`, curve
-  untouched); regen = the resource's pct through `Cons::DrinkNeed` (curve untouched); invisibility = stealth intent (`selfSneaking` or `ClassGate::sneakClass`);
+  untouched); regen = the resource's pct through `Cons::DrinkNeed` (curve untouched); invisibility = stealth intent (`selfSneaking` only, review F2); fortify needs a kept foe at least his level (`kBuffFortifyFoeRatio`, placeholder, review F3); fortify_skill stores the BASE skill number (`BaseSkillAv`, PowerModifier 135..152 and *Modifier 96..113 mapped, review F1);
   water breathing and the cures are catalogued, never candidates. NEW: `Family::DrinkBuff`, `Cons::BuffThreat` (`VetoBelow(Lin(1,0), 0.05)`), `Cons::BuffStealth` (gate), `aw(DrinkBuff) 0.5`
   (`Catalogue.cpp:359/407/462`), all APPENDED. The road: `Vocab::kActDrinkBuffPotion` (`act.drink_buff_potion`, IAUS-only, param = the potion form, never serialized) from
   `IausSource.cpp:347` to `cast/Fire.cpp:695` -> `Logistics::DrinkPotionForm` (`logistics/PotionFx.cpp:88`, EquipObject like `DrinkBest`, a per-(follower, potion) duration gate `g_buffUntil`,

@@ -386,6 +386,9 @@ namespace MFO::Iaus {
             }
             return den > 0.0f ? num / den : 0.0f;
         }
+        // PLACEHOLDER (review F3, not searched): a fortify is offered only when some kept foe is at least this level ratio (foe level / his level),
+        // the fact Cons::FoeThreat reads, so a mudcrab fight burns none. The sim search sets it.
+        constexpr float kBuffFortifyFoeRatio = 1.0f;
         void BuffPotions(Ctx& x) {
             const Snapshot& s = x.s;
             if (x.fleeRun) return;   // card G3: during the flee he heals and runs
@@ -437,10 +440,16 @@ namespace MFO::Iaus {
                     default: break;
                     }
                     if (!useful) continue;
+                    if (IsFortify(kind)) {
+                        bool worth = false;
+                        for (const Combatant* foe : x.top)
+                            if (SafeRatio(static_cast<float>(foe->level), static_cast<float>(s.self.level), 1.0f) >= kBuffFortifyFoeRatio) { worth = true; break; }
+                        if (!worth) continue;
+                    }
                     if (IsRegen(kind)) c.f.buffRegenPct = pct;
                     else               c.f.buffOpener = true;
                 } else if (kind == BuffKind::Invisibility) {
-                    if (!(s.selfSneaking || x.g.sneakClass)) continue;
+                    if (!s.selfSneaking) continue;   // review F1/F2: stealth intent = he sneaks NOW (a sneak class alone would drink it in open melee)
                     c.f.buffStealth = Tri::Yes;
                 } else {
                     continue;   // water breathing and the cures: catalogued only

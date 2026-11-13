@@ -348,7 +348,13 @@ static class Catalog
                         case ActorValue.Stamina: if (recover || peak) kind = "fortify_stamina"; break;
                         case ActorValue.Magicka: if (recover || peak) kind = "fortify_magicka"; break;
                         default:
-                            if ((int)av >= 6 && (int)av <= 23) { kind = "fortify_skill"; skill = (int)av; }   // the 18 skills
+                        {
+                            // The 18 skills, stored as the BASE skill number 6..23. Vanilla fortify-skill potions use the PowerModifier actor
+                            // values 135..152 (base + 129) and some the *Modifier values 96..113 (base + 90); only a few use the base value.
+                            int n = (int)av;
+                            if (n >= 135 && n <= 152) n -= 129; else if (n >= 96 && n <= 113) n -= 90;
+                            if (n >= 6 && n <= 23) { kind = "fortify_skill"; skill = n; }
+                        }
                             break;
                     }
                     break;
