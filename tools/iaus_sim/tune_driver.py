@@ -616,6 +616,14 @@ def stage_globals():
                     if worse(ld, lse):
                         fails.append("worse on %s (%+.2f, se %.2f)" % (w, ld, lse))
                 row["lists_g3"] = lists
+                kf = {}
+                for w in A.worlds:   # a shared value moves the Knight's fights too: his guard floor must hold with it
+                    o, n = knight_floor(w, "knight", curves), knight_floor(w, "knight", curves, st)
+                    for g in ("g3", "shipped"):
+                        kf["%s/%s" % (w, g)] = [o[g], n[g]]
+                        if n[g] < 60.0 and (o[g] >= 60.0 or n[g] < o[g] - 0.5):
+                            fails.append("Knight guard floor on %s %s %.1f -> %.1f" % (w, g, o[g], n[g]))
+                row["knight_floor"] = kf
                 if fails:
                     row["verdict"] = "REJECTED: " + "; ".join(fails)
                 elif rise > 0.10:

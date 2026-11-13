@@ -2430,7 +2430,8 @@ A number is ACCEPTED only when every line holds.
   15 cells at all three configs.
 - cross-world: fresh seeds 4001..4096 on built-in, LoreRim, Tuxborn, Vanilla: the equal-weight mean of the four d is > 2 se,
   no world is worse, and as shipped the mean is not worse and inside the band.
-- Knight line: the guard floor holds (>= 60%) on every world, default and as shipped.
+- Knight line: the guard floor holds (>= 60%) on every world, default and as shipped (a Knight-line value, a T1 melee value
+  and a shared value are all held to it).
 - fixed: the School Circle is never a knob; pure 0 / 1 gates and Step vetoes are never knobs; a knob never leaves its valid
   range (no negative offset, floor or level; a boost never under 1; a Piece point at 0 stays a veto).
 
