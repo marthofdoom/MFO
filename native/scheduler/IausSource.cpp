@@ -121,6 +121,44 @@ namespace MFO::Scheduler {
             APMFBridge::ServiceRangeClose(a_id, c.foe, c.radius, c.far);
         }
 
+        // THE OCCLUDED APPROACH (fix/iaus-occluded-approach, field 11-12): the gambit selector (Evaluator.cpp PickFoe) files the ch.24 offense
+        // approach when every candidate foe reads Occluded on the follower's own ray, and ends it on a Visible read; IAUS never ran that selector,
+        // so a follower who sensed a foe she could not see (an archer with only buffs and summons to pick) never walked toward it. Same shape as
+        // ServiceSpellRange: a lap-level claim of MFO's own that is not a pick and names no action. The same Sightline verdicts (Basis::Own, which
+        // the snapshot carries as Combatant::sight), the same calls with the same arguments; the sight dwell, the standoff, the radius and the
+        // blocked / regular-movement bookkeeping all live in apmf/OffenseApproach.cpp, so this adds no constant. A melee-only follower reads the
+        // engine's ray in the gambit path (a_ownRay false) and files nothing there, so he files nothing here.
+        // The foe: the current combat target if it is a listed foe, else the target of the attack / offense candidate, else none.
+        void ServiceOccludedApproach(RE::FormID a_id, const Iaus::Candidates::Set& a_set) {
+            const Iaus::Snapshot& s = a_set.snap;
+            if (s.meleeOnly || s.foes.empty()) return;
+            auto listed = [&](std::uint32_t a_fid) -> const Iaus::Combatant* {
+                if (a_fid == 0) return nullptr;
+                for (const auto& f : s.foes) if (f.id == a_fid) return &f;
+                return nullptr;
+            };
+            const Iaus::Combatant* foe = listed(s.currentTargetId);
+            if (!foe) {
+                for (const auto& c : a_set.gen.actions) {
+                    if (c.family != Family::Attack && c.family != Family::PowerAttack && c.family != Family::CastOffense) continue;
+                    if ((foe = listed(c.target))) break;
+                }
+            }
+            if (!foe) return;
+            // A fresh Visible read from any listed foe is sight (the gambit path's realVisible); the dwell is inside NoteOffenseSight.
+            for (const auto& f : s.foes) {
+                if (f.sight == Iaus::Sight::Visible) { APMFBridge::NoteOffenseSight(a_id); return; }
+            }
+            if (foe->sight != Iaus::Sight::Occluded) return;   // Unknown passes, as in the gambit path
+            // A touch spell closes to touch range (Evaluator's a_touchSpell): the spell of his hands that IAUS would cast at him.
+            bool touch = false;
+            if (Iaus::Reposition::SpellPhase(s)) {
+                const auto h = Iaus::Reposition::HandsRange(s);
+                touch = h.touchForm != 0 && (!h.mixed || h.touchChosen);
+            }
+            APMFBridge::ServiceOffenseApproach(a_id, foe->id, touch);
+        }
+
         // RELEASE WHAT A RUNNING DECISION HOLDS (the toggle edge). Every call is the existing, idempotent release
         // the combat-end teardown and the `!castSeen` lap already make; nothing here is a new engine road.
         void StandDown(RE::FormID a_id, const char* a_why) {
@@ -164,6 +202,7 @@ namespace MFO::Scheduler {
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
         ServiceSpellRange(a_id, m_set.snap, m_set.gate);
+        ServiceOccludedApproach(a_id, m_set);
         auto& acts = m_set.gen.actions;
         Iaus::Engine::FillCooldowns(a_id, acts, m_tick, T);
         m_d = Iaus::Engine::Decide(a_id, acts, ProfileOf(m_set.gate), T, m_tick, &m_ms);
