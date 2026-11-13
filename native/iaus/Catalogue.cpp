@@ -424,7 +424,7 @@ namespace MFO::Iaus {
             aw(Family::Step, 1.197f);      // batch I item 5, chosen 0.9; tuning round 2026-11-12 (iaus-sim-v2 31.11 gates) 1.197: above the hold row it replaces (Sneak 0.6) and below a blow (a blow from stealth is generated at once when ready)
             aw(Family::DrinkBuff, 0.5f);   // PLACEHOLDER (feat/buff-potions): NOT from the sim, not hand-tuned. MEASURED (harness, lap one, Knight melee): a fortify
                                            // or resist candidate scores 0.500 against an Attack's 0.42 (weight 0.8), so on the first lap a buff potion CAN outrank a
-                                           // blow; Generate.cpp gates fortify on a foe worth it (kBuffFortifyFoeRatio). The sim / oracle search sets the real number.
+                                           // blow; Generate.cpp gates fortify on the worth-the-gold rule (WorthTable::floor, feat/consumables; it replaced the old kBuffFortifyFoeRatio level rule). The sim / oracle search sets the real number.
             aw(Family::Regroup, 0.8f);     aw(Family::GiveGround, 1.0f);   aw(Family::Block, 1.0f);   aw(Family::Bash, 1.0f);     // chosen: a move is not a blow, it has to be clearly worth it
 
             // Rapport sharpness (section 5.1, doc; ruling Q33: no emergency exemption -- the floor-gated pool
