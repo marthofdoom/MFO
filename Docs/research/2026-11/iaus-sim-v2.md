@@ -2734,3 +2734,75 @@ before batch 3 (8ba53367) and after (6f85e22a), apart from the decision-timing c
 
 Effect of each switch alone (ranged, archer, ranged-off; built-in; shipped table; 32 seeds; paired d of J, se): `--ranged-perks` +3.86
 (0.34); `--point-blank` +0.15 (0.16); `--draw-spoil 0.5` +0.01 (0.23); `--ranged-perks --point-blank` +4.17 (0.38).
+
+### 35.2 The posture edge as one knob
+
+A single midpoint (`equip.ranged_dist.b` or `melee_dist.b`) moves the crossover only half way, and the driver's coordinate descent moves
+one knob at a time, so the earlier searches could not reach a far edge (full-r2: ranged / archer / ranged-off posture knobs, nothing beat
+noise). `equip.crossover` sets BOTH midpoints (sim alias `<class>:equip.crossover=<v>`, proven equal to the two specs; written into native
+as the two `SetCurveParam` lines by `cpp_line`), tried at x0.25 / 0.35 / 0.5 / 0.75 / 1.33 of 0.45 (135 / 189 / 270 / 405 / 718 units).
+For reference the engine's own combat inventory equips melee inside fCombatInventoryMeleeEquipRange = 256 units (GMST; not used as a value).
+
+### 35.3 The search (run `b3-posture`, 2026-11-13)
+
+`tune_driver.py --bin sim-b3x (a27eaa55) --sim-flags "--ranged-perks --point-blank --buff-dur real" --knobs '^(equip\.|cast_buff\.threat)'
+--classes <15 cells, the ranged line first> --stages prep,classes,joint,edge,floor,summary --jobs 4`: the normal RULE (33.3): 64 train
+seeds, 64 holdout, many-seed gates at three configs (a T1 value on all 15 cells), fresh-seed cross-world over built-in / LoreRim / Tuxborn
+/ Vanilla, the Knight floor. Every list's potion worth re-measured with the flags (prep). `--draw-spoil` is not in it (MODEL, 35.1).
+
+ACCEPTED (every line of RULE):
+
+| Value | train d (se) | holdout | cross-world mean (built-in / LoreRim / Tuxborn / Vanilla) | open decision |
+|---|---|---|---|---|
+| mage `equip.ranged_dist.b` 0.45 -> 0.27 | +0.41 (0.11) | +0.14 (0.07) | +0.20 (+0.23 / +0.41 / +0.12 / +0.02) | card read: small changes (melee 11.4 -> 10.1%, taken/s 5.2 -> 4.7); the same value full-r2 accepted without the flags |
+| evoker `equip.crossover` 0.45 -> 0.1125 (135 u) | +0.88 (0.17) | +0.59 (0.17) | +1.10 (+0.55 / +2.39 / +0.55 / +0.90) | card read: his flee share 1.5 -> 14.1% of actions, distance to the player 426 -> 1089, melee 11.2 -> 6.6%: marth decides whether "stays at the furthest range his spell works at" covers it |
+| evoker `equip.trade.w` 1 -> 2 | +0.23 (0.04) | +0.14 (0.02) | +0.22 | weight at the edge of the range tried (runbook 7); the edge stage found nothing wider better |
+| healer `equip.ranged_dist.w` 1 -> 0.5 | +0.18 (0.06) | +0.11 (0.07) | +0.12 | weight at the edge (runbook 7); card read: contact 39 -> 35% |
+
+Joint gate (the four values against the shipped table, 15 cells, 128 seeds, three configs): PASS, pooled +0.11 (0.01) g3, +0.08 off, +0.08
+shipped. Knight floor: unchanged by the values (no Knight-line value); Vanilla stays under 60% (knight 58.6, great-knight 58.6, ebony-warrior
+59.1 as shipped), exactly as in full-r2 without the flags (58.5 / 58.6 / 59.2): a standing open decision, not batch 3's.
+
+THE ARCHER LINE: no posture value passes.
+- ranged `equip.crossover` 0.1575 (189 u): train +0.66 (0.18), holdout +0.80 (0.23), every many-seed gate passes (ranged +0.73, archer +0.06,
+  conjurer +0.13), but cross-world: LoreRim -0.78 (0.21).
+- archer `equip.crossover` 0.1125 (135 u): train +0.58 (0.15), holdout +0.36 (0.12), gates pass, cross-world: built-in +0.51, LoreRim -0.59
+  (0.11), Tuxborn -0.08 (0.08), Vanilla -0.10 (0.06), mean -0.06.
+- ranged-off: nothing beats noise. thief `equip.ranged_dist.a` 8 -> 4: holdout not confirmed.
+- Why LoreRim says no (seed 4001, archer, shipped vs 0.1125, `--posture-report`): with the bow kept to 135 units his damage per second FALLS
+  (balanced 20.0 -> 18.0, natural 16.4 -> 14.3): on that list his melee near a foe out-damages his bow. The built-in world says the opposite.
+  A value best on one world only is never accepted (RULE), and here the worlds disagree in sign.
+
+THE BUFF FOE TERM: `cast_buff.threat.y0` / `.y1` (0.7, 0.85) beat noise for NO class (largest: mage y1 -0.19 (0.18), evoker +0.03 (0.03)).
+The lab cannot see the field's loop: its fights always have foes (x >= 0.25), the field's buffing ran with NO foe (221 of 318 buff picks,
+`own combat OFF foes 0`), and the lab models a buff's armor / resist only. The knob stays shipped flat; its value waits for a world with
+foe-less combat time (open decision).
+
+### 35.4 Sensitivity: the posture edge rests on an undecoded engine fact
+
+Archer, built-in, 64 seeds, d of J against 0.45 (shipped), flags on, `--draw-spoil P` (a melee hit spoils a draw with chance P):
+
+| P | 0.3375 | 0.225 | 0.1575 | 0.1125 |
+|---|---|---|---|---|
+| 0 | -0.00 (0.12) | +0.14 (0.13) | +0.34 (0.14) | +0.56 (0.15) |
+| 0.5 | -0.07 (0.11) | +0.28 (0.10) | +0.30 (0.12) | +0.50 (0.12) |
+| 1 | +0.12 (0.12) | +0.24 (0.14) | +0.09 (0.16) | +0.04 (0.16) |
+
+If every plain hit spoiled a draw, the built-in edge would sit near 270 units, not 135. Whether a plain hit interrupts an NPC's bow draw is
+the fact that decides it (a disassembly of the hit reaction, or a passive field line: draws begun / released / interrupted per archer).
+
+### 35.5 The ranged playstyle on the result (Playstyles.h: ranged contact% <= 25, archer <= 20)
+
+Built-in, flags on, seeds 1 to 6, the equal-weight mean over the brackets: as shipped (the result: no archer-line value passed) ranged
+contact 29.9% (FAILS <= 25), archer 29.6% (FAILS <= 20), ranged-off 23.0% (passes); bow drawn 68 / 66 / 74% of up-time. With the rejected
+crossovers (ranged 0.1575, archer 0.1125) contact would be 16.2% for both (bow 91 / 93%). The band and the cross-world rule disagree: an
+open decision for marth.
+
+### 35.6 Findings outside the brief, fixed or open
+
+- FIXED (f5fc0ab4): the driver's class-card read (`play_changes_natural`) read a `--baseline` from a `--seeds` run, which writes none, so
+  every run's card read was EMPTY (full-r2's nine classes included). It reads one seed at 48 fights per cell now. full-r2's card-read open
+  decisions were raised on no data: re-run its `classes` stage on the same `--out` with this driver to fill them (cached sweeps replay).
+- OPEN: the edge stage widens a multiplicative knob only to x0.35 / x0.25 of the shared value. For `equip.crossover`, tried down to x0.25,
+  it printed "EDGE IS THE VALID LIMIT" for evoker 0.1125 although the valid limit is 0.02: the edge below 135 units was never tried.
+- OPEN: the field closing rate (35.1).
