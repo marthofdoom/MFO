@@ -18,8 +18,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MFO::Iaus {
@@ -107,7 +109,42 @@ namespace MFO::Iaus {
         int   poisonTarget = 3;
         float poisonPowerRef = 100.0f, poisonWeakScale = 0.8f;
     };
-    [[nodiscard]] inline const LootTuning& DefaultLootTuning() { static const LootTuning t; return t; }
+    // DefaultLootTuning() is the LIVE table: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/looting.txt) swaps edited ones in on the worker between
+    // ticks. ShippedLootTuning() is never edited (a reload starts from it); LiveLootTuning() is the editable object (TuningFile only).
+    [[nodiscard]] inline const LootTuning& ShippedLootTuning() { static const LootTuning t; return t; }
+    [[nodiscard]] inline LootTuning& LiveLootTuning() { static LootTuning t = ShippedLootTuning(); return t; }
+    [[nodiscard]] inline const LootTuning& DefaultLootTuning() { return LiveLootTuning(); }
+    // The by-name edit surface of LootTuning (`loot.<name>=<v>`). ONE list, next to the table: add a member above, add its row here WITH its valid range
+    // (a_why says it). An int member takes a whole number >= 0, the bool 0 or 1. False on an unknown name or a bad / out-of-range value.
+    inline bool SetLootKnob(LootTuning& a_t, std::string_view a_name, float a_v, std::string* a_why = nullptr) {
+        auto why = [&](const char* a_m) { if (a_why) *a_why = a_m; return false; };
+        if (!std::isfinite(a_v)) return why("not a finite number");
+        struct F { const char* name; float LootTuning::* m; bool open; float hi; };   // valid: >= 0 (> 0 when open) .. hi
+        constexpr float kInf = 3.0e38f;
+        static constexpr F kFloats[] = {
+            { "takeThreshold", &LootTuning::takeThreshold, false, 1.0f }, { "needBase", &LootTuning::needBase, false, kInf }, { "needSlope", &LootTuning::needSlope, false, kInf },
+            { "roomKnee", &LootTuning::roomKnee, true, 1.0f }, { "saleGoldPerWeight", &LootTuning::saleGoldPerWeight, true, kInf }, { "saleWeight", &LootTuning::saleWeight, false, kInf },
+            { "gold", &LootTuning::gold, false, kInf }, { "equipment", &LootTuning::equipment, false, kInf }, { "valuables", &LootTuning::valuables, false, kInf },
+            { "jewelry", &LootTuning::jewelry, false, kInf }, { "gemChargeTrigger", &LootTuning::gemChargeTrigger, false, 1.0f }, { "buffScale", &LootTuning::buffScale, false, kInf },
+            { "foodScale", &LootTuning::foodScale, false, kInf }, { "poisonPowerRef", &LootTuning::poisonPowerRef, true, kInf }, { "poisonWeakScale", &LootTuning::poisonWeakScale, false, kInf },
+        };
+        for (const F& k : kFloats) if (a_name == k.name) {
+            if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kInf ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kInf ? "out of range: must be 0..1" : "out of range: must be >= 0"));
+            a_t.*(k.m) = a_v; return true;
+        }
+        struct I { const char* name; int LootTuning::* m; };
+        static constexpr I kInts[] = {
+            { "soulGemTarget", &LootTuning::soulGemTarget }, { "healthTarget", &LootTuning::healthTarget }, { "staminaTarget", &LootTuning::staminaTarget },
+            { "staminaTargetNoWeapon", &LootTuning::staminaTargetNoWeapon }, { "magickaTarget", &LootTuning::magickaTarget }, { "resistTarget", &LootTuning::resistTarget },
+            { "fortifyTarget", &LootTuning::fortifyTarget }, { "regenTarget", &LootTuning::regenTarget }, { "invisTarget", &LootTuning::invisTarget },
+            { "lockpickTarget", &LootTuning::lockpickTarget }, { "poisonTarget", &LootTuning::poisonTarget },
+        };
+        for (const I& k : kInts) if (a_name == k.name) {
+            if (a_v != std::floor(a_v) || a_v < 0.0f || a_v > 1.0e6f) return why("out of range: must be a whole number 0..1000000");
+            a_t.*(k.m) = static_cast<int>(a_v); return true; }
+        if (a_name == "consumableSellRoad") { if (a_v != 0.0f && a_v != 1.0f) return why("must be 0 or 1"); a_t.consumableSellRoad = a_v != 0.0f; return true; }
+        return why("unknown loot knob");
+    }
 
     struct LootVerdict {
         float       score = 0.0f;

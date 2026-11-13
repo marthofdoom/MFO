@@ -1825,7 +1825,7 @@ namespace MFO::Board {
                 // (a snapshot); the actual AddSpell + book consume runs in
                 // ApplyEdits on the main thread.
                 if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc) {
-                    const MFO::Iaus::ClassGate teachGate = MFO::Iaus::SpellBook::GateFor(a->GetFormID());   // once per row, not per tome
+                    const MFO::Iaus::ClassGate teachGate = MFO::Iaus::SpellBook::GateFor(a->GetFormID(), false);   // gating fields only, never the live class rows (TuningFile swaps them on the pump worker); once per row, not per tome
                     for (auto& [obj, data] : pc->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();

@@ -10,6 +10,7 @@
 #include "scheduler/Scheduler_internal.h"
 #include "scheduler/ChoiceSource.h"   // IAUS card I1: the combat scan reads its choices through the seam
 #include "scheduler/IausSource.h"     // IAUS card I6: the second source, for a follower whose FLWR bit 3 is set
+#include "iaus/TuningFile.h"           // MFO_Tuning/*.txt: the live tuning swap, at the top of Tick (between laps)
 #include "Evaluator.h"
 #include "cast/Actuation.h"
 #include "Followers.h"
@@ -493,6 +494,10 @@ namespace MFO::Scheduler {
         constexpr auto kSlack = std::chrono::milliseconds(10);
         if (g_lastTick.time_since_epoch().count() != 0 && (now - g_lastTick) < (kTickInterval - kSlack)) return;
         g_lastTick = now;
+
+        // IAUS TUNING FILES (iaus/TuningFile.h): swap an edited MFO_Tuning/ table in HERE, between laps. This worker is the only reader of those tables
+        // and no IausSource outlives a lap, so the swap needs no lock. Rate-limited to one folder check per ~2 s inside; the first call loads everything.
+        Iaus::TuningFile::Poll();
 
         // OBSERVE THE PACKAGE STATE MACHINE FIRST, and unconditionally.
         //

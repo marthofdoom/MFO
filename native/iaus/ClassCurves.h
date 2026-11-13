@@ -70,11 +70,17 @@ namespace MFO::Iaus::ClassCurves {
     // The shipped table (placeholder structure: every row present, no override, shared defaults).
     [[nodiscard]] const Table& Defaults();
 
-    // The Profile a class scores with, built ONCE per row from Defaults() and cached (a class change is a different reference,
-    // never a rebuild). An id outside the table (0xFF: no class resolved) is the empty default Profile.
+    // The Profile a class scores with, from the LIVE table (the shipped one until iaus/TuningFile.cpp swaps an edited row in) and cached (a
+    // class change is a different reference; a live edit rebuilds the profile IN PLACE between laps, so never hold one across a lap). An id outside the table (0xFF: no class resolved) is the empty default Profile.
     [[nodiscard]] const Profile& ProfileFor(std::uint8_t a_classId);
 
-    // The shipped row's edge constants onto a gate (SpellBook::GateFor), and the same from any Row (the sim's edited copy).
+    // LIVE EDIT (iaus/TuningFile.cpp ONLY, the worker, at the top of Scheduler::Tick): replace a live row (a_row < kRows) and rebuild its profile; and
+    // set the shared per-(family, consideration) weight overrides applied to EVERY profile after its class weights (the sim's --set w.<f>.<c>).
+    // Defaults() stays the compiled table, never edited: a reload copies a row from it.
+    bool SetLiveRow(std::size_t a_row, const Row& a_r);
+    void SetSharedWeights(const std::vector<Profile::WeightOverride>& a_w);
+
+    // The live row's edge constants onto a gate (SpellBook::GateFor), and the same from any Row (the sim's edited copy).
     void Apply(std::uint8_t a_classId, ClassGate& a_gate);
     void Apply(const Row& a_row, std::uint8_t a_classId, ClassGate& a_gate);
 

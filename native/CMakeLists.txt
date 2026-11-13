@@ -92,6 +92,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Curves.cpp
     iaus/Catalogue.cpp
     iaus/ClassCurves.cpp
+    iaus/TuningFile.cpp
     iaus/Score.cpp
     iaus/Decide.cpp
     iaus/Explain.cpp

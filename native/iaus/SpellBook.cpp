@@ -383,7 +383,7 @@ namespace MFO::Iaus::SpellBook {
         std::shared_ptr<const Book> Measure(RE::Actor* a_actor, Probes& a_probes) {
             auto book = std::make_shared<Book>();
             const RE::FormID  fid  = a_actor->GetFormID();
-            const ClassGate   gate = GateFor(fid);
+            const ClassGate   gate = GateFor(fid, false);   // MAIN thread: never the live class rows (TuningFile swaps them on the worker); Measure reads only the gating fields
 
             // The party as the buff "already active" mirror sees it: himself, the player, the active followers.
             std::vector<RE::Actor*> party;
@@ -551,7 +551,7 @@ namespace MFO::Iaus::SpellBook {
         return a_def.line == Classes::Line::Mage || a_def.line == Classes::Line::Hybrid;
     }
 
-    ClassGate GateFor(RE::FormID a_follower) {
+    ClassGate GateFor(RE::FormID a_follower, bool a_curves) {
         namespace W = Classes::Weapon;
         ClassGate g;
         const std::uint8_t eq = Classes::Active() ? Classes::GetEquipped(a_follower) : Classes::kNoClass;
@@ -571,7 +571,7 @@ namespace MFO::Iaus::SpellBook {
         if (def) {
             // Tree OFF: def is the T1 root (T1ForOverride, id 0..2) and the follower scores with the tree-OFF base row of that root.
             const auto row = static_cast<std::uint8_t>(g.treeOn ? static_cast<std::size_t>(def->id) : ClassCurves::kBaseOffFirst + static_cast<std::size_t>(def->id));
-            ClassCurves::Apply(row, g);
+            if (a_curves) ClassCurves::Apply(row, g);
         }
         if (!g.treeOn) {
             // THE CLASS TREE IS OFF: THE CLASS GATE RESTRICTS NOTHING (marth Q63, card I6; closes MFO-B657). Any
@@ -595,7 +595,7 @@ namespace MFO::Iaus::SpellBook {
             const auto id = static_cast<Classes::Id>(i);
             if ((mastered & Classes::Bit(id)) != 0 && CastingClass(Classes::Get(id))) { g.spellsFromMastered = true; break; }
         }
-        ClassCurves::ApplyMastered(mastered, g);   // marth 11-12: each mastered casting class bumps the weight at its peak school (shipped 0)
+        if (a_curves) ClassCurves::ApplyMastered(mastered, g);   // marth 11-12: each mastered casting class bumps the weight at its peak school (shipped 0)
         g.scrollUser = g.spellsOnClass;
         const bool any = (def->weapons & W::kUnrestricted) != 0;
         g.weaponMelee    = any || (def->weapons & (W::kDagger | W::kOneHand | W::kTwoHand)) != 0;
