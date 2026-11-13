@@ -13,7 +13,7 @@ used in place of the library's answer.
 Offline result of this generation: 1.6.1170.0 66/66 verified, 0 refused, 1.5.97.0 66/66 verified, 0 refused.
 
 1.7.104.0 has NO Address Library. Its column is OUR OWN id map: the MIT id table of the CommonLibSSE-NG fork
-(`data/mit-idtable-v1-1-7-104-0.bin`, revision 4, 17770 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
+(`data/mit-idtable-v1-1-7-104-0.bin`, revision 5, 17792 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
 what SelfCheck queries at runtime; authoritative) with the evidence CSVs beside it, keyed by
 the 1.6.1170 id, re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script
 docstring). Offline result: 1.7.104.0 66/68 verified, 2 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
