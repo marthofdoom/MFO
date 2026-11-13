@@ -79,7 +79,7 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
-            "strike", "hold", "need", "flee_heal", "need", "guard_line",
+            "strike", "hold", "need", "flee_heal", "need", "guard_line", "threat",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -97,6 +97,7 @@ namespace MFO::Iaus {
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
         case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
+        case Cons::BoostBuffThreat:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -355,6 +356,13 @@ namespace MFO::Iaus {
             // line OFF (tauntedOnMe 0) below kDrinkHealthLine with a health potion in stock, so a hurt Knight drinks first. CHOSEN, tuned
             // in the sim (iaus-sim-v2 section 31.12).
             at(Cons::BoostGuardLine) = Bin(1.0f, 2.0f);
+            // buff_threat (batch 3, iaus-sim-v2.md 35): FLAT 1.0 through (0, 1) and (1, 1), so the shipped catalogue scores every buff as
+            // before (a boost of exactly 1). The two points are the searched knobs (py0: no foe in the fight, py1: four or more): the sim
+            // decides whether a buff is worth less with no foe and more against many; a value is written only through the driver's gates.
+            {
+                static constexpr std::array<std::array<float, 2>, 2> p{ { { 0.0f, 1.0f }, { 1.0f, 1.0f } } };
+                at(Cons::BoostBuffThreat) = Piece(p);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -482,7 +490,7 @@ namespace MFO::Iaus {
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
                 { Cons::BuffEarly, 1 }, { Cons::BuffMelee, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f },
-                { Cons::ClassFit, 1 },
+                { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 },
             };
             constexpr U kSummon[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::CooldownSoft, 1 }, { Cons::SummonLive, 1 },
@@ -652,6 +660,7 @@ namespace MFO::Iaus {
                 return f.disengageFlee ? RetreatDangerOf(f, t) : Clamp(f.detectShare, 0.0f, 1.0f);
             case Cons::BoostFleeHeal: return B(f.fleeHeal);
             case Cons::BoostGuardLine: return c.family == Family::Block ? In(B(f.tauntedOnMe >= kGuardLineFoes)) : In::Off();
+            case Cons::BoostBuffThreat: return c.family == Family::CastBuff ? In(static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f) : In::Off();
             case Cons::DrinkNeed:
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
                 if (c.family == Family::DrinkMagicka) return f.selfMagicka;

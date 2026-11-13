@@ -136,6 +136,8 @@ namespace MFO::Iaus {
                             // a Mercenary = how many foes press him (two or more)
         BoostGuardLine,     // multiplier x2.0 (APPENDED, Q-S-5): the Knight line holds two or more taunted foes and a swing at him is in the air:
                             // the guard outranks his own blows (marth: the line blocks at least 60% of the attacks aimed at it then)
+        BoostBuffThreat,    // multiplier (APPENDED, batch 3 "sim decides the edge"): a buff cast, by the foes in the fight (x = min(foes, 4) / 4).
+                            // Ships FLAT 1.0 at every x (bit-identical); a class row's curve override is the searched knob (iaus-sim-v2.md 35)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
