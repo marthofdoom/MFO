@@ -1298,9 +1298,7 @@ namespace MFO::Scheduler {
         // action. Once per combat entry -- never delays mid-fight reactions --
         // and silent: no engine call, no log, exactly a slightly-later opening.
         {
-            const auto entered = g_combatEnteredAt.try_emplace(id, now);
-            const auto beat = entered.first;
-            if (entered.second) Actuation::ReleasePendingBuffOnEngage(f);   // release on engage: an unfired self-buff hand claim must not hold his weapon off
+            const auto beat = g_combatEnteredAt.try_emplace(id, now).first;
             const auto hold = std::chrono::milliseconds(
                 200 + static_cast<int>(150.0f * Temperament(id)));
             if (now < beat->second + hold) {

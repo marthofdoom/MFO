@@ -180,11 +180,6 @@ namespace MFO::Actuation {
         // re-cast until the magicka runs dry, holding LEFT. Erased when the claim ends. Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireSeen;
 
-        // THE PENDING SELF-BUFF CLAIM (release on engage, marth 2026-11-12). Per follower, the spell of the self-buff claim BuffClaim last
-        // FILED on himself and nothing has ended; ReleasePendingBuffOnEngage ends it when he engages and it has not fired. Erased by
-        // EndBuffClaim, ResetBuffFollower and ResetBuffRoad. Worker-serial (#4).
-        std::unordered_map<RE::FormID, RE::FormID> g_pendingSelfBuff;
-
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
         void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
@@ -198,8 +193,6 @@ namespace MFO::Actuation {
                 ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             }
             ClearLeftCastLockIf(id, a_spell->GetFormID());
-            if (const auto pb = g_pendingSelfBuff.find(id); pb != g_pendingSelfBuff.end() && pb->second == a_spell->GetFormID())
-                g_pendingSelfBuff.erase(pb);
             if (const auto fs = g_fireSeen.find(id); fs != g_fireSeen.end())
                 for (auto it = fs->second.begin(); it != fs->second.end();)
                     it = (static_cast<RE::FormID>(it->first & 0xFFFFFFFFu) == a_spell->GetFormID()) ? fs->second.erase(it) : std::next(it);
@@ -236,7 +229,6 @@ namespace MFO::Actuation {
         g_neverFired.clear();
         g_fired.clear();
         g_fireSeen.clear();
-        g_pendingSelfBuff.clear();
         std::scoped_lock lock(g_upMx);
         g_up.clear();
     }
@@ -245,31 +237,6 @@ namespace MFO::Actuation {
         g_neverFired.erase(a_follower);
         g_fired.erase(a_follower);
         g_fireSeen.erase(a_follower);
-        g_pendingSelfBuff.erase(a_follower);
-    }
-
-    bool ReleasePendingBuffOnEngage(RE::Actor* a_follower) {
-        if (!a_follower) return false;
-        const auto id = a_follower->GetFormID();
-        const auto pb = g_pendingSelfBuff.find(id);
-        if (pb == g_pendingSelfBuff.end()) return false;
-        const RE::FormID spellID = pb->second;
-        auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
-        if (!spell) { g_pendingSelfBuff.erase(pb); return false; }
-        // A claim that has FIRED (or is charging / in flight) is not pending: it is left to its own refresh and release laps.
-        bool fired = false;
-        if (const auto fi = g_fired.find(id); fi != g_fired.end())
-            for (const auto k : fi->second)
-                if (static_cast<RE::FormID>(k & 0xFFFFFFFFu) == spellID) { fired = true; break; }
-        if (fired || ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID, APMFBridge::kObservedFiringRecencyMs) ||
-            CastInFlightOnHand(a_follower, kHandLeft, spellID, CastProxyOnHand(id, kHandLeft))) {
-            g_pendingSelfBuff.erase(pb);
-            return false;
-        }
-        EndBuffClaim(a_follower, spell, /*a_takeBack=*/true);   // erases the record
-        spdlog::info("[cast] {:08X} released pending self-buff hand claim on engage ({} {:08X}): the weapon can be equipped",
-                     id, spell->GetName() ? spell->GetName() : "?", spellID);
-        return true;
     }
 
     bool BuffPlacementSpell(RE::SpellItem* a_spell) {
@@ -524,7 +491,6 @@ namespace MFO::Actuation {
 #ifdef MFO_DEV_SELFTEST
         DevNoteBuffClaim(spellID);
 #endif
-        if (!other && !corpseTarget && !placement) g_pendingSelfBuff[id] = spellID;
         if (RoadLogDue(id, spellID, BuffRoad::Claim)) {
             const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
             spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X}{} (animated; the engine's own {} caster "

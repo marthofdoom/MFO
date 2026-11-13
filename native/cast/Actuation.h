@@ -770,11 +770,6 @@ namespace MFO::Actuation {
     // points that claim already uses).
     void ClearCastLock(RE::FormID a_follower);
 
-    // RELEASE ON ENGAGE (marth 2026-11-12), cast/BuffRoad.cpp. WORKER only. When the follower engages, a self-buff hand claim (LEFT) that has
-    // NOT fired yet is released at once (claim, [cfc] watch, left lock, the spell in hand) so the engine can equip his weapon. A claim that
-    // fired or is charging is left alone. No timer; buffs outside the engage edge are unchanged. Idempotent. Returns true when it released.
-    bool ReleasePendingBuffOnEngage(RE::Actor* a_follower);
-
     // Revert/load: drop every follower's lock. No engine call -- the world is
     // being replaced (mirrors ClearForcedWeapons/ClearSelfCasts). Called from
     // ClearSelfCasts(), not wired as a separate Serialization.cpp call site.
