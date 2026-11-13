@@ -68,7 +68,7 @@ import time
 
 INF = float("inf")
 # G2 (review of 7e883a9a): gap runs before the stages that describe the final table, because its (a) search can move the table
-DEFAULT_STAGES = "prep,rejudge,classes,joint,edge,gap,globals,consts,floor,rating,recalib,logistics,summary"
+DEFAULT_STAGES = "prep,rejudge,classes,joint,edge,gap,globals,consts,worth,floor,rating,recalib,logistics,loot,summary"
 FOR_CLASS_STAGES = "prep,classes,joint,edge,gap,floor,summary"
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
@@ -156,10 +156,19 @@ def world_args(world):
 
 
 def key_of(world, classes, cfg, curves, sets, binary):
-    return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)], separators=(",", ":"))
+    extra = ["uses:" + sha(uses_path())] if classes.startswith("logi:") else []   # a loot run also depends on the combat world's use counts
+    return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)] + extra, separators=(",", ":"))
+
+
+def uses_path():
+    return os.path.join(A.out, "uses.txt")
 
 
 def sim_cmd(world, classes, cfg, curves, sets, binary):
+    if classes.startswith("logi:"):   # tune 2.11.1: the logistics world's IAUS arm, J_log per seed (Logistics.h Run, --logi-score), mean over the classes
+        cmd = [binary or A.bin, "--no-json", "--logistics", str(CFG["logi_eps"]), "--logi-policy", "iaus", "--logi-score", "--logi-consumables",
+               "--logi-uses", uses_path(), "--classes", classes[5:]]
+        return cmd + (["--set", sets] if sets else [])
     cmd = [binary or A.bin, "--no-json", "--threads", "1", "--print-switch", "--classes", classes, "--fights", "48"] + world_args(world) + CONFIGS[cfg]
     for c in curves:
         cmd += ["--curve", c]
@@ -1277,6 +1286,182 @@ def stage_logistics():
     SUMMARY["stages"]["logistics"] = st
 
 
+# ── tune 2.11.1: the worth-the-gold table and the IAUS loot table ─────────────────────────────────────────────────────────────────
+# One knob = one native member (Tune.h kWorthKnobs / kLootKnobs*): worth.<f> = iaus/ConsumableWorth.h WorthTable::<f>, loot.<f> =
+# iaus/LootNeed.h LootTuning::<f>. Values: x0.5 / x0.75 / x1.33 / x2 of the placeholder inside the member's valid range (a 0..1 share stays
+# inside 0..1, a count stays >= its smallest meaningful value). Both tables are SHARED (one per game), so every value is judged like a
+# global on the pooled 15 cells (`beta1`) with the T1 gates.
+WORTH_KNOBS = [("worth.ratioCap", 2.0, [1.0, 1.5, 3.0, 4.0]), ("worth.pressureFull", 1.0, [0.5, 0.75, 1.33, 2.0]),
+               ("worth.dangerSpan", 0.34, [0.17, 0.255, 0.45, 0.68]), ("worth.hurtWeight", 1.0, [0.5, 0.75, 1.33, 2.0]),
+               ("worth.magickaWinLine", 0.15, [0.075, 0.1125, 0.2, 0.3]), ("worth.staminaWinLine", 0.10, [0.05, 0.075, 0.133, 0.2]),
+               ("worth.winNeed", 1.0, [0.5, 0.75]), ("worth.ttlFloorSec", 4.0, [2.0, 3.0, 5.33, 8.0]), ("worth.ttlSpanSec", 6.0, [3.0, 4.5, 8.0, 12.0]),
+               ("worth.wealthFrac", 0.25, [0.125, 0.1875, 0.333, 0.5]), ("worth.wealthFloor", 100.0, [50.0, 75.0, 133.0, 200.0]),
+               ("worth.costWeight", 1.0, [0.5, 0.75, 1.33, 2.0]), ("worth.scarcityRate", 0.5, [0.25, 0.375, 0.667, 1.0]),
+               ("worth.restoreCostScale", 0.25, [0.125, 0.1875, 0.333, 0.5]), ("worth.restoreUseWeight", 0.5, [0.25, 0.375, 0.667, 1.0]),
+               ("worth.floor", 0.2, [0.1, 0.15, 0.267, 0.4]), ("worth.foodMinGain", 0.05, [0.025, 0.0375, 0.0667, 0.1])]
+LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.needBase", 0.55, [0.275, 0.41, 0.73, 0.9]),
+              ("loot.needSlope", 0.45, [0.225, 0.34, 0.6, 0.9]), ("loot.roomKnee", 0.25, [0.125, 0.1875, 0.333, 0.5]),
+              ("loot.gold", 1.0, [0.5, 0.75]), ("loot.equipment", 0.8, [0.4, 0.6, 1.0]), ("loot.valuables", 0.75, [0.375, 0.56, 1.0]),
+              ("loot.jewelry", 0.75, [0.375, 0.56, 1.0]), ("loot.buffScale", 0.95, [0.475, 0.71, 1.0]), ("loot.foodScale", 0.9, [0.45, 0.675, 1.0]),
+              ("loot.healthTarget", 6, [3, 4, 8, 12]), ("loot.staminaTarget", 4, [2, 3, 5, 8]), ("loot.staminaTargetNoWeapon", 2, [0, 1, 3, 4]),
+              ("loot.magickaTarget", 5, [2, 3, 7, 10]), ("loot.resistTarget", 2, [1, 3, 4]), ("loot.fortifyTarget", 1, [2, 3])]
+# NOT searched, each an open decision with its reason: the lab prices their items at 0 because MFO has no road that uses them, so any
+# value found would only say "carry less weight" (soul gems: no recharge road, ClickUp 1dfcuabd356; poisons: no apply road; invisibility,
+# regen and lockpicks: not in the fixture; the sale scale: inert while consumableSellRoad is false, no ALCH sell road).
+LOOT_NOT_SEARCHED = {"loot.gemChargeTrigger": "no weapon-recharge road (ClickUp 1dfcuabd356): a carried gem is worth 0 in the lab",
+                     "loot.soulGemTarget": "no weapon-recharge road: a carried gem is worth 0 in the lab",
+                     "loot.poisonTarget": "no poison-apply road: a carried poison is worth 0 in the lab",
+                     "loot.poisonPowerRef": "no poison-apply road", "loot.poisonWeakScale": "no poison-apply road",
+                     "loot.invisTarget": "no invisibility potion in the fixture (a sneak road the logistics world does not model)",
+                     "loot.regenTarget": "no regen potion in the fixture", "loot.lockpickTarget": "no lockpick in the fixture",
+                     "loot.saleGoldPerWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
+                     "loot.saleWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)"}
+
+
+def final_sets():
+    """The accepted worth-the-gold values (the worth stage), as one --set string, or None."""
+    kept = SUMMARY["stages"].get("worth", {}).get("kept", [])
+    return ",".join(kept) or None
+
+
+def shared_search(stage, knobs, pooled, train, judge_one, base_sets=None):
+    """Coordinate descent over SHARED knobs (one table per game): liveness on the probe seeds, then most sensitive first, each sweep raced
+    (race) on the pooled cells, the best value through judge_one (holdout, gates, confirmatory), an accepted value carried into the next
+    sweep; a second pass only after something changed. Rows like the classes stage's."""
+    curves = final_curves() if stage == "worth" else []
+    cfg = "g3"
+    probe = range(train[0], train[0] + CFG["probe_seeds"])
+    kn = knobs[:1] if CFG["force"] else knobs
+    join = lambda xs: ",".join(([base_sets] if base_sets else []) + xs) or None
+    res = jmany([req("builtin", pooled, cfg, curves, probe, join([]))] + [req("builtin", pooled, cfg, curves, probe, join(["%s=%s" % (n, v)])) for n, _, vals in kn for v in (vals[0], vals[-1])])
+    live, dead = [], []
+    for i, (n, sh, vals) in enumerate(kn):
+        best = 0.0
+        for r in (res[1 + 2 * i], res[2 + 2 * i]):
+            d = [y[0] - x[0] for x, y in zip(res[0], r)]
+            if any(abs(x) > 1e-9 for x in d):
+                best = max(best, abs(sum(d) / len(d)), 1e-6)
+        (live if best > 0.0 else dead).append((best, n, sh, vals))
+    live.sort(key=lambda x: -x[0])
+    log("%s: %d knobs, %d live, %d dead (%s)" % (stage, len(kn), len(live), len(dead), " ".join(n for _, n, _, _ in dead)))
+    kept, rows, done = [], [], set()
+    for ps in range(CFG["passes"]):
+        moved = False
+        for sens, n, sh, vals in live:
+            if n in done:
+                continue
+            b0, rr = race(req("builtin", pooled, cfg, curves, train, join(kept)), [req("builtin", pooled, cfg, curves, train, join(kept + ["%s=%s" % (n, v)])) for v in vals], train)
+            cands = sorted([(paired(b0, r) + (v,)) for (r, _), v in zip(rr, vals) if r is not None], key=lambda x: -x[0]) or [(-INF, 0.0, vals[0])]
+            d, se, v = cands[0]
+            spec = "%s=%s" % (n, v)
+            row = {"knob": n, "shipped": sh, "best": v, "probe": round(sens, 3), "pass": ps + 1, "train": [round(d, 3), round(se, 3)] if d > -INF else None,
+                   "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2]) if c[0] > -INF],
+                   "raced_out": [(vv, nn) for (r, nn), vv in zip(rr, vals) if r is None], "accepted": False, "spec": spec}
+            passed = d > 2.5 * se and d >= 0.15
+            if passed or (CFG["force"] and not rows):
+                j = judge_one(join(kept), join(kept + [spec]), not passed)
+                row["steps"], row["why"] = j["steps"], j["why"]
+                row["accepted"] = passed and j["accepted"]
+            else:
+                row["why"] = ("train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J") if d > -INF else "train: every value raced out"
+            if row["accepted"]:
+                kept.append(spec)
+                done.add(n)
+                moved = True
+            rows.append(row)
+            log("%s pass %d  %-26s %-8g -> %-8g train %s  %s" % (stage, ps + 1, n, sh, v, row["train"], row["why"][:150]))
+            SUMMARY["stages"][stage] = {"kept": kept, "rows": rows, "live": [[n2, round(x, 3)] for x, n2, _, _ in live], "dead": [n2 for _, n2, _, _ in dead], "complete": False}
+            save_summary()
+        if not moved:
+            break
+    SUMMARY["stages"][stage] = {"kept": kept, "rows": rows, "live": [[n2, round(x, 3)] for x, n2, _, _ in live], "dead": [n2 for _, n2, _, _ in dead], "complete": True}
+    save_summary()
+    return kept, rows
+
+
+def stage_worth():
+    """THE WORTH-THE-GOLD TABLE (iaus/ConsumableWorth.h WorthTable, feat/consumables). Needs the consumables world (--sim-flags with
+    "--consumables on": gold, item values, buff potions and food in the kits, Setup.h FillConsumables), else the cost side is inert and
+    the stage refuses. Every value is shared, so it is judged as a global by judge("beta1"): holdout on the pooled 15 cells, many-seed
+    gates on all 15 cells at all three configs, fresh-seed cross-world over every world, the Knight floor."""
+    if "--consumables on" not in (A.sim_flags or ""):
+        raise SystemExit("the worth stage needs --sim-flags \"--consumables on\" (without the consumables kit the worth rule's cost side is inert)")
+    curves = final_curves()
+    def judge_one(bs, ns, forced):
+        return judge("beta1", curves, None, forced=forced, sets=ns, base_sets=bs)
+    kept, rows = shared_search("worth", WORTH_KNOBS, "beta1", range(1, CFG["train"] + 1), judge_one)
+    for r in rows:
+        if r["accepted"] and (r["best"] in (min(dict((k[0], k[2]) for k in WORTH_KNOBS)[r["knob"]]), max(dict((k[0], k[2]) for k in WORTH_KNOBS)[r["knob"]]))):
+            open_decision("worth %s accepted at the edge of the range tried (%s)" % (r["knob"], r["best"]), "the best value may lie past it (runbook 7); written only after a look")
+
+
+def loot_judge(bs, ns, forced):
+    """The loot table's RULE (the combat RULE carried over, 33.3, with what the logistics world can and cannot measure): holdout on seeds
+    8001.. (d > 1.5 se, pooled 15 cells); gates on the 128 train + holdout seeds per cell (no cell worse at the 15-at-once bar, none out of
+    band); confirmatory on FRESH seeds 9001.. pooled (d > 2 se): the cross-WORLD step cannot run, the simulator refuses a list logistics
+    world (34.6: the extracts hold no containers); no Knight floor (a loot value does not change a fight in the lab)."""
+    row = {"steps": {}, "accepted": False}
+    fails = []
+    pooled = "logi:" + ",".join(CELLS)
+    hold = range(8001, 8001 + CFG["hold"])
+    b, v = jmany([req("builtin", pooled, "g3", [], hold, bs), req("builtin", pooled, "g3", [], hold, ns)])
+    hd, hse = paired(b, v)
+    row["steps"]["holdout"] = [round(hd, 3), round(hse, 3)]
+    if not hd > 1.5 * hse:
+        fails.append("holdout: not confirmed")
+    if not fails or forced:
+        seeds = list(range(7001, 7001 + CFG["train"])) + list(hold)
+        res = jmany([req("builtin", "logi:" + c, "g3", [], seeds, x) for c in CELLS for x in (bs, ns)])
+        gate = {}
+        for i, c in enumerate(CELLS):
+            d, se = paired(res[2 * i], res[2 * i + 1])
+            gate[c] = [round(d, 3), round(se, 3)]
+            if worse(d, se, True) or out_of_band(c, d, se):
+                fails.append("gate: %s gets worse (%+.2f, se %.2f)" % (c, d, se))
+        row["steps"]["gates"] = gate
+    if not fails or forced:
+        fresh = range(9001, 9001 + CFG["confirm"])
+        b, v = jmany([req("builtin", pooled, "g3", [], fresh, bs), req("builtin", pooled, "g3", [], fresh, ns)])
+        fd, fse = paired(b, v)
+        row["steps"]["fresh"] = [round(fd, 3), round(fse, 3)]
+        if not fd > 2.0 * fse:
+            fails.append("fresh seeds: not confirmed (%+.2f, se %.2f)" % (fd, fse))
+    row["accepted"] = not fails
+    row["why"] = "ACCEPTED: holdout, per-cell gates, fresh seeds (no list world exists for logistics)" if not fails else "; ".join(fails)
+    return row
+
+
+def stage_loot():
+    """THE IAUS LOOT TABLE (iaus/LootNeed.h LootTuning) in the logistics world's IAUS arm (Logistics.h, the native scorer compiled in),
+    with the stops' buff potions, food, poisons, soul gems and bolts (--logi-consumables). What a carried buff potion or food is worth
+    there comes from the COMBAT world: its uses per fight per class (--consumables on --print-consume, with the final table and the
+    accepted worth values), written to <out>/uses.txt first."""
+    curves = final_curves()
+    def one(c):
+        cmd = [A.bin, "--no-json", "--threads", "1", "--classes", c, "--fights", "48", "--print-consume", "--seeds", ",".join(str(x) for x in range(1, 1 + max(2, CFG["calib_seeds"])))] + world_args("builtin")
+        for cv in curves:
+            cmd += ["--curve", cv]
+        if final_sets():
+            cmd += ["--set", final_sets()]
+        def chk(t):
+            if "CONSUSE" not in t:
+                raise RuntimeError("no CONSUSE line for %s (is --consumables on in --sim-flags?):\n%s" % (c, t[-400:]))
+        t = text_run("uses:" + json.dumps(cmd[1:]), cmd, "builtin", check=chk)
+        f, u = 0, None
+        for m in re.finditer(r"^CONSUSE \d+ (\d+)((?: \d+)+)$", t, re.M):
+            f += int(m.group(1))
+            xs = [int(x) for x in m.group(2).split()]
+            u = xs if u is None else [a + b for a, b in zip(u, xs)]
+        return c, [x / max(1, f) for x in u]
+    lines = ["%s %s" % (c, " ".join("%.6f" % x for x in u)) for c, u in POOL.map(one, CELLS)]
+    open(uses_path(), "w").write("\n".join(lines) + "\n")
+    st = {"uses": lines}
+    SUMMARY["stages"]["loot_uses"] = st
+    kept, rows = shared_search("loot", LOOT_KNOBS, "logi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
+    for n, why in LOOT_NOT_SEARCHED.items():
+        open_decision("loot %s not searched" % n, why + "; the placeholder stays")
+
+
 def stage_globals():
     curves = final_curves()
     seeds = range(5001, 5001 + CFG["global_seeds"])
@@ -1387,7 +1572,7 @@ def stage_floor():
     out = {}
     for w in A.worlds:
         for cls in (KNIGHTS[:1] if CFG["force"] else KNIGHTS):
-            out["%s/%s" % (cls, w)] = fl = knight_floor(w, cls, curves)
+            out["%s/%s" % (cls, w)] = fl = knight_floor(w, cls, curves, final_sets())
             log("floor %s on %s: default %.1f, as shipped %.1f  (why, as shipped: %s)" % (cls, w, fl["g3"], fl["shipped"], fl["shipped_why"]))
             if min(fl["g3"], fl["shipped"]) < 60.0:
                 open_decision("Knight guard floor under 60%%: %s on %s" % (cls, w), "default %.1f, as shipped %.1f; unguarded blows by cause (%% of all blows under 2+ own-taunted foes), as shipped: %s. marth's floor is a hard requirement (Q-S-5): the fix is a mechanism change (the hold / renewal / rest of the guard, or a taunt-count term), not a table value" % (fl["g3"], fl["shipped"], fl["shipped_why"]))
@@ -1401,6 +1586,8 @@ def stage_rating():
         cmd = [A.bin, "--no-json", "--threads", str(A.jobs), "--rating-only", "--rating", "3" if not CFG["force"] else "1", "--classes", "beta1", "--seeds", ",".join(str(s) for s in range(1, CFG["rating_seeds"] + 1))] + world_args(w)
         for c in curves:
             cmd += ["--curve", c]
+        if final_sets():
+            cmd += ["--set", final_sets()]
         txt = text_run("rating:" + json.dumps(cmd[1:]), cmd, w)
         rows = []
         for m in re.finditer(r"^(\S+)\s+T(\d)\s+([-0-9.]+)\s+([-0-9.]+)\s+(\d+)/(\d+)\s+([-+0-9.]+)\s*(BELOW)?", txt, re.M):
@@ -1478,6 +1665,26 @@ def render_md():
         for c, r in s["classes"].items():
             L.append("- %s: %d dead (full list in summary.json); live and not searched (over the cap): %s" % (c, len(r["dead"]), ", ".join(r.get("not_searched", [])) or "none"))
         L.append("")
+    for stg, hdr, native in (("worth", "The worth-the-gold table (iaus/ConsumableWorth.h WorthTable)", "ConsumableWorth.h"), ("loot", "The IAUS loot table (iaus/LootNeed.h LootTuning)", "LootNeed.h")):
+        if stg not in s:
+            continue
+        r = s[stg]
+        L += ["## " + hdr + ("" if r.get("complete") else " (running)"), "", "Live %d, dead %d (%s). Accepted: %s" % (len(r["live"]), len(r["dead"]), ", ".join(r["dead"]) or "none", " ".join("`%s`" % k for k in r["kept"]) or "none"), "",
+              "| Knob | Placeholder | Best | Train d (se) | Raced out | Verdict |", "|---|---|---|---|---|---|"]
+        for row in r["rows"]:
+            tr = row["train"]
+            L.append("| %s | %g | %g | %s | %s | %s |" % (row["knob"], row["shipped"], row["best"], "%+.3f (%.3f)" % tuple(tr) if tr else "n/a", " ".join("%g@%d" % (v, n) for v, n in row.get("raced_out", [])) or "", row["why"][:160]))
+        L += ["", "Lines for native/iaus/%s (one per accepted value, the evidence beside it):" % native, "", "```cpp"]
+        for row in r["rows"]:
+            if row["accepted"]:
+                st = row["steps"]
+                ev = "holdout %+.3f (se %.3f)" % tuple(st["holdout"])
+                if "cross_world" in st:
+                    ev += ", fresh-seed mean over %s %+.3f (se %.3f), as shipped %+.3f" % ("/".join(A.worlds), st["cross_world"]["mean/g3"][0], st["cross_world"]["mean/g3"][1], st["cross_world"]["mean/shipped"][0])
+                if "fresh" in st:
+                    ev += ", fresh seeds %+.3f (se %.3f)" % tuple(st["fresh"])
+                L.append("%s = %s;   // SEARCHED (tune 2.11.1): placeholder %g; train d %+.3f (se %.3f), %s" % (row["knob"].split(".", 1)[1], row["best"], row["shipped"], row["train"][0], row["train"][1], ev))
+        L += ["```", ""]
     if "joint" in s:
         j = s["joint"]
         L += ["## The whole final table against the shipped one (joint gate)", "", "Verdict: **%s**" % j["verdict"], ""]
@@ -1582,7 +1789,7 @@ def main():
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, knobs=A.knobs)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
-    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics}
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics, "worth": stage_worth, "loot": stage_loot}
     order = A.stages.split(",")
     done = []
     i = 0

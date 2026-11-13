@@ -472,17 +472,19 @@ namespace Sim::Logi {
     inline int Run(const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int K, bool checks,
                    const std::string& policy = "baseline", bool score = false) {
         long bad = 0; const bool iaus = policy == "iaus";
-        if (score) {
+        if (score) {   // per seed: the mean over the named classes of the mean J_log of n episodes (one class = that class)
+            std::vector<Who> ws;
             for (const SimClass& sc : all) {
                 if (only.empty() || ("," + only + ",").find("," + sc.name + ",") == std::string::npos) continue;
                 Who w; w.cls = sc.name; w.fam = sc.fam; w.worth = PotWorthFor(sc.name);
                 if (!w.worth) { std::fprintf(stderr, "logistics: no potion-worth row for %s: refused\n", sc.name.c_str()); return 2; }
                 if (g_logiConsumables) { auto it = g_uses.find(sc.name); if (it == g_uses.end()) { std::fprintf(stderr, "--logi-consumables: no --logi-uses row for %s: refused\n", sc.name.c_str()); return 2; } w.uses = &it->second; }
-                for (std::uint64_t sd : seeds) { double a = 0; for (int k = 0; k < n; ++k) { Rng R; R.g.seed(sd * 2654435761ULL + std::uint64_t(k) * 40503ULL + 17); const Ep e = MakeEpisode(R); a += RunIaus(Start(w, e), w, e, nullptr); }
-                    std::printf("SEED %llu  J=%.4f (scenarios 0.00, natural 0.00)\nSWITCH %llu 0 1.000\n", (unsigned long long)sd, a / n, (unsigned long long)sd); }
-                return 0;
+                ws.push_back(w);
             }
-            std::fprintf(stderr, "--logi-score: one class (--classes) is required\n"); return 2;
+            if (ws.empty()) { std::fprintf(stderr, "--logi-score: no class named by --classes\n"); return 2; }
+            for (std::uint64_t sd : seeds) { double a = 0; for (const Who& w : ws) for (int k = 0; k < n; ++k) { Rng R; R.g.seed(sd * 2654435761ULL + std::uint64_t(k) * 40503ULL + 17); const Ep e = MakeEpisode(R); a += RunIaus(Start(w, e), w, e, nullptr); }
+                std::printf("SEED %llu  J=%.4f (scenarios 0.00, natural 0.00)\nSWITCH %llu 0 1.000\n", (unsigned long long)sd, a / n / double(ws.size()), (unsigned long long)sd); }
+            return 0;
         }
         {   // the model's own checks (LOGI-CHECKS)
             const Quote q = QuoteFor(kSpeech); const ItemDef& rh = Items()[static_cast<std::size_t>(ItemIdx("RestoreHealth01"))];
