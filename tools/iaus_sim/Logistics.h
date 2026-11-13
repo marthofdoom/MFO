@@ -8,13 +8,23 @@
 // An EPISODE: a dungeon of kStops stops (the potion chain's 8 fights), then the town. At every stop he finds bodies and a chest; each
 // found item is TAKE or LEAVE. In town the errand sells and buys by today's rules. Policies:
 //   Baseline = TODAY'S RULES, mirrored from native (Docs/research/2026-11/iaus-sim-v2.md 34.6 lists each rule with its file:line):
-//              the 4 default logistics rows (Followers.cpp:48-51): loot_potions while < 2 restore-health potions, loot_arrows while < 10
-//              arrows, loot_equipment always (strict upgrades only, LootEquipment.cpp); no other category (no default row takes gold,
-//              gems, ingredients or junk). Carry check per WHOLE stack, no reserve (LootTake.cpp:40-46). Potion floor: the weakest tier is
-//              ignored (Upkeep.cpp ComputeWeakPotionFloor: first magnitude > 1.25 x the minimum). Town: an errand runs when its sell rows
-//              pay >= 100 g or carry > 80% (ErrandTrip.cpp, iErrandMinSellGold); sells unkept gear, MISC with value/weight >= 20 and
-//              obsolete ammo, highest value first, capped by the chest's gold (MFO_Trade.psc RunTrade); buys the rows' needs, potions
-//              capped at half the purse (TradeBridge.cpp PlanBuy). Prices: Pricing.cpp, Speech only (no perks in the fixture).
+//              the default logistics rows in their order (Followers.cpp:48-51): loot_arrows while < 10 arrows, loot_potions while < 2
+//              restore-health potions, loot_equipment always; no other category (no default row takes gold, gems, ingredients or junk).
+//              PER SOURCE (LootScan.cpp:1046-1090): the rows are evaluated once per body / chest, in order, each condition read at that
+//              moment, and a row that fires takes EVERYTHING its action wants from that source: LootAmmo (LootTake.cpp:77, SwapUp.cpp
+//              SwapUpAmmoTakeSet: at or above his worst held round and not obsolete on landing, best first; NO BOW GATE, Evaluator.cpp:
+//              880-885 "No bow gate (marth)": a follower who does not use arrows restocks with keep target 0, nothing obsolete),
+//              LootPotions (LootTake.cpp:97: every drinkable at or above the floor, strongest first), loot_equipment drained one piece per
+//              call up to 10 (LootScan.cpp guard; LootEquipment.cpp:483 weapon, then ranged, then armor; with no piece left, a bow user
+//              takes ammo STRICTLY above the weakest tier he relies on, SwapUpAmmoFrom upgrade road). Carry check per WHOLE stack, no
+//              reserve (LootTake.cpp:40-46). Potion floor: the weakest tier is ignored (Upkeep.cpp ComputeWeakPotionFloor: first
+//              magnitude > 1.25 x the minimum). Town: an errand runs when its sell rows pay >= 100 g, carry > 80% (ErrandTrip.cpp,
+//              iErrandMinSellGold) or a row needs something (potions < 2, arrows < 10: Economy.cpp:1034, no bow check); BUY first (the
+//              rows' needs, potions capped at half the purse: TradeBridge.cpp PlanBuy), then SELL what was planned before the buy: unkept
+//              gear, MISC with value/weight >= 20, obsolete ammo (a user's: below the cut at keep target 50; a follower with no bow: below
+//              the cut at the arrows row's 10, Economy.cpp:967-988), highest value first, capped by the chest's gold (MFO_Trade.psc
+//              RunTrade). Prices: Pricing.cpp, Speech only (no perks in the fixture). No worn-ammo pin is modelled: the engine nocks his
+//              best round and the best round is never under the cut, so the pin never changes a sale here (MODEL).
 //   Oracle   = a rollout search over TAKE / LEAVE per item and a SELL RUN at a stop's start (a trip to town and back that costs the stop):
 //              K sampled futures shared by both options, rolled forward with the baseline, scored by Value(). Any lootable item may be
 //              taken (the decision surface an IAUS scorer will have); stolen goods do not exist in the fixture (unowned dungeon).
@@ -150,16 +160,70 @@ namespace Sim::Logi {
     }
     inline void Equip(Inv& v, int item) { const Kind k = Items()[static_cast<std::size_t>(item)].kind;
         if (k == Kind::Weapon1H || k == Kind::Weapon2H) v.bestWeapon = item; else if (k == Kind::Bow) v.bestBow = item; else if (k == Kind::ArmorBody) v.body = item; else if (k == Kind::ArmorHead) v.head = item; }
-    // Does today's rule set take this stack now? (the rows are evaluated at the moment of the take, LootScan.cpp:1040-1110)
-    [[nodiscard]] inline bool BaselineTakes(const Inv& v, const Who& w, const Stack& st) {
-        const ItemDef& d = Items()[static_cast<std::size_t>(st.item)];
-        if (!Fits(v, d, st.count)) return false;
-        switch (d.kind) {
-        case Kind::PotionH: case Kind::PotionM: case Kind::PotionS: return v.Count(Kind::PotionH) < kRowPotions && d.power >= PotionFloor();   // loot_potions is the catch-all drinkable take
-        case Kind::Ammo: return w.Bow() && v.Count(Kind::Ammo) < kRowArrows && d.power >= (v.Count(Kind::Ammo) > 0 ? v.WorstAmmo() : 0.0f);   // restock: not worse than his worst held rank
-        case Kind::Weapon1H: case Kind::Weapon2H: case Kind::Bow: case Kind::ArmorBody: case Kind::ArmorHead: return IsUpgrade(v, w, d);
-        default: return false;   // gold, gems, jewelry, ingredients, junk: no default row takes them
+    // ── ammo (SwapUp.cpp; rank = damage, then value: Logistics_internal.h AmmoRankAbove) ──────────────────────────────────────
+    [[nodiscard]] inline bool RankAbove(int a, int b) { const ItemDef& x = Items()[static_cast<std::size_t>(a)]; const ItemDef& y = Items()[static_cast<std::size_t>(b)]; return x.power > y.power || (x.power == y.power && x.value > y.value); }
+    [[nodiscard]] inline int KeepTarget(const Who& w) { return w.Bow() ? std::max(kAmmoKeepFloor, kRowArrows) : 0; }   // AmmoKeepTarget: 0 when he does not use the kind
+    [[nodiscard]] inline std::vector<Stack> HeldAmmo(const Inv& v) { std::vector<Stack> h; for (const Stack& x : v.s) if (x.count > 0 && Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo) h.push_back(x); return h; }
+    [[nodiscard]] inline int Cutoff(std::vector<Stack> pool, int target) {   // AmmoCutoff: the tier at which the best `target` rounds are reached; -1 = none
+        std::stable_sort(pool.begin(), pool.end(), [](const Stack& a, const Stack& b) { return RankAbove(a.item, b.item); });
+        if (target <= 0) return -1; long cum = 0; for (const Stack& x : pool) { cum += x.count; if (cum >= target) return x.item; } return -1;
+    }
+    [[nodiscard]] inline bool Obsolete(int item, int cut) { return cut >= 0 && RankAbove(cut, item); }   // AmmoObsolete (no special / silver round in the fixture)
+    // SwapUpAmmoTakeSet: which of the source's ammo stacks the rule takes. Restock (the arrows row): at or above his worst held round.
+    // Upgrade (loot_equipment, a user only): strictly above the weakest tier he relies on (AmmoUpgradeBar), nothing held = no upgrade.
+    [[nodiscard]] inline std::vector<Stack> AmmoTakeSet(const Inv& v, const Who& w, const std::vector<Stack>& body, bool upgradeOnly) {
+        const int target = KeepTarget(w); const std::vector<Stack> held = HeldAmmo(v); int floor = -1; bool strict = false;
+        if (upgradeOnly) {
+            if (target <= 0 || held.empty()) return {};
+            std::vector<Stack> pool = held; std::stable_sort(pool.begin(), pool.end(), [](const Stack& a, const Stack& b) { return RankAbove(a.item, b.item); });
+            int bar = pool.back().item; long cum = 0; for (const Stack& x : pool) { cum += x.count; if (cum >= target) { bar = x.item; break; } }
+            long above = 0; for (const Stack& x : pool) if (RankAbove(x.item, bar)) above += x.count;
+            if (target - above <= 0) return {};
+            floor = bar; strict = true;
+        } else for (const Stack& h : held) if (floor < 0 || RankAbove(floor, h.item)) floor = h.item;
+        std::vector<Stack> pool = held; pool.insert(pool.end(), body.begin(), body.end()); const int cut = Cutoff(pool, target);
+        std::vector<Stack> take;
+        for (const Stack& b : body) { bool ok = true; if (floor >= 0) ok = strict ? RankAbove(b.item, floor) : !RankAbove(floor, b.item); if (ok && !Obsolete(b.item, cut)) take.push_back(b); }
+        std::stable_sort(take.begin(), take.end(), [](const Stack& a, const Stack& b) { return RankAbove(a.item, b.item); });   // best first (the carry gate drops iron)
+        return take;
+    }
+
+    struct Tally;
+    inline void TakeStack(Inv& v, const Who& w, const Stack& st, Tally* t, bool baseline);
+    // TODAY'S RULES ON ONE SOURCE (LootScan.cpp:1046-1090), over its stacks from index `from` (a rollout that resumes mid-source applies
+    // the rows to what is left of it). Each row's condition is read when the row is reached; a row that fires drains its category.
+    // `took` (optional) marks which stacks were taken.
+    inline void BaselineSource(Inv& v, const Who& w, const std::vector<Stack>& items, std::size_t from, Tally* t, std::vector<char>* took = nullptr) {
+        std::vector<char> gone(items.size(), 0); for (std::size_t i = 0; i < from && i < items.size(); ++i) gone[i] = 1;
+        auto take = [&](std::size_t i) { TakeStack(v, w, items[i], t, true); gone[i] = 1; if (took) (*took)[i] = 1; };
+        auto ammoRoad = [&](bool upgradeOnly) {   // SwapUpAmmoFrom: the whole take set, best first, each stack carry-checked
+            std::vector<Stack> body; std::vector<std::size_t> at;
+            for (std::size_t i = 0; i < items.size(); ++i) if (!gone[i] && Items()[static_cast<std::size_t>(items[i].item)].kind == Kind::Ammo) { body.push_back(items[i]); at.push_back(i); }
+            if (body.empty()) return false; bool moved = false;
+            for (const Stack& s : AmmoTakeSet(v, w, body, upgradeOnly)) for (std::size_t k = 0; k < body.size(); ++k)
+                if (!gone[at[k]] && body[k].item == s.item && body[k].count == s.count) { if (Fits(v, Items()[static_cast<std::size_t>(s.item)], s.count)) { take(at[k]); moved = true; } break; }
+            return moved;
+        };
+        if (v.Count(Kind::Ammo) < kRowArrows) ammoRoad(false);   // loot_arrows (row 2), no bow gate
+        if (v.Count(Kind::PotionH) < kRowPotions) {             // loot_potions (row 3): every drinkable at or above the floor, strongest first
+            std::vector<std::size_t> p; const float fl = PotionFloor();
+            for (std::size_t i = 0; i < items.size(); ++i) { const ItemDef& d = Items()[static_cast<std::size_t>(items[i].item)];
+                if (!gone[i] && (d.kind == Kind::PotionH || d.kind == Kind::PotionM || d.kind == Kind::PotionS) && !(d.power > 0 && d.power < fl)) p.push_back(i); }
+            std::stable_sort(p.begin(), p.end(), [&](std::size_t a, std::size_t b) { return Items()[static_cast<std::size_t>(items[a].item)].power > Items()[static_cast<std::size_t>(items[b].item)].power; });
+            for (std::size_t i : p) if (Fits(v, Items()[static_cast<std::size_t>(items[i].item)], items[i].count)) take(i);
         }
+        for (int guard = 10; guard > 0; --guard) {               // loot_equipment (row 4, always): one piece per call, drained
+            auto bestOf = [&](std::initializer_list<Kind> ks) { int b = -1; for (std::size_t i = 0; i < items.size(); ++i) { const ItemDef& d = Items()[static_cast<std::size_t>(items[i].item)];
+                    bool in = false; for (Kind k : ks) in = in || d.kind == k; if (!gone[i] && in && IsUpgrade(v, w, d) && (b < 0 || d.power > Items()[static_cast<std::size_t>(items[static_cast<std::size_t>(b)].item)].power)) b = static_cast<int>(i); } return b; };
+            int b = bestOf({ Kind::Weapon1H, Kind::Weapon2H }); if (b < 0) b = bestOf({ Kind::Bow }); if (b < 0) b = bestOf({ Kind::ArmorBody, Kind::ArmorHead });   // LootEquipment.cpp:483
+            if (b >= 0 && !Fits(v, Items()[static_cast<std::size_t>(items[static_cast<std::size_t>(b)].item)], items[static_cast<std::size_t>(b)].count)) b = -1;   // no room: skipped, the call goes on to ammo
+            if (b >= 0) { take(static_cast<std::size_t>(b)); continue; }
+            if (!ammoRoad(true)) break;
+        }
+    }
+    // Would today's rules take stack i of this source, from where he stands now? (the oracle's label of a divergence)
+    [[nodiscard]] inline bool BaselineTakes(const Inv& v, const Who& w, const std::vector<Stack>& items, std::size_t i) {
+        Inv u = v; std::vector<char> took(items.size(), 0); BaselineSource(u, w, items, i, nullptr, &took); return took[i] != 0;
     }
     struct Errand { int sold = 0, bought = 0; bool ran = false; };
     [[nodiscard]] inline bool Sellable(const Inv& v, const Stack& x) {   // EconomyProbeImpl: unkept gear, valuable MISC, obsolete ammo (gold, potions, ingredients never)
@@ -173,22 +237,34 @@ namespace Sim::Logi {
         }
     }
     [[nodiscard]] inline bool SellableGem(const ItemDef& d) { return d.kind == Kind::Gem && (d.weight > 0 ? d.value / d.weight >= kValuablesRatio : d.value > 0); }   // a gem is MISC (IsValuableMisc)
+    // THE AMMO HE SELLS (Economy.cpp:955-993): a user sells what is obsolete at his keep target; one who carries no bow sells every
+    // round below the cut at the arrows row's N (10); one who carries a bow he does not use sells none (target 0).
+    [[nodiscard]] inline std::vector<Stack> SellAmmo(const Inv& v, const Who& w) {
+        const std::vector<Stack> held = HeldAmmo(v); int target = KeepTarget(w);
+        if (!w.Bow() && v.Count(Kind::Bow) == 0) target = kRowArrows;   // off-kind: keep the best N the row asks for (keepN > 0 always here)
+        if (target <= 0) return {};
+        const int cut = Cutoff(held, target); std::vector<Stack> out; for (const Stack& x : held) if (Obsolete(x.item, cut)) out.push_back(x); return out;
+    }
     inline Errand Town(Inv& v, const Who& w, bool force) {   // the errand: TryStart's trigger, then BUY first, then SELL (RunTrade)
         const Quote q = QuoteFor(kSpeech); Errand e; int sellTotal = 0;
-        std::vector<std::size_t> rows; for (std::size_t i = 0; i < v.s.size(); ++i) { const ItemDef& d = Items()[static_cast<std::size_t>(v.s[i].item)]; if (v.s[i].count > 0 && (Sellable(v, v.s[i]) || SellableGem(d))) { rows.push_back(i); sellTotal += SellUnit(d, q) * v.s[i].count; } }
-        const bool needs = v.Count(Kind::PotionH) < kRowPotions || (w.Bow() && v.Count(Kind::Ammo) < kRowArrows);
+        std::vector<Stack> rows;   // planned before the buy (EconomyProbeImpl): item and count; the sale moves min(planned, held)
+        for (const Stack& x : v.s) { const ItemDef& d = Items()[static_cast<std::size_t>(x.item)]; if (x.count > 0 && (Sellable(v, x) || SellableGem(d))) rows.push_back(x); }
+        for (const Stack& x : SellAmmo(v, w)) rows.push_back(x);
+        for (const Stack& x : rows) sellTotal += SellUnit(Items()[static_cast<std::size_t>(x.item)], q) * x.count;
+        const bool needs = v.Count(Kind::PotionH) < kRowPotions || v.Count(Kind::Ammo) < kRowArrows;   // Economy.cpp:1034: no bow check
         if (!force && !(std::min(sellTotal, kVendorGold) >= kMinSellGold || v.Weight() > kCarryRatioErrand * kCarryCap || needs)) return e;
         e.ran = true; int chest = kVendorGold;
         {   // BUY: the rows' needs, potions capped at half the purse (PlanBuy), the dearest supply line first
             int potLeft = v.purse / 2;
             for (const char* id : { "RestoreHealth02", "RestoreHealth03", "RestoreHealth01" }) { const int it = ItemIdx(id); const int u = BuyUnit(Items()[static_cast<std::size_t>(it)], q);   // the dearest line first
                 while (v.Count(Kind::PotionH) < kRowPotions && u <= potLeft && u <= v.purse) { v.Add(it, 1); v.purse -= u; potLeft -= u; chest += u; e.bought += u; } }
-            if (w.Bow()) { const int it = ItemIdx("IronArrow"); const int u = BuyUnit(Items()[static_cast<std::size_t>(it)], q);
+            { const int it = ItemIdx("IronArrow"); const int u = BuyUnit(Items()[static_cast<std::size_t>(it)], q);   // the arrows row's need, whatever he wields
                 while (v.Count(Kind::Ammo) < kRowArrows && u <= v.purse) { v.Add(it, 1); v.purse -= u; chest += u; e.bought += u; } }
         }
-        std::sort(rows.begin(), rows.end(), [&](std::size_t a, std::size_t b) { return Items()[static_cast<std::size_t>(v.s[a].item)].value > Items()[static_cast<std::size_t>(v.s[b].item)].value; });
-        for (std::size_t i : rows) { Stack& x = v.s[i]; const int u = SellUnit(Items()[static_cast<std::size_t>(x.item)], q); if (u <= 0 || u > chest) continue;
-            const int n = std::min(x.count, chest / u); x.count -= n; v.purse += u * n; chest -= u * n; e.sold += u * n; }
+        std::stable_sort(rows.begin(), rows.end(), [&](const Stack& a, const Stack& b) { return Items()[static_cast<std::size_t>(a.item)].value > Items()[static_cast<std::size_t>(b.item)].value; });
+        for (const Stack& r : rows) { Stack* x = nullptr; for (Stack& y : v.s) if (y.item == r.item) x = &y; if (!x) continue;
+            const int u = SellUnit(Items()[static_cast<std::size_t>(r.item)], q); if (u <= 0 || u > chest) continue;
+            const int n = std::min({ r.count, x->count, chest / u }); x->count -= n; v.purse += u * n; chest -= u * n; e.sold += u * n; }
         return e;
     }
 
@@ -222,14 +298,14 @@ namespace Sim::Logi {
 
     inline void TakeStack(Inv& v, const Who& w, const Stack& st, Tally* t, bool baseline) {
         const ItemDef& d = Items()[static_cast<std::size_t>(st.item)];
-        if (t) { ++t->takes; if (!Fits(v, d, st.count)) ++t->carryBreaks; if (baseline && !BaselineTakes(v, w, st)) ++t->offRowTakes; }
+        if (t) { ++t->takes; if (!Fits(v, d, st.count)) ++t->carryBreaks;   // the baseline takes only what a default row names (ammo, drinkables, his upgrades)
+            if (baseline && !(d.kind == Kind::Ammo || d.kind == Kind::PotionH || d.kind == Kind::PotionM || d.kind == Kind::PotionS || IsUpgrade(v, w, d))) ++t->offRowTakes; }
         const bool up = IsUpgrade(v, w, d); v.Add(st.item, st.count); if (up) Equip(v, st.item);
     }
     // The baseline over stops [s0, kStops) of an episode, from item i0 of stop s0; then the town. Returns Value().
     inline double RunBaseline(Inv v, const Who& w, const Ep& e, int s0, std::size_t src0, std::size_t i0, Tally* t) {
         for (int s = s0; s < kStops; ++s) { const auto& st = e.stops[static_cast<std::size_t>(s)];
-            for (std::size_t a = (s == s0 ? src0 : 0); a < st.size(); ++a) for (std::size_t i = (s == s0 && a == src0 ? i0 : 0); i < st[a].items.size(); ++i)
-                if (BaselineTakes(v, w, st[a].items[i])) TakeStack(v, w, st[a].items[i], t, true); }
+            for (std::size_t a = (s == s0 ? src0 : 0); a < st.size(); ++a) BaselineSource(v, w, st[a].items, s == s0 && a == src0 ? i0 : 0, t); }
         Town(v, w, false); if (t) t->end = v; return Value(v, w);
     }
     // The oracle: per item TAKE / LEAVE, per stop start SELL RUN / GO ON, each scored by K rollouts of the baseline over futures resampled
@@ -250,7 +326,7 @@ namespace Sim::Logi {
                 if (!Fits(v, d, x.count)) continue;   // the engine refuses an over-weight stack whatever the policy
                 double take = 0, leave = 0; Inv tv = v; TakeStack(tv, w, x, nullptr, false);
                 for (const Ep& f : F) { take += RunBaseline(tv, w, f, s, a, i + 1, nullptr); leave += RunBaseline(v, w, f, s, a, i + 1, nullptr); }
-                const bool b = BaselineTakes(v, w, x), o = std::fabs(take - leave) < 1e-9 ? b : take > leave;   // a tie keeps today's choice (no divergence without a difference)
+                const bool b = BaselineTakes(v, w, st[a].items, i), o = std::fabs(take - leave) < 1e-9 ? b : take > leave;   // a tie keeps today's choice (no divergence without a difference)
                 if (t && b != o) { Div& dv = t->div[std::string(Name(d.kind)) + "|base:" + (b ? "take" : "leave") + "|orc:" + (o ? "take" : "leave")]; ++dv.n; dv.dU += std::fabs(take - leave) / K; }
                 if (o) TakeStack(v, w, x, t, false);
             }
@@ -268,6 +344,18 @@ namespace Sim::Logi {
             const bool floorOk = std::fabs(PotionFloor() - 50.0f) < 1e-4f;   // magnitudes 25 / 50 / 75: the weakest tier (25) is ignored
             if (checks) std::printf("LOGI-CHECK prices pinned (RestoreHealth01 buy 38 sell 8 at Speech 15): %s\nLOGI-CHECK every sell unit <= its buy unit: %s\nLOGI-CHECK potion floor = 50: %s\n", pin ? "PASS" : "FAIL", sellUnderBuy ? "PASS" : "FAIL", floorOk ? "PASS" : "FAIL");
             bad += !pin + !sellUnderBuy + !floorOk;
+            // the review round's rules (L1 no bow gate, L2 per-source drain, L3 the ammo sale), pinned on hand-made inventories
+            Who mel; mel.fam = Cls::Melee; Who bow; bow.fam = Cls::Ranged;
+            Inv m = StartKit(mel); const std::vector<Stack> body = { { ItemIdx("SteelArrow"), 7 }, { ItemIdx("RestoreHealth02"), 1 }, { ItemIdx("RestoreHealth03"), 1 } };
+            BaselineSource(m, mel, body, 0, nullptr);   // he holds 1 health potion and no arrow: both rows fire, each drains its kind
+            const bool l1 = m.Count(Kind::Ammo) == 7, l2 = m.Count(Kind::PotionH) == 3;
+            Inv o = StartKit(mel); o.Add(ItemIdx("IronArrow"), 12); o.Add(ItemIdx("SteelArrow"), 10);   // off-kind: keeps the best 10, sells the 12 iron
+            std::vector<Stack> so = SellAmmo(o, mel); const bool l3a = so.size() == 1 && so[0].item == ItemIdx("IronArrow") && so[0].count == 12;
+            Inv b = StartKit(bow); b.Add(ItemIdx("OrcishArrow"), 50);   // a user at keep target 50: the 30 iron rounds under the cut sell
+            std::vector<Stack> sb = SellAmmo(b, bow); const bool l3b = sb.size() == 1 && sb[0].item == ItemIdx("IronArrow") && sb[0].count == 30;
+            if (checks) std::printf("LOGI-CHECK no bow gate: a melee follower restocks arrows (7 of 7): %s\nLOGI-CHECK per-source drain: 1 potion held, a body with 2 gives 2: %s\nLOGI-CHECK ammo sale: off-kind below the row's 10 (12 iron), a user's below the cut at 50 (30 iron): %s\n",
+                                    l1 ? "PASS" : "FAIL", l2 ? "PASS" : "FAIL", l3a && l3b ? "PASS" : "FAIL");
+            bad += !l1 + !l2 + !(l3a && l3b);
         }
         std::printf("LOGISTICS WORLD (built-in fixture, %d stops, K=%d): J_log = potion worth of the bag + %s x gold-equivalent (Logistics.h VALUE)\n", kStops, K, "kGoldJ");
         for (const SimClass& sc : all) {
