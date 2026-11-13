@@ -125,6 +125,7 @@ namespace MFO::Logistics {
                 // Ranked by the SAME MEO-aware judge as loot/buy. The worn piece is
                 // itself a candidate, so a worn BEST never downgrades (no-op), and
                 // equipping a replacement auto-unequips the lesser -> never strips naked.
+                LogArmorClassIfChanged(a_follower, ArmorPrefFor(a_follower), /*a_clothing*/true);   // [armor] names CLOTHING
                 MageSlotBest bestSlot[6];
                 MageBestPerSlot(a_follower, a_state, bestSlot);
                 // First slot whose worn piece isn't the computed best -> one
@@ -149,6 +150,11 @@ namespace MFO::Logistics {
                 LogArmorClassIfChanged(a_follower, armorPref);   // one [armor] line per {class, worn-set} change
                 float bestScore = 0.0f;
                 const bool wearsHelmets = WearsHelmets(&a_state);
+                // A worn museum relic never holds a slot against the class rule (re-claim correction, 2026-11-12):
+                // it counts as a bare slot, so the class's own piece replaces it and the relic stays carried for deposit.
+                const std::function<bool(RE::TESObjectARMO*)> wornCounts = [&](RE::TESObjectARMO* a_w) {
+                    return !RelicOffBody(a_follower, a_state, a_w);
+                };
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
@@ -162,7 +168,7 @@ namespace MFO::Logistics {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     if ((static_cast<std::uint32_t>(ar->GetSlotMask()) &
                          static_cast<std::uint32_t>(Slot::kShield)) != 0) continue;   // shields: leave to the loot role logic
-                    if (!ArmorIsBetter(armorPref, a_follower, ar)) continue;   // strictly higher score than worn on its slot
+                    if (!ArmorIsBetter(armorPref, a_follower, ar, &wornCounts)) continue;   // strictly higher score than worn on its slot
                     const float sc = ArmorScore(armorPref, ar);
                     if (sc > bestScore) { bestScore = sc; pick = obj; }
                 }
@@ -881,6 +887,9 @@ namespace MFO::Logistics {
                 };
                 const ArmorPref pref = ArmorPrefFor(a_follower);
                 const bool wearsHelmets = WearsHelmets(&a_state);
+                const std::function<bool(RE::TESObjectARMO*)> wornCounts = [&](RE::TESObjectARMO* a_w) {
+                    return !RelicOffBody(a_follower, a_state, a_w);   // a worn relic is a bare slot, never an incumbent
+                };
                 float bestScore[4] = {};
                 for (auto& [obj, data] : a_inv) {
                     if (!obj || data.first <= 0) continue;
@@ -891,7 +900,7 @@ namespace MFO::Logistics {
                     const int s = ArmorBuySlot(ar);
                     if (s < 0 || s > 3) continue;
                     if (ar->GetArmorRating() <= 0.0f) continue;             // rating-0 clothing can never win
-                    if (!ArmorIsBetter(pref, a_follower, ar) && WornInLogicalSlot(a_follower, s) != ar) continue;
+                    if (!ArmorIsBetter(pref, a_follower, ar, &wornCounts) && WornInLogicalSlot(a_follower, s) != ar) continue;
                     const float sc = ArmorScore(pref, ar);
                     auto*& win = a_out.slot[s];
                     if (!win || sc > bestScore[s] || (sc == bestScore[s] && ar->GetFormID() > win->GetFormID())) {
