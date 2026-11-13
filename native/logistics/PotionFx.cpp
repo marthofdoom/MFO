@@ -100,8 +100,15 @@ namespace MFO::Logistics {
         }
         auto* alc = RE::TESForm::LookupByID<RE::AlchemyItem>(a_potion);
         if (!alc) return false;
-        const auto fx = PotionBuffs(alc);   // a snapshot is up to seconds old: re-judge the FORM here, never trust the candidate alone
-        if (fx.empty()) return false;
+        // A snapshot is up to seconds old: re-judge the FORM here, never trust the candidate alone. feat/consumables: through the ONE shared
+        // reader (ReadConsumable), so a food or drink with a restore or a buff effect passes like a potion; a poison or a drug never does.
+        const auto item = ReadConsumable(alc);
+        if (item.hostile) return false;
+        const auto& fx = item.fx;
+        bool restores = false;
+        for (std::size_t i = 0; i < Iaus::kRestoreFamilies; ++i)
+            if (item.restoreMag[i] > 0.0f || item.foodRestoreMag[i] > 0.0f) restores = true;
+        if (fx.empty() && !restores) return false;
 
         bool carried = false;
         for (auto& [obj, data] : a_follower->GetInventory())
@@ -119,6 +126,7 @@ namespace MFO::Logistics {
 
         float dur = 1.0f;
         for (const auto& e : fx) dur = (std::max)(dur, e.duration);
+        for (const auto* e : alc->effects) if (e) dur = (std::max)(dur, static_cast<float>(e->GetDuration()));   // a restore carries no PotionFx: its own duration gates the stack too
         g_buffUntil[key] = now + std::chrono::milliseconds(static_cast<int>(dur * 1000.0f));
         return true;
     }

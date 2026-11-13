@@ -82,7 +82,7 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
-            "buff_foes", "perks",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
+            "buff_foes", "perks", "consumable_worth",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -119,7 +119,7 @@ namespace MFO::Iaus {
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
-                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct };
+                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -395,6 +395,9 @@ namespace MFO::Iaus {
             // magicka buys: x = min(1, casts the fight still asks for / 3). Three casts and more 1.0, one cast 0.45, none
             // (the foes left die to one blow) 0.18: a potion drunk for a fight that is over is the bot's tell.
             at(Cons::MagickaBuys) = Lin(0.82f, 0.18f);
+            // consumable_worth (feat/consumables): x = Worth(need, cost share), 0..1 (iaus/ConsumableWorth.h). PLACEHOLDER: the identity shape, vetoed
+            // below WorthTable::floor (0.2). Flat-safe: it is NOT APPLICABLE (Input Off) for every candidate that sets no Facts::consumableWorth.
+            at(Cons::ConsumableWorth) = VetoBelow(Lin(1.0f, 0.0f), d.worth.floor);
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
             auto aw = [&](Family f, float w) { d.actionWeight[static_cast<std::size_t>(f)] = w; };
@@ -470,16 +473,16 @@ namespace MFO::Iaus {
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
-                { Cons::BoostMortalDanger, 1 }, { Cons::BoostFleeHeal, 1 },
+                { Cons::BoostMortalDanger, 1 }, { Cons::BoostFleeHeal, 1 }, { Cons::ConsumableWorth, 1 },
             };
             // feat/buff-potions: ONE family, one candidate per carried buff kind (Facts::buffKind); a consideration that does not apply to the kind
             // is not applicable (Input returns Off), so a resist potion is scored by buff_threat alone, a fortify by fight_start, a regen by need,
             // an invisibility by buff_stealth. already_active, stock and the hard cooldown apply to all.
             constexpr U kDrinkBuff[] = {
                 { Cons::BuffThreat, 1 }, { Cons::FightStart, 1 }, { Cons::BuffStealth, 1 }, { Cons::DrinkNeed, 1 },
-                { Cons::AlreadyActive, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 },
+                { Cons::AlreadyActive, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::ConsumableWorth, 1 },
             };
-            constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 } };
+            constexpr U kDrinkOther[] = { { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::CooldownHard, 1 }, { Cons::MagickaBuys, 1 }, { Cons::ConsumableWorth, 1 } };
             constexpr U kPosture[] = {
                 { Cons::PostureRanged, 1 }, { Cons::PostureMelee, 1 }, { Cons::Ammo, 1 }, { Cons::StaffCharge, 1 },
                 { Cons::MeleeReach, 1 }, { Cons::Unholy, 1 }, { Cons::MundaneVsUnholy, 1 }, { Cons::ClassWeapon, 1 },
@@ -698,6 +701,7 @@ namespace MFO::Iaus {
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
                 if (c.family == Family::DrinkMagicka) return f.selfMagicka;
                 return f.selfHp;
+            case Cons::ConsumableWorth: return f.consumableWorth >= 0.0f ? In(Clamp(f.consumableWorth, 0.0f, 1.0f)) : In::Off();
             case Cons::Stock:         return f.stock < 0 ? In::Off() : In(B(f.stock > 0));
             case Cons::NoHealDrink:   return bestHeal > t.noHealDrink ? 0.0f : 1.0f;
             case Cons::PostureRanged:

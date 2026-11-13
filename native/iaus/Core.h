@@ -20,6 +20,8 @@
 //
 // THREADING: none of its own. Every function is reentrant over its arguments. A Mind is per follower and is owned
 // by whoever holds it (Engine.cpp keeps them in the g_followers worker domain, #4).
+#include "iaus/ConsumableWorth.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -144,6 +146,8 @@ namespace MFO::Iaus {
                             // Ships FLAT 1.0 at every x (bit-identical); a class row's curve override is the searched knob (iaus-sim-v2.md 35)
         BoostPosturePerks,  // multiplier (APPENDED, batch 3 part C): a weapon posture by its side's share of his weapon-damage perk multipliers (Facts::perkShare).
                             // Ships FLAT 1.0 (bit-identical); NOT APPLICABLE while Snapshot::perks is unread (the game today)
+        ConsumableWorth,    // (APPENDED, feat/consumables, marth 2026-11-13): is this potion / food worth its gold, needed enough here to win (iaus/ConsumableWorth.h).
+                            // NOT APPLICABLE (flat-safe) while Facts::consumableWorth < 0; a veto below WorthTable::floor
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -264,6 +268,8 @@ namespace MFO::Iaus {
                                                  // again and a mage is not run in circles; chosen, tuned in the sim)
         float stepCooldownSec = 3.0f;            // batch I item 5: one quiet step, then the hold row looks again (chosen)
         float regroupCooldownSec = 6.0f;         // a regroup is a walk of seconds: no second order inside this (no yo-yo)
+        // feat/consumables: THE ONE TABLE of the worth-the-gold rule (iaus/ConsumableWorth.h). PLACEHOLDERS, not searched; the sim sets them later.
+        WorthTable worth{};
     };
 
     [[nodiscard]] const Tuning& DefaultTuning();
@@ -418,6 +424,7 @@ namespace MFO::Iaus {
         float buffRegenPct = -1.0f;       // regen kinds: the resource's pct now (feeds DrinkNeed); < 0 = n/a
         bool  buffOpener = false;         // fortify kinds: FightStart applies (a fortify is an opener, drunk before the fight is old)
         Tri   buffStealth = Tri::Unknown; // invisibility: Yes = stealth intent stands, No = it does not (a gate); Unknown = n/a
+        float consumableWorth = -1.0f;    // Cons::ConsumableWorth: iaus/ConsumableWorth.h Worth(need, cost share) for the item this drink uses; < 0 = n/a
         bool  foeHelpless = false;        // BoostControlled: the foe is PARALYSED (he cannot answer a blow). Not a fleeing foe:
                                           // foeControlled also covers fleeing (the control-cast gate), and a boost on a runner
                                           // pulled followers after him (review of 303c14d, F2)

@@ -75,6 +75,13 @@ namespace MFO::Iaus {
         std::int32_t potionsStamina = 0;
         std::int32_t potionsMagicka = 0;
         BuffStock    buff;           // every other beneficial potion effect he carries, by kind (iaus/PotionBuff.h; counts, best potion, live)
+        // feat/consumables (marth 2026-11-13: potions AND food / drink, every effect, worth its gold). Per restore family (0 health, 1 stamina,
+        // 2 magicka): the gold value of the strongest restore POTION he carries (what DrinkBest drinks in a fight), and the best restore FOOD
+        // or drink (an ALCH with the food flag; PotionBuff reused: form, count, best magnitude, value, masks, name). gold < 0 = unknown.
+        std::array<float, 3>      restoreValue{};
+        std::array<float, 3>      restoreBestMag{};   // bookkeeping of the strongest restore potion per family (what restoreValue belongs to)
+        std::array<PotionBuff, 3> restoreFood;
+        float        gold = -1.0f;   // the gold he carries: the wealth the worth-the-gold rule measures an item's price against
         std::int32_t arrows = 0;
         std::int32_t bolts = 0;
         bool melee = false;          // carries a melee weapon

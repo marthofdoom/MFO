@@ -40,6 +40,7 @@ namespace MFO::Iaus {
             int   foeCount = 0;
             int   partyCount = 1;
             std::vector<const Combatant*> top;   // the P3 cut, most relevant first
+            float pressure = 0.0f;               // feat/consumables: the kept foes' pressure on him (iaus/ConsumableWorth.h), 0..1
             // estimates (iaus/Estimate.h); unknown = +inf / 0
             float selfIncoming = 0.0f;
             float selfTtl = kInf;
@@ -322,22 +323,73 @@ namespace MFO::Iaus {
                 x.Push(std::move(c));
             }
         }
+        // ── worth-the-gold (feat/consumables, ClickUp 1dfcuabd2t0; iaus/ConsumableWorth.h) ───────────────────────────────────────────
+        // The need of ONE restore family (0 health, 1 stamina, 2 magicka) in this fight, and of ONE buff kind. A mixed item's need is the MAX over
+        // every effect it carries (kindMask / restoreMask); an item none of whose effects has a need here (invisibility, water breathing, a cure)
+        // has none: -1 = the consideration is not applicable to it.
+        float RestoreNeed(const Ctx& x, std::size_t a_family) {
+            const float pct = a_family == 0 ? x.selfHp : a_family == 1 ? x.selfSp : x.selfMp;
+            return ResourceNeed(pct, x.pressure, x.g.drinkHealthLine, a_family == 0, x.t.worth);
+        }
+        float KindNeed(const Ctx& x, BuffKind a_kind) {
+            if (IsFortify(a_kind) || IsResist(a_kind)) return x.pressure;   // the outcome without it: the fight's pressure alone
+            switch (a_kind) {
+            case BuffKind::RegenHealth:  return ResourceNeed(x.selfHp, x.pressure, x.g.drinkHealthLine, false, x.t.worth);
+            case BuffKind::RegenStamina: return ResourceNeed(x.selfSp, x.pressure, x.g.drinkHealthLine, false, x.t.worth);
+            case BuffKind::RegenMagicka: return ResourceNeed(x.selfMp, x.pressure, x.g.drinkHealthLine, false, x.t.worth);
+            default: return -1.0f;
+            }
+        }
+        float ItemNeed(const Ctx& x, std::uint32_t a_kindMask, std::uint8_t a_restoreMask) {
+            float need = -1.0f;
+            for (std::size_t f = 0; f < 3; ++f)
+                if (a_restoreMask & (1u << f)) need = (std::max)(need, RestoreNeed(x, f));
+            for (std::size_t i = 0; i < kBuffKinds; ++i)
+                if (a_kindMask & (1u << i)) need = (std::max)(need, KindNeed(x, static_cast<BuffKind>(i)));
+            return need;
+        }
+        // Facts::consumableWorth for an item of gold value a_value; need < 0 leaves it n/a.
+        void SetWorth(const Ctx& x, Candidate& a_c, float a_need, float a_value) {
+            if (!(a_need >= 0.0f)) return;
+            a_c.f.consumableWorth = Worth(a_need, CostShare(a_value, x.s.book.kit.gold, x.t.worth));
+        }
+
         // ── the three drinks (P2: no stock, no candidate) ────────────────────────────────────────────────
+        // A restore POTION is drunk through act.drink_<resource>_potion (form 0, DrinkBest picks the strongest); a restore FOOD or drink (feat/consumables)
+        // is a candidate of the SAME family with its form set, drunk through act.drink_buff_potion (Logistics::DrinkPotionForm), and only while he
+        // carries no restore potion of that resource and it restores at least WorthTable::foodMinGain of the resource's maximum.
         void Drinks(Ctx& x) {
             const Kit& k = x.s.book.kit;
-            const auto drink = [&](Family a_f, std::int32_t a_stock) {
+            const auto drink = [&](Family a_f, std::int32_t a_stock, std::size_t a_fam) {
                 if (a_stock <= 0) return;
                 Candidate c = x.Make(a_f, nullptr);
                 c.f.stock = a_stock;
                 c.f.fleeHeal = x.fleeRun && a_f == Family::DrinkHealth;   // card G3: a health potion while he flees is drunk first
+                SetWorth(x, c, RestoreNeed(x, a_fam), k.restoreValue[a_fam]);
                 x.Push(std::move(c));
             };
-            drink(Family::DrinkHealth, k.potionsHealth);
-            drink(Family::DrinkStamina, k.potionsStamina);
+            const float poolMax[3] = { x.s.self.hpMax, x.s.self.spMax, x.s.self.mpMax };
+            const auto food = [&](Family a_f, std::int32_t a_potions, std::size_t a_fam, float a_wanted) {
+                const PotionBuff& fd = k.restoreFood[a_fam];
+                if (fd.count <= 0 || fd.form == 0 || a_potions > 0) return;
+                if (std::isfinite(poolMax[a_fam]) && poolMax[a_fam] > 0.0f && fd.magnitude < x.t.worth.foodMinGain * poolMax[a_fam]) return;
+                Candidate c = x.Make(a_f, nullptr);
+                c.form = fd.form;
+                c.formName = fd.name;
+                c.f.stock = fd.count;
+                c.f.fleeHeal = x.fleeRun && a_f == Family::DrinkHealth;
+                if (a_f == Family::DrinkMagicka) c.f.castsWanted = a_wanted;
+                SetWorth(x, c, ItemNeed(x, fd.kindMask, fd.restoreMask), fd.value);
+                x.Push(std::move(c));
+            };
+            drink(Family::DrinkHealth, k.potionsHealth, 0);
+            food(Family::DrinkHealth, k.potionsHealth, 0, -1.0f);
+            drink(Family::DrinkStamina, k.potionsStamina, 1);
+            food(Family::DrinkStamina, k.potionsStamina, 1, -1.0f);
             // What the magicka would buy: the casts of his best measured spell the fight still asks for. Offense first (the
             // kept foes' health against his best spell's damage), else healing (the party's missing health against his best
             // heal). Unknown (no measured spell) leaves the potion scored as before.
-            if (k.potionsMagicka > 0) {
+            if (k.potionsMagicka > 0 || k.restoreFood[2].count > 0) {
                 float bestDmg = 0.0f, bestHeal = 0.0f;
                 for (const SpellEntry& e : x.s.book.entries) {
                     if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
@@ -356,12 +408,14 @@ namespace MFO::Iaus {
                         if (Readable(a)) missing += (std::max)(0.0f, Finite(a.hpMax, 0.0f) - Finite(a.hp, 0.0f));
                     wanted = missing / bestHeal;
                 }
-                {
+                if (k.potionsMagicka > 0) {
                     Candidate c = x.Make(Family::DrinkMagicka, nullptr);
                     c.f.stock = k.potionsMagicka;
                     c.f.castsWanted = std::isfinite(wanted) ? wanted : -1.0f;
+                    SetWorth(x, c, RestoreNeed(x, 2), k.restoreValue[2]);
                     x.Push(std::move(c));
                 }
+                food(Family::DrinkMagicka, k.potionsMagicka, 2, std::isfinite(wanted) ? wanted : -1.0f);
             }
         }
 
@@ -386,9 +440,9 @@ namespace MFO::Iaus {
             }
             return den > 0.0f ? num / den : 0.0f;
         }
-        // PLACEHOLDER (review F3, not searched): a fortify is offered only when some kept foe is at least this level ratio (foe level / his level),
-        // the fact Cons::FoeThreat reads, so a mudcrab fight burns none. The sim search sets it.
-        constexpr float kBuffFortifyFoeRatio = 1.0f;
+        // feat/consumables: the old level rule (kBuffFortifyFoeRatio: some kept foe at least his level) is REPLACED by the worth-the-gold rule
+        // (WorthTable): a fortify is offered only when Worth(need = the fight's pressure, cost share) clears WorthTable::floor. Every other kind
+        // carries the same worth fact, so Cons::ConsumableWorth scores (and vetoes) it too.
         void BuffPotions(Ctx& x) {
             const Snapshot& s = x.s;
             if (x.fleeRun) return;   // card G3: during the flee he heals and runs
@@ -441,10 +495,8 @@ namespace MFO::Iaus {
                     }
                     if (!useful) continue;
                     if (IsFortify(kind)) {
-                        bool worth = false;
-                        for (const Combatant* foe : x.top)
-                            if (SafeRatio(static_cast<float>(foe->level), static_cast<float>(s.self.level), 1.0f) >= kBuffFortifyFoeRatio) { worth = true; break; }
-                        if (!worth) continue;
+                        SetWorth(x, c, ItemNeed(x, p.kindMask | (1u << i), p.restoreMask), p.value);
+                        if (c.f.consumableWorth < x.t.worth.floor) continue;
                     }
                     if (IsRegen(kind)) c.f.buffRegenPct = pct;
                     else               c.f.buffOpener = true;
@@ -454,6 +506,7 @@ namespace MFO::Iaus {
                 } else {
                     continue;   // water breathing and the cures: catalogued only
                 }
+                if (c.f.consumableWorth < 0.0f) SetWorth(x, c, ItemNeed(x, p.kindMask | (1u << i), p.restoreMask), p.value);   // resist, regen (fortify set it above); invisibility has no need: n/a
                 x.Push(std::move(c));
             }
         }
@@ -731,6 +784,12 @@ namespace MFO::Iaus {
         }
         x.foeCount = static_cast<int>(foes.size());
         for (const std::size_t i : Prune::TopFoes(rel)) x.top.push_back(foes[i]);
+        {   // feat/consumables: the fight's pressure, from the kept foes' levels against his (the same ratio Cons::FoeThreat reads)
+            float share = 0.0f;
+            for (const Combatant* f : x.top)
+                share += FoePressureShare(SafeRatio(static_cast<float>(f->level), static_cast<float>(a_s.self.level), 1.0f), a_t.worth);
+            x.pressure = Pressure(share, a_t.worth);
+        }
         out.foesSeen = foes.size();
         out.foesKept = x.top.size();
 

@@ -96,28 +96,58 @@ namespace MFO::Iaus::SpellBook {
                 if (!ae || !ae->spell || ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled)) continue;
                 auto* alc = ae->spell->As<RE::AlchemyItem>();
                 if (!alc) continue;
-                for (const auto& fx : Logistics::PotionBuffs(alc))
+                for (const auto& fx : Logistics::ConsumableBuffs(alc))   // feat/consumables: a food's live buff counts too
                     if (static_cast<std::size_t>(fx.kind) < kBuffKinds) live[static_cast<std::size_t>(fx.kind)] = true;
             }
             return live;
         }
 
-        // One carried potion into the kit's per-kind stock: the count of potions that hold the kind, and the BEST such potion (largest
-        // magnitude, then the longer). One potion counts once per kind however many effects of that kind it has.
-        void NoteBuffPotion(RE::AlchemyItem* a_alc, std::int32_t a_count, Kit& a_kit) {
+        // One carried consumable into the kit (feat/consumables): read ONCE through the shared reader (Logistics::ReadConsumable, the loot
+        // scorer's reader), never a second classifier.
+        //   a restore POTION: the count per family (the same test CountPotions makes) and the gold value of the strongest (what DrinkBest drinks);
+        //   a restore FOOD or drink: per family the best one (largest restore, then dearer is not preferred: the cheaper), counted;
+        //   every buff kind (potion, food or drink): the count of items that hold the kind and the BEST such item (largest magnitude, then the
+        //     longer). One item counts once per kind however many effects of that kind it has. A mixed item remembers every kind and every
+        //     restore family it holds (masks), so the worth rule counts each effect.
+        void NoteConsumable(RE::AlchemyItem* a_alc, std::int32_t a_count, Kit& a_kit) {
+            const Consumable c = Logistics::ReadConsumable(a_alc);
+            if (c.hostile) return;   // a poison or a drug: no kinds, no restore
+            std::uint32_t kindMask = 0;
+            for (const auto& fx : c.fx)
+                if (static_cast<std::size_t>(fx.kind) < kBuffKinds) kindMask |= 1u << static_cast<unsigned>(fx.kind);
+            std::uint8_t restoreMask = 0;
+            for (std::size_t f = 0; f < 3; ++f)
+                if (c.restoreMag[f] > 0.0f || c.foodRestoreMag[f] > 0.0f) restoreMask = static_cast<std::uint8_t>(restoreMask | (1u << f));
+            const std::string name = a_alc->GetName() ? a_alc->GetName() : "?";
+            for (std::size_t f = 0; f < 3; ++f) {
+                if (!(restoreMask & (1u << f))) continue;
+                if (!c.food) {
+                    (f == 0 ? a_kit.potionsHealth : f == 1 ? a_kit.potionsStamina : a_kit.potionsMagicka) += a_count;
+                    if (c.restoreMag[f] > a_kit.restoreBestMag[f]) { a_kit.restoreBestMag[f] = c.restoreMag[f]; a_kit.restoreValue[f] = c.value; }
+                    continue;
+                }
+                PotionBuff& b = a_kit.restoreFood[f];
+                b.count += a_count;
+                if (b.form != 0 && !(c.foodRestoreMag[f] > b.magnitude)) continue;
+                b.form = a_alc->GetFormID(); b.magnitude = c.foodRestoreMag[f]; b.value = c.value;
+                b.kindMask = kindMask; b.restoreMask = restoreMask; b.name = name;
+            }
             std::array<bool, kBuffKinds> seen{};
-            for (const auto& fx : Logistics::PotionBuffs(a_alc)) {
+            for (const auto& fx : c.fx) {
                 const auto i = static_cast<std::size_t>(fx.kind);
                 if (i >= kBuffKinds) continue;
                 PotionBuff& b = a_kit.buff[i];
                 if (!seen[i]) { b.count += a_count; seen[i] = true; }
                 const bool better = b.form == 0 || fx.magnitude > b.magnitude || (fx.magnitude == b.magnitude && fx.duration > b.duration);
                 if (!better) continue;
-                b.form      = a_alc->GetFormID();
-                b.magnitude = fx.magnitude;
-                b.duration  = fx.duration;
-                b.av        = fx.av;
-                b.name      = a_alc->GetName() ? a_alc->GetName() : "?";
+                b.form        = a_alc->GetFormID();
+                b.magnitude   = fx.magnitude;
+                b.duration    = fx.duration;
+                b.av          = fx.av;
+                b.value       = c.value;
+                b.kindMask    = kindMask;
+                b.restoreMask = restoreMask;
+                b.name        = name;
             }
         }
 
@@ -402,6 +432,7 @@ namespace MFO::Iaus::SpellBook {
             }
 
             std::vector<Entry> scrolls, staves;
+            book->kit.gold = 0.0f;   // a readable inventory with no Gold001 is a follower with no gold (unknown stays -1 only if the read never ran)
             for (auto& [obj, data] : a_actor->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* w = obj->As<RE::TESObjectWEAP>()) {
@@ -441,16 +472,8 @@ namespace MFO::Iaus::SpellBook {
                     (Logistics::AmmoIsBolt(ammo) ? book->kit.bolts : book->kit.arrows) += data.first;
                     continue;
                 }
-                if (auto* alc = obj->As<RE::AlchemyItem>()) {
-                    // The SAME test Logistics::CountPotions makes (the drink executors' stock read).
-                    switch (Logistics::PotionRestores(alc)) {
-                    case RE::ActorValue::kHealth:  book->kit.potionsHealth += data.first; break;
-                    case RE::ActorValue::kStamina: book->kit.potionsStamina += data.first; break;
-                    case RE::ActorValue::kMagicka: book->kit.potionsMagicka += data.first; break;
-                    default: break;
-                    }
-                    NoteBuffPotion(alc, data.first, book->kit);   // feat/buff-potions: every other beneficial effect, by kind
-                }
+                if (obj->GetFormID() == 0x0000000F) { book->kit.gold = static_cast<float>(data.first); continue; }   // Gold001: his wealth (the worth rule's cost share)
+                if (auto* alc = obj->As<RE::AlchemyItem>()) NoteConsumable(alc, data.first, book->kit);
             }
             {
                 const auto live = LiveBuffKinds(a_actor);
