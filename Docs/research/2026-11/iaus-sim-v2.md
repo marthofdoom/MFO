@@ -2806,3 +2806,121 @@ open decision for marth.
 - OPEN: the edge stage widens a multiplicative knob only to x0.35 / x0.25 of the shared value. For `equip.crossover`, tried down to x0.25,
   it printed "EDGE IS THE VALID LIMIT" for evoker 0.1125 although the valid limit is 0.02: the edge below 135 units was never tried.
 - OPEN: the field closing rate (35.1).
+
+### 35.7 marth's rulings of 11-12, applied (open-questions-for-marth.md, "Answered 2026-11-12 (batch 3)")
+
+- Archer line, "Playstyle band": the band wins over the cross-world rule. Written (ab4ebe0f, `ClassCurves.cpp SeedSearchedValues`):
+  ranged `equip.crossover` 0.1575, archer 0.1125. Per-world J of these values is in 35.3 (ranged: train +0.66, LoreRim -0.78; archer:
+  built-in +0.51, LoreRim -0.59, Tuxborn -0.08, Vanilla -0.10) and, with the part C models, in 35.8.
+- Evoker, "Yes, apply": `equip.crossover` 0.1125 and `equip.trade.w` 2 written.
+- Healer `ranged_dist.w`, "Widen search first": the edge stage judged x0.35 / x0.25 with the normal gates; none beats 0.5 (train +0.03,
+  se 0.04), so 0.5 (accepted through every gate) is written.
+- Mage 0.27: not written; it lands with full-r2's block.
+- Edge stage, "only if small": fixed (a multiplicative knob tried to x0.25 now widens on from its outermost value, x0.7 / x0.5 down, x1.4 /
+  x2 up). Re-run on b3-posture: evoker crossover widened to 0.079 / 0.056, none beats 0.1125 (train -0.07, se 0.07).
+- The write is proven: the edited tree with no `--curve` prints the same SEED lines as the unedited tree with the five specs (ranged,
+  archer, evoker, healer, beta1). The baseline was regenerated (every cell moved: ranged is the T1 companion) and three CLI pins re-pinned.
+
+### 35.8 Part C (marth 11-12): foe melee styles, enclosed vs open space, ranged perks, the perk weight, the named sanity cells
+
+**`--ranged-perks` is a BUG FIX and the default** (marth: "If ranged perks get applied. In the case of adelinda or auri ranged wins for
+sure."). `--ranged-perks off` is kept only for the byte-identical proof. Baseline regenerated, the three pins re-pinned (thief stealth-off
+42.05 -> 69.12: his bow carried his dagger's chain).
+
+Models (each behind its switch; every switch off + `--ranged-perks off`: beta1 seeds 1-3 `--class-oracle 2` baselines byte-identical to
+ab4ebe0f):
+- `--foe-styles` (FACT: the record value; MODEL: the mapping): after a blow a melee foe backpedals with chance = its combat style's
+  close-range Fallback Mult (CSTY CSCR[1], read from the world extract into `Style::fallback`), for U(0.5, 1.5) s at the back-pedal speed,
+  then re-engages; an aggressive style (low fallback, high offensive mult) presses on (its think pause is already / offensive mult). The
+  follower's own backpedal while shooting already existed (bow drawn, a foe under fCombatRangedMinimumRange 256, his package's fallback).
+- `--space R` (MODEL): a fight whose encounter cell is an INTERIOR is a room: a disc of radius R around the start centroid; whoever starts
+  outside starts at its edge (the line of fire is at most 2R) and every move stops at the wall (backpedal, kiting, flight). The mix is DATA:
+  the share of interior encounter cells in each extract (LoreRim 664 / 1200 = 55%, Tuxborn 721 / 1200 = 60%, Vanilla 708 / 1200 = 59%;
+  the built-in natural fights are exterior, its scenarios set their own). R has no source: a sensitivity axis (500 / 600 / 900);
+  `--space-force enclosed|open` puts every fight in one type.
+- `Cons::BoostPosturePerks` (native, APPENDED, flat, bit-identical) on `Snapshot::PerkRead`: the DESIGN SHAPE for the follow-up (ClickUp
+  1dfcuabd2pk): a general reader of what his perks multiply, keyed by entry point and effect, never by perk name, read "like potions":
+  `weaponDamage[OneHand | TwoHand | Bow | Crossbow]` (ModAttackDamage) now; spell cost / magnitude per school (ModSpellCost /
+  ModSpellMagnitude) and armor rating per type are the next fields, each read once and consumed by any family. x = this posture's share of
+  his weapon-damage multipliers. The GAME does not fill PerkRead yet (`read = false`: a main-thread entry-point evaluation is its own
+  brief), so the consideration is not applicable in game; the sim fills it from its perk chain.
+
+The search (run `b3c`: `--sim-flags "--point-blank --buff-dur real --foe-styles --space 600"`, ranged perks on, knobs `equip.crossover` +
+`equip.perks.y0/y1/y2`, all 15 cells, the normal RULE, 16 cores): NO new value is accepted. The written crossovers stay the best on train
+(ranged 0.1125 +0.00 against the written 0.1575, 0.225 -0.21, 0.3375 -0.50; archer and evoker: every other value is worse). The perk weight:
+no class beats noise (largest ranged y0 0.7: +0.11, se 0.06; thief +0.07, se 0.04). Warlock crossover 0.1575: train +1.33 (se 0.36),
+holdout not confirmed. Knight floor on Vanilla 59.2 as shipped (standing open decision).
+
+J of the written crossover minus the catalogue 0.45, per world and space type (64 fresh seeds 4001.., part C models, R 600):
+
+    builtin  open      ranged +0.37 (0.26) | archer +0.33 (0.13) | evoker +0.62 (0.24)
+    builtin  enclosed  ranged +1.55 (0.46) | archer +0.97 (0.19) | evoker +0.06 (0.25)
+    LoreRim  open      ranged -0.35 (0.22) | archer -0.26 (0.14) | evoker +1.30 (0.24)
+    LoreRim  enclosed  ranged -0.72 (0.34) | archer -0.89 (0.24) | evoker +1.08 (0.21)
+    Tuxborn  open      ranged -0.42 (0.30) | archer -0.11 (0.11) | evoker +0.17 (0.20)
+    Tuxborn  enclosed  ranged -0.06 (0.39) | archer +0.13 (0.16) | evoker +0.44 (0.23)
+    Vanilla  open      ranged -0.19 (0.21) | archer -0.24 (0.14) | evoker +0.29 (0.14)
+    Vanilla  enclosed  ranged +0.09 (0.17) | archer -0.04 (0.12) | evoker +0.63 (0.15)
+
+Contact% (bow drawn %) by crossover, built-in, seeds 1-6 (band: ranged <= 25, archer <= 20):
+
+    ranged  data      R600  0.1125: 16.3 (93) | 0.1575: 16.7 (90) | 0.225: 19.8 (83) | 0.3375: 22.6 (76)
+    ranged  open      R600  0.1125: 16.3 (93) | 0.1575: 16.7 (90) | 0.225: 19.8 (83) | 0.3375: 22.6 (76)
+    ranged  enclosed  R500  0.1125: 34.5 (94) | 0.1575: 35.5 (88) | 0.225: 41.1 (69) | 0.3375: 46.2 (59)
+    ranged  enclosed  R600  0.1125: 30.4 (94) | 0.1575: 31.6 (89) | 0.225: 36.1 (71) | 0.3375: 40.5 (63)
+    ranged  enclosed  R900  0.1125: 20.1 (94) | 0.1575: 21.2 (90) | 0.225: 24.3 (81) | 0.3375: 28.2 (74)
+    archer  data      R600  0.1125: 16.5 (92) | 0.1575: 17.2 (89) | 0.225: 18.4 (84) | 0.3375: 21.3 (77)
+    archer  open      R600  0.1125: 16.5 (92) | 0.1575: 17.2 (89) | 0.225: 18.4 (84) | 0.3375: 21.3 (77)
+    archer  enclosed  R500  0.1125: 34.6 (94) | 0.1575: 35.6 (88) | 0.225: 39.8 (70) | 0.3375: 44.1 (61)
+    archer  enclosed  R600  0.1125: 30.3 (94) | 0.1575: 31.2 (89) | 0.225: 35.4 (72) | 0.3375: 39.2 (65)
+    archer  enclosed  R900  0.1125: 20.2 (94) | 0.1575: 21.3 (91) | 0.225: 23.3 (82) | 0.3375: 27.3 (75)
+
+Read: in the OPEN the written values meet the band (ranged 16.7, archer 16.5); in a ROOM no crossover meets it (the lowest tried, 0.1125,
+gives 30 to 35% at R 500 / 600, 20% at R 900): contact there is the room, not the posture, so the band does not ask for another
+crossover and the written values stand. A band for enclosed fights is marth's call (open decision).
+
+**The named sanity cells** (Adelinda = Skyrim.esm `DBInitiate2`, the base of the field ref 00015D09, named "Adelinda" by Tuxborn's NPC merge;
+Auri = `018Auri`; built from each world's record: skills, health, race, gear, with the follower perk model at their own skills; Adelinda's
+record carries no bow, so the Ranged class kit's bow is hers; Auri is not in the Vanilla install). Per-posture J, 48 seeds, ranged cell,
+bow-leaning (crossover 0.02) against melee-leaning (0.9) and the written 0.1575:
+
+    Tuxborn  DBInitiate2  open     False | 76.56 | +2.48 (0.66) | +0.72 (0.29)
+    Tuxborn  DBInitiate2  open     True  | 77.12 | +2.11 (0.66) | +0.00 (0.26)
+    Tuxborn  DBInitiate2  enclosed False | 77.19 | +3.52 (0.88) | +0.47 (0.36)
+    Tuxborn  DBInitiate2  enclosed True  | 78.21 | +2.89 (0.71) | +0.27 (0.26)
+    Tuxborn  018Auri      open     False | 76.86 | +1.91 (0.62) | -0.20 (0.25)
+    Tuxborn  018Auri      open     True  | 77.33 | +1.27 (0.70) | -0.05 (0.20)
+    Tuxborn  018Auri      enclosed False | 76.37 | +2.27 (0.74) | +0.42 (0.30)
+    Tuxborn  018Auri      enclosed True  | 77.69 | +1.86 (0.67) | -0.12 (0.24)
+    LoreRim  DBInitiate2  open     False | 59.75 | +5.91 (0.99) | +1.40 (0.50)
+    LoreRim  DBInitiate2  open     True  | 60.85 | +5.68 (1.05) | +0.79 (0.35)
+    LoreRim  DBInitiate2  enclosed False | 59.40 | +8.12 (0.96) | +0.52 (0.39)
+    LoreRim  DBInitiate2  enclosed True  | 59.54 | +8.91 (1.05) | +0.53 (0.33)
+    LoreRim  018Auri      open     False | 60.10 | +2.60 (0.70) | +0.33 (0.19)
+    LoreRim  018Auri      open     True  | 61.02 | +2.39 (0.62) | +0.19 (0.25)
+    LoreRim  018Auri      enclosed False | 58.96 | +3.50 (0.73) | +0.36 (0.36)
+    LoreRim  018Auri      enclosed True  | 59.15 | +4.60 (0.81) | +0.44 (0.23)
+    Vanilla  DBInitiate2  open     False | 87.22 | +2.76 (0.56) | +0.48 (0.23)
+    Vanilla  DBInitiate2  open     True  | 87.92 | +2.22 (0.51) | +0.22 (0.13)
+    Vanilla  DBInitiate2  enclosed False | 87.10 | +3.28 (0.80) | +1.16 (0.48)
+    Vanilla  DBInitiate2  enclosed True  | 87.96 | +2.25 (0.63) | +0.43 (0.29)
+
+**The sim does NOT show ranged winning on J for either of them, in any world, space type or foe style.** Treated as a defect, checked
+road by road:
+- damage chain: correct after the fix. Their OWN damage is the bow's: Auri, Tuxborn, 6 seeds: bow-leaning dps 13.9 against melee-leaning
+  12.1 (arrows 53 to 75 per hit vs the dagger's 11 to 12 per swing); LoreRim: Adelinda melee-leaning 30.9 vs 11.6 (her record's sword is
+  damage 60, the kit bow far weaker), Auri 17.2 vs 13.5 (Requiem's bone bow at speed 0.44).
+- draw timing: the lab's shot is FASTER than the engine's (fBowDrawTime / speed x 0.6 + half the hold): not the cause.
+- point-blank: `--point-blank` moves J by +0.15 (0.16) on the ranged cells: not the cause.
+- foe closing / J: the melee-leaning gain is the PLAYER's survival. With the bow she stays back and the foes, choosing by distance (row 22),
+  go for the player: Auri Tuxborn player damage taken 19.2 / s bow-leaning vs 16.3 melee-leaning; Utility charges a dead player 50 + 15 + ...
+  and the lab's player loses 20 to 37% of natural fights. A melee-leaning follower draws the foes off him.
+So the defect, if it is one, is not in the archer's roads: it is how the lab's player fares and how foes pick between him and a follower
+(row 22, MODEL, no engine source for the weights). Not fixed here; open decision (a field measure of who the foes target, or the player
+model).
+
+### 35.9 full-r2's class-card read re-run
+
+`tune_driver.py --bin class-tuning-bin/sim-r2 --out scratchpad/tune/full-r3 --stages classes,summary --knobs '^(?!equip\.crossover$)'`
+(full-r2's cache, summary and potion tables copied in; the crossover knob excluded so its knob set is full-r2's): every cached sweep
+replays and the card read (`play_changes_natural`) is measured for every class with a value. Summary: `scratchpad/tune/full-r3/summary.md`.
