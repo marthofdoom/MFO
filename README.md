@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.10.0 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
+**Status: v2.11.0 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,16 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.11.0 (Deck test prerelease)
+
+- **Needs Harbinger v0.20.0 (ABI v45).** Without it the classes add-on does not start.
+- **New co-save version.** MCLS v2 (class add-on data). An older MFO cannot read a save written with class data. FLWR is still v6. Keep a backup of your saves.
+- **Mages wear clothing** and a self buff no longer loops (per spell lock, per follower pacing, fire and forget buffs live out their life).
+- **A universal theft gate**, plus the new `act.steal` and `act.pick_locks` gambits and an owned chest pick.
+- **Melee moves, hiding and disengaging, corpse raising and class aversion** through Harbinger.
+- **Class add-on beta (tiers 1 and 2):** packages, XP, Classes tab, MCM, default gambits, dodge rates and school affinity. It ships as its own archive.
+- **Sentient AI fills its facts from the engine** and was tuned with the simulator.
 
 ## What is new in 2.10.0 (Deck test prerelease)
 
