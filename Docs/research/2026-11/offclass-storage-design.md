@@ -2,19 +2,22 @@
 
 ClickUp 86e3t212u. Branch `feat/offclass-storage`. Written 2026-11-13 against `origin/main` 6a5c3c9f.
 
-**State: IMPLEMENTED 2026-11-13 (tier A, co-save), NOT merged.** The first version of this document (sections 1 to 12
-below) was an outline written before marth's rulings of 2026-11-12. Those rulings OVERRIDE it wherever they differ; section
-0a says what was built and supersedes the plan of sections 3, 4 (the trip parts), 5 (the layout), 7 and 8. The code is
-`native/logistics/Storage.h` / `Storage.cpp`, `Papyrus::DispatchMoveItem`, the 'STOR' record in `Serialization.h/.cpp`, the
-sale-loop hook in `Economy.cpp`, `Storage::Tick` in `Service.cpp`, and `native/selftest/TestsStorage.cpp`.
+**State: IMPLEMENTED 2026-11-13 (tier A, co-save), fix round after review 2026-11-13, NOT merged.** The first version of
+this document (sections 1 to 12 below) was an outline written before marth's rulings of 2026-11-12 and 2026-11-13. Those
+rulings OVERRIDE it wherever they differ; section 0a says what was built and supersedes the plan of sections 3, 4 (the trip
+parts), 5 (the layout), 7 and 8, and everything below about player homes, home learning, interim chests, migration and the
+home stop. The code is `native/logistics/Storage.h` / `Storage.cpp`, `Papyrus::DispatchMoveItem`, the 'STOR' record in
+`Serialization.h/.cpp`, the sale-loop hook in `Economy.cpp`, `Storage::Tick` in `Service.cpp`, the MFO storage chest in
+`MFO_GenerateESP.py` / `Forms.h`, and `native/selftest/TestsStorage.cpp`.
 
-## 0a. Rulings 2026-11-12 (verbatim) and what was built
+## 0a. Rulings 2026-11-12 / 2026-11-13 (verbatim) and what was built
 
 - Classes OFF: "No storing" (he sells as today).
 - What is stored: "It only stores for previously mastered, or future in line. But Armor too."
 - Access: "As I said they can access it from anywhere. But only for this purpose."
-- Where: "I would say the main player home is preferred, but other safe storage exists, id have the storage moved to the
-  player home once one is bought."
+- Where (2026-11-12, SUPERSEDED the next day): "I would say the main player home is preferred, but other safe storage exists,
+  id have the storage moved to the player home once one is bought."
+- Where (2026-11-13, Q-S-13, the ruling in force): "Give the followers thier own mfo storage they can access."
 - Economy decides what is worth keeping; retrieval on a class change and when a stored piece beats what he carries.
 
 Built:
@@ -30,34 +33,49 @@ Built:
   feet for rated armor and for clothing. Store only when the piece outranks every other carried piece of its bucket and
   his stored one, he carries exactly ONE copy (a count drop could otherwise be a sale), and use value minus sale value
   (`Pricing::Apply` with `Pricing::Resolve(follower, none, 0)`) is at least `iErrandMinSellGold` (placeholder, Q-S-3).
-- **Chests.** Learned on the worker from the follower's own attached INTERIOR cell, a cell at most once a minute: persistent,
-  not disabled / deleted, base CONT without kRespawn, unlocked, no linked refs (scripted setups such as the vanilla book
-  shelves), not a LOTD drop-off or faction service container, ref owner none / Player / PlayerFaction; lowest FormID wins
-  (no chest inventory is read). A cell owned by Player / PlayerFaction (or unowned under LocTypePlayerHouse) gives a MAIN home
-  chest; any other cell gives an INTERIM chest only when the container is owned by the player, and only while no main home is
-  known. Target: the first main home, else the first interim. Once a main home exists every interim piece is MIGRATED through
-  his pack (chest -> him, confirmed by his count rising; him -> home, confirmed by it falling).
-- **Retrieval** (5 s cadence, one per pass): the piece fits his class now (weapon bit in his set or unrestricted; armor of the
-  kind he wears), his weapon roles keep its bucket, and by the KEEP SET's own key and rank (a mirror of `ComputeKeepSet`) it
-  beats what he carries. Only when he carries no copy. Three misses drop the entry loudly (the player took it).
+- **The chest (Q-S-13).** ONE MFO-owned chest, generated in `MFO.esp` by `MFO_GenerateESP.py`: base CONT `0x917`
+  `MFO_StorageChest` (no respawn flag), an interior holding CELL `0x918` `MFO_StorageCell` that nothing links to, and ONE
+  PERSISTENT REFR `0x919` `MFO_StorageChestRef` of the chest in it (`Forms::kStorageChestRef`, resolved to
+  `Forms::g_storageChest`). Persistent, so the ref stays in memory with its cell unloaded and a Papyrus RemoveItem reaches it
+  from anywhere. Shared by every follower; what each follower stored is tracked per follower in 'STOR'. No home search, no
+  interim chest, no migration (all removed). The chest missing (an older MFO.esp) = no storing, one error line.
+  `tools/audit_esp.py` checks the three records.
+- **Receiver binding (review F1).** `DispatchMethodCall2` resolves its receiver through a bound script object, and the chest
+  has no script, so `Papyrus::DispatchMoveItem` first binds one through CommonLib's own `PackHandle` road (FindBoundObject,
+  else CreateObject + BindID, fork `src/RE/P/PackUnpack.cpp`) for the receiver; the destination is bound by the same road when
+  the arguments are packed. A store dispatch failure blocks that base for the session (it sells as before); a retrieval
+  dispatch failure is a miss with the 5 minute backoff (one WARN per try, never every 5 s), and the entry stays.
+- **Retrieval** (5 s cadence, one per pass, review F2): the piece fits his class now (weapon bit in his set or unrestricted;
+  armor of the kind he wears), and the SALE PATH ITSELF would keep it were he carrying it: `ComputeKeepSet(..., a_extra)`
+  with the piece added, plus the sell loop's own unworn-row gates (`SaleKeepGates` / `SaleKeepsUnworn` in `Economy.cpp`,
+  one shared predicate, no mirror). Only when he carries no copy. Three confirm misses drop the entry loudly.
+- **Confirms (review F5).** Every move is confirmed from the FOLLOWER's own count; the shared chest's inventory is never read.
+  While a container / gift / barter menu is open no confirm reads his count, no window runs out and no move starts. One
+  stored entry per base per follower (review F8: a second copy of a stored base sells, the stored one is never replaced).
+  REMAINING LIMIT: the chest holds items, not owners. Two followers who store the same base each have their own entry, and a
+  RemoveItem by base takes whichever copy the engine picks, so a retrieval can hand him the other follower's copy (a
+  different temper / enchant instance of the same base). Counts stay right per follower; instance data can swap.
+- **Load (review F4, co-save carve-out).** An entry saved mid-move (flag 0x01 store, 0x02 retrieval) becomes a settle op on
+  the follower's first loaded tick of the session with a FRESH 30 s window, through the same confirm path; never judged on
+  the first pass.
 - **Evidence for the old NOT VERIFIED items.** (1) Persistent home chests: parsed Skyrim.esm / HearthFires.esm (tool
   `Linux-Native-Tools/tools/esp_query.py` plus a cell walker): the vanilla city houses (Breezehome, Vlindrel Hall, Proudspire,
   Honeyside) have NO persistent general container (PlayerHouseChest refs are temporary); Hjerim has a persistent wardrobe;
-  Hearthfire houses have many. So vanilla city houses do not qualify (logged, open question Q-S-13). (2) VM RemoveItem into
+  Hearthfire houses have many. So vanilla city houses do not qualify (Q-S-13, ANSWERED 2026-11-13: MFO's own chest, above). (2) VM RemoveItem into
   an unloaded persistent container: the standard Papyrus idiom (holding-cell containers), and MFO_Trade's merchant-chest
   moves are the same shape; every move here is confirmed from the follower's count and a miss is a WARN, so the first field
   run proves or refutes it.
 
-'STOR' v1 as built (supersedes section 5's block; the reader rules of section 5 stand):
+'STOR' v1 as built (supersedes section 5's block and the 2026-11-13 morning draft with a homes table, which never
+shipped; the reader rules of section 5 stand):
 
 ```
-u32 homeCount <= 16
-per home:     u32 chest, u32 cell, u32 town, u8 kind (1 main home, 2 interim; other -> dropped)
-u32 followerCount <= 4096
-per follower: u32 follower, u32 itemCount <= 16
-  per item:   u32 chest (must name a loaded home), u32 base (WEAP/ARMO), u16 count (1; 0 dropped, >1 clamped),
+u32 followerCount <= 4096 (more = aborted)
+per follower: u32 follower (unresolvable -> his items read past and dropped), u32 itemCount <= 16
+  per item:   u32 base (WEAP/ARMO; unresolvable / other type / duplicate base -> dropped), u16 count (1; 0 dropped, >1 clamped),
               u8 flags (0x01 a store in flight at the save, 0x02 a retrieval in flight; others masked)
 ```
+Version 0 skipped, a newer version skipped with the "newer save" warning, a short read keeps what was parsed.
 
 ## 0. The rulings this implements
 

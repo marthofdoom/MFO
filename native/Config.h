@@ -963,8 +963,8 @@ namespace MFO::Config {
     //   OFF-CLASS STORAGE (feat/offclass-storage, ClickUp 86e3t212u; INI-only, features ship ON):
     //     bOffClassStorage: a piece the sale path would sell that belongs to a class he MASTERED or one ahead on his own tree line
     //       (weapons, shields, armor) goes to a storage chest instead when the economy says keeping it beats selling it, and comes
-    //       back on a class change or when it beats what he carries. The chest is the player's home (preferred), else another safe,
-    //       player-owned container until a home is owned (then the pieces move to the home). Needs the class add-on and a usable chest.
+    //       back on a class change or when it beats what he carries. The chest is the followers' OWN MFO chest (MFO.esp 0x919,
+    //       marth 2026-11-13), reached from anywhere. Needs the class add-on and the current MFO.esp.
     //       0 = everything sells as before (stored pieces stay in the chest; their entries are kept for when it is turned back on).
     inline std::atomic<bool>  g_offClassStorage{ true };
     //   TOWN PHASE 2 R7 (inn + temple, all INI-only; logistics/ErrandRest.cpp):

@@ -86,7 +86,7 @@ namespace MFO::Papyrus {
     bool DispatchRemoveItem(RE::TESObjectREFR* a_ref, RE::TESForm* a_item, std::int32_t a_count);
 
     // a_from.RemoveItem(akItem, aiCount, abSilent=true, akOtherContainer=a_to): an inventory MOVE between two references through the
-    // VM (off-class storage, logistics/Storage.cpp: a follower -> his home chest and back, the chest usually in an UNLOADED cell, the
+    // VM (off-class storage, logistics/Storage.cpp: a follower -> the MFO storage chest and back, the chest in an UNLOADED cell, the
     // house rule above). akItem is packed by its concrete type (WEAP or ARMO only; anything else is refused, not guessed) and
     // akOtherContainer as an Actor when a_to is one, else as an ObjectReference. Dispatched, async: "true" is never "moved"; the
     // caller confirms from a count it can read.

@@ -633,7 +633,7 @@ namespace MFO::Followers {
             g_stateSample.erase(v.id);
             Logistics::ForgetStockGear(v.id);
             PlayerGiven::Forget(v.id);
-            Logistics::Storage::Forget(v.id);   // 86e3t212u: his stored pieces stay in the chest as the player's
+            Logistics::Storage::Forget(v.id);   // 86e3t212u: his stored pieces stay in the MFO chest, untracked
             if (rejoined) {
                 // He came back between the main undo and this hop: give him what any new
                 // party member gets (a fresh default record), never a recordless follower.

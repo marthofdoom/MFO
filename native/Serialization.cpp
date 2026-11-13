@@ -723,8 +723,8 @@ namespace MFO {
         // contract: the town errands in progress (written only when one exists).
         WriteErrandRecord(a_intfc);
 
-        // 86e3t212u (kRecStorage/'STOR') -- an independent record, same isolation contract: the off-class storage chests and the
-        // pieces each follower keeps in them (logistics/Storage.cpp owns the layout, bounds and the lock). Written only when non-empty.
+        // 86e3t212u (kRecStorage/'STOR') -- an independent record, same isolation contract: the off-class pieces each follower
+        // keeps in the MFO storage chest (logistics/Storage.cpp owns the layout, bounds and the lock). Written only when non-empty.
         Logistics::Storage::CoSave(a_intfc);
 
         SelfTest::CoSave(a_intfc);   // dev builds only ('MFST', selftest/Record.cpp); an empty inline in release

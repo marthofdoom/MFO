@@ -1,6 +1,6 @@
 // THE OFF-CLASS STORAGE SELF-TESTS (dev builds only; feat/offclass-storage, ClickUp 86e3t212u). Same rules as TestsT2.cpp: pure reads
 // inside step(), no spawn, no engine mutation. Design section 9 (Docs/research/2026-11/offclass-storage-design.md), adjusted to the
-// 2026-11-12 rulings (no errand stop, classes OFF = no storing, armor in scope, interim safe storage):
+// 2026-11-12 rulings (no errand stop, classes OFF = no storing, armor in scope) and 2026-11-13 (Q-S-13: the MFO chest):
 //
 //   storage.decide_store     the pure store judge, table-driven over DecideStore.
 //   storage.decide_retrieve  the pure retrieval judge, table-driven over DecideRetrieve.
