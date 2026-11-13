@@ -77,6 +77,12 @@ namespace Sim {
             if (fld == "a") c.a = f; else if (fld == "b") c.b = f; else if (fld == "floor") c.floor = f; else return false; return true; }
         if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { s.pkg[name] = f; return true; }
         for (const TuneScalar& k : kTuneScalars) if (name == k.name) { s.t.*(k.m) = f; return true; }
+#ifdef MFO_SIM_KNOBS   // run.sh builds; tools/iaus_sim/const_probe.sh (the rebuild road) does not
+        if (name == "const.kCloseSlack") { SimKnob_kCloseSlack = f; return true; }   // run.sh RUNTIME CONSTANTS: native's constexpr, a sim global here
+        if (name == "const.kMinimumFrac") { SimKnob_kMinimumFrac = f; return true; }
+        if (name == "const.kRangeVeto") { SimKnob_kRangeVeto = f; return true; }
+        if (name == "const.kPostureDist") { SimKnob_kPostureDist = f; return true; }
+#endif
         for (const WorthKnob& k : kWorthKnobs) if (name == k.name) { s.t.worth.*(k.m) = f;
             if (k.m == &MFO::Iaus::WorthTable::floor) s.t.curve[static_cast<std::size_t>(Cons::ConsumableWorth)].zeroBelow = f;   // Catalogue.cpp builds the veto from the same member
             return true; }

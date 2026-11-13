@@ -451,6 +451,7 @@ namespace Sim {
 
     // Run a fight to its end: the world at 30 Hz, one follower served per pump tick, round-robin.
     inline void RunFight(Fight& F, Policy& P) {
+        F.SetArena();   // review F1: the room stands before the first decision
         while (!F.over) {
             if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; P.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); }
             F.StepWorld();

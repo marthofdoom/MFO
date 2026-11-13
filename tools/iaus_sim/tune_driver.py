@@ -168,11 +168,49 @@ def sim_cmd(world, classes, cfg, curves, sets, binary):
     return cmd
 
 
+import queue
+
+WORKERS = {}        # binary -> queue of idle `sim --serve` workers (tune 2.11.1)
+WORKER_LOCK = threading.Lock()
+
+
+def run_worker(cmd):
+    """One job on a persistent `sim --serve` worker of cmd[0] (sim.cpp main: the lists are parsed once per worker, each job is a fork of
+    it that runs exactly the normal command, stderr joined to stdout). Returns (exit code, output)."""
+    with WORKER_LOCK:
+        q = WORKERS.setdefault(cmd[0], queue.Queue())
+    try:
+        w = q.get_nowait()
+    except queue.Empty:
+        lists = [CACHE_DIR + x + ".sim.json" for x in A.worlds if x != "builtin"]
+        w = subprocess.Popen([cmd[0], "--serve"] + lists, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+    if any("\t" in a or "\n" in a for a in cmd[1:]):
+        raise RuntimeError("a job argument holds a TAB or a newline: %s" % cmd)
+    w.stdin.write("\t".join(cmd[1:]) + "\n")
+    w.stdin.flush()
+    out = []
+    while True:
+        line = w.stdout.readline()
+        if not line:
+            raise RuntimeError("the simulator worker died: %s\n%s" % (" ".join(cmd), "".join(out)[-600:]))
+        if line.startswith("@@END "):
+            rc = int(line.split()[1])
+            break
+        out.append(line)
+    q.put(w)
+    return rc, "".join(out)
+
+
 def run_chunk(k, cmd, seeds):
-    r = subprocess.run(cmd + ["--seeds", ",".join(str(s) for s in seeds)], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError("the simulator failed (exit %d): %s\n%s\n%s" % (r.returncode, " ".join(cmd), r.stdout[-400:], r.stderr[-400:]))
-    out = r.stdout
+    full = cmd + ["--seeds", ",".join(str(s) for s in seeds)]
+    if A.no_worker:
+        r = subprocess.run(full, capture_output=True, text=True)
+        rc, out, err = r.returncode, r.stdout, r.stderr
+    else:
+        rc, out = run_worker(full)
+        err = ""
+    if rc != 0:
+        raise RuntimeError("the simulator failed (exit %d): %s\n%s\n%s" % (rc, " ".join(cmd), out[-400:], err[-400:]))
     js = {int(m.group(1)): float(m.group(2)) for m in re.finditer(r"^SEED (\d+)  J=([-0-9.]+)", out, re.M)}
     sw = {int(m.group(1)): (float(m.group(2)), float(m.group(3))) for m in re.finditer(r"^SWITCH (\d+) (\d+) ([0-9.]+)", out, re.M)}
     if set(js) != set(seeds) or set(sw) != set(seeds):
@@ -572,6 +610,40 @@ def stage_rejudge():
     SUMMARY["stages"]["rejudge"] = rows
 
 
+RACE_Z = 3.0   # the racing bound (tune 2.11.1, coordinator 11-13 "drop a candidate once it is clearly behind")
+
+
+def race(base_req, cand_reqs, seeds):
+    """RACING (tune 2.11.1). A sweep's candidates are measured on growing prefixes of the train seeds (16, 32, 48, then all) instead of all
+    seeds at once. After each look, candidate c (paired d_c, se_c against the sweep's base on that prefix) is DROPPED when its upper bound
+    d_c + RACE_Z se_c is under the train bar's 0.15 J, or under the lower bound d_l - RACE_Z se_l of the look's leader. With RACE_Z = 3 the
+    normal-approximation chance that a dropped candidate's full-seed d would have reached either line is under 0.14% per look and candidate
+    (three looks: under 0.41%). Survivors, and so every value that can pass the train bar or lead the sweep, are measured on ALL the seeds,
+    and the bar itself (d > 2.5 se, d >= 0.15) is applied to the full-seed numbers only: racing decides which candidates are worth the full
+    seeds, never whether one is accepted. --no-race measures every candidate on every seed (the old driver, the proof's reference).
+    Returns (base result on all seeds, [(result on all seeds or None, n seeds it was dropped at or len(seeds))])."""
+    seeds = list(seeds)
+    looks = [n for n in (16, 32, 48) if n < len(seeds)] if not A.no_race else []
+    alive = list(range(len(cand_reqs)))
+    dropped = {}
+    for n in looks:
+        sub = lambda r: r[:6] + (seeds[:n],)
+        res = jmany([sub(base_req)] + [sub(cand_reqs[i]) for i in alive])
+        st = {i: paired(res[0], r) for i, r in zip(alive, res[1:])}
+        lead = max(alive, key=lambda i: st[i][0])
+        lcb = st[lead][0] - RACE_Z * st[lead][1]
+        keep = [i for i in alive if st[i][0] + RACE_Z * st[i][1] >= 0.15 and (i == lead or st[i][0] + RACE_Z * st[i][1] >= lcb)]
+        for i in alive:
+            if i not in keep:
+                dropped[i] = n
+        alive = keep
+        if not alive:
+            break
+    res = jmany([base_req] + [cand_reqs[i] for i in alive])
+    full = dict(zip(alive, res[1:]))
+    return res[0], [(full.get(i), dropped.get(i, len(seeds))) for i in range(len(cand_reqs))]
+
+
 def search_class(cls, knobs):
     probe = range(1, CFG["probe_seeds"] + 1)
     train = range(1, CFG["train"] + 1)
@@ -604,12 +676,13 @@ def search_class(cls, knobs):
         for sens, name, tmpl, shared, vals in live[:CFG["max_knobs"]]:
             if name in done or any(k.split("=")[0] == tmpl.format(c=cls, v=0).split("=")[0] for k in kept):
                 continue   # a knob that took a value is not searched twice
-            res = jmany([req("builtin", cls, "g3", base + kept, train)] + [req("builtin", cls, "g3", base + kept + [tmpl.format(c=cls, v=v)], train) for v in vals])
-            cands = sorted(((paired(res[0], r) + (v,)) for r, v in zip(res[1:], vals)), key=lambda x: -x[0])
+            b0, rr = race(req("builtin", cls, "g3", base + kept, train), [req("builtin", cls, "g3", base + kept + [tmpl.format(c=cls, v=v)], train) for v in vals], train)
+            raced = [(v, n) for (r, n), v in zip(rr, vals) if r is None]
+            cands = sorted([(paired(b0, r) + (v,)) for (r, n), v in zip(rr, vals) if r is not None], key=lambda x: -x[0]) or [(-INF, 0.0, vals[0])]
             d, se, v = cands[0]
             spec = tmpl.format(c=cls, v=v)
             row = {"class": cls, "knob": name, "shared": shared, "best": v, "probe": round(sens, 3), "pass": ps + 1, "train": [round(d, 3), round(se, 3)],
-                   "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2])], "accepted": False, "spec": spec}
+                   "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2]) if c[0] > -INF], "raced_out": raced, "accepted": False, "spec": spec}
             passed = d > 2.5 * se and d >= 0.15
             if passed or (CFG["force"] and not rows):   # a smoke run pushes its first sweep through every later step
                 j = judge(cls, base + kept, spec, forced=not passed)
@@ -618,7 +691,7 @@ def search_class(cls, knobs):
                 if not passed:
                     row["why"] = "train: does not beat noise (later steps were run for the smoke test only); " + j["why"]
             else:
-                row["why"] = "train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J"
+                row["why"] = ("train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J") if d > -INF else "train: every value raced out (under the 0.15 J bar or behind the leader at %g sigma)" % RACE_Z
             if row["accepted"]:
                 kept.append(spec)
                 done.add(name)
@@ -1284,13 +1357,9 @@ def stage_consts():
     rows = []
     for name, shipped, vals in (CONSTS[:1] if CFG["force"] else CONSTS):
         for v in (vals[:1] if CFG["force"] else vals):
-            vb = os.path.join(A.out, "bin-%s-%s" % (name, v))
-            if not os.path.exists(vb):
-                r = subprocess.run([os.path.join(HERE, "const_probe.sh"), name, str(v), vb], capture_output=True, text=True)
-                if r.returncode != 0 or not os.path.exists(vb):
-                    rows.append({"const": name, "value": v, "verdict": "PROBE FAILED TO BUILD: " + r.stderr[-200:]})
-                    continue
-            res = jmany([req("builtin", c, g, curves, seeds, None, b) for c in CELLS for g in CONFIGS for b in (None, vb)])
+            # tune 2.11.1: a RUNTIME knob of the run.sh build (--set const.<name>, run.sh RUNTIME CONSTANTS), no rebuild; proven equal to the
+            # const_probe.sh variant binaries (iaus-sim-v2.md 36). const_probe.sh stays for a constant run.sh does not expose.
+            res = jmany([req("builtin", c, g, curves, seeds, st) for c in CELLS for g in CONFIGS for st in (None, "const.%s=%s" % (name, v))])
             row, i, pooled, same = {"const": name, "was": shipped, "value": v}, 0, {}, True
             for c in CELLS:
                 for g in CONFIGS:
@@ -1475,9 +1544,11 @@ def main():
     ap.add_argument("--stages", default=DEFAULT_STAGES)
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
+    ap.add_argument("--no-worker", action="store_true", help="one simulator process per chunk instead of the persistent `sim --serve` workers")
+    ap.add_argument("--no-race", action="store_true", help="measure every candidate of a sweep on every train seed (the pre-2.11.1 driver; the racing proof's reference)")
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
-    ap.add_argument("--jobs", type=int, default=12)
+    ap.add_argument("--jobs", type=int, default=os.cpu_count() or 16)
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one dashboard results file per finished sweep")
     A = ap.parse_args()
     if A.for_class:

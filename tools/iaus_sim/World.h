@@ -729,7 +729,7 @@ namespace Sim {
             sh.dodged = true; if (d->ctl == 0) ++t.dodges;
             const Body* a = Find(sh.src); float ux = 0, uy = 1; if (a) { const float dx = d->c.x - a->c.x, dy = d->c.y - a->c.y, l = std::max(1.0f, std::hypot(dx, dy)); ux = -dy / l; uy = dx / l; }
             if (R.P(0.5f)) { ux = -ux; uy = -uy; }
-            if (Standable(d->c.x + ux * 90.0f, d->c.y + uy * 90.0f)) { d->c.x += ux * 90.0f; d->c.y += uy * 90.0f; d->movedAt = now; d->ranLast = true; }
+            if (Standable(d->c.x + ux * 90.0f, d->c.y + uy * 90.0f)) { d->c.x += ux * 90.0f; d->c.y += uy * 90.0f; IntoRoom(*d, arenaR); d->movedAt = now; d->ranLast = true; }
             d->act = Act::None; d->hitAt = -1; d->actEnd = now + 0.4;
             if (trace) std::fprintf(trace, "%7.2f  DODGE %s side steps a projectile (avoid threat %.2f)\n", now, d->c.name.c_str(), p);
         }
@@ -1152,13 +1152,21 @@ namespace Sim {
             { float nd = 1e9f; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && o.c.targetId == x.c.id) nd = std::min(nd, Dist(x, o));
               t.nearOnMeSec[nd < 256.0f ? 0 : nd < 540.0f ? 1 : 2] += TM::dt; }
         }
-        void StepWorld() {
+        // --space R: the enclosed fight's disc, set ONCE before the first decision (review F1 of ca46a3e2: it was set in the first StepWorld,
+        // after the first Serve at now = 0, so the first decision saw open-space distances). RunFight calls it before its loop.
+        void SetArena() {
             if (!arenaSet) { arenaSet = true;   // --space R (Part C, MODEL): an enclosed fight is a disc of radius R around the start centroid; whoever starts
                 // outside it starts at its edge (a room: the line of fire is no longer than 2R, backpedal / kiting / flight stop at the wall)
                 const bool enclosed = g_spaceForce >= 0 ? g_spaceForce == 1 : interior;
                 if (g_spaceSize > 0.0f && enclosed && !b.empty()) { float cx = 0, cy = 0; for (const Body& o : b) { cx += o.c.x; cy += o.c.y; } cx /= float(b.size()); cy /= float(b.size());
                     arenaX = cx; arenaY = cy; arenaR = g_spaceSize; const float in = std::max(0.5f * g_spaceSize, g_spaceSize - 50.0f);
                     for (Body& o : b) { const float ox = o.c.x - cx, oy = o.c.y - cy, od = std::hypot(ox, oy); if (od > in) { o.c.x = cx + ox * in / od; o.c.y = cy + oy * in / od; } } } }
+        }
+        // review F1: a body placed or moved outside the room (a late spawn, a dodge step) is put back inside it (a late spawn at the starting
+        // ring, a dodge step stops at the wall like every other move). No room = nothing.
+        void IntoRoom(Body& o, float r) { if (!(arenaR > 0.0f)) return; const float ox = o.c.x - arenaX, oy = o.c.y - arenaY, od = std::hypot(ox, oy); if (od > r) { o.c.x = arenaX + ox * r / od; o.c.y = arenaY + oy * r / od; } }
+        void StepWorld() {
+            SetArena();
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }
@@ -1171,7 +1179,7 @@ namespace Sim {
                 if (now >= x.tauntUntil) x.c.taunted = false;
                 if (x.hitAt >= 0 && now >= x.hitAt && now >= x.staggerUntil && now >= x.ctrlUntil) Resolve(b[i]);
             }
-            for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale;
+            for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale; IntoRoom(n, std::max(0.5f * arenaR, arenaR - 50.0f));
                     if (!ctl.empty() && t.mpAtLate < 0) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; t.mpAtLate = s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1.0; } } else ++i; }
             if (g_stealth > 0) {
                 for (Body& x : b) if (x.stealthy && x.ctl >= 0) x.sneaking = Up(x) && now >= x.standUntil;   // G1 holds the stance all fight, the hide run included (a crouched run: the drive asks for the run speed, the stance is the claim's)

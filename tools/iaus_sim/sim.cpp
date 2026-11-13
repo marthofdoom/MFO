@@ -14,6 +14,8 @@
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -543,7 +545,34 @@ namespace {
 
 }
 
+// THE WORKER (tune 2.11.1, coordinator 11-13 "a persistent sim worker per core that loads worlds and binary once"): `sim [flags] --serve
+// [<sim.json> ...]` parses each named list ONCE, then reads one job per stdin line (the arguments of a normal run, separated by TABs), forks,
+// and the child runs exactly what `sim [flags] <job args>` would (fresh copies of every global, the parsed world shared copy-on-write), its
+// stderr joined to stdout; after the child exits the worker prints "@@END <exit code>". A forked child is the same program with the same
+// state a fresh process would have, except that LoadData of a preloaded path starts from its parsed JSON tree (Load.h PreloadedJson).
+static int RealMain(int argc, char** argv);
 int main(int argc, char** argv) {
+    int at = -1; for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i], "--serve")) { at = i; break; }
+    if (at < 0) return RealMain(argc, argv);
+    for (int i = at + 1; i < argc; ++i) Sim::PreloadJson(argv[i]);
+    std::string line;
+    for (int ch; ; ) {
+        line.clear(); while ((ch = std::fgetc(stdin)) != EOF && ch != '\n') line.push_back(static_cast<char>(ch));
+        if (ch == EOF && line.empty()) return 0;
+        std::vector<std::string> toks; std::size_t p = 0; while (p <= line.size()) { const auto q = line.find('\t', p); toks.push_back(line.substr(p, q == std::string::npos ? std::string::npos : q - p)); if (q == std::string::npos) break; p = q + 1; }
+        std::fflush(stdout);
+        const pid_t pid = fork();
+        if (pid == 0) {
+            dup2(1, 2);
+            std::vector<char*> av; av.push_back(argv[0]); for (int i = 1; i < at; ++i) av.push_back(argv[i]); for (auto& t : toks) if (!t.empty()) av.push_back(t.data()); av.push_back(nullptr);
+            const int rc = RealMain(static_cast<int>(av.size()) - 1, av.data());
+            std::fflush(stdout); std::fflush(stderr); _exit(rc);
+        }
+        int status = 0; waitpid(pid, &status, 0);
+        std::printf("@@END %d\n", WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0)); std::fflush(stdout);
+    }
+}
+static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
