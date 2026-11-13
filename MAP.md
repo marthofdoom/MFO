@@ -4961,6 +4961,24 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 **Open backlog:** MFO-B130 (menu read off-main), MFO-B131 (a stale entry after a fast leave; now saved), MFO-B132
 (a gift before LOTD's first snapshot is recorded whatever it is; inert).
 
+### logistics/LootNeed.cpp + iaus/LootNeed.h — IAUS LOOTING BY INVENTORY NEED (ClickUp 1dfcuabd18f, `feat/iaus-loot`, 2026-11-13; NOT serialized; NOT field-run)
+- **What:** marth "still find loot the same way we currently do, but then iaus what gets looted by current inventory". FINDING is unchanged
+  (LootScan). ON for a follower = `IausLootOn` (`LootNeed.cpp:148`): `Config::g_iausLoot` (`[General] bIausLoot`, INI-only, default 1) &&
+  `g_iausAvailable` && `mfoEnabled` && `iausCombat` (the Sentient AI switch; FLWR bit 4 is NOT used). With it on, the rows `IsIausNeedLootOp`
+  (`Logistics_internal.h:659`: `IsLootOp` minus museum and steal) are SKIPPED ("replaced, never stacked") in the three walks, and after each
+  walk (a Wait row still stops first) `IausLootPlan` (`:152`) returns the categories that clear `ScoreLootKind` (`iaus/LootNeed.h:161`), best
+  first: Service rule walk `Service.cpp:1531` (skip) + `:2151` (pass, before the smith-mats pass), `StripCorpse` `LootScan.cpp:1046` + `:1098`
+  (same `TierReleased` dibs gate + drain), `RunExcursionScan` `:1142` + `:1172`. Potions: `LootHere` / `HasLoot` (`LootTake.cpp:882`) route
+  to `LootConsumablesNeed` (`LootNeed.cpp:171`), which scores EVERY ALCH in the source (potions, food, poisons; all effects read by
+  `ReadConsumable` `:83` + `ConsumableBuffs` `PotionFx.cpp:89`) with `ScoreConsumable` (`iaus/LootNeed.h:243`), re-judging after each take.
+  Poisons: `PoisonCarryValue` (`:230`), weapon users only. Every take still passes `TheftGate::Takeable/Take` and LootHere's guard gate.
+- **Pure + placeholders:** `iaus/LootNeed.h` is std-only (harness `LootNeedScores`); every number in `LootTuning` (`:70`) is a labelled
+  placeholder for the sim's logistics world (Fable-only; nothing here reads tools/iaus_sim).
+- **Threading:** worker, inside `ServiceFollower` (reads `g_svc`, like `LootEquipment`). Only state: the `[iaus-loot]` log rate-limit map.
+- **What breaks if you change this:** a new `act.loot_*` opcode must be added to `IsLootOp` or IAUS looting will stack with it; renaming a
+  Category drops it from `CatOf`; `PotionBuffs` / `ConsumableBuffs` must keep the one classification rule (catalog first); `GemRules.cpp`
+  `SellGambitActive` still reads the `act.loot_valuables` ROW, so an IAUS-loot follower without that row does not sell gems that way.
+
 ### logistics/Storage.cpp / Storage.h — OFF-CLASS STORAGE (ClickUp 86e3t212u, `feat/offclass-storage`, 2026-11-13; SAVED: 'STOR' v1)
 marth rulings 2026-11-12 / 2026-11-13 (header comment quotes them; `Docs/research/2026-11/offclass-storage-design.md` section
 0a): a piece the SALE PATH would sell that belongs to a class he MASTERED or one AHEAD of his equipped class on his own tree
