@@ -1,6 +1,9 @@
 #include "PCH.h"
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "MainThread.h"
+#include "Config.h"   // g_vptrTripwire
+
+extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId();   // as Diagnostics.cpp: no windows.h here
 
 namespace MFO::MainThread {
 
@@ -20,12 +23,40 @@ namespace MFO::MainThread {
         // queueing them forever into a queue nothing will ever drain.
         std::atomic<bool> g_dead{ false };
 
+        // Passive tripwire (field CTD 16:21: a 32-bit store of 0x1000 clobbered the low dword of the
+        // player's vtable pointer during Update; the writer is unknown). Reads the object's vptr at
+        // three kinds of point and logs ONE critical line on the first mismatch per session. Repairs
+        // nothing, changes no behaviour: the crash still happens exactly as before.
+        std::uintptr_t g_expectedVptr = 0;      // set in Install() before the hook is written
+        std::atomic<bool> g_vptrReported{ false };
+
+        // a_point: 'a' entry, 'b' after func(), 'c' after drained fn #a_idx.
+        void VptrCheck(RE::PlayerCharacter* a_this, char a_point, std::size_t a_idx = 0,
+                       const std::function<void()>* a_fn = nullptr) {
+            const auto cur = *reinterpret_cast<const volatile std::uintptr_t*>(a_this);
+            if (cur == g_expectedVptr) return;
+            if (g_vptrReported.exchange(true)) return;
+            if (a_point == 'c') {
+                spdlog::critical("[vptr-tripwire] player vptr CHANGED at point (c) after drained fn #{} ({}): expected 0x{:X} now 0x{:X} (this=0x{:X}, tid={})",
+                                 a_idx, a_fn ? a_fn->target_type().name() : "?", g_expectedVptr, cur,
+                                 reinterpret_cast<std::uintptr_t>(a_this), GetCurrentThreadId());
+            } else {
+                spdlog::critical("[vptr-tripwire] player vptr CHANGED at point ({}) {}: expected 0x{:X} now 0x{:X} (this=0x{:X}, tid={})",
+                                 a_point, a_point == 'a' ? "entry, before func()" : "right after func()",
+                                 g_expectedVptr, cur, reinterpret_cast<std::uintptr_t>(a_this), GetCurrentThreadId());
+            }
+            spdlog::default_logger()->flush();
+        }
+
         struct PlayerUpdateHook {
             static void thunk(RE::PlayerCharacter* a_this, float a_delta) {
+                const bool trip = Config::g_vptrTripwire.load(std::memory_order_relaxed);
+                if (trip) VptrCheck(a_this, 'a');
                 // Original FIRST, always -- the pump piggybacks on the engine's
                 // frame; it never runs ahead of the engine's own bookkeeping.
                 // Same doctrine as Targeting's UpdateCombat thunk.
                 func(a_this, a_delta);
+                if (trip) VptrCheck(a_this, 'b');
 
                 // SWAP-THEN-RUN: take the whole queue under the lock, run it
                 // outside. A drained fn can then Post() again without
@@ -49,8 +80,13 @@ namespace MFO::MainThread {
                                  batch.size());
                 }
 
+                std::size_t idx = 0;
                 for (auto& fn : batch) {
-                    if (fn) fn();
+                    if (fn) {
+                        fn();
+                        if (trip) VptrCheck(a_this, 'c', idx, &fn);
+                    }
+                    ++idx;
                 }
             }
 
@@ -111,6 +147,7 @@ namespace MFO::MainThread {
                           "vtable); Post becomes a no-op.");
             return;
         }
+        g_expectedVptr = vtbl.address();   // an object's vptr == the address of vtable[0]
         PlayerUpdateHook::func =
             vtbl.write_vfunc(PlayerUpdateHook::idx, PlayerUpdateHook::thunk);
 

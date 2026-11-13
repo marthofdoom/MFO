@@ -726,6 +726,14 @@ namespace MFO::Config {
     // gambits are assignable without grinding. SlotsForRank returns the Rank V
     // allowance when set. Default off.
     inline std::atomic<bool>  g_debugUnlockSlots{ false };
+    // DEBUG: passive PlayerCharacter vtable-pointer tripwire in MainThread's Update thunk (names the
+    // writer of a corrupted player vptr; repairs nothing). [Debug] bVptrTripwire; default OFF in a
+    // release DLL, ON in a DEV (MFO_DEV_SELFTEST) build.
+#ifdef MFO_DEV_SELFTEST
+    inline std::atomic<bool>  g_vptrTripwire{ true };
+#else
+    inline std::atomic<bool>  g_vptrTripwire{ false };
+#endif
     inline std::atomic<float> g_suppressWindow{ 1.5f };
     // -- logistics (DESIGN §4.8) ---------------------------------------------
     // The non-combat table (drink/loot/restock). Now ON by default: a follower
