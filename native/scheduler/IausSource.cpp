@@ -145,11 +145,21 @@ namespace MFO::Scheduler {
                 }
             }
             if (!foe) return;
-            // A fresh Visible read from any listed foe is sight (the gambit path's realVisible); the dwell is inside NoteOffenseSight.
+            // Mirror of Evaluator.cpp PickFoe: a Visible read from any listed foe is sight (NoteOffenseSight); the approach is filed only when
+            // EVERY listed foe reads Occluded (a Visible or Unknown foe means no approach).
+            bool anyVisible = false, allOccluded = true;
             for (const auto& f : s.foes) {
-                if (f.sight == Iaus::Sight::Visible) { APMFBridge::NoteOffenseSight(a_id); return; }
+                if (f.sight == Iaus::Sight::Visible) anyVisible = true;
+                if (f.sight != Iaus::Sight::Occluded) allOccluded = false;
             }
-            if (foe->sight != Iaus::Sight::Occluded) return;   // Unknown passes, as in the gambit path
+            if (anyVisible) { APMFBridge::NoteOffenseSight(a_id); return; }
+            if (!allOccluded) return;
+            // ONE ch.24 claim per follower (apmf/RangeApproach.cpp banner): the H4 spell-range close and the H3 disengage drive hold the
+            // channel while they stand, so the offense approach yields to them and is released, never filed over them.
+            if (APMFBridge::RangeCloseStands(a_id) || APMFBridge::DisengageStands(a_id)) {
+                APMFBridge::ReleaseOffenseApproach(a_id, "a spell-range close or a disengage drive holds the ch.24 channel");
+                return;
+            }
             // A touch spell closes to touch range (Evaluator's a_touchSpell): the spell of his hands that IAUS would cast at him.
             bool touch = false;
             if (Iaus::Reposition::SpellPhase(s)) {
