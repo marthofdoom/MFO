@@ -182,12 +182,14 @@ namespace MFO::Actuation {
 
         // BUFF, THEN BOW (marth 11-12): a fire-and-forget buff claim lets go of LEFT the moment its fire is observed (BuffRefreshGate), so
         // the weapon is not denied for the claim's TTL. That release ends g_fireSeen's "fired but never landed" bound, so this keeps it: per
-        // follower, SK(recipient, spell) -> when the claim was released after its fire. BuffClaim declines a re-claim while the up-read has not
-        // said Yes inside kHoldLastSeenCapMs of that release (Unknown counts as not landed; never a second cast on a guess); at the cap it does
-        // what R2-1 did (WARN, g_neverFired: held off for the fight). Dropped on Yes, by ResetBuffRoad, and by EndFightBuffBounds (the fight's
-        // real end, CombatScan's two-OOC-service edge). The per-lap ResetBuffFollower (ClearCastLock on a !castSeen lap) does NOT touch it.
-        // Worker-serial (#4).
-        std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireReleased;
+        // follower, SK(recipient, spell) -> the release (the actor the up-read is made on, the spell, whether it is a placement spell, when).
+        // The verdict is made WHEN THE WINDOW CLOSES, by TickBuffLanded (one call per combat lap): the up-read says Yes -> landed, entry erased;
+        // kHoldLastSeenCapMs after the release with no Yes -> what R2-1 did (WARN, g_neverFired: held off for the fight), entry erased; else
+        // keep waiting. BuffClaim declines while an entry is pending and claims normally with none (IAUS never asks for an active buff, so
+        // the claim can not be the judge). Erased by ResetBuffRoad and EndFightBuffBounds (the fight's real end, CombatScan's two-OOC-service
+        // edge); the per-lap ResetBuffFollower (a !castSeen lap) does NOT touch it. Worker-serial (#4).
+        struct FireRelease { RE::FormID upActor = 0, spell = 0; bool placement = false; std::chrono::steady_clock::time_point at{}; };
+        std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, FireRelease>> g_fireReleased;
 
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
@@ -248,6 +250,36 @@ namespace MFO::Actuation {
     void ResetBuffFollower(RE::FormID a_follower) {
         g_fired.erase(a_follower);
         g_fireSeen.erase(a_follower);
+    }
+
+    void TickBuffLanded(RE::Actor* a_follower) {
+        if (!a_follower) return;
+        const auto id = a_follower->GetFormID();
+        const auto fr = g_fireReleased.find(id);
+        if (fr == g_fireReleased.end()) return;
+        const auto now = std::chrono::steady_clock::now();
+        for (auto it = fr->second.begin(); it != fr->second.end();) {
+            const FireRelease rel = it->second;
+            auto* recip = RE::TESForm::LookupByID<RE::Actor>(rel.upActor);
+            auto* sp    = RE::TESForm::LookupByID<RE::SpellItem>(rel.spell);
+            if (!recip || !sp) { it = fr->second.erase(it); continue; }   // the actor or the spell is gone: nothing to judge
+            const Up up = BuffUp(recip, sp, rel.placement);
+            if (up == Up::Yes || up == Up::Blocked) {   // landed (Blocked: the summon limit is reached, nothing to recast)
+                it = fr->second.erase(it);
+                continue;
+            }
+            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - rel.at).count();
+            if (ageMs >= static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) {
+                spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} FIRED but NEVER LANDED: released {} ms ago after its fire, the buff is "
+                             "still not up -- the rule is held off until the next cast-rule reset (no direct fallback; rule {})",
+                             id, sp->GetName() ? sp->GetName() : "?", rel.spell, rel.upActor, ageMs, g_firingRule);
+                g_neverFired[id].insert(it->first);
+                it = fr->second.erase(it);
+                continue;
+            }
+            ++it;   // inside the window, not up yet: keep waiting
+        }
+        if (fr->second.empty()) g_fireReleased.erase(fr);
     }
 
     void EndFightBuffBounds(RE::FormID a_follower) {
@@ -461,33 +493,16 @@ namespace MFO::Actuation {
         // ends or the load reverts (the latch is cleared there). Never the direct road.
         if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second.count(sk))
             return SelfCast::Declined;
+        // Released after its fire (BuffRefreshGate) and the window still open (TickBuffLanded judges it): not cast a second time on a guess.
+        if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end() && fr->second.count(sk)) return SelfCast::Declined;
         // The up-read is made on the main thread and latched (F6); no verdict yet is a transparent
         // no-cast this lap (the read is posted), never a guess. An INSTANT spell has nothing to read.
         if (!conc && !instant) {
             const Up up = BuffUp(recip, a_spell, placement);
             if (up == Up::Yes) {
                 g_fired[id].insert(sk);   // R3-1: it landed
-                if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end()) fr->second.erase(sk);
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                 return SelfCast::Declined;
-            }
-            // Released after its fire (BuffRefreshGate), the buff not up (No or Unknown): wait out the cap, never cast it a second time on a
-            // guess; at the cap it is the R2-1 outcome, FIRED but NEVER LANDED: WARN and hold the rule off for the fight.
-            if (up != Up::Blocked) {
-                if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end()) {
-                    if (const auto it = fr->second.find(sk); it != fr->second.end()) {
-                        const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - it->second).count();
-                        if (ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return SelfCast::Declined;
-                        fr->second.erase(it);
-                        spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} FIRED but NEVER LANDED: released {} ms ago after its fire, the buff is "
-                                     "still not up -- the rule is held off until the next cast-rule reset (no direct fallback; rule {})",
-                                     id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, corpseTarget ? corpseTarget : rid, ageMs,
-                                     g_firingRule);
-                        g_neverFired[id].insert(sk);
-                        return SelfCast::Declined;
-                    }
-                }
             }
             if (up == Up::Blocked) {   // a summon the commanded-actor list refuses: not cast, not "fired"
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
@@ -606,7 +621,7 @@ namespace MFO::Actuation {
                 if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                                  static_cast<std::uint32_t>(ageMs + 1))) {
                     g_fired[id].insert(sk);
-                    g_fireReleased[id][sk] = std::chrono::steady_clock::now();
+                    g_fireReleased[id][sk] = { rid, spellID, placement, std::chrono::steady_clock::now() };
                     spdlog::info("[buff] {:08X} {} ({:08X}): fired -- left hand released at once (fire-and-forget; the weapon can be "
                                  "equipped now){}", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  g_autoBuffSeries ? " (fan series: the spell stays in hand)" : "");

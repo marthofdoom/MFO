@@ -772,6 +772,9 @@ namespace MFO::Actuation {
     // The follower's fight has really ended (CombatScan's two-consecutive-party-OOC edge): ends BuffRoad's per-fight bounds (the
     // never-fired hold-off g_neverFired and the fire-released window g_fireReleased). ClearCastLock's per-lap ResetBuffFollower leaves both.
     void EndFightBuffBounds(RE::FormID a_follower);
+    // One call per combat lap (CombatScan): judges a fire-and-forget buff released at its fire. Landed (up-read Yes) -> done; the cap
+    // passed with no Yes -> the R2-1 WARN + g_neverFired hold-off; else it keeps waiting. Worker only.
+    void TickBuffLanded(RE::Actor* a_follower);
 
     // Revert/load: drop every follower's lock. No engine call -- the world is
     // being replaced (mirrors ClearForcedWeapons/ClearSelfCasts). Called from
