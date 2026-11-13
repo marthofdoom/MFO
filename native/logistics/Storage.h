@@ -22,7 +22,7 @@ namespace MFO { class CoSaveBuffer; }   // Serialization.h (the round-trip self-
 //   * 2026-11-12, access: "As I said they can access it from anywhere. But only for this purpose." -- no trip, no errand stop:
 //     the move to and from the chest is a Papyrus VM RemoveItem wherever he is (Papyrus::DispatchMoveItem);
 //   * 2026-11-13 (Q-S-13), where: "Give the followers thier own mfo storage they can access." -- ONE MFO-owned persistent chest
-//     generated in MFO.esp (Forms::g_storageChest, 0x919, in an MFO holding cell), shared by every follower; each follower's
+//     generated in MFO.esp (Forms::g_storageChest, 0x919, in an unchanged override of vanilla CELL 001052FD), shared by every follower; each follower's
 //     pieces are tracked per follower in the 'STOR' record. No home search, no interim chest, no migration. Chest missing (old
 //     ESP) = no storing;
 //   * the economy decides what is worth keeping (use value later >= sale value now + iErrandMinSellGold, a placeholder);

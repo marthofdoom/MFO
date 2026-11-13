@@ -34,8 +34,9 @@ Built:
   his stored one, he carries exactly ONE copy (a count drop could otherwise be a sale), and use value minus sale value
   (`Pricing::Apply` with `Pricing::Resolve(follower, none, 0)`) is at least `iErrandMinSellGold` (placeholder, Q-S-3).
 - **The chest (Q-S-13).** ONE MFO-owned chest, generated in `MFO.esp` by `MFO_GenerateESP.py`: base CONT `0x917`
-  `MFO_StorageChest` (no respawn flag), an interior holding CELL `0x918` `MFO_StorageCell` that nothing links to, and ONE
-  PERSISTENT REFR `0x919` `MFO_StorageChestRef` of the chest in it (`Forms::kStorageChestRef`, resolved to
+  `MFO_StorageChest` (no respawn flag), and ONE
+  PERSISTENT REFR `0x919` `MFO_StorageChestRef` of the chest, placed in the VANILLA interior cell Skyrim.esm `001052FD`
+  `LoadScreenTesting` (see "Where the chest lives" below; `0x918`, the first draft's new CELL, is RETIRED, never reused) (`Forms::kStorageChestRef`, resolved to
   `Forms::g_storageChest`). Persistent, so the ref stays in memory with its cell unloaded and a Papyrus RemoveItem reaches it
   from anywhere. Shared by every follower; what each follower stored is tracked per follower in 'STOR'. No home search, no
   interim chest, no migration (all removed). The chest missing (an older MFO.esp) = no storing, one error line.
@@ -76,6 +77,23 @@ per follower: u32 follower (unresolvable -> his items read past and dropped), u3
               u8 flags (0x01 a store in flight at the save, 0x02 a retrieval in flight; others masked)
 ```
 Version 0 skipped, a newer version skipped with the "newer save" warning, a short read keeps what was parsed.
+
+**Where the chest lives (review r2 SEV-3 fix, marth 2026-11-13: "1.5 is supported", "As is 1.7").** MFO.esp is ESL-flagged, and
+a NEW CELL in an ESL loses its refs' data on reload on the pre-1.6.1130 runtimes (the "ESL CELL load bug"; fixed in 1.6.1130+).
+1.5.97, 1.6.x and 1.7.104 are all supported, so MFO.esp defines NO new CELL. The REFR `0x919` goes into an existing vanilla
+interior cell and MFO.esp carries that CELL as an IDENTICAL override plus the one new persistent child. The placement holds on
+1.5.97, 1.6.x and 1.7.104 alike (a plain master-cell override with a persistent child, nothing runtime specific).
+Choice: Skyrim.esm CELL `001052FD`, EDID `LoadScreenTesting`. Evidence (`Linux-Native-Tools/tools/esp_query.py` helpers over the
+Tuxborn `Game Root/Data/Skyrim.esm`, 2026-11-13): interior (DATA `0100`, bit 0x0001), record flags 0 (not compressed), subrecords
+only EDID / DATA / XCLL (92 bytes) / LTMP / XCLW (no FULL, no XLCN location, no XOWN owner, no XCIM); the only FormID references to it
+in Skyrim.esm are its own record and its two child-group labels (so no door, teleport, quest or script targets it); the other
+`Data/` masters carry none. A cell the game never loads, so no one meets the chest (considered and rejected: ThievesGuildHoldingCell
+`000C0BBA`, which has a location and a quest using it). Its vanilla children (11 REFRs in a temporary-children group) are not
+repeated. Structure written to `out/MFO.esp`: `GRUP CELL > GRUP type 2 (label 1) > GRUP type 3 (label 2) > CELL 001052FD (flags 0,
+EDID/DATA/XCLL/LTMP/XCLW copied byte for byte) > GRUP type 6 (label 001052FD) > GRUP type 8 (label 001052FD) > REFR 01000919 (flags
+0x400, NAME 01000917)`; vanilla nests the cell block 1 > sub-block 2, the same. `tools/audit_esp.py` checks: no CELL other than
+that override, the override identical in shape, REFR 0x919 persistent. Residual: another mod overriding the same cell later
+in the load order would win the CELL record only, the persistent child list still merges (children are additive).
 
 Superseded and removed pieces (fix round after review r2, 665c3f46): the chest is unreachable by the player, so nothing is ever
 "released to the player" in it. A superseded piece is retrieved back to the follower (in-memory `g_evict` mark, the entry stays

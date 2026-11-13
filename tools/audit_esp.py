@@ -82,7 +82,7 @@ REQUIRED = {
     # Off-class storage (86e3t212u): the followers' own chest. Forms.h kStorageChestRef is what the DLL looks up; the REFR's
     # PERSISTENT flag (0x400) is checked below (a temporary ref leaves memory with its cell: storing from anywhere breaks).
     0x917: ('CONT', "MFO_StorageChest",       ['EDID', 'OBND', 'DATA']),
-    0x918: ('CELL', "MFO_StorageHoldingCell", ['EDID', 'DATA']),
+    # 0x918 is RETIRED (the first draft's new CELL); the chest lives in an unchanged override of Skyrim.esm 001052FD (checked below).
     0x919: ('REFR', "MFO_StorageChestRef",    ['EDID', 'NAME', 'DATA']),
 }
 
@@ -455,6 +455,21 @@ def audit_one(esp):
         next_id = struct.unpack('<I', hedr[8:12])[0] if hedr and len(hedr) >= 12 else None
 
     own = [r for r in recs if r[0] != 'TES4']
+    # OFF-CLASS STORAGE: the one allowed master-prefixed record is the unchanged override of Skyrim.esm CELL 001052FD
+    # (LoadScreenTesting). MFO.esp must define NO new CELL (ESL new-cell load bug on pre-1.6.1130 runtimes).
+    if is_main:
+        for t, fid, fl, subs in own:
+            if t == 'CELL' and fid != 0x001052FD:
+                errors.append(f"CELL {fid:08X}: MFO.esp must define no CELL of its own (only the unchanged override of 001052FD)")
+        sc = [r for r in own if r[0] == 'CELL' and r[1] == 0x001052FD]
+        if len(sc) != 1:
+            errors.append("storage holding-cell override (Skyrim.esm CELL 001052FD) missing or duplicated")
+        else:
+            _, _, fl, subs = sc[0]
+            if fl != 0 or subs.get('EDID', b'') != b'LoadScreenTesting\x00' or subs.get('DATA') != b'\x01\x00' \
+                    or len(subs.get('XCLL', b'')) != 92 or subs.get('LTMP') != bytes(4) or subs.get('XCLW') != bytes(4):
+                errors.append("CELL 001052FD override differs from the vanilla record (must be an identical override)")
+        own = [r for r in own if not (r[0] == 'CELL' and r[1] == 0x001052FD)]
     if not own:
         errors.append("no records emitted besides TES4")
 

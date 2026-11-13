@@ -4967,7 +4967,7 @@ marth rulings 2026-11-12 / 2026-11-13 (header comment quotes them; `Docs/researc
 line (same T1 root; weapons, shields, armor) goes to the followers' OWN MFO chest ("Give the followers thier own mfo storage
 they can access.") when use-later beats sale-now by `iErrandMinSellGold` (placeholder); classes off = no storing; access from
 anywhere (no trip, no errand stop, no ERND change); retrieval on a class change / a better piece. INI `bOffClassStorage`.
-- The chest: MFO.esp CONT `0x917` / holding CELL `0x918` / PERSISTENT REFR `0x919` (`MFO_GenerateESP.py`, `Forms.h`
+- The chest: MFO.esp CONT `0x917` / PERSISTENT REFR `0x919` placed in an UNCHANGED OVERRIDE of Skyrim.esm CELL `001052FD` `LoadScreenTesting` (MFO.esp defines no new CELL: the ESL new-cell load bug on pre-1.6.1130 runtimes; `0x918` RETIRED, never reuse) (`MFO_GenerateESP.py`, `Forms.h`
   `kStorageChest*`, `Forms::g_storageChest`; `tools/audit_esp.py` checks them). Missing (old ESP) = `Enabled()` false, one error.
 - Pure: `PlannedFor:355`, `DecideStore:401`, `DecideRetrieve:419` (self-tested, `selftest/TestsStorage.cpp`).
 - Sale hook: `HoldFromSale:446` <- `Economy.cpp:900` (just before the weapon / armor `sellCandidates.push_back`, skipped for a
@@ -4987,7 +4987,7 @@ anywhere (no trip, no errand stop, no ERND change); retrieval on a class change 
   `Logistics_internal.h:829-830`); `SaleKeepGates` (`Logistics_internal.h:1073`).
 
 **What breaks if you change this.** The 'STOR' v1 layout (section 1) without a version bump and a kept v1 reader (#12). The
-chest FormIDs `0x917-0x919` (frozen with `MFO_GenerateESP.py`: a renumber orphans every stored piece). The sale hook's
+chest FormIDs `0x917` / `0x919` and the `001052FD` cell override (frozen with `MFO_GenerateESP.py`: a renumber orphans every stored piece). The sale hook's
 position: it must stay BELOW every protection in the sell loop (stock, player pick, keep set, worn, gem hold, quest, catalog)
 and above the `push_back`, or storage starts moving protected gear. The single-copy rule and "no copy in his pack" before a
 retrieval: they are what makes a count change an unambiguous confirm (a sale or a loot of another copy would fake it). The
@@ -4995,7 +4995,7 @@ sell loop and the retrieval share the keep gates (`SaleKeepGates`): change them 
 leaf mutex `g_mx` is never held across a Papyrus / engine call (form LOOKUPS under it are the one exception,
 `ReleaseSameBucket`). Never read the chest's inventory (shared by every follower; the confirm is per follower). KNOWN LIMIT:
 the chest holds items, not owners; two followers storing one base can swap instance data (temper / enchant) on retrieval.
-KNOWN LIMIT: a save loaded by an older DLL without STOR loses track of stored pieces (they stay in the unreachable chest). Open review findings: `Docs/REVIEW-BACKLOG.md` "feat/offclass-storage r2 review" (ESL new-CELL SEV-3 on pre-1.6.1130 runtimes, retrieval cost SEV-4, two-place keep-gate combine SEV-5).
+KNOWN LIMIT: a save loaded by an older DLL without STOR loses track of stored pieces (they stay in the unreachable chest). Open review findings: `Docs/REVIEW-BACKLOG.md` "feat/offclass-storage r2 review" (retrieval cost SEV-4, two-place keep-gate combine SEV-5).
 
 ### logistics/Errand.cpp / Errand.h / apmf/ErrandClaims.cpp — TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7; SAVED since R2: 'ERND' v1)
 Design: `_evidence/2026-10-18-designs/TOWN-DESIGN.md` (R1a = this; R1b = off-screen simulation + recall, R2 = the `ERND` co-save,
@@ -5240,7 +5240,7 @@ combat start is a SEPARATE combat behaviour, NOT built: it would go beside `Serv
 - **ESP**: `MFO_GenerateESP.py` `make_errand_work_packages()` -- 16 PACKs `MFO_ErrandActivate/Sandbox/Eat/Sleep0-3` = `0x906-0x915` (Forms.h `kErrandActivate0/Sandbox0/Eat0/Sleep0`,
   `Forms::ErrandWorkPackage(kind, slot)`), each instance mirrored from a vanilla exemplar (Activate 00019B2D <- 00100FA7, Sandbox 0001C254 <- 00000E8C, Eat 00019714 <- 0010C524,
   Sleep 00019717 <- 0010FB3E; `tools/esp_inspect.py` dumps, signature order identical), Location = PLDT type 0 + placeholder `FREF_PLAYER` (the DLL overwrites it), no QNAM, any-time PSDT.
-  `NEXT_OBJECT_ID` was `0x916` after these (now `0x91A`: `0x917-0x919` = the off-class storage chest, see logistics/Storage.cpp). One slot per concurrent follower (4): two followers never share a record. WHAT BREAKS: changing a FormID orphans the records (frozen with the generator, `tools/audit_esp.py`).
+  `NEXT_OBJECT_ID` was `0x916` after these (now `0x91A`: `0x917` + `0x919` = the off-class storage chest, `0x918` retired, see logistics/Storage.cpp). One slot per concurrent follower (4): two followers never share a record. WHAT BREAKS: changing a FormID orphans the records (frozen with the generator, `tools/audit_esp.py`).
 - **Writer** `Packages::SetPackageLocation` / `SetPackageTargetRef` (`Packages.cpp:2495/2510`, `FindInputAnyUid:720`): the SAME guarded offset model as `SetAPMFLootTravelTarget` (type name `Location` / `SingleRef`, pointer at `IPackageData*+0x10`), but the Sandbox's THREE inputs named
   "Location" (uids 0, 9, 15) are resolved to the uid that has a value slot, and the resolved uid is LOGGED (`[pkg] errand work ... input 'Location' (uid N)`). **UNVERIFIED IN THE FIELD (P-PKG-LOC).** `Packages.cpp` is past 2500 lines (the cap is relaxed until the next major, memory 2500-cap-relaxed).
 - **Claim** `apmf/ErrandWork.cpp`: `APMFBridge::OfferErrandWork(follower, kind, ref, radius, why)` writes the slot record's run-time input, THEN files (or Repoints) ONE ch.9 `kIntent_OfferPackage` claim (own handle, own mutex, never `g_mx`); a failed guard files nothing and returns the reason.
