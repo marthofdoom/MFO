@@ -568,11 +568,35 @@ namespace MFO::Logistics::Storage {
             if (!fresh && it->second != eq) { classChanged = true; it->second = eq; }
             // 0. A LOAD'S FLAGS BECOME OPS (review F4): an entry saved mid-move gets a settle op with a FRESH window, started on
             //    this, his first loaded tick (never judged on the first pass). Once per follower per session.
-            if (g_settled.insert(fid).second)
+            const bool fresh0 = g_settled.insert(fid).second;
+            if (fresh0)
                 if (const auto st = g_table.stored.find(fid); st != g_table.stored.end())
                     for (const auto& i : st->second)
                         if (i.flags) g_ops[fid].push_back(Op{ (i.flags & Item::kRetrieving) ? OpKind::SettleRetrieve : OpKind::SettleStore,
                                                               i.base, 0, a_now + kConfirmWindow });
+            // 0b. g_evict is memory-only: rebuild it from the loaded table, else a superseded piece becomes an ordinary entry and
+            //     stays in the chest. Per bucket with more than one settled entry (flags 0), mark all but the LAST pushed (the stored
+            //     sequence only rises in rank). Same once-per-session gate; form lookups only under g_mx (as ReleaseSameBucket).
+            if (fresh0)
+                if (const auto st = g_table.stored.find(fid); st != g_table.stored.end()) {
+                    std::unordered_map<std::uint8_t, RE::FormID> last;
+                    std::vector<std::pair<RE::FormID, Bucket>> settled;
+                    for (const auto& i : st->second) {
+                        if (i.flags) continue;
+                        auto* o = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
+                        if (!o) continue;
+                        const Bucket b = Classify(o).bucket;
+                        if (b == Bucket::None) continue;
+                        last[static_cast<std::uint8_t>(b)] = i.base;
+                        settled.emplace_back(i.base, b);
+                    }
+                    for (const auto& [base, b] : settled) {
+                        if (last[static_cast<std::uint8_t>(b)] == base) continue;
+                        if (!g_evict[fid].insert(base).second) continue;
+                        spdlog::info("[storage] {:08X}: {:08X} superseded after load (a later {} entry is stored) -- it comes back to him from the MFO chest",
+                                     fid, base, BucketName(b));
+                    }
+                }
         }
 
         const bool menu = InventoryMenuOpen();
@@ -781,6 +805,13 @@ namespace MFO::Logistics::Storage {
         {
             std::scoped_lock lk(g_mx);
             if (const auto it = g_table.stored.find(a_follower); it != g_table.stored.end()) { items = std::move(it->second); g_table.stored.erase(it); }
+            // A store still in flight has no entry yet: its piece lands in the chest after this, so bring it back too.
+            if (const auto o = g_ops.find(a_follower); o != g_ops.end())
+                for (const auto& op : o->second)
+                    if (op.kind == OpKind::Store) {
+                        spdlog::warn("[storage] {:08X}: store in flight at roster removal -- {:08X} is sent back from the MFO chest", a_follower, op.base);
+                        items.push_back(Item{ op.base, 1, 0 });
+                    }
             g_wants.erase(a_follower);
             g_ops.erase(a_follower);
             g_evict.erase(a_follower);

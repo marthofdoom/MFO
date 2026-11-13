@@ -94,6 +94,7 @@ EDID/DATA/XCLL/LTMP/XCLW copied byte for byte) > GRUP type 6 (label 001052FD) > 
 0x400, NAME 01000917)`; vanilla nests the cell block 1 > sub-block 2, the same. `tools/audit_esp.py` checks: no CELL other than
 that override, the override identical in shape, REFR 0x919 persistent. Residual: another mod overriding the same cell later
 in the load order would win the CELL record only, the persistent child list still merges (children are additive).
+Cosmetic residue: a lighting mod that overrides CELL `001052FD` XCLL (a Placed Light.esm style patch) has that lighting reverted when MFO loads later. The cell is never visited and a persistent child needs its CELL record, so this is unavoidable and harmless.
 
 Superseded and removed pieces (fix round after review r2, 665c3f46): the chest is unreachable by the player, so nothing is ever
 "released to the player" in it. A superseded piece is retrieved back to the follower (in-memory `g_evict` mark, the entry stays
