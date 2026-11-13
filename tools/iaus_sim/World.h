@@ -1127,10 +1127,12 @@ namespace Sim {
               t.nearOnMeSec[nd < 256.0f ? 0 : nd < 540.0f ? 1 : 2] += TM::dt; }
         }
         void StepWorld() {
-            if (!arenaSet) { arenaSet = true;   // --space (Part C, MODEL): an enclosed fight is a disc around the start centroid, radius max(R, every start position + 50)
+            if (!arenaSet) { arenaSet = true;   // --space R (Part C, MODEL): an enclosed fight is a disc of radius R around the start centroid; whoever starts
+                // outside it starts at its edge (a room: the line of fire is no longer than 2R, backpedal / kiting / flight stop at the wall)
                 const bool enclosed = g_spaceForce >= 0 ? g_spaceForce == 1 : interior;
                 if (g_spaceSize > 0.0f && enclosed && !b.empty()) { float cx = 0, cy = 0; for (const Body& o : b) { cx += o.c.x; cy += o.c.y; } cx /= float(b.size()); cy /= float(b.size());
-                    float r = g_spaceSize; for (const Body& o : b) r = std::max(r, std::hypot(o.c.x - cx, o.c.y - cy) + 50.0f); arenaX = cx; arenaY = cy; arenaR = r; } }
+                    arenaX = cx; arenaY = cy; arenaR = g_spaceSize; const float in = std::max(0.5f * g_spaceSize, g_spaceSize - 50.0f);
+                    for (Body& o : b) { const float ox = o.c.x - cx, oy = o.c.y - cy, od = std::hypot(ox, oy); if (od > in) { o.c.x = cx + ox * in / od; o.c.y = cy + oy * in / od; } } } }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }
