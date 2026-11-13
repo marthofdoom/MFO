@@ -2558,3 +2558,68 @@ builtin,LoreRim` and another `--out`.
    classes that took a value), `tools/iaus_harness/run.sh` (0 failed), `tools/iaus_dash/test.sh`, the local MSVC build.
 6. Shared defaults and constants are NOT written by the runner (open decisions 1 and 2).
 7. The diff goes to an Opus review (tier B: values inside an existing mechanism).
+
+## 34. The pipeline closes on the oracle: driver fixes, the edge stage, the gap stage, the new-class workflow (2026-11-12)
+
+Branch `feat/oracle-gap` on `feat/class-tuning` 4f0cd62d. Opus author. marth 11-12: "getting close to oracle should be a goal";
+re-scope: "adding the final oracle gap close to the end of it. So that every time we add a class, that script itself will iterate
+through exactly what needs it." Native scope: `iaus/ClassCurves.cpp` one comparison (F7). Everything else is `tools/iaus_sim`.
+
+### 34.1 Review F7 / F8 (the class-tuning backlog, raised against 33a0b963)
+
+- F7: a Logi midpoint candidate keeps its sign (`tune_driver.py logi_mid`; a negative midpoint was clamped to +0.02). Native
+  `ClassCurves::SetCurveParam` refuses a Piece x EQUAL to a neighbour (strict), harness check added. No shipped Piece curve has a
+  duplicate x (`--list-uses` scan), so no shipped behaviour moves.
+- F8: `check_world()` runs inside `world_args()` and `ident()`: every stage that reads a list checks its `.sim.json`,
+  `.combatmods.json` and potion-worth table, not only `stage_prep`.
+
+### 34.2 The edge stage (marth 11-12 "Widen to x4 / x0.25")
+
+Only knobs whose ACCEPTED value is the outermost value tried on its side are searched again past that edge: multiplicative knobs
+at x3 / x4 or x0.35 / x0.25 of the shared value, additive knobs at 2 and 4 times the largest step tried on that side, always inside
+the knob's valid range (`KNOB_META`, filled by `all_knobs`; a Piece x stays strictly between its neighbours). Same RULE; the wider
+value REPLACES the accepted one in its test (`judge(replace=)`), so two specs never sit on one parameter. The table is never changed
+here: the edge value stays written, and a wider value that passes every line is an OPEN DECISION ("far from the shared curve").
+
+### 34.3 The gap stage
+
+The rule is `stage_gap`'s docstring (written before any of its results was read). In short:
+- the class oracle plans for the SUBJECT only (`--oracle-subject-only`). FOUND: the default oracle (`OracleCfg.allFollowers`)
+  drives every follower, so a class's gap in every earlier table also carried its T1 companions' gap. Smoke, Knight, built-in,
+  8 fights: subject-only -1.32 (se 2.20) against all followers +1.74 (se 0.67). The all-followers gap is still measured on the
+  built-in world for continuity with the dashboard;
+- per class and world, the shipped and the final table on the same fights (seeds 6001..): the tuning's effect is a paired
+  difference. 12 seeds x (4 natural + 1 of each of his own scenarios); a cell with under 2 fights or se > max(0.5 U, |gap| / 4) gets
+  12 more seeds, up to 48;
+- `--gap-dump` (sim): `GAPFIGHT` per fight, `GAPSIT` the subject's divergence clusters (IAUS pick | oracle pick | kind |
+  situation, summed dU; kind = retarget, ranked, unranked, posture, ext, idle), `GAPGEN` candidates generated per family, `GAPDEC`;
+- `classify`: (d) the oracle's action is in `FIDELITY` (its version is more favourable than the game's: `ext:block` and `ext:bash`
+  have no cooldown in `Oracle.h Apply`, the game's guard holds 2.5 s with a 4 s row cooldown and a 1.5 s rest, a timed bash has no
+  road); (b) IAUS's pick broke its class ruling, the oracle took a candidate IAUS scored under the floor or vetoed, or an extended
+  action of a family the class is offered elsewhere; (c) an action IAUS never generates for this class, with its road from
+  section 25 (`EXT_ROAD`); (a) the rest;
+- (a) drives a BOUNDED extra search: the families of the (a) clusters with the most dU (up to 3), their live knobs that took no
+  value (up to 12, most sensitive first), at the midpoints between the shared value and each value tried (acceptable under RULE)
+  and past the outermost ones (a pass is an open decision). An accepted value re-runs the joint gate and re-measures that gap;
+- (b) to (d): one open decision per class with the evidence, and `<out>/gap-ledger.md` rows in the format of `iaus-classes.md`
+  section 3. dU per fight is the oracle's local per-decision advantage summed: it ORDERS divergences, it does not add up to the gap.
+
+Tests: `tools/iaus_sim/test_tune_driver.py` (9: logi_mid, edge_of, widen, check_world, classify, gap_parse); CLI-CHECK "--gap-dump
+prints its lines, only when asked"; smoke of edge (planted accepted-at-edge rows), gap (built-in), a simulator that fails on gap runs
+(stops, nothing cached), a dump without GAPFIGHT (stops, nothing cached: `text_run(check=)` validates before caching), SIGKILL
+mid-stage and resume (3 cached, 3 new, a third run 0 new in 0 s).
+
+### 34.4 RUNBOOK: a new or changed class
+
+```
+SIM_OUT=<new sim> tools/iaus_sim/run.sh --print-classes | head -3          # build the simulator with the new row
+setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py --bin <new sim> --out <the earlier run's dir> \
+    --for-class <slug> --jobs 12 > <dir>/driver-<slug>.out 2>&1 &
+```
+
+`--for-class` = `--classes <slug> --stages prep,classes,joint,edge,floor,gap,summary`. What it re-measures: every cache key carries
+the sha256 of the simulator binary, the world's `.sim.json` / `.combatmods.json` and its potion-worth table, so a new binary
+re-measures everything a stage needs (the list potion-worth tables included: `prep`) and nothing stale is replayed; an unchanged
+binary replays. The T1 rows must be complete in that `--out` (their values are the new class's baseline). The other classes'
+accepted values, rows, gap cells and open decisions stay (scoped stages merge; `open_decision(cls=)`). `cells()` adds the new class
+to the joint gate and to a T1 value's gate. A fresh `--out` runs the whole pipeline (the T1 rows first).
