@@ -51,8 +51,13 @@ namespace MFO::Iaus::ClassCurves {
     // Exactly 1.0 when flat (floor >= 1 or no peak) and at d = 0. Never below the floor, never above 1.
     [[nodiscard]] float SchoolWeight(const Scalars& a_s, std::size_t a_school);   // a_school = School identity; distance is measured along Core.h kSchoolCircle
 
+    // A per-class multiplier on a whole action family (Profile::family, card I8's weight shape). Absent = 1.0 = bit-identical.
+    struct FamilyWeight { Family family; float w; };
+
     struct Row {
         std::vector<Profile::CurveOverride> curves;
+        std::vector<Profile::WeightOverride> weights;   // a (family, consideration) exponent that REPLACES the catalogue's w for this class (Profile::weights)
+        std::vector<FamilyWeight> families;             // a family multiplier for this class (Profile::family)
         Scalars scalars;
     };
     using Table = std::array<Row, kRows>;
@@ -76,8 +81,13 @@ namespace MFO::Iaus::ClassCurves {
     // A fresh Profile holding a row's curve overrides (the sim builds its own from an edited Table).
     [[nodiscard]] Profile Build(const Row& a_row);
 
-    // Sim / search edit surface. SetCurveParam: param is a | b | floor | zeroAbove | zeroBelow; the override is created as a copy of
-    // the shared curve a_shared when the (family, cons) pair has none. SetScalar: drinkHealthLine | touchSpentSec | schoolPeak | schoolFloor | schoolShape | schoolMasteredBump. False on a bad name.
+    // Sim / search edit surface. SetCurveParam: param is a | b | floor | zeroAbove | zeroBelow, or for a Piece curve px0..px5 / py0..py5
+    // (one point's x or y; refused on a curve that is not a Piece, on a point it does not have, on a non-finite value and on an x that
+    // would break the ascending order); the override is created as a copy of the shared curve a_shared when the (family, cons) pair has none.
+    // SetWeight: the consideration's exponent for this class's family (> 0, finite). SetFamilyWeight: the family's multiplier (> 0, finite;
+    // a class weight never switches a family off, a gate does that). SetScalar: drinkHealthLine | touchSpentSec | schoolPeak | schoolFloor | schoolShape | schoolMasteredBump. False on a bad name.
     bool SetCurveParam(Row& a_row, Family a_f, Cons a_c, const Curve& a_shared, std::string_view a_param, float a_v);
     bool SetScalar(Row& a_row, std::string_view a_name, float a_v);
+    bool SetWeight(Row& a_row, Family a_f, Cons a_c, float a_w);
+    bool SetFamilyWeight(Row& a_row, Family a_f, float a_w);
 }

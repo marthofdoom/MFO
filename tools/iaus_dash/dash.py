@@ -274,23 +274,28 @@ def ledger_covers(run, g, cls):
     return False
 
 
-def class_gap(run, cls):
-    """Main gap of a class (oracle U minus IAUS U). First source that has a number wins:
-    1. class_gaps (schema 2: the gap pass of a class report run), 2. main_gap on the class's rows,
-    3. the mean gap of its scenarios, 4. the summed ledger delta_u of the rows that cover it. None if nothing."""
+def class_gap_src(run, cls):
+    """(gap, source) of a class (oracle U minus IAUS U). First source that has a number wins:
+    1. "class_gaps" (schema 2: the gap pass of a class report run), 2. "main_gap" on the class's rows,
+    3. "scenarios": the mean gap of its scenarios, 4. "ledger": the summed delta_u of the rows that cover it. (None, None) if nothing.
+    The four sources measure different things, so two gaps are compared only when they come from the SAME source (Trend)."""
     if run is None:
-        return None
+        return None, None
     for g in (run.get("class_gaps") or []):
         if isinstance(g, dict) and g.get("class") == cls and is_num(g.get("gap")):
-            return g["gap"]
+            return g["gap"], "class_gaps"
     g = [c["main_gap"] for c in class_rows(run) if c.get("class") == cls and is_num(c.get("main_gap"))]
     if g:
-        return sum(g) / len(g)
+        return sum(g) / len(g), "main_gap"
     g = [s["gap"] for s in (run.get("scenarios") or []) if isinstance(s, dict) and s.get("class") == cls and is_num(s.get("gap"))]
     if g:
-        return sum(g) / len(g)
+        return sum(g) / len(g), "scenarios"
     g = [x["delta_u"] for x in (run.get("gaps") or []) if isinstance(x, dict) and is_num(x.get("delta_u")) and ledger_covers(run, x, cls)]
-    return sum(g) if g else None
+    return (sum(g), "ledger") if g else (None, None)
+
+
+def class_gap(run, cls):
+    return class_gap_src(run, cls)[0]
 
 
 def comparable(a, b):
@@ -304,10 +309,11 @@ def prev_gap(runs, run, cls):
     """(gap, run) of the nearest EARLIER comparable run that has a gap for this class, else (None, None).
     Most runs in a runs directory are one-class probes: the run before this one usually does not hold this class at all."""
     idx = runs.index(run) if run in runs else -1
+    src = class_gap_src(run, cls)[1]
     for r in reversed(runs[:max(idx, 0)]):
         if comparable(r, run):
-            g = class_gap(r, cls)
-            if g is not None:
+            g, s = class_gap_src(r, cls)
+            if g is not None and s == src:   # the same source only: a ledger sum against a gap-pass mean is not a trend
                 return g, r
     return None, None
 
@@ -414,7 +420,12 @@ def table_classes(st):
         rul = ("%d/%d" % (npass, len(rs)), "bad" if npass < len(rs) else ("ok" if rs else "dim"))
         g = class_gap(run, cls)
         # Trend = this gap against the compare run when one is on, else against the nearest earlier comparable run that HAS this class's gap
-        pg = class_gap(base, cls) if (base and st.cmp_on) else prev_gap(st.runs, run, cls)[0]
+        if base and st.cmp_on:
+            pg, psrc = class_gap_src(base, cls)
+            if psrc != class_gap_src(run, cls)[1]:
+                pg = None   # the compare run's gap comes from another source: no trend
+        else:
+            pg = prev_gap(st.runs, run, cls)[0]
         rt = rating_of(run, cls)
         if g is not None and pg is not None:
             d = g - pg

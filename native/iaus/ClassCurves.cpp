@@ -51,11 +51,41 @@ namespace MFO::Iaus::ClassCurves {
         //     +0.109 (se 0.054); about 0.13 J of it is the stamina potion he no longer spends. But on the six fixed gate seeds of 31.11 the
         //     Warrior is -0.50 J and the 12-class mean falls by 0.04 at all three gates, and those gates are hard constraints.
 
+        // THE SEARCHED VALUES (per-class tuning, Docs/research/2026-11/iaus-sim-v2.md section 33; tools/iaus_sim/tune_driver.py).
+        // One statement per ACCEPTED value, pasted from the driver's summary.md ("Lines for ClassCurves.cpp"), each under a comment with
+        // its evidence: metric, seeds, worlds, delta. Runs AFTER the base rows are copied from the T1 rows, so a T1 value does not leak
+        // into a tree-OFF base row (the base cells are searched as their own cells). `sh` is the shared catalogue a curve override starts
+        // from. EMPTY = no searched value: every row scores with the shared catalogue (bit-identical).
+        void SeedSearchedValues([[maybe_unused]] Table& t) {
+            [[maybe_unused]] const Tuning& sh = DefaultTuning();
+            // BATCH 3 (iaus-sim-v2.md 35; run b3-posture, 2026-11-13: tune_driver.py, sim flags --ranged-perks --point-blank --buff-dur real,
+            // 64 train + 64 holdout seeds, fresh seeds 4001.. on builtin / LoreRim / Tuxborn / Vanilla), written on marth's rulings of 11-12.
+            // ranged equip.crossover 0.45 -> 0.1575 (189 u): J +0.66 (se 0.18) train, holdout +0.80 (se 0.23), every many-seed gate passes;
+            //   cross-world FAILED (LoreRim -0.78, se 0.21). Written on marth's ruling "Playstyle band" (contact% <= 25 wins over cross-world).
+            SetCurveParam(t[1 /* ranged */], static_cast<Family>(8), static_cast<Cons>(35), sh.curve[35], "b", 0.1575f);
+            SetCurveParam(t[1 /* ranged */], static_cast<Family>(8), static_cast<Cons>(36), sh.curve[36], "b", 0.1575f);
+            // archer equip.crossover 0.45 -> 0.1125 (135 u): J +0.58 (se 0.15) train, holdout +0.36 (se 0.12), gates pass; cross-world FAILED
+            //   (builtin +0.51, LoreRim -0.59, Tuxborn -0.08, Vanilla -0.10). Written on marth's ruling "Playstyle band".
+            SetCurveParam(t[6 /* archer */], static_cast<Family>(8), static_cast<Cons>(35), sh.curve[35], "b", 0.1125f);
+            SetCurveParam(t[6 /* archer */], static_cast<Family>(8), static_cast<Cons>(36), sh.curve[36], "b", 0.1125f);
+            // evoker equip.crossover 0.45 -> 0.1125: J +0.88 (se 0.17) on 64 train seeds, holdout +0.59 (se 0.17), fresh-seed mean over
+            //   builtin/LoreRim/Tuxborn/Vanilla +1.10 (se 0.06), as shipped +0.21 (ACCEPTED; card read ruled "Yes, apply")
+            SetCurveParam(t[8 /* evoker */], static_cast<Family>(8), static_cast<Cons>(35), sh.curve[35], "b", 0.1125f);
+            SetCurveParam(t[8 /* evoker */], static_cast<Family>(8), static_cast<Cons>(36), sh.curve[36], "b", 0.1125f);
+            // evoker equip.trade.w 1 -> 2: J +0.23 (se 0.04) on 64 train seeds, holdout +0.14 (se 0.02), fresh-seed mean +0.22 (se 0.01)
+            //   (ACCEPTED; edge weight ruled "Yes, apply"; the edge stage found x3 / x4 no better)
+            SetWeight(t[8 /* evoker */], static_cast<Family>(8), static_cast<Cons>(77), 2.0f);
+            // healer equip.ranged_dist.w 1 -> 0.5: J +0.18 (se 0.06) on 64 train seeds, holdout +0.11 (se 0.07), fresh-seed mean +0.12 (se 0.03)
+            //   (ACCEPTED; ruled "Widen search first": x0.35 / x0.25 judged, none beats 0.5, train +0.03 se 0.04)
+            SetWeight(t[10 /* healer */], static_cast<Family>(8), static_cast<Cons>(35), 0.5f);
+        }
+
         Table MakeDefaults() {
             Table t{};
             SeedSchoolPeaks(t);
             t[kArchMage].scalars.schoolAny = true;   // marth 11-12: "obviously Arch mage gets any school"
             for (std::size_t i = 0; i < 3; ++i) t[kBaseOffFirst + i] = t[i];   // each tree-OFF base row starts as its T1 row
+            SeedSearchedValues(t);
             return t;
         }
     }
@@ -90,6 +120,9 @@ namespace MFO::Iaus::ClassCurves {
     Profile Build(const Row& a_row) {
         Profile p;
         p.curves = a_row.curves;
+        p.weights = a_row.weights;
+        for (const FamilyWeight& fw : a_row.families)
+            if (static_cast<std::size_t>(fw.family) < kFamilies) p.family[static_cast<std::size_t>(fw.family)] = fw.w;
         for (std::size_t s = 0; s < kSchools; ++s) p.school[s] = SchoolWeight(a_row.scalars, s);
         return p;
     }
@@ -130,10 +163,20 @@ namespace MFO::Iaus::ClassCurves {
     }
 
     bool SetCurveParam(Row& a_row, Family a_f, Cons a_c, const Curve& a_shared, std::string_view a_param, float a_v) {
-        if (a_param != "a" && a_param != "b" && a_param != "floor" && a_param != "zeroAbove" && a_param != "zeroBelow") return false;
+        // A Piece point: px<i> / py<i>. Checked against the curve it will edit (the row's override, else the shared one) BEFORE an override is made.
+        const bool point = a_param.size() == 3 && a_param[0] == 'p' && (a_param[1] == 'x' || a_param[1] == 'y') && a_param[2] >= '0' && a_param[2] <= '5';
+        if (!point && a_param != "a" && a_param != "b" && a_param != "floor" && a_param != "zeroAbove" && a_param != "zeroBelow") return false;
+        if (point) {
+            const Curve* cur = &a_shared;
+            for (const auto& e : a_row.curves) if (e.family == a_f && e.cons == a_c) { cur = &e.curve; break; }
+            const std::size_t i = static_cast<std::size_t>(a_param[2] - '0');
+            if (cur->kind != CurveKind::Piece || i >= cur->np || !std::isfinite(a_v)) return false;
+            if (a_param[1] == 'x' && ((i > 0 && a_v <= cur->px[i - 1]) || (i + 1 < cur->np && a_v >= cur->px[i + 1]))) return false;   // strictly between its neighbours: a duplicate x is refused (review F7)
+        }
         Profile::CurveOverride* o = nullptr;
         for (auto& e : a_row.curves) if (e.family == a_f && e.cons == a_c) { o = &e; break; }
         if (!o) { a_row.curves.push_back({ a_f, a_c, a_shared }); o = &a_row.curves.back(); }
+        if (point) { (a_param[1] == 'x' ? o->curve.px : o->curve.py)[static_cast<std::size_t>(a_param[2] - '0')] = a_v; return true; }
         if (a_param == "a") o->curve.a = a_v;
         else if (a_param == "b") o->curve.b = a_v;
         else if (a_param == "floor") o->curve.floor = a_v;
@@ -150,6 +193,20 @@ namespace MFO::Iaus::ClassCurves {
         else if (a_name == "schoolShape") a_row.scalars.schoolShape = a_v;
         else if (a_name == "schoolMasteredBump") a_row.scalars.schoolMasteredBump = a_v;
         else return false;
+        return true;
+    }
+
+    bool SetWeight(Row& a_row, Family a_f, Cons a_c, float a_w) {
+        if (!std::isfinite(a_w) || !(a_w > 0.0f) || static_cast<std::size_t>(a_f) >= kFamilies || static_cast<std::size_t>(a_c) >= kCons) return false;
+        for (auto& e : a_row.weights) if (e.family == a_f && e.cons == a_c) { e.w = a_w; return true; }
+        a_row.weights.push_back({ a_f, a_c, a_w });
+        return true;
+    }
+
+    bool SetFamilyWeight(Row& a_row, Family a_f, float a_w) {
+        if (!std::isfinite(a_w) || !(a_w > 0.0f) || static_cast<std::size_t>(a_f) >= kFamilies) return false;
+        for (auto& e : a_row.families) if (e.family == a_f) { e.w = a_w; return true; }
+        a_row.families.push_back({ a_f, a_w });
         return true;
     }
 }

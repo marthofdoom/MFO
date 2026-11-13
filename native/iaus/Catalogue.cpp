@@ -82,6 +82,7 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
+            "buff_foes", "perks",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -99,6 +100,7 @@ namespace MFO::Iaus {
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
         case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
+        case Cons::BoostBuffThreat: case Cons::BoostPosturePerks:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -364,6 +366,19 @@ namespace MFO::Iaus {
             // line OFF (tauntedOnMe 0) below kDrinkHealthLine with a health potion in stock, so a hurt Knight drinks first. CHOSEN, tuned
             // in the sim (iaus-sim-v2 section 31.12).
             at(Cons::BoostGuardLine) = Bin(1.0f, 2.0f);
+            // buff_threat (batch 3, iaus-sim-v2.md 35): FLAT 1.0 through (0, 1) and (1, 1), so the shipped catalogue scores every buff as
+            // before (a boost of exactly 1). The two points are the searched knobs (py0: no foe in the fight, py1: four or more): the sim
+            // decides whether a buff is worth less with no foe and more against many; a value is written only through the driver's gates.
+            {
+                static constexpr std::array<std::array<float, 2>, 2> p{ { { 0.0f, 1.0f }, { 1.0f, 1.0f } } };
+                at(Cons::BoostBuffThreat) = Piece(p);
+            }
+            // perks (batch 3 part C, marth 11-12): FLAT 1.0 through (0, 1), (0.5, 1), (1, 1): bit-identical. x = this posture's share of his weapon-damage
+            // perk multipliers (0.5 = equal investment). The three points are the searched knobs (the sim decides how much perk investment weighs).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 1.0f }, { 1.0f, 1.0f } } };
+                at(Cons::BoostPosturePerks) = Piece(p);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -468,7 +483,7 @@ namespace MFO::Iaus {
             constexpr U kPosture[] = {
                 { Cons::PostureRanged, 1 }, { Cons::PostureMelee, 1 }, { Cons::Ammo, 1 }, { Cons::StaffCharge, 1 },
                 { Cons::MeleeReach, 1 }, { Cons::Unholy, 1 }, { Cons::MundaneVsUnholy, 1 }, { Cons::ClassWeapon, 1 },
-                { Cons::PostureTrade, 1 },
+                { Cons::PostureTrade, 1 }, { Cons::BoostPosturePerks, 1 },
             };
             constexpr U kOffense[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -501,7 +516,7 @@ namespace MFO::Iaus {
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
                 { Cons::BuffEarly, 1 }, { Cons::BuffMelee, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f },
-                { Cons::ClassFit, 1 },
+                { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 },
             };
             constexpr U kSummon[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::CooldownSoft, 1 }, { Cons::SummonLive, 1 },
@@ -676,6 +691,8 @@ namespace MFO::Iaus {
             case Cons::BoostGuardLine: return c.family == Family::Block ? In(B(f.tauntedOnMe >= kGuardLineFoes)) : In::Off();
             case Cons::BuffThreat:    return (c.family == Family::DrinkBuff && f.buffThreat >= 0.0f) ? In(Clamp(f.buffThreat, 0.0f, 1.0f)) : In::Off();
             case Cons::BuffStealth:   return (c.family == Family::DrinkBuff && f.buffStealth != Tri::Unknown) ? In(B(f.buffStealth == Tri::Yes)) : In::Off();
+            case Cons::BoostPosturePerks: return c.family == Family::Posture && f.perkShare >= 0.0f ? In(f.perkShare) : In::Off();
+            case Cons::BoostBuffThreat: return c.family == Family::CastBuff ? In(static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f) : In::Off();
             case Cons::DrinkNeed:
                 if (c.family == Family::DrinkBuff) return f.buffRegenPct >= 0.0f ? In(Clamp(f.buffRegenPct, 0.0f, 1.0f)) : In::Off();   // a regen kind reads its resource's pct
                 if (c.family == Family::DrinkStamina) return f.selfStamina;

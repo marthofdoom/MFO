@@ -100,6 +100,7 @@ namespace Sim {
         std::uint32_t actTarget = 0; int actSpell = -1; bool actIaus = false; float actCost = 0; float swingDist = 0;
         double think = 0, retargetAt = 0;
         double blockUntil = 0, staggerUntil = 0, ctrlUntil = 0, tauntUntil = 0, fleeUntil = 0, downUntil = 0, frenzyUntil = 0, retreatUntil = 0;
+        double backUntil = 0;   // --foe-styles: a foe's backpedal after a blow
         std::uint32_t tauntBy = 0, lastAttacker = 0;
         double regenAt[3] = { 0, 0, 0 };
         std::vector<Effect> fx;
@@ -153,6 +154,7 @@ namespace Sim {
         long   foeCasts = 0, foeCastsInterrupted = 0, interruptsByFollowers = 0;
         long   elemCasts = 0, resistedCasts = 0, weakCasts = 0, weakOpp = 0, immuneCasts = 0;
         long   splashAllyHits = 0, areaCasts = 0;
+        long   ung2[6] = {};   // the unguarded ones by cause (World.h, the tally)
         long   inc2 = 0, guard2 = 0;   // Q-S-5: melee blows that LAND on the subject while two or more foes are taunted onto him, and how many met his guard
         long   ctrlCasts = 0, ctrlFails = 0, ctrlOnControlled = 0, hitsOnControlled = 0, powOnControlled = 0, powerAttacks = 0, powerWhiffs = 0, regroups = 0, grounds = 0, blocks = 0, bashes = 0;
         double playerPressureSec = 0, peelSum = 0; long peelN = 0, peelMiss = 0;
@@ -170,6 +172,7 @@ namespace Sim {
         double runSec = 0, holdSec = 0, fleeHpGain = 0;
         double sneakDmg = 0, hiddenSec = 0, sneakSec = 0, tgtDistSum = 0, playerDistSum = 0, contactSec = 0, goInBadSec = 0, summonSec = 0, undeadDmg = 0, healAtSum = 0, cloakSec = 0;
         long   posN = 0, tgtDistN = 0, arrowsShot = 0, arrowsHit = 0;
+        double drawnSec[4] = { 0, 0, 0, 0 }, nearOnMeSec[3] = { 0, 0, 0 }, swapSec = 0; long drawSpoiled = 0, pointBlankShots = 0;   // --posture-report: bow / melee / other drawn; a foe ON HIM within 256 / 540 / beyond (time); draws a hit spoiled; shots under 256
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         // T2 batch S tallies of the subject (section 31)
@@ -203,6 +206,11 @@ namespace Sim {
     // SpellRole ordinals (native/classes/Classes.h, frozen order).
     enum : int { kRoleNone = 0, kRoleAttack, kRoleDestruction, kRoleFire, kRoleFrost, kRoleShock, kRoleArea, kRoleHeal, kRoleSummon, kRoleBoundWeapon, kRoleWard, kRoleArmor,
                  kRoleParalyze, kRoleFear, kRoleCalm, kRoleReanimate, kRoleTurnUndead };
+
+    // The worth in J of the k-th potion still in the bag at the end of a fight, per kind (0 health, 1 magicka, 2 stamina), k = 1..kPotWorthMax
+    // (a bag deeper than that prices the extra ones as the last). Filled from PotionWorth.h or --potion-worth <file> (Setup.h).
+    inline constexpr int kPotWorthMax = 4;
+    struct PotWorth { std::array<std::array<float, kPotWorthMax>, 3> m{}; };
 
     struct Ctl {   // one follower with a decision layer (IAUS, or his gambit table)
         mutable std::unordered_map<std::uint32_t, double> occSince;   // foe id -> when its occlusion began (the keep-current-attack hold)
@@ -244,6 +252,8 @@ namespace Sim {
         double commitUntil = 0;                    // oracle rollouts: he keeps the option he was given until then
         float  goalX = 0, goalY = 0; double moveUntil = 0; bool sprint = false, moveFight = false;   // a deliberate reposition order (the extended action set)
         int    potions0 = 0;                       // potions at the start (Utility: resources left)
+        int    pot0[3] = { 0, 0, 0 };              // the same by kind: health, magicka, stamina (Utility: what a drunk potion was worth, Oracle.h PotionCost)
+        const PotWorth* worth = nullptr;           // his class cell's row of the potion-worth table (nullptr = no charge)
         Key    lastKey{}; bool hasLastKey = false; // oracle arm: the action he is on (switch counting)
         std::uint32_t lastTarget = 0;
         // class traits the world applies (the class's own design data: SimClass, RealClasses.cpp)
@@ -274,6 +284,7 @@ namespace Sim {
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
+        float arenaX = 0, arenaY = 0, arenaR = 0; bool arenaSet = false;   // --space: the enclosed fight's bounds (0 = open)
         float light = 0.6f; bool interior = false; double nextDetect = 0; Detect::Gmst dg;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
         std::uint64_t avSeed = 0;                  // ch.32: the per (foe, follower, 6 s window) draws come from a hash of this, never from R
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
@@ -551,7 +562,10 @@ namespace Sim {
             }
             if (a.ctl == 0) { ++t.wpnHits; if (sneakAtk) ++t.sneakHits; if (flankAtk) ++t.flankHits; if (!t.firstHits) { t.firstHits = 1; t.sneakOpens = sneakAtk ? 1 : 0; } }
             if (d.ctl == 0 && !ranged && a.role == Role::Foe) { int held = 0; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && o.tauntBy == d.c.id && now < o.tauntUntil) ++held;
-                if (held >= 2) { ++t.inc2; if (now < d.blockUntil) ++t.guard2; } }   // Q-S-5 tally (the guard is up when the blow lands: the same test as the block below)
+                if (held >= 2) { ++t.inc2; if (now < d.blockUntil) ++t.guard2;
+                    else { const Ctl& dc = ctl[0];   // WHY the blow found no guard (--guard-why): 0 staggered, 1 the rest after a hold, 2 hurt with a potion (drink first), 3 drinking, 4 mid blow / other action, 5 free
+                        const int why = now < d.staggerUntil ? 0 : now < dc.blockRestUntil ? 1 : d.act == Act::Drink && now < d.actEnd ? 3 : (d.c.hp < dc.gate.drinkHealthLine * d.c.hpMax && dc.book.kit.potionsHealth > 0) ? 2 : now < d.actEnd ? 4 : 5;
+                        ++t.ung2[why]; } } }   // Q-S-5 tally (the guard is up when the blow lands: the same test as the block below)
             if (now < d.blockUntil && !ranged) {   // MODEL block: shield 0.45 + 0.30 x skill, weapon 0.30 + 0.20 x skill; a power attack halves it (fBlockPowerAttackMult)
                 const float sk = d.spec->Skill(kAvBlock) / 100.0f; float bf = d.spec->shield ? 0.45f + 0.30f * sk : 0.30f + 0.20f * sk;
                 if (power) bf *= r.blockPowMult;
@@ -564,6 +578,9 @@ namespace Sim {
             if (a.ctl == 0) { if (Controlled(d)) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; }
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
             const float dealt = Hurt(d, dmg, &a, fromIaus);
+            // --draw-spoil P (MODEL, no engine source: whether a plain hit interrupts an NPC's draw is not decoded; a stagger already does):
+            // a melee hit that lands on a body mid-draw spoils the draw with chance P (the arrow is not fired, he starts again).
+            if (g_drawSpoil > 0.0f && !ranged && Up(d) && d.act == Act::Shoot && d.hitAt >= 0 && R.P(g_drawSpoil)) { d.act = Act::None; d.hitAt = -1; d.actEnd = now; if (d.ctl == 0) ++t.drawSpoiled; }
             if (sneakAtk && a.ctl == 0) t.sneakDmg += dealt;
             if (trace) std::fprintf(trace, "%7.2f  hit  %s -> %s (%u) %.0f%s%s%s%s%s  hp %.0f/%.0f\n", now, a.c.name.c_str(), d.c.name.c_str(), d.c.id, dealt, power ? " POWER" : "", blocked ? " blocked" : "", ranged ? " arrow" : "", sneakAtk ? " SNEAK" : "", flankAtk ? " flank" : "", d.c.hp, d.c.hpMax);
             if (D->poise.on) PoiseHit(a, d, PoiseDamage(a, d, rawDmg, power, ranged, false, blockedFrac));
@@ -614,6 +631,8 @@ namespace Sim {
             x.ranLast = speed >= 0.9f * x.spec->run;   // MODEL: combat movement is at the engine's RUN speed and a crouched run is still IsRunning (probe P1 logs it); a backpedal is not
             if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait (the crouched run)
             const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
+            if (arenaR > 0.0f) { const float ax = x.c.x - arenaX, ay = x.c.y - arenaY, ad = std::hypot(ax, ay);   // --space: a wall stops him (backpedal, kite, flee)
+                if (ad > arenaR) { x.c.x = arenaX + ax * arenaR / ad; x.c.y = arenaY + ay * arenaR / ad; } }
         }
         [[nodiscard]] Body* PickTarget(Body& x) {
             Body* best = nullptr; Body* second = nullptr; float bs = -1, bs2 = -1;
@@ -747,7 +766,12 @@ namespace Sim {
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
                 --x.arrows; if (x.ctl == 0) ++t.arrowsShot;
-                Shot sh{ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, WeaponDamage(D->rules, *x.spec, x.spec->ranged, false), -1, false, x.actIaus, tg->c.x, tg->c.y, 1 };
+                float shotDmg = WeaponDamage(D->rules, *x.spec, x.spec->ranged, false);
+                // --ranged-perks (FACT: a ModAttackDamage entry is conditioned on the weapon it fires for, Overdraw on a bow, Armsman on a
+                // one-hander; the lab applied the MELEE weapon's chain to every shot): the shot carries the bow skill's chain instead.
+                if (g_rangedPerks && x.spec->rangedAtkMult > 0.0f && x.spec->atkMult > 0.0f) shotDmg = shotDmg / x.spec->atkMult * x.spec->rangedAtkMult;
+                if (x.ctl == 0 && Dist(x, *tg) < D->rules.holdMinDist) ++t.pointBlankShots;
+                Shot sh{ now + Dist(x, *tg) / TM::arrowSpeed, x.c.id, tg->c.id, shotDmg, -1, false, x.actIaus, tg->c.x, tg->c.y, 1 };
                 // CARD H5 (ch.29, apmf/AimClaims.cpp; FACT = that file's contract): over his last 10 shots, when the misses plus the shots
                 // in flight reach the class's budget, the next launch is re-aimed at the engine's own unscattered solution.
                 if (x.ctl >= 0 && g_t2.aim) { Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
@@ -806,9 +830,11 @@ namespace Sim {
             }
             if (na == Prune::Nature::Buff || na == Prune::Nature::Ward) {
                 Body* r = (tg && tg->Party() == x.Party()) ? tg : &x;
-                if (s->armor > 0) r->fx.push_back({ 2, s->armor, -1, now + std::max(30.0f, s->buffDur), x.c.id });
-                if (s->resistBuffAv >= 0) r->fx.push_back({ 3, s->resistBuff, s->resistBuffAv, now + std::max(30.0f, s->buffDur), x.c.id });
-                if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(x.actSpell)].push_back({ r->c.id, now + std::max(30.0, static_cast<double>(s->buffDur)) });
+                // --buff-dur real: up for the record's duration (a record with none keeps the lab's 30 s, MODEL); off: max(30 s, duration) as before
+                const float up = g_buffDurReal ? (s->buffDur > 0.0f ? s->buffDur : 30.0f) : std::max(30.0f, s->buffDur);
+                if (s->armor > 0) r->fx.push_back({ 2, s->armor, -1, now + up, x.c.id });
+                if (s->resistBuffAv >= 0) r->fx.push_back({ 3, s->resistBuff, s->resistBuffAv, now + up, x.c.id });
+                if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(x.actSpell)].push_back({ r->c.id, now + (g_buffDurReal ? static_cast<double>(up) : std::max(30.0, static_cast<double>(s->buffDur))) });
                 return;
             }
             if (na == Prune::Nature::Summon) {
@@ -983,13 +1009,18 @@ namespace Sim {
                 if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
                 if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); }
                 if (now >= x.think) {
-                    const Weapon& w = x.spec->ranged; const float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + R.U(TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
+                    const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + R.U(TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
+                    // --point-blank (GMST: the hold time has a minimum DISTANCE, 256, and an absolute minimum, 0.1 s; how the engine blends
+                    // them is not decoded, so MODEL: under the distance the hold is the absolute minimum). The draw above already took its R.U.
+                    if (g_pointBlank && w.anim != 9 && d < r.holdMinDist) draw = TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + r.holdAbsMin * 0.5f;
                     x.act = Act::Shoot; x.actTarget = tg->c.id; x.hitAt = now + draw; x.actEnd = x.hitAt + TM::bowRecover; x.actIaus = false; Action(x, dg.soundSilent);   // MODEL: a bow is Silent
                     x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) * 0.5f / std::max(0.25f, st.off);
                 }
                 return;
             }
             if (!hasMelee) return;
+            // --foe-styles (Part C): a foe stepping back after its blow (CSCR Fallback Mult) moves away at the back-pedal speed, then re-engages
+            if (g_foeStyles && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); return; }
             // melee
             const float reach = Reach(x);
             if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash
@@ -1008,6 +1039,10 @@ namespace Sim {
             if (x.ctl == 0 && kind == Act::Power) ++t.engPower;
             StartSwing(x, *tg, kind, false);
             x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) / std::max(0.25f, st.off);
+            // --foe-styles (Part C, MODEL mapping of a record value): after the blow a foe backpedals with chance = its combat style's close-range
+            // Fallback Mult (CSCR[1], read from the world extract: Load.h Style::fallback), for U(0.5, 1.5) s; an aggressive style (low fallback,
+            // high offensive mult: the think pause above) presses on. Followers keep their own package movement.
+            if (g_foeStyles && x.role == Role::Foe && R.P(std::clamp(st.fallback, 0.0f, 0.9f))) x.backUntil = x.actEnd + R.U(0.5f, 1.5f);
         }
         // Q-SIM-5 (marth 11-11: "why wouldnt a follower be able to move and do an action. I believe he should"): what his FEET do while
         // his hands are busy with a weapon swap, a potion or a cast. Every deliberate movement Brain() would make, and nothing else: no
@@ -1087,8 +1122,17 @@ namespace Sim {
             for (std::size_t i = 0; i < c.summonUntil.size(); ++i) if (c.summonUntil[i] > now) { t.summonSec += TM::dt; break; }
             if (x.sneaking) t.sneakSec += TM::dt; if (now < x.cloakUntil) t.cloakSec += TM::dt;
             if (Unseen(x)) t.hiddenSec += TM::dt;
+            t.drawnSec[c.drawn == PostureKind::Bow ? 0 : (c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver) ? 1 : c.drawn == PostureKind::None ? 2 : 3] += TM::dt;
+            { float nd = 1e9f; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && o.c.targetId == x.c.id) nd = std::min(nd, Dist(x, o));
+              t.nearOnMeSec[nd < 256.0f ? 0 : nd < 540.0f ? 1 : 2] += TM::dt; }
         }
         void StepWorld() {
+            if (!arenaSet) { arenaSet = true;   // --space R (Part C, MODEL): an enclosed fight is a disc of radius R around the start centroid; whoever starts
+                // outside it starts at its edge (a room: the line of fire is no longer than 2R, backpedal / kiting / flight stop at the wall)
+                const bool enclosed = g_spaceForce >= 0 ? g_spaceForce == 1 : interior;
+                if (g_spaceSize > 0.0f && enclosed && !b.empty()) { float cx = 0, cy = 0; for (const Body& o : b) { cx += o.c.x; cy += o.c.y; } cx /= float(b.size()); cy /= float(b.size());
+                    arenaX = cx; arenaY = cy; arenaR = g_spaceSize; const float in = std::max(0.5f * g_spaceSize, g_spaceSize - 50.0f);
+                    for (Body& o : b) { const float ox = o.c.x - cx, oy = o.c.y - cy, od = std::hypot(ox, oy); if (od > in) { o.c.x = cx + ox * in / od; o.c.y = cy + oy * in / od; } } } }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }

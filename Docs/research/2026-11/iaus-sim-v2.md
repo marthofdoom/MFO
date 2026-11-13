@@ -2355,3 +2355,572 @@ gap (`class_gaps` of the newest full run: melee and the base cells are furthest 
 (3) `wide` on the built-in world for the 15 cells, then a fresh-seed three-world confirmatory and `gates` for each pass.
 (4) Decide with the coordinator whether the Warrior stamina value ships despite the six-seed gate. (5) Confirm the three
 `Tuning` winners on fresh seeds and on the lists, with a switching metric next to J for momentum.
+
+## 33. The per-class tuning: what was built, and the RUNBOOK for the run (2026-11-12)
+
+Branch `feat/class-tuning`. Fable author (the structural part only: marth 11-12 moved the run itself to a cheaper agent). This
+section is written for that agent. Nothing below is a tuning result: the run has not been made. FACT / MODEL as in 31.2.
+
+### 33.1 What changed in the lab and in native
+
+1. **Every curve is a knob now.** `ClassCurves::SetCurveParam` takes `px0..px5` / `py0..py5` for a Piece curve (one point's x or
+   y; refused on a curve that is not a Piece, on a point it does not have, on a non-finite value, on an x past a neighbour).
+   The 20 Piece curves of 32.13 gap 1 are searchable. Sim: `--curve <class>:<family>.<cons>.py1=0.6`.
+2. **Per-class weights (card I8) have a table surface.** `ClassCurves::Row` gains `weights` (a consideration's exponent for this
+   class's family, `Profile::weights`) and `families` (the class's multiplier on a whole family, `Profile::family`);
+   `SetWeight`, `SetFamilyWeight`; `Build` copies them into the Profile. Unset = bit-identical (harness: every shipped row
+   has no override, no weight and every family multiplier exactly 1.0). Sim: `--curve <class>:<family>.<cons>.w=<v>` and
+   `--curve <class>:family.<family>=<v>`. `ClassCurves.cpp` has an empty `SeedSearchedValues(Table&)` where accepted values go.
+3. **What a potion is worth is measured (marth, Q-potion-value: "Sim calibrates it").** Utility used to pay
+   2.5 / (potions carried) / (followers) for a potion left over, about 0.3 J. Now: `--potion-calib N` plays the same natural
+   fights with the subject's stock of one kind forced to 0..4 and prints what one more potion at the start of a fight buys
+   and how many he drinks; `potion_worth.py` turns that into the worth of the k-th potion left in the bag over a CHAIN of
+   fights (W_h(p) = U(p) + sum_u P[p][u] W_{h-1}(p - u); the mean over the 8 places of a chain of 8 fights between restocks);
+   Utility charges each potion drunk that worth (`Oracle.h PotionCost`). The table belongs to a world: the built-in one is the
+   generated `tools/iaus_sim/PotionWorth.h`, a list's is `--potion-worth <file>` (the driver measures it). `--potion-worth
+   legacy` is the old rate and reproduces the old J exactly. MODEL choices: the chain is 8 fights (the file prints 4 and 16
+   next to it); a measured d[k] counts only when it beats its own noise (d > 2 se), else 0; the fights are the natural bracket; end health and end magicka keep
+   their old terms (they regenerate between fights: a possible next step, not done).
+4. **The gate rule (marth, Q-gate-rule: "Gate on many seeds").** The no-class-worse gates are judged on the same seeds as the
+   search (train + holdout), paired, and a drop counts only beyond noise. The full rule is the `RULE` block of
+   `tune_driver.py`, copied in 33.3. It was written before any result of the driver was read.
+5. **Decision switching is visible next to J**: `--print-switch` prints the subject's decision switches and fight minutes
+   per seed. J does not price switching, so the driver reports the rate and never applies a shared value that raises it
+   by more than 10% for any class.
+6. **Why a blow found no guard**: `--guard-why` adds `ung2*%` metrics (staggered, the rest after a hold, hurt with a
+   potion = drink first, drinking, mid action, free) to the Knight line's tally.
+7. **Review fixes of the sim batch** (`edge_search.py`): a single-world pass is labelled "passes on this world only: not a
+   result" (the accept path is the driver's); `moved()` never crosses 0 and a boost never goes under 1; the potion kind follows
+   the cell's family (melee-off and ranged-off are stamina cells); `global` uses the per-class rule (2 se, 0.30 J, the band).
+   `Results.h` writes `kRatingCells`; the dashboard's Trend compares two gaps only when they come from the same source.
+
+### 33.2 Two findings that change what 32.11 said
+
+- **The Knight floor on LoreRim was measured on a world without LoreRim's combat mods.** The simulator reads
+  `<list>.combatmods.json` BESIDE the `.sim.json` and takes a missing file for "no such mod" (`Load.h`). The final-world list
+  runs of 32.11 used copies in a scratch directory, without that file. With it (the shared cache, re-compiled with the
+  corrected potion ladders): Knight, as shipped, 48 seeds: **63.1%** (six-seed groups 61.2 to 65.4); without it 58.5% (57.3
+  on seeds 1 to 6, the number of 32.11). So the shipped table is OVER the floor on LoreRim. Every LoreRim number of 32.11
+  has the same defect (Tuxborn's and Vanilla's files are empty, so those are unaffected). The driver refuses a list whose
+  companion file is missing.
+- **Where the unguarded blows go** (Knight, as shipped, 6 seeds, percent of all blows under two or more own-taunted foes):
+  built-in: the rest after a hold 18.4, mid action 8.4, staggered 2.6, drinking 1.9; LoreRim: rest 18.1, mid action 6.0,
+  staggered 4.9, drinking 4.0, drink-first 1.3; Tuxborn: rest 16.5, staggered 10.4, mid action 9.6. The 1.5 s rest after a
+  hold (Harbinger's) is the largest cause on every world: if the floor ever has to rise, that is the lever, and it is not a
+  table value.
+
+- **What a potion is worth on the built-in world** (`PotionWorth.h`, 9600 fights per class, kind and stock, chain of 8): a
+  health potion left in the bag is worth 1.2 to 2.1 J to the Knight, the Warrior, the Mercenary and the melee cells, 0.3 to
+  1.1 to the ranged cells and the Evoker and Mage, up to 0.5 to the Healer, Conjurer, Warlock and Thief. A stamina
+  potion is worth something only to the Warrior (0.3 to 0.6) and the Mercenary (0.1 to 0.4); to every other class, the Knight
+  included, its worth cannot be told from 0 (the Knight drinks 0.58 a fight and gains nothing measurable). A magicka potion:
+  the first is worth 0.2 to 0.5 to the four casting T2 classes, the rest nothing. The old rate was about 0.3 J for any potion:
+  health potions were underpriced several times over, which is why the class oracle drank at 72 to 94% health (32.11).
+  With a chain of 4 the Knight's first health potion is 1.2 J, with 16 it is 2.6: the chain length is a MODEL choice.
+
+### 33.3 The rule (copied from `tune_driver.py`; the script is the authority)
+
+A number is ACCEPTED only when every line holds.
+
+- train: built-in world, default roads (g3), seeds 1..64: the best value of a sweep has paired d > 2.5 se and d >= 0.15 J.
+- holdout: seeds 1001..1064, never used to pick: d > 1.5 se.
+- gates (many seeds): on the 128 train + holdout seeds, with stealth off and as shipped, the class may not get worse, and
+  worse = d < -2 se and d < -0.05 J (when the 15 cells are judged at once: -2.5 se); never more than 0.5 J down (Thief,
+  Mercenary 0.25) when that drop is itself outside one se. A T1 row (melee / ranged / mage) is the companion in other classes' fights, so its value is gated on all
+  15 cells at all three configs.
+- cross-world: fresh seeds 4001..4096 on built-in, LoreRim, Tuxborn, Vanilla: the equal-weight mean of the four d is > 2 se,
+  no world is worse, and as shipped the mean is not worse and inside the band.
+- joint: the T1 rows (melee, ranged, mage) are searched first and their accepted values are part of every later class's
+  baseline. When the classes are done, the whole final table is gated against the shipped one on all 15 cells (128 seeds,
+  three configs: no cell worse at the 15-at-once bar, no 15-cell mean worse) and each T1 value is left out in turn (the
+  table without it may not be better). A failure writes nothing and is an open decision.
+- Knight line: the guard floor holds (>= 60%, measured on 36 seeds per world and config; the six-seed groups of 33.2
+  spread over about 4 points) on every world, default and as shipped (a Knight-line value, a T1 melee value and a shared
+  value are all held to it). A floor run with no blow in its tally stops the driver: it never reads as a floor that holds.
+- fixed: the School Circle is never a knob; pure 0 / 1 gates and Step vetoes are never knobs; a knob never leaves its valid
+  range (no negative offset, floor or level; a boost never under 1; a Piece point at 0 stays a veto).
+
+Changes from 32.10, and why: 64 + 64 seeds instead of 48 + 48 (a run is 0.17 s per seed and class); the train bar is 2.5 se
+and 0.15 J instead of 2 se and 0.30 J (more seeds see smaller effects; the stricter se bar pays for the many more knobs);
+the holdout bar is 1.5 se instead of 1; the gates follow Q-gate-rule; Vanilla is a fourth world; the literal six-seed gates
+of 31.11 are gone (Q-gate-rule).
+
+### 33.4 RUNBOOK
+
+**Before the run** (once, about 2 minutes):
+
+```
+cd <repo>
+SIM_OUT=/tmp/claude-1000/class-tuning-bin/sim-r2 taskset -c 0-11 nice -n 10 tools/iaus_sim/run.sh --print-classes | head -3
+ls ~/.cache/mfo-list-balance/{LoreRim,Tuxborn,Vanilla}.{sim,combatmods}.json     # all six must exist
+```
+
+If a `.sim.json` is missing or older than `tools/list_balance/compile_world.py`: `python3 tools/list_balance/compile_world.py
+--name <List>`. `PotionWorth.h` is committed; re-measure it only if the sim's fights changed
+(`tools/iaus_sim/potion_worth.py --bin <sim> --out <file> --header`, about 25 minutes, then rebuild the sim).
+
+**Launch** (detached; the run directory must be durable for the length of the run):
+
+```
+OUT=<scratchpad>/tune/full
+mkdir -p $OUT
+setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py \
+    --bin /tmp/claude-1000/class-tuning-bin/sim-r2 --out $OUT --jobs 12 > $OUT/driver.out 2>&1 &
+```
+
+Do not poll it in a loop. `tail -3 $OUT/progress.log` shows the last finished step; the dashboard gets one results file
+per finished sweep. Expected length: hours (15 cells, every live knob of each (34 to about 190 of 396; cap 250), 2 passes).
+
+**Resume**: run the same command again. Everything finished is in `$OUT/cache.jsonl` and replays in seconds; never delete
+that file, never edit it. One stage only: add `--stages floor,rating,summary` (any subset, in order). One class only:
+`--classes knight` (with `--stages classes,joint,summary`); the driver refuses it until melee, ranged and mage are done in
+that `--out`, because their values are the Knight's baseline.
+
+**What a cached result is tied to**: the sha256 of the simulator binary (the built-in potion table and every curve are
+compiled into it), of the world's `.sim.json` and `.combatmods.json`, and of its potion-worth table are part of every cache
+key (`summary.json` `stages.prep.identity`). Rebuild the simulator, re-extract a list or re-measure a table and the
+results that depend on it are measured again; nothing stale is replayed. Never rebuild the binary in place while a run
+is going: build to a new path and start a new `--out`. A list's potion-worth table is reused only while the binary and
+the list files it was measured from are the same (the `.inputs` stamp beside it). A simulator run that fails stops the
+driver with the command and the simulator's message; it is never cached and never read as an empty result. The simulator
+itself refuses a `--list` run without `--potion-worth` (`edge_search.py` too).
+
+**Where the result lands**: `$OUT/summary.md` (read this), `$OUT/summary.json` (every number), `$OUT/progress.log`. Both
+summaries are rewritten after every sweep, so a half-finished run can be read too (classes marked "(running)").
+
+**What each verdict means**
+
+| Verdict | Meaning | What the runner does |
+|---|---|---|
+| `ACCEPTED: holdout, many-seed gates, cross-world on fresh seeds` | passed every line of the rule | write it (33.5), unless an open decision names it |
+| `train: does not beat noise` / `beats noise but under 0.15 J` | nothing to see at 64 seeds | nothing; the shared value stays |
+| `holdout: not confirmed` | the train pick was chance | nothing |
+| `gate: <class> gets worse at <config>` | a real loss with stealth off or as shipped | nothing |
+| `cross-world: ...` | the gain does not hold on fresh seeds over the four worlds | nothing |
+| `Knight guard floor: ...` | the value pushes the Knight line under 60% | nothing |
+| joint `PASS` | the whole final table holds against the shipped one on all 15 cells | go on |
+| joint `FAIL: ...` | the values do not hold together | open decision: write NO value, report |
+| globals `PASSES RULE` or `BEATS NOISE, NOT APPLIED` | a shared default would gain | ALWAYS an open decision: report, do not write |
+| consts `BEATS NOISE` | a compile-time constant would gain | open decision: report, do not write |
+| recalib `DOES NOT HOLD` | an accepted value loses under the re-measured potion worth | do not write it; report |
+| rating `BELOW` | a class is under its tier on that world | report |
+
+**Decisions the rule leaves open. The runner STOPS and reports these; it does not decide.** They are listed at the end of
+`summary.md` under OPEN DECISIONS with their numbers.
+
+1. Any shared `Tuning` default (`t.momentum`, `t.powerCd`, `t.postureMomentum`): a design value. `t.powerCd` is also a
+   ruling (10 s rows). `t.momentum` is the anti-thrash term and J does not price switching: whether switching needs a price
+   in Utility first is marth's or the coordinator's call. The driver gives J and the switching rate per class for 1.0, 1.05,
+   1.1, 1.15 and 1.2.
+2. Any compile-time constant that beats noise (`kCloseSlack`, `kMinimumFrac`, `kRangeVeto`, `kPostureDist`): a native edit
+   of its own (`kRangeVeto` is also three literals in `Catalogue.cpp`).
+3. The class-card read of every class with an accepted value: the driver lists the twelve largest changes in his play
+   (`play_changes_natural`). If a change takes him off his card (a Knight who stops taunting, a Warrior who power attacks
+   much less), report it with its gain instead of writing it; small deviations that measurably help are allowed, each listed.
+4. A Knight line under 60% on any world with the final table: a mechanism change (the guard's hold, renewal and rest, or a
+   taunt-count term), not a table value.
+5. A class flagged BELOW its tier by the rating battery.
+6. An accepted value that fails `recalib`.
+7. More than ten accepted values for one class, or a consideration weight accepted at the edge of the range tried (x2 or
+   x0.5 of the catalogue's): report before writing (a sign the shared catalogue, not the class, is off). The driver raises
+   both itself.
+9. A failed joint gate: no value of the run is written until it is decided.
+8. Anything the driver stops on (a missing input, a simulator error): report the last lines of `driver.out`. Do not edit
+   the driver's rule or thresholds to get past it; a rule change is written down first and is Fable's.
+
+**The smoke run** (`--smoke`: 4 seeds, 4 knobs, first sweep pushed through every later step; its numbers are NOT results
+and its dashboard files are labelled so). Made on the final binary, Knight, built-in + LoreRim: every stage ran (prep with
+LoreRim's potion worth, rejudge, classes: 397 knobs, 85 live, 312 dead for the Knight, holdout, gates, cross-world, Knight
+floor; globals with the switching rate; one constant variant built and compared; floor with causes; rating; recalib;
+summary) in 72 s on 12 cores. Killed with SIGKILL 22 s in (mid liveness), the same command finished the run from 818 cached
+results; a third run of the finished directory replayed in under a second and wrote no second dashboard file.
+After the review round (cache identity, failed runs, the joint gate; melee + Knight, built-in + LoreRim, binary `sim-r2`):
+(A) a simulator whose Knight-floor run exits 3 stopped the driver with the command and "planted failure", and no floor
+result was cached; (B) SIGKILL 45 s in (mid sweep), the same command finished from 3214 cached results, the Knight searched
+on top of the melee row's value, joint gate run; a third run: 0 s, 0 new results; (C) one line of LoreRim's potion table
+changed: the LoreRim floor was measured again (4 new results), the built-in one replayed. All 15 cells
+with the oracle-gap order (ranged-off, melee, mercenary, melee-off first): a second smoke run, about 9 minutes; live knobs per cell 34 (melee) to 191 (mage-off) of 396. To repeat it: the launch command with `--smoke --classes knight --worlds
+builtin,LoreRim` and another `--out`.
+
+### 33.5 Writing accepted values into native (mechanical)
+
+1. `summary.md` has a block "Lines for ClassCurves.cpp": one comment line with the evidence and one statement per accepted
+   value. Paste them into `SeedSearchedValues` in `native/iaus/ClassCurves.cpp`, after the `sh` line, grouped by class.
+   Do not write a value by hand and do not round it.
+2. Replace the "NO VALUE PASSED EVERYTHING" paragraph of that file's comment with one sentence naming the run (date, seeds,
+   worlds) and this section.
+3. `tools/iaus_harness/harness.cpp`: the check "every shipped row has no curve override ..." is now false for the rows that
+   took a value. Change it to skip exactly those rows (list their indexes in the check) and keep it for every other row.
+4. Prove the write: for each class with values, `<sim> --no-json --classes <class> --seeds 1,2,3` built from the edited
+   tree with NO `--curve` must print the same three SEED lines as the unedited tree with the accepted `--curve` specs.
+5. `tools/iaus_sim/run.sh --no-json --classes beta1 --baseline tools/iaus_sim/baseline_builtin.txt` (regenerated on
+   purpose; say which classes moved in the commit message), `SIM_CLITEST=1 tools/iaus_sim/run.sh` (re-pin only the pins of
+   classes that took a value), `tools/iaus_harness/run.sh` (0 failed), `tools/iaus_dash/test.sh`, the local MSVC build.
+6. Shared defaults and constants are NOT written by the runner (open decisions 1 and 2).
+7. The diff goes to an Opus review (tier B: values inside an existing mechanism).
+
+## 34. The pipeline closes on the oracle: driver fixes, the edge stage, the gap stage, the new-class workflow (2026-11-12)
+
+Branch `feat/oracle-gap` on `feat/class-tuning` 4f0cd62d. Opus author. marth 11-12: "getting close to oracle should be a goal";
+re-scope: "adding the final oracle gap close to the end of it. So that every time we add a class, that script itself will iterate
+through exactly what needs it." Native scope: `iaus/ClassCurves.cpp` one comparison (F7). Everything else is `tools/iaus_sim`.
+
+### 34.1 Review F7 / F8 (the class-tuning backlog, raised against 33a0b963)
+
+- F7: a Logi midpoint candidate keeps its sign (`tune_driver.py logi_mid`; a negative midpoint was clamped to +0.02). Native
+  `ClassCurves::SetCurveParam` refuses a Piece x EQUAL to a neighbour (strict), harness check added. No shipped Piece curve has a
+  duplicate x (`--list-uses` scan), so no shipped behaviour moves.
+- F8: `check_world()` runs inside `world_args()` and `ident()`: every stage that reads a list checks its `.sim.json`,
+  `.combatmods.json` and potion-worth table, not only `stage_prep`.
+
+### 34.2 The edge stage (marth 11-12 "Widen to x4 / x0.25")
+
+Only knobs whose ACCEPTED value is the outermost value tried on its side are searched again past that edge: multiplicative knobs
+at x3 / x4 or x0.35 / x0.25 of the shared value, additive knobs at 2 and 4 times the largest step tried on that side, always inside
+the knob's valid range (`KNOB_META`, filled by `all_knobs`; a Piece x stays strictly between its neighbours). Same RULE; the wider
+value REPLACES the accepted one in its test (`judge(replace=)`), so two specs never sit on one parameter. The table is never changed
+here: the edge value stays written, and a wider value that passes every line is an OPEN DECISION ("far from the shared curve").
+
+### 34.3 The gap stage
+
+The rule is `stage_gap`'s docstring (written before any of its results was read). In short:
+- the class oracle plans for the SUBJECT only (`--oracle-subject-only`). FOUND: the default oracle (`OracleCfg.allFollowers`)
+  drives every follower, so a class's gap in every earlier table also carried its T1 companions' gap. Smoke, Knight, built-in,
+  8 fights: subject-only -1.32 (se 2.20) against all followers +1.74 (se 0.67). The all-followers gap is still measured on the
+  built-in world for continuity with the dashboard;
+- per class and world, the shipped and the final table on the same fights (seeds 6001..): the tuning's effect is a paired
+  difference. 12 seeds x (4 natural + 1 of each of his own scenarios); a cell with under 2 fights or se > max(0.5 U, |gap| / 4) gets
+  12 more seeds, up to 48;
+- `--gap-dump` (sim): `GAPFIGHT` per fight, `GAPSIT` the subject's divergence clusters (IAUS pick | oracle pick | kind |
+  situation, summed dU; kind = retarget, ranked, unranked, posture, ext, idle), `GAPGEN` candidates generated per family, `GAPDEC`;
+- `classify`: (d) the oracle's action is in `FIDELITY` (its version is more favourable than the game's: `ext:block` and `ext:bash`
+  have no cooldown in `Oracle.h Apply`, the game's guard holds 2.5 s with a 4 s row cooldown and a 1.5 s rest, a timed bash has no
+  road); (b) IAUS's pick broke its class ruling, the oracle took a candidate IAUS scored under the floor or vetoed, or an extended
+  action of a family the class is offered elsewhere; (c) an action IAUS never generates for this class, with its road from
+  section 25 (`EXT_ROAD`); (a) the rest;
+- (a) drives a BOUNDED extra search: the families of the (a) clusters with the most dU (up to 3), their live knobs that took no
+  value (up to 12, most sensitive first), at the midpoints between the shared value and each value tried (acceptable under RULE)
+  and past the outermost ones (a pass is an open decision); the best in-range value and the best widened value are judged SEPARATELY
+  (review G1 of 7e883a9a: a far winner never hides an in-range pass). An accepted value re-runs the joint gate and re-measures that gap.
+  ORDER (review G2): `gap` runs before `globals`, `consts`, `floor`, `rating` and `recalib` in the default order and in `--for-class`, so
+  those describe the table after the search; a custom order that ran `floor` / `rating` / `recalib` first runs them again when the
+  search moved the table;
+- (b) to (d): one open decision per class with the evidence, and `<out>/gap-ledger.md` rows in the format of `iaus-classes.md`
+  section 3. dU per fight is the oracle's local per-decision advantage summed: it ORDERS divergences, it does not add up to the gap.
+
+Tests: `tools/iaus_sim/test_tune_driver.py` (9: logi_mid, edge_of, widen, check_world, classify, gap_parse); CLI-CHECK "--gap-dump
+prints its lines, only when asked"; smoke of edge (planted accepted-at-edge rows), gap (built-in), a simulator that fails on gap runs
+(stops, nothing cached), a dump without GAPFIGHT (stops, nothing cached: `text_run(check=)` validates before caching), SIGKILL
+mid-stage and resume (3 cached, 3 new, a third run 0 new in 0 s).
+
+### 34.4 RUNBOOK: a new or changed class
+
+```
+SIM_OUT=<new sim> tools/iaus_sim/run.sh --print-classes | head -3          # build the simulator with the new row
+setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py --bin <new sim> --out <the earlier run's dir> \
+    --for-class <slug> --jobs 12 > <dir>/driver-<slug>.out 2>&1 &
+```
+
+`--for-class` = `--classes <slug> --stages prep,classes,joint,edge,gap,floor,summary`. What it re-measures: every cache key carries
+the sha256 of the simulator binary, the world's `.sim.json` / `.combatmods.json` and its potion-worth table, so a new binary
+re-measures everything a stage needs (the list potion-worth tables included: `prep`) and nothing stale is replayed; an unchanged
+binary replays. The T1 rows must be complete in that `--out` (their values are the new class's baseline). The other classes'
+accepted values, rows, gap cells and open decisions stay (scoped stages merge; `open_decision(cls=)`). `cells()` adds the new class
+to the joint gate and to a T1 value's gate. A fresh `--out` runs the whole pipeline (the T1 rows first).
+
+### 34.6 The logistics world (marth 11-12: "Might as well add whats needed for logistics sentient ai testing now as well")
+
+`tools/iaus_sim/Logistics.h`, `--logistics N` (episodes per seed and class), `--logi-k K` (the oracle's sampled futures, default 8),
+`--logi-policy` (only `baseline`; `iaus` is REFUSED until the post-T2 loot scorer exists, ClickUp 1dfcuabd18f). Driver stage
+`logistics` (seeds 7001..7012, 8 episodes each, per class). Spec of today's rules, every one with its file:line, read from native at
+f178d8bf: scratchpad `logistics-spec.md` (the rules below are its sections 1 to 5).
+
+An EPISODE: 8 stops (the potion chain's length) of bodies and a chest, then the town. Each found stack is TAKE or LEAVE.
+- BASELINE = today's rules (the IAUS-looting-OFF state). The default logistics rows in order (`Followers.cpp:48-51`): `loot_arrows`
+  while under 10 arrows, `loot_potions` while under 2 restore-health potions, `loot_equipment` always. They are evaluated ONCE PER SOURCE
+  (body or chest), in order, each condition read when the row is reached, and a row that fires DRAINS its kind from that source
+  (`LootScan.cpp:1046-1090`): `LootAmmo` takes the whole `SwapUpAmmoTakeSet` best first (at or above his worst held round, not obsolete
+  on landing; NO BOW GATE, `Evaluator.cpp:880-885`: a follower who does not use arrows restocks with keep target 0, so nothing is
+  obsolete); `LootPotions` takes every drinkable at or above the floor, strongest first (the weakest tier is ignored:
+  `Upkeep.cpp ComputeWeakPotionFloor`, first magnitude over 1.25 x the minimum); `loot_equipment` takes one strict upgrade of his class per
+  call, drained up to 10 (`LootEquipment.cpp:483`: weapon, then ranged, then armor; an upgrade is equipped), and with no piece left a bow
+  user takes ammo strictly above the weakest tier he relies on (the `SwapUpAmmoFrom` upgrade road). No default row takes gold, gems,
+  jewelry, ingredients or junk. Carry: the WHOLE stack must fit, no reserve (`LootTake.cpp:40-46`). Town: an errand runs when its sell
+  rows pay at least 100 g (capped by the chest's gold), carry is over 80%, or a row needs something (potions under 2, arrows under 10 for
+  EVERY follower, `Economy.cpp:1034`; `ErrandTrip.cpp`); BUY first (the rows' needs, the dearest line first, potions capped at half the
+  purse: `TradeBridge.cpp PlanBuy`), then SELL what was planned before the buy (unkept gear, MISC with value / weight at least 20,
+  obsolete ammo: a bow user's below the cut at keep target 50, a follower with no bow every round below the cut at the arrows row's 10,
+  `Economy.cpp:955-993`; highest value first, while the chest's gold lasts: `MFO_Trade.psc RunTrade`). Prices: `Pricing.cpp` with the
+  Skyrim.esm GMSTs (fBarterMax 2.4, fBarterMin 1.4, fBarterBuyMin 1.05, fBarterSellMax 0.95, fMinBuyMult / fMaxSellMult 1.0; exe
+  1.6.1170). Fixed after the review of 7e883a9a (L1 the invented bow gate, L2 per-stack re-checks, L3 no ammo sale): 16cad7b7.
+- IAUS LOOTING REPLACES THE ROWS (marth 2026-11-12): when IAUS looting is ON the looting gambit rows are disabled; the IAUS arm never runs
+  on top of them. The baseline arm IS the IAUS-looting-OFF state. The oracle arm here decides every stack itself (its rollouts use the
+  baseline only as the model of the future); the town errand's buy list still comes from the rows' needs in both arms, which the IAUS
+  loot scorer will have to own when it exists (open with ClickUp 1dfcuabd18f).
+- ORACLE: per stack TAKE or LEAVE, per stop start a SELL RUN (to town and back, the stop's loot unseen), each option scored by K
+  rollouts of the baseline over futures resampled after the current stop, streams shared across options; a tie keeps the baseline's
+  choice. Any lootable stack may be taken (the surface an IAUS scorer will have).
+- VALUE (MODEL, open decision): the potion worth of the bag at the end, from the COMBAT world (`PotionWorth.h`, his class) + kGoldJ x
+  gold-equivalent (purse + the buy price of his worn gear and of his arrows up to the keep target 50), kGoldJ = J per gold where gold
+  buys the most J (the first potion of a kind / the buy price of its cheapest potion). Gold is valued LINEARLY.
+- AMMO'S WORTH (marth 2026-11-12, the ammo need): in the value both arms are scored by (and in the future IAUS loot arm), ammo is a NEED only
+  when the class uses ranged AND he carries a launcher of that kind (a bow for arrows, a crossbow for bolts): then up to the keep target at
+  the buy price. Otherwise ammo is worth its sale gold only. The baseline's TAKE rules stay native's (no bow gate).
+- FIXTURE: item values, damages, armor ratings and potion magnitudes are Skyrim.esm records read from the Vanilla extract; armor and
+  potion weights, gems, jewelry, ingredients, clutter, his carry weight (300), Speech (15), the vendor's gold (750) and the loot
+  shape of a stop are MODEL (no extract has them), each marked in `Logistics.h`.
+- LISTS: REFUSED, with the reason: the list extracts hold no containers, no gold / MISC / gems / ingredients, no vendor chests or gold
+  and no armor or potion weights. Building that into `tools/list_balance` is its own piece of work (open decision).
+- CHECKS (`LOGI-CHECKS`, CLI-CHECK): prices pinned (RestoreHealth01 at Speech 15: buy 38, sell 8), every sell unit under its buy unit,
+  the potion floor 50, carry never exceeded by either arm, the baseline takes only what its rows name, an episode is deterministic.
+
+Measurement after the review round (binary sha256 2fda9f42f717bccc, 8ba53367, `sim --logistics 8 --seeds 1,2,3,4,5,6 --classes beta1`, 48
+episodes per class, K = 8). The first measurement (7e883a9a, binary 658ca6396c5f76fb) had the invented bow gate and per-stack re-checks; its
+table is superseded by this one.
+
+| Class | Gap J_log (se) | of it potions (J) | of it gold-equivalent (g) | sell runs (48 episodes) |
+|---|---|---|---|---|
+| melee | +49.82 (1.19) | 2.4218 | 1220.0 | 34 |
+| ranged | +32.44 (0.88) | 1.1862 | 1078.1 | 21 |
+| mage | +26.95 (1.11) | 0.7628 | 1124.6 | 12 |
+| knight | +67.74 (1.50) | 2.7046 | 1234.5 | 29 |
+| warrior | +57.18 (1.30) | 3.3598 | 1235.2 | 31 |
+| mercenary | +72.15 (1.66) | 2.9083 | 1238.2 | 29 |
+| archer | +29.70 (0.80) | 1.3433 | 1078.1 | 21 |
+| thief | +13.09 (0.37) | 0.1851 | 1078.1 | 21 |
+| evoker | +29.76 (1.15) | 1.3022 | 1154.9 | 12 |
+| conjurer | +16.57 (0.64) | 0.7989 | 1154.9 | 12 |
+| healer | +12.61 (0.50) | 0.2512 | 1154.9 | 12 |
+| warlock | +9.50 (0.36) | 0.5850 | 1154.9 | 12 |
+| melee-off | +69.48 (1.54) | 2.5735 | 1234.5 | 29 |
+| ranged-off | +24.41 (0.66) | 1.0303 | 1078.1 | 21 |
+| mage-off | +25.58 (1.05) | 0.7029 | 1124.6 | 12 |
+
+Read: today's rules leave about 1080 to 1240 gold of value per 8-stop dungeon on the floor, and 0.2 to 3.4 J of potions; the largest
+divergences are (c), behaviours today's rules do not have: gold, gems and gear gathered to sell (no default row takes them) and
+mid-dungeon sell runs. How much of that the IAUS loot scorer should chase depends on the VALUE function, which is marth's call.
+
+## 35. Batch 3: the archer's posture edge and the buff's foe term (marth 11-12: "Sim decides the edge") (2026-11-12)
+
+Branch `feat/oracle-gap` after the review round of 34. Opus author. The field (deck 11-12, Tuxbornrc1, Adelinda 00015D09, diagnosis
+`diag-t2-mage-buffs.md` 1 and 3): the archer spent 59% of her combat time in melee posture with 85 to 147 arrows; every melee swap came
+at attack range x0.19 to 0.25, inside the 540-unit crossover of the class-blind posture curves Logi(-8 / 8, 0.45) on distance / 1200
+(`native/iaus/Catalogue.cpp`, the `equip` family). The mage buffed in a loop: the buff utility has no foe term, and the lab held a cast
+buff up for at least 30 s with only its armor / resist effect modelled (`World.h`).
+
+### 35.1 What the lab lacked, checked one by one (FACT / MODEL as in 31.2)
+
+| Item | What the lab did | What is built (switch; OFF = the lab before, byte-identical) | Source | Level |
+|---|---|---|---|---|
+| Marksman vs melee skill | skills per class weight (row 4, PROVEN), but EVERY shot was multiplied by the ModAttackDamage chain of the MELEE weapon's skill (`Load.h` `atkMult`, applied in `WeaponDamage`): an archer's bow carried his One-handed perks | `--ranged-perks`: a shot carries the chain of the BOW's skill (`ActorSpec::rangedAtkMult`, a follower build) | a ModAttackDamage entry is conditioned on the weapon it fires for (Overdraw on a bow, Armsman on a one-hander; ENGINE_NOTES perk entry class 2, CalculateWeaponDamage); the lab's own perk table is keyed by weapon skill (`Load.h` pAttack 6 / 7 / 8) | FACT (the chain), MODEL (the unconditioned-entry rule of row 10 stands) |
+| The melee weapon he carries | the class kit's one-hander from the level ladder (`Load.h BuildFollower`) | nothing: the field archer's only melee weapon was a relic Honed Falmer Sword, damage 12 (`MFO.log` 22:07:38), not weaker than the ladder's; no source says an archer carries less | field log | unchanged |
+| Bow draw interrupted by a foe in melee | `bowDraw` (fBowDrawTime, `Data.h`) sets the draw; only a STAGGER (power attack, bash, poise) or a control cancels it (`World.h Stagger`); a plain hit does not | `--draw-spoil P`: a melee hit landing mid-draw spoils it with chance P | none: whether a plain hit interrupts an NPC's draw is not decoded (the vanilla fStagger* settings are extracted, row 20, not used) | MODEL; sensitivity only, never in the search |
+| Point-blank bow | hold U(0.25, 1.5) x 0.5 at every distance | `--point-blank`: under fCombatRangedAttackHoldTimeMinDistance (256) the hold is fCombatRangedAttackHoldTimeAbsoluteMin (0.1) | GMST names and values (gmst_defaults.json, 1.6.1170); the blend is not decoded | GMST + MODEL |
+| Foes closing on an archer | foes target by distance, last attacker x1.8, retarget 3 to 7 s, and close on their target at run speed (row 22) | nothing: the field logs hold no distance of the foes on him (`[sense]` gives foe count and hpLoss only), so no closing RATE can be measured from this session; the lab's own is printed by `--posture-report` (a foe targeting him within 256 / 540 units) for the next field comparison | none | open (a passive field line is the road) |
+| Buff up-time | max(30 s, record duration) | `--buff-dur real`: the record's duration (none in the record: 30 s, MODEL) | SPEL / MGEF duration | DATA |
+| Buff foe term | none: CastBuff scores early / in-melee / affordable / reserve only | `Cons::BoostBuffThreat` (native, APPENDED): x = min(foes in the fight, 4) / 4, a Boost (outside the compensated product), shipped FLAT 1.0 (Piece (0,1)-(1,1)), so the shipped catalogue is bit-identical; py0 (no foe) and py1 (four or more) are the searched knobs | design (marth "Sim decides the edge") | the knob; its value is the search's |
+
+A class posture override needed no new capability: `ClassCurves::Row::curves` already overrides any (family, consideration) curve for
+one class, the posture curves included (`--curve archer:8.35.b=0.15` = `equip.ranged_dist` midpoint). No native change for it.
+
+`--posture-report` (diagnostic): the share of his up-time with the bow / a melee weapon drawn, the time a foe targeting HIM is within 256
+and 540 units, draws spoiled per fight, shots under 256 units (metrics `pr.*`, a POSTURE section). Built-in, shipped table, seed 1: the
+archer holds a melee weapon 20 to 35% of his up-time, a foe is on him inside 540 units only 8 to 20%: once a melee weapon is drawn he walks
+in to swing (melee mode closes on his target), so the posture's own input (distance to his target) keeps it drawn.
+
+Identity: with every switch off, `--classes beta1 --seed 1..3 --class-oracle 2 --baseline` files are byte-identical between the binary
+before batch 3 (8ba53367) and after (6f85e22a), apart from the decision-timing column `dec.us` / `dec.max`; the SEED lines of
+`--seeds 1,2,3` are identical. The native `BoostBuffThreat` is inside that proof (the sim compiles the native catalogue). Harness 0 failed.
+
+Effect of each switch alone (ranged, archer, ranged-off; built-in; shipped table; 32 seeds; paired d of J, se): `--ranged-perks` +3.86
+(0.34); `--point-blank` +0.15 (0.16); `--draw-spoil 0.5` +0.01 (0.23); `--ranged-perks --point-blank` +4.17 (0.38).
+
+### 35.2 The posture edge as one knob
+
+A single midpoint (`equip.ranged_dist.b` or `melee_dist.b`) moves the crossover only half way, and the driver's coordinate descent moves
+one knob at a time, so the earlier searches could not reach a far edge (full-r2: ranged / archer / ranged-off posture knobs, nothing beat
+noise). `equip.crossover` sets BOTH midpoints (sim alias `<class>:equip.crossover=<v>`, proven equal to the two specs; written into native
+as the two `SetCurveParam` lines by `cpp_line`), tried at x0.25 / 0.35 / 0.5 / 0.75 / 1.33 of 0.45 (135 / 189 / 270 / 405 / 718 units).
+For reference the engine's own combat inventory equips melee inside fCombatInventoryMeleeEquipRange = 256 units (GMST; not used as a value).
+
+### 35.3 The search (run `b3-posture`, 2026-11-13)
+
+`tune_driver.py --bin sim-b3x (a27eaa55) --sim-flags "--ranged-perks --point-blank --buff-dur real" --knobs '^(equip\.|cast_buff\.threat)'
+--classes <15 cells, the ranged line first> --stages prep,classes,joint,edge,floor,summary --jobs 4`: the normal RULE (33.3): 64 train
+seeds, 64 holdout, many-seed gates at three configs (a T1 value on all 15 cells), fresh-seed cross-world over built-in / LoreRim / Tuxborn
+/ Vanilla, the Knight floor. Every list's potion worth re-measured with the flags (prep). `--draw-spoil` is not in it (MODEL, 35.1).
+
+ACCEPTED (every line of RULE):
+
+| Value | train d (se) | holdout | cross-world mean (built-in / LoreRim / Tuxborn / Vanilla) | open decision |
+|---|---|---|---|---|
+| mage `equip.ranged_dist.b` 0.45 -> 0.27 | +0.41 (0.11) | +0.14 (0.07) | +0.20 (+0.23 / +0.41 / +0.12 / +0.02) | card read: small changes (melee 11.4 -> 10.1%, taken/s 5.2 -> 4.7); the same value full-r2 accepted without the flags |
+| evoker `equip.crossover` 0.45 -> 0.1125 (135 u) | +0.88 (0.17) | +0.59 (0.17) | +1.10 (+0.55 / +2.39 / +0.55 / +0.90) | card read: his flee share 1.5 -> 14.1% of actions, distance to the player 426 -> 1089, melee 11.2 -> 6.6%: marth decides whether "stays at the furthest range his spell works at" covers it |
+| evoker `equip.trade.w` 1 -> 2 | +0.23 (0.04) | +0.14 (0.02) | +0.22 | weight at the edge of the range tried (runbook 7); the edge stage found nothing wider better |
+| healer `equip.ranged_dist.w` 1 -> 0.5 | +0.18 (0.06) | +0.11 (0.07) | +0.12 | weight at the edge (runbook 7); card read: contact 39 -> 35% |
+
+Joint gate (the four values against the shipped table, 15 cells, 128 seeds, three configs): PASS, pooled +0.11 (0.01) g3, +0.08 off, +0.08
+shipped. Knight floor: unchanged by the values (no Knight-line value); Vanilla stays under 60% (knight 58.6, great-knight 58.6, ebony-warrior
+59.1 as shipped), exactly as in full-r2 without the flags (58.5 / 58.6 / 59.2): a standing open decision, not batch 3's.
+
+THE ARCHER LINE: no posture value passes.
+- ranged `equip.crossover` 0.1575 (189 u): train +0.66 (0.18), holdout +0.80 (0.23), every many-seed gate passes (ranged +0.73, archer +0.06,
+  conjurer +0.13), but cross-world: LoreRim -0.78 (0.21).
+- archer `equip.crossover` 0.1125 (135 u): train +0.58 (0.15), holdout +0.36 (0.12), gates pass, cross-world: built-in +0.51, LoreRim -0.59
+  (0.11), Tuxborn -0.08 (0.08), Vanilla -0.10 (0.06), mean -0.06.
+- ranged-off: nothing beats noise. thief `equip.ranged_dist.a` 8 -> 4: holdout not confirmed.
+- Why LoreRim says no (seed 4001, archer, shipped vs 0.1125, `--posture-report`): with the bow kept to 135 units his damage per second FALLS
+  (balanced 20.0 -> 18.0, natural 16.4 -> 14.3): on that list his melee near a foe out-damages his bow. The built-in world says the opposite.
+  A value best on one world only is never accepted (RULE), and here the worlds disagree in sign.
+
+THE BUFF FOE TERM: `cast_buff.threat.y0` / `.y1` (0.7, 0.85) beat noise for NO class (largest: mage y1 -0.19 (0.18), evoker +0.03 (0.03)).
+The lab cannot see the field's loop: its fights always have foes (x >= 0.25), the field's buffing ran with NO foe (221 of 318 buff picks,
+`own combat OFF foes 0`), and the lab models a buff's armor / resist only. The knob stays shipped flat; its value waits for a world with
+foe-less combat time (open decision).
+
+### 35.4 Sensitivity: the posture edge rests on an undecoded engine fact
+
+Archer, built-in, 64 seeds, d of J against 0.45 (shipped), flags on, `--draw-spoil P` (a melee hit spoils a draw with chance P):
+
+| P | 0.3375 | 0.225 | 0.1575 | 0.1125 |
+|---|---|---|---|---|
+| 0 | -0.00 (0.12) | +0.14 (0.13) | +0.34 (0.14) | +0.56 (0.15) |
+| 0.5 | -0.07 (0.11) | +0.28 (0.10) | +0.30 (0.12) | +0.50 (0.12) |
+| 1 | +0.12 (0.12) | +0.24 (0.14) | +0.09 (0.16) | +0.04 (0.16) |
+
+If every plain hit spoiled a draw, the built-in edge would sit near 270 units, not 135. Whether a plain hit interrupts an NPC's bow draw is
+the fact that decides it (a disassembly of the hit reaction, or a passive field line: draws begun / released / interrupted per archer).
+
+### 35.5 The ranged playstyle on the result (Playstyles.h: ranged contact% <= 25, archer <= 20)
+
+Built-in, flags on, seeds 1 to 6, the equal-weight mean over the brackets: as shipped (the result: no archer-line value passed) ranged
+contact 29.9% (FAILS <= 25), archer 29.6% (FAILS <= 20), ranged-off 23.0% (passes); bow drawn 68 / 66 / 74% of up-time. With the rejected
+crossovers (ranged 0.1575, archer 0.1125) contact would be 16.2% for both (bow 91 / 93%). The band and the cross-world rule disagree: an
+open decision for marth.
+
+### 35.6 Findings outside the brief, fixed or open
+
+- FIXED (f5fc0ab4): the driver's class-card read (`play_changes_natural`) read a `--baseline` from a `--seeds` run, which writes none, so
+  every run's card read was EMPTY (full-r2's nine classes included). It reads one seed at 48 fights per cell now. full-r2's card-read open
+  decisions were raised on no data: re-run its `classes` stage on the same `--out` with this driver to fill them (cached sweeps replay).
+- OPEN: the edge stage widens a multiplicative knob only to x0.35 / x0.25 of the shared value. For `equip.crossover`, tried down to x0.25,
+  it printed "EDGE IS THE VALID LIMIT" for evoker 0.1125 although the valid limit is 0.02: the edge below 135 units was never tried.
+- OPEN: the field closing rate (35.1).
+
+### 35.7 marth's rulings of 11-12, applied (open-questions-for-marth.md, "Answered 2026-11-12 (batch 3)")
+
+- Archer line, "Playstyle band": the band wins over the cross-world rule. Written (ab4ebe0f, `ClassCurves.cpp SeedSearchedValues`):
+  ranged `equip.crossover` 0.1575, archer 0.1125. Per-world J of these values is in 35.3 (ranged: train +0.66, LoreRim -0.78; archer:
+  built-in +0.51, LoreRim -0.59, Tuxborn -0.08, Vanilla -0.10) and, with the part C models, in 35.8.
+- Evoker, "Yes, apply": `equip.crossover` 0.1125 and `equip.trade.w` 2 written.
+- Healer `ranged_dist.w`, "Widen search first": the edge stage judged x0.35 / x0.25 with the normal gates; none beats 0.5 (train +0.03,
+  se 0.04), so 0.5 (accepted through every gate) is written.
+- Mage 0.27: not written; it lands with full-r2's block.
+- Edge stage, "only if small": fixed (a multiplicative knob tried to x0.25 now widens on from its outermost value, x0.7 / x0.5 down, x1.4 /
+  x2 up). Re-run on b3-posture: evoker crossover widened to 0.079 / 0.056, none beats 0.1125 (train -0.07, se 0.07).
+- The write is proven: the edited tree with no `--curve` prints the same SEED lines as the unedited tree with the five specs (ranged,
+  archer, evoker, healer, beta1). The baseline was regenerated (every cell moved: ranged is the T1 companion) and three CLI pins re-pinned.
+
+### 35.8 Part C (marth 11-12): foe melee styles, enclosed vs open space, ranged perks, the perk weight, the named sanity cells
+
+**`--ranged-perks` is a BUG FIX and the default** (marth: "If ranged perks get applied. In the case of adelinda or auri ranged wins for
+sure."). `--ranged-perks off` is kept only for the byte-identical proof. Baseline regenerated, the three pins re-pinned (thief stealth-off
+42.05 -> 69.12: his bow carried his dagger's chain).
+
+Models (each behind its switch; every switch off + `--ranged-perks off`: beta1 seeds 1-3 `--class-oracle 2` baselines byte-identical to
+ab4ebe0f):
+- `--foe-styles` (FACT: the record value; MODEL: the mapping): after a blow a melee foe backpedals with chance = its combat style's
+  close-range Fallback Mult (CSTY CSCR[1], read from the world extract into `Style::fallback`), for U(0.5, 1.5) s at the back-pedal speed,
+  then re-engages; an aggressive style (low fallback, high offensive mult) presses on (its think pause is already / offensive mult). The
+  follower's own backpedal while shooting already existed (bow drawn, a foe under fCombatRangedMinimumRange 256, his package's fallback).
+- `--space R` (MODEL): a fight whose encounter cell is an INTERIOR is a room: a disc of radius R around the start centroid; whoever starts
+  outside starts at its edge (the line of fire is at most 2R) and every move stops at the wall (backpedal, kiting, flight). The mix is DATA:
+  the share of interior encounter cells in each extract (LoreRim 664 / 1200 = 55%, Tuxborn 721 / 1200 = 60%, Vanilla 708 / 1200 = 59%;
+  the built-in natural fights are exterior, its scenarios set their own). R has no source: a sensitivity axis (500 / 600 / 900);
+  `--space-force enclosed|open` puts every fight in one type.
+- `Cons::BoostPosturePerks` (native, APPENDED, flat, bit-identical) on `Snapshot::PerkRead`: the DESIGN SHAPE for the follow-up (ClickUp
+  1dfcuabd2pk): a general reader of what his perks multiply, keyed by entry point and effect, never by perk name, read "like potions":
+  `weaponDamage[OneHand | TwoHand | Bow | Crossbow]` (ModAttackDamage) now; spell cost / magnitude per school (ModSpellCost /
+  ModSpellMagnitude) and armor rating per type are the next fields, each read once and consumed by any family. x = this posture's share of
+  his weapon-damage multipliers. The GAME does not fill PerkRead yet (`read = false`: a main-thread entry-point evaluation is its own
+  brief), so the consideration is not applicable in game; the sim fills it from its perk chain.
+
+The search (run `b3c`: `--sim-flags "--point-blank --buff-dur real --foe-styles --space 600"`, ranged perks on, knobs `equip.crossover` +
+`equip.perks.y0/y1/y2`, all 15 cells, the normal RULE, 16 cores): NO new value is accepted. The written crossovers stay the best on train
+(ranged 0.1125 +0.00 against the written 0.1575, 0.225 -0.21, 0.3375 -0.50; archer and evoker: every other value is worse). The perk weight:
+no class beats noise (largest ranged y0 0.7: +0.11, se 0.06; thief +0.07, se 0.04). Warlock crossover 0.1575: train +1.33 (se 0.36),
+holdout not confirmed. Knight floor on Vanilla 59.2 as shipped (standing open decision).
+
+J of the written crossover minus the catalogue 0.45, per world and space type (64 fresh seeds 4001.., part C models, R 600):
+
+    builtin  open      ranged +0.37 (0.26) | archer +0.33 (0.13) | evoker +0.62 (0.24)
+    builtin  enclosed  ranged +1.55 (0.46) | archer +0.97 (0.19) | evoker +0.06 (0.25)
+    LoreRim  open      ranged -0.35 (0.22) | archer -0.26 (0.14) | evoker +1.30 (0.24)
+    LoreRim  enclosed  ranged -0.72 (0.34) | archer -0.89 (0.24) | evoker +1.08 (0.21)
+    Tuxborn  open      ranged -0.42 (0.30) | archer -0.11 (0.11) | evoker +0.17 (0.20)
+    Tuxborn  enclosed  ranged -0.06 (0.39) | archer +0.13 (0.16) | evoker +0.44 (0.23)
+    Vanilla  open      ranged -0.19 (0.21) | archer -0.24 (0.14) | evoker +0.29 (0.14)
+    Vanilla  enclosed  ranged +0.09 (0.17) | archer -0.04 (0.12) | evoker +0.63 (0.15)
+
+Contact% (bow drawn %) by crossover, built-in, seeds 1-6 (band: ranged <= 25, archer <= 20):
+
+    ranged  data      R600  0.1125: 16.3 (93) | 0.1575: 16.7 (90) | 0.225: 19.8 (83) | 0.3375: 22.6 (76)
+    ranged  open      R600  0.1125: 16.3 (93) | 0.1575: 16.7 (90) | 0.225: 19.8 (83) | 0.3375: 22.6 (76)
+    ranged  enclosed  R500  0.1125: 34.5 (94) | 0.1575: 35.5 (88) | 0.225: 41.1 (69) | 0.3375: 46.2 (59)
+    ranged  enclosed  R600  0.1125: 30.4 (94) | 0.1575: 31.6 (89) | 0.225: 36.1 (71) | 0.3375: 40.5 (63)
+    ranged  enclosed  R900  0.1125: 20.1 (94) | 0.1575: 21.2 (90) | 0.225: 24.3 (81) | 0.3375: 28.2 (74)
+    archer  data      R600  0.1125: 16.5 (92) | 0.1575: 17.2 (89) | 0.225: 18.4 (84) | 0.3375: 21.3 (77)
+    archer  open      R600  0.1125: 16.5 (92) | 0.1575: 17.2 (89) | 0.225: 18.4 (84) | 0.3375: 21.3 (77)
+    archer  enclosed  R500  0.1125: 34.6 (94) | 0.1575: 35.6 (88) | 0.225: 39.8 (70) | 0.3375: 44.1 (61)
+    archer  enclosed  R600  0.1125: 30.3 (94) | 0.1575: 31.2 (89) | 0.225: 35.4 (72) | 0.3375: 39.2 (65)
+    archer  enclosed  R900  0.1125: 20.2 (94) | 0.1575: 21.3 (91) | 0.225: 23.3 (82) | 0.3375: 27.3 (75)
+
+Read: in the OPEN the written values meet the band (ranged 16.7, archer 16.5); in a ROOM no crossover meets it (the lowest tried, 0.1125,
+gives 30 to 35% at R 500 / 600, 20% at R 900): contact there is the room, not the posture, so the band does not ask for another
+crossover and the written values stand. A band for enclosed fights is marth's call (open decision).
+
+**The named sanity cells** (Adelinda = Skyrim.esm `DBInitiate2`, the base of the field ref 00015D09, named "Adelinda" by Tuxborn's NPC merge;
+Auri = `018Auri`; built from each world's record: skills, health, race, gear, with the follower perk model at their own skills; Adelinda's
+record carries no bow, so the Ranged class kit's bow is hers; Auri is not in the Vanilla install). Per-posture J, 48 seeds, ranged cell,
+bow-leaning (crossover 0.02) against melee-leaning (0.9) and the written 0.1575:
+
+    Tuxborn  DBInitiate2  open     False | 76.56 | +2.48 (0.66) | +0.72 (0.29)
+    Tuxborn  DBInitiate2  open     True  | 77.12 | +2.11 (0.66) | +0.00 (0.26)
+    Tuxborn  DBInitiate2  enclosed False | 77.19 | +3.52 (0.88) | +0.47 (0.36)
+    Tuxborn  DBInitiate2  enclosed True  | 78.21 | +2.89 (0.71) | +0.27 (0.26)
+    Tuxborn  018Auri      open     False | 76.86 | +1.91 (0.62) | -0.20 (0.25)
+    Tuxborn  018Auri      open     True  | 77.33 | +1.27 (0.70) | -0.05 (0.20)
+    Tuxborn  018Auri      enclosed False | 76.37 | +2.27 (0.74) | +0.42 (0.30)
+    Tuxborn  018Auri      enclosed True  | 77.69 | +1.86 (0.67) | -0.12 (0.24)
+    LoreRim  DBInitiate2  open     False | 59.75 | +5.91 (0.99) | +1.40 (0.50)
+    LoreRim  DBInitiate2  open     True  | 60.85 | +5.68 (1.05) | +0.79 (0.35)
+    LoreRim  DBInitiate2  enclosed False | 59.40 | +8.12 (0.96) | +0.52 (0.39)
+    LoreRim  DBInitiate2  enclosed True  | 59.54 | +8.91 (1.05) | +0.53 (0.33)
+    LoreRim  018Auri      open     False | 60.10 | +2.60 (0.70) | +0.33 (0.19)
+    LoreRim  018Auri      open     True  | 61.02 | +2.39 (0.62) | +0.19 (0.25)
+    LoreRim  018Auri      enclosed False | 58.96 | +3.50 (0.73) | +0.36 (0.36)
+    LoreRim  018Auri      enclosed True  | 59.15 | +4.60 (0.81) | +0.44 (0.23)
+    Vanilla  DBInitiate2  open     False | 87.22 | +2.76 (0.56) | +0.48 (0.23)
+    Vanilla  DBInitiate2  open     True  | 87.92 | +2.22 (0.51) | +0.22 (0.13)
+    Vanilla  DBInitiate2  enclosed False | 87.10 | +3.28 (0.80) | +1.16 (0.48)
+    Vanilla  DBInitiate2  enclosed True  | 87.96 | +2.25 (0.63) | +0.43 (0.29)
+
+**The sim does NOT show ranged winning on J for either of them, in any world, space type or foe style.** Treated as a defect, checked
+road by road:
+- damage chain: correct after the fix. Their OWN damage is the bow's: Auri, Tuxborn, 6 seeds: bow-leaning dps 13.9 against melee-leaning
+  12.1 (arrows 53 to 75 per hit vs the dagger's 11 to 12 per swing); LoreRim: Adelinda melee-leaning 30.9 vs 11.6 (her record's sword is
+  damage 60, the kit bow far weaker), Auri 17.2 vs 13.5 (Requiem's bone bow at speed 0.44).
+- draw timing: the lab's shot is FASTER than the engine's (fBowDrawTime / speed x 0.6 + half the hold): not the cause.
+- point-blank: `--point-blank` moves J by +0.15 (0.16) on the ranged cells: not the cause.
+- foe closing / J: the melee-leaning gain is the PLAYER's survival. With the bow she stays back and the foes, choosing by distance (row 22),
+  go for the player: Auri Tuxborn player damage taken 19.2 / s bow-leaning vs 16.3 melee-leaning; Utility charges a dead player 50 + 15 + ...
+  and the lab's player loses 20 to 37% of natural fights. A melee-leaning follower draws the foes off him.
+So the defect, if it is one, is not in the archer's roads: it is how the lab's player fares and how foes pick between him and a follower
+(row 22, MODEL, no engine source for the weights). Not fixed here; open decision (a field measure of who the foes target, or the player
+model).
+
+### 35.9 full-r2's class-card read re-run
+
+`tune_driver.py --bin class-tuning-bin/sim-r2 --out scratchpad/tune/full-r3 --stages classes,summary --knobs '^(?!equip\.crossover$)'`
+(full-r2's cache, summary and potion tables copied in; the crossover knob excluded so its knob set is full-r2's): every cached sweep
+replays and the card read (`play_changes_natural`) is measured for every class with a value. Summary: `scratchpad/tune/full-r3/summary.md`.

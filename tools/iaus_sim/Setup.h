@@ -76,6 +76,11 @@ namespace Sim {
     // "<class slug>:<family>.<cons>.<a|b|floor|zeroAbove|zeroBelow>=<v>" or "<class slug>:scalar.<drinkHealthLine|touchSpentSec>=<v>".
     // <family> / <cons> are an index or a Name() (an index when several considerations share a display name). a_shared = the curve an
     // override starts from. False with a_err set on any bad token.
+    // The potion-worth table (Oracle.h Utility): class cell -> worth rows. Built once before any fight (sim.cpp: PotionWorth.h for the
+    // built-in world, or --potion-worth <file> for a list), read-only afterwards. g_forcePot: --potion-calib sets the subject's stock of one kind.
+    inline std::map<std::string, PotWorth> g_potWorth;
+    inline int g_forcePot[3] = { -1, -1, -1 };
+    [[nodiscard]] inline const PotWorth* PotWorthFor(const std::string& cls) { const auto i = g_potWorth.find(cls); return i == g_potWorth.end() ? nullptr : &i->second; }
     bool ApplyCurveSpecs(const std::vector<std::string>& a_specs, const Tuning& a_shared, std::string& a_err);
     void PrintClassTable(const std::vector<SimClass>& v);
 
@@ -165,6 +170,21 @@ namespace Sim {
         std::vector<std::string> taught;   // --teach: the subject only, a casting class only
         if (F.ctl.empty() && !g_teach.empty() && sc.gate.spellsOnClass) { if (ensure) taught = *ensure; for (const std::string& t : g_teach) taught.push_back(t); ensure = &taught; }
         auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R, true, ensure));
+        if (F.ctl.empty() && !g_namedFollower.empty()) {   // batch 3 sanity cell: the subject from a named record (the spec compiled nearest his level)
+            const auto it = D.named.find(g_namedFollower);
+            if (it == D.named.end() || it->second.empty()) { std::fprintf(stderr, "--named-follower %s: not in this world's sim.json (compile_world.py with extract_world.py --named)\n", g_namedFollower.c_str()); std::exit(2); }
+            int best = -1, bd = 1 << 30; for (const auto& [lv, si] : it->second) if (si >= 0 && std::abs(lv - level) < bd) { bd = std::abs(lv - level); best = si; }
+            const ActorSpec& ns = D.specs[static_cast<std::size_t>(best)]; ActorSpec& a = fb->spec; Kit& k = fb->book.kit;
+            a.race = ns.race; a.hp = ns.hp; a.mp = ns.mp; a.sp = ns.sp; a.hpR = ns.hpR; a.mpR = ns.mpR; a.spR = ns.spR; a.skill = ns.skill; a.run = ns.run; a.mass = ns.mass;
+            if (ns.melee.Has()) { a.melee = ns.melee; k.melee = true; }
+            if (ns.ranged.Has()) { a.ranged = ns.ranged; if (ns.ammoDmg > 0.0f) a.ammoDmg = ns.ammoDmg; k.bow = ns.ranged.anim != 9; k.crossbow = ns.ranged.anim == 9; if (k.arrows + k.bolts <= 0) k.arrows = R.I(20, 80); }
+            if (ns.ar > 0.0f) { a.ar = ns.ar; a.pieces = ns.pieces; }
+            a.shield = a.shield && a.melee.Has() && !a.melee.TwoH();
+            // his perks: the follower perk model (row 11) at HIS skills, per weapon (the record's own PRKR entries are condition-gated: row 10)
+            a.atkMult = a.melee.Has() ? PerkBest(D.pAttack, std::to_string(a.melee.skill), a.Skill(a.melee.skill)) : 1.0f;
+            a.powMult = a.melee.Has() ? PerkBest(D.pPower, std::to_string(a.melee.skill), a.Skill(a.melee.skill)) : 1.0f;
+            a.rangedAtkMult = a.ranged.Has() ? PerkBest(D.pAttack, std::to_string(a.ranged.skill), a.Skill(a.ranged.skill)) : -1.0f;
+        }
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
         Body& b = F.Add(Role::Follower, spec, x, y); b.ctl = static_cast<int>(F.ctl.size()); b.arrows = fb->book.kit.arrows + fb->book.kit.bolts;
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }
@@ -187,6 +207,7 @@ namespace Sim {
         c.window = 1.5 * (0.88 + 0.24 * R.U(0.0f, 1.0f));   // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick
         c.drawn = sc.fam == Cls::Ranged && fb->spec.ranged.Has() ? PostureKind::Bow : sc.fam == Cls::Mage ? PostureKind::None : fb->spec.melee.Has() ? PostureKind::Melee : PostureKind::None;
         c.potH = fb->potH; c.potM = fb->potM; c.potS = fb->potS; for (int i = 0; i < 3; ++i) c.potDur[i] = fb->potDur[i];
+        c.worth = PotWorthFor(sc.name);
         F.ctl.push_back(std::move(c));
     }
 
@@ -235,7 +256,8 @@ namespace Sim {
         F.b[0].c.hp *= fs.playerHp; F.b[0].potions = fs.playerPotions;
         { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH;
           if (fs.subjectPotionsM >= 0) F.ctl[0].book.kit.potionsMagicka = fs.subjectPotionsM; if (fs.subjectPotionsS >= 0) F.ctl[0].book.kit.potionsStamina = fs.subjectPotionsS; if (fs.subjectArrows >= 0 && s0.arrows > 0) s0.arrows = fs.subjectArrows; }
-        for (Ctl& c : F.ctl) c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
+        { Kit& k0 = F.ctl[0].book.kit; if (g_forcePot[0] >= 0) k0.potionsHealth = g_forcePot[0]; if (g_forcePot[1] >= 0) k0.potionsMagicka = g_forcePot[1]; if (g_forcePot[2] >= 0) k0.potionsStamina = g_forcePot[2]; }   // --potion-calib
+        for (Ctl& c : F.ctl) { c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina; c.pot0[0] = c.book.kit.potionsHealth; c.pot0[1] = c.book.kit.potionsMagicka; c.pot0[2] = c.book.kit.potionsStamina; }
         F.interior = fs.interior;
         if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)
             Rng S; S.g.seed(fs.seed * 0x9E3779B97F4A7C15ULL + 77u);

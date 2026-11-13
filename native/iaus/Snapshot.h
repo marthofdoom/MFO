@@ -88,6 +88,18 @@ namespace MFO::Iaus {
         float precisionWeaponLength = 0.0f;
     };
 
+    // WHAT HIS PERKS DO, read "like potions" by EFFECT (batch 3 part C, marth 11-12: "Perks are just one more thing that needs a weight"; the
+    // follow-up ClickUp 1dfcuabd2pk extends it to spell choice and armor / weapon pick). A small GENERAL reader keyed by entry point and effect,
+    // never by perk name: each value is the multiplier his perks give that effect (1.0 = no perk). Room is left for the spell entries
+    // (ModSpellCost / ModSpellMagnitude per school) and armor rating per type; only weapon damage is defined now.
+    // NOT FILLED IN THE GAME YET (read = false): evaluating ModAttackDamage per weapon kind on the actor is a main-thread engine read of its
+    // own brief, so every perk consideration is NOT APPLICABLE in game. The simulator fills it from its perk chain (tools/iaus_sim/Policy.h).
+    enum class PerkWeapon : std::uint8_t { OneHand = 0, TwoHand, Bow, Crossbow, kCount };
+    struct PerkRead {
+        bool read = false;
+        std::array<float, static_cast<std::size_t>(PerkWeapon::kCount)> weaponDamage{ 1.0f, 1.0f, 1.0f, 1.0f };   // entry point ModAttackDamage, by weapon kind
+    };
+
     struct Book {
         std::vector<SpellEntry> entries;   // spells first, then scrolls, then staves
         Kit                     kit;
@@ -202,6 +214,7 @@ namespace MFO::Iaus {
         Book book;
 
         PostureKind drawn = PostureKind::None;   // the weapon category in his hands now
+        PerkRead perks;                          // batch 3 part C: what his perks multiply, by effect (not filled in game yet: read = false)
         bool  meleeInRightHand = false;   // Taunt::MeleeInRightHand (the act.taunt offer gate)
         bool  meleeOnly = false;          // Actuation::MeleeOnly (the reach gate's subject)
         bool  handBusyLeft = false;       // a heal stands on that hand (design 1.3: never preempted)

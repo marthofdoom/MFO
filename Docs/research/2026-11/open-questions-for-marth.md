@@ -313,3 +313,13 @@ Q-I-8. Block in IAUS. DEFAULT taken: a Block candidate exists only for a class w
 - **Sight wins + buff, then bow: ANSWERED (11-12).** (1) When every foe reads Occluded the offense approach outranks the H4 spell-range close for casters and archers alike ("for sure, and not having a bow doesn't matter if you don't have line of sight"); the disengage drive still outranks it. (2) A fire-and-forget self-buff claim lets go of the hand once its spell fires so the weapon can be equipped at once; concentration self-buffs are unchanged (a sim-backed IAUS cost for a weapon hand lost while channelling comes separately). Branch fix/sight-wins-buff-release.
 
 - **Ruling 2026-11-12 (marth, Deck field test): "Mage line wears clothing."** Mage-line classes (Mage, Wizard, Evoker, Conjurer, Necromancer, Sorcerer?, Healer, Priest, Warlock, Arch-Mage...; the class table's mage line) wear clothing, never light or heavy armor. Found when a Mage-class follower wore heavy pieces and the armor target read "class LIGHT".
+
+
+## Answered 2026-11-12 (batch 3, the archer posture edge; relayed by the coordinator, interactive; iaus-sim-v2.md section 35)
+- **Archer line: "Playstyle band".** The ranged contact band (<= 25%, archer <= 20%) wins over the cross-world rule: the crossovers the search found and cross-world rejected (ranged 0.1575, archer 0.1125) are written to the class rows (ab4ebe0f).
+- **Evoker: "Yes, apply".** Both values written: `equip.crossover` 0.1125 and `equip.trade.w` 2 (the flee share 1.5 -> 14% and the edge weight are accepted).
+- **Healer `ranged_dist.w`: "Widen search first".** Widen past 0.5, judge with the normal gates, apply only if accepted. Done: x0.35 / x0.25 judged, none beats 0.5 (train +0.03, se 0.04); 0.5 (accepted through every gate) written.
+- **Mage 0.27: do NOT write it now** (coordinator's wording of the ruling): it lands with full-r2's block (that run is still going).
+- **Edge stage: fix it so it can widen past already-tried values only if small; else backlog.** Small: fixed (x0.7 / x0.5 down, x1.4 / x2 up from the outermost tried value).
+- **Part C (marth 11-12): "The sim clearly isn't modeling backpedaling melee vs aggressive, and doesn't seem to have enclosed vs wide open spaces."** Foe melee styles from their combat style records and a per-fight space type, each behind a switch; the archer-line and evoker search re-run with them; the playstyle-band ruling stands.
+- **Ranged perks (marth 11-12): "If ranged perks get applied. In the case of adelinda or auri ranged wins for sure."** `--ranged-perks` is a bug fix and the default; a sanity cell of perked archers built from the real Adelinda and Auri records must show ranged beating melee, else it is a sim defect.

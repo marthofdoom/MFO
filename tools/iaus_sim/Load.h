@@ -64,6 +64,7 @@ namespace Sim {
             a.atkMult = static_cast<float>(s["atkMult"].num(1)); a.powMult = static_cast<float>(s["powMult"].num(1));
             b.specs.push_back(std::move(a));
         }
+        for (const auto& kv : root["named"].o) for (const auto& lv : kv.second.o) b.named[kv.first].push_back({ std::atoi(lv.first.c_str()), static_cast<int>(lv.second.num(-1)) });
         for (const J& bk : root["buckets"].a) b.buckets.push_back(static_cast<int>(bk.num()));
         for (const J& e : root["encounters"].a) {
             Encounter en; en.cell = e["cell"].s; en.interior = e["interior"].yes();
@@ -246,6 +247,7 @@ namespace Sim {
             }
         }
         if (a.melee.Has()) { a.atkMult = PerkBest(D.pAttack, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); a.powMult = PerkBest(D.pPower, std::to_string(a.melee.skill), a.Skill(a.melee.skill)); }
+        if (a.ranged.Has()) a.rangedAtkMult = PerkBest(D.pAttack, std::to_string(a.ranged.skill), a.Skill(a.ranged.skill));   // read only under --ranged-perks
         a.hasStyle = true; a.st.wMagic = fam == Cls::Mage ? 3.0f : 0.5f; a.st.wRanged = fam == Cls::Ranged ? 3.0f : 1.0f; a.conf = 3;   // the player model's style; a follower's is his class package (Setup.h MfoPackage)
         k.potionsHealth = R.I(0, 4); k.potionsStamina = R.I(0, 2); k.potionsMagicka = R.I(0, 3);
         for (int i = 0; i < 3; ++i) if (!D.pots[i].empty()) { const auto& pt = LadderAt(D.pots[i], level, 0.9f); (i == 0 ? fb.potH : i == 1 ? fb.potM : fb.potS) = pt.first; fb.potDur[i] = pt.second;

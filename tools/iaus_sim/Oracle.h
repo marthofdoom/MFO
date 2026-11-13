@@ -21,20 +21,34 @@ namespace Sim {
     // How good a fight state is for the party, 0..100. One objective for every policy: win, fast, the player and
     // the party healthy, nobody down, resources left.
     inline bool g_utilResources = true;   // --utility-no-resources (DIAGNOSTIC): the "resources left" term is a constant 5, so a value's gain can be split into "fights better" and "kept a potion"
-    inline double Utility(const Fight& F) {
+    // WHAT A POTION IS WORTH (marth 11-12, Q-potion-value: "Sim calibrates it": price a potion by its worth in later fights over a chain
+    // of fights, not by a fixed constant). g_potWorth holds, per class cell and per potion kind, the worth in J of the k-th potion still
+    // in the bag when a fight ends (PotionWorth.h: measured by --potion-calib and the chain recursion of tools/iaus_sim/potion_worth.py).
+    // A fight's Utility pays 2.5 for the bag and charges each potion drunk in it that worth. g_potLegacy (--potion-worth legacy) is the
+    // older fixed rate, 2.5 / (potions carried) / (followers) per potion, kept for comparisons only.
+    inline bool g_potLegacy = false;
+    inline double PotionCost(const Ctl& c) {
+        if (!c.worth) return 0.0;
+        const int left[3] = { c.book.kit.potionsHealth, c.book.kit.potionsMagicka, c.book.kit.potionsStamina }; double cost = 0;
+        for (int t = 0; t < 3; ++t) for (int k = left[t] + 1; k <= c.pot0[t]; ++k) cost += c.worth->m[static_cast<std::size_t>(t)][static_cast<std::size_t>(std::min(k, kPotWorthMax) - 1)];
+        return cost;
+    }
+    inline double Utility(const Fight& F, bool chargePotions = true) {
         double foeHp = 0; for (const Body& x : F.b) if (x.role == Role::Foe && x.alive && x.airUntil >= 0) foeHp += std::max(0.0f, x.c.hp);
         for (const Spawn& s : F.late) foeHp += s.spec->hp;
         const double removed = F.foeHpTotal > 0 ? std::clamp(1.0 - foeHp / F.foeHpTotal, 0.0, 1.0) : 1.0;
         const Body& pl = F.b[0];
         if (!pl.alive) return 10.0 * removed;
         const bool win = foeHp <= 0.0;
-        double partyHp = 0, res = 0; const double nf = std::max<double>(1, double(F.ctl.size()));
+        double partyHp = 0, res = 0, mp = 0, cost = 0; const double nf = std::max<double>(1, double(F.ctl.size()));
         for (const Ctl& c : F.ctl) { const Body& x = F.b[static_cast<std::size_t>(c.body)];
             partyHp += Fight::Up(x) ? x.c.hp / std::max(1.0f, x.c.hpMax) : 0.0;
             const int pots = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
-            res += 0.5 * (x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0) + 0.5 * (c.potions0 > 0 ? double(pots) / c.potions0 : 1.0); }
+            const double mpf = x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0; mp += mpf; if (chargePotions) cost += PotionCost(c);
+            res += 0.5 * mpf + 0.5 * (c.potions0 > 0 ? double(pots) / c.potions0 : 1.0); }
+        const double resTerm = !g_utilResources ? 5.0 : g_potLegacy ? 5.0 * res / nf : 2.5 * mp / nf + 2.5 - cost;
         return 50.0 * removed + (win ? 15.0 * (1.0 - std::min(1.0, F.now / F.maxSec)) : 0.0) + 15.0 * pl.c.hp / std::max(1.0f, pl.c.hpMax)
-             + 10.0 * (1.0 - std::min(1.0, double(F.t.partyDowns) / nf)) + 5.0 * partyHp / nf + (g_utilResources ? 5.0 * res / nf : 5.0);
+             + 10.0 * (1.0 - std::min(1.0, double(F.t.partyDowns) / nf)) + 5.0 * partyHp / nf + resTerm;
     }
 
     // ── the extended action set ─────────────────────────────────────────────────────────────────────────
@@ -128,6 +142,20 @@ namespace Sim {
         double iFoeHp = 0, oFoeHp = 0, iOnPlayer = 0, oOnPlayer = 0, iCaster = 0, oCaster = 0, iResist = 0, oResist = 0, iRecHp = 0, oRecHp = 0, selfHp = 0, selfMp = 0, foes = 0, sameTarget = 0, iDist = 0, oDist = 0, playerHp = 0, nearDist = 0;
     };
 
+    // THE GAP STAGE'S DUMP (tune_driver.py stage gap, iaus-sim-v2.md 34). g_oracleSubjectOnly (--oracle-subject-only): the oracle plans for
+    // the SUBJECT only and his companions play IAUS in both arms, so a class's gap is the gap of his own decisions (the default oracle
+    // drives every follower, and a class's gap then carries its T1 companions' gap too). SitRec: one divergence cluster of the subject,
+    // keyed "iaus pick|oracle pick|kind|situation" (kind: retarget = the same family on another target or form; ranked = the oracle took a candidate IAUS ranked lower; unranked = a candidate
+    // IAUS generated and scored under the floor or vetoed; posture; ext = an action the catalogue has no candidate for; idle).
+    inline bool g_oracleSubjectOnly = false;
+    struct SitRec { long n = 0; double dU = 0; };
+    [[nodiscard]] inline std::string Situation(const Body& x, const Snapshot& sn) {
+        float nd = 1e9f; for (const auto& f : sn.foes) nd = std::min(nd, f.dist);
+        const float hp = x.c.hp / std::max(1.0f, x.c.hpMax); const std::size_t n = sn.foes.size();
+        return std::string("hp:") + (hp < 0.3f ? "lo" : hp < 0.6f ? "mid" : "hi") + ",near:" + (n == 0 ? "none" : nd < 250.0f ? "melee" : nd < 900.0f ? "mid" : "far")
+             + ",foes:" + (n <= 1 ? std::to_string(n) : n <= 3 ? "2-3" : "4+");
+    }
+
     struct OracleCfg { int K = 8; double H = 150.0, every = 0.4, commit = 2.5; std::size_t maxOptions = 14; double minDU = 1.0; bool allFollowers = true, ext = true; };
 
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
@@ -144,6 +172,9 @@ namespace Sim {
         std::map<std::string, Disagreement>* log = nullptr;
         std::vector<double> last;
         long decisions = 0, disagreed = 0; double dUSum = 0;
+        std::map<std::string, SitRec>* sit = nullptr;          // --gap-dump: the subject's divergences (SitRec above)
+        std::array<long, kFamilies>* gen = nullptr;            // --gap-dump: candidates his generator offered per family, summed over the oracle's decisions for him
+        long subjDec = 0;                                      // --gap-dump: the oracle's decisions for the subject
 
         static void RunFor(Fight& G, Policy& P, double until) {
             while (!G.over && G.now < until) {
@@ -234,6 +265,19 @@ namespace Sim {
             ++decisions;
             // the disagreement with IAUS's own pick
             std::size_t ii = opt.size() - 1; if (iausPick) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == KeyOf(*iausPick)) { ii = i; break; }
+            if (subj && (sit || gen)) {
+                ++subjDec;
+                if (gen) for (const Candidate& k : acts) ++(*gen)[static_cast<std::size_t>(k.family)];
+                const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
+                if (sit && ii != best && dU >= cfg.minDU) {
+                    const bool iFound = !iausPick || ii != opt.size() - 1;   // IAUS's pick is among the options (idle is last and has no candidate)
+                    const Opt& ob = opt[best]; bool ranked = false;
+                    if (ob.k) for (const Scored& r : sv.d.ranked) if (r.idx < acts.size() && &acts[r.idx] == ob.k) { ranked = true; break; }
+                    const char* kind = ob.ext != Ext::None ? "ext" : !ob.k ? "idle" : ob.k->family == Family::Posture ? "posture" : iausPick && iausPick->family == ob.k->family ? "retarget" : ranked ? "ranked" : "unranked";
+                    const std::string il = iausPick ? std::string(MFO::Iaus::Name(iausPick->family)) + (iFound ? "" : "!") : std::string("idle");
+                    SitRec& r = (*sit)[il + "|" + ob.Label() + "|" + kind + "|" + Situation(x, sv.sn)]; ++r.n; r.dU += dU;
+                }
+            }
             if (log) {
                 const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
                 if (ii != best && dU >= cfg.minDU) {

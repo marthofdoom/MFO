@@ -140,6 +140,10 @@ namespace MFO::Iaus {
                             // the guard outranks his own blows (marth: the line blocks at least 60% of the attacks aimed at it then)
         BuffThreat,         // buff potion (resist kinds): the share of the foes whose incoming element is the one this potion resists
         BuffStealth,        // buff potion (invisibility): gate, he sneaks or is a sneak class (stealth intent)
+        BoostBuffThreat,    // multiplier (APPENDED, batch 3 "sim decides the edge"): a buff cast, by the foes in the fight (x = min(foes, 4) / 4).
+                            // Ships FLAT 1.0 at every x (bit-identical); a class row's curve override is the searched knob (iaus-sim-v2.md 35)
+        BoostPosturePerks,  // multiplier (APPENDED, batch 3 part C): a weapon posture by its side's share of his weapon-damage perk multipliers (Facts::perkShare).
+                            // Ships FLAT 1.0 (bit-identical); NOT APPLICABLE while Snapshot::perks is unread (the game today)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -379,6 +383,7 @@ namespace MFO::Iaus {
         bool  outOfAmmo = false;
         bool  staffCharged = true;
         bool  classAllowsWeapon = true;   // false only under strict adherence (G16)
+        float perkShare = -1.0f;          // batch 3 part C: this posture's share of his weapon-damage perk multipliers, mine / (mine + the other side's); < 0 = not read
         // class (ruling Q34). onClass: the ability belongs to the follower's current class (tree OFF: its T1
         // class). fromMastered: a class the follower has MASTERED grants it. emergency: EmergencyLevel().
         bool  onClass = true;

@@ -108,6 +108,10 @@ namespace Sim {
             if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; e.measured = true; }
         }
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
+        {   // batch 3 part C: what his perks multiply (Snapshot::PerkRead), from the lab's perk chain (Load.h: atkMult at the melee weapon's skill,
+            // rangedAtkMult at the bow's); the game does not fill it yet. Read only by Cons::BoostPosturePerks, shipped flat (bit-identical).
+            sn.perks.read = true; const float mel = self.spec->melee.Has() ? self.spec->atkMult : 1.0f, rng = self.spec->rangedAtkMult > 0.0f ? self.spec->rangedAtkMult : 1.0f;
+            sn.perks.weaponDamage = { mel, mel, rng, rng }; }
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
         if (g_learnReach && c.reach[0].Known()) sn.swingReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three

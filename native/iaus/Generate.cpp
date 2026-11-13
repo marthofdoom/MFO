@@ -482,6 +482,13 @@ namespace MFO::Iaus {
                 c.f.outOfAmmo = !((k.bow && k.arrows > 0) || (k.crossbow && k.bolts > 0));
                 c.f.staffCharged = k.staffCharged;
                 c.f.classAllowsWeapon = !gated || a_classAllows;
+                if (s.perks.read && (a_kind == PostureKind::Melee || a_kind == PostureKind::Silver || a_kind == PostureKind::Bow)) {   // batch 3 part C
+                    const auto& wd = s.perks.weaponDamage;
+                    const float mel = (std::max)(wd[static_cast<std::size_t>(PerkWeapon::OneHand)], wd[static_cast<std::size_t>(PerkWeapon::TwoHand)]);
+                    const float rng = wd[static_cast<std::size_t>(k.bow || !k.crossbow ? PerkWeapon::Bow : PerkWeapon::Crossbow)];
+                    const float mine = a_kind == PostureKind::Bow ? rng : mel, sum = mel + rng;
+                    if (sum > 0.0f && std::isfinite(sum)) c.f.perkShare = mine / sum;
+                }
                 x.Push(std::move(c));
             };
             if (k.melee) posture(PostureKind::Melee, RoleTag::Melee, x.g.weaponMelee);

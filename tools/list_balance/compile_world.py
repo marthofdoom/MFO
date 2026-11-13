@@ -29,7 +29,8 @@ CASTTYPE = ['ConstantEffect', 'FireAndForget', 'Concentration', 'Scroll']
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--name', required=True); ap.add_argument('--seed', type=int, default=1)
-    a = ap.parse_args(); cache = os.path.expanduser('~/.cache/mfo-list-balance/')
+    ap.add_argument('--cache', help='the directory holding <name>.world.json / <name>.json / gmst_defaults.json and receiving <name>.sim.json (default ~/.cache/mfo-list-balance/)')
+    a = ap.parse_args(); cache = os.path.join(a.cache, '') if a.cache else os.path.expanduser('~/.cache/mfo-list-balance/')
     W = json.load(open(cache + a.name + '.world.json'))
     L = json.load(open(cache + a.name + '.json')) if os.path.exists(cache + a.name + '.json') else {}
     D = json.load(open(cache + 'gmst_defaults.json'))['gmst'] if os.path.exists(cache + 'gmst_defaults.json') else {}
@@ -331,9 +332,15 @@ def main():
 
     frace = [dict(edid=r['edid'], hp=r['hp'], mp=r['mp'], sp=r['sp'], hpR=r['hpRegen'], mpR=r['mpRegen'], spR=r['spRegen'], unarmed=r['unarmedDmg'], run=r['run'], mass=r['mass'],
                   boosts=r.get('boosts', [])) for r in races if r and r['playable'] and r['hp'] > 0 and 'Child' not in r['edid'] and 'Vampire' not in r['edid']]
+    # batch 3 sanity cells (extract_world.py --named): each named follower's spec at four levels (a pcMult record scales with the player);
+    # TEST INPUT ONLY, read by the sim's --named-follower, never logic. Absent when the extract named nobody (the file is unchanged then).
+    named = {}
+    for lab, ref in (W.get('named') or {}).items():
+        if ref and ref[0] == 'n': named[lab] = {str(L): build_spec(ref[1], L) for L in (10, 20, 30, 40)}
     out = dict(list=W['list'], gmst={k: v for k, v in sorted(gm.items()) if isinstance(v, (int, float))}, specs=specs, encounters=encounters, buckets=BUCKETS,
                follower=dict(races=frace, classes=fclass, weapons=wl, armor=al, arrows=arrows, bolts=bolts, perks=ptab, potions=pots),
                spells=[s for s in L.get('spells', [])], scrolls=[s for s in L.get('scrolls', [])], foeSpells=fspells, potionsRaw=len(W.get('potions', [])), stats=stats)
+    if named: out['named'] = named
     path = cache + a.name + '.sim.json'
     with open(path, 'w') as f: json.dump(out, f, separators=(',', ':'))
     print(path, 'specs', len(specs), 'encounters', len(encounters), 'spells', len(out['spells']), 'MB %.1f' % (os.path.getsize(path) / 1e6))

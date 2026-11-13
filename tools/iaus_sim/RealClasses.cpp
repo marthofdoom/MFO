@@ -83,13 +83,25 @@ namespace Sim {
             if (path.rfind("scalar.", 0) == 0) {
                 if (!CC::SetScalar(row, path.substr(7), v)) { a_err = "unknown scalar in --curve '" + sp + "' (drinkHealthLine | touchSpentSec)"; return false; }
                 continue; }
+            if (path.rfind("family.", 0) == 0) {   // <class>:family.<family>=<v>: the class's multiplier on a whole action family (Profile::family)
+                const long ff = index(path.substr(7), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
+                if (ff < 0 || !CC::SetFamilyWeight(row, static_cast<Family>(ff), v)) { a_err = "unknown family or bad weight in --curve '" + sp + "' (<class>:family.<family>=<v>, v > 0)"; return false; }
+                continue; }
+            if (path == "equip.crossover") {   // BATCH 3 (iaus-sim-v2.md 35): the posture EDGE, both distance curves' midpoint b at once (ranged_dist and melee_dist
+                // cross where both are 0.5, so equal midpoints put the swap at v x 1200 units). Native has no such param: it is the two SetCurveParam lines.
+                for (const Cons k : { Cons::PostureRanged, Cons::PostureMelee }) { g_curveConsEdited.push_back(static_cast<std::size_t>(k));
+                    if (!CC::SetCurveParam(row, Family::Posture, k, a_shared.curve[static_cast<std::size_t>(k)], "b", v)) { a_err = "bad value in --curve '" + sp + "'"; return false; } }
+                continue; }
             const auto d1 = path.find('.'), d2 = d1 == std::string::npos ? d1 : path.find('.', d1 + 1);
             if (d2 == std::string::npos) { a_err = "bad --curve path '" + path + "' (<family>.<cons>.<param>)"; return false; }
             const long fi = index(path.substr(0, d1), MFO::Iaus::kFamilies, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Family>(i)); });
             const long ki = index(path.substr(d1 + 1, d2 - d1 - 1), MFO::Iaus::kCons, [](std::size_t i) { return MFO::Iaus::Name(static_cast<Cons>(i)); });
             if (fi < 0 || ki < 0) { a_err = "unknown family or consideration in --curve '" + sp + "'"; return false; }
+            if (path.substr(d2 + 1) == "w") {   // <class>:<family>.<cons>.w=<v>: the consideration's exponent for this class (Profile::weights)
+                if (!CC::SetWeight(row, static_cast<Family>(fi), static_cast<Cons>(ki), v)) { a_err = "bad weight in --curve '" + sp + "' (v > 0)"; return false; }
+                continue; }
             g_curveConsEdited.push_back(static_cast<std::size_t>(ki));   // sim.cpp refuses --opt c.<ki>.* next to it
-            if (!CC::SetCurveParam(row, static_cast<Family>(fi), static_cast<Cons>(ki), a_shared.curve[static_cast<std::size_t>(ki)], path.substr(d2 + 1), v)) { a_err = "unknown curve param in --curve '" + sp + "' (a | b | floor | zeroAbove | zeroBelow)"; return false; }
+            if (!CC::SetCurveParam(row, static_cast<Family>(fi), static_cast<Cons>(ki), a_shared.curve[static_cast<std::size_t>(ki)], path.substr(d2 + 1), v)) { a_err = "unknown curve param in --curve '" + sp + "' (a | b | floor | zeroAbove | zeroBelow | w | px<i> / py<i> on a Piece curve)"; return false; }
         }
         return true;
     }
