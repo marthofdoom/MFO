@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.11.0 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
+**Status: v2.11.1 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,14 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.11.1 (Deck test prerelease)
+
+- **Needs Harbinger v0.20.1 (ABI v45, unchanged)** for the Holy Spirit fix. Everything else works with v0.20.0.
+- **New co-save record.** STOR v1 (off-class storage). An older MFO drops it and stored pieces lose tracking. FLWR is still v6 and MCLS v2. Keep a backup of your saves.
+- **Buff potions and consumables in IAUS.** Food and drink are used in fights, buff potions only when needed, and scarce ones are kept.
+- **Looting by need (Sentient AI).** Ammo by class and launcher, potions, food, drink and poisons by all effects, soul gems only when a weapon is below 50% charge (max 3).
+- **Off-class storage** in each follower's own chest, **proxied spell versions** as IAUS candidates, and **posture values** for ranged, archer, evoker and healer.
 
 ## What is new in 2.11.0 (Deck test prerelease)
 

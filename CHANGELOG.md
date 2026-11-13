@@ -5,6 +5,20 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.11.1 -- IAUS looting by need, buff potions, off-class storage and posture values (PRERELEASE)
+
+This is a Deck test prerelease. It needs Harbinger v0.20.1 (ABI v45, unchanged). The Holy Spirit fix is in Harbinger, so without v0.20.1 mixed spells such as Holy Spirit still never fire. Everything else works with v0.20.0.
+
+**Save note.** This build adds one new co-save record, STOR v1 (the off-class storage). FLWR is still v6 and MCLS is still v2. An older MFO skips the STOR record, so pieces a follower has stored lose tracking and stay in the chest. Keep a copy of your saves from before you try it.
+
+- **Buff potions in IAUS.** Every beneficial potion is a candidate. Resist potions against the incoming element, fortify potions at the start of a fight against an equal level foe, regen when low and invisibility while sneaking. They go through the existing drink road as `act.drink_buff_potion`. Values are placeholders until the simulator search sets them.
+- **Posture values for ranged, archer, evoker and healer.** The third batch of rulings is in, with the simulator models behind it.
+- **Off-class storage.** A follower keeps gear that doesn't fit his class in his own MFO chest and takes it back when the class fits again. New co-save record STOR v1. The chest is in an override of the vanilla cell 001052FD, so MFO.esp changed.
+- **Proxied spell versions are IAUS candidates.** A self heal or a concentration buff can be offered at an ally, keyed to the source spell. An unflippable self heal at an ally is refused loudly.
+- **Looting by need (Sentient AI followers).** Finding loot is unchanged, but what a follower goes for follows what he needs: ammo by class and launcher, potions, food, drink and poisons by all their effects, and soul gems only while a weapon he carries is below 50% charge (at most 3). Setting: `bIausLoot` (default on).
+- **Food, drink and potions are used with sense.** Food and drink are used in fights. Buff potions are used only when they are needed. A potion is weighed against what it costs, and a scarce one is kept (restores are rarely held back). A follower won't drink what can't win him the fight, and every drink is logged.
+- **Holy Spirit and mixed spells (Harbinger 0.20.1).** Seat 0 no longer forces the self row on a spell with any hostile effect.
+
 ## v2.11.0 -- Classes beta groundwork, mage buffs and clothing, the theft gate and a smarter fight (PRERELEASE)
 
 This is a Deck test prerelease for the T2 field session. It needs Harbinger v0.20.0 (ABI v45). With an older Harbinger the base mod still works, but the classes add-on will not start (one log line and one notice say so, and its saved data is kept).
