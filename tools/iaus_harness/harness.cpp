@@ -1918,6 +1918,24 @@ static void ConsumablesWorth() {
         const Candidate* c2 = FindCand(g2, Family::DrinkHealth, 0);
         Check(c2 && ScoreOne(*c2, Mind{}, Profile{}, t, 3, 0.0f, nullptr) <= 0.0f, "healthy: the same dear potion is not worth drinking (vetoed by worth)");
     }
+    {   // SCARCITY + the BUFF-potion target (marth 11-13: "scarcity should also factor in ... prevent invis and fortify potions from being spammed when they would
+        // help, and not when they are needed")
+        const WorthTable& w = t.worth;
+        Check(CostShare(200.0f, 0.0f, w, 6) < CostShare(200.0f, 0.0f, w, 1) && CostShare(200.0f, 0.0f, w, 1) == CostShare(200.0f, 0.0f, w), "scarcity: a full stack is cheaper to use than the last one");
+        Check(CostShare(200.0f, 0.0f, w, 1, true) < CostShare(200.0f, 0.0f, w, 1, false), "scarcity: a restore item's cost is held lightly");
+        Snapshot easy = WorthFight(190.0f, 4, 100.0f);   // a foe far below him: comfortably won
+        PotionBuff& b = easy.book.kit.buff[static_cast<std::size_t>(BuffKind::FortifyHealth)];
+        b.form = 0xF010; b.count = 1; b.magnitude = 50.0f; b.duration = 60.0f; b.value = 100.0f; b.name = "Fortify";
+        b.kindMask = 1u << static_cast<unsigned>(BuffKind::FortifyHealth);
+        Snapshot hardFight = easy; hardFight.foes[0].level = 20;
+        Check(BuffScore(easy, BuffKind::FortifyHealth) < 0.0f, "buff target: a fortify in a fight he wins comfortably is vetoed (would help, not needed)");
+        Check(BuffScore(hardFight, BuffKind::FortifyHealth) > t.actFloor, "buff target: the same fortify in a hard fight is drunk");
+        Snapshot hurt = WorthFight(100.0f, 4, 100.0f);   // half health, a weak foe: pressure low
+        hurt.book.kit.potionsHealth = 6; hurt.book.kit.restoreValue[0] = 300.0f;
+        const Generated gh = Generate(hurt, ClassGate{}, t);
+        const Candidate* ch = FindCand(gh, Family::DrinkHealth, 0);
+        Check(ch && ch->f.consumableWorth >= w.floor, "restore: a hurt follower with a stack of potions is not held back by the gate in a weak fight");
+    }
     {   // CANNOT-WIN FLOOR (review F1): a mage with an empty pool and a fight that still needs casts drinks, whatever the pressure or his purse
         Snapshot s = WorthFight(190.0f, 6, 0.0f);   // one 0.6x foe: pressure 0.3
         s.self.mp = 0; s.self.mpMax = 100;
@@ -1933,7 +1951,7 @@ static void ConsumablesWorth() {
         Snapshot armed = s; armed.book.kit.melee = true;
         const Generated ga = Generate(armed, ClassGate{}, t);
         const Candidate* ca = FindCand(ga, Family::DrinkMagicka, 0);
-        Check(ca && ca->f.consumableWorth < t.worth.floor, "cannot win: a mage who carries a weapon has another offense (the floor is off)");
+        Check(ca && ca->f.consumableWorth < 1.0f, "cannot win: a mage who carries a weapon has another offense (the floor is off: worth below 1, the restore use weight alone)");
         Snapshot full = s; full.self.mp = 100;
         const Generated gf = Generate(full, ClassGate{}, t);
         const Candidate* cf = FindCand(gf, Family::DrinkMagicka, 0);
@@ -1948,7 +1966,7 @@ static void ConsumablesWorth() {
         Check(cs && cs->f.consumableWorth == 1.0f, "cannot win: a power-attack melee class at 0 stamina needs the potion at 1");
         const Generated gs2 = Generate(k, ClassGate{}, t);
         const Candidate* cs2 = FindCand(gs2, Family::DrinkStamina, 0);
-        Check(cs2 && cs2->f.consumableWorth < t.worth.floor, "cannot win: a class whose offense does not need stamina keeps the pressure rule");
+        Check(cs2 && cs2->f.consumableWorth < 1.0f, "cannot win: a class whose offense does not need stamina keeps the pressure rule");
         // health: a fast-dying follower above the band
         const WorthTable& w = t.worth;
         Check(DeathWinFloor(2.0f, w) == 1.0f && DeathWinFloor(w.ttlFloorSec + w.ttlSpanSec, w) == 0.0f && DeathWinFloor(1.0e30f, w) == 0.0f &&

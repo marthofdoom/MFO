@@ -45,6 +45,14 @@ namespace MFO::Iaus {
         float wealthFrac = 0.25f;
         float wealthFloor = 100.0f;
         float costWeight = 1.0f;
+        // SCARCITY (marth 2026-11-13: "scarcity should also factor in"): the cost share is divided by 1 + scarcityRate x (carried - 1), so the last
+        // one is dear and a full stack is cheap to use (restore potions are mostly abundant). A RESTORE item (potion, food or drink) also pays only
+        // restoreCostScale of its cost share, and its need never falls below (1 - the resource now) x restoreUseWeight, so a hurt follower is not
+        // held back from a heal that is useful. The gate's main target is the BUFF potions (invisibility, fortify, resist): drunk when NEEDED
+        // (the need of a fortify / resist is the fight's pressure alone), not merely when they would help. PLACEHOLDERS.
+        float scarcityRate = 0.5f;
+        float restoreCostScale = 0.25f;
+        float restoreUseWeight = 0.5f;
         // A worth below this vetoes the use (Cons::ConsumableWorth's curve; Generate's fortify gate, which replaces the old
         // kBuffFortifyFoeRatio level rule, reads the same number).
         float floor = 0.2f;
@@ -83,10 +91,12 @@ namespace MFO::Iaus {
     }
 
     // The item's gold value against his wealth. a_gold < 0 = unknown: no cost is held against the item.
-    [[nodiscard]] inline float CostShare(float a_value, float a_gold, const WorthTable& a_t) {
+    // a_count = how many of that item (or kind) he carries (scarcity); a_restore = a restore item (its cost is held lightly, see WorthTable).
+    [[nodiscard]] inline float CostShare(float a_value, float a_gold, const WorthTable& a_t, int a_count = 1, bool a_restore = false) {
         if (!(a_value > 0.0f) || !std::isfinite(a_value) || !(a_gold >= 0.0f) || !std::isfinite(a_gold)) return 0.0f;
         const float ref = std::max(a_gold * a_t.wealthFrac, a_t.wealthFloor);
-        return WorthUnit(a_value / ref * a_t.costWeight);
+        const float scarcity = 1.0f / (1.0f + std::max(0.0f, a_t.scarcityRate) * static_cast<float>(std::max(a_count, 1) - 1));
+        return WorthUnit(a_value / ref * a_t.costWeight * scarcity * (a_restore ? WorthUnit(a_t.restoreCostScale) : 1.0f));
     }
 
     [[nodiscard]] inline float Worth(float a_need, float a_costShare) {

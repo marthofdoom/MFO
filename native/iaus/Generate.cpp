@@ -346,7 +346,9 @@ namespace MFO::Iaus {
         }
         float RestoreNeed(const Ctx& x, std::size_t a_family) {
             const float pct = a_family == 0 ? x.selfHp : a_family == 1 ? x.selfSp : x.selfMp;
-            return ResourceNeed(pct, x.pressure, x.g.drinkHealthLine, a_family == 0, x.t.worth, CannotWinFloor(x, a_family));
+            // A heal is useful by how hurt the resource is, whatever the fight's pressure (WorthTable::restoreUseWeight), never below the cannot-win floor.
+            const float useful = (1.0f - WorthUnit(pct)) * x.t.worth.restoreUseWeight;
+            return (std::max)(useful, ResourceNeed(pct, x.pressure, x.g.drinkHealthLine, a_family == 0, x.t.worth, CannotWinFloor(x, a_family)));
         }
         float KindNeed(const Ctx& x, BuffKind a_kind) {
             if (IsFortify(a_kind) || IsResist(a_kind)) return x.pressure;   // the outcome without it: the fight's pressure alone
@@ -366,9 +368,9 @@ namespace MFO::Iaus {
             return need;
         }
         // Facts::consumableWorth for an item of gold value a_value; need < 0 leaves it n/a.
-        void SetWorth(const Ctx& x, Candidate& a_c, float a_need, float a_value) {
+        void SetWorth(const Ctx& x, Candidate& a_c, float a_need, float a_value, std::int32_t a_count, bool a_restore) {
             if (!(a_need >= 0.0f)) return;
-            a_c.f.consumableWorth = Worth(a_need, CostShare(a_value, x.s.book.kit.gold, x.t.worth));
+            a_c.f.consumableWorth = Worth(a_need, CostShare(a_value, x.s.book.kit.gold, x.t.worth, a_count, a_restore));
         }
 
         // What the magicka would buy: the casts of his best measured spell the fight still asks for. Offense first (the kept foes' health against
@@ -407,7 +409,7 @@ namespace MFO::Iaus {
                 Candidate c = x.Make(a_f, nullptr);
                 c.f.stock = a_stock;
                 c.f.fleeHeal = x.fleeRun && a_f == Family::DrinkHealth;   // card G3: a health potion while he flees is drunk first
-                SetWorth(x, c, RestoreNeed(x, a_fam), k.restoreValue[a_fam]);
+                SetWorth(x, c, RestoreNeed(x, a_fam), k.restoreValue[a_fam], a_stock, true);
                 x.Push(std::move(c));
             };
             const float poolMax[3] = { x.s.self.hpMax, x.s.self.spMax, x.s.self.mpMax };
@@ -421,7 +423,7 @@ namespace MFO::Iaus {
                 c.f.stock = fd.count;
                 c.f.fleeHeal = x.fleeRun && a_f == Family::DrinkHealth;
                 if (a_f == Family::DrinkMagicka) c.f.castsWanted = a_wanted;
-                SetWorth(x, c, ItemNeed(x, fd.kindMask, fd.restoreMask), fd.value);
+                SetWorth(x, c, ItemNeed(x, fd.kindMask, fd.restoreMask), fd.value, fd.count, true);
                 x.Push(std::move(c));
             };
             drink(Family::DrinkHealth, k.potionsHealth, 0);
@@ -437,7 +439,7 @@ namespace MFO::Iaus {
                     Candidate c = x.Make(Family::DrinkMagicka, nullptr);
                     c.f.stock = k.potionsMagicka;
                     c.f.castsWanted = wanted;
-                    SetWorth(x, c, RestoreNeed(x, 2), k.restoreValue[2]);
+                    SetWorth(x, c, RestoreNeed(x, 2), k.restoreValue[2], k.potionsMagicka, true);
                     x.Push(std::move(c));
                 }
                 food(Family::DrinkMagicka, k.potionsMagicka, 2, wanted);
@@ -520,7 +522,7 @@ namespace MFO::Iaus {
                     }
                     if (!useful) continue;
                     if (IsFortify(kind)) {
-                        SetWorth(x, c, ItemNeed(x, p.kindMask | (1u << i), p.restoreMask), p.value);
+                        SetWorth(x, c, ItemNeed(x, p.kindMask | (1u << i), p.restoreMask), p.value, p.count, p.restoreMask != 0);
                         if (c.f.consumableWorth < x.t.worth.floor) continue;
                     }
                     if (IsRegen(kind)) c.f.buffRegenPct = pct;
@@ -531,7 +533,7 @@ namespace MFO::Iaus {
                 } else {
                     continue;   // water breathing and the cures: catalogued only
                 }
-                if (c.f.consumableWorth < 0.0f) SetWorth(x, c, ItemNeed(x, p.kindMask | (1u << i), p.restoreMask), p.value);   // resist, regen (fortify set it above); invisibility has no need: n/a
+                if (c.f.consumableWorth < 0.0f) SetWorth(x, c, ItemNeed(x, p.kindMask | (1u << i), p.restoreMask), p.value, p.count, p.restoreMask != 0);   // resist, regen (fortify set it above); invisibility has no need: n/a
                 x.Push(std::move(c));
             }
         }
