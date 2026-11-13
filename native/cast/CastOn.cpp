@@ -931,6 +931,22 @@ namespace MFO::Actuation {
             // target only reaches here with bCastSelf OFF, and that dev-only
             // world keeps its old road byte-identical (the heal twin below
             // already scopes itself the same way).
+            // 1dfcuabd309 (review F3): a fire-and-forget Self-delivery HEAL at another recipient with no heal claim is
+            // not servable here: RestorationCastDirect would cast the Self SOURCE on the CASTER (CastTargetDirect has no
+            // delivery flip for it), healing him instead of the target. IAUS offers it at an ally only while the claim
+            // road is open (HealServedAtAlly), so this is a stale offer or a rule aimed there: refuse loudly, cast nothing.
+            if (!healClaim && a_target != a_follower &&
+                CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Heal &&
+                spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf) {
+                static std::unordered_set<std::uint64_t> s_selfHealAllyLog;   // worker-serial, like the lock it guards
+                if (s_selfHealAllyLog.insert((static_cast<std::uint64_t>(id) << 32) | a_spellID).second)
+                    spdlog::warn("[heal] {:08X} {} ({:08X}) is a Self-delivery heal and no heal claim is taken (road '{}'): "
+                                 "it can't be cast at {:08X} without a delivery flip -- REFUSED, nothing cast (it would heal "
+                                 "the caster instead)",
+                                 id, spell->GetName() ? spell->GetName() : "?", a_spellID,
+                                 static_cast<int>(healRoad), a_target->GetFormID());
+                return { Result::NoOp, "a self-delivered heal can't be cast at another recipient off the heal claim road", true };
+            }
             if (!healClaim && a_target != a_follower && IsRestorationSpell(spell)) {
                 commitPreempt();   // the hand is taken inside CastTargetDirect
                 return RestorationCastDirect(a_follower, spell, a_target);

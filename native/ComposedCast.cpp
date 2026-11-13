@@ -771,6 +771,23 @@ namespace MFO::ComposedCast {
         }
     }
 
+    bool HealClaimGatesOpen(RE::Actor* a_follower, RE::SpellItem* a_spell, bool* a_noController) {
+        if (a_noController) *a_noController = false;
+        if (!a_follower || !a_spell) return false;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return false;
+        // Enabled() is Try()'s own gate (Heal kind, verified runtime, bHealAnimPackage, Harbinger present);
+        // HealCastClaimSupported adds the ABI (>= 5). bEquipToCast: the claim road is CastOn's composed branch.
+        if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
+            !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load())
+            return false;
+        // THE TEST IS THE OBJECT THE SEATS HANG OFF: a plain member load through the SE/AE-shifted accessor, racy by design.
+        if (!a_follower->GetActorRuntimeData().combatController) {
+            if (a_noController) *a_noController = true;
+            return false;
+        }
+        return true;
+    }
+
     HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target) {
         if (!a_follower || !a_spell) return HealRoad::NotHeal;
         if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return HealRoad::NotHeal;
@@ -779,8 +796,8 @@ namespace MFO::ComposedCast {
         // the claim road is CastOn's composed branch, which lives inside that toggle.
         const auto fid     = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
-        if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
-            !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load()) {
+        bool noController = false;
+        if (!HealClaimGatesOpen(a_follower, a_spell, &noController) && !noController) {
             // THE KILL SWITCH KILLS A STANDING CLAIM TOO (review F3). bHealAnimPackage
             // (or bEquipToCast) flipped OFF mid-fight: a heal claim minted before the
             // flip would otherwise be renewed by CastOn's in-flight refresh (which
@@ -797,10 +814,9 @@ namespace MFO::ComposedCast {
             }
             return HealRoad::DirectDegrade;
         }
-        // THE TEST IS THE OBJECT THE SEATS HANG OFF (see CastTargetDirect's note):
-        // a plain member load through the SE/AE-shifted accessor, racy by design --
+        // THE CONTROLLER TEST (HealClaimGatesOpen's last gate; see CastTargetDirect's note): racy by design --
         // worst case one lap takes the other road.
-        if (!a_follower->GetActorRuntimeData().combatController) {
+        if (noController) {
             // ONE ROAD PER ACTOR: a heal claim minted on an in-combat lap must not
             // outlive the controller it needed (RC-2 of 09-21: a claim nothing could
             // serve, heart-beaten for 9.7 s) while this lap casts direct beside it.
@@ -851,6 +867,10 @@ namespace MFO::ComposedCast {
         // rule is answered Claim here too but never mints, and ended a higher rule's
         // DirectNoSeat stream (reachable with bCastSelf ON).
         return HealRoad::Claim;
+    }
+
+    bool HealClaimRoadOpen(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        return HealClaimGatesOpen(a_follower, a_spell, nullptr);
     }
 
     void NoteOocDirectHeal(RE::Actor* a_follower, RE::SpellItem* a_spell) {

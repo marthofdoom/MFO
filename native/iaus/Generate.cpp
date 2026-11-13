@@ -627,9 +627,11 @@ namespace MFO::Iaus {
                     const bool heal = e.nature == Prune::Nature::Heal;
                     for (const Combatant* r : party) {
                         const bool self = r == &s.self;
-                        // self-delivery = himself only (design section 2), except a BUFF the claim road serves at an ally right now
-                        // (e.allyRoad: Harbinger's delivery-flip proxy; fix/mage-buff-loop item 5). A Self HEAL stays himself-only.
-                        if (!self && e.selfDelivery && (heal || !e.allyRoad)) continue;
+                        // self-delivery = himself only (design section 2), except a buff or heal a proxy road serves at an ally
+                        // right now (e.allyRoad: Harbinger's delivery-flip proxy, or MFO's ConcProxy for a concentration spell;
+                        // fix/mage-buff-loop item 5, heals since 1dfcuabd309). The candidate is the SOURCE spell; the reach below
+                        // is e.reach, which for a Self spell is Heal Other's (Actuation::HealReach), the same test the road makes.
+                        if (!self && e.selfDelivery && !e.allyRoad) continue;
                         const float hp = self ? x.selfHp : Pct(r->hp, r->hpMax);
                         if (heal && !Prune::Hurt(hp)) continue;   // hurt targets only
                         if (!heal && std::find(e.activeOn.begin(), e.activeOn.end(), r->id) != e.activeOn.end()) {

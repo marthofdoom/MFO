@@ -824,6 +824,24 @@ namespace MFO::Actuation {
         }
     }
 
+    bool HealServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+        if (!a_follower || !a_spell || !a_recipient || a_recipient == a_follower) return false;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return false;
+        // The heal CLAIM road (CastOn -> HealRoadLap -> ComposedCast::Try) forwards the Self spell at the ally unchanged and
+        // Harbinger mints its delivery-flip proxy for it (ComposedCast.cpp, Try's "FORWARD UNCHANGED" note). Same answer as
+        // ChooseHealRoad == Claim for a target other than the caster.
+        if (ComposedCast::HealClaimRoadOpen(a_follower, a_spell)) return true;
+        // Off the claim road a CONCENTRATION Self heal at an ally is CastOn's concentration fork (ConcentrationCast ->
+        // CastTargetDirect -> ApplyTargetEffect), which casts MFO's own delivery-flipped ConcProxy (DeliverySpell). The proxy
+        // is minted on the main thread only (ConcProxy::Acquire refuses with no MainThread seat: VR). A full slot table is a
+        // transient skip of one lap, not a reason to withhold the candidate.
+        if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+            return MainThread::IsInstalled();
+        // A fire-and-forget Self heal off the claim road takes RestorationCastDirect, which casts the Self SOURCE unflipped:
+        // no road is proven to land it on someone else. Himself only.
+        return false;
+    }
+
     void HealNoteLauncherFloor(RE::Actor* a_follower) {
         if (a_follower && g_launcherSeen.count(a_follower->GetFormID()))
             APMFBridge::NoteArcherRightFloor(a_follower->GetFormID());

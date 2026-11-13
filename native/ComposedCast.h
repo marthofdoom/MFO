@@ -217,6 +217,16 @@ namespace MFO::ComposedCast {
     // Worker-serial (same worker as Try/End; its log dedup is unlocked for that reason).
     enum class HealRoad : std::uint8_t { NotHeal, Claim, DirectNoCombat, DirectNoSeat, DirectDegrade };
     HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target);
+    // A PURE read of ChooseHealRoad's gates for a heal at ANOTHER recipient (1dfcuabd309): Enabled (Heal kind, verified
+    // runtime, bHealAnimPackage, Harbinger present) + the heal-claim ABI + bEquipToCast + a live combat controller. True = a
+    // heal of a_spell at an ally would be answered Claim (the self-flip bar only ever applies to a self target). No log, no
+    // release: ChooseHealRoad keeps those side effects for the caster's own lap. Keep the two in step. Worker (racy
+    // controller load, the same as ChooseHealRoad's).
+    bool HealClaimRoadOpen(RE::Actor* a_follower, RE::SpellItem* a_spell);
+    // The ONE pure predicate of those gates (review F3): Heal kind + Enabled + heal-claim ABI + bEquipToCast + a live combat
+    // controller. ChooseHealRoad and HealClaimRoadOpen both call it, so they cannot drift. `a_noController` (optional) is set
+    // true only when every other gate passed and the controller alone is missing (ChooseHealRoad's release/log branch).
+    bool HealClaimGatesOpen(RE::Actor* a_follower, RE::SpellItem* a_spell, bool* a_noController = nullptr);
 
     // NoteOocDirectHeal (review F2 on 3a42371): the out-of-combat heal callers
     // (CastSelfDirect / CastTargetDirect with g_firingRule == kNoRule) no longer ask

@@ -405,6 +405,19 @@ namespace MFO::Actuation {
         // the claim road's up-read can ever see it up on an ally; the self-apply lockout does not cover a claim. Never offered.
         const auto shape = ClassifyArchetype(a_spell, /*a_seat0=*/true).shape;
         if (shape == SpellShape::SelfHazard || shape == SpellShape::ScriptRider) return false;
+        // 1dfcuabd309: a CONCENTRATION Self buff at another recipient is not this chooser's claim (it answers DirectNoSeat for
+        // it), but CastOn still serves it: its concentration fork (ConcentrationCast -> CastTargetDirect) claims it through
+        // Harbinger's concentration cast claim (its delivery-flip proxy) in combat, else streams MFO's own delivery-flipped
+        // ConcProxy (Direct.cpp DeliverySpell). The proxy is minted on the main thread only (none under VR).
+        // ANIMATIONS ARE REQUIRED FOR ALL ACTIONS (review F4): the ConcProxy fallback streams UNANIMATED, so the candidate is
+        // offered only while the ANIMATED concentration claim's gates are open -- a pure read of CastTargetDirect's claim
+        // site (cast/DirectTarget.cpp: CastSeatsSupported, Harbinger present, bApmfCast, not legacy hybrid, a combat
+        // controller; NOT g_firingRule, which is per fire). Else false, as a fire-and-forget Self buff gets.
+        if (a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf &&
+            a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+            return CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Buff && MainThread::IsInstalled() &&
+                   APMFBridge::Available() && APMFBridge::CastSeatsSupported() && Config::g_apmfCast.load() &&
+                   !Config::g_legacyCastHybrid.load() && a_follower->GetActorRuntimeData().combatController;
         return ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, a_recipient) == BuffRoad::Claim;
     }
 

@@ -355,9 +355,10 @@ namespace MFO::Scheduler {
             bool selfDelivery = false;
             for (const auto& e : m_set.snap.book.entries)
                 if (e.form == cand.form && e.source == Iaus::SpellSource::Spell) { selfDelivery = e.selfDelivery; break; }
-            // fix/mage-buff-loop item 5: a Self-delivery BUFF that Generate offered at an ally (Snapshot allyRoad: the claim road's
-            // delivery-flip proxy serves it) is a cast AT that ally; every other Self-delivery spell is himself.
-            const bool buffAtOther = cand.family == Family::CastBuff && cand.target != 0;
+            // fix/mage-buff-loop item 5: a Self-delivery BUFF that Generate offered at an ally (Snapshot allyRoad: a proxy road
+            // serves it) is a cast AT that ally; so is a Self-delivery HEAL since 1dfcuabd309 (the heal claim's delivery-flip
+            // proxy, or MFO's ConcProxy). Every other Self-delivery spell is himself.
+            const bool buffAtOther = (cand.family == Family::CastBuff || cand.family == Family::CastHeal) && cand.target != 0;
             if (cand.target == 0 || (selfDelivery && !buffAtOther)) {
                 // Himself (a self heal, buff, ward, summon) or a Self-delivered blast centred on him.
                 c.actionOpcode = Vocab::kActCastSelf;

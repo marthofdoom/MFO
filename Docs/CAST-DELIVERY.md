@@ -236,6 +236,27 @@ APMF-present equivalent is the CAST-CLAIM OBSERVABILITY section near the bottom.
 - **Breadcrumbs** (terse `[cast]` log): `proxy slot ACQUIRE/RECONFIG/FREE/OVERFLOW owner …` and
   `stream RELEASE (heal-full | magicka-out | cap | stale | gone) …` — so a field test is legible.
 
+### IAUS candidates for proxied versions (1dfcuabd309, 2026-11-13, NOT field-run)
+
+The proxy FORM never enters IAUS: it is a 0xFF dynamic form that renumbers per save, and
+`iaus/SpellBook.cpp` skips every one (Harbinger's taught claim proxy and MFO's `ConcProxy` alike).
+The SOURCE spell's proxied version IS a candidate, keyed to the source FormID, wherever a proxy
+road would serve it at an ally. `iaus/Candidates.cpp` fills `SpellEntry::allyRoad` each lap:
+
+| Proxy road | Who mints | Source spell shape | IAUS ally candidate |
+|---|---|---|---|
+| Heal-claim delivery-flip (`ComposedCast::Try` forwards the Self spell at the ally) | Harbinger | Self heal, FF or concentration | `HealServedAtAlly` = `ComposedCast::HealClaimRoadOpen` (pure read of `ChooseHealRoad`'s gates, one shared predicate `HealClaimGatesOpen`) |
+| `ConcProxy` (`DeliverySpell`, CastOn's concentration fork) | MFO | Self **concentration** heal off the claim road | `HealServedAtAlly`: concentration + `MainThread::IsInstalled()` |
+| Buff-claim delivery-flip (`ChooseBuffRoad == Claim`) | Harbinger | Self buff, fire-and-forget | `BuffServedAtAlly` (unchanged since fix/mage-buff-loop) |
+| Concentration claim / `ConcProxy` (CastOn's concentration fork) | Harbinger / MFO | Self **concentration** buff | `BuffServedAtAlly`: concentration + `MainThread::IsInstalled()` + the animated concentration claim's gates (CastSeatsSupported, Harbinger, bApmfCast, !bLegacyCastHybrid, combat controller); else false (ConcProxy alone is unanimated) |
+| Self-flip (a non-Self heal / buff at its own caster) | Harbinger | Aimed / Touch / TargetActor | already a self candidate (no delivery test at self) |
+| Explained-zero lift (Light / Script shapes) | Harbinger | a score lift of the claim's driven form, not a proxy form | IAUS reads no engine score; nothing to add |
+
+Not served, so never offered at an ally: a fire-and-forget Self heal off the claim road
+(`RestorationCastDirect` would cast the Self source unflipped; `CastOn` refuses it with a warning), and a SelfHazard / ScriptRider buff (no
+up-read can see it on an ally). `scheduler/IausSource.cpp` fires a CastHeal / CastBuff whose target is
+another actor as `cast_target` with the source FormID; the road mints its proxy at fire time.
+
 ---
 
 ## STREAM BOUNDING — long randomized caps, MAGICKA-GATED, heal-to-full at 99.95%

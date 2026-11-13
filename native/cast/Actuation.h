@@ -291,7 +291,15 @@ namespace MFO::Actuation {
     // a_follower) take the animated ch.8b CLAIM road (ChooseBuffRoad == Claim)? IAUS offers an ally a Self-delivery buff
     // only where this is true (iaus/Generate.cpp via Candidates.cpp), because the claim's delivery-flip proxy is the road
     // that lands a Self spell on someone else in combat.
+    // A CONCENTRATION Self buff at another recipient answers true where MFO's ConcProxy can be minted (CastOn's concentration
+    // fork serves it: Harbinger's concentration claim in combat, else the ConcProxy stream), 1dfcuabd309.
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
+    // WORKER (cast/HealRoad.cpp, 1dfcuabd309). The heal twin: would a Self-delivery HEAL of a_spell cast at a_recipient (any
+    // actor other than a_follower) be served by a proxy road? True when the heal claim road is open
+    // (ComposedCast::HealClaimRoadOpen: Harbinger's delivery-flip proxy), or for a CONCENTRATION heal where MFO's ConcProxy can
+    // be minted (CastOn's concentration fork). A fire-and-forget Self heal off the claim road is false (no road lands it on
+    // another actor). A pure read, no log.
+    bool HealServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
     // The CLAIM road (I4 review F1): does a standing Harbinger heal claim of a_follower, on either hand, name exactly
     // (a_spell, a_recipient)? a_recipient 0 or the follower himself = a SELF claim (the bridge reports a self claim's
     // target as 0). The same two reads Evaluator's PickAlly makes for the incumbent recipient
