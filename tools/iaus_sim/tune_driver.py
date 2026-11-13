@@ -633,13 +633,15 @@ def search_class(cls, knobs):
     out = {"kept": kept, "base": base, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": True,
            "not_searched": [n for _, n, _, _, _ in live[CFG["max_knobs"]:]]}
     if kept:   # what the accepted values change in his play, for the class-card read (the runner reports it; a card deviation is an open decision)
-        cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seeds", "1,2,3,4,5,6", "--rating", "0", "--baseline", "/dev/stdout"] + world_args("builtin")
+        # The simulator writes a --baseline file only in single-seed mode (a --seeds run prints SEED lines and nothing else), so this read
+        # was ALWAYS empty before batch 3 (found 11-13: every play_changes_natural of every run was []). One seed, 48 fights per cell.
+        cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seed", "1", "--fights", "48", "--rating", "0", "--baseline", "/dev/stdout"] + world_args("builtin")
         for c in base:
             cmd += ["--curve", c]
-        b = text_run("metrics:" + cls + ":" + " ".join(base), list(cmd), "builtin")
+        b = text_run("metrics1:" + cls + ":" + " ".join(base), list(cmd), "builtin")
         for c in kept:
             cmd += ["--curve", c]
-        n = text_run("metrics:" + cls + ":" + " ".join(base + kept), cmd, "builtin")
+        n = text_run("metrics1:" + cls + ":" + " ".join(base + kept), cmd, "builtin")
         pick = lambda t: {m.group(1): float(m.group(2)) for m in re.finditer(r"^%s\|natural\|([^=]+)=([-0-9.e]+)" % re.escape(cls), t, re.M)}
         ob, nb = pick(b), pick(n)
         ch = sorted(((abs(nb[k] - ob[k]) / (abs(ob[k]) + 1.0), k, ob[k], nb[k]) for k in ob if k in nb and abs(nb[k] - ob[k]) > 1e-9), reverse=True)[:12]
