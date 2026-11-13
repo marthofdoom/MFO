@@ -32,6 +32,7 @@
 #include "classes/Classes.h"         // class update C3: the 'MCLS' class add-on record
 #include "logistics/PlayerGiven.h"   // 86e3faccn: the 'PGIV' player-given relic record
 #include "logistics/Errand.h"        // 86e3t1mx7 (town R2): the 'ERND' errand record
+#include "logistics/Storage.h"       // 86e3t212u: the 'STOR' off-class storage record
 #include "selftest/SelfTest.h"       // dev builds only: the 'MFST' self-test record (no-op inlines in release)
 #include <cmath>                     // std::isfinite: ERND float ingestion (#11)
 #include "logistics/GemRules.h"   // revert: clear the looted-gear gem probes
@@ -722,6 +723,10 @@ namespace MFO {
         // contract: the town errands in progress (written only when one exists).
         WriteErrandRecord(a_intfc);
 
+        // 86e3t212u (kRecStorage/'STOR') -- an independent record, same isolation contract: the off-class storage chests and the
+        // pieces each follower keeps in them (logistics/Storage.cpp owns the layout, bounds and the lock). Written only when non-empty.
+        Logistics::Storage::CoSave(a_intfc);
+
         SelfTest::CoSave(a_intfc);   // dev builds only ('MFST', selftest/Record.cpp); an empty inline in release
     }
 
@@ -998,6 +1003,7 @@ namespace MFO {
         Classes::BeginLoad();          // class update C3: same belt-and-braces for 'MCLS' (+ the debug round-trip self-test)
         PlayerGiven::ClearRecord();    // 86e3faccn: same belt-and-braces for 'PGIV'
         Logistics::Errand::ClearRestorePending();   // 86e3t1mx7: same belt-and-braces for 'ERND'
+        Logistics::Storage::ClearRecord();          // 86e3t212u: same belt-and-braces for 'STOR'
         SelfTest::ClearAll();                       // dev builds only: same belt-and-braces for 'MFST'
 
         std::uint32_t type = 0, version = 0, length = 0;
@@ -1087,6 +1093,23 @@ namespace MFO {
                     continue;
                 }
                 ReadErrandRecord(a_intfc, version);
+                continue;
+            }
+            if (type == kRecStorage) {
+                // 86e3t212u: same independence contract. A newer record skips (never aborts); an old save without it simply never
+                // reaches here (nothing stored).
+                if (version > kStorageVersion) {
+                    spdlog::error("[cosave] OFF-CLASS STORAGE SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kStorageVersion);
+                    g_sawNewerSave.store(true);
+                    continue;
+                }
+                if (version < 1) {   // the MFO-B309 rule: no writer produced v0; never parse it as v1 (#11)
+                    spdlog::error("[cosave] STOR record with version {} (no such schema) -- skipped, nothing stored", version);
+                    continue;
+                }
+                Logistics::Storage::CoLoad(a_intfc, version);
                 continue;
             }
 #ifdef MFO_DEV_SELFTEST
@@ -1214,6 +1237,9 @@ namespace MFO {
         // ClearTransientState); kept as its own call beside PGIV so the serialized-record
         // contract reads in one place. A load right after this stages them again.
         Logistics::Errand::ClearRestorePending();
+        // 86e3t212u: the 'STOR' off-class storage record IS serialized too -- same contract, after StopPump (its moves in flight
+        // were dropped by Logistics::ClearTransientState above). A load right after this repopulates it.
+        Logistics::Storage::ClearRecord();
         // Dev builds only ('MFST'): runs, results and the fixture ledger. No engine call (the world is being
         // replaced; the save being loaded carries its own ledger). An empty inline in a release build.
         SelfTest::ClearAll();

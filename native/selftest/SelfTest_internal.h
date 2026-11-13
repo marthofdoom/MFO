@@ -137,6 +137,7 @@ namespace MFO::SelfTest {
     void                         ClearDrivenState();   // TestsDrive.cpp: the driven tests' session caches (called by ClearTestState)
     void                         RegisterT2();         // TestsT2.cpp: the T2 tests (called from RegisterAll, last)
     void                         RegisterBuffPotion(); // TestsBuffPotion.cpp: the buff-potion scoring test (feat/buff-potions; called from RegisterAll, after RegisterT2)
+    void                         RegisterStorage();    // TestsStorage.cpp: the off-class storage tests (feat/offclass-storage; called from RegisterAll, after RegisterBuffPotion)
     void                         ClearT2State();       // TestsT2.cpp: their main-thread result cache (called by ClearTestState)
     const std::vector<ManualItem>& T2ManualItems();    // TestsT2.cpp: the T2 steps a human must judge (appended to ManualItems())
 

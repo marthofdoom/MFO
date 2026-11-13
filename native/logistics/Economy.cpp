@@ -14,6 +14,7 @@
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include "Errand_internal.h"      // town errands: ErrandShop / ErrandPlanned (the plan entry below)
+#include "Storage.h"              // off-class storage: HoldFromSale in the sell loop (86e3t212u)
 #include <format>
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
@@ -907,8 +908,19 @@ namespace MFO::Logistics {
                 if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
                 // #21 sell price: the BASE instance value; the per-vendor unit price is Apply(base, quote.sell) below (R2).
                 const std::int32_t baseVal = entry ? entry->GetValue() : 0;
+                // OFF-CLASS STORAGE (feat/offclass-storage, ClickUp 86e3t212u): a piece every protection above let through, that
+                // belongs to a class he mastered or one ahead on his tree line and that the economy says is worth keeping, goes
+                // to his storage chest instead of the vendor (logistics/Storage.cpp; the move is its service tick's). A force-sell
+                // row (worn redundant / blacklisted / denied) is never storage's.
+                std::int32_t rowCount = static_cast<std::int32_t>(data.first);
+                if (!forceSell) {
+                    if (const std::int32_t held = Storage::HoldFromSale(a_follower, a_state, obj, entry, rowCount, baseVal); held > 0) {
+                        if (held >= rowCount) { sdiag(obj, "storage (off-class piece kept for a planned class)"); continue; }
+                        rowCount -= held;
+                    }
+                }
                 sellCandidates.push_back(SellCandidate{
-                    obj, static_cast<std::int32_t>(data.first),
+                    obj, rowCount,
                     baseVal,
                     armo && IsJewelryPiece(armo), kwf, "SELL" });
             }

@@ -2,14 +2,62 @@
 
 ClickUp 86e3t212u. Branch `feat/offclass-storage`. Written 2026-11-13 against `origin/main` 6a5c3c9f.
 
-**State: OUTLINE + TEMPLATES ONLY.** Nothing is implemented. The branch adds two skeleton files
-(`native/logistics/Storage.h`, `native/logistics/Storage.cpp`, one line in `native/CMakeLists.txt`) whose
-functions have TODO bodies and are called from nowhere. No co-save record is written or read, no INI key
-exists, no live path changed. This document is what the next author fills them in from. Line numbers are
-from 6a5c3c9f and drift: grep the symbol.
+**State: IMPLEMENTED 2026-11-13 (tier A, co-save), NOT merged.** The first version of this document (sections 1 to 12
+below) was an outline written before marth's rulings of 2026-11-12. Those rulings OVERRIDE it wherever they differ; section
+0a says what was built and supersedes the plan of sections 3, 4 (the trip parts), 5 (the layout), 7 and 8. The code is
+`native/logistics/Storage.h` / `Storage.cpp`, `Papyrus::DispatchMoveItem`, the 'STOR' record in `Serialization.h/.cpp`, the
+sale-loop hook in `Economy.cpp`, `Storage::Tick` in `Service.cpp`, and `native/selftest/TestsStorage.cpp`.
 
-What was verified and what was not is marked per item. "READ" = the code was read at that line. "NOT
-VERIFIED" = an assumption the author must check before building on it (CLAUDE.md principle 5).
+## 0a. Rulings 2026-11-12 (verbatim) and what was built
+
+- Classes OFF: "No storing" (he sells as today).
+- What is stored: "It only stores for previously mastered, or future in line. But Armor too."
+- Access: "As I said they can access it from anywhere. But only for this purpose."
+- Where: "I would say the main player home is preferred, but other safe storage exists, id have the storage moved to the
+  player home once one is bought."
+- Economy decides what is worth keeping; retrieval on a class change and when a stored piece beats what he carries.
+
+Built:
+- **No errand stop, no ERND change.** The sale loop (`Economy.cpp`, before the weapon / armor `push_back`) asks
+  `Storage::HoldFromSale`; a Store verdict holds the row (one copy) and records a want. `Storage::Tick` (the service tick's
+  idle branch, worker, out of combat, ~2 s) moves it with `Papyrus::DispatchMoveItem` (follower -> chest,
+  `ObjectReference.RemoveItem(item, 1, true, chest)`) wherever he is, and confirms it from HIS count within 30 s.
+- **Planned** = (mastered classes | classes ahead of the equipped one through `parentMask` with the same T1 root) minus the
+  equipped class. Weapon bits ignore unrestricted sets (T1, Dragonborn); armor kind per class: the mage line wears clothing
+  (with bMageWearRobes on and dolls mode off), every other class rated armor; Dragonborn (no T1 root) adds no kind.
+  Classes off / none equipped: no storing.
+- **Buckets** (one stored piece each): dagger, one-hander, two-hander, bow, crossbow, staff, shield, and head / body / hands /
+  feet for rated armor and for clothing. Store only when the piece outranks every other carried piece of its bucket and
+  his stored one, he carries exactly ONE copy (a count drop could otherwise be a sale), and use value minus sale value
+  (`Pricing::Apply` with `Pricing::Resolve(follower, none, 0)`) is at least `iErrandMinSellGold` (placeholder, Q-S-3).
+- **Chests.** Learned on the worker from the follower's own attached INTERIOR cell, a cell at most once a minute: persistent,
+  not disabled / deleted, base CONT without kRespawn, unlocked, no linked refs (scripted setups such as the vanilla book
+  shelves), not a LOTD drop-off or faction service container, ref owner none / Player / PlayerFaction; lowest FormID wins
+  (no chest inventory is read). A cell owned by Player / PlayerFaction (or unowned under LocTypePlayerHouse) gives a MAIN home
+  chest; any other cell gives an INTERIM chest only when the container is owned by the player, and only while no main home is
+  known. Target: the first main home, else the first interim. Once a main home exists every interim piece is MIGRATED through
+  his pack (chest -> him, confirmed by his count rising; him -> home, confirmed by it falling).
+- **Retrieval** (5 s cadence, one per pass): the piece fits his class now (weapon bit in his set or unrestricted; armor of the
+  kind he wears), his weapon roles keep its bucket, and by the KEEP SET's own key and rank (a mirror of `ComputeKeepSet`) it
+  beats what he carries. Only when he carries no copy. Three misses drop the entry loudly (the player took it).
+- **Evidence for the old NOT VERIFIED items.** (1) Persistent home chests: parsed Skyrim.esm / HearthFires.esm (tool
+  `Linux-Native-Tools/tools/esp_query.py` plus a cell walker): the vanilla city houses (Breezehome, Vlindrel Hall, Proudspire,
+  Honeyside) have NO persistent general container (PlayerHouseChest refs are temporary); Hjerim has a persistent wardrobe;
+  Hearthfire houses have many. So vanilla city houses do not qualify (logged, open question Q-S-13). (2) VM RemoveItem into
+  an unloaded persistent container: the standard Papyrus idiom (holding-cell containers), and MFO_Trade's merchant-chest
+  moves are the same shape; every move here is confirmed from the follower's count and a miss is a WARN, so the first field
+  run proves or refutes it.
+
+'STOR' v1 as built (supersedes section 5's block; the reader rules of section 5 stand):
+
+```
+u32 homeCount <= 16
+per home:     u32 chest, u32 cell, u32 town, u8 kind (1 main home, 2 interim; other -> dropped)
+u32 followerCount <= 4096
+per follower: u32 follower, u32 itemCount <= 16
+  per item:   u32 chest (must name a loaded home), u32 base (WEAP/ARMO), u16 count (1; 0 dropped, >1 clamped),
+              u8 flags (0x01 a store in flight at the save, 0x02 a retrieval in flight; others masked)
+```
 
 ## 0. The rulings this implements
 

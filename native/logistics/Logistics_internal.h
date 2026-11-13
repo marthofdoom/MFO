@@ -823,6 +823,11 @@ namespace MFO::Logistics {
     // StyleVotesFor, TopTwoSchoolMask). WORKER, like they are.
     MEOBridge::GemReconcilePrefs GemReconcilePrefsFor(RE::Actor* a_follower, const FollowerState& a_state);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);
+    // Card G16's class reads (EquipAuthority.cpp), shared with logistics/Storage.cpp (feat/offclass-storage). WORKER, like G16.
+    //   ClassWeaponBit: the Classes::Weapon bit a weapon belongs to (0 = fists / unknown: never off-class).
+    //   ClassSet: the follower's equipped class weapon set, 0 = unrestricted (no class, tree off, T1, Dragonborn).
+    std::uint16_t ClassWeaponBit(const RE::TESObjectWEAP* a_w);
+    std::uint16_t ClassSet(RE::FormID a_follower);
     bool IsCreatureArmor(const RE::TESObjectARMO* a_armo);
     RE::TESObjectARMO* WornInLogicalSlot(RE::Actor* a_follower, int a_logicalSlot);
     bool AcquireEquip(RE::Actor* a_follower, RE::TESBoundObject* a_item,

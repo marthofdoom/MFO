@@ -1,129 +1,150 @@
 #pragma once
 #include "PCH.h"
-#include "State.h"   // FollowerState
+#include "State.h"            // FollowerState
+#include "classes/Classes.h"  // Classes::Mask / Id (the pure plan reads the class table)
 
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-// logistics/Storage.h -- OFF-CLASS STORAGE (ClickUp 86e3t212u). TEMPLATE ONLY (2026-11-13): every function below is a
-// compiling SKELETON with a TODO body. NOTHING here is called from a live path, no co-save record is written or read,
-// and no INI key exists yet. Design, layout, seats and the ordered plan: Docs/research/2026-11/offclass-storage-design.md.
+namespace MFO { class CoSaveBuffer; }   // Serialization.h (the round-trip self-test's byte buffer)
+
+// logistics/Storage.h -- OFF-CLASS STORAGE (ClickUp 86e3t212u). Design: Docs/research/2026-11/offclass-storage-design.md.
 //
-// WHAT IT WILL BE. marth 2026-10-18: "a follower keep a tracked set expensive off class items that they store in the
-// player home, with no player home, they dont store." Rulings 2026-11-12: kept = the economy says its use value later
-// beats its sale value now; only equipment he PLANS TO USE; an owned, non-respawning container in a cell the player
-// owns, the same chest every time; storing is a STOP on the town errand itinerary; retrieval needs no trip; the tracked
-// set is saved; a stored piece is never sold.
+// WHAT IT IS. marth 2026-10-18: "a follower keep a tracked set expensive off class items that they store in the player home".
+// Rulings 2026-11-12 (they override the first design where they differ; the doc's section 0 quotes them):
+//   * classes OFF: "No storing" (he sells as today);
+//   * what: "It only stores for previously mastered, or future in line. But Armor too." -- a piece is PLANNED only for a class
+//     he has mastered or one ahead of his equipped class on his own tree line (same T1 root); weapons, shields AND armor;
+//   * access: "they can access it from anywhere. But only for this purpose." -- no trip, no errand stop: the move to and from
+//     the chest is a Papyrus VM RemoveItem wherever he is (Papyrus::DispatchMoveItem), and the chest is used for nothing else;
+//   * where: "the main player home is preferred, but other safe storage exists, id have the storage moved to the player home
+//     once one is bought." -- the main home's chest when one is known, else an interim SAFE container (persistent, non-respawn,
+//     owned by the player); once a home is learned every piece in interim storage is moved there. No safe storage at all = no
+//     storing;
+//   * the economy decides what is worth keeping (use value later >= sale value now + iErrandMinSellGold, a placeholder);
+//   * retrieval: on a class change, and when a stored piece is better than what he carries.
 //
-// THREADING (design section 6). Every entry point runs on the AddTask job worker (the service tick, the errand planner,
-// the pump's sweep) EXCEPT: LearnHomeOnMain (MAIN: it walks a loaded cell's references), CoSave / CoLoad (the SKSE save /
-// load callbacks, pump paused / stopped) and ClearRecord / ClearTransientState (revert, pump drained). The table sits
-// under ONE leaf mutex that is never held across an engine, Harbinger, Papyrus or WriteRecordData call (the PGIV rule).
-// Item moves go through the Papyrus VM (ObjectReference.RemoveItem with akOtherContainer): the house rule is "no native
-// inventory mutation off screen" (Papyrus.h DispatchRemoveItem), and the chest is usually unloaded.
+// THE JUDGE OF "WOULD BE SOLD" IS THE SALE PATH ITSELF (logistics/Economy.cpp, the sell-candidate loop): HoldFromSale is asked
+// only for an unworn weapon / armor row that cleared every protection above it (museum, stock gear, player pick, keep set,
+// worn, gem hold, quest, catalog exclusion), so storage needs no copy of those rules.
+//
+// THREADING. Every entry point runs on the AddTask job worker (the service tick and the sale loop it drives) EXCEPT CoSave /
+// CoLoad (the SKSE save / load callbacks, pump paused / stopped) and ClearRecord / ClearTransientState (revert, pump drained).
+// The tables sit under ONE leaf mutex that is never held across an engine, Papyrus or WriteRecordData call. A chest is found by
+// walking the follower's OWN attached interior cell on the worker (the Economy / LootScan walk precedent); a chest's inventory
+// is never read natively (an unpopulated container's GetInventory faulted once: Service.cpp's economy note), so every move is
+// confirmed from the FOLLOWER's count.
 namespace MFO::Logistics::Storage {
 
     using Clock = std::chrono::steady_clock;
 
-    // ── the saved data (the proposed 'STOR' v1 record; design section 5 has the byte layout) ────────────────────────
-    // A chosen home chest. Identities only (FormIDs, never handles). cell / town are stored with it because an unloaded
-    // ref's cell and location chain are not a read this module wants to depend on.
+    // ── the saved data (the 'STOR' v1 record; Serialization.h has the byte layout) ─────────────────────────────────────
+    // A storage chest. Identities only (FormIDs, never handles).
     struct Home {
-        RE::FormID chest = 0;   // the container REFR (persistent, player-owned cell, base CONT without kRespawn)
-        RE::FormID cell  = 0;   // its parent CELL
-        RE::FormID town  = 0;   // LocationTypes::TownAnchor of its location chain (0 = none: retrieval works, storing never plans)
+        static constexpr std::uint8_t kMain    = 1;   // a chest in the player's home (preferred)
+        static constexpr std::uint8_t kInterim = 2;   // another SAFE (player-owned) container, used only until a home is known
+        RE::FormID   chest = 0;   // the container REFR (persistent, base CONT without kRespawn)
+        RE::FormID   cell  = 0;   // its parent CELL (informational: the chest is addressed by its REFR)
+        RE::FormID   town  = 0;   // LocationTypes::TownAnchor of his location chain at learning (informational, 0 = none)
+        std::uint8_t kind  = kMain;
     };
-    // One stored piece. ONE entry per (follower, bucket): a better piece of the same bucket RELEASES the older one to the
-    // chest's owner (its entry is dropped, the item stays in the chest; it is never sold).
+    // One stored piece. ONE entry per (follower, Bucket): a better piece of the same bucket RELEASES the older one to the
+    // player (its entry is dropped, the item stays in the chest; it is never sold).
     struct Item {
-        static constexpr std::uint8_t kUnverified = 0x01;   // moved off screen (VM dispatch): confirmed on his next loaded tick
-        static constexpr std::uint8_t kAllFlags   = 0x01;
+        static constexpr std::uint8_t kUnverified = 0x01;   // a store was in flight at the save: confirmed on his first loaded pass
+        static constexpr std::uint8_t kRetrieving = 0x02;   // a retrieval was in flight at the save: settled on his first loaded pass
+        static constexpr std::uint8_t kAllFlags   = 0x03;
         RE::FormID    chest = 0;
-        RE::FormID    base  = 0;    // TESObjectWEAP, or a shield TESObjectARMO
-        std::uint16_t count = 1;    // 1 today (one piece per bucket); the field leaves room
+        RE::FormID    base  = 0;    // TESObjectWEAP or TESObjectARMO
+        std::uint16_t count = 1;    // 1 (one piece per bucket); the field leaves room
         std::uint8_t  flags = 0;
     };
-
-    // ── the PURE decision (no engine object: the self-test and the errand planner both call it) ─────────────────────
-    // Buckets = the keep set's (SwapUp.cpp ComputeKeepSet bucketOf) plus the shield.
-    enum class Bucket : std::uint8_t { None, OneHand, TwoHand, Bow, Crossbow, Staff, Shield };
-    enum class Verdict : std::uint8_t {
-        Sell,            // today's behaviour: the sale path takes it
-        Store,           // hold it from sale and store it at the home stop
+    struct Table {
+        std::vector<Home>                                 homes;
+        std::unordered_map<RE::FormID, std::vector<Item>> stored;   // follower -> his pieces
     };
+
+    // ── the PURE decision (no engine object: the self-test calls it table-driven) ────────────────────────────────────────
+    enum class Bucket : std::uint8_t {
+        None, Dagger, OneHand, TwoHand, Bow, Crossbow, Staff, Shield,
+        HeadRated, BodyRated, HandsRated, FeetRated,
+        HeadCloth, BodyCloth, HandsCloth, FeetCloth,
+        kCount
+    };
+    const char* BucketName(Bucket a_b);
+    // Armor kinds (a class wears one of them): rated armor, or clothing (the mage line with bMageWearRobes on).
+    namespace Kind {
+        inline constexpr std::uint8_t kRated    = 1 << 0;
+        inline constexpr std::uint8_t kClothing = 1 << 1;
+    }
+    // The armor kind class a_class wears. a_robes = bMageWearRobes on and dolls mode off.
+    std::uint8_t KindOf(Classes::Id a_class, bool a_robes);
+
+    // What his classes plan: the union over PLANNED classes = (mastered | the classes ahead of a_equipped with the same T1
+    // root, transitively through parentMask), minus a_equipped. Weapon bits skip unrestricted sets (T1, Dragonborn: they fit
+    // everything and would plan every item); armor kinds skip a class with no T1 root (Dragonborn).
+    struct Plan {
+        std::uint16_t weapons = 0;
+        std::uint8_t  kinds   = 0;
+        Classes::Mask classes = 0;   // the planned classes (for the log)
+    };
+    Plan PlannedFor(std::uint8_t a_equipped, Classes::Mask a_mastered, bool a_robes);
+
+    enum class Verdict : std::uint8_t { Sell, Store };
     struct StoreInput {
         Bucket        bucket = Bucket::None;
-        std::uint16_t classBit = 0;        // Classes::Weapon bit of the piece (0 = none)
+        std::uint16_t classBit = 0;        // Classes::Weapon bit of a weapon / shield (0 for armor)
+        std::uint8_t  armorKind = 0;       // Kind:: of an armor piece (0 for a weapon / shield)
         bool          classesOn = false;   // Classes::Active() and a class equipped
-        std::uint16_t currentSet = 0;      // his equipped class's weapon set (0 = unrestricted / classes off)
-        std::uint16_t plannedSets = 0;     // union of the restricted sets of the classes he can take or that are next on his tree
-        int           perkRanks = 0;       // classes OFF: his owned perk ranks in the piece's skill tree (OPEN QUESTION Q-S-1)
-        float         rank = 0.0f;         // the bucket's rank (WeaponScore / attack damage / gold value / armor rating)
-        float         bestOtherRank = -1.0f;   // best rank among every OTHER carried piece of the bucket and his stored piece (-1 = none)
+        std::uint16_t currentSet = 0;      // his equipped class's weapon set (0 = unrestricted)
+        std::uint8_t  currentKind = 0;     // the armor kind his equipped class wears
+        Plan          plan;                // PlannedFor(...)
+        bool          storageReady = false;   // a usable chest exists (home or interim)
+        bool          singleCopy = true;   // he carries exactly one copy (a store is confirmed by his count)
+        float         rank = 0.0f;         // the bucket's rank (StoreRank in Storage.cpp)
+        float         bestOtherRank = -1.0f;   // best rank among every OTHER carried piece of the bucket and his stored one (-1 = none)
         bool          tieLoses = false;    // an equal-ranked other piece wins the tie (value, then the lower FormID)
         std::int32_t  value = 0;           // the instance's base value (InventoryEntryData::GetValue)
         float         buyMult = 1.0f;      // Pricing::Quote::buy  (>= 1)
         float         sellMult = 1.0f;     // Pricing::Quote::sell (<= 1)
-        std::int32_t  minMargin = 0;       // Config::g_errandMinSellGold: what makes a stop worth walking
-        bool          homeReady = false;   // Prepare said a home stop can be planned on this trip
+        std::int32_t  minMargin = 0;       // Config::g_errandMinSellGold (PLACEHOLDER for the sim logistics world, Q-S-3)
     };
     struct StoreOutput {
         Verdict      verdict = Verdict::Sell;
         std::int32_t useValue = 0, saleValue = 0;   // Pricing::Apply(value, buy / sell)
         const char*  why = "";                       // one word group for the [storage] line
     };
-    // TODO(author): design section 2 + 3. No side effect, no engine read.
     StoreOutput DecideStore(const StoreInput& a_in);
 
     struct RetrieveInput {
         Bucket        bucket = Bucket::None;
         std::uint16_t classBit = 0;
+        std::uint8_t  armorKind = 0;
         std::uint16_t currentSet = 0;        // 0 = unrestricted / classes off
-        bool          roleKeeps = false;     // his weapon roles keep this bucket now (ComputeWeaponRoles; shield: off hand is not a weapon)
-        float         rank = 0.0f;
-        float         bestCarriedRank = -1.0f;   // best carried piece of the bucket (-1 = none)
+        std::uint8_t  currentKind = 0;       // the armor kind he wears now
+        bool          roleKeeps = false;     // his weapon roles keep this bucket now (ComputeWeaponRoles); armor: true
+        float         rank = 0.0f;           // the KEEP SET's rank of the stored piece (so a retrieved piece is the one kept)
+        float         bestCarriedRank = -1.0f;   // the keep set's best carried rank in that keep bucket (-1 = none)
+        bool          tieWins = false;       // equal ranks: the stored piece wins the keep set's own tie-break (value)
         bool          classChanged = false;  // his equipped class differs from the last evaluation's (the log's reason only)
     };
-    // TODO(author): design section 4. True = bring it back now.
     bool DecideRetrieve(const RetrieveInput& a_in, const char** a_whyOut = nullptr);
 
-    // ── live seats (ALL UNCALLED today; the design's plan wires them one by one) ────────────────────────────────────
-    // INI switch + Harbinger errand support. TODO(author): Config::g_offClassStorage (bOffClassStorage, default ON).
+    // ── live seats (WORKER) ────────────────────────────────────────────────────────────────────────────────────────────
+    // bOffClassStorage. (Classes OFF is decided per follower inside: no class equipped = no storing.)
     bool Enabled();
 
-    // MAIN thread. The player stands in a cell he owns: pick (or confirm) that cell's chest. Design section 1.
-    void LearnHomeOnMain();
-    // Worker, cheap: ask for LearnHomeOnMain when the player's cell changed (posts at most once per cell).
-    void NoteWorkerTick();
-
-    // Errand planner (worker, TryStart, BEFORE EconomyErrandPlan): can THIS trip carry a home stop for him?
-    enum class Prep : std::uint8_t { Off, Ready, Pending };
-    Prep Prepare(RE::Actor* a_follower, RE::FormID a_playerTown);
-
-    // Economy.cpp sell loop (worker): how many copies of this sell candidate are held back for the home stop (0 = none,
-    // today's sale). a_value = the instance's base value. Records the piece on his want list. Call BeginSaleScan first.
-    void BeginSaleScan(RE::FormID a_follower);
+    // Economy.cpp sell loop: how many copies of this sell candidate are held back from the sale (0 = sell as today, 1 = it
+    // is going to storage). Records the piece on his want list; Tick moves it.
     std::int32_t HoldFromSale(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_obj,
-                              RE::InventoryEntryData* a_entry, std::int32_t a_value);
+                              RE::InventoryEntryData* a_entry, std::int32_t a_count, std::int32_t a_value);
 
-    // The physical stop (worker; the Smith stop's shape, logistics/ErrandSmith.cpp). The planner half (Augment) takes the
-    // itinerary types of Errand_internal.h and is therefore declared THERE when it is wired (design section 8, step 6).
-    enum class Result : std::uint8_t { Continue, Done, Failed };
-    struct StepOut { Result res = Result::Continue; std::string why; };
-    bool Begin(RE::Actor* a_follower, RE::FormID a_chest, const std::string& a_followerName, Clock::time_point a_now);
-    StepOut Step(RE::Actor* a_follower, Clock::time_point a_now);
-    void End(RE::FormID a_follower, const char* a_why);
-    bool Working(RE::FormID a_follower);
-    std::string Describe(RE::FormID a_follower);   // "Storing gear at home" ("" = no work). Any thread.
-
-    // Off screen (worker): the stage's game-day cost and its end (VM dispatch, entries flagged kUnverified).
-    double SimWorkDays();
-    std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName);
-
-    // Retrieval, from anywhere (worker, the idle branch of the service tick, on its own cadence).
-    void RetrieveTick(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now);
+    // The service tick's idle branch (logistics/Service.cpp), out of combat, loaded: learn a chest from the cell he stands
+    // in, settle flags restored by a load, confirm in-flight moves, dispatch wanted stores, retrieve, migrate interim -> home.
+    void Tick(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now);
 
     // Queries. Any thread (they copy under the leaf mutex).
     bool IsStored(RE::FormID a_follower, RE::FormID a_base);
@@ -133,9 +154,18 @@ namespace MFO::Logistics::Storage {
     // Roster removal (Followers::DrainRosterRemovals, beside PlayerGiven::Forget): his entries go, the items stay in the chest.
     void Forget(RE::FormID a_follower);
 
-    // ── the proposed 'STOR' co-save record (NOT WIRED: Serialization.h / Serialization.cpp do not know it yet) ────────
-    void CoSave(SKSE::SerializationInterface* a_intfc);                          // 'STOR' v1
+    // ── the 'STOR' co-save record (Serialization.h has the layout) ────────────────────────────────────────────────────
+    void CoSave(SKSE::SerializationInterface* a_intfc);                          // 'STOR' v1, written only when non-empty
     void CoLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version); // version-checked by the caller
     void ClearRecord();            // ResetAllState after StopPump, and LoadCallback start (the record is SAVED)
-    void ClearTransientState();    // want lists, plans, work records, cadences (session-only)
+    void ClearTransientState();    // want lists, in-flight moves, cadences, learned-cell marks (session-only)
+
+    // The codec on a plain Table (the self-test's round trip; CoSave / CoLoad run the same template on the SKSE interface).
+    // ReadBody resolves every id (#8) and drops what does not resolve; false = the record was aborted (short read /
+    // implausible count) and what was parsed before it is kept.
+    struct LoadStats {
+        std::uint32_t droppedHomes = 0, droppedFollowers = 0, droppedItems = 0, clampedFlags = 0, skippedRuntime = 0;
+    };
+    void WriteBody(CoSaveBuffer& a_out, const Table& a_table, LoadStats* a_stats = nullptr);
+    bool ReadBody(CoSaveBuffer& a_in, std::uint32_t a_version, Table& a_out, LoadStats& a_stats);
 }

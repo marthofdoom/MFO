@@ -178,6 +178,7 @@ namespace MFO::Config {
             else if (a_key == "iSmithWorkGameMin")  { setI(g_smithWorkGameMin, 1, 240); return; }            // legacy: read, no longer used
             else if (a_key == "fSmithWorkRealSec")  { setF(g_smithWorkRealSec, 1.0f, 600.0f); return; }
             else if (a_key == "bErrandSmithFurniture") { setB(g_errandSmithFurniture); return; }            // R8: station animation via Harbinger (P-SMITH-1)
+            else if (a_key == "bOffClassStorage") { setB(g_offClassStorage); return; }                     // off-class storage (86e3t212u), default ON
             else if (a_key == "bErrandInn")         { setB(g_errandInn);     return; }   // R7, default ON, INI-only
             else if (a_key == "iInnMeals")          { setI(g_innMeals, 0, 5);      return; }
             else if (a_key == "iInnFoodStock")      { setI(g_innFoodStock, 0, 20); return; }
@@ -554,6 +555,7 @@ namespace MFO::Config {
             g_smithWorkGameMin   = 20;
             g_smithWorkRealSec   = 60.0f;
             g_errandSmithFurniture = true;
+            g_offClassStorage    = true;    // off-class storage (86e3t212u) -- ON (features ship on)
             g_errandInn          = true;    // R7 inn + temple errands -- ON (features ship on)
             g_innMeals           = 1;
             g_innFoodStock       = 3;

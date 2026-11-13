@@ -169,6 +169,38 @@ namespace MFO::Papyrus {
         return ok;
     }
 
+    bool DispatchMoveItem(RE::TESObjectREFR* a_from, RE::TESForm* a_item, std::int32_t a_count, RE::TESObjectREFR* a_to) {
+        if (!a_from || !a_item || !a_to || a_count <= 0 || a_from == a_to) { ++g_failures; return false; }
+        auto* vm = VM();
+        if (!vm) { ++g_failures; return false; }
+
+        RE::VMHandle handle{};
+        if (!HandleFor(a_from, handle)) { ++g_failures; return false; }
+
+        // Both Form arguments are packed by their STATIC type (PackUnpack.h: decay_pointer_t<T>::FORMTYPE), so each is passed as
+        // its concrete class: the item as Weapon or Armor (Form subclasses, accepted by akItemToRemove), the destination as Actor
+        // (an ObjectReference subclass) or ObjectReference.
+        auto* weap = a_item->As<RE::TESObjectWEAP>();
+        auto* armo = weap ? nullptr : a_item->As<RE::TESObjectARMO>();
+        if (!weap && !armo) { ++g_failures; return false; }
+        auto* toActor = a_to->As<RE::Actor>();
+        std::unique_ptr<RE::BSScript::IFunctionArguments> args;
+        if (weap && toActor)
+            args.reset(RE::MakeFunctionArguments(std::move(weap), std::move(a_count), true, std::move(toActor)));
+        else if (weap)
+            args.reset(RE::MakeFunctionArguments(std::move(weap), std::move(a_count), true, std::move(a_to)));
+        else if (toActor)
+            args.reset(RE::MakeFunctionArguments(std::move(armo), std::move(a_count), true, std::move(toActor)));
+        else
+            args.reset(RE::MakeFunctionArguments(std::move(armo), std::move(a_count), true, std::move(a_to)));
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        const bool ok = vm->DispatchMethodCall2(handle, "ObjectReference", "RemoveItem", args.get(), callback);
+        if (ok) ++g_dispatches;
+        else    ++g_failures;
+        return ok;
+    }
+
     bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token) {
         if (!a_quest) { ++g_failures; return false; }
         auto* vm = VM();

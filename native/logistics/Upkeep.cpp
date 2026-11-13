@@ -19,6 +19,7 @@
 #include "Loadout.h"       // LeftHandSlot: the left-hand heal equip names its slot
 #include "Lotd.h"          // LOTD awareness: the deposit trip's lifecycle edges (feat/mfo-lotd)
 #include "Errand.h"        // town errands: ClearTransientState on revert
+#include "Storage.h"       // off-class storage: ClearTransientState on revert
 #include "PotionFx.h"      // feat/buff-potions: ClearBuffDrinks
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
@@ -798,6 +799,7 @@ namespace MFO::Logistics {
         Lockpick::Clear();    // LP-M1: pick jobs, verdicts and their Harbinger holds are per-session
         Lotd::ClearTransientState();   // LOTD: the deposit trip + its claims, the needs cache, the ledger
         Errand::ClearTransientState(); // town errands: the records + their Harbinger claims
+        Storage::ClearTransientState(); // off-class storage: want lists, moves in flight, cadences (the 'STOR' table is ClearRecord's)
     }
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {

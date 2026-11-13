@@ -19,6 +19,7 @@
 #include "TeleportCompat.h" // follower-teleport mod leash clamp + teleport recognition (86e3ec824)
 #include "Lotd.h"          // LOTD awareness: the museum gambit + deposit trip (feat/mfo-lotd)
 #include "Errand.h"        // town errands (R1a): Tick / TryStart
+#include "Storage.h"       // off-class storage (86e3t212u): Tick
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -2283,6 +2284,10 @@ namespace MFO::Logistics {
                 MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
             }
             GemRules::PumpProbes(a_follower);   // looted-gear gem probes: keep or put back once the strip landed
+            // OFF-CLASS STORAGE (feat/offclass-storage, ClickUp 86e3t212u): learn a storage chest from the cell he stands in, move
+            // the pieces the sale path held to it, and bring a stored piece back on a class change or when it beats what he
+            // carries -- from anywhere, no trip (marth 2026-11-12). Own cadence inside; out of combat; a no-op with bOffClassStorage 0.
+            Storage::Tick(a_follower, a_state, now);
             // TOWN ERRANDS (Harbinger ABI >= 24): the planner owns the economy; the instant proximity trade runs
             // ONLY when errands are off or Harbinger is absent / too old (TryStart returns false then).
             // bProximityTrading (INI-only, default OFF) gates ONLY the instant proximity trade below; the errand planner (TryStart) is unchanged.
