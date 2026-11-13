@@ -416,6 +416,17 @@ namespace MFO::Iaus::Candidates {
             auto ptr = h.get();   // HOLD the NiPointer
             addAlly(ptr.get());
         }
+        // Review F2: a concentration Self buff at an ally runs as a minted 0xFF proxy (Harbinger's claim or the ConcProxy), so
+        // the book's activeOn (keyed to ae->spell == source) never reads it up there. The stream registries are keyed to the
+        // SOURCE form: a live stream at the ally = up there. (After the allies are built; the buff branch runs before them.)
+        if (s.hasBook)
+            for (auto& e : s.book.entries) {
+                if (!e.allyRoad || e.nature != Prune::Nature::Buff) continue;
+                for (const auto& al : s.allies)
+                    if (Actuation::TargetStreamLive(selfID, e.form, al.id) &&
+                        std::find(e.activeOn.begin(), e.activeOn.end(), al.id) == e.activeOn.end())
+                        e.activeOn.push_back(al.id);
+            }
 
         // ── G10: the pairs the last decision ranked on top, plus the pairs still refused (a call is also the
         // prefetch). A No is stamped on its entry, so NoteDecision keeps a refused pair on the list although the
@@ -447,7 +458,7 @@ namespace MFO::Iaus::Candidates {
             // on-target stream (g_targetCast) and a standing Harbinger heal claim on either hand.
             if (Actuation::SelfStreamLive(selfID, e.form) || Actuation::HealClaimLive(selfID, e.form, 0))
                 s.liveStreams.push_back({ e.form, 0u, Tri::Yes });
-            if (e.selfDelivery) continue;
+            if (e.selfDelivery && !e.allyRoad) continue;   // review F1: a Self heal served at an ally (allyRoad) can be streaming there
             for (const auto& a : s.allies)
                 if (Actuation::TargetStreamLive(selfID, e.form, a.id) || Actuation::HealClaimLive(selfID, e.form, a.id))
                     s.liveStreams.push_back({ e.form, a.id, Tri::Yes });

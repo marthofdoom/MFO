@@ -792,10 +792,13 @@ per concern:
     ally only where a proxy road serves it (`IausSource` then fires `cast_target`); `SpellBook` skips 0xFF dynamic forms (Harbinger's taught proxy).
     **PROXIED VERSIONS ARE CANDIDATES (1dfcuabd309, 2026-11-13, NOT field-run):** the proxy itself never enters the book, but the SOURCE spell's proxied
     version does: `allyRoad` is also filled for a Self-delivery HEAL by `Actuation::HealServedAtAlly` (`cast/HealRoad.cpp`: true when
-    `ComposedCast::HealClaimRoadOpen`, the pure read of `ChooseHealRoad`'s gates = Harbinger's heal-claim delivery-flip proxy, or for a CONCENTRATION heal
-    where MFO's `ConcProxy` can be minted), and `BuffServedAtAlly` answers true for a CONCENTRATION Self buff (CastOn's concentration fork: Harbinger's
-    concentration claim / `ConcProxy`). `Generate` reads `allyRoad` for heals and buffs alike; `IausSource` fires a CastHeal / CastBuff at another actor as
-    `cast_target` (the source FormID). A fire-and-forget Self heal off the claim road stays himself-only (RestorationCastDirect casts it unflipped).
+    `ComposedCast::HealClaimRoadOpen`, the pure read of `ChooseHealRoad`'s gates (both call the one predicate `ComposedCast::HealClaimGatesOpen`) = Harbinger's heal-claim delivery-flip proxy, or for a CONCENTRATION heal
+    where MFO's `ConcProxy` can be minted), and `BuffServedAtAlly` answers true for a CONCENTRATION Self buff only while the ANIMATED concentration claim's gates are open (CastSeatsSupported,
+    Harbinger present, bApmfCast, !bLegacyCastHybrid, a combat controller: a pure read of `DirectTarget.cpp`'s claim site, not `g_firingRule`), never the
+    unanimated `ConcProxy` alone; a concentration HEAL off the claim road keeps the ConcProxy road (no animated road exists for it). The gather pushes an
+    ally with a live `TargetStreamLive` stream into that buff's `activeOn` (the book's up-read cannot see a minted proxy), and a Self heal's `allyRoad`
+    lets `liveStreams` carry its on-ally streams. CastOn REFUSES (warn, NoOp) a fire-and-forget Self heal at another recipient off the claim road. `Generate` reads `allyRoad` for heals and buffs alike; `IausSource` fires a CastHeal / CastBuff at another actor as
+    `cast_target` (the source FormID). A fire-and-forget Self heal off the claim road stays himself-only (RestorationCastDirect would cast it unflipped; CastOn now refuses it).
     **What breaks:** recording a lock for anything but a landed non-concentration Buff (the lock also gates the dispel skip); reading it from a path that holds
     another lock (it is a leaf); dropping the clear on combat end (a 600 s Candlelight would stay locked into the next fight); letting `HealClaimRoadOpen`
     drift from `ChooseHealRoad`'s gates (a candidate the road then answers Direct for: an FF Self heal would land on the caster); answering `allyRoad` true

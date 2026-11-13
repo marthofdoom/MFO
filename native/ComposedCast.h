@@ -223,6 +223,10 @@ namespace MFO::ComposedCast {
     // release: ChooseHealRoad keeps those side effects for the caster's own lap. Keep the two in step. Worker (racy
     // controller load, the same as ChooseHealRoad's).
     bool HealClaimRoadOpen(RE::Actor* a_follower, RE::SpellItem* a_spell);
+    // The ONE pure predicate of those gates (review F3): Heal kind + Enabled + heal-claim ABI + bEquipToCast + a live combat
+    // controller. ChooseHealRoad and HealClaimRoadOpen both call it, so they cannot drift. `a_noController` (optional) is set
+    // true only when every other gate passed and the controller alone is missing (ChooseHealRoad's release/log branch).
+    bool HealClaimGatesOpen(RE::Actor* a_follower, RE::SpellItem* a_spell, bool* a_noController = nullptr);
 
     // NoteOocDirectHeal (review F2 on 3a42371): the out-of-combat heal callers
     // (CastSelfDirect / CastTargetDirect with g_firingRule == kNoRule) no longer ask

@@ -675,6 +675,21 @@ namespace {
                   "a Self heal a proxy road serves (allyRoad) is offered at the hurt player, keyed to the source spell");
         }
         Check(CountFam(g, Family::CastBuff) == 0, "Oakflesh already active on him: no buff candidate");
+        {   // 1dfcuabd309 review F2: a Self buff a proxy road serves (allyRoad) is offered at the player and Lydia until the
+            // gather marks a live stream there (Candidates.cpp pushes the ally into activeOn): then it is "up" and not offered.
+            // (The stream read itself is engine state the harness cannot express; this pins Generate's consumption of it.)
+            Snapshot sb = s;
+            for (auto& e : sb.book.entries) if (e.form == 0x5AD5C) { e.allyRoad = true; e.activeOn = { 0x14F00 }; }
+            const Generated gb = Generate(sb, mage, t);
+            for (auto& e : sb.book.entries) if (e.form == 0x5AD5C) e.activeOn.push_back(0x14);
+            const Generated gu = Generate(sb, mage, t);
+            auto buffAt = [](const Generated& gg, std::uint32_t tgt) {
+                for (const auto& c : gg.actions) if (c.family == Family::CastBuff && c.form == 0x5AD5C && c.target == tgt) return true;
+                return false;
+            };
+            Check(buffAt(gb, 0x14) && !buffAt(gu, 0x14) && buffAt(gu, 0xA2C94),
+                  "an ally buff with a live proxy stream (activeOn at the player) is not re-offered there; others still are");
+        }
         Check(CountFam(g, Family::CastSummon) == 1 && CountFam(g, Family::CastWard) == 1, "one summon, one ward");
         Check(CountFam(g, Family::DrinkHealth) == 1 && CountFam(g, Family::DrinkMagicka) == 1 &&
               CountFam(g, Family::DrinkStamina) == 0, "drinks: only the stocked ones (P2)");
