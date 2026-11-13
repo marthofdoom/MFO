@@ -442,7 +442,7 @@ namespace MFO::Iaus {
     Tuning& LiveTuning() { static Tuning t = ShippedTuning(); return t; }
     const Tuning& DefaultTuning() { return LiveTuning(); }
 
-    bool SetTuningScalar(Tuning& a_t, std::string_view a_name, float a_v) {
+    bool SetTuningScalar(Tuning& a_t, std::string_view a_name, float a_v, std::string* a_why) {
         struct Scalar { const char* name; float Tuning::* m; };
         static constexpr Scalar kScalars[] = {   // the sim's kTuneScalars (tools/iaus_sim/Tune.h), same names
             { "t.momentum", &Tuning::momentum }, { "t.postureMomentum", &Tuning::postureMomentum }, { "t.preempt", &Tuning::preemptMargin }, { "t.actFloor", &Tuning::actFloor },
@@ -452,8 +452,14 @@ namespace MFO::Iaus {
             { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
         };
-        if (!std::isfinite(a_v)) return false;
-        for (const Scalar& k : kScalars) if (a_name == k.name) { a_t.*(k.m) = a_v; return true; }
+        if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
+        for (const Scalar& k : kScalars) if (a_name == k.name) {
+            // every one is a multiplier, margin, line or a cooldown / duration in seconds: negative is never valid; the two HP lines are fractions
+            const bool hpLine = a_name == "t.emergencyHpHigh" || a_name == "t.emergencyHpLow";
+            if (a_v < 0.0f || (hpLine && a_v > 1.0f)) { if (a_why) *a_why = hpLine ? "out of range: must be 0..1" : "out of range: must be >= 0"; return false; }
+            a_t.*(k.m) = a_v; return true;
+        }
+        if (a_why) *a_why = "unknown t.<name> scalar";
         return false;
     }
 

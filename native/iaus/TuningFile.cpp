@@ -48,6 +48,8 @@ namespace MFO::Iaus::TuningFile {
             std::size_t row = 0;       // Kind::Class: the ClassCurves row
             Stamp last;                // what was last loaded
             std::optional<Stamp> pending;   // a change seen once; applied when seen unchanged on the next check
+            Stamp seen;                     // the stamp a pending change settled on (what a successful load marks as loaded)
+            bool errLogged = false;         // the read-failure warning is logged once per failure streak
         };
 
         struct State {
@@ -69,6 +71,7 @@ namespace MFO::Iaus::TuningFile {
 
         bool ParseFloat(std::string_view s, float& out) {
             s = Trim(s);
+            if (!s.empty() && s.front() == '+') { s.remove_prefix(1); if (s.empty() || s.front() == '-' || s.front() == '+') return false; }   // from_chars takes no '+'
             if (s.empty()) return false;
             const auto r = std::from_chars(s.data(), s.data() + s.size(), out);
             return r.ec == std::errc() && r.ptr == s.data() + s.size() && std::isfinite(out);
@@ -162,13 +165,13 @@ namespace MFO::Iaus::TuningFile {
             if (a_name.rfind("st.", 0) == 0 || a_name.rfind("pk.", 0) == 0 || a_name.rfind("row.", 0) == 0) { a_err = "a simulator-only knob (the class package): the game has no table for it"; return false; }
             if (a_name.rfind("worth.", 0) == 0) { a_err = "belongs in potions.txt"; return false; }
             if (a_name.rfind("loot.", 0) == 0) { a_err = "belongs in looting.txt"; return false; }
-            if (!SetTuningScalar(a_t, a_name, a_v)) { a_err = "unknown t.<name> scalar"; return false; }
-            return true;
+            return SetTuningScalar(a_t, a_name, a_v, &a_err);
         }
 
-        // Walk a file line by line. a_apply(entryText, err) -> bool for each entry (a comma list splits into entries when a_split).
+        // Walk a file line by line. a_apply(lineText, err) -> bool for each non-empty line (comments, a leading --set / --curve token already stripped).
+        // a_quiet: a rejected line logs at debug, not warn (a class row re-applied because shared.txt changed already warned when its own file loaded).
         template <class Apply>
-        Counts Walk(const std::string& a_text, const std::string& a_file, bool a_split, Apply a_apply, bool a_quiet) {
+        Counts Walk(const std::string& a_text, const std::string& a_file, Apply a_apply, bool a_quiet) {
             Counts n;
             std::istringstream in(a_text);
             std::string raw;
@@ -179,26 +182,22 @@ namespace MFO::Iaus::TuningFile {
                 if (const auto hash = v.find('#'); hash != std::string_view::npos) v = v.substr(0, hash);
                 v = Trim(v);
                 if (v.empty()) continue;
-                for (const char* lead : { "--set", "--curve" })   // a tuning run's own output pastes in unchanged
-                    if (v.rfind(lead, 0) == 0 && v.size() > std::char_traits<char>::length(lead) && std::isspace(static_cast<unsigned char>(v[std::char_traits<char>::length(lead)]))) {
-                        v = Trim(v.substr(std::char_traits<char>::length(lead)));
+                for (const char* lead : { "--set", "--curve" }) {   // a tuning run's own output pastes in unchanged
+                    const std::size_t len = std::char_traits<char>::length(lead);
+                    if (v.rfind(lead, 0) == 0 && v.size() > len && std::isspace(static_cast<unsigned char>(v[len]))) {
+                        v = Trim(v.substr(len));
                         if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front()) v = Trim(v.substr(1, v.size() - 2));
                         break;
                     }
-                std::size_t p = 0;
-                while (p <= v.size()) {
-                    const auto q = a_split ? v.find(',', p) : std::string_view::npos;
-                    const std::string_view ent = Trim(v.substr(p, q == std::string_view::npos ? std::string_view::npos : q - p));
-                    if (!ent.empty()) {
-                        std::string err;
-                        if (a_apply(ent, err)) ++n.applied;
-                        else { ++n.rejected; spdlog::warn("[tuning] MFO_Tuning/{}:{}: rejected '{}': {}", a_file, line, std::string(ent), err); }
-                    }
-                    if (q == std::string_view::npos) break;
-                    p = q + 1;
+                }
+                std::string err;
+                if (a_apply(v, err)) ++n.applied;
+                else {
+                    ++n.rejected;
+                    if (a_quiet) spdlog::debug("[tuning] MFO_Tuning/{}:{}: rejected '{}': {}", a_file, line, std::string(v), err);
+                    else         spdlog::warn("[tuning] MFO_Tuning/{}:{}: rejected '{}': {}", a_file, line, std::string(v), err);
                 }
             }
-            (void)a_quiet;
             return n;
         }
 
@@ -212,12 +211,27 @@ namespace MFO::Iaus::TuningFile {
             return true;
         }
 
-        std::optional<std::string> ReadFile(const std::string& a_name) {
-            std::ifstream f(std::string(kDir) + "/" + a_name + ".txt", std::ios::binary);
-            if (!f) return std::nullopt;
-            std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            if (s.size() > kMaxBytes) { spdlog::warn("[tuning] MFO_Tuning/{}.txt is {} bytes (cap {}): ignored, shipped values", a_name, s.size(), kMaxBytes); return std::nullopt; }
-            return s;
+        enum class Read { Ok, Missing, Failed };
+        // Ok: a_out holds the text (BOM stripped). Missing: the file truly is not there (the table reverts to shipped). Failed: it exists but cannot be used
+        // (locked, open fails, over the cap): the caller keeps the live table, warns once, and does NOT mark the file loaded, so the next check retries.
+        Read ReadFile(Entry& e, std::string& a_out) {
+            const fs::path p = fs::path(kDir) / (e.name + ".txt");
+            std::error_code ec;
+            if (!fs::exists(p, ec) && !ec) return Read::Missing;
+            const auto sz = fs::file_size(p, ec);
+            auto fail = [&](const std::string& why) {
+                if (!e.errLogged) { e.errLogged = true; spdlog::warn("[tuning] MFO_Tuning/{}.txt: {}: keeping the values already in use, retrying", e.name, why); }
+                return Read::Failed;
+            };
+            if (ec) return fail("cannot stat (" + ec.message() + ")");
+            if (sz > kMaxBytes) return fail("is " + std::to_string(sz) + " bytes, over the " + std::to_string(kMaxBytes) + " byte cap");
+            std::ifstream f(p, std::ios::binary);
+            if (!f) return fail("cannot be opened (locked?)");
+            a_out.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            if (f.bad()) return fail("read error");
+            if (a_out.size() >= 3 && a_out.compare(0, 3, "\xEF\xBB\xBF") == 0) a_out.erase(0, 3);   // a UTF-8 BOM (Notepad)
+            e.errLogged = false;
+            return Read::Ok;
         }
 
         void LogLoaded(const std::string& a_name, const Counts& n, std::uint64_t a_hash, bool a_quiet) {
@@ -226,60 +240,82 @@ namespace MFO::Iaus::TuningFile {
         }
 
         // ── the four rebuilds: each starts from the SHIPPED table, then applies its file (so deleting a line reverts it) ──────────────
-        void RebuildPotions(const Entry& e, bool a_firstLoad) {
+        // Each returns false when the file exists but could not be read: the live table is then left alone and the caller does not mark the file loaded.
+        bool RebuildPotions(Entry& e, bool a_firstLoad) {
             WorthTable w = ShippedTuning().worth;
-            const auto text = ReadFile(e.name);
-            if (text) {
-                const Counts n = Walk(*text, e.name + ".txt", false, [&](std::string_view ent, std::string& err) {
+            std::string text;
+            const Read r = ReadFile(e, text);
+            if (r == Read::Failed) return false;
+            if (r == Read::Ok) {
+                const Counts n = Walk(text, e.name + ".txt", [&](std::string_view ent, std::string& err) {
                     std::string_view name; float v = 0.0f;
                     if (!SplitNameValue(ent, name, v, err)) return false;
                     if (name.rfind("worth.", 0) != 0) { err = "a potions.txt line is worth.<name>=<v>"; return false; }
-                    if (!SetWorthKnob(w, name.substr(6), v)) { err = "unknown worth knob or non-finite value"; return false; }
-                    return true; }, false);
-                LogLoaded(e.name, n, Fnv1a(*text), a_firstLoad && n.applied + n.rejected == 0);
+                    return SetWorthKnob(w, name.substr(6), v, &err); }, false);
+                LogLoaded(e.name, n, Fnv1a(text), a_firstLoad && n.applied + n.rejected == 0);
             } else if (!a_firstLoad) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
             g.worth = w;
             LiveTuning().worth = w;
+            return true;
         }
 
-        void RebuildLooting(const Entry& e, bool a_firstLoad) {
+        bool RebuildLooting(Entry& e, bool a_firstLoad) {
             LootTuning t = ShippedLootTuning();
-            const auto text = ReadFile(e.name);
-            if (text) {
-                const Counts n = Walk(*text, e.name + ".txt", false, [&](std::string_view ent, std::string& err) {
+            std::string text;
+            const Read r = ReadFile(e, text);
+            if (r == Read::Failed) return false;
+            if (r == Read::Ok) {
+                const Counts n = Walk(text, e.name + ".txt", [&](std::string_view ent, std::string& err) {
                     std::string_view name; float v = 0.0f;
                     if (!SplitNameValue(ent, name, v, err)) return false;
                     if (name.rfind("loot.", 0) != 0) { err = "a looting.txt line is loot.<name>=<v>"; return false; }
-                    if (!SetLootKnob(t, name.substr(5), v)) { err = "unknown loot knob or bad value (an int knob takes a whole number, consumableSellRoad 0 or 1)"; return false; }
-                    return true; }, false);
-                LogLoaded(e.name, n, Fnv1a(*text), a_firstLoad && n.applied + n.rejected == 0);
+                    return SetLootKnob(t, name.substr(5), v, &err); }, false);
+                LogLoaded(e.name, n, Fnv1a(text), a_firstLoad && n.applied + n.rejected == 0);
             } else if (!a_firstLoad) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
             LiveLootTuning() = t;
+            return true;
         }
 
-        void RebuildShared(const Entry& e, bool a_firstLoad) {
+        bool RebuildShared(Entry& e, bool a_firstLoad) {
             Tuning t = ShippedTuning();
             std::vector<Profile::WeightOverride> weights;
-            const auto text = ReadFile(e.name);
-            if (text) {
-                const Counts n = Walk(*text, e.name + ".txt", true, [&](std::string_view ent, std::string& err) {
-                    std::string_view name; float v = 0.0f;
-                    if (!SplitNameValue(ent, name, v, err)) return false;
-                    if (name.find(':') != std::string_view::npos) { err = "a class line belongs in that class's own file"; return false; }
-                    return ApplySharedEntry(t, weights, name, v, err); }, false);
-                LogLoaded(e.name, n, Fnv1a(*text), a_firstLoad && n.applied + n.rejected == 0);
+            std::string text;
+            const Read r = ReadFile(e, text);
+            if (r == Read::Failed) return false;
+            if (r == Read::Ok) {
+                // A comma line is the sim's `--set a=1,b=2`: it is accepted or rejected WHOLE (ParseSets parity), so a bad entry leaves none of its line applied.
+                const Counts n = Walk(text, e.name + ".txt", [&](std::string_view line, std::string& err) {
+                    const Tuning savedT = t;
+                    const auto savedW = weights;
+                    std::size_t p = 0;
+                    while (p <= line.size()) {
+                        const auto q = line.find(',', p);
+                        const std::string_view ent = Trim(line.substr(p, q == std::string_view::npos ? std::string_view::npos : q - p));
+                        std::string_view name; float v = 0.0f;
+                        bool ok = SplitNameValue(ent, name, v, err);
+                        if (ok && name.find(':') != std::string_view::npos) { err = "a class line belongs in that class's own file"; ok = false; }
+                        if (ok) ok = ApplySharedEntry(t, weights, name, v, err);
+                        if (!ok) { err = "entry '" + std::string(ent) + "': " + err + " (the whole line is rejected)"; t = savedT; weights = savedW; return false; }
+                        if (q == std::string_view::npos) break;
+                        p = q + 1;
+                    }
+                    return true; }, false);
+                LogLoaded(e.name, n, Fnv1a(text), a_firstLoad && n.applied + n.rejected == 0);
             } else if (!a_firstLoad) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
             t.worth = g.worth;   // potions.txt owns the worth table
             LiveTuning() = t;
             CC::SetSharedWeights(weights);
+            return true;
         }
 
-        void RebuildClass(const Entry& e, bool a_firstLoad, bool a_quiet) {
+        bool RebuildClass(Entry& e, bool a_firstLoad, bool a_quiet) {
             CC::Row row = CC::Defaults()[e.row];
-            const auto text = ReadFile(e.name);
-            if (text) {
+            std::string text;
+            const Read r = ReadFile(e, text);
+            if (r == Read::Failed) return false;
+            if (r == Read::Ok) {
                 const Tuning& shared = LiveTuning();
-                const Counts n = Walk(*text, e.name + ".txt", false, [&](std::string_view ent, std::string& err) {
+                const Counts n = Walk(text, e.name + ".txt", [&](std::string_view ent, std::string& err) {
                     const auto eq = ent.find('=');
                     if (eq == std::string_view::npos) { err = "no '=' (expected [<class>:]<path>=<value>)"; return false; }
                     std::string_view lhs = Trim(ent.substr(0, eq));
@@ -291,9 +327,10 @@ namespace MFO::Iaus::TuningFile {
                         lhs = Trim(lhs.substr(colon + 1));
                     }
                     return ApplyClassSpec(row, lhs, v, shared, err); }, a_quiet);
-                LogLoaded(e.name, n, Fnv1a(*text), a_quiet || (a_firstLoad && n.applied + n.rejected == 0));
+                LogLoaded(e.name, n, Fnv1a(text), a_quiet || (a_firstLoad && n.applied + n.rejected == 0));
             } else if (!a_firstLoad && !a_quiet) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
             CC::SetLiveRow(e.row, row);
+            return true;
         }
 
         Stamp StatOf(const Entry& e) {
@@ -319,7 +356,7 @@ namespace MFO::Iaus::TuningFile {
         }
 
         void RebuildAllClasses(bool a_firstLoad, bool a_quiet) {
-            for (const Entry& e : g.files) if (e.kind == Kind::Class) RebuildClass(e, a_firstLoad, a_quiet);
+            for (Entry& e : g.files) if (e.kind == Kind::Class) RebuildClass(e, a_firstLoad, a_quiet);
         }
     }
 
@@ -337,32 +374,35 @@ namespace MFO::Iaus::TuningFile {
             for (Entry& e : g.files) { e.last = StatOf(e); if (e.last.exists) ++present; }
             if (!dir) spdlog::info("[tuning] MFO_Tuning/ folder not found: shipped values for every table");
             else spdlog::info("[tuning] MFO_Tuning/: {} of {} files present, the rest use shipped values", present, g.files.size());
-            for (const Entry& e : g.files) if (e.kind == Kind::Potions) RebuildPotions(e, true);
-            for (const Entry& e : g.files) if (e.kind == Kind::Looting) RebuildLooting(e, true);
-            for (const Entry& e : g.files) if (e.kind == Kind::Shared) RebuildShared(e, true);
-            RebuildAllClasses(true, false);
+            // a file that exists but cannot be read now is retried: its stamp is left as "absent" so the next check sees a change
+            for (Entry& e : g.files) if (e.kind == Kind::Potions && !RebuildPotions(e, true)) e.last = Stamp{};
+            for (Entry& e : g.files) if (e.kind == Kind::Looting && !RebuildLooting(e, true)) e.last = Stamp{};
+            for (Entry& e : g.files) if (e.kind == Kind::Shared && !RebuildShared(e, true)) e.last = Stamp{};
+            for (Entry& e : g.files) if (e.kind == Kind::Class && !RebuildClass(e, true, false)) e.last = Stamp{};
             return;
         }
 
-        std::vector<const Entry*> changed;
+        std::vector<Entry*> changed;
         for (Entry& e : g.files) {
             const Stamp cur = StatOf(e);
             if (cur == e.last) { e.pending.reset(); continue; }
-            if (e.pending && *e.pending == cur) { e.last = cur; e.pending.reset(); changed.push_back(&e); }
+            if (e.pending && *e.pending == cur) { e.pending.reset(); e.seen = cur; changed.push_back(&e); }
             else e.pending = cur;   // first sight of a change: wait one more check so a file still being written is not read half-done
         }
         if (changed.empty()) return;
 
+        // An entry is marked loaded (last = its stamp) only when its rebuild read the file; a read failure keeps the live table and retries next check.
+        auto mark = [](Entry* e, bool ok) { if (ok) e->last = e->seen; };
         bool sharedChanged = false;
-        for (const Entry* e : changed) if (e->kind == Kind::Potions) RebuildPotions(*e, false);
-        for (const Entry* e : changed) if (e->kind == Kind::Looting) RebuildLooting(*e, false);
-        for (const Entry* e : changed) if (e->kind == Kind::Shared) { RebuildShared(*e, false); sharedChanged = true; }
+        for (Entry* e : changed) if (e->kind == Kind::Potions) mark(e, RebuildPotions(*e, false));
+        for (Entry* e : changed) if (e->kind == Kind::Looting) mark(e, RebuildLooting(*e, false));
+        for (Entry* e : changed) if (e->kind == Kind::Shared) { const bool ok = RebuildShared(*e, false); mark(e, ok); sharedChanged = sharedChanged || ok; }
         if (sharedChanged) {   // a class curve override starts from the live shared curve, so every class row is re-applied (quietly) on top of the new shared table
             spdlog::info("[tuning] shared.txt changed: class rows re-applied on top of it");
             RebuildAllClasses(false, true);
-            for (const Entry* e : changed) if (e->kind == Kind::Class) RebuildClass(*e, false, false);   // the changed ones log their own line
+            for (Entry* e : changed) if (e->kind == Kind::Class) mark(e, RebuildClass(*e, false, false));   // the changed ones log their own line
         } else {
-            for (const Entry* e : changed) if (e->kind == Kind::Class) RebuildClass(*e, false, false);
+            for (Entry* e : changed) if (e->kind == Kind::Class) mark(e, RebuildClass(*e, false, false));
         }
     }
 }

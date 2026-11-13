@@ -17,6 +17,7 @@
 // WorthTable, NOT searched: the sim / oracle search sets them later (tools/iaus_sim is NOT edited by this change). Tuning::worth carries the table.
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <string_view>
 
 namespace MFO::Iaus {
@@ -63,18 +64,30 @@ namespace MFO::Iaus {
     };
 
     // The by-name edit surface of the table above (MFO_Tuning/potions.txt: `worth.<name>=<v>`; iaus/TuningFile.cpp). ONE list, next to the table: add a
-    // member above, add its row here. False on an unknown name or a non-finite value.
-    inline bool SetWorthKnob(WorthTable& a_t, std::string_view a_name, float a_v) {
-        struct Knob { const char* name; float WorthTable::* m; };
+    // member above, add its row here WITH its valid range (a value that divides by zero or goes NaN downstream is refused, a_why says the range).
+    // False on an unknown name, a non-finite value or one outside the range.
+    inline bool SetWorthKnob(WorthTable& a_t, std::string_view a_name, float a_v, std::string* a_why = nullptr) {
+        struct Knob { const char* name; float WorthTable::* m; float lo; bool loOpen; float hi; };   // valid: lo (or > lo when loOpen) .. hi
+        constexpr float kInf = 3.0e38f;
         static constexpr Knob kKnobs[] = {
-            { "ratioCap", &WorthTable::ratioCap }, { "pressureFull", &WorthTable::pressureFull }, { "dangerSpan", &WorthTable::dangerSpan }, { "hurtWeight", &WorthTable::hurtWeight },
-            { "magickaWinLine", &WorthTable::magickaWinLine }, { "staminaWinLine", &WorthTable::staminaWinLine }, { "winNeed", &WorthTable::winNeed },
-            { "ttlFloorSec", &WorthTable::ttlFloorSec }, { "ttlSpanSec", &WorthTable::ttlSpanSec }, { "wealthFrac", &WorthTable::wealthFrac }, { "wealthFloor", &WorthTable::wealthFloor },
-            { "costWeight", &WorthTable::costWeight }, { "scarcityRate", &WorthTable::scarcityRate }, { "restoreCostScale", &WorthTable::restoreCostScale },
-            { "restoreUseWeight", &WorthTable::restoreUseWeight }, { "floor", &WorthTable::floor }, { "foodMinGain", &WorthTable::foodMinGain },
+            { "ratioCap", &WorthTable::ratioCap, 0.0f, true, kInf }, { "pressureFull", &WorthTable::pressureFull, 0.0f, true, kInf }, { "dangerSpan", &WorthTable::dangerSpan, 0.0f, true, kInf },
+            { "hurtWeight", &WorthTable::hurtWeight, 0.0f, false, kInf }, { "magickaWinLine", &WorthTable::magickaWinLine, 0.0f, false, 1.0f },
+            { "staminaWinLine", &WorthTable::staminaWinLine, 0.0f, false, 1.0f }, { "winNeed", &WorthTable::winNeed, 0.0f, false, 1.0f },
+            { "ttlFloorSec", &WorthTable::ttlFloorSec, 0.0f, false, kInf }, { "ttlSpanSec", &WorthTable::ttlSpanSec, 0.0f, true, kInf },
+            { "wealthFrac", &WorthTable::wealthFrac, 0.0f, false, kInf }, { "wealthFloor", &WorthTable::wealthFloor, 0.0f, true, kInf },
+            { "costWeight", &WorthTable::costWeight, 0.0f, false, kInf }, { "scarcityRate", &WorthTable::scarcityRate, 0.0f, false, kInf },
+            { "restoreCostScale", &WorthTable::restoreCostScale, 0.0f, false, kInf }, { "restoreUseWeight", &WorthTable::restoreUseWeight, 0.0f, false, kInf },
+            { "floor", &WorthTable::floor, 0.0f, false, 1.0f }, { "foodMinGain", &WorthTable::foodMinGain, 0.0f, false, 1.0f },
         };
-        if (!std::isfinite(a_v)) return false;
-        for (const Knob& k : kKnobs) if (a_name == k.name) { a_t.*(k.m) = a_v; return true; }
+        if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
+        for (const Knob& k : kKnobs) if (a_name == k.name) {
+            if (a_v < k.lo || (k.loOpen && a_v <= k.lo) || a_v > k.hi) {
+                if (a_why) *a_why = std::string("out of range: must be ") + (k.loOpen ? "> 0" : ">= 0") + (k.hi < kInf ? " and <= 1" : "");
+                return false;
+            }
+            a_t.*(k.m) = a_v; return true;
+        }
+        if (a_why) *a_why = "unknown worth knob";
         return false;
     }
 

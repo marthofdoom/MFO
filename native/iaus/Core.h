@@ -278,7 +278,7 @@ namespace MFO::Iaus {
     [[nodiscard]] const Tuning& DefaultTuning();
     [[nodiscard]] const Tuning& ShippedTuning();
     [[nodiscard]] Tuning& LiveTuning();
-    bool SetTuningScalar(Tuning& a_t, std::string_view a_name, float a_v);
+    bool SetTuningScalar(Tuning& a_t, std::string_view a_name, float a_v, std::string* a_why = nullptr);   // a_why: the range / reason on false
 
     // ── Class profile: the weight-input shape card I8 fills (section 4.9) ─────────────────────────────────
     // classWeight(candidate) = family[f] x role[tag]. A consideration weight override REPLACES that family's

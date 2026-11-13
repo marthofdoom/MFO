@@ -3352,3 +3352,4 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 
 ### feat/tuning-file (raised against the author's own note, 2026-11-13)
 - **DUPLICATED SPEC PARSER (SEV-5, deferred until a Fable sim batch):** the sim's spec parser (`tools/iaus_sim/RealClasses.cpp ApplyCurveSpecs`, `Tune.h SetParam` / `ParseSets` / `kTuneScalars`) and the native one (`native/iaus/TuningFile.cpp`, `Catalogue.cpp SetTuningScalar`) are two copies of the same grammar. Until the sim moves onto the native parser, a new knob or form must be added to BOTH or a pasted tuning line is rejected in game. tools/iaus_sim was off limits to the author of this change.
+- **(SEV-5, raised against 9eafa8c7, Opus 5.5 review of feat/tuning-file):** verbatim: "shared.txt change runs RebuildAllClasses, which also reads class files still in pending (mid-write); transient, next check re-applies final content"

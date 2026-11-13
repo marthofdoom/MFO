@@ -49,7 +49,10 @@ namespace MFO::Iaus::SpellBook {
     // EQUIPPED class when the class tree is on (Classes::Active), else the T1 class of his resolved combat class
     // (Followers::ResolvedClassFast: the Gambit-tab pick, or the Auto vote). ANY THREAD: the Classes:: accessors
     // and ResolvedClassFast are mirrors. resolved == false (a benched follower left on Auto): nothing is gated.
-    [[nodiscard]] ClassGate GateFor(RE::FormID a_follower);
+    // a_curves = false: leave out the LIVE class-row fields (curveClass, drinkHealthLine, touchSpentSec, schoolBump: ClassCurves::Apply / ApplyMastered).
+    // Those rows are swapped in place on the WORKER (iaus/TuningFile.cpp), so a caller on the MAIN thread (Measure) or in a gated sink body (Board)
+    // passes false: it reads only the class-gating fields (spellsOnClass, scrollUser, strict, weapon*, spellsFromMastered ...), never the live rows.
+    [[nodiscard]] ClassGate GateFor(RE::FormID a_follower, bool a_curves = true);
     // A casting class (ruling Q34 / Q36): the mage line and every hybrid (all six T3 hybrids, Grand Battlemage
     // and Dragonborn pair a weapon line with a magic school).
     [[nodiscard]] bool CastingClass(const Classes::ClassDef& a_def);
