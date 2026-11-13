@@ -93,12 +93,12 @@ namespace MFO::Catalog {
                 if (cur != Cure::kNone)           { g_cure[fid]   = cur; ++nc; }
                 if (hasFx) {
                     std::vector<Iaus::PotionFx> v;
-                    for (const auto& f : e["fx"]) {
+                    for (const auto& fe : e["fx"]) {
                         Iaus::PotionFx fx;
-                        if (!Iaus::BuffFromName(f.value("kind", std::string{}), fx.kind)) continue;   // a kind a newer patcher wrote: skipped
-                        fx.magnitude = f.value("mag", 0.0f);
-                        fx.duration  = f.value("dur", 0.0f);
-                        fx.av        = f.value("av", -1);
+                        if (!Iaus::BuffFromName(fe.value("kind", std::string{}), fx.kind)) continue;   // a kind a newer patcher wrote: skipped
+                        fx.magnitude = fe.value("mag", 0.0f);
+                        fx.duration  = fe.value("dur", 0.0f);
+                        fx.av        = fe.value("av", -1);
                         v.push_back(fx);
                     }
                     g_fx[fid] = std::move(v);
