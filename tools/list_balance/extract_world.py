@@ -92,6 +92,8 @@ def main():
     ap.add_argument('--data', action='append', default=[]); ap.add_argument('--out'); ap.add_argument('--name')
     ap.add_argument('--vanilla', action='store_true', help='only the five base ESMs of this install (the unmodded reference set, name Vanilla)')
     ap.add_argument('--selfcheck', action='store_true', help='print the vanilla layout self-check rows and exit 1 on a miss')
+    ap.add_argument('--named', default='', help='batch 3 sanity cells: comma list of NPC_ records exported whatever their hostility, each an EDID or plugin:hexfid (e.g. skyrim.esm:15D09); TEST INPUT ONLY, never logic')
+    ap.add_argument('--named-scan', default='', help='print the NPC_ EDIDs containing this text and exit (to find a --named EDID)')
     a = ap.parse_args()
     name = a.name or os.path.basename(a.list.rstrip('/'))
     order, where = find_plugins(a.list, a.profile, a.data)
@@ -435,6 +437,22 @@ def main():
             h = any(khostile(key(u32(d, 4)), depth + 1) for d in subsall(subs, 'LVLO') if len(d) >= 12)
         hmemo[k] = h; return h
 
+    # ── batch 3 sanity cells: named followers (--named), exported as plain npc rows (TEST INPUT: the sim builds a perked follower from them) ──
+    if a.named_scan:
+        for k, (kk, fl, subs) in by.get('NPC_', {}).items():
+            e = edid(subs)
+            if a.named_scan.lower() in (e or '').lower(): print('NPC_', k, e)
+        sys.exit(0)
+    named = {}
+    for sel in [x for x in a.named.split(',') if x]:
+        if ':' in sel:
+            pl_, fid = sel.split(':', 1); k = (pl_.lower(), int(fid, 16))
+        else:
+            k = next((kk for kk, (key_, fl, subs) in by.get('NPC_', {}).items() if (edid(subs) or '').lower() == sel.lower()), None)
+        if k not in by.get('NPC_', {}) and k in achrw and achrw[k][3] is not None:   # a placed reference's FormID (what a field log prints): its base
+            nm = sub(achrw[k][3], 'NAME'); k = achrw[k][0](u32(nm, 0)) if nm else k
+        named[sel] = actor_ref(k) if k in by.get('NPC_', {}) else None
+        print('named', sel, '->', k, named[sel], edid(by['NPC_'][k][2]) if k in by.get('NPC_', {}) else '')
     # ── placed actors -> encounters (clusters of hostile actors inside one cell) ──
     ecz = {}
     for k, (key, fl, subs) in by.get('ECZN', {}).items():
@@ -537,7 +555,7 @@ def main():
     out = dict(list=name, profile=a.profile, plugins=len(order), pluginsMissing=missing, gmst=dict(sorted(gmst.items())),
                races=rows['race'], classes=rows['clas'], cstyles=rows['csty'], weapons=rows['weap'], armors=rows['armo'], ammo=rows['ammo'],
                lvli=rows['lvli'], lvln=rows['lvln'], npcs=rows['npc'], spells=rows['spel'], perks=rows['perk'], potions=potions,
-               encounters=encounters, selfcheck=selfcheck)
+               encounters=encounters, selfcheck=selfcheck, named=named)
     path = a.out or os.path.expanduser('~/.cache/mfo-list-balance/%s.world.json' % name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f: json.dump(out, f, separators=(',', ':'))

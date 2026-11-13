@@ -60,6 +60,7 @@ namespace Sim {
     inline bool  g_pointBlank = false;    // --point-blank: under fCombatRangedAttackHoldTimeMinDistance the bow hold is fCombatRangedAttackHoldTimeAbsoluteMin
     inline float g_drawSpoil = 0.0f;      // --draw-spoil P: a melee hit that lands on a drawing archer spoils the draw with chance P (MODEL, no engine source)
     inline bool  g_foeStyles = false;     // --foe-styles: a melee foe backpedals after a blow with the chance its CSTY close-range Fallback Mult gives, then re-engages (Part C)
+    inline std::string g_namedFollower;   // --named-follower <label>: the SUBJECT is built from that named record (skills, health, race, gear; the class kit fills what it lacks)
     inline float g_spaceSize = 0.0f;      // --space R: an ENCLOSED fight (the encounter's cell is an interior) is bounded by a disc of radius >= R around its start (Part C); 0 = open everywhere
     inline int   g_spaceForce = -1;       // --space-force enclosed|open: every fight that type (the sensitivity axis); -1 = by the encounter's cell
     inline bool  g_buffDurReal = false;   // --buff-dur real: a cast buff is up for its record duration (the lab used max(30 s, duration))
@@ -193,6 +194,7 @@ namespace Sim {
         std::map<std::string, double> gmst;
         Rules rules;
         std::vector<ActorSpec> specs;
+        std::map<std::string, std::vector<std::pair<int, int>>> named;   // batch 3 sanity cells (compile_world.py named): label -> (level, spec index); TEST INPUT
         std::vector<SimSpell> foeSpells;
         std::vector<Encounter> encounters;
         std::vector<int> buckets;

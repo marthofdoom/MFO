@@ -596,6 +596,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--posture-report")) g_postureReport = true;
         else if (!std::strcmp(argv[i], "--ranged-perks")) { if (i + 1 < argc && !std::strcmp(argv[i + 1], "off")) { g_rangedPerks = false; ++i; } else if (i + 1 < argc && !std::strcmp(argv[i + 1], "on")) ++i; }   // BATCH 3: the bow skill's ModAttackDamage chain (default ON; "off" = the lab before the fix)
         else if (!std::strcmp(argv[i], "--point-blank")) g_pointBlank = true;
+        else if (!std::strcmp(argv[i], "--named-follower") && i + 1 < argc) g_namedFollower = argv[++i];                   // BATCH 3 sanity cell (test input)
         else if (!std::strcmp(argv[i], "--foe-styles")) g_foeStyles = true;                                                // PART C: foe backpedal from its CSTY Fallback Mult
         else if (!std::strcmp(argv[i], "--space") && i + 1 < argc) g_spaceSize = std::max(0.0f, static_cast<float>(std::atof(argv[++i])));   // PART C: enclosed fights bounded (radius >= R)
         else if (!std::strcmp(argv[i], "--space-force") && i + 1 < argc) { const char* v = argv[++i]; g_spaceForce = !std::strcmp(v, "enclosed") ? 1 : !std::strcmp(v, "open") ? 0 : -1; }                                              // BATCH 3: the hold under fCombatRangedAttackHoldTimeMinDistance

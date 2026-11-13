@@ -170,6 +170,21 @@ namespace Sim {
         std::vector<std::string> taught;   // --teach: the subject only, a casting class only
         if (F.ctl.empty() && !g_teach.empty() && sc.gate.spellsOnClass) { if (ensure) taught = *ensure; for (const std::string& t : g_teach) taught.push_back(t); ensure = &taught; }
         auto fb = std::make_shared<FollowerBuild>(BuildFollower(D, sc.fam, sc.kit, sc.gate, level, R, true, ensure));
+        if (F.ctl.empty() && !g_namedFollower.empty()) {   // batch 3 sanity cell: the subject from a named record (the spec compiled nearest his level)
+            const auto it = D.named.find(g_namedFollower);
+            if (it == D.named.end() || it->second.empty()) { std::fprintf(stderr, "--named-follower %s: not in this world's sim.json (compile_world.py with extract_world.py --named)\n", g_namedFollower.c_str()); std::exit(2); }
+            int best = -1, bd = 1 << 30; for (const auto& [lv, si] : it->second) if (si >= 0 && std::abs(lv - level) < bd) { bd = std::abs(lv - level); best = si; }
+            const ActorSpec& ns = D.specs[static_cast<std::size_t>(best)]; ActorSpec& a = fb->spec; Kit& k = fb->book.kit;
+            a.race = ns.race; a.hp = ns.hp; a.mp = ns.mp; a.sp = ns.sp; a.hpR = ns.hpR; a.mpR = ns.mpR; a.spR = ns.spR; a.skill = ns.skill; a.run = ns.run; a.mass = ns.mass;
+            if (ns.melee.Has()) { a.melee = ns.melee; k.melee = true; }
+            if (ns.ranged.Has()) { a.ranged = ns.ranged; if (ns.ammoDmg > 0.0f) a.ammoDmg = ns.ammoDmg; k.bow = ns.ranged.anim != 9; k.crossbow = ns.ranged.anim == 9; if (k.arrows + k.bolts <= 0) k.arrows = R.I(20, 80); }
+            if (ns.ar > 0.0f) { a.ar = ns.ar; a.pieces = ns.pieces; }
+            a.shield = a.shield && a.melee.Has() && !a.melee.TwoH();
+            // his perks: the follower perk model (row 11) at HIS skills, per weapon (the record's own PRKR entries are condition-gated: row 10)
+            a.atkMult = a.melee.Has() ? PerkBest(D.pAttack, std::to_string(a.melee.skill), a.Skill(a.melee.skill)) : 1.0f;
+            a.powMult = a.melee.Has() ? PerkBest(D.pPower, std::to_string(a.melee.skill), a.Skill(a.melee.skill)) : 1.0f;
+            a.rangedAtkMult = a.ranged.Has() ? PerkBest(D.pAttack, std::to_string(a.ranged.skill), a.Skill(a.ranged.skill)) : -1.0f;
+        }
         auto spec = std::make_shared<ActorSpec>(fb->spec); spec->name = F.ctl.empty() ? "Follower" : "Follower" + std::to_string(F.ctl.size() + 1);
         Body& b = F.Add(Role::Follower, spec, x, y); b.ctl = static_cast<int>(F.ctl.size()); b.arrows = fb->book.kit.arrows + fb->book.kit.bolts;
         if (worn > 0) { b.c.hp *= R.U(1.0f - worn, 1.0f); b.c.mp *= R.U(1.0f - worn, 1.0f); }

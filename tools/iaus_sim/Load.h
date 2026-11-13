@@ -64,6 +64,7 @@ namespace Sim {
             a.atkMult = static_cast<float>(s["atkMult"].num(1)); a.powMult = static_cast<float>(s["powMult"].num(1));
             b.specs.push_back(std::move(a));
         }
+        for (const auto& kv : root["named"].o) for (const auto& lv : kv.second.o) b.named[kv.first].push_back({ std::atoi(lv.first.c_str()), static_cast<int>(lv.second.num(-1)) });
         for (const J& bk : root["buckets"].a) b.buckets.push_back(static_cast<int>(bk.num()));
         for (const J& e : root["encounters"].a) {
             Encounter en; en.cell = e["cell"].s; en.interior = e["interior"].yes();
