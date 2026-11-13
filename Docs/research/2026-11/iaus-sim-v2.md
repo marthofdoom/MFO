@@ -2699,3 +2699,38 @@ table is superseded by this one.
 Read: today's rules leave about 1080 to 1240 gold of value per 8-stop dungeon on the floor, and 0.2 to 3.4 J of potions; the largest
 divergences are (c), behaviours today's rules do not have: gold, gems and gear gathered to sell (no default row takes them) and
 mid-dungeon sell runs. How much of that the IAUS loot scorer should chase depends on the VALUE function, which is marth's call.
+
+## 35. Batch 3: the archer's posture edge and the buff's foe term (marth 11-12: "Sim decides the edge") (2026-11-12)
+
+Branch `feat/oracle-gap` after the review round of 34. Opus author. The field (deck 11-12, Tuxbornrc1, Adelinda 00015D09, diagnosis
+`diag-t2-mage-buffs.md` 1 and 3): the archer spent 59% of her combat time in melee posture with 85 to 147 arrows; every melee swap came
+at attack range x0.19 to 0.25, inside the 540-unit crossover of the class-blind posture curves Logi(-8 / 8, 0.45) on distance / 1200
+(`native/iaus/Catalogue.cpp`, the `equip` family). The mage buffed in a loop: the buff utility has no foe term, and the lab held a cast
+buff up for at least 30 s with only its armor / resist effect modelled (`World.h`).
+
+### 35.1 What the lab lacked, checked one by one (FACT / MODEL as in 31.2)
+
+| Item | What the lab did | What is built (switch; OFF = the lab before, byte-identical) | Source | Level |
+|---|---|---|---|---|
+| Marksman vs melee skill | skills per class weight (row 4, PROVEN), but EVERY shot was multiplied by the ModAttackDamage chain of the MELEE weapon's skill (`Load.h` `atkMult`, applied in `WeaponDamage`): an archer's bow carried his One-handed perks | `--ranged-perks`: a shot carries the chain of the BOW's skill (`ActorSpec::rangedAtkMult`, a follower build) | a ModAttackDamage entry is conditioned on the weapon it fires for (Overdraw on a bow, Armsman on a one-hander; ENGINE_NOTES perk entry class 2, CalculateWeaponDamage); the lab's own perk table is keyed by weapon skill (`Load.h` pAttack 6 / 7 / 8) | FACT (the chain), MODEL (the unconditioned-entry rule of row 10 stands) |
+| The melee weapon he carries | the class kit's one-hander from the level ladder (`Load.h BuildFollower`) | nothing: the field archer's only melee weapon was a relic Honed Falmer Sword, damage 12 (`MFO.log` 22:07:38), not weaker than the ladder's; no source says an archer carries less | field log | unchanged |
+| Bow draw interrupted by a foe in melee | `bowDraw` (fBowDrawTime, `Data.h`) sets the draw; only a STAGGER (power attack, bash, poise) or a control cancels it (`World.h Stagger`); a plain hit does not | `--draw-spoil P`: a melee hit landing mid-draw spoils it with chance P | none: whether a plain hit interrupts an NPC's draw is not decoded (the vanilla fStagger* settings are extracted, row 20, not used) | MODEL; sensitivity only, never in the search |
+| Point-blank bow | hold U(0.25, 1.5) x 0.5 at every distance | `--point-blank`: under fCombatRangedAttackHoldTimeMinDistance (256) the hold is fCombatRangedAttackHoldTimeAbsoluteMin (0.1) | GMST names and values (gmst_defaults.json, 1.6.1170); the blend is not decoded | GMST + MODEL |
+| Foes closing on an archer | foes target by distance, last attacker x1.8, retarget 3 to 7 s, and close on their target at run speed (row 22) | nothing: the field logs hold no distance of the foes on him (`[sense]` gives foe count and hpLoss only), so no closing RATE can be measured from this session; the lab's own is printed by `--posture-report` (a foe targeting him within 256 / 540 units) for the next field comparison | none | open (a passive field line is the road) |
+| Buff up-time | max(30 s, record duration) | `--buff-dur real`: the record's duration (none in the record: 30 s, MODEL) | SPEL / MGEF duration | DATA |
+| Buff foe term | none: CastBuff scores early / in-melee / affordable / reserve only | `Cons::BoostBuffThreat` (native, APPENDED): x = min(foes in the fight, 4) / 4, a Boost (outside the compensated product), shipped FLAT 1.0 (Piece (0,1)-(1,1)), so the shipped catalogue is bit-identical; py0 (no foe) and py1 (four or more) are the searched knobs | design (marth "Sim decides the edge") | the knob; its value is the search's |
+
+A class posture override needed no new capability: `ClassCurves::Row::curves` already overrides any (family, consideration) curve for
+one class, the posture curves included (`--curve archer:8.35.b=0.15` = `equip.ranged_dist` midpoint). No native change for it.
+
+`--posture-report` (diagnostic): the share of his up-time with the bow / a melee weapon drawn, the time a foe targeting HIM is within 256
+and 540 units, draws spoiled per fight, shots under 256 units (metrics `pr.*`, a POSTURE section). Built-in, shipped table, seed 1: the
+archer holds a melee weapon 20 to 35% of his up-time, a foe is on him inside 540 units only 8 to 20%: once a melee weapon is drawn he walks
+in to swing (melee mode closes on his target), so the posture's own input (distance to his target) keeps it drawn.
+
+Identity: with every switch off, `--classes beta1 --seed 1..3 --class-oracle 2 --baseline` files are byte-identical between the binary
+before batch 3 (8ba53367) and after (6f85e22a), apart from the decision-timing column `dec.us` / `dec.max`; the SEED lines of
+`--seeds 1,2,3` are identical. The native `BoostBuffThreat` is inside that proof (the sim compiles the native catalogue). Harness 0 failed.
+
+Effect of each switch alone (ranged, archer, ranged-off; built-in; shipped table; 32 seeds; paired d of J, se): `--ranged-perks` +3.86
+(0.34); `--point-blank` +0.15 (0.16); `--draw-spoil 0.5` +0.01 (0.23); `--ranged-perks --point-blank` +4.17 (0.38).
