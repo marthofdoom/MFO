@@ -242,6 +242,8 @@ namespace MFO::Logistics {
         // ServiceFollower at a time), so it points at the right state for the
         // whole of that follower's loot pass. Never dereferenced outside it.
         inline const FollowerState* g_svc = nullptr;
+        // Bumped once per ServiceFollower call: the key the IAUS loot inventory cache (logistics/LootNeed.cpp) is valid for. Worker only.
+        inline std::uint64_t g_svcSeq = 0;
 
         // Does this table author the given action anywhere? (e.g. an equip-ranged
         // gambit => the follower is meant to use a bow/crossbow, so loot one.)
@@ -653,6 +655,13 @@ namespace MFO::Logistics {
                    a_op == Vocab::kActSteal;   // batch L: the [L] glyph lights on a CONFIRMED steal too (act.pick_locks opens a lock, it takes nothing)
         }
 
+        // IAUS LOOTING (ClickUp 1dfcuabd18f, logistics/LootNeed.cpp): the loot rows IAUS looting REPLACES when it is on for a follower
+        // (marth 2026-11-12: "replaced, never stacked"). Museum (LOTD road) and steal (act.steal, a crime-shaped road) keep their rows,
+        // and act.pick_locks is not a loot op at all.
+        inline bool IsIausNeedLootOp(const std::string& a_op) {
+            return IsLootOp(a_op) && a_op != Vocab::kActLootMuseum && a_op != Vocab::kActSteal;
+        }
+
 }
 
 // The loot TRAVEL substrate (travel intents and slots, stall / sticky / gate /
@@ -855,6 +864,21 @@ namespace MFO::Logistics {
     bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                     RE::ActorValue a_potionWant = RE::ActorValue::kNone,
                     LootMode a_mode = LootMode::kNormal);
+    // IAUS LOOTING (logistics/LootNeed.cpp, ClickUp 1dfcuabd18f). WORKER only, inside ServiceFollower (g_svc set).
+    //   IausLootOn: bIausLoot && bIausAvailable && the follower's Sentient AI switch (FollowerState::iausCombat) && mfoEnabled.
+    //   IausLootPlan: the loot categories worth taking NOW by his inventory, best score first (iaus/LootNeed.h ScoreLootKind); logs
+    //     each category's take / leave with its reasons ([iaus-loot], rate-limited).
+    //   LootConsumablesNeed: the Potions category's item filter while IAUS looting is on (LootHere / HasLoot): every ALCH, food and
+    //     poisons included, scored by ScoreConsumable; the theft gate decides every take, as in LootPotions.
+    bool IausLootOn(const FollowerState& a_state);
+    std::vector<Category> IausLootPlan(RE::Actor* a_follower, const FollowerState& a_state);
+    bool LootConsumablesNeed(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek);   // a_peek: no [iaus-loot] line (F8)
+    //   IausLootInvDirty: drop the per-tick inventory read after a real take (F4). IausLootValuablesTake: the valuables category verdict
+    //     is TAKE (GemRules' sell-gambit stand-in, F6). IausLooseConsumableWanted: a loose potion / food on a surface passes the same
+    //     per-item scorer (F7), no log.
+    void IausLootInvDirty();
+    bool IausLootValuablesTake(RE::Actor* a_follower, const FollowerState& a_state);
+    bool IausLooseConsumableWanted(RE::Actor* a_follower, RE::AlchemyItem* a_alc);
     bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                      RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
                      bool* a_leftWaiting = nullptr);

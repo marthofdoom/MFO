@@ -225,6 +225,7 @@ namespace MFO::Config {
             else if (a_key == "bInheritPerkCensus") setB(g_inheritPerkCensus);   // [inherit-census] hidden-perk census, log only, INI-only, default ON
             else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
             else if (a_key == "bIausAvailable")     setB(g_iausAvailable);    // global IAUS gate, MCM, default ON (the per-follower bit stays default OFF)
+            else if (a_key == "bIausLoot")          setB(g_iausLoot);         // IAUS looting for Sentient AI followers, INI-only, default ON
             else if (a_key == "bIausExplain")       setB(g_iausExplain);      // [iaus-why] per-candidate breakdown, INI-only, default OFF
             else if (a_key == "bIausFillProbe")     setB(g_iausFillProbe);    // [iaus-fill] measured inputs next to reality, log only, INI-only, default OFF
             else if (a_key == "bIausFillArmor")     setB(g_iausFillArmor);    // the IAUS engine fills, one input each, INI-only, all default OFF
@@ -464,6 +465,7 @@ namespace MFO::Config {
             g_spellShapeCensus   = true;    // [shape-census] load-time log-only census -- ON
             g_inheritPerkCensus  = true;    // [inherit-census] hidden-perk census -- ON (log only, changes nothing)
             g_iausAvailable      = true;    // global IAUS gate -- ON (the per-follower switch is what defaults OFF)
+            g_iausLoot           = true;    // IAUS looting (Sentient AI followers) -- ON
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
             g_iausFillProbe      = false;   // [iaus-fill] probe lines -- OFF everywhere by default (the Deck INI arms it)
             g_iausFillArmor      = false;   // the IAUS engine fills -- each OFF until its probe numbers are field-proven

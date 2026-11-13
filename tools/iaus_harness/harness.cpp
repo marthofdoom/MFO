@@ -13,6 +13,7 @@
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
+#include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
 #include <limits>
 #include <algorithm>
@@ -1831,6 +1832,78 @@ static void BuffPotions() {
     }
 }
 
+namespace {
+    // IAUS LOOTING (ClickUp 1dfcuabd18f): the pure scores LootNeed.cpp feeds. Placeholder weights; these check the SHAPE of the rulings.
+    void LootNeedScores() {
+        std::printf("\n=== IAUS looting scores ===\n");
+        LootInv archer;
+        archer.ranged = true; archer.usesArrows = true; archer.arrows = 0; archer.arrowTarget = 20; archer.capacity = 300.0f; archer.carried = 50.0f;
+        const auto a1 = ScoreLootKind(LootKind::Arrows, archer);
+        std::printf("  archer arrows: %.2f %s\n", static_cast<double>(a1.score), a1.why.c_str());
+        Check(a1.take && a1.score > 0.9f, "ammo need: uses the kind + carries a launcher, 0/20 -> take near 1");
+        LootInv noBow = archer; noBow.usesArrows = false; noBow.arrowTarget = 0; noBow.carried = 290.0f;
+        const auto a2 = ScoreLootKind(LootKind::Arrows, noBow);
+        Check(!a2.take && a2.why.find("unused") != std::string::npos, "ammo without the launcher: unused, left");
+        archer.arrows = 20;
+        Check(ScoreLootKind(LootKind::Bolts, archer).why.find("unused") != std::string::npos, "bolts read the bolt fields (no crossbow: unused)");
+        Check(ScoreLootKind(LootKind::Arrows, noBow).score == 0.0f && !ScoreLootKind(LootKind::Arrows, noBow).take, "unused ammo: no sell road -> leave (F2)");
+        Check(ScoreLootKind(LootKind::Arrows, archer).why.find("need 20/20") != std::string::npos &&
+              !ScoreLootKind(LootKind::Arrows, archer).take, "ammo stocked to target: no need");
+
+        LootInv melee; melee.melee = true; melee.capacity = 300.0f; melee.carried = 100.0f;
+        Consumable heal; heal.restoreMag[kRestoreHealth] = 50.0f; heal.value = 10.0f; heal.weight = 0.5f;
+        const auto h1 = ScoreConsumable(heal, 10, melee);
+        std::printf("  heal x10, 0 carried: %.2f n=%d %s\n", static_cast<double>(h1.score), h1.takeCount, h1.why.c_str());
+        Check(h1.take && h1.takeCount == DefaultLootTuning().healthTarget, "health potion need: takes only the shortfall");
+        LootInv stocked = melee; stocked.restore[kRestoreHealth] = 6;
+        Check(!ScoreConsumable(heal, 10, stocked).take, "health stocked + low gold per weight: left");
+        Consumable magicka; magicka.restoreMag[kRestoreMagicka] = 50.0f; magicka.value = 10.0f; magicka.weight = 0.5f;
+        Check(!ScoreConsumable(magicka, 3, melee).take, "magicka potion for a non-caster: sale only (left at 20 g/w)");
+
+        Consumable bread; bread.food = true; bread.restoreMag[kRestoreStamina] = 10.0f; bread.value = 2.0f; bread.weight = 0.2f;
+        const auto f1 = ScoreConsumable(bread, 3, melee);
+        Check(!f1.take, "food never creates a restore need (the stock count cannot see it): left (F1)");
+        Consumable stamPot; stamPot.restoreMag[kRestoreStamina] = 40.0f; stamPot.value = 20.0f; stamPot.weight = 0.5f;
+        LootInv none = melee;
+        const auto s1 = ScoreConsumable(stamPot, 10, none);
+        Check(s1.take && s1.takeCount == DefaultLootTuning().staminaTarget, "stamina potion need: takes the shortfall");
+        LootInv after = none; after.restore[kRestoreStamina] += s1.takeCount;   // what the take does to the stock read
+        Check(!ScoreConsumable(stamPot, 10, after).take && ScoreConsumable(stamPot, 10, after).score < s1.score, "a take lowers the need (stock = item read)");
+        Consumable foodBuff; foodBuff.food = true; foodBuff.fx.push_back(PotionFx{ BuffKind::ResistFire, 30.0f, 60.0f, -1 }); foodBuff.value = 5.0f; foodBuff.weight = 0.3f;
+        Check(ScoreConsumable(foodBuff, 1, melee).take, "a food's buff kinds still count (both sides read them)");
+
+        Consumable resist; resist.fx.push_back(PotionFx{ BuffKind::ResistFrost, 50.0f, 60.0f, -1 }); resist.value = 30.0f; resist.weight = 0.5f;
+        Check(ScoreConsumable(resist, 1, melee).take, "a buff kind IAUS drinks (resist): carried");
+        Consumable breath; breath.fx.push_back(PotionFx{ BuffKind::WaterBreathing, 1.0f, 60.0f, -1 }); breath.value = 10.0f; breath.weight = 0.5f;
+        Check(!ScoreConsumable(breath, 1, melee).take, "water breathing (not drunk): sale only");
+
+        Consumable poison; poison.poison = true; poison.hostile = true; poison.poisonPower = 150.0f; poison.value = 10.0f; poison.weight = 0.5f;
+        const auto p1 = ScoreConsumable(poison, 5, melee);
+        Check(p1.take && p1.takeCount == DefaultLootTuning().poisonTarget, "poison: weapon user carries up to the target");
+        LootInv caster; caster.caster = true; caster.capacity = 300.0f; caster.carried = 100.0f;
+        Check(!ScoreConsumable(poison, 5, caster).take, "poison for a pure caster: sale only");
+        Consumable drug = heal; drug.hostile = true;
+        Check(!ScoreConsumable(drug, 5, melee).take, "a drug (hostile effects, no poison flag): no drink need");
+
+        LootInv full = melee; full.carried = 300.0f;
+        Check(!ScoreLootKind(LootKind::Equipment, full).take && ScoreLootKind(LootKind::Gold, full).take,
+              "full pack: equipment left, weightless gold still taken");
+        Check(ScoreLootKind(LootKind::Lockpicks, melee).take, "lockpicks below target: take");
+
+        // F3: a default follower (everything stocked, no launcher, no weapon to charge) must not take all the categories.
+        LootInv stockedAll = melee; stockedAll.restore = { 6, 4, 0 }; stockedAll.lockpicks = 10;
+        int taken = 0; for (std::size_t i = 0; i < kLootKinds; ++i) if (ScoreLootKind(static_cast<LootKind>(i), stockedAll).take) ++taken;
+        std::printf("  stocked default follower takes %d of %zu categories\n", taken, kLootKinds);
+        Check(!ScoreLootKind(LootKind::Arrows, stockedAll).take &&
+              !ScoreLootKind(LootKind::Bolts, stockedAll).take && !ScoreLootKind(LootKind::Ingredients, stockedAll).take &&
+              !ScoreLootKind(LootKind::SoulGems, stockedAll).take && !ScoreLootKind(LootKind::Lockpicks, stockedAll).take,
+              "stocked default follower leaves ammo, ingredients, gems, lockpicks (F2/F3)");
+        // Soul gems: a USE value only while an enchanted weapon is below max charge (marth 2026-11-13).
+        LootInv charger = stockedAll; charger.weaponNeedsCharge = true;
+        Check(ScoreLootKind(LootKind::SoulGems, charger).take && !ScoreLootKind(LootKind::SoulGems, stockedAll).take, "soul gems: taken for a weapon that needs charge, else left");
+    }
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -1852,6 +1925,7 @@ int main() {
     ClassCurveRows();
     SchoolAffinityRows();
     BuffPotions();
+    LootNeedScores();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

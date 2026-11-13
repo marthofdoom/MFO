@@ -4971,6 +4971,36 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 **Open backlog:** MFO-B130 (menu read off-main), MFO-B131 (a stale entry after a fast leave; now saved), MFO-B132
 (a gift before LOTD's first snapshot is recorded whatever it is; inert).
 
+### logistics/LootNeed.cpp + iaus/LootNeed.h — IAUS LOOTING BY INVENTORY NEED (ClickUp 1dfcuabd18f, `feat/iaus-loot`, 2026-11-13; NOT serialized; NOT field-run)
+- **What:** marth "still find loot the same way we currently do, but then iaus what gets looted by current inventory". FINDING is unchanged
+  (LootScan). ON for a follower = `IausLootOn` (`LootNeed.cpp:148`): `Config::g_iausLoot` (`[General] bIausLoot`, INI-only, default 1) &&
+  `g_iausAvailable` && `mfoEnabled` && `iausCombat` (the Sentient AI switch; FLWR bit 4 is NOT used). With it on, the rows `IsIausNeedLootOp`
+  (`Logistics_internal.h:659`: `IsLootOp` minus museum and steal) are SKIPPED ("replaced, never stacked") in the three walks, and after each
+  walk (a Wait row still stops first) `IausLootPlan` (`:152`) returns the categories that clear `ScoreLootKind` (`iaus/LootNeed.h:161`), best
+  first: Service rule walk `Service.cpp:1531` (skip) + `:2151` (pass, before the smith-mats pass), `StripCorpse` `LootScan.cpp:1046` + `:1098`
+  (same `TierReleased` dibs gate + drain), `RunExcursionScan` `:1142` + `:1172`. Potions: `LootHere` / `HasLoot` (`LootTake.cpp:882`) route
+  to `LootConsumablesNeed` (`LootNeed.cpp:171`), which scores EVERY ALCH in the source (potions, food, poisons; all effects read by
+  `ReadConsumable` `:83` + `ConsumableBuffs` `PotionFx.cpp:89`) with `ScoreConsumable` (`iaus/LootNeed.h:243`), re-judging after each take.
+  Poisons: `PoisonCarryValue` (`:230`), weapon users only. Every take still passes `TheftGate::Takeable/Take` and LootHere's guard gate.
+- **Pure + placeholders:** `iaus/LootNeed.h` is std-only (harness `LootNeedScores`); every number in `LootTuning` (`:70`) is a labelled
+  placeholder for the sim's logistics world (Fable-only; nothing here reads tools/iaus_sim).
+- **Threading:** worker, inside `ServiceFollower` (reads `g_svc`, like `LootEquipment`). Only state: the `[iaus-loot]` log rate-limit map.
+- **What breaks if you change this:** a new `act.loot_*` opcode must be added to `IsLootOp` or IAUS looting will stack with it; renaming a
+  Category drops it from `CatOf`; `PotionBuffs` / `ConsumableBuffs` must keep the one classification rule (catalog first); `GemRules.cpp`
+  `GemRules::SellGambitActive` now also answers true when IAUS looting's valuables verdict is TAKE (`IausLootValuablesTake`, review F6).
+- **Review-fix round (2026-11-13, F1-F8 + soul gems):** ONE consumable reader, `ReadConsumable` (`LootNeed.cpp`), is used by the item side AND
+  the stock side (`ReadLootInv`), so they cannot disagree: restore family = `PotionRestores` (catalog first, never food) + `PotionMagnitude`,
+  buff kinds = `ConsumableBuffs`; a FOOD never makes a restore need (F1). No sell road => no sale score: Economy sells only WEAP, ARMO and valuable
+  MISC, so potions / food / poisons / ammo / ingredients / soul gems score NEED or USE only (`LootTuning::consumableSellRoad`, F2/F3). Soul gems:
+  USE value while he carries an enchanted weapon below max charge (`LootInv::weaponNeedsCharge`, `InventoryEntryData::GetEnchantmentCharge`). The
+  inventory is read once per tick (`CachedLootInv`, key `g_svcSeq`, `IausLootInvDirty` after a take, F4). The IAUS pass runs at the FIRST skipped
+  loot row of each walk, else after it (F5). Loose potions use `IausLooseConsumableWanted` (F7); the `[iaus-loot]` item line is a real-decision log
+  only (F8).
+- **TO ADD ... EDIT ...:** a new consumable / effect kind = a `BuffKind` row (iaus/PotionBuff.h) + its target in `BuffTarget`
+  (iaus/LootNeed.h); how an ALCH is classified = `ReadConsumable` (the one reader); a new SELL ROAD (e.g. ALCH sold) = flip / add its flag in
+  `LootTuning` (`consumableSellRoad`) and add the road in Economy.cpp; a new weight or threshold = `LootTuning`; a new carry USE for a loot
+  kind (like gems for charging) = a `LootInv` flag filled in `ReadLootInv` + its case in `ScoreLootKind`.
+
 ### logistics/Storage.cpp / Storage.h — OFF-CLASS STORAGE (ClickUp 86e3t212u, `feat/offclass-storage`, 2026-11-13; SAVED: 'STOR' v1)
 marth rulings 2026-11-12 / 2026-11-13 (header comment quotes them; `Docs/research/2026-11/offclass-storage-design.md` section
 0a): a piece the SALE PATH would sell that belongs to a class he MASTERED or one AHEAD of his equipped class on his own tree

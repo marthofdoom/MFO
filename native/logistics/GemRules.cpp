@@ -297,7 +297,7 @@ namespace MFO::Logistics::GemRules {
         a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, a_c.xl, a_follower);
         if (!FindOwned(a_follower, a_c.obj, uid, v)) return false;
         spdlog::info("[gems] {:08X}: took '{}' from {:08X} to look for gems", fol, NameOf(a_c.obj), src);
-        const bool sell = SellGambitActive();
+        const bool sell = SellGambitActive(a_follower);
         if (MainThread::IsInstalled()) MainThread::Post([fol, base, uid, src, sell]() { ProbeOnMain(fol, base, uid, src, sell); });
         else                           ProbeOnMain(fol, base, uid, src, sell);   // VR: no pump, same as the other gem reads
         return true;
@@ -349,7 +349,10 @@ namespace MFO::Logistics::GemRules {
         return true;
     }
 
-    bool SellGambitActive() { return g_svc && TableHasAction(g_svc->logistics(), Vocab::kActLootValuables); }
+    // IAUS looting replaces the act.loot_valuables row (review F6): its valuables verdict TAKE stands in for the row.
+    bool SellGambitActive(RE::Actor* a_follower) {
+        return g_svc && (TableHasAction(g_svc->logistics(), Vocab::kActLootValuables) || IausLootValuablesTake(a_follower, *g_svc));
+    }
 
     bool NoteLoosePickup(RE::TESObjectREFR* a_ref) {
         if (!a_ref || !g_looseRefs.contains(a_ref->GetFormID())) return false;
