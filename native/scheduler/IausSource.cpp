@@ -40,7 +40,26 @@ namespace MFO::Scheduler {
         constexpr std::uint8_t kChanDescribe = 0;   // [iaus-gen]: what was generated
         constexpr std::uint8_t kChanNoBook   = 1;   // [iaus] no fresh spell book
         constexpr std::uint8_t kChanStaff    = 2;   // [iaus] staff posture has no equip road
+        constexpr std::uint8_t kChanBuffPotion = 3;   // [iaus] buff-potion: one line per pick, paced
         constexpr double       kDescribeSec  = 10.0;
+        constexpr double       kBuffLogSec   = 5.0;   // at most one buff-potion line per follower per 5 s (a refused drink repeats every lap)
+
+        // PASSIVE LOG (feat/buff-potions): the pick of a buff potion, the effect it is for and WHY (the facts its considerations read), and
+        // how the drink went. Reads the candidate and the snapshot's kit only; nothing is mutated.
+        void LogBuffPick(RE::FormID a_actor, const Iaus::Kit& a_kit, const Iaus::Candidate& a_c, const Actuation::Outcome& a_out) {
+            const std::size_t ki = a_c.f.buffKind;
+            if (ki >= Iaus::kBuffKinds) return;
+            const auto kind = static_cast<Iaus::BuffKind>(ki);
+            const Iaus::PotionBuff& p = a_kit.buff[ki];
+            std::string why;
+            if (Iaus::IsResist(kind)) why = std::format("{:.0f}% of the foes (a foe on him counts double) hit with the element it resists", a_c.f.buffThreat * 100.0f);
+            else if (Iaus::IsRegen(kind)) why = std::format("the resource is at {:.0f}%", a_c.f.buffRegenPct * 100.0f);
+            else if (Iaus::IsFortify(kind)) why = std::format("fight opener, {:.1f} s into the fight", a_c.f.combatSec);
+            else if (kind == Iaus::BuffKind::Invisibility) why = "stealth intent (he sneaks or his class sneaks)";
+            spdlog::info("[iaus] buff-potion {:08X} drinks '{}' ({:08X}) for {}: magnitude {:.0f} for {:.0f} s, {} carried, why: {} -> {}{}{}",
+                         a_actor, p.name.empty() ? "?" : p.name, a_c.form, Iaus::BuffName(kind), p.magnitude, p.duration, p.count, why,
+                         a_out.result == Actuation::Result::Fired ? "drank it" : "not drunk", a_out.reason.empty() ? "" : ": ", a_out.reason);
+        }
 
         [[nodiscard]] bool IsCastFamily(Family a_f) {
             // The families that hold a hand and a claim. A summon is a one-shot (the scan's own isCast excludes it).
@@ -325,6 +344,7 @@ namespace MFO::Scheduler {
         case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
         case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
         case Family::DrinkMagicka: c.actionOpcode = Vocab::kActDrinkMagickaPotion; break;
+        case Family::DrinkBuff:    c.actionOpcode = Vocab::kActDrinkBuffPotion; c.actionParam = cand.form; break;   // the potion: Logistics::DrinkPotionForm
         case Family::CastOffense:
         case Family::CastControl:
         case Family::CastHeal:
@@ -420,6 +440,8 @@ namespace MFO::Scheduler {
         }
         const Iaus::Step& step = m_d.order[it->idx];
         const Iaus::Candidate& cand = m_set.gen.actions[step.idx];
+        if (cand.family == Family::DrinkBuff && Iaus::Engine::Paced(m_id, kChanBuffPotion, kBuffLogSec, m_tick))
+            LogBuffPick(m_id, m_set.snap.book.kit, cand, a_outcome);
         if (fired) {
             m_pickedStep = static_cast<int>(it->idx);
             // An approach leg (the power attack closing to melee) is the decision in effect, not the swing: it
@@ -441,7 +463,7 @@ namespace MFO::Scheduler {
             // old and no container event covers the first three. Re-measure at once after such a fire.
             switch (cand.family) {
             case Family::CastBuff: case Family::CastWard: case Family::CastSummon: case Family::Scroll:
-            case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka:
+            case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka: case Family::DrinkBuff:
                 Iaus::SpellBook::Invalidate(m_id);
                 break;
             default: break;

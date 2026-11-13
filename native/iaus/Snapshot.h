@@ -13,6 +13,7 @@
 // read (unloaded): the generator skips that actor, it never divides by it. Distances and positions are world
 // units. A missing or unknown value keeps its default, which is always the neutral one.
 #include "iaus/Core.h"
+#include "iaus/PotionBuff.h"
 #include "iaus/Prune.h"
 
 #include <cstdint>
@@ -69,6 +70,7 @@ namespace MFO::Iaus {
         std::int32_t potionsHealth = 0;
         std::int32_t potionsStamina = 0;
         std::int32_t potionsMagicka = 0;
+        BuffStock    buff;           // every other beneficial potion effect he carries, by kind (iaus/PotionBuff.h; counts, best potion, live)
         std::int32_t arrows = 0;
         std::int32_t bolts = 0;
         bool melee = false;          // carries a melee weapon
@@ -157,6 +159,8 @@ namespace MFO::Iaus {
         float hit = 0.0f;                   // physical damage of ONE weapon hit before the target's armor
         float hitsPerSec = 0.0f;            // the engine's rate model: weapon speed x fCombatDPS(Melee|Bow)SpeedMult
         bool  hitIsMagic = false;           // the hit is a spell in hand (armor does not apply)
+        int   incomingAv = -1;              // buff potions: the resist actor value of the element it hits with (the spell in its hand or the one it is
+                                            // casting: the costliest hostile effect's resist), -1 = none known (Candidates.cpp FoeElementAv)
         float armor = 0.0f;                 // its physical mitigation, 0..1
         float magicResist = 0.0f;           // kResistMagic, points
         float lossPerSec = 0.0f;            // health it has been losing per second (observed)

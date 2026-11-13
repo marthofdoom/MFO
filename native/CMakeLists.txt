@@ -103,6 +103,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Hide.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
+    logistics/PotionFx.cpp
     logistics/Sinks.cpp
     logistics/TheftGate.cpp
     logistics/Steal.cpp
@@ -209,6 +210,7 @@ if(MFO_DEV_SELFTEST)
         selftest/Tests.cpp
         selftest/TestsDrive.cpp
         selftest/TestsT2.cpp
+        selftest/TestsBuffPotion.cpp
         selftest/Setup.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE MFO_DEV_SELFTEST=1)

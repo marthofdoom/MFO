@@ -19,6 +19,7 @@
 #include "Loadout.h"       // LeftHandSlot: the left-hand heal equip names its slot
 #include "Lotd.h"          // LOTD awareness: the deposit trip's lifecycle edges (feat/mfo-lotd)
 #include "Errand.h"        // town errands: ClearTransientState on revert
+#include "PotionFx.h"      // feat/buff-potions: ClearBuffDrinks
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -771,6 +772,7 @@ namespace MFO::Logistics {
         g_claim.clear();
         g_lastLootSource = 0;
         g_drinkUntil.clear();
+        ClearBuffDrinks();      // feat/buff-potions: the per-potion drink gates (logistics/PotionFx.cpp) -- live-session only
         g_logiCastUntil.clear();   // OOC cast pacing window -- save-scoped (#6, FF-reuse)
         g_playerLooted.clear();
         g_econScan.clear();   // #21 econ cadence clocks -- save-scoped (Fable audit #7)

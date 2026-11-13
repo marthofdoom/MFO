@@ -10,8 +10,21 @@
 // Output schema (mfo_items.json), each entry = { plugin, id } + category fields:
 //   potions[] : restores = health|stamina|magicka  (optional)
 //               cures    = poison|disease|both      (optional; cure potions)
-//               a potion row appears if it restores a resource OR cures -- some
-//               do both, some only cure (no restore ActorValue at all).
+//               fx       = [ { kind, mag, dur, av? } ]   (schema 2, EVERY non-food, non-poison
+//                          potion: possibly an EMPTY list, which means "classified: no kind";
+//                          the DLL then does not run its runtime fallback for that potion)
+//                          one row per beneficial effect that is not a plain restore, read from
+//                          the MGEF archetype + actor value (never a name): see ClassifyFx.
+//                          kind = resist_fire|resist_frost|resist_shock|resist_poison|resist_magic
+//                                 fortify_health|fortify_stamina|fortify_magicka|fortify_skill
+//                                 fortify_attack|regen_health|regen_stamina|regen_magicka
+//                                 invisibility|waterbreathing|cure_poison|cure_disease
+//                          mag = effect magnitude, dur = duration in seconds,
+//                          av  = fortify_skill only: the skill's ActorValue number.
+//               a potion row appears if it restores a resource OR cures OR is a non-food
+//               non-poison potion (schema 2) -- some restore and cure, some only cure.
+//   schema 1 catalogs (no fx) are still read by the DLL: it falls back to the potion's own
+//   records. The kind names are the DLL's iaus/PotionBuff.h BuffName; keep them in step.
 //   ammo[]    : kind     = arrow|bolt
 //   jewelry[] : (amulets + rings)
 //   soulgems[]: (every SLGM record — the DLL treats membership as the category)
@@ -38,7 +51,11 @@ static class Catalog
     // wants at runtime.
     sealed record Entry(string plugin, string id,
                         string? restores = null, string? kind = null, string? why = null,
-                        string? name = null, uint? value = null, string? cures = null);
+                        string? name = null, uint? value = null, string? cures = null,
+                        List<Fx>? fx = null);
+
+    // One beneficial non-restore effect of a potion (schema 2). av only for fortify_skill.
+    sealed record Fx(string kind, float mag, float dur, int? av = null);
 
     // ActorTypeNPC keyword: present on every humanoid race (playable or follower
     // variant), absent on creature races (GiantRace, DwarvenSphereRace, DraugrRace,
@@ -123,11 +140,13 @@ static class Catalog
         foreach (var p in lo.PriorityOrder.Ingestible().WinningOverrides())
         {
             if (p.Flags.HasFlag(Ingestible.Flag.FoodItem)) continue;   // food, not a potion
+            if (p.Flags.HasFlag(Ingestible.Flag.Poison)) continue;     // a poison: never drunk (the DLL's runtime fallback refuses it too)
             var restores = ClassifyRestore(p, cache);
             var cures    = ClassifyCure(p, cache);
-            if (restores != null || cures != null)
-                potions.Add(new Entry(Plugin(p.FormKey), Id(p.FormKey), restores: restores,
-                                      cures: cures, name: p.Name?.String, value: p.Value));
+            // schema 2: EVERY non-food non-poison potion carries an fx list (maybe empty), so a potion the patcher saw is never re-guessed at run time.
+            var fx       = ClassifyFx(p, cache);
+            potions.Add(new Entry(Plugin(p.FormKey), Id(p.FormKey), restores: restores,
+                                  cures: cures, name: p.Name?.String, value: p.Value, fx: fx));
         }
 
         // ── AMMO ────────────────────────────────────────────────────────────
@@ -223,7 +242,7 @@ static class Catalog
         // ── emit ────────────────────────────────────────────────────────────
         var model = new
         {
-            schema = 1,
+            schema = 2,
             potions,
             ammo,
             jewelry,
@@ -277,6 +296,68 @@ static class Catalog
             (false, true)  => "disease",
             _              => null,
         };
+    }
+
+    // THE BUFF KINDS of a potion (schema 2 `fx`), read from each effect's MGEF archetype and actor value. ONE rule, written twice: the DLL's
+    // runtime fallback is logistics/PotionFx.cpp ClassifyRuntime / KindOf, and the kind names are iaus/PotionBuff.h BuffName. Keep all three
+    // in step. A potion with ANY Hostile or Detrimental effect is a drug (the DLL's PotionIsDrug) and gets an EMPTY list, as do foods and
+    // poisons (skipped by the caller). A plain restore (Health/Stamina/Magicka without the Recover flag or the Peak archetype) is NOT a kind:
+    // restores keep their own `restores` field and families. ActorValue numbers equal RE::ActorValue's (checked 2026-11-12).
+    static List<Fx> ClassifyFx(IIngestibleGetter p, ILinkCache cache)
+    {
+        var rows = new List<Fx>();
+        var seen = new List<(IEffectGetter e, IMagicEffectGetter m)>();
+        foreach (var e in p.Effects)
+        {
+            if (!e.BaseEffect.TryResolve(cache, out var m)) continue;
+            if (m.Flags.HasFlag(MagicEffect.Flag.Detrimental) || m.Flags.HasFlag(MagicEffect.Flag.Hostile))
+                return new List<Fx>();                                  // a drug
+            seen.Add((e, m));
+        }
+        foreach (var (e, m) in seen)
+        {
+            var arch = m.Archetype.Type;
+            var av   = m.Archetype.ActorValue;
+            bool recover = m.Flags.HasFlag(MagicEffect.Flag.Recover);
+            string? kind = null; int? skill = null;
+            switch (arch)
+            {
+                case MagicEffectArchetype.TypeEnum.CurePoison:   kind = "cure_poison";  break;
+                case MagicEffectArchetype.TypeEnum.CureDisease:  kind = "cure_disease"; break;
+                case MagicEffectArchetype.TypeEnum.Invisibility: kind = "invisibility"; break;
+                case MagicEffectArchetype.TypeEnum.ValueModifier:
+                case MagicEffectArchetype.TypeEnum.DualValueModifier:
+                case MagicEffectArchetype.TypeEnum.PeakValueModifier:
+                {
+                    bool peak = arch == MagicEffectArchetype.TypeEnum.PeakValueModifier;
+                    switch (av)
+                    {
+                        case ActorValue.ResistFire:     kind = "resist_fire";   break;
+                        case ActorValue.ResistFrost:    kind = "resist_frost";  break;
+                        case ActorValue.ResistShock:    kind = "resist_shock";  break;
+                        case ActorValue.PoisonResist:   kind = "resist_poison"; break;
+                        case ActorValue.ResistMagic:    kind = "resist_magic";  break;
+                        case ActorValue.WaterBreathing: kind = "waterbreathing"; break;
+                        case ActorValue.HealRate:    case ActorValue.HealRateMult:    kind = "regen_health";  break;
+                        case ActorValue.StaminaRate: case ActorValue.StaminaRateMult: kind = "regen_stamina"; break;
+                        case ActorValue.MagickaRate: case ActorValue.MagickaRateMult: kind = "regen_magicka"; break;
+                        case ActorValue.AttackDamageMult: case ActorValue.MeleeDamage: case ActorValue.UnarmedDamage:
+                            kind = "fortify_attack"; break;
+                        // A resource effect is a FORTIFY only with the Recover flag or the Peak archetype; a plain one is a restore.
+                        case ActorValue.Health:  if (recover || peak) kind = "fortify_health";  break;
+                        case ActorValue.Stamina: if (recover || peak) kind = "fortify_stamina"; break;
+                        case ActorValue.Magicka: if (recover || peak) kind = "fortify_magicka"; break;
+                        default:
+                            if ((int)av >= 6 && (int)av <= 23) { kind = "fortify_skill"; skill = (int)av; }   // the 18 skills
+                            break;
+                    }
+                    break;
+                }
+            }
+            if (kind == null) continue;
+            rows.Add(new Fx(kind, e.Data?.Magnitude ?? 0f, (float)(e.Data?.Duration ?? 0), skill));
+        }
+        return rows;
     }
 
     static string? ClassifyRestore(IIngestibleGetter p, ILinkCache cache)

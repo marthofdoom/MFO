@@ -652,6 +652,7 @@ namespace MFO::SelfTest {
                    "the party",
                    60.0f, PerkPre, nullptr, PerkStep, PerkTimeout });
         RegisterT2();   // TestsT2.cpp: the T2 field-session tests (quick, no spawn except t2.block_hands)
+        RegisterBuffPotion();   // TestsBuffPotion.cpp: buffpotion.resist_scores (feat/buff-potions)
     }
 
 }
