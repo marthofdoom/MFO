@@ -1682,24 +1682,6 @@ namespace MFO::Logistics {
                                      ar->GetName() ? ar->GetName() : "?");
                     continue;
                 }
-                // MAGE LINE WEARS CLOTHING (2026-11-12): rated armor (light / heavy) is off the class's wardrobe
-                // category, so a worn piece the clothing set does not displace (no owned clothing for its slot) is
-                // not declared either: the seat refuses its re-equip, and the next owned clothing for that slot
-                // replaces it. MFO has no unequip road (marth 2026-10-20), so a piece already on stays on until
-                // then; said loudly, once per (follower, piece), never masked.
-                if (mageSetMode && ar->GetArmorRating() > 0.0f) {
-                    const int cs = MageClothingSlot(ar);
-                    if (cs >= 0 && cs <= 3) {
-                        withheldNow.insert(ar->GetFormID());
-                        static std::unordered_set<std::uint64_t> s_armorLogged;   // worker-serial like g_lastDeclared
-                        if (s_armorLogged.insert((static_cast<std::uint64_t>(id) << 32) | ar->GetFormID()).second)
-                            spdlog::info("[equip-auth] {:08X}: worn rated armor '{}' is off the mage line's clothing category and "
-                                         "no owned clothing covers its slot -- kept OUT of the declared set (stays on until "
-                                         "clothing for that slot is owned; MFO has no unequip road)", id,
-                                         ar->GetName() ? ar->GetName() : "?");
-                        continue;
-                    }
-                }
                 decl.Add(ar);
             }
             // THE CHOSEN JEWELRY COPY (APMF ABI v25): the ring / amulet entry names the instance ChooseJewelry

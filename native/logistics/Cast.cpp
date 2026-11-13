@@ -121,7 +121,7 @@ namespace MFO::Logistics {
         // below used to drop every class-equipped mage to the skill-tie LIGHT armor path, field 2026-11-12:
         // Jesper). The line is the class table's own field (Classes::Get(id).line == Line::Mage: Mage and the
         // T2/T3/T4 mage-line classes), never a hand list; with no class equipped (classes OFF / add-on absent)
-        // it is the explicit Gambit-tab pick Mage (combatClassOverride 3). Every wear / buy / loot / sell /
+        // it is false and the follower keeps today's behaviour exactly (the caster-gated cls==3 branch below). Every wear / buy / loot / sell /
         // keep / declaration site reads UsesMageClothing, so they cannot disagree on the category.
         static bool OnMageLine(const FollowerState& a_state, RE::Actor* a_follower) {
             const RE::FormID fid = a_follower ? a_follower->GetFormID() : 0;
@@ -130,7 +130,7 @@ namespace MFO::Logistics {
                 if (eq < Classes::kClassCount)
                     return Classes::Get(static_cast<Classes::Id>(eq)).line == Classes::Line::Mage;
             }
-            return a_state.combatClassOverride == 3;
+            return false;   // no class: today's behaviour exactly (an explicit Mage pick keeps its caster-gated meaning below)
         }
 
         bool UsesMageClothing(const FollowerState& a_state, RE::Actor* a_follower) {
