@@ -81,5 +81,15 @@ class Gap(unittest.TestCase):
         self.assertEqual((r["fights"], r["sit"]["attack|idle|idle|hp:hi,near:melee,foes:1"], r["gen"]["block"], r["dec"]), ([(7, 0, "nat", 80.0, 85.5)], (3, 9.5), 4, 50))
 
 
+class Logistics(unittest.TestCase):
+    def test_logi_class(self):
+        self.assertEqual(T.logi_class("sell_run", "base:go_on", "orc:sell_run")[0], "c")
+        self.assertEqual(T.logi_class("gold", "base:leave", "orc:take")[0], "c")
+        self.assertEqual(T.logi_class("bow", "base:leave", "orc:take")[0], "c")       # gathering gear to sell
+        self.assertEqual(T.logi_class("bow", "base:take", "orc:leave")[0], "a")
+        self.assertEqual(T.logi_class("potion_h", "base:leave", "orc:take")[0], "a")  # the potion floor / the row param
+        self.assertEqual(T.logi_class("ammo", "base:take", "orc:leave")[0], "a")
+
+
 if __name__ == "__main__":
     unittest.main()

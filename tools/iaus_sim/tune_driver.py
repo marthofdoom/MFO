@@ -3,7 +3,7 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,logistics,summary] [--jobs 12]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
 
@@ -32,6 +32,7 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
           gap       the oracle gap per class and world on the shipped and the final table, the divergences classified (a) curve /
                     weight, (b) missing consideration or input, (c) missing behaviour, (d) modelling suspect; (a) drives a bounded
                     extra search; (b)-(d) are open decisions and <out>/gap-ledger.md rows. Its RULE is stage_gap's docstring.
+          logistics the logistics world (Logistics.h): today's loot rules against the loot oracle per class (IAUS loot policy: post-T2).
           summary   summary.json + summary.md.
 
 RULE (fixed before any result of this driver was read; a number is ACCEPTED only when every line holds):
@@ -78,10 +79,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
-            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12)
+            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
-             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1)
+             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1)
 
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
@@ -1109,6 +1110,65 @@ def gap_ledger(st, order):
     open(os.path.join(A.out, "gap-ledger.md"), "w").write("\n".join(L) + "\n")
 
 
+LOGI_NO_ROW = {"gold", "gem", "jewelry", "ingredient", "junk"}   # Logistics.h: no default logistics row takes these (Followers.cpp:48-51)
+LOGI_GEAR = {"weapon_1h", "weapon_2h", "bow", "armor_body", "armor_head"}   # loot_equipment takes strict upgrades only (LootEquipment.cpp)
+
+
+def logi_class(kind, base, orc):
+    """(c) the oracle does what today's rules have no behaviour for: a sell run, a take of a category no row names, a take of gear the
+    upgrade-only rule leaves (gathering to sell); (a) the rest: a row's or an INI value (potion floor, ammo keep target, row params)."""
+    if kind == "sell_run":
+        return "c", "today's rules never make a sell run mid-dungeon"
+    if orc == "orc:take" and kind in LOGI_NO_ROW:
+        return "c", "no default row takes %s (Followers.cpp:48-51): a category or a scorer that judges it is missing" % kind
+    if orc == "orc:take" and kind in LOGI_GEAR:
+        return "c", "loot_equipment takes strict upgrades only: gathering %s to sell is not a behaviour today" % kind
+    return "a", "a row's or an INI value decides this %s (potion floor, keep target, row param)" % kind
+
+
+def stage_logistics():
+    """THE LOGISTICS WORLD (Logistics.h; marth 11-12 "Loot sim"): today's loot rules (the baseline) against the loot oracle, per class,
+    on the built-in fixture (seeds 7001.., 8 episodes each). Runs only where the simulator has the world (a probe); a list world is
+    refused by the simulator with the fields its extract lacks, and that refusal is an open decision. The IAUS loot policy is the
+    post-T2 batch: until it exists the stage reports baseline vs oracle. Divergences: (c) the oracle takes what no row takes or makes a
+    sell run (a behaviour today's rules do not have), (a) the rest (a row's or an INI value: the potion floor, the keep targets)."""
+    st = {"policy": "baseline (today's rules); IAUS loot scorer not built", "cells": {}, "clusters": {}, "lists": {}}
+    probe = subprocess.run([A.bin, "--logistics", "1", "--seeds", "1", "--classes", "melee"], capture_output=True, text=True)
+    if "LOGI-CHECKS" not in probe.stdout:
+        st["verdict"] = "SKIPPED: this simulator has no logistics world (no LOGI-CHECKS line from --logistics)"
+        log("logistics: " + st["verdict"])
+        SUMMARY["stages"]["logistics"] = st
+        return
+    order = scope() or CELLS
+    seeds = ",".join(str(x) for x in range(7001, 7001 + CFG["logi_seeds"]))
+    def one(c):
+        cmd = [A.bin, "--logistics", str(CFG["logi_eps"]), "--seeds", seeds, "--classes", c]
+        def chk(t):
+            if "LOGI-CHECKS" not in t or "=> PASS" not in t.split("LOGI-CHECKS:")[-1] or not re.search(r"^LOGIGAP %s " % re.escape(c), t, re.M):
+                raise RuntimeError("logistics run of %s: the model's checks did not pass or no LOGIGAP line:\n%s" % (c, t[-600:]))
+        return c, text_run("logi:" + json.dumps(cmd[1:]), cmd, "builtin", check=chk)
+    for c, txt in POOL.map(one, order):
+        m = re.search(r"^LOGIGAP %s ([-0-9.]+) ([-0-9.]+) (\d+) goldJ=([0-9.]+) potionJ_gap=([-0-9.]+) gold_equivalent_gap=([-0-9.]+) baseline_takes=(\d+) oracle_takes=(\d+) sell_runs=(\d+)" % re.escape(c), txt, re.M)
+        cell = dict(zip(("gap", "se", "episodes", "goldJ", "potionJ_gap", "gold_equivalent_gap", "baseline_takes", "oracle_takes", "sell_runs"), [float(x) for x in m.groups()]))
+        st["cells"][c] = cell
+        rows = []
+        for k, n, du in re.findall(r"^LOGIDIS %s (\S+) (\d+) ([-0-9.]+)$" % re.escape(c), txt, re.M):
+            kind, b, o = k.split("|")
+            cl, why = logi_class(kind, b, o)
+            rows.append({"cluster": k, "class": cl, "n": int(n), "dU_per_episode": round(float(du) / cell["episodes"], 3), "why": why})
+        rows.sort(key=lambda r: -r["dU_per_episode"])
+        st["clusters"][c] = rows
+        log("logistics %s: gap %+.2f (se %.2f, %d episodes), potions %+.2f J, gold-equivalent %+.0f g" % (c, cell["gap"], cell["se"], cell["episodes"], cell["potionJ_gap"], cell["gold_equivalent_gap"]))
+    for w in [w for w in A.worlds if w != "builtin"]:
+        r = subprocess.run([A.bin, "--logistics", "1", "--list", CACHE_DIR + w + ".sim.json"], capture_output=True, text=True)
+        st["lists"][w] = (r.stderr.strip() or r.stdout[-200:])[:400]
+    if st["lists"]:
+        open_decision("logistics on the lists", "the simulator refuses a list logistics world: %s. The list extractor (tools/list_balance) would need containers, gold / MISC / gems / ingredients, vendor chests and gold, armor and potion weights" % next(iter(st["lists"].values())))
+    open_decision("logistics VALUE function", "J_log = the potion worth of the bag (combat world, PotionWorth) + kGoldJ x gold-equivalent, kGoldJ = J per gold where gold buys the most J (the first potion); gold is valued LINEARLY, so the gap is mostly gold (%s). Whether gold beyond the potion quota is worth J, and what a gear upgrade is worth in J (a combat-world measurement), is a value choice: marth or the coordinator decides (Q-potion-value analogue)"
+                  % ", ".join("%s %+.0f g" % (c, v["gold_equivalent_gap"]) for c, v in list(st["cells"].items())[:3]))
+    SUMMARY["stages"]["logistics"] = st
+
+
 def stage_globals():
     curves = final_curves()
     seeds = range(5001, 5001 + CFG["global_seeds"])
@@ -1357,6 +1417,13 @@ def render_md():
             L += ["", "Accepted by the (a) search (in final_curves; joint gate re-run: %s): %s" % (g.get("joint_after_search", "?"), " ".join("`%s`" % k for v in g["kept"].values() for k in v))]
             L += ["", "```cpp"] + [cpp_line(k) for v in g["kept"].values() for k in v] + ["```"]
         L += ["", "Ledger rows: `gap-ledger.md` in the run directory.", ""]
+    if "logistics" in s:
+        g = s["logistics"]
+        L += ["## Logistics world (built-in fixture): today's loot rules against the loot oracle", "", g.get("verdict", "Policy: " + g["policy"]), ""]
+        if g["cells"]:
+            L += ["| Class | Gap J_log (se) | episodes | potions J | gold-equivalent | takes base / oracle | sell runs | largest divergences |", "|---|---|---|---|---|---|---|---|"]
+            L += ["| %s | %+.2f (%.2f) | %d | %+.2f | %+.0f g | %d / %d | %d | %s |" % (c, v["gap"], v["se"], v["episodes"], v["potionJ_gap"], v["gold_equivalent_gap"], v["baseline_takes"], v["oracle_takes"], v["sell_runs"],
+                  "; ".join("(%s) %s %.2f" % (r["class"], r["cluster"], r["dU_per_episode"]) for r in g["clusters"][c][:3])) for c, v in g["cells"].items()] + [""]
     L += ["## OPEN DECISIONS (the runner reports these and does not decide)", ""] + (["- **%s**: %s" % (d["what"], d["evidence"]) for d in SUMMARY["open_decisions"]] or ["- none"]) + [""]
     return "\n".join(L)
 
@@ -1370,7 +1437,7 @@ def main():
     ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,floor,gap,summary")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
-    ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,summary")
+    ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,logistics,summary")
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
     ap.add_argument("--jobs", type=int, default=12)
@@ -1396,7 +1463,7 @@ def main():
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
-    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap}
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics}
     for name in A.stages.split(","):
         if name == "summary":
             continue

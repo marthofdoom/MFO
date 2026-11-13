@@ -10,6 +10,7 @@
 #include "iaus_sim/Tune.h"
 #include "iaus_sim/StealLab.h"
 #include "iaus_sim/PotionWorth.h"
+#include "iaus_sim/Logistics.h"
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
@@ -538,7 +539,7 @@ int main(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false, gapDump = false; int declineN = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; int declineN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -577,6 +578,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--no-class-rulings")) { g_classRulings = false; noClassRulings = true; }   // ... and stays unconstrained even with --class-oracle
         else if (!std::strcmp(argv[i], "--parked")) g_parked = true;                  // the PARKED rows (T3+ playstyles, passives, stealth scenarios) take effect; Beta 1 = T1 + T2 only without it
         else if (!std::strcmp(argv[i], "--class-kit")) g_classKit = true;              // the subject knows the spells his class's default rows name
+        else if (!std::strcmp(argv[i], "--logistics") && i + 1 < argc) logiN = std::max(1, std::atoi(argv[++i]));   // THE LOGISTICS WORLD (Logistics.h): N episodes per seed and class, baseline vs the loot oracle
+        else if (!std::strcmp(argv[i], "--logi-k") && i + 1 < argc) logiK = std::max(1, std::atoi(argv[++i]));      // the loot oracle's sampled futures per option
+        else if (!std::strcmp(argv[i], "--logi-policy") && i + 1 < argc) logiPolicy = argv[++i];                     // baseline (today's rules); iaus is refused until the post-T2 loot scorer exists
         else if (!std::strcmp(argv[i], "--oracle-subject-only")) g_oracleSubjectOnly = true;   // the gap pass's oracle plans for the subject only (Oracle.h g_oracleSubjectOnly)
         else if (!std::strcmp(argv[i], "--gap-dump")) gapDump = true;                        // the gap pass prints GAPFIGHT / GAPSIT / GAPGEN / GAPDEC lines (tune_driver.py stage gap)
         else if (!std::strcmp(argv[i], "--class-oracle") && i + 1 < argc) { classOracle = std::max(0, std::atoi(argv[++i])); if (classOracle > 0 && !noClassRulings) g_classRulings = true; }   // N natural fights per class with the class-constrained oracle: the per-class oracle gap
@@ -642,6 +646,8 @@ int main(int argc, char** argv) {
         // A per-class override is a COPY of the shared curve taken when the spec is applied: a search over the shared curve of the same
         // consideration would not move that class, and its result would read as if it had. Refused, never silently half-applied.
         for (std::size_t ci : g_curveConsEdited) { const std::string tag = "c." + std::to_string(ci) + "."; if (("," + opt).find("," + tag) != std::string::npos) { std::fprintf(stderr, "--opt %s* together with a --curve on consideration %zu is refused: the per-class override is a copy of the shared curve, so the search would not move it\n", tag.c_str(), ci); return 2; } } }
+    if (logiN > 0 && listPath) { std::fprintf(stderr, "--logistics with --list is REFUSED: the list extracts (tools/list_balance) hold no containers, no gold, MISC, gems or ingredients, no vendor chests or gold, and no armor or potion weights (iaus-sim-v2.md 34.6). The logistics world is the built-in fixture until the extractor carries them.\n"); return 2; }
+    if (logiN > 0 && logiPolicy != "baseline") { std::fprintf(stderr, "--logi-policy %s is REFUSED: only 'baseline' (today's rules) exists; the IAUS loot scorer is the post-T2 batch (ClickUp 1dfcuabd18f)\n", logiPolicy.c_str()); return 2; }
     Data Dm = listPath ? LoadData(listPath) : BuiltinData();
     // The potion-worth table of this world: the committed built-in one, a list's own (--potion-worth <file>), or the older fixed rate.
     // A list run WITHOUT its table is refused a silent fallback: it prices potions with the built-in world's worth and says so in the headline.
@@ -670,6 +676,7 @@ int main(int argc, char** argv) {
         if (!bad.empty()) { std::fprintf(stderr, "unknown class slug(s):"); for (const std::string& b : bad) std::fprintf(stderr, " %s", b.c_str()); std::fprintf(stderr, "  (see --print-classes)\n"); return 2; } }
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (stealLab > 0) return RunStealLab(D, allClasses, stealLab, seed);
+    if (logiN > 0) return Logi::Run(allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, logiN, logiK, true);
     if (disengageReport > 0) return DisengageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, disengageReport, threads, estimates, scrollRoad);
     if (optRows) return OptimiseRows(D, allClasses, seed, optFights > 0 ? optFights : fights, threads, rowCap, rowEvals);
     if (optPrefix) return OptimisePrefix(D, allClasses, seed, optFights > 0 ? optFights : fights, threads);
