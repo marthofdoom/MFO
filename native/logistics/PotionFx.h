@@ -15,6 +15,11 @@ namespace MFO::Logistics {
     // Hostile or Detrimental effect (a drug: PotionIsDrug). Reads the form only; any thread.
     std::vector<Iaus::PotionFx> PotionBuffs(RE::AlchemyItem* a_potion);
 
+    // IAUS looting (marth 2026-11-13: "Potions shoudl also read all effects, in fact food and drink as well"): the buff kinds of ANY
+    // non-poison, non-drug ALCH, food and drink included -- the catalog row first, else the runtime rule PotionBuffs uses. Worker-safe
+    // (reads the record only). logistics/LootNeed.cpp.
+    std::vector<Iaus::PotionFx> ConsumableBuffs(RE::AlchemyItem* a_item);
+
     // Drink the carried potion a_potion (FormID) NOW: ActorEquipManager::EquipObject, the same road DrinkBest takes (the AlchemyItem equip
     // path is the vanilla "drink"; v8 equip authority governs only ARMO / WEAP / AMMO / LIGH, and MFO files no ch.30 potion allowance, so
     // nothing refuses it: MAP.md "DRINK ROAD"). Refuses (false, nothing consumed): he cannot act (Actuation::CannotActReason), the form is

@@ -104,6 +104,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/PotionFx.cpp
+    logistics/LootNeed.cpp
     logistics/Sinks.cpp
     logistics/TheftGate.cpp
     logistics/Steal.cpp

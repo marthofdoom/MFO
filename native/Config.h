@@ -595,6 +595,11 @@ namespace MFO::Config {
     // follower's choice. ANDed into `iausOn` in scheduler/CombatScan.cpp Tick, so the existing IausToggleEdge stands
     // a running follower down. Read on the worker (scan) and the render thread (board button grey-out).
     inline std::atomic<bool>  g_iausAvailable{ true };
+    // IAUS LOOTING ([General] bIausLoot, INI-only, default ON, ClickUp 1dfcuabd18f). For a follower whose Sentient AI switch is on
+    // (FollowerState::iausCombat, under g_iausAvailable): LootScan still FINDS the loot, but the act.loot_* gambit rows (except museum /
+    // steal / pick locks) are skipped and logistics/LootNeed.cpp scores WHAT he takes by his current inventory (iaus/LootNeed.h).
+    // 0 = his loot gambit rows run exactly as before. Read on the worker (ServiceFollower).
+    inline std::atomic<bool>  g_iausLoot{ true };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };

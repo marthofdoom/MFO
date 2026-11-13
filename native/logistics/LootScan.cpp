@@ -1043,10 +1043,12 @@ namespace MFO::Logistics {
             bool moved = false, stopped = false;
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : a_follower->GetPosition();
+            const bool iausLoot = IausLootOn(a_state);   // IAUS looting (logistics/LootNeed.cpp): it replaces his act.loot_* rows here
             for (int start = 0; ; ) {
                 const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
                 if (choice.rank < 0) break;
                 const auto& op = choice.actionOpcode;
+                if (iausLoot && IsIausNeedLootOp(op)) { start = choice.rank + 1; continue; }
                 Category cat = Category::Gold; RE::ActorValue want = RE::ActorValue::kNone;
                 bool isLoot = true;
                 if      (op == Vocab::kActLootArrows)         cat = Category::Arrows;
@@ -1093,6 +1095,18 @@ namespace MFO::Logistics {
                 }
                 start = choice.rank + 1;
             }
+            // IAUS LOOTING: the categories his inventory needs, best score first, under the SAME dibs gate and the same drain as the rows
+            // above (a Wait rule ended the sweep: a deliberate STOP wins).
+            if (!stopped && iausLoot) {
+                for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                    if (!TierReleased(cat, a_corpse, playerPos, a_now)) {
+                        if (a_leftWaiting) *a_leftWaiting = true;
+                        continue;
+                    }
+                    int guard = (cat == Category::Equipment) ? 10 : 1;
+                    while (guard-- > 0 && LootHere(a_follower, a_corpse, cat, RE::ActorValue::kNone)) moved = true;
+                }
+            }
             // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot ... whats needed for town errand smithing"): both take roads
             // (the arm's-reach drain and the excursion arrival) come through here, and they only evaluate loot gambits, so the smithing
             // materials have their own pass: free tier, only the forms still on his want list. A Wait rule (stopped) wins.
@@ -1125,6 +1139,9 @@ namespace MFO::Logistics {
                 if (restrictFree && IsDibsTierLootOp(op)) {
                     start = choice.rank + 1; continue;   // dibs-tier: defer to pass 1
                 }
+                if (IausLootOn(a_state) && IsIausNeedLootOp(op)) {
+                    start = choice.rank + 1; continue;   // IAUS looting owns this row's decision (the pass after the walk)
+                }
                 bool acted = false, isLoot = true;
                 if      (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows,  a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
                 else if (op == Vocab::kActLootBolts)          acted = LootNearby(a_follower, Category::Bolts,   a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
@@ -1152,6 +1169,10 @@ namespace MFO::Logistics {
                 start = choice.rank + 1;   // skip non-loot / no-op, try next
             }
             }
+            // IAUS LOOTING: the categories his inventory needs, best score first (a Wait rule returned above).
+            if (IausLootOn(a_state))
+                for (const Category cat : IausLootPlan(a_follower, a_state))
+                    if (LootNearby(a_follower, cat, a_now, RE::ActorValue::kNone, LootMode::kExcursion)) return true;
             // TOWN PHASE 2 R8: the smithing want list's materials ride the same leg boundaries, gambit or not (Service.cpp has the
             // always-on pass for the idle tick). A Wait rule returned above.
             if (Errand::Smith::WantsMaterials(a_follower) &&

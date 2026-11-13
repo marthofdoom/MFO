@@ -86,6 +86,12 @@ namespace MFO::Logistics {
         return ClassifyRuntime(a_potion);
     }
 
+    std::vector<Iaus::PotionFx> ConsumableBuffs(RE::AlchemyItem* a_item) {
+        if (!a_item || a_item->IsPoison() || PotionIsDrug(a_item)) return {};
+        if (const auto* cat = Catalog::PotionEffects(a_item->GetFormID())) return *cat;
+        return ClassifyRuntime(a_item);
+    }
+
     bool DrinkPotionForm(RE::Actor* a_follower, RE::FormID a_potion) {
         if (!a_follower || a_potion == 0) return false;
         if (const char* why = Actuation::CannotActReason(a_follower)) {

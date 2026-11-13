@@ -879,7 +879,8 @@ namespace MFO::Logistics {
             switch (a_cat) {
             case Category::Arrows:    return LootAmmo(a_follower, a_ref, false);
             case Category::Bolts:     return LootAmmo(a_follower, a_ref, true);
-            case Category::Potions:   return LootPotions(a_follower, a_ref, a_want);
+            case Category::Potions:   // IAUS looting on: every consumable scored by his inventory (logistics/LootNeed.cpp), else the gambit's rule
+                return (g_svc && IausLootOn(*g_svc)) ? LootConsumablesNeed(a_follower, a_ref, false) : LootPotions(a_follower, a_ref, a_want);
             case Category::Equipment: return LootEquipment(a_follower, a_ref);
             case Category::Gold:      return LootGold(a_follower, a_ref);
             case Category::Jewelry:   return LootJewelry(a_follower, a_ref);
@@ -903,7 +904,8 @@ namespace MFO::Logistics {
             switch (a_cat) {
             case Category::Arrows:    return LootAmmo(a_follower, a_ref, false, true);
             case Category::Bolts:     return LootAmmo(a_follower, a_ref, true, true);
-            case Category::Potions:   return LootPotions(a_follower, a_ref, a_want, true);
+            case Category::Potions:
+                return (g_svc && IausLootOn(*g_svc)) ? LootConsumablesNeed(a_follower, a_ref, true) : LootPotions(a_follower, a_ref, a_want, true);
             case Category::Equipment: return LootEquipment(a_follower, a_ref, true);
             case Category::Gold:      return LootGold(a_follower, a_ref, true);
             case Category::Jewelry:   return LootJewelry(a_follower, a_ref, true);

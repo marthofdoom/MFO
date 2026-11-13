@@ -1526,6 +1526,9 @@ namespace MFO::Logistics {
         // player's gambit-table order. Pass 1 is the original unrestricted
         // walk: a released dibs item still loots normally once nothing
         // free-tier fired. Ordering only -- TierReleased's timing is untouched.
+        // IAUS LOOTING (ClickUp 1dfcuabd18f, logistics/LootNeed.cpp): with it on, his act.loot_* rows (IsIausNeedLootOp) are skipped,
+        // never run beside it (marth: "replaced, never stacked"), and the IAUS pass below picks what to loot after the walk.
+        const bool iausLoot = IausLootOn(a_state);
         for (int pass = 0; pass < 2 && !acted; ++pass) {
         const bool restrictFree = (pass == 0);
         for (int start = 0; ; ) {
@@ -1537,6 +1540,9 @@ namespace MFO::Logistics {
 
             if (restrictFree && IsDibsTierLootOp(op)) {
                 start = choice.rank + 1; continue;   // dibs-tier: defer to pass 1
+            }
+            if (iausLoot && IsIausNeedLootOp(op)) {
+                start = choice.rank + 1; continue;   // IAUS looting owns this row's decision
             }
 
             if      (op == Vocab::kActDrinkHealthPotion)  acted = DrinkBest(a_follower, RE::ActorValue::kHealth);
@@ -2141,6 +2147,16 @@ namespace MFO::Logistics {
             start = choice.rank + 1;      // matched but no-op -> try the next rule
         }
         }   // end pass loop (no-dibs-first loot ordering)
+
+        // IAUS LOOTING: after every rule found nothing to do (a Wait rule returned above, so a deliberate STOP still wins), the categories
+        // his inventory needs, best score first, through the same LootNearby road (claims, dibs tiers, theft gate unchanged).
+        if (!acted && iausLoot) {
+            for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                if (!LootNearby(a_follower, cat, now)) continue;
+                acted = true; fired = -1; label = std::string("IAUS loot ") + CatName(cat); MarkJustLooted(id, now);
+                break;
+            }
+        }
 
         // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot or buy whats needed for town errand smithing"): after every
         // gambit rule found nothing to do, a follower whose smithing want list still lacks materials takes them (ruling Q5: only the
