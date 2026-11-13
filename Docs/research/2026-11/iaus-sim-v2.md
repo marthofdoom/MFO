@@ -2430,8 +2430,13 @@ A number is ACCEPTED only when every line holds.
   15 cells at all three configs.
 - cross-world: fresh seeds 4001..4096 on built-in, LoreRim, Tuxborn, Vanilla: the equal-weight mean of the four d is > 2 se,
   no world is worse, and as shipped the mean is not worse and inside the band.
-- Knight line: the guard floor holds (>= 60%) on every world, default and as shipped (a Knight-line value, a T1 melee value
-  and a shared value are all held to it).
+- joint: the T1 rows (melee, ranged, mage) are searched first and their accepted values are part of every later class's
+  baseline. When the classes are done, the whole final table is gated against the shipped one on all 15 cells (128 seeds,
+  three configs: no cell worse at the 15-at-once bar, no 15-cell mean worse) and each T1 value is left out in turn (the
+  table without it may not be better). A failure writes nothing and is an open decision.
+- Knight line: the guard floor holds (>= 60%, measured on 36 seeds per world and config; the six-seed groups of 33.2
+  spread over about 4 points) on every world, default and as shipped (a Knight-line value, a T1 melee value and a shared
+  value are all held to it). A floor run with no blow in its tally stops the driver: it never reads as a floor that holds.
 - fixed: the School Circle is never a knob; pure 0 / 1 gates and Step vetoes are never knobs; a knob never leaves its valid
   range (no negative offset, floor or level; a boost never under 1; a Piece point at 0 stays a veto).
 
@@ -2446,7 +2451,7 @@ of 31.11 are gone (Q-gate-rule).
 
 ```
 cd <repo>
-SIM_OUT=/tmp/claude-1000/class-tuning-bin/sim taskset -c 0-11 nice -n 10 tools/iaus_sim/run.sh --print-classes | head -3
+SIM_OUT=/tmp/claude-1000/class-tuning-bin/sim-r2 taskset -c 0-11 nice -n 10 tools/iaus_sim/run.sh --print-classes | head -3
 ls ~/.cache/mfo-list-balance/{LoreRim,Tuxborn,Vanilla}.{sim,combatmods}.json     # all six must exist
 ```
 
@@ -2460,7 +2465,7 @@ If a `.sim.json` is missing or older than `tools/list_balance/compile_world.py`:
 OUT=<scratchpad>/tune/full
 mkdir -p $OUT
 setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py \
-    --bin /tmp/claude-1000/class-tuning-bin/sim --out $OUT --jobs 12 > $OUT/driver.out 2>&1 &
+    --bin /tmp/claude-1000/class-tuning-bin/sim-r2 --out $OUT --jobs 12 > $OUT/driver.out 2>&1 &
 ```
 
 Do not poll it in a loop. `tail -3 $OUT/progress.log` shows the last finished step; the dashboard gets one results file
@@ -2468,7 +2473,17 @@ per finished sweep. Expected length: hours (15 cells, every live knob of each (3
 
 **Resume**: run the same command again. Everything finished is in `$OUT/cache.jsonl` and replays in seconds; never delete
 that file, never edit it. One stage only: add `--stages floor,rating,summary` (any subset, in order). One class only:
-`--classes knight` (with `--stages classes,summary`).
+`--classes knight` (with `--stages classes,joint,summary`); the driver refuses it until melee, ranged and mage are done in
+that `--out`, because their values are the Knight's baseline.
+
+**What a cached result is tied to**: the sha256 of the simulator binary (the built-in potion table and every curve are
+compiled into it), of the world's `.sim.json` and `.combatmods.json`, and of its potion-worth table are part of every cache
+key (`summary.json` `stages.prep.identity`). Rebuild the simulator, re-extract a list or re-measure a table and the
+results that depend on it are measured again; nothing stale is replayed. Never rebuild the binary in place while a run
+is going: build to a new path and start a new `--out`. A list's potion-worth table is reused only while the binary and
+the list files it was measured from are the same (the `.inputs` stamp beside it). A simulator run that fails stops the
+driver with the command and the simulator's message; it is never cached and never read as an empty result. The simulator
+itself refuses a `--list` run without `--potion-worth` (`edge_search.py` too).
 
 **Where the result lands**: `$OUT/summary.md` (read this), `$OUT/summary.json` (every number), `$OUT/progress.log`. Both
 summaries are rewritten after every sweep, so a half-finished run can be read too (classes marked "(running)").
@@ -2483,6 +2498,8 @@ summaries are rewritten after every sweep, so a half-finished run can be read to
 | `gate: <class> gets worse at <config>` | a real loss with stealth off or as shipped | nothing |
 | `cross-world: ...` | the gain does not hold on fresh seeds over the four worlds | nothing |
 | `Knight guard floor: ...` | the value pushes the Knight line under 60% | nothing |
+| joint `PASS` | the whole final table holds against the shipped one on all 15 cells | go on |
+| joint `FAIL: ...` | the values do not hold together | open decision: write NO value, report |
 | globals `PASSES RULE` or `BEATS NOISE, NOT APPLIED` | a shared default would gain | ALWAYS an open decision: report, do not write |
 | consts `BEATS NOISE` | a compile-time constant would gain | open decision: report, do not write |
 | recalib `DOES NOT HOLD` | an accepted value loses under the re-measured potion worth | do not write it; report |
@@ -2504,8 +2521,10 @@ summaries are rewritten after every sweep, so a half-finished run can be read to
    taunt-count term), not a table value.
 5. A class flagged BELOW its tier by the rating battery.
 6. An accepted value that fails `recalib`.
-7. More than about ten accepted values for one class, or an accepted value on a consideration weight above x2 or under x0.5
-   of the catalogue's: report before writing (a sign the shared catalogue, not the class, is off).
+7. More than ten accepted values for one class, or a consideration weight accepted at the edge of the range tried (x2 or
+   x0.5 of the catalogue's): report before writing (a sign the shared catalogue, not the class, is off). The driver raises
+   both itself.
+9. A failed joint gate: no value of the run is written until it is decided.
 8. Anything the driver stops on (a missing input, a simulator error): report the last lines of `driver.out`. Do not edit
    the driver's rule or thresholds to get past it; a rule change is written down first and is Fable's.
 
@@ -2514,7 +2533,12 @@ and its dashboard files are labelled so). Made on the final binary, Knight, buil
 LoreRim's potion worth, rejudge, classes: 397 knobs, 85 live, 312 dead for the Knight, holdout, gates, cross-world, Knight
 floor; globals with the switching rate; one constant variant built and compared; floor with causes; rating; recalib;
 summary) in 72 s on 12 cores. Killed with SIGKILL 22 s in (mid liveness), the same command finished the run from 818 cached
-results; a third run of the finished directory replayed in under a second and wrote no second dashboard file. All 15 cells
+results; a third run of the finished directory replayed in under a second and wrote no second dashboard file.
+After the review round (cache identity, failed runs, the joint gate; melee + Knight, built-in + LoreRim, binary `sim-r2`):
+(A) a simulator whose Knight-floor run exits 3 stopped the driver with the command and "planted failure", and no floor
+result was cached; (B) SIGKILL 45 s in (mid sweep), the same command finished from 3214 cached results, the Knight searched
+on top of the melee row's value, joint gate run; a third run: 0 s, 0 new results; (C) one line of LoreRim's potion table
+changed: the LoreRim floor was measured again (4 new results), the built-in one replayed. All 15 cells
 with the oracle-gap order (ranged-off, melee, mercenary, melee-off first): a second smoke run, about 9 minutes; live knobs per cell 34 (melee) to 191 (mage-off) of 396. To repeat it: the launch command with `--smoke --classes knight --worlds
 builtin,LoreRim` and another `--out`.
 

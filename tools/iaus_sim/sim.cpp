@@ -646,6 +646,8 @@ int main(int argc, char** argv) {
     if (!potWorthPath.empty()) { const auto sl = potWorthPath.find_last_of('/'); g_potTag = "+potworth=" + (sl == std::string::npos ? potWorthPath : potWorthPath.substr(sl + 1)); }
     if (potWorthPath == "legacy") g_potLegacy = true;
     else if (!potWorthPath.empty()) { if (!LoadPotWorth(potWorthPath.c_str())) { std::fprintf(stderr, "cannot read --potion-worth '%s'\n", potWorthPath.c_str()); return 2; } }
+    else if (listPath && potCalibN == 0 && !listUses && !listParams && !printClasses) {   // REFUSED, never a silent fallback: the built-in table is the built-in world's
+        std::fprintf(stderr, "a --list run needs its own potion-worth table: --potion-worth <table> (tools/iaus_sim/potion_worth.py --list ... --out <table>; tune_driver.py measures it), or --potion-worth legacy for the older fixed rate\n"); return 2; }
     else BuiltinPotWorth();
     if (sneakProfile == "lorerim-like") sneakProfile = "steep";
     if (sneakProfile.empty()) sneakProfile = listPath ? "list" : "vanilla";   // the built-in world has no sneak data of its own: Skyrim.esm's

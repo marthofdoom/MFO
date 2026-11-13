@@ -79,8 +79,13 @@ CACHE = {}
 EMIT_LOCK = threading.Lock()
 
 
+def list_args():
+    """A list runs with ITS potion-worth table (the simulator refuses a list without one; --potion-worth legacy = the older fixed rate)."""
+    return ["--list", ARGS.list, "--potion-worth", ARGS.potion_worth] if ARGS.list else (["--potion-worth", ARGS.potion_worth] if ARGS.potion_worth else [])
+
+
 def run_sim(extra):
-    cmd = [ARGS.bin, "--no-json", "--threads", "1"] + (["--list", ARGS.list] if ARGS.list else []) + extra
+    cmd = [ARGS.bin, "--no-json", "--threads", "1"] + list_args() + extra
     return subprocess.run(cmd, capture_output=True, text=True).stdout
 
 
@@ -92,7 +97,7 @@ def emit_run(classes, label, curves=(), sets=None):
     if not ARGS.emit_runs:
         return
     cmd = [ARGS.bin, "--threads", "2", "--classes", classes, "--fights", "4", "--class-oracle", "2", "--gap-scenarios", "1", "--label", label]
-    cmd += (["--list", ARGS.list] if ARGS.list else [])
+    cmd += list_args()
     for c in curves:
         cmd += ["--curve", c]
     if sets:
@@ -433,6 +438,7 @@ def main():
     ap.add_argument("--top", type=int, default=12, help="wide: how many of a class's most sensitive live parameters are searched (default 12)")
     ap.add_argument("--bin", required=True, help="the built simulator (run.sh's SIM_OUT)")
     ap.add_argument("--list", help="a <list>.sim.json (test input only); default the built-in world")
+    ap.add_argument("--potion-worth", help="the world's potion-worth table (potion_worth.py), or legacy; REQUIRED with --list")
     ap.add_argument("--classes", help="comma list (per-class); default the 12 Beta 1 classes + the 3 base cells")
     ap.add_argument("--params", help="comma list (global); default every Tuning scalar of GLOBAL_PARAMS")
     ap.add_argument("--curves", help="space-separated --curve specs to apply (gates, floor, global)")
@@ -442,6 +448,8 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one results JSON per finished sweep")
     ARGS = ap.parse_args()
+    if ARGS.list and not ARGS.potion_worth:
+        ap.error("--list needs --potion-worth <table> (tools/iaus_sim/potion_worth.py --list ... --out <table>) or --potion-worth legacy")
     POOL = cf.ThreadPoolExecutor(max_workers=ARGS.jobs)
     return {"per-class": cmd_per_class, "wide": cmd_wide, "global": cmd_global, "gates": cmd_gates, "floor": cmd_floor}[ARGS.mode]() or 0
 

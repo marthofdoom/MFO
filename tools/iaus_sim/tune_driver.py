@@ -3,7 +3,7 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,globals,consts,floor,rating,recalib,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,joint,globals,consts,floor,rating,recalib,summary] [--jobs 12]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
 
@@ -17,7 +17,10 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
           classes   per class: every knob the class table can move (curve parameters, Piece points, consideration weights, family
                     weights, edge scalars) -> liveness screen -> coordinate descent over the live ones, most sensitive first, an
                     accepted value carried into the next sweep -> holdout -> many-seed gates -> fresh-seed cross-world confirmatory
-                    -> Knight guard floor. One dashboard results file per finished sweep.
+                    -> Knight guard floor. The T1 rows (melee, ranged, mage) are searched first and their accepted values are
+                    every later class's baseline. One dashboard results file per finished sweep.
+          joint     the whole final table against the shipped one on all 15 cells (128 seeds, three configs), and each T1 value
+                    left out in turn. A failure is an open decision: no value is written.
           globals   the shared Tuning winners of the earlier round, confirmed on fresh seeds on every world with the per-class gate
                     and the decision-switching rate next to J.
           consts    the compile-time constants never probed (const_probe.sh variants).
@@ -37,14 +40,17 @@ RULE (fixed before any result of this driver was read; a number is ACCEPTED only
   cross-world  fresh seeds 4001.. on every world: the equal-weight mean of the worlds' d is > 2 se, no world is worse (d < -2 se),
                and as shipped the mean over the worlds is not worse and inside the band. A list's actors are test input: a value
                that is best on one list only is never accepted.
-  knight       the Knight line's guard floor (>= 60% under two or more own-taunted foes) holds on every world, default and as
-               shipped; where the shipped table is already under it, the value may not lower it by more than 0.5.
+  joint        the whole final table against the shipped one on all 15 cells, on the train + holdout seeds, at all three configs:
+               no cell worse (the 15-at-once bar), no 15-cell mean worse, and no T1 value whose removal makes the table better.
+  knight       the Knight line's guard floor (>= 60% under two or more own-taunted foes, measured on 36 seeds) holds on every
+               world, default and as shipped; where the shipped table is already under it, the value may not lower it by more than 0.5.
   fixed        marth's School Circle (floor 0.35, shape 1.5, mastery bump 0.15, order, home schools) is never a knob. Pure 0 / 1
                gates and Step vetoes are rules, never knobs. A knob never moves outside its valid range (no negative offset, floor
                or level; a boost never under 1; a Piece point at 0 stays a veto and no other point may reach 0).
 """
 import argparse
 import concurrent.futures as cf
+import hashlib
 import json
 import math
 import os
@@ -65,9 +71,9 @@ CACHE_DIR = os.path.expanduser("~/.cache/mfo-list-balance/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
-            const_seeds=48, floor_seeds=6, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False)
+            const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
-             const_seeds=2, floor_seeds=1, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True)
+             const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True)
 
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
@@ -87,6 +93,35 @@ def log(msg):
         f.write(line + "\n")
 
 
+_HASH = {}
+
+
+def sha(path):
+    """sha256 of a file (first 16 hex), re-read only when its size or mtime changed. A missing file is an error, never an empty hash."""
+    st = os.stat(path)
+    k = (path, st.st_size, st.st_mtime_ns)
+    if k not in _HASH:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for blk in iter(lambda: f.read(1 << 20), b""):
+                h.update(blk)
+        _HASH[k] = h.hexdigest()[:16]
+    return _HASH[k]
+
+
+def ident(world, binary=None):
+    """EVERYTHING a result of this world depends on besides its arguments: the simulator binary (PotionWorth.h and every curve are
+    compiled into it), the world's .sim.json and .combatmods.json, and its potion-worth table. Part of every cache key, so a result
+    measured on another binary, another list extract or another potion table is never replayed as this one's."""
+    out = ["bin:" + sha(binary or A.bin)]
+    if world == "builtin":
+        if A.builtin_worth:
+            out.append("worth:" + sha(A.builtin_worth))
+    elif world is not None:
+        out += ["sim:" + sha(CACHE_DIR + world + ".sim.json"), "mods:" + sha(CACHE_DIR + world + ".combatmods.json"), "worth:" + sha(os.path.join(A.out, "potworth-%s.txt" % world))]
+    return "|".join(out)
+
+
 def world_args(world):
     if world == "builtin":
         return ["--potion-worth", A.builtin_worth] if A.builtin_worth else []
@@ -94,7 +129,7 @@ def world_args(world):
 
 
 def key_of(world, classes, cfg, curves, sets, binary):
-    return json.dumps([world, classes, cfg, sorted(curves), sets or "", binary or "", A.builtin_worth or ""], separators=(",", ":"))
+    return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)], separators=(",", ":"))
 
 
 def sim_cmd(world, classes, cfg, curves, sets, binary):
@@ -107,10 +142,13 @@ def sim_cmd(world, classes, cfg, curves, sets, binary):
 
 
 def run_chunk(k, cmd, seeds):
-    out = subprocess.run(cmd + ["--seeds", ",".join(str(s) for s in seeds)], capture_output=True, text=True).stdout
+    r = subprocess.run(cmd + ["--seeds", ",".join(str(s) for s in seeds)], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("the simulator failed (exit %d): %s\n%s\n%s" % (r.returncode, " ".join(cmd), r.stdout[-400:], r.stderr[-400:]))
+    out = r.stdout
     js = {int(m.group(1)): float(m.group(2)) for m in re.finditer(r"^SEED (\d+)  J=([-0-9.]+)", out, re.M)}
     sw = {int(m.group(1)): (float(m.group(2)), float(m.group(3))) for m in re.finditer(r"^SWITCH (\d+) (\d+) ([0-9.]+)", out, re.M)}
-    if set(js) != set(seeds):
+    if set(js) != set(seeds) or set(sw) != set(seeds):
         raise RuntimeError("sim gave seeds %s for %s: %s\n%s" % (sorted(js), seeds, " ".join(cmd), out[-600:]))
     with LOCK:
         with open(os.path.join(A.out, "cache.jsonl"), "a") as f:
@@ -139,9 +177,15 @@ def req(world, classes, cfg, curves, seeds, sets=None, binary=None):
     return (world, classes, cfg, tuple(curves), sets, binary, list(seeds))
 
 
-def text_run(key, cmd):
+def text_run(key, cmd, world=None):
+    """A cached text run. The key carries the identity of the binary and the world (ident). A run that fails is NEVER cached and
+    never read as an empty result: it stops the driver with the command and the simulator's own message."""
+    key = key + "#" + ident(world, cmd[0])   # cmd[0] is always the simulator binary that runs
     if key not in TEXT:
-        out = subprocess.run(cmd, capture_output=True, text=True).stdout
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError("the simulator failed (exit %d): %s\n%s\n%s" % (r.returncode, " ".join(cmd), r.stdout[-400:], r.stderr[-400:]))
+        out = r.stdout
         with LOCK:
             TEXT[key] = out
             with open(os.path.join(A.out, "cache.jsonl"), "a") as f:
@@ -235,6 +279,8 @@ def all_knobs():
     """Every knob a class row can carry, each with its candidate values INSIDE its valid range. From the simulator's --list-uses."""
     txt = text_run("list-uses", [A.bin, "--list-uses"])
     knobs, seen, gates, pieces = [], set(), 0, {}
+    if txt.count("\nUSE ") < 50 or "\nFAMILY " not in txt:
+        raise RuntimeError("--list-uses printed no catalogue (a simulator without the class-tuning surface?)")
     for line in txt.splitlines():
         p = line.split()
         if p and p[0] == "PIECE":
@@ -296,13 +342,14 @@ def knight_floor(world, cls, curves, sets=None):
     for cfg in ("g3", "shipped"):
         num = den = 0.0
         why = [0.0] * 6
-        for seed in range(1, CFG["floor_seeds"] + 1):
+        def one(seed):
             cmd = [A.bin, "--no-json", "--threads", "1", "--classes", cls, "--seed", str(seed), "--fights", "8", "--rating", "0", "--guard-why", "--baseline", "/dev/stdout"] + world_args(world) + CONFIGS[cfg]
             for c in curves:
                 cmd += ["--curve", c]
             if sets:
                 cmd += ["--set", sets]
-            txt = text_run("floor:" + json.dumps(cmd[1:]), cmd)
+            return text_run("floor:" + json.dumps(cmd[1:]), cmd, world)
+        for txt in list(POOL.map(one, range(1, CFG["floor_seeds"] + 1))):   # all seeds at once; a failed run raises here
             rows = {}
             for m in re.finditer(r"^%s\|([^|]+)\|(guard2%%|inc2/f|ung2[a-z]+%%)=([-0-9.e]+)" % re.escape(cls), txt, re.M):
                 rows.setdefault(m.group(1), {})[m.group(2)] = float(m.group(3))
@@ -312,8 +359,10 @@ def knight_floor(world, cls, curves, sets=None):
                 den += n
                 for i, nm in enumerate(("ung2stagger%", "ung2rest%", "ung2hurt%", "ung2drink%", "ung2busy%", "ung2free%")):
                     why[i] += r.get(nm, 0.0) * n
-        out[cfg] = round(num / den, 1) if den else -1.0
-        out[cfg + "_why"] = dict(zip(("staggered", "rest_after_hold", "hurt_drinks_first", "drinking", "mid_action", "free"), [round(x / den, 1) if den else 0.0 for x in why]))
+        if not den > 0.0:   # no blow under two or more own-taunted foes in any fight: the tally measured nothing, and "nothing" must never read as a floor that holds
+            raise RuntimeError("Knight floor: %s on %s (%s) has no blow under 2+ own-taunted foes in %d seeds: the tally is empty (wrong class, a broken taunt road, or a changed output format)" % (cls, world, cfg, CFG["floor_seeds"]))
+        out[cfg] = round(num / den, 1)
+        out[cfg + "_why"] = dict(zip(("staggered", "rest_after_hold", "hurt_drinks_first", "drinking", "mid_action", "free"), [round(x / den, 1) for x in why]))
     return out
 
 
@@ -397,6 +446,26 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
     return row
 
 
+def measure_worth(tab, world, seeds, curves=()):
+    """A potion-worth table, measured once and reused ONLY while everything it was measured from is the same (the binary, the world's
+    .sim.json and .combatmods.json, the seeds and fights, the curves): the stamp beside it says what that was."""
+    src = None if world == "builtin" else CACHE_DIR + world + ".sim.json"
+    stamp = json.dumps(["bin:" + sha(A.bin)] + ([] if src is None else ["sim:" + sha(src), "mods:" + sha(CACHE_DIR + world + ".combatmods.json")]) + [seeds, CFG["calib_fights"], sorted(curves)])
+    if os.path.exists(tab) and os.path.exists(tab + ".inputs") and open(tab + ".inputs").read() == stamp:
+        return
+    log("measuring the potion worth of %s%s" % (world, " (its inputs changed: the table on disk is not reused)" if os.path.exists(tab) else ""))
+    cmd = [sys.executable, os.path.join(HERE, "potion_worth.py"), "--bin", A.bin, "--seeds", str(seeds), "--fights", str(CFG["calib_fights"]), "--jobs", str(A.jobs), "--out", tab + ".tmp"]
+    if src:
+        cmd += ["--list", src]
+    if curves:
+        cmd += ["--curves", " ".join(curves)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("potion_worth.py failed: %s\n%s" % (" ".join(cmd), (r.stdout + r.stderr)[-600:]))
+    os.replace(tab + ".tmp", tab)
+    open(tab + ".inputs", "w").write(stamp)
+
+
 # ── stages ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 def stage_prep():
     st = {"worlds": {}}
@@ -413,19 +482,16 @@ def stage_prep():
         if not os.path.exists(CACHE_DIR + w + ".combatmods.json"):   # the simulator reads it BESIDE the .sim.json and takes "absent" for "no such mod": a copied list file silently loses the list's combat mods
             raise SystemExit("missing %s%s.combatmods.json (tools/list_balance/extract_combat_mods.py): without it the list's combat mods are not in the world" % (CACHE_DIR, w))
         tab = os.path.join(A.out, "potworth-%s.txt" % w)
-        if not os.path.exists(tab):
-            log("prep: measuring the potion worth of %s" % w)
-            subprocess.run([sys.executable, os.path.join(HERE, "potion_worth.py"), "--bin", A.bin, "--list", src, "--seeds", str(CFG["list_calib_seeds"]),
-                            "--fights", str(CFG["calib_fights"]), "--jobs", str(A.jobs), "--out", tab + ".tmp"], check=True, capture_output=True)
-            os.replace(tab + ".tmp", tab)
+        measure_worth(tab, w, CFG["list_calib_seeds"])
         st["worlds"][w] = tab
     chk = text_run("print-classes", [A.bin, "--print-classes"])
     st["school_circle_and_armor"] = {"mercenary_light": bool(re.search(r"T2 mercenary .* light", chk)), "warrior_heavy": bool(re.search(r"T2 warrior .* heavy", chk)),
                                      "archer_light": bool(re.search(r"T2 archer .* light", chk)), "thief_light": bool(re.search(r"T2 thief .* light", chk))}
     if not all(st["school_circle_and_armor"].values()):
         raise SystemExit("the armor model is not the class cards': %s" % st["school_circle_and_armor"])
+    st["identity"] = {w: ident(w) for w in A.worlds}   # what every cached result of this run is keyed on
     SUMMARY["stages"]["prep"] = st
-    log("prep: done %s" % st["worlds"])
+    log("prep: done %s" % st["identity"])
 
 
 def stage_rejudge():
@@ -448,17 +514,22 @@ def search_class(cls, knobs):
     probe = range(1, CFG["probe_seeds"] + 1)
     train = range(1, CFG["train"] + 1)
     kn = class_knobs(cls, knobs)
+    # THE COMBINED TABLE: a T1 row (melee / ranged / mage) is the companion in every other class's fights, so the T1 rows are searched
+    # FIRST and their accepted values are part of every later class's baseline (`base`): a later value is found, gated and confirmed in
+    # the world the final table will make, not in the shipped one. The joint stage then gates the whole final table once more.
+    done_cls = SUMMARY["stages"].get("classes", {})
+    base = [k for t in sorted(T1) if t != cls and done_cls.get(t, {}).get("complete") for k in done_cls[t]["kept"]]
     # LIVENESS: the two outermost values of every knob on a few seeds; a knob that changes no seed's J is dead for this class
-    reqs = [req("builtin", cls, "g3", [], probe)]
+    reqs = [req("builtin", cls, "g3", base, probe)]
     for name, tmpl, shared, vals in kn:
         for v in (vals[0], vals[-1]):
-            reqs.append(req("builtin", cls, "g3", [tmpl.format(c=cls, v=v)], probe))
+            reqs.append(req("builtin", cls, "g3", base + [tmpl.format(c=cls, v=v)], probe))
     res = jmany(reqs)
-    base, live, dead = res[0], [], []
+    base_j, live, dead = res[0], [], []
     for i, (name, tmpl, shared, vals) in enumerate(kn):
         best = 0.0
         for r in (res[1 + 2 * i], res[2 + 2 * i]):
-            d = [y[0] - x[0] for x, y in zip(base, r)]
+            d = [y[0] - x[0] for x, y in zip(base_j, r)]
             if any(abs(x) > 1e-9 for x in d):
                 best = max(best, abs(sum(d) / len(d)), 1e-6)
         (live if best > CFG["min_probe"] else dead).append((best, name, tmpl, shared, vals))
@@ -471,7 +542,7 @@ def search_class(cls, knobs):
         for sens, name, tmpl, shared, vals in live[:CFG["max_knobs"]]:
             if name in done or any(k.split("=")[0] == tmpl.format(c=cls, v=0).split("=")[0] for k in kept):
                 continue   # a knob that took a value is not searched twice
-            res = jmany([req("builtin", cls, "g3", kept, train)] + [req("builtin", cls, "g3", kept + [tmpl.format(c=cls, v=v)], train) for v in vals])
+            res = jmany([req("builtin", cls, "g3", base + kept, train)] + [req("builtin", cls, "g3", base + kept + [tmpl.format(c=cls, v=v)], train) for v in vals])
             cands = sorted(((paired(res[0], r) + (v,)) for r, v in zip(res[1:], vals)), key=lambda x: -x[0])
             d, se, v = cands[0]
             spec = tmpl.format(c=cls, v=v)
@@ -479,7 +550,7 @@ def search_class(cls, knobs):
                    "sweep": [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda x: x[2])], "accepted": False, "spec": spec}
             passed = d > 2.5 * se and d >= 0.15
             if passed or (CFG["force"] and not rows):   # a smoke run pushes its first sweep through every later step
-                j = judge(cls, kept, spec, forced=not passed)
+                j = judge(cls, base + kept, spec, forced=not passed)
                 row["steps"], row["why"] = j["steps"], j["why"]
                 row["accepted"] = passed and j["accepted"]
                 if not passed:
@@ -491,25 +562,34 @@ def search_class(cls, knobs):
                 done.add(name)
                 accepted_this_pass = True
             rows.append(row)
-            emit_run(cls, "tune %s %s %s -> %s (%s; train %+.2f J, se %.2f)" % (cls, name, shared, v, "ACCEPTED" if row["accepted"] else "rejected", d, se), kept)
+            emit_run(cls, "tune %s %s %s -> %s (%s; train %+.2f J, se %.2f)" % (cls, name, shared, v, "ACCEPTED" if row["accepted"] else "rejected", d, se), base + kept)
             log("classes %s pass %d  %-34s %-8g -> %-8g train %+.2f (se %.2f)  %s" % (cls, ps + 1, name, shared, v, d, se, row["why"][:140]))
-            SUMMARY["stages"].setdefault("classes", {})[cls] = {"kept": kept, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": False}
+            SUMMARY["stages"].setdefault("classes", {})[cls] = {"kept": kept, "base": base, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": False}
             save_summary()
         if not accepted_this_pass:
             break   # a second pass only looks again after something changed
-    out = {"kept": kept, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": True,
+    out = {"kept": kept, "base": base, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": True,
            "not_searched": [n for _, n, _, _, _ in live[CFG["max_knobs"]:]]}
     if kept:   # what the accepted values change in his play, for the class-card read (the runner reports it; a card deviation is an open decision)
-        b = text_run("metrics:" + cls, [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seeds", "1,2,3,4,5,6", "--rating", "0", "--baseline", "/dev/stdout"])
-        cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seeds", "1,2,3,4,5,6", "--rating", "0", "--baseline", "/dev/stdout"]
+        cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seeds", "1,2,3,4,5,6", "--rating", "0", "--baseline", "/dev/stdout"] + world_args("builtin")
+        for c in base:
+            cmd += ["--curve", c]
+        b = text_run("metrics:" + cls + ":" + " ".join(base), list(cmd), "builtin")
         for c in kept:
             cmd += ["--curve", c]
-        n = text_run("metrics:" + cls + ":" + " ".join(kept), cmd)
+        n = text_run("metrics:" + cls + ":" + " ".join(base + kept), cmd, "builtin")
         pick = lambda t: {m.group(1): float(m.group(2)) for m in re.finditer(r"^%s\|natural\|([^=]+)=([-0-9.e]+)" % re.escape(cls), t, re.M)}
         ob, nb = pick(b), pick(n)
         ch = sorted(((abs(nb[k] - ob[k]) / (abs(ob[k]) + 1.0), k, ob[k], nb[k]) for k in ob if k in nb and abs(nb[k] - ob[k]) > 1e-9), reverse=True)[:12]
         out["play_changes_natural"] = [[k, o, w] for _, k, o, w in ch]
         open_decision("class card read for %s" % cls, "accepted %s; the largest changes in his play are in summary.json stages.classes.%s.play_changes_natural: confirm none leaves his class card before writing" % (" ".join(kept), cls))
+    # runbook open decision 7: many accepted values for one class, or a consideration weight at the edge of what was tried, say the shared
+    # catalogue (not the class) is off: reported before anything is written
+    edge = [r["spec"] for r in rows if r["accepted"] and r["knob"].endswith(".w") and (r["best"] >= 2.0 * r["shared"] - 1e-6 or r["best"] <= 0.5 * r["shared"] + 1e-6)]
+    if len(kept) > 10:
+        open_decision("%s took %d accepted values (more than 10)" % (cls, len(kept)), "a sign the shared catalogue, not the class, is off: report before writing any of %s" % " ".join(kept))
+    if edge:
+        open_decision("%s: a consideration weight accepted at the edge of the range tried (x2 or x0.5)" % cls, "%s: the best weight may lie outside what was searched, and so far from the catalogue's that the shared curve is in question" % " ".join(edge))
     SUMMARY["stages"].setdefault("classes", {})[cls] = out
     save_summary()
     return out
@@ -520,6 +600,12 @@ def stage_classes():
     SUMMARY["stages"]["knobs"] = {"count": len(knobs), "pure_gates_never_touched": gates, "unrateable": ["scalar.touchSpentSec (the lab opens no touch window)"],
                                   "fixed": ["School Circle: schoolPeak / schoolFloor / schoolShape / schoolMasteredBump"]}
     order = A.classes.split(",") if A.classes else gap_order()
+    order = [c for c in sorted(T1) if c in order] + [c for c in order if c not in T1]   # the T1 rows first: their values are every later class's baseline
+    for cls in order:   # what this stage is about to decide again is forgotten first, so a resumed run meets the same baselines as the first one
+        SUMMARY["stages"].get("classes", {}).pop(cls, None)
+    missing = [t for t in sorted(T1) if t not in order and not SUMMARY["stages"].get("classes", {}).get(t, {}).get("complete")]
+    if missing and not A.smoke:
+        raise SystemExit("--classes without %s: the T1 rows are searched first (their accepted values are every other class's baseline). Run them in this --out first, or include them." % ", ".join(missing))
     for cls in order:
         search_class(cls, knobs)
 
@@ -565,6 +651,53 @@ def final_curves():
         if r.get("accepted") and r["spec"] not in out:
             out.append(r["spec"])
     return out
+
+
+def stage_joint():
+    """THE WHOLE FINAL TABLE against the shipped one, once more, on all 15 cells: the values were accepted one at a time, each in the
+    table that existed when it was searched, and the companions' rows (T1) move everyone's fights. On the 128 train + holdout seeds, at
+    the default roads, with stealth off and as shipped: no cell may be worse (the 15-at-once bar), no pooled mean may be worse. And
+    each T1 value is left out in turn: the table without it must not be better than the table with it."""
+    curves = final_curves()
+    st = {"table": curves, "cells": {}, "pooled": {}, "leave_one_out": [], "verdict": "no accepted value: nothing to gate"}
+    if curves:
+        seeds = list(range(1, CFG["train"] + 1)) + list(range(1001, 1001 + CFG["hold"]))
+        fails = []
+
+        def table_vs(a, b):   # per cell and config, and pooled over the 15 cells: b - a
+            res = jmany([req("builtin", c, g, x, seeds) for c in CELLS for g in CONFIGS for x in (a, b)])
+            cells, pooled, i = {}, {}, 0
+            for c in CELLS:
+                for g in CONFIGS:
+                    cells["%s/%s" % (c, g)] = paired(res[i], res[i + 1])
+                    pooled.setdefault(g, []).append([y[0] - x[0] for x, y in zip(res[i], res[i + 1])])
+                    i += 2
+            out = {}
+            for g in CONFIGS:
+                dd = [sum(col) / len(col) for col in zip(*pooled[g])]
+                d = sum(dd) / len(dd)
+                out[g] = (d, math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0)
+            return cells, out
+        cells, pooled = table_vs([], curves)
+        for k, (d, se) in cells.items():
+            st["cells"][k] = [round(d, 3), round(se, 3)]
+            if worse(d, se, True) or out_of_band(k.split("/")[0], d, se):
+                fails.append("%s worse (%+.2f, se %.2f)" % (k, d, se))
+        for g, (d, se) in pooled.items():
+            st["pooled"][g] = [round(d, 3), round(se, 3)]
+            if worse(d, se):
+                fails.append("the 15-cell mean is worse at %s (%+.2f, se %.2f)" % (g, d, se))
+        for spec in [c for c in curves if c.split(":")[0] in T1]:
+            _, lo = table_vs([c for c in curves if c != spec], curves)
+            st["leave_one_out"].append({"spec": spec, "contribution": {g: [round(d, 3), round(se, 3)] for g, (d, se) in lo.items()}})
+            for g, (d, se) in lo.items():
+                if worse(d, se):
+                    fails.append("T1 value %s makes the final table worse at %s (%+.2f, se %.2f over the 15 cells)" % (spec, g, d, se))
+        st["verdict"] = "PASS" if not fails else "FAIL: " + "; ".join(fails)
+        log("joint: %d values, pooled g3 %+.2f (se %.2f) off %+.2f shipped %+.2f  %s" % (len(curves), pooled["g3"][0], pooled["g3"][1], pooled["off"][0], pooled["shipped"][0], st["verdict"]))
+        if fails:
+            open_decision("JOINT GATE FAILED: the final table as a whole", "write NO value from this run until this is decided: %s" % "; ".join(fails))
+    SUMMARY["stages"]["joint"] = st
 
 
 GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0])]
@@ -686,7 +819,7 @@ def stage_floor():
         for cls in (KNIGHTS[:1] if CFG["force"] else KNIGHTS):
             out["%s/%s" % (cls, w)] = fl = knight_floor(w, cls, curves)
             log("floor %s on %s: default %.1f, as shipped %.1f  (why, as shipped: %s)" % (cls, w, fl["g3"], fl["shipped"], fl["shipped_why"]))
-            if 0.0 <= min(fl["g3"], fl["shipped"]) < 60.0:
+            if min(fl["g3"], fl["shipped"]) < 60.0:
                 open_decision("Knight guard floor under 60%%: %s on %s" % (cls, w), "default %.1f, as shipped %.1f; unguarded blows by cause (%% of all blows under 2+ own-taunted foes), as shipped: %s. marth's floor is a hard requirement (Q-S-5): the fix is a mechanism change (the hold / renewal / rest of the guard, or a taunt-count term), not a table value" % (fl["g3"], fl["shipped"], fl["shipped_why"]))
     SUMMARY["stages"]["floor"] = out
 
@@ -698,10 +831,12 @@ def stage_rating():
         cmd = [A.bin, "--no-json", "--threads", str(A.jobs), "--rating-only", "--rating", "3" if not CFG["force"] else "1", "--classes", "beta1", "--seeds", ",".join(str(s) for s in range(1, CFG["rating_seeds"] + 1))] + world_args(w)
         for c in curves:
             cmd += ["--curve", c]
-        txt = text_run("rating:" + json.dumps(cmd[1:]), cmd)
+        txt = text_run("rating:" + json.dumps(cmd[1:]), cmd, w)
         rows = []
         for m in re.finditer(r"^(\S+)\s+T(\d)\s+([-0-9.]+)\s+([-0-9.]+)\s+(\d+)/(\d+)\s+([-+0-9.]+)\s*(BELOW)?", txt, re.M):
             rows.append({"class": m.group(1), "tier": int(m.group(2)), "rating": float(m.group(3)), "se": float(m.group(4)), "rank": "%s/%s" % (m.group(5), m.group(6)), "vs_tier": float(m.group(7)), "below": bool(m.group(8))})
+        if len(rows) != len(CELLS):
+            raise RuntimeError("rating on %s: %d class rows parsed, %d expected (a failed run or a changed table format):\n%s" % (w, len(rows), len(CELLS), txt[-600:]))
         out[w] = rows
         below = [r["class"] for r in rows if r["below"]]
         log("rating %s: %d classes, below their tier: %s" % (w, len(rows), ", ".join(below) or "none"))
@@ -717,10 +852,7 @@ def stage_recalib():
     st = {"accepted": curves, "rows": []}
     if curves:
         tab = os.path.join(A.out, "potworth-builtin-final.txt")
-        if not os.path.exists(tab):
-            subprocess.run([sys.executable, os.path.join(HERE, "potion_worth.py"), "--bin", A.bin, "--seeds", str(CFG["calib_seeds"]), "--fights", str(CFG["calib_fights"]),
-                            "--jobs", str(A.jobs), "--curves", " ".join(curves), "--out", tab + ".tmp"], check=True, capture_output=True)
-            os.replace(tab + ".tmp", tab)
+        measure_worth(tab, "builtin", CFG["calib_seeds"], curves)
         old = A.builtin_worth
         A.builtin_worth = tab
         seeds = range(9001, 9001 + CFG["confirm"])
@@ -776,6 +908,12 @@ def render_md():
         for c, r in s["classes"].items():
             L.append("- %s: %d dead (full list in summary.json); live and not searched (over the cap): %s" % (c, len(r["dead"]), ", ".join(r.get("not_searched", [])) or "none"))
         L.append("")
+    if "joint" in s:
+        j = s["joint"]
+        L += ["## The whole final table against the shipped one (joint gate)", "", "Verdict: **%s**" % j["verdict"], ""]
+        if j["pooled"]:
+            L += ["Mean over the 15 cells: " + ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in j["pooled"].items()), ""]
+            L += ["- without `%s`: the table with it is %s" % (r["spec"], ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in r["contribution"].items())) for r in j["leave_one_out"]] + [""]
     if "globals" in s:
         L += ["## Shared Tuning scalars (fresh seeds 5001..)", "", "| Set | Pooled g3 | off | shipped | Max switching rise | Verdict |", "|---|---|---|---|---|---|"]
         L += ["| `%s` | %+.2f (se %.2f) | %+.2f | %+.2f | %.0f%% | %s |" % (r["set"], r["pooled_g3"][0], r["pooled_g3"][1], r["pooled_off"][0], r["pooled_shipped"][0], r["max_switch_rise_pct"], r["verdict"]) for r in s["globals"]] + [""]
@@ -804,7 +942,7 @@ def main():
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
-    ap.add_argument("--stages", default="prep,rejudge,classes,globals,consts,floor,rating,recalib,summary")
+    ap.add_argument("--stages", default="prep,rejudge,classes,joint,globals,consts,floor,rating,recalib,summary")
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
     ap.add_argument("--jobs", type=int, default=12)
@@ -826,7 +964,7 @@ def main():
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
-    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
     for name in A.stages.split(","):
         if name == "summary":
             continue
