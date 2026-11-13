@@ -79,6 +79,11 @@ REQUIRED = {
     # Positional lockpick sounds: SNDR copies the DLL plays at the follower (Lockpick.cpp).
     0x904: ('SNDR', "MFO_LockpickPickMovementSD", ['EDID', 'CNAM', 'GNAM', 'ANAM', 'ONAM', 'LNAM', 'BNAM']),
     0x905: ('SNDR', "MFO_LockpickPickBreakSD",    ['EDID', 'CNAM', 'GNAM', 'ANAM', 'ONAM', 'LNAM', 'BNAM']),
+    # Off-class storage (86e3t212u): the followers' own chest. Forms.h kStorageChestRef is what the DLL looks up; the REFR's
+    # PERSISTENT flag (0x400) is checked below (a temporary ref leaves memory with its cell: storing from anywhere breaks).
+    0x917: ('CONT', "MFO_StorageChest",       ['EDID', 'OBND', 'DATA']),
+    # 0x918 is RETIRED (the first draft's new CELL); the chest lives in an unchanged override of Skyrim.esm 001052FD (checked below).
+    0x919: ('REFR', "MFO_StorageChestRef",    ['EDID', 'NAME', 'DATA']),
 }
 
 # TOWN PHASE 2 R7: the errand WORK packages (Forms.h kErrandActivate0 / Sandbox0 / Eat0 / Sleep0, four slots each, ch.9 route). The Activate carries
@@ -450,6 +455,21 @@ def audit_one(esp):
         next_id = struct.unpack('<I', hedr[8:12])[0] if hedr and len(hedr) >= 12 else None
 
     own = [r for r in recs if r[0] != 'TES4']
+    # OFF-CLASS STORAGE: the one allowed master-prefixed record is the unchanged override of Skyrim.esm CELL 001052FD
+    # (LoadScreenTesting). MFO.esp must define NO new CELL (ESL new-cell load bug on pre-1.6.1130 runtimes).
+    if is_main:
+        for t, fid, fl, subs in own:
+            if t == 'CELL' and fid != 0x001052FD:
+                errors.append(f"CELL {fid:08X}: MFO.esp must define no CELL of its own (only the unchanged override of 001052FD)")
+        sc = [r for r in own if r[0] == 'CELL' and r[1] == 0x001052FD]
+        if len(sc) != 1:
+            errors.append("storage holding-cell override (Skyrim.esm CELL 001052FD) missing or duplicated")
+        else:
+            _, _, fl, subs = sc[0]
+            if fl != 0 or subs.get('EDID', b'') != b'LoadScreenTesting\x00' or subs.get('DATA') != b'\x01\x00' \
+                    or len(subs.get('XCLL', b'')) != 92 or subs.get('LTMP') != bytes(4) or subs.get('XCLW') != bytes(4):
+                errors.append("CELL 001052FD override differs from the vanilla record (must be an identical override)")
+        own = [r for r in own if not (r[0] == 'CELL' and r[1] == 0x001052FD)]
     if not own:
         errors.append("no records emitted besides TES4")
 
@@ -493,6 +513,19 @@ def audit_one(esp):
                 errors.append(f"0x{local:03X} ({want_edid}): missing required subrecord {s}")
 
     if is_main:
+        # OFF-CLASS STORAGE (86e3t212u): the chest REFR must be PERSISTENT (record flag 0x400) and name the storage CONT, and that
+        # CONT must not respawn (DATA flags bit 0x02) -- either fault empties or unloads the followers' storage silently.
+        flags_by_local = {(fid & 0xFFFFFF): fl for t, fid, fl, _ in own}
+        if 0x919 in by_local:
+            if not (flags_by_local.get(0x919, 0) & 0x400):
+                errors.append("REFR 0x919 (MFO_StorageChestRef): not PERSISTENT (flag 0x400) -- it would leave memory with its cell")
+            name = by_local[0x919][1].get('NAME')
+            if not name or (struct.unpack('<I', name[:4])[0] & 0xFFFFFF) != 0x917:
+                errors.append("REFR 0x919 (MFO_StorageChestRef): NAME is not the storage CONT 0x917")
+        if 0x917 in by_local:
+            cdata = by_local[0x917][1].get('DATA')
+            if not cdata or (cdata[0] & 0x02):
+                errors.append("CONT 0x917 (MFO_StorageChest): DATA missing or kRespawn set -- the chest would empty itself")
         # SPEL sanity: a lesser power must be SPIT type 3. Type 4 is an Ability,
         # which is passive and never fires a cast event -- the board would never open.
         if 0x801 in by_local:

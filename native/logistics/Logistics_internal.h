@@ -823,6 +823,11 @@ namespace MFO::Logistics {
     // StyleVotesFor, TopTwoSchoolMask). WORKER, like they are.
     MEOBridge::GemReconcilePrefs GemReconcilePrefsFor(RE::Actor* a_follower, const FollowerState& a_state);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);
+    // Card G16's class reads (EquipAuthority.cpp), shared with logistics/Storage.cpp (feat/offclass-storage). WORKER, like G16.
+    //   ClassWeaponBit: the Classes::Weapon bit a weapon belongs to (0 = fists / unknown: never off-class).
+    //   ClassSet: the follower's equipped class weapon set, 0 = unrestricted (no class, tree off, T1, Dragonborn).
+    std::uint16_t ClassWeaponBit(const RE::TESObjectWEAP* a_w);
+    std::uint16_t ClassSet(RE::FormID a_follower);
     bool IsCreatureArmor(const RE::TESObjectARMO* a_armo);
     RE::TESObjectARMO* WornInLogicalSlot(RE::Actor* a_follower, int a_logicalSlot);
     bool AcquireEquip(RE::Actor* a_follower, RE::TESBoundObject* a_item,
@@ -1060,7 +1065,25 @@ namespace MFO::Logistics {
         std::unordered_set<RE::TESBoundObject*>      armor;
         std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best (worn-inferior convergence)
     };
-    KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state);
+    // a_extra: judge as if he also carried one unworn copy of it (logistics/Storage.cpp's retrieval); nullptr = his inventory exactly.
+    KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_extra = nullptr);
+
+    // THE SALE PATH'S KEEP GATES (Economy.cpp; shared by its sell loop and logistics/Storage.cpp's retrieval, 86e3t212u review F2).
+    // Per-follower inputs, read once per scan. WORKER.
+    struct SaleKeepGates {
+        bool               equipWeaponOn = true;    // Harbinger EquipWeapon priority > 0 for MFO
+        bool               equipArmorOn  = true;    // Harbinger EquipArmor priority > 0 for MFO
+        RE::TESObjectWEAP* heldWeap[2]   = { nullptr, nullptr };   // right, left (read only when EquipWeapon is 0)
+        bool               wantsRangedGambit = false;
+        bool               mageModeB24   = false;   // the NARROW MFO-B24 mage mode the keep set and the loot judge use
+        bool               wearsHelmets  = true;    // 86e3phy41 "Wear helmets"
+    };
+    SaleKeepGates BuildSaleKeepGates(RE::Actor* a_follower, const FollowerState& a_state);
+    bool OffRoleLauncher(const SaleKeepGates& a_g, const WeaponRoles& a_roles, const RE::TESObjectWEAP* a_weap);
+    bool WeapCannotEquip(const SaleKeepGates& a_g, RE::TESObjectWEAP* a_weap, bool a_unworn);
+    bool ArmoCannotEquip(const SaleKeepGates& a_g, RE::TESObjectARMO* a_armo, bool a_unworn);
+    // The sell loop's verdict for an UNWORN weapon / armor piece: true = kept (never offered).
+    bool SaleKeepsUnworn(const KeepSet& a_keep, const SaleKeepGates& a_g, RE::TESBoundObject* a_obj);
 
     // Ammo: ranked by DAMAGE, VALUE breaking a tie, within one kind (arrows /
     // bolts), judged only for the kind the follower USES (UsesAmmoKind). He keeps

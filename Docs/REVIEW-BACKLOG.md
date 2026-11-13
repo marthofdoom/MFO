@@ -3340,3 +3340,8 @@ Opus 5.5 full review of a444e159 (`feat/buff-potions`) vs b4533665. Verbatim:
 - **F4 (SEV-5, OPEN, tools/iaus_sim/Setup.h named override):** verbatim: "named override keeps class kit k.silver etc." Reviewer: the named follower keeps kit flags (silver, staff) from the class kit it does not carry.
 - **F5 (SEV-5, OPEN, tools/iaus_sim/Data.h:393):** verbatim: "named specs enter TagRoles pools (Data.h:393). Verified current extracts: 0 spells, non-Bandit -> no effect today." Reviewer: the named specs share the foe spec pool; inert today.
 - **F6 (SEV-5, OPEN, native/iaus/Generate.cpp:392-398):** verbatim: "Generate.cpp:392-398 perkShare max(1h,2h) / melee-only share vs bow perks; inert while flat." Reviewer: the melee side takes the larger of one- and two-hand rather than his wielded kind; inert while the curve ships flat and the game leaves PerkRead unread.
+
+### feat/offclass-storage r2 review, retrieval cost (SEV-4) / keep-gate combine (SEV-5), raised against 665c3f46
+Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OPEN. Verbatim. (The same review's SEV-3 ESL new-CELL finding was FIXED, not deferred: the chest now lives in an override of vanilla CELL 001052FD, design doc section 0a.)
+- **SEV-4:** "Retrieval: ComputeKeepSet+BuildSaleKeepGates per fitting not-kept stored item every 5 s forever. SEV-4 perf."
+- **SEV-5:** "(2) SaleKeepsUnworn vs sell loop 868-876: weapon = keep && !offRole && !weapCannotEquip; armor = !blacklisted(forceSell for unworn) && keep && !armoCannotEquip. redundantInferior/deniedWorn are worn-only. No drift. Two combine sites remain (SEV-5 nit)."

@@ -89,6 +89,8 @@ namespace MFO::Forms {
         // named line".
         g_meleeStyle  = Look<RE::TESCombatStyle>(kMeleeStyle,  "MFO_MeleeStyle");
         g_meleeSingleStyle = Look<RE::TESCombatStyle>(kMeleeSingleStyle, "MFO_MeleeSingleStyle");
+        // Off-class storage (86e3t212u): the followers' own persistent chest. A miss disables storing only (Storage::Enabled).
+        g_storageChest = Look<RE::TESObjectREFR>(kStorageChestRef, "MFO_StorageChestRef");
         g_rangedStyle = Look<RE::TESCombatStyle>(kRangedStyle, "MFO_RangedStyle");
         g_castStyle   = g_probeCastStyle;   // Cast stance reuses the pure-mage CSTY (0x832)
 

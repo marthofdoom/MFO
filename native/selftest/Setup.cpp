@@ -22,6 +22,7 @@
 #include "apmf/APMFBridge.h"   // IsSubstrateAnchor: Harbinger's ghost stand-in is not a bystander
 #include "LocationTypes.h"
 #include "classes/Classes.h"
+#include "logistics/Storage.h"   // storage.chest_roundtrip: arm / disarm the DEV round trip (86e3t212u)
 
 namespace MFO::SelfTest {
 
@@ -127,6 +128,10 @@ namespace MFO::SelfTest {
             spdlog::info("[selftest] setup {:08X}: probe bAimProbe switched ON in memory for the run (was {}; the INI is untouched)",
                          a_follower, a_out.probePrev[0] ? "on" : "off");
         }
+        if (a_req.probes & kProbeStorageMove) {   // storage.chest_roundtrip: Storage::Tick moves one Iron Dagger to the MFO chest and back
+            Logistics::Storage::DevArmRoundTrip(a_follower, VanillaForm(0x0001397E));
+            a_out.probes |= kProbeStorageMove;
+        }
     }
 
     void SetupTeardown(RE::FormID a_follower, FollowerState* a_st, std::uint32_t a_token, RunSetup& a_setup, const char* a_why) {
@@ -185,6 +190,11 @@ namespace MFO::SelfTest {
             Config::g_aimProbe.store(a_setup.probePrev[0]);
             spdlog::info("[selftest] teardown ({}) {:08X}: probe bAimProbe restored to {}", a_why, a_follower, a_setup.probePrev[0] ? "on" : "off");
             a_setup.probes &= ~kProbeAim;
+        }
+        if (a_setup.probes & kProbeStorageMove) {
+            Logistics::Storage::DevDisarmRoundTrip(a_follower);
+            spdlog::info("[selftest] teardown ({}) {:08X}: the storage round trip disarmed", a_why, a_follower);
+            a_setup.probes &= ~kProbeStorageMove;
         }
     }
 

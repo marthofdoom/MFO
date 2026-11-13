@@ -346,7 +346,8 @@ namespace MFO::Logistics {
         }
 
         // ── OFF-CLASS WEAPON RULE (batch L, card G16) ──
-        namespace {
+        // ClassWeaponBit and ClassSet live OUTSIDE the anonymous namespace (feat/offclass-storage, ClickUp 86e3t212u, design
+        // step 3): logistics/Storage.cpp judges a piece by the same bit and set. Declared in Logistics_internal.h; text unchanged.
             // The Classes::Weapon bit a weapon belongs to (0 = fists / unknown: never off-class).
             std::uint16_t ClassWeaponBit(const RE::TESObjectWEAP* a_w) {
                 using W = RE::WEAPON_TYPE;
@@ -368,6 +369,7 @@ namespace MFO::Logistics {
                 const std::uint16_t set = Classes::Get(static_cast<Classes::Id>(eq)).weapons;
                 return (set & Classes::Weapon::kUnrestricted) ? 0 : set;
             }
+        namespace {
             bool OffClassBit(const RE::TESObjectWEAP* a_w, std::uint16_t a_set) {
                 if (!a_w || a_set == 0 || a_w->IsBound()) return false;
                 const std::uint16_t bit = ClassWeaponBit(a_w);

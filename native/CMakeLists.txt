@@ -131,6 +131,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/TeleportCompat.cpp
     logistics/Lotd.cpp
     logistics/PlayerGiven.cpp
+    logistics/Storage.cpp
     logistics/SwapUp.cpp
     logistics/Silver.cpp
     logistics/Lockpick.cpp
@@ -211,6 +212,7 @@ if(MFO_DEV_SELFTEST)
         selftest/TestsDrive.cpp
         selftest/TestsT2.cpp
         selftest/TestsBuffPotion.cpp
+        selftest/TestsStorage.cpp
         selftest/Setup.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE MFO_DEV_SELFTEST=1)

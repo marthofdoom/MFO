@@ -17,6 +17,7 @@
 #include "Diagnostics.h"  // F7: CurrentPumpEpoch / PumpTickGate for its AddTask body
 #include "progression/ProgAllocator.h"   // 86e3eewaf: ForgetFollower (the main-thread progression undo)
 #include "logistics/PlayerGiven.h"        // 86e3eewaf: Forget (his PGIV entries)
+#include "logistics/Storage.h"            // 86e3t212u: Forget (his STOR entries)
 #include "FollowerCatchUp.h"               // Poll: the left-behind catch-up
 #include "Rapport.h"                      // review F5: DrainPendingSpends (the respec debit, worker side)
 #include <mutex>                          // 86e3eewaf: g_rosterMx (main -> worker verdict hand-back)
@@ -632,6 +633,7 @@ namespace MFO::Followers {
             g_stateSample.erase(v.id);
             Logistics::ForgetStockGear(v.id);
             PlayerGiven::Forget(v.id);
+            Logistics::Storage::Forget(v.id);   // 86e3t212u: his stored pieces are sent back from the MFO chest (to him, else the player)
             if (rejoined) {
                 // He came back between the main undo and this hop: give him what any new
                 // party member gets (a fresh default record), never a recordless follower.
