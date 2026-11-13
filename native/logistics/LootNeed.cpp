@@ -27,7 +27,6 @@ namespace MFO::Logistics {
 
         constexpr auto kLogEvery = std::chrono::seconds(10);
         constexpr RE::FormID kLockpick = 0x0000000A;   // LootLockpicks' form
-        constexpr double kChargeFullPct = 99.5;         // a weapon at or above this percent of its max charge needs none
 
         // LOW-POWER FLOOR (marth: "ignore low power potions entirely"), as LootPotions: a POTION's restore below the floor does not count as
         // a restore on the ITEM side. Its other effects and a food are never floored (a food's restores are small by design). A magnitude of
@@ -121,6 +120,24 @@ namespace MFO::Logistics {
             return c;
         }
 
+        // The lowest charge fraction (1 = full or none) over every extra list of a weapon stack: ExtraCharge against the copy's own
+        // ExtraEnchantment maximum, else the base enchantment's (the same two sources InventoryEntryData::GetEnchantmentCharge reads).
+        float LowestChargeFrac(RE::TESObjectWEAP* a_w, const RE::InventoryEntryData* a_entry) {
+            float low = 1.0f;
+            if (!a_entry->extraLists) return low;
+            for (auto* xList : *a_entry->extraLists) {
+                if (!xList) continue;
+                const auto* xCharge = xList->GetByType<RE::ExtraCharge>();
+                if (!xCharge) continue;   // no ExtraCharge on this copy: full
+                const auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
+                float max = 0.0f;
+                if (xEnch && xEnch->enchantment && xEnch->charge != 0) max = static_cast<float>(xEnch->charge);
+                else if (a_w->formEnchanting && a_w->amountofEnchantment != 0) max = static_cast<float>(a_w->amountofEnchantment);
+                if (max > 0.0f) low = std::min(low, xCharge->charge / max);
+            }
+            return low;
+        }
+
         Iaus::LootInv ReadLootInv(RE::Actor* a_actor, const FollowerState& a_state) {
             Iaus::LootInv inv;
             const WeaponRoles roles = ComputeWeaponRoles(a_actor, a_state);
@@ -137,11 +154,12 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_actor->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() == kLockpick) { inv.lockpicks += data.first; continue; }
+                if (IsSoulGemItem(obj)) { inv.soulGems += data.first; continue; }   // filled or empty
                 if (auto* w = obj->As<RE::TESObjectWEAP>()) {
-                    // SOUL GEMS' USE (marth 2026-11-13): an enchanted weapon below its max charge (percent, the item's own ExtraCharge
-                    // against its enchantment's maximum: InventoryEntryData::GetEnchantmentCharge). Staves and bound weapons do not take gems.
-                    if (!inv.weaponNeedsCharge && data.second && !w->IsStaff() && !w->IsBound())
-                        if (const auto pct = data.second->GetEnchantmentCharge(); pct && *pct < kChargeFullPct) inv.weaponNeedsCharge = true;
+                    // SOUL GEMS' USE (marth 2026-11-13): the lowest charge over EVERY copy of an enchanted weapon (each extra list; review
+                    // R2-2: InventoryEntryData::GetEnchantmentCharge stops at the first list with a charge). Staves and bound weapons do not take gems.
+                    if (data.second && !w->IsStaff() && !w->IsBound())
+                        inv.weaponChargeFrac = std::min(inv.weaponChargeFrac, LowestChargeFrac(w, data.second.get()));
                     continue;
                 }
                 auto* alc = obj->As<RE::AlchemyItem>();
