@@ -272,6 +272,12 @@ namespace MFO::Vocab {
     // Fired and starts the row's cooldown (the time from one raise to the next). Combat table. No param.
     // APPENDED, a frozen serialization string (#10).
     inline constexpr const char* kActBlock = "act.block";
+    // DRINK A BUFF POTION (feat/buff-potions, ClickUp 1dfcuabd18f): the follower drinks ONE named potion (Choice::actionParam = the
+    // AlchemyItem's FormID) whose effect is not a restore: a resist, a fortify, a regeneration, invisibility. Drunk by the SAME road as
+    // act.drink_*_potion (Logistics::DrinkPotionForm -> ActorEquipManager::EquipObject, logistics/PotionFx.cpp). IAUS-ONLY like act.bash:
+    // produced by scheduler/IausSource.cpp for Iaus::Family::DrinkBuff, in NO board table and no class row, so it is never serialized. If it
+    // ever joins the row vocabulary this string becomes a frozen serialization string (#10).
+    inline constexpr const char* kActDrinkBuffPotion = "act.drink_buff_potion";
 #ifdef MFO_DEV_SELFTEST
     // DEV BUILDS ONLY (CMake MFO_DEV_SELFTEST; ClickUp 1dfcuabcqr7, Docs/SELFTEST.md): "DEV: run self-tests".
     // A STANDING MARKER, never an action: an enabled combat rule holding it turns the self-test runner

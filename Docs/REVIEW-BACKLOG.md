@@ -3319,3 +3319,11 @@ Opus 5.5 full review of 3f4ee3ca (`fix/mage-buff-loop`) vs d16b27cc. DEFERRED, n
 - **F6 SEV-5: the 0xFF dynamic-form skip.** It also drops any spell crafted at runtime (spellmaking mods) that a follower was taught. I found no MFO path that teaches a dynamic spell, and MFO's own ConcProxy forms are never in a spell list. So no legitimate spell is dropped in practice. Asking Harbinger whether a form is its proxy would be more precise.
 - **F7 SEV-5: a buff we did not cast can be dispelled.** If the `ApplySelfEffect` already-active guard skipped because a buff from elsewhere was already up, no lock is set. On the next lap the item-3 latch says Yes and the rule goes transparent. The stream goes stale and is dispelled (keep=false), costing one recast.
 - Coordinator note (fix round 8ce5f200): F7's keep=false path is now judged on main and only for non-Buff-kind or concentration spells, so a fire-and-forget Buff is kept; F7 may already be closed, re-check at drain. Wards are Buff kind, so a fire-and-forget ward is also kept on a stale/switch release.
+
+### feat/buff-potions review, F5 / F6 / F7 / F8 / F9 (DEFERRED), raised against a444e159
+Opus 5.5 full review of a444e159 (`feat/buff-potions`) vs b4533665. Verbatim:
+- **F5 (SEV-4):** `ElementShare` is a ratio, so a single fire mage aiming at the player gives 0.5/0.5 = 1.0, and the follower drinks Resist Fire even though he isn't the target. "A foe on him counts double" only matters when foes are mixed. (The comment part, shouts/breath are read, was fixed in dc53cc42.)
+- **F6 (SEV-4):** `LiveBuffKinds` marks every kind of a multi-effect potion as live while any one of its effects lasts, which over-gates. It only causes under-use.
+- **F7 (SEV-4):** there is no `magnitude > 0` check. A modded negative resist effect without the Detrimental flag would be classed as a resist. Nothing in vanilla does this.
+- **F8 (SEV-5):** DummyPotion and DefaultPotionRackPotionMarker classify as fortify_health with magnitude 1 and duration 0. This is harmless.
+- **F9 (SEV-5):** each lap copies the Kit's 17-entry BuffStock, and names over 15 characters allocate on the heap, but only for kinds he carries. The cost is negligible.

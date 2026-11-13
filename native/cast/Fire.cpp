@@ -10,6 +10,7 @@
 #include "APMF_API.h"          // kCombatMove_Block / kCombatMove_PowerAttack: the "served on this game" question (review F3)
 #include "Concealment.h"       // card G3: act.disengage starts the hide run
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
+#include "logistics/PotionFx.h"   // act.drink_buff_potion: Logistics::DrinkPotionForm
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
 #include <limits>         // rank preemption: kNoRule sentinel (numeric_limits<int>::max)
@@ -686,6 +687,15 @@ namespace MFO::Actuation {
             // TRANSPARENT: the worst concrete D1 -- a follower must not die
             // holding a heal rule below an out-of-potions drink rule (§3.1).
             return { Result::FailedSkill, "no matching potion, or still on cooldown", true };
+        }
+
+        // DRINK A BUFF POTION (IAUS-only, feat/buff-potions): the potion named by actionParam, through the same EquipObject road as the drinks
+        // above (Logistics::DrinkPotionForm). TRANSPARENT when nothing was drunk (he cannot act, the potion is gone or not a buff potion, or it is
+        // still inside its own duration): no cooldown starts and the scan goes on to the candidates below.
+        if (op == Vocab::kActDrinkBuffPotion) {
+            if (Logistics::DrinkPotionForm(a_follower, a_choice.actionParam))
+                return { Result::Fired, "drank a buff potion" };
+            return { Result::FailedSkill, "no such potion carried, not a buff potion, or still inside its own duration", true };
         }
 
         // Unknown action opcode: fail closed and say so. Likely a rule from a

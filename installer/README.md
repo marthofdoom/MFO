@@ -16,7 +16,10 @@ It does ONE job, run once (and again after any load-order change):
 **Item catalog** — it does NOT edit records. It scans the winning load order
 with Mutagen and writes `Data/SKSE/Plugins/MFO/mfo_items.json`, the catalog the
 DLL loads: potion restore types (health/stamina/magicka, read from real effect
-records — Requiem/CACO-proof, unlike a runtime archetype guess), ammo class
+records — Requiem/CACO-proof, unlike a runtime archetype guess), every other
+beneficial potion effect (schema 2 `fx`: resist, fortify, regeneration,
+invisibility, water breathing, cures, each with magnitude and duration, read
+from the effect's archetype and actor value), ammo class
 (arrow vs bolt), jewellery, and the "never loot" exclusion list (quest items,
 unique enchantments, scripted items with a second special signal). The analysis
 lives in `Catalog.cs` (`Catalog.Write`); re-running is safe and idempotent.

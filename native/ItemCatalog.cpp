@@ -16,6 +16,7 @@ namespace MFO::Catalog {
         // offset), so lookups are a plain hash hit against a live form's GetFormID.
         std::unordered_map<RE::FormID, RE::ActorValue> g_potion;
         std::unordered_map<RE::FormID, Cure>           g_cure;       // cure-poison/disease potions
+        std::unordered_map<RE::FormID, std::vector<Iaus::PotionFx>> g_fx;   // schema 2: every non-food potion's buff effects (maybe empty)
         std::unordered_map<RE::FormID, bool>           g_ammoBolt;   // true = bolt, false = arrow
         std::unordered_set<RE::FormID>                 g_jewelry;
         std::unordered_set<RE::FormID>                 g_soulgems;
@@ -57,6 +58,7 @@ namespace MFO::Catalog {
     void Load() {
         g_potion.clear();
         g_cure.clear();
+        g_fx.clear();
         g_ammoBolt.clear();
         g_jewelry.clear();
         g_soulgems.clear();
@@ -74,7 +76,8 @@ namespace MFO::Catalog {
         try {
             nlohmann::json j;
             f >> j;
-            int np = 0, nc = 0, nj = 0, nx = 0, miss = 0;
+            int np = 0, nc = 0, nj = 0, nx = 0, miss = 0, nf = 0;
+            const int schema = j.value("schema", 1);   // 1 = restores + cures only (no `fx`); 2 adds `fx`. Both read: an absent key is "not catalogued"
 
             // A potion row can restore, cure, or both -- resolve ONCE, then record
             // whichever fields it carries. A cure-only potion has no "restores",
@@ -82,11 +85,25 @@ namespace MFO::Catalog {
             for (const auto& e : j.value("potions", nlohmann::json::array())) {
                 const auto av  = AvOf(e.value("restores", std::string{}));
                 const auto cur = CureOf(e.value("cures", std::string{}));
-                if (av == RE::ActorValue::kNone && cur == Cure::kNone) continue;
+                const bool hasFx = e.contains("fx") && e["fx"].is_array();
+                if (av == RE::ActorValue::kNone && cur == Cure::kNone && !hasFx) continue;
                 auto fid = Resolve(dh, e);
                 if (!fid) { ++miss; continue; }
                 if (av  != RE::ActorValue::kNone) { g_potion[fid] = av;  ++np; }
                 if (cur != Cure::kNone)           { g_cure[fid]   = cur; ++nc; }
+                if (hasFx) {
+                    std::vector<Iaus::PotionFx> v;
+                    for (const auto& fe : e["fx"]) {
+                        Iaus::PotionFx fx;
+                        if (!Iaus::BuffFromName(fe.value("kind", std::string{}), fx.kind)) continue;   // a kind a newer patcher wrote: skipped
+                        fx.magnitude = fe.value("mag", 0.0f);
+                        fx.duration  = fe.value("dur", 0.0f);
+                        fx.av        = fe.value("av", -1);
+                        v.push_back(fx);
+                    }
+                    g_fx[fid] = std::move(v);
+                    ++nf;
+                }
             }
             int na = 0;
             for (const auto& e : j.value("ammo", nlohmann::json::array())) {
@@ -107,8 +124,8 @@ namespace MFO::Catalog {
 
             g_loaded = true;
             spdlog::info("[catalog] loaded {} potions ({} cure), {} ammo, {} jewellery, "
-                         "{} soul gems, {} excluded ({} rows unresolved in this load order)",
-                         np, nc, na, nj, ns, nx, miss);
+                         "{} soul gems, {} excluded ({} rows unresolved in this load order); schema {}, {} potions with effect rows",
+                         np, nc, na, nj, ns, nx, miss, schema, nf);
         } catch (const std::exception& ex) {
             spdlog::warn("[catalog] mfo_items.json parse failed: {} -- runtime heuristics only",
                          ex.what());
@@ -131,6 +148,11 @@ namespace MFO::Catalog {
     bool CuresDisease(RE::FormID a_potion) {
         const auto c = PotionCures(a_potion);
         return c == Cure::kDisease || c == Cure::kBoth;
+    }
+
+    const std::vector<Iaus::PotionFx>* PotionEffects(RE::FormID a_potion) {
+        auto it = g_fx.find(a_potion);
+        return it == g_fx.end() ? nullptr : &it->second;
     }
 
     Ammo AmmoKind(RE::FormID a_ammo) {
