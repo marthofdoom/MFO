@@ -150,6 +150,11 @@ namespace MFO::Logistics {
                 LogArmorClassIfChanged(a_follower, armorPref);   // one [armor] line per {class, worn-set} change
                 float bestScore = 0.0f;
                 const bool wearsHelmets = WearsHelmets(&a_state);
+                // A worn museum relic never holds a slot against the class rule (re-claim correction, 2026-11-12):
+                // it counts as a bare slot, so the class's own piece replaces it and the relic stays carried for deposit.
+                const std::function<bool(RE::TESObjectARMO*)> wornCounts = [&](RE::TESObjectARMO* a_w) {
+                    return !RelicOffBody(a_follower, a_state, a_w);
+                };
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
@@ -163,7 +168,7 @@ namespace MFO::Logistics {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     if ((static_cast<std::uint32_t>(ar->GetSlotMask()) &
                          static_cast<std::uint32_t>(Slot::kShield)) != 0) continue;   // shields: leave to the loot role logic
-                    if (!ArmorIsBetter(armorPref, a_follower, ar)) continue;   // strictly higher score than worn on its slot
+                    if (!ArmorIsBetter(armorPref, a_follower, ar, &wornCounts)) continue;   // strictly higher score than worn on its slot
                     const float sc = ArmorScore(armorPref, ar);
                     if (sc > bestScore) { bestScore = sc; pick = obj; }
                 }
@@ -882,6 +887,9 @@ namespace MFO::Logistics {
                 };
                 const ArmorPref pref = ArmorPrefFor(a_follower);
                 const bool wearsHelmets = WearsHelmets(&a_state);
+                const std::function<bool(RE::TESObjectARMO*)> wornCounts = [&](RE::TESObjectARMO* a_w) {
+                    return !RelicOffBody(a_follower, a_state, a_w);   // a worn relic is a bare slot, never an incumbent
+                };
                 float bestScore[4] = {};
                 for (auto& [obj, data] : a_inv) {
                     if (!obj || data.first <= 0) continue;
@@ -892,7 +900,7 @@ namespace MFO::Logistics {
                     const int s = ArmorBuySlot(ar);
                     if (s < 0 || s > 3) continue;
                     if (ar->GetArmorRating() <= 0.0f) continue;             // rating-0 clothing can never win
-                    if (!ArmorIsBetter(pref, a_follower, ar) && WornInLogicalSlot(a_follower, s) != ar) continue;
+                    if (!ArmorIsBetter(pref, a_follower, ar, &wornCounts) && WornInLogicalSlot(a_follower, s) != ar) continue;
                     const float sc = ArmorScore(pref, ar);
                     auto*& win = a_out.slot[s];
                     if (!win || sc > bestScore[s] || (sc == bestScore[s] && ar->GetFormID() > win->GetFormID())) {
@@ -1673,6 +1681,24 @@ namespace MFO::Logistics {
                                      "(its re-equip is refused; it ships at the next deposit)", id,
                                      ar->GetName() ? ar->GetName() : "?");
                     continue;
+                }
+                // MAGE LINE WEARS CLOTHING (2026-11-12): rated armor (light / heavy) is off the class's wardrobe
+                // category, so a worn piece the clothing set does not displace (no owned clothing for its slot) is
+                // not declared either: the seat refuses its re-equip, and the next owned clothing for that slot
+                // replaces it. MFO has no unequip road (marth 2026-10-20), so a piece already on stays on until
+                // then; said loudly, once per (follower, piece), never masked.
+                if (mageSetMode && ar->GetArmorRating() > 0.0f) {
+                    const int cs = MageClothingSlot(ar);
+                    if (cs >= 0 && cs <= 3) {
+                        withheldNow.insert(ar->GetFormID());
+                        static std::unordered_set<std::uint64_t> s_armorLogged;   // worker-serial like g_lastDeclared
+                        if (s_armorLogged.insert((static_cast<std::uint64_t>(id) << 32) | ar->GetFormID()).second)
+                            spdlog::info("[equip-auth] {:08X}: worn rated armor '{}' is off the mage line's clothing category and "
+                                         "no owned clothing covers its slot -- kept OUT of the declared set (stays on until "
+                                         "clothing for that slot is owned; MFO has no unequip road)", id,
+                                         ar->GetName() ? ar->GetName() : "?");
+                        continue;
+                    }
                 }
                 decl.Add(ar);
             }

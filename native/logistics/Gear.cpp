@@ -137,7 +137,8 @@ namespace MFO::Logistics {
         // cuirass (26 x 2.0 = 52) displace the worn HEAVY one (31 x 1.0 = 31)
         // on a light-skilled follower, and stops a heavy 18 helmet from
         // "upgrading" his bare head over a light 13 (13 x 2.0 = 26 > 18).
-        bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+        bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
+                           const std::function<bool(RE::TESObjectARMO*)>* a_wornCounts) {
             if (!a_follower || !a_armo) return false;
             if (a_armo->GetArmorRating() <= 0.0f) return false;   // clothing / jewellery -- not armor
             const float cand = ArmorScore(a_pref, a_armo);
@@ -161,6 +162,7 @@ namespace MFO::Logistics {
             // Real worn armor there: only a strictly higher SCORE may replace
             // it. A tie or worse is beaten -> never downgrade real worn armor.
             auto beatenBy = [&](RE::TESObjectARMO* worn) {
+                if (worn && a_wornCounts && !(*a_wornCounts)(worn)) return false;   // a worn relic never holds the slot
                 return worn && worn->GetArmorRating() > 0.0f && ArmorScore(a_pref, worn) >= cand;
             };
             if (IsHeadSlotMask(mask)) {

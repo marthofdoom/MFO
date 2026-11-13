@@ -3581,9 +3581,9 @@ module. Module layout:
   Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
-  role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
+  role signal, gambit based), `UsesMageClothing:136` (MAGE CLOTHING MODE, equip/clothing decisions
   only, `fix/mfo-cicero-gear`: caster AND class, explicit override wins, Auto = base skills, never the
-  gambit alone, never `ResolveBaseClass`; logs `[gear] <id> clothing mode: ...`),
+  gambit alone, never `ResolveBaseClass`; logs `[gear] <id> clothing mode: ...`. **MAGE LINE WEARS CLOTHING (`fix/mage-line-clothing`, marth 2026-11-12):** `OnMageLine` (`Cast.cpp:126`, class table `Classes::Get(id).line == Line::Mage` when a class is equipped, else the explicit Mage pick) returns true BEFORE the caster gate, so every class-equipped mage-line follower wears clothing with no `HasCastGambit` dependence (IAUS class tables carry no cast row); the caster-gate false now logs `[gear] ... caster gate: ...`; `LogArmorClassIfChanged(.., a_clothing)` prints `class CLOTHING`. RE-CLAIM: `ArmorIsBetter` takes an optional `a_wornCounts` predicate (`Gear.cpp`), the rated pick and slate (`EquipAuthority.cpp`) pass `!RelicOffBody` so a worn museum relic is a bare slot, never an incumbent; rule 5 (`RefreshEquipDeclaration`) withholds worn rated armor on a mage-set follower with a one-time `[equip-auth]` line (MFO has no unequip road, marth 2026-10-20: a piece no owned clothing covers stays on). What breaks: re-gating the mage line on `IsCasterFollower` re-creates the Jesper armor swap; every `UsesMageClothing && bMageWearRobes` site follows the one answer),
   `TopTwoSchoolMask:154`, `LearnCarriedTomes:183`, school name/keyword helpers.
 - #21 economy (was `Logistics_Economy.cpp`, wave-2 split into two): `logistics/Economy.cpp`
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
