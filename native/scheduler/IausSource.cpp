@@ -18,6 +18,7 @@
 #include "iaus/Reposition.h"   // batch I H4: the spell range
 #include "cast/Actuation.h"
 #include "iaus/SpellBook.h"
+#include "logistics/PotionFx.h"   // feat/consumables: ConfirmDrinks
 
 #include <algorithm>
 #include <format>
@@ -58,7 +59,7 @@ namespace MFO::Scheduler {
             else if (kind == Iaus::BuffKind::Invisibility) why = "stealth intent (he sneaks or his class sneaks)";
             spdlog::info("[iaus] buff-potion {:08X} drinks '{}' ({:08X}) for {}: magnitude {:.0f} for {:.0f} s, {} carried, why: {} -> {}{}{}",
                          a_actor, p.name.empty() ? "?" : p.name, a_c.form, Iaus::BuffName(kind), p.magnitude, p.duration, p.count, why,
-                         a_out.result == Actuation::Result::Fired ? "drank it" : "not drunk", a_out.reason.empty() ? "" : ": ", a_out.reason);
+                         a_out.result == Actuation::Result::Fired ? "drink issued" : "not drunk", a_out.reason.empty() ? "" : ": ", a_out.reason);
         }
 
         [[nodiscard]] bool IsCastFamily(Family a_f) {
@@ -234,6 +235,7 @@ namespace MFO::Scheduler {
         const Iaus::Tuning& T = Iaus::DefaultTuning();
         // THE CANDIDATE CYCLE, in this order: Build, FillCooldowns, Decide, DecidePosture, NoteDecision. m_set is a
         // member and is never moved while the candidates (string_views into its snapshot) are in use.
+        Logistics::ConfirmDrinks(a_self);   // feat/consumables: prove (or warn about) the drink issued on an earlier pass
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
         // SIGHT WINS (marth 11-12: "for sure, and not having a bow doesn't matter if you don't have line of sight"): while EVERY listed foe
@@ -341,9 +343,11 @@ namespace MFO::Scheduler {
         case Family::Step:         c.actionOpcode = Vocab::kActDisengage; c.actionParam = cand.form; break;
         case Family::Block:        c.actionOpcode = Vocab::kActBlock; break;        // batch I item 4: Harbinger ch.31 held guard (Snapshot::blockRoad + the class's Block row)
         case Family::Retreat:      c.actionOpcode = Vocab::kActFlee; break;
-        case Family::DrinkHealth:  c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
-        case Family::DrinkStamina: c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
-        case Family::DrinkMagicka: c.actionOpcode = Vocab::kActDrinkMagickaPotion; break;
+        // feat/consumables: a restore FOOD or drink carries its own form (a restore potion is form 0: DrinkBest picks the strongest): it is eaten
+        // through the named-form road, the same act.drink_buff_potion (Logistics::DrinkPotionForm re-judges the form with the shared reader).
+        case Family::DrinkHealth:  if (cand.form) { c.actionOpcode = Vocab::kActDrinkBuffPotion; c.actionParam = cand.form; } else c.actionOpcode = Vocab::kActDrinkHealthPotion; break;
+        case Family::DrinkStamina: if (cand.form) { c.actionOpcode = Vocab::kActDrinkBuffPotion; c.actionParam = cand.form; } else c.actionOpcode = Vocab::kActDrinkStaminaPotion; break;
+        case Family::DrinkMagicka: if (cand.form) { c.actionOpcode = Vocab::kActDrinkBuffPotion; c.actionParam = cand.form; } else c.actionOpcode = Vocab::kActDrinkMagickaPotion; break;
         case Family::DrinkBuff:    c.actionOpcode = Vocab::kActDrinkBuffPotion; c.actionParam = cand.form; break;   // the potion: Logistics::DrinkPotionForm
         case Family::CastOffense:
         case Family::CastControl:
@@ -446,6 +450,11 @@ namespace MFO::Scheduler {
         const Iaus::Candidate& cand = m_set.gen.actions[step.idx];
         if (cand.family == Family::DrinkBuff && Iaus::Engine::Paced(m_id, kChanBuffPotion, kBuffLogSec, m_tick))
             LogBuffPick(m_id, m_set.snap.book.kit, cand, a_outcome);
+        else if (cand.form != 0 && (cand.family == Family::DrinkHealth || cand.family == Family::DrinkStamina || cand.family == Family::DrinkMagicka) &&
+                 Iaus::Engine::Paced(m_id, kChanBuffPotion, kBuffLogSec, m_tick))   // PASSIVE (feat/consumables, principle 5): the first food eaten in the field says so
+            spdlog::info("[iaus] consumable {:08X} eats '{}' ({:08X}) as {}: worth {:.2f} (need x cost), {} carried -> {}{}{}", m_id,
+                         std::string(cand.formName), cand.form, Iaus::Name(cand.family), cand.f.consumableWorth, cand.f.stock,
+                         a_outcome.result == Actuation::Result::Fired ? "use issued (consume confirmed next pass)" : "not used", a_outcome.reason.empty() ? "" : ": ", a_outcome.reason);
         if (fired) {
             m_pickedStep = static_cast<int>(it->idx);
             // An approach leg (the power attack closing to melee) is the decision in effect, not the swing: it

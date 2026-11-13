@@ -20,6 +20,27 @@ namespace MFO::Logistics {
         // worker, like DrinkBest and g_drinkUntil; cleared by ClearTransientState on the main thread after the pump stopped (kPreLoadGame).
         std::unordered_map<std::uint64_t, Clock::time_point> g_buffUntil;
 
+        // feat/consumables fix F2: a drink is only PROVEN by the carried count dropping. (follower << 32 | form) -> the count carried when
+        // EquipObject was issued; ConfirmDrinks reads it back on the next pass. WORKER only, like g_buffUntil; cleared with it.
+        struct PendingDrink { std::int32_t before = 0; std::string name; };
+        std::unordered_map<std::uint64_t, PendingDrink> g_pendingDrink;
+
+        std::int32_t CarriedCount(RE::Actor* a_follower, const RE::AlchemyItem* a_alc) {
+            for (auto& [obj, data] : a_follower->GetInventory())
+                if (obj == a_alc) return data.first;
+            return 0;
+        }
+
+        void ConfirmOne(RE::Actor* a_follower, std::uint64_t a_key, const PendingDrink& a_p) {
+            const auto form = static_cast<RE::FormID>(a_key & 0xFFFFFFFFu);
+            auto* alc = RE::TESForm::LookupByID<RE::AlchemyItem>(form);
+            const std::int32_t now = alc ? CarriedCount(a_follower, alc) : 0;
+            if (now < a_p.before)
+                spdlog::info("[iaus] consumable {:08X}: '{}' ({:08X}) CONSUMED, carried {} -> {}", a_follower->GetFormID(), a_p.name, form, a_p.before, now);
+            else   // no masking, no retry: the equip road was issued and the count did not drop
+                spdlog::warn("[iaus] consumable {:08X}: '{}' ({:08X}) NOT CONSUMED, carried {} -> {} after EquipObject", a_follower->GetFormID(), a_p.name, form, a_p.before, now);
+        }
+
         // THE RULE, runtime side. Written to match installer/MFO.Synthesis/Catalog.cs ClassifyFx line for line (the numbers of the actor
         // values are the same on both sides: Mutagen's ActorValue enum and RE::ActorValue agree, checked 2026-11-12). Returns false = the
         // effect is not a kind (a restore, a damage, a utility effect).
@@ -100,13 +121,18 @@ namespace MFO::Logistics {
         }
         auto* alc = RE::TESForm::LookupByID<RE::AlchemyItem>(a_potion);
         if (!alc) return false;
-        const auto fx = PotionBuffs(alc);   // a snapshot is up to seconds old: re-judge the FORM here, never trust the candidate alone
-        if (fx.empty()) return false;
+        // A snapshot is up to seconds old: re-judge the FORM here, never trust the candidate alone. feat/consumables: through the ONE shared
+        // reader (ReadConsumable), so a food or drink with a restore or a buff effect passes like a potion; a poison or a drug never does.
+        const auto item = ReadConsumable(alc);
+        if (item.hostile) return false;
+        const auto& fx = item.fx;
+        bool restores = false;
+        for (std::size_t i = 0; i < Iaus::kRestoreFamilies; ++i)
+            if (item.restoreMag[i] > 0.0f || item.foodRestoreMag[i] > 0.0f) restores = true;
+        if (fx.empty() && !restores) return false;
 
-        bool carried = false;
-        for (auto& [obj, data] : a_follower->GetInventory())
-            if (obj == alc && data.first > 0) { carried = true; break; }
-        if (!carried) return false;
+        const std::int32_t carriedBefore = CarriedCount(a_follower, alc);
+        if (carriedBefore <= 0) return false;
 
         // Its own duration: do not drink the rest of the stack while the first is still working (the restore potions' M5 gate).
         const std::uint64_t key = (static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | a_potion;
@@ -115,13 +141,22 @@ namespace MFO::Logistics {
 
         auto* mgr = RE::ActorEquipManager::GetSingleton();
         if (!mgr) return false;
+        if (const auto pend = g_pendingDrink.find(key); pend != g_pendingDrink.end()) { ConfirmOne(a_follower, key, pend->second); g_pendingDrink.erase(pend); }
         mgr->EquipObject(a_follower, alc, nullptr, 1);   // the AlchemyItem equip path IS the vanilla drink; one unit, the engine removes it
+        g_pendingDrink[key] = PendingDrink{ carriedBefore, std::string(alc->GetName()) };   // proven (or not) on the next pass: ConfirmDrinks
 
-        float dur = 1.0f;
-        for (const auto& e : fx) dur = (std::max)(dur, e.duration);
-        g_buffUntil[key] = now + std::chrono::milliseconds(static_cast<int>(dur * 1000.0f));
+        g_buffUntil[key] = now + std::chrono::milliseconds(static_cast<int>((std::max)(1.0f, item.maxDuration) * 1000.0f));   // the reader's longest effect (restores included) gates the stack
         return true;
     }
 
-    void ClearBuffDrinks() { g_buffUntil.clear(); }
+    void ConfirmDrinks(RE::Actor* a_follower) {
+        if (!a_follower || g_pendingDrink.empty()) return;
+        const auto fid = static_cast<std::uint64_t>(a_follower->GetFormID());
+        for (auto it = g_pendingDrink.begin(); it != g_pendingDrink.end();) {
+            if ((it->first >> 32) == fid) { ConfirmOne(a_follower, it->first, it->second); it = g_pendingDrink.erase(it); }
+            else ++it;
+        }
+    }
+
+    void ClearBuffDrinks() { g_buffUntil.clear(); g_pendingDrink.clear(); }
 }

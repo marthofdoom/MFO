@@ -694,8 +694,8 @@ namespace MFO::Actuation {
         // still inside its own duration): no cooldown starts and the scan goes on to the candidates below.
         if (op == Vocab::kActDrinkBuffPotion) {
             if (Logistics::DrinkPotionForm(a_follower, a_choice.actionParam))
-                return { Result::Fired, "drank a buff potion" };
-            return { Result::FailedSkill, "no such potion carried, not a buff potion, or still inside its own duration", true };
+                return { Result::Fired, "use issued (potion, food or drink; the consume is confirmed on the next pass)" };
+            return { Result::FailedSkill, "no such item carried, nothing beneficial in it, or still inside its own duration", true };
         }
 
         // Unknown action opcode: fail closed and say so. Likely a rule from a

@@ -96,7 +96,7 @@ namespace MFO::Logistics {
         //   buff kinds: ConsumableBuffs (catalog fx row first, the runtime rule otherwise).
         //   poison: the strength of all its hostile effects. A drug (hostile effects, no poison flag) carries no need.
         // No low-power floor here (the stock side must count every potion): the item side applies PotionLootFloor on top.
-        Iaus::Consumable ReadConsumable(RE::AlchemyItem* a_alc) {
+        Iaus::Consumable ReadConsumableImpl(RE::AlchemyItem* a_alc) {
             Iaus::Consumable c;
             c.food    = a_alc->IsFood();
             c.poison  = a_alc->IsPoison();
@@ -112,11 +112,30 @@ namespace MFO::Logistics {
                 return c;
             }
             if (c.hostile) return c;
+            for (const auto* e : a_alc->effects)
+                if (e) c.maxDuration = std::max(c.maxDuration, static_cast<float>(e->GetDuration()));   // the use side's stack gate (DrinkPotionForm)
             if (const int f = FamilyOf(PotionRestores(a_alc)); f >= 0) {
                 const float mag = PotionMagnitude(a_alc);
                 c.restoreMag[static_cast<std::size_t>(f)] = mag > 0.0f ? mag : 1.0f;   // 1 = classified, magnitude unreadable (counts, never floored)
             }
             c.fx = ConsumableBuffs(a_alc);
+            for (const auto& fx : c.fx) c.maxDuration = std::max(c.maxDuration, fx.duration);   // a catalog row's duration can differ from the record's
+            if (c.food) {
+                // feat/consumables: the USE side reads a food's restore too (the loot side's restoreMag stays 0 for food, review F1).
+                for (const auto* e : a_alc->effects) {
+                    const auto* mgef = e ? e->baseEffect : nullptr;
+                    if (!mgef) continue;
+                    const auto arch = mgef->data.archetype;
+                    if (arch != RE::EffectArchetypes::ArchetypeID::kValueModifier && arch != RE::EffectArchetypes::ArchetypeID::kDualValueModifier) continue;
+                    if (mgef->data.flags.any(RE::EffectSetting::EffectSettingData::Flag::kRecover)) continue;   // a Recover value-modifier is a fortify (a buff kind)
+                    const int f = FamilyOf(mgef->data.primaryAV);
+                    if (f < 0) continue;
+                    const float mag = e->GetMagnitude();
+                    auto& slot = c.foodRestoreMag[static_cast<std::size_t>(f)];
+                    const float m = mag > 0.0f ? mag : 1.0f;
+                    if (m > slot) { slot = m; c.foodRestoreDur[static_cast<std::size_t>(f)] = static_cast<float>(e->GetDuration()); }
+                }
+            }
             return c;
         }
 
@@ -196,6 +215,8 @@ namespace MFO::Logistics {
             return g_invCache.inv;
         }
     }
+
+    Iaus::Consumable ReadConsumable(RE::AlchemyItem* a_alc) { return a_alc ? ReadConsumableImpl(a_alc) : Iaus::Consumable{}; }
 
     void IausLootInvDirty() { g_invCache.valid = false; }
 

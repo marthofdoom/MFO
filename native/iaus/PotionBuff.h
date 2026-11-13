@@ -130,6 +130,9 @@ namespace MFO::Iaus {
         float         duration = 0.0f;
         int           av = -1;
         bool          active = false;
+        float         value = 0.0f;           // feat/consumables: the BEST potion's gold value (the worth-the-gold rule, iaus/ConsumableWorth.h)
+        std::uint32_t kindMask = 0;           // ... and every BuffKind that potion holds (bit = the kind's number): a mixed item counts each effect
+        std::uint8_t  restoreMask = 0;        // ... and every restore family it also restores (bit 0 health, 1 stamina, 2 magicka)
         std::string   name;
     };
     using BuffStock = std::array<PotionBuff, kBuffKinds>;
