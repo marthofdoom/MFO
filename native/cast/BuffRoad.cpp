@@ -373,7 +373,19 @@ namespace MFO::Actuation {
         if (!a_follower || !a_spell) return false;
         const bool other = a_recipient && a_recipient != a_follower;
         RE::Actor* recip = other ? a_recipient : a_follower;
-        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr) != BuffRoad::Claim) return false;
+        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr) != BuffRoad::Claim) {
+            // fix/mage-buff-loop item 3: the direct road gets the same "already up" latch, for a SELF buff (CastOn's self
+            // fork; the ally fork's direct road keeps the already-active guard in ApplyTargetEffect). Two sources: the
+            // recast lockout of a landed apply (a buff whose effect leaves no active effect of its own, which no read can
+            // see), and the same main-thread HasMagicEffect latch the claim road reads. Unknown is NOT transparent here
+            // (the claim road's pending-read guess protects a preempt; this road makes none), only a read that says Yes.
+            if (other || a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration ||
+                BuffPlacementSpell(a_spell) || CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff)
+                return false;
+            if (SelfBuffRecastLocked(a_follower->GetFormID(), a_spell->GetFormID())) return true;
+            if (InstantSpell(a_spell)) return false;
+            return BuffUp(recip, a_spell, /*a_placement=*/false) == Up::Yes;
+        }
         // A never-fired hold-off (F1) is transparent without a preempt too. G7: keyed by the corpse for a corpse claim.
         const RE::FormID corpseTarget = BuffCorpseTarget(a_follower, a_spell, a_corpse);
         if (const auto nf = g_neverFired.find(a_follower->GetFormID());
@@ -385,6 +397,11 @@ namespace MFO::Actuation {
         if (InstantSpell(a_spell) && !BuffPlacementSpell(a_spell)) return false;
         // Unknown (the read is posted, no verdict yet) is transparent too: a guess here would preempt.
         return BuffUp(recip, a_spell, BuffPlacementSpell(a_spell)) != Up::No;
+    }
+
+    bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+        if (!a_follower || !a_spell || !a_recipient || a_recipient == a_follower) return false;
+        return ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, a_recipient) == BuffRoad::Claim;
     }
 
     BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log, RE::Actor* a_recipient,

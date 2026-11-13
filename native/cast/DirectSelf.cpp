@@ -219,6 +219,13 @@ namespace MFO::Actuation {
         const auto now = SelfClock::now();
         auto it = g_selfCast.find(id);
 
+        // fix/mage-buff-loop item 2: the apply pacing below is PER ACTOR, not per spell. A switch used to reset lastApply
+        // to the epoch, so a follower rotating Candlelight / Mystic Wind / Circle of Strength applied a new one every
+        // lap (0.67 s) and the >= 1 s beat only ever paced a repeat of the SAME spell. The beat is fCastCooldown, the
+        // engine's cast timing, which is the caster's; so the old stream's lastApply is carried across the switch.
+        // (A first-ever stream, or one whose entry was released, still applies at once: nothing to carry.)
+        SelfClock::time_point carriedApply{};
+
         // A DIFFERENT spell was channeling -> end it (stop its VFX) before this
         // one, so shaders never stack.
         if (it != g_selfCast.end() && it->second.spell != spellID) {
@@ -227,7 +234,10 @@ namespace MFO::Actuation {
                        SettleSec(it->second.timed, it->second.paidThrough, it->second.lastApply,
                                  it->second.window, now),
                        "self-stream", "switch");
-            SelfCastEndActor(id, it->second.spell);
+            carriedApply = it->second.lastApply;
+            // A fire-and-forget buff still inside its authored life is left to live it (item 4: the switch used to dispel
+            // Candlelight at once, so the already-active read saw it gone and it was cast again).
+            SelfCastEndActor(id, it->second.spell, /*a_keepLiveBuff=*/true);
             g_selfCast.erase(it);
             it = g_selfCast.end();
         }
@@ -244,7 +254,7 @@ namespace MFO::Actuation {
             // (ApplySelfEffect) blocks re-casting until the effect expires.
             auto& sc = g_selfCast[id];
             sc.spell = spellID; sc.started = now;
-            sc.lastFired = now; sc.lastApply = {};   // epoch -> apply the effect immediately
+            sc.lastFired = now; sc.lastApply = carriedApply;   // epoch (a first fire) -> apply the effect immediately; else the old stream's beat, item 2
             sc.cap = DrawConcCap(CasterConsent::ClassifySpell(a_spell));   // per-stream random cap
             // CHARGE FOR TIME: a momentary concentration self stream is billed for
             // the seconds it ran; window = the sustain window ApplySelfEffect pins.
@@ -287,6 +297,7 @@ namespace MFO::Actuation {
     }
 
     void SelfCastReconcile() {
+        PumpSelfBuffReadback();   // fix/mage-buff-loop item 7: the ~1 s `[buff-readback]` posts (before the empty-registry return)
         if (g_selfCast.empty()) return;
         const auto  now = SelfClock::now();
         // Release when the rule stops re-firing. The callers refresh lastFired
@@ -398,7 +409,8 @@ namespace MFO::Actuation {
                                "self-stream", reason);
                 if (a && (kind == CasterConsent::SpellKind::Buff || stale || healedFull || magickaDry ||
                           casterDown))
-                    SelfCastEndActor(id, sc.spell);
+                    SelfCastEndActor(id, sc.spell,
+                                     /*a_keepLiveBuff=*/!casterDown && !healedFull && !magickaDry && !concCapped);
                 done.push_back(id);
             }
         }

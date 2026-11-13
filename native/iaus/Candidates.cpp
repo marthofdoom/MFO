@@ -42,8 +42,15 @@ namespace MFO::Iaus::Candidates {
             Clock::time_point seen{};
         };
         std::unordered_map<RE::FormID, Fight>                    g_fights;
+        std::unordered_set<std::uint64_t>                        g_lockLogged;   // (follower << 32 | spell): the recast-lockout drop line, once per spell per fight
         std::unordered_map<RE::FormID, std::uint32_t>             g_chosenCast;   // Q-I-2: the cast form ranked first on the last decision
         std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
+
+        // fix/mage-buff-loop: drop a follower's self-buff recast lockout and its once-per-fight log marks. Worker domain.
+        void ClearBuffLockState(RE::FormID a_follower) {
+            Actuation::ClearSelfBuffLocks(a_follower);
+            std::erase_if(g_lockLogged, [a_follower](std::uint64_t k) { return static_cast<RE::FormID>(k >> 32) == a_follower; });
+        }
 
         // A Gather this long after the last one starts a NEW fight clock when card I6 did not call CombatEnded.
         // Sized from the cadence (principle 9): one follower is served every 133 ms x party, about 1.3 s for ten,
@@ -165,7 +172,10 @@ namespace MFO::Iaus::Candidates {
             auto& fight = g_fights[selfID];
             const bool fresh = fight.seen.time_since_epoch().count() != 0 &&
                                std::chrono::duration<double>(now - fight.seen).count() <= kFightGapSec;
-            if (!fresh) { fight.start = now; newFight = true; }
+            if (!fresh) {
+                fight.start = now; newFight = true;
+                ClearBuffLockState(selfID);   // fix/mage-buff-loop: the lockout and its log are per fight
+            }
             fight.seen = now;
             s.combatSec = static_cast<float>(std::chrono::duration<double>(now - fight.start).count());
         }
@@ -174,6 +184,24 @@ namespace MFO::Iaus::Candidates {
         if (const auto book = SpellBook::Read(a_self)) {
             s.book = *book;
             s.hasBook = true;
+            // fix/mage-buff-loop, on the snapshot's own COPY of the book (the shared one stays immutable).
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            for (auto& e : s.book.entries) {
+                if (e.source != SpellSource::Spell || e.nature != Prune::Nature::Buff || e.drop != Prune::Drop::Keep) continue;
+                // Item 1: a buff he applied to himself and whose effect leaves no active effect of its own (SelfHazard /
+                // ScriptRider) is invisible to the book's activeOn. The recast lockout stands in for it while it lasts.
+                if (Actuation::SelfBuffRecastLocked(selfID, e.form) &&
+                    std::find(e.activeOn.begin(), e.activeOn.end(), selfID) == e.activeOn.end()) {
+                    e.activeOn.push_back(selfID);
+                    if (g_lockLogged.insert((static_cast<std::uint64_t>(selfID) << 32) | e.form).second)
+                        spdlog::info("[iaus] {:08X} buff {} ({:08X}) dropped as a candidate: recast lockout (he applied it to himself "
+                                     "and its authored life has not run out; once per spell per fight)", selfID, e.name, e.form);
+                }
+                // Item 5: a Self-delivery buff is offered to an ally only where the claim road serves it.
+                if (e.selfDelivery && player && player != a_self)
+                    if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(e.form))
+                        e.allyRoad = Actuation::BuffServedAtAlly(a_self, sp, player);
+            }
         }
         s.drawn            = Drawn(a_self);
         // H4 (batch I): the spell in his hand, right first (a one-handed cast comes from it; a dual cast holds the same in both). The book
@@ -450,6 +478,7 @@ namespace MFO::Iaus::Candidates {
     }
 
     void CombatEnded(RE::FormID a_follower) {
+        ClearBuffLockState(a_follower);   // fix/mage-buff-loop
         Classes::StealthEntryForget(a_follower);   // batch I item 2: the next fight is counted afresh
         g_fights.erase(a_follower);
         g_wants.erase(a_follower);
@@ -459,6 +488,8 @@ namespace MFO::Iaus::Candidates {
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }
 
     void Clear() {
+        Actuation::ClearSelfBuffLocks(0);   // (ClearSelfCasts does the same; the pair stays whole on its own)
+        g_lockLogged.clear();
         Classes::StealthEntryClear();
         g_fights.clear();
         g_wants.clear();

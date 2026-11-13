@@ -781,6 +781,18 @@ per concern:
     `ApplyTargetEffect` (`:464`), `TargetCastEndActor` (`:633`), `SpellHealsHealth` (`:675`),
     `IsRestorationSpell` (`:690`), `ClearSelfCasts` (`:701`), `ClearApmfRefusalLog` (`:733`).
   - `cast/DirectSelf.cpp` (358) = the SELF stream: `CastSelfDirect` (`:17`), `SelfCastReconcile` (`:239`).
+    **SELF-BUFF RECAST LOCKOUT (`fix/mage-buff-loop`, 2026-11-12, NOT field-run):** `NoteSelfBuffApplied` / `SelfBuffRecastLocked` / `ClearSelfBuffLocks` /
+    `PumpSelfBuffReadback` (`cast/Direct.cpp`, public in `cast/Actuation.h`; a LEAF mutex `g_buffLockMx`, written on MAIN by `ApplySelfEffect` after a landed
+    fire-and-forget Buff, read on the WORKER by `iaus/Candidates.cpp` Gather, which pushes the follower into the snapshot COPY's `activeOn` so `Generate`'s
+    existing drop fires, and by `BuffUpTransparent`'s direct-road branch (`cast/BuffRoad.cpp`) and `SelfCastEndActor`). Length = the costliest effect's
+    duration, 5 s floor. Cleared by `ClearSelfCasts`, `Candidates::CombatEnded` / `Clear` / a new fight clock. `CastSelfDirect` carries `lastApply` across a
+    spell switch (pacing is per ACTOR) and `SelfCastEndActor(..., a_keepLiveBuff)` skips the dispel of a stale / switch release while the lock stands (before
+    this every one-shot buff was dispelled ~2 s after its cast, the Candlelight recast beat). `[buff-readback]` = the ~1 s passive read-back, once per spell per
+    fight. `Actuation::BuffServedAtAlly` (`cast/BuffRoad.cpp`) feeds `SpellEntry::allyRoad` (Candidates, per lap) so `Generate` offers a Self-delivery BUFF to an
+    ally only where the claim road serves it (`IausSource` then fires `cast_target`); `SpellBook` skips 0xFF dynamic forms (Harbinger's taught proxy).
+    **What breaks:** recording a lock for anything but a landed non-concentration Buff (the lock also gates the dispel skip); reading it from a path that holds
+    another lock (it is a leaf); dropping the clear on combat end (a 600 s Candlelight would stay locked into the next fight); making `Generate` read `allyRoad`
+    for a heal (a Self heal stays himself-only).
   - `cast/DirectTarget.cpp` (387) = the ON-TARGET stream: `CastTargetDirect` (`:30`),
     `TargetCastReconcile` (`:297`), `TargetStreamLive` (`:382`).
   - `cast/CanAct.cpp` (236) = the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply` (`:103`),

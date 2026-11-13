@@ -71,7 +71,7 @@ namespace MFO::Actuation {
         void PostSettle(RE::FormID a_casterID, RE::FormID a_spellID, float a_sec,
                         const char* a_road, const char* a_reason);
         void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID, float a_chargeSec);
-        void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID);
+        void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID, bool a_keepLiveBuff = false);
         void ApplyTargetEffect(RE::FormID a_casterID, RE::FormID a_targetID,
                                RE::FormID a_spellID, bool a_guard, float a_chargeSec);
         void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID, RE::FormID a_ownerID);
