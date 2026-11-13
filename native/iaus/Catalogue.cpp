@@ -79,7 +79,7 @@ namespace MFO::Iaus {
             "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency",
             "control_worth", "magicka_buys", "range", "mortal", "mortal_danger", "trade",
             "need", "far", "need", "need", "need",
-            "strike", "hold", "need", "flee_heal", "need", "guard_line", "threat",
+            "strike", "hold", "need", "flee_heal", "need", "guard_line", "threat", "perks",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -97,7 +97,7 @@ namespace MFO::Iaus {
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
         case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
-        case Cons::BoostBuffThreat:
+        case Cons::BoostBuffThreat: case Cons::BoostPosturePerks:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -363,6 +363,12 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 2> p{ { { 0.0f, 1.0f }, { 1.0f, 1.0f } } };
                 at(Cons::BoostBuffThreat) = Piece(p);
             }
+            // perks (batch 3 part C, marth 11-12): FLAT 1.0 through (0, 1), (0.5, 1), (1, 1): bit-identical. x = this posture's share of his weapon-damage
+            // perk multipliers (0.5 = equal investment). The three points are the searched knobs (the sim decides how much perk investment weighs).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 1.0f }, { 1.0f, 1.0f } } };
+                at(Cons::BoostPosturePerks) = Piece(p);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -457,7 +463,7 @@ namespace MFO::Iaus {
             constexpr U kPosture[] = {
                 { Cons::PostureRanged, 1 }, { Cons::PostureMelee, 1 }, { Cons::Ammo, 1 }, { Cons::StaffCharge, 1 },
                 { Cons::MeleeReach, 1 }, { Cons::Unholy, 1 }, { Cons::MundaneVsUnholy, 1 }, { Cons::ClassWeapon, 1 },
-                { Cons::PostureTrade, 1 },
+                { Cons::PostureTrade, 1 }, { Cons::BoostPosturePerks, 1 },
             };
             constexpr U kOffense[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -660,6 +666,7 @@ namespace MFO::Iaus {
                 return f.disengageFlee ? RetreatDangerOf(f, t) : Clamp(f.detectShare, 0.0f, 1.0f);
             case Cons::BoostFleeHeal: return B(f.fleeHeal);
             case Cons::BoostGuardLine: return c.family == Family::Block ? In(B(f.tauntedOnMe >= kGuardLineFoes)) : In::Off();
+            case Cons::BoostPosturePerks: return c.family == Family::Posture && f.perkShare >= 0.0f ? In(f.perkShare) : In::Off();
             case Cons::BoostBuffThreat: return c.family == Family::CastBuff ? In(static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f) : In::Off();
             case Cons::DrinkNeed:
                 if (c.family == Family::DrinkStamina) return f.selfStamina;
