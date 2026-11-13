@@ -184,11 +184,10 @@ namespace MFO::Actuation {
         // the weapon is not denied for the claim's TTL. That release ends g_fireSeen's "fired but never landed" bound, so this keeps it: per
         // follower, SK(recipient, spell) -> when the claim was released after its fire. BuffClaim declines a re-claim while the up-read has not
         // said Yes inside kHoldLastSeenCapMs of that release (Unknown counts as not landed; never a second cast on a guess); at the cap it does
-        // what R2-1 did (WARN, g_neverFired: held off for the fight). Dropped on Yes and by ResetBuffRoad. ResetBuffFollower (run by the
-        // per-lap ClearCastLock on a !castSeen lap, which is NOT the fight's end) keeps an entry younger than kFireReleasedKeepMs, so the
-        // window survives such a lap; an older one is a stale record of a fight long gone and is dropped. Worker-serial (#4).
+        // what R2-1 did (WARN, g_neverFired: held off for the fight). Dropped on Yes, by ResetBuffRoad, and by EndFightBuffBounds (the fight's
+        // real end, CombatScan's two-OOC-service edge). The per-lap ResetBuffFollower (ClearCastLock on a !castSeen lap) does NOT touch it.
+        // Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireReleased;
-        constexpr std::chrono::milliseconds kFireReleasedKeepMs{ 2 * APMFBridge::kHoldLastSeenCapMs };
 
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
@@ -244,16 +243,16 @@ namespace MFO::Actuation {
         g_up.clear();
     }
 
+    // The per-lap reset (ClearCastLock, also run on a !castSeen lap): g_neverFired and g_fireReleased are PER-FIGHT bounds and are NOT
+    // cleared here, only by EndFightBuffBounds (the fight's end), ChooseBuffRoad's controller-lost erase and ResetBuffRoad.
     void ResetBuffFollower(RE::FormID a_follower) {
-        g_neverFired.erase(a_follower);
         g_fired.erase(a_follower);
         g_fireSeen.erase(a_follower);
-        if (const auto fr = g_fireReleased.find(a_follower); fr != g_fireReleased.end()) {
-            const auto now = std::chrono::steady_clock::now();
-            for (auto it = fr->second.begin(); it != fr->second.end();)
-                it = (now - it->second >= kFireReleasedKeepMs) ? fr->second.erase(it) : std::next(it);
-            if (fr->second.empty()) g_fireReleased.erase(fr);
-        }
+    }
+
+    void EndFightBuffBounds(RE::FormID a_follower) {
+        g_neverFired.erase(a_follower);
+        g_fireReleased.erase(a_follower);
     }
 
     bool BuffPlacementSpell(RE::SpellItem* a_spell) {

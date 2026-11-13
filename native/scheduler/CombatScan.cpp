@@ -817,6 +817,7 @@ namespace MFO::Scheduler {
                 Actuation::HealHandsCombatEnded(id);   // [heal-hold] ... combat-ended, once per heal record
                 ComposedCast::End(id);
                 Actuation::ClearCastLock(id);
+                Actuation::EndFightBuffBounds(id);   // BuffRoad's per-fight bounds (never-fired hold-off, fire-released window) end with the fight
                 // Weapon-stance ownership dies with the fight too. The live CSTY
                 // already reverted when the per-combat controller was destroyed;
                 // this drops the stale bookkeeping so the next fight re-baselines.

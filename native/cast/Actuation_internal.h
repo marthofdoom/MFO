@@ -591,7 +591,7 @@ namespace MFO::Actuation {
         void ResetBuffRoad();
         // cast/SubstrateRoad.cpp (slice S3): its pacing / log-dedup maps, on revert / load (ClearCastLocks).
         void ResetSubstrateRoad();
-        void ResetBuffFollower(RE::FormID a_follower);   // ClearCastLock(follower): combat end / dismiss
+        void ResetBuffFollower(RE::FormID a_follower);   // ClearCastLock(follower), per lap: g_fired / g_fireSeen only (see EndFightBuffBounds)
         // ANIMATED-HEAL CLAIM ROAD (animheal phase 2), defined in cast/Hands.cpp.
         // ReleaseOwnHealClaim: end THIS rule's heal claim on a_spell now (the claim
         // via ComposedCast::End, and the LEFT lock that names it) -- the recipient
