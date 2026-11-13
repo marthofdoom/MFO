@@ -4982,7 +4982,7 @@ anywhere (no trip, no errand stop, no ERND change); retrieval on a class change 
   sell loop's own gates, review F2). A retrieval dispatch failure is a miss with the 5 min backoff (review F1). All moves:
   `Papyrus::DispatchMoveItem` (VM RemoveItem with akOtherContainer; the scriptless chest receiver is bound through
   `PackHandle` first).
-- `Forget:766` <- `Followers.cpp:636` (roster removal); `ClearTransientState:850` <- `Upkeep.cpp:802`; `ClearRecord` (above).
+- `Forget` <- `Followers.cpp:636` (roster removal: dispatches each stored piece from the chest back to him if he resolves, else to the player; one log line per piece; no confirm tracking). A better piece of a bucket marks the older one SUPERSEDED (`g_evict`, in memory, `ReleaseSameBucket`): Tick retrieves it to him unconditionally through the normal dispatch/confirm, the entry stays until that confirms; `ClearTransientState:850` <- `Upkeep.cpp:802`; `ClearRecord` (above).
 - Uses `ClassWeaponBit` / `ClassSet` (`EquipAuthority.cpp`, out of the anonymous namespace, declared
   `Logistics_internal.h:829-830`); `SaleKeepGates` (`Logistics_internal.h:1073`).
 
@@ -4995,7 +4995,7 @@ sell loop and the retrieval share the keep gates (`SaleKeepGates`): change them 
 leaf mutex `g_mx` is never held across a Papyrus / engine call (form LOOKUPS under it are the one exception,
 `ReleaseSameBucket`). Never read the chest's inventory (shared by every follower; the confirm is per follower). KNOWN LIMIT:
 the chest holds items, not owners; two followers storing one base can swap instance data (temper / enchant) on retrieval.
-Open review findings: none deferred yet (`Docs/REVIEW-BACKLOG.md`).
+KNOWN LIMIT: a save loaded by an older DLL without STOR loses track of stored pieces (they stay in the unreachable chest). Open review findings: `Docs/REVIEW-BACKLOG.md` "feat/offclass-storage r2 review" (ESL new-CELL SEV-3 on pre-1.6.1130 runtimes, retrieval cost SEV-4, two-place keep-gate combine SEV-5).
 
 ### logistics/Errand.cpp / Errand.h / apmf/ErrandClaims.cpp — TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7; SAVED since R2: 'ERND' v1)
 Design: `_evidence/2026-10-18-designs/TOWN-DESIGN.md` (R1a = this; R1b = off-screen simulation + recall, R2 = the `ERND` co-save,

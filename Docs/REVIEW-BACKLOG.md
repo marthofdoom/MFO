@@ -3327,3 +3327,9 @@ Opus 5.5 full review of a444e159 (`feat/buff-potions`) vs b4533665. Verbatim:
 - **F7 (SEV-4):** there is no `magnitude > 0` check. A modded negative resist effect without the Detrimental flag would be classed as a resist. Nothing in vanilla does this.
 - **F8 (SEV-5):** DummyPotion and DefaultPotionRackPotionMarker classify as fortify_health with magnitude 1 and duration 0. This is harmless.
 - **F9 (SEV-5):** each lap copies the Kit's 17-entry BuffStock, and names over 15 characters allocate on the heap, but only for kinds he carries. The cost is negligible.
+
+### feat/offclass-storage r2 review, ESL new-CELL (SEV-3) / retrieval cost (SEV-4) / keep-gate combine (SEV-5), raised against 665c3f46
+Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OPEN. Verbatim:
+- **SEV-3 (1.5/pre-1.6.1130 runtimes; deck 1.6.1170 unaffected):** "NEW: ESL-flagged new CELL: known pre-1.6.1130 "ESL CELL load bug" (refs/inventories in new ESL cells lose data on reload; Nightfallstorm ESL Cell Load Bug Fix). 1.6.1170 fixed; 1.5.97/1.6.640 affected. SEV-3 (medium confidence, from memory)."
+- **SEV-4:** "Retrieval: ComputeKeepSet+BuildSaleKeepGates per fitting not-kept stored item every 5 s forever. SEV-4 perf."
+- **SEV-5:** "(2) SaleKeepsUnworn vs sell loop 868-876: weapon = keep && !offRole && !weapCannotEquip; armor = !blacklisted(forceSell for unworn) && keep && !armoCannotEquip. redundantInferior/deniedWorn are worn-only. No drift. Two combine sites remain (SEV-5 nit)."

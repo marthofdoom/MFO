@@ -228,7 +228,7 @@ namespace MFO {
     // the bounds and the lock). Per follower, the off-class pieces he keeps in the followers' OWN chest (MFO.esp 0x919, one
     // persistent MFO container shared by every follower, marth 2026-11-13). Written ONLY when a piece exists; a save without it
     // loads with nothing. An older DLL meets an unknown record type, skips it and drops it on its next save: the pieces then stay
-    // in the MFO chest untracked (the documented downgrade).
+    // in the MFO chest untracked and LOST to play (the chest is unreachable by the player; the documented downgrade limit).
     //   v1 - little-endian, in this order:
     //          u32 followerCount            <= 4096 (more = the record is aborted, #11)
     //          per follower: u32 follower   Actor FormID (unresolvable -> his items are read past and DROPPED, #8)

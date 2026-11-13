@@ -78,6 +78,7 @@ namespace MFO::Logistics::Storage {
         // Session-only (ClearTransientState).
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>        g_wants;    // follower -> bases held for storing
         std::unordered_map<RE::FormID, std::vector<Op>>                       g_ops;
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>        g_evict;     // follower -> superseded bases to bring back (in-memory only)
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>        g_blocked;  // a store that did not land / dispatch
         std::unordered_map<std::uint64_t, Miss>                                g_miss;     // (follower, base) retrieval misses
         std::unordered_map<RE::FormID, Clock::time_point>                      g_nextTick, g_nextRetrieve;
@@ -201,23 +202,26 @@ namespace MFO::Logistics::Storage {
             return (UsesMageClothing(a_state, a_follower) && Robes()) ? Kind::kClothing : Kind::kRated;
         }
 
-        // Drop every OTHER entry of a_keepBase's bucket (the superseded piece is released to the player in the chest, never sold).
+        // Mark every OTHER entry of a_keepBase's bucket as SUPERSEDED (g_evict): Tick brings it back to the follower through the
+        // ordinary retrieval dispatch + confirm, and the sale path then judges it (a piece left in the chest with no entry would
+        // be lost: the chest is unreachable by the player). The entry stays in the table until that retrieval confirms.
         // Called under g_mx: it does form LOOKUPS only (TESForm::LookupByID, the form map's own reader lock; nothing takes g_mx
         // under that lock).
         void ReleaseSameBucket(std::vector<Item>& a_items, RE::FormID a_keepBase, RE::FormID a_fid) {
             const Piece kp = Classify(RE::TESForm::LookupByID<RE::TESBoundObject>(a_keepBase));
             if (kp.bucket == Bucket::None) return;
-            std::erase_if(a_items, [&](const Item& i) {
-                if (i.base == a_keepBase) return false;
+            for (const auto& i : a_items) {
+                if (i.base == a_keepBase || i.flags) continue;
                 auto* o = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
-                if (!o || Classify(o).bucket != kp.bucket) return false;
-                spdlog::info("[storage] {:08X}: '{}' released to the player in the MFO chest (a better {} is stored)", a_fid, NameOf(o),
-                             BucketName(kp.bucket));
-                return true;
-            });
+                if (!o || Classify(o).bucket != kp.bucket) continue;
+                if (!g_evict[a_fid].insert(i.base).second) continue;
+                spdlog::info("[storage] {:08X}: '{}' superseded (a better {} is stored) -- it comes back to him from the MFO chest", a_fid,
+                             NameOf(o), BucketName(kp.bucket));
+            }
         }
 
         void DropEntry(RE::FormID a_fid, RE::FormID a_base) {   // under g_mx
+            if (auto e = g_evict.find(a_fid); e != g_evict.end()) { e->second.erase(a_base); if (e->second.empty()) g_evict.erase(e); }
             if (auto it = g_table.stored.find(a_fid); it != g_table.stored.end()) {
                 std::erase_if(it->second, [&](const Item& e) { return e.base == a_base; });
                 if (it->second.empty()) g_table.stored.erase(it);
@@ -702,6 +706,11 @@ namespace MFO::Logistics::Storage {
             }
             const std::uint16_t curSet  = ClassSet(fid);
             const std::uint8_t  curKind = items.empty() ? 0 : CurrentKind(a_follower, a_state, eq);
+            std::unordered_set<RE::FormID> evict;
+            {
+                std::scoped_lock lk(g_mx);
+                if (const auto e = g_evict.find(fid); e != g_evict.end()) evict = e->second;
+            }
             for (const auto& i : items) {
                 if (i.flags) continue;
                 {
@@ -717,19 +726,23 @@ namespace MFO::Logistics::Storage {
                 }
                 if (CountOf(a_follower, obj) != 0) continue;   // a copy in his pack would make the confirm ambiguous
                 const Piece pc = Classify(obj);
+                const bool superseded = evict.count(i.base) != 0;   // a better piece of its bucket is stored: back to him, the sale path judges
                 RetrieveInput r;
                 r.bucket = pc.bucket; r.classBit = pc.armor ? 0 : pc.classBit; r.armorKind = pc.armor ? pc.kind : 0;
                 r.currentSet = curSet; r.currentKind = curKind; r.classChanged = classChanged;
                 // The cheap class half first; the keep set only for a piece that fits his class now.
                 const bool fits = r.armorKind == 0 ? (curSet == 0 || (r.classBit & curSet)) : (r.armorKind == curKind);
-                if (!fits || r.bucket == Bucket::None) continue;
+                if (!superseded && (!fits || r.bucket == Bucket::None)) continue;
                 // Review F2: the SALE PATH's own verdict, as if he carried it: the keep set with this piece added plus the sell loop's
                 // gates (Economy.cpp SaleKeepsUnworn). A piece it would not keep is never brought back to be sold.
-                const KeepSet       ks    = ComputeKeepSet(a_follower, a_state, obj);
-                const SaleKeepGates gates = BuildSaleKeepGates(a_follower, a_state);
-                r.saleKeeps = SaleKeepsUnworn(ks, gates, obj);
                 const char* why = "";
-                if (!DecideRetrieve(r, &why)) continue;
+                if (superseded) why = "superseded by a better stored piece";
+                else {
+                    const KeepSet       ks    = ComputeKeepSet(a_follower, a_state, obj);
+                    const SaleKeepGates gates = BuildSaleKeepGates(a_follower, a_state);
+                    r.saleKeeps = SaleKeepsUnworn(ks, gates, obj);
+                    if (!DecideRetrieve(r, &why)) continue;
+                }
                 if (Papyrus::DispatchMoveItem(chest, obj, 1, a_follower)) {
                     keepOps.push_back(Op{ OpKind::Retrieve, i.base, 0, a_now + kConfirmWindow });
                     spdlog::info("[storage] {:08X} '{}': RETRIEVE '{}' from the MFO chest -- {}", fid, NameOf(a_follower), NameOf(obj), why);
@@ -764,16 +777,33 @@ namespace MFO::Logistics::Storage {
     }
 
     void Forget(RE::FormID a_follower) {
-        std::size_t n = 0;
+        std::vector<Item> items;
         {
             std::scoped_lock lk(g_mx);
-            if (const auto it = g_table.stored.find(a_follower); it != g_table.stored.end()) { n = it->second.size(); g_table.stored.erase(it); }
+            if (const auto it = g_table.stored.find(a_follower); it != g_table.stored.end()) { items = std::move(it->second); g_table.stored.erase(it); }
             g_wants.erase(a_follower);
             g_ops.erase(a_follower);
+            g_evict.erase(a_follower);
             g_blocked.erase(a_follower);
             g_lastClass.erase(a_follower);
         }
-        if (n) spdlog::info("[storage] {:08X}: {} stored piece(s) released to the player in the MFO chest (roster removal)", a_follower, n);
+        if (items.empty()) return;
+        // His pieces must not stay in the chest untracked (the player cannot reach it): send each back to him if he still resolves,
+        // else to the player. No confirm tracking after this (the entry is gone); the dispatch result is logged.
+        auto* chest = Chest();
+        auto* who   = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+        RE::TESObjectREFR* dest = who ? static_cast<RE::TESObjectREFR*>(who) : static_cast<RE::TESObjectREFR*>(RE::PlayerCharacter::GetSingleton());
+        for (const auto& i : items) {
+            auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(i.base);
+            if (!chest || !dest || !obj) {
+                spdlog::warn("[storage] {:08X}: roster removal -- piece {:08X} NOT returned ({}); it stays in the MFO chest untracked", a_follower,
+                             i.base, !chest ? "no chest" : !dest ? "no destination" : "its form no longer resolves");
+                continue;
+            }
+            const bool ok = Papyrus::DispatchMoveItem(chest, obj, 1, dest);
+            spdlog::info("[storage] {:08X}: roster removal -- '{}' from the MFO chest to {} ({})", a_follower, NameOf(obj), who ? "him" : "the player",
+                         ok ? "dispatched" : "dispatch FAILED (VM / handle / binding); it stays in the chest untracked");
+        }
     }
 
     // ── the 'STOR' record ────────────────────────────────────────────────────────────────────────────────────────────
@@ -851,6 +881,7 @@ namespace MFO::Logistics::Storage {
         std::scoped_lock lk(g_mx);
         g_wants.clear();
         g_ops.clear();
+        g_evict.clear();
         g_blocked.clear();
         g_miss.clear();
         g_nextTick.clear();

@@ -77,6 +77,13 @@ per follower: u32 follower (unresolvable -> his items read past and dropped), u3
 ```
 Version 0 skipped, a newer version skipped with the "newer save" warning, a short read keeps what was parsed.
 
+Superseded and removed pieces (fix round after review r2, 665c3f46): the chest is unreachable by the player, so nothing is ever
+"released to the player" in it. A superseded piece is retrieved back to the follower (in-memory `g_evict` mark, the entry stays
+until the retrieval confirms; a save between the mark and the confirm just leaves an ordinary stored entry). On roster removal
+(`Forget`) each stored piece is dispatched from the chest to him if he still resolves, else to the player, one log line per
+piece, no confirm tracking. KNOWN LIMIT: a save loaded by an older DLL without STOR loses track of the stored pieces (they stay
+in the chest, untracked and unreachable).
+
 ## 0. The rulings this implements
 
 - marth 2026-10-18: "Id recommend a follower keep a tracked set expensive off class items that they store
@@ -154,8 +161,9 @@ bow, crossbow, staff) plus shield. Ranks are the keep set's too: `WeaponScore` f
 launchers, gold value for staves, armor rating for shields. A piece is stored only when it outranks every
 other carried piece of its bucket and the piece he already has stored in that bucket (tie: higher value,
 then lower FormID). So he never stores a duplicate or an inferior, and the tracked set is at most one piece
-per bucket per follower. When a better piece of a bucket is stored, the older entry is RELEASED: the item
-stays in the chest and becomes the player's. It is never sold by him.
+per bucket per follower. When a better piece of a bucket is stored, the older entry is SUPERSEDED: it is brought back to HIM from the
+chest through the ordinary retrieval dispatch + confirm (unconditionally, whatever his class), and the sale path then judges it.
+The chest is unreachable by the player, so a piece must never be left in it untracked.
 
 ## 3. The keep test and the store stop
 
@@ -299,12 +307,12 @@ Harbinger, Papyrus or `WriteRecordData` call, never nested with the Errand or Si
 [storage] {fid} '{name}': '{item}' sells -- {why}                       (rate-limited with the [sell] diag, 15 s per follower)
 [storage] {fid} '{name}': no home stop this visit -- {door locked ({word}) | no door to cell {cell} | the trip is full | storing blocked after 3 failed stops}
 [storage] {fid} '{name}': home stop {k} at chest {chest}: {n} piece(s)
-[storage] {fid} '{name}': STORED '{item}' in {chest} ({on screen | off screen, unverified}){; '{old}' released to the chest's owner}
+[storage] {fid} '{name}': STORED '{item}' in {chest} ({on screen | off screen, unverified}){; '{old}' superseded -- it comes back to him}
 [storage] {fid} '{name}': '{item}' did NOT leave his pack within {s} s -- not recorded      (WARN)
 [storage] {fid} '{name}': off-screen store of '{item}' CONFIRMED | NOT confirmed (he still carries it) -- entry dropped (WARN)
 [storage] {fid} '{name}': RETRIEVE '{item}' from {chest} -- {class change | better than what he carries} (rank {r} vs {c})
 [storage] {fid} '{name}': RETRIEVED '{item}' | '{item}' did not arrive in {s} s (try {k}/3) | '{item}' is no longer in the chest -- entry dropped (WARN)
-[storage] {fid}: {n} stored piece(s) released (roster removal)
+[storage] {fid}: roster removal -- '{item}' from the MFO chest to him | the player ({dispatched | dispatch FAILED})   (one per piece)
 [cosave] saved {h} home chest(s), {n} stored piece(s) for {f} follower(s), schema v1
 [cosave] loaded {h} home chest(s), {n} stored piece(s); dropped {a} home(s), {b} follower(s), {c} piece(s)
 ```
@@ -381,8 +389,8 @@ All quick, no spawn. `RegisterStorage()` declared in `SelfTest_internal.h:139` a
 ## 10. Never-sell, PGIV and equip authority
 
 - A stored piece is in the chest, not in his pack, so no sale path can reach it. Between the decision and
-  the stop it is held by `HoldFromSale`. A superseded piece is released in place, never brought back to
-  be sold.
+  the stop it is held by `HoldFromSale`. A superseded piece is brought back to him by the retrieval path;
+  the sale path then judges it like any carried piece (it is not top of its bucket, so it sells).
 - PGIV is untouched. A player-given relic never reaches the hook (`Lotd::HoldFromSale` at the top of the
   sell loop, `Economy.cpp:728`). Stock gear and `IsPlayerPick` are tested above the hook as well.
 - Equip authority is untouched. Storage moves only unworn pieces at `Begin` (live re-check). Off screen it
