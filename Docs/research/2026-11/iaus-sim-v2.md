@@ -2514,7 +2514,7 @@ LoreRim's potion worth, rejudge, classes: 397 knobs, 85 live, 312 dead for the K
 floor; globals with the switching rate; one constant variant built and compared; floor with causes; rating; recalib;
 summary) in 72 s on 12 cores. Killed with SIGKILL 22 s in (mid liveness), the same command finished the run from 818 cached
 results; a third run of the finished directory replayed in under a second and wrote no second dashboard file. All 15 cells
-with the oracle-gap order (ranged-off, melee, mercenary, melee-off first): a second smoke run, about 6 minutes; live knobs per cell 34 (melee) to 191 (mage-off) of 396. To repeat it: the launch command with `--smoke --classes knight --worlds
+with the oracle-gap order (ranged-off, melee, mercenary, melee-off first): a second smoke run, about 9 minutes; live knobs per cell 34 (melee) to 191 (mage-off) of 396. To repeat it: the launch command with `--smoke --classes knight --worlds
 builtin,LoreRim` and another `--out`.
 
 ### 33.5 Writing accepted values into native (mechanical)
