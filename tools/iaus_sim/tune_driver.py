@@ -92,6 +92,7 @@ CFG = None          # FULL or SMOKE
 POOL = None
 EMIT = cf.ThreadPoolExecutor(max_workers=1)   # the dashboard files
 CACHE = {}          # (key, seed) -> (J, switches, minutes)
+STAGE = ["-"]       # the stage running now (cache_stats)
 TEXT = {}           # key -> stdout (rating / floor / list-uses runs)
 LOCK = threading.Lock()
 SUMMARY = {"rule": __doc__[__doc__.index("RULE ("):].strip(), "open_decisions": [], "stages": {}}
@@ -239,6 +240,10 @@ def jmany(reqs):
     for world, classes, cfg, curves, sets, binary, seeds in reqs:
         k = key_of(world, classes, cfg, curves, sets, binary)
         miss = [s for s in seeds if (k, s) not in CACHE]
+        with LOCK:   # marth 11-13 "productive sims as fuel": how much of each stage was served from the cache (earlier runs of this --out)
+            cs = SUMMARY.setdefault("cache_stats", {}).setdefault(STAGE[0], {"seed_runs": 0, "from_cache": 0})
+            cs["seed_runs"] += len(seeds)
+            cs["from_cache"] += len(seeds) - len(miss)
         cmd = sim_cmd(world, classes, cfg, curves, sets, binary)
         for i in range(0, len(miss), 8):
             futs.append(POOL.submit(run_chunk, k, cmd, miss[i:i + 8]))
@@ -1800,11 +1805,16 @@ def main():
             continue
         SUMMARY["open_decisions"] = [d for d in SUMMARY["open_decisions"] if d.get("stage") != name or (scope() and d.get("cls") and d["cls"] not in scope())]   # a scoped re-run keeps the other classes' decisions
         n0 = len(SUMMARY["open_decisions"])
+        STAGE[0] = name
+        SUMMARY.setdefault("cache_stats", {})[name] = {"seed_runs": 0, "from_cache": 0}   # this invocation's numbers (a resumed run replaces them)
+        t0 = time.time()
         stages[name]()
         for d in SUMMARY["open_decisions"][n0:]:
             d["stage"] = name
+        cs = SUMMARY["cache_stats"][name]
+        cs["wall_s"] = round(time.time() - t0, 1)
         save_summary()
-        log("STAGE %s done" % name)
+        log("STAGE %s done (%.0f s; seed runs %d, %d of them served from the cache = %.1f%%)" % (name, cs["wall_s"], cs["seed_runs"], cs["from_cache"], 100.0 * cs["from_cache"] / max(1, cs["seed_runs"])))
         done.append(name)
         if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
             # G2 (review of 7e883a9a): the (a) search moved the table, so a stage that reads the final table and already ran in this
