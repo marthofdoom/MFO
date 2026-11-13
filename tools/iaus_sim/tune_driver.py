@@ -285,8 +285,20 @@ def save_summary():
     open(os.path.join(A.out, "summary.md"), "w").write(render_md())
 
 
-def open_decision(what, evidence):
-    SUMMARY["open_decisions"].append({"what": what, "evidence": evidence})
+def scope():
+    """The classes a run is scoped to (--classes), or None for all. classes, edge and gap act on these only and keep the rest."""
+    return A.classes.split(",") if A.classes else None
+
+
+def cells():
+    """The 15 Beta 1 cells, plus every other class searched in this --out or named by --classes (a new class is gated with the rest)."""
+    extra = [c for c in (scope() or []) + list(SUMMARY["stages"].get("classes", {})) if c not in CELLS]
+    return CELLS + sorted(set(extra), key=extra.index)
+
+
+def open_decision(what, evidence, cls=None):
+    """cls: the class a decision belongs to, so a stage re-run for some classes (--classes) replaces only THEIR decisions."""
+    SUMMARY["open_decisions"].append({"what": what, "evidence": evidence, **({"cls": cls} if cls else {})})
     log("OPEN DECISION (the runner stops and reports this, it does not decide): %s | %s" % (what, evidence))
 
 
@@ -427,15 +439,15 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
         return row
     # gates, on the train + holdout seeds (Q-gate-rule: many seeds)
     seeds = list(range(1, CFG["train"] + 1)) + list(hold)
-    cells = CELLS if cls in T1 or cls == "beta1" else [cls]
-    cfgs = ("g3", "off", "shipped") if len(cells) > 1 else ("off", "shipped")
-    reqs = [req("builtin", c, g, kept if x == 0 else cur, seeds, base_sets if x == 0 else sets) for c in cells for g in cfgs for x in (0, 1)]
+    gated = cells() if cls in T1 or cls == "beta1" else [cls]   # a T1 value moves every class it is a companion of, a new class too
+    cfgs = ("g3", "off", "shipped") if len(gated) > 1 else ("off", "shipped")
+    reqs = [req("builtin", c, g, kept if x == 0 else cur, seeds, base_sets if x == 0 else sets) for c in gated for g in cfgs for x in (0, 1)]
     res = jmany(reqs)
     gate = {}
-    for i, (c, g) in enumerate([(c, g) for c in cells for g in cfgs]):
+    for i, (c, g) in enumerate([(c, g) for c in gated for g in cfgs]):
         d, se = paired(res[2 * i], res[2 * i + 1])
         gate["%s/%s" % (c, g)] = [round(d, 3), round(se, 3)]
-        if worse(d, se, len(cells) > 1) or out_of_band(c, d, se):
+        if worse(d, se, len(gated) > 1) or out_of_band(c, d, se):
             fails.append("gate: %s gets worse at %s (%+.2f, se %.2f)" % (c, g, d, se))
     row["steps"]["gates"] = gate
     if fails and not forced:
@@ -621,14 +633,14 @@ def search_class(cls, knobs):
         ob, nb = pick(b), pick(n)
         ch = sorted(((abs(nb[k] - ob[k]) / (abs(ob[k]) + 1.0), k, ob[k], nb[k]) for k in ob if k in nb and abs(nb[k] - ob[k]) > 1e-9), reverse=True)[:12]
         out["play_changes_natural"] = [[k, o, w] for _, k, o, w in ch]
-        open_decision("class card read for %s" % cls, "accepted %s; the largest changes in his play are in summary.json stages.classes.%s.play_changes_natural: confirm none leaves his class card before writing" % (" ".join(kept), cls))
+        open_decision("class card read for %s" % cls, "accepted %s; the largest changes in his play are in summary.json stages.classes.%s.play_changes_natural: confirm none leaves his class card before writing" % (" ".join(kept), cls), cls=cls)
     # runbook open decision 7: many accepted values for one class, or a consideration weight at the edge of what was tried, say the shared
     # catalogue (not the class) is off: reported before anything is written
     edge = [r["spec"] for r in rows if r["accepted"] and r["knob"].endswith(".w") and (r["best"] >= 2.0 * r["shared"] - 1e-6 or r["best"] <= 0.5 * r["shared"] + 1e-6)]
     if len(kept) > 10:
-        open_decision("%s took %d accepted values (more than 10)" % (cls, len(kept)), "a sign the shared catalogue, not the class, is off: report before writing any of %s" % " ".join(kept))
+        open_decision("%s took %d accepted values (more than 10)" % (cls, len(kept)), "a sign the shared catalogue, not the class, is off: report before writing any of %s" % " ".join(kept), cls=cls)
     if edge:
-        open_decision("%s: a consideration weight accepted at the edge of the range tried (x2 or x0.5)" % cls, "%s: the best weight may lie outside what was searched, and so far from the catalogue's that the shared curve is in question" % " ".join(edge))
+        open_decision("%s: a consideration weight accepted at the edge of the range tried (x2 or x0.5)" % cls, "%s: the best weight may lie outside what was searched, and so far from the catalogue's that the shared curve is in question" % " ".join(edge), cls=cls)
     SUMMARY["stages"].setdefault("classes", {})[cls] = out
     save_summary()
     return out
@@ -705,12 +717,12 @@ def stage_joint():
         seeds = list(range(1, CFG["train"] + 1)) + list(range(1001, 1001 + CFG["hold"]))
         fails = []
 
-        def table_vs(a, b):   # per cell and config, and pooled over the 15 cells: b - a
-            res = jmany([req("builtin", c, g, x, seeds) for c in CELLS for g in CONFIGS for x in (a, b)])
-            cells, pooled, i = {}, {}, 0
-            for c in CELLS:
+        def table_vs(a, b):   # per cell and config, and pooled over the cells: b - a
+            res = jmany([req("builtin", c, g, x, seeds) for c in cells() for g in CONFIGS for x in (a, b)])
+            per, pooled, i = {}, {}, 0
+            for c in cells():
                 for g in CONFIGS:
-                    cells["%s/%s" % (c, g)] = paired(res[i], res[i + 1])
+                    per["%s/%s" % (c, g)] = paired(res[i], res[i + 1])
                     pooled.setdefault(g, []).append([y[0] - x[0] for x, y in zip(res[i], res[i + 1])])
                     i += 2
             out = {}
@@ -718,9 +730,9 @@ def stage_joint():
                 dd = [sum(col) / len(col) for col in zip(*pooled[g])]
                 d = sum(dd) / len(dd)
                 out[g] = (d, math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0)
-            return cells, out
-        cells, pooled = table_vs([], curves)
-        for k, (d, se) in cells.items():
+            return per, out
+        per, pooled = table_vs([], curves)
+        for k, (d, se) in per.items():
             st["cells"][k] = [round(d, 3), round(se, 3)]
             if worse(d, se, True) or out_of_band(k.split("/")[0], d, se):
                 fails.append("%s worse (%+.2f, se %.2f)" % (k, d, se))
@@ -785,9 +797,9 @@ def stage_edge():
     line of the rule is far from the shared curve by construction and becomes an OPEN DECISION with its evidence (never shipped)."""
     knobs, _ = all_knobs()
     train = range(1, CFG["train"] + 1)
-    rows = []
+    rows = [e for e in SUMMARY["stages"].get("edge", []) if scope() and e["class"] not in scope()]   # a scoped run keeps the other classes' rows
     for cls, r in SUMMARY["stages"].get("classes", {}).items():
-        if not r.get("complete"):
+        if not r.get("complete") or (scope() and cls not in scope()):
             continue
         meta = {n: (t, sh) for n, t, sh, _ in class_knobs(cls, knobs)}
         for row in [x for x in r["rows"] if x.get("accepted")]:
@@ -816,7 +828,7 @@ def stage_edge():
                     if j["accepted"]:
                         e["verdict"] = "WIDER VALUE PASSES THE RULE: reported, never shipped (far from the shared curve)"
                         open_decision("%s %s: a value past the edge passes the rule" % (cls, row["knob"]), "shared %g, accepted (edge, %s) %g, widened %g: train %+.2f (se %.2f) over the accepted value, holdout %+.2f, cross-world mean %+.2f (se %.2f). Far from the shared curve: marth or the coordinator decides; the accepted %g stays written until then (summary.json stages.edge)"
-                                      % (cls, row["knob"], shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]))
+                                      % (cls, row["knob"], shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]), cls=cls)
                     else:
                         e["verdict"] = "the accepted edge value holds (%s: %s)" % ("a wider value beat it on train only" if passed else "SMOKE: judged without a train pass", j["why"])
                 else:
@@ -935,11 +947,14 @@ def stage_gap():
                and each value already tried (inside the range: accepted under RULE like any sweep) and past the outermost ones
                (widen: a pass is an open decision, never shipped). An accepted value re-runs the joint gate and re-measures that gap.
       (b)-(d)  open decisions with their evidence; the ledger rows go to <out>/gap-ledger.md for the coordinator to paste."""
-    SUMMARY["stages"].pop("gap", None)   # this stage's own earlier values are decided again
-    order = A.classes.split(",") if A.classes else CELLS
+    old = SUMMARY["stages"].pop("gap", {})   # this stage's own earlier values are decided again (for the classes in scope; the others are kept)
+    order = scope() or cells()
+    keep = lambda part: {k: v for k, v in old.get(part, {}).items() if k.split("/")[0] not in order}
+    if scope():
+        SUMMARY["stages"]["gap"] = {"kept": keep("kept")}   # the other classes' accepted values stay in final_curves
     shipped, final = [], final_curves()
     tables = {"shipped": shipped, "final": final}
-    st = {"rule": stage_gap.__doc__[stage_gap.__doc__.index("RULE"):], "tables": {"final": final}, "cells": {}, "clusters": {}, "kept": {}, "search": {}}
+    st = {"rule": stage_gap.__doc__[stage_gap.__doc__.index("RULE"):], "tables": {"final": final}, "cells": keep("cells"), "clusters": keep("clusters"), "kept": keep("kept"), "search": keep("search")}
     nseeds = {(w, c): CFG["gap_seeds"] for w in A.worlds for c in order}
     data = {}
     while True:   # measure; then grow only the cells whose se is too wide, up to the cap
@@ -1049,7 +1064,7 @@ def gap_search(st, order):
                 ok = passed and j["accepted"]
                 if ok and far:
                     row["why"] = "PASSES THE RULE PAST THE RANGE TRIED: reported, never shipped"
-                    open_decision("gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f: far from the shared curve, marth or the coordinator decides (summary.json stages.gap.search.%s)" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], c))
+                    open_decision("gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f: far from the shared curve, marth or the coordinator decides (summary.json stages.gap.search.%s)" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], c), cls=c)
                 elif ok:
                     row["accepted"] = True
                     st["kept"].setdefault(c, []).append(spec)
@@ -1068,7 +1083,7 @@ def gap_search(st, order):
         st["joint_after_search"] = SUMMARY["stages"]["joint"]["verdict"]
         final = final_curves()
         for c in sorted(set(changed)):
-            open_decision("class card read for %s (gap search)" % c, "accepted %s in the gap stage's (a) search: confirm none leaves his class card before writing" % " ".join(st["kept"][c]))
+            open_decision("class card read for %s (gap search)" % c, "accepted %s in the gap stage's (a) search: confirm none leaves his class card before writing" % " ".join(st["kept"][c]), cls=c)
             for w in A.worlds:
                 n = st["cells"]["%s/%s" % (c, w)]["seeds"]
                 fin = gap_merge(gap_runs([(w, c, final, s, True) for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)]))
@@ -1082,15 +1097,15 @@ def gap_ledger(st, order):
     L = ["# Oracle-gap ledger rows (tune_driver.py stage gap, %s)" % time.strftime("%Y-%m-%d %H:%M"), "",
          "Paste into Docs/research/2026-11/iaus-classes.md section 3. dU/f = the oracle's per-decision advantage summed per fight (an ordering, not an additive share of the gap).", "",
          "| Id | Classes | What is missing | Road |", "|---|---|---|---|"]
-    for c in order:
+    for c in st["clusters"]:   # every class the stage holds (a scoped run kept the others'); decisions only for the classes in scope
         cl = st["clusters"][c]
         gaps = ", ".join("%s %+.2f (se %.2f)" % (w, st["cells"]["%s/%s" % (c, w)]["gap"], st["cells"]["%s/%s" % (c, w)]["se"]) for w in A.worlds)
         rows = [r for r in cl["rows"] if r["class"] in "bcd" and (r["share"] >= 0.05 or r is cl["rows"][0])][:5]
         for i, r in enumerate(rows):
             L.append("| O-%s-%d | %s | (%s) IAUS %s, oracle %s (%s): dU/f %.2f, %.0f%% of his divergence cost; most in %s. Gap %s | %s |" % (
                 c, i + 1, c, r["class"], r["iaus"], r["oracle"], r["kind"], r["dU_per_fight"], 100 * r["share"], r["situations"][0][0] if r["situations"] else "-", gaps, r["why"]))
-        if rows:
-            open_decision("oracle gap %s: %d divergence(s) of class b/c/d" % (c, len(rows)), "; ".join("(%s) %s -> %s dU/f %.2f: %s" % (r["class"], r["iaus"], r["oracle"], r["dU_per_fight"], r["why"]) for r in rows) + " (summary.json stages.gap.clusters.%s, <out>/gap-ledger.md)" % c)
+        if rows and c in order:
+            open_decision("oracle gap %s: %d divergence(s) of class b/c/d" % (c, len(rows)), "; ".join("(%s) %s -> %s dU/f %.2f: %s" % (r["class"], r["iaus"], r["oracle"], r["dU_per_fight"], r["why"]) for r in rows) + " (summary.json stages.gap.clusters.%s, <out>/gap-ledger.md)" % c, cls=c)
     open(os.path.join(A.out, "gap-ledger.md"), "w").write("\n".join(L) + "\n")
 
 
@@ -1352,6 +1367,7 @@ def main():
     ap.add_argument("--bin", required=True, help="the built simulator (SIM_OUT of tools/iaus_sim/run.sh)")
     ap.add_argument("--out", required=True, help="the run's directory: cache.jsonl, progress.log, summary.json, summary.md")
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
+    ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,floor,gap,summary")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
     ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,summary")
@@ -1360,6 +1376,10 @@ def main():
     ap.add_argument("--jobs", type=int, default=12)
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one dashboard results file per finished sweep")
     A = ap.parse_args()
+    if A.for_class:
+        if A.classes or A.stages != ap.get_default("stages"):
+            raise SystemExit("--for-class sets --classes and --stages itself: give neither")
+        A.classes, A.stages = A.for_class, "prep,classes,joint,edge,floor,gap,summary"
     A.worlds = A.worlds.split(",")
     A.bin = os.path.abspath(A.bin)
     CFG = SMOKE if A.smoke else FULL
@@ -1380,7 +1400,7 @@ def main():
     for name in A.stages.split(","):
         if name == "summary":
             continue
-        SUMMARY["open_decisions"] = [d for d in SUMMARY["open_decisions"] if d.get("stage") != name]
+        SUMMARY["open_decisions"] = [d for d in SUMMARY["open_decisions"] if d.get("stage") != name or (scope() and d.get("cls") and d["cls"] not in scope())]   # a scoped re-run keeps the other classes' decisions
         n0 = len(SUMMARY["open_decisions"])
         stages[name]()
         for d in SUMMARY["open_decisions"][n0:]:
