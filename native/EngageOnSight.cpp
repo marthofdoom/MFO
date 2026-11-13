@@ -13,6 +13,7 @@
 #include "MainThread.h"
 #include "Sightline.h"            // MeasureNow -- the SEES test, on the main thread
 #include "Targeting.h"            // the ch.20 pin (or the latch) for the same target
+#include "cast/Actuation.h"        // ReleasePendingBuffOnEngage
 #include "logistics/Logistics.h"  // ReleaseTravelOnCombat -- the engage ends his loot trip
 
 #include <algorithm>
@@ -848,6 +849,7 @@ namespace MFO::EngageOnSight {
                         }
                         // Preempt logistics the way player combat does: his loot trip ends now.
                         Logistics::ReleaseTravelOnCombat(a_f);
+                        Actuation::ReleasePendingBuffOnEngage(a_f);   // release on engage: an unfired self-buff hand claim must not hold his weapon off
                         Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
                         // ABI v18: the senses that fired (Harbinger SenseActor) replace the sightline text.
                         const std::string basis = r.sensed
