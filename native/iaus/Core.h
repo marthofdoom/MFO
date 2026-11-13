@@ -272,7 +272,13 @@ namespace MFO::Iaus {
         WorthTable worth{};
     };
 
+    // DefaultTuning() is the LIVE tuning: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/shared.txt, potions.txt) swaps edited ones in on the
+    // worker between ticks. ShippedTuning() is the compiled table, never edited; a reload always starts from it. LiveTuning() is the editable live object
+    // (TuningFile only). SetTuningScalar: one Tuning scalar by its `t.<name>` (the sim's kTuneScalars, tools/iaus_sim/Tune.h; the two lists are duplicated).
     [[nodiscard]] const Tuning& DefaultTuning();
+    [[nodiscard]] const Tuning& ShippedTuning();
+    [[nodiscard]] Tuning& LiveTuning();
+    bool SetTuningScalar(Tuning& a_t, std::string_view a_name, float a_v);
 
     // ── Class profile: the weight-input shape card I8 fills (section 4.9) ─────────────────────────────────
     // classWeight(candidate) = family[f] x role[tag]. A consideration weight override REPLACES that family's

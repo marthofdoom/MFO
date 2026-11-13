@@ -18,8 +18,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MFO::Iaus {
@@ -107,7 +109,36 @@ namespace MFO::Iaus {
         int   poisonTarget = 3;
         float poisonPowerRef = 100.0f, poisonWeakScale = 0.8f;
     };
-    [[nodiscard]] inline const LootTuning& DefaultLootTuning() { static const LootTuning t; return t; }
+    // DefaultLootTuning() is the LIVE table: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/looting.txt) swaps edited ones in on the worker between
+    // ticks. ShippedLootTuning() is never edited (a reload starts from it); LiveLootTuning() is the editable object (TuningFile only).
+    [[nodiscard]] inline const LootTuning& ShippedLootTuning() { static const LootTuning t; return t; }
+    [[nodiscard]] inline LootTuning& LiveLootTuning() { static LootTuning t = ShippedLootTuning(); return t; }
+    [[nodiscard]] inline const LootTuning& DefaultLootTuning() { return LiveLootTuning(); }
+    // The by-name edit surface of LootTuning (`loot.<name>=<v>`). ONE list, next to the table: add a member above, add its row here. An int member takes a
+    // whole number, the bool 0 or 1. False on an unknown name or a bad value.
+    inline bool SetLootKnob(LootTuning& a_t, std::string_view a_name, float a_v) {
+        if (!std::isfinite(a_v)) return false;
+        struct F { const char* name; float LootTuning::* m; };
+        static constexpr F kFloats[] = {
+            { "takeThreshold", &LootTuning::takeThreshold }, { "needBase", &LootTuning::needBase }, { "needSlope", &LootTuning::needSlope }, { "roomKnee", &LootTuning::roomKnee },
+            { "saleGoldPerWeight", &LootTuning::saleGoldPerWeight }, { "saleWeight", &LootTuning::saleWeight }, { "gold", &LootTuning::gold }, { "equipment", &LootTuning::equipment },
+            { "valuables", &LootTuning::valuables }, { "jewelry", &LootTuning::jewelry }, { "gemChargeTrigger", &LootTuning::gemChargeTrigger },
+            { "buffScale", &LootTuning::buffScale }, { "foodScale", &LootTuning::foodScale }, { "poisonPowerRef", &LootTuning::poisonPowerRef }, { "poisonWeakScale", &LootTuning::poisonWeakScale },
+        };
+        for (const F& k : kFloats) if (a_name == k.name) { a_t.*(k.m) = a_v; return true; }
+        struct I { const char* name; int LootTuning::* m; };
+        static constexpr I kInts[] = {
+            { "soulGemTarget", &LootTuning::soulGemTarget }, { "healthTarget", &LootTuning::healthTarget }, { "staminaTarget", &LootTuning::staminaTarget },
+            { "staminaTargetNoWeapon", &LootTuning::staminaTargetNoWeapon }, { "magickaTarget", &LootTuning::magickaTarget }, { "resistTarget", &LootTuning::resistTarget },
+            { "fortifyTarget", &LootTuning::fortifyTarget }, { "regenTarget", &LootTuning::regenTarget }, { "invisTarget", &LootTuning::invisTarget },
+            { "lockpickTarget", &LootTuning::lockpickTarget }, { "poisonTarget", &LootTuning::poisonTarget },
+        };
+        for (const I& k : kInts) if (a_name == k.name) {
+            if (a_v != std::floor(a_v) || std::fabs(a_v) > 1.0e6f) return false;
+            a_t.*(k.m) = static_cast<int>(a_v); return true; }
+        if (a_name == "consumableSellRoad") { if (a_v != 0.0f && a_v != 1.0f) return false; a_t.consumableSellRoad = a_v != 0.0f; return true; }
+        return false;
+    }
 
     struct LootVerdict {
         float       score = 0.0f;

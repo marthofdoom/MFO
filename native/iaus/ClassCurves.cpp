@@ -57,7 +57,7 @@ namespace MFO::Iaus::ClassCurves {
         // into a tree-OFF base row (the base cells are searched as their own cells). `sh` is the shared catalogue a curve override starts
         // from. EMPTY = no searched value: every row scores with the shared catalogue (bit-identical).
         void SeedSearchedValues([[maybe_unused]] Table& t) {
-            [[maybe_unused]] const Tuning& sh = DefaultTuning();
+            [[maybe_unused]] const Tuning& sh = ShippedTuning();   // the compiled catalogue, never the live (tuning-file) one
             // BATCH 3 (iaus-sim-v2.md 35; run b3-posture, 2026-11-13: tune_driver.py, sim flags --ranged-perks --point-blank --buff-dur real,
             // 64 train + 64 holdout seeds, fresh seeds 4001.. on builtin / LoreRim / Tuxborn / Vanilla), written on marth's rulings of 11-12.
             // ranged equip.crossover 0.45 -> 0.1575 (189 u): J +0.66 (se 0.18) train, holdout +0.80 (se 0.23), every many-seed gate passes;
@@ -127,13 +127,37 @@ namespace MFO::Iaus::ClassCurves {
         return p;
     }
 
+    namespace {
+        // THE LIVE STATE (iaus/TuningFile.cpp, MFO_Tuning/<class>.txt): a copy of the shipped table, the profiles built from it, and the shared
+        // weight overrides (MFO_Tuning/shared.txt `w.<family>.<cons>`, applied to EVERY profile last, as the sim's ProfileHook does). WORKER only:
+        // the swap (SetLiveRow / SetSharedWeights) runs at the top of Scheduler::Tick, between laps, and no Profile reference outlives a lap.
+        struct Live {
+            Table rows = Defaults();
+            std::vector<Profile::WeightOverride> shared;
+            std::array<Profile, kRows + 1> profiles{};   // [kRows] = the empty default
+            void Rebuild(std::size_t a_i) {
+                profiles[a_i] = a_i < kRows ? Build(rows[a_i]) : Profile{};
+                for (const auto& o : shared) MFO::Iaus::SetWeight(profiles[a_i], o.family, o.cons, o.w);
+            }
+            Live() { for (std::size_t i = 0; i <= kRows; ++i) Rebuild(i); }
+        };
+        Live& L() { static Live l; return l; }
+    }
+
     const Profile& ProfileFor(std::uint8_t a_classId) {
-        static const std::array<Profile, kRows + 1> profiles = [] {
-            std::array<Profile, kRows + 1> a{};
-            for (std::size_t i = 0; i < kRows; ++i) a[i] = Build(Defaults()[i]);
-            return a;   // [kRows] = the empty default
-        }();
-        return profiles[a_classId < kRows ? a_classId : kRows];
+        return L().profiles[a_classId < kRows ? a_classId : kRows];
+    }
+
+    bool SetLiveRow(std::size_t a_row, const Row& a_r) {
+        if (a_row >= kRows) return false;
+        L().rows[a_row] = a_r;
+        L().Rebuild(a_row);
+        return true;
+    }
+
+    void SetSharedWeights(const std::vector<Profile::WeightOverride>& a_w) {
+        L().shared = a_w;
+        for (std::size_t i = 0; i <= kRows; ++i) L().Rebuild(i);
     }
 
     void Apply(const Row& a_row, std::uint8_t a_classId, ClassGate& a_gate) {
@@ -155,11 +179,11 @@ namespace MFO::Iaus::ClassCurves {
         }
     }
 
-    void ApplyMastered(std::uint64_t a_mask, ClassGate& a_gate) { ApplyMastered(Defaults(), a_mask, a_gate); }
+    void ApplyMastered(std::uint64_t a_mask, ClassGate& a_gate) { ApplyMastered(L().rows, a_mask, a_gate); }
 
     void Apply(std::uint8_t a_classId, ClassGate& a_gate) {
         if (a_classId >= kRows) return;   // no class: the gate keeps the shared constants
-        Apply(Defaults()[a_classId], a_classId, a_gate);
+        Apply(L().rows[a_classId], a_classId, a_gate);
     }
 
     bool SetCurveParam(Row& a_row, Family a_f, Cons a_c, const Curve& a_shared, std::string_view a_param, float a_v) {

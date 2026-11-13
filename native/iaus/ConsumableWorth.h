@@ -17,6 +17,7 @@
 // WorthTable, NOT searched: the sim / oracle search sets them later (tools/iaus_sim is NOT edited by this change). Tuning::worth carries the table.
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 namespace MFO::Iaus {
 
@@ -60,6 +61,22 @@ namespace MFO::Iaus {
         // of the resource's maximum (an apple is not a heal).
         float foodMinGain = 0.05f;
     };
+
+    // The by-name edit surface of the table above (MFO_Tuning/potions.txt: `worth.<name>=<v>`; iaus/TuningFile.cpp). ONE list, next to the table: add a
+    // member above, add its row here. False on an unknown name or a non-finite value.
+    inline bool SetWorthKnob(WorthTable& a_t, std::string_view a_name, float a_v) {
+        struct Knob { const char* name; float WorthTable::* m; };
+        static constexpr Knob kKnobs[] = {
+            { "ratioCap", &WorthTable::ratioCap }, { "pressureFull", &WorthTable::pressureFull }, { "dangerSpan", &WorthTable::dangerSpan }, { "hurtWeight", &WorthTable::hurtWeight },
+            { "magickaWinLine", &WorthTable::magickaWinLine }, { "staminaWinLine", &WorthTable::staminaWinLine }, { "winNeed", &WorthTable::winNeed },
+            { "ttlFloorSec", &WorthTable::ttlFloorSec }, { "ttlSpanSec", &WorthTable::ttlSpanSec }, { "wealthFrac", &WorthTable::wealthFrac }, { "wealthFloor", &WorthTable::wealthFloor },
+            { "costWeight", &WorthTable::costWeight }, { "scarcityRate", &WorthTable::scarcityRate }, { "restoreCostScale", &WorthTable::restoreCostScale },
+            { "restoreUseWeight", &WorthTable::restoreUseWeight }, { "floor", &WorthTable::floor }, { "foodMinGain", &WorthTable::foodMinGain },
+        };
+        if (!std::isfinite(a_v)) return false;
+        for (const Knob& k : kKnobs) if (a_name == k.name) { a_t.*(k.m) = a_v; return true; }
+        return false;
+    }
 
     [[nodiscard]] inline float WorthUnit(float a_v) { return std::isfinite(a_v) ? std::clamp(a_v, 0.0f, 1.0f) : 0.0f; }
 
