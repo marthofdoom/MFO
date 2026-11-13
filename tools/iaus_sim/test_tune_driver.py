@@ -91,5 +91,45 @@ class Logistics(unittest.TestCase):
         self.assertEqual(T.logi_class("ammo", "base:take", "orc:leave")[0], "a")
 
 
+class GapSearchG1(unittest.TestCase):   # review G1 / G2 of 7e883a9a
+    def test_in_range_judged_even_when_a_far_value_wins(self):
+        T.CFG = dict(T.SMOKE, force=False)
+        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp())
+        T.SUMMARY["stages"] = {"classes": {"knight": {"live": [["attack.x.w", 1.0]]}}}
+        T.SUMMARY["open_decisions"] = []
+        judged = []
+        saved = {k: getattr(T, k) for k in ("all_knobs", "class_knobs", "final_curves", "jmany", "req", "paired", "judge", "widen", "log", "save_summary", "stage_joint", "gap_runs", "gap_merge")}
+        try:
+            T.all_knobs = lambda: ([], [])
+            T.class_knobs = lambda c, k: [("attack.x.w", "{c}:attack.x.w={v}", 1.0, [0.5, 2.0])]
+            T.final_curves = lambda: []
+            T.widen = lambda n, sh, tried, side: [4.0] if side == "up" else []
+            T.req = lambda w, c, cfg, curves, seeds: tuple(curves)
+            T.jmany = lambda reqs: list(reqs)
+            gain = {(): 0.0, ("knight:attack.x.w=0.75",): 0.5, ("knight:attack.x.w=1.5",): 0.1, ("knight:attack.x.w=4.0",): 0.9}
+            T.paired = lambda a, b: (gain[b] - gain[a], 0.05)
+            T.judge = lambda c, base, spec, forced=False: (judged.append(spec), {"accepted": True, "why": "ACCEPTED", "steps": {"holdout": [1, 0.1], "cross_world": {"mean/g3": [1, 0.1]}}})[1]
+            T.log = lambda m: None
+            T.save_summary = lambda: None
+            T.stage_joint = lambda: T.SUMMARY["stages"].__setitem__("joint", {"verdict": "PASS"})
+            T.gap_runs = lambda tasks: []
+            T.gap_merge = lambda parts: {"fights": [(1, 0, "nat", 1.0, 1.0)]}
+            st = {"clusters": {"knight": {"rows": [{"class": "a", "families": ["attack"], "dU_per_fight": 1.0}]}}, "search": {}, "kept": {}, "cells": {"knight/builtin": {"seeds": 1}}}
+            changed = T.gap_search(st, ["knight"])
+        finally:
+            for k, v in saved.items():
+                setattr(T, k, v)
+        self.assertEqual(judged, ["knight:attack.x.w=0.75", "knight:attack.x.w=4.0"])   # both groups judged, in-range first
+        self.assertEqual(st["kept"], {"knight": ["knight:attack.x.w=0.75"]})            # only the in-range one is written
+        self.assertEqual(changed, ["knight"])
+        self.assertTrue(any("past the range tried" in d["what"] for d in T.SUMMARY["open_decisions"]))
+
+    def test_gap_runs_before_the_table_readers(self):
+        o = T.DEFAULT_STAGES.split(",")
+        self.assertTrue(all(o.index("gap") < o.index(x) for x in ("floor", "rating", "recalib", "globals", "consts")))
+        f = T.FOR_CLASS_STAGES.split(",")
+        self.assertLess(f.index("gap"), f.index("floor"))
+
+
 if __name__ == "__main__":
     unittest.main()

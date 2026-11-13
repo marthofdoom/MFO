@@ -3,7 +3,7 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,logistics,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,joint,edge,gap,globals,consts,floor,rating,recalib,logistics,summary] [--jobs 12]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
 
@@ -67,6 +67,9 @@ import threading
 import time
 
 INF = float("inf")
+# G2 (review of 7e883a9a): gap runs before the stages that describe the final table, because its (a) search can move the table
+DEFAULT_STAGES = "prep,rejudge,classes,joint,edge,gap,globals,consts,floor,rating,recalib,logistics,summary"
+FOR_CLASS_STAGES = "prep,classes,joint,edge,gap,floor,summary"
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
 BASE = ["melee-off", "ranged-off", "mage-off"]
@@ -1017,7 +1020,7 @@ def stage_gap():
                              "rows": out, "generated": allp["gen"]}
         SUMMARY["stages"]["gap"] = st
         save_summary()
-    gap_search(st, order)
+    st["search_changed"] = gap_search(st, order)
     gap_ledger(st, order)
     SUMMARY["stages"]["gap"] = st
 
@@ -1054,26 +1057,32 @@ def gap_search(st, order):
             base = final_curves()
             res = jmany([req("builtin", c, "g3", base, train)] + [req("builtin", c, "g3", base + [tmpl.format(c=c, v=v)], train) for v in vals])
             cands = sorted(((paired(res[0], x) + (v,)) for x, v in zip(res[1:], vals)), key=lambda x: -x[0])
-            d, se, v = cands[0]
-            far = v in wide
-            row = {"knob": name, "shared": shared, "best": v, "far": far, "train": [round(d, 3), round(se, 3)], "sweep": [[x[2], round(x[0], 3), round(x[1], 3)] for x in sorted(cands, key=lambda x: x[2])], "accepted": False}
-            passed = d > 2.5 * se and d >= 0.15
-            if passed or (CFG["force"] and not srch["rows"]):
-                spec = tmpl.format(c=c, v=v)
-                j = judge(c, base, spec, forced=not passed)
-                row["steps"], row["why"] = j["steps"], j["why"]
-                ok = passed and j["accepted"]
-                if ok and far:
-                    row["why"] = "PASSES THE RULE PAST THE RANGE TRIED: reported, never shipped"
-                    open_decision("gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f: far from the shared curve, marth or the coordinator decides (summary.json stages.gap.search.%s)" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], c), cls=c)
-                elif ok:
-                    row["accepted"] = True
-                    st["kept"].setdefault(c, []).append(spec)
-                    changed.append(c)
-            else:
-                row["why"] = "train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J"
-            srch["rows"].append(row)
-            log("gap search %s %-30s %g -> %g train %+.2f (se %.2f) %s" % (c, name, shared, v, d, se, row["why"][:120]))
+            sweep = [[x[2], round(x[0], 3), round(x[1], 3)] for x in sorted(cands, key=lambda x: x[2])]
+            # G1 (review of 7e883a9a): the best IN-RANGE value and the best WIDENED value are judged separately, so a far value that wins
+            # on train never hides an in-range one that would pass (the in-range one may be written; the far one is only ever reported).
+            for far in (False, True):
+                grp = [x for x in cands if (x[2] in wide) == far]
+                if not grp:
+                    continue
+                d, se, v = grp[0]
+                row = {"knob": name, "shared": shared, "best": v, "far": far, "train": [round(d, 3), round(se, 3)], "sweep": sweep, "accepted": False}
+                passed = d > 2.5 * se and d >= 0.15
+                if passed or (CFG["force"] and not far and not srch["rows"]):
+                    spec = tmpl.format(c=c, v=v)
+                    j = judge(c, base, spec, forced=not passed)
+                    row["steps"], row["why"] = j["steps"], j["why"]
+                    ok = passed and j["accepted"]
+                    if ok and far:
+                        row["why"] = "PASSES THE RULE PAST THE RANGE TRIED: reported, never shipped"
+                        open_decision("gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f: far from the shared curve, marth or the coordinator decides (summary.json stages.gap.search.%s)" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], c), cls=c)
+                    elif ok:
+                        row["accepted"] = True
+                        st["kept"].setdefault(c, []).append(spec)
+                        changed.append(c)
+                else:
+                    row["why"] = "train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J"
+                srch["rows"].append(row)
+                log("gap search %s %-30s %g -> %g%s train %+.2f (se %.2f) %s" % (c, name, shared, v, " (far)" if far else "", d, se, row["why"][:120]))
             st["search"][c] = srch
             SUMMARY["stages"]["gap"] = st
             save_summary()
@@ -1091,6 +1100,7 @@ def gap_search(st, order):
                 g, se = mse([uo - ui for *_, ui, uo in fin["fights"]])
                 st["cells"]["%s/%s" % (c, w)]["after_search"] = [round(g, 3), round(se, 3)]
                 log("gap %s on %s after the (a) search: %+.2f (se %.2f)" % (c, w, g, se))
+    return sorted(set(changed))
 
 
 def gap_ledger(st, order):
@@ -1434,10 +1444,10 @@ def main():
     ap.add_argument("--bin", required=True, help="the built simulator (SIM_OUT of tools/iaus_sim/run.sh)")
     ap.add_argument("--out", required=True, help="the run's directory: cache.jsonl, progress.log, summary.json, summary.md")
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
-    ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,floor,gap,summary")
+    ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,gap,floor,summary")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
-    ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,gap,logistics,summary")
+    ap.add_argument("--stages", default=DEFAULT_STAGES)
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
     ap.add_argument("--jobs", type=int, default=12)
@@ -1446,7 +1456,7 @@ def main():
     if A.for_class:
         if A.classes or A.stages != ap.get_default("stages"):
             raise SystemExit("--for-class sets --classes and --stages itself: give neither")
-        A.classes, A.stages = A.for_class, "prep,classes,joint,edge,floor,gap,summary"
+        A.classes, A.stages = A.for_class, FOR_CLASS_STAGES
     A.worlds = A.worlds.split(",")
     A.bin = os.path.abspath(A.bin)
     CFG = SMOKE if A.smoke else FULL
@@ -1464,7 +1474,12 @@ def main():
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
     stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics}
-    for name in A.stages.split(","):
+    order = A.stages.split(",")
+    done = []
+    i = 0
+    while i < len(order):
+        name = order[i]
+        i += 1
         if name == "summary":
             continue
         SUMMARY["open_decisions"] = [d for d in SUMMARY["open_decisions"] if d.get("stage") != name or (scope() and d.get("cls") and d["cls"] not in scope())]   # a scoped re-run keeps the other classes' decisions
@@ -1474,6 +1489,14 @@ def main():
             d["stage"] = name
         save_summary()
         log("STAGE %s done" % name)
+        done.append(name)
+        if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
+            # G2 (review of 7e883a9a): the (a) search moved the table, so a stage that reads the final table and already ran in this
+            # order describes the table from before it: run it again (the default order puts gap first, so this is a custom order only).
+            again = [x for x in ("floor", "rating", "recalib") if x in done and x not in order[i:]]
+            if again:
+                log("gap search moved the table: %s run again after it" % ",".join(again))
+                order[i:i] = again
     save_summary()
     EMIT.shutdown(wait=True)
     log("DONE: %s/summary.md, %d open decision(s)" % (A.out, len(SUMMARY["open_decisions"])))
