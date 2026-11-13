@@ -594,8 +594,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--potion-calib") && i + 1 < argc) potCalibN = std::max(1, std::atoi(argv[++i]));   // the potion-worth measurement of --classes over --seeds (PotionCalib above)
         else if (!std::strcmp(argv[i], "--potion-worth") && i + 1 < argc) potWorthPath = argv[++i];                          // a potion-worth table for this world (potion_worth.py), or "legacy" = the older fixed rate
         else if (!std::strcmp(argv[i], "--posture-report")) g_postureReport = true;
-        else if (!std::strcmp(argv[i], "--ranged-perks")) g_rangedPerks = true;                                            // BATCH 3: a shot carries the bow skill's ModAttackDamage chain
-        else if (!std::strcmp(argv[i], "--point-blank")) g_pointBlank = true;                                              // BATCH 3: the hold under fCombatRangedAttackHoldTimeMinDistance
+        else if (!std::strcmp(argv[i], "--ranged-perks")) { if (i + 1 < argc && !std::strcmp(argv[i + 1], "off")) { g_rangedPerks = false; ++i; } else if (i + 1 < argc && !std::strcmp(argv[i + 1], "on")) ++i; }   // BATCH 3: the bow skill's ModAttackDamage chain (default ON; "off" = the lab before the fix)
+        else if (!std::strcmp(argv[i], "--point-blank")) g_pointBlank = true;
+        else if (!std::strcmp(argv[i], "--foe-styles")) g_foeStyles = true;                                                // PART C: foe backpedal from its CSTY Fallback Mult
+        else if (!std::strcmp(argv[i], "--space") && i + 1 < argc) g_spaceSize = std::max(0.0f, static_cast<float>(std::atof(argv[++i])));   // PART C: enclosed fights bounded (radius >= R)
+        else if (!std::strcmp(argv[i], "--space-force") && i + 1 < argc) { const char* v = argv[++i]; g_spaceForce = !std::strcmp(v, "enclosed") ? 1 : !std::strcmp(v, "open") ? 0 : -1; }                                              // BATCH 3: the hold under fCombatRangedAttackHoldTimeMinDistance
         else if (!std::strcmp(argv[i], "--draw-spoil") && i + 1 < argc) g_drawSpoil = std::clamp(static_cast<float>(std::atof(argv[++i])), 0.0f, 1.0f);   // BATCH 3 MODEL
         else if (!std::strcmp(argv[i], "--buff-dur") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "real")) g_buffDurReal = true; else if (std::strcmp(v, "lab")) { std::fprintf(stderr, "--buff-dur real|lab\n"); return 2; } }                                         // DIAGNOSTIC (batch 3, the archer study): POSTURE section + pr.* metrics
         else if (!std::strcmp(argv[i], "--guard-why")) g_guardWhy = true;                                                   // DIAGNOSTIC: the unguarded blows of GUARD UNDER TAUNT by cause, as ung2*% metrics (in --baseline output)

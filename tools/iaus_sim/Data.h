@@ -55,9 +55,13 @@ namespace Sim {
                                           // attacks fill the window (review of 0880667, F3), so the default waits for 8. The switch measures the other reading
     inline bool  g_noG3 = false;          // the disengage report's 'none' mode: card G3's hide run and flee are never asked for (every other road stands)
     // BATCH 3 ("sim decides the edge", iaus-sim-v2.md 35). Each switch OFF reproduces the earlier lab byte-identically.
-    inline bool  g_rangedPerks = false;   // --ranged-perks: a shot is multiplied by the ModAttackDamage perks of the BOW's skill (Archery), not the melee weapon's
+    inline bool  g_rangedPerks = true;    // a shot is multiplied by the ModAttackDamage perks of the BOW's skill (Archery), not the melee weapon's: a BUG FIX, the default
+                                          // (marth 11-12); --ranged-perks off is the lab before it, kept only for the byte-identical baseline proof
     inline bool  g_pointBlank = false;    // --point-blank: under fCombatRangedAttackHoldTimeMinDistance the bow hold is fCombatRangedAttackHoldTimeAbsoluteMin
     inline float g_drawSpoil = 0.0f;      // --draw-spoil P: a melee hit that lands on a drawing archer spoils the draw with chance P (MODEL, no engine source)
+    inline bool  g_foeStyles = false;     // --foe-styles: a melee foe backpedals after a blow with the chance its CSTY close-range Fallback Mult gives, then re-engages (Part C)
+    inline float g_spaceSize = 0.0f;      // --space R: an ENCLOSED fight (the encounter's cell is an interior) is bounded by a disc of radius >= R around its start (Part C); 0 = open everywhere
+    inline int   g_spaceForce = -1;       // --space-force enclosed|open: every fight that type (the sensitivity axis); -1 = by the encounter's cell
     inline bool  g_buffDurReal = false;   // --buff-dur real: a cast buff is up for its record duration (the lab used max(30 s, duration))
     inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships OFF; without it no Block candidate exists)
 

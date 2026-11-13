@@ -100,6 +100,7 @@ namespace Sim {
         std::uint32_t actTarget = 0; int actSpell = -1; bool actIaus = false; float actCost = 0; float swingDist = 0;
         double think = 0, retargetAt = 0;
         double blockUntil = 0, staggerUntil = 0, ctrlUntil = 0, tauntUntil = 0, fleeUntil = 0, downUntil = 0, frenzyUntil = 0, retreatUntil = 0;
+        double backUntil = 0;   // --foe-styles: a foe's backpedal after a blow
         std::uint32_t tauntBy = 0, lastAttacker = 0;
         double regenAt[3] = { 0, 0, 0 };
         std::vector<Effect> fx;
@@ -283,6 +284,7 @@ namespace Sim {
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
+        float arenaX = 0, arenaY = 0, arenaR = 0; bool arenaSet = false;   // --space: the enclosed fight's bounds (0 = open)
         float light = 0.6f; bool interior = false; double nextDetect = 0; Detect::Gmst dg;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
         std::uint64_t avSeed = 0;                  // ch.32: the per (foe, follower, 6 s window) draws come from a hash of this, never from R
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
@@ -629,6 +631,8 @@ namespace Sim {
             x.ranLast = speed >= 0.9f * x.spec->run;   // MODEL: combat movement is at the engine's RUN speed and a crouched run is still IsRunning (probe P1 logs it); a backpedal is not
             if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait (the crouched run)
             const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
+            if (arenaR > 0.0f) { const float ax = x.c.x - arenaX, ay = x.c.y - arenaY, ad = std::hypot(ax, ay);   // --space: a wall stops him (backpedal, kite, flee)
+                if (ad > arenaR) { x.c.x = arenaX + ax * arenaR / ad; x.c.y = arenaY + ay * arenaR / ad; } }
         }
         [[nodiscard]] Body* PickTarget(Body& x) {
             Body* best = nullptr; Body* second = nullptr; float bs = -1, bs2 = -1;
@@ -1015,6 +1019,8 @@ namespace Sim {
                 return;
             }
             if (!hasMelee) return;
+            // --foe-styles (Part C): a foe stepping back after its blow (CSCR Fallback Mult) moves away at the back-pedal speed, then re-engages
+            if (g_foeStyles && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); return; }
             // melee
             const float reach = Reach(x);
             if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash
@@ -1033,6 +1039,10 @@ namespace Sim {
             if (x.ctl == 0 && kind == Act::Power) ++t.engPower;
             StartSwing(x, *tg, kind, false);
             x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax) / std::max(0.25f, st.off);
+            // --foe-styles (Part C, MODEL mapping of a record value): after the blow a foe backpedals with chance = its combat style's close-range
+            // Fallback Mult (CSCR[1], read from the world extract: Load.h Style::fallback), for U(0.5, 1.5) s; an aggressive style (low fallback,
+            // high offensive mult: the think pause above) presses on. Followers keep their own package movement.
+            if (g_foeStyles && x.role == Role::Foe && R.P(std::clamp(st.fallback, 0.0f, 0.9f))) x.backUntil = x.actEnd + R.U(0.5f, 1.5f);
         }
         // Q-SIM-5 (marth 11-11: "why wouldnt a follower be able to move and do an action. I believe he should"): what his FEET do while
         // his hands are busy with a weapon swap, a potion or a cast. Every deliberate movement Brain() would make, and nothing else: no
@@ -1117,6 +1127,10 @@ namespace Sim {
               t.nearOnMeSec[nd < 256.0f ? 0 : nd < 540.0f ? 1 : 2] += TM::dt; }
         }
         void StepWorld() {
+            if (!arenaSet) { arenaSet = true;   // --space (Part C, MODEL): an enclosed fight is a disc around the start centroid, radius max(R, every start position + 50)
+                const bool enclosed = g_spaceForce >= 0 ? g_spaceForce == 1 : interior;
+                if (g_spaceSize > 0.0f && enclosed && !b.empty()) { float cx = 0, cy = 0; for (const Body& o : b) { cx += o.c.x; cy += o.c.y; } cx /= float(b.size()); cy /= float(b.size());
+                    float r = g_spaceSize; for (const Body& o : b) r = std::max(r, std::hypot(o.c.x - cx, o.c.y - cy) + 50.0f); arenaX = cx; arenaY = cy; arenaR = r; } }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }
