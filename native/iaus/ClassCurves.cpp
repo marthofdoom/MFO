@@ -58,6 +58,26 @@ namespace MFO::Iaus::ClassCurves {
         // from. EMPTY = no searched value: every row scores with the shared catalogue (bit-identical).
         void SeedSearchedValues([[maybe_unused]] Table& t) {
             [[maybe_unused]] const Tuning& sh = DefaultTuning();
+            // BATCH 3 (iaus-sim-v2.md 35; run b3-posture, 2026-11-13: tune_driver.py, sim flags --ranged-perks --point-blank --buff-dur real,
+            // 64 train + 64 holdout seeds, fresh seeds 4001.. on builtin / LoreRim / Tuxborn / Vanilla), written on marth's rulings of 11-12.
+            // ranged equip.crossover 0.45 -> 0.1575 (189 u): J +0.66 (se 0.18) train, holdout +0.80 (se 0.23), every many-seed gate passes;
+            //   cross-world FAILED (LoreRim -0.78, se 0.21). Written on marth's ruling "Playstyle band" (contact% <= 25 wins over cross-world).
+            SetCurveParam(t[1 /* ranged */], static_cast<Family>(8), static_cast<Cons>(35), sh.curve[35], "b", 0.1575f);
+            SetCurveParam(t[1 /* ranged */], static_cast<Family>(8), static_cast<Cons>(36), sh.curve[36], "b", 0.1575f);
+            // archer equip.crossover 0.45 -> 0.1125 (135 u): J +0.58 (se 0.15) train, holdout +0.36 (se 0.12), gates pass; cross-world FAILED
+            //   (builtin +0.51, LoreRim -0.59, Tuxborn -0.08, Vanilla -0.10). Written on marth's ruling "Playstyle band".
+            SetCurveParam(t[6 /* archer */], static_cast<Family>(8), static_cast<Cons>(35), sh.curve[35], "b", 0.1125f);
+            SetCurveParam(t[6 /* archer */], static_cast<Family>(8), static_cast<Cons>(36), sh.curve[36], "b", 0.1125f);
+            // evoker equip.crossover 0.45 -> 0.1125: J +0.88 (se 0.17) on 64 train seeds, holdout +0.59 (se 0.17), fresh-seed mean over
+            //   builtin/LoreRim/Tuxborn/Vanilla +1.10 (se 0.06), as shipped +0.21 (ACCEPTED; card read ruled "Yes, apply")
+            SetCurveParam(t[8 /* evoker */], static_cast<Family>(8), static_cast<Cons>(35), sh.curve[35], "b", 0.1125f);
+            SetCurveParam(t[8 /* evoker */], static_cast<Family>(8), static_cast<Cons>(36), sh.curve[36], "b", 0.1125f);
+            // evoker equip.trade.w 1 -> 2: J +0.23 (se 0.04) on 64 train seeds, holdout +0.14 (se 0.02), fresh-seed mean +0.22 (se 0.01)
+            //   (ACCEPTED; edge weight ruled "Yes, apply"; the edge stage found x3 / x4 no better)
+            SetWeight(t[8 /* evoker */], static_cast<Family>(8), static_cast<Cons>(77), 2.0f);
+            // healer equip.ranged_dist.w 1 -> 0.5: J +0.18 (se 0.06) on 64 train seeds, holdout +0.11 (se 0.07), fresh-seed mean +0.12 (se 0.03)
+            //   (ACCEPTED; ruled "Widen search first": x0.35 / x0.25 judged, none beats 0.5, train +0.03 se 0.04)
+            SetWeight(t[10 /* healer */], static_cast<Family>(8), static_cast<Cons>(35), 0.5f);
         }
 
         Table MakeDefaults() {

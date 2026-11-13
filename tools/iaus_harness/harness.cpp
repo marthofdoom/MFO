@@ -1533,14 +1533,22 @@ namespace {
         Check(d0 > 0.0f && a0 > 0.0f, "class curves: the probe candidates score above 0");
         // The shipped table after the sim batch (2026-11-12): the edge-number search found no curve override that passed every gate, so
         // every row still has none (the school shape is a Scalars value, checked below) and scores these probes bit-identically.
-        bool same = true, empty = true;
+        // Batch 3 (iaus-sim-v2.md 35) wrote POSTURE values into rows 1 (ranged), 6 (archer), 8 (evoker), 10 (healer): those rows carry only
+        // Family::Posture overrides / weights (the drink and attack probes below are untouched by them); every other row still has none.
+        bool same = true, empty = true, postureOnly = true;
         for (std::size_t i = 0; i < CC::kRows; ++i) {
             const Profile& p = CC::ProfileFor(static_cast<std::uint8_t>(i));
+            if (i == 1 || i == 6 || i == 8 || i == 10) {
+                postureOnly = postureOnly && !(p.curves.empty() && p.weights.empty());
+                for (const auto& o : p.curves) postureOnly = postureOnly && o.family == Family::Posture;
+                for (const auto& o : p.weights) postureOnly = postureOnly && o.family == Family::Posture;
+            } else
             empty = empty && p.curves.empty() && p.weights.empty();
             for (const float fw : p.family) empty = empty && fw == 1.0f;
             same = same && ScoreOne(drink, m, p, t, 3, 0.0f, nullptr) == d0 && ScoreOne(atk, m, p, t, 3, 0.0f, nullptr) == a0;
         }
-        Check(empty && same, "class curves: every shipped row has no curve override and scores the drink probes bit-identically to the default Profile");
+        Check(empty && same, "class curves: every shipped row but the batch 3 posture rows has no curve override, and every row scores the drink probes bit-identically to the default Profile");
+        Check(postureOnly, "class curves: the batch 3 rows (ranged, archer, evoker, healer) carry posture overrides only");
         Check(&CC::ProfileFor(0xFF) != nullptr && CC::ProfileFor(0xFF).curves.empty(), "class curves: no resolved class = the empty default Profile");
         Check(&CC::ProfileFor(3) == &CC::ProfileFor(3), "class curves: a class's Profile is cached (the same object every call)");
         ClassGate g; CC::Apply(3, g);
