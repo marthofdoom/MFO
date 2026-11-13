@@ -2409,6 +2409,15 @@ section is written for that agent. Nothing below is a tuning result: the run has
   hold (Harbinger's) is the largest cause on every world: if the floor ever has to rise, that is the lever, and it is not a
   table value.
 
+- **What a potion is worth on the built-in world** (`PotionWorth.h`, 9600 fights per class, kind and stock, chain of 8): a
+  health potion left in the bag is worth 1.2 to 2.1 J to the Knight, the Warrior, the Mercenary and the melee cells, 0.3 to
+  1.1 to the ranged cells and the Evoker and Mage, up to 0.5 to the Healer, Conjurer, Warlock and Thief. A stamina
+  potion is worth something only to the Warrior (0.3 to 0.6) and the Mercenary (0.1 to 0.4); to every other class, the Knight
+  included, its worth cannot be told from 0 (the Knight drinks 0.58 a fight and gains nothing measurable). A magicka potion:
+  the first is worth 0.2 to 0.5 to the four casting T2 classes, the rest nothing. The old rate was about 0.3 J for any potion:
+  health potions were underpriced several times over, which is why the class oracle drank at 72 to 94% health (32.11).
+  With a chain of 4 the Knight's first health potion is 1.2 J, with 16 it is 2.6: the chain length is a MODEL choice.
+
 ### 33.3 The rule (copied from `tune_driver.py`; the script is the authority)
 
 A number is ACCEPTED only when every line holds.
@@ -2454,7 +2463,7 @@ setsid nohup taskset -c 0-11 nice -n 10 python3 tools/iaus_sim/tune_driver.py \
 ```
 
 Do not poll it in a loop. `tail -3 $OUT/progress.log` shows the last finished step; the dashboard gets one results file
-per finished sweep. Expected length: hours (15 cells, every live knob of each, up to 150, 2 passes).
+per finished sweep. Expected length: hours (15 cells, every live knob of each (34 to about 190 of 396; cap 250), 2 passes).
 
 **Resume**: run the same command again. Everything finished is in `$OUT/cache.jsonl` and replays in seconds; never delete
 that file, never edit it. One stage only: add `--stages floor,rating,summary` (any subset, in order). One class only:
@@ -2498,6 +2507,15 @@ summaries are rewritten after every sweep, so a half-finished run can be read to
    of the catalogue's: report before writing (a sign the shared catalogue, not the class, is off).
 8. Anything the driver stops on (a missing input, a simulator error): report the last lines of `driver.out`. Do not edit
    the driver's rule or thresholds to get past it; a rule change is written down first and is Fable's.
+
+**The smoke run** (`--smoke`: 4 seeds, 4 knobs, first sweep pushed through every later step; its numbers are NOT results
+and its dashboard files are labelled so). Made on the final binary, Knight, built-in + LoreRim: every stage ran (prep with
+LoreRim's potion worth, rejudge, classes: 397 knobs, 85 live, 312 dead for the Knight, holdout, gates, cross-world, Knight
+floor; globals with the switching rate; one constant variant built and compared; floor with causes; rating; recalib;
+summary) in 72 s on 12 cores. Killed with SIGKILL 22 s in (mid liveness), the same command finished the run from 818 cached
+results; a third run of the finished directory replayed in under a second and wrote no second dashboard file. All 15 cells
+with the oracle-gap order (ranged-off, melee, mercenary, melee-off first): a second smoke run, about 6 minutes; live knobs per cell 34 (melee) to 191 (mage-off) of 396. To repeat it: the launch command with `--smoke --classes knight --worlds
+builtin,LoreRim` and another `--out`.
 
 ### 33.5 Writing accepted values into native (mechanical)
 

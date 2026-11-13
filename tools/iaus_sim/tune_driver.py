@@ -64,7 +64,7 @@ TIGHT = {"thief", "mercenary"}
 CACHE_DIR = os.path.expanduser("~/.cache/mfo-list-balance/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=150, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
+FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=6, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=1, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True)
@@ -195,11 +195,19 @@ def emit_run(classes, label, curves=(), sets=None):
     """ONE normal results file per finished sweep, so the dashboard shows the search moving (small on purpose)."""
     if not A.emit_runs:
         return
+    if A.smoke:
+        label = "SMOKE TEST, NOT A RESULT: " + label
     cmd = [A.bin, "--threads", "2", "--classes", classes, "--fights", "4", "--class-oracle", "2", "--gap-scenarios", "1", "--label", label]
     for c in curves:
         cmd += ["--curve", c]
     if sets:
         cmd += ["--set", sets]
+    if "emit:" + label in TEXT:
+        return   # a resumed run replays its sweeps from the cache: the dashboard file of a sweep is written once
+    with LOCK:
+        TEXT["emit:" + label] = ""
+        with open(os.path.join(A.out, "cache.jsonl"), "a") as f:
+            f.write(json.dumps({"t": "emit:" + label, "v": ""}) + "\n")
     EMIT.submit(subprocess.run, cmd, capture_output=True, text=True)   # one at a time (the run id is a timestamp), never in the search's way
 
 
