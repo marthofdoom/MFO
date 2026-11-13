@@ -79,7 +79,7 @@ namespace MFO::Logistics {
         // is actually wearing on every rated slot with its score. The worn-set
         // half of the key means an engine auto-equip that changes a slot is
         // logged the tick after it lands, even with the category unchanged.
-        void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref) {
+        void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref, bool a_clothing) {
             if (!a_follower) return;
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
             using AT   = RE::BGSBipedObjectForm::ArmorType;
@@ -97,7 +97,7 @@ namespace MFO::Logistics {
                                                          : a_follower->GetWornArmor(kRows[i].slot);
                 key = (key ^ (worn[i] ? worn[i]->GetFormID() : 0u)) * 1099511628211ull;
             }
-            key = (key ^ (a_pref.heavyClass ? 0x48u : 0x4Cu)) * 1099511628211ull;
+            key = (key ^ (a_clothing ? 0x43u : (a_pref.heavyClass ? 0x48u : 0x4Cu))) * 1099511628211ull;
             bool logIt = false;
             {
                 std::scoped_lock lk(g_styleMx);
@@ -123,7 +123,8 @@ namespace MFO::Logistics {
             }
             spdlog::info("[armor] {:08X} '{}': heavy={:.0f} light={:.0f} -> class {} votes h/l={}/{} bias h/l={:.2f}/{:.2f} | worn {}",
                          a_follower->GetFormID(), a_follower->GetName() ? a_follower->GetName() : "?",
-                         a_pref.heavySkill, a_pref.lightSkill, a_pref.heavyClass ? "HEAVY" : "LIGHT",
+                         a_pref.heavySkill, a_pref.lightSkill,
+                         a_clothing ? "CLOTHING (mage line: rated armor is never chosen)" : (a_pref.heavyClass ? "HEAVY" : "LIGHT"),
                          a_pref.heavyVotes, a_pref.lightVotes, a_pref.heavyBias, a_pref.lightBias, wornStr);
         }
 

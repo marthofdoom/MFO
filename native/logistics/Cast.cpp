@@ -6,6 +6,7 @@
 // cast DISPATCH itself (pacing via g_logiCastUntil, concentration direct
 // force, fire-and-forget) lives inside ServiceFollower in Logistics.cpp.
 #include "Logistics_internal.h"
+#include "classes/Classes.h"   // mage line: Classes::Active(), GetEquipped(), Get().line (UsesMageClothing)
 
 namespace MFO::Logistics {
 
@@ -113,9 +114,46 @@ namespace MFO::Logistics {
         // Deliberately NOT ResolveBaseClass (HMS-only, gambit table weighted). Equip /
         // clothing decisions only: casting, tome buying and ammo keep the gambit signal.
         // Worker-serial (logistics service); the dedupe map is mutex-guarded anyway.
+        //
+        // MAGE LINE WEARS CLOTHING (marth 2026-11-12: "Mage line wears clothing."): a follower whose effective
+        // class is on the mage line wears clothing, never light or heavy armor, DECIDED FROM THE CLASS ALONE --
+        // no dependence on HasCastGambit (an IAUS class table carries no cast gambit row, so the caster gate
+        // below used to drop every class-equipped mage to the skill-tie LIGHT armor path, field 2026-11-12:
+        // Jesper). The line is the class table's own field (Classes::Get(id).line == Line::Mage: Mage and the
+        // T2/T3/T4 mage-line classes), never a hand list; with no class equipped (classes OFF / add-on absent)
+        // it is the explicit Gambit-tab pick Mage (combatClassOverride 3). Every wear / buy / loot / sell /
+        // keep / declaration site reads UsesMageClothing, so they cannot disagree on the category.
+        static bool OnMageLine(const FollowerState& a_state, RE::Actor* a_follower) {
+            const RE::FormID fid = a_follower ? a_follower->GetFormID() : 0;
+            if (fid && Classes::Active()) {
+                const std::uint8_t eq = Classes::GetEquipped(fid);
+                if (eq < Classes::kClassCount)
+                    return Classes::Get(static_cast<Classes::Id>(eq)).line == Classes::Line::Mage;
+            }
+            return a_state.combatClassOverride == 3;
+        }
+
         bool UsesMageClothing(const FollowerState& a_state, RE::Actor* a_follower) {
-            if (!IsCasterFollower(a_state)) return false;
-            const std::uint8_t cls = EffectiveClassPick(a_follower ? a_follower->GetFormID() : 0, a_state);
+            static std::mutex s_mx;
+            static std::unordered_map<std::uint32_t, const char*> s_last;
+            const std::uint32_t id = a_follower ? a_follower->GetFormID() : 0;
+            const auto logWhy = [&](const char* why) {
+                bool log = false;
+                { std::lock_guard<std::mutex> lk(s_mx);
+                  auto& slot = s_last[id];
+                  if (slot != why) { slot = why; log = true; } }
+                if (log) spdlog::info("[gear] {:08X} clothing mode: {}", id, why);
+            };
+            if (OnMageLine(a_state, a_follower)) {
+                logWhy("class on the mage line -> clothing (decided by the class, no cast-gambit gate)");
+                return true;
+            }
+            if (!IsCasterFollower(a_state)) {
+                // Invisible before 2026-11-12: this is the gate that silently sent a class-equipped mage to armor.
+                logWhy("caster gate: magic loadout off or no enabled cast gambit, class not on the mage line -> armor path");
+                return false;
+            }
+            const std::uint8_t cls = EffectiveClassPick(id, a_state);
             bool mage = false;
             const char* why = "";
             if (cls == 3)      { mage = true;  why = "class Mage (explicit) -> mage clothing"; }
@@ -137,14 +175,7 @@ namespace MFO::Logistics {
                 why = mage ? "class Auto, magic skill leads -> mage clothing"
                            : "class Auto, melee/archery skill leads -> armor";
             }
-            static std::mutex s_mx;
-            static std::unordered_map<std::uint32_t, const char*> s_last;
-            const std::uint32_t id = a_follower ? a_follower->GetFormID() : 0;
-            bool log = false;
-            { std::lock_guard<std::mutex> lk(s_mx);
-              auto& slot = s_last[id];
-              if (slot != why) { slot = why; log = true; } }
-            if (log) spdlog::info("[gear] {:08X} clothing mode: {}", id, why);
+            logWhy(why);
             return mage;
         }
 

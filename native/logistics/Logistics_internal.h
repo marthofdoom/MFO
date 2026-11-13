@@ -803,7 +803,8 @@ namespace MFO::Logistics {
                   bool a_peek = false);
     ArmorPref ArmorPrefFor(RE::Actor* a_follower);
     float ArmorScore(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
-    void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref);
+    // a_clothing: the follower is on the mage line (UsesMageClothing) -- the [armor] line names the CLOTHING category.
+    void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref, bool a_clothing = false);
     bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,

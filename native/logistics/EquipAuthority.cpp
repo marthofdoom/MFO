@@ -125,6 +125,7 @@ namespace MFO::Logistics {
                 // Ranked by the SAME MEO-aware judge as loot/buy. The worn piece is
                 // itself a candidate, so a worn BEST never downgrades (no-op), and
                 // equipping a replacement auto-unequips the lesser -> never strips naked.
+                LogArmorClassIfChanged(a_follower, ArmorPrefFor(a_follower), /*a_clothing*/true);   // [armor] names CLOTHING
                 MageSlotBest bestSlot[6];
                 MageBestPerSlot(a_follower, a_state, bestSlot);
                 // First slot whose worn piece isn't the computed best -> one
