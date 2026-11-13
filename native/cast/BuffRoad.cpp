@@ -180,6 +180,13 @@ namespace MFO::Actuation {
         // re-cast until the magicka runs dry, holding LEFT. Erased when the claim ends. Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireSeen;
 
+        // BUFF, THEN BOW (marth 11-12): a fire-and-forget buff claim lets go of LEFT the moment its fire is observed (BuffRefreshGate), so
+        // the weapon is not denied for the claim's TTL. That release ends g_fireSeen's "fired but never landed" bound, so this keeps it: per
+        // follower, SK(recipient, spell) -> when the claim was released after its fire. BuffClaim declines a re-claim while the up-read still
+        // says No inside kHoldLastSeenCapMs of that release (the buff is not showing yet; never a second cast on a guess), and drops the
+        // entry on Yes or once the window has passed. Erased by ResetBuffFollower / ResetBuffRoad. Worker-serial (#4).
+        std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireReleased;
+
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
         void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
@@ -229,6 +236,7 @@ namespace MFO::Actuation {
         g_neverFired.clear();
         g_fired.clear();
         g_fireSeen.clear();
+        g_fireReleased.clear();
         std::scoped_lock lock(g_upMx);
         g_up.clear();
     }
@@ -237,6 +245,7 @@ namespace MFO::Actuation {
         g_neverFired.erase(a_follower);
         g_fired.erase(a_follower);
         g_fireSeen.erase(a_follower);
+        g_fireReleased.erase(a_follower);
     }
 
     bool BuffPlacementSpell(RE::SpellItem* a_spell) {
@@ -451,8 +460,20 @@ namespace MFO::Actuation {
             const Up up = BuffUp(recip, a_spell, placement);
             if (up == Up::Yes) {
                 g_fired[id].insert(sk);   // R3-1: it landed
+                if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end()) fr->second.erase(sk);
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                 return SelfCast::Declined;
+            }
+            // Released after its fire (BuffRefreshGate), the buff not showing yet: wait out the cap, never cast it a second time on a guess.
+            if (up == Up::No) {
+                if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end()) {
+                    if (const auto it = fr->second.find(sk); it != fr->second.end()) {
+                        const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - it->second).count();
+                        if (ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return SelfCast::Declined;
+                        fr->second.erase(it);
+                    }
+                }
             }
             if (up == Up::Blocked) {   // a summon the commanded-actor list refuses: not cast, not "fired"
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
@@ -555,6 +576,28 @@ namespace MFO::Actuation {
                                  "claim)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
                     EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                     return Outcome{ Result::NoOp, "instant buff cast fired: claim released", true };
+                }
+            }
+        }
+
+        // BUFF, THEN BOW (marth 11-12): a FIRE-AND-FORGET claim (not a concentration, not instant, which has its own release above) lets go
+        // of LEFT as soon as a fire is observed SINCE THIS CLAIM, not when the up-read says Yes or the claim's TTL runs out; the weapon can
+        // be equipped straight away. takeBack follows the landed release below (a fan series keeps the spell in hand for its next
+        // recipient). The up-read still decides "landed": BuffClaim declines a re-claim inside the never-landed cap (g_fireReleased).
+        if (!conc && !instant) {
+            if (const auto stamp = CastLockClaimStamp(id, kHandLeft, spellID);
+                stamp != std::chrono::steady_clock::time_point{}) {
+                const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - stamp).count();
+                if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                                                 static_cast<std::uint32_t>(ageMs + 1))) {
+                    g_fired[id].insert(sk);
+                    g_fireReleased[id][sk] = std::chrono::steady_clock::now();
+                    spdlog::info("[buff] {:08X} {} ({:08X}): fired -- left hand released at once (fire-and-forget; the weapon can be "
+                                 "equipped now){}", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
+                                 g_autoBuffSeries ? " (fan series: the spell stays in hand)" : "");
+                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);
+                    return Outcome{ Result::NoOp, "buff cast fired: left hand released", true };
                 }
             }
         }
