@@ -801,6 +801,20 @@ def widen(name, shared, tried, side):
             continue
         if all(abs(v - t) > 1e-6 for t in list(tried) + [shared] + out):
             out.append(v)
+    # Batch 3 (marth 11-13, "only if small"): a multiplicative knob whose tried values already reach x0.25 / x4 of the shared value got
+    # nothing past its edge here ("EDGE IS THE VALID LIMIT" for equip.crossover 0.1125 while its limit is 0.02). Keep only the values PAST
+    # the outermost tried on this side, and with none, step on from that outermost value (x0.7 / x0.5 down, x1.4 / x2 up), inside the range.
+    if mode == "mul" and shared != 0.0:
+        side_t = [t for t in tried if (t / shared > 1.0) == (side == "up")]
+        if side_t:
+            outer = max(side_t, key=lambda t: abs(math.log(abs(t / shared))) if t / shared > 0 else INF)
+            past = (lambda v: v / shared > outer / shared + 1e-9) if side == "up" else (lambda v: v / shared < outer / shared - 1e-9)
+            out = [v for v in out if past(v)]
+            if not out:
+                for k in ((1.4, 2.0) if side == "up" else (0.7, 0.5)):
+                    v = round(min(hi, max(lo, outer * k)), 5)
+                    if past(v) and all(abs(v - x) > 1e-6 for x in out):
+                        out.append(v)
     return out
 
 

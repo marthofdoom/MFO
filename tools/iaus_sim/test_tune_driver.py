@@ -37,6 +37,11 @@ class Edge(unittest.TestCase):
         self.assertEqual(T.widen("a.w", 1.0, [0.5, 0.75, 1.5, 2.0], "up"), [3.0, 4.0])
         self.assertEqual(T.widen("n.a", -8.0, [-4.0], "down"), [-2.8, -2.0])
 
+    def test_widen_past_a_tried_x025(self):   # batch 3: the crossover tried down to x0.25 still widens (limit 0.02)
+        T.KNOB_META["c.x"] = ("mul", 0.02, 1.0, False)
+        self.assertEqual(T.widen("c.x", 0.45, [0.1125, 0.1575, 0.225, 0.3375, 0.5985], "down"), [0.07875, 0.05625])
+        self.assertEqual(T.widen("a.w", 1.0, [0.5, 0.75, 1.5, 2.0], "down"), [0.35, 0.25])   # unchanged when x0.35 / x0.25 lie past the edge
+
     def test_widen_stays_in_range(self):
         self.assertEqual(T.widen("p.y1", 0.9, [0.6, 0.75, 1.0], "up"), [])            # the edge is the valid limit
         self.assertEqual(T.widen("lv.lo", 0.5, [0.25, 0.375, 0.665, 0.835], "up"), [1.0])
