@@ -789,10 +789,17 @@ per concern:
     spell switch (pacing is per ACTOR) and `SelfCastEndActor(..., a_keepLiveBuff)` skips the dispel of a stale / switch release while the lock stands (before
     this every one-shot buff was dispelled ~2 s after its cast, the Candlelight recast beat). `[buff-readback]` = the ~1 s passive read-back, once per spell per
     fight. `Actuation::BuffServedAtAlly` (`cast/BuffRoad.cpp`) feeds `SpellEntry::allyRoad` (Candidates, per lap) so `Generate` offers a Self-delivery BUFF to an
-    ally only where the claim road serves it (`IausSource` then fires `cast_target`); `SpellBook` skips 0xFF dynamic forms (Harbinger's taught proxy).
+    ally only where a proxy road serves it (`IausSource` then fires `cast_target`); `SpellBook` skips 0xFF dynamic forms (Harbinger's taught proxy).
+    **PROXIED VERSIONS ARE CANDIDATES (1dfcuabd309, 2026-11-13, NOT field-run):** the proxy itself never enters the book, but the SOURCE spell's proxied
+    version does: `allyRoad` is also filled for a Self-delivery HEAL by `Actuation::HealServedAtAlly` (`cast/HealRoad.cpp`: true when
+    `ComposedCast::HealClaimRoadOpen`, the pure read of `ChooseHealRoad`'s gates = Harbinger's heal-claim delivery-flip proxy, or for a CONCENTRATION heal
+    where MFO's `ConcProxy` can be minted), and `BuffServedAtAlly` answers true for a CONCENTRATION Self buff (CastOn's concentration fork: Harbinger's
+    concentration claim / `ConcProxy`). `Generate` reads `allyRoad` for heals and buffs alike; `IausSource` fires a CastHeal / CastBuff at another actor as
+    `cast_target` (the source FormID). A fire-and-forget Self heal off the claim road stays himself-only (RestorationCastDirect casts it unflipped).
     **What breaks:** recording a lock for anything but a landed non-concentration Buff (the lock also gates the dispel skip); reading it from a path that holds
-    another lock (it is a leaf); dropping the clear on combat end (a 600 s Candlelight would stay locked into the next fight); making `Generate` read `allyRoad`
-    for a heal (a Self heal stays himself-only).
+    another lock (it is a leaf); dropping the clear on combat end (a 600 s Candlelight would stay locked into the next fight); letting `HealClaimRoadOpen`
+    drift from `ChooseHealRoad`'s gates (a candidate the road then answers Direct for: an FF Self heal would land on the caster); answering `allyRoad` true
+    for an FF Self heal off the claim road; keying a candidate to a 0xFF proxy form (renumbers per save, CastOn refuses it).
   - `cast/DirectTarget.cpp` (387) = the ON-TARGET stream: `CastTargetDirect` (`:30`),
     `TargetCastReconcile` (`:297`), `TargetStreamLive` (`:382`).
   - `cast/CanAct.cpp` (236) = the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply` (`:103`),
