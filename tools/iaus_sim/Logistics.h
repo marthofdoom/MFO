@@ -31,7 +31,8 @@
 //   IAUS     = not built (the post-T2 loot scorer). --logistics refuses `--logi-policy iaus` until it exists.
 // VALUE (MODEL, every term an open decision for marth, 34.6): J of the potions in the bag at the episode's end, from the COMBAT world's
 // potion worth for his class (PotionWorth.h: the k-th potion's worth over a chain of fights) + kGoldJ x gold-equivalent, where
-// gold-equivalent = purse + the BUY price of his worn gear and of his arrows up to the keep target (what it would cost to have them),
+// gold-equivalent = purse + the BUY price of his worn gear and of his arrows up to the keep target (what it would cost to have them;
+// arrows are a need only for a ranged class that carries a bow, marth 2026-11-12; otherwise they are worth their sale gold),
 // and kGoldJ = J per gold where gold buys the most J: max over potion kinds of worth(first potion) / buy price of that kind's cheapest
 // restore potion. Unsold junk at the end is worth 0. Everything the fixture item table says is a Skyrim.esm record value read from the
 // Vanilla extract (value, damage, armor rating, magnitude) unless it is marked MODEL.
@@ -285,7 +286,11 @@ namespace Sim::Logi {
         if (w.worth) { const int n[3] = { v.Count(Kind::PotionH), v.Count(Kind::PotionM), v.Count(Kind::PotionS) };
             for (int t = 0; t < 3; ++t) for (int k = 0; k < std::min(n[t], kPotWorthMax); ++k) j += w.worth->m[static_cast<std::size_t>(t)][static_cast<std::size_t>(k)]; }
         double g = v.purse; for (int it : { v.bestWeapon, v.bestBow, v.body, v.head }) if (it >= 0) g += BuyUnit(Items()[static_cast<std::size_t>(it)], q);
-        if (w.Bow()) { int left = kAmmoKeepFloor; std::vector<std::pair<float, int>> am; for (const Stack& x : v.s) if (Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo) am.push_back({ Items()[static_cast<std::size_t>(x.item)].power, x.item });
+        // AMMO'S WORTH (marth 2026-11-12, the ammo need): a NEED only when his class uses ranged AND he carries a launcher of the kind
+        // (a bow for arrows): then up to the keep target at the buy price; otherwise ammo is worth its sale gold only. The BASELINE's
+        // take rules are native's (no bow gate); this is the value both arms are scored by.
+        if (!(w.Bow() && v.Count(Kind::Bow) > 0)) { for (const Stack& x : v.s) if (Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo) g += x.count * SellUnit(Items()[static_cast<std::size_t>(x.item)], q); }
+        else { int left = kAmmoKeepFloor; std::vector<std::pair<float, int>> am; for (const Stack& x : v.s) if (Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo) am.push_back({ Items()[static_cast<std::size_t>(x.item)].power, x.item });
             std::sort(am.rbegin(), am.rend()); for (auto& [pw, it] : am) { (void)pw; for (const Stack& x : v.s) if (x.item == it) { const int n = std::min(left, x.count); g += n * BuyUnit(Items()[static_cast<std::size_t>(it)], q); left -= n; } } }
         return j + GoldJ(w) * g;
     }
