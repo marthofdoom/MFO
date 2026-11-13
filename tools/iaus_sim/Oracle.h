@@ -33,6 +33,14 @@ namespace Sim {
         for (int t = 0; t < 3; ++t) for (int k = left[t] + 1; k <= c.pot0[t]; ++k) cost += c.worth->m[static_cast<std::size_t>(t)][static_cast<std::size_t>(std::min(k, kPotWorthMax) - 1)];
         return cost;
     }
+    // --consumables (tune 2.11.1): a buff potion or a food used up is charged its gold value at J PER GOLD where gold buys the most J: the
+    // first restore potion's worth over the buy price of the cheapest restore potion of that kind (RestoreHealth01 17 g, RestoreMagicka01 /
+    // RestoreStamina01 20 g at Speech 15: x2.25, Logistics.h QuoteFor). The SAME number as Logistics.h GoldJ (a LOGI-CHECK pins them equal).
+    inline double GoldJOf(const PotWorth* w) {
+        if (!w) return 0.0; const double buy[3] = { double(std::lround(17 * 2.25f)), double(std::lround(20 * 2.25f)), double(std::lround(20 * 2.25f)) }; double best = 0;
+        for (int t = 0; t < 3; ++t) best = std::max(best, double(w->m[static_cast<std::size_t>(t)][0]) / buy[t]);
+        return best;
+    }
     inline double Utility(const Fight& F, bool chargePotions = true) {
         double foeHp = 0; for (const Body& x : F.b) if (x.role == Role::Foe && x.alive && x.airUntil >= 0) foeHp += std::max(0.0f, x.c.hp);
         for (const Spawn& s : F.late) foeHp += s.spec->hp;
@@ -44,7 +52,7 @@ namespace Sim {
         for (const Ctl& c : F.ctl) { const Body& x = F.b[static_cast<std::size_t>(c.body)];
             partyHp += Fight::Up(x) ? x.c.hp / std::max(1.0f, x.c.hpMax) : 0.0;
             const int pots = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
-            const double mpf = x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0; mp += mpf; if (chargePotions) cost += PotionCost(c);
+            const double mpf = x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0; mp += mpf; if (chargePotions) { cost += PotionCost(c); if (g_consumables) cost += GoldJOf(c.worth) * c.consumedGold; }
             res += 0.5 * mpf + 0.5 * (c.potions0 > 0 ? double(pots) / c.potions0 : 1.0); }
         const double resTerm = !g_utilResources ? 5.0 : g_potLegacy ? 5.0 * res / nf : 2.5 * mp / nf + 2.5 - cost;
         return 50.0 * removed + (win ? 15.0 * (1.0 - std::min(1.0, F.now / F.maxSec)) : 0.0) + 15.0 * pl.c.hp / std::max(1.0f, pl.c.hpMax)

@@ -52,6 +52,7 @@ namespace Sim {
     inline int g_learnReach = 2;
     // MODEL, UNPROVEN: a calmed foe that the party damages fights again (the common in-game reading: one free blow, then he is
     // back). false = the first model (a Calm holds for its whole duration whatever happens), kept for comparison (--calm-holds).
+    inline bool g_consumables = false;   // --consumables on (tune 2.11.1, Setup.h FillConsumables): gold, item values, buff potions and food in every IAUS kit
     inline bool g_calmBreaks = true;
     // FOLLOWER DEATH (marth 2026-11-10: "Lorerim by default has follower death. I personally have mine turned off"). false (the
     // default, his setup and the one the field calibration comes from): a follower at 0 health goes down and stands up after
@@ -85,7 +86,9 @@ namespace Sim {
     enum class Act : std::uint8_t { None = 0, Swing, Power, Bash, Shoot, Cast, Drink, Swap, Taunt, Block };
     enum class Role : std::uint8_t { Player = 0, Follower, Summon, Foe };
 
-    struct Effect { int kind = 0; float v = 0; int av = -1; double until = 0; std::uint32_t src = 0; };   // 0 dot, 1 hot, 2 armor, 3 resist, 4 magicka per second, 5 stamina per second (a restore-over-time potion)
+    struct Effect { int kind = 0; float v = 0; int av = -1; double until = 0; std::uint32_t src = 0; int buff = -1; };   // 0 dot, 1 hot, 2 armor, 3 resist, 4 magicka per second, 5 stamina per second (a restore-over-time potion),
+    // 6 fortify a pool (av 0 health, 1 magicka, 2 stamina: max and current up by v while it lasts), 7 fortify weapon damage (v percent). buff >= 0: a
+    // buff POTION's effect (--consumables, iaus/PotionBuff.h BuffKind), so Kit::buff[kind].active follows it.
     struct Shot { double at = 0; std::uint32_t src = 0, tgt = 0; float dmg = 0; int spell = -1; bool power = false, fromIaus = false; float x = 0, y = 0; float mag = 1; bool corrected = false, dodged = false; };
 
     struct Body {
@@ -247,6 +250,10 @@ namespace Sim {
         std::uint32_t steer = 0;                   // act.attack's target for the engine AI
         std::uint8_t rank = 3; std::uint64_t seed = 0; double window = 1.5;
         float potH = 100, potM = 100, potS = 100, potDur[3] = { 0, 0, 0 };   // potDur > 0: pot* per second for that long (FollowerBuild::potDur)
+        // --consumables (tune 2.11.1): the gold value of every buff potion and food he used up in this fight (Utility charges it at J per gold), and
+        // the uses per kind (the logistics world's use counts). Per buff kind: the potion's magnitude and duration (the kit fill, Setup.h).
+        double consumedGold = 0; std::array<long, MFO::Iaus::kBuffKinds> buffUses{}; std::array<long, 3> foodUses{};
+        std::array<float, MFO::Iaus::kBuffKinds> buffMag{}, buffDur{};
         double lowSince = -1; bool lowHealed = false, lowHadCand = false;
         double pressureSince = -1;                 // the player came under attack at (peel latency)
         double commitUntil = 0;                    // oracle rollouts: he keeps the option he was given until then
@@ -323,6 +330,8 @@ namespace Sim {
         [[nodiscard]] bool Busy(const Body& x) const { return now < x.actEnd || now < x.staggerUntil || now < x.ctrlUntil || now < x.downUntil; }
         [[nodiscard]] bool Controlled(const Body& x) const { return now < x.ctrlUntil || now < x.fleeUntil; }
         [[nodiscard]] float ArmorOf(const Body& x) const { return x.spec->ar + x.armorBuff; }
+        // --consumables: a fortify-skill / fortify-attack potion raises his weapon damage by its percent while it lasts (1 = none, exactly).
+        [[nodiscard]] static float FortifyDmg(const Body& x) { float p = 0.0f; for (const Effect& e : x.fx) if (e.kind == 7) p += e.v; return p > 0.0f ? 1.0f + p / 100.0f : 1.0f; }
         [[nodiscard]] float ResistOf(const Body& x, int av) const {
             float r = x.spec->Resist(av);
             for (const Effect& e : x.fx) if (e.kind == 3 && e.av == av && e.until > now) r += e.v;
@@ -762,11 +771,11 @@ namespace Sim {
                 if (whiff && x.ctl == 0 && kind == Act::Power && x.actIaus) ++t.powerWhiffs;
                 if (!tg || !Up(*tg) || whiff) return;   // whiff
                 if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
-                Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power), kind == Act::Power, false, x.actIaus);
+                Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power) * FortifyDmg(x), kind == Act::Power, false, x.actIaus);
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
                 --x.arrows; if (x.ctl == 0) ++t.arrowsShot;
-                float shotDmg = WeaponDamage(D->rules, *x.spec, x.spec->ranged, false);
+                float shotDmg = WeaponDamage(D->rules, *x.spec, x.spec->ranged, false) * FortifyDmg(x);
                 // --ranged-perks (FACT: a ModAttackDamage entry is conditioned on the weapon it fires for, Overdraw on a bow, Armsman on a
                 // one-hander; the lab applied the MELEE weapon's chain to every shot): the shot carries the bow skill's chain instead.
                 if (g_rangedPerks && x.spec->rangedAtkMult > 0.0f && x.spec->atkMult > 0.0f) shotDmg = shotDmg / x.spec->atkMult * x.spec->rangedAtkMult;
@@ -781,6 +790,19 @@ namespace Sim {
                 shots.push_back(sh);
             } else if (kind == Act::Cast) {
                 ReleaseCast(x, tg);
+            } else if (kind == Act::Drink && x.ctl >= 0 && x.actSpell >= 10) {   // --consumables: a buff potion (10 + kind) or a restore food (20 + family)
+                Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
+                if (x.actSpell >= 20) { const int fam = x.actSpell - 20; const float m = c.book.kit.restoreFood[static_cast<std::size_t>(fam)].magnitude;
+                    if (fam == 0) Heal(x, m, nullptr, false); else if (fam == 1) x.c.sp = std::min(x.c.spMax, x.c.sp + m); else x.c.mp = std::min(x.c.mpMax, x.c.mp + m); }
+                else { const int bk = x.actSpell - 10; const auto K = static_cast<MFO::Iaus::BuffKind>(bk); const float m = c.buffMag[static_cast<std::size_t>(bk)];
+                    const double until = now + static_cast<double>(std::max(1.0f, c.buffDur[static_cast<std::size_t>(bk)]));
+                    if (MFO::Iaus::IsResist(K)) x.fx.push_back({ 3, m, MFO::Iaus::ResistAvOf(K), until, x.c.id, bk });
+                    else if (K == MFO::Iaus::BuffKind::FortifyHealth || K == MFO::Iaus::BuffKind::FortifyMagicka || K == MFO::Iaus::BuffKind::FortifyStamina) {
+                        const int pool = K == MFO::Iaus::BuffKind::FortifyHealth ? 0 : K == MFO::Iaus::BuffKind::FortifyMagicka ? 1 : 2;
+                        float& mx = pool == 0 ? x.c.hpMax : pool == 1 ? x.c.mpMax : x.c.spMax; float& cur = pool == 0 ? x.c.hp : pool == 1 ? x.c.mp : x.c.sp;
+                        mx += m; cur += m; x.fx.push_back({ 6, m, pool, until, x.c.id, bk }); }
+                    else if (K == MFO::Iaus::BuffKind::FortifySkill || K == MFO::Iaus::BuffKind::FortifyAttack) x.fx.push_back({ 7, m, -1, until, x.c.id, bk });
+                    c.book.kit.buff[static_cast<std::size_t>(bk)].active = true; }
             } else if (kind == Act::Drink && x.ctl >= 0) {
                 const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
                 // A potion with a duration restores its magnitude PER SECOND for that long (the record's ValueModifier effect); without one, at once.
@@ -1091,7 +1113,11 @@ namespace Sim {
             x.recentDmg *= 1.0f - TM::dt / 2.0f; x.armorBuff = 0;
             for (std::size_t i = 0; i < x.fx.size();) {
                 Effect& e = x.fx[i];
-                if (e.until <= now) { x.fx[i] = x.fx.back(); x.fx.pop_back(); continue; }
+                if (e.until <= now) {
+                    if (e.kind == 6) { float& mx = e.av == 0 ? x.c.hpMax : e.av == 1 ? x.c.mpMax : x.c.spMax; float& cur = e.av == 0 ? x.c.hp : e.av == 1 ? x.c.mp : x.c.sp; mx -= e.v; cur = std::min(cur, mx); }
+                    if (e.buff >= 0 && x.ctl >= 0) { const int bk = e.buff; bool still = false; for (const Effect& o : x.fx) still = still || (&o != &e && o.buff == bk && o.until > now);
+                        ctl[static_cast<std::size_t>(x.ctl)].book.kit.buff[static_cast<std::size_t>(bk)].active = still; }
+                    x.fx[i] = x.fx.back(); x.fx.pop_back(); continue; }
                 if (e.kind == 0) Hurt(x, e.v * TM::dt, Find(e.src)); else if (e.kind == 1) Heal(x, e.v * TM::dt, nullptr, false); else if (e.kind == 4) x.c.mp = std::min(x.c.mpMax, x.c.mp + e.v * TM::dt); else if (e.kind == 5) x.c.sp = std::min(x.c.spMax, x.c.sp + e.v * TM::dt); else if (e.kind == 2) x.armorBuff = std::max(x.armorBuff, e.v);
                 ++i;
             }

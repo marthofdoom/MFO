@@ -219,6 +219,43 @@ namespace Sim {
 
     inline float StrengthRatio(const Data& D, const Fight& F);
 
+    // --consumables (tune 2.11.1): the worth-the-gold rule's inputs (iaus/ConsumableWorth.h) in his kit. Drawn from a stream of its own (the
+    // fight's seed and his slot), so a fight is the same fight with the switch on or off, draw for draw; off = main's kit.
+    //   gold        MODEL: 50..1500 carried.
+    //   values      the engine's ALCH auto-calc price: sum over effects of baseCost x mag^1.1 x (dur / 10)^1.1 (dur 0: x1); baseCost and the
+    //               fortify magnitudes / durations are the Vanilla extract's (FortifyHealth01..03 0.35 / 20..60 / 60 s, FortifyMagicka 0.3 / 60 s,
+    //               FortifyStamina 0.3 / 300 s, RestoreHealth 0.5, RestoreMagicka / Stamina 0.6; the formula gives RestoreHealth01 its 17 g).
+    //               MODEL: the resist and fortify-skill potions (not in the extract): 20..40 % for 60 s at baseCost 0.5.
+    //   buff stock  MODEL: each kind he can use with p 0.6, 1..2 potions; one resist element at random; fortify skill of his weapon line.
+    //   food        MODEL: a health food (FoodCheeseWheel01A: 15 health, extract) and a stamina food (FoodVenisonStew: 15 stamina, extract),
+    //               each with p 0.5, 1..3, value 10 / 8 g (no extract has food values).
+    inline float AutoCalcValue(float bc, float mag, float dur) {
+        return std::round(bc * std::pow(std::max(mag, 1.0f), 1.1f) * (dur > 0.0f ? std::pow(dur / 10.0f, 1.1f) : 1.0f));
+    }
+    inline void FillConsumables(Ctl& c, std::uint64_t seed) {
+        using MFO::Iaus::BuffKind; Rng C; C.g.seed(seed * 0x9E3779B97F4A7C15ULL + 0x5C0A5ULL + static_cast<std::uint64_t>(c.body) * 7919ULL);
+        Kit& k = c.book.kit; k.gold = static_cast<float>(C.I(50, 1500));
+        const float bc[3] = { 0.5f, 0.6f, 0.6f }, mag[3] = { c.potH, c.potS, c.potM };   // families: 0 health, 1 stamina, 2 magicka
+        for (int f = 0; f < 3; ++f) { k.restoreBestMag[static_cast<std::size_t>(f)] = mag[f]; k.restoreValue[static_cast<std::size_t>(f)] = AutoCalcValue(bc[f], mag[f], c.potDur[f == 0 ? 0 : f == 1 ? 2 : 1]); }
+        const bool weapon = c.fam != Cls::Mage, caster = c.fam == Cls::Mage || c.gate.spellsOnClass;
+        auto give = [&](BuffKind kind, float m, float dur, float bcost, int av) {
+            const auto i = static_cast<std::size_t>(kind); const bool has = C.P(0.6f); const int n = C.I(1, 2); if (!has) return;
+            MFO::Iaus::PotionBuff& p = k.buff[i]; p.form = 0xFB000000u + static_cast<std::uint32_t>(i); p.count = n; p.magnitude = m; p.duration = dur; p.av = av;
+            p.value = AutoCalcValue(bcost, m, dur); p.kindMask = 1u << i; p.restoreMask = 0; p.name = std::string(MFO::Iaus::BuffName(kind));
+            c.buffMag[i] = m; c.buffDur[i] = dur; };
+        const float tier[3] = { 20.0f, 40.0f, 60.0f };
+        give(BuffKind::FortifyHealth, tier[C.I(0, 2)], 60.0f, 0.35f, 24);
+        if (weapon) give(BuffKind::FortifyStamina, tier[C.I(0, 2)], 300.0f, 0.3f, 26);
+        if (caster) give(BuffKind::FortifyMagicka, tier[C.I(0, 2)], 60.0f, 0.3f, 25);
+        if (weapon) give(BuffKind::FortifySkill, 20.0f + 10.0f * float(C.I(0, 2)), 60.0f, 0.5f, c.fam == Cls::Ranged ? 8 : 6);
+        { const BuffKind el[3] = { BuffKind::ResistFire, BuffKind::ResistFrost, BuffKind::ResistShock }; const BuffKind e = el[C.I(0, 2)];
+          give(e, 20.0f + 10.0f * float(C.I(0, 2)), 60.0f, 0.5f, MFO::Iaus::ResistAvOf(e)); }
+        auto food = [&](int f, std::uint32_t form, float m, float value, const char* name) {
+            const bool has = C.P(0.5f); const int n = C.I(1, 3); if (!has) return;
+            MFO::Iaus::PotionBuff& p = k.restoreFood[static_cast<std::size_t>(f)]; p.form = form; p.count = n; p.magnitude = m; p.value = value; p.restoreMask = static_cast<std::uint8_t>(1u << f); p.kindMask = 0; p.name = name; };
+        food(0, 0xFC000001u, 15.0f, 10.0f, "FoodCheeseWheel01A");
+        food(1, 0xFC000002u, 15.0f, 8.0f, "FoodVenisonStew");
+    }
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
         Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
@@ -257,6 +294,7 @@ namespace Sim {
         { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; s0.c.hp *= fs.subjectHp; s0.c.mp *= fs.subjectMp; if (fs.subjectPotionsH >= 0) F.ctl[0].book.kit.potionsHealth = fs.subjectPotionsH;
           if (fs.subjectPotionsM >= 0) F.ctl[0].book.kit.potionsMagicka = fs.subjectPotionsM; if (fs.subjectPotionsS >= 0) F.ctl[0].book.kit.potionsStamina = fs.subjectPotionsS; if (fs.subjectArrows >= 0 && s0.arrows > 0) s0.arrows = fs.subjectArrows; }
         { Kit& k0 = F.ctl[0].book.kit; if (g_forcePot[0] >= 0) k0.potionsHealth = g_forcePot[0]; if (g_forcePot[1] >= 0) k0.potionsMagicka = g_forcePot[1]; if (g_forcePot[2] >= 0) k0.potionsStamina = g_forcePot[2]; }   // --potion-calib
+        if (g_consumables) for (Ctl& c : F.ctl) FillConsumables(c, fs.seed);
         for (Ctl& c : F.ctl) { c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina; c.pot0[0] = c.book.kit.potionsHealth; c.pot0[1] = c.book.kit.potionsMagicka; c.pot0[2] = c.book.kit.potionsStamina; }
         F.interior = fs.interior;
         if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)

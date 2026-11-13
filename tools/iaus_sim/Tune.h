@@ -12,6 +12,7 @@
 //       coordinate search: each parameter in turn is tried at x0.5, x0.75, x1.33, x2 of its value (and +-0.15 for a
 //       value near 0), the best mean utility is kept. Objective = mean U over the scenarios and the natural bracket.
 #include "iaus_sim/Setup.h"
+#include "iaus/LootNeed.h"
 
 #include <cstring>
 
@@ -21,6 +22,7 @@ namespace Sim {
         Tuning t = DefaultTuning();
         std::vector<Profile::WeightOverride> weights;
         std::map<std::string, float> pkg;   // st.<stance>.<field> / pk.power / pk.leash: the class package under search
+        MFO::Iaus::LootTuning loot{};       // loot.<field>: the IAUS loot scorer's table (iaus/LootNeed.h), read by the logistics world's IAUS arm
     };
     inline TuneState& Tune() { static TuneState s; return s; }
     // Every scalar of iaus/Core.h Tuning a search may move, by name (sim batch: the edge-number search reaches the cooldowns, holds and
@@ -35,6 +37,32 @@ namespace Sim {
         { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
     };
 
+    // tune 2.11.1: the worth-the-gold table (iaus/ConsumableWorth.h WorthTable, carried in Tuning::worth) and the loot table
+    // (iaus/LootNeed.h LootTuning), each field by its native name: worth.<field>, loot.<field>. One name = one native member, nothing else.
+    struct WorthKnob { const char* name; float MFO::Iaus::WorthTable::* m; };
+    inline constexpr WorthKnob kWorthKnobs[] = {
+        { "worth.ratioCap", &MFO::Iaus::WorthTable::ratioCap }, { "worth.pressureFull", &MFO::Iaus::WorthTable::pressureFull }, { "worth.dangerSpan", &MFO::Iaus::WorthTable::dangerSpan },
+        { "worth.hurtWeight", &MFO::Iaus::WorthTable::hurtWeight }, { "worth.magickaWinLine", &MFO::Iaus::WorthTable::magickaWinLine }, { "worth.staminaWinLine", &MFO::Iaus::WorthTable::staminaWinLine },
+        { "worth.winNeed", &MFO::Iaus::WorthTable::winNeed }, { "worth.ttlFloorSec", &MFO::Iaus::WorthTable::ttlFloorSec }, { "worth.ttlSpanSec", &MFO::Iaus::WorthTable::ttlSpanSec },
+        { "worth.wealthFrac", &MFO::Iaus::WorthTable::wealthFrac }, { "worth.wealthFloor", &MFO::Iaus::WorthTable::wealthFloor }, { "worth.costWeight", &MFO::Iaus::WorthTable::costWeight },
+        { "worth.scarcityRate", &MFO::Iaus::WorthTable::scarcityRate }, { "worth.restoreCostScale", &MFO::Iaus::WorthTable::restoreCostScale }, { "worth.restoreUseWeight", &MFO::Iaus::WorthTable::restoreUseWeight },
+        { "worth.floor", &MFO::Iaus::WorthTable::floor }, { "worth.foodMinGain", &MFO::Iaus::WorthTable::foodMinGain },
+    };
+    struct LootKnobF { const char* name; float MFO::Iaus::LootTuning::* m; };
+    struct LootKnobI { const char* name; int MFO::Iaus::LootTuning::* m; };
+    using LT = MFO::Iaus::LootTuning;
+    inline constexpr LootKnobF kLootKnobsF[] = {
+        { "loot.takeThreshold", &LT::takeThreshold }, { "loot.needBase", &LT::needBase }, { "loot.needSlope", &LT::needSlope }, { "loot.roomKnee", &LT::roomKnee },
+        { "loot.saleGoldPerWeight", &LT::saleGoldPerWeight }, { "loot.saleWeight", &LT::saleWeight }, { "loot.gold", &LT::gold }, { "loot.equipment", &LT::equipment },
+        { "loot.valuables", &LT::valuables }, { "loot.jewelry", &LT::jewelry }, { "loot.gemChargeTrigger", &LT::gemChargeTrigger }, { "loot.buffScale", &LT::buffScale },
+        { "loot.foodScale", &LT::foodScale }, { "loot.poisonPowerRef", &LT::poisonPowerRef }, { "loot.poisonWeakScale", &LT::poisonWeakScale },
+    };
+    inline constexpr LootKnobI kLootKnobsI[] = {
+        { "loot.soulGemTarget", &LT::soulGemTarget }, { "loot.healthTarget", &LT::healthTarget }, { "loot.staminaTarget", &LT::staminaTarget },
+        { "loot.staminaTargetNoWeapon", &LT::staminaTargetNoWeapon }, { "loot.magickaTarget", &LT::magickaTarget }, { "loot.resistTarget", &LT::resistTarget },
+        { "loot.fortifyTarget", &LT::fortifyTarget }, { "loot.regenTarget", &LT::regenTarget }, { "loot.invisTarget", &LT::invisTarget },
+        { "loot.lockpickTarget", &LT::lockpickTarget }, { "loot.poisonTarget", &LT::poisonTarget },
+    };
     inline void ApplyWeights(Profile& p) { for (const auto& o : Tune().weights) SetWeight(p, o.family, o.cons, o.w); }
 
     // The default weight of (family, cons) is not reachable from outside Catalogue.cpp; the search starts a weight at 1 unless told.
@@ -49,6 +77,11 @@ namespace Sim {
             if (fld == "a") c.a = f; else if (fld == "b") c.b = f; else if (fld == "floor") c.floor = f; else return false; return true; }
         if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { s.pkg[name] = f; return true; }
         for (const TuneScalar& k : kTuneScalars) if (name == k.name) { s.t.*(k.m) = f; return true; }
+        for (const WorthKnob& k : kWorthKnobs) if (name == k.name) { s.t.worth.*(k.m) = f;
+            if (k.m == &MFO::Iaus::WorthTable::floor) s.t.curve[static_cast<std::size_t>(Cons::ConsumableWorth)].zeroBelow = f;   // Catalogue.cpp builds the veto from the same member
+            return true; }
+        for (const LootKnobF& k : kLootKnobsF) if (name == k.name) { s.loot.*(k.m) = f; return true; }
+        for (const LootKnobI& k : kLootKnobsI) if (name == k.name) { s.loot.*(k.m) = static_cast<int>(std::lround(v)); return true; }
         return false;
     }
     inline double GetParam(const std::string& name, double unset = 1.0) {
@@ -60,6 +93,9 @@ namespace Sim {
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); const Curve& c = s.t.curve[idx(2) % kCons]; const std::string fld = dot == std::string::npos ? "" : name.substr(dot + 1); return fld == "a" ? c.a : fld == "b" ? c.b : c.floor; }
         if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { auto i = s.pkg.find(name); return i == s.pkg.end() ? unset : i->second; }
         for (const TuneScalar& k : kTuneScalars) if (name == k.name) return s.t.*(k.m);
+        for (const WorthKnob& k : kWorthKnobs) if (name == k.name) return s.t.worth.*(k.m);
+        for (const LootKnobF& k : kLootKnobsF) if (name == k.name) return s.loot.*(k.m);
+        for (const LootKnobI& k : kLootKnobsI) if (name == k.name) return s.loot.*(k.m);
         return unset;
     }
     // The package overrides onto a follower (st.<0 melee|1 ranged|2 cast>.<off|def|avoid|fallback|circle|powBlock|powStag|bash>, pk.power, pk.leash).
@@ -82,7 +118,8 @@ namespace Sim {
     inline void ListParams() {
         std::printf("families:"); for (std::size_t i = 0; i < kFamilies; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Family>(i))).c_str());
         std::printf("\nconsiderations:"); for (std::size_t i = 0; i < kCons; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Cons>(i))).c_str());
-        std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor "); for (const TuneScalar& k : kTuneScalars) std::printf(" %s", k.name); std::printf("\n");
+        std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor "); for (const TuneScalar& k : kTuneScalars) std::printf(" %s", k.name);
+        for (const WorthKnob& k : kWorthKnobs) std::printf(" %s", k.name); for (const LootKnobF& k : kLootKnobsF) std::printf(" %s", k.name); for (const LootKnobI& k : kLootKnobsI) std::printf(" %s", k.name); std::printf("\n");
     }
 
 }
