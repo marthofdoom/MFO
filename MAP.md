@@ -3438,7 +3438,7 @@ module. Module layout:
     player-drop record is GONE, 86e3faccn: what the player drops is fair game.) Line numbers: grep.
   - `logistics/LootTake.cpp` (906), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (1027),
     `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
-    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268), `logistics/ClassResolve.cpp` (110),
+    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (359), `logistics/ClassResolve.cpp` (110),
     `logistics/SwapUp.cpp` (649, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
   - `logistics/Logistics_internal.h` (938) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
@@ -3579,12 +3579,12 @@ module. Module layout:
   returns true for `IsSilverAmmo`: silver ammo is a 'special' round, outside the ordinary ladder (`AmmoCutoff`,
   `HeldAmmo`, the loose-ammo take set, the authority's best pick).
   Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
-- `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
-  `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
-  role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
+- `logistics/Cast.cpp` (359, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
+  `TargetMagicSchool:25`, `HasCastGambit:65`, `IsCasterFollower:102` (weapon/shield/ammo/tome
+  role signal, gambit based), `UsesMageClothing:136` (MAGE CLOTHING MODE, equip/clothing decisions
   only, `fix/mfo-cicero-gear`: caster AND class, explicit override wins, Auto = base skills, never the
-  gambit alone, never `ResolveBaseClass`; logs `[gear] <id> clothing mode: ...`),
-  `TopTwoSchoolMask:154`, `LearnCarriedTomes:183`, school name/keyword helpers.
+  gambit alone, never `ResolveBaseClass`; logs `[gear] <id> clothing mode: ...`. **MAGE LINE WEARS CLOTHING (`fix/mage-line-clothing`, marth 2026-11-12):** `OnMageLine` (`Cast.cpp:126`, class table `Classes::Get(id).line == Line::Mage` when a class is equipped, else false: no class = today's caster-gated behaviour exactly, an explicit Mage pick keeps its old meaning) returns true BEFORE the caster gate, so every class-equipped mage-line follower wears clothing with no `HasCastGambit` dependence (IAUS class tables carry no cast row); the caster-gate false now logs `[gear] ... caster gate: ...`; `LogArmorClassIfChanged(.., a_clothing)` prints `class CLOTHING`. RE-CLAIM: `ArmorIsBetter` takes an optional `a_wornCounts` predicate (`Gear.cpp`), the rated pick and slate (`EquipAuthority.cpp`) pass `!RelicOffBody` so a worn museum relic is a bare slot, never an incumbent; a worn rated piece no owned clothing covers stays on (MFO has no unequip road, marth 2026-10-20) and is declared as before by rule 5 (`Rule5Overlaps` displaces it wherever clothing exists). What breaks: re-gating the mage line on `IsCasterFollower` re-creates the Jesper armor swap; every `UsesMageClothing && bMageWearRobes` site follows the one answer),
+  `TopTwoSchoolMask:185`, `LearnCarriedTomes:228`, school name/keyword helpers.
 - #21 economy (was `Logistics_Economy.cpp`, wave-2 split into two): `logistics/Economy.cpp`
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
   `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
@@ -3800,7 +3800,7 @@ module. Module layout:
   bits (shared with the buy thresholds); reading `TallyStyleVotes` directly from
   the worker instead of `StyleVotesFor` races the allocator.
 - **CICERO GEAR FIXES (`fix/mfo-cicero-gear`, 2026-10-01).** (1) MAGE CLOTHING MODE is decided by `UsesMageClothing`
-  (`logistics/Cast.cpp:116`), not by `HasCastGambit`: a Melee Cicero given Arcane Pull went back to his jester set.
+  (`logistics/Cast.cpp:136`), not by `HasCastGambit`: a Melee Cicero given Arcane Pull went back to his jester set.
   Switched to it: `EquipAuthority.cpp` `ComputeOwnedGearPick`, `ComputeOwnedGearSlate`, `RefreshEquipDeclaration`
   `mageSetMode` + `playerPieceWins`; `SwapUp.cpp` `ComputeKeepSet` `useMageApparel`; `Economy.cpp`
   `BuildBuyThresholds` `useMageApparel` + `umaSell`; `LootEquipment.cpp` `ctx.useMageApparel`; `Service.cpp` MEO gem

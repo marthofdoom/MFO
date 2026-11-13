@@ -803,9 +803,13 @@ namespace MFO::Logistics {
                   bool a_peek = false);
     ArmorPref ArmorPrefFor(RE::Actor* a_follower);
     float ArmorScore(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
-    void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref);
+    // a_clothing: the follower is on the mage line (UsesMageClothing) -- the [armor] line names the CLOTHING category.
+    void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref, bool a_clothing = false);
     bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
-    bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    // a_wornCounts (optional): a worn piece it returns FALSE for counts as a BARE slot, so it never holds the slot
+    // against a candidate (a worn museum relic: EquipAuthority.cpp RelicOffBody). nullptr = every worn piece counts.
+    bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
+                       const std::function<bool(RE::TESObjectARMO*)>* a_wornCounts = nullptr);
     bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,
                                  RE::TESObjectARMO* a_armo);
     bool ArmorWontRender(RE::Actor* a_actor, RE::TESObjectARMO* a_armo);   // playable foreign piece that draws nothing on his race: never worn, sells (Gear.cpp)
