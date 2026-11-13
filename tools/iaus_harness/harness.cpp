@@ -1918,6 +1918,42 @@ static void ConsumablesWorth() {
         const Candidate* c2 = FindCand(g2, Family::DrinkHealth, 0);
         Check(c2 && ScoreOne(*c2, Mind{}, Profile{}, t, 3, 0.0f, nullptr) <= 0.0f, "healthy: the same dear potion is not worth drinking (vetoed by worth)");
     }
+    {   // CANNOT-WIN FLOOR (review F1): a mage with an empty pool and a fight that still needs casts drinks, whatever the pressure or his purse
+        Snapshot s = WorthFight(190.0f, 6, 0.0f);   // one 0.6x foe: pressure 0.3
+        s.self.mp = 0; s.self.mpMax = 100;
+        s.drawn = PostureKind::None;
+        SpellEntry sp = Spell("Firebolt", 0x100, Prune::Nature::Offense, 20.0f);
+        sp.damage = 40.0f; sp.measured = true;
+        s.book.entries.push_back(sp);
+        s.book.kit.potionsMagicka = 1; s.book.kit.restoreValue[2] = 300.0f;
+        const Generated g = Generate(s, ClassGate{}, t);
+        const Candidate* c = FindCand(g, Family::DrinkMagicka, 0);
+        Check(c && c->f.consumableWorth == 1.0f, "cannot win: a mage at 0 magicka with casts wanted needs the potion at 1 (0 gold, a 0.6x foe)");
+        Check(c && ScoreOne(*c, Mind{}, Profile{}, t, 3, 0.0f, nullptr) > t.actFloor, "cannot win: and he drinks it");
+        Snapshot armed = s; armed.book.kit.melee = true;
+        const Generated ga = Generate(armed, ClassGate{}, t);
+        const Candidate* ca = FindCand(ga, Family::DrinkMagicka, 0);
+        Check(ca && ca->f.consumableWorth < t.worth.floor, "cannot win: a mage who carries a weapon has another offense (the floor is off)");
+        Snapshot full = s; full.self.mp = 100;
+        const Generated gf = Generate(full, ClassGate{}, t);
+        const Candidate* cf = FindCand(gf, Family::DrinkMagicka, 0);
+        Check(cf && cf->f.consumableWorth < t.worth.floor, "cannot win: a full pool in a weak fight is still vetoed for a dear potion");
+        // stamina: a power-attack class with a melee weapon at ~0 stamina
+        Snapshot k = WorthFight(190.0f, 6, 0.0f);
+        k.self.sp = 0; k.book.kit.melee = true; k.book.kit.potionsStamina = 1; k.book.kit.restoreValue[1] = 300.0f;
+        ClassGate pg; pg.powerAttack = true;
+        const Candidate* cs = nullptr;
+        const Generated gs = Generate(k, pg, t);
+        cs = FindCand(gs, Family::DrinkStamina, 0);
+        Check(cs && cs->f.consumableWorth == 1.0f, "cannot win: a power-attack melee class at 0 stamina needs the potion at 1");
+        const Generated gs2 = Generate(k, ClassGate{}, t);
+        const Candidate* cs2 = FindCand(gs2, Family::DrinkStamina, 0);
+        Check(cs2 && cs2->f.consumableWorth < t.worth.floor, "cannot win: a class whose offense does not need stamina keeps the pressure rule");
+        // health: a fast-dying follower above the band
+        const WorthTable& w = t.worth;
+        Check(DeathWinFloor(2.0f, w) == 1.0f && DeathWinFloor(w.ttlFloorSec + w.ttlSpanSec, w) == 0.0f && DeathWinFloor(1.0e30f, w) == 0.0f &&
+              ResourceNeed(0.8f, 0.1f, 0.34f, true, w, DeathWinFloor(2.0f, w)) == 1.0f, "cannot win: a follower who dies in 2 s at 80% health needs a heal at 1; nothing hitting = no floor");
+    }
 }
 
 namespace {

@@ -30,6 +30,17 @@ namespace MFO::Iaus {
         // magicka) takes the low band only as far as the pressure.
         float dangerSpan = 0.34f;
         float hurtWeight = 1.0f;
+        // CANNOT-WIN FLOOR (fix round, review F1): a need floor from facts the Snapshot already holds, for the case where the fight cannot be won
+        // without the resource whatever its pressure reads. PLACEHOLDERS, not searched.
+        //   magicka: a caster the fight still asks casts of (Facts::castsWanted > 0) with no weapon offense and a spent pool (<= magickaWinLine)
+        //   stamina: a class whose offense needs stamina (a power-attack row and a melee weapon) at <= staminaWinLine
+        //   health : his own time to live (Estimate::Ttl on the damage coming in): need 1 at <= ttlFloorSec, 0 at ttlFloorSec + ttlSpanSec
+        // Each ramps linearly from 0 at its line to winNeed at an empty pool.
+        float magickaWinLine = 0.15f;
+        float staminaWinLine = 0.10f;
+        float winNeed = 1.0f;
+        float ttlFloorSec = 4.0f;
+        float ttlSpanSec = 6.0f;
         // COST SHARE: the item's value / max(gold * wealthFrac, wealthFloor), times costWeight, capped at 1.
         float wealthFrac = 0.25f;
         float wealthFloor = 100.0f;
@@ -52,13 +63,23 @@ namespace MFO::Iaus {
         return WorthUnit(a_t.pressureFull > 0.0f ? a_shareSum / a_t.pressureFull : 0.0f);
     }
 
-    // The need of a resource's restore: a_pct = the resource now (0..1), a_vital = health.
-    [[nodiscard]] inline float ResourceNeed(float a_pct, float a_pressure, float a_line, bool a_vital, const WorthTable& a_t) {
+    // The cannot-win floor of a spent pool (see WorthTable): ramps from 0 at a_line to a_t.winNeed at 0.
+    [[nodiscard]] inline float PoolWinFloor(float a_pct, float a_line, const WorthTable& a_t) {
+        return a_line > 0.0f ? WorthUnit((a_line - WorthUnit(a_pct)) / a_line) * WorthUnit(a_t.winNeed) : 0.0f;
+    }
+    // The cannot-win floor of his health from his time to live in seconds (kInf / non-finite = nothing is hitting him = 0).
+    [[nodiscard]] inline float DeathWinFloor(float a_ttl, const WorthTable& a_t) {
+        if (!std::isfinite(a_ttl) || !(a_t.ttlSpanSec > 0.0f)) return 0.0f;
+        return WorthUnit((a_t.ttlFloorSec + a_t.ttlSpanSec - a_ttl) / a_t.ttlSpanSec) * WorthUnit(a_t.winNeed);
+    }
+
+    // The need of a resource's restore: a_pct = the resource now (0..1), a_vital = health. a_winFloor = the cannot-win floor (0 = none).
+    [[nodiscard]] inline float ResourceNeed(float a_pct, float a_pressure, float a_line, bool a_vital, const WorthTable& a_t, float a_winFloor = 0.0f) {
         const float pct = WorthUnit(a_pct), pressure = WorthUnit(a_pressure);
         const float span = a_t.dangerSpan > 0.0f ? a_t.dangerSpan : 1.0f;
         const float low = WorthUnit((a_line + span - pct) / span) * (a_vital ? 1.0f : pressure);
         const float hurt = (1.0f - pct) * pressure * a_t.hurtWeight;
-        return WorthUnit(std::max(low, hurt));
+        return WorthUnit(std::max({ low, hurt, WorthUnit(a_winFloor) }));
     }
 
     // The item's gold value against his wealth. a_gold < 0 = unknown: no cost is held against the item.

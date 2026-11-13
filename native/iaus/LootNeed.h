@@ -73,7 +73,9 @@ namespace MFO::Iaus {
         // feat/consumables (the USE side, never read by the loot scorer): a FOOD or drink's restore per family (health / stamina / magicka;
         // the same archetype split as restoreMag, but a food is not excluded). 0 = none. Empty for a potion (its restores are restoreMag).
         std::array<float, kRestoreFamilies> foodRestoreMag{};
+        std::array<float, kRestoreFamilies> foodRestoreDur{};   // ...and the duration (seconds) of the effect that set that magnitude (0 = instant)
         float value = 0.0f, weight = 0.0f;
+        float maxDuration = 0.0f;         // feat/consumables (the USE side): the longest duration over EVERY effect it carries, restores included; 0 = none
     };
 
     struct LootTuning {

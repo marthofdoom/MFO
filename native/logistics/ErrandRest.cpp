@@ -37,6 +37,7 @@
 #include "LocationTypes.h"
 #include "MainThread.h"
 #include "Pricing.h"
+#include "logistics/PotionFx.h"   // ReadConsumable: FoodWorth derives from the shared reader
 #include "Runtime.h"
 #include "TradeBridge.h"
 #include "apmf/APMFBridge.h"
@@ -58,30 +59,20 @@
 
 namespace MFO::Logistics {
 
-    // The worth of a FOOD item: judged like a potion (R0-10) from its real MGEF effects -- the same archetype split as
-    // PotionRestores / PotionMagnitude. Any detrimental / hostile effect = 0 (not stocked). A value-modifier on a resource (Health,
-    // Magicka, Stamina) is a restore: magnitude x max(duration, 1) seconds, capped at an hour so a one-hour regen does not drown a heal; any
-    // other BENEFICIAL value / peak-value modifier counts magnitude x sqrt(max(duration, 1)). Survival-mode hunger effects are player-only
-    // and carry no beneficial value-modifier on the follower, so they score nothing. Pure form reads: safe on the Papyrus VM thread (PlanBuy).
+    // The worth of a FOOD item for the inn's buying (TradeBridge PlanBuy / ranking), DERIVED from the shared consumable reader (feat/consumables
+    // fix F4: no effect judging of its own any more). Any hostile effect (a poison or a drug) = 0. A restore (the reader's foodRestoreMag per
+    // resource) counts magnitude x max(duration, 1) seconds, capped at an hour so a one-hour regen does not drown a heal; any other beneficial
+    // kind the reader classifies (fx) counts magnitude x sqrt(max(duration, 1)). Differences from the old judge: an effect whose actor value is
+    // in no BuffKind (carry weight, movement speed) no longer scores; only the strongest restore per resource counts. Pure form reads, safe on
+    // the Papyrus VM thread (PlanBuy).
     float FoodWorth(const RE::AlchemyItem* a_food) {
         if (!a_food || !a_food->IsFood() || a_food->IsPoison()) return 0.0f;
+        const Iaus::Consumable c = ReadConsumable(const_cast<RE::AlchemyItem*>(a_food));   // the reader only reads the record
+        if (c.hostile) return 0.0f;
         float worth = 0.0f;
-        for (const auto* e : a_food->effects) {
-            const auto* mgef = e ? e->baseEffect : nullptr;
-            if (!mgef) continue;
-            if (mgef->IsDetrimental() || mgef->IsHostile()) return 0.0f;
-            const auto arch = mgef->data.archetype;
-            if (arch != RE::EffectArchetypes::ArchetypeID::kValueModifier && arch != RE::EffectArchetypes::ArchetypeID::kDualValueModifier &&
-                arch != RE::EffectArchetypes::ArchetypeID::kPeakValueModifier) continue;
-            const float mag = std::max(0.0f, e->GetMagnitude());
-            const float dur = static_cast<float>(std::max<std::uint32_t>(e->GetDuration(), 1u));
-            const auto av = mgef->data.primaryAV;
-            const bool resource = av == RE::ActorValue::kHealth || av == RE::ActorValue::kMagicka || av == RE::ActorValue::kStamina;
-            if (resource && arch != RE::EffectArchetypes::ArchetypeID::kPeakValueModifier && !mgef->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kRecover))
-                worth += mag * std::min(dur, 3600.0f);
-            else
-                worth += mag * std::sqrt(dur);
-        }
+        for (std::size_t f = 0; f < Iaus::kRestoreFamilies; ++f)
+            if (c.foodRestoreMag[f] > 0.0f) worth += c.foodRestoreMag[f] * std::min(std::max(c.foodRestoreDur[f], 1.0f), 3600.0f);
+        for (const auto& fx : c.fx) worth += std::max(0.0f, fx.magnitude) * std::sqrt(std::max(fx.duration, 1.0f));
         return worth;
     }
 }

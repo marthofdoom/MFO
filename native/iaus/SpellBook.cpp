@@ -128,7 +128,7 @@ namespace MFO::Iaus::SpellBook {
                 }
                 PotionBuff& b = a_kit.restoreFood[f];
                 b.count += a_count;
-                if (b.form != 0 && !(c.foodRestoreMag[f] > b.magnitude)) continue;
+                if (b.form != 0 && !(c.foodRestoreMag[f] > b.magnitude || (c.foodRestoreMag[f] == b.magnitude && c.value < b.value))) continue;   // largest restore, then the CHEAPER
                 b.form = a_alc->GetFormID(); b.magnitude = c.foodRestoreMag[f]; b.value = c.value;
                 b.kindMask = kindMask; b.restoreMask = restoreMask; b.name = name;
             }

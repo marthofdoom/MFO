@@ -33,7 +33,13 @@ namespace MFO::Logistics {
     // not a carried potion, food or drink the shared reader finds a beneficial effect in (a buff kind OR a restore; feat/consumables: a food is
     // eaten through this same road), or this item is still inside its own duration (no chain-drinking
     // the stack). Worker domain, like DrinkPotion.
+    // true = EquipObject was ISSUED, not that the item was consumed: the carried count is recorded before the call and ConfirmDrinks proves
+    // (or warns about) the decrement on the next pass.
     bool DrinkPotionForm(RE::Actor* a_follower, RE::FormID a_potion);
+
+    // feat/consumables: reads back every drink DrinkPotionForm issued for this follower and logs CONSUMED (count dropped) or a WARN NOT CONSUMED
+    // (it did not; no retry, no masking). Worker domain; called once per IAUS pass (scheduler/IausSource.cpp).
+    void ConfirmDrinks(RE::Actor* a_follower);
 
     // Forgets the per-potion drink gates (ClearTransientState).
     void ClearBuffDrinks();

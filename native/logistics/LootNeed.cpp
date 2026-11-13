@@ -112,11 +112,14 @@ namespace MFO::Logistics {
                 return c;
             }
             if (c.hostile) return c;
+            for (const auto* e : a_alc->effects)
+                if (e) c.maxDuration = std::max(c.maxDuration, static_cast<float>(e->GetDuration()));   // the use side's stack gate (DrinkPotionForm)
             if (const int f = FamilyOf(PotionRestores(a_alc)); f >= 0) {
                 const float mag = PotionMagnitude(a_alc);
                 c.restoreMag[static_cast<std::size_t>(f)] = mag > 0.0f ? mag : 1.0f;   // 1 = classified, magnitude unreadable (counts, never floored)
             }
             c.fx = ConsumableBuffs(a_alc);
+            for (const auto& fx : c.fx) c.maxDuration = std::max(c.maxDuration, fx.duration);   // a catalog row's duration can differ from the record's
             if (c.food) {
                 // feat/consumables: the USE side reads a food's restore too (the loot side's restoreMag stays 0 for food, review F1).
                 for (const auto* e : a_alc->effects) {
@@ -129,7 +132,8 @@ namespace MFO::Logistics {
                     if (f < 0) continue;
                     const float mag = e->GetMagnitude();
                     auto& slot = c.foodRestoreMag[static_cast<std::size_t>(f)];
-                    slot = std::max(slot, mag > 0.0f ? mag : 1.0f);
+                    const float m = mag > 0.0f ? mag : 1.0f;
+                    if (m > slot) { slot = m; c.foodRestoreDur[static_cast<std::size_t>(f)] = static_cast<float>(e->GetDuration()); }
                 }
             }
             return c;

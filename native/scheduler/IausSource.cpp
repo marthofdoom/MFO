@@ -18,6 +18,7 @@
 #include "iaus/Reposition.h"   // batch I H4: the spell range
 #include "cast/Actuation.h"
 #include "iaus/SpellBook.h"
+#include "logistics/PotionFx.h"   // feat/consumables: ConfirmDrinks
 
 #include <algorithm>
 #include <format>
@@ -58,7 +59,7 @@ namespace MFO::Scheduler {
             else if (kind == Iaus::BuffKind::Invisibility) why = "stealth intent (he sneaks or his class sneaks)";
             spdlog::info("[iaus] buff-potion {:08X} drinks '{}' ({:08X}) for {}: magnitude {:.0f} for {:.0f} s, {} carried, why: {} -> {}{}{}",
                          a_actor, p.name.empty() ? "?" : p.name, a_c.form, Iaus::BuffName(kind), p.magnitude, p.duration, p.count, why,
-                         a_out.result == Actuation::Result::Fired ? "drank it" : "not drunk", a_out.reason.empty() ? "" : ": ", a_out.reason);
+                         a_out.result == Actuation::Result::Fired ? "drink issued" : "not drunk", a_out.reason.empty() ? "" : ": ", a_out.reason);
         }
 
         [[nodiscard]] bool IsCastFamily(Family a_f) {
@@ -234,6 +235,7 @@ namespace MFO::Scheduler {
         const Iaus::Tuning& T = Iaus::DefaultTuning();
         // THE CANDIDATE CYCLE, in this order: Build, FillCooldowns, Decide, DecidePosture, NoteDecision. m_set is a
         // member and is never moved while the candidates (string_views into its snapshot) are in use.
+        Logistics::ConfirmDrinks(a_self);   // feat/consumables: prove (or warn about) the drink issued on an earlier pass
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
         // SIGHT WINS (marth 11-12: "for sure, and not having a bow doesn't matter if you don't have line of sight"): while EVERY listed foe
@@ -452,7 +454,7 @@ namespace MFO::Scheduler {
                  Iaus::Engine::Paced(m_id, kChanBuffPotion, kBuffLogSec, m_tick))   // PASSIVE (feat/consumables, principle 5): the first food eaten in the field says so
             spdlog::info("[iaus] consumable {:08X} eats '{}' ({:08X}) as {}: worth {:.2f} (need x cost), {} carried -> {}{}{}", m_id,
                          std::string(cand.formName), cand.form, Iaus::Name(cand.family), cand.f.consumableWorth, cand.f.stock,
-                         a_outcome.result == Actuation::Result::Fired ? "ate it" : "not eaten", a_outcome.reason.empty() ? "" : ": ", a_outcome.reason);
+                         a_outcome.result == Actuation::Result::Fired ? "use issued (consume confirmed next pass)" : "not used", a_outcome.reason.empty() ? "" : ": ", a_outcome.reason);
         if (fired) {
             m_pickedStep = static_cast<int>(it->idx);
             // An approach leg (the power attack closing to melee) is the decision in effect, not the swing: it

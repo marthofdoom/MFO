@@ -41,6 +41,7 @@ namespace MFO::Iaus {
             int   partyCount = 1;
             std::vector<const Combatant*> top;   // the P3 cut, most relevant first
             float pressure = 0.0f;               // feat/consumables: the kept foes' pressure on him (iaus/ConsumableWorth.h), 0..1
+            float castsWanted = -1.0f;           // feat/consumables: the casts of his best measured spell the fight still asks for (Drinks); < 0 = unknown
             // estimates (iaus/Estimate.h); unknown = +inf / 0
             float selfIncoming = 0.0f;
             float selfTtl = kInf;
@@ -327,9 +328,25 @@ namespace MFO::Iaus {
         // The need of ONE restore family (0 health, 1 stamina, 2 magicka) in this fight, and of ONE buff kind. A mixed item's need is the MAX over
         // every effect it carries (kindMask / restoreMask); an item none of whose effects has a need here (invisibility, water breathing, a cure)
         // has none: -1 = the consideration is not applicable to it.
+        // The CANNOT-WIN floor of a restore (review F1; WorthTable): the need the situation has whatever the pressure reads, from Snapshot facts only.
+        // health: his time to live on the damage coming in; magicka: a caster the fight still asks casts of, no weapon offense, a spent pool;
+        // stamina: a power-attack class with a melee weapon, a spent pool. Nothing in the fight (no kept foe) = 0.
+        float CannotWinFloor(const Ctx& x, std::size_t a_family) {
+            if (x.top.empty()) return 0.0f;
+            const Kit& k = x.s.book.kit;
+            switch (a_family) {
+            case 0: return DeathWinFloor(x.selfTtl, x.t.worth);
+            case 1: return x.g.powerAttack && k.melee ? PoolWinFloor(x.selfSp, x.t.worth.staminaWinLine, x.t.worth) : 0.0f;
+            case 2: {
+                const bool otherOffense = k.melee || k.bow || k.crossbow || (k.staff && k.staffCharged);
+                return x.castsWanted > 0.0f && !otherOffense ? PoolWinFloor(x.selfMp, x.t.worth.magickaWinLine, x.t.worth) : 0.0f;
+            }
+            default: return 0.0f;
+            }
+        }
         float RestoreNeed(const Ctx& x, std::size_t a_family) {
             const float pct = a_family == 0 ? x.selfHp : a_family == 1 ? x.selfSp : x.selfMp;
-            return ResourceNeed(pct, x.pressure, x.g.drinkHealthLine, a_family == 0, x.t.worth);
+            return ResourceNeed(pct, x.pressure, x.g.drinkHealthLine, a_family == 0, x.t.worth, CannotWinFloor(x, a_family));
         }
         float KindNeed(const Ctx& x, BuffKind a_kind) {
             if (IsFortify(a_kind) || IsResist(a_kind)) return x.pressure;   // the outcome without it: the fight's pressure alone
@@ -352,6 +369,31 @@ namespace MFO::Iaus {
         void SetWorth(const Ctx& x, Candidate& a_c, float a_need, float a_value) {
             if (!(a_need >= 0.0f)) return;
             a_c.f.consumableWorth = Worth(a_need, CostShare(a_value, x.s.book.kit.gold, x.t.worth));
+        }
+
+        // What the magicka would buy: the casts of his best measured spell the fight still asks for. Offense first (the kept foes' health against
+        // his best spell's damage), else healing (the party's missing health against his best heal). Unknown (no measured spell) = -1: the
+        // potion is scored as before. Computed once in Generate (before any candidate) because the worth rule's cannot-win floor reads it too.
+        float CastsWanted(const Ctx& x) {
+            float bestDmg = 0.0f, bestHeal = 0.0f;
+            for (const SpellEntry& e : x.s.book.entries) {
+                if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                if (!e.measured) continue;   // MFO-B684: an unmeasured entry says nothing
+                if (e.nature == Prune::Nature::Offense) bestDmg = (std::max)(bestDmg, Estimate::Pos(e.damage));
+                else if (e.nature == Prune::Nature::Heal) bestHeal = (std::max)(bestHeal, Estimate::Pos(e.heal));
+            }
+            float wanted = -1.0f;
+            if (bestDmg > 0.0f) {
+                float hp = 0.0f;
+                for (const Combatant* f : x.top) hp += (std::max)(0.0f, Finite(f->hp, 0.0f));
+                wanted = hp / bestDmg;
+            } else if (bestHeal > 0.0f) {
+                float missing = (std::max)(0.0f, Finite(x.s.self.hpMax, 0.0f) - Finite(x.s.self.hp, 0.0f));
+                for (const auto& a : x.s.allies)
+                    if (Readable(a)) missing += (std::max)(0.0f, Finite(a.hpMax, 0.0f) - Finite(a.hp, 0.0f));
+                wanted = missing / bestHeal;
+            }
+            return std::isfinite(wanted) ? wanted : -1.0f;
         }
 
         // ── the three drinks (P2: no stock, no candidate) ────────────────────────────────────────────────
@@ -390,32 +432,15 @@ namespace MFO::Iaus {
             // kept foes' health against his best spell's damage), else healing (the party's missing health against his best
             // heal). Unknown (no measured spell) leaves the potion scored as before.
             if (k.potionsMagicka > 0 || k.restoreFood[2].count > 0) {
-                float bestDmg = 0.0f, bestHeal = 0.0f;
-                for (const SpellEntry& e : x.s.book.entries) {
-                    if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
-                    if (!e.measured) continue;   // MFO-B684: an unmeasured entry says nothing
-                    if (e.nature == Prune::Nature::Offense) bestDmg = (std::max)(bestDmg, Estimate::Pos(e.damage));
-                    else if (e.nature == Prune::Nature::Heal) bestHeal = (std::max)(bestHeal, Estimate::Pos(e.heal));
-                }
-                float wanted = -1.0f;
-                if (bestDmg > 0.0f) {
-                    float hp = 0.0f;
-                    for (const Combatant* f : x.top) hp += (std::max)(0.0f, Finite(f->hp, 0.0f));
-                    wanted = hp / bestDmg;
-                } else if (bestHeal > 0.0f) {
-                    float missing = (std::max)(0.0f, Finite(x.s.self.hpMax, 0.0f) - Finite(x.s.self.hp, 0.0f));
-                    for (const auto& a : x.s.allies)
-                        if (Readable(a)) missing += (std::max)(0.0f, Finite(a.hpMax, 0.0f) - Finite(a.hp, 0.0f));
-                    wanted = missing / bestHeal;
-                }
+                const float wanted = x.castsWanted;
                 if (k.potionsMagicka > 0) {
                     Candidate c = x.Make(Family::DrinkMagicka, nullptr);
                     c.f.stock = k.potionsMagicka;
-                    c.f.castsWanted = std::isfinite(wanted) ? wanted : -1.0f;
+                    c.f.castsWanted = wanted;
                     SetWorth(x, c, RestoreNeed(x, 2), k.restoreValue[2]);
                     x.Push(std::move(c));
                 }
-                food(Family::DrinkMagicka, k.potionsMagicka, 2, std::isfinite(wanted) ? wanted : -1.0f);
+                food(Family::DrinkMagicka, k.potionsMagicka, 2, wanted);
             }
         }
 
@@ -789,6 +814,7 @@ namespace MFO::Iaus {
             for (const Combatant* f : x.top)
                 share += FoePressureShare(SafeRatio(static_cast<float>(f->level), static_cast<float>(a_s.self.level), 1.0f), a_t.worth);
             x.pressure = Pressure(share, a_t.worth);
+            x.castsWanted = CastsWanted(x);
         }
         out.foesSeen = foes.size();
         out.foesKept = x.top.size();

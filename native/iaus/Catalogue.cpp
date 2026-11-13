@@ -96,6 +96,7 @@ namespace MFO::Iaus {
         case Cons::NoHealRetreat: case Cons::DisengageClass: case Cons::Stock: case Cons::NoHealDrink:
         case Cons::Ammo: case Cons::StaffCharge: case Cons::MeleeReach: case Cons::ClassWeapon:
         case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive: case Cons::HoldStill: case Cons::BuffStealth:
+        case Cons::ConsumableWorth:   // feat/consumables fix F3: a veto only (worth >= floor scores as before; it must not enter the compensation n)
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
@@ -395,8 +396,8 @@ namespace MFO::Iaus {
             // magicka buys: x = min(1, casts the fight still asks for / 3). Three casts and more 1.0, one cast 0.45, none
             // (the foes left die to one blow) 0.18: a potion drunk for a fight that is over is the bot's tell.
             at(Cons::MagickaBuys) = Lin(0.82f, 0.18f);
-            // consumable_worth (feat/consumables): x = Worth(need, cost share), 0..1 (iaus/ConsumableWorth.h). PLACEHOLDER: the identity shape, vetoed
-            // below WorthTable::floor (0.2). Flat-safe: it is NOT APPLICABLE (Input Off) for every candidate that sets no Facts::consumableWorth.
+            // consumable_worth (feat/consumables): x = Worth(need, cost share), 0..1 (iaus/ConsumableWorth.h). A GATE (RoleOf): vetoed below
+            // WorthTable::floor (0.2), 1 and not counted in n above it. Flat-safe: it is NOT APPLICABLE (Input Off) for every candidate that sets no Facts::consumableWorth.
             at(Cons::ConsumableWorth) = VetoBelow(Lin(1.0f, 0.0f), d.worth.floor);
             // Action weights (section 3.2, all doc). Heal 1.2 and drinks 1.1 are the only ones above 1: saving a
             // life beats dealing damage at equal utility.
