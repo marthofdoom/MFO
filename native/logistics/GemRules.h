@@ -67,7 +67,7 @@ namespace MFO::Logistics::GemRules {
     struct LooseCapture { RE::FormID base = 0; std::uint16_t uid = 0; RE::NiPoint3 pos{}; RE::NiPoint3 rot{}; };
     LooseCapture CaptureLoose(RE::TESObjectREFR* a_ref);
     void BeginLooseProbe(RE::Actor* a_follower, const LooseCapture& a_cap, bool a_sellGambit);
-    bool SellGambitActive();   // WORKER: does the serviced follower have a loot-valuables (to sell) gambit?
+    bool SellGambitActive(RE::Actor* a_follower = nullptr);   // WORKER: a loot-valuables (to sell) gambit, or IAUS looting's valuables verdict TAKE (a_follower: for that)
 
     void ClearTransient();   // revert (pump drained)
 }

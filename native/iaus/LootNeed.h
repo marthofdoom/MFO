@@ -53,6 +53,9 @@ namespace MFO::Iaus {
         std::array<int, kRestoreFamilies> restore{};   // restore potions carried per family (CountPotions)
         std::array<int, kBuffKinds>       buff{};      // consumables carried that hold each buff kind
         int   poisons = 0;                             // poisons carried (ALCH with the poison flag)
+        // SOUL GEMS' USE (marth 2026-11-13): he carries an enchanted weapon whose current charge is below its maximum (runtime read of the
+        // item's own charge, never a mod or list name). false = a soul gem has no use for him.
+        bool  weaponNeedsCharge = false;
     };
 
     // One consumable (an ALCH: potion, food or drink) as the scorer sees it: EVERY beneficial effect read (catalog row first, the
@@ -76,8 +79,13 @@ namespace MFO::Iaus {
         float roomKnee = 0.25f;
         // PLACEHOLDER. Sale value: gold per unit weight that scores 1 (before saleWeight and the room factor).
         float saleGoldPerWeight = 50.0f, saleWeight = 0.7f;
-        // PLACEHOLDER. Category bases (times the room factor): gold is weightless coin.
-        float gold = 1.0f, equipment = 0.8f, valuables = 0.75f, jewelry = 0.75f, soulGems = 0.7f, ingredients = 0.55f;
+        // PLACEHOLDER. Category bases (times the room factor): gold is weightless coin. soulGemUse: a soul gem's carry value while he
+        // carries a weapon that needs charging.
+        float gold = 1.0f, equipment = 0.8f, valuables = 0.75f, jewelry = 0.75f, soulGemUse = 0.8f;
+        // A SALE score counts only where MFO has a sell road for the form type (review F2): Economy.cpp sells WEAP, ARMO (jewellery
+        // included) and valuable MISC only. No ALCH / INGR / AMMO road exists today, so a consumable's sale value is 0 until one does;
+        // flip this when an economy road sells ALCH. Never a sale floor that clears takeThreshold on its own (review F3).
+        bool  consumableSellRoad = false;
         // PLACEHOLDER. Carry targets for the consumables IAUS drinks.
         int   healthTarget = 6, staminaTarget = 4, staminaTargetNoWeapon = 2, magickaTarget = 5;
         int   resistTarget = 2, fortifyTarget = 1, regenTarget = 1, invisTarget = 1, lockpickTarget = 10;
@@ -173,8 +181,8 @@ namespace MFO::Iaus {
                 v.score = NeedScore(have, tgt, a_t);
                 std::snprintf(buf, sizeof buf, "need %d/%d (uses the kind + carries its launcher)", have, tgt);
             } else {
-                v.score = a_t.saleWeight * room;
-                std::snprintf(buf, sizeof buf, "sale-only (no ranged use of the kind or no launcher) room=%.2f", static_cast<double>(room));
+                v.score = 0.0f;   // no sell road for AMMO (review F2): unused ammo is left
+                std::snprintf(buf, sizeof buf, "unused (no ranged use of the kind or no launcher), no sell road for ammo");
             }
             break;
         }
@@ -191,18 +199,17 @@ namespace MFO::Iaus {
                 const float s = NeedScore(a_inv.buff[i], BuffTarget(k, -1, a_inv, a_t), a_t) * a_t.buffScale;
                 if (s > best) { best = s; bestFam = -1; bestBuff = static_cast<int>(i); }
             }
-            // A sale-worthy consumable can still clear on its own (ScoreConsumable): the trip is worth it while he has room.
-            const float sale = a_t.saleWeight * room;
-            v.score = std::max(best, sale);
+            // NEED only: no ALCH sell road exists (review F2), so a stocked follower leaves potions, food and drink alone.
+            v.score = best;
             constexpr const char* fam[] = { "health", "stamina", "magicka" };
-            if (best >= sale && bestFam >= 0)
+            if (bestFam >= 0)
                 std::snprintf(buf, sizeof buf, "need restore %s %d/%d", fam[bestFam], a_inv.restore[static_cast<std::size_t>(bestFam)],
                               RestoreTarget(bestFam, a_inv, a_t));
-            else if (best >= sale && bestBuff >= 0)
+            else if (bestBuff >= 0)
                 std::snprintf(buf, sizeof buf, "need buff %s %d", std::string(BuffName(static_cast<BuffKind>(bestBuff))).c_str(),
                               a_inv.buff[static_cast<std::size_t>(bestBuff)]);
             else
-                std::snprintf(buf, sizeof buf, "stocked; sale-only room=%.2f", static_cast<double>(room));
+                std::snprintf(buf, sizeof buf, "stocked, no sell road for consumables");
             break;
         }
         case LootKind::Lockpicks:
@@ -213,8 +220,14 @@ namespace MFO::Iaus {
         case LootKind::Equipment:   v.score = a_t.equipment * room;  std::snprintf(buf, sizeof buf, "keep-logic upgrades, room=%.2f", static_cast<double>(room)); break;
         case LootKind::Valuables:   v.score = a_t.valuables * room;  std::snprintf(buf, sizeof buf, "sale gold vs weight, room=%.2f", static_cast<double>(room)); break;
         case LootKind::Jewelry:     v.score = a_t.jewelry * room;    std::snprintf(buf, sizeof buf, "sale gold vs weight, room=%.2f", static_cast<double>(room)); break;
-        case LootKind::SoulGems:    v.score = a_t.soulGems * room;   std::snprintf(buf, sizeof buf, "sale gold vs weight, room=%.2f", static_cast<double>(room)); break;
-        case LootKind::Ingredients: v.score = a_t.ingredients * room; std::snprintf(buf, sizeof buf, "sale gold vs weight, room=%.2f", static_cast<double>(room)); break;
+        case LootKind::SoulGems:
+            // marth 2026-11-13: a gem is for charging a weapon. USE value while he carries an enchanted weapon below its max charge;
+            // otherwise 0 (Economy's valuable-MISC road excludes soul gems: IsValuableMisc, so there is no sale value to keep).
+            v.score = a_inv.weaponNeedsCharge ? a_t.soulGemUse * room : 0.0f;
+            std::snprintf(buf, sizeof buf, a_inv.weaponNeedsCharge ? "use: an enchanted weapon below max charge, room=%.2f" : "no weapon to charge, no sell road for gems (room=%.2f)",
+                          static_cast<double>(room));
+            break;
+        case LootKind::Ingredients: v.score = 0.0f; std::snprintf(buf, sizeof buf, "no use, no sell road for ingredients"); break;
         case LootKind::kCount:      buf[0] = '\0'; break;
         }
         v.take = v.score >= a_t.takeThreshold;
@@ -249,7 +262,9 @@ namespace MFO::Iaus {
         std::string needWhy;
         if (!a_c.hostile) {
             constexpr const char* fam[] = { "health", "stamina", "magicka" };
-            for (int f = 0; f < kRestoreFamilies; ++f) {
+            // A FOOD never creates a restore need (review F1): the stock count (CountPotions / PotionRestores) excludes food, so the need
+            // could never be seen filled. Its buff kinds still count (the stock side reads those for every ALCH).
+            for (int f = 0; f < kRestoreFamilies && !a_c.food; ++f) {
                 if (a_c.restoreMag[static_cast<std::size_t>(f)] <= 0.0f) continue;
                 const int have = a_inv.restore[static_cast<std::size_t>(f)], tgt = RestoreTarget(f, a_inv, a_t);
                 const float s = NeedScore(have, tgt, a_t);
@@ -270,7 +285,7 @@ namespace MFO::Iaus {
             need = PoisonCarryValue(a_c, a_inv, a_t, want);   // weapon users only; a drug or a non-weapon follower: 0 (sale gold only)
             if (need > 0.0f) { needShort = want; needWhy = "poison " + std::to_string(a_inv.poisons) + "/" + std::to_string(a_t.poisonTarget); }
         }
-        const float sale = SaleScore(a_c.value, a_c.weight, room, a_t);
+        const float sale = a_t.consumableSellRoad ? SaleScore(a_c.value, a_c.weight, room, a_t) : 0.0f;
         char buf[96];
         if (need >= sale) {
             v.score = need;

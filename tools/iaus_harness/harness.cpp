@@ -1813,9 +1813,10 @@ namespace {
         Check(a1.take && a1.score > 0.9f, "ammo need: uses the kind + carries a launcher, 0/20 -> take near 1");
         LootInv noBow = archer; noBow.usesArrows = false; noBow.arrowTarget = 0; noBow.carried = 290.0f;
         const auto a2 = ScoreLootKind(LootKind::Arrows, noBow);
-        Check(!a2.take && a2.why.find("sale-only") != std::string::npos, "ammo without the launcher: sale-only, left when nearly full");
+        Check(!a2.take && a2.why.find("unused") != std::string::npos, "ammo without the launcher: unused, left");
         archer.arrows = 20;
-        Check(ScoreLootKind(LootKind::Bolts, archer).why.find("sale-only") != std::string::npos, "bolts read the bolt fields (no crossbow: sale-only)");
+        Check(ScoreLootKind(LootKind::Bolts, archer).why.find("unused") != std::string::npos, "bolts read the bolt fields (no crossbow: unused)");
+        Check(ScoreLootKind(LootKind::Arrows, noBow).score == 0.0f && !ScoreLootKind(LootKind::Arrows, noBow).take, "unused ammo: no sell road -> leave (F2)");
         Check(ScoreLootKind(LootKind::Arrows, archer).why.find("need 20/20") != std::string::npos &&
               !ScoreLootKind(LootKind::Arrows, archer).take, "ammo stocked to target: no need");
 
@@ -1831,7 +1832,15 @@ namespace {
 
         Consumable bread; bread.food = true; bread.restoreMag[kRestoreStamina] = 10.0f; bread.value = 2.0f; bread.weight = 0.2f;
         const auto f1 = ScoreConsumable(bread, 3, melee);
-        Check(f1.take && f1.why.find("food") != std::string::npos, "food read by its effects: stamina need for a melee follower");
+        Check(!f1.take, "food never creates a restore need (the stock count cannot see it): left (F1)");
+        Consumable stamPot; stamPot.restoreMag[kRestoreStamina] = 40.0f; stamPot.value = 20.0f; stamPot.weight = 0.5f;
+        LootInv none = melee;
+        const auto s1 = ScoreConsumable(stamPot, 10, none);
+        Check(s1.take && s1.takeCount == DefaultLootTuning().staminaTarget, "stamina potion need: takes the shortfall");
+        LootInv after = none; after.restore[kRestoreStamina] += s1.takeCount;   // what the take does to the stock read
+        Check(!ScoreConsumable(stamPot, 10, after).take && ScoreConsumable(stamPot, 10, after).score < s1.score, "a take lowers the need (stock = item read)");
+        Consumable foodBuff; foodBuff.food = true; foodBuff.fx.push_back(PotionFx{ BuffKind::ResistFire, 30.0f, 60.0f, -1 }); foodBuff.value = 5.0f; foodBuff.weight = 0.3f;
+        Check(ScoreConsumable(foodBuff, 1, melee).take, "a food's buff kinds still count (both sides read them)");
 
         Consumable resist; resist.fx.push_back(PotionFx{ BuffKind::ResistFrost, 50.0f, 60.0f, -1 }); resist.value = 30.0f; resist.weight = 0.5f;
         Check(ScoreConsumable(resist, 1, melee).take, "a buff kind IAUS drinks (resist): carried");
@@ -1850,6 +1859,18 @@ namespace {
         Check(!ScoreLootKind(LootKind::Equipment, full).take && ScoreLootKind(LootKind::Gold, full).take,
               "full pack: equipment left, weightless gold still taken");
         Check(ScoreLootKind(LootKind::Lockpicks, melee).take, "lockpicks below target: take");
+
+        // F3: a default follower (everything stocked, no launcher, no weapon to charge) must not take all the categories.
+        LootInv stockedAll = melee; stockedAll.restore = { 6, 4, 0 }; stockedAll.lockpicks = 10;
+        int taken = 0; for (std::size_t i = 0; i < kLootKinds; ++i) if (ScoreLootKind(static_cast<LootKind>(i), stockedAll).take) ++taken;
+        std::printf("  stocked default follower takes %d of %zu categories\n", taken, kLootKinds);
+        Check(!ScoreLootKind(LootKind::Arrows, stockedAll).take &&
+              !ScoreLootKind(LootKind::Bolts, stockedAll).take && !ScoreLootKind(LootKind::Ingredients, stockedAll).take &&
+              !ScoreLootKind(LootKind::SoulGems, stockedAll).take && !ScoreLootKind(LootKind::Lockpicks, stockedAll).take,
+              "stocked default follower leaves ammo, ingredients, gems, lockpicks (F2/F3)");
+        // Soul gems: a USE value only while an enchanted weapon is below max charge (marth 2026-11-13).
+        LootInv charger = stockedAll; charger.weaponNeedsCharge = true;
+        Check(ScoreLootKind(LootKind::SoulGems, charger).take && !ScoreLootKind(LootKind::SoulGems, stockedAll).take, "soul gems: taken for a weapon that needs charge, else left");
     }
 }
 

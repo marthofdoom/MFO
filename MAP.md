@@ -4977,7 +4977,19 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 - **Threading:** worker, inside `ServiceFollower` (reads `g_svc`, like `LootEquipment`). Only state: the `[iaus-loot]` log rate-limit map.
 - **What breaks if you change this:** a new `act.loot_*` opcode must be added to `IsLootOp` or IAUS looting will stack with it; renaming a
   Category drops it from `CatOf`; `PotionBuffs` / `ConsumableBuffs` must keep the one classification rule (catalog first); `GemRules.cpp`
-  `SellGambitActive` still reads the `act.loot_valuables` ROW, so an IAUS-loot follower without that row does not sell gems that way.
+  `GemRules::SellGambitActive` now also answers true when IAUS looting's valuables verdict is TAKE (`IausLootValuablesTake`, review F6).
+- **Review-fix round (2026-11-13, F1-F8 + soul gems):** ONE consumable reader, `ReadConsumable` (`LootNeed.cpp`), is used by the item side AND
+  the stock side (`ReadLootInv`), so they cannot disagree: restore family = `PotionRestores` (catalog first, never food) + `PotionMagnitude`,
+  buff kinds = `ConsumableBuffs`; a FOOD never makes a restore need (F1). No sell road => no sale score: Economy sells only WEAP, ARMO and valuable
+  MISC, so potions / food / poisons / ammo / ingredients / soul gems score NEED or USE only (`LootTuning::consumableSellRoad`, F2/F3). Soul gems:
+  USE value while he carries an enchanted weapon below max charge (`LootInv::weaponNeedsCharge`, `InventoryEntryData::GetEnchantmentCharge`). The
+  inventory is read once per tick (`CachedLootInv`, key `g_svcSeq`, `IausLootInvDirty` after a take, F4). The IAUS pass runs at the FIRST skipped
+  loot row of each walk, else after it (F5). Loose potions use `IausLooseConsumableWanted` (F7); the `[iaus-loot]` item line is a real-decision log
+  only (F8).
+- **TO ADD ... EDIT ...:** a new consumable / effect kind = a `BuffKind` row (iaus/PotionBuff.h) + its target in `BuffTarget`
+  (iaus/LootNeed.h); how an ALCH is classified = `ReadConsumable` (the one reader); a new SELL ROAD (e.g. ALCH sold) = flip / add its flag in
+  `LootTuning` (`consumableSellRoad`) and add the road in Economy.cpp; a new weight or threshold = `LootTuning`; a new carry USE for a loot
+  kind (like gems for charging) = a `LootInv` flag filled in `ReadLootInv` + its case in `ScoreLootKind`.
 
 ### logistics/Storage.cpp / Storage.h — OFF-CLASS STORAGE (ClickUp 86e3t212u, `feat/offclass-storage`, 2026-11-13; SAVED: 'STOR' v1)
 marth rulings 2026-11-12 / 2026-11-13 (header comment quotes them; `Docs/research/2026-11/offclass-storage-design.md` section

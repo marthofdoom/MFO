@@ -27,6 +27,17 @@ namespace MFO::Logistics {
 
         constexpr auto kLogEvery = std::chrono::seconds(10);
         constexpr RE::FormID kLockpick = 0x0000000A;   // LootLockpicks' form
+        constexpr double kChargeFullPct = 99.5;         // a weapon at or above this percent of its max charge needs none
+
+        // LOW-POWER FLOOR (marth: "ignore low power potions entirely"), as LootPotions: a POTION's restore below the floor does not count as
+        // a restore on the ITEM side. Its other effects and a food are never floored (a food's restores are small by design). A magnitude of
+        // 1.0 is ReadConsumable's "classified, unreadable" marker and is exempt like LootPotions' mag == 0.
+        void ApplyLootFloor(Iaus::Consumable& a_c) {
+            const float floor = PotionLootFloor();
+            if (a_c.food || floor <= 0.0f) return;
+            for (auto& m : a_c.restoreMag)
+                if (m > 1.0f && m < floor) m = 0.0f;
+        }
 
         // (follower << 32) ^ key -> last [iaus-loot] line. WORKER only.
         std::unordered_map<std::uint64_t, Clock::time_point> g_logAt;
@@ -77,35 +88,36 @@ namespace MFO::Logistics {
             }
         }
 
-        // One ALCH read from ALL its effects: plain restores (a value modifier on health / stamina / magicka without the Recover flag;
-        // with it, or Peak, it is a fortify and ConsumableBuffs names it), every buff kind (catalog first, the runtime rule otherwise),
-        // and for a poison the strength of all its hostile effects. A drug (hostile effects, no poison flag) is read for sale only.
+        // THE ONE CONSUMABLE READER (marth 2026-11-13: "design with future tweaks in mind"): every consumer reads an ALCH through this and
+        // nothing else -- the ITEM side (what a source holds) AND the STOCK side (what he carries, ReadLootInv), so the two can never
+        // disagree about what an item is (review F1). To classify a new kind of consumable, edit here (or the catalog row / ClassifyRuntime
+        // behind ConsumableBuffs); the scorer in iaus/LootNeed.h never looks at a form.
+        //   restore family: EXACTLY what the drink / count roads use (PotionRestores: catalog first, costliest-effect archetype otherwise,
+        //     never a food, a poison or a drug) with PotionMagnitude; a mixed potion is one family, as it is for CountPotions.
+        //   buff kinds: ConsumableBuffs (catalog fx row first, the runtime rule otherwise).
+        //   poison: the strength of all its hostile effects. A drug (hostile effects, no poison flag) carries no need.
+        // No low-power floor here (the stock side must count every potion): the item side applies PotionLootFloor on top.
         Iaus::Consumable ReadConsumable(RE::AlchemyItem* a_alc) {
-            using Arch = RE::EffectArchetypes::ArchetypeID;
             Iaus::Consumable c;
             c.food    = a_alc->IsFood();
             c.poison  = a_alc->IsPoison();
             c.hostile = c.poison || PotionIsDrug(a_alc);
             c.value   = static_cast<float>(a_alc->GetGoldValue());
             c.weight  = a_alc->GetWeight();
-            for (auto* e : a_alc->effects) {
-                const auto* mgef = e ? e->baseEffect : nullptr;
-                if (!mgef) continue;
-                const bool bad = mgef->IsHostile() || mgef->IsDetrimental();
-                if (c.poison) {
-                    if (bad) c.poisonPower += e->GetMagnitude() * std::max(1.0f, static_cast<float>(e->GetDuration()));
-                    continue;
+            if (c.poison) {
+                for (auto* e : a_alc->effects) {
+                    const auto* mgef = e ? e->baseEffect : nullptr;
+                    if (mgef && (mgef->IsHostile() || mgef->IsDetrimental()))
+                        c.poisonPower += e->GetMagnitude() * std::max(1.0f, static_cast<float>(e->GetDuration()));
                 }
-                if (c.hostile || bad) continue;
-                const auto arch = mgef->data.archetype;
-                if (arch != Arch::kValueModifier && arch != Arch::kDualValueModifier) continue;
-                if (mgef->data.flags.any(RE::EffectSetting::EffectSettingData::Flag::kRecover)) continue;
-                const int f = FamilyOf(mgef->data.primaryAV);
-                if (f < 0) continue;
-                auto& m = c.restoreMag[static_cast<std::size_t>(f)];
-                m = std::max(m, e->GetMagnitude());
+                return c;
             }
-            if (!c.hostile) c.fx = ConsumableBuffs(a_alc);
+            if (c.hostile) return c;
+            if (const int f = FamilyOf(PotionRestores(a_alc)); f >= 0) {
+                const float mag = PotionMagnitude(a_alc);
+                c.restoreMag[static_cast<std::size_t>(f)] = mag > 0.0f ? mag : 1.0f;   // 1 = classified, magnitude unreadable (counts, never floored)
+            }
+            c.fx = ConsumableBuffs(a_alc);
             return c;
         }
 
@@ -122,17 +134,24 @@ namespace MFO::Logistics {
             inv.ranged      = roles.doRanged;
             inv.caster      = IsCasterFollower(a_state);
             inv.sneaks      = TableHasAction(a_state.logistics(), Vocab::kActSneak) || TableHasAction(a_state.combat(), Vocab::kActSneak);
-            inv.restore[Iaus::kRestoreHealth]  = CountPotions(a_actor, AV::kHealth);
-            inv.restore[Iaus::kRestoreStamina] = CountPotions(a_actor, AV::kStamina);
-            inv.restore[Iaus::kRestoreMagicka] = CountPotions(a_actor, AV::kMagicka);
             for (auto& [obj, data] : a_actor->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() == kLockpick) { inv.lockpicks += data.first; continue; }
+                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                    // SOUL GEMS' USE (marth 2026-11-13): an enchanted weapon below its max charge (percent, the item's own ExtraCharge
+                    // against its enchantment's maximum: InventoryEntryData::GetEnchantmentCharge). Staves and bound weapons do not take gems.
+                    if (!inv.weaponNeedsCharge && data.second && !w->IsStaff() && !w->IsBound())
+                        if (const auto pct = data.second->GetEnchantmentCharge(); pct && *pct < kChargeFullPct) inv.weaponNeedsCharge = true;
+                    continue;
+                }
                 auto* alc = obj->As<RE::AlchemyItem>();
                 if (!alc) continue;
-                if (alc->IsPoison()) { inv.poisons += data.first; continue; }
+                const Iaus::Consumable c = ReadConsumable(alc);   // the SAME reader the item side uses
+                if (c.poison) { inv.poisons += data.first; continue; }
+                for (std::size_t f = 0; f < Iaus::kRestoreFamilies; ++f)
+                    if (c.restoreMag[f] > 0.0f) inv.restore[f] += data.first;
                 std::array<bool, Iaus::kBuffKinds> seen{};
-                for (const auto& fx : ConsumableBuffs(alc)) {
+                for (const auto& fx : c.fx) {
                     const auto i = static_cast<std::size_t>(fx.kind);
                     if (i >= Iaus::kBuffKinds || seen[i]) continue;
                     seen[i] = true;
@@ -143,6 +162,35 @@ namespace MFO::Logistics {
             inv.carried = a_actor->GetWeightInContainer();
             return inv;
         }
+
+        // ONE inventory read per ServiceFollower tick (review F4): keyed on the tick's sequence number + the follower, dropped after a real
+        // take. Worker only (like g_svc).
+        struct InvCache { std::uint64_t seq = 0; RE::FormID fid = 0; bool valid = false; Iaus::LootInv inv; };
+        InvCache g_invCache;
+
+        const Iaus::LootInv& CachedLootInv(RE::Actor* a_actor, const FollowerState& a_state) {
+            if (!g_invCache.valid || g_invCache.seq != g_svcSeq || g_invCache.fid != a_actor->GetFormID()) {
+                g_invCache.inv   = ReadLootInv(a_actor, a_state);
+                g_invCache.seq   = g_svcSeq;
+                g_invCache.fid   = a_actor->GetFormID();
+                g_invCache.valid = true;
+            }
+            return g_invCache.inv;
+        }
+    }
+
+    void IausLootInvDirty() { g_invCache.valid = false; }
+
+    bool IausLootValuablesTake(RE::Actor* a_follower, const FollowerState& a_state) {
+        if (!a_follower || !IausLootOn(a_state)) return false;
+        return Iaus::ScoreLootKind(LootKind::Valuables, CachedLootInv(a_follower, a_state)).take;
+    }
+
+    bool IausLooseConsumableWanted(RE::Actor* a_follower, RE::AlchemyItem* a_alc) {
+        if (!a_follower || !a_alc || !g_svc) return false;
+        Iaus::Consumable c = ReadConsumable(a_alc);
+        ApplyLootFloor(c);
+        return Iaus::ScoreConsumable(c, 1, CachedLootInv(a_follower, *g_svc)).take;   // a peek: no log
     }
 
     bool IausLootOn(const FollowerState& a_state) {
@@ -152,7 +200,7 @@ namespace MFO::Logistics {
     std::vector<Category> IausLootPlan(RE::Actor* a_follower, const FollowerState& a_state) {
         std::vector<Category> out;
         if (!a_follower) return out;
-        const auto inv = ReadLootInv(a_follower, a_state);
+        const auto& inv = CachedLootInv(a_follower, a_state);
         const RE::FormID fid = a_follower->GetFormID();
         std::vector<std::pair<float, Category>> takes;
         for (std::size_t i = 0; i < Iaus::kLootKinds; ++i) {
@@ -170,11 +218,8 @@ namespace MFO::Logistics {
 
     bool LootConsumablesNeed(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek) {
         if (!a_follower || !a_src || !g_svc) return false;
-        auto inv = ReadLootInv(a_follower, *g_svc);
+        Iaus::LootInv inv = CachedLootInv(a_follower, *g_svc);
         const RE::FormID fid = a_follower->GetFormID();
-        // LOW-POWER FLOOR (marth: "ignore low power potions entirely"), as LootPotions: a POTION's restore below the floor does not count
-        // as a restore. Its other effects (buff kinds) and its sale gold still do. Food is never floored (its restores are small by design).
-        const float floor = PotionLootFloor();
         struct Item { RE::TESBoundObject* obj; Iaus::Consumable c; std::int32_t count; float score; };
         std::vector<Item> items;
         for (auto& [obj, data] : a_src->GetInventory()) {
@@ -182,11 +227,10 @@ namespace MFO::Logistics {
             auto* alc = obj->As<RE::AlchemyItem>();
             if (!alc) continue;
             Iaus::Consumable c = ReadConsumable(alc);
-            if (!c.food && floor > 0.0f)
-                for (auto& m : c.restoreMag)
-                    if (m > 0.0f && m < floor) m = 0.0f;
+            ApplyLootFloor(c);
             const auto v = Iaus::ScoreConsumable(c, data.first, inv);
-            if (LogDue(fid, obj->GetFormID()))
+            // F8: only a real take / leave decision is logged, never the HasLoot peek (it re-judges every distinct item every few seconds).
+            if (!a_peek && LogDue(fid, obj->GetFormID()))
                 spdlog::info("[iaus-loot] {:08X}: item {:08X} '{}' x{} from {:08X}: {} score={:.2f} n={} ({})", fid, obj->GetFormID(),
                              obj->GetName() ? obj->GetName() : "?", data.first, a_src->GetFormID(), v.take ? "TAKE" : "leave", v.score,
                              v.takeCount, v.why);
@@ -205,7 +249,8 @@ namespace MFO::Logistics {
             if (!FitsCarryWeight(a_follower, it.obj->GetWeight() * static_cast<float>(v.takeCount))) continue;
             if (TheftGate::Take(a_follower, a_src, it.obj, v.takeCount, TheftGate::Road::Container) > 0) {
                 moved = true;
-                inv = ReadLootInv(a_follower, *g_svc);
+                IausLootInvDirty();   // a real take: the cached read is stale
+                inv = CachedLootInv(a_follower, *g_svc);
             }
         }
         return moved;

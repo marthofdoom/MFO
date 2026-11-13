@@ -242,6 +242,8 @@ namespace MFO::Logistics {
         // ServiceFollower at a time), so it points at the right state for the
         // whole of that follower's loot pass. Never dereferenced outside it.
         inline const FollowerState* g_svc = nullptr;
+        // Bumped once per ServiceFollower call: the key the IAUS loot inventory cache (logistics/LootNeed.cpp) is valid for. Worker only.
+        inline std::uint64_t g_svcSeq = 0;
 
         // Does this table author the given action anywhere? (e.g. an equip-ranged
         // gambit => the follower is meant to use a bow/crossbow, so loot one.)
@@ -870,7 +872,13 @@ namespace MFO::Logistics {
     //     poisons included, scored by ScoreConsumable; the theft gate decides every take, as in LootPotions.
     bool IausLootOn(const FollowerState& a_state);
     std::vector<Category> IausLootPlan(RE::Actor* a_follower, const FollowerState& a_state);
-    bool LootConsumablesNeed(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek);
+    bool LootConsumablesNeed(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek);   // a_peek: no [iaus-loot] line (F8)
+    //   IausLootInvDirty: drop the per-tick inventory read after a real take (F4). IausLootValuablesTake: the valuables category verdict
+    //     is TAKE (GemRules' sell-gambit stand-in, F6). IausLooseConsumableWanted: a loose potion / food on a surface passes the same
+    //     per-item scorer (F7), no log.
+    void IausLootInvDirty();
+    bool IausLootValuablesTake(RE::Actor* a_follower, const FollowerState& a_state);
+    bool IausLooseConsumableWanted(RE::Actor* a_follower, RE::AlchemyItem* a_alc);
     bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                      RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
                      bool* a_leftWaiting = nullptr);
