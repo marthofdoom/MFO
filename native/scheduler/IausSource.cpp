@@ -221,9 +221,13 @@ namespace MFO::Scheduler {
         // reads Occluded and the offense approach would file, it outranks the H4 spell-range close, for casters and archers alike. The close is
         // released and not asked for; the approach files. The decision is the all-Occluded state alone (no churn), and any Visible / Unknown
         // read gives the channel back to H4 as before. A standing disengage drive still outranks both (it is checked in each service).
-        if (OccludedFoe(m_set) && !APMFBridge::DisengageStands(a_id))
+        // H4 is released only when the approach could actually file at that foe (not blocked this fight, seat not refused); otherwise H4
+        // works as on main. While an offense approach stands H4 is not filed at all: the approach's own 1.5 s sight dwell is the hysteresis,
+        // so a flicker of sight does not swap the two claims every lap.
+        const Iaus::Combatant* occFoe = OccludedFoe(m_set);
+        if (occFoe && !APMFBridge::DisengageStands(a_id) && !APMFBridge::OffenseApproachCannotFile(a_id, occFoe->id))
             APMFBridge::ReleaseRangeClose(a_id, "sight wins: every foe reads Occluded, the offense approach takes the ch.24 channel");
-        else
+        else if (!APMFBridge::OffenseApproachStands(a_id))
             ServiceSpellRange(a_id, m_set.snap, m_set.gate);
         ServiceOccludedApproach(a_id, m_set);
         auto& acts = m_set.gen.actions;

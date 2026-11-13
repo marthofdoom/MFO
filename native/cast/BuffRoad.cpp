@@ -182,10 +182,13 @@ namespace MFO::Actuation {
 
         // BUFF, THEN BOW (marth 11-12): a fire-and-forget buff claim lets go of LEFT the moment its fire is observed (BuffRefreshGate), so
         // the weapon is not denied for the claim's TTL. That release ends g_fireSeen's "fired but never landed" bound, so this keeps it: per
-        // follower, SK(recipient, spell) -> when the claim was released after its fire. BuffClaim declines a re-claim while the up-read still
-        // says No inside kHoldLastSeenCapMs of that release (the buff is not showing yet; never a second cast on a guess), and drops the
-        // entry on Yes or once the window has passed. Erased by ResetBuffFollower / ResetBuffRoad. Worker-serial (#4).
+        // follower, SK(recipient, spell) -> when the claim was released after its fire. BuffClaim declines a re-claim while the up-read has not
+        // said Yes inside kHoldLastSeenCapMs of that release (Unknown counts as not landed; never a second cast on a guess); at the cap it does
+        // what R2-1 did (WARN, g_neverFired: held off for the fight). Dropped on Yes and by ResetBuffRoad. ResetBuffFollower (run by the
+        // per-lap ClearCastLock on a !castSeen lap, which is NOT the fight's end) keeps an entry younger than kFireReleasedKeepMs, so the
+        // window survives such a lap; an older one is a stale record of a fight long gone and is dropped. Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireReleased;
+        constexpr std::chrono::milliseconds kFireReleasedKeepMs{ 2 * APMFBridge::kHoldLastSeenCapMs };
 
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
@@ -245,7 +248,12 @@ namespace MFO::Actuation {
         g_neverFired.erase(a_follower);
         g_fired.erase(a_follower);
         g_fireSeen.erase(a_follower);
-        g_fireReleased.erase(a_follower);
+        if (const auto fr = g_fireReleased.find(a_follower); fr != g_fireReleased.end()) {
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = fr->second.begin(); it != fr->second.end();)
+                it = (now - it->second >= kFireReleasedKeepMs) ? fr->second.erase(it) : std::next(it);
+            if (fr->second.empty()) g_fireReleased.erase(fr);
+        }
     }
 
     bool BuffPlacementSpell(RE::SpellItem* a_spell) {
@@ -464,14 +472,21 @@ namespace MFO::Actuation {
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                 return SelfCast::Declined;
             }
-            // Released after its fire (BuffRefreshGate), the buff not showing yet: wait out the cap, never cast it a second time on a guess.
-            if (up == Up::No) {
+            // Released after its fire (BuffRefreshGate), the buff not up (No or Unknown): wait out the cap, never cast it a second time on a
+            // guess; at the cap it is the R2-1 outcome, FIRED but NEVER LANDED: WARN and hold the rule off for the fight.
+            if (up != Up::Blocked) {
                 if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end()) {
                     if (const auto it = fr->second.find(sk); it != fr->second.end()) {
                         const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - it->second).count();
                         if (ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return SelfCast::Declined;
                         fr->second.erase(it);
+                        spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} FIRED but NEVER LANDED: released {} ms ago after its fire, the buff is "
+                                     "still not up -- the rule is held off until the next cast-rule reset (no direct fallback; rule {})",
+                                     id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, corpseTarget ? corpseTarget : rid, ageMs,
+                                     g_firingRule);
+                        g_neverFired[id].insert(sk);
+                        return SelfCast::Declined;
                     }
                 }
             }
