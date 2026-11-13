@@ -3309,3 +3309,6 @@ Raised by the Opus review of 1ec94fd. Verbatim (the brief's wording): "stale Ver
 ### SEV-4 · retreat outlasting a buff gives a false NEVER LANDED (raised against 6f5011b4, fix/sight-wins-buff-release, 2026-11-12)
 Verbatim: "Retreat case: if a retreat outlasts the buff's duration, the late judgment reads Up::No with ageMs past the cap. That produces a false 'FIRED but NEVER LANDED' WARN and holds the buff off for the rest of the fight. Failure scenario: Oakflesh fires, she retreats for more than 60 s, she returns, and the buff is held off. One possible fix: store the first Yes seen in TickBuffLanded, or call TickBuffLanded on the retreat path too."
 Reasoning: the in-combat retreat branch (CombatScan.cpp ~:1189) returns before TickBuffLanded (:1336). The bound lasts only for the retreat; the window is wrong only when the retreat is longer than the buff. Area: cast/BuffRoad.cpp TickBuffLanded, scheduler/CombatScan.cpp.
+
+### fix/mage-buff-loop review, F5 / F6 / F7 (SEV-5), raised against 3f4ee3ca
+Opus 5.5 tier-B review of 3f4ee3ca (`fix/mage-buff-loop`) vs d16b27cc. F5, F6 and F7 are SEV-5 and are DEFERRED, not fixed (rule 9). Their verbatim text was NOT available to the fix round (`scratchpad/agentlogs/review-mage-buff-loop.md` held only the F1-F4 summary line), so the coordinator must paste the exact wording here. Do not drain from this stub alone.

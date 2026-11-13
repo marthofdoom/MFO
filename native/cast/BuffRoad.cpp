@@ -401,6 +401,10 @@ namespace MFO::Actuation {
 
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
         if (!a_follower || !a_spell || !a_recipient || a_recipient == a_follower) return false;
+        // A SelfHazard / ScriptRider spell leaves no active effect carrying its own spell, so neither the book's activeOn nor
+        // the claim road's up-read can ever see it up on an ally; the self-apply lockout does not cover a claim. Never offered.
+        const auto shape = ClassifyArchetype(a_spell, /*a_seat0=*/true).shape;
+        if (shape == SpellShape::SelfHazard || shape == SpellShape::ScriptRider) return false;
         return ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, a_recipient) == BuffRoad::Claim;
     }
 

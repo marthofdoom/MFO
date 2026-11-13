@@ -384,10 +384,15 @@ namespace MFO::Actuation {
                 }
             }
             if (gone || stale || concCapped || healedFull || magickaDry || casterDown) {
-                // RELEASE. DISPEL (+ interrupt the channel, in SelfCastEndActor) a
-                // lingering STICKY buff on any release, AND a momentary stream's
-                // SUSTAINED effect when it truly ENDED (stale / heal-full / magicka-out /
-                // caster-down).
+                // RELEASE (SelfCastEndActor interrupts the channel). A FIRE-AND-FORGET
+                // Buff-kind spell (a light, a ward, a fortify, a rune-shaped buff) lives its
+                // authored life: a stale (or spell-switch) release does NOT dispel it
+                // (fix/mage-buff-loop; IAUS stops choosing a buff once it is up, so the old
+                // dispel tore it down ~2 s after the cast and it was cast again). It is
+                // DISPELLED, with its recast lock erased, on a CONCENTRATION buff's release,
+                // a momentary stream's SUSTAINED effect when it truly ENDED (heal-full /
+                // magicka-out / caster-down) and a conc cap release; heals are never
+                // dispelled on a plain cap.
                 // A plain CAP-only release re-streams next tick (fresh random cap),
                 // keeping a wanted self buff/heal continuous across bursts (self has no
                 // proxy slot to orphan). There is NO equip to undo.

@@ -36,6 +36,10 @@ namespace MFO::Actuation {
         // 5 s when that is 0 or the record gives none: the book's refresh period (iaus/SpellBook.cpp kRefreshSec), the
         // shortest interval at which IAUS could learn anything new about a buff it cannot read.
         constexpr float kBuffLockFloorSec = 5.0f;
+        void EraseBuffLock(RE::FormID a_follower, RE::FormID a_spell) {
+            std::scoped_lock lk(g_buffLockMx);
+            g_buffLockUntil.erase(BuffLockKey(a_follower, a_spell));
+        }
         float BuffLockSec(RE::SpellItem* a_sp) {
             auto* ei = a_sp ? a_sp->GetCostliestEffectItem() : nullptr;
             const float d = ei ? static_cast<float>(ei->GetDuration()) : 0.0f;
@@ -539,8 +543,13 @@ namespace MFO::Actuation {
                              sp->GetName() ? sp->GetName() : "?", a_spellID, before, after, cost,
                              a_chargeSec, spend);
                 // fix/mage-buff-loop item 1: a landed fire-and-forget Buff is locked against a recast for its authored life.
+                // The lock stands in for the up-read ONLY where the effect cannot be read: a buff whose post-cast read found its
+                // effect on him (HealAttach::Present: Candlelight) is already covered by the book's activeOn and the
+                // HasMagicEffect guards, and a lock there would outlive a dispel from anywhere else. Absent / Instant = nothing
+                // readable (SelfHazard, ScriptRider) -> lock. (Chosen over a shape gate: it follows the real read, not a list.)
                 if (!concMomentary && sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
-                    CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Buff)
+                    CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Buff &&
+                    attach != HealAttach::Present)
                     NoteSelfBuffApplied(a_id, sp);
                 if (heal) {
                     NoteHealLanded(a_id, a_id, a_spellID);   // [bleed] attribution
@@ -554,15 +563,23 @@ namespace MFO::Actuation {
         // The self-cast NEVER equips or channels, so there is nothing to unequip,
         // interrupt, or sheathe -- and doing any of those would touch the
         // follower's OWN combat draw/equip state, which is not ours to change.
-        //   a_keepLiveBuff (fix/mage-buff-loop): the release is a stale / switch one, not a heal-full / magicka-out /
-        //   caster-down END, and a fire-and-forget Buff of this spell is still inside the recast lockout (its authored life,
-        //   NoteSelfBuffApplied): do NOT dispel it. The rule going quiet is how IAUS reaches the next choice once the
-        //   buff is up, so a dispel here tore every one-shot buff down about 2 s after it was cast and the next lap cast it again.
+        //   a_keepLiveBuff (fix/mage-buff-loop): the release is a stale / switch one (not a heal-full / magicka-out /
+        //   caster-down / cap END). A FIRE-AND-FORGET Buff-kind spell then lives its authored life: it is NOT dispelled. That is
+        //   its own rule (decided inside the posted lambda, FIFO after the apply, from the spell record), independent of the
+        //   recast lockout. The rule going quiet is how IAUS reaches the next choice once the buff is up, so a dispel here tore
+        //   every one-shot buff down about 2 s after it was cast and the next lap cast it again. Concentration, heal,
+        //   magicka-out, cap and caster-down releases are unchanged. A real dispel also erases that (follower, spell) lock.
         void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID, bool a_keepLiveBuff) {
-            const bool keep = a_keepLiveBuff && SelfBuffRecastLocked(a_id, a_spellID);
-            MainThread::Post([a_id, a_spellID, keep] {
+            MainThread::Post([a_id, a_spellID, a_keepLiveBuff] {
                 if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id)) {
-                    if (!keep) DispelSpellEffectsOn(a, a_spellID);
+                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                    const bool keep = a_keepLiveBuff && sp &&
+                                      sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
+                                      CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Buff;
+                    if (!keep) {
+                        DispelSpellEffectsOn(a, a_spellID);
+                        EraseBuffLock(a_id, a_spellID);
+                    }
                     // A SELF concentration channel also drains the caster per-second
                     // via the engine -- interrupt it so a self-heal/ward channel truly
                     // ends (no runaway self-drain), same as the target path.
