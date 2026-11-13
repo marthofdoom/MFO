@@ -145,6 +145,19 @@ namespace MFO::APMFBridge {
         }
     }
 
+    bool OffenseApproachStands(RE::FormID a_follower) {
+        std::scoped_lock lock(g_offMx);
+        const auto it = g_off.find(a_follower);
+        return it != g_off.end() && it->second.handle != APMF_API::kInvalidHandle;
+    }
+
+    bool OffenseApproachCannotFile(RE::FormID a_follower, RE::FormID a_foe) {
+        if (!OffApi() || g_offSeatRefused.load(std::memory_order_relaxed)) return true;
+        std::scoped_lock lock(g_offMx);
+        const auto bit = g_offBlocked.find(a_follower);
+        return bit != g_offBlocked.end() && bit->second.count(a_foe) != 0;
+    }
+
     void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe, bool a_touchSpell) {
         const float standoff = a_touchSpell ? kTouchStandoff : kOffenseStandoff;
         const char* standoffWhy = a_touchSpell ? "touch spell" : "ranged";

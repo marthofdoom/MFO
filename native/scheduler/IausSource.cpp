@@ -121,6 +121,26 @@ namespace MFO::Scheduler {
             APMFBridge::ServiceRangeClose(a_id, c.foe, c.radius, c.far);
         }
 
+        // The foe the occluded approach would pin, or null when it files nothing: not a melee-only follower, every listed foe reads Occluded,
+        // and a foe resolves (the current combat target if it is a listed foe, else the target of the attack / offense candidate).
+        // A pure read of the snapshot, so the lap's ordering (SIGHT WINS) and the filing itself decide on the same state.
+        const Iaus::Combatant* OccludedFoe(const Iaus::Candidates::Set& a_set) {
+            const Iaus::Snapshot& s = a_set.snap;
+            if (s.meleeOnly || s.foes.empty()) return nullptr;
+            for (const auto& f : s.foes) if (f.sight != Iaus::Sight::Occluded) return nullptr;
+            auto listed = [&](std::uint32_t a_fid) -> const Iaus::Combatant* {
+                if (a_fid == 0) return nullptr;
+                for (const auto& f : s.foes) if (f.id == a_fid) return &f;
+                return nullptr;
+            };
+            if (const auto* foe = listed(s.currentTargetId)) return foe;
+            for (const auto& c : a_set.gen.actions) {
+                if (c.family != Family::Attack && c.family != Family::PowerAttack && c.family != Family::CastOffense) continue;
+                if (const auto* foe = listed(c.target)) return foe;
+            }
+            return nullptr;
+        }
+
         // THE OCCLUDED APPROACH (fix/iaus-occluded-approach, field 11-12): the gambit selector (Evaluator.cpp PickFoe) files the ch.24 offense
         // approach when every candidate foe reads Occluded on the follower's own ray, and ends it on a Visible read; IAUS never ran that selector,
         // so a follower who sensed a foe she could not see (an archer with only buffs and summons to pick) never walked toward it. Same shape as
@@ -132,32 +152,18 @@ namespace MFO::Scheduler {
         void ServiceOccludedApproach(RE::FormID a_id, const Iaus::Candidates::Set& a_set) {
             const Iaus::Snapshot& s = a_set.snap;
             if (s.meleeOnly || s.foes.empty()) return;
-            auto listed = [&](std::uint32_t a_fid) -> const Iaus::Combatant* {
-                if (a_fid == 0) return nullptr;
-                for (const auto& f : s.foes) if (f.id == a_fid) return &f;
-                return nullptr;
-            };
-            const Iaus::Combatant* foe = listed(s.currentTargetId);
-            if (!foe) {
-                for (const auto& c : a_set.gen.actions) {
-                    if (c.family != Family::Attack && c.family != Family::PowerAttack && c.family != Family::CastOffense) continue;
-                    if ((foe = listed(c.target))) break;
-                }
-            }
-            if (!foe) return;
             // Mirror of Evaluator.cpp PickFoe: a Visible read from any listed foe is sight (NoteOffenseSight); the approach is filed only when
             // EVERY listed foe reads Occluded (a Visible or Unknown foe means no approach).
-            bool anyVisible = false, allOccluded = true;
-            for (const auto& f : s.foes) {
-                if (f.sight == Iaus::Sight::Visible) anyVisible = true;
-                if (f.sight != Iaus::Sight::Occluded) allOccluded = false;
-            }
+            bool anyVisible = false;
+            for (const auto& f : s.foes) if (f.sight == Iaus::Sight::Visible) anyVisible = true;
             if (anyVisible) { APMFBridge::NoteOffenseSight(a_id); return; }
-            if (!allOccluded) return;
-            // ONE ch.24 claim per follower (apmf/RangeApproach.cpp banner): the H4 spell-range close and the H3 disengage drive hold the
-            // channel while they stand, so the offense approach yields to them and is released, never filed over them.
-            if (APMFBridge::RangeCloseStands(a_id) || APMFBridge::DisengageStands(a_id)) {
-                APMFBridge::ReleaseOffenseApproach(a_id, "a spell-range close or a disengage drive holds the ch.24 channel");
+            const Iaus::Combatant* foe = OccludedFoe(a_set);
+            if (!foe) return;
+            // ONE ch.24 claim per follower (apmf/RangeApproach.cpp banner): the H3 disengage drive holds the channel while it stands, so the
+            // offense approach yields to it and is released, never filed over it. (The H4 close is NOT a yield: SIGHT WINS, the lap releases it
+            // before this runs, see the constructor.)
+            if (APMFBridge::DisengageStands(a_id)) {
+                APMFBridge::ReleaseOffenseApproach(a_id, "a disengage drive holds the ch.24 channel");
                 return;
             }
             // A touch spell closes to touch range (Evaluator's a_touchSpell): the spell of his hands that IAUS would cast at him.
@@ -211,7 +217,18 @@ namespace MFO::Scheduler {
         // member and is never moved while the candidates (string_views into its snapshot) are in use.
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
-        ServiceSpellRange(a_id, m_set.snap, m_set.gate);
+        // SIGHT WINS (marth 11-12: "for sure, and not having a bow doesn't matter if you don't have line of sight"): while EVERY listed foe
+        // reads Occluded and the offense approach would file, it outranks the H4 spell-range close, for casters and archers alike. The close is
+        // released and not asked for; the approach files. The decision is the all-Occluded state alone (no churn), and any Visible / Unknown
+        // read gives the channel back to H4 as before. A standing disengage drive still outranks both (it is checked in each service).
+        // H4 is released only when the approach could actually file at that foe (not blocked this fight, seat not refused); otherwise H4
+        // works as on main. While an offense approach stands H4 is not filed at all: the approach's own 1.5 s sight dwell is the hysteresis,
+        // so a flicker of sight does not swap the two claims every lap.
+        const Iaus::Combatant* occFoe = OccludedFoe(m_set);
+        if (occFoe && !APMFBridge::DisengageStands(a_id) && !APMFBridge::OffenseApproachCannotFile(a_id, occFoe->id))
+            APMFBridge::ReleaseRangeClose(a_id, "sight wins: every foe reads Occluded, the offense approach takes the ch.24 channel");
+        else if (!APMFBridge::OffenseApproachStands(a_id))
+            ServiceSpellRange(a_id, m_set.snap, m_set.gate);
         ServiceOccludedApproach(a_id, m_set);
         auto& acts = m_set.gen.actions;
         Iaus::Engine::FillCooldowns(a_id, acts, m_tick, T);

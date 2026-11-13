@@ -817,6 +817,7 @@ namespace MFO::Scheduler {
                 Actuation::HealHandsCombatEnded(id);   // [heal-hold] ... combat-ended, once per heal record
                 ComposedCast::End(id);
                 Actuation::ClearCastLock(id);
+                Actuation::EndFightBuffBounds(id);   // BuffRoad's per-fight bounds (never-fired hold-off, fire-released window) end with the fight
                 // Weapon-stance ownership dies with the fight too. The live CSTY
                 // already reverted when the per-combat controller was destroyed;
                 // this drops the stale bookkeeping so the next fight re-baselines.
@@ -1332,6 +1333,7 @@ namespace MFO::Scheduler {
         APMFBridge::PollCombatMove(id);
         APMFBridge::PollBlock(id);           // Harbinger ch.31 block (ABI v43): each outcome of his held guard, once
         APMFBridge::CombatMoveProbeTick(f);
+        Actuation::TickBuffLanded(f);        // buff-then-bow: judge a self-buff released at its fire (landed, or R2-1 never-landed at the cap)
         APMFBridge::TickRangeClose(id);      // batch I H4: end a spell-range close that is over, leashed or no longer asked for
         APMFBridge::ServiceGroundStep(id);   // Harbinger ch.24 on a point: end a step back that is over (one outcome line)
         // Card G3 (Concealment.cpp): a hide run holds him (running to the point, or the bounded hold at it). No rule scan

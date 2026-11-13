@@ -537,6 +537,7 @@ namespace MFO::Followers {
         // runtime-only, no serialized tail, same discipline as the two claims
         // just above -- a dismissed follower's lock must not outlive him either.
         Actuation::ClearCastLock(id);
+        Actuation::EndFightBuffBounds(id);   // the per-fight buff bounds (ClearCastLock no longer ends them) die with the follower too
     }
 
     void ReleaseHeldState(RE::FormID id) { ReleaseHeldStateImpl(id, false); }
