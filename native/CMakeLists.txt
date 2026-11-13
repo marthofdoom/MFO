@@ -131,6 +131,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/TeleportCompat.cpp
     logistics/Lotd.cpp
     logistics/PlayerGiven.cpp
+    logistics/Storage.cpp
     logistics/SwapUp.cpp
     logistics/Silver.cpp
     logistics/Lockpick.cpp

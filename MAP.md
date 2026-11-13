@@ -4947,6 +4947,14 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 **Open backlog:** MFO-B130 (menu read off-main), MFO-B131 (a stale entry after a fast leave; now saved), MFO-B132
 (a gift before LOTD's first snapshot is recorded whatever it is; inert).
 
+### logistics/Storage.cpp / Storage.h — OFF-CLASS STORAGE, TEMPLATE ONLY (ClickUp 86e3t212u, `feat/offclass-storage`, 2026-11-13; NOT serialized yet, NOT called)
+Skeleton files: every function is a TODO body and NOTHING calls them (no hook, no tick, no errand stop, no co-save record, no INI key).
+`IsStored` / `StoredOf` / `Homes` / `ClearRecord` are the only real bodies and read an always-empty table under the leaf mutex `g_mx`.
+The design, the proposed `'STOR'` v1 byte layout, the threading table, the `[storage]` log lines, the self-test cases, the open questions
+and the ORDERED PLAN with file:line seats are in `Docs/research/2026-11/offclass-storage-design.md`. **What breaks:** nothing today. The
+author who fills it in adds a co-save record (tier A): the record list in section 1 above and CLAUDE.md's "five things" count must be
+updated in that change, and this entry replaced by a real one with its own "What breaks".
+
 ### logistics/Errand.cpp / Errand.h / apmf/ErrandClaims.cpp — TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7; SAVED since R2: 'ERND' v1)
 Design: `_evidence/2026-10-18-designs/TOWN-DESIGN.md` (R1a = this; R1b = off-screen simulation + recall, R2 = the `ERND` co-save,
 both LATER rounds). With Harbinger ABI >= 24 (`APMFBridge::ErrandSupported`, ch.19 + ch.12 v2 + `GetIdleState`) and

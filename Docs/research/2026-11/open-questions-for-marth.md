@@ -313,3 +313,12 @@ Q-I-8. Block in IAUS. DEFAULT taken: a Block candidate exists only for a class w
 - **Sight wins + buff, then bow: ANSWERED (11-12).** (1) When every foe reads Occluded the offense approach outranks the H4 spell-range close for casters and archers alike ("for sure, and not having a bow doesn't matter if you don't have line of sight"); the disengage drive still outranks it. (2) A fire-and-forget self-buff claim lets go of the hand once its spell fires so the weapon can be equipped at once; concentration self-buffs are unchanged (a sim-backed IAUS cost for a weapon hand lost while channelling comes separately). Branch fix/sight-wins-buff-release.
 
 - **Ruling 2026-11-12 (marth, Deck field test): "Mage line wears clothing."** Mage-line classes (Mage, Wizard, Evoker, Conjurer, Necromancer, Sorcerer?, Healer, Priest, Warlock, Arch-Mage...; the class table's mage line) wear clothing, never light or heavy armor. Found when a Mage-class follower wore heavy pieces and the armor target read "class LIGHT".
+
+## Saved 2026-11-13 (off-class storage, ClickUp 86e3t212u, `feat/offclass-storage`; OUTLINE ONLY, nothing built; the default in brackets is what `offclass-storage-design.md` plans)
+- Q-S-1 ("plans to use" with classes OFF). [His own perk ranks in the piece's skill tree: an explicit Melee pick with Archery perks keeps his best bow at home.] Alternative: no storing without the class add-on.
+- Q-S-2 (armor). [Not stored in v1, weapons and shields only: the class data has weapon sets and no armor sets.] The real case is robes against armor across the mage line.
+- Q-S-3 (how expensive is "expensive"). [Stored when the price to buy it back minus the sale price now is at least `iErrandMinSellGold` (100). At Speech 15 that is any planned piece worth about 36 gold or more.] Placeholder for the sim logistics world.
+- Q-S-4 (a home with no persistent container). [No storing there, one log line.] Retrieval from anywhere needs a chest that stays in memory while its cell is unloaded.
+- Q-S-5 (home in another town). [He stores only in the home's own town and sells elsewhere as today.] Alternative: carry planned pieces until the next home visit.
+- Q-S-6 (roster removal). [His entries are dropped, the pieces stay in the chest as yours.]
+- Q-S-7 (several homes). [One chest per owned cell, up to 16.]
