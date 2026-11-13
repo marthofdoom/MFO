@@ -1587,7 +1587,8 @@ namespace {
               "class curves: a Piece point's y is a per-class knob (py<i>)");
         Check(CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "px1", 0.25f) && pr.curves[0].curve.px[1] == 0.25f, "class curves: a Piece point's x moves between its neighbours (px<i>)");
         Check(!CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "px1", 1.5f) && !CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "px1", -0.1f) && !CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "py3", 0.5f)
-              && !CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "py0", std::numeric_limits<float>::infinity()), "class curves: a Piece x past a neighbour, a point the curve does not have and a non-finite value are refused");
+              && !CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "px1", 0.0f) && !CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "px1", 1.0f) && pr.curves[0].curve.px[1] == 0.25f   /* review F7: an x equal to a neighbour is refused */
+              && !CC::SetCurveParam(pr, Family::Attack, Cons::Los, piece, "py0", std::numeric_limits<float>::infinity()), "class curves: a Piece x past or ON a neighbour, a point the curve does not have and a non-finite value are refused");
         CC::Row np; Check(!CC::SetCurveParam(np, Family::DrinkHealth, Cons::DrinkNeed, t.curve[static_cast<std::size_t>(Cons::DrinkNeed)], "py0", 0.5f) && np.curves.empty(), "class curves: a point edit on a curve that is not a Piece is refused and creates no override");
     }
 

@@ -151,7 +151,7 @@ namespace MFO::Iaus::ClassCurves {
             for (const auto& e : a_row.curves) if (e.family == a_f && e.cons == a_c) { cur = &e.curve; break; }
             const std::size_t i = static_cast<std::size_t>(a_param[2] - '0');
             if (cur->kind != CurveKind::Piece || i >= cur->np || !std::isfinite(a_v)) return false;
-            if (a_param[1] == 'x' && ((i > 0 && a_v < cur->px[i - 1]) || (i + 1 < cur->np && a_v > cur->px[i + 1]))) return false;
+            if (a_param[1] == 'x' && ((i > 0 && a_v <= cur->px[i - 1]) || (i + 1 < cur->np && a_v >= cur->px[i + 1]))) return false;   // strictly between its neighbours: a duplicate x is refused (review F7)
         }
         Profile::CurveOverride* o = nullptr;
         for (auto& e : a_row.curves) if (e.family == a_f && e.cons == a_c) { o = &e; break; }

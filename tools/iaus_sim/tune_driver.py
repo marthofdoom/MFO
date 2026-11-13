@@ -3,7 +3,7 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,joint,globals,consts,floor,rating,recalib,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,summary] [--jobs 12]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
 
@@ -21,6 +21,8 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
                     every later class's baseline. One dashboard results file per finished sweep.
           joint     the whole final table against the shipped one on all 15 cells (128 seeds, three configs), and each T1 value
                     left out in turn. A failure is an open decision: no value is written.
+          edge      marth "Widen to x4 / x0.25": only knobs whose accepted value sits at the edge of the range tried are searched
+                    again past it, same RULE; a wider value that passes is an open decision (never shipped).
           globals   the shared Tuning winners of the earlier round, confirmed on fresh seeds on every world with the per-class gate
                     and the decision-switching rate next to J.
           consts    the compile-time constants never probed (const_probe.sh variants).
@@ -60,6 +62,7 @@ import sys
 import threading
 import time
 
+INF = float("inf")
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
 BASE = ["melee-off", "ranged-off", "mage-off"]
@@ -118,11 +121,26 @@ def ident(world, binary=None):
         if A.builtin_worth:
             out.append("worth:" + sha(A.builtin_worth))
     elif world is not None:
+        check_world(world)
         out += ["sim:" + sha(CACHE_DIR + world + ".sim.json"), "mods:" + sha(CACHE_DIR + world + ".combatmods.json"), "worth:" + sha(os.path.join(A.out, "potworth-%s.txt" % world))]
     return "|".join(out)
 
 
+def check_world(world, need_worth=True):
+    """Review F8: EVERY stage that reads a list checks its companion files here (world_args and ident call it), not only stage_prep.
+    The simulator reads <list>.combatmods.json BESIDE the .sim.json and takes "absent" for "no such mod", so a missing file would
+    silently drop the list's combat mods; a missing potion-worth table would be refused by the simulator only later."""
+    if world == "builtin":
+        return
+    for f in (CACHE_DIR + world + ".sim.json", CACHE_DIR + world + ".combatmods.json"):
+        if not os.path.exists(f):
+            raise SystemExit("missing %s (tools/list_balance/compile_world.py / extract_combat_mods.py): a list is never run without its companion files" % f)
+    if need_worth and not os.path.exists(os.path.join(A.out, "potworth-%s.txt" % world)):
+        raise SystemExit("missing %s: run the prep stage on this --out first (it measures each list's potion worth)" % os.path.join(A.out, "potworth-%s.txt" % world))
+
+
 def world_args(world):
+    check_world(world)
     if world == "builtin":
         return ["--potion-worth", A.builtin_worth] if A.builtin_worth else []
     return ["--list", CACHE_DIR + world + ".sim.json", "--potion-worth", os.path.join(A.out, "potworth-%s.txt" % world)]
@@ -275,6 +293,16 @@ def uniq(vals, shared):
     return out
 
 
+def logi_mid(b, mults, steps):
+    """A Logi midpoint's candidates: scaled when |b| >= 0.2, else stepped; a midpoint never crosses 0 (review F7: a negative midpoint
+    used to clamp to +0.02, which flipped its sign). b = 0 has no sign to keep and steps to the positive side, as before."""
+    if abs(b) >= 0.2:
+        return [b * k for k in mults]
+    if b < 0.0:
+        return [min(-0.02, b - s) for s in steps]   # mirrored: the same distances, on the negative side
+    return [max(0.02, b + s) for s in steps]
+
+
 def all_knobs():
     """Every knob a class row can carry, each with its candidate values INSIDE its valid range. From the simulator's --list-uses."""
     txt = text_run("list-uses", [A.bin, "--list-uses"])
@@ -293,46 +321,54 @@ def all_knobs():
                 continue
             seen.add((f, c))
             name, pre = "%s.%s" % (fn, cn), "{c}:%d.%d." % (f, c)
-            add = lambda suffix, param, shared, vals: knobs.append((name + suffix, pre + param + "={v}", shared, uniq(vals, shared))) if uniq(vals, shared) else None
+            def add(suffix, param, shared, vals, meta):
+                if uniq(vals, shared):
+                    knobs.append((name + suffix, pre + param + "={v}", shared, uniq(vals, shared)))
+                    KNOB_META[name + suffix] = meta
             if kind == "Bin":
                 if {a, b} <= {0.0, 1.0}:
                     gates += 1   # a pure 0 / 1 gate is a rule
                 else:
                     for suffix, param, v in ((".lo", "a", a), (".hi", "b", b)):
                         if v > 1.0:      # a boost: never under 1
-                            add(suffix, param, v, [1.0, 1.0 + 0.5 * (v - 1.0), 1.0 + 1.5 * (v - 1.0), 1.0 + 2.5 * (v - 1.0)])
+                            add(suffix, param, v, [1.0, 1.0 + 0.5 * (v - 1.0), 1.0 + 1.5 * (v - 1.0), 1.0 + 2.5 * (v - 1.0)], ("add", 1.0, INF, False))
                         elif 0.0 < v < 1.0:   # a damped level: never 0 (a veto), never over 1
-                            add(suffix, param, v, [max(0.02, v * 0.5), v * 0.75, min(1.0, v * 1.33), min(1.0, v * 1.67)])
+                            add(suffix, param, v, [max(0.02, v * 0.5), v * 0.75, min(1.0, v * 1.33), min(1.0, v * 1.67)], ("mul", 0.02, 1.0, False))
             elif kind == "Piece":
                 pts = pieces.get((f, c), [])
                 top = max([1.0] + [y for _, y in pts])
                 for i, (x, y) in enumerate(pts):
                     if y > 0.0:          # a point at 0 is a veto and stays one; no other point may reach 0
-                        add(".y%d" % i, "py%d" % i, y, [min(top, max(0.02, y + s)) for s in (-0.3, -0.15, 0.15, 0.3)])
+                        add(".y%d" % i, "py%d" % i, y, [min(top, max(0.02, y + s)) for s in (-0.3, -0.15, 0.15, 0.3)], ("add", 0.02, top, False))
                     if 0 < i < len(pts) - 1:   # an interior point's x, a quarter of the way to either neighbour (the order is kept)
-                        add(".x%d" % i, "px%d" % i, x, [x - 0.25 * (x - pts[i - 1][0]), x + 0.25 * (pts[i + 1][0] - x)])
+                        add(".x%d" % i, "px%d" % i, x, [x - 0.25 * (x - pts[i - 1][0]), x + 0.25 * (pts[i + 1][0] - x)], ("add", pts[i - 1][0], pts[i + 1][0], True))
             else:
                 if kind == "Lin":
-                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)])
-                    add(".b", "b", b, [max(min(b, 0.0), b + s) for s in (-0.2, -0.1, 0.1, 0.2)])   # an offset is never pushed under 0
+                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)], ("mul", -INF, INF, False))
+                    add(".b", "b", b, [max(min(b, 0.0), b + s) for s in (-0.2, -0.1, 0.1, 0.2)], ("add", min(b, 0.0), INF, False))   # an offset is never pushed under 0
                 elif kind == "Logi":
-                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)])
-                    add(".b", "b", b, [max(0.02, b * k) for k in (0.6, 0.8, 1.25, 1.6)] if abs(b) >= 0.2 else [max(0.02, b + s) for s in (-0.1, -0.05, 0.05, 0.1, 0.2)])
+                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)], ("mul", -INF, INF, False))
+                    add(".b", "b", b, logi_mid(b, (0.6, 0.8, 1.25, 1.6), (-0.1, -0.05, 0.05, 0.1, 0.2)), ("mul", -INF, INF, False) if abs(b) >= 0.2 else ("add", -INF, -0.02, False) if b < 0.0 else ("add", 0.02, INF, False))
                 else:   # Pow / Inv: the exponent, always > 0
-                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)])
+                    add(".a", "a", a, [a * k for k in (0.5, 0.75, 1.33, 2.0)], ("mul", -INF, INF, False))
                 if fl > 0.0:
-                    add(".floor", "floor", fl, [max(0.01, fl * 0.5), min(1.0, fl * 1.5)])
+                    add(".floor", "floor", fl, [max(0.01, fl * 0.5), min(1.0, fl * 1.5)], ("mul", 0.01, 1.0, False))
             if kind != "Bin" and w > 0.0:
-                add(".w", "w", w, [w * k for k in (0.5, 0.75, 1.5, 2.0)])   # the consideration's exponent for this class (inert on a gate or a boost: the liveness screen drops it)
+                add(".w", "w", w, [w * k for k in (0.5, 0.75, 1.5, 2.0)], ("mul", -INF, INF, False))   # the consideration's exponent for this class (inert on a gate or a boost: the liveness screen drops it)
         elif len(p) == 4 and p[0] == "FAMILY" and float(p[3]) > 0.0 and p[2] not in ("use_scroll", "equip"):
             knobs.append(("family." + p[2], "{c}:family.%s={v}" % p[1], 1.0, [0.75, 0.87, 1.15, 1.33]))   # the class's multiplier on a whole family: small on purpose (the class card)
+            KNOB_META["family." + p[2]] = ("mul", -INF, INF, False)
     return knobs, gates
+
+
+KNOB_META = {}   # name -> (mode "mul" | "add", lo, hi, strict): how all_knobs moved the knob and its valid range; the edge stage widens inside it
 
 
 def class_knobs(cls, knobs):
     out = list(knobs)
     if cls in KNIGHTS:
         out.append(("scalar.drinkHealthLine", "{c}:scalar.drinkHealthLine={v}", 0.34, [0.20, 0.25, 0.30, 0.40, 0.50]))
+        KNOB_META["scalar.drinkHealthLine"] = ("add", 0.02, 0.98, False)
     return out
 
 
@@ -366,11 +402,11 @@ def knight_floor(world, cls, curves, sets=None):
     return out
 
 
-def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, base_sets=None):
+def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, base_sets=None, replace=None):
     """Holdout, many-seed gates, cross-world confirmatory, Knight floor for ONE candidate (a --curve spec, or a --set string in `sets`)
     on top of the kept specs. Returns the row; row["accepted"] is the verdict. forced (smoke runs, re-judgements): every step is
     run and reported even after one fails, and the verdict is still the rule's."""
-    cur = kept + ([spec] if spec else [])
+    cur = [k for k in kept if k != replace] + ([spec] if spec else [])   # replace: the edge stage moves an accepted value, never stacks two specs on one parameter
     row = {"class": cls, "spec": spec or sets, "accepted": False, "why": "", "steps": {}}
     fails = []
     hold = range(1001, 1001 + CFG["hold"])
@@ -476,11 +512,7 @@ def stage_prep():
         if w == "builtin":
             st["worlds"][w] = "PotionWorth.h" if not A.builtin_worth else A.builtin_worth
             continue
-        src = CACHE_DIR + w + ".sim.json"
-        if not os.path.exists(src):
-            raise SystemExit("missing %s: run tools/list_balance/compile_world.py --name %s" % (src, w))
-        if not os.path.exists(CACHE_DIR + w + ".combatmods.json"):   # the simulator reads it BESIDE the .sim.json and takes "absent" for "no such mod": a copied list file silently loses the list's combat mods
-            raise SystemExit("missing %s%s.combatmods.json (tools/list_balance/extract_combat_mods.py): without it the list's combat mods are not in the world" % (CACHE_DIR, w))
+        check_world(w, need_worth=False)   # the table is measured just below
         tab = os.path.join(A.out, "potworth-%s.txt" % w)
         measure_worth(tab, w, CFG["list_calib_seeds"])
         st["worlds"][w] = tab
@@ -700,6 +732,95 @@ def stage_joint():
     SUMMARY["stages"]["joint"] = st
 
 
+EDGE_MUL = {"up": (3.0, 4.0), "down": (0.35, 0.25)}   # marth 11-12 "Widen to x4 / x0.25" (the classes stage tried x0.5 .. x2)
+EDGE_ADD = (2.0, 4.0)                                 # an additive knob: 2 and 4 times its largest step in the edge's direction
+
+
+def edge_of(name, shared, tried, best):
+    """'up' / 'down' when the accepted value is the outermost value tried on that side of the shared one, else None."""
+    mode = KNOB_META.get(name, ("add",))[0]
+    pos = (lambda v: v / shared) if mode == "mul" and shared != 0.0 else (lambda v: v)
+    xs = [pos(v) for v in tried] + [pos(shared)]
+    if pos(best) >= max(xs) - 1e-9 and pos(best) > pos(shared):
+        return "up"
+    if pos(best) <= min(xs) + 1e-9 and pos(best) < pos(shared):
+        return "down"
+    return None
+
+
+def widen(name, shared, tried, side):
+    """The values past the edge, INSIDE the knob's valid range (KNOB_META). [] = the edge is the valid limit: nothing to widen."""
+    mode, lo, hi, strict = KNOB_META.get(name, ("add", -INF, INF, False))
+    if mode == "mul" and shared != 0.0:
+        vals = [shared * k for k in EDGE_MUL[side]]
+    else:
+        step = max([abs(v - shared) for v in tried if (v > shared) == (side == "up")] or [0.0])
+        vals = [shared + (k * step if side == "up" else -k * step) for k in EDGE_ADD]
+    out = []
+    for v in vals:
+        v = round(min(hi, max(lo, v)), 5)
+        if strict and not lo < v < hi:
+            continue
+        if strict and v in (lo, hi):
+            continue
+        if all(abs(v - t) > 1e-6 for t in list(tried) + [shared] + out):
+            out.append(v)
+    return out
+
+
+def stage_edge():
+    """marth 11-12 ("Widen to x4 / x0.25"): ONLY the knobs whose ACCEPTED value sits at the edge of the range the classes stage
+    tried are searched again, past that edge (multiplicative knobs to x4 / x0.25 of the shared value, additive ones to 2 and 4
+    times the largest step tried), inside each knob's valid range, under the same RULE, with the accepted value as the baseline
+    (the new value REPLACES it). The table is never changed here: the edge value stays written; a widened value that passes every
+    line of the rule is far from the shared curve by construction and becomes an OPEN DECISION with its evidence (never shipped)."""
+    knobs, _ = all_knobs()
+    train = range(1, CFG["train"] + 1)
+    rows = []
+    for cls, r in SUMMARY["stages"].get("classes", {}).items():
+        if not r.get("complete"):
+            continue
+        meta = {n: (t, sh) for n, t, sh, _ in class_knobs(cls, knobs)}
+        for row in [x for x in r["rows"] if x.get("accepted")]:
+            tried = [c[0] for c in row["sweep"]]
+            side = edge_of(row["knob"], row["shared"], tried, row["best"])
+            if not side:
+                continue
+            tmpl, shared = meta[row["knob"]]
+            vals = widen(row["knob"], shared, tried, side)
+            e = {"class": cls, "knob": row["knob"], "shared": shared, "accepted": row["best"], "side": side, "widened": vals, "sweep": [], "verdict": ""}
+            if not vals:
+                e["verdict"] = "EDGE IS THE VALID LIMIT: nothing to widen; the accepted value stands"
+            else:
+                base = r["base"] + r["kept"]
+                res = jmany([req("builtin", cls, "g3", base, train)] + [req("builtin", cls, "g3", [k for k in base if k != row["spec"]] + [tmpl.format(c=cls, v=v)], train) for v in vals])
+                cands = sorted(((paired(res[0], x) + (v,)) for x, v in zip(res[1:], vals)), key=lambda c: -c[0])
+                e["sweep"] = [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda c: c[2])]
+                d, se, v = cands[0]
+                e["train"] = [round(d, 3), round(se, 3)]
+                passed = d > 2.5 * se and d >= 0.15
+                if passed or (CFG["force"] and not any("steps" in x for x in rows)):   # a smoke run pushes its first widened sweep through the judge
+                    spec = tmpl.format(c=cls, v=v)
+                    j = judge(cls, base, spec, forced=not passed, replace=row["spec"])
+                    j["accepted"] = passed and j["accepted"]
+                    e["steps"], e["best"] = j["steps"], v
+                    if j["accepted"]:
+                        e["verdict"] = "WIDER VALUE PASSES THE RULE: reported, never shipped (far from the shared curve)"
+                        open_decision("%s %s: a value past the edge passes the rule" % (cls, row["knob"]), "shared %g, accepted (edge, %s) %g, widened %g: train %+.2f (se %.2f) over the accepted value, holdout %+.2f, cross-world mean %+.2f (se %.2f). Far from the shared curve: marth or the coordinator decides; the accepted %g stays written until then (summary.json stages.edge)"
+                                      % (cls, row["knob"], shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]))
+                    else:
+                        e["verdict"] = "the accepted edge value holds (%s: %s)" % ("a wider value beat it on train only" if passed else "SMOKE: judged without a train pass", j["why"])
+                else:
+                    e["verdict"] = "the accepted edge value holds (no wider value beats it: train %+.2f, se %.2f)" % (d, se)
+            rows.append(e)
+            log("edge %s %s %g (accepted %g, %s) widened %s: %s" % (cls, row["knob"], shared, row["best"], side, vals, e["verdict"]))
+            SUMMARY["stages"]["edge"] = rows
+            save_summary()
+    SUMMARY["stages"]["edge"] = rows
+    if not rows:
+        log("edge: no accepted value sits at the edge of its range")
+
+
 GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0])]
 
 
@@ -914,6 +1035,10 @@ def render_md():
         if j["pooled"]:
             L += ["Mean over the 15 cells: " + ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in j["pooled"].items()), ""]
             L += ["- without `%s`: the table with it is %s" % (r["spec"], ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in r["contribution"].items())) for r in j["leave_one_out"]] + [""]
+    if "edge" in s:
+        L += ["## Accepted values at the edge of their range, searched past it (x4 / x0.25)", "", "| Class | Knob | Shared | Accepted (side) | Widened | Train (best widened vs accepted) | Verdict |", "|---|---|---|---|---|---|---|"]
+        L += ["| %s | %s | %g | %g (%s) | %s | %s | %s |" % (e["class"], e["knob"], e["shared"], e["accepted"], e["side"], " ".join("%g" % v for v in e["widened"]) or "-",
+                                                    "%+.2f (se %.2f)" % tuple(e["train"]) if "train" in e else "-", e["verdict"]) for e in s["edge"]] + ([] if s["edge"] else ["| none | | | | | | |"]) + [""]
     if "globals" in s:
         L += ["## Shared Tuning scalars (fresh seeds 5001..)", "", "| Set | Pooled g3 | off | shipped | Max switching rise | Verdict |", "|---|---|---|---|---|---|"]
         L += ["| `%s` | %+.2f (se %.2f) | %+.2f | %+.2f | %.0f%% | %s |" % (r["set"], r["pooled_g3"][0], r["pooled_g3"][1], r["pooled_off"][0], r["pooled_shipped"][0], r["max_switch_rise_pct"], r["verdict"]) for r in s["globals"]] + [""]
@@ -942,7 +1067,7 @@ def main():
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
-    ap.add_argument("--stages", default="prep,rejudge,classes,joint,globals,consts,floor,rating,recalib,summary")
+    ap.add_argument("--stages", default="prep,rejudge,classes,joint,edge,globals,consts,floor,rating,recalib,summary")
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
     ap.add_argument("--jobs", type=int, default=12)
@@ -964,7 +1089,7 @@ def main():
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
-    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib}
     for name in A.stages.split(","):
         if name == "summary":
             continue
