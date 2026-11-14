@@ -1584,7 +1584,10 @@ LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.nee
 # NOT searched, each an open decision with its reason: the lab prices their items at 0 because MFO has no road that uses them, so any
 # value found would only say "carry less weight" (soul gems: no recharge road, ClickUp 1dfcuabd356; poisons: no apply road; invisibility,
 # regen and lockpicks: not in the fixture; the sale scale: inert while consumableSellRoad is false, no ALCH sell road).
-LOOT_NOT_SEARCHED = {"loot.gemChargeTrigger": "no weapon-recharge road (ClickUp 1dfcuabd356): a carried gem is worth 0 in the lab",
+LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "no theft road in the lab (thief steal-by-need, feat/iaus-loot-paths): PLACEHOLDER",
+                     "loot.stealRiskWeight": "no theft road in the lab: PLACEHOLDER", "loot.stealBountyPerGold": "no theft road in the lab: PLACEHOLDER",
+                     "loot.stealBountyRef": "no theft road in the lab: PLACEHOLDER",
+                     "loot.gemChargeTrigger": "no weapon-recharge road (ClickUp 1dfcuabd356): a carried gem is worth 0 in the lab",
                      "loot.soulGemTarget": "no weapon-recharge road: a carried gem is worth 0 in the lab",
                      "loot.poisonTarget": "no poison-apply road: a carried poison is worth 0 in the lab",
                      "loot.poisonPowerRef": "no poison-apply road", "loot.poisonWeakScale": "no poison-apply road",
