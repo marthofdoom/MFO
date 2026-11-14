@@ -3388,3 +3388,6 @@ F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below,
 - **F9 (SEV-4, OPEN):** `SUMMARY["withheld"]` only accumulates across resumes; it is not cleared at recalib start, so a value withheld in an earlier run stays withheld after it would now hold.
 - **F10 (SEV-4, OPEN):** the Knight guard floor is checked per accepted value, not for the whole final table.
 - **F11 (SEV-5, OPEN):** an edge value rejected in a later round overwrites e["best"] / steps / verdict of the earlier accepted round.
+### fix/sneak-release-hold (Opus 5.5 review, 2026-11-13, against 6f555217)
+- **(SEV-5):** a bow held drawn for more than 2 s still gets SneakStop mid-shot after the deferral bound (Harbinger's release confirm covers it).
+- **(SEV-5):** `s_last` in `StanceProbeTick` (native/apmf/SneakClaims.cpp) is never cleared across loads.

@@ -54,12 +54,14 @@
 #include "APMFBridge_internal.h"   // g_apmf, kOwnBasis
 #include "APMF_API.h"
 #include "Config.h"
+#include "MainThread.h"        // Post(): the stance probe reads the graph variable on the main thread
 #include "Followers.h"           // ActiveSnapshot(): the stance probe walks the managed followers
 
 #include <chrono>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -366,20 +368,29 @@ namespace MFO::APMFBridge {
         static std::unordered_map<RE::FormID, Clock::time_point> s_last;   // pump worker only
         const auto now  = Clock::now();
         const auto snap = Followers::ActiveSnapshot();
+        std::vector<RE::FormID> due;   // the rate gate stays here, on the worker
         for (const RE::FormID fid : *snap) {
             if (fid == 0 || fid == 0x14) continue;
-            auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
-            if (!a || a->IsDead() || !a->Is3DLoaded() || InCombat(a)) continue;
             auto& last = s_last[fid];
             if (last.time_since_epoch().count() != 0 &&
                 std::chrono::duration<double>(now - last).count() < kStanceProbePeriodSec) continue;
             last = now;
-            bool graph = false;
-            const bool read = a->GetGraphVariableBool("IsSneaking", graph);
-            spdlog::info("[stance-probe] {:08X}: engine IsSneaking={} graph IsSneaking={} (read {}) claim held={} swimming={} mounted={}",
-                         fid, a->IsSneaking(), graph, read ? "ok" : "FAILED", SneakClaimHeld(fid),
-                         a->AsActorState()->IsSwimming(), a->IsOnMount());
+            due.push_back(fid);
         }
+        if (due.empty()) return;
+        // The graph variable read is a main-thread read: ONE posted lambda per tick looks each actor up again
+        // (it may have unloaded or died since the gather), reads, and logs.
+        MFO::MainThread::Post([due = std::move(due)]() {
+            for (const RE::FormID fid : due) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
+                if (!a || a->IsDead() || !a->Is3DLoaded() || InCombat(a)) continue;
+                bool graph = false;
+                const bool read = a->GetGraphVariableBool("IsSneaking", graph);
+                spdlog::info("[stance-probe] {:08X}: engine IsSneaking={} graph IsSneaking={} (read {}) claim held={} swimming={} mounted={}",
+                             fid, a->IsSneaking(), graph, read ? "ok" : "FAILED", SneakClaimHeld(fid),
+                             a->AsActorState()->IsSwimming(), a->IsOnMount());
+            }
+        });
     }
 
     void ClearSneakClaims() {
