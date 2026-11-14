@@ -3361,3 +3361,6 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 - **(SEV-5):** verbatim: "Evaluator.cpp:186 still opens with 'engaged both ways', which is no longer accurate when the foe targets the player."
 - **(SEV-5):** verbatim: "Evaluator.cpp:550 calls RE::PlayerCharacter::GetSingleton() when the function already has a_player, used at :567. Using that would be consistent; behaviour is the same either way."
 - **(note, not a defect):** the widened legacy waiver lets a hurt melee follower chase a HELD foe of any distance that targets the player (marth's "HIM or PLAYER" ruling covers it). The sim (tools/iaus_sim/Policy.h:78) has no held-foe waiver at all: next Fable sim batch.
+### fix/loot-guard-gate (Opus 5.5 review 2, 2026-11-13, against d2c1661d)
+- **(SEV-5):** verbatim: "5 s window vs the real cadence: a held body's stamp is only refreshed on that follower's own turn, N x 133 ms. That is about 2.1 s at 16 active followers, so 5 s holds up to about 37. Derive the window from the period x active count instead of a literal." (Service.cpp GuardHeldAt, cap sweep ~:276)
+- **(SEV-5, round 1):** verbatim: "a future inner gate on a different key would wrongly mark the body as held" (StripCorpse refusal counter; comment added at LootScan.cpp ~:1050).

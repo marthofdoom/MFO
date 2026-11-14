@@ -649,15 +649,20 @@ namespace MFO::Logistics {
                 auto& nxt = s_nextWalkLog[key];
                 if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
                     nxt = a_now + std::chrono::seconds(10);
+                    // busy = candidates a teammate's slot is already walking to (the act loop skips them, TargetedByOtherSlot)
+                    int busy = 0;
+                    for (auto& bh : candidates)
+                        if (auto bp = bh.get(); bp && origin.GetDistance(bp->GetPosition()) > kArrivalDist &&
+                                                TargetedByOtherSlot(bp->GetFormID(), a_follower->GetFormID())) ++busy;
                     // Include the follower's OWN state so a "3 eligible but
                     // nothing looted" is unambiguous -- an eligible corpse yields
                     // nothing if it simply does not hold the thing the winning
                     // rule wants (arrows, or the specific potion).
                     spdlog::info("[loot] {:08X} cat={} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
-                                 "(dropped owned={} offlimits={} locked={} waiting={} farleash={} empty={}) | self arrows={} bolts={} "
+                                 "(dropped owned={} offlimits={} locked={} waiting={} farleash={} empty={} busy={}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
                                  a_follower->GetFormID(), CatName(a_cat), kLootRadius, leash, dRefs, dLootable,
-                                 (int)candidates.size(), dOwned, dOffLimits, dLocked, dNotYet, dLeash, dEmpty,
+                                 (int)candidates.size(), dOwned, dOffLimits, dLocked, dNotYet, dLeash, dEmpty, busy,
                                  ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),
@@ -797,6 +802,8 @@ namespace MFO::Logistics {
                     // keeps the ref IN THE RUNNING: it sorts to the back, and the
                     // in-range grown-grab path above never consults this list.
                     if (TravelFailedRecently(rid, a_now))                          continue;
+                    // ONE FOLLOWER PER TARGET: another follower's slot is already walking to it (no blocklist; it frees when that leg ends).
+                    if (df > kArrivalDist && TargetedByOtherSlot(rid, a_follower->GetFormID())) continue;
                     // Clutter is exempt from the bubble (IsClutterCat, above).
                     if (!IsClutterCat(a_cat) &&
                         playerPos.GetDistance(ref->GetPosition())
@@ -871,6 +878,8 @@ namespace MFO::Logistics {
                     // no re-walk inside the fail cooldown; the ref still sorts
                     // last (not skipped) and the grown grab never checks this.
                     if (TravelFailedRecently(rid, a_now)) continue;
+                    // ONE FOLLOWER PER TARGET (see the excursion path): a teammate's slot is already walking to it.
+                    if (df > kArrivalDist && TargetedByOtherSlot(rid, a_follower->GetFormID())) continue;
                     // CONVERGENCE YIELD: never walk to loot the player is right
                     // next to -- you win the race for the corpse you're heading to.
                     // Clutter is exempt from the bubble (IsClutterCat, above).
@@ -1038,10 +1047,17 @@ namespace MFO::Logistics {
         // (the deliberate STOP gambit). Returns true if anything moved.
         bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                          RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
-                         bool* a_leftWaiting) {
+                         bool* a_leftWaiting, bool* a_guardHeld) {
             // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): waiting, not done -- the body is revisited once no guard sees him.
+            // ONE verdict per visit (TheftGate.cpp readAt): this outer check is the first read, the LootHere / Take gates below reuse it.
+            // The refusal counter assumes EVERY inner gate in this function (LootHere / Take) keys on the corpse (a_corpse): a gate on another
+            // key would still bump the thread's count and read as a hold on this body.
+            // a_guardHeld = ONLY a Pending answer (the caller retries the arrival); a Seen answer keeps the body (leftWaiting) and the batch
+            // moves on, the caller reads GuardRefusalInfo() for the log text.
+            const auto refusalsBefore = TheftGate::GuardRefusalInfo().n;
             if (TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
                 if (a_leftWaiting) *a_leftWaiting = true;
+                if (a_guardHeld && TheftGate::GuardRefusalInfo().state == TheftGate::GuardState::Pending) *a_guardHeld = true;
                 return false;
             }
             bool moved = false, stopped = false;
@@ -1121,6 +1137,11 @@ namespace MFO::Logistics {
             // materials have their own pass: free tier, only the forms still on his want list. A Wait rule (stopped) wins.
             if (!stopped && Errand::Smith::WantsMaterials(a_follower))
                 while (LootHere(a_follower, a_corpse, Category::SmithMats, RE::ActorValue::kNone)) moved = true;
+            // A gate INSIDE this visit (LootHere / Take) refused: a guard hold, not an empty body. The caller must not mark it DONE.
+            if (const auto gr = TheftGate::GuardRefusalInfo(); gr.n != refusalsBefore) {
+                if (a_guardHeld && gr.state == TheftGate::GuardState::Pending) *a_guardHeld = true;
+                if (a_leftWaiting) *a_leftWaiting = true;
+            }
             return moved;
         }
 
@@ -1134,10 +1155,11 @@ namespace MFO::Logistics {
                               Clock::time_point a_now) {
             g_scanSawWaiting = false;
             const bool iausLoot = IausLootOn(a_state);
-            bool iausDone = false;
-            const auto runIausExcursion = [&]() {
+            bool iausDone[2] = { false, false };   // per pass, like the rows: pass 0 = the plan minus the dibs-tier categories, pass 1 = whole
+            const auto runIausExcursion = [&](bool a_restrictFree) {
                 for (const Category cat : IausLootPlan(a_follower, a_state))
-                    if (LootNearby(a_follower, cat, a_now, RE::ActorValue::kNone, LootMode::kExcursion)) return true;
+                    if (!(a_restrictFree && IsDibsTierCat(cat)) &&
+                        LootNearby(a_follower, cat, a_now, RE::ActorValue::kNone, LootMode::kExcursion)) return true;
                 return false;
             };
             // LOOT RUN ORDERING (marth: no-dibs + closest first, dibs later in
@@ -1153,9 +1175,9 @@ namespace MFO::Logistics {
                 if (choice.rank < 0) break;
                 const auto& op = choice.actionOpcode;
                 if (iausLoot && IsIausNeedLootOp(op)) {
-                    if (!iausDone) {   // review F5: the IAUS pass sits at the first need-loot row's position
-                        iausDone = true;
-                        if (runIausExcursion()) return true;
+                    if (!iausDone[pass]) {   // review F5: the IAUS pass sits at the first need-loot row's position
+                        iausDone[pass] = true;
+                        if (runIausExcursion(restrictFree)) return true;
                     }
                     start = choice.rank + 1; continue;
                 }
@@ -1190,7 +1212,8 @@ namespace MFO::Logistics {
             }
             }
             // IAUS LOOTING: a table with no need-loot row reaches the pass here (a Wait rule returned above).
-            if (iausLoot && !iausDone && runIausExcursion()) return true;
+            for (int p = 0; p < 2 && iausLoot; ++p)
+                if (!iausDone[p] && runIausExcursion(p == 0)) return true;
             // TOWN PHASE 2 R8: the smithing want list's materials ride the same leg boundaries, gambit or not (Service.cpp has the
             // always-on pass for the idle tick). A Wait rule returned above.
             if (Errand::Smith::WantsMaterials(a_follower) &&

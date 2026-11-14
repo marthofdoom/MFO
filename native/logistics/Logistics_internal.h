@@ -640,6 +640,13 @@ namespace MFO::Logistics {
                    a_op == Vocab::kActLootValuables || a_op == Vocab::kActLootMuseum;
         }
 
+        // The Category twin of IsDibsTierLootOp, for the IAUS passes (they walk Categories, not opcodes): the one predicate that decides which
+        // categories pass 0 of the loot run ordering defers. Museum is a dibs-tier category (its row is excluded from the IAUS plan anyway).
+        inline bool IsDibsTierCat(Category a_cat) {
+            return a_cat == Category::Equipment || a_cat == Category::Gold || a_cat == Category::Jewelry ||
+                   a_cat == Category::SoulGems || a_cat == Category::Valuables || a_cat == Category::Museum;
+        }
+
         // Every opcode that names a LOOT action (as opposed to drink/torch/cast,
         // which share the same per-tick fall-through in Logistics.cpp). Used to
         // gate the [L] glyph's real-acquisition stamp (g_justLooted) onto loot
@@ -881,7 +888,9 @@ namespace MFO::Logistics {
     bool IausLooseConsumableWanted(RE::Actor* a_follower, RE::AlchemyItem* a_alc);
     bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                      RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
-                     bool* a_leftWaiting = nullptr);
+                     bool* a_leftWaiting = nullptr, bool* a_guardHeld = nullptr);
+    // a_guardHeld: set when ANY theft-gate guard check (the outer one, or a LootHere / Take one inside) refused this visit. A guard-held
+    // body is waiting, never DONE; a_leftWaiting is set with it, so the dibs-only callers still keep the body. TheftGate::GuardRefusalInfo says why.
     bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
                           Clock::time_point a_now);
     // logistics/StuckAtOrigin.cpp: a follower whose loot targets all BLOCK within ~300 u of one point is stuck

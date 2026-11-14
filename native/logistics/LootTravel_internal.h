@@ -130,6 +130,16 @@ namespace MFO::Logistics {
                 if (!g_travelSlots[i].active) return i;
             return -1;
         }
+        // Is a_ref the WALKING target of an active slot that belongs to ANOTHER follower? Two followers dispatched to one ref get
+        // ACTOR-BLOCKED by each other (field 2026-11-13), so the scans skip it. Worker-tick-only, like g_travelSlots.
+        inline bool TargetedByOtherSlot(RE::FormID a_ref, RE::FormID a_self) {
+            if (!a_ref) return false;
+            for (auto& t : g_travelSlots) {
+                if (!t.active || t.follower == a_self || t.phase != TravelPhase::Walking) continue;
+                if (auto tp = t.target.get(); tp && tp->GetFormID() == a_ref) return true;
+            }
+            return false;
+        }
         // Is ANY excursion in flight? Gates the global blocklist reassess.
         inline bool AnyTravelActive() {
             for (auto& t : g_travelSlots)
