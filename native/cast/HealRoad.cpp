@@ -955,9 +955,10 @@ namespace MFO::Actuation {
         }
 
         // THE OCCLUDED-RELEASE GUARD (D): refuse to re-claim the same (spell, recipient) while he still reads Occluded.
-        // Transparent; logged once per pair. Any other verdict (or another pair) lifts it.
+        // Transparent; logged once per pair. Only that pair reading a non-Occluded verdict lifts it.
         if (const auto blk = g_healOccludedBlock.find(id); blk != g_healOccludedBlock.end()) {
-            if (blk->second.spell == spellID && blk->second.recipient == recipKey && !atSelf &&
+            const bool samePair = blk->second.spell == spellID && blk->second.recipient == recipKey && !atSelf;
+            if (samePair &&
                 Sightline::CheckWithin(id, recipKey, kHealLosTrustSec, Sightline::Basis::Own) == Sightline::Verdict::Occluded) {
                 if (!blk->second.logged) {
                     blk->second.logged = true;
@@ -967,7 +968,9 @@ namespace MFO::Actuation {
                 }
                 return Outcome{ Result::FailedOther, "animated heal held off: its recipient is still out of sight after a release", true };
             }
-            g_healOccludedBlock.erase(blk);
+            // Only the SAME pair reading non-Occluded lifts the block (review 2 SEV-3): a lap for another pair (self, another rule's
+            // recipient or spell) leaves it, or the blocked pair re-claims the next tick and churns every ~2 s.
+            if (samePair) g_healOccludedBlock.erase(blk);
         }
 
         // THE HAND. Served -> that hand. Contested by another spell on him -> that hand
