@@ -3364,3 +3364,7 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 ### fix/loot-guard-gate (Opus 5.5 review 2, 2026-11-13, against d2c1661d)
 - **(SEV-5):** verbatim: "5 s window vs the real cadence: a held body's stamp is only refreshed on that follower's own turn, N x 133 ms. That is about 2.1 s at 16 active followers, so 5 s holds up to about 37. Derive the window from the period x active count instead of a literal." (Service.cpp GuardHeldAt, cap sweep ~:276)
 - **(SEV-5, round 1):** verbatim: "a future inner gate on a different key would wrongly mark the body as held" (StripCorpse refusal counter; comment added at LootScan.cpp ~:1050).
+### feat/iaus-loot-paths (Opus 5.5 review, 2026-11-13, against 68159eed)
+- **(SEV-5):** verbatim: "CorpseGuardWaived applies only to Road::Corpse; Gear/Swap/Silver takes from an unowned wilderness corpse (SwapUp.cpp:610, Silver.cpp:468, Gear.cpp:856) stay guard-gated (conservative, inconsistent with the ruling)."
+- **(SEV-5):** verbatim: "the waiver depends on TESObjectREFR::GetOwner returning null for a dead actor; if it returns the cell owner the waiver never fires (fails safe; the WAIVED log shows it)."
+- **(SEV-5):** verbatim: "g_stealSkipLogged not cleared on load (logs only)."

@@ -230,10 +230,16 @@ namespace MFO::Logistics::TheftGate {
         return GuardCheck(a_follower, a_src, a_road, false) != GuardState::Clear;
     }
 
+    bool PlayerInTown() {
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        return !pc || LocationTypes::TownAnchor(pc->GetCurrentLocation());   // no player: fail closed (the bar stays)
+    }
+
     bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse) {
         if (!a_follower || !a_corpse || !a_corpse->As<RE::Actor>()) return false;
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (!pc || LocationTypes::TownAnchor(pc->GetCurrentLocation())) return false;   // in a town (or unknown): the corpse guard check stays
+        // In a town (the player's location OR the corpse's): the corpse guard check stays. A null location (wilderness) is no town: it waives.
+        if (!pc || LocationTypes::TownAnchor(pc->GetCurrentLocation()) || LocationTypes::TownAnchor(a_corpse->GetCurrentLocation())) return false;
         if (a_corpse->GetOwner()) return false;
         auto inv = a_corpse->GetInventory();
         for (const auto& [obj, data] : inv) {

@@ -1606,8 +1606,9 @@ namespace MFO::Lotd {
             crate = NearestCrate(a_follower, a_now, nullptr, nullptr);
         }
         if (!crate || !ShippingInitialised()) return false;
+        // Same leash test as PriorityDeposit: no hold while he lags beyond the leash from the player.
+        if (a_follower->GetPosition().GetDistance(pc->GetPosition()) > Logistics::TeleportCompat::View(a_follower).leash) return false;
         if (Shippable(a_follower, needs).empty()) return false;
-        GateLog(fid, a_now, std::format("a museum deposit is waiting (crate {:08X}): it goes before any town errand", crate->GetFormID()));
         return true;
     }
 

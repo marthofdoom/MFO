@@ -43,6 +43,10 @@ namespace MFO::Logistics::TheftGate {
     // stays: "Outside of towns") and for any corpse holding one owned copy (every crime gate stays, everywhere). Reads the inventory: worker.
     bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse);
 
+    // TRUE = the player stands in a town (or there is no player): LootNearby keeps its follower-level guard bar for every category. Outside a
+    // town the bar moves into the scan's candidate filter so an unowned corpse (CorpseGuardWaived) is not blocked by it.
+    bool PlayerInTown();
+
     // One copy's verdict. nullptr = may be taken, else the reason. a_xList = the copy's extra list (null = a plain copy,
     // owned by the container's owner, if any). Pure read; no guard check, no log.
     const char* TakeBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj,

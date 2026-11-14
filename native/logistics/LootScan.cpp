@@ -87,7 +87,10 @@ namespace MFO::Logistics {
             // one spot -- no new excursion from that box (StuckAtOrigin.cpp). Quiet: the trigger logged loudly.
             if (StuckAtOriginCooldown(a_follower, a_now)) return false;
             // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): no looting while a guard can see him. TheftGate.cpp.
-            if (TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard)) return false;
+            // Inside a town the bar is follower-level for every category. Outside one it moves into the candidate filter (below), so an
+            // unowned corpse (marth 2026-11-13: guard check skipped outside towns) is not barred by it; Pending still bars (fail closed).
+            const bool guardSeen = TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard);
+            if (guardSeen && TheftGate::PlayerInTown()) return false;
             // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
             // immediately cancel a loot excursion and pull followers back").
             // A follower must never BEGIN or CONTINUE a loot action while the
@@ -628,8 +631,11 @@ namespace MFO::Logistics {
                     // clock; Free tiers (ammo/potions/lockpicks) release at once. The
                     // accrual it runs is idempotent-per-tick (a_now dedupe), so this
                     // scan drives it exactly as the inline version did.
-                    if (TierReleased(a_cat, ref, playerPos, a_now))
+                    if (TierReleased(a_cat, ref, playerPos, a_now)) {
+                        // Outside a town the guard bar applies per candidate: only a waived (unowned) corpse passes it.
+                        if (guardSeen && !(ref->As<RE::Actor>() && ref->IsDead() && TheftGate::CorpseGuardWaived(a_follower, ref))) return RE::BSContainer::ForEachResult::kContinue;
                         candidates.push_back(ref->GetHandle());
+                    }
                     else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
                 };
