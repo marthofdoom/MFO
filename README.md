@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.11.1 (Deck test prerelease)** (see [`VERSION`](VERSION) and the
+**Status: v2.11.1 (Sentient AI beta)** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -182,13 +182,17 @@ leash and walk-to-loot.
 
 ---
 
-## What is new in 2.11.1 (Deck test prerelease)
+## What is new in 2.11.1 (Sentient AI beta)
 
-- **Needs Harbinger v0.20.1 (ABI v45, unchanged)** for the Holy Spirit fix. Everything else works with v0.20.0.
-- **New co-save record.** STOR v1 (off-class storage). An older MFO drops it and stored pieces lose tracking. FLWR is still v6 and MCLS v2. Keep a backup of your saves.
-- **Buff potions and consumables in IAUS.** Food and drink are used in fights, buff potions only when needed, and scarce ones are kept.
-- **Looting by need (Sentient AI).** Ammo by class and launcher, potions, food, drink and poisons by all effects, soul gems only when a weapon is below 50% charge (max 3).
-- **Off-class storage** in each follower's own chest, **proxied spell versions** as IAUS candidates, and **posture values** for ranged, archer, evoker and healer.
+The first real release since 2.8.2. It carries everything from the 2.9.0, 2.10.0 and 2.11.0 test builds below. The Classes add-on is a separate download and is not part of it.
+
+- **Needs Harbinger v0.20.1 (ABI v45)**, which also fixes mixed spells such as Holy Spirit.
+- **Sentient AI is a beta** for Melee, Ranged, Mage and Auto. It is a utility AI that scores everything a follower could do and picks the best. It is tuned in a simulator against the game's real enemies and has had little field time. Switch it on per follower (the Gambit tab or the Logistics page). Off means his gambits run as before. The ideas come from LandingCrew's Auto mode and all-NPC utility AI mod.
+- **Tuning files.** Every Sentient AI number is in a text file in `Data/SKSE/Plugins/MFO_Tuning` (one per class, plus `shared.txt`, `potions.txt` and `looting.txt`). Edit and save, and it is live a few seconds later. A missing file means the built-in values. The Melee, Ranged and Mage files ship tuned, the rest ship as comments only.
+- **Looting by need.** Ammo by class and launcher, potions, food, drink and poisons by all effects, soul gems only when a weapon is below 50% charge (max 3). Setting `bIausLoot`.
+- **Consumables with sense.** Food and drink in fights, buff potions only when needed, scarce ones kept.
+- **Off-class storage** in each follower's own chest, **proxied spell versions** and **posture values** for ranged, archer, evoker and healer.
+- **Save note.** FLWR v6 (one way, from 2.9.0), MCLS v2 and the new STOR v1. An older MFO cannot read a save this version wrote. Keep a backup of your saves.
 
 ## What is new in 2.11.0 (Deck test prerelease)
 
