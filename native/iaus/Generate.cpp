@@ -44,7 +44,8 @@ namespace MFO::Iaus {
             float castsWanted = -1.0f;           // feat/consumables: the casts of his best measured spell the fight still asks for (Drinks); < 0 = unknown
             // estimates (iaus/Estimate.h); unknown = +inf / 0
             float selfIncoming = 0.0f;
-            bool  closeRefusing = false;         // a casting class that does not survive closing: close spells are refused (Casts, CanCastOffense)
+            bool  closeRefusing = false;         // a Mage-line class that does not survive closing AND has a non-close castable offense to fall back to: close spells are refused (Casts, CanCastOffense)
+            bool  casterLine = false;            // ClassGate::casterLine, resolved (marth 2026-11-13: Mage line only)
             float selfTtl = kInf;
             float playerTtl = kInf;
             // G2 Layer 1 (iaus/Hide.h): hidden from every listed foe while he sneaks (Yes), seen by one (No), or not known.
@@ -539,14 +540,34 @@ namespace MFO::Iaus {
             }
         }
 
-        // THE CLOSE-SPELL RULE (marth 2026-11-13; Reposition.h CloseSpell / SurvivesClosing): a casting class does not pick a close offense /
-        // control spell unless he survives closing. True = this spell is refused now. Computed once per Generate (Ctx::closeRefusing).
+        // The spellsHold latch's re-gate margin: a released follower is held again only when his pool clears this x the cheapest kept
+        // offense's cost (a held one stays held down to the cost itself). PLACEHOLDER, the sim tunes it (marth 2026-11-13 review, finding 4).
+        constexpr float kHoldRegate = 1.25f;
+
+        // THE CLOSE-SPELL RULE (marth 2026-11-13; Reposition.h CloseSpell / SurvivesClosing): a Mage-line class does not pick a close offense /
+        // control spell unless he survives closing, while he has a non-close one to fall back to ("refuse the dagger, not Frostbite": a book
+        // of close spells alone keeps them). True = this spell is refused now. Computed once per Generate (Ctx::closeRefusing).
         bool CloseRefused(const Ctx& x, const SpellEntry& e) {
             return x.closeRefusing && Reposition::CloseSpell(e, x.s.meleeReach);
         }
 
-        // Does he carry a kept offense / control spell he can pay for and cast with a free hand? (the Casts() tests, without a target)
-        bool CanCastOffense(const Ctx& x) {
+        // THE ONE SET OF CAST GATES a kept offense / control spell meets before any foe is looked at (Casts and CanCastOffense both read them,
+        // so the posture layer's "he can cast" never disagrees with the cast layer's "he can cast").
+        bool CastBarred(const Ctx& x, const SpellEntry& e) {
+            if (x.guard) return true;                                   // a held guard denies all his own casts
+            if (x.holdQuiet && !e.silent) return true;                   // G2: hidden, no blow ready: a loud cast is not made
+            if (e.selfDelivery && !(e.areaUnits > 0.0f)) return true;    // a self blast with no area reaches nothing
+            return false;
+        }
+        // ... and the per-foe gates: its own undead-only rule, and effects that would all merely replace ones live on that foe.
+        bool FoeBarred(const SpellEntry& e, const Combatant& foe) {
+            return (e.undeadOnly && !foe.undead) || FxAllReplaced(e.lingerFx, foe.liveFx);
+        }
+
+        // Does he carry a kept offense / control spell he can pay for and cast with a free hand on a foe on the board? (the Casts() tests)
+        // a_costScale 1 = affordable now; > 1 = the pool must clear cost x scale (the spellsHold latch's re-gate margin).
+        // a_nonCloseOnly: count only spells that are not close (the fallback test that decides closeRefusing).
+        bool CanCastOffense(const Ctx& x, float a_costScale, bool a_nonCloseOnly) {
             const Snapshot& s = x.s;
             if (x.fleeRun) return false;
             const bool poolOk = std::isfinite(s.self.mpMax) && s.self.mpMax > 0.0f;
@@ -557,9 +578,12 @@ namespace MFO::Iaus {
                 if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
                 if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) continue;
                 if (e.twoHanded ? anyBusy : bothBusy) continue;
-                if (e.cost > 0.0f && (!poolOk || !Prune::Affordable(e.cost, pool))) continue;
-                if (CloseRefused(x, e)) continue;   // a spell he may not pick is no reason to keep the dagger away
-                return true;
+                if (e.cost > 0.0f && (!poolOk || !Prune::Affordable(e.cost * a_costScale, pool))) continue;
+                if (CastBarred(x, e)) continue;
+                const bool close = Reposition::CloseSpell(e, s.meleeReach);
+                if (close && (a_nonCloseOnly || CloseRefused(x, e))) continue;   // a spell he may not pick is no reason to keep the dagger away
+                for (const Combatant* foe : x.top)
+                    if (!FoeBarred(e, *foe)) return true;
             }
             return false;
         }
@@ -578,11 +602,13 @@ namespace MFO::Iaus {
             if (!tgt) return;
             const bool gated = x.g.resolved && x.g.strict;
             // SPELLS STAY ON SPELLS (marth 2026-11-13, Jesper/Evoker closed to dagger range and went down; gate the source, not the output):
-            // a casting class with a kept offense / control spell he can afford carries no melee or silver posture candidate, so a carried
+            // a Mage-line class (ClassGate::casterLine, "Mage line only") with a kept offense / control spell he can afford carries no melee or silver posture candidate, so a carried
             // dagger never outscores the spells it replaces. The dagger is a candidate again the moment the pool cannot pay for any
             // (or there is no such spell). The weapon-gambit road (act.equip_melee from a board rule) is not this layer and stays.
             // Interim: the sim tunes the real "spells" posture candidate (REVIEW-BACKLOG / MAP IAUS posture).
-            const bool spellsHold = x.g.resolved && x.g.spellsOnClass && CanCastOffense(x);
+            // LATCH (review finding 4): once held he stays held until the pool no longer pays the cheapest kept offense; once released he is
+            // held again only when the pool clears kHoldRegate x its cost, so the magicka cost edge never flips a dagger in and out.
+            const bool spellsHold = x.casterLine && CanCastOffense(x, s.spellsHoldPrev ? 1.0f : kHoldRegate, false);
             x.out.spellsHold = spellsHold;
             const auto posture = [&](PostureKind a_kind, RoleTag a_role, bool a_classAllows) {
                 Candidate c = x.Make(Family::Posture, nullptr);   // the posture Key's target stays 0 (I2 convention)
@@ -658,7 +684,7 @@ namespace MFO::Iaus {
             }
             for (const SpellEntry& e : s.book.entries) {
                 if (e.source == SpellSource::Staff) continue;        // staves: the posture layer
-                if (x.holdQuiet && !e.silent) continue;              // G2: hidden and no blow ready -> a loud cast is not made (a soundless one is)
+                if (x.holdQuiet && !e.silent) continue;              // G2 (CastBarred's): hidden and no blow ready -> a loud cast is not made (a soundless one is)
                 // Scrolls (card S3): a candidate only once a scroll can be read as a cast (Snapshot::scrollRoad), for a
                 // scroll user (ruling Q36), with one in stock. Offense / control / heal / buff only (the scroll sets).
                 const bool scroll = e.source == SpellSource::Scroll;
@@ -704,10 +730,10 @@ namespace MFO::Iaus {
                     // Reach: Touch = a swing's reach; a Self-delivered blast reaches its own area; else the aimed
                     // reach (0 = the record gives none: range is then not applicable).
                     const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.areaUnits : e.reach);
-                    if (e.selfDelivery && !(e.areaUnits > 0.0f)) { ++x.out.droppedTarget; break; }
+                    if (CastBarred(x, e)) { ++x.out.droppedTarget; break; }   // (the guard / holdQuiet gates were met above; this is the blast-area one)
                     for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                         const Combatant* foe = x.top[ti];
-                        if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule
+                        if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule (FoeBarred's)
                         // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
                         // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
                         if (FxAllReplaced(e.lingerFx, foe->liveFx)) { ++x.out.droppedTarget; continue; }
@@ -818,7 +844,7 @@ namespace MFO::Iaus {
         x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
         x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
         x.fleeRun = a_s.fleeRun;
-        x.closeRefusing = a_gate.resolved && a_gate.spellsOnClass && !Reposition::SurvivesClosing(a_s, a_t.worth);
+        x.casterLine = a_gate.resolved && a_gate.casterLine;
         x.guard = a_s.guardHeld;
         for (const Combatant& a : a_s.allies)
             if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }
@@ -874,6 +900,10 @@ namespace MFO::Iaus {
             for (const Combatant* f : foes)
                 if (x.StrikeReady(*f)) { x.strikeReady = true; break; }
         x.holdQuiet = x.hold && !x.strikeReady;
+
+        // The close-spell rule (needs x.top, holdQuiet, guard): refused only when he has a non-close castable offense to fall back to.
+        // x.closeRefusing is still false here, which is what the fallback question needs.
+        x.closeRefusing = x.casterLine && !Reposition::SurvivesClosing(a_s, a_t.worth) && CanCastOffense(x, 1.0f, true);
 
         Swings(x);
         Holds(x);

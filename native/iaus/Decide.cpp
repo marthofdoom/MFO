@@ -116,7 +116,10 @@ namespace MFO::Iaus {
             const Family f = cands[i].family;
             if (f == Family::Posture) { ++d.vetoed; continue; }   // posture is DecidePosture's layer
             if (detail::DependsOnHeal(f)) continue;
-            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]));
+            // A damage-class offense is never P5-pruned: the buff cap below reads the best offense score, and a pruned (below-cutoff because
+            // of uncapped buffs) offense would leave it at -1 (Opus review 2026-11-13, finding 3).
+            const bool exactOffense = f == Family::CastOffense && cands[i].f.damageClass;
+            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]) && !exactOffense);
         }
         // Pass 2: Retreat, DrinkHealth.
         for (std::size_t i = 0; i < lim; ++i)

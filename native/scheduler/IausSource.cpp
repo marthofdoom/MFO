@@ -268,18 +268,18 @@ namespace MFO::Scheduler {
             const bool now = m_set.gen.spellsHold;
             const auto it = s_spellsHold.find(a_id);
             if (it == s_spellsHold.end() ? now : it->second != now) {
-                spdlog::info("[iaus] {:08X}: posture layer {} (a casting class with an affordable offense / control spell keeps to "
+                spdlog::info("[iaus] {:08X}: posture layer {} (a Mage-line class with an affordable offense / control spell keeps to "
                              "spells; melee and silver postures are {} until the pool or the book changes)", a_id,
                              now ? "STAYS ON SPELLS" : "may use a weapon again", now ? "gated off" : "scored");
             }
             s_spellsHold[a_id] = now;
-            // The close-spell rule (Reposition::SurvivesClosing), once per change: a touch / stream / short-range spell is refused while
+            // The close-spell rule (Reposition::SurvivesClosing), once per change: a touch / short-range spell (a stream that out-ranges melee is not one) is refused while
             // the threat on him says he does not survive closing; the mage back-off minimum then comes from his ranged spells.
             static std::unordered_map<RE::FormID, bool> s_closeRefused;
             const bool refused = m_set.gen.closeRefused;
             const auto ci = s_closeRefused.find(a_id);
             if (ci == s_closeRefused.end() ? refused : ci->second != refused)
-                spdlog::info("[iaus] {:08X}: close spells {} (touch / concentration / range under the strike distance; he {} closing "
+                spdlog::info("[iaus] {:08X}: close spells {} (touch / range under the strike distance; he {} closing "
                              "under the threat on him)", a_id, refused ? "REFUSED" : "allowed again", refused ? "does not survive" : "survives");
             s_closeRefused[a_id] = refused;
         }

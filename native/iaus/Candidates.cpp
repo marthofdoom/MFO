@@ -565,7 +565,14 @@ namespace MFO::Iaus::Candidates {
                     sn.stepPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::Step, tgt->id, sn.drawn == PostureKind::Bow);
             }
         }
-        a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
+        {   // the spellsHold latch (Generate::Postures): last tick's answer for this follower goes in, this tick's is kept
+            static std::unordered_map<RE::FormID, bool> s_spellsHold;
+            const RE::FormID id = a_follower->GetFormID();
+            const auto it = s_spellsHold.find(id);
+            a_out.snap.spellsHoldPrev = it != s_spellsHold.end() && it->second;
+            a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
+            s_spellsHold[id] = a_out.gen.spellsHold;
+        }
         return true;
     }
 

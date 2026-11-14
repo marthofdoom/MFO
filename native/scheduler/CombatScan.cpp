@@ -856,9 +856,9 @@ namespace MFO::Scheduler {
                 // "weapons vanishing" this comment already describes stops being visible.
                 // See ReleaseForcedWeapon's doc in cast/Actuation.h for why the unequip itself
                 // cannot go away.
-                // CASTING CLASS (marth 2026-11-13): the weapon the posture layer or a gambit put in his hands for the fight is
+                // MAGE LINE (marth 2026-11-13): the weapon the posture layer or a gambit put in his hands for the fight is
                 // taken out and his pre-fight hands asked back, instead of keeping the dagger NON-forced for the engine to draw.
-                if (const auto g = Iaus::SpellBook::GateFor(id, false); g.resolved && g.spellsOnClass)
+                if (const auto g = Iaus::SpellBook::GateFor(id, false); g.resolved && g.casterLine)
                     Actuation::StandDownCasterHands(f);
                 Actuation::ReleaseForcedWeapon(f, /*a_standDown=*/true);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable

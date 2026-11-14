@@ -3388,3 +3388,11 @@ F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below,
 - **F9 (SEV-4, OPEN):** `SUMMARY["withheld"]` only accumulates across resumes; it is not cleared at recalib start, so a value withheld in an earlier run stays withheld after it would now hold.
 - **F10 (SEV-4, OPEN):** the Knight guard floor is checked per accepted value, not for the whole final table.
 - **F11 (SEV-5, OPEN):** an edge value rejected in a later round overwrites e["best"] / steps / verdict of the earlier accepted round.
+### fix/caster-posture (Opus 5.5 review, 2026-11-13, against 0ed9c705)
+SEV-2 findings 1, 2 and SEV-3 findings 3-5 were FIXED in the fix round. Deferred, status OPEN:
+- **(SEV-4, a):** verbatim: "Reposition.h RangeToHold / MageBackOffNeed read DefaultTuning().worth while Generate uses a_t.worth (sim mismatch; pass worth in)."
+- **(SEV-4, b):** verbatim: "HandsRange closeOk=false falls back to the book's longest spell without an affordability / free-hand check."
+- **(SEV-4, c):** verbatim: "the cap makes a tie and the tie-break prefers the lower cost (a cheaper buff can win); bestOffense ignores offense scrolls."
+- **(SEV-4, d):** verbatim: "the close-spell refusal is counted in droppedTarget."
+- **(SEV-4, e):** verbatim: "prevRight / prevLeft are captured only on the right-hand gambit path, a pre-drawn AI dagger may be 'restored', and the restore placement can sit 120 s."
+- **(SEV-4, f):** verbatim: "the static per-follower log maps are never cleared."

@@ -21,13 +21,14 @@ namespace MFO::Iaus::Reposition {
     // ── H4: the spell's range (marth: "Near the furthest range an equipped spell will work, but will move to range for touch or
     // cone spells automatically"; Docs/research/2026-11/class-build-plan.md H4) ──────────────────────────────────────────────
     //   touch                      the melee reach x0.8 (a touch spell is a swing's length)
-    //   concentration (a cone)     the spell's range x0.8 (a stream that falls off, so inside the range, not at its edge)
+    //   concentration (a cone)     the spell's range x0.8 (a stream that falls off, so inside the range, not at its edge); a stream that
+//                              out-ranges melee (reach >= StrikeDistance) also has the aimed spell's minimum (0.4 of desired)
     //   Self-delivered blast       its own area x0.8 (he stands in it: the foe must be inside)
     //   aimed / target actor       the furthest range at which it works x0.9
     //   target location            its range (never an IAUS candidate today: Placement is dropped)
     // `desired` = the distance to fight at (0 = the record gives none: no range is kept). `minimum` = the distance under which a foe
     // that has to close is too near for him to keep casting at it: only a spell that is cast from AFAR has one (an aimed or
-    // target-actor spell that is not a concentration spell); a touch / cone / self-area spell WANTS the foe near. CHOSEN: 0.4 of the
+    // target-actor spell, or a concentration spell that out-ranges melee); a touch / cone / self-area spell WANTS the foe near. CHOSEN: 0.4 of the
     // desired distance (the sim tunes it).
     inline constexpr float kCloseSlack = 1.15f;      // the range veto's own slack (Catalogue.cpp RangeSpell): beyond desired x this he closes
     inline constexpr float kMinimumFrac = 0.4f;
@@ -43,26 +44,43 @@ namespace MFO::Iaus::Reposition {
         if (a_e.selfDelivery) { r.desired = 0.8f * fin(a_e.areaUnits); return r; }   // no area = no range to keep
         const float reach = fin(a_e.reach);
         if (!(reach > 0.0f)) return r;
-        if (a_e.concentration) { r.desired = 0.8f * reach; return r; }
+        // A concentration stream whose range is beyond a foe's strike distance (Frostbite: marth 2026-11-13, "Frostbite range is out of melee")
+        // is a RANGED spell like any aimed one: it keeps 0.8 x reach and gets the same minimum fraction of that distance. One whose
+        // reach is inside the strike distance is a close spell (CloseSpell below) and keeps no minimum.
+        if (a_e.concentration) {
+            r.desired = 0.8f * reach;
+            if (reach >= Estimate::StrikeDistance(a_meleeReach)) r.minimum = kMinimumFrac * r.desired;
+            return r;
+        }
         r.desired = 0.9f * reach;
         r.minimum = kMinimumFrac * r.desired;
         return r;
     }
 
     // ── THE CLOSE-SPELL RULE (marth 2026-11-13: "He shouldn't pick a close spell until he knows he can survive getting close") ───────────
-    // A CLOSE spell is one he must stand within a foe's strike distance to use: a touch spell, a concentration stream (Flames, Frostbite) or
-    // any spell whose range is under Estimate::StrikeDistance (two swing reaches: the same "a foe can hurt him here" distance IncomingOn
+    // A CLOSE spell is one he must stand within a foe's strike distance to use: a touch spell, or any spell (a concentration stream
+    // included: Flames is close, Frostbite is not, marth 2026-11-13 "Frostbite range is out of melee") whose real range is under Estimate::StrikeDistance (two swing reaches: the same "a foe can hurt him here" distance IncomingOn
     // and the Mercenary's press count use; the ONE threshold, derived from the data, no new constant). A casting class does not pick one
     // (Generate::Casts) unless he SURVIVES closing: the time to live under EVERY foe that targets him (the Retreat family's threat TTL,
     // Estimate::ThreatOn) leaves the cannot-win floor of the worth rule at zero (ConsumableWorth.h DeathWinFloor: the very line the
     // potions use for "he cannot win by the numbers"). Nothing targets him = it passes (the TTL is unknown, the floor 0).
     [[nodiscard]] inline bool CloseSpell(const SpellEntry& a_e, float a_meleeReach) {
-        if (a_e.touch || a_e.concentration) return true;
+        if (a_e.touch) return true;
         const float reach = a_e.selfDelivery ? a_e.areaUnits : a_e.reach;
         return std::isfinite(reach) && reach > 0.0f && reach < Estimate::StrikeDistance(a_meleeReach);
     }
     [[nodiscard]] inline bool SurvivesClosing(const Snapshot& a_s, const WorthTable& a_w) {
         return DeathWinFloor(Estimate::Ttl(a_s.self.hp, Estimate::ThreatOn(a_s, a_s.self)), a_w) <= 0.0f;
+    }
+
+    // Does the book keep an offense / control spell that is NOT close (the fallback the close-spell rule needs)?
+    [[nodiscard]] inline bool HasFarOffense(const Book& a_book, float a_meleeReach) {
+        for (const SpellEntry& e : a_book.entries) {
+            if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+            if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) continue;
+            if (!CloseSpell(e, a_meleeReach)) return true;
+        }
+        return false;
     }
 
     // The entry of a spell in his hand (a form of the book), an offense / control spell that is kept; nullptr when none.
@@ -98,6 +116,9 @@ namespace MFO::Iaus::Reposition {
     [[nodiscard]] inline HandRange HandsRange(const Book& a_book, std::uint32_t a_right, std::uint32_t a_other, float a_meleeReach,
                                               bool a_touchSpent, std::uint32_t a_chosenCast, bool a_closeOk = true) {
         HandRange h;
+        // marth 2026-11-13 ("refuse the dagger, not frostbite"): the rule only bites when he has a non-close offense / control spell to
+        // fall back to; a book of close spells alone keeps them (a_closeOk is then ignored).
+        if (!a_closeOk && !HasFarOffense(a_book, a_meleeReach)) a_closeOk = true;
         Range touch, dist;
         const SpellEntry* tEntry = nullptr;
         const SpellEntry* dEntry = nullptr;
@@ -165,7 +186,7 @@ namespace MFO::Iaus::Reposition {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return false;
         const Combatant* foe = RangeFoe(a_s);
         if (!foe) return false;
-        const Range r = HandsRange(a_s, SurvivesClosing(a_s, DefaultTuning().worth)).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type; a close spell he may not pick sets none
+        const Range r = HandsRange(a_s, !a_g.casterLine || SurvivesClosing(a_s, DefaultTuning().worth)).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type; a close spell he may not pick sets none
         if (!r.Known()) return false;
         a_out.foe = foe->id;
         a_out.radius = r.desired;
@@ -180,7 +201,7 @@ namespace MFO::Iaus::Reposition {
     // to back out whether or not it has him as its target when he has just cast the touch spell (Snapshot::touchSpent): "in and out quick".
     [[nodiscard]] inline float MageBackOffNeed(const Snapshot& a_s, const ClassGate& a_g) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return 0.0f;
-        const HandRange hr = HandsRange(a_s, SurvivesClosing(a_s, DefaultTuning().worth));   // the minimum comes from his RANGED spells (close-spell rule)
+        const HandRange hr = HandsRange(a_s, !a_g.casterLine || SurvivesClosing(a_s, DefaultTuning().worth));   // the minimum comes from his RANGED spells (close-spell rule)
         const Range& r = hr.range;
         if (!(r.minimum > 0.0f)) return 0.0f;
         const bool backingOut = hr.mixed && a_s.touchSpent;

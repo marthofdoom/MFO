@@ -883,13 +883,17 @@ namespace MFO::Actuation {
     }
 
     void StandDownCasterHands(RE::Actor* a_follower) {
-        if (!a_follower || a_follower->IsDead() || !WeighingEquips()) return;
+        if (!a_follower || a_follower->IsDead()) return;
         const auto id = a_follower->GetFormID();
         ForcedHold hold;
         {
             std::scoped_lock lk(g_forcedMx);
             const auto it = g_forcedWeapon.find(id);
             if (it == g_forcedWeapon.end()) return;
+            // NON-WEIGHING ROAD (bWeighWeapons 0, the default; review finding 1): ReleaseForcedWeapon unequips the hold's hands and re-arms them
+            // NON-forced two hops later, which would put the very dagger back. Mark the hold so that re-arm puts back the pre-fight hands
+            // (prevRight / prevLeft) instead, and skips a weapon that was not his.
+            if (!WeighingEquips()) { it->second.casterStandDown = true; return; }
             hold = it->second;
         }
         if (hold.forcedLeft || hold.forcedRight) return;   // a legacy lock: ReleaseForcedWeapon clears and re-arms it
@@ -1073,8 +1077,12 @@ namespace MFO::Actuation {
         // is never left without his main weapon); the left hand only on a stand-down, as before,
         // and the sheathe only on a stand-down.
         if ((a_standDown || silverMain != 0) && (hold.left || hold.right) && MainThread::IsInstalled()) {
-            const RE::FormID rightID = silverMain ? silverMain : (hold.right ? hold.right->GetFormID() : 0);
-            const RE::FormID leftID  = (a_standDown && hold.left) ? hold.left->GetFormID() : 0;
+            // CASTER STAND-DOWN (StandDownCasterHands marked it): the hands go back to what he held before the hold (a weapon not his is skipped).
+            const RE::FormID rightID = silverMain ? silverMain
+                                     : hold.casterStandDown ? hold.prevRight
+                                     : (hold.right ? hold.right->GetFormID() : 0);
+            const RE::FormID leftID  = hold.casterStandDown ? hold.prevLeft
+                                     : (a_standDown && hold.left) ? hold.left->GetFormID() : 0;
             const bool standDown = a_standDown;
             const bool silverBack = silverMain != 0;
             auto reArm = [id, rightID, leftID, standDown, silverBack]() {

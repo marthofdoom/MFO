@@ -674,6 +674,7 @@ namespace MFO::Iaus::SpellBook {
             // OFF: the Mage T1 uses them); no scroll candidate is generated yet (card S3).
             g.resolved      = def != nullptr;
             g.spellsOnClass = true;
+            g.casterLine    = def && def->line == Classes::Line::Mage;   // tree OFF: def is the T1 root (kRootMage = the Mage T1)
             g.scrollUser    = def && CastingClass(*def);
             g.powerAttack   = true;
             g.taunt         = true;
@@ -684,6 +685,7 @@ namespace MFO::Iaus::SpellBook {
         g.resolved = true;
 
         g.spellsOnClass = CastingClass(*def);
+        g.casterLine    = def->line == Classes::Line::Mage;   // marth 2026-11-13: "Mage line only" (a hybrid keeps the weapon road)
         for (std::size_t i = 0; i < Classes::kClassCount; ++i) {
             const auto id = static_cast<Classes::Id>(i);
             if ((mastered & Classes::Bit(id)) != 0 && CastingClass(Classes::Get(id))) { g.spellsFromMastered = true; break; }

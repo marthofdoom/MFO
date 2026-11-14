@@ -43,8 +43,8 @@ namespace MFO::Iaus {
         bool  selfUnreadable = false;      // the follower's own maxima read 0: nothing was generated
         std::size_t foesSeen = 0;          // readable foes before the top-5 cut
         std::size_t foesKept = 0;
-        bool  closeRefused = false;        // Casts: a casting class dropped a close spell (touch / stream / short range) because he does not survive closing (Reposition::SurvivesClosing)
-        bool  spellsHold = false;          // Postures: a casting class with an affordable kept offense / control spell -> no melee / silver posture candidate wins
+        bool  closeRefused = false;        // Casts: a Mage-line class dropped a close spell (touch / reach under the strike distance) because he does not survive closing (Reposition::SurvivesClosing)
+        bool  spellsHold = false;          // Postures: a Mage-line class (ClassGate::casterLine) with an affordable kept offense / control spell -> no melee / silver posture candidate wins
         std::array<std::uint16_t, kFamilies> perFamily{};   // candidates per family (the over-cap WARN, tests)
         // P1 / P2 drops, for the generation log line: spells dropped as unaffordable, off-class, two-handed with a
         // hand held; pairs dropped by a target rule (undead only, already active, live summon).
