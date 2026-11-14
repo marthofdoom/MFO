@@ -54,6 +54,9 @@ namespace MFO::Iaus {
         float         charge = 0.0f;            // staff: current charge
         bool          charged = true;           // staff: at least one cast left
         std::vector<std::uint32_t> activeOn;    // Buff / Ward: party members this spell's effect is live on
+        std::vector<std::uint32_t> exclusiveGroups;   // Buff / Ward: one key per beneficial effect, (archetype << 16 | primary actor value). Two spells sharing a key
+                                                // replace one another in the engine (cloaks share the cloak archetype, armor spells the armor value); the key is
+                                                // data read off the MGEF, never a spell list (fix/iaus-claim-thrash, marth 2026-11-13)
         bool          allyRoad = false;         // Buff / Heal, Self delivery: a proxy road serves it at an ally NOW (1dfcuabd309): Harbinger's
                                                 // delivery-flip proxy on the claim road, or MFO's ConcProxy for a concentration spell
                                                 // (Actuation::BuffServedAtAlly / HealServedAtAlly, filled by iaus/Candidates.cpp each lap,

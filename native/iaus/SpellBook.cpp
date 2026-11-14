@@ -303,9 +303,24 @@ namespace MFO::Iaus::SpellBook {
             e.fromMastered = a_gate.spellsFromMastered;
             if (e.nature == Prune::Nature::Summon) e.liveSummon = Actuation::CasterHasLiveSummon(a_actor, a_sp);
             if (e.drop == Prune::Drop::Keep &&
-                (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward))
+                (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward)) {
+                // The exclusive group of each beneficial effect: archetype + primary actor value. A cloak or light effect names no
+                // value, so the archetype alone is its group; any other effect with no value names none (an unrelated script).
+                for (auto* eff : a_sp->effects) {
+                    auto* base = eff ? eff->baseEffect : nullptr;
+                    if (!base || base->IsHostile() || base->IsDetrimental()) continue;
+                    using Arch = RE::EffectArchetypes::ArchetypeID;
+                    const auto arc = base->GetArchetype();
+                    const auto av  = base->data.primaryAV;
+                    if (av == RE::ActorValue::kNone && arc != Arch::kCloak && arc != Arch::kLight) continue;
+                    const std::uint32_t key = (static_cast<std::uint32_t>(arc) << 16) |
+                                              (static_cast<std::uint32_t>(av) & 0xFFFFu);
+                    if (std::find(e.exclusiveGroups.begin(), e.exclusiveGroups.end(), key) == e.exclusiveGroups.end())
+                        e.exclusiveGroups.push_back(key);
+                }
                 for (auto* p : a_party)
                     if (EffectLive(p, a_sp)) e.activeOn.push_back(p->GetFormID());
+            }
             // The engine fills (iaus/Fills.h): what one cast does to health, probe first, written only with
             // [Debug] bIausFillSpells = 1. With both keys off it returns at once.
             if (e.drop == Prune::Drop::Keep &&

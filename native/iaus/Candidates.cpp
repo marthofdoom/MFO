@@ -43,6 +43,7 @@ namespace MFO::Iaus::Candidates {
         };
         std::unordered_map<RE::FormID, Fight>                    g_fights;
         std::unordered_set<std::uint64_t>                        g_lockLogged;   // (follower << 32 | spell): the recast-lockout drop line, once per spell per fight
+        std::unordered_map<std::uint64_t, std::uint32_t>         g_replaceLogged;   // (follower << 32 | spell, target mix) -> the active spell it would replace: logged once per change
         std::unordered_map<RE::FormID, std::uint32_t>             g_chosenCast;   // Q-I-2: the cast form ranked first on the last decision
         std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
 
@@ -50,6 +51,7 @@ namespace MFO::Iaus::Candidates {
         void ClearBuffLockState(RE::FormID a_follower) {
             Actuation::ClearSelfBuffLocks(a_follower);
             std::erase_if(g_lockLogged, [a_follower](std::uint64_t k) { return static_cast<RE::FormID>(k >> 32) == a_follower; });
+            std::erase_if(g_replaceLogged, [a_follower](const auto& kv) { return static_cast<RE::FormID>(kv.first >> 32) == a_follower; });
         }
 
         // A Gather this long after the last one starts a NEW fight clock when card I6 did not call CombatEnded.
@@ -428,6 +430,54 @@ namespace MFO::Iaus::Candidates {
                         std::find(e.activeOn.begin(), e.activeOn.end(), al.id) == e.activeOn.end())
                         e.activeOn.push_back(al.id);
             }
+
+        // NO BUFF THAT REPLACES AN ACTIVE BUFF IS VALID (marth 2026-11-13: "no spell that replaced an active buff is valid. The tuning
+        // should pick the correct buff and only rebuff it if it runs out", fix/iaus-claim-thrash). A Buff / Ward whose exclusive group
+        // (SpellEntry::exclusiveGroups, read off the MGEF) is shared with ANOTHER spell live on the same target is marked active there, so
+        // Generate prunes it (droppedTarget) exactly as it prunes its own live effect. A buff whose own claim is IN FLIGHT on his hand
+        // counts as active too (on himself). It returns only when the live one has run out: there is no refresh margin to read, so
+        // "expired" it is. Which buff is first cast is the tuning's job; nothing here ranks them.
+        if (s.hasBook) {
+            auto& es = s.book.entries;
+            std::vector<std::vector<std::uint32_t>> act(es.size());
+            const auto buffLike = [](const SpellEntry& e) {
+                return e.source == SpellSource::Spell && e.drop == Prune::Drop::Keep && !e.exclusiveGroups.empty() &&
+                       (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward);
+            };
+            for (std::size_t i = 0; i < es.size(); ++i) {
+                if (!buffLike(es[i])) continue;
+                act[i] = es[i].activeOn;
+                if (std::find(act[i].begin(), act[i].end(), selfID) == act[i].end())
+                    for (const std::size_t hand : { Actuation::kHandLeft, Actuation::kHandRight })
+                        if (Actuation::CastLockClaimStamp(selfID, hand, es[i].form).time_since_epoch().count() != 0 &&
+                            Actuation::CastInFlightOnHand(a_self, hand, es[i].form, 0)) {
+                            act[i].push_back(selfID);
+                            break;
+                        }
+            }
+            for (std::size_t j = 0; j < es.size(); ++j) {
+                if (!buffLike(es[j])) continue;
+                for (std::size_t i = 0; i < es.size(); ++i) {
+                    if (i == j || !buffLike(es[i]) || act[i].empty()) continue;
+                    const bool shares = std::any_of(es[j].exclusiveGroups.begin(), es[j].exclusiveGroups.end(), [&](std::uint32_t g) {
+                        return std::find(es[i].exclusiveGroups.begin(), es[i].exclusiveGroups.end(), g) != es[i].exclusiveGroups.end();
+                    });
+                    if (!shares) continue;
+                    for (const std::uint32_t t : act[i]) {
+                        if (std::find(es[j].activeOn.begin(), es[j].activeOn.end(), t) != es[j].activeOn.end()) continue;
+                        es[j].activeOn.push_back(t);
+                        const std::uint64_t key = (static_cast<std::uint64_t>(selfID) << 32) | (es[j].form ^ (t * 0x9E3779B1u));
+                        auto& said = g_replaceLogged[key];
+                        if (said != es[i].form) {
+                            said = es[i].form;
+                            spdlog::info("[iaus] {:08X} buff {} ({:08X}) pruned on {:08X}: it would replace {} ({:08X}), live or in flight "
+                                         "there in the same exclusive group; offered again when that one has run out",
+                                         selfID, es[j].name, es[j].form, t, es[i].name, es[i].form);
+                        }
+                    }
+                }
+            }
+        }
 
         // ── G10: the pairs the last decision ranked on top, plus the pairs still refused (a call is also the
         // prefetch). A No is stamped on its entry, so NoteDecision keeps a refused pair on the list although the

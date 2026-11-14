@@ -836,6 +836,23 @@ namespace MFO::Actuation {
                 if (BuffUpTransparent(a_follower, spell))   // F2: BEFORE the preempt (cast/BuffRoad.cpp)
                     return { Result::NoOp, "self-buff already up (or its read is pending)", true };
                 commitPreempt();   // the claim happens inside CastSelfDirect
+                // THE DIRECT SELF STREAM OF A FIRE-AND-FORGET SPELL HOLDS NO HAND (field 2026-11-13, Jesper: Frost
+                // Nova went unanimated on the 'self-stream' road, applied at once, and its left-hand lock then
+                // stood until the stream's stale release ~3 s later, 89 HELD OFF lines). The apply is instant and
+                // there is no claim or charge to protect, so the lock is cleared instead of held. A claim road
+                // (heal / buff claim) leaves no g_selfCast entry and a concentration stream is multi-tick, so both
+                // keep lockHands. Rank stays the carried index: nothing else is touched.
+                auto releaseInstantStream = [&](SelfCast a_r) {
+                    if (spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration ||
+                        !SelfStreamLive(id, a_spellID))
+                        return false;
+                    if (handPlan.left)  ClearCastLockHand(id, kHandLeft);
+                    if (handPlan.right) ClearCastLockHand(id, kHandRight);
+                    if (a_r == SelfCast::Applied)   // once per apply, never per refresh lap
+                        spdlog::info("[cast] {:08X} self-stream applied spell {:08X}: instant apply, no hand lock held",
+                                     id, a_spellID);
+                    return true;
+                };
                 switch (CastSelfDirect(a_follower, spell)) {
                 case SelfCast::Applied:
                     // TASK 2: hold the lock (LEFT -- handPlan resolved above) --
@@ -843,10 +860,10 @@ namespace MFO::Actuation {
                     // multi-tick; an FF instant apply with no live claim
                     // self-releases within one round-robin lap via
                     // CastLockLive's staleness fallback (harmless).
-                    lockHands(a_spellID, 0);
+                    if (!releaseInstantStream(SelfCast::Applied)) lockHands(a_spellID, 0);
                     return { Result::Fired, "self-cast channel (direct trigger)" };
                 case SelfCast::Refreshed:
-                    lockHands(a_spellID, 0);
+                    if (!releaseInstantStream(SelfCast::Refreshed)) lockHands(a_spellID, 0);
                     // Channel kept alive, no effect/magicka this tick -- fall past.
                     return { Result::NoOp, "self-cast refresh (paced)", true };
                 // Fable SEV-2 (2026-09-06): a HELD outcome is not a cast.
