@@ -74,9 +74,13 @@ namespace MFO::Logistics::TheftGate {
         std::unordered_map<RE::FormID, Ring> g_rings;
 
         // ── the guard cache ──
-        struct GuardAns { SClock::time_point at{}, posted{}; bool seen = true; RE::FormID guard = 0; const char* how = "pending"; bool have = false; bool unread = false; };   // unread: posted by a reader that has not seen it yet
+        struct GuardAns { SClock::time_point at{}, posted{}; bool seen = true; RE::FormID guard = 0; const char* how = "pending"; bool have = false; bool unread = false; SClock::time_point readAt{}; };   // unread: posted by a reader that has not seen it yet; readAt: when a gate first USED this answer (one verdict per visit)
         std::mutex g_gMx;
         std::unordered_map<std::uint64_t, GuardAns> g_guard;   // (follower, src) -> the last scan
+
+        // The calling thread's own count of non-Clear GuardCheck results (thread_local: no sharing, no lock). A caller that wants to know
+        // whether ANY gate inside a call chain refused (StripCorpse: its LootHere / Take gates) snapshots n before and after.
+        thread_local GuardRefusal t_lastRefusal{};
 
         std::uint64_t GKey(RE::FormID a_f, RE::FormID a_src) { return (static_cast<std::uint64_t>(a_f) << 32) | a_src; }
 
@@ -179,7 +183,15 @@ namespace MFO::Logistics::TheftGate {
             auto& e = g_guard[GKey(fid, sid)];
             // Fresh = younger than the TTL, OR never read yet: the service round-robin (N x 133 ms per follower, over 2 s from 16 actives) can
             // revisit a follower later than the TTL, and an answer that was posted for that very reader must still be usable once.
-            if (e.have && (now - e.at < kGuardFresh || (e.unread && now - e.at < kGuardUnreadMax))) { have = true; seen = e.seen; how = e.how; guard = e.guard; e.unread = false; }
+            // ONE VERDICT PER VISIT: a visit reads this key several times (StripCorpse, LootHere, Take). The first gate that USES an answer
+            // stamps readAt; the later reads of the same visit accept it for kGuardFresh from that stamp even when the answer itself is older
+            // than the TTL by then. It only re-uses a verdict a gate already acted on: it never turns "no answer" into a take.
+            const bool freshAns = e.have && (now - e.at < kGuardFresh || (e.unread && now - e.at < kGuardUnreadMax));
+            const bool sameVisit = e.have && e.readAt.time_since_epoch().count() != 0 && now - e.readAt < kGuardFresh;
+            if (freshAns || sameVisit) {
+                have = true; seen = e.seen; how = e.how; guard = e.guard; e.unread = false;
+                if (!sameVisit) e.readAt = now;
+            }
             if (!have && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= kGuardRepost)) { e.posted = now; post = true; }
         }
         if (post) {
@@ -187,15 +199,19 @@ namespace MFO::Logistics::TheftGate {
             else                           ScanGuards(fid, sid);   // VR: no pump, the other main-thread reads fall back the same way
         }
         if (!have) {   // no fresh answer yet: the caller must retry next tick, never treat this as a verdict (no blocklist, no travel-fail)
+            ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0;
             Say(a_follower, Road::Guard, a_src, nullptr, 0, nullptr, how, "guard", /*a_pending*/ true);
             return GuardState::Pending;
         }
         if (!seen) return GuardState::Clear;
+        ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Seen; t_lastRefusal.guard = guard;
         auto* g = guard ? RE::TESForm::LookupByID<RE::Actor>(guard) : nullptr;
         Say(a_follower, a_road == Road::Loose || a_road == Road::Flora ? a_road : Road::Guard, a_src, nullptr, 0,
             g ? static_cast<RE::TESForm*>(g->GetActorBase()) : nullptr, how, "guard");
         return GuardState::Seen;   // a guard bar is a verdict, not a world action: it never enters the ring
     }
+
+    GuardRefusal GuardRefusalInfo() { return t_lastRefusal; }
 
     bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road) {
         return GuardCheck(a_follower, a_src, a_road, false) != GuardState::Clear;

@@ -845,6 +845,12 @@ namespace MFO::Logistics {
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 }
 
+                // THEFT GATE PREFETCH: within ~600 u of the target, ask the guard question every tick (the 500 ms repost limit throttles the
+                // main-thread scan) so the answer is already cached when he arrives, instead of the first read being at arrival. The result is
+                // ignored here: the gates at arrival decide.
+                if (!gone && tref && dist <= 600.0f)
+                    (void)TheftGate::GuardCheck(a_follower, tref, LooseRef(tref) ? TheftGate::Road::Loose : TheftGate::Road::Corpse, false);
+
                 // ARRIVAL is checked BEFORE the stall/deadline giveup: a follower
                 // standing ON the corpse has ARRIVED, not "stalled walking" -- and
                 // the considering/sneak HOLD below legitimately keeps him stationary
@@ -1066,12 +1072,30 @@ namespace MFO::Logistics {
                     // genuinely DONE and safe to blocklist -- UNLESS a Gear/Valuables
                     // tier is still under the player's dibs (#2): then DON'T mark it
                     // DONE, so the linger revisits it once the claim releases.
-                    bool leftWaiting = false;
-                    const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting);
+                    bool leftWaiting = false, guardHeld = false;
+                    const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting, &guardHeld);
                     if (moved) MarkJustLooted(id, now);   // [L] glyph: CONFIRMED pickup
                     StuckAtOriginResetRun(id);   // a pickup breaks the 'consecutive' run
                     if (moved || !leftWaiting)
                         g_grabGrow.erase(tref->GetFormID());   // handled -> stale grow verdict
+                    // THEFT GATE (guard check): Pending = the answer is not back yet (the scan runs on main), Seen = a guard sees him or the body.
+                    // Either way this is a WAIT, never "nothing to take" and never DONE: the phase is untouched so this arrival is re-entered next
+                    // tick (TheftGate.h: Pending = RETRY). Bounded by the excursion cap (the slot sweep at the top of the service tick ends it).
+                    if (guardHeld) {
+                        static std::unordered_map<RE::FormID, Clock::time_point> s_nextGuardHoldLog;
+                        auto& nxtG = s_nextGuardHoldLog[id];
+                        if (nxtG.time_since_epoch().count() == 0 || now >= nxtG) {
+                            nxtG = now + std::chrono::seconds(3);
+                            const auto gr = TheftGate::GuardRefusalInfo();
+                            if (gr.state == TheftGate::GuardState::Seen)
+                                spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard sees {:08X} (follower or body), corpse kept, retrying until the excursion cap",
+                                             id, tref->GetFormID(), gr.guard);
+                            else
+                                spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard check pending, corpse kept, retrying next tick (until the excursion cap)",
+                                             id, tref->GetFormID());
+                        }
+                        return;
+                    }
                     if (!leftWaiting)
                         MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
                     tr.phase = TravelPhase::Holding;
@@ -1530,10 +1554,12 @@ namespace MFO::Logistics {
         // IAUS LOOTING (ClickUp 1dfcuabd18f, logistics/LootNeed.cpp): with it on, his act.loot_* rows (IsIausNeedLootOp) are skipped,
         // never run beside it (marth: "replaced, never stacked"), and the IAUS pass below picks what to loot after the walk.
         const bool iausLoot = IausLootOn(a_state);
-        bool iausDone = false;       // the IAUS pass runs once per tick: at the first skipped loot row, else after the walk
+        bool iausDone[2] = { false, false };   // the IAUS pass runs once per PASS per tick: at the first skipped loot row, else after the walk
         std::string iausLabel;
-        const auto runIausLoot = [&]() {
+        // Same dibs-tier ordering as the rows (marth: no-dibs first): pass 0 runs the plan MINUS the dibs-tier categories, pass 1 runs it whole.
+        const auto runIausLoot = [&](bool a_restrictFree) {
             for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                if (a_restrictFree && IsDibsTierCat(cat)) continue;
                 if (!LootNearby(a_follower, cat, now)) continue;
                 iausLabel = std::string("IAUS loot ") + CatName(cat); MarkJustLooted(id, now);
                 return true;
@@ -1552,9 +1578,9 @@ namespace MFO::Logistics {
             // IAUS looting owns every need-loot row: the first one the walk reaches is where the IAUS pass runs (review F5), so the
             // rows above it (drinks, casts, ...) still come first and the rows below it (and any Wait below) only after it found nothing.
             if (iausLoot && IsIausNeedLootOp(op)) {
-                if (!iausDone) {
-                    iausDone = true;
-                    if (runIausLoot()) { acted = true; fired = choice.rank; label = iausLabel; break; }
+                if (!iausDone[pass]) {
+                    iausDone[pass] = true;
+                    if (runIausLoot(restrictFree)) { acted = true; fired = choice.rank; label = iausLabel; break; }
                 }
                 start = choice.rank + 1; continue;
             }
@@ -2168,7 +2194,8 @@ namespace MFO::Logistics {
         // IAUS LOOTING: a table with no need-loot row at all reaches the IAUS pass here, after every rule found nothing to do (a Wait rule
         // returned above, so a deliberate STOP still wins); otherwise it ran at its first loot row. Same LootNearby road (claims, dibs
         // tiers, theft gate unchanged).
-        if (!acted && iausLoot && !iausDone && runIausLoot()) { acted = true; fired = -1; label = iausLabel; }
+        for (int p = 0; p < 2 && !acted && iausLoot; ++p)
+            if (!iausDone[p] && runIausLoot(p == 0)) { acted = true; fired = -1; label = iausLabel; }
 
         // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot or buy whats needed for town errand smithing"): after every
         // gambit rule found nothing to do, a follower whose smithing want list still lacks materials takes them (ruling Q5: only the

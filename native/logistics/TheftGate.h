@@ -24,6 +24,12 @@ namespace MFO::Logistics::TheftGate {
     // Full answer. a_onMain = the caller is on the main thread already (scans now, so it is never Pending).
     GuardState GuardCheck(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road, bool a_onMain);
 
+    // The CALLING THREAD's last non-Clear GuardCheck result and a running count of them (thread_local, no lock). A caller whose call chain
+    // passes several gates (StripCorpse -> LootHere / Take) snapshots n before and after to learn that a gate refused, and reads state / guard
+    // to say why (Pending = "guard check pending", Seen = "guard sees <guard>").
+    struct GuardRefusal { std::uint32_t n = 0; GuardState state = GuardState::Clear; RE::FormID guard = 0; };
+    GuardRefusal GuardRefusalInfo();
+
     // INTERIM GUARD GATE. TRUE = refuse (a guard sees the follower or a_src, or the answer is not back yet).
     // a_src may be null (a follower-only check, the scan's). Logs `[theft-gate] ... BARRED:guard` rate-limited.
     bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road);
