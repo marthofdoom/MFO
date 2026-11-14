@@ -359,6 +359,7 @@ namespace MFO::Iaus::Candidates {
                 u.targetIsAlly = tgt.get() != a_self && !tgt->IsPlayerRef() && Taunt::IsPartyMember(tgt.get());
             }
             auto* avo = foe->AsActorValueOwner();
+            u.liveFx = SpellBook::FoeFx(fid);   // the main-thread mirror's last read (empty until the first one lands)
             u.paralysed = avo && avo->GetActorValue(RE::ActorValue::kParalysis) > 0.0f;
             if (auto* fcc = foe->GetActorRuntimeData().combatController; fcc && fcc->state) u.fleeing = fcc->state->isFleeing;
             u.blocking = foe->IsBlocking();
@@ -515,6 +516,7 @@ namespace MFO::Iaus::Candidates {
 
         // Ask the main thread to (re)measure the sight lines this tick read (rate-limited per pair inside).
         if (!wantFoes.empty()) {
+            SpellBook::WantFoeFx(wantFoes);   // the foes' live effects, read on the main thread (the next lap sees them)
             Sightline::Want(selfID, wantFoes, Sightline::Basis::Own);
             Sightline::Want(selfID, std::move(wantFoes), Sightline::Basis::Engine);
         }

@@ -57,6 +57,10 @@ namespace MFO::Iaus::SpellBook {
         std::unordered_map<RE::FormID, Slot> g_books;
         std::unordered_set<RE::FormID>       g_dropLogged;   // once per spell per session
         std::unordered_set<RE::FormID>       g_probeLogged;  // the passive probes: once per spell / staff per session
+        struct FoeSlot { std::vector<FxKey> fx; Clock::time_point stamp{}; Clock::time_point asked{}; };
+        std::unordered_map<RE::FormID, FoeSlot> g_foeFx;   // under g_mx
+        constexpr double kFoeFxAskSec   = 0.5;   // re-read a foe at most this often
+        constexpr double kFoeFxTrustSec = 4.0;   // a read older than this is not used (the lap period is N x 133 ms, principle 9)
         std::uint32_t                        g_gen = 0;      // bumped by Clear: a pre-Clear refresh is dropped
 
         double Age(const Clock::time_point& a_then, const Clock::time_point& a_now) {
@@ -345,6 +349,21 @@ namespace MFO::Iaus::SpellBook {
             e.onClass      = a_source == Source::Scroll ? a_gate.scrollUser : a_gate.spellsOnClass;
             e.fromMastered = a_gate.spellsFromMastered;
             if (e.nature == Prune::Nature::Summon) e.liveSummon = Actuation::CasterHasLiveSummon(a_actor, a_sp);
+            // A hostile spell's LINGERING effects (marth 2026-11-13, "all effect spell detection"): a pure debuff / control / damage-over-time
+            // spell (every hostile effect has a duration, it is not a concentration stream) whose effects would all merely replace ones live
+            // on a foe is no candidate there until they run out. A spell with any instant hostile effect always does something new: never listed.
+            if (e.drop == Prune::Drop::Keep && (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control) &&
+                a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration) {
+                std::vector<FxKey> ling;
+                bool instant = false;
+                for (auto* eff : a_sp->effects) {
+                    auto* base = eff ? eff->baseEffect : nullptr;
+                    if (!base || !(base->IsHostile() || base->IsDetrimental())) continue;
+                    if (eff->GetDuration() == 0) { instant = true; break; }
+                    ling.push_back(FxOf(base));
+                }
+                if (!instant) e.lingerFx = std::move(ling);
+            }
             if (e.drop == Prune::Drop::Keep &&
                 (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward)) {
                 // THE ENGINE'S OWN REPLACE RULES, read per MGEF off each party member's live active-effect list (source-agnostic: a proxy
@@ -723,10 +742,54 @@ namespace MFO::Iaus::SpellBook {
         if (auto it = g_books.find(a_new); a_new != 0 && it != g_books.end()) ++it->second.dirtySeq;
     }
 
+    void WantFoeFx(const std::vector<RE::FormID>& a_foes) {
+        if (a_foes.empty() || !MainThread::IsInstalled()) return;
+        const auto now = Clock::now();
+        std::vector<RE::FormID> due;
+        std::uint32_t gen = 0;
+        {
+            std::scoped_lock lk(g_mx);
+            gen = g_gen;
+            for (auto it = g_foeFx.begin(); it != g_foeFx.end();)   // forget foes not asked for a while
+                it = (Age(it->second.asked, now) > 30.0) ? g_foeFx.erase(it) : std::next(it);
+            for (const auto id : a_foes) {
+                auto& s = g_foeFx[id];
+                if (s.asked.time_since_epoch().count() != 0 && Age(s.asked, now) < kFoeFxAskSec) continue;
+                s.asked = now;
+                due.push_back(id);
+            }
+        }
+        if (due.empty()) return;
+        MainThread::Post([due = std::move(due), gen]() {
+            std::vector<std::pair<RE::FormID, std::vector<FxKey>>> read;
+            for (const auto id : due) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (a && !a->IsDead()) read.emplace_back(id, LiveFx(a));
+            }
+            const auto stamp = Clock::now();
+            std::scoped_lock lk(g_mx);
+            if (gen != g_gen) return;
+            for (auto& [id, fx] : read) {
+                auto& s = g_foeFx[id];
+                s.fx    = std::move(fx);
+                s.stamp = stamp;
+            }
+        });
+    }
+
+    std::vector<FxKey> FoeFx(RE::FormID a_foe) {
+        const auto now = Clock::now();
+        std::scoped_lock lk(g_mx);
+        const auto it = g_foeFx.find(a_foe);
+        if (it == g_foeFx.end() || it->second.stamp.time_since_epoch().count() == 0 || Age(it->second.stamp, now) > kFoeFxTrustSec) return {};
+        return it->second.fx;
+    }
+
     void Clear() {
         std::scoped_lock lk(g_mx);
         ++g_gen;
         g_books.clear();
+        g_foeFx.clear();
         g_dropLogged.clear();
         g_probeLogged.clear();
     }

@@ -45,6 +45,17 @@ namespace MFO::Iaus {
         return false;
     }
 
+    // True when EVERY effect in a_ask would merely replace a live effect of a_live (an empty side is never "replaced").
+    inline bool FxAllReplaced(const std::vector<FxKey>& a_ask, const std::vector<FxKey>& a_live) {
+        if (a_ask.empty() || a_live.empty()) return false;
+        for (const auto& a : a_ask) {
+            bool any = false, kw = false;
+            for (const auto& l : a_live) if (FxReplaces(a, l, kw)) { any = true; break; }
+            if (!any) return false;
+        }
+        return true;
+    }
+
 struct SpellEntry {
         std::uint32_t form = 0;                 // spell / scroll FormID; for a staff the WEAPON's FormID
         SpellSource   source = SpellSource::Spell;
@@ -73,6 +84,8 @@ struct SpellEntry {
         float         charge = 0.0f;            // staff: current charge
         bool          charged = true;           // staff: at least one cast left
         std::vector<std::uint32_t> activeOn;    // Buff / Ward: party members this spell's effect is live on
+        std::vector<FxKey> lingerFx;            // Offense / Control: the hostile effects that LINGER on a foe (duration > 0), only when the spell has no instant
+                                                // hostile effect and is not a concentration stream; empty = never pruned as "already on him". All must be replaced
         std::vector<FxKey> fx;                  // Buff / Ward: one per beneficial effect, read off its MGEF (fix/iaus-claim-thrash, marth 2026-11-13)
         bool          allyRoad = false;         // Buff / Heal, Self delivery: a proxy road serves it at an ally NOW (1dfcuabd309): Harbinger's
                                                 // delivery-flip proxy on the claim road, or MFO's ConcProxy for a concentration spell
@@ -171,6 +184,7 @@ struct SpellEntry {
     // ── One actor ─────────────────────────────────────────────────────────────────────────────────────────
     struct Combatant {
         std::uint32_t id = 0;
+        std::vector<FxKey> liveFx;          // a FOE's live effects by base MGEF, from SpellBook's main-thread mirror (empty = none read yet: nothing is pruned)
         std::string   name;
         float hp = 0.0f, hpMax = 0.0f;      // hpMax <= 0: unreadable, the generator skips this actor
         float mp = 0.0f, mpMax = 0.0f;

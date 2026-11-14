@@ -673,6 +673,9 @@ namespace MFO::Iaus {
                     for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                         const Combatant* foe = x.top[ti];
                         if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule
+                        // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
+                        // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
+                        if (FxAllReplaced(e.lingerFx, foe->liveFx)) { ++x.out.droppedTarget; continue; }
                         Candidate c = base(foe);
                         x.Foe(c.f, *foe, true);
                         c.f.meleeRange = false;
