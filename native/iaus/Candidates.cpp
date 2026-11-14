@@ -28,11 +28,6 @@
 #include <format>
 #include <unordered_map>
 
-// cast/CastOn.cpp (fix/iaus-claim-thrash). Belongs in cast/Actuation.h beside CastLockClaimStamp; declared here only because that header
-// was outside this round's file list (reviewer: move it).
-namespace MFO::Actuation {
-    bool CastClaimStandingOnHand(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell, RE::FormID& a_target);
-}
 
 namespace MFO::Iaus::Candidates {
 

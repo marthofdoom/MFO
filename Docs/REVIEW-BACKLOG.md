@@ -3367,3 +3367,8 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 
 ### fix/iaus-claim-thrash (Opus 5.5 review, 2026-11-13, against 0c899c78)
 - **(SEV-3):** verbatim: "a lower Buff claim the engine never builds (NOT BUILT) now holds off a higher Offense for up to 6 s; nothing checks the incumbent's target (dead foe / now-buffed ally keeps the hand until it fires, ends or the cap); consider releasing early when ClaimLiveOnHand stands but the incumbent's target is dead or the claim reports not-built." (`cast/Hands.cpp` CanPreemptHand fresh-incumbent guard; reviewer reasoning: the widening is kept by ruling, this is the cost.)
+- **(SEV-4, Opus 5.5 review 2 against 92731a4c):** verbatim: "The foe prune leaves no log line, only the droppedTarget count (Generate.cpp:678). Suggest one line per (follower, spell, foe MGEF) in Candidates when FxAllReplaced fires."
+- **(SEV-4):** verbatim: "The buff measure calls LiveFx(p) inside the per-buff-spell loop, O(buffs x party x effects), allocating keyword vectors each time (SpellBook.cpp:376-387). Hoist one LiveFx per party member above the spell loop."
+- **(SEV-4, note):** "For a re-apply after the beat (liveInstantStream, Applied), commitPreempt now runs after CastSelfDirect instead of before it. That stream holds no hand, no harm found."
+- **(SEV-5):** "The WantFoeFx Post lambda checks !IsDead() but not Is3DLoaded(), unlike PostRefresh. Safe (LiveFx returns empty), but match PostRefresh."
+- **(design note for marth):** all Influence MGEFs (Calm, Fear, Fury) share keyword 00078098 with the dispel flag, so a Fear spell is pruned on a calmed or frenzied foe and vice versa (the engine dispels one with the other). Switching a foe from fear to frenzy on purpose is a design question.

@@ -358,8 +358,18 @@ namespace MFO::Iaus::SpellBook {
                 bool instant = false;
                 for (auto* eff : a_sp->effects) {
                     auto* base = eff ? eff->baseEffect : nullptr;
-                    if (!base || !(base->IsHostile() || base->IsDetrimental())) continue;
-                    if (eff->GetDuration() == 0) { instant = true; break; }
+                    using A = RE::EffectArchetypes::ArchetypeID;
+                    const auto arch = base ? base->GetArchetype() : A::kNone;
+                    // Control archetypes count even when the MGEF is flagged neither hostile nor detrimental (vanilla Calm
+                    // InfluenceAggDownFFAimed, some TurnUndead / Paralysis MGEFs: review 2 SEV-3).
+                    const bool control = arch == A::kCalm || arch == A::kFrenzy || arch == A::kDemoralize ||
+                                         arch == A::kParalysis || arch == A::kTurnUndead;
+                    if (!base || !(base->IsHostile() || base->IsDetrimental() || control)) continue;
+                    // Health damage (a damage-over-time recast applies a new full instance: net new damage) always does
+                    // something new, like an instant hit: the spell is never listed (review 2 SEV-3).
+                    const bool healthDamage = base->data.primaryAV == RE::ActorValue::kHealth &&
+                                              (arch == A::kValueModifier || arch == A::kPeakValueModifier);
+                    if (eff->GetDuration() == 0 || healthDamage) { instant = true; break; }
                     ling.push_back(FxOf(base));
                 }
                 if (!instant) e.lingerFx = std::move(ling);
