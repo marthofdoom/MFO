@@ -226,6 +226,7 @@ namespace MFO::Config {
             else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
             else if (a_key == "bIausAvailable")     setB(g_iausAvailable);    // global IAUS gate, MCM, default ON (the per-follower bit stays default OFF)
             else if (a_key == "bIausLoot")          setB(g_iausLoot);         // IAUS looting for Sentient AI followers, INI-only, default ON
+            else if (a_key == "bIausThiefNeedSteal") setB(g_iausThiefNeedSteal);   // thief-class need-steal inside IAUS looting, MCM, default ON
             else if (a_key == "bIausExplain")       setB(g_iausExplain);      // [iaus-why] per-candidate breakdown, INI-only, default OFF
             else if (a_key == "bIausFillProbe")     setB(g_iausFillProbe);    // [iaus-fill] measured inputs next to reality, log only, INI-only, default OFF
             else if (a_key == "bIausFillArmor")     setB(g_iausFillArmor);    // the IAUS engine fills, one input each, INI-only, all default OFF
@@ -466,6 +467,7 @@ namespace MFO::Config {
             g_inheritPerkCensus  = true;    // [inherit-census] hidden-perk census -- ON (log only, changes nothing)
             g_iausAvailable      = true;    // global IAUS gate -- ON (the per-follower switch is what defaults OFF)
             g_iausLoot           = true;    // IAUS looting (Sentient AI followers) -- ON
+            g_iausThiefNeedSteal = true;    // a Thief-class follower steals a NEEDED item inside IAUS looting -- ON
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
             g_iausFillProbe      = false;   // [iaus-fill] probe lines -- OFF everywhere by default (the Deck INI arms it)
             g_iausFillArmor      = false;   // the IAUS engine fills -- each OFF until its probe numbers are field-proven
@@ -650,6 +652,7 @@ namespace MFO::Config {
             { "fEngageOnSightRange", "2000.000000" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
             { "bTownErrands", "1" },           { "bTownToasts", "0" },
+            { "bIausThiefNeedSteal", "1" },
             { "iErrandMinSellGold", "100" },
             { "iErrandMinPurse", "200" },      { "fErrandSettleSec", "10.000000" },
             { "fErrandCooldownSec", "120.000000" }, { "fErrandMaxGameMin", "120.000000" },

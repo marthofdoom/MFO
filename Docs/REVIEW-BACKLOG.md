@@ -3370,3 +3370,7 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 - **(SEV-3 follow-up):** verbatim: "DirectSelf.cpp:186, DirectTarget.cpp:203 and Auto.cpp:667 are combat-table-only... the same inactive-controller stall probably applies to offense and buff concentration claims."
 - **(SEV-4):** verbatim: "each change to inactive releases the standing claim through the existing no-controller branch... watch for inactive=true lines in the next field run."
 - **(SEV-4, Opus 5.5 review 2 against adf5880e):** verbatim: "inside the else-if at :989-1007, the guard `if (onHand[kHandLeft].found)` is always true, because the else-if condition already requires it. So `a_hand = kHandRight` and the displacing bookkeeping below it (:998-1005) are unreachable. The surrounding comment (:984-987) is stale. Cleanup only."
+### feat/iaus-loot-paths (Opus 5.5 review, 2026-11-13, against 68159eed)
+- **(SEV-5):** verbatim: "CorpseGuardWaived applies only to Road::Corpse; Gear/Swap/Silver takes from an unowned wilderness corpse (SwapUp.cpp:610, Silver.cpp:468, Gear.cpp:856) stay guard-gated (conservative, inconsistent with the ruling)."
+- **(SEV-5):** verbatim: "the waiver depends on TESObjectREFR::GetOwner returning null for a dead actor; if it returns the cell owner the waiver never fires (fails safe; the WAIVED log shows it)."
+- **(SEV-5):** verbatim: "g_stealSkipLogged not cleared on load (logs only)."

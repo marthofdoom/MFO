@@ -24,6 +24,7 @@
 #include "Runtime.h"         // the exact-build gates (the PLVD place: PlvdPlaceVerified, Errand_internal.h)
 #include "Logistics.h"          // ForEachLoadedRef (run 4: the unattended-vendor scan of every loaded cell, on the main thread)
 #include "Logistics_internal.h"
+#include "Lotd.h"             // DepositPending: the museum drop-off goes before any town errand
 #include "Config.h"
 #include "Followers.h"
 #include "MainThread.h"
@@ -1818,6 +1819,10 @@ namespace MFO::Logistics::Errand {
                 coolIsDone = g_coolDone.contains(fid);
             } else if (const auto it2 = g_nextPlan.find(fid); it2 != g_nextPlan.end() && a_now < it2->second) return true;
         }
+        // MUSEUM DROP-OFF FIRST (marth 2026-11-13: "no matter what museum drop off is the highest priority town event"): a follower with a
+        // museum deposit waiting plans no errand of any kind (shop, smith, temple, inn, reopened trip); the deposit (Service.cpp
+        // PriorityDeposit, every tick) goes first. Bounded: DepositPending is false while his deposit cooldown stands.
+        if (Lotd::DepositPending(a_follower, a_state, a_now)) { NotPlanning(a_follower, a_now, "a museum deposit is waiting: the drop-off is the first town event"); return true; }
         if (cooling) {   // LIVE NEED RE-CHECK bypasses the cooldown (Auri, restored trip): a need still unmet with the gold in hand starts a fresh trip
             Reopen::Plan plan;
             if (playerTown && coolIsDone && PlanLiveNeeds(a_follower, a_state, a_now, tidNow, "errand cooldown", nullptr, false, plan)) {   // (a FAILURE cooldown stands)

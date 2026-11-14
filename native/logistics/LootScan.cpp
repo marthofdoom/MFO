@@ -87,7 +87,10 @@ namespace MFO::Logistics {
             // one spot -- no new excursion from that box (StuckAtOrigin.cpp). Quiet: the trigger logged loudly.
             if (StuckAtOriginCooldown(a_follower, a_now)) return false;
             // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): no looting while a guard can see him. TheftGate.cpp.
-            if (TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard)) return false;
+            // Inside a town the bar is follower-level for every category. Outside one it moves into the candidate filter (below), so an
+            // unowned corpse (marth 2026-11-13: guard check skipped outside towns) is not barred by it; Pending still bars (fail closed).
+            const bool guardSeen = TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard);
+            if (guardSeen && TheftGate::PlayerInTown()) return false;
             // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
             // immediately cancel a loot excursion and pull followers back").
             // A follower must never BEGIN or CONTINUE a loot action while the
@@ -425,6 +428,8 @@ namespace MFO::Logistics {
                                 // follower only (the pre-check needs it anyway; this saves the walk). The owner bars are replaced by
                                 // Steal::LooseBarred + the witness pre-check at arrival and at the write.
                                 if (!a_follower->IsSneaking()) break;
+                                // IAUS thief-need pass (LootNeed.cpp): only an owned item he NEEDS, scored; the act.steal ROW keeps the superset.
+                                if (g_iausStealScan && !IausNeedStealWants(a_follower, ref, base)) break;
                                 if (base->GetFormID() == kGold001Ref || IsCoinLoot(base) || IsCoinPurseFlora(ref, base) ||
                                     base->GetFormID() == kLockpickRef) {
                                     lootable = loose = true;
@@ -626,8 +631,11 @@ namespace MFO::Logistics {
                     // clock; Free tiers (ammo/potions/lockpicks) release at once. The
                     // accrual it runs is idempotent-per-tick (a_now dedupe), so this
                     // scan drives it exactly as the inline version did.
-                    if (TierReleased(a_cat, ref, playerPos, a_now))
+                    if (TierReleased(a_cat, ref, playerPos, a_now)) {
+                        // Outside a town the guard bar applies per candidate: only a waived (unowned) corpse passes it.
+                        if (guardSeen && !(ref->As<RE::Actor>() && ref->IsDead() && TheftGate::CorpseGuardWaived(a_follower, ref))) return RE::BSContainer::ForEachResult::kContinue;
                         candidates.push_back(ref->GetHandle());
+                    }
                     else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
                 };
@@ -1055,7 +1063,8 @@ namespace MFO::Logistics {
             // a_guardHeld = ONLY a Pending answer (the caller retries the arrival); a Seen answer keeps the body (leftWaiting) and the batch
             // moves on, the caller reads GuardRefusalInfo() for the log text.
             const auto refusalsBefore = TheftGate::GuardRefusalInfo().n;
-            if (TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
+            // CORPSE GUARD WAIVER (marth 2026-11-13): outside a town a corpse that carries no ownership is no theft, so no witness check (TheftGate::CorpseGuardWaived).
+            if (!TheftGate::CorpseGuardWaived(a_follower, a_corpse) && TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
                 if (a_leftWaiting) *a_leftWaiting = true;
                 if (a_guardHeld && TheftGate::GuardRefusalInfo().state == TheftGate::GuardState::Pending) *a_guardHeld = true;
                 return false;
@@ -1068,6 +1077,7 @@ namespace MFO::Logistics {
             // The categories his inventory needs, best score first, under the SAME dibs gate and the same drain as the rows.
             const auto runIausStrip = [&]() {
                 for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                    if (cat == Category::Steal) continue;   // thief-need steals LOOSE refs only (the scan / excursion road), never a corpse
                     if (!TierReleased(cat, a_corpse, playerPos, a_now)) {
                         if (a_leftWaiting) *a_leftWaiting = true;
                         continue;
@@ -1157,9 +1167,11 @@ namespace MFO::Logistics {
             const bool iausLoot = IausLootOn(a_state);
             bool iausDone[2] = { false, false };   // per pass, like the rows: pass 0 = the plan minus the dibs-tier categories, pass 1 = whole
             const auto runIausExcursion = [&](bool a_restrictFree) {
-                for (const Category cat : IausLootPlan(a_follower, a_state))
-                    if (!(a_restrictFree && IsDibsTierCat(cat)) &&
-                        LootNearby(a_follower, cat, a_now, RE::ActorValue::kNone, LootMode::kExcursion)) return true;
+                for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                    if (a_restrictFree && IsDibsTierCat(cat)) continue;
+                    const IausStealScope stealScope(cat == Category::Steal);
+                    if (LootNearby(a_follower, cat, a_now, RE::ActorValue::kNone, LootMode::kExcursion)) return true;
+                }
                 return false;
             };
             // LOOT RUN ORDERING (marth: no-dibs + closest first, dibs later in

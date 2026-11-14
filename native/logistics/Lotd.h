@@ -62,6 +62,11 @@ namespace MFO::Lotd {
     // combat (his or the player's) and heals. True = a trip started (the caller returns).
     bool PriorityDeposit(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
                          const DepositGate& a_gate);
+    // TOWN ERRAND ORDER (marth 2026-11-13: "no matter what museum drop off is the highest priority town event"): TRUE = this follower has a
+    // museum deposit WAITING (an enabled act.loot_museum rule, Shippable relics in the pack, an outgoing crate inside his leash, shipping
+    // initialised, no cooldown on him, not already on a trip) so Errand::TryStart must not PLAN a new errand yet. The same tests as
+    // PriorityDeposit's, minus the transient gates (combat, heals, the town door read), which clear on their own. Worker road; reads only.
+    bool DepositPending(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now);
     // Drive this follower's deposit trip, if he is on one. True = the trip owns this
     // tick (the caller returns). Called at the top of the logistics tick. a_healWants:
     // while he is still walking, a heal rule that wants to fire ends the trip.

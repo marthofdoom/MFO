@@ -1581,6 +1581,7 @@ namespace MFO::Logistics {
         const auto runIausLoot = [&](bool a_restrictFree) {
             for (const Category cat : IausLootPlan(a_follower, a_state)) {
                 if (a_restrictFree && IsDibsTierCat(cat)) continue;
+                const IausStealScope stealScope(cat == Category::Steal);   // thief-need: LootScan's Steal case filters to owned needed items
                 if (!LootNearby(a_follower, cat, now)) continue;
                 iausLabel = std::string("IAUS loot ") + CatName(cat); MarkJustLooted(id, now);
                 return true;
