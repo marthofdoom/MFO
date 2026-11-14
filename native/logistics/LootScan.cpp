@@ -1057,7 +1057,8 @@ namespace MFO::Logistics {
             // a_guardHeld = ONLY a Pending answer (the caller retries the arrival); a Seen answer keeps the body (leftWaiting) and the batch
             // moves on, the caller reads GuardRefusalInfo() for the log text.
             const auto refusalsBefore = TheftGate::GuardRefusalInfo().n;
-            if (TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
+            // CORPSE GUARD WAIVER (marth 2026-11-13): outside a town a corpse that carries no ownership is no theft, so no witness check (TheftGate::CorpseGuardWaived).
+            if (!TheftGate::CorpseGuardWaived(a_follower, a_corpse) && TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
                 if (a_leftWaiting) *a_leftWaiting = true;
                 if (a_guardHeld && TheftGate::GuardRefusalInfo().state == TheftGate::GuardState::Pending) *a_guardHeld = true;
                 return false;

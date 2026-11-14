@@ -600,6 +600,10 @@ namespace MFO::Config {
     // steal / pick locks) are skipped and logistics/LootNeed.cpp scores WHAT he takes by his current inventory (iaus/LootNeed.h).
     // 0 = his loot gambit rows run exactly as before. Read on the worker (ServiceFollower).
     inline std::atomic<bool>  g_iausLoot{ true };
+    // THIEF NEED-STEAL ([General] bIausThiefNeedSteal, MCM, default ON; marth 2026-11-13 "Thief class always"). Under IAUS looting, a follower whose
+    // equipped class is a Thief-line class (logistics/LootNeed.cpp IsThiefLine) also considers STEALING an owned lockpick / soul gem / drinkable
+    // potion he needs (sneaking only). 0 = no need-steal at all (his own act.steal row, if any, is unchanged). Read on the worker.
+    inline std::atomic<bool>  g_iausThiefNeedSteal{ true };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };

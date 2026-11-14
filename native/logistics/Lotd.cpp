@@ -1587,6 +1587,30 @@ namespace MFO::Lotd {
         return true;
     }
 
+    bool DepositPending(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
+        if (!a_follower || !Enabled() || !HarbingerReady() || !DepositCanRun()) return false;
+        const auto fid = a_follower->GetFormID();
+        const bool hasGambit = std::any_of(a_state.logistics().begin(), a_state.logistics().end(),
+                                           [](const Gambit& g) { return g.enabled && g.actionOpcode == Vocab::kActLootMuseum; });
+        if (!hasGambit) return false;
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (!pc) return false;
+        auto& needs = FreshNeeds(a_now);
+        if (!needs.snap) return false;
+        RE::TESObjectREFR* crate = nullptr;
+        {
+            std::scoped_lock lock(g_tripMx);
+            if (g_trips.count(fid)) return false;   // he is already on the deposit trip
+            if (auto it = g_followerCooldown.find(fid); it != g_followerCooldown.end() && a_now < it->second)
+                return false;   // a refused / failed deposit stands off: errands must not be held for ever behind it
+            crate = NearestCrate(a_follower, a_now, nullptr, nullptr);
+        }
+        if (!crate || !ShippingInitialised()) return false;
+        if (Shippable(a_follower, needs).empty()) return false;
+        GateLog(fid, a_now, std::format("a museum deposit is waiting (crate {:08X}): it goes before any town errand", crate->GetFormID()));
+        return true;
+    }
+
     bool DepositTick(RE::Actor* a_follower, Clock::time_point a_now, const std::function<bool()>& a_healWants) {
         if (!a_follower) return false;
         const auto fid = a_follower->GetFormID();

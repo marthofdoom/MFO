@@ -778,6 +778,16 @@
           }
         },
         {
+          "id": "bIausThiefNeedSteal:General",
+          "text": "Thieves steal what they need",
+          "type": "toggle",
+          "help": "ON (default): with Sentient AI looting on, a follower whose class is a Thief-line class (Thief, Master Thief, Nightingale, Listener) also considers stealing an owned lockpick, soul gem or drinkable potion that his inventory needs, while he sneaks. Never coin, valuables or jewellery. OFF: no need-based stealing at all (a Steal gambit you gave him still runs as before).",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "iMinPotionMag:General",
           "text": "Ignore weak potions (min power)",
           "type": "slider",

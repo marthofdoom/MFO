@@ -37,6 +37,12 @@ namespace MFO::Logistics::TheftGate {
     // a_src may be null (a follower-only check, the scan's). Logs `[theft-gate] ... BARRED:guard` rate-limited.
     bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road);
 
+    // CORPSE GUARD WAIVER (marth 2026-11-13, ClickUp 1dfcuabczbg): TRUE = a corpse whose contents carry NO ownership (no owner on the body, no
+    // ExtraOwnership on any held copy), looted OUTSIDE a town (the player's location has no LocationTypes::TownAnchor): the engine never calls
+    // that theft, so the witness check is skipped for the corpse (StripCorpse's gate and Take's, both). FALSE inside a town (the guard check
+    // stays: "Outside of towns") and for any corpse holding one owned copy (every crime gate stays, everywhere). Reads the inventory: worker.
+    bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse);
+
     // One copy's verdict. nullptr = may be taken, else the reason. a_xList = the copy's extra list (null = a plain copy,
     // owned by the container's owner, if any). Pure read; no guard check, no log.
     const char* TakeBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj,

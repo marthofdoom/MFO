@@ -3,6 +3,7 @@
 #include "TheftGate.h"
 #include "Sightline.h"        // the guard's line of sight (MeasureNow / PointSeenNow, main thread)
 #include "MainThread.h"
+#include "LocationTypes.h"   // CorpseGuardWaived: TownAnchor, the same town test the errands and the loot town bars use
 #include <array>
 #include <mutex>
 
@@ -48,7 +49,7 @@ namespace MFO::Logistics::TheftGate {
         std::unordered_map<std::string, SClock::time_point> g_logAt;
 
         void Say(RE::Actor* a_f, Road a_road, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_n,
-                 RE::TESForm* a_owner, const char* a_via, const char* a_barred, bool a_pending = false) {
+                 RE::TESForm* a_owner, const char* a_via, const char* a_barred, bool a_pending = false, RE::Actor* a_guard = nullptr) {
             const RE::FormID fid = a_f ? a_f->GetFormID() : 0u;
             const RE::FormID sid = a_src ? a_src->GetFormID() : 0u;
             const std::string verdict = a_pending ? std::string("pending") : a_barred ? std::string("BARRED:") + a_barred : std::string("take");
@@ -62,9 +63,11 @@ namespace MFO::Logistics::TheftGate {
                 at = now;
             }
             auto* sb = a_src ? a_src->GetBaseObject() : nullptr;
-            spdlog::info("[theft-gate] F={:08X} road={} src={:08X}({:08X}) item={:08X}x{} owner={:08X} via={} offLimits(pc)={} locked={} verdict={}",
+            spdlog::info("[theft-gate] F={:08X} road={} src={:08X}({:08X}) item={:08X}x{} owner={:08X}{} via={} offLimits(pc)={} locked={} verdict={}",
                          fid, RoadName(a_road), sid, sb ? sb->GetFormID() : 0u, a_obj ? a_obj->GetFormID() : 0u, a_n,
-                         a_owner ? a_owner->GetFormID() : 0u, a_via ? a_via : "-", a_src && a_src->IsOffLimits() ? 1 : 0, a_src && a_src->IsLocked() ? 1 : 0, verdict);
+                         a_owner ? a_owner->GetFormID() : 0u,
+                         a_guard ? std::format(" guard={:08X}({:08X})", a_guard->GetFormID(), a_guard->GetActorBase() ? a_guard->GetActorBase()->GetFormID() : 0u) : std::string(),
+                         a_via ? a_via : "-", a_src && a_src->IsOffLimits() ? 1 : 0, a_src && a_src->IsLocked() ? 1 : 0, verdict);
         }
 
         // ── the action ring ──
@@ -217,7 +220,7 @@ namespace MFO::Logistics::TheftGate {
         ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Seen; t_lastRefusal.guard = guard;
         auto* g = guard ? RE::TESForm::LookupByID<RE::Actor>(guard) : nullptr;
         Say(a_follower, a_road == Road::Loose || a_road == Road::Flora ? a_road : Road::Guard, a_src, nullptr, 0,
-            g ? static_cast<RE::TESForm*>(g->GetActorBase()) : nullptr, how, "guard");
+            nullptr, how, "guard", /*a_pending*/ false, g);   // owner= stays the SOURCE's owner (none here); the guard prints as guard=<ref>(<base>)
         return GuardState::Seen;   // a guard bar is a verdict, not a world action: it never enters the ring
     }
 
@@ -225,6 +228,35 @@ namespace MFO::Logistics::TheftGate {
 
     bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road) {
         return GuardCheck(a_follower, a_src, a_road, false) != GuardState::Clear;
+    }
+
+    bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse) {
+        if (!a_follower || !a_corpse || !a_corpse->As<RE::Actor>()) return false;
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (!pc || LocationTypes::TownAnchor(pc->GetCurrentLocation())) return false;   // in a town (or unknown): the corpse guard check stays
+        if (a_corpse->GetOwner()) return false;
+        auto inv = a_corpse->GetInventory();
+        for (const auto& [obj, data] : inv) {
+            auto* e = data.second.get();
+            if (!e || !e->extraLists) continue;
+            for (auto* xl : *e->extraLists) {
+                if (!xl) continue;
+                if (auto* own = xl->GetByType<RE::ExtraOwnership>(); own && own->owner) return false;   // one owned copy keeps every gate
+            }
+        }
+        const std::string key = std::format("waive|{:08X}|{:08X}", a_follower->GetFormID(), a_corpse->GetFormID());
+        {
+            std::scoped_lock lk(g_logMx);
+            const auto now = SClock::now();
+            if (g_logAt.size() > 512) g_logAt.clear();
+            auto& at = g_logAt[key];
+            if (at.time_since_epoch().count() == 0 || now - at >= kLogEvery) {
+                at = now;
+                spdlog::info("[theft-gate] F={:08X} road=corpse src={:08X} guard check WAIVED: outside a town and the corpse carries no ownership",
+                             a_follower->GetFormID(), a_corpse->GetFormID());
+            }
+        }
+        return true;
     }
 
     const char* TakeBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj,
@@ -290,7 +322,7 @@ namespace MFO::Logistics::TheftGate {
     std::int32_t Take(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, Road a_road) {
         if (!a_follower || !a_src || !a_obj || a_count <= 0) return 0;
         if (a_road == Road::Container && a_src->As<RE::Actor>()) a_road = Road::Corpse;
-        if (GuardInterim(a_follower, a_src, a_road)) return 0;
+        if (!(a_road == Road::Corpse && CorpseGuardWaived(a_follower, a_src)) && GuardInterim(a_follower, a_src, a_road)) return 0;
         constexpr auto kReason = RE::ITEM_REMOVE_REASON::kStoreInContainer;
         std::int32_t moved = 0;
         for (int iter = 0; iter < 16 && moved < a_count; ++iter) {   // re-read the inventory each time: a RemoveItem invalidates its extra lists

@@ -20,6 +20,7 @@
 
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace MFO::Logistics {
 
@@ -40,6 +41,9 @@ namespace MFO::Logistics {
                 if (m > 1.0f && m < floor) m = 0.0f;
         }
 
+        // (follower << 32) ^ ref -> a thief-need SKIP already logged: one skip line per ref, not one per kLogEvery. WORKER only.
+        std::unordered_set<std::uint64_t> g_stealSkipLogged;
+
         // (follower << 32) ^ key -> last [iaus-loot] line. WORKER only.
         std::unordered_map<std::uint64_t, Clock::time_point> g_logAt;
 
@@ -56,7 +60,7 @@ namespace MFO::Logistics {
         // THIEF STEALS BY NEED: a "Thief-line" follower = his EQUIPPED class ships an applied act.steal default row (Thief, Master Thief,
         // Nightingale, Listener today; read from the class table, never a list of ids). Classes OFF / no class equipped: false.
         bool IsThiefLine(RE::FormID a_fid) {
-            if (!a_fid || !Classes::Active()) return false;
+            if (!a_fid || !Config::g_iausThiefNeedSteal.load() || !Classes::Active()) return false;   // bIausThiefNeedSteal OFF: no need-steal at all
             const std::uint8_t eq = Classes::GetEquipped(a_fid);
             if (eq >= Classes::kClassCount) return false;
             const Classes::ClassDef& def = Classes::Get(static_cast<Classes::Id>(eq));
@@ -257,26 +261,35 @@ namespace MFO::Logistics {
 
     bool IausNeedStealWants(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base) {
         if (!a_follower || !a_ref || !a_base || !g_svc) return false;
+        if (!Config::g_iausThiefNeedSteal.load()) return false;   // bIausThiefNeedSteal OFF: no need-steal at all
+        // KIND first (cheap form tests): only a lockpick, a soul gem or a drinkable potion is a need-scored kind; coin, valuables and the rest never steal by need.
+        const bool isPick = a_base->GetFormID() == kLockpick;
+        const bool isGem  = !isPick && IsSoulGemItem(a_base);
+        RE::AlchemyItem* alc = (isPick || isGem) ? nullptr : a_base->As<RE::AlchemyItem>();
+        if (!isPick && !isGem && !(alc && IsDrinkablePotion(alc))) return false;
         // OWNED only (an explicit owner, or a crime to take: the cell-owned case). An unowned loose item is the ordinary IAUS road's.
         if (!a_ref->GetOwner() && !a_ref->IsOffLimits()) return false;
-        const Iaus::LootTuning st = StealTuning();
+        const Iaus::LootTuning st = StealTuning();   // built after the two cheap rejections, once per candidate that reaches scoring
         const auto& inv = CachedLootInv(a_follower, *g_svc);
         const std::int32_t count = std::max<std::int32_t>(a_ref->extraList.GetCount(), 1);
         Iaus::LootVerdict need;
-        if (a_base->GetFormID() == kLockpick)
+        if (isPick)
             need = Iaus::ScoreLootKind(LootKind::Lockpicks, inv, st);
-        else if (IsSoulGemItem(a_base))
+        else if (isGem)
             need = Iaus::ScoreLootKind(LootKind::SoulGems, inv, st);
-        else if (auto* alc = a_base->As<RE::AlchemyItem>(); alc && IsDrinkablePotion(alc)) {
+        else {
             Iaus::Consumable c = ReadConsumable(alc);
             ApplyLootFloor(c);
             need = Iaus::ScoreConsumable(c, count, inv, st);
-        } else
-            return false;   // not a need-scored kind: coin, valuables, jewellery and the rest never steal by need
+        }
         const float value = static_cast<float>(std::max<std::int32_t>(a_base->GetGoldValue(), 0)) * static_cast<float>(count);
         const auto v = Iaus::ScoreStealNeed(need, value, st);
         const RE::FormID fid = a_follower->GetFormID();
-        if (LogDue(fid, a_ref->GetFormID()))
+        // a TAKE is logged on the usual cadence; a SKIP once per (follower, ref) so a scan repeating every tick stays quiet
+        const std::uint64_t logKey = (static_cast<std::uint64_t>(fid) << 32) ^ a_ref->GetFormID();
+        if (g_stealSkipLogged.size() > 4096) g_stealSkipLogged.clear();
+        const bool logIt = v.take ? LogDue(fid, a_ref->GetFormID()) : g_stealSkipLogged.insert(logKey).second;
+        if (logIt)
             spdlog::info("[loot] {:08X} thief-need {} {:08X} '{}' ({:08X}) x{}: {}", fid, v.take ? "take" : "skip", a_ref->GetFormID(),
                          a_base->GetName() ? a_base->GetName() : "?", a_base->GetFormID(), count, v.why);
         return v.take;
@@ -304,7 +317,7 @@ namespace MFO::Logistics {
         for (const auto& t : takes) out.push_back(t.second);
         // THIEF STEALS BY NEED (marth 2026-11-13): after every free-loot category, a Thief-line follower also arms the steal road when a NEED
         // kind (the kinds that score by need: potions, lockpicks, soul gems) reaches stealNeedMin before risk. Per-item and witness gates follow.
-        if (IsThiefLine(fid)) {
+        if (a_follower->IsSneaking() && IsThiefLine(fid)) {   // the steal road only runs sneaking: do not arm it standing
             const Iaus::LootTuning st = StealTuning();
             for (const LootKind k : { LootKind::Potions, LootKind::Lockpicks, LootKind::SoulGems }) {
                 const auto v = Iaus::ScoreLootKind(k, inv, st);
