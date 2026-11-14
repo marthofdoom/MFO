@@ -5,6 +5,26 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.11.2 -- Heal, cloak and caster fixes, mages stay on spells, thieves steal by need, quieter looting
+
+This is a real release on top of 2.11.1. It needs Harbinger v0.20.2 (ABI v45, unchanged). The saves are unchanged too: there is no new co-save record and no new layout, so the 2.11.1 save note still applies and nothing new is added to it. The Classes add-on alpha v1.0.1 pairs with this release.
+
+- **Heals no longer stall while the combat AI is inactive.** A heal claim used to wait for a combat controller that Harbinger builds inactive at first, so a follower sat on a heal for 3 to 9 seconds with no cast. Heals now use the direct road until the AI is live.
+- **No second-hand heal beside a live one.** A second heal claim for the other hand queues behind the first instead of stacking on it.
+- **A heal he can't see is released and re-picked.** A heal held through a target he can't see is released after 2 seconds and not claimed again until the target is in view.
+- **The cloak thrash is fixed.** Frost Cloak and Flame Cloak swapped the left hand 22 times in 10 seconds with no cast. A cast that has just been picked and not fired now holds its hand against anything but a heal. Frost Nova no longer holds the left hand for 3 seconds after it fires.
+- **A buff or debuff that would only replace one is never picked until it runs out.** The follower reads the game's own replace rules for each magic effect, so a weaker or equal buff already on the target is left alone. It works the same for spells, scrolls, staves and proxy spells. Illusion and control debuffs on foes follow it too. Damage over time is never blocked.
+- **Casters stay on spells.** A follower of the Mage line (Evoker, Warlock, Wizard, Arch-Mage and the rest) no longer draws a dagger and charges in while he can pay for an attack spell. The dagger comes back only when his magicka can't pay or his book has no attack. The posture weapon is taken out again when the fight ends, and his own weapon and shield come back.
+- **Close spells only when he would survive closing.** A touch spell, a concentration spell or a short range spell is refused unless he would outlast the foes who are hitting him while he closes. Frostbite counts as ranged. His back-off distance comes from his ranged spells while a close one is refused.
+- **Damage casters rank attacks above buffs.** An Evoker, Warlock, Wizard or Arch-Mage never scores a buff higher than his best attack he can see.
+- **Thieves steal what they need (`bIausThiefNeedSteal`, default on).** With Sentient AI looting on, a Thief line follower (Thief, Master Thief, Nightingale, Listener) can steal an owned lockpick, soul gem or potion that his inventory needs, while he sneaks. Never coin, valuables or jewellery. It is an MCM toggle on the General page. Off means no need based stealing at all.
+- **Museum drop-off is the first town errand.** A follower carrying museum relics takes them to the Museum Shipments crate before his other town errands.
+- **The guard check is skipped for unowned corpse loot outside towns.** A body nobody owns, in a wilderness cell, no longer waits on a guard check. Owned items keep every check. The log now names the guard who saw it.
+- **Looting stutter is reduced.** A follower now scans the area once per check instead of once for every kind of loot, and the scan no longer runs under the cell lock.
+- **A crouch after a sneak release is fixed.** MFO waits for a follower's attack to end before it releases his sneak, and Harbinger 0.20.2 confirms he stood up. Before, a follower released mid shot could stay crouched.
+- **New opt-in probe `bStanceProbe`** in the INI. It only logs a follower's stance state, and it is off by default.
+- **The shipped tuning files carry the final 2.11.1 round.** All 15 class cells and the potion values are updated.
+
 ## Classes add-on v1.0.1 -- Alpha, tiers 1 and 2 tuned
 
 The class add-on is its own download (`MFO-Classes-Addon-v1.0.1.zip`, GitHub tag `classes-addon-v1.0.1`) and is not part of the MFO zip. It needs MFO v2.11.1 with its tuning update files, and Harbinger v0.20.1.
