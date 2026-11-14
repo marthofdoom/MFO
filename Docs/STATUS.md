@@ -6,8 +6,9 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-11-13 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-11-14 UTC (delta block only; the body below is 2026-09-07).
 
+- **2026-11-14 release v2.11.2 prep (a REAL release, branch `release/2.11.2`, NOT merged, NOT tagged; docs and version stamp only, no native logic; needs Harbinger v0.20.2, ABI v45 unchanged; NO co-save, ABI, address-id or ESP change):** merged since v2.11.1: `fix/heal-claim-gates`, `fix/iaus-claim-thrash`, `feat/iaus-loot-paths` (thief need-steal `bIausThiefNeedSteal` default ON, museum drop-off first town errand, unowned corpse guard waiver outside towns, guard named in the log), `fix/loot-scan-perf`, `fix/sneak-release-hold` (opt-in `bStanceProbe`), `fix/caster-posture`, the final 2.11.1 tuning round and the tuner decision rules. Stamp (what `release.sh 2.11.2` phase 1 changes): `VERSION`, `native/CMakeLists.txt` project VERSION, `out/MCM/Config/MFO/config.json` "value" readout. The Classes add-on alpha v1.0.1 is unchanged and pairs with it.
 - **2026-11-13 `fix/loot-scan-perf`:** one cell walk per follower per evaluation (was one per loot category), scanOne runs outside the cell lock; marth: "performance drops and stutters during looting". Field measure pending.
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)

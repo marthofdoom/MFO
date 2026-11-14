@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.11.1 (Sentient AI beta)** (see [`VERSION`](VERSION) and the
+**Status: v2.11.2 (Sentient AI beta)** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -184,7 +184,19 @@ leash and walk-to-loot.
 
 ## Classes add-on v1.0.1 (alpha)
 
-The Classes add-on is its own download, published as a GitHub prerelease with MFO v2.11.1. It needs MFO v2.11.1, the v2.11.1 tuning update files and Harbinger v0.20.1. It adds 35 classes in four tiers. Tiers 1 and 2 are tuned by the simulator, tiers 3 and 4 are not. Enable `MFO_Classes.esl` to install it and disable it to remove it. Saves keep the class data.
+The Classes add-on is its own download, published as a GitHub prerelease with MFO v2.11.1 and pairs with MFO v2.11.2. It needs MFO v2.11.1 or newer, the matching tuning update files and Harbinger v0.20.1 or newer. It adds 35 classes in four tiers. Tiers 1 and 2 are tuned by the simulator, tiers 3 and 4 are not. Enable `MFO_Classes.esl` to install it and disable it to remove it. Saves keep the class data.
+
+## What is new in 2.11.2 (Sentient AI beta)
+
+Fixes on top of 2.11.1 from field runs. **Needs Harbinger v0.20.2 (ABI v45, unchanged).** No new co-save record. The Classes add-on alpha v1.0.1 pairs with it.
+
+- **Heals fixed.** They no longer stall while the combat AI is still inactive, a second hand never stacks a heal beside a live one, and a heal on a target he can't see is released and picked again.
+- **Cloak thrash fixed.** A cast he just picked holds its hand, and Frost Nova frees it.
+- **A buff or debuff that would only replace one already on the target is not picked** until it runs out (the game's own replace rules, for spells, scrolls, staves and proxies). Damage over time is never blocked.
+- **Casters stay on spells.** A Mage line follower no longer draws a dagger and charges in. Close spells only when he would survive closing, and damage casters rank attacks above buffs.
+- **Thieves steal by need** (`bIausThiefNeedSteal`, default on), **museum drop-off is the first town errand**, and the **guard check is skipped for unowned corpse loot** outside towns.
+- **Less looting stutter** (one area scan per follower), and a **stuck crouch after a sneak release** is fixed.
+- **Tuning files** carry the final 2.11.1 round (all 15 class cells and potions).
 
 ## What is new in 2.11.1 (Sentient AI beta)
 

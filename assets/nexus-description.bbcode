@@ -30,6 +30,12 @@ A rule is just [b][Condition] -> [Action][/b]. An enemy drops below 30% health, 
 [b]Sentient AI (beta).[/b] Turn it on for a follower and he stops reading a list and starts scoring everything he could do, then picks the best. It is built for Melee, Ranged, Mage and Auto, it was tuned in a simulator against the game's real enemies, and it hasn't had much field time, so call it a beta. He loots by need (the right ammo for his bow, potions, food, soul gems for a weapon that's running low) and drinks a potion only when it's worth the gold. Every number it uses is in a text file in [i]Data/SKSE/Plugins/MFO_Tuning[/i]. Edit one, save it, and the change is live a few seconds later. Turn it off and the follower runs his gambits like before.
 
 
+[b]Casters stay casters.[/b] A Mage line follower keeps casting instead of drawing a dagger and charging in, and he only picks a close spell when he would survive getting close. Heals, cloaks and buffs got a round of fixes, and a buff that would only replace one already running isn't cast.
+
+
+[b]Thieves steal what they need (optional).[/b] With Sentient AI looting on, a Thief line follower can steal a lockpick, soul gem or potion his inventory needs while he sneaks. It's a toggle in the MCM (on by default, off means no need based stealing).
+
+
 [b]They play nice with other mods.[/b] MFO runs on Harbinger, my framework that lets several mods drive the same follower without fighting over them. So a custom follower still loots, casts and retreats.
 
 
@@ -53,7 +59,7 @@ The bigger behaviours are toggles and sliders in the MCM ([b]Mod Configuration -
 
 [*]SkyUI[/*]
 
-[*]Harbinger (version 0.20.1 or newer)[/*]
+[*]Harbinger (version 0.20.2 or newer)[/*]
 
 [*]MCM Helper (version 9 or newer)[/*]
 
