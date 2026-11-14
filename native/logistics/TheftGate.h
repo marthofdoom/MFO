@@ -23,7 +23,8 @@ namespace MFO::Logistics::TheftGate {
     enum class GuardState : std::uint8_t { Clear, Seen, Pending };   // Pending = no fresh answer yet: RETRY, never blocklist
     // Full answer. a_onMain = the caller is on the main thread already (scans now, so it is never Pending).
     // a_peek (the Service.cpp approach PREFETCH only): may post the scan (500 ms repost limit) but never stamps readAt, never clears unread,
-    // never logs and never records a refusal; the result is meaningless to the caller. The first ARRIVAL gate starts the visit.
+    // never logs and never records a refusal, and reposts on the TTL alone; the result is meaningless to the caller. The first ARRIVAL
+    // gate starts the visit; the answer it uses may come from an approach scan, bounded by kGuardFresh.
     GuardState GuardCheck(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road, bool a_onMain, bool a_peek = false);
 
     // The CALLING THREAD's last non-Clear GuardCheck result and a running count of them (thread_local, no lock). A caller whose call chain

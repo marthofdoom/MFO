@@ -1097,7 +1097,7 @@ namespace MFO::Logistics {
                         g_grabGrow.erase(tref->GetFormID());   // handled -> stale grow verdict
                     // THEFT GATE (guard check): Pending = the answer is not back yet (the scan runs on main): a WAIT, never "nothing to take" and
                     // never DONE; the phase is untouched so this arrival is re-entered next tick (TheftGate.h: Pending = RETRY), bounded by the
-                    // excursion cap (the slot sweep at the top of the service tick ends it, WITHOUT blocklisting a guard-held body: s_guardHeldAt).
+                    // excursion cap (the slot sweep at the top of the service tick ends it, WITHOUT blocklisting a guard-held body: GuardHeldAt()).
                     // Seen = a guard sees him or the body: the body is KEPT (leftWaiting, never DONE) but the batch moves on (Holding), as before.
                     if (!guardHeld && guardAfter.n != guardN0 && guardAfter.state == TheftGate::GuardState::Seen) {
                         spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard sees {:08X} (follower or body), corpse kept, batch continues",

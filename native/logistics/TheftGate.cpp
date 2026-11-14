@@ -187,8 +187,8 @@ namespace MFO::Logistics::TheftGate {
             // LootHere, Take). The first gate that USES an answer stamps readAt; the later reads of the same key accept it for kGuardFresh from
             // that stamp even when the answer itself is older than the TTL by then (it is not tied to a visit boundary: a revisit within
             // that window reuses it too). It only re-uses a verdict a gate already acted on: it never turns "no answer" into a take.
-            // PEEK (the approach prefetch) reads the cache but stamps nothing, so a take is never authorised by an answer taken at the
-            // approach position: the first arrival gate starts the visit.
+            // PEEK (the approach prefetch) stamps nothing and reposts on the TTL alone: the first arrival gate starts the visit, and the
+            // answer it uses may come from an approach scan, bounded by kGuardFresh (plus the repost interval).
             const bool freshAns = e.have && (now - e.at < kGuardFresh || (e.unread && now - e.at < kGuardUnreadMax));
             const bool sameVisit = e.have && e.readAt.time_since_epoch().count() != 0 && now - e.readAt < kGuardFresh;
             if (freshAns || sameVisit) {
@@ -198,7 +198,10 @@ namespace MFO::Logistics::TheftGate {
                     if (!sameVisit) e.readAt = now;
                 }
             }
-            if (!have && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= kGuardRepost)) { e.posted = now; post = true; }
+            // A PEEK reposts on the TTL alone (never on unread / sameVisit): the scans it posts are never read by it, so their unread flag must
+            // not keep an approach-position answer alive past kGuardFresh (review 2 SEV-2). The newest scan stays under ~kGuardFresh + repost.
+            const bool haveForPost = a_peek ? (e.have && now - e.at < kGuardFresh) : have;
+            if (!haveForPost && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= kGuardRepost)) { e.posted = now; post = true; }
         }
         if (post) {
             if (MainThread::IsInstalled()) MainThread::Post([fid, sid]() { ScanGuards(fid, sid); });
