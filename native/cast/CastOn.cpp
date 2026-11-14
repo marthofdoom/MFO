@@ -15,6 +15,23 @@
 
 namespace MFO::Actuation {
 
+    // THE STANDING CLAIM OF a_spell ON ONE HAND (fix/iaus-claim-thrash; declared by iaus/Candidates.cpp, which reads it each lap): true when the
+    // hand's cast lock names a_spell (the SOURCE form, never a proxy) AND an APMF claim behind it still stands (the offense facet buff claims
+    // ride, or the per-hand heal slot: the same two answers CanPreemptHand's ClaimLiveOnHand gives on a single hand). a_target = the recipient
+    // (a self claim's lock target reads 0 = the follower). True before any caster is built, the window the thrash lived in. Worker-serial (#4).
+    bool CastClaimStandingOnHand(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell, RE::FormID& a_target) {
+        a_target = 0;
+        if (a_hand >= kHandCount || a_spell == 0) return false;
+        const auto it = g_castLock.find(a_follower);
+        if (it == g_castLock.end()) return false;
+        const auto& lk = it->second.hand[a_hand];
+        if (lk.spell != a_spell || lk.lastSeen.time_since_epoch().count() == 0) return false;
+        const std::int32_t h = a_hand == kHandLeft ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+        if (!APMFBridge::IsOwnedCastActiveOnHand(a_follower, h) && !APMFBridge::IsHealCastActiveOnHand(a_follower, h)) return false;
+        a_target = lk.target == 0 ? a_follower : lk.target;
+        return true;
+    }
+
     namespace {
 
         // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
@@ -835,19 +852,29 @@ namespace MFO::Actuation {
                 // no-op tick.
                 if (BuffUpTransparent(a_follower, spell))   // F2: BEFORE the preempt (cast/BuffRoad.cpp)
                     return { Result::NoOp, "self-buff already up (or its read is pending)", true };
-                commitPreempt();   // the claim happens inside CastSelfDirect
+                // A LIVE FIRE-AND-FORGET STREAM OF THIS SPELL ALREADY HOLDS ITS CLAIM: this lap neither preempts nor locks unless the beat
+                // applies (Refreshed returns the transparent NoOp below, before any hand is touched; Applied preempts then).
+                const bool liveInstantStream = spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
+                                               SelfStreamLive(id, a_spellID);
+                if (!liveInstantStream) commitPreempt();   // the claim happens inside CastSelfDirect
                 // THE DIRECT SELF STREAM OF A FIRE-AND-FORGET SPELL HOLDS NO HAND (field 2026-11-13, Jesper: Frost
                 // Nova went unanimated on the 'self-stream' road, applied at once, and its left-hand lock then
                 // stood until the stream's stale release ~3 s later, 89 HELD OFF lines). The apply is instant and
                 // there is no claim or charge to protect, so the lock is cleared instead of held. A claim road
                 // (heal / buff claim) leaves no g_selfCast entry and a concentration stream is multi-tick, so both
                 // keep lockHands. Rank stays the carried index: nothing else is touched.
+                // Spell-checked and claim-guarded: only a lock that still names THIS spell and has no standing claim behind it is cleared.
                 auto releaseInstantStream = [&](SelfCast a_r) {
                     if (spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration ||
                         !SelfStreamLive(id, a_spellID))
                         return false;
-                    if (handPlan.left)  ClearCastLockHand(id, kHandLeft);
-                    if (handPlan.right) ClearCastLockHand(id, kHandRight);
+                    const auto it = g_castLock.find(id);
+                    for (const std::size_t h : { kHandLeft, kHandRight }) {
+                        if (!(h == kHandLeft ? handPlan.left : handPlan.right) || it == g_castLock.end()) continue;
+                        RE::FormID tg = 0;
+                        if (it->second.hand[h].spell == a_spellID && !CastClaimStandingOnHand(id, h, a_spellID, tg))
+                            it->second.hand[h] = CastLock{};
+                    }
                     if (a_r == SelfCast::Applied)   // once per apply, never per refresh lap
                         spdlog::info("[cast] {:08X} self-stream applied spell {:08X}: instant apply, no hand lock held",
                                      id, a_spellID);
@@ -860,10 +887,13 @@ namespace MFO::Actuation {
                     // multi-tick; an FF instant apply with no live claim
                     // self-releases within one round-robin lap via
                     // CastLockLive's staleness fallback (harmless).
+                    if (liveInstantStream) commitPreempt();   // a re-apply after the beat: displace as the first apply did
                     if (!releaseInstantStream(SelfCast::Applied)) lockHands(a_spellID, 0);
                     return { Result::Fired, "self-cast channel (direct trigger)" };
                 case SelfCast::Refreshed:
-                    if (!releaseInstantStream(SelfCast::Refreshed)) lockHands(a_spellID, 0);
+                    // The instant stream is live and paced out: transparent, no preempt, no lock (the lock was cleared at its apply).
+                    if (liveInstantStream) return { Result::NoOp, "self-cast refresh (paced)", true };
+                    lockHands(a_spellID, 0);
                     // Channel kept alive, no effect/magicka this tick -- fall past.
                     return { Result::NoOp, "self-cast refresh (paced)", true };
                 // Fable SEV-2 (2026-09-06): a HELD outcome is not a cast.

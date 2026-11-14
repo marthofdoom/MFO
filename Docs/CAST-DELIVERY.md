@@ -1159,7 +1159,7 @@ hybrid all run), now hand-aware:
 - **An Offense spell at a real (non-self) target** — the only real decision:
   `Loadout::PlanCastHand`'s result is passed straight through.
 
-**2026-11-13 hand-lock rules (`fix/iaus-claim-thrash`).** (1) A fresh unfired NON-HEAL incumbent (claim younger than `kInFlightHoldCap`) is not preempted by a higher NON-HEAL asker (`CanPreemptHand`; was Offense over Offense only, which let two cloaks swap the hand every lap). (2) A fire-and-forget self-cast on the direct `self-stream` road (unanimated, instant apply) holds NO hand lock: `CastOn` clears it after Applied/Refreshed instead of `lockHands`. Claim roads and concentration streams still lock.
+**2026-11-13 hand-lock rules (`fix/iaus-claim-thrash`).** (1) A fresh unfired NON-HEAL incumbent (claim younger than `kInFlightHoldCap`) is not preempted by a higher NON-HEAL asker (`CanPreemptHand`; was Offense over Offense only, which let two cloaks swap the hand every lap). (2) A fire-and-forget self-cast on the direct `self-stream` road (unanimated, instant apply) holds NO hand lock: `CastOn` clears it (only a lock naming that spell, never under a standing claim) after Applied instead of `lockHands`; a paced Refreshed lap returns the transparent NoOp before any preempt or lock. Claim roads and concentration streams still lock.
 
 `ResolveCastHand` implements THE JUGGLE per `HandPick`, checking `HandFree`
 (unlocked, already locked to this EXACT (spell,target) — a refresh — or gone

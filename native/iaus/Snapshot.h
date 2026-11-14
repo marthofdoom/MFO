@@ -16,6 +16,7 @@
 #include "iaus/PotionBuff.h"
 #include "iaus/Prune.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -26,7 +27,25 @@ namespace MFO::Iaus {
     // ── The SpellBook mirror's content (iaus/SpellBook.h measures it on the main thread) ──────────────────
     enum class SpellSource : std::uint8_t { Spell = 0, Scroll, Staff };
 
-    struct SpellEntry {
+        // ONE EFFECT'S IDENTITY FOR THE ENGINE'S "REPLACES" RULES (fix/iaus-claim-thrash, marth 2026-11-13: "no spell that replaced an active buff is valid").
+    // The engine's own two rules, nothing authored: (a) an effect with the same base MGEF as a live one replaces it; (b) an MGEF flagged
+    // kDispelWithKeywords dispels a live effect whose MGEF shares a keyword with it. Plain ids, so this header stays RE-free.
+    struct FxKey {
+        std::uint32_t              mgef = 0;
+        bool                       dispelByKeyword = false;   // EffectSettingData::Flag::kDispelWithKeywords
+        std::vector<std::uint32_t> keywords;                  // the MGEF's own keyword forms
+    };
+    // True when the effect `a_ask` would replace the live effect `a_live` (rule a, or rule b); a_byKeyword reports which fired.
+    inline bool FxReplaces(const FxKey& a_ask, const FxKey& a_live, bool& a_byKeyword) {
+        a_byKeyword = false;
+        if (a_ask.mgef != 0 && a_ask.mgef == a_live.mgef) return true;
+        if (!a_ask.dispelByKeyword) return false;
+        for (const auto k : a_ask.keywords)
+            if (std::find(a_live.keywords.begin(), a_live.keywords.end(), k) != a_live.keywords.end()) { a_byKeyword = true; return true; }
+        return false;
+    }
+
+struct SpellEntry {
         std::uint32_t form = 0;                 // spell / scroll FormID; for a staff the WEAPON's FormID
         SpellSource   source = SpellSource::Spell;
         Prune::Nature nature = Prune::Nature::Unknown;
@@ -54,9 +73,7 @@ namespace MFO::Iaus {
         float         charge = 0.0f;            // staff: current charge
         bool          charged = true;           // staff: at least one cast left
         std::vector<std::uint32_t> activeOn;    // Buff / Ward: party members this spell's effect is live on
-        std::vector<std::uint32_t> exclusiveGroups;   // Buff / Ward: one key per beneficial effect, (archetype << 16 | primary actor value). Two spells sharing a key
-                                                // replace one another in the engine (cloaks share the cloak archetype, armor spells the armor value); the key is
-                                                // data read off the MGEF, never a spell list (fix/iaus-claim-thrash, marth 2026-11-13)
+        std::vector<FxKey> fx;                  // Buff / Ward: one per beneficial effect, read off its MGEF (fix/iaus-claim-thrash, marth 2026-11-13)
         bool          allyRoad = false;         // Buff / Heal, Self delivery: a proxy road serves it at an ally NOW (1dfcuabd309): Harbinger's
                                                 // delivery-flip proxy on the claim road, or MFO's ConcProxy for a concentration spell
                                                 // (Actuation::BuffServedAtAlly / HealServedAtAlly, filled by iaus/Candidates.cpp each lap,

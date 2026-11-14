@@ -84,6 +84,49 @@ namespace MFO::Iaus::SpellBook {
             return false;
         }
 
+        // One MGEF's FxKey (iaus/Snapshot.h): its form, the kDispelWithKeywords flag and its keyword forms.
+        FxKey FxOf(const RE::EffectSetting* a_base) {
+            FxKey k;
+            if (!a_base) return k;
+            k.mgef            = a_base->GetFormID();
+            k.dispelByKeyword = a_base->data.flags.any(RE::EffectSetting::EffectSettingData::Flag::kDispelWithKeywords);
+            for (auto* kw : a_base->GetKeywords())
+                if (kw) k.keywords.push_back(kw->GetFormID());
+            return k;
+        }
+
+        // MAIN THREAD: every live (not dispelled, not inactive) effect on a_actor, by its base MGEF, whatever cast it.
+        std::vector<FxKey> LiveFx(RE::Actor* a_actor) {
+            std::vector<FxKey> out;
+            auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            auto* list = mt ? mt->GetActiveEffectList() : nullptr;
+            if (!list) return out;
+            for (auto* ae : *list) {
+                if (!ae || !ae->effect || !ae->effect->baseEffect) continue;
+                if (ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled)) continue;
+                out.push_back(FxOf(ae->effect->baseEffect));
+            }
+            return out;
+        }
+
+        // Principle 5: the keyword rule is logged the first time each MGEF pair fires it, with both keyword lists, so the field shows whether
+        // the engine's dispel-by-keyword data is what is doing the pruning.
+        void LogDispelOnce(const FxKey& a_ask, const FxKey& a_live) {
+            static std::mutex                     mx;
+            static std::unordered_set<std::uint64_t> seen;
+            {
+                std::scoped_lock lk(mx);
+                if (!seen.insert((static_cast<std::uint64_t>(a_ask.mgef) << 32) | a_live.mgef).second) return;
+            }
+            const auto join = [](const std::vector<std::uint32_t>& v) {
+                std::string o;
+                for (const auto k : v) o += std::format("{}{:08X}", o.empty() ? "" : ",", k);
+                return o;
+            };
+            spdlog::info("[spellbook] dispel-by-keyword: MGEF {:08X} (keywords {}) would dispel live MGEF {:08X} (keywords {}) via a shared keyword",
+                         a_ask.mgef, join(a_ask.keywords), a_live.mgef, join(a_live.keywords));
+        }
+
         // MAIN THREAD (feat/buff-potions): the buff kinds live on a_actor now, whatever potion they came from. A live, undispelled effect whose
         // source is an AlchemyItem is classified by the SAME rule as a carried potion (Logistics::PotionBuffs), so drinking a Resist Fire 25 keeps
         // a carried Resist Fire 50 from being offered while the 25 works (EffectLive above reads one named spell; this reads the whole list).
@@ -304,22 +347,28 @@ namespace MFO::Iaus::SpellBook {
             if (e.nature == Prune::Nature::Summon) e.liveSummon = Actuation::CasterHasLiveSummon(a_actor, a_sp);
             if (e.drop == Prune::Drop::Keep &&
                 (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward)) {
-                // The exclusive group of each beneficial effect: archetype + primary actor value. A cloak or light effect names no
-                // value, so the archetype alone is its group; any other effect with no value names none (an unrelated script).
+                // THE ENGINE'S OWN REPLACE RULES, read per MGEF off each party member's live active-effect list (source-agnostic: a proxy
+                // cast (Harbinger's 0xFF delivery-flip form), a scroll or a staff all show). A member is "active" for this spell when, for any
+                // beneficial effect of it, (a) he has a live effect with the same base MGEF (it would be refreshed or replaced) or (b) this MGEF
+                // is flagged kDispelWithKeywords and shares a keyword with a live effect's MGEF (it would dispel it). Same thread and list as
+                // EffectLive above. The old own-spell read (ae->spell == a_sp) is kept as an OR.
                 for (auto* eff : a_sp->effects) {
                     auto* base = eff ? eff->baseEffect : nullptr;
                     if (!base || base->IsHostile() || base->IsDetrimental()) continue;
-                    using Arch = RE::EffectArchetypes::ArchetypeID;
-                    const auto arc = base->GetArchetype();
-                    const auto av  = base->data.primaryAV;
-                    if (av == RE::ActorValue::kNone && arc != Arch::kCloak && arc != Arch::kLight) continue;
-                    const std::uint32_t key = (static_cast<std::uint32_t>(arc) << 16) |
-                                              (static_cast<std::uint32_t>(av) & 0xFFFFu);
-                    if (std::find(e.exclusiveGroups.begin(), e.exclusiveGroups.end(), key) == e.exclusiveGroups.end())
-                        e.exclusiveGroups.push_back(key);
+                    e.fx.push_back(FxOf(base));
                 }
-                for (auto* p : a_party)
-                    if (EffectLive(p, a_sp)) e.activeOn.push_back(p->GetFormID());
+                for (auto* p : a_party) {
+                    const auto live = LiveFx(p);
+                    bool hit = EffectLive(p, a_sp);
+                    for (const auto& ask : e.fx)
+                        for (const auto& lv : live) {
+                            bool byKw = false;
+                            if (!FxReplaces(ask, lv, byKw)) continue;
+                            hit = true;
+                            if (byKw) LogDispelOnce(ask, lv);
+                        }
+                    if (hit) e.activeOn.push_back(p->GetFormID());
+                }
             }
             // The engine fills (iaus/Fills.h): what one cast does to health, probe first, written only with
             // [Debug] bIausFillSpells = 1. With both keys off it returns at once.

@@ -3364,3 +3364,6 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 ### fix/loot-guard-gate (Opus 5.5 review 2, 2026-11-13, against d2c1661d)
 - **(SEV-5):** verbatim: "5 s window vs the real cadence: a held body's stamp is only refreshed on that follower's own turn, N x 133 ms. That is about 2.1 s at 16 active followers, so 5 s holds up to about 37. Derive the window from the period x active count instead of a literal." (Service.cpp GuardHeldAt, cap sweep ~:276)
 - **(SEV-5, round 1):** verbatim: "a future inner gate on a different key would wrongly mark the body as held" (StripCorpse refusal counter; comment added at LootScan.cpp ~:1050).
+
+### fix/iaus-claim-thrash (Opus 5.5 review, 2026-11-13, against 0c899c78)
+- **(SEV-3):** verbatim: "a lower Buff claim the engine never builds (NOT BUILT) now holds off a higher Offense for up to 6 s; nothing checks the incumbent's target (dead foe / now-buffed ally keeps the hand until it fires, ends or the cap); consider releasing early when ClaimLiveOnHand stands but the incumbent's target is dead or the claim reports not-built." (`cast/Hands.cpp` CanPreemptHand fresh-incumbent guard; reviewer reasoning: the widening is kept by ruling, this is the cost.)

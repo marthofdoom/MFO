@@ -28,6 +28,12 @@
 #include <format>
 #include <unordered_map>
 
+// cast/CastOn.cpp (fix/iaus-claim-thrash). Belongs in cast/Actuation.h beside CastLockClaimStamp; declared here only because that header
+// was outside this round's file list (reviewer: move it).
+namespace MFO::Actuation {
+    bool CastClaimStandingOnHand(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell, RE::FormID& a_target);
+}
+
 namespace MFO::Iaus::Candidates {
 
     static_assert(Prune::kHealFull == Vocab::kHealFull, "the pure generator's heal-full mark is Vocab::kHealFull");
@@ -432,48 +438,40 @@ namespace MFO::Iaus::Candidates {
             }
 
         // NO BUFF THAT REPLACES AN ACTIVE BUFF IS VALID (marth 2026-11-13: "no spell that replaced an active buff is valid. The tuning
-        // should pick the correct buff and only rebuff it if it runs out", fix/iaus-claim-thrash). A Buff / Ward whose exclusive group
-        // (SpellEntry::exclusiveGroups, read off the MGEF) is shared with ANOTHER spell live on the same target is marked active there, so
-        // Generate prunes it (droppedTarget) exactly as it prunes its own live effect. A buff whose own claim is IN FLIGHT on his hand
-        // counts as active too (on himself). It returns only when the live one has run out: there is no refresh margin to read, so
-        // "expired" it is. Which buff is first cast is the tuning's job; nothing here ranks them.
+        // should pick the correct buff and only rebuff it if it runs out", fix/iaus-claim-thrash). The LIVE half is the book's: SpellBook
+        // marks a party member active for a spell whose effect shares a base MGEF with a live one (any source, a proxy cast included) or
+        // dispels it by keyword (the engine's own two rules, iaus/Snapshot.h FxReplaces). The IN-FLIGHT half is here: a buff whose
+        // STANDING CLAIM is on a follower's hand (his lock names it and APMF's claim stands: true before any caster is built, which is the
+        // window the thrash lived in) marks its recipient active for every OTHER buff its effects would replace. It returns when the live
+        // one has run out: there is no refresh margin to read. Which buff is first cast is the tuning's job; nothing here ranks them.
         if (s.hasBook) {
             auto& es = s.book.entries;
-            std::vector<std::vector<std::uint32_t>> act(es.size());
             const auto buffLike = [](const SpellEntry& e) {
-                return e.source == SpellSource::Spell && e.drop == Prune::Drop::Keep && !e.exclusiveGroups.empty() &&
+                return e.source == SpellSource::Spell && e.drop == Prune::Drop::Keep && !e.fx.empty() &&
                        (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward);
             };
             for (std::size_t i = 0; i < es.size(); ++i) {
                 if (!buffLike(es[i])) continue;
-                act[i] = es[i].activeOn;
-                if (std::find(act[i].begin(), act[i].end(), selfID) == act[i].end())
-                    for (const std::size_t hand : { Actuation::kHandLeft, Actuation::kHandRight })
-                        if (Actuation::CastLockClaimStamp(selfID, hand, es[i].form).time_since_epoch().count() != 0 &&
-                            Actuation::CastInFlightOnHand(a_self, hand, es[i].form, 0)) {
-                            act[i].push_back(selfID);
-                            break;
-                        }
-            }
-            for (std::size_t j = 0; j < es.size(); ++j) {
-                if (!buffLike(es[j])) continue;
-                for (std::size_t i = 0; i < es.size(); ++i) {
-                    if (i == j || !buffLike(es[i]) || act[i].empty()) continue;
-                    const bool shares = std::any_of(es[j].exclusiveGroups.begin(), es[j].exclusiveGroups.end(), [&](std::uint32_t g) {
-                        return std::find(es[i].exclusiveGroups.begin(), es[i].exclusiveGroups.end(), g) != es[i].exclusiveGroups.end();
+                RE::FormID target = 0;
+                bool       stands = false;
+                for (const std::size_t hand : { Actuation::kHandLeft, Actuation::kHandRight })
+                    if (Actuation::CastClaimStandingOnHand(selfID, hand, es[i].form, target)) { stands = true; break; }
+                if (!stands) continue;
+                for (std::size_t j = 0; j < es.size(); ++j) {
+                    if (j == i || !buffLike(es[j])) continue;   // its own candidate stays: the claim road answers "in flight"
+                    bool byKw = false;
+                    const bool replaces = std::any_of(es[j].fx.begin(), es[j].fx.end(), [&](const FxKey& a) {
+                        return std::any_of(es[i].fx.begin(), es[i].fx.end(), [&](const FxKey& l) { return FxReplaces(a, l, byKw); });
                     });
-                    if (!shares) continue;
-                    for (const std::uint32_t t : act[i]) {
-                        if (std::find(es[j].activeOn.begin(), es[j].activeOn.end(), t) != es[j].activeOn.end()) continue;
-                        es[j].activeOn.push_back(t);
-                        const std::uint64_t key = (static_cast<std::uint64_t>(selfID) << 32) | (es[j].form ^ (t * 0x9E3779B1u));
-                        auto& said = g_replaceLogged[key];
-                        if (said != es[i].form) {
-                            said = es[i].form;
-                            spdlog::info("[iaus] {:08X} buff {} ({:08X}) pruned on {:08X}: it would replace {} ({:08X}), live or in flight "
-                                         "there in the same exclusive group; offered again when that one has run out",
-                                         selfID, es[j].name, es[j].form, t, es[i].name, es[i].form);
-                        }
+                    if (!replaces || std::find(es[j].activeOn.begin(), es[j].activeOn.end(), target) != es[j].activeOn.end()) continue;
+                    es[j].activeOn.push_back(target);
+                    const std::uint64_t key = (static_cast<std::uint64_t>(selfID) << 32) | (es[j].form ^ (target * 0x9E3779B1u));
+                    auto& said = g_replaceLogged[key];
+                    if (said != es[i].form) {
+                        said = es[i].form;
+                        spdlog::info("[iaus] {:08X} buff {} ({:08X}) pruned on {:08X}: it would replace {} ({:08X}), whose claim stands there "
+                                     "({}); offered again when that one has run out",
+                                     selfID, es[j].name, es[j].form, target, es[i].name, es[i].form, byKw ? "dispel by keyword" : "same effect");
                     }
                 }
             }
