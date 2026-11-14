@@ -37,6 +37,8 @@
 // restore potion. Unsold junk at the end is worth 0. Everything the fixture item table says is a Skyrim.esm record value read from the
 // Vanilla extract (value, damage, armor rating, magnitude) unless it is marked MODEL.
 #include "iaus_sim/Setup.h"
+#include "iaus_sim/Tune.h"   // tune 2.11.1: Tune().loot, the IAUS arm's LootTuning (loot.<field>)
+#include "iaus/LootNeed.h"
 
 #include <cmath>
 #include <cstdio>
@@ -46,12 +48,15 @@
 
 namespace Sim::Logi {
 
-    enum class Kind : std::uint8_t { Gold, PotionH, PotionM, PotionS, Ammo, Weapon1H, Weapon2H, Bow, ArmorBody, ArmorHead, Gem, Jewelry, Ingredient, Junk, kCount };
+    enum class Kind : std::uint8_t { Gold, PotionH, PotionM, PotionS, Ammo, Weapon1H, Weapon2H, Bow, ArmorBody, ArmorHead, Gem, Jewelry, Ingredient, Junk,
+        Buff, Food, Poison, SoulGem, Bolt, kCount };   // tune 2.11.1 (--logi-consumables): buff potions, food, poisons, soul gems, bolts
     inline const char* Name(Kind k) {
-        static const char* n[] = { "gold", "potion_h", "potion_m", "potion_s", "ammo", "weapon_1h", "weapon_2h", "bow", "armor_body", "armor_head", "gem", "jewelry", "ingredient", "junk" };
+        static const char* n[] = { "gold", "potion_h", "potion_m", "potion_s", "ammo", "weapon_1h", "weapon_2h", "bow", "armor_body", "armor_head", "gem", "jewelry", "ingredient", "junk",
+                                    "buff", "food", "poison", "soulgem", "bolt" };
         return n[static_cast<std::size_t>(k)];
     }
-    struct ItemDef { const char* edid; Kind kind; int value; float weight; float power; bool weightModel; };   // power: weapon damage, armor rating, potion magnitude, arrow damage
+    struct ItemDef { const char* edid; Kind kind; int value; float weight; float power; bool weightModel;
+        int bk = -1; int av = -1; float dur = 0; int rfam = -1; };   // tune 2.11.1: a buff potion's BuffKind, its skill / resist av, its duration; a food's restore family (0 health, 1 stamina, 2 magicka)   // power: weapon damage, armor rating, potion magnitude, arrow damage
     // THE FIXTURE ITEMS. value / power: Vanilla extract (Skyrim.esm, exe 1.6.1170) unless weightModel / the comment says MODEL.
     // Weights: weapons from the extract; armor, potions, gems, jewelry, ingredients and junk are NOT in any extract (MODEL, marked).
     inline const std::vector<ItemDef>& Items() {
@@ -68,6 +73,16 @@ namespace Sim::Logi {
             { "ArmorDraugrCuirass", Kind::ArmorBody, 125, 30.0f, 25, true }, { "ArmorSteelCuirassA", Kind::ArmorBody, 275, 35.0f, 31, true }, { "ArmorIronHelmet", Kind::ArmorHead, 60, 5.0f, 15, true },
             { "GemGarnet (MODEL)", Kind::Gem, 100, 0.1f, 0, true }, { "GemAmethyst (MODEL)", Kind::Gem, 120, 0.1f, 0, true }, { "SilverRing (MODEL)", Kind::Jewelry, 30, 0.25f, 0, true },
             { "Ingredient (MODEL)", Kind::Ingredient, 2, 0.1f, 0, true }, { "Clutter (MODEL)", Kind::Junk, 3, 2.0f, 0, true },
+            // tune 2.11.1, drawn only with --logi-consumables. Magnitudes / durations: the Vanilla extract (FortifyHealth01 20 / 60 s, FortifyStamina01
+            // 20 / 300 s, FortifyMagicka01 20 / 60 s; FoodCheeseWheel01A 15 health, FoodVenisonStew 15 stamina; bolts 10 damage). Potion values: the
+            // ALCH auto-calc of those effects (Setup.h AutoCalcValue: 68 / 341 / 58 g; the MODEL resist and skill potions at baseCost 0.5: 97 g). MODEL (no extract has them): the resist and fortify-skill
+            // potions, the poison, the soul gem, food values, every weight and the bolt's value.
+            { "FortifyHealth01", Kind::Buff, 68, 0.5f, 20, true, 5, 24, 60 }, { "FortifyStamina01", Kind::Buff, 341, 0.5f, 20, true, 6, 26, 300 },
+            { "FortifyMagicka01", Kind::Buff, 58, 0.5f, 20, true, 7, 25, 60 }, { "ResistFire (MODEL)", Kind::Buff, 97, 0.5f, 20, true, 0, 41, 60 },
+            { "FortifyOneHanded (MODEL)", Kind::Buff, 97, 0.5f, 20, true, 8, 6, 60 }, { "FortifyMarksman (MODEL)", Kind::Buff, 97, 0.5f, 20, true, 8, 8, 60 },
+            { "FoodCheeseWheel01A", Kind::Food, 10, 2.0f, 15, true, -1, 24, 0, 0 }, { "FoodVenisonStew", Kind::Food, 8, 1.0f, 15, true, -1, 26, 0, 1 },
+            { "DamageHealthPoison (MODEL)", Kind::Poison, 40, 0.5f, 15, true },   // power = magnitude x duration summed (15 x 1 s)
+            { "SoulGemPetty (MODEL)", Kind::SoulGem, 10, 0.1f, 0, true }, { "SteelBolt", Kind::Bolt, 2, 0.0f, 10, true },
         };
         return v;
     }
@@ -98,13 +113,15 @@ namespace Sim::Logi {
     struct Stack { int item = -1; int count = 0; };
     struct Inv {
         std::vector<Stack> s; int purse = 0;
+        float charge = 1.0f;   // tune 2.11.1: the lowest charge fraction of his enchanted weapon (1 = none or full; Ep::charge)
         int bestWeapon = -1, bestBow = -1, body = -1, head = -1;   // worn / in use (the equip authority equips an upgrade it takes)
         [[nodiscard]] float Weight() const { float w = 0; for (const Stack& x : s) w += Items()[static_cast<std::size_t>(x.item)].weight * float(x.count); return w; }
         [[nodiscard]] int Count(Kind k) const { int n = 0; for (const Stack& x : s) if (Items()[static_cast<std::size_t>(x.item)].kind == k) n += x.count; return n; }
         [[nodiscard]] float WorstAmmo() const { float w = 1e9f; for (const Stack& x : s) if (Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo && x.count > 0) w = std::min(w, Items()[static_cast<std::size_t>(x.item)].power); return w; }
         void Add(int item, int n) { if (Items()[static_cast<std::size_t>(item)].kind == Kind::Gold) { purse += n; return; } for (Stack& x : s) if (x.item == item) { x.count += n; return; } s.push_back({ item, n }); }
     };
-    struct Who { std::string cls; Cls fam = Cls::Melee; const PotWorth* worth = nullptr; [[nodiscard]] bool Bow() const { return fam == Cls::Ranged; } };
+    struct Who { std::string cls; Cls fam = Cls::Melee; const PotWorth* worth = nullptr; const std::array<double, MFO::Iaus::kBuffKinds + 3>* uses = nullptr;   // uses: --logi-uses, per fight
+        [[nodiscard]] bool Bow() const { return fam == Cls::Ranged; } };
 
     inline Inv StartKit(const Who& w) {   // MODEL: a T1 kit of his family (the combat world's iron rung)
         Inv v; v.purse = 50; v.Add(ItemIdx("RestoreHealth02"), 1);
@@ -117,6 +134,16 @@ namespace Sim::Logi {
 
     // LOOT FOUND AT A STOP (MODEL: the shape of a draugr crypt's bodies and its chest; a list world would read real containers, 34.6)
     struct Source { std::vector<Stack> items; };
+    inline bool g_logiConsumables = false;   // --logi-consumables (tune 2.11.1): the stops also hold buff potions, food, poisons, soul gems and bolts
+    // MODEL (tune 2.11.1): how often a body / the chest holds the new kinds (drawn after main's draws, so off = main's stops draw for draw)
+    inline void ExtraFinds(Rng& R, Source& s, bool chest) {
+        static const char* bb[] = { "FortifyHealth01", "FortifyStamina01", "FortifyMagicka01", "ResistFire (MODEL)", "FortifyOneHanded (MODEL)", "FortifyMarksman (MODEL)" };
+        if (R.P(chest ? 0.3f : 0.12f)) s.items.push_back({ ItemIdx(bb[R.I(0, 5)]), 1 });
+        if (R.P(chest ? 0.1f : 0.1f)) s.items.push_back({ R.P(0.5f) ? ItemIdx("FoodCheeseWheel01A") : ItemIdx("FoodVenisonStew"), R.I(1, 2) });
+        if (R.P(chest ? 0.15f : 0.1f)) s.items.push_back({ ItemIdx("DamageHealthPoison (MODEL)"), 1 });
+        if (R.P(chest ? 0.2f : 0.1f)) s.items.push_back({ ItemIdx("SoulGemPetty (MODEL)"), 1 });
+        if (!chest && R.P(0.1f)) s.items.push_back({ ItemIdx("SteelBolt"), R.I(3, 10) });
+    }
     inline std::vector<Source> MakeStop(Rng& R) {
         std::vector<Source> out; const int bodies = R.I(2, 5);
         static const char* bw[] = { "DraugrSword", "DraugrWarAxe", "IronSword", "SteelSword", "IronWarAxe", "SteelGreatsword", "LongBow", "HuntingBow", "ImperialBow" };
@@ -133,11 +160,13 @@ namespace Sim::Logi {
             if (R.P(0.15f)) s.items.push_back({ R.P(0.5f) ? ItemIdx("GemGarnet (MODEL)") : ItemIdx("GemAmethyst (MODEL)"), 1 });
             if (R.P(0.25f)) s.items.push_back({ ItemIdx("Ingredient (MODEL)"), R.I(1, 3) });
             if (R.P(0.3f)) s.items.push_back({ ItemIdx("Clutter (MODEL)"), 1 });
+            if (g_logiConsumables) ExtraFinds(R, s, false);
             out.push_back(std::move(s)); }
         Source c; c.items.push_back({ ItemIdx("Gold001"), R.I(20, 80) });
         for (int k = R.I(1, 2); k > 0; --k) c.items.push_back({ pick(bp, 7), 1 });
         if (R.P(0.3f)) c.items.push_back({ ItemIdx("GemGarnet (MODEL)"), 1 });
         if (R.P(0.2f)) c.items.push_back({ ItemIdx("SilverRing (MODEL)"), 1 });
+        if (g_logiConsumables) ExtraFinds(R, c, true);
         out.push_back(std::move(c));
         return out;
     }
@@ -282,7 +311,7 @@ namespace Sim::Logi {
         return j;
     }
     inline double Value(const Inv& v, const Who& w) {
-        const Quote q = QuoteFor(kSpeech); double j = 0;
+        const Quote q = QuoteFor(kSpeech); const Quote& q0 = q; double j = 0;
         if (w.worth) { const int n[3] = { v.Count(Kind::PotionH), v.Count(Kind::PotionM), v.Count(Kind::PotionS) };
             for (int t = 0; t < 3; ++t) for (int k = 0; k < std::min(n[t], kPotWorthMax); ++k) j += w.worth->m[static_cast<std::size_t>(t)][static_cast<std::size_t>(k)]; }
         double g = v.purse; for (int it : { v.bestWeapon, v.bestBow, v.body, v.head }) if (it >= 0) g += BuyUnit(Items()[static_cast<std::size_t>(it)], q);
@@ -292,14 +321,25 @@ namespace Sim::Logi {
         if (!(w.Bow() && v.Count(Kind::Bow) > 0)) { for (const Stack& x : v.s) if (Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo) g += x.count * SellUnit(Items()[static_cast<std::size_t>(x.item)], q); }
         else { int left = kAmmoKeepFloor; std::vector<std::pair<float, int>> am; for (const Stack& x : v.s) if (Items()[static_cast<std::size_t>(x.item)].kind == Kind::Ammo) am.push_back({ Items()[static_cast<std::size_t>(x.item)].power, x.item });
             std::sort(am.rbegin(), am.rend()); for (auto& [pw, it] : am) { (void)pw; for (const Stack& x : v.s) if (x.item == it) { const int n = std::min(left, x.count); g += n * BuyUnit(Items()[static_cast<std::size_t>(it)], q); left -= n; } } }
+        if (g_logiConsumables && w.uses) {   // tune 2.11.1 (MODEL, open decision as the rest of VALUE): a buff potion or food is worth its BUY price while the combat
+            // world would use it (uses per fight x kStops fights, --logi-uses), nothing past that (no sell road for ALCH). Poisons: no apply road, soul gems: no
+            // recharge road, bolts: no crossbow and no ammo sale road in the model: 0. The loot table's targets never enter this.
+            std::array<double, MFO::Iaus::kBuffKinds + 3> left{}; for (std::size_t i = 0; i < left.size(); ++i) left[i] = (*w.uses)[i] * kStops;
+            std::vector<std::pair<int, int>> cs; for (const Stack& x : v.s) { const ItemDef& d = Items()[static_cast<std::size_t>(x.item)]; if (x.count > 0 && (d.kind == Kind::Buff || d.kind == Kind::Food)) cs.push_back({ -d.value, x.item }); }
+            std::sort(cs.begin(), cs.end());   // the dearest stack first: the uses go to what it would cost most to replace
+            for (auto& [nv, it] : cs) { (void)nv; const ItemDef& d = Items()[static_cast<std::size_t>(it)]; const std::size_t slot = d.kind == Kind::Buff ? static_cast<std::size_t>(d.bk) : MFO::Iaus::kBuffKinds + static_cast<std::size_t>(d.rfam);
+                int n = 0; for (const Stack& x : v.s) if (x.item == it) n += x.count;
+                for (int q = 0; q < n && left[slot] > 0.0; ++q) { g += std::min(1.0, left[slot]) * BuyUnit(d, q0); left[slot] -= 1.0; } }
+        }
         return j + GoldJ(w) * g;
     }
 
     // ── an episode under a policy ────────────────────────────────────────────────────────────────────────────────────────────
     struct Div { long n = 0; double dU = 0; };
     struct Tally { long takes = 0, carryBreaks = 0, offRowTakes = 0, sellRuns = 0; std::map<std::string, Div> div; Inv end; };
-    struct Ep { std::vector<std::vector<Source>> stops; };
-    inline Ep MakeEpisode(Rng& R) { Ep e; for (int s = 0; s < kStops; ++s) e.stops.push_back(MakeStop(R)); return e; }
+    struct Ep { std::vector<std::vector<Source>> stops; float charge = 1.0f; };
+    inline Ep MakeEpisode(Rng& R) { Ep e; for (int s = 0; s < kStops; ++s) e.stops.push_back(MakeStop(R)); if (g_logiConsumables) e.charge = R.U(0.0f, 1.0f); return e; }   // charge: MODEL, his enchanted weapon's lowest charge
+    inline Inv Start(const Who& w, const Ep& e) { Inv v = StartKit(w); if (g_logiConsumables && w.fam != Cls::Mage) v.charge = e.charge; return v; }
 
     inline void TakeStack(Inv& v, const Who& w, const Stack& st, Tally* t, bool baseline) {
         const ItemDef& d = Items()[static_cast<std::size_t>(st.item)];
@@ -313,10 +353,91 @@ namespace Sim::Logi {
             for (std::size_t a = (s == s0 ? src0 : 0); a < st.size(); ++a) BaselineSource(v, w, st[a].items, s == s0 && a == src0 ? i0 : 0, t); }
         Town(v, w, false); if (t) t->end = v; return Value(v, w);
     }
+    // ── THE IAUS ARM (tune 2.11.1): native's IAUS looting on the same stops, the NATIVE scorer compiled in (iaus/LootNeed.h ScoreLootKind /
+    // ScoreConsumable) with the table under search (Tune().loot, loot.<field>). Mirrors native/logistics/LootNeed.cpp + LootScan.cpp:1053-1061:
+    // per source, the kinds whose ScoreLootKind is a TAKE, best score first (IausLootPlan, read once per source); each kind's road runs once
+    // (Equipment up to 10 calls); the inventory is read again after every take (IausLootInvDirty). Roads: Arrows = LootAmmo (the restock take
+    // set), Potions = LootConsumablesNeed (every ALCH in the source scored, best first, re-judged against what he carries now, takeCount of
+    // the stack, ApplyLootFloor: a restore below the weak-potion floor carries no restore), Equipment = loot_equipment's road, Gold = all
+    // coin, Jewelry = every ring, SoulGems = every soul gem (LootSoulGems), Valuables = MISC at value / weight >= fValuablesRatio. The town
+    // errand is today's (its buy list is the rows' needs, 34.6) in every arm. The IAUS arm replaces the rows: they never run on top of it.
+    inline MFO::Iaus::LootInv LootInvOf(const Inv& v, const Who& w) {
+        MFO::Iaus::LootInv inv; using namespace MFO::Iaus;
+        inv.usesArrows = w.Bow() && v.Count(Kind::Bow) > 0; inv.usesBolts = false;   // no crossbow in the fixture
+        inv.arrows = v.Count(Kind::Ammo); inv.bolts = v.Count(Kind::Bolt);
+        inv.arrowTarget = inv.usesArrows ? KeepTarget(w) : 0; inv.boltTarget = 0;   // AmmoKeepTarget: 0 for a kind he does not use
+        inv.carried = v.Weight(); inv.capacity = kCarryCap;
+        inv.melee = w.fam != Cls::Mage && v.bestWeapon >= 0; inv.ranged = w.Bow(); inv.caster = w.fam == Cls::Mage; inv.sneaks = false;
+        inv.restore[kRestoreHealth] = v.Count(Kind::PotionH); inv.restore[kRestoreStamina] = v.Count(Kind::PotionS); inv.restore[kRestoreMagicka] = v.Count(Kind::PotionM);
+        for (const Stack& x : v.s) { const ItemDef& d = Items()[static_cast<std::size_t>(x.item)]; if (d.kind == Kind::Buff && d.bk >= 0) inv.buff[static_cast<std::size_t>(d.bk)] += x.count; }
+        inv.poisons = v.Count(Kind::Poison); inv.soulGems = v.Count(Kind::SoulGem); inv.weaponChargeFrac = v.charge;
+        return inv;
+    }
+    [[nodiscard]] inline bool IsAlch(Kind k) { return k == Kind::PotionH || k == Kind::PotionM || k == Kind::PotionS || k == Kind::Buff || k == Kind::Food || k == Kind::Poison; }
+    inline MFO::Iaus::Consumable ConsOf(const ItemDef& d) {   // logistics/LootNeed.cpp ReadConsumableImpl + ApplyLootFloor, from the fixture record
+        MFO::Iaus::Consumable c; using namespace MFO::Iaus; c.value = float(d.value); c.weight = d.weight;
+        if (d.kind == Kind::Poison) { c.poison = true; c.hostile = true; c.poisonPower = d.power; return c; }
+        if (d.kind == Kind::Food) { c.food = true; c.foodRestoreMag[static_cast<std::size_t>(d.rfam)] = d.power; return c; }   // the loot side's restoreMag stays 0 for food (review F1)
+        const int f = d.kind == Kind::PotionH ? kRestoreHealth : d.kind == Kind::PotionS ? kRestoreStamina : d.kind == Kind::PotionM ? kRestoreMagicka : -1;
+        if (f >= 0) c.restoreMag[static_cast<std::size_t>(f)] = (d.power > 1.0f && d.power < PotionFloor()) ? 0.0f : d.power;   // ApplyLootFloor
+        if (d.kind == Kind::Buff) { PotionFx fx; fx.kind = static_cast<BuffKind>(d.bk); fx.av = d.bk == static_cast<int>(BuffKind::FortifySkill) ? d.av : -1; fx.magnitude = d.power; fx.duration = d.dur; c.fx.push_back(fx); }
+        return c;
+    }
+    struct IausTally { long takes = 0, carryBreaks = 0; std::array<long, static_cast<std::size_t>(Kind::kCount)> byKind{}; };
+    inline void IausSource(Inv& v, const Who& w, std::vector<Stack> items, IausTally* t) {
+        using namespace MFO::Iaus; const LootTuning& T = Tune().loot;
+        auto moveN = [&](std::size_t i, int n) { const ItemDef& d = Items()[static_cast<std::size_t>(items[i].item)]; if (n <= 0 || !Fits(v, d, n)) return false;
+            const bool up = IsUpgrade(v, w, d); v.Add(items[i].item, n); if (up) Equip(v, items[i].item); items[i].count -= n;
+            if (t) { ++t->takes; t->byKind[static_cast<std::size_t>(d.kind)] += n; } return true; };
+        std::vector<std::pair<float, LootKind>> plan; { const LootInv inv = LootInvOf(v, w);
+            for (std::size_t i = 0; i < kLootKinds; ++i) { const auto k = static_cast<LootKind>(i); const LootVerdict r = ScoreLootKind(k, inv, T); if (r.take) plan.push_back({ r.score, k }); } }
+        std::stable_sort(plan.begin(), plan.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        auto takeAll = [&](auto pred) { for (std::size_t i = 0; i < items.size(); ++i) if (items[i].count > 0 && pred(Items()[static_cast<std::size_t>(items[i].item)])) moveN(i, items[i].count); };
+        auto ammoRoad = [&](bool upgradeOnly) {
+            std::vector<Stack> body; std::vector<std::size_t> at;
+            for (std::size_t i = 0; i < items.size(); ++i) if (items[i].count > 0 && Items()[static_cast<std::size_t>(items[i].item)].kind == Kind::Ammo) { body.push_back(items[i]); at.push_back(i); }
+            if (body.empty()) return false; bool moved = false;
+            for (const Stack& st : AmmoTakeSet(v, w, body, upgradeOnly)) for (std::size_t k = 0; k < body.size(); ++k)
+                if (items[at[k]].count > 0 && body[k].item == st.item && body[k].count == st.count) { moved = moveN(at[k], st.count) || moved; break; }
+            return moved;
+        };
+        for (const auto& [sc, k] : plan) { (void)sc;
+            switch (k) {
+            case LootKind::Arrows: ammoRoad(false); break;
+            case LootKind::Bolts: case LootKind::Lockpicks: case LootKind::Ingredients: case LootKind::kCount: break;   // no crossbow / lockpicks in the fixture; ingredients score 0
+            case LootKind::Gold: takeAll([](const ItemDef& d) { return d.kind == Kind::Gold; }); break;
+            case LootKind::Jewelry: takeAll([](const ItemDef& d) { return d.kind == Kind::Jewelry; }); break;
+            case LootKind::SoulGems: takeAll([](const ItemDef& d) { return d.kind == Kind::SoulGem; }); break;
+            case LootKind::Valuables: takeAll([](const ItemDef& d) { return (d.kind == Kind::Gem || d.kind == Kind::Junk) && (d.weight > 0 ? d.value / d.weight >= kValuablesRatio : d.value > 0); }); break;
+            case LootKind::Equipment:
+                for (int guard = 10; guard > 0; --guard) {
+                    auto bestOf = [&](std::initializer_list<Kind> ks) { int b = -1; for (std::size_t i = 0; i < items.size(); ++i) { const ItemDef& d = Items()[static_cast<std::size_t>(items[i].item)];
+                            bool in = false; for (Kind kk : ks) in = in || d.kind == kk; if (items[i].count > 0 && in && IsUpgrade(v, w, d) && (b < 0 || d.power > Items()[static_cast<std::size_t>(items[static_cast<std::size_t>(b)].item)].power)) b = static_cast<int>(i); } return b; };
+                    int b = bestOf({ Kind::Weapon1H, Kind::Weapon2H }); if (b < 0) b = bestOf({ Kind::Bow }); if (b < 0) b = bestOf({ Kind::ArmorBody, Kind::ArmorHead });
+                    if (b >= 0 && moveN(static_cast<std::size_t>(b), items[static_cast<std::size_t>(b)].count)) continue;
+                    if (!ammoRoad(true)) break;
+                }
+                break;
+            case LootKind::Potions: {   // LootConsumablesNeed
+                std::vector<std::pair<float, std::size_t>> cand; LootInv inv = LootInvOf(v, w);
+                for (std::size_t i = 0; i < items.size(); ++i) { const ItemDef& d = Items()[static_cast<std::size_t>(items[i].item)]; if (items[i].count <= 0 || !IsAlch(d.kind)) continue;
+                    const LootVerdict r = ScoreConsumable(ConsOf(d), items[i].count, inv, T); if (r.take) cand.push_back({ r.score, i }); }
+                std::stable_sort(cand.begin(), cand.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                for (const auto& [scr, i] : cand) { (void)scr; const LootVerdict r = ScoreConsumable(ConsOf(Items()[static_cast<std::size_t>(items[i].item)]), items[i].count, inv, T);
+                    if (!r.take) continue; if (moveN(i, r.takeCount)) inv = LootInvOf(v, w); }
+                break; }
+            }
+        }
+    }
+    inline double RunIaus(Inv v, const Who& w, const Ep& e, IausTally* t, Tally* end = nullptr) {
+        for (int s = 0; s < kStops; ++s) for (const Source& src : e.stops[static_cast<std::size_t>(s)]) IausSource(v, w, src.items, t);
+        Town(v, w, false); if (end) end->end = v; return Value(v, w);
+    }
+
     // The oracle: per item TAKE / LEAVE, per stop start SELL RUN / GO ON, each scored by K rollouts of the baseline over futures resampled
     // after the current stop (the current stop is known, as the combat oracle knows the fight it is in). Shared streams across options.
     inline double RunOracle(const Who& w, const Ep& e, std::uint64_t seed, int K, Tally* t) {
-        Inv v = StartKit(w);
+        Inv v = Start(w, e);
         auto futures = [&](int s, std::uint64_t salt) { std::vector<Ep> f; for (int k = 0; k < K; ++k) { Rng R; R.g.seed(seed * 7919ULL + salt * 104729ULL + std::uint64_t(k)); Ep x = e;
                 for (int q = s + 1; q < kStops; ++q) x.stops[static_cast<std::size_t>(q)] = MakeStop(R); f.push_back(std::move(x)); } return f; };
         for (int s = 0; s < kStops; ++s) {
@@ -340,8 +461,31 @@ namespace Sim::Logi {
     }
 
     // ── the run: --logistics N (episodes per seed and class) ─────────────────────────────────────────────────────────────────
-    inline int Run(const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int K, bool checks) {
-        long bad = 0;
+    inline std::map<std::string, std::array<double, MFO::Iaus::kBuffKinds + 3>> g_uses;   // --logi-uses: class -> uses per fight (CONSUSE, the driver's prep)
+    inline bool LoadUses(const std::string& path) {
+        std::FILE* f = std::fopen(path.c_str(), "r"); if (!f) return false; char name[64];
+        while (std::fscanf(f, "%63s", name) == 1) { std::array<double, MFO::Iaus::kBuffKinds + 3> u{}; for (double& x : u) if (std::fscanf(f, "%lf", &x) != 1) { std::fclose(f); return false; } g_uses[name] = u; }
+        std::fclose(f); return true;
+    }
+    // policy: "baseline" (today's rules vs the oracle) or "iaus" (also the IAUS arm). score: the IAUS arm only, its mean J per seed as SEED lines
+    // (the tune driver's loot stage reads them like a combat run's), one class per run.
+    inline int Run(const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int K, bool checks,
+                   const std::string& policy = "baseline", bool score = false) {
+        long bad = 0; const bool iaus = policy == "iaus";
+        if (score) {   // per seed: the mean over the named classes of the mean J_log of n episodes (one class = that class)
+            std::vector<Who> ws;
+            for (const SimClass& sc : all) {
+                if (only.empty() || ("," + only + ",").find("," + sc.name + ",") == std::string::npos) continue;
+                Who w; w.cls = sc.name; w.fam = sc.fam; w.worth = PotWorthFor(sc.name);
+                if (!w.worth) { std::fprintf(stderr, "logistics: no potion-worth row for %s: refused\n", sc.name.c_str()); return 2; }
+                if (g_logiConsumables) { auto it = g_uses.find(sc.name); if (it == g_uses.end()) { std::fprintf(stderr, "--logi-consumables: no --logi-uses row for %s: refused\n", sc.name.c_str()); return 2; } w.uses = &it->second; }
+                ws.push_back(w);
+            }
+            if (ws.empty()) { std::fprintf(stderr, "--logi-score: no class named by --classes\n"); return 2; }
+            for (std::uint64_t sd : seeds) { double a = 0; for (const Who& w : ws) for (int k = 0; k < n; ++k) { Rng R; R.g.seed(sd * 2654435761ULL + std::uint64_t(k) * 40503ULL + 17); const Ep e = MakeEpisode(R); a += RunIaus(Start(w, e), w, e, nullptr); }
+                std::printf("SEED %llu  J=%.4f (scenarios 0.00, natural 0.00)\nSWITCH %llu 0 1.000\n", (unsigned long long)sd, a / n / double(ws.size()), (unsigned long long)sd); }
+            return 0;
+        }
         {   // the model's own checks (LOGI-CHECKS)
             const Quote q = QuoteFor(kSpeech); const ItemDef& rh = Items()[static_cast<std::size_t>(ItemIdx("RestoreHealth01"))];
             const bool pin = BuyUnit(rh, q) == 38 && SellUnit(rh, q) == 8 && std::fabs(q.buy - 2.25f) < 1e-4f;   // 17 x 2.25 = 38.25 -> 38; 17 / 2.25 = 7.56 -> 8
@@ -362,16 +506,33 @@ namespace Sim::Logi {
                                     l1 ? "PASS" : "FAIL", l2 ? "PASS" : "FAIL", l3a && l3b ? "PASS" : "FAIL");
             bad += !l1 + !l2 + !(l3a && l3b);
         }
+        {   // tune 2.11.1: the IAUS arm's rules on hand-made inventories (native's scorer, the table at --set loot.*)
+            Who mel; mel.fam = Cls::Melee; Who bow; bow.fam = Cls::Ranged; const bool was = g_logiConsumables;
+            Inv m = StartKit(mel); IausSource(m, mel, { { ItemIdx("SteelArrow"), 7 } }, nullptr); const bool a1 = m.Count(Kind::Ammo) == 0;   // ammo by class + launcher: a melee follower leaves arrows
+            Inv b = StartKit(bow); for (Stack& x : b.s) if (x.item == ItemIdx("IronArrow")) x.count = 5; IausSource(b, bow, { { ItemIdx("SteelArrow"), 7 }, { ItemIdx("SteelBolt"), 5 } }, nullptr); const bool a2 = b.Count(Kind::Ammo) == 12 && b.Count(Kind::Bolt) == 0;   // a bow user under target takes arrows, never bolts
+            Inv g1 = StartKit(mel); g1.charge = 0.2f; IausSource(g1, mel, { { ItemIdx("SoulGemPetty (MODEL)"), 1 } }, nullptr);
+            Inv g2 = StartKit(mel); g2.charge = 0.9f; IausSource(g2, mel, { { ItemIdx("SoulGemPetty (MODEL)"), 1 } }, nullptr);
+            const bool a3 = g1.Count(Kind::SoulGem) == (Tune().loot.gemChargeTrigger > 0.2f && Tune().loot.soulGemTarget > 0 ? 1 : 0) && g2.Count(Kind::SoulGem) == (Tune().loot.gemChargeTrigger > 0.9f && Tune().loot.soulGemTarget > 0 ? 1 : 0);
+            Inv p1 = StartKit(mel); Who mag; mag.fam = Cls::Mage; Inv p2 = StartKit(mag); IausSource(p1, mel, { { ItemIdx("DamageHealthPoison (MODEL)"), 1 } }, nullptr); IausSource(p2, mag, { { ItemIdx("DamageHealthPoison (MODEL)"), 1 } }, nullptr);
+            const bool a4 = p2.Count(Kind::Poison) == 0;   // a poison is a weapon user's only; a mage leaves it (no ALCH sell road)
+            const bool a5 = std::fabs(GoldJ(Who{ "melee", Cls::Melee, PotWorthFor("melee") }) - GoldJOf(PotWorthFor("melee"))) < 1e-12;   // the combat world charges at the same J per gold
+            g_logiConsumables = was; (void)p1;
+            if (checks) std::printf("LOGI-CHECK IAUS ammo by class + launcher (melee leaves arrows; a bow user takes arrows, never bolts): %s\nLOGI-CHECK IAUS soul gems only below the charge trigger: %s\nLOGI-CHECK IAUS poison only for a weapon user: %s\nLOGI-CHECK combat J per gold = logistics J per gold: %s\n",
+                                    a1 && a2 ? "PASS" : "FAIL", a3 ? "PASS" : "FAIL", a4 ? "PASS" : "FAIL", a5 ? "PASS" : "FAIL");
+            if (iaus) bad += !(a1 && a2) + !a3 + !a4 + !a5;
+        }
         std::printf("LOGISTICS WORLD (built-in fixture, %d stops, K=%d): J_log = potion worth of the bag + %s x gold-equivalent (Logistics.h VALUE)\n", kStops, K, "kGoldJ");
         for (const SimClass& sc : all) {
             if (!only.empty() && ("," + only + ",").find("," + sc.name + ",") == std::string::npos) continue;
             Who w; w.cls = sc.name; w.fam = sc.fam; w.worth = PotWorthFor(sc.name);
             if (!w.worth) { std::fprintf(stderr, "logistics: no potion-worth row for %s (PotionWorth.h / --potion-worth): refused\n", sc.name.c_str()); return 2; }
-            Tally tb, to; std::vector<double> d, dp, dg;
+            if (g_logiConsumables) { auto it = g_uses.find(sc.name); if (it == g_uses.end()) { std::fprintf(stderr, "--logi-consumables: no --logi-uses row for %s: refused\n", sc.name.c_str()); return 2; } w.uses = &it->second; }
+            Tally tb, to; std::vector<double> d, dp, dg, di, dio; IausTally ti;
             for (std::uint64_t sd : seeds) for (int k = 0; k < n; ++k) {
                 Rng R; R.g.seed(sd * 2654435761ULL + std::uint64_t(k) * 40503ULL + 17); const Ep e = MakeEpisode(R);
-                const double jb = RunBaseline(StartKit(w), w, e, 0, 0, 0, &tb), jo = RunOracle(w, e, sd * 1000003ULL + std::uint64_t(k), K, &to);
-                const double jb2 = RunBaseline(StartKit(w), w, e, 0, 0, 0, nullptr); if (jb2 != jb) ++bad;   // deterministic
+                const double jb = RunBaseline(Start(w, e), w, e, 0, 0, 0, &tb), jo = RunOracle(w, e, sd * 1000003ULL + std::uint64_t(k), K, &to);
+                const double jb2 = RunBaseline(Start(w, e), w, e, 0, 0, 0, nullptr); if (jb2 != jb) ++bad;   // deterministic
+                if (iaus) { const double ji = RunIaus(Start(w, e), w, e, &ti); di.push_back(ji - jb); dio.push_back(jo - ji); if (RunIaus(Start(w, e), w, e, nullptr) != ji) ++bad; std::printf("LOGIIAUSEP %s %llu %d %.4f\n", sc.name.c_str(), (unsigned long long)sd, k, ji); }
                 d.push_back(jo - jb); dp.push_back(PotionJ(to.end, w) - PotionJ(tb.end, w)); dg.push_back(GoldJ(w) > 0 ? (jo - jb - dp.back()) / GoldJ(w) : 0.0);
                 std::printf("LOGI %s %llu %d %.4f %.4f\n", sc.name.c_str(), (unsigned long long)sd, k, jb, jo);
             }
@@ -381,6 +542,11 @@ namespace Sim::Logi {
             auto mean = [](const std::vector<double>& x) { double a = 0; for (double y : x) a += y; return x.empty() ? 0.0 : a / double(x.size()); };
             std::printf("LOGIGAP %s %.4f %.4f %zu goldJ=%.5f potionJ_gap=%.4f gold_equivalent_gap=%.1f baseline_takes=%ld oracle_takes=%ld sell_runs=%ld\n", sc.name.c_str(), m, se, d.size(), GoldJ(w), mean(dp), mean(dg), tb.takes, to.takes, to.sellRuns);
             for (const auto& [k, v] : to.div) std::printf("LOGIDIS %s %s %ld %.4f\n", sc.name.c_str(), k.c_str(), v.n, v.dU);
+            if (iaus) { auto ms = [](const std::vector<double>& x) { double a = 0; for (double y : x) a += y; a /= std::max<std::size_t>(1, x.size()); double q = 0; for (double y : x) q += (y - a) * (y - a);
+                    return std::pair<double, double>{ a, x.size() > 1 ? std::sqrt(q / double(x.size() - 1) / double(x.size())) : 0.0 }; };
+                const auto [a1, s1] = ms(di); const auto [a2, s2] = ms(dio); bad += ti.carryBreaks;
+                std::printf("LOGIIAUS %s iaus-baseline %.4f %.4f oracle-iaus %.4f %.4f takes=%ld", sc.name.c_str(), a1, s1, a2, s2, ti.takes);
+                for (std::size_t q = 0; q < ti.byKind.size(); ++q) if (ti.byKind[q]) std::printf(" %s=%ld", Name(static_cast<Kind>(q)), ti.byKind[q]); std::printf("\n"); }
         }
         std::printf("LOGI-CHECKS: carry never exceeded, the baseline takes only what its rows name, deterministic, prices and floor pinned  => %s\n", bad == 0 ? "PASS" : "FAIL");
         return bad == 0 ? 0 : 1;

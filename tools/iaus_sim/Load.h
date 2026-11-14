@@ -30,10 +30,17 @@ namespace Sim {
         const J& fs = root["followerScaling"];
         if (fs["present"].yes()) { b.dfs.on = true; b.dfs.mode = static_cast<int>(fs["mode"].num(1)); b.dfs.reduction = static_cast<float>(fs["reduction"].num()) / 100.0f; }
     }
+    inline std::map<std::string, J>& PreloadedJson() { static std::map<std::string, J> m; return m; }
+    inline void PreloadJson(const char* path) { std::ifstream f(path); if (!f) { std::fprintf(stderr, "cannot open %s\n", path); std::exit(2); }
+        std::stringstream ss; ss << f.rdbuf(); const std::string txt = ss.str(); JP p{ txt }; PreloadedJson()[path] = p.val(); }
     inline Data LoadData(const char* path) {
         Data b;
-        std::ifstream f(path); if (!f) { std::fprintf(stderr, "cannot open %s\n", path); std::exit(2); }
-        std::stringstream ss; ss << f.rdbuf(); const std::string txt = ss.str(); JP p{ txt }; const J root = p.val();
+        // sim --serve (tune 2.11.1): a list the worker parsed once is its JSON TREE only; everything derived from it below runs again with
+        // this job's switches, exactly as in a fresh process.
+        J parsed; const auto pre = PreloadedJson().find(path);
+        if (pre == PreloadedJson().end()) { std::ifstream f(path); if (!f) { std::fprintf(stderr, "cannot open %s\n", path); std::exit(2); }
+            std::stringstream ss; ss << f.rdbuf(); const std::string txt = ss.str(); JP p{ txt }; parsed = p.val(); }
+        const J& root = pre != PreloadedJson().end() ? pre->second : parsed;
         b.name = root["list"].s;
         for (const auto& kv : root["gmst"].o) b.gmst[kv.first] = kv.second.num();
         ApplyRules(b);

@@ -312,7 +312,21 @@ namespace Sim {
             F.StartSwing(x, *tg, Act::Bash, true); if (subj) ++t.bashes; return Fired::Yes; }
         case Family::Regroup: { if (!tg || !Fight::Up(*tg) || !tg->Party()) return Fired::Invalid; if (bodyHeld) return Fired::Declined;
             c.goalX = tg->c.x - 110.0f; c.goalY = tg->c.y + (x.c.y > tg->c.y ? 100.0f : -100.0f); c.moveUntil = F.now + 4.0; c.sprint = false; c.moveFight = true; if (subj) ++t.regroups; return Fired::Yes; }
-        case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka: {
+        case Family::DrinkBuff: {   // --consumables: the best potion of a kind (Generate.cpp BuffPotions sets the key's form)
+            Kit& kit = c.book.kit; int bk = -1; for (std::size_t i = 0; i < kit.buff.size(); ++i) if (kit.buff[i].form != 0 && kit.buff[i].form == k.form) bk = static_cast<int>(i);
+            if (bk < 0 || kit.buff[static_cast<std::size_t>(bk)].count <= 0) return Fired::Invalid;
+            if (bodyHeld) return Fired::Declined;
+            PotionBuff& p = kit.buff[static_cast<std::size_t>(bk)]; --p.count; c.consumedGold += p.value; ++c.buffUses[static_cast<std::size_t>(bk)];
+            take(Act::Drink, TM::drink, TM::drinkAt); x.actSpell = 10 + bk; return Fired::Yes; }
+        case Family::DrinkHealth: case Family::DrinkStamina: case Family::DrinkMagicka:
+            if (k.form != 0) {   // --consumables: a restore FOOD of that family (Generate.cpp Drinks: offered only with no restore potion of it)
+                Kit& kit = c.book.kit; const int rf = fam == Family::DrinkHealth ? 0 : fam == Family::DrinkStamina ? 1 : 2; PotionBuff& fd = kit.restoreFood[static_cast<std::size_t>(rf)];
+                if (fd.form != k.form || fd.count <= 0) return Fired::Invalid;
+                if (bodyHeld) return Fired::Declined;
+                --fd.count; c.consumedGold += fd.value; ++c.foodUses[static_cast<std::size_t>(rf)];
+                take(Act::Drink, TM::drink, TM::drinkAt); x.actSpell = 20 + rf; return Fired::Yes;
+            }
+            {
             Kit& kit = c.book.kit; std::int32_t& n = fam == Family::DrinkHealth ? kit.potionsHealth : fam == Family::DrinkStamina ? kit.potionsStamina : kit.potionsMagicka;
             if (n <= 0) return Fired::Invalid;
             if (bodyHeld) return Fired::Declined;
@@ -437,6 +451,7 @@ namespace Sim {
 
     // Run a fight to its end: the world at 30 Hz, one follower served per pump tick, round-robin.
     inline void RunFight(Fight& F, Policy& P) {
+        F.SetArena();   // review F1: the room stands before the first decision
         while (!F.over) {
             if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; P.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); }
             F.StepWorld();

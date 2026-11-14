@@ -14,6 +14,8 @@
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -194,7 +196,11 @@ namespace {
         return o;
     }
     bool g_printSwitch = false; std::atomic<long> g_swCount{ 0 }; std::atomic<long> g_swMs{ 0 };   // --print-switch: the subject's decision switches and fight time of the objective's fights
-    inline void NoteSwitch(const Fight& F) { if (g_printSwitch) { g_swCount += F.t.switches; g_swMs += static_cast<long>(F.now * 1000.0); } }
+    // --print-consume (tune 2.11.1, needs --consumables on): the subject's buff-potion and food uses per objective fight, per kind (the
+    // logistics world's use counts: what a carried buff potion or food is worth there, Logistics.h ConsumeUses).
+    bool g_printConsume = false; std::atomic<long> g_conFights{ 0 }; std::array<std::atomic<long>, MFO::Iaus::kBuffKinds + 3> g_conUses{};
+    inline void NoteSwitch(const Fight& F) { if (g_printSwitch) { g_swCount += F.t.switches; g_swMs += static_cast<long>(F.now * 1000.0); }
+        if (g_printConsume && !F.ctl.empty()) { ++g_conFights; for (std::size_t i = 0; i < MFO::Iaus::kBuffKinds; ++i) g_conUses[i] += F.ctl[0].buffUses[i]; for (std::size_t i = 0; i < 3; ++i) g_conUses[MFO::Iaus::kBuffKinds + i] += F.ctl[0].foodUses[i]; } }
     // --potion-worth <file>: lines "<class> <kind 0|1|2> <m1> <m2> <m3> <m4>" (# comments). PotionWorth.h is the same for the built-in world.
     bool LoadPotWorth(const char* path) { std::FILE* f = std::fopen(path, "r"); if (!f) return false; char line[512]; g_potWorth.clear();
         while (std::fgets(line, sizeof line, f)) { char name[128]; int t = 0; float m[4]; if (line[0] == '#' || std::sscanf(line, "%127s %d %f %f %f %f", name, &t, &m[0], &m[1], &m[2], &m[3]) != 6 || t < 0 || t > 2) continue;
@@ -539,11 +545,38 @@ namespace {
 
 }
 
+// THE WORKER (tune 2.11.1, coordinator 11-13 "a persistent sim worker per core that loads worlds and binary once"): `sim [flags] --serve
+// [<sim.json> ...]` parses each named list ONCE, then reads one job per stdin line (the arguments of a normal run, separated by TABs), forks,
+// and the child runs exactly what `sim [flags] <job args>` would (fresh copies of every global, the parsed world shared copy-on-write), its
+// stderr joined to stdout; after the child exits the worker prints "@@END <exit code>". A forked child is the same program with the same
+// state a fresh process would have, except that LoadData of a preloaded path starts from its parsed JSON tree (Load.h PreloadedJson).
+static int RealMain(int argc, char** argv);
 int main(int argc, char** argv) {
+    int at = -1; for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i], "--serve")) { at = i; break; }
+    if (at < 0) return RealMain(argc, argv);
+    for (int i = at + 1; i < argc; ++i) Sim::PreloadJson(argv[i]);
+    std::string line;
+    for (int ch; ; ) {
+        line.clear(); while ((ch = std::fgetc(stdin)) != EOF && ch != '\n') line.push_back(static_cast<char>(ch));
+        if (ch == EOF && line.empty()) return 0;
+        std::vector<std::string> toks; std::size_t p = 0; while (p <= line.size()) { const auto q = line.find('\t', p); toks.push_back(line.substr(p, q == std::string::npos ? std::string::npos : q - p)); if (q == std::string::npos) break; p = q + 1; }
+        std::fflush(stdout);
+        const pid_t pid = fork();
+        if (pid == 0) {
+            dup2(1, 2);
+            std::vector<char*> av; av.push_back(argv[0]); for (int i = 1; i < at; ++i) av.push_back(argv[i]); for (auto& t : toks) if (!t.empty()) av.push_back(t.data()); av.push_back(nullptr);
+            const int rc = RealMain(static_cast<int>(av.size()) - 1, av.data());
+            std::fflush(stdout); std::fflush(stderr); _exit(rc);
+        }
+        int status = 0; waitpid(pid, &status, 0);
+        std::printf("@@END %d\n", WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0)); std::fflush(stdout);
+    }
+}
+static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; int declineN = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -603,7 +636,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--draw-spoil") && i + 1 < argc) g_drawSpoil = std::clamp(static_cast<float>(std::atof(argv[++i])), 0.0f, 1.0f);   // BATCH 3 MODEL
         else if (!std::strcmp(argv[i], "--buff-dur") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "real")) g_buffDurReal = true; else if (std::strcmp(v, "lab")) { std::fprintf(stderr, "--buff-dur real|lab\n"); return 2; } }                                         // DIAGNOSTIC (batch 3, the archer study): POSTURE section + pr.* metrics
         else if (!std::strcmp(argv[i], "--guard-why")) g_guardWhy = true;                                                   // DIAGNOSTIC: the unguarded blows of GUARD UNDER TAUNT by cause, as ung2*% metrics (in --baseline output)
-        else if (!std::strcmp(argv[i], "--print-switch")) g_printSwitch = true;                                             // after every SEED line: SWITCH <seed> <decision switches of the subject> <fight minutes>
+        else if (!std::strcmp(argv[i], "--print-switch")) g_printSwitch = true;
+        else if (!std::strcmp(argv[i], "--print-consume")) g_printConsume = true;
+        else if (!std::strcmp(argv[i], "--logi-score")) logiScore = true;                                                // tune 2.11.1: the IAUS loot arm only, SEED <s> J=<mean J_log> per seed (one class)                                           // after every SEED line: CONSUSE <seed> <fights> <uses per buff kind (17)> <food uses health stamina magicka>
+        else if (!std::strcmp(argv[i], "--consumables") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "on" && v != "off") { std::fprintf(stderr, "--consumables on|off\n"); return 2; } g_consumables = v == "on"; }   // tune 2.11.1: gold, values, buff potions, food in the kits (Setup.h FillConsumables)
+        else if (!std::strcmp(argv[i], "--logi-consumables")) Logi::g_logiConsumables = true;                            // tune 2.11.1: the logistics fixture's buff potions, food, poisons and soul gems (Logistics.h)
+        else if (!std::strcmp(argv[i], "--logi-uses") && i + 1 < argc) logiUses = argv[++i];                              // tune 2.11.1: per class, the combat world's uses per fight of each buff kind and food (CONSUSE lines)                                             // after every SEED line: SWITCH <seed> <decision switches of the subject> <fight minutes>
         else if (!std::strcmp(argv[i], "--utility-no-resources")) g_utilResources = false;                              // DIAGNOSTIC: Utility without its "resources left" term (Oracle.h); never a gate, never a baseline
         else if (!std::strcmp(argv[i], "--potion-over") && i + 1 < argc) g_potionOver = static_cast<float>(std::atof(argv[++i]));   // EXPERIMENT: at-once potions are delivered over S seconds (Load.h g_potionOver)
         else if (!std::strcmp(argv[i], "--rating-only")) ratingOnly = true;                                               // print the rating table of --classes (over --seeds) and stop: no class cells, no results file
@@ -660,7 +698,9 @@ int main(int argc, char** argv) {
         // consideration would not move that class, and its result would read as if it had. Refused, never silently half-applied.
         for (std::size_t ci : g_curveConsEdited) { const std::string tag = "c." + std::to_string(ci) + "."; if (("," + opt).find("," + tag) != std::string::npos) { std::fprintf(stderr, "--opt %s* together with a --curve on consideration %zu is refused: the per-class override is a copy of the shared curve, so the search would not move it\n", tag.c_str(), ci); return 2; } } }
     if (logiN > 0 && listPath) { std::fprintf(stderr, "--logistics with --list is REFUSED: the list extracts (tools/list_balance) hold no containers, no gold, MISC, gems or ingredients, no vendor chests or gold, and no armor or potion weights (iaus-sim-v2.md 34.6). The logistics world is the built-in fixture until the extractor carries them.\n"); return 2; }
-    if (logiN > 0 && logiPolicy != "baseline") { std::fprintf(stderr, "--logi-policy %s is REFUSED: only 'baseline' (today's rules) exists; the IAUS loot scorer is the post-T2 batch (ClickUp 1dfcuabd18f)\n", logiPolicy.c_str()); return 2; }
+    if (logiN > 0 && logiPolicy != "baseline" && logiPolicy != "iaus") { std::fprintf(stderr, "--logi-policy %s: baseline | iaus\n", logiPolicy.c_str()); return 2; }
+    if (logiScore && logiPolicy != "iaus") { std::fprintf(stderr, "--logi-score needs --logi-policy iaus\n"); return 2; }
+    if (Logi::g_logiConsumables && (logiUses.empty() || !Logi::LoadUses(logiUses))) { std::fprintf(stderr, "--logi-consumables needs a readable --logi-uses <file> (the combat world's uses per fight, CONSUSE)\n"); return 2; }
     Data Dm = listPath ? LoadData(listPath) : BuiltinData();
     // The potion-worth table of this world: the committed built-in one, a list's own (--potion-worth <file>), or the older fixed rate.
     // A list run WITHOUT its table is refused a silent fallback: it prices potions with the built-in world's worth and says so in the headline.
@@ -689,7 +729,7 @@ int main(int argc, char** argv) {
         if (!bad.empty()) { std::fprintf(stderr, "unknown class slug(s):"); for (const std::string& b : bad) std::fprintf(stderr, " %s", b.c_str()); std::fprintf(stderr, "  (see --print-classes)\n"); return 2; } }
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (stealLab > 0) return RunStealLab(D, allClasses, stealLab, seed);
-    if (logiN > 0) return Logi::Run(allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, logiN, logiK, true);
+    if (logiN > 0) return Logi::Run(allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, logiN, logiK, true, logiPolicy, logiScore);
     if (disengageReport > 0) return DisengageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, disengageReport, threads, estimates, scrollRoad);
     if (optRows) return OptimiseRows(D, allClasses, seed, optFights > 0 ? optFights : fights, threads, rowCap, rowEvals);
     if (optPrefix) return OptimisePrefix(D, allClasses, seed, optFights > 0 ? optFights : fights, threads);
@@ -714,7 +754,8 @@ int main(int argc, char** argv) {
     // --fights says (that flag sizes the class cells), so two archived full runs never differ in J because of their cell size.
     const int hf = !g_seeds.empty() && fightsGiven ? fights : 24;
     if (!g_seeds.empty()) {   // J per seed, mean and standard error; no full tables
-        std::vector<double> js; for (std::uint64_t sd : g_seeds) { double a = 0, b = 0; js.push_back(Objective(D, allClasses, sd, hf, threads, &a, &b)); std::printf("SEED %llu  J=%.2f (scenarios %.2f, natural %.2f)\n", (unsigned long long)sd, js.back(), a, b); if (g_printSwitch) { std::printf("SWITCH %llu %ld %.3f\n", (unsigned long long)sd, g_swCount.exchange(0), double(g_swMs.exchange(0)) / 60000.0); } }
+        std::vector<double> js; for (std::uint64_t sd : g_seeds) { double a = 0, b = 0; js.push_back(Objective(D, allClasses, sd, hf, threads, &a, &b)); std::printf("SEED %llu  J=%.2f (scenarios %.2f, natural %.2f)\n", (unsigned long long)sd, js.back(), a, b); if (g_printSwitch) { std::printf("SWITCH %llu %ld %.3f\n", (unsigned long long)sd, g_swCount.exchange(0), double(g_swMs.exchange(0)) / 60000.0); }
+            if (g_printConsume) { std::printf("CONSUSE %llu %ld", (unsigned long long)sd, g_conFights.exchange(0)); for (auto& u : g_conUses) std::printf(" %ld", u.exchange(0)); std::printf("\n"); } }
         double m = 0; for (double x : js) m += x; m /= double(js.size()); double v = 0; for (double x : js) v += (x - m) * (x - m);
         const double se = js.size() > 1 ? std::sqrt(v / double(js.size() - 1) / double(js.size())) : -1.0;   // n=1 has no spread: print n/a
         char seb[32]; if (se < 0) std::snprintf(seb, sizeof seb, "n/a"); else std::snprintf(seb, sizeof seb, "%.2f", se);

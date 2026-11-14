@@ -3381,3 +3381,10 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 - **(SEV-4, note):** "For a re-apply after the beat (liveInstantStream, Applied), commitPreempt now runs after CastSelfDirect instead of before it. That stream holds no hand, no harm found."
 - **(SEV-5):** "The WantFoeFx Post lambda checks !IsDead() but not Is3DLoaded(), unlike PostRefresh. Safe (LiveFx returns empty), but match PostRefresh."
 - **(design note for marth):** all Influence MGEFs (Calm, Fear, Fury) share keyword 00078098 with the dispel flag, so a Fear spell is pruned on a calmed or frenzied foe and vice versa (the engine dispels one with the other). Switching a foe from fear to frenzy on purpose is a design question.
+### feat/tuner-auto-decisions (Opus 5.5 review, 2026-11-13, against b59b0a1a)
+F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below, status OPEN, tools/iaus_sim/tune_driver.py:
+- **F7 (SEV-4, OPEN):** BUFF_SHARE_CAP is never checked on its own; the potion gate only refuses a rise of a.drink_buff beyond noise, so a start table already over the 1% cap is held, never brought under it.
+- **F8 (SEV-4, OPEN):** a second `--stages edge` run re-widens from the already widened value past EDGE_ROUNDS (the round count is not carried across runs).
+- **F9 (SEV-4, OPEN):** `SUMMARY["withheld"]` only accumulates across resumes; it is not cleared at recalib start, so a value withheld in an earlier run stays withheld after it would now hold.
+- **F10 (SEV-4, OPEN):** the Knight guard floor is checked per accepted value, not for the whole final table.
+- **F11 (SEV-5, OPEN):** an edge value rejected in a later round overwrites e["best"] / steps / verdict of the earlier accepted round.

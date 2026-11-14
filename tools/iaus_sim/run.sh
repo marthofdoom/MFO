@@ -26,10 +26,24 @@ if [[ -z "${SIM_NOBUILD:-}" ]]; then
     # (stub/PCH.h, stub/State.h) and the opcode constants copied out of native/Vocabulary.h (gen_vocab.py), all FIRST on the include path.
     GEN="${OUT}.gen"; mkdir -p "$GEN"
     python3 -I "$ROOT/tools/iaus_sim/gen_vocab.py" "$ROOT/native/Vocabulary.h" "$GEN/Vocabulary.h"
+    # RUNTIME CONSTANTS (tune 2.11.1, coordinator 11-13: "any compiled-in constant searched by rebuilding a binary becomes a runtime knob"):
+    # a copy of native/iaus in which the four constants the consts stage searches (kCloseSlack, kMinimumFrac, kRangeVeto, kPostureDist) are
+    # REFERENCES to sim globals holding native's own literal (read out of the copy here), so `--set const.<name>=<v>` moves them without a
+    # rebuild. native/ is never edited; the DLL keeps its constexpr. Each rewrite must hit exactly one initializer or the build stops.
+    P="${OUT}.patch"; rm -rf "$P"; mkdir -p "$P/iaus"; cp "$ROOT"/native/iaus/*.h "$ROOT"/native/iaus/*.cpp "$P/iaus/"
+    : > "$GEN/simknobs.h"; printf '#pragma once\n#define MFO_SIM_KNOBS 1\n' >> "$GEN/simknobs.h"
+    for spec in Reposition.h:kCloseSlack Reposition.h:kMinimumFrac Generate.cpp:kRangeVeto Catalogue.cpp:kPostureDist; do
+        F="${spec%%:*}"; N="${spec##*:}"
+        n="$(grep -c -E "constexpr float ${N} = [-0-9.]+f;" "$P/iaus/$F" || true)"
+        if [[ "$n" != 1 ]]; then echo "run.sh: expected exactly one 'constexpr float $N = <number>f;' in native/iaus/$F, found $n" >&2; exit 2; fi
+        V="$(grep -o -E "constexpr float ${N} = [-0-9.]+f;" "$P/iaus/$F" | sed -E 's/.* = ([-0-9.]+f);/\1/')"
+        echo "inline float SimKnob_${N} = ${V};" >> "$GEN/simknobs.h"
+        sed -i -E "s/(inline )?constexpr float ${N} = [-0-9.]+f;/\1const float\& ${N} = SimKnob_${N};/" "$P/iaus/$F"
+    done
     "${CXX:-g++}" -std=c++23 -O2 -pthread -Wall -Wextra -Wno-misleading-indentation -Wno-parentheses ${SIM_CXXFLAGS:-} \
-        -I "$GEN" -I "$ROOT/tools/iaus_sim/stub" -I "$ROOT/native" -I "$ROOT/tools" \
-        "$ROOT/native/iaus/Curves.cpp" "$ROOT/native/iaus/Catalogue.cpp" "$ROOT/native/iaus/ClassCurves.cpp" "$ROOT/native/iaus/Score.cpp" \
-        "$ROOT/native/iaus/Decide.cpp" "$ROOT/native/iaus/Explain.cpp" "$ROOT/native/iaus/Generate.cpp" \
+        -include "$GEN/simknobs.h" -I "$P" -I "$GEN" -I "$ROOT/tools/iaus_sim/stub" -I "$ROOT/native" -I "$ROOT/tools" \
+        "$P/iaus/Curves.cpp" "$P/iaus/Catalogue.cpp" "$P/iaus/ClassCurves.cpp" "$P/iaus/Score.cpp" \
+        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" \
         "$ROOT/native/classes/ClassTable.cpp" "$ROOT/tools/iaus_sim/RealClasses.cpp" \
         "$ROOT/tools/iaus_sim/sim.cpp" -o "$OUT"
 fi

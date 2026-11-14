@@ -96,10 +96,67 @@ class Logistics(unittest.TestCase):
         self.assertEqual(T.logi_class("ammo", "base:take", "orc:leave")[0], "a")
 
 
+class CardGateF4F5(unittest.TestCase):   # review F4 / F5 of b59b0a1a
+    def test_every_cell_has_a_card_and_parses(self):
+        T.CARDS.clear()
+        cards = T.load_cards()
+        for c in T.CELLS:
+            self.assertIn(T.CARD_ALIAS.get(c, c), cards, c)
+        self.assertTrue(all(cards[T.CARD_ALIAS.get(c, c)]["bands"] for c in ("knight", "mage")))
+
+    def test_missing_metric_is_graded_not_skipped(self):
+        saved = T.play_metrics
+        try:
+            # start has no taunt sample, the new table has one far outside the knight's bound: graded against the bare bound
+            T.play_metrics = lambda cls, curves: ({"contact%": (80.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1), "taunt/min": (0.0, 0.1)})
+            g = T.card_potion_gate("knight", ["a"], ["b"])
+            self.assertTrue(any("taunt_per_min" in f for f in g["fails"]), g["fails"])
+            # start present, new missing: FAIL
+            T.play_metrics = lambda cls, curves: ({"contact%": (80.0, 0.1), "taunt/min": (3.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1)})
+            g = T.card_potion_gate("knight", ["a"], ["b"])
+            self.assertTrue(any("taunt_per_min" in f and "no sample" in f for f in g["fails"]), g["fails"])
+        finally:
+            T.play_metrics = saved
+
+
 class GapSearchG1(unittest.TestCase):   # review G1 / G2 of 7e883a9a
+    def test_auto_gate_rejection_keeps_nothing(self):   # review F3 of b59b0a1a: decisions=auto, the card + potion gate rejects every value
+        T.CFG = dict(T.SMOKE, force=False)
+        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp(), decisions="auto")
+        T.SUMMARY["stages"] = {"classes": {"knight": {"live": [["attack.x.w", 1.0]], "base": []}}}
+        T.SUMMARY["open_decisions"] = []
+        T.SUMMARY["auto_decisions"] = []
+        names = ("all_knobs", "class_knobs", "final_curves", "jmany", "req", "paired", "judge", "widen", "log", "save_summary", "stage_joint", "gap_runs", "gap_merge", "card_potion_gate")
+        saved = {k: getattr(T, k) for k in names}
+        try:
+            T.all_knobs = lambda: ([], [])
+            T.class_knobs = lambda c, k: [("attack.x.w", "{c}:attack.x.w={v}", 1.0, [0.5, 2.0])]
+            T.final_curves = lambda: []
+            T.widen = lambda n, sh, tried, side: [4.0] if side == "up" else []
+            T.req = lambda w, c, cfg, curves, seeds: tuple(curves)
+            T.jmany = lambda reqs: list(reqs)
+            gain = {(): 0.0, ("knight:attack.x.w=0.75",): 0.5, ("knight:attack.x.w=1.5",): 0.1, ("knight:attack.x.w=4.0",): 0.9}
+            T.paired = lambda a, b: (gain[b] - gain[a], 0.05)
+            T.judge = lambda c, base, spec, forced=False: {"accepted": True, "why": "ACCEPTED", "steps": {"holdout": [1, 0.1], "cross_world": {"mean/g3": [1, 0.1]}}}
+            T.card_potion_gate = lambda cls, anchor, new: {"ok": False, "fails": ["card test: rejected"], "card": [], "potion": []}
+            T.log = lambda m: None
+            T.save_summary = lambda: None
+            T.stage_joint = lambda: T.SUMMARY["stages"].__setitem__("joint", {"verdict": "PASS"})
+            T.gap_runs = lambda tasks: []
+            T.gap_merge = lambda parts: {"fights": [(1, 0, "nat", 1.0, 1.0)]}
+            st = {"clusters": {"knight": {"rows": [{"class": "a", "families": ["attack"], "dU_per_fight": 1.0}]}}, "search": {}, "kept": {}, "cells": {"knight/builtin": {"seeds": 1}}}
+            changed = T.gap_search(st, ["knight"])
+        finally:
+            for k, v in saved.items():
+                setattr(T, k, v)
+        self.assertEqual(st["kept"].get("knight", []), [])   # nothing the gate rejected is added to the kept set
+        self.assertEqual(changed, [])
+        self.assertTrue(all(not r["accepted"] for r in st["search"]["knight"]["rows"]))
+        self.assertTrue(any(d["verdict"] == "rejected" for d in T.SUMMARY["auto_decisions"]))
+
     def test_in_range_judged_even_when_a_far_value_wins(self):
         T.CFG = dict(T.SMOKE, force=False)
-        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp())
+        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp(), decisions="ask")
         T.SUMMARY["stages"] = {"classes": {"knight": {"live": [["attack.x.w", 1.0]]}}}
         T.SUMMARY["open_decisions"] = []
         judged = []
@@ -134,6 +191,83 @@ class GapSearchG1(unittest.TestCase):   # review G1 / G2 of 7e883a9a
         self.assertTrue(all(o.index("gap") < o.index(x) for x in ("floor", "rating", "recalib", "globals", "consts")))
         f = T.FOR_CLASS_STAGES.split(",")
         self.assertLess(f.index("gap"), f.index("floor"))
+
+
+class Race(unittest.TestCase):   # tune 2.11.1: racing decides which candidates get the full seeds, never the bar
+    def setUp(self):
+        self.oldA, self.oldj = T.A, T.jmany
+        T.A = types.SimpleNamespace(no_race=False)
+        # candidate id in `sets`: J = base + effect + noise(seed); "b" = the base
+        eff = {None: 0.0, "c0": 0.0, "c1": 1.0, "c2": -1.0, "c3": 0.9}
+        noise = lambda s: ((s * 7919) % 13 - 6) * 0.05
+        self.calls = []
+        def jm(reqs):
+            self.calls.append([(r[4], len(r[6])) for r in reqs])
+            return [[(10.0 + eff[r[4]] + noise(s), 0, 1) for s in r[6]] for r in reqs]
+        T.jmany = jm
+
+    def tearDown(self):
+        T.A, T.jmany = self.oldA, self.oldj
+
+    def mk(self, sets):
+        return T.req("builtin", "x", "g3", [], range(1, 65), sets)
+
+    def test_losers_drop_early_winners_run_full(self):
+        b, rr = T.race(self.mk(None), [self.mk("c0"), self.mk("c1"), self.mk("c2"), self.mk("c3")], range(1, 65))
+        self.assertIsNone(rr[0][0]); self.assertEqual(rr[0][1], 16)       # no effect: under the 0.15 J bar at 3 sigma after 16 seeds
+        self.assertIsNone(rr[2][0])                                        # a loss
+        self.assertIsNotNone(rr[1][0]); self.assertEqual(len(rr[1][0]), 64)   # the leader is measured on every seed
+        self.assertEqual(len(b), 64)
+
+    def test_no_race_measures_everything(self):
+        T.A.no_race = True
+        b, rr = T.race(self.mk(None), [self.mk("c0"), self.mk("c1")], range(1, 65))
+        self.assertTrue(all(r is not None and len(r) == 64 for r, _ in rr))
+        self.assertEqual(len(self.calls), 1)
+
+
+class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native member
+    def fields(self, path, struct):
+        import re
+        txt = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../native/iaus/" + path)).read()
+        body = txt[txt.index("struct %s {" % struct):]
+        body = body[:body.index("\n    };")]
+        out = set()
+        for m in re.finditer(r"^\s*(float|int)\s+([^;]+);", body, re.M):
+            for part in m.group(2).split(","):
+                out.add(part.split("=")[0].strip())
+        return out
+
+    def test_worth_knobs_cover_worthtable(self):
+        self.assertEqual({n.split(".", 1)[1] for n, _, _ in T.WORTH_KNOBS}, self.fields("ConsumableWorth.h", "WorthTable"))
+
+    def test_loot_knobs_cover_loottuning(self):
+        names = {n.split(".", 1)[1] for n, _, _ in T.LOOT_KNOBS} | {n.split(".", 1)[1] for n in T.LOOT_NOT_SEARCHED}
+        self.assertEqual(names, self.fields("LootNeed.h", "LootTuning"))
+        self.assertFalse({n for n, _, _ in T.LOOT_KNOBS} & set(T.LOOT_NOT_SEARCHED))
+
+    def test_values_in_range(self):
+        shares = {"dangerSpan", "magickaWinLine", "staminaWinLine", "winNeed", "wealthFrac", "restoreCostScale", "restoreUseWeight", "floor", "foodMinGain",
+                  "takeThreshold", "needBase", "needSlope", "roomKnee", "buffScale", "foodScale"}
+        for n, sh, vals in T.WORTH_KNOBS + T.LOOT_KNOBS:
+            f = n.split(".", 1)[1]
+            self.assertNotIn(sh, vals, n)
+            for v in vals:
+                self.assertGreaterEqual(v, 0, n)
+                if f in shares:
+                    self.assertLessEqual(v, 1.0, n)
+
+    def test_loot_command_and_key(self):
+        d = tempfile.mkdtemp()
+        T.A = types.SimpleNamespace(bin="/x/sim", out=d, builtin_worth=None)
+        T.CFG = dict(T.FULL)
+        open(T.uses_path(), "w").write("melee 0\n")
+        open(T.A.bin if os.path.exists(T.A.bin) else os.path.join(d, "sim"), "w").write("x")
+        T.A.bin = os.path.join(d, "sim")
+        cmd = T.sim_cmd("builtin", "logi:melee,mage", "g3", [], "loot.healthTarget=8", None)
+        self.assertEqual(cmd[1:], ["--no-json", "--logistics", "8", "--logi-policy", "iaus", "--logi-score", "--logi-consumables", "--logi-uses", T.uses_path(), "--classes", "melee,mage", "--set", "loot.healthTarget=8"])
+        self.assertIn("uses:", T.key_of("builtin", "logi:melee", "g3", [], None, None))
+        self.assertNotIn("uses:", T.key_of("builtin", "melee", "g3", [], None, None))
 
 
 if __name__ == "__main__":
