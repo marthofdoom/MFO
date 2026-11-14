@@ -751,10 +751,11 @@ namespace MFO::Board {
                         ImGui::SameLine();
                         // IAUS card I7: the per-follower "IAUS combat" switch. A SmallButton like its two
                         // neighbours (d-pad focus, [A] toggles), applied through the edit queue on the worker.
-                        // Combat page only: the logistics IAUS is not built (greyed on the Logistics page).
+                        // The switch is the per-follower FLWR bit 3 (iausCombat) and serves both pages: Combat
+                        // (scheduler/CombatScan.cpp:738) and Logistics looting by need (logistics/LootNeed.cpp:236, under bIausLoot).
                         {
                             const bool iausAvail = Config::g_iausAvailable.load();   // bIausAvailable (MCM): off = greyed
-                            ImGui::BeginDisabled(selTable != 0 || !iausAvail);
+                            ImGui::BeginDisabled(!iausAvail);
                             std::string ib = Str::Fmt(Str::K::Gb_IausBtn,
                                 { Str::Get(who->iausCombat ? Str::K::Gb_IausOn : Str::K::Gb_IausOff) }) + "###iausbtn";
                             if (Click::SmallButton(ib.c_str()))
