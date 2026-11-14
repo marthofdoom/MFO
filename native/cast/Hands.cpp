@@ -573,21 +573,24 @@ namespace MFO::Actuation {
             // (lower index) only: an equal index is the incumbent ITSELF (see
             // IsOwnRetarget below), and a lower rank is held off exactly as before.
             if (g_firingRule >= a_lock.owningRule) return false;
-            // A FRESH OFFENSE INCUMBENT IS NOT PREEMPTED BY A HIGHER OFFENSE RULE (field 1006c: Jesper's rule 6
+            // A FRESH NON-HEAL INCUMBENT IS NOT PREEMPTED BY A HIGHER NON-HEAL RULE (field 1006c: Jesper's rule 6
             // took rule 7's hand 4 times in a fight, each time before the incumbent's claim had its window,
-            // so neither cast). Fresh = claimed less than kInFlightHoldCap ago (APMF's cast TTL, the longest one
+            // so neither cast. Field 2026-11-13, Jesper/Evoker: Frost Cloak and Flame Cloak swapped the left hand
+            // 22 laps in 10 s with 0 fires, because the running candidate answers a transparent "in flight" NoOp, the
+            // scan walks on, and the next candidate is a fresh decision that outranks the incumbent by epoch: so
+            // the guard now covers Offense AND Buff askers and incumbents, not Offense alone). Fresh = claimed less than kInFlightHoldCap ago (APMF's cast TTL, the longest one
             // cast may stand: a FLOOR, principle 9, so a stuck claim is never held past it) and not yet
             // observed firing since its claim stamp (`lastSeen`, frozen at the first claim, as
-            // IncumbentHealCastDone reads it). Offense over offense only: a heal (urgent or not) and any
-            // non-offense asker keep the rules below, and once the window has passed gambit order rules.
+            // IncumbentHealCastDone reads it). Non-heal over non-heal only: a heal asker (urgent or not) and a
+            // heal incumbent keep the rules below, and once the window has passed gambit order rules.
             // The incumbent's APMF claim must actually STAND (ClaimLiveOnHand): a refused or ended claim whose
             // lock is merely still live is an idle hand, taken at once as before.
             if (!a_urgentHeal && a_lock.spell != 0 && a_lock.lastSeen.time_since_epoch().count() != 0 &&
                 ClaimLiveOnHand(fid, a_hand)) {
                 auto* askSp = RE::TESForm::LookupByID<RE::SpellItem>(a_askerSpell);
                 auto* incSp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
-                if (askSp && incSp && CasterConsent::ClassifySpell(askSp) == CasterConsent::SpellKind::Offense &&
-                    CasterConsent::ClassifySpell(incSp) == CasterConsent::SpellKind::Offense) {
+                if (askSp && incSp && CasterConsent::ClassifySpell(askSp) != CasterConsent::SpellKind::Heal &&
+                    CasterConsent::ClassifySpell(incSp) != CasterConsent::SpellKind::Heal) {
                     const auto now = std::chrono::steady_clock::now();
                     const auto age = now - a_lock.lastSeen;
                     if (age < kInFlightHoldCap) {

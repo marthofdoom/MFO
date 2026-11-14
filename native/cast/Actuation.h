@@ -91,6 +91,9 @@ namespace MFO::Actuation {
     // has no lock for that spell (the direct roads hold none). Worker-serial, no
     // lock, like every cast-lock reader (#4); ComposedCast's [cfc] watch is the
     // caller and runs on the same worker.
+    // A standing cast claim on that hand for a_spell (lock names the source spell AND Harbinger's claim stands); a_target = its target
+    // (the follower for a self claim). cast/CastOn.cpp. Worker-serial, like CastLockClaimStamp.
+    bool CastClaimStandingOnHand(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell, RE::FormID& a_target);
     std::chrono::steady_clock::time_point CastLockClaimStamp(RE::FormID a_follower, std::size_t a_hand,
                                                              RE::FormID a_spell);
 

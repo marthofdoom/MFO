@@ -28,6 +28,7 @@
 #include <format>
 #include <unordered_map>
 
+
 namespace MFO::Iaus::Candidates {
 
     static_assert(Prune::kHealFull == Vocab::kHealFull, "the pure generator's heal-full mark is Vocab::kHealFull");
@@ -43,6 +44,7 @@ namespace MFO::Iaus::Candidates {
         };
         std::unordered_map<RE::FormID, Fight>                    g_fights;
         std::unordered_set<std::uint64_t>                        g_lockLogged;   // (follower << 32 | spell): the recast-lockout drop line, once per spell per fight
+        std::unordered_map<std::uint64_t, std::uint32_t>         g_replaceLogged;   // (follower << 32 | spell, target mix) -> the active spell it would replace: logged once per change
         std::unordered_map<RE::FormID, std::uint32_t>             g_chosenCast;   // Q-I-2: the cast form ranked first on the last decision
         std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
 
@@ -50,6 +52,7 @@ namespace MFO::Iaus::Candidates {
         void ClearBuffLockState(RE::FormID a_follower) {
             Actuation::ClearSelfBuffLocks(a_follower);
             std::erase_if(g_lockLogged, [a_follower](std::uint64_t k) { return static_cast<RE::FormID>(k >> 32) == a_follower; });
+            std::erase_if(g_replaceLogged, [a_follower](const auto& kv) { return static_cast<RE::FormID>(kv.first >> 32) == a_follower; });
         }
 
         // A Gather this long after the last one starts a NEW fight clock when card I6 did not call CombatEnded.
@@ -351,6 +354,7 @@ namespace MFO::Iaus::Candidates {
                 u.targetIsAlly = tgt.get() != a_self && !tgt->IsPlayerRef() && Taunt::IsPartyMember(tgt.get());
             }
             auto* avo = foe->AsActorValueOwner();
+            u.liveFx = SpellBook::FoeFx(fid);   // the main-thread mirror's last read (empty until the first one lands)
             u.paralysed = avo && avo->GetActorValue(RE::ActorValue::kParalysis) > 0.0f;
             if (auto* fcc = foe->GetActorRuntimeData().combatController; fcc && fcc->state) u.fleeing = fcc->state->isFleeing;
             u.blocking = foe->IsBlocking();
@@ -429,6 +433,46 @@ namespace MFO::Iaus::Candidates {
                         e.activeOn.push_back(al.id);
             }
 
+        // NO BUFF THAT REPLACES AN ACTIVE BUFF IS VALID (marth 2026-11-13: "no spell that replaced an active buff is valid. The tuning
+        // should pick the correct buff and only rebuff it if it runs out", fix/iaus-claim-thrash). The LIVE half is the book's: SpellBook
+        // marks a party member active for a spell whose effect shares a base MGEF with a live one (any source, a proxy cast included) or
+        // dispels it by keyword (the engine's own two rules, iaus/Snapshot.h FxReplaces). The IN-FLIGHT half is here: a buff whose
+        // STANDING CLAIM is on a follower's hand (his lock names it and APMF's claim stands: true before any caster is built, which is the
+        // window the thrash lived in) marks its recipient active for every OTHER buff its effects would replace. It returns when the live
+        // one has run out: there is no refresh margin to read. Which buff is first cast is the tuning's job; nothing here ranks them.
+        if (s.hasBook) {
+            auto& es = s.book.entries;
+            const auto buffLike = [](const SpellEntry& e) {
+                return e.source == SpellSource::Spell && e.drop == Prune::Drop::Keep && !e.fx.empty() &&
+                       (e.nature == Prune::Nature::Buff || e.nature == Prune::Nature::Ward);
+            };
+            for (std::size_t i = 0; i < es.size(); ++i) {
+                if (!buffLike(es[i])) continue;
+                RE::FormID target = 0;
+                bool       stands = false;
+                for (const std::size_t hand : { Actuation::kHandLeft, Actuation::kHandRight })
+                    if (Actuation::CastClaimStandingOnHand(selfID, hand, es[i].form, target)) { stands = true; break; }
+                if (!stands) continue;
+                for (std::size_t j = 0; j < es.size(); ++j) {
+                    if (j == i || !buffLike(es[j])) continue;   // its own candidate stays: the claim road answers "in flight"
+                    bool byKw = false;
+                    const bool replaces = std::any_of(es[j].fx.begin(), es[j].fx.end(), [&](const FxKey& a) {
+                        return std::any_of(es[i].fx.begin(), es[i].fx.end(), [&](const FxKey& l) { return FxReplaces(a, l, byKw); });
+                    });
+                    if (!replaces || std::find(es[j].activeOn.begin(), es[j].activeOn.end(), target) != es[j].activeOn.end()) continue;
+                    es[j].activeOn.push_back(target);
+                    const std::uint64_t key = (static_cast<std::uint64_t>(selfID) << 32) | (es[j].form ^ (target * 0x9E3779B1u));
+                    auto& said = g_replaceLogged[key];
+                    if (said != es[i].form) {
+                        said = es[i].form;
+                        spdlog::info("[iaus] {:08X} buff {} ({:08X}) pruned on {:08X}: it would replace {} ({:08X}), whose claim stands there "
+                                     "({}); offered again when that one has run out",
+                                     selfID, es[j].name, es[j].form, target, es[i].name, es[i].form, byKw ? "dispel by keyword" : "same effect");
+                    }
+                }
+            }
+        }
+
         // ── G10: the pairs the last decision ranked on top, plus the pairs still refused (a call is also the
         // prefetch). A No is stamped on its entry, so NoteDecision keeps a refused pair on the list although the
         // decision no longer ranks it (D1: it used to drop off and come back as Unknown every second lap).
@@ -467,6 +511,7 @@ namespace MFO::Iaus::Candidates {
 
         // Ask the main thread to (re)measure the sight lines this tick read (rate-limited per pair inside).
         if (!wantFoes.empty()) {
+            SpellBook::WantFoeFx(wantFoes);   // the foes' live effects, read on the main thread (the next lap sees them)
             Sightline::Want(selfID, wantFoes, Sightline::Basis::Own);
             Sightline::Want(selfID, std::move(wantFoes), Sightline::Basis::Engine);
         }

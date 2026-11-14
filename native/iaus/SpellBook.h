@@ -74,6 +74,13 @@ namespace MFO::Iaus::SpellBook {
     // either side dirty when one exists (a container that is not a mirrored follower costs one map lookup).
     void OnContainerChanged(RE::FormID a_old, RE::FormID a_new);
 
+    // FOE EFFECT MIRROR (fix/iaus-claim-thrash, marth 2026-11-13: "all effect spell detection"). WORKER: ask the main thread to read the
+    // live effects (the book's reader: base MGEF, source-agnostic, not dispelled, not inactive) on these foes; rate-limited per foe, one
+    // MainThread::Post per call that has anything due. FoeFx = the last read, empty when none or older than kFoeFxTrustSec (then nothing
+    // is pruned: an unread foe is "unknown", never "affected"). The worker never walks an effect list itself.
+    void WantFoeFx(const std::vector<RE::FormID>& a_foes);
+    [[nodiscard]] std::vector<FxKey> FoeFx(RE::FormID a_foe);
+
     // ResetAllState, after StopPump (card I6 wires it). Drops every book and the once-per-session log ledgers.
     void Clear();
 
