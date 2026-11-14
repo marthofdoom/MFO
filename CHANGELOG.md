@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Classes add-on v1.0.1 -- Alpha, tiers 1 and 2 tuned
+
+The class add-on is its own download (`MFO-Classes-Addon-v1.0.1.zip`, GitHub tag `classes-addon-v1.0.1`) and is not part of the MFO zip. It needs MFO v2.11.1 with its tuning update files, and Harbinger v0.20.1.
+
+- 35 classes in four tiers. Tiers 1 and 2 are tuned by the simulator. Tiers 3 and 4 are built and untuned.
+- Same ESL layout as before. The version stamp in the ESL moves from 1.000 to 1.001. Nothing in MFO.esp or MFO_Progression.esl changes.
+- Uninstall by disabling `MFO_Classes.esl`. Class data in saves is kept.
+
 ## v2.11.1 -- Looting fixed, followers keep fighting far foes, Sentient AI beta (Melee, Ranged, Mage, Auto), live tuning files
 
 This is a real release, and it is the first one since 2.8.2. It folds in everything from the 2.9.0, 2.10.0 and 2.11.0 test builds, whose own entries stay below as history. It needs Harbinger v0.20.1 (ABI v45). The Classes add-on is a separate download and is not part of this release.

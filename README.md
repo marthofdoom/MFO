@@ -182,6 +182,10 @@ leash and walk-to-loot.
 
 ---
 
+## Classes add-on v1.0.1 (alpha)
+
+The Classes add-on is its own download, published as a GitHub prerelease with MFO v2.11.1. It needs MFO v2.11.1, the v2.11.1 tuning update files and Harbinger v0.20.1. It adds 35 classes in four tiers. Tiers 1 and 2 are tuned by the simulator, tiers 3 and 4 are not. Enable `MFO_Classes.esl` to install it and disable it to remove it. Saves keep the class data.
+
 ## What is new in 2.11.1 (Sentient AI beta)
 
 The first real release since 2.8.2. It carries everything from the 2.9.0, 2.10.0 and 2.11.0 test builds below. The Classes add-on is a separate download and is not part of it.

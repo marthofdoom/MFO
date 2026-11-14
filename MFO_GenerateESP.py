@@ -2182,7 +2182,7 @@ CGID_OFFCLASS_PERK = OWN_CLS | 0xA84   # card G16 (off-class weapon rule): grant
 CGID_STYLE_TWIN_BASE = OWN_CLS | 0xA85         # one twin per class style with avoidThreat > 0 (<= 95: 0xA85-0xAE3)
 CGID_STYLE_TWIN_FLST_BASE = OWN_CLS | 0xB00    # + class Id: the twin lookup, SAME shape as MFOC_ClassStyles_<Name>
 CLS_NEXT_OBJECT_ID = 0xB23
-CLS_VERSION_STAMP  = 1.000
+CLS_VERSION_STAMP  = 1.001
 
 # RANK SPACE (marth 11-10: caps T1 10 / T2 15 / T3 20 / T4 25; the T3 strong effect
 # and the T4 unique scale linearly 25% at L1 -> 100% at the cap; a mastered-but-

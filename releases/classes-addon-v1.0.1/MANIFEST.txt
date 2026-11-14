@@ -1,0 +1,8 @@
+MFO Classes Add-on v1.0.1 (alpha; generator stamp 1.001)
+base:     a25f4f7a (MFO v2.11.1 main), plus the stamp bump in this commit
+zip sha256: f5baa7a20926e3357f1377d68e1a166f46cb7f17ffb27ceca90df4d9a70e38e0
+esl sha256: 3ebf44a005e2ef2804e01f810505783b94ff5b65ca7248bd99207aec78d62987
+layout:   MFO_Classes.esl, SEQ/MFO_Classes.seq, MCM/Config/MFO_Classes/{config.json,settings.ini}, Scripts/MFOC_MCM.pex
+audit:    tools/audit_esp.py out/MFO_Classes.esl PASS
+needs:    MFO v2.11.1 + v2.11.1 tuning update, Harbinger v0.20.1 (ABI v45)
+shipped:  GitHub prerelease classes-addon-v1.0.1 (own tag, own release)
