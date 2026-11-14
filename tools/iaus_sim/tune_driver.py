@@ -3,9 +3,14 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,joint,edge,gap,globals,consts,floor,rating,recalib,logistics,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,edge,joint,gap,globals,consts,floor,rating,recalib,logistics,summary] [--jobs 12]
+                                  [--decisions auto|ask] [--replay <summary.json>]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
+DECISIONS (marth 11-13, Docs/research/2026-11/tuner-auto-decisions.md): with `--decisions auto` (the default) a round needs no human decision.
+          What used to be an open decision is decided by a rule (the two gates below) and written to summary.json `auto_decisions`
+          with the rule and the numbers, or is a report-only note that never blocks. `--decisions ask` is the old behaviour (open
+          decisions, no card / potion gate). `--replay summary.json` replays an old round's open decisions through the new rules offline.
 
 RESUME    every simulator result is appended to <out>/cache.jsonl the moment it exists and every stage is a pure function of the
           cache, so running the SAME command again continues where it died (finished work replays in seconds). <out>/progress.log
@@ -50,6 +55,13 @@ RULE (fixed before any result of this driver was read; a number is ACCEPTED only
                no cell worse (the 15-at-once bar), no 15-cell mean worse, and no T1 value whose removal makes the table better.
   knight       the Knight line's guard floor (>= 60% under two or more own-taunted foes, measured on 36 seeds) holds on every
                world, default and as shipped; where the shipped table is already under it, the value may not lower it by more than 0.5.
+  card         CLASS IDENTITY (marth 11-13: "a class must play like that class"): the class's bands (Playstyles.h, parsed at run time, never
+               copied) measured on the natural bracket of the built-in world: no band may end further outside its bound than the class's
+               start table had it, beyond max(CARD_SLACK of the band's credit scale, 2 se of the difference).
+  potions      marth 11-13: "potion spam is not allowed. Potions other than hsm are emergency options". Health / stamina / magicka restores
+               are normal tools; every other potion (a.drink_buff) is EMERGENCY ONLY. No potion may be drunk more than DRINK_FIGHT_CAP
+               health drinks per fight or DRINK_SHARE_CAP of the action time over all potions unless the start table already did (then it
+               may not rise); non-restore potions may not rise at all, and stay under BUFF_SHARE_CAP.
   fixed        marth's School Circle (floor 0.35, shape 1.5, mastery bump 0.15, order, home schools) is never a knob. Pure 0 / 1
                gates and Step vetoes are rules, never knobs. A knob never moves outside its valid range (no negative offset, floor
                or level; a boost never under 1; a Piece point at 0 stays a veto and no other point may reach 0).
@@ -68,8 +80,8 @@ import time
 
 INF = float("inf")
 # G2 (review of 7e883a9a): gap runs before the stages that describe the final table, because its (a) search can move the table
-DEFAULT_STAGES = "prep,rejudge,classes,joint,edge,gap,globals,consts,worth,floor,rating,recalib,logistics,loot,summary"
-FOR_CLASS_STAGES = "prep,classes,joint,edge,gap,floor,summary"
+DEFAULT_STAGES = "prep,rejudge,classes,edge,joint,gap,globals,consts,worth,floor,rating,recalib,logistics,loot,summary"
+FOR_CLASS_STAGES = "prep,classes,edge,joint,gap,floor,summary"
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
 BASE = ["melee-off", "ranged-off", "mage-off"]
@@ -82,10 +94,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
-            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8)
+            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, card_seeds=3, card_fights=48)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
-             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1)
+             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, card_seeds=1, card_fights=8)
 
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
@@ -95,7 +107,7 @@ CACHE = {}          # (key, seed) -> (J, switches, minutes)
 STAGE = ["-"]       # the stage running now (cache_stats)
 TEXT = {}           # key -> stdout (rating / floor / list-uses runs)
 LOCK = threading.Lock()
-SUMMARY = {"rule": __doc__[__doc__.index("RULE ("):].strip(), "open_decisions": [], "stages": {}}
+SUMMARY = {"rule": __doc__[__doc__.index("RULE ("):].strip(), "open_decisions": [], "auto_decisions": [], "stages": {}}
 
 
 # ── plumbing ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -352,8 +364,150 @@ def cells():
     return CELLS + sorted(set(extra), key=extra.index)
 
 
-def open_decision(what, evidence, cls=None):
-    """cls: the class a decision belongs to, so a stage re-run for some classes (--classes) replaces only THEIR decisions."""
+# ── automatic decisions (tuner-auto-decisions.md) ────────────────────────────────────────────────────────────────────────────────
+CARD_ALIAS = {"melee-off": "melee", "ranged-off": "ranged", "mage-off": "mage"}   # the tree-OFF base cells play their role's card (no row of their own in Playstyles.h)
+SCHEMA_RAW = {"melee_share_pct": "b.melee", "taunt_per_min": "taunt/min", "power_per_min": "pow/min", "overheal_pct": "overheal%", "overkill_pct": "overkill%",
+              "double_heal_pct": "dblheal%", "heal_latency_s": "heal.s"}   # Results.h SchemaMetrics: the schema name of a band -> the --baseline name
+CARD_SLACK = 0.05        # PLACEHOLDER (no marth number): a band may end this much of the sim's credit scale (max(5, 0.5 bound), Playstyles.h BandCredit) further out
+DRINK_FIGHT_CAP = 1.5    # PLACEHOLDER: health drinks per fight (drinkH/f); the shipped cells sit at 0.1 to 0.3
+DRINK_SHARE_CAP = 8.0    # PLACEHOLDER: % of the follower's action time spent drinking, all potions (a.drink_*)
+BUFF_SHARE_CAP = 1.0     # PLACEHOLDER: % of action time on a non-restore potion (a.drink_buff): emergency only, so rare by construction
+EMERGENCY_HP_PCT = 50.0  # PLACEHOLDER: an emergency drink happens at or under this health %; read from buffDrinkAt% when the simulator reports it (it does not yet)
+EDGE_ROUNDS = 3          # the edge stage: the first widening and at most two more past each newly accepted value
+RULES = {   # kind -> the rule that replaces asking marth (the text is also in Docs/research/2026-11/tuner-auto-decisions.md)
+    "class card": "an accepted value stays only if the class's bands (Playstyles.h) and the potion limits hold against the class's start table; else it is rejected",
+    "edge": "a widened value is accepted only through the normal judge and the card + potion gates; it replaces the accepted value; up to EDGE_ROUNDS widenings",
+    "gap far": "a value past the range tried is accepted only through the normal judge and the card + potion gates",
+    "weight at edge": "report-only: the edge stage widens exactly these weights under the same rule",
+    "many values": "report-only: every value passed every gate; the count never blocks",
+    "oracle": "report-only: a ledger row (b-d divergences are not tunable); never a blocker",
+    "joint": "the final table must pass the joint gate and the card + potion gates against the shipped table; a failing table is withheld (summary.json ship)",
+    "withheld": "a value that loses on re-measure is withheld from the table (summary.json ship.withheld)",
+    "note": "report-only: nothing is written from it; never a blocker",
+}
+CARDS = {}
+
+
+def load_cards():
+    """The class bands, parsed from Playstyles.h (the simulator's own table; never copied here). {class: {"line": n, "bands": [(metric, lo, hi, line)]}}."""
+    if CARDS:
+        return CARDS
+    cur = None
+    for n, line in enumerate(open(os.path.join(HERE, "Playstyles.h")), 1):
+        m = re.match(r'\s*\{ "([a-z0-9-]+)", "', line)
+        if m:
+            cur = m.group(1)
+            CARDS[cur] = {"line": n, "bands": []}
+            continue
+        if cur:
+            for b in re.finditer(r'at(Least|Most)\("([^"]+)", ([-0-9.]+)', line):
+                v = float(b.group(3))
+                CARDS[cur]["bands"].append((b.group(2), v if b.group(1) == "Least" else -INF, INF if b.group(1) == "Least" else v, n))
+    return CARDS
+
+
+def band_viol(v, lo, hi):
+    return lo - v if v < lo else v - hi if v > hi else 0.0
+
+
+def band_scale(lo, hi):
+    return max(5.0, 0.5 * abs(lo if lo > -INF else hi))   # BandCredit: the credit falls to 0 at half the bound (or 5)
+
+
+def play_metrics(cls, curves):
+    """{metric: (mean, se)} of the class's natural bracket in the built-in world over CFG card_seeds single-seed runs (-1 = no sample, skipped)."""
+    def one(sd):
+        cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seed", str(sd), "--fights", str(CFG["card_fights"]), "--rating", "0", "--baseline", "/dev/stdout"] + world_args("builtin")
+        for c in curves:
+            cmd += ["--curve", c]
+        t = text_run("card:%s:%d:%d:%s" % (cls, sd, CFG["card_fights"], " ".join(curves)), cmd, "builtin")
+        return {m.group(1): float(m.group(2)) for m in re.finditer(r"^%s\|natural\|([^=]+)=([-0-9.e+]+)" % re.escape(cls), t, re.M)}
+    runs = list(POOL.map(one, range(1, CFG["card_seeds"] + 1)))
+    out = {}
+    for k in set().union(*runs):
+        xs = [r[k] for r in runs if k in r and r[k] >= 0]
+        if xs:
+            mu = sum(xs) / len(xs)
+            out[k] = (mu, math.sqrt(sum((x - mu) ** 2 for x in xs) / (len(xs) - 1) / len(xs)) if len(xs) > 1 else 0.0)
+    return out
+
+
+def pm_get(m, raw):
+    """(value, se) of a metric; an a.<family> share that never fired is 0 (Results.h RulingValue); None = no sample."""
+    if raw in m:
+        return m[raw]
+    return (0.0, 0.0) if raw.startswith("a.") else None
+
+
+def card_potion_gate(cls, anchor, new):
+    """The two gates every automatic acceptance passes: CLASS IDENTITY (the class's bands, measured on `new`, may not end further outside
+    their bounds than on `anchor`, the class's start table) and POTIONS (no spam; non-restore potions emergency only). Returns
+    {"ok", "fails", "card", "potion", "card_line"}; every number is kept for summary.json."""
+    a, n = play_metrics(cls, anchor), play_metrics(cls, new)
+    card = load_cards().get(CARD_ALIAS.get(cls, cls))
+    fails, crow, prow = [], [], []
+    for metric, lo, hi, ln in (card["bands"] if card else []):
+        raw = SCHEMA_RAW.get(metric, metric)
+        x, y = pm_get(a, raw), pm_get(n, raw)
+        if x is None or y is None:
+            crow.append({"metric": metric, "line": ln, "verdict": "no sample"})
+            continue
+        va, vn = band_viol(x[0], lo, hi), band_viol(y[0], lo, hi)
+        tol = max(CARD_SLACK * band_scale(lo, hi), 2.0 * math.sqrt(x[1] ** 2 + y[1] ** 2))
+        bad = vn > va + tol
+        crow.append({"metric": metric, "line": ln, "band": [None if lo == -INF else lo, None if hi == INF else hi], "start": round(x[0], 3), "new": round(y[0], 3), "outside_start": round(va, 3), "outside_new": round(vn, 3), "tol": round(tol, 3), "ok": not bad})
+        if bad:
+            fails.append("card %s: %s %.2f -> %.2f (band %s, %.2f outside, was %.2f, tolerance %.2f)" % (CARD_ALIAS.get(cls, cls), metric, x[0], y[0], "[%s, %s]" % ("-" if lo == -INF else lo, "-" if hi == INF else hi), vn, va, tol))
+    def drink_total(m):
+        parts = [pm_get(m, k) for k in ("a.drink_health", "a.drink_stamina", "a.drink_magicka", "a.drink_buff")]
+        return (sum(p[0] for p in parts), math.sqrt(sum(p[1] ** 2 for p in parts)))
+    checks = [("health drinks per fight", pm_get(a, "drinkH/f"), pm_get(n, "drinkH/f"), DRINK_FIGHT_CAP, False),
+              ("all potions, % of action time", drink_total(a), drink_total(n), DRINK_SHARE_CAP, False),
+              ("non-restore potions, % of action time (emergency only)", pm_get(a, "a.drink_buff"), pm_get(n, "a.drink_buff"), BUFF_SHARE_CAP, True)]
+    for name, x, y, cap, strict in checks:
+        if x is None or y is None:
+            prow.append({"metric": name, "verdict": "no sample"})
+            continue
+        tol = max(0.05 * cap, 2.0 * math.sqrt(x[1] ** 2 + y[1] ** 2))
+        raised = y[0] > x[0] + tol
+        bad = raised and (strict or y[0] > cap)   # a rise beyond noise is refused for a non-restore potion always, for a restore only when it ends over the cap; a start already over the cap is not made worse
+        prow.append({"metric": name, "cap": cap, "start": round(x[0], 3), "new": round(y[0], 3), "tol": round(tol, 3), "ok": not bad})
+        if bad:
+            fails.append("potions: %s %.2f -> %.2f (cap %g%s)" % (name, x[0], y[0], cap, ", may not rise" if strict else ""))
+    if "buffDrinkAt%" in n:   # the emergency check proper, once the simulator reports it (needs-sim-metric, tuner-auto-decisions.md)
+        h = n["buffDrinkAt%"][0]
+        prow.append({"metric": "health % at a non-restore drink", "cap": EMERGENCY_HP_PCT, "new": round(h, 2), "ok": h <= EMERGENCY_HP_PCT})
+        if h > EMERGENCY_HP_PCT:
+            fails.append("potions: a non-restore potion drunk at %.0f%% health (emergency is <= %g%%)" % (h, EMERGENCY_HP_PCT))
+    else:
+        prow.append({"metric": "health % at a non-restore drink", "verdict": "needs sim metric buffDrinkAt% (not reported yet): the rise + share cap above stand in"})
+    return {"ok": not fails, "fails": fails, "card": crow, "potion": prow, "card_line": card["line"] if card else None}
+
+
+def final_card_check(cls, anchor, fixed, kept):
+    """The whole accepted set of a class against his start table. Values accepted one at a time were each gated against the table of their
+    time, so interactions can only surface here: while the set fails, its LAST value is dropped. Returns (gate, dropped)."""
+    dropped = []
+    while True:
+        g = card_potion_gate(cls, anchor, fixed + kept)
+        if g["ok"] or not kept:
+            return g, dropped
+        dropped.append(kept.pop())
+
+
+def auto_decision(kind, what, verdict, evidence, cls=None, **numbers):
+    """A decision the driver took by rule (verdict: accepted / rejected / note). The rule and the numbers are in summary.json auto_decisions."""
+    d = {"kind": kind, "what": what, "verdict": verdict, "rule": RULES[kind], "evidence": evidence, **({"cls": cls} if cls else {}), **({"numbers": numbers} if numbers else {})}
+    SUMMARY.setdefault("auto_decisions", []).append(d)
+    log("AUTO DECISION %s [%s]: %s | %s" % (verdict.upper(), kind, what, evidence))
+
+
+def open_decision(what, evidence, cls=None, kind="note", verdict="note"):
+    """cls: the class a decision belongs to, so a stage re-run for some classes (--classes) replaces only THEIR decisions.
+    --decisions auto: a call that has no gate of its own becomes a report-only note (or, with verdict, a rejection) in auto_decisions."""
+    if A.decisions == "auto":
+        auto_decision(kind, what, verdict, evidence, cls=cls)
+        return
     SUMMARY["open_decisions"].append({"what": what, "evidence": evidence, **({"cls": cls} if cls else {})})
     log("OPEN DECISION (the runner stops and reports this, it does not decide): %s | %s" % (what, evidence))
 
@@ -619,6 +773,12 @@ def stage_rejudge():
         if not (d > 2.5 * se and d >= 0.15):
             row["accepted"] = False
             row["why"] = "train: does not beat noise under RULE (%+.2f, se %.2f); " % (d, se) + row["why"]
+        if row["accepted"] and A.decisions == "auto":
+            g = card_potion_gate(cls, [], [spec])
+            row["card_potion"] = g
+            if not g["ok"]:
+                row["accepted"], row["why"] = False, "card / potion gate: " + "; ".join(g["fails"])
+                auto_decision("class card", "rejudge %s" % spec, "rejected", row["why"], cls=cls, gate=g)
         rows.append(row)
         log("rejudge %s: %s" % (spec, row["why"]))
     SUMMARY["stages"]["rejudge"] = rows
@@ -704,6 +864,15 @@ def search_class(cls, knobs):
                 row["accepted"] = passed and j["accepted"]
                 if not passed:
                     row["why"] = "train: does not beat noise (later steps were run for the smoke test only); " + j["why"]
+                smoke_probe = CFG["force"] and not row["accepted"] and not any("card_potion" in r2 for r2 in rows)   # a smoke run exercises the gate on its first forced value too
+                if (row["accepted"] or smoke_probe) and A.decisions == "auto":   # CLASS IDENTITY + POTIONS: the value in the table it joins, against the class's start table
+                    g = card_potion_gate(cls, base, base + kept + [spec])
+                    row["card_potion"] = g
+                    if smoke_probe:
+                        auto_decision("class card", "SMOKE %s %s -> %g" % (cls, name, v), "note", "SMOKE ONLY: the gate run on a value the train step did not accept, to exercise it: gate %s%s" % ("holds" if g["ok"] else "REJECTS", "" if g["ok"] else " (" + "; ".join(g["fails"]) + ")"), cls=cls, gate=g)
+                    elif not g["ok"]:
+                        row["accepted"], row["why"] = False, "card / potion gate: " + "; ".join(g["fails"])
+                        auto_decision("class card", "%s %s -> %g" % (cls, name, v), "rejected", row["why"], cls=cls, gate=g)
             else:
                 row["why"] = ("train: does not beat noise" if not d > 2.5 * se else "train: beats noise but under 0.15 J") if d > -INF else "train: every value raced out (under the 0.15 J bar or behind the leader at %g sigma)" % RACE_Z
             if row["accepted"]:
@@ -719,7 +888,15 @@ def search_class(cls, knobs):
             break   # a second pass only looks again after something changed
     out = {"kept": kept, "base": base, "rows": rows, "live": [[n, round(x, 3)] for x, n, _, _, _ in live], "dead": [n for _, n, _, _, _ in dead], "complete": True,
            "not_searched": [n for _, n, _, _, _ in live[CFG["max_knobs"]:]]}
-    if kept:   # what the accepted values change in his play, for the class-card read (the runner reports it; a card deviation is an open decision)
+    if kept and A.decisions == "auto":   # the accepted set as a whole against his card (each value was gated one at a time)
+        g, dropped = final_card_check(cls, base, base, kept)
+        for sp in dropped:
+            for r in rows:
+                if r["spec"] == sp and r["accepted"]:
+                    r["accepted"], r["why"] = False, "card / potion gate on the whole set: " + "; ".join(g["fails"])
+        auto_decision("class card", "class card read for %s" % cls, "rejected" if dropped else "accepted",
+                      "accepted %s%s: every band of his card and the potion limits hold against his start table" % (" ".join(kept) or "none", ("; DROPPED by the whole-set gate: " + " ".join(dropped)) if dropped else ""), cls=cls, gate=g, dropped=dropped)
+    if kept:   # what the accepted values change in his play, for the class-card read (informational: the card gate above decides)
         # The simulator writes a --baseline file only in single-seed mode (a --seeds run prints SEED lines and nothing else), so this read
         # was ALWAYS empty before batch 3 (found 11-13: every play_changes_natural of every run was []). One seed, 48 fights per cell.
         cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seed", "1", "--fights", "48", "--rating", "0", "--baseline", "/dev/stdout"] + world_args("builtin")
@@ -733,14 +910,15 @@ def search_class(cls, knobs):
         ob, nb = pick(b), pick(n)
         ch = sorted(((abs(nb[k] - ob[k]) / (abs(ob[k]) + 1.0), k, ob[k], nb[k]) for k in ob if k in nb and abs(nb[k] - ob[k]) > 1e-9), reverse=True)[:12]
         out["play_changes_natural"] = [[k, o, w] for _, k, o, w in ch]
-        open_decision("class card read for %s" % cls, "accepted %s; the largest changes in his play are in summary.json stages.classes.%s.play_changes_natural: confirm none leaves his class card before writing" % (" ".join(kept), cls), cls=cls)
+        if A.decisions == "ask":
+            open_decision("class card read for %s" % cls, "accepted %s; the largest changes in his play are in summary.json stages.classes.%s.play_changes_natural: confirm none leaves his class card before writing" % (" ".join(kept), cls), cls=cls)
     # runbook open decision 7: many accepted values for one class, or a consideration weight at the edge of what was tried, say the shared
     # catalogue (not the class) is off: reported before anything is written
     edge = [r["spec"] for r in rows if r["accepted"] and r["knob"].endswith(".w") and (r["best"] >= 2.0 * r["shared"] - 1e-6 or r["best"] <= 0.5 * r["shared"] + 1e-6)]
     if len(kept) > 10:
-        open_decision("%s took %d accepted values (more than 10)" % (cls, len(kept)), "a sign the shared catalogue, not the class, is off: report before writing any of %s" % " ".join(kept), cls=cls)
+        open_decision("%s took %d accepted values (more than 10)" % (cls, len(kept)), "a sign the shared catalogue, not the class, is off: report before writing any of %s" % " ".join(kept), cls=cls, kind="many values")
     if edge:
-        open_decision("%s: a consideration weight accepted at the edge of the range tried (x2 or x0.5)" % cls, "%s: the best weight may lie outside what was searched, and so far from the catalogue's that the shared curve is in question" % " ".join(edge), cls=cls)
+        open_decision("%s: a consideration weight accepted at the edge of the range tried (x2 or x0.5)" % cls, "%s: the best weight may lie outside what was searched, and so far from the catalogue's that the shared curve is in question" % " ".join(edge), cls=cls, kind="weight at edge")
     SUMMARY["stages"].setdefault("classes", {})[cls] = out
     save_summary()
     return out
@@ -848,10 +1026,16 @@ def stage_joint():
             for g, (d, se) in lo.items():
                 if worse(d, se):
                     fails.append("T1 value %s makes the final table worse at %s (%+.2f, se %.2f over the 15 cells)" % (spec, g, d, se))
+        if A.decisions == "auto":   # CLASS IDENTITY + POTIONS of every cell in the final table, against the shipped one
+            st["card_potion"] = {}
+            for c in cells():
+                g = card_potion_gate(c, [], curves)
+                st["card_potion"][c] = g
+                fails += ["%s: %s" % (c, f) for f in g["fails"]]
         st["verdict"] = "PASS" if not fails else "FAIL: " + "; ".join(fails)
         log("joint: %d values, pooled g3 %+.2f (se %.2f) off %+.2f shipped %+.2f  %s" % (len(curves), pooled["g3"][0], pooled["g3"][1], pooled["off"][0], pooled["shipped"][0], st["verdict"]))
         if fails:
-            open_decision("JOINT GATE FAILED: the final table as a whole", "write NO value from this run until this is decided: %s" % "; ".join(fails))
+            open_decision("JOINT GATE FAILED: the final table as a whole", "write NO value from this run: %s" % "; ".join(fails), kind="joint", verdict="rejected")
     SUMMARY["stages"]["joint"] = st
 
 
@@ -929,26 +1113,54 @@ def stage_edge():
             if not vals:
                 e["verdict"] = "EDGE IS THE VALID LIMIT: nothing to widen; the accepted value stands"
             else:
-                base = r["base"] + r["kept"]
-                res = jmany([req("builtin", cls, "g3", base, train)] + [req("builtin", cls, "g3", [k for k in base if k != row["spec"]] + [tmpl.format(c=cls, v=v)], train) for v in vals])
-                cands = sorted(((paired(res[0], x) + (v,)) for x, v in zip(res[1:], vals)), key=lambda c: -c[0])
-                e["sweep"] = [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda c: c[2])]
-                d, se, v = cands[0]
-                e["train"] = [round(d, 3), round(se, 3)]
-                passed = d > 2.5 * se and d >= 0.15
-                if passed or (CFG["force"] and not any("steps" in x for x in rows)):   # a smoke run pushes its first widened sweep through the judge
-                    spec = tmpl.format(c=cls, v=v)
-                    j = judge(cls, base, spec, forced=not passed, replace=row["spec"])
-                    j["accepted"] = passed and j["accepted"]
-                    e["steps"], e["best"] = j["steps"], v
-                    if j["accepted"]:
-                        e["verdict"] = "WIDER VALUE PASSES THE RULE: reported, never shipped (far from the shared curve)"
-                        open_decision("%s %s: a value past the edge passes the rule" % (cls, row["knob"]), "shared %g, accepted (edge, %s) %g, widened %g: train %+.2f (se %.2f) over the accepted value, holdout %+.2f, cross-world mean %+.2f (se %.2f). Far from the shared curve: marth or the coordinator decides; the accepted %g stays written until then (summary.json stages.edge)"
-                                      % (shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]), cls=cls)
+                e["rounds"] = []
+                for rnd in range(EDGE_ROUNDS if A.decisions == "auto" else 1):   # auto: a widened value that is accepted is widened again (bounded)
+                    if rnd:
+                        vals = widen(row["knob"], shared, tried, side)
+                        if not vals:
+                            e["verdict"] += "; the range's valid limit is reached"
+                            break
+                    base = r["base"] + r["kept"]
+                    res = jmany([req("builtin", cls, "g3", base, train)] + [req("builtin", cls, "g3", [k for k in base if k != row["spec"]] + [tmpl.format(c=cls, v=v)], train) for v in vals])
+                    cands = sorted(((paired(res[0], x) + (v,)) for x, v in zip(res[1:], vals)), key=lambda c: -c[0])
+                    e["sweep"] += [[c[2], round(c[0], 3), round(c[1], 3)] for c in sorted(cands, key=lambda c: c[2])]
+                    d, se, v = cands[0]
+                    e["train"] = [round(d, 3), round(se, 3)]
+                    passed = d > 2.5 * se and d >= 0.15
+                    if passed or (CFG["force"] and not any("steps" in x for x in rows) and not rnd):   # a smoke run pushes its first widened sweep through the judge
+                        spec = tmpl.format(c=cls, v=v)
+                        j = judge(cls, base, spec, forced=not passed, replace=row["spec"])
+                        j["accepted"] = passed and j["accepted"]
+                        e["steps"], e["best"] = j["steps"], v
+                        if j["accepted"] and A.decisions == "auto":
+                            g = card_potion_gate(cls, r["base"], [k for k in base if k != row["spec"]] + [spec])
+                            e["card_potion"] = g
+                            if not g["ok"]:
+                                j["accepted"], j["why"] = False, "card / potion gate: " + "; ".join(g["fails"])
+                                auto_decision("edge", "%s %s %g -> %g (past the edge)" % (cls, row["knob"], row["best"], v), "rejected", j["why"], cls=cls, gate=g, train=e["train"], holdout=j["steps"]["holdout"])
+                        if j["accepted"] and A.decisions == "auto":   # the wider value replaces the accepted one in the class's table
+                            r["kept"] = [spec if k == row["spec"] else k for k in r["kept"]]
+                            auto_decision("edge", "%s %s %g -> %g (past the edge)" % (cls, row["knob"], row["best"], v), "accepted",
+                                          "shared %g, edge (%s) %g, widened %g: train %+.2f (se %.2f) over the previous value, holdout %+.2f, cross-world mean %+.2f (se %.2f); card and potion gates hold" % (shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1]),
+                                          cls=cls, gate=e["card_potion"], round=rnd + 1)
+                            row["spec"], row["best"] = spec, v
+                            e["accepted_now"], e["verdict"] = v, "WIDER VALUE ACCEPTED (round %d): judge + card + potion gates hold; it replaces the edge value" % (rnd + 1)
+                            tried = list(tried) + list(vals)
+                            e["rounds"].append({"widened": vals, "best": v, "accepted": True})
+                            side = edge_of(row["knob"], shared, tried, v)
+                            if not side:
+                                break
+                            continue
+                        if j["accepted"]:   # ask mode: reported, never shipped
+                            e["verdict"] = "WIDER VALUE PASSES THE RULE: reported, never shipped (far from the shared curve)"
+                            open_decision("%s %s: a value past the edge passes the rule" % (cls, row["knob"]), "shared %g, accepted (edge, %s) %g, widened %g: train %+.2f (se %.2f) over the accepted value, holdout %+.2f, cross-world mean %+.2f (se %.2f). Far from the shared curve: marth or the coordinator decides; the accepted %g stays written until then (summary.json stages.edge)"
+                                          % (shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]), cls=cls)
+                        else:
+                            e["verdict"] = "the accepted %sedge value holds (%s: %s)" % ("(widened) " if rnd else "", "a wider value beat it on train only" if passed else "SMOKE: judged without a train pass", j["why"])
                     else:
-                        e["verdict"] = "the accepted edge value holds (%s: %s)" % ("a wider value beat it on train only" if passed else "SMOKE: judged without a train pass", j["why"])
-                else:
-                    e["verdict"] = "the accepted edge value holds (no wider value beats it: train %+.2f, se %.2f)" % (d, se)
+                        e["verdict"] = "the accepted %sedge value holds (no wider value beats it: train %+.2f, se %.2f)" % ("(widened) " if rnd else "", d, se)
+                    e["rounds"].append({"widened": vals, "best": v, "accepted": False})
+                    break
             rows.append(e)
             log("edge %s %s %g (accepted %g, %s) widened %s: %s" % (cls, row["knob"], shared, row["best"], side, vals, e["verdict"]))
             SUMMARY["stages"]["edge"] = rows
@@ -1184,11 +1396,22 @@ def gap_search(st, order):
                     j = judge(c, base, spec, forced=not passed)
                     row["steps"], row["why"] = j["steps"], j["why"]
                     ok = passed and j["accepted"]
-                    if ok and far:
+                    if ok and A.decisions == "auto":   # in range or far: the same two gates (class identity, potions) against the class's start table
+                        g = card_potion_gate(c, SUMMARY["stages"].get("classes", {}).get(c, {}).get("base", []), base + [spec])
+                        row["card_potion"] = g
+                        if not g["ok"]:
+                            ok, row["why"] = False, "card / potion gate: " + "; ".join(g["fails"])
+                            auto_decision("gap far" if far else "class card", "gap search %s %s %g -> %g" % (c, name, shared, v), "rejected", row["why"], cls=c, gate=g)
+                        elif far:
+                            auto_decision("gap far", "gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "accepted",
+                                          "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f; card and potion gates hold" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0]), cls=c, gate=g)
+                    if ok and far and A.decisions == "ask":
                         row["why"] = "PASSES THE RULE PAST THE RANGE TRIED: reported, never shipped"
                         open_decision("gap search %s %s %g -> %g (past the range tried)" % (c, name, shared, v), "train %+.2f (se %.2f), holdout %+.2f, cross-world mean %+.2f: far from the shared curve, marth or the coordinator decides (summary.json stages.gap.search.%s)" % (d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], c), cls=c)
                     elif ok:
                         row["accepted"] = True
+                        if far:
+                            row["why"] = "ACCEPTED PAST THE RANGE TRIED: judge + card + potion gates hold"
                         st["kept"].setdefault(c, []).append(spec)
                         changed.append(c)
                 else:
@@ -1205,7 +1428,13 @@ def gap_search(st, order):
         st["joint_after_search"] = SUMMARY["stages"]["joint"]["verdict"]
         final = final_curves()
         for c in sorted(set(changed)):
-            open_decision("class card read for %s (gap search)" % c, "accepted %s in the gap stage's (a) search: confirm none leaves his class card before writing" % " ".join(st["kept"][c]), cls=c)
+            if A.decisions == "auto":   # the set the gap search added, with the table as it now is, against his start table
+                g, dropped = final_card_check(c, SUMMARY["stages"].get("classes", {}).get(c, {}).get("base", []), [k for k in final if k not in st["kept"][c]], st["kept"][c])
+                auto_decision("class card", "class card read for %s (gap search)" % c, "rejected" if dropped else "accepted",
+                              "accepted %s in the gap stage's (a) search%s: card and potion gates against his start table" % (" ".join(st["kept"][c]) or "none", ("; DROPPED by the whole-set gate: " + " ".join(dropped)) if dropped else ""), cls=c, gate=g, dropped=dropped)
+                final = final_curves()
+            else:
+                open_decision("class card read for %s (gap search)" % c, "accepted %s in the gap stage's (a) search: confirm none leaves his class card before writing" % " ".join(st["kept"][c]), cls=c)
             for w in A.worlds:
                 n = st["cells"]["%s/%s" % (c, w)]["seeds"]
                 fin = gap_merge(gap_runs([(w, c, final, s, True) for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)]))
@@ -1228,7 +1457,7 @@ def gap_ledger(st, order):
             L.append("| O-%s-%d | %s | (%s) IAUS %s, oracle %s (%s): dU/f %.2f, %.0f%% of his divergence cost; most in %s. Gap %s | %s |" % (
                 c, i + 1, c, r["class"], r["iaus"], r["oracle"], r["kind"], r["dU_per_fight"], 100 * r["share"], r["situations"][0][0] if r["situations"] else "-", gaps, r["why"]))
         if rows and c in order:
-            open_decision("oracle gap %s: %d divergence(s) of class b/c/d" % (c, len(rows)), "; ".join("(%s) %s -> %s dU/f %.2f: %s" % (r["class"], r["iaus"], r["oracle"], r["dU_per_fight"], r["why"]) for r in rows) + " (summary.json stages.gap.clusters.%s, <out>/gap-ledger.md)" % c, cls=c)
+            open_decision("oracle gap %s: %d divergence(s) of class b/c/d" % (c, len(rows)), "; ".join("(%s) %s -> %s dU/f %.2f: %s" % (r["class"], r["iaus"], r["oracle"], r["dU_per_fight"], r["why"]) for r in rows) + " (summary.json stages.gap.clusters.%s, <out>/gap-ledger.md)" % c, cls=c, kind="oracle")
     open(os.path.join(A.out, "gap-ledger.md"), "w").write("\n".join(L) + "\n")
 
 
@@ -1627,7 +1856,8 @@ def stage_recalib():
             st["rows"].append({"spec": spec, "d": round(d, 3), "se": round(se, 3), "holds": ok})
             log("recalib %s: %+.2f (se %.2f) with the re-measured potion worth: %s" % (spec, d, se, "holds" if ok else "DOES NOT HOLD"))
             if not ok:
-                open_decision("accepted value %s loses with the re-measured potion worth" % spec, "%+.2f (se %.2f) on fresh seeds: do not write it; report" % (d, se))
+                SUMMARY.setdefault("withheld", []).append(spec)
+                open_decision("accepted value %s loses with the re-measured potion worth" % spec, "%+.2f (se %.2f) on fresh seeds: do not write it; report" % (d, se), kind="withheld", verdict="rejected")
         A.builtin_worth = old
         st["table"] = tab
     SUMMARY["stages"]["recalib"] = st
@@ -1740,8 +1970,70 @@ def render_md():
             L += ["| Class | Gap J_log (se) | episodes | potions J | gold-equivalent | takes base / oracle | sell runs | largest divergences |", "|---|---|---|---|---|---|---|---|"]
             L += ["| %s | %+.2f (%.2f) | %d | %+.2f | %+.0f g | %d / %d | %d | %s |" % (c, v["gap"], v["se"], v["episodes"], v["potionJ_gap"], v["gold_equivalent_gap"], v["baseline_takes"], v["oracle_takes"], v["sell_runs"],
                   "; ".join("(%s) %s %.2f" % (r["class"], r["cluster"], r["dU_per_episode"]) for r in g["clusters"][c][:3])) for c, v in g["cells"].items()] + [""]
+    ad = SUMMARY.get("auto_decisions", [])
+    L += ["## AUTOMATIC DECISIONS (--decisions %s; the rule and the numbers are in summary.json auto_decisions)" % A.decisions, "", "| Kind | Verdict | What | Evidence |", "|---|---|---|---|"]
+    L += ["| %s | %s | %s | %s |" % (d["kind"], d["verdict"], d["what"], d["evidence"].replace("|", "/")[:400]) for d in ad if d["verdict"] != "note"] or ["| - | - | none | |"]
+    L += ["", "Report-only notes (never blockers): %d" % sum(1 for d in ad if d["verdict"] == "note"), ""]
     L += ["## OPEN DECISIONS (the runner reports these and does not decide)", ""] + (["- **%s**: %s" % (d["what"], d["evidence"]) for d in SUMMARY["open_decisions"]] or ["- none"]) + [""]
     return "\n".join(L)
+
+
+def replay(path):
+    """--replay: the open_decisions of an earlier summary.json through the automatic rules, OFFLINE. Only what the summary holds is used:
+    a class-card read has the 12 largest changes of his play (stages.classes.<c>.play_changes_natural: metric, start, new), so only band /
+    potion metrics among them are judged (the rest moved less than those 12); a decision that needs a measurement the summary lacks is
+    `needs-metric`. Prints the table; returns 0."""
+    S = json.load(open(path))
+    cards, tally, detail = load_cards(), {}, []
+    def tl(kind, v):
+        tally.setdefault(kind, {"count": 0, "accepted": 0, "rejected": 0, "note": 0, "needs-metric": 0})
+        tally[kind]["count"] += 1
+        tally[kind][v] += 1
+    for d in S.get("open_decisions", []):
+        w, cls = d["what"], d.get("cls")
+        m = re.match(r"class card read for ([a-z0-9-]+)$", w)
+        if m:
+            c = m.group(1)
+            ch = {k: (o, nw) for k, o, nw in S["stages"].get("classes", {}).get(c, {}).get("play_changes_natural", [])}
+            fails, seen = [], 0
+            for metric, lo, hi, ln in (cards.get(CARD_ALIAS.get(c, c), {}).get("bands", [])):
+                raw = SCHEMA_RAW.get(metric, metric)
+                if raw in ch:
+                    seen += 1
+                    va, vn = band_viol(ch[raw][0], lo, hi), band_viol(ch[raw][1], lo, hi)
+                    if vn > va + CARD_SLACK * band_scale(lo, hi):
+                        fails.append("%s %.1f -> %.1f (band line %d)" % (metric, ch[raw][0], ch[raw][1], ln))
+            for k, cap, strict in (("a.drink_buff", BUFF_SHARE_CAP, True), ("drinkH/f", DRINK_FIGHT_CAP, False)):
+                if k in ch:
+                    seen += 1
+                    o, nw = ch[k]
+                    if nw > o + 0.05 * cap and (strict or nw > cap):
+                        fails.append("potion %s %.2f -> %.2f" % (k, o, nw))
+            v = "rejected" if fails else "accepted" if seen else "needs-metric"
+            tl("class card read", v)
+            detail.append("class card read %-10s %-12s visible band/potion metrics %d  %s" % (c, v, seen, "; ".join(fails)))
+        elif "(gap search)" in w:
+            tl("class card read", "needs-metric")
+            detail.append("%s: needs the gap search's own play metrics (not in summary.json)" % w)
+        elif "consideration weight accepted at the edge" in w:
+            tl("weight at edge", "note")
+        elif "more than 10" in w:
+            tl("many values", "note")
+        elif "a value past the edge passes the rule" in w:
+            tl("edge past the edge", "needs-metric")
+            detail.append("%s: needs card + potion metrics of the widened value%s" % (w, " (a lower family.drink_buff weight can only lower non-restore drinks)" if "drink_buff" in w else ""))
+        elif w.startswith("gap search"):
+            tl("gap far", "needs-metric")
+        elif w.startswith("oracle gap"):
+            tl("oracle", "note")
+        else:
+            tl("other (worth / floor / rating ...)", "note")
+    print("%-38s %5s %9s %9s %5s %13s" % ("kind", "count", "accepted", "rejected", "note", "needs-metric"))
+    for k, t in tally.items():
+        print("%-38s %5d %9d %9d %5d %13d" % (k, t["count"], t["accepted"], t["rejected"], t["note"], t["needs-metric"]))
+    print("%-38s %5d" % ("TOTAL", sum(t["count"] for t in tally.values())))
+    print("\n".join(detail))
+    return 0
 
 
 def main():
@@ -1761,8 +2053,12 @@ def main():
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 16)
+    ap.add_argument("--decisions", choices=("auto", "ask"), default="auto", help="auto (default): every former open decision is decided by a rule (class card + potion gates, tuner-auto-decisions.md) or is a report-only note, all in summary.json auto_decisions; ask: the old open decisions, no card / potion gate")
+    ap.add_argument("--replay", help="replay the open_decisions of an earlier summary.json through the automatic rules, offline (no simulator), and print the table")
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one dashboard results file per finished sweep")
     A = ap.parse_args()
+    if A.replay:
+        return replay(A.replay)
     if A.for_class:
         if A.classes or A.stages != ap.get_default("stages"):
             raise SystemExit("--for-class sets --classes and --stages itself: give neither")
@@ -1790,6 +2086,7 @@ def main():
             old = json.load(open(prev))
             if old.get("config", {}).get("smoke") == A.smoke:
                 SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
+                SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
         except ValueError:
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, knobs=A.knobs)
@@ -1804,12 +2101,13 @@ def main():
         if name == "summary":
             continue
         SUMMARY["open_decisions"] = [d for d in SUMMARY["open_decisions"] if d.get("stage") != name or (scope() and d.get("cls") and d["cls"] not in scope())]   # a scoped re-run keeps the other classes' decisions
-        n0 = len(SUMMARY["open_decisions"])
+        SUMMARY["auto_decisions"] = [d for d in SUMMARY["auto_decisions"] if d.get("stage") != name or (scope() and d.get("cls") and d["cls"] not in scope())]
+        n0, a0 = len(SUMMARY["open_decisions"]), len(SUMMARY["auto_decisions"])
         STAGE[0] = name
         SUMMARY.setdefault("cache_stats", {})[name] = {"seed_runs": 0, "from_cache": 0}   # this invocation's numbers (a resumed run replaces them)
         t0 = time.time()
         stages[name]()
-        for d in SUMMARY["open_decisions"][n0:]:
+        for d in SUMMARY["open_decisions"][n0:] + SUMMARY["auto_decisions"][a0:]:
             d["stage"] = name
         cs = SUMMARY["cache_stats"][name]
         cs["wall_s"] = round(time.time() - t0, 1)
@@ -1823,9 +2121,12 @@ def main():
             if again:
                 log("gap search moved the table: %s run again after it" % ",".join(again))
                 order[i:i] = again
+    j = SUMMARY["stages"].get("joint", {}).get("verdict", "")
+    SUMMARY["ship"] = {"table": [c for c in final_curves() if c not in SUMMARY.get("withheld", [])] if not j.startswith("FAIL") else [], "withheld": SUMMARY.get("withheld", []),
+                       "joint": j or "not run", "note": "nothing a gate rejected is in `table`; a failed joint gate withholds the whole table"}
     save_summary()
     EMIT.shutdown(wait=True)
-    log("DONE: %s/summary.md, %d open decision(s)" % (A.out, len(SUMMARY["open_decisions"])))
+    log("DONE: %s/summary.md, %d open decision(s), %d automatic decision(s)" % (A.out, len(SUMMARY["open_decisions"]), len(SUMMARY["auto_decisions"])))
     return 0
 
 
