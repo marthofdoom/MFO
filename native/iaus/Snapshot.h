@@ -166,6 +166,7 @@ struct SpellEntry {
         bool taunt = false;           // a taunt default row
         float tauntCooldownSec = 0.0f;   // that row's cooldown; 0 = none declared (Tuning::rowlessTauntCooldownSec then)
         bool disengage = false;       // Flag::kDisengage (Retreat)
+        bool damage = false;          // Flag::kDamage: a destruction caster (Evoker, Warlock, Wizard, Arch-Mage): attacks rank at or above buffs. false with the tree OFF
         bool backOffPressed = false;  // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no
                                       // way out by design. false with the tree OFF
         bool sneakClass = false;      // Flag::kSneakAlways: a sneak class (card G3's hide run). false with the tree OFF

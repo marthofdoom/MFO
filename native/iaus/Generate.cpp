@@ -44,6 +44,7 @@ namespace MFO::Iaus {
             float castsWanted = -1.0f;           // feat/consumables: the casts of his best measured spell the fight still asks for (Drinks); < 0 = unknown
             // estimates (iaus/Estimate.h); unknown = +inf / 0
             float selfIncoming = 0.0f;
+            bool  closeRefusing = false;         // a casting class that does not survive closing: close spells are refused (Casts, CanCastOffense)
             float selfTtl = kInf;
             float playerTtl = kInf;
             // G2 Layer 1 (iaus/Hide.h): hidden from every listed foe while he sneaks (Yes), seen by one (No), or not known.
@@ -538,6 +539,31 @@ namespace MFO::Iaus {
             }
         }
 
+        // THE CLOSE-SPELL RULE (marth 2026-11-13; Reposition.h CloseSpell / SurvivesClosing): a casting class does not pick a close offense /
+        // control spell unless he survives closing. True = this spell is refused now. Computed once per Generate (Ctx::closeRefusing).
+        bool CloseRefused(const Ctx& x, const SpellEntry& e) {
+            return x.closeRefusing && Reposition::CloseSpell(e, x.s.meleeReach);
+        }
+
+        // Does he carry a kept offense / control spell he can pay for and cast with a free hand? (the Casts() tests, without a target)
+        bool CanCastOffense(const Ctx& x) {
+            const Snapshot& s = x.s;
+            if (x.fleeRun) return false;
+            const bool poolOk = std::isfinite(s.self.mpMax) && s.self.mpMax > 0.0f;
+            const float pool  = Finite(s.self.mp, 0.0f);
+            const bool anyBusy  = s.handBusyLeft || s.handBusyRight;
+            const bool bothBusy = s.handBusyLeft && s.handBusyRight;
+            for (const SpellEntry& e : s.book.entries) {
+                if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) continue;
+                if (e.twoHanded ? anyBusy : bothBusy) continue;
+                if (e.cost > 0.0f && (!poolOk || !Prune::Affordable(e.cost, pool))) continue;
+                if (CloseRefused(x, e)) continue;   // a spell he may not pick is no reason to keep the dagger away
+                return true;
+            }
+            return false;
+        }
+
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
         void Postures(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
@@ -551,6 +577,13 @@ namespace MFO::Iaus {
                     if (!tgt || f->dist < tgt->dist) tgt = f;
             if (!tgt) return;
             const bool gated = x.g.resolved && x.g.strict;
+            // SPELLS STAY ON SPELLS (marth 2026-11-13, Jesper/Evoker closed to dagger range and went down; gate the source, not the output):
+            // a casting class with a kept offense / control spell he can afford carries no melee or silver posture candidate, so a carried
+            // dagger never outscores the spells it replaces. The dagger is a candidate again the moment the pool cannot pay for any
+            // (or there is no such spell). The weapon-gambit road (act.equip_melee from a board rule) is not this layer and stays.
+            // Interim: the sim tunes the real "spells" posture candidate (REVIEW-BACKLOG / MAP IAUS posture).
+            const bool spellsHold = x.g.resolved && x.g.spellsOnClass && CanCastOffense(x);
+            x.out.spellsHold = spellsHold;
             const auto posture = [&](PostureKind a_kind, RoleTag a_role, bool a_classAllows) {
                 Candidate c = x.Make(Family::Posture, nullptr);   // the posture Key's target stays 0 (I2 convention)
                 c.role = a_role;
@@ -561,7 +594,7 @@ namespace MFO::Iaus {
                 c.f.foeUnholy = tgt->unholy;
                 c.f.outOfAmmo = !((k.bow && k.arrows > 0) || (k.crossbow && k.bolts > 0));
                 c.f.staffCharged = k.staffCharged;
-                c.f.classAllowsWeapon = !gated || a_classAllows;
+                c.f.classAllowsWeapon = (!gated || a_classAllows) && !(spellsHold && (a_kind == PostureKind::Melee || a_kind == PostureKind::Silver));
                 if (s.perks.read && (a_kind == PostureKind::Melee || a_kind == PostureKind::Silver || a_kind == PostureKind::Bow)) {   // batch 3 part C
                     const auto& wd = s.perks.weaponDamage;
                     const float mel = (std::max)(wd[static_cast<std::size_t>(PerkWeapon::OneHand)], wd[static_cast<std::size_t>(PerkWeapon::TwoHand)]);
@@ -658,6 +691,7 @@ namespace MFO::Iaus {
                     if (priced) { c.f.cost = e.cost; c.f.magicka = pool; c.f.magickaMax = s.self.mpMax; }
                     c.f.handFree = true;   // the P1 test above already dropped a held hand
                     c.f.onClass = scroll ? true : onClass;
+                    c.f.damageClass = x.g.damage;   // Decide caps a buff's score at the best viable offense (marth 2026-11-13)
                     c.f.fromMastered = fromMastered;
                     return c;
                 };
@@ -666,6 +700,7 @@ namespace MFO::Iaus {
                 case Prune::Nature::Offense:
                 case Prune::Nature::Control: {
                     if (x.fleeRun) break;   // card G3: no offense while he flees
+                    if (!scroll && CloseRefused(x, e)) { ++x.out.droppedTarget; x.out.closeRefused = true; break; }   // marth 2026-11-13: not until he survives closing
                     // Reach: Touch = a swing's reach; a Self-delivered blast reaches its own area; else the aimed
                     // reach (0 = the record gives none: range is then not applicable).
                     const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.areaUnits : e.reach);
@@ -783,6 +818,7 @@ namespace MFO::Iaus {
         x.selfIncoming = Estimate::IncomingOn(a_s, a_s.self);
         x.selfTtl = Estimate::Ttl(a_s.self.hp, x.selfIncoming);
         x.fleeRun = a_s.fleeRun;
+        x.closeRefusing = a_gate.resolved && a_gate.spellsOnClass && !Reposition::SurvivesClosing(a_s, a_t.worth);
         x.guard = a_s.guardHeld;
         for (const Combatant& a : a_s.allies)
             if (a.isPlayer && Readable(a)) { x.playerTtl = Estimate::Ttl(a.hp, Estimate::IncomingOn(a_s, a)); break; }

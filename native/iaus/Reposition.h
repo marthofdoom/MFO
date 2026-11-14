@@ -4,6 +4,7 @@
 //   Q-T2-3  the Mercenary's back-off (two or more foes press him)
 //   G18  the hidden step (hidden with no blow ready: close on a foe that does not detect him, quietly)
 // Standard types only (iaus/Snapshot.h), so the off-line harness and the simulator read the very same answers as the game.
+#include "iaus/ConsumableWorth.h"   // DeathWinFloor: the survival signal the close-spell rule reuses
 #include "iaus/Estimate.h"
 #include "iaus/Snapshot.h"
 
@@ -48,6 +49,22 @@ namespace MFO::Iaus::Reposition {
         return r;
     }
 
+    // ── THE CLOSE-SPELL RULE (marth 2026-11-13: "He shouldn't pick a close spell until he knows he can survive getting close") ───────────
+    // A CLOSE spell is one he must stand within a foe's strike distance to use: a touch spell, a concentration stream (Flames, Frostbite) or
+    // any spell whose range is under Estimate::StrikeDistance (two swing reaches: the same "a foe can hurt him here" distance IncomingOn
+    // and the Mercenary's press count use; the ONE threshold, derived from the data, no new constant). A casting class does not pick one
+    // (Generate::Casts) unless he SURVIVES closing: the time to live under EVERY foe that targets him (the Retreat family's threat TTL,
+    // Estimate::ThreatOn) leaves the cannot-win floor of the worth rule at zero (ConsumableWorth.h DeathWinFloor: the very line the
+    // potions use for "he cannot win by the numbers"). Nothing targets him = it passes (the TTL is unknown, the floor 0).
+    [[nodiscard]] inline bool CloseSpell(const SpellEntry& a_e, float a_meleeReach) {
+        if (a_e.touch || a_e.concentration) return true;
+        const float reach = a_e.selfDelivery ? a_e.areaUnits : a_e.reach;
+        return std::isfinite(reach) && reach > 0.0f && reach < Estimate::StrikeDistance(a_meleeReach);
+    }
+    [[nodiscard]] inline bool SurvivesClosing(const Snapshot& a_s, const WorthTable& a_w) {
+        return DeathWinFloor(Estimate::Ttl(a_s.self.hp, Estimate::ThreatOn(a_s, a_s.self)), a_w) <= 0.0f;
+    }
+
     // The entry of a spell in his hand (a form of the book), an offense / control spell that is kept; nullptr when none.
     [[nodiscard]] inline const SpellEntry* ScoreableEntry(const Book& a_book, std::uint32_t a_form) {
         if (a_form == 0) return nullptr;
@@ -75,8 +92,11 @@ namespace MFO::Iaus::Reposition {
         bool  touchChosen = false;                  // mixed, and the range is the touch spell's
         std::uint32_t touchForm = 0;                // the touch spell of his hands (the shortest), 0 = none
     };
+    // a_closeOk (the close-spell rule): false = a CLOSE spell is one he may not pick now, so it sets no range and no minimum; the range then
+    // comes from his other hand's spell, else the longest-ranged kept offense / control spell of the book (the mage back-off minimum is
+    // taken from his ranged spells, never zeroed by a stream he may not use). The default keeps every existing caller's answer.
     [[nodiscard]] inline HandRange HandsRange(const Book& a_book, std::uint32_t a_right, std::uint32_t a_other, float a_meleeReach,
-                                              bool a_touchSpent, std::uint32_t a_chosenCast) {
+                                              bool a_touchSpent, std::uint32_t a_chosenCast, bool a_closeOk = true) {
         HandRange h;
         Range touch, dist;
         const SpellEntry* tEntry = nullptr;
@@ -86,10 +106,20 @@ namespace MFO::Iaus::Reposition {
             if (form == 0) continue;
             const SpellEntry* e = ScoreableEntry(a_book, form);
             if (!e) continue;
+            if (!a_closeOk && CloseSpell(*e, a_meleeReach)) continue;
             const Range r = SpellRange(*e, a_meleeReach);
             if (!r.Known()) continue;
             if (e->touch) { if (!tEntry || r.desired < touch.desired) { touch = r; tEntry = e; } }
             else          { if (!dEntry || r.desired < dist.desired)  { dist = r;  dEntry = e; } }
+        }
+        if (!a_closeOk && !tEntry && !dEntry) {   // nothing usable in his hands: the book's longest ranged spell sets the range to keep
+            for (const SpellEntry& e : a_book.entries) {
+                if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
+                if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) continue;
+                if (CloseSpell(e, a_meleeReach)) continue;
+                const Range r = SpellRange(e, a_meleeReach);
+                if (r.Known() && r.desired > dist.desired) { dist = r; dEntry = &e; }
+            }
         }
         h.touchForm = tEntry ? tEntry->form : 0u;
         h.mixed = tEntry && dEntry;
@@ -100,6 +130,10 @@ namespace MFO::Iaus::Reposition {
     }
     [[nodiscard]] inline HandRange HandsRange(const Snapshot& a_s) {
         return HandsRange(a_s.book, a_s.equippedSpell, a_s.equippedSpellOther, a_s.meleeReach, a_s.touchSpent, a_s.chosenCast);
+    }
+    // The game's answer with the close-spell rule applied (a_closeOk = SurvivesClosing for a casting class; the caller says which class).
+    [[nodiscard]] inline HandRange HandsRange(const Snapshot& a_s, bool a_closeOk) {
+        return HandsRange(a_s.book, a_s.equippedSpell, a_s.equippedSpellOther, a_s.meleeReach, a_s.touchSpent, a_s.chosenCast, a_closeOk);
     }
 
     // His hands hold spells or nothing (no weapon drawn, or a staff): the SPELL PHASE of a mage or a hybrid.
@@ -131,7 +165,7 @@ namespace MFO::Iaus::Reposition {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return false;
         const Combatant* foe = RangeFoe(a_s);
         if (!foe) return false;
-        const Range r = HandsRange(a_s).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type
+        const Range r = HandsRange(a_s, SurvivesClosing(a_s, DefaultTuning().worth)).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type; a close spell he may not pick sets none
         if (!r.Known()) return false;
         a_out.foe = foe->id;
         a_out.radius = r.desired;
@@ -146,7 +180,7 @@ namespace MFO::Iaus::Reposition {
     // to back out whether or not it has him as its target when he has just cast the touch spell (Snapshot::touchSpent): "in and out quick".
     [[nodiscard]] inline float MageBackOffNeed(const Snapshot& a_s, const ClassGate& a_g) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return 0.0f;
-        const HandRange hr = HandsRange(a_s);
+        const HandRange hr = HandsRange(a_s, SurvivesClosing(a_s, DefaultTuning().worth));   // the minimum comes from his RANGED spells (close-spell rule)
         const Range& r = hr.range;
         if (!(r.minimum > 0.0f)) return 0.0f;
         const bool backingOut = hr.mixed && a_s.touchSpent;

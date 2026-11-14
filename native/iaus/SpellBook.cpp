@@ -696,6 +696,7 @@ namespace MFO::Iaus::SpellBook {
         g.weaponCrossbow = any || (def->weapons & W::kCrossbow) != 0;
         g.weaponStaff    = any || (def->weapons & W::kStaff) != 0;
         g.disengage   = (def->flags & Classes::Flag::kDisengage) != 0;
+        g.damage      = (def->flags & Classes::Flag::kDamage) != 0;
         g.sneakClass  = (def->flags & Classes::Flag::kSneakAlways) != 0;   // card G3: only a sneak class runs to hide
         // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no way out BY DESIGN; the
         // Blademaster (its T3, "Mercenary, more extreme") is NOT included: a default taken, asked in the questions file.
