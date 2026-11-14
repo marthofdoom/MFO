@@ -170,7 +170,7 @@ namespace MFO::Logistics::TheftGate {
         }
     }
 
-    GuardState GuardCheck(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road, bool a_onMain) {
+    GuardState GuardCheck(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road, bool a_onMain, bool a_peek) {
         if (!a_follower) return GuardState::Seen;
         const RE::FormID fid = a_follower->GetFormID(), sid = a_src ? a_src->GetFormID() : 0u;
         if (a_onMain) ScanGuards(fid, sid);   // the caller is ALREADY on the main thread (a posted lambda): answer now, never "pending"
@@ -183,14 +183,20 @@ namespace MFO::Logistics::TheftGate {
             auto& e = g_guard[GKey(fid, sid)];
             // Fresh = younger than the TTL, OR never read yet: the service round-robin (N x 133 ms per follower, over 2 s from 16 actives) can
             // revisit a follower later than the TTL, and an answer that was posted for that very reader must still be usable once.
-            // ONE VERDICT PER VISIT: a visit reads this key several times (StripCorpse, LootHere, Take). The first gate that USES an answer
-            // stamps readAt; the later reads of the same visit accept it for kGuardFresh from that stamp even when the answer itself is older
-            // than the TTL by then. It only re-uses a verdict a gate already acted on: it never turns "no answer" into a take.
+            // ONE VERDICT PER (follower, source) FOR kGuardFresh FROM ITS FIRST USE: a visit reads this key several times (StripCorpse,
+            // LootHere, Take). The first gate that USES an answer stamps readAt; the later reads of the same key accept it for kGuardFresh from
+            // that stamp even when the answer itself is older than the TTL by then (it is not tied to a visit boundary: a revisit within
+            // that window reuses it too). It only re-uses a verdict a gate already acted on: it never turns "no answer" into a take.
+            // PEEK (the approach prefetch) reads the cache but stamps nothing, so a take is never authorised by an answer taken at the
+            // approach position: the first arrival gate starts the visit.
             const bool freshAns = e.have && (now - e.at < kGuardFresh || (e.unread && now - e.at < kGuardUnreadMax));
             const bool sameVisit = e.have && e.readAt.time_since_epoch().count() != 0 && now - e.readAt < kGuardFresh;
             if (freshAns || sameVisit) {
-                have = true; seen = e.seen; how = e.how; guard = e.guard; e.unread = false;
-                if (!sameVisit) e.readAt = now;
+                have = true; seen = e.seen; how = e.how; guard = e.guard;
+                if (!a_peek) {
+                    e.unread = false;
+                    if (!sameVisit) e.readAt = now;
+                }
             }
             if (!have && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= kGuardRepost)) { e.posted = now; post = true; }
         }
@@ -198,6 +204,7 @@ namespace MFO::Logistics::TheftGate {
             if (MainThread::IsInstalled()) MainThread::Post([fid, sid]() { ScanGuards(fid, sid); });
             else                           ScanGuards(fid, sid);   // VR: no pump, the other main-thread reads fall back the same way
         }
+        if (a_peek) return GuardState::Pending;   // prefetch: the scan may be posted, nothing else (no stamp, no log, no refusal record)
         if (!have) {   // no fresh answer yet: the caller must retry next tick, never treat this as a verdict (no blocklist, no travel-fail)
             ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0;
             Say(a_follower, Road::Guard, a_src, nullptr, 0, nullptr, how, "guard", /*a_pending*/ true);

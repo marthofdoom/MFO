@@ -4212,11 +4212,13 @@ module. Module layout:
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
 - **LOOT GUARD-GATE FIX (2026-11-13, `fix/loot-guard-gate`; field: corpse/container looting took nothing, 212 "arrived -- nothing to take" / 0 looted):**
-  (1) `TheftGate.cpp` `GuardAns.readAt` = ONE VERDICT PER VISIT: the first gate that uses an answer stamps it, later reads of the same visit
-  (StripCorpse, `LootHere`, `Take`) accept it for 2 s from that stamp; it never turns "no answer" into a take. `TheftGate::GuardRefusalInfo()` = the
+  (1) `TheftGate.cpp` `GuardAns.readAt` = ONE VERDICT per (follower, source) for 2 s from its first use: the first gate that uses an answer stamps it,
+  later reads of the same key (StripCorpse, `LootHere`, `Take`) accept it for 2 s from that stamp (not tied to a visit boundary); it never turns
+  "no answer" into a take. The approach prefetch is `GuardCheck(.., a_peek=true)`: posts the scan only, never stamps / clears unread / logs. `TheftGate::GuardRefusalInfo()` = the
   calling thread's thread_local count + last state of non-Clear `GuardCheck` results. (2) `StripCorpse(.., a_leftWaiting, a_guardHeld)` reports a
-  guard hold (outer check OR any inner gate) separately from the player's dibs; Service.cpp's corpse arrival on `guardHeld` logs "guard check
-  pending" / "guard sees <fid>", never marks DONE and leaves the phase untouched (re-entered next tick, bounded by the excursion-cap slot sweep).
+  PENDING guard hold (outer check OR any inner gate) separately from the player's dibs; Service.cpp's corpse arrival on `guardHeld` logs "guard check
+  pending", never marks DONE and leaves the phase untouched (re-entered next tick, bounded by the excursion-cap slot sweep, which does NOT
+  MarkTravelFailed a guard-held body: `GuardHeldAt()`). A SEEN guard keeps the body (leftWaiting), logs "guard sees <fid>" and goes to Holding: the batch moves on.
   (3) Service.cpp Walking phase prefetches `GuardCheck` within 600 u so the answer is cached at arrival. (4) `TargetedByOtherSlot`
   (`LootTravel_internal.h`) skips a ref another follower's WALKING slot targets, in both LootNearby branches (log `busy=N`); within arm's reach exempt.
   (5) IAUS passes follow the dibs-tier order: `IsDibsTierCat` (`Logistics_internal.h`, the Category twin of `IsDibsTierLootOp`); pass 0 = the plan

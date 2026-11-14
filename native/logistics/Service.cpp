@@ -170,6 +170,13 @@ namespace MFO::Logistics {
         return DrinkBest(a_follower, a_which);
     }
 
+    // target FormID -> last tick a corpse arrival was held by a PENDING guard answer (worker-only, like the slots); the excursion-cap sweep
+    // reads it so a never-judged body is not MarkTravelFailed.
+    static std::unordered_map<RE::FormID, Clock::time_point>& GuardHeldAt() {
+        static std::unordered_map<RE::FormID, Clock::time_point> m;
+        if (m.size() > 64) m.clear();
+        return m;
+    }
     // MUSEUM PRIORITY (review F1): when the rule loop last REALLY fired a heal for a
     // follower (worker-serial like g_nextTick). A steady-clock stamp read against a 6 s
     // window, so a stale entry after a load or a reused FormID expires on its own.
@@ -276,7 +283,15 @@ namespace MFO::Logistics {
                 // un-penalized, the moment the player is done fighting (or the
                 // subsystem comes back on).
                 if (!off && !playerInCombat) {
-                    if (auto tp = tr.target.get()) MarkTravelFailed(tp->GetFormID(), now);
+                    if (auto tp = tr.target.get()) {
+                        // A body held by a PENDING guard answer was never judged: keep it (not blacklisted), say so.
+                        const auto gh = GuardHeldAt().find(tp->GetFormID());
+                        if (gh != GuardHeldAt().end() && now - gh->second < std::chrono::seconds(5))
+                            spdlog::info("[loot] {:08X}: excursion cap while the guard check on {:08X} was still pending -- body kept, not blacklisted",
+                                         tr.follower, tp->GetFormID());
+                        else
+                            MarkTravelFailed(tp->GetFormID(), now);
+                    }
                 }
                 Packages::LootTravelClear(playerInCombat ? "player combat"
                                           : (off ? "subsystem off" : "excursion cap"),
@@ -846,10 +861,10 @@ namespace MFO::Logistics {
                 }
 
                 // THEFT GATE PREFETCH: within ~600 u of the target, ask the guard question every tick (the 500 ms repost limit throttles the
-                // main-thread scan) so the answer is already cached when he arrives, instead of the first read being at arrival. The result is
-                // ignored here: the gates at arrival decide.
+                // main-thread scan) so the answer is already cached when he arrives, instead of the first read being at arrival. PEEK: it only posts
+                // the scan and stamps nothing (readAt / unread / log untouched), so the arrival gates decide and start the visit.
                 if (!gone && tref && dist <= 600.0f)
-                    (void)TheftGate::GuardCheck(a_follower, tref, LooseRef(tref) ? TheftGate::Road::Loose : TheftGate::Road::Corpse, false);
+                    (void)TheftGate::GuardCheck(a_follower, tref, LooseRef(tref) ? TheftGate::Road::Loose : TheftGate::Road::Corpse, false, /*a_peek*/ true);
 
                 // ARRIVAL is checked BEFORE the stall/deadline giveup: a follower
                 // standing ON the corpse has ARRIVED, not "stalled walking" -- and
@@ -1073,26 +1088,32 @@ namespace MFO::Logistics {
                     // tier is still under the player's dibs (#2): then DON'T mark it
                     // DONE, so the linger revisits it once the claim releases.
                     bool leftWaiting = false, guardHeld = false;
+                    const auto guardN0 = TheftGate::GuardRefusalInfo().n;
                     const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting, &guardHeld);
+                    const auto guardAfter = TheftGate::GuardRefusalInfo();
                     if (moved) MarkJustLooted(id, now);   // [L] glyph: CONFIRMED pickup
                     StuckAtOriginResetRun(id);   // a pickup breaks the 'consecutive' run
                     if (moved || !leftWaiting)
                         g_grabGrow.erase(tref->GetFormID());   // handled -> stale grow verdict
-                    // THEFT GATE (guard check): Pending = the answer is not back yet (the scan runs on main), Seen = a guard sees him or the body.
-                    // Either way this is a WAIT, never "nothing to take" and never DONE: the phase is untouched so this arrival is re-entered next
-                    // tick (TheftGate.h: Pending = RETRY). Bounded by the excursion cap (the slot sweep at the top of the service tick ends it).
+                    // THEFT GATE (guard check): Pending = the answer is not back yet (the scan runs on main): a WAIT, never "nothing to take" and
+                    // never DONE; the phase is untouched so this arrival is re-entered next tick (TheftGate.h: Pending = RETRY), bounded by the
+                    // excursion cap (the slot sweep at the top of the service tick ends it, WITHOUT blocklisting a guard-held body: s_guardHeldAt).
+                    // Seen = a guard sees him or the body: the body is KEPT (leftWaiting, never DONE) but the batch moves on (Holding), as before.
+                    if (!guardHeld && guardAfter.n != guardN0 && guardAfter.state == TheftGate::GuardState::Seen) {
+                        spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard sees {:08X} (follower or body), corpse kept, batch continues",
+                                     id, tref->GetFormID(), guardAfter.guard);
+                        tr.phase = TravelPhase::Holding;
+                        tr.lingerUntil = now + BatchLingerDur();
+                        return;
+                    }
                     if (guardHeld) {
+                        GuardHeldAt()[tref->GetFormID()] = now;
                         static std::unordered_map<RE::FormID, Clock::time_point> s_nextGuardHoldLog;
                         auto& nxtG = s_nextGuardHoldLog[id];
                         if (nxtG.time_since_epoch().count() == 0 || now >= nxtG) {
                             nxtG = now + std::chrono::seconds(3);
-                            const auto gr = TheftGate::GuardRefusalInfo();
-                            if (gr.state == TheftGate::GuardState::Seen)
-                                spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard sees {:08X} (follower or body), corpse kept, retrying until the excursion cap",
-                                             id, tref->GetFormID(), gr.guard);
-                            else
-                                spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard check pending, corpse kept, retrying next tick (until the excursion cap)",
-                                             id, tref->GetFormID());
+                            spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard check pending, corpse kept, retrying next tick (until the excursion cap)",
+                                         id, tref->GetFormID());
                         }
                         return;
                     }

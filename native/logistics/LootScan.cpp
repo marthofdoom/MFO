@@ -1050,10 +1050,14 @@ namespace MFO::Logistics {
                          bool* a_leftWaiting, bool* a_guardHeld) {
             // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): waiting, not done -- the body is revisited once no guard sees him.
             // ONE verdict per visit (TheftGate.cpp readAt): this outer check is the first read, the LootHere / Take gates below reuse it.
+            // The refusal counter assumes EVERY inner gate in this function (LootHere / Take) keys on the corpse (a_corpse): a gate on another
+            // key would still bump the thread's count and read as a hold on this body.
+            // a_guardHeld = ONLY a Pending answer (the caller retries the arrival); a Seen answer keeps the body (leftWaiting) and the batch
+            // moves on, the caller reads GuardRefusalInfo() for the log text.
             const auto refusalsBefore = TheftGate::GuardRefusalInfo().n;
             if (TheftGate::GuardInterim(a_follower, a_corpse, TheftGate::Road::Corpse)) {
                 if (a_leftWaiting) *a_leftWaiting = true;
-                if (a_guardHeld) *a_guardHeld = true;
+                if (a_guardHeld && TheftGate::GuardRefusalInfo().state == TheftGate::GuardState::Pending) *a_guardHeld = true;
                 return false;
             }
             bool moved = false, stopped = false;
@@ -1134,8 +1138,8 @@ namespace MFO::Logistics {
             if (!stopped && Errand::Smith::WantsMaterials(a_follower))
                 while (LootHere(a_follower, a_corpse, Category::SmithMats, RE::ActorValue::kNone)) moved = true;
             // A gate INSIDE this visit (LootHere / Take) refused: a guard hold, not an empty body. The caller must not mark it DONE.
-            if (TheftGate::GuardRefusalInfo().n != refusalsBefore) {
-                if (a_guardHeld) *a_guardHeld = true;
+            if (const auto gr = TheftGate::GuardRefusalInfo(); gr.n != refusalsBefore) {
+                if (a_guardHeld && gr.state == TheftGate::GuardState::Pending) *a_guardHeld = true;
                 if (a_leftWaiting) *a_leftWaiting = true;
             }
             return moved;
