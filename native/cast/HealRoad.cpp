@@ -264,6 +264,7 @@ namespace MFO::Actuation {
             RE::FormID recip = 0;
             long long  heldMs = 0;
             bool       approachBlocked = false;   // held through lost sight with the ch.24 approach unable to bring it back
+            bool       occludedHold    = false;   // sustained own-ray Occluded with no approach walking him back into sight (D)
             bool       approachStuck   = false;   // the approach gave up AT THE FLOOR (Holding, still unseen, 5 s): marth 2026-10-11
             if (const auto hit = g_healHands.find(fid); hit != g_healHands.end()) {
                 const auto& hh = hit->second.hand[a_hand];
@@ -274,6 +275,12 @@ namespace MFO::Actuation {
                 // age / in-flight gates are bypassed), exit token approach-blocked. Taken once; it re-claims later.
                 approachStuck = recip != 0 && hh.losHeld && APMFBridge::HealApproachStuckTake(fid, recip);
                 if (approachStuck) approachBlocked = true;
+                // D (field 11-13): the seat answers NO while his own ray reads Occluded; with no ch.24 approach standing to
+                // bring sight back, a run of kHealLosReleaseReadings Occluded readings releases the heal now (the hand is
+                // re-chosen next lap and PickAlly skips an Occluded ally for the new pick), instead of waiting out the bound.
+                occludedHold = recip != 0 && hh.losHeld && !APMFBridge::HealApproachStands(fid) &&
+                               Sightline::OccludedRun(fid, recip, kHealLosTrustSec, Sightline::Basis::Own) >=
+                                   kHealLosReleaseReadings;
                 // SEV-3 (review round 2): the exclusion lasts only while the ch.24 approach can still bring
                 // sight back. Blocked (EngineDropped / TargetLost / Leashed / never-live) or no approach at
                 // all (below ABI 19, seat refused): nothing is excluded and the plain bound applies.
@@ -284,7 +291,7 @@ namespace MFO::Actuation {
                 }
             }
             const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - stamp).count() - heldMs;
-            if (!approachStuck && ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return false;
+            if (!approachStuck && !occludedHold && ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return false;
             if (!approachStuck && ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs))
                 return false;
             // FIRE EVIDENCE THE CAST EVENT LAGS BEHIND (fix/mfo-heal-archer-dualcast, field 2026-10-12): the
@@ -307,7 +314,7 @@ namespace MFO::Actuation {
                 const bool waiting = CastChargedWaitingOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand));
                 const bool occluded = recip != 0 &&
                     Sightline::CheckWithin(fid, recip, kHealLosTrustSec, Sightline::Basis::Own) == Sightline::Verdict::Occluded;
-                if (!waiting || occluded) return false;
+                if ((!waiting || occluded) && !occludedHold) return false;
             }
             if (!approachStuck && ComposedCast::UndecidedFire(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs)) {
                 static std::unordered_map<std::uint64_t, Clock::time_point> s_noBoundLog;   // worker-serial
@@ -328,7 +335,13 @@ namespace MFO::Actuation {
                 default:                           return "Unknown";
                 }
             }();
-            if (approachStuck)
+            if (occludedHold)
+                spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {}: held {} ms with the own-ray verdict OCCLUDED "
+                             "for {}+ readings in a row (the seat's CheckStartCast answers NO) and no approach bringing "
+                             "sight back -- RELEASED (occluded), the hand is re-chosen next lap and the recipient is "
+                             "re-picked (rule {})",
+                             fid, HandWord(a_hand), a_spell, a_who, ageMs, kHealLosReleaseReadings, g_firingRule);
+            else if (approachStuck)
                 spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {}: held at the approach floor with the recipient "
                              "still out of sight for 5 s -- the approach is BLOCKED, heal RELEASED (approach-blocked), the "
                              "hand is re-chosen next lap and the heal may claim again (recipient LoS {}; rule {})",
@@ -350,7 +363,7 @@ namespace MFO::Actuation {
             g_neverFiredLatch[(static_cast<std::uint64_t>(fid) << 1) | a_hand] = { a_spell, false };
             HealHoldLapsed(fid, a_hand, "never-fired: the claim never fired within the never-observed bound (LoS-free)");
             ReleaseWithExit(a_follower, a_hand, a_spell, "it never fired within the never-observed window",
-                            approachBlocked ? "approach-blocked" : "never-fired");
+                            occludedHold ? "occluded" : approachBlocked ? "approach-blocked" : "never-fired");
             return true;
         }
 
@@ -918,6 +931,27 @@ namespace MFO::Actuation {
         } else if (onHand[kHandLeft].found && !onHand[kHandRight].found &&
                    !APMFBridge::IsHealCastDual(id) &&   // a dual-cast heal already holds the right hand
                    !RightHandIsWeaponHand(a_follower)) {
+            // B (field 11-13, 2 of 9 stalls): the engine builds ONE Restore caster per controller, and a SECOND hand's
+            // heal claim minted while the left hand holds a LIVE AI-road Restore claim never builds until the first
+            // closes (it sat 3.5-9 s unserved). So no second-hand claim is minted: this recipient is QUEUED (transparent,
+            // re-judged every lap) until the left claim ends, then takes the left. NOT the direct road: a direct heal
+            // stream beside a standing claim is the overlap the one-road-per-actor rule forbids (MFO-B176).
+            if (onHand[kHandLeft].claim) {
+                static std::unordered_map<RE::FormID, Clock::time_point> s_queueLog;   // worker-serial (like the road itself)
+                if (s_queueLog.size() > 64) s_queueLog.clear();
+                auto& last = s_queueLog[id];
+                const auto now = Clock::now();
+                if (now - last >= std::chrono::seconds(5)) {
+                    last = now;
+                    spdlog::info("[heal] {:08X} animated heal (spell {:08X}, rule {}) for {:08X} QUEUED -- the left hand "
+                                 "holds a live AI-road Restore claim for {:08X} and a second-hand claim would not build "
+                                 "until it closes; no second-hand claim is minted, he is served when the left frees",
+                                 id, spellID, g_firingRule, recipKey, onHand[kHandLeft].recipient);
+                }
+                return Outcome{ Result::FailedOther,
+                                "animated heal queued: the left hand's Restore claim is live (a second-hand claim would not build)",
+                                true };
+            }
             a_hand = kHandRight;
             auto& hh = g_healHands[id].hand[kHandRight];
             hh.displacing = 0;

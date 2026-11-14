@@ -391,13 +391,15 @@ first; the 09-21 paragraph after it is history and still describes the road for 
 with no combat controller, and with Harbinger absent.**
 - **Which road.** `ComposedCast::ChooseHealRoad` decides for every heal caller. A Heal-kind spell
   with Harbinger present and capable (ABI >= 5, `bHealAnimPackage` ON, `bEquipToCast` ON, a verified
-  runtime: 1.6.1170 or 1.5.97, where Harbinger installs the heal seats too) and a `CombatController`
-  on the follower goes through the ch.8b claim, cast by the follower's OWN AI with the real hand
+  runtime: 1.6.1170 or 1.5.97, where Harbinger installs the heal seats too) and an ACTIVE `CombatController`
+  (`ComposedCast::CombatAiLive`: pointer present and `!inactive`; Harbinger's ch.21 StartCombat builds it inactive and it builds no caster until the engine activates it, field 11-13) on the follower goes through the ch.8b claim, cast by the follower's OWN AI with the real hand
   animation. No controller (out of combat, an own-OOC follower in a party fight, a retreating
-  healer): the DIRECT road, unanimated, with a rate-limited `[heal] <id> <spell>: no combat controller
+  healer, an inactive controller): the DIRECT road, unanimated, with a rate-limited `[heal] <id> <spell>: no live combat AI (controller present|absent, inactive=...)
   -- DIRECT road` line (marth's D1), and a heal claim still standing on that follower is RELEASED
   first. A non-Self heal aimed at its own caster has no seat (Harbinger resolves a self claim only
   for Self delivery): direct, `[heal] ... WARN`. Harbinger absent: the direct road, as always.
+  A SECOND heal recipient is queued (no right-hand claim) while the left hand holds a live heal claim, and a held heal whose
+  recipient reads Occluded for `kHealLosReleaseReadings` own-ray readings with no ch.24 approach standing is released (`occluded`).
 - **Why the reversal is safe now.** The 09-21 "freeze" was MFO's direct Healing Hands on the INSTANT
   caster denied against MFO's own hand claim (`hand=?`), not the engine choosing another heal
   (`scratchpad/animheal-design.md` §2). Harbinger `d41ed43` stopped ch.8b gating the instant caster;
