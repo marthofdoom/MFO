@@ -59,8 +59,8 @@ RULE (fixed before any result of this driver was read; a number is ACCEPTED only
                copied) measured on the natural bracket of the built-in world: no band may end further outside its bound than the class's
                start table had it, beyond max(CARD_SLACK of the band's credit scale, 2 se of the difference).
   potions      marth 11-13: "potion spam is not allowed. Potions other than hsm are emergency options". Health / stamina / magicka restores
-               are normal tools; every other potion (a.drink_buff) is EMERGENCY ONLY. No potion may be drunk more than DRINK_FIGHT_CAP
-               health drinks per fight or DRINK_SHARE_CAP of the action time over all potions unless the start table already did (then it
+               are normal tools; every other potion (a.drink_buff) is EMERGENCY ONLY. No potion may be drunk more than DRINK_MIN_CAP
+               (8) drinks per minute, emergency drinks (EMERGENCY_HP_PCT) not counted, or DRINK_SHARE_CAP of the action time over all potions unless the start table already did (then it
                may not rise); non-restore potions may not rise at all, and stay under BUFF_SHARE_CAP.
   fixed        marth's School Circle (floor 0.35, shape 1.5, mastery bump 0.15, order, home schools) is never a knob. Pure 0 / 1
                gates and Step vetoes are rules, never knobs. A knob never moves outside its valid range (no negative offset, floor
@@ -369,7 +369,7 @@ CARD_ALIAS = {"melee-off": "melee", "ranged-off": "ranged", "mage-off": "mage"} 
 SCHEMA_RAW = {"melee_share_pct": "b.melee", "taunt_per_min": "taunt/min", "power_per_min": "pow/min", "overheal_pct": "overheal%", "overkill_pct": "overkill%",
               "double_heal_pct": "dblheal%", "heal_latency_s": "heal.s"}   # Results.h SchemaMetrics: the schema name of a band -> the --baseline name
 CARD_SLACK = 0.05        # PLACEHOLDER (no marth number): a band may end this much of the sim's credit scale (max(5, 0.5 bound), Playstyles.h BandCredit) further out
-DRINK_FIGHT_CAP = 1.5    # PLACEHOLDER: health drinks per fight (drinkH/f); the shipped cells sit at 0.1 to 0.3
+DRINK_MIN_CAP = 8.0      # marth 11-13: "Per fight is too strict already, spam is drinking like 8 per minute, I'd say emergencies would override that limit anyway": health drinks per MINUTE, all potions, emergency drinks not counted
 DRINK_SHARE_CAP = 8.0    # PLACEHOLDER: % of the follower's action time spent drinking, all potions (a.drink_*)
 BUFF_SHARE_CAP = 1.0     # PLACEHOLDER: % of action time on a non-restore potion (a.drink_buff): emergency only, so rare by construction
 EMERGENCY_HP_PCT = 50.0  # PLACEHOLDER: an emergency drink happens at or under this health %; read from buffDrinkAt% when the simulator reports it (it does not yet)
@@ -439,6 +439,20 @@ def pm_get(m, raw):
     return (0.0, 0.0) if raw.startswith("a.") else None
 
 
+def drink_rate(m, d=None, dur=None, at=None):
+    """Health drinks per minute that count against DRINK_MIN_CAP: drinkH/f over the fight length (dur.s), the sim's own counters. The sim
+    reports only the MEAN health % of a health drink (drinkAt%), so the emergency split is by that mean: a class whose drinks sit at or
+    under EMERGENCY_HP_PCT on average takes them in emergencies and counts 0; above it, all count. buffDrinkAt% (filed sim counter, a
+    per-drink health histogram) would make the split exact. Returns (rate, se) or None; the optional args feed --replay's changed-metric pairs."""
+    d, dur, at = (d or pm_get(m, "drinkH/f")), (dur or pm_get(m, "dur.s")), (at or pm_get(m, "drinkAt%"))
+    if d is None or dur is None or dur[0] <= 0:
+        return None
+    k = 60.0 / dur[0]
+    if at is not None and at[0] <= EMERGENCY_HP_PCT:
+        return (0.0, 0.0)
+    return (d[0] * k, d[1] * k)
+
+
 def card_potion_gate(cls, anchor, new):
     """The two gates every automatic acceptance passes: CLASS IDENTITY (the class's bands, measured on `new`, may not end further outside
     their bounds than on `anchor`, the class's start table) and POTIONS (no spam; non-restore potions emergency only). Returns
@@ -461,7 +475,7 @@ def card_potion_gate(cls, anchor, new):
     def drink_total(m):
         parts = [pm_get(m, k) for k in ("a.drink_health", "a.drink_stamina", "a.drink_magicka", "a.drink_buff")]
         return (sum(p[0] for p in parts), math.sqrt(sum(p[1] ** 2 for p in parts)))
-    checks = [("health drinks per fight", pm_get(a, "drinkH/f"), pm_get(n, "drinkH/f"), DRINK_FIGHT_CAP, False),
+    checks = [("non-emergency health drinks per minute", drink_rate(a), drink_rate(n), DRINK_MIN_CAP, False),
               ("all potions, % of action time", drink_total(a), drink_total(n), DRINK_SHARE_CAP, False),
               ("non-restore potions, % of action time (emergency only)", pm_get(a, "a.drink_buff"), pm_get(n, "a.drink_buff"), BUFF_SHARE_CAP, True)]
     for name, x, y, cap, strict in checks:
@@ -2003,12 +2017,21 @@ def replay(path):
                     va, vn = band_viol(ch[raw][0], lo, hi), band_viol(ch[raw][1], lo, hi)
                     if vn > va + CARD_SLACK * band_scale(lo, hi):
                         fails.append("%s %.1f -> %.1f (band line %d)" % (metric, ch[raw][0], ch[raw][1], ln))
-            for k, cap, strict in (("a.drink_buff", BUFF_SHARE_CAP, True), ("drinkH/f", DRINK_FIGHT_CAP, False)):
-                if k in ch:
-                    seen += 1
-                    o, nw = ch[k]
-                    if nw > o + 0.05 * cap and (strict or nw > cap):
-                        fails.append("potion %s %.2f -> %.2f" % (k, o, nw))
+            if "a.drink_buff" in ch:
+                seen += 1
+                o, nw = ch["a.drink_buff"]
+                if nw > o + 0.05 * BUFF_SHARE_CAP:
+                    fails.append("potion a.drink_buff %.2f -> %.2f" % (o, nw))
+            if "drinkH/f" in ch:   # per-minute rate needs the fight length and the mean drink health beside it; an unchanged metric is not in play_changes_natural
+                seen += 1
+                o, nw = ch["drinkH/f"]
+                durs = ch.get("dur.s", (None, None)); ats = ch.get("drinkAt%", (None, None))
+                ro = drink_rate({}, (o, 0.0), (durs[0], 0.0) if durs[0] else None, (ats[0], 0.0) if ats[0] is not None else None)
+                rn = drink_rate({}, (nw, 0.0), (durs[1], 0.0) if durs[1] else None, (ats[1], 0.0) if ats[1] is not None else None)
+                if ro is None or rn is None:
+                    detail.append("class card read %-10s drinks/min needs dur.s in play_changes_natural (unchanged or absent): not graded" % c)
+                elif rn[0] > ro[0] + 0.05 * DRINK_MIN_CAP and rn[0] > DRINK_MIN_CAP:
+                    fails.append("potion drinks/min %.2f -> %.2f" % (ro[0], rn[0]))
             v = "rejected" if fails else "accepted" if seen else "needs-metric"
             tl("class card read", v)
             detail.append("class card read %-10s %-12s visible band/potion metrics %d  %s" % (c, v, seen, "; ".join(fails)))

@@ -63,7 +63,7 @@ namespace Sim {
             // ── tier 2 ──
             { "knight", "the wall: stays on the player, taunts what attacks an ally, keeps his guard up and drops it only to attack, bashes; little circling, no flank",
               "leaves the line (short leash), backs off, swings heavy more than a quarter of the time (ch.18 cap 0.25)",
-              { atLeast("contact%", 60, "he stays in the fight's front"), atMost("pDist", 450, "short ch.23 leash: beside the player"), atLeast("b.block", 15, "marth Q2: an in-your-face tank only stops blocking to attack"),
+              { atLeast("contact%", 60, "he stays in the fight's front"), atMost("pDist", 450, "short ch.23 leash: beside the player"), atLeast("guard2%", 50, "marth 11-13: he blocks most of the attacks aimed at him (guard2% = share of blows that land on him under two or more own-taunted foes that met his guard)"),
                 atMost("powShare%", 25, "ch.18 power share max 0.25"), atLeast("taunt_per_min", 0.5, "the taunt is his first row"), atMost("retreat%", 1, "a wall does not back off") }, kPsNoRetreat, "C-BLOCK,C-C8,C-NOFLEE" },
             { "warrior", "pushes hard and head on, circles and flanks, presses with allies; power attacks a blocking or a stronger foe, at most one per 10 s per rule",
               "backs off; lets a blocking foe turtle",
@@ -99,7 +99,7 @@ namespace Sim {
             // ── tier 3, pure ──
             { "great-knight", "the knight made extreme: the wall with Shieldwall, taunts at three foes or more as well, heavier guard, shorter leash",
               "leaves the line; swings heavy more than a fifth of the time",
-              { atLeast("contact%", 60, "the front"), atMost("pDist", 450, "short leash"), atLeast("b.block", 20, "blocks even more than the knight"), atMost("powShare%", 20, "ch.18 cap 0.20"), atLeast("taunt_per_min", 0.8, "taunts allies' attackers and crowds"), atMost("retreat%", 1, "a wall") }, kPsNoRetreat, "C-BLOCK,C-C8" },
+              { atLeast("contact%", 60, "the front"), atMost("pDist", 450, "short leash"), atLeast("guard2%", 80, "marth 11-13: blocks even more than the knight (80)"), atMost("powShare%", 20, "ch.18 cap 0.20"), atLeast("taunt_per_min", 0.8, "taunts allies' attackers and crowds"), atMost("retreat%", 1, "a wall") }, kPsNoRetreat, "C-BLOCK,C-C8" },
             { "champion", "the warrior made extreme: heavy blows are his language (floor 40%, +20% power damage), same 10 s pacing per rule",
               "backs off",
               { atLeast("contact%", 55, "pushes hard"), atLeast("powShare%", 40, "ch.18 floor 0.40"), atMost("pow/min", 6.5, "the 10 s cooldown"), atMost("retreat%", 0.5, "never backs off") }, kPsNoRetreat, "C-C8,C-POWER" },

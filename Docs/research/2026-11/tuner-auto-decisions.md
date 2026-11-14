@@ -66,8 +66,8 @@ Facts used (all existing sim metrics, `--baseline` names): `a.drink_health`, `a.
 (health drinks per fight).
 
 * Restores (HMS) are normal tools: they may rise, but never into spam. Spam is measured two ways, both with PLACEHOLDER caps (marth gave no
-  number): health drinks per fight `DRINK_FIGHT_CAP = 1.5` (the shipped cells sit at 0.1 to 0.3), and the share of action time spent
-  drinking, all potions, `DRINK_SHARE_CAP = 8%`. A value is rejected when the metric ends over the cap AND rose beyond noise (`tol = max(5%
+  number): the share of action time spent
+  drinking, all potions, `DRINK_SHARE_CAP = 8%`, plus marth's 11-13 RULING "Per fight is too strict already, spam is drinking like 8 per minute, I'd say emergencies would override that limit anyway": `DRINK_MIN_CAP = 8` health drinks per MINUTE (`drinkH/f` / (`dur.s`/60)), emergency drinks not counted. The sim has no per-drink health split, so the emergency split uses the mean health % of a health drink (`drinkAt%`): at or under `EMERGENCY_HP_PCT` the drinks are emergencies and count 0, above it all count. `buffDrinkAt%` (filed sim counter) or a per-drink health histogram would make the split exact. The per-fight cap is gone. A value is rejected when the metric ends over the cap AND rose beyond noise (`tol = max(5%
   of the cap, 2 se)`). A start table already over a cap is not blamed, but may not be made worse.
 * Every other potion is emergency only: `a.drink_buff` may NOT rise beyond noise at all (whatever the cap), and must stay under
   `BUFF_SHARE_CAP = 1%` unless the start was already over it (then: may not rise). So no value can make the follower buff-drink more.
@@ -104,5 +104,13 @@ band / potion metrics among them; edge and gap decisions need the widened value'
 ## 5. What needs a human, what is a placeholder
 
 Nothing blocks a round. These are PLACEHOLDERS marth can overwrite with one number each (all at the top of `tune_driver.py`): `CARD_SLACK`
-0.05, `DRINK_FIGHT_CAP` 1.5, `DRINK_SHARE_CAP` 8, `BUFF_SHARE_CAP` 1, `EMERGENCY_HP_PCT` 50, `EDGE_ROUNDS` 3, and the -off cells' borrowed
+0.05, `DRINK_MIN_CAP` 8/min (marth), `DRINK_SHARE_CAP` 8, `BUFF_SHARE_CAP` 1, `EMERGENCY_HP_PCT` 50, `EDGE_ROUNDS` 3, and the -off cells' borrowed
 cards. One simulator change would make the emergency rule exact: `buffDrinkAt%` (section 2).
+
+## 6. Knight blocking (marth 11-13)
+
+"That may mean we are measuring the wrong thing" / "the idea is that they block most attacks that are aimed at them." The old bands
+`b.block` >= 15 (Knight) and >= 20 (Great Knight) measured the share of time spent in the block action. They became bands on `guard2%`
+(sim.cpp:110; counted World.h:573-574: the melee blows that LAND on him while two or more foes are taunted onto him, `inc2`, and how many met
+his raised guard, `guard2`). Knight `atLeast("guard2%", 50)`, Great Knight `atLeast("guard2%", 80)` (marth correction 11-13: 80, not 60).
+Caveat: it is a share of blows under a two-or-more taunt, not of every blow; with fewer than two foes taunted onto him it has no sample.
