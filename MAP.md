@@ -4212,6 +4212,7 @@ module. Module layout:
   route it through `IsHeadSlotMask` / `WornInLogicalSlot(0)`; `ArmorIsBetter`'s
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
+- **LOOT SCAN PERF (2026-11-13, `fix/loot-scan-perf`):** `LootScan.cpp` `LootNearby` replays ONE per-follower-per-`a_now` cell walk (`WalkSnap`, a function-static worker-only map keyed on follower; exact key = a_now, origin, radius, cell set) through the unchanged `scanOne` for every category; anything that makes the ref SEQUENCE category-dependent must bypass it. `TheftGate::CorpseGuardWaived` reads a cached ownership bool (`g_waive`, 5 s, `ComputeWaiver` runs on MAIN from `ScanGuards` or its own post; no answer = not waived + post). What breaks: a new per-category ref filter placed BEFORE the walk, or a caller using a different `a_now` per category (just misses the cache), or reading the corpse inventory in `CorpseGuardWaived` again (re-introduces the off-main map build). Open: `HasLoot` / `[arrowprobe]` still read inventories on the worker.
 - **LOOT GUARD-GATE FIX (2026-11-13, `fix/loot-guard-gate`; field: corpse/container looting took nothing, 212 "arrived -- nothing to take" / 0 looted):**
   (1) `TheftGate.cpp` `GuardAns.readAt` = ONE VERDICT per (follower, source) for 2 s from its first use: the first gate that uses an answer stamps it,
   later reads of the same key (StripCorpse, `LootHere`, `Take`) accept it for 2 s from that stamp (not tied to a visit boundary); it never turns

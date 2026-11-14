@@ -87,6 +87,42 @@ namespace MFO::Logistics::TheftGate {
 
         std::uint64_t GKey(RE::FormID a_f, RE::FormID a_src) { return (static_cast<std::uint64_t>(a_f) << 32) | a_src; }
 
+        // ── the corpse-ownership cache (CorpseGuardWaived's inventory half) ──
+        // The scan over a corpse's held copies for an ExtraOwnership used to run on the worker (GetInventory builds a full map) while the main
+        // thread can mutate that container. It now runs on MAIN (ComputeWaiver, from ScanGuards or its own post); the worker reads only this bool.
+        constexpr auto kWaiveFresh = std::chrono::seconds(5);   // a cached "no owned copy" answer is trusted this long (a corpse's copies change only by our own takes, which only remove)
+        struct WaiveAns { SClock::time_point at{}, posted{}; bool ownedFree = false; bool have = false; };
+        std::unordered_map<std::uint64_t, WaiveAns> g_waive;   // (follower, corpse) -> the last read; guarded by g_gMx
+
+        // MAIN THREAD (or the VR no-pump caller). Does the corpse hold any copy with an ExtraOwnership owner? Unreadable = owned (fail closed).
+        // a_force false: skip when the cached answer is still fresh (the ScanGuards path, which runs for every guard re-ask).
+        void ComputeWaiver(RE::FormID a_fid, RE::FormID a_corpseId, bool a_force) {
+            const auto key = GKey(a_fid, a_corpseId);
+            if (!a_force) {
+                std::scoped_lock lk(g_gMx);
+                auto it = g_waive.find(key);
+                if (it != g_waive.end() && it->second.have && SClock::now() - it->second.at < kWaiveFresh) return;
+            }
+            bool ownedFree = false;
+            if (auto* c = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_corpseId); c && c->As<RE::Actor>()) {
+                ownedFree = true;
+                auto inv = c->GetInventory();
+                for (const auto& [obj, data] : inv) {
+                    auto* e = data.second.get();
+                    if (!e || !e->extraLists) continue;
+                    for (auto* xl : *e->extraLists) {
+                        if (!xl) continue;
+                        if (auto* own = xl->GetByType<RE::ExtraOwnership>(); own && own->owner) { ownedFree = false; break; }   // one owned copy keeps every gate
+                    }
+                    if (!ownedFree) break;
+                }
+            }
+            std::scoped_lock lk(g_gMx);
+            if (g_waive.size() > 256) g_waive.clear();
+            auto& w = g_waive[key];
+            w.at = SClock::now(); w.ownedFree = ownedFree; w.have = true;
+        }
+
         // MAIN THREAD (or the VR no-pump caller). Does any live guard in the high-process list see the follower or the source?
         // Seen = Visible, or Unknown (the sight could not be measured: fail closed). Teammates and the player are never guards here.
         void ScanGuards(RE::FormID a_fid, RE::FormID a_srcId) {
@@ -125,9 +161,12 @@ namespace MFO::Logistics::TheftGate {
                     }
                 }
             }
-            std::scoped_lock lk(g_gMx);
-            if (g_guard.size() > 256) g_guard.clear();
-            g_guard[GKey(a_fid, a_srcId)] = ans;
+            {
+                std::scoped_lock lk(g_gMx);
+                if (g_guard.size() > 256) g_guard.clear();
+                g_guard[GKey(a_fid, a_srcId)] = ans;
+            }
+            if (src && src->As<RE::Actor>()) ComputeWaiver(a_fid, a_srcId, /*a_force*/ false);   // the corpse's ownership read rides the same main-thread visit
         }
     }
 
@@ -241,15 +280,23 @@ namespace MFO::Logistics::TheftGate {
         // In a town (the player's location OR the corpse's): the corpse guard check stays. A null location (wilderness) is no town: it waives.
         if (!pc || LocationTypes::TownAnchor(pc->GetCurrentLocation()) || LocationTypes::TownAnchor(a_corpse->GetCurrentLocation())) return false;
         if (a_corpse->GetOwner()) return false;
-        auto inv = a_corpse->GetInventory();
-        for (const auto& [obj, data] : inv) {
-            auto* e = data.second.get();
-            if (!e || !e->extraLists) continue;
-            for (auto* xl : *e->extraLists) {
-                if (!xl) continue;
-                if (auto* own = xl->GetByType<RE::ExtraOwnership>(); own && own->owner) return false;   // one owned copy keeps every gate
-            }
+        // The held-copies read is MAIN's (ComputeWaiver): the worker reads the cached bool and never builds the inventory map itself. No fresh
+        // answer = NOT waived (fail closed: the guard bar stays), and the read is posted (repost-limited), so the next ask has it.
+        const RE::FormID fid = a_follower->GetFormID(), cid = a_corpse->GetFormID();
+        bool have = false, ownedFree = false, post = false;
+        {
+            std::scoped_lock lk(g_gMx);
+            const auto now = SClock::now();
+            if (g_waive.size() > 256) g_waive.clear();
+            auto& w = g_waive[GKey(fid, cid)];
+            if (w.have && now - w.at < kWaiveFresh) { have = true; ownedFree = w.ownedFree; }
+            else if (w.posted.time_since_epoch().count() == 0 || now - w.posted >= kGuardRepost) { w.posted = now; post = true; }
         }
+        if (post) {
+            if (MainThread::IsInstalled()) MainThread::Post([fid, cid]() { ComputeWaiver(fid, cid, /*a_force*/ true); });
+            else                           ComputeWaiver(fid, cid, /*a_force*/ true);   // VR: no pump, the same fallback as the guard scan
+        }
+        if (!have || !ownedFree) return false;
         const std::string key = std::format("waive|{:08X}|{:08X}", a_follower->GetFormID(), a_corpse->GetFormID());
         {
             std::scoped_lock lk(g_logMx);

@@ -40,7 +40,9 @@ namespace MFO::Logistics::TheftGate {
     // CORPSE GUARD WAIVER (marth 2026-11-13, ClickUp 1dfcuabczbg): TRUE = a corpse whose contents carry NO ownership (no owner on the body, no
     // ExtraOwnership on any held copy), looted OUTSIDE a town (the player's location has no LocationTypes::TownAnchor): the engine never calls
     // that theft, so the witness check is skipped for the corpse (StripCorpse's gate and Take's, both). FALSE inside a town (the guard check
-    // stays: "Outside of towns") and for any corpse holding one owned copy (every crime gate stays, everywhere). Reads the inventory: worker.
+    // stays: "Outside of towns") and for any corpse holding one owned copy (every crime gate stays, everywhere). WORKER-callable and builds NO inventory
+    // map: the held-copies read is main's (ComputeWaiver, posted with the guard scan or on its own, cached 5 s per (follower, corpse)); the worker reads the
+    // cached bool. No fresh answer = FALSE (fail closed) and the read is posted, so the next ask (next tick) has it.
     bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse);
 
     // TRUE = the player stands in a town (or there is no player): LootNearby keeps its follower-level guard bar for every category. Outside a
