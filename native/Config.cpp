@@ -262,6 +262,7 @@ namespace MFO::Config {
             else if (a_key == "bApmfEquipAuthority") setB(g_apmfEquipAuthority); // APMF equip authority (declared worn set), inert without APMF v7+
             else if (a_key == "bTaunt")             setB(g_taunt);            // taunt master switch, INI-only, default OFF (86e3pyjk2)
             else if (a_key == "bTauntProbe")        setB(g_tauntProbe);       // taunt S0 passive probes, INI-only, default OFF
+            else if (a_key == "bStanceProbe")       setB(g_stanceProbe);      // ch.3 stance probe, passive, INI-only, default OFF
             else if (a_key == "bStealthProbe")      setB(g_stealthProbe);     // G2 stealth probe P1-P3, passive, INI-only, default OFF
             else if (a_key == "bWeighWeapons")      setB(g_weighWeapons);     // EXPERIMENTAL weapon weighting (ch.26 + ch.17 placements), INI-only, default OFF (batch D)
             // The key chain is split in two here: MSVC stops at ~128 nested else-ifs (C1061). Keys are unique, so a
@@ -441,6 +442,7 @@ namespace MFO::Config {
             g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+
             g_taunt              = false;   // Taunt gambits skipped this release (86e3pyjk2, INI-only)
             g_tauntProbe         = false;   // taunt S0 passive probes -- OFF by default (INI-only)
+            g_stanceProbe        = false;   // ch.3 stance probe -- OFF by default (INI-only)
             g_stealthProbe       = false;   // G2 stealth probe P1-P3 -- OFF by default (INI-only)
             g_weighWeapons       = false;   // default OFF: MFO equips weapons directly (weighting is parked, batch D)
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent

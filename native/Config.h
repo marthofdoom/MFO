@@ -357,6 +357,10 @@ namespace MFO::Config {
     // foe's group record of him, and every sneak hit with the expected multiplier. No claim, no engine write, not in the MCM.
     inline std::atomic<bool>  g_stealthProbe{ false };
 
+    // STANCE PROBE ([Debug] bStanceProbe, INI-only, default OFF): PASSIVE [stance-probe] line, out of combat, 30 s per follower:
+    // engine IsSneaking() beside the behaviour graph's "IsSneaking" variable (apmf/SneakClaims.cpp). No claim, no engine write, not in the MCM.
+    inline std::atomic<bool>  g_stanceProbe{ false };
+
     // TAUNT MASTER SWITCH (INI-only [Taunt] bTaunt, ClickUp 86e3pyjk2). Default OFF: marth 2026-10-13, Taunt failed its
     // field test, so a Taunt gambit is skipped (Taunt::Fire, transparent) this release. The release-time cleanup
     // (Taunt::Clear / Tick / ClearTauntClaims) runs regardless. Not in the MCM.
