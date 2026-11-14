@@ -944,7 +944,7 @@ def stage_edge():
                     if j["accepted"]:
                         e["verdict"] = "WIDER VALUE PASSES THE RULE: reported, never shipped (far from the shared curve)"
                         open_decision("%s %s: a value past the edge passes the rule" % (cls, row["knob"]), "shared %g, accepted (edge, %s) %g, widened %g: train %+.2f (se %.2f) over the accepted value, holdout %+.2f, cross-world mean %+.2f (se %.2f). Far from the shared curve: marth or the coordinator decides; the accepted %g stays written until then (summary.json stages.edge)"
-                                      % (cls, row["knob"], shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]), cls=cls)
+                                      % (shared, side, row["best"], v, d, se, j["steps"]["holdout"][0], j["steps"]["cross_world"]["mean/g3"][0], j["steps"]["cross_world"]["mean/g3"][1], row["best"]), cls=cls)
                     else:
                         e["verdict"] = "the accepted edge value holds (%s: %s)" % ("a wider value beat it on train only" if passed else "SMOKE: judged without a train pass", j["why"])
                 else:
