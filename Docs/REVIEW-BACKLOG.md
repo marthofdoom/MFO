@@ -3349,3 +3349,11 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 ### feat/iaus-loot r2 review (raised against 0066bbbf, Opus 5.5, 2026-11-13; log scratchpad agentlogs/review-iaus-loot-r2.md)
 - **R2-1 (SEV-4, FIXED on fix/soulgem-cap; ruling marth 2026-11-13: "cap em, but better is a weapon charge check a weapon with a charge below 50% triggers the looting of gems". Cap = LootTuning::soulGemTarget 3 via NeedScore, trigger = LootTuning::gemChargeTrigger 0.5; native/iaus/LootNeed.h:226 / native/logistics/LootNeed.cpp:143):** verbatim: "the soul-gem need can never be met. MFO has no road that recharges a weapon. So carried gems never lower weaponNeedsCharge. A follower holding a drained enchanted weapon takes every soul gem until the room factor stops him." Fix: count carried soul gems against a small target (soulGemTarget = 3, NeedScore), or the recharge road (ClickUp 1dfcuabd356). Not exercised on MEO lists.
 - **R2-2 (SEV-5, FIXED on fix/soulgem-cap: LowestChargeFrac checks every extra list; LootNeed.cpp:144):** verbatim: "GetEnchantmentCharge stops at the first extra list that has a charge, so in a stack of several copies a drained second copy is not seen. The result is a missed need, never a hoard."
+
+### feat/tuner-auto-decisions (Opus 5.5 review, 2026-11-13, against b59b0a1a)
+F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below, status OPEN, tools/iaus_sim/tune_driver.py:
+- **F7 (SEV-4, OPEN):** BUFF_SHARE_CAP is never checked on its own; the potion gate only refuses a rise of a.drink_buff beyond noise, so a start table already over the 1% cap is held, never brought under it.
+- **F8 (SEV-4, OPEN):** a second `--stages edge` run re-widens from the already widened value past EDGE_ROUNDS (the round count is not carried across runs).
+- **F9 (SEV-4, OPEN):** `SUMMARY["withheld"]` only accumulates across resumes; it is not cleared at recalib start, so a value withheld in an earlier run stays withheld after it would now hold.
+- **F10 (SEV-4, OPEN):** the Knight guard floor is checked per accepted value, not for the whole final table.
+- **F11 (SEV-5, OPEN):** an edge value rejected in a later round overwrites e["best"] / steps / verdict of the earlier accepted round.

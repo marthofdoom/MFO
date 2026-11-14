@@ -59,9 +59,12 @@ RULE (fixed before any result of this driver was read; a number is ACCEPTED only
                copied) measured on the natural bracket of the built-in world: no band may end further outside its bound than the class's
                start table had it, beyond max(CARD_SLACK of the band's credit scale, 2 se of the difference).
   potions      marth 11-13: "potion spam is not allowed. Potions other than hsm are emergency options". Health / stamina / magicka restores
-               are normal tools; every other potion (a.drink_buff) is EMERGENCY ONLY. No potion may be drunk more than DRINK_MIN_CAP
-               (8) drinks per minute, emergency drinks (EMERGENCY_HP_PCT) not counted, or DRINK_SHARE_CAP of the action time over all potions unless the start table already did (then it
-               may not rise); non-restore potions may not rise at all, and stay under BUFF_SHARE_CAP.
+               are normal tools; every other potion (a.drink_buff) is EMERGENCY ONLY. Checked: HEALTH drinks per minute under DRINK_MIN_CAP
+               (8; drinkH/f over the fight length, split into emergency and not by the MEAN drinkAt%: at or under EMERGENCY_HP_PCT the drinks
+               count 0, above it all count), and DRINK_SHARE_CAP of the action time over all potions (a.drink_*, which is what covers
+               magicka / stamina drinks: no per-minute count of those exists); each only when it ends over the cap and rose, unless the start
+               table already was over (then it may not rise). Non-restore potions may not rise at all (BUFF_SHARE_CAP is not checked on its
+               own). Sim counters drinkM/f, drinkS/f and buffDrinkAt% would make the per-minute cap exact for every potion.
   fixed        marth's School Circle (floor 0.35, shape 1.5, mastery bump 0.15, order, home schools) is never a knob. Pure 0 / 1
                gates and Step vetoes are rules, never knobs. A knob never moves outside its valid range (no negative offset, floor
                or level; a boost never under 1; a Piece point at 0 stays a veto and no other point may reach 0).
@@ -369,7 +372,7 @@ CARD_ALIAS = {"melee-off": "melee", "ranged-off": "ranged", "mage-off": "mage"} 
 SCHEMA_RAW = {"melee_share_pct": "b.melee", "taunt_per_min": "taunt/min", "power_per_min": "pow/min", "overheal_pct": "overheal%", "overkill_pct": "overkill%",
               "double_heal_pct": "dblheal%", "heal_latency_s": "heal.s"}   # Results.h SchemaMetrics: the schema name of a band -> the --baseline name
 CARD_SLACK = 0.05        # PLACEHOLDER (no marth number): a band may end this much of the sim's credit scale (max(5, 0.5 bound), Playstyles.h BandCredit) further out
-DRINK_MIN_CAP = 8.0      # marth 11-13: "Per fight is too strict already, spam is drinking like 8 per minute, I'd say emergencies would override that limit anyway": health drinks per MINUTE, all potions, emergency drinks not counted
+DRINK_MIN_CAP = 8.0      # marth 11-13: "Per fight is too strict already, spam is drinking like 8 per minute, I'd say emergencies would override that limit anyway": HEALTH drinks per MINUTE (drinkH/f over dur.s; magicka / stamina drinks are covered only by DRINK_SHARE_CAP; the emergency split is by the MEAN drinkAt%, so a class whose mean is at or under EMERGENCY_HP_PCT is not capped; sim counters drinkM/f, drinkS/f, buffDrinkAt% would make it exact)
 DRINK_SHARE_CAP = 8.0    # PLACEHOLDER: % of the follower's action time spent drinking, all potions (a.drink_*)
 BUFF_SHARE_CAP = 1.0     # PLACEHOLDER: % of action time on a non-restore potion (a.drink_buff): emergency only, so rare by construction
 EMERGENCY_HP_PCT = 50.0  # PLACEHOLDER: an emergency drink happens at or under this health %; read from buffDrinkAt% when the simulator reports it (it does not yet)
@@ -398,11 +401,18 @@ def load_cards():
         if m:
             cur = m.group(1)
             CARDS[cur] = {"line": n, "bands": []}
-            continue
+        elif re.match(r'\s*\};', line):
+            cur = None   # the end of the card table: nothing after it is a band of the last class
         if cur:
+            got = 0
             for b in re.finditer(r'at(Least|Most)\("([^"]+)", ([-0-9.]+)', line):
                 v = float(b.group(3))
                 CARDS[cur]["bands"].append((b.group(2), v if b.group(1) == "Least" else -INF, INF if b.group(1) == "Least" else v, n))
+                got += 1
+            calls = len(re.findall(r'\bat(?:Least|Most)\(', line))
+            if calls != got:   # a band this parser cannot read would silently leave the class's identity ungated
+                CARDS.clear()
+                raise RuntimeError("Playstyles.h:%d: %d band call(s), %d parsed (class %s): the card parser needs updating" % (n, calls, got, cur))
     return CARDS
 
 
@@ -459,17 +469,27 @@ def card_potion_gate(cls, anchor, new):
     {"ok", "fails", "card", "potion", "card_line"}; every number is kept for summary.json."""
     a, n = play_metrics(cls, anchor), play_metrics(cls, new)
     card = load_cards().get(CARD_ALIAS.get(cls, cls))
+    if card is None:   # a class with no card row would pass with nothing checked
+        raise RuntimeError("card_potion_gate: class %s (%s) has no row in Playstyles.h: its identity cannot be gated" % (cls, CARD_ALIAS.get(cls, cls)))
     fails, crow, prow = [], [], []
-    for metric, lo, hi, ln in (card["bands"] if card else []):
+    for metric, lo, hi, ln in card["bands"]:
         raw = SCHEMA_RAW.get(metric, metric)
         x, y = pm_get(a, raw), pm_get(n, raw)
-        if x is None or y is None:
+        if x is None and y is None:
             crow.append({"metric": metric, "line": ln, "verdict": "no sample"})
             continue
-        va, vn = band_viol(x[0], lo, hi), band_viol(y[0], lo, hi)
+        if y is None:   # the start had the metric and the new table has none: a class that stopped doing the thing is not the class
+            crow.append({"metric": metric, "line": ln, "start": round(x[0], 3), "new": None, "ok": False})
+            fails.append("card %s: %s %.2f -> no sample on the new table" % (CARD_ALIAS.get(cls, cls), metric, x[0]))
+            continue
+        if x is None:   # no sample at the start, one now: graded against the bare bound (outside_start = 0)
+            x, va = (float("nan"), 0.0), 0.0
+        else:
+            va = band_viol(x[0], lo, hi)
+        vn = band_viol(y[0], lo, hi)
         tol = max(CARD_SLACK * band_scale(lo, hi), 2.0 * math.sqrt(x[1] ** 2 + y[1] ** 2))
         bad = vn > va + tol
-        crow.append({"metric": metric, "line": ln, "band": [None if lo == -INF else lo, None if hi == INF else hi], "start": round(x[0], 3), "new": round(y[0], 3), "outside_start": round(va, 3), "outside_new": round(vn, 3), "tol": round(tol, 3), "ok": not bad})
+        crow.append({"metric": metric, "line": ln, "band": [None if lo == -INF else lo, None if hi == INF else hi], "start": None if x[0] != x[0] else round(x[0], 3), "new": round(y[0], 3), "outside_start": round(va, 3), "outside_new": round(vn, 3), "tol": round(tol, 3), "ok": not bad})
         if bad:
             fails.append("card %s: %s %.2f -> %.2f (band %s, %.2f outside, was %.2f, tolerance %.2f)" % (CARD_ALIAS.get(cls, cls), metric, x[0], y[0], "[%s, %s]" % ("-" if lo == -INF else lo, "-" if hi == INF else hi), vn, va, tol))
     def drink_total(m):
@@ -479,9 +499,15 @@ def card_potion_gate(cls, anchor, new):
               ("all potions, % of action time", drink_total(a), drink_total(n), DRINK_SHARE_CAP, False),
               ("non-restore potions, % of action time (emergency only)", pm_get(a, "a.drink_buff"), pm_get(n, "a.drink_buff"), BUFF_SHARE_CAP, True)]
     for name, x, y, cap, strict in checks:
-        if x is None or y is None:
+        if x is None and y is None:
             prow.append({"metric": name, "verdict": "no sample"})
             continue
+        if y is None:   # the start had a rate and the new table has none (no fight length): not gradable, so not accepted
+            prow.append({"metric": name, "cap": cap, "start": round(x[0], 3), "new": None, "ok": False})
+            fails.append("potions: %s %.2f -> no sample on the new table" % (name, x[0]))
+            continue
+        if x is None:   # no start sample: the new value is graded against the bare cap
+            x = (0.0, 0.0)
         tol = max(0.05 * cap, 2.0 * math.sqrt(x[1] ** 2 + y[1] ** 2))
         raised = y[0] > x[0] + tol
         bad = raised and (strict or y[0] > cap)   # a rise beyond noise is refused for a non-restore potion always, for a restore only when it ends over the cap; a start already over the cap is not made worse
@@ -495,7 +521,7 @@ def card_potion_gate(cls, anchor, new):
             fails.append("potions: a non-restore potion drunk at %.0f%% health (emergency is <= %g%%)" % (h, EMERGENCY_HP_PCT))
     else:
         prow.append({"metric": "health % at a non-restore drink", "verdict": "needs sim metric buffDrinkAt% (not reported yet): the rise + share cap above stand in"})
-    return {"ok": not fails, "fails": fails, "card": crow, "potion": prow, "card_line": card["line"] if card else None}
+    return {"ok": not fails, "fails": fails, "card": crow, "potion": prow, "card_line": card["line"]}
 
 
 def final_card_check(cls, anchor, fixed, kept):
@@ -1436,10 +1462,8 @@ def gap_search(st, order):
             SUMMARY["stages"]["gap"] = st
             save_summary()
         st["search"][c] = srch
-    if changed:   # the table moved: the joint gate again, and the gap of each class that took a value measured once more on the new table
+    if changed:   # the table moved: the whole-set card check first (it can drop a value), THEN the joint gate on the table that remains, then the gap of each class that took a value measured once more
         SUMMARY["stages"]["gap"] = st
-        stage_joint()
-        st["joint_after_search"] = SUMMARY["stages"]["joint"]["verdict"]
         final = final_curves()
         for c in sorted(set(changed)):
             if A.decisions == "auto":   # the set the gap search added, with the table as it now is, against his start table
@@ -1449,6 +1473,10 @@ def gap_search(st, order):
                 final = final_curves()
             else:
                 open_decision("class card read for %s (gap search)" % c, "accepted %s in the gap stage's (a) search: confirm none leaves his class card before writing" % " ".join(st["kept"][c]), cls=c)
+        stage_joint()
+        st["joint_after_search"] = SUMMARY["stages"]["joint"]["verdict"]
+        final = final_curves()
+        for c in sorted(set(changed)):
             for w in A.worlds:
                 n = st["cells"]["%s/%s" % (c, w)]["seeds"]
                 fin = gap_merge(gap_runs([(w, c, final, s, True) for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)]))
@@ -2145,8 +2173,15 @@ def main():
                 log("gap search moved the table: %s run again after it" % ",".join(again))
                 order[i:i] = again
     j = SUMMARY["stages"].get("joint", {}).get("verdict", "")
-    SUMMARY["ship"] = {"table": [c for c in final_curves() if c not in SUMMARY.get("withheld", [])] if not j.startswith("FAIL") else [], "withheld": SUMMARY.get("withheld", []),
-                       "joint": j or "not run", "note": "nothing a gate rejected is in `table`; a failed joint gate withholds the whole table"}
+    # the table ships only when the joint gate PASSED on exactly this table: a joint that did not run, or ran on a table that a later stage
+    # changed (the gap search's whole-set drop, recalib's withheld values), leaves ship.table empty with the reason
+    fin, wh, jt = final_curves(), SUMMARY.get("withheld", []), SUMMARY["stages"].get("joint", {})
+    need = "" if j == "PASS" and jt.get("table") == fin and not wh else (
+        "joint gate: %s" % (j or "not run") if j != "PASS" else
+        "the joint gate graded a different table than the final one (%d vs %d values): re-run the joint stage" % (len(jt.get("table", [])), len(fin)) if jt.get("table") != fin else
+        "recalib withheld %d value(s) after the joint gate graded the larger table: re-run the joint stage on the table without them" % len(wh))
+    SUMMARY["ship"] = {"table": fin if not need else [], "withheld": wh, "joint": j or "not run", "needs_joint_rerun": need,
+                       "note": "ship.table is non-empty only when the joint gate PASSED on exactly this table with nothing withheld; otherwise it is empty and needs_joint_rerun says why"}
     save_summary()
     EMIT.shutdown(wait=True)
     log("DONE: %s/summary.md, %d open decision(s), %d automatic decision(s)" % (A.out, len(SUMMARY["open_decisions"]), len(SUMMARY["auto_decisions"])))

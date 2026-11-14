@@ -96,10 +96,67 @@ class Logistics(unittest.TestCase):
         self.assertEqual(T.logi_class("ammo", "base:take", "orc:leave")[0], "a")
 
 
+class CardGateF4F5(unittest.TestCase):   # review F4 / F5 of b59b0a1a
+    def test_every_cell_has_a_card_and_parses(self):
+        T.CARDS.clear()
+        cards = T.load_cards()
+        for c in T.CELLS:
+            self.assertIn(T.CARD_ALIAS.get(c, c), cards, c)
+        self.assertTrue(all(cards[T.CARD_ALIAS.get(c, c)]["bands"] for c in ("knight", "mage")))
+
+    def test_missing_metric_is_graded_not_skipped(self):
+        saved = T.play_metrics
+        try:
+            # start has no taunt sample, the new table has one far outside the knight's bound: graded against the bare bound
+            T.play_metrics = lambda cls, curves: ({"contact%": (80.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1), "taunt/min": (0.0, 0.1)})
+            g = T.card_potion_gate("knight", ["a"], ["b"])
+            self.assertTrue(any("taunt_per_min" in f for f in g["fails"]), g["fails"])
+            # start present, new missing: FAIL
+            T.play_metrics = lambda cls, curves: ({"contact%": (80.0, 0.1), "taunt/min": (3.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1)})
+            g = T.card_potion_gate("knight", ["a"], ["b"])
+            self.assertTrue(any("taunt_per_min" in f and "no sample" in f for f in g["fails"]), g["fails"])
+        finally:
+            T.play_metrics = saved
+
+
 class GapSearchG1(unittest.TestCase):   # review G1 / G2 of 7e883a9a
+    def test_auto_gate_rejection_keeps_nothing(self):   # review F3 of b59b0a1a: decisions=auto, the card + potion gate rejects every value
+        T.CFG = dict(T.SMOKE, force=False)
+        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp(), decisions="auto")
+        T.SUMMARY["stages"] = {"classes": {"knight": {"live": [["attack.x.w", 1.0]], "base": []}}}
+        T.SUMMARY["open_decisions"] = []
+        T.SUMMARY["auto_decisions"] = []
+        names = ("all_knobs", "class_knobs", "final_curves", "jmany", "req", "paired", "judge", "widen", "log", "save_summary", "stage_joint", "gap_runs", "gap_merge", "card_potion_gate")
+        saved = {k: getattr(T, k) for k in names}
+        try:
+            T.all_knobs = lambda: ([], [])
+            T.class_knobs = lambda c, k: [("attack.x.w", "{c}:attack.x.w={v}", 1.0, [0.5, 2.0])]
+            T.final_curves = lambda: []
+            T.widen = lambda n, sh, tried, side: [4.0] if side == "up" else []
+            T.req = lambda w, c, cfg, curves, seeds: tuple(curves)
+            T.jmany = lambda reqs: list(reqs)
+            gain = {(): 0.0, ("knight:attack.x.w=0.75",): 0.5, ("knight:attack.x.w=1.5",): 0.1, ("knight:attack.x.w=4.0",): 0.9}
+            T.paired = lambda a, b: (gain[b] - gain[a], 0.05)
+            T.judge = lambda c, base, spec, forced=False: {"accepted": True, "why": "ACCEPTED", "steps": {"holdout": [1, 0.1], "cross_world": {"mean/g3": [1, 0.1]}}}
+            T.card_potion_gate = lambda cls, anchor, new: {"ok": False, "fails": ["card test: rejected"], "card": [], "potion": []}
+            T.log = lambda m: None
+            T.save_summary = lambda: None
+            T.stage_joint = lambda: T.SUMMARY["stages"].__setitem__("joint", {"verdict": "PASS"})
+            T.gap_runs = lambda tasks: []
+            T.gap_merge = lambda parts: {"fights": [(1, 0, "nat", 1.0, 1.0)]}
+            st = {"clusters": {"knight": {"rows": [{"class": "a", "families": ["attack"], "dU_per_fight": 1.0}]}}, "search": {}, "kept": {}, "cells": {"knight/builtin": {"seeds": 1}}}
+            changed = T.gap_search(st, ["knight"])
+        finally:
+            for k, v in saved.items():
+                setattr(T, k, v)
+        self.assertEqual(st["kept"].get("knight", []), [])   # nothing the gate rejected is added to the kept set
+        self.assertEqual(changed, [])
+        self.assertTrue(all(not r["accepted"] for r in st["search"]["knight"]["rows"]))
+        self.assertTrue(any(d["verdict"] == "rejected" for d in T.SUMMARY["auto_decisions"]))
+
     def test_in_range_judged_even_when_a_far_value_wins(self):
         T.CFG = dict(T.SMOKE, force=False)
-        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp())
+        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp(), decisions="ask")
         T.SUMMARY["stages"] = {"classes": {"knight": {"live": [["attack.x.w", 1.0]]}}}
         T.SUMMARY["open_decisions"] = []
         judged = []
