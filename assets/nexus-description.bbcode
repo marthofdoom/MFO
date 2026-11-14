@@ -27,6 +27,9 @@ A rule is just [b][Condition] -> [Action][/b]. An enemy drops below 30% health, 
 [b]Followers stock your museum.[/b] With Legacy of the Dragonborn installed, turn on LOTD awareness in the MCM and give a follower the Loot museum items gambit. They take the relics your museum still needs and nothing it already has, from chests, bodies and shelves. They count what you and the other followers already carry, so nobody doubles up. When they're carrying some, they walk to a nearby Museum Shipments crate and put them in, and LOTD delivers them as usual. They never sell or drop a relic the museum needs, and a relic you gave them yourself stays with them.
 
 
+[b]Sentient AI (beta).[/b] Turn it on for a follower and he stops reading a list and starts scoring everything he could do, then picks the best. It is built for Melee, Ranged, Mage and Auto, it was tuned in a simulator against the game's real enemies, and it hasn't had much field time, so call it a beta. He loots by need (the right ammo for his bow, potions, food, soul gems for a weapon that's running low) and drinks a potion only when it's worth the gold. Every number it uses is in a text file in [i]Data/SKSE/Plugins/MFO_Tuning[/i]. Edit one, save it, and the change is live a few seconds later. Turn it off and the follower runs his gambits like before.
+
+
 [b]They play nice with other mods.[/b] MFO runs on Harbinger, my framework that lets several mods drive the same follower without fighting over them. So a custom follower still loots, casts and retreats.
 
 
@@ -50,7 +53,7 @@ The bigger behaviours are toggles and sliders in the MCM ([b]Mod Configuration -
 
 [*]SkyUI[/*]
 
-[*]Harbinger[/*]
+[*]Harbinger (version 0.20.1 or newer)[/*]
 
 [*]MCM Helper (version 9 or newer)[/*]
 
@@ -128,6 +131,8 @@ Yes. All the state lives in the SKSE co-save and reverts cleanly, so you can add
 [*][b]marth[/b] for design, direction, and all in-game testing.[/*]
 
 [*][url=https://github.com/CharmedBaryon/CommonLibSSE-NG]CommonLibSSE-NG[/url], [url=https://github.com/Mutagen-Modding/Synthesis]Synthesis[/url] and Mutagen, SKSE, and Dear ImGui, the frameworks MFO is built on.[/*]
+
+[*][b]LandingCrew[/b] for the ideas behind Sentient AI, from their Auto mode and all-NPC utility AI mod.[/*]
 
 [*]The board fonts, [b]Cinzel[/b] and [b]EB Garamond[/b], are under the SIL Open Font License 1.1.[/*]
 
