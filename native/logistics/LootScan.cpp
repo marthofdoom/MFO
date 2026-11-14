@@ -425,6 +425,8 @@ namespace MFO::Logistics {
                                 // follower only (the pre-check needs it anyway; this saves the walk). The owner bars are replaced by
                                 // Steal::LooseBarred + the witness pre-check at arrival and at the write.
                                 if (!a_follower->IsSneaking()) break;
+                                // IAUS thief-need pass (LootNeed.cpp): only an owned item he NEEDS, scored; the act.steal ROW keeps the superset.
+                                if (g_iausStealScan && !IausNeedStealWants(a_follower, ref, base)) break;
                                 if (base->GetFormID() == kGold001Ref || IsCoinLoot(base) || IsCoinPurseFlora(ref, base) ||
                                     base->GetFormID() == kLockpickRef) {
                                     lootable = loose = true;
@@ -1052,6 +1054,7 @@ namespace MFO::Logistics {
             // The categories his inventory needs, best score first, under the SAME dibs gate and the same drain as the rows.
             const auto runIausStrip = [&]() {
                 for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                    if (cat == Category::Steal) continue;   // thief-need steals LOOSE refs only (the scan / excursion road), never a corpse
                     if (!TierReleased(cat, a_corpse, playerPos, a_now)) {
                         if (a_leftWaiting) *a_leftWaiting = true;
                         continue;
@@ -1136,8 +1139,10 @@ namespace MFO::Logistics {
             const bool iausLoot = IausLootOn(a_state);
             bool iausDone = false;
             const auto runIausExcursion = [&]() {
-                for (const Category cat : IausLootPlan(a_follower, a_state))
+                for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                    const IausStealScope stealScope(cat == Category::Steal);
                     if (LootNearby(a_follower, cat, a_now, RE::ActorValue::kNone, LootMode::kExcursion)) return true;
+                }
                 return false;
             };
             // LOOT RUN ORDERING (marth: no-dibs + closest first, dibs later in

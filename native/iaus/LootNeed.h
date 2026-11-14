@@ -108,6 +108,14 @@ namespace MFO::Iaus {
         // full need, a weaker one down to poisonWeakScale of it.
         int   poisonTarget = 3;
         float poisonPowerRef = 100.0f, poisonWeakScale = 0.8f;
+        // THIEF STEALS BY NEED (marth 2026-11-13: "A thief should consider stealing needed items depending on circumstances."). A Thief-line
+        // follower may take an OWNED loose item whose NEED score (the same score an unowned one gets) clears stealNeedMin AFTER the risk
+        // term, on top of the witness pre-check (Steal::Check) that decides every real take. ALL FOUR PLACEHOLDERS (sim-search later):
+        //   stealNeedMin       the need an owned item must keep after risk (above takeThreshold: free loot is cheaper than a crime).
+        //   stealRiskWeight    the most the risk term can subtract (at a bounty of stealBountyRef or more).
+        //   stealBountyPerGold the bounty a theft would cost per gold of the item's value (an estimate; the engine's own figure is not read).
+        //   stealBountyRef     the bounty at which the risk term reaches stealRiskWeight.
+        float stealNeedMin = 0.8f, stealRiskWeight = 0.3f, stealBountyPerGold = 1.0f, stealBountyRef = 500.0f;
     };
     // DefaultLootTuning() is the LIVE table: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/looting.txt) swaps edited ones in on the worker between
     // ticks. ShippedLootTuning() is never edited (a reload starts from it); LiveLootTuning() is the editable object (TuningFile only).
@@ -127,6 +135,8 @@ namespace MFO::Iaus {
             { "gold", &LootTuning::gold, false, kInf }, { "equipment", &LootTuning::equipment, false, kInf }, { "valuables", &LootTuning::valuables, false, kInf },
             { "jewelry", &LootTuning::jewelry, false, kInf }, { "gemChargeTrigger", &LootTuning::gemChargeTrigger, false, 1.0f }, { "buffScale", &LootTuning::buffScale, false, kInf },
             { "foodScale", &LootTuning::foodScale, false, kInf }, { "poisonPowerRef", &LootTuning::poisonPowerRef, true, kInf }, { "poisonWeakScale", &LootTuning::poisonWeakScale, false, kInf },
+            { "stealNeedMin", &LootTuning::stealNeedMin, false, 1.0f }, { "stealRiskWeight", &LootTuning::stealRiskWeight, false, kInf },
+            { "stealBountyPerGold", &LootTuning::stealBountyPerGold, false, kInf }, { "stealBountyRef", &LootTuning::stealBountyRef, true, kInf },
         };
         for (const F& k : kFloats) if (a_name == k.name) {
             if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kInf ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kInf ? "out of range: must be 0..1" : "out of range: must be >= 0"));
@@ -284,6 +294,25 @@ namespace MFO::Iaus {
         case LootKind::kCount:      buf[0] = '\0'; break;
         }
         v.take = v.score >= a_t.takeThreshold;
+        v.why = buf;
+        return v;
+    }
+
+    // THIEF STEALS BY NEED: a_need = the verdict an UNOWNED copy of the item would get (ScoreLootKind / ScoreConsumable), a_value = the gold value
+    // of what would be taken. Only a NEED-driven score may steal (the caller passes potions, lockpicks, soul gems; never a sale-value kind such
+    // as valuables, equipment or jewellery). risk = stealRiskWeight * clamp01(value * stealBountyPerGold / stealBountyRef); TAKE iff
+    // need - risk >= stealNeedMin. The witness pre-check (Steal::Check) is separate and decides whether the take really happens.
+    [[nodiscard]] inline LootVerdict ScoreStealNeed(const LootVerdict& a_need, float a_value, const LootTuning& a_t = DefaultLootTuning()) {
+        LootVerdict v;
+        const float bounty = std::max(a_value, 0.0f) * a_t.stealBountyPerGold;
+        const float risk = a_t.stealRiskWeight * (a_t.stealBountyRef > 0.0f ? LootClamp01(bounty / a_t.stealBountyRef) : 1.0f);
+        v.score = a_need.score - risk;
+        v.takeCount = a_need.takeCount;
+        v.take = a_need.take && v.score >= a_t.stealNeedMin;
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "need %.2f - risk %.2f (value %.0fg, est. bounty %.0fg) vs min %.2f; %s", static_cast<double>(a_need.score),
+                      static_cast<double>(risk), static_cast<double>(a_value), static_cast<double>(bounty), static_cast<double>(a_t.stealNeedMin),
+                      a_need.why.c_str());
         v.why = buf;
         return v;
     }

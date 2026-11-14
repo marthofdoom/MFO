@@ -871,6 +871,21 @@ namespace MFO::Logistics {
     //   LootConsumablesNeed: the Potions category's item filter while IAUS looting is on (LootHere / HasLoot): every ALCH, food and
     //     poisons included, scored by ScoreConsumable; the theft gate decides every take, as in LootPotions.
     bool IausLootOn(const FollowerState& a_state);
+    // THIEF STEALS BY NEED (marth 2026-11-13: "A thief should consider stealing needed items depending on circumstances."): IausLootPlan appends
+    //   Category::Steal for a Thief-line follower (his class ships an act.steal default) whose potions / lockpicks / soul gems need clears
+    //   LootTuning::stealNeedMin. The existing steal road does the rest (sneaking, Steal::LooseBarred, the witness pre-check at arrival and at
+    //   the write). While g_iausStealScan is set (IausStealScope, the three IAUS passes' LootNearby(Steal) calls) LootScan's Steal case asks
+    //   IausNeedStealWants per loose ref: an OWNED, NEEDED item only, scored by iaus/LootNeed.h ScoreStealNeed; every verdict logs [loot] thief-need.
+    //   The act.steal ROW's own scan (flag clear) is unchanged. Worker only.
+    inline bool g_iausStealScan = false;
+    struct IausStealScope {
+        bool prev;
+        explicit IausStealScope(bool a_on) : prev(g_iausStealScan) { g_iausStealScan = a_on; }
+        ~IausStealScope() { g_iausStealScan = prev; }
+        IausStealScope(const IausStealScope&) = delete;
+        IausStealScope& operator=(const IausStealScope&) = delete;
+    };
+    bool IausNeedStealWants(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base);
     std::vector<Category> IausLootPlan(RE::Actor* a_follower, const FollowerState& a_state);
     bool LootConsumablesNeed(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek);   // a_peek: no [iaus-loot] line (F8)
     //   IausLootInvDirty: drop the per-tick inventory read after a real take (F4). IausLootValuablesTake: the valuables category verdict

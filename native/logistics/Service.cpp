@@ -1534,6 +1534,7 @@ namespace MFO::Logistics {
         std::string iausLabel;
         const auto runIausLoot = [&]() {
             for (const Category cat : IausLootPlan(a_follower, a_state)) {
+                const IausStealScope stealScope(cat == Category::Steal);   // thief-need: LootScan's Steal case filters to owned needed items
                 if (!LootNearby(a_follower, cat, now)) continue;
                 iausLabel = std::string("IAUS loot ") + CatName(cat); MarkJustLooted(id, now);
                 return true;
