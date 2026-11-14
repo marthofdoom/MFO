@@ -3388,3 +3388,7 @@ F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below,
 - **F9 (SEV-4, OPEN):** `SUMMARY["withheld"]` only accumulates across resumes; it is not cleared at recalib start, so a value withheld in an earlier run stays withheld after it would now hold.
 - **F10 (SEV-4, OPEN):** the Knight guard floor is checked per accepted value, not for the whole final table.
 - **F11 (SEV-5, OPEN):** an edge value rejected in a later round overwrites e["best"] / steps / verdict of the earlier accepted round.
+
+### fix/loot-scan-perf (Opus 5.5 review, 2026-11-13, against 55b80011)
+- **(SEV-4, design):** the worker reads mutable container inventories (HasLoot LootScan.cpp:597, [arrowprobe] :611, PickLocks GetInventoryCounts :572, Take Analyse/RemoveItem, CorpseGuardWaived). Documented #72 worker-transfer pattern, no field crash attributed. Redesign as ONE per-tick per-ref main-side inventory snapshot shared across categories (also the next perf lever: HasLoot builds a GetInventory map per corpse/container 6-7x per follower per tick). The branch's main-side waiver move was reverted: it mirrored the race (main read vs MFO's own worker RemoveItem) instead of removing it.
+- **(SEV-5):** [arrowprobe] is diagnostic only; drop it.
