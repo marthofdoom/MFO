@@ -3396,3 +3396,4 @@ SEV-2 findings 1, 2 and SEV-3 findings 3-5 were FIXED in the fix round. Deferred
 - **(SEV-4, d):** verbatim: "the close-spell refusal is counted in droppedTarget."
 - **(SEV-4, e):** verbatim: "prevRight / prevLeft are captured only on the right-hand gambit path, a pre-drawn AI dagger may be 'restored', and the restore placement can sit 120 s."
 - **(SEV-4, f):** verbatim: "the static per-follower log maps are never cleared."
+- **(SEV-5, g, against aaacee6e):** verbatim: "s_spellsHold (Candidates.cpp) is not erased by Candidates::Forget; IausRetreatSelfHeal's Build resets the latch out of combat (harmless)."

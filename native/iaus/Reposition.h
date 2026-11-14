@@ -182,11 +182,13 @@ namespace MFO::Iaus::Reposition {
         float         radius = 0.0f;
         bool          far = false;
     };
-    [[nodiscard]] inline bool RangeToHold(const Snapshot& a_s, const ClassGate& a_g, Close& a_out) {
+    // a_closeOk: Generated::closeRefusing's answer inverted (the ONE source of truth for "a close spell is refused now": Generate.cpp
+    // CanCastOffense-based, affordable / castable aware). Default true = no spell is refused (the sim, the harness, a non-casting class).
+    [[nodiscard]] inline bool RangeToHold(const Snapshot& a_s, const ClassGate& a_g, Close& a_out, bool a_closeOk = true) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return false;
         const Combatant* foe = RangeFoe(a_s);
         if (!foe) return false;
-        const Range r = HandsRange(a_s, !a_g.casterLine || SurvivesClosing(a_s, DefaultTuning().worth)).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type; a close spell he may not pick sets none
+        const Range r = HandsRange(a_s, a_closeOk).range;   // Q-I-2: the shortest range of the equipped spells of one delivery type; a close spell he may not pick sets none
         if (!r.Known()) return false;
         a_out.foe = foe->id;
         a_out.radius = r.desired;
@@ -199,9 +201,9 @@ namespace MFO::Iaus::Reposition {
     // inside the minimum. The need is how far inside (at the foe's feet = 1).
     // Q-I-2: with a touch spell and a distance spell in his hands and the distance spell's range kept, a foe inside the minimum is a reason
     // to back out whether or not it has him as its target when he has just cast the touch spell (Snapshot::touchSpent): "in and out quick".
-    [[nodiscard]] inline float MageBackOffNeed(const Snapshot& a_s, const ClassGate& a_g) {
+    [[nodiscard]] inline float MageBackOffNeed(const Snapshot& a_s, const ClassGate& a_g, bool a_closeOk = true) {
         if (!SpellPhase(a_s) || (a_g.resolved && !a_g.spellsOnClass)) return 0.0f;
-        const HandRange hr = HandsRange(a_s, !a_g.casterLine || SurvivesClosing(a_s, DefaultTuning().worth));   // the minimum comes from his RANGED spells (close-spell rule)
+        const HandRange hr = HandsRange(a_s, a_closeOk);   // the minimum comes from his RANGED spells (close-spell rule)
         const Range& r = hr.range;
         if (!(r.minimum > 0.0f)) return 0.0f;
         const bool backingOut = hr.mixed && a_s.touchSpent;
@@ -236,8 +238,8 @@ namespace MFO::Iaus::Reposition {
     }
     // The larger of the two reasons (a Mercenary is never in the spell phase, a mage is never a Mercenary; the max is for a class
     // that is both one day).
-    [[nodiscard]] inline float BackOffNeed(const Snapshot& a_s, const ClassGate& a_g) {
-        return (std::max)(MageBackOffNeed(a_s, a_g), PressedBackOffNeed(a_s, a_g));
+    [[nodiscard]] inline float BackOffNeed(const Snapshot& a_s, const ClassGate& a_g, bool a_closeOk = true) {
+        return (std::max)(MageBackOffNeed(a_s, a_g, a_closeOk), PressedBackOffNeed(a_s, a_g));
     }
 
     // ── G18: the hidden step ─────────────────────────────────────────────────────────────────────────────────────────────────

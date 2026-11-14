@@ -260,7 +260,7 @@ namespace MFO::Iaus {
             // BACK OFF (batch I): a short H3 run to a point farther from the foes, then he fights on. A mage inside the minimum range of the spell
             // in his hand (H4), or a Mercenary two or more foes press (Q-T2-3). Only with the road open and a fresh point. Not during a held guard.
             if (s.backOffRoad && s.backOffPoint && !x.guard) {
-                const float need = Reposition::BackOffNeed(s, x.g);
+                const float need = Reposition::BackOffNeed(s, x.g, !x.closeRefusing);   // the close-spell rule's one answer
                 if (need > 0.0f) {
                     Candidate c = x.Make(Family::BackOff, nullptr);
                     c.form = Reposition::kBackOffForm;
@@ -567,9 +567,11 @@ namespace MFO::Iaus {
         // Does he carry a kept offense / control spell he can pay for and cast with a free hand on a foe on the board? (the Casts() tests)
         // a_costScale 1 = affordable now; > 1 = the pool must clear cost x scale (the spellsHold latch's re-gate margin).
         // a_nonCloseOnly: count only spells that are not close (the fallback test that decides closeRefusing).
-        bool CanCastOffense(const Ctx& x, float a_costScale, bool a_nonCloseOnly) {
+        // a_costOnly: the held latch's RELEASE test: any kept offense / control spell he can pay for with a free hand, whatever else bars it now
+        // (guard, holdQuiet, a foe's lingering effect, close refusal, flee run): only the magicka cost edge may release a hold, never a lull.
+        bool CanCastOffense(const Ctx& x, float a_costScale, bool a_nonCloseOnly, bool a_costOnly = false) {
             const Snapshot& s = x.s;
-            if (x.fleeRun) return false;
+            if (!a_costOnly && x.fleeRun) return false;
             const bool poolOk = std::isfinite(s.self.mpMax) && s.self.mpMax > 0.0f;
             const float pool  = Finite(s.self.mp, 0.0f);
             const bool anyBusy  = s.handBusyLeft || s.handBusyRight;
@@ -578,9 +580,10 @@ namespace MFO::Iaus {
                 if (e.source != SpellSource::Spell || e.drop != Prune::Drop::Keep) continue;
                 if (e.nature != Prune::Nature::Offense && e.nature != Prune::Nature::Control) continue;
                 if (e.twoHanded ? anyBusy : bothBusy) continue;
-                if (e.cost > 0.0f && (!poolOk || !Prune::Affordable(e.cost * a_costScale, pool))) continue;
-                if (CastBarred(x, e)) continue;
+                if (e.cost > 0.0f && (!poolOk || !Prune::Affordable((std::min)(e.cost * a_costScale, s.self.mpMax), pool))) continue;   // the margin never exceeds the pool's own size (an expensive book can latch)
+                if (!a_costOnly && CastBarred(x, e)) continue;
                 const bool close = Reposition::CloseSpell(e, s.meleeReach);
+                if (a_costOnly) return true;   // the latch's release test: only the pool and a free hand count
                 if (close && (a_nonCloseOnly || CloseRefused(x, e))) continue;   // a spell he may not pick is no reason to keep the dagger away
                 for (const Combatant* foe : x.top)
                     if (!FoeBarred(e, *foe)) return true;
@@ -591,6 +594,7 @@ namespace MFO::Iaus {
         // ── posture: the categories he carries, against the foe he is fighting ───────────────────────────
         void Postures(Ctx& x, const std::vector<const Combatant*>& a_foes) {
             const Snapshot& s = x.s;
+            x.out.spellsHold = s.spellsHoldPrev;   // an early return below is no verdict: the latch carries over (only the pool releases it)
             if (x.guard) return;   // a held guard: no weapon change (cast/Fire.cpp refuses the equips)
             const Kit&      k = s.book.kit;
             const Combatant* tgt = nullptr;
@@ -608,7 +612,7 @@ namespace MFO::Iaus {
             // Interim: the sim tunes the real "spells" posture candidate (REVIEW-BACKLOG / MAP IAUS posture).
             // LATCH (review finding 4): once held he stays held until the pool no longer pays the cheapest kept offense; once released he is
             // held again only when the pool clears kHoldRegate x its cost, so the magicka cost edge never flips a dagger in and out.
-            const bool spellsHold = x.casterLine && CanCastOffense(x, s.spellsHoldPrev ? 1.0f : kHoldRegate, false);
+            const bool spellsHold = x.casterLine && (s.spellsHoldPrev ? CanCastOffense(x, 1.0f, false, true) : CanCastOffense(x, kHoldRegate, false));
             x.out.spellsHold = spellsHold;
             const auto posture = [&](PostureKind a_kind, RoleTag a_role, bool a_classAllows) {
                 Candidate c = x.Make(Family::Posture, nullptr);   // the posture Key's target stays 0 (I2 convention)
@@ -904,6 +908,7 @@ namespace MFO::Iaus {
         // The close-spell rule (needs x.top, holdQuiet, guard): refused only when he has a non-close castable offense to fall back to.
         // x.closeRefusing is still false here, which is what the fallback question needs.
         x.closeRefusing = x.casterLine && !Reposition::SurvivesClosing(a_s, a_t.worth) && CanCastOffense(x, 1.0f, true);
+        x.out.closeRefusing = x.closeRefusing;
 
         Swings(x);
         Holds(x);

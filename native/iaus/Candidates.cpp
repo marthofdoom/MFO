@@ -559,7 +559,8 @@ namespace MFO::Iaus::Candidates {
                 std::vector<RE::FormID> foes;
                 foes.reserve(sn.foes.size());
                 for (const auto& f : sn.foes) foes.push_back(f.id);
-                if (Reposition::BackOffNeed(sn, a_out.gate) > 0.0f)
+                // the point is prepared if the need stands either way: Generate's close-spell answer (Ctx::closeRefusing) is not known yet and decides which
+                if (Reposition::BackOffNeed(sn, a_out.gate, true) > 0.0f || Reposition::BackOffNeed(sn, a_out.gate, false) > 0.0f)
                     sn.backOffPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::BackOff);
                 else if (const Combatant* tgt = Reposition::StepTarget(sn))
                     sn.stepPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::Step, tgt->id, sn.drawn == PostureKind::Bow);

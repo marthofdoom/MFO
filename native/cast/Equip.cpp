@@ -1078,8 +1078,8 @@ namespace MFO::Actuation {
         // and the sheathe only on a stand-down.
         if ((a_standDown || silverMain != 0) && (hold.left || hold.right) && MainThread::IsInstalled()) {
             // CASTER STAND-DOWN (StandDownCasterHands marked it): the hands go back to what he held before the hold (a weapon not his is skipped).
-            const RE::FormID rightID = silverMain ? silverMain
-                                     : hold.casterStandDown ? hold.prevRight
+            const RE::FormID rightID = hold.casterStandDown ? hold.prevRight   // checked first: prevRight already excludes the hold's own weapon
+                                     : silverMain ? silverMain
                                      : (hold.right ? hold.right->GetFormID() : 0);
             const RE::FormID leftID  = hold.casterStandDown ? hold.prevLeft
                                      : (a_standDown && hold.left) ? hold.left->GetFormID() : 0;
