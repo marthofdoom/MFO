@@ -3364,3 +3364,8 @@ Opus 5.5 review r2 of 665c3f46 (`feat/offclass-storage`) vs 17d358c8. Status: OP
 ### fix/loot-guard-gate (Opus 5.5 review 2, 2026-11-13, against d2c1661d)
 - **(SEV-5):** verbatim: "5 s window vs the real cadence: a held body's stamp is only refreshed on that follower's own turn, N x 133 ms. That is about 2.1 s at 16 active followers, so 5 s holds up to about 37. Derive the window from the period x active count instead of a literal." (Service.cpp GuardHeldAt, cap sweep ~:276)
 - **(SEV-5, round 1):** verbatim: "a future inner gate on a different key would wrongly mark the body as held" (StripCorpse refusal counter; comment added at LootScan.cpp ~:1050).
+
+### fix/heal-claim-gates (Opus 5.5 review, 2026-11-13, against dc930d69)
+- **(SEV-3):** verbatim: "The queue never compares g_firingRule with the rank of the rule that owns the left claim. A dying ally from a higher-ranked rule waits behind a lower-ranked concentration heal on a healthy ally... when the queued rule outranks the left claim, release the left claim so the higher-ranked recipient gets it."
+- **(SEV-3 follow-up):** verbatim: "DirectSelf.cpp:186, DirectTarget.cpp:203 and Auto.cpp:667 are combat-table-only... the same inactive-controller stall probably applies to offense and buff concentration claims."
+- **(SEV-4):** verbatim: "each change to inactive releases the standing claim through the existing no-controller branch... watch for inactive=true lines in the next field run."

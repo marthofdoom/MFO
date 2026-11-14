@@ -840,10 +840,10 @@ namespace MFO::ComposedCast {
             const auto standing = APMFBridge::GetHealCastSpell(fid);
             if (standing != 0) {
                 // BOTH hands (feat/mfo-perhand-heal); MFO-B179: End alone left the lock naming it
-                Actuation::ReleaseHealClaimsAllHands(fid, "the combat controller is gone");
-                spdlog::info("[heal] {:08X} combat controller gone -- the standing heal claim "
+                Actuation::ReleaseHealClaimsAllHands(fid, inactive ? "the combat controller is INACTIVE" : "the combat controller is gone");
+                spdlog::info("[heal] {:08X} combat controller {} -- the standing heal claim "
                              "(spell {:08X}) is RELEASED; heals take the direct road until the "
-                             "follower is in combat again", fid, standing);
+                             "follower is in combat again", fid, inactive ? "INACTIVE" : "gone", standing);
             }
             if (RoadLogDue(fid, spellID, HealRoad::DirectNoCombat))
                 spdlog::info("[heal] {:08X} {} ({:08X}): no live combat AI (controller {}, inactive={}) -- DIRECT road, "

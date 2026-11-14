@@ -238,6 +238,13 @@ namespace MFO::Actuation {
         struct NeverFiredLatch { RE::FormID spell = 0; bool logged = false; };
         std::unordered_map<std::uint64_t, NeverFiredLatch> g_neverFiredLatch;   // worker-serial (#4)
 
+        // THE HEAL TWIN OF g_unsightedCharge (CastOn.cpp): a heal released for sustained Occluded (NeverFiredRelease,
+        // exit token `occluded`) is not re-claimed for the same (spell, recipient) while he still reads Occluded, so the
+        // release is not a one-or-two-lap churn. Keyed by follower; `logged` = the transparent line was said. Cleared in
+        // ResetHealRoad. Worker-serial (#4).
+        struct OccludedBlock { RE::FormID spell = 0; RE::FormID recipient = 0; bool logged = false; };
+        std::unordered_map<RE::FormID, OccludedBlock> g_healOccludedBlock;
+
         // THE NEVER-OBSERVED BOUND ON A RENEWAL (review F2 on 9895a53, SEV-2). A claim this
         // file renews without the rule re-asking for it (the companion, and the RIGHT hand's
         // in-flight refresh, which has no Prepare repair behind it) must not be renewed
@@ -276,11 +283,12 @@ namespace MFO::Actuation {
                 approachStuck = recip != 0 && hh.losHeld && APMFBridge::HealApproachStuckTake(fid, recip);
                 if (approachStuck) approachBlocked = true;
                 // D (field 11-13): the seat answers NO while his own ray reads Occluded; with no ch.24 approach standing to
-                // bring sight back, a run of kHealLosReleaseReadings Occluded readings releases the heal now (the hand is
+                // bring sight back, kHealLosReleaseMs of occluded time since this claim releases the heal now (the hand is
                 // re-chosen next lap and PickAlly skips an Occluded ally for the new pick), instead of waiting out the bound.
+                // Only occluded time since THIS claim's stamp counts (losHeld / losSince carry over a re-claim).
                 occludedHold = recip != 0 && hh.losHeld && !APMFBridge::HealApproachStands(fid) &&
-                               Sightline::OccludedRun(fid, recip, kHealLosTrustSec, Sightline::Basis::Own) >=
-                                   kHealLosReleaseReadings;
+                               std::chrono::duration_cast<std::chrono::milliseconds>(now - std::max(hh.losSince, stamp)).count() >=
+                                   kHealLosReleaseMs;
                 // SEV-3 (review round 2): the exclusion lasts only while the ch.24 approach can still bring
                 // sight back. Blocked (EngineDropped / TargetLost / Leashed / never-live) or no approach at
                 // all (below ABI 19, seat refused): nothing is excluded and the plain bound applies.
@@ -314,7 +322,7 @@ namespace MFO::Actuation {
                 const bool waiting = CastChargedWaitingOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand));
                 const bool occluded = recip != 0 &&
                     Sightline::CheckWithin(fid, recip, kHealLosTrustSec, Sightline::Basis::Own) == Sightline::Verdict::Occluded;
-                if ((!waiting || occluded) && !occludedHold) return false;
+                if (!waiting || occluded) return false;   // a charged, waiting heal stays (marth 09-30b); D acts only when nothing charges
             }
             if (!approachStuck && ComposedCast::UndecidedFire(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs)) {
                 static std::unordered_map<std::uint64_t, Clock::time_point> s_noBoundLog;   // worker-serial
@@ -335,12 +343,22 @@ namespace MFO::Actuation {
                 default:                           return "Unknown";
                 }
             }();
-            if (occludedHold)
-                spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {}: held {} ms with the own-ray verdict OCCLUDED "
-                             "for {}+ readings in a row (the seat's CheckStartCast answers NO) and no approach bringing "
-                             "sight back -- RELEASED (occluded), the hand is re-chosen next lap and the recipient is "
-                             "re-picked (rule {})",
-                             fid, HandWord(a_hand), a_spell, a_who, ageMs, kHealLosReleaseReadings, g_firingRule);
+            if (occludedHold) {
+                // The heal twin of g_unsightedCharge: this (spell, recipient) is not re-claimed while he still reads Occluded.
+                g_healOccludedBlock[fid] = { a_spell, recip, false };
+                static std::unordered_map<RE::FormID, Clock::time_point> s_occRelLog;   // worker-serial; throttle
+                if (s_occRelLog.size() > 64) s_occRelLog.clear();
+                auto& lastRel = s_occRelLog[fid];
+                if (now - lastRel >= std::chrono::seconds(5)) {
+                    lastRel = now;
+                    spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {}: held {} ms with the own-ray verdict OCCLUDED "
+                                 "(the seat's CheckStartCast answers NO) and no approach bringing sight back -- RELEASED "
+                                 "(occluded), re-claimed only once he reads visible (rule {})",
+                                 fid, HandWord(a_hand), a_spell, a_who, now - stamp > Clock::duration::zero()
+                                     ? std::chrono::duration_cast<std::chrono::milliseconds>(now - stamp).count() : 0LL,
+                                 g_firingRule);
+                }
+            }
             else if (approachStuck)
                 spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {}: held at the approach floor with the recipient "
                              "still out of sight for 5 s -- the approach is BLOCKED, heal RELEASED (approach-blocked), the "
@@ -860,6 +878,28 @@ namespace MFO::Actuation {
             APMFBridge::NoteArcherRightFloor(a_follower->GetFormID());
     }
 
+    // B (field 11-13, 2 of 9 stalls): the engine builds ONE Restore caster per controller, and a heal claim minted on the
+    // SECOND hand while the first holds a live AI-road Restore claim never builds until the first closes (3.5-9 s
+    // unserved). So no second-hand claim is minted: the recipient is QUEUED (transparent, re-judged every lap) until
+    // that claim ends. NOT the direct road: a direct heal stream beside a standing claim is the overlap the
+    // one-road-per-actor rule forbids (MFO-B176). Logged once per 5 s per follower. Worker-serial.
+    static Outcome QueueSecondHeal(RE::FormID a_id, RE::FormID a_spell, RE::FormID a_recip, const char* a_holderHand,
+                                   RE::FormID a_holderRecip) {
+        static std::unordered_map<RE::FormID, Clock::time_point> s_queueLog;
+        if (s_queueLog.size() > 64) s_queueLog.clear();
+        auto& last = s_queueLog[a_id];
+        const auto now = Clock::now();
+        if (now - last >= std::chrono::seconds(5)) {
+            last = now;
+            spdlog::info("[heal] {:08X} animated heal (spell {:08X}, rule {}) for {:08X} QUEUED -- the {} hand holds a "
+                         "live AI-road Restore claim for {:08X} and a second-hand claim would not build until it closes; "
+                         "no second-hand claim is minted, he is served when it frees",
+                         a_id, a_spell, g_firingRule, a_recip, a_holderHand, a_holderRecip);
+        }
+        return Outcome{ Result::FailedOther,
+                        "animated heal queued: the other hand's Restore claim is live (a second-hand claim would not build)", true };
+    }
+
     std::optional<Outcome> HealRoadLap(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
                                        std::size_t& a_hand, bool& a_dual) {
         a_dual = false;
@@ -914,6 +954,22 @@ namespace MFO::Actuation {
             return Outcome{ Result::FailedOther, std::format("animated heal not cast: {}", lost), true };
         }
 
+        // THE OCCLUDED-RELEASE GUARD (D): refuse to re-claim the same (spell, recipient) while he still reads Occluded.
+        // Transparent; logged once per pair. Any other verdict (or another pair) lifts it.
+        if (const auto blk = g_healOccludedBlock.find(id); blk != g_healOccludedBlock.end()) {
+            if (blk->second.spell == spellID && blk->second.recipient == recipKey && !atSelf &&
+                Sightline::CheckWithin(id, recipKey, kHealLosTrustSec, Sightline::Basis::Own) == Sightline::Verdict::Occluded) {
+                if (!blk->second.logged) {
+                    blk->second.logged = true;
+                    spdlog::info("[heal] {:08X} animated heal (spell {:08X}, rule {}) for {:08X} NOT re-claimed -- it was "
+                                 "released after sustained OCCLUDED and he still reads Occluded (until sight is back)",
+                                 id, spellID, g_firingRule, recipKey);
+                }
+                return Outcome{ Result::FailedOther, "animated heal held off: its recipient is still out of sight after a release", true };
+            }
+            g_healOccludedBlock.erase(blk);
+        }
+
         // THE HAND. Served -> that hand. Contested by another spell on him -> that hand
         // (the old contest, by rank). Otherwise the LEFT, unless the left already heals a
         // DIFFERENT recipient: then this second recipient takes the RIGHT, when the right
@@ -936,22 +992,9 @@ namespace MFO::Actuation {
             // closes (it sat 3.5-9 s unserved). So no second-hand claim is minted: this recipient is QUEUED (transparent,
             // re-judged every lap) until the left claim ends, then takes the left. NOT the direct road: a direct heal
             // stream beside a standing claim is the overlap the one-road-per-actor rule forbids (MFO-B176).
-            if (onHand[kHandLeft].claim) {
-                static std::unordered_map<RE::FormID, Clock::time_point> s_queueLog;   // worker-serial (like the road itself)
-                if (s_queueLog.size() > 64) s_queueLog.clear();
-                auto& last = s_queueLog[id];
-                const auto now = Clock::now();
-                if (now - last >= std::chrono::seconds(5)) {
-                    last = now;
-                    spdlog::info("[heal] {:08X} animated heal (spell {:08X}, rule {}) for {:08X} QUEUED -- the left hand "
-                                 "holds a live AI-road Restore claim for {:08X} and a second-hand claim would not build "
-                                 "until it closes; no second-hand claim is minted, he is served when the left frees",
-                                 id, spellID, g_firingRule, recipKey, onHand[kHandLeft].recipient);
-                }
-                return Outcome{ Result::FailedOther,
-                                "animated heal queued: the left hand's Restore claim is live (a second-hand claim would not build)",
-                                true };
-            }
+            // `found`, not `claim`: the concentration stream cap's re-stream gap reports found=true, claim=false.
+            if (onHand[kHandLeft].found)
+                return QueueSecondHeal(id, spellID, recipKey, "left", onHand[kHandLeft].recipient);
             a_hand = kHandRight;
             auto& hh = g_healHands[id].hand[kHandRight];
             hh.displacing = 0;
@@ -962,6 +1005,11 @@ namespace MFO::Actuation {
                 hh.displacingRule = lit->second.hand[kHandRight].owningRule;
             }
         }
+
+        // THE MIRROR OF B: no LEFT mint while the RIGHT hand holds a heal claim (or its re-stream gap) for someone else.
+        if (a_hand == kHandLeft && servedOn >= kHandCount && contestedOn >= kHandCount && !onHand[kHandLeft].found &&
+            onHand[kHandRight].found)
+            return QueueSecondHeal(id, spellID, recipKey, "right", onHand[kHandRight].recipient);
 
         // GAMBIT ORDER ON THE LEFT HAND (review round 2, marth 2026-09-30: "Gambit order
         // wins, so in most cases it's heal. But a poorly ordered gambit board shouldn't be
@@ -1254,6 +1302,7 @@ namespace MFO::Actuation {
         g_autoTopUp.clear();
         g_healStillLog.clear();
         g_neverFiredLatch.clear();
+        g_healOccludedBlock.clear();
         g_handFireAttach.clear();
         g_launcherSeen.clear();
         {

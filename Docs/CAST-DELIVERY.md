@@ -399,7 +399,7 @@ with no combat controller, and with Harbinger absent.**
   first. A non-Self heal aimed at its own caster has no seat (Harbinger resolves a self claim only
   for Self delivery): direct, `[heal] ... WARN`. Harbinger absent: the direct road, as always.
   A SECOND heal recipient is queued (no right-hand claim) while the left hand holds a live heal claim, and a held heal whose
-  recipient reads Occluded for `kHealLosReleaseReadings` own-ray readings with no ch.24 approach standing is released (`occluded`).
+  recipient reads Occluded for `kHealLosReleaseMs` of occluded time since the claim with no ch.24 approach standing and nothing charging is released (`occluded`).
 - **Why the reversal is safe now.** The 09-21 "freeze" was MFO's direct Healing Hands on the INSTANT
   caster denied against MFO's own hand claim (`hand=?`), not the engine choosing another heal
   (`scratchpad/animheal-design.md` §2). Harbinger `d41ed43` stopped ch.8b gating the instant caster;
