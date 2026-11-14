@@ -183,7 +183,7 @@ namespace MFO::Eval {
             auto& last = s_last[a_self];
             if (last == a_foe) return;
             last = a_foe;
-            spdlog::info("[sense] {:08X}: chase cap waived: engaged both ways (Harbinger holds the engagement on {:08X} and it targets him)",
+            spdlog::info("[sense] {:08X}: chase cap waived: engaged both ways (Harbinger holds the engagement on {:08X} and it targets him or the player)",
                          a_self, a_foe);
         }
 
@@ -546,7 +546,8 @@ namespace MFO::Eval {
                     if (dist > chaseCap) {
                         const auto fid = foe->GetFormID();
                         const bool held = fid != 0 && (fid == heldFoeID || fid == entryFoeID);
-                        if (!(held && FoeTargets(foe, a_self))) continue;
+                        // marth 2026-11-13: fighting HIM OR the PLAYER is enough.
+                        if (!(held && (FoeTargets(foe, a_self) || FoeTargets(foe, RE::PlayerCharacter::GetSingleton())))) continue;
                         if (!waivedFoe) waivedFoe = fid;
                     }
 
