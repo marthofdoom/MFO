@@ -5,7 +5,7 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## v2.11.1 -- Sentient AI beta (Melee, Ranged, Mage, Auto), looting by need, live tuning files
+## v2.11.1 -- Looting fixed, followers keep fighting far foes, Sentient AI beta (Melee, Ranged, Mage, Auto), live tuning files
 
 This is a real release, and it is the first one since 2.8.2. It folds in everything from the 2.9.0, 2.10.0 and 2.11.0 test builds, whose own entries stay below as history. It needs Harbinger v0.20.1 (ABI v45). The Classes add-on is a separate download and is not part of this release.
 
@@ -13,8 +13,12 @@ This is a real release, and it is the first one since 2.8.2. It folds in everyth
 
 **Save note. Read this before you load a save.** This release writes the follower gambit data in the FLWR v6 layout (the cooldown on each rule) and adds the class data record MCLS v2 and the off-class storage record STOR v1. An older MFO cannot read a save this build wrote, and an older MFO that saves over it wipes the follower boards and loses track of stored gear. Keep a copy of your saves from before you try it, and do not go back to 2.8.2 on a save that this version has written.
 
+- **Followers loot corpses and containers again.** Since 2.11.0 the guard check refused every corpse and chest take, even in a wilderness cell with no guards, so followers walked to a body, took nothing and came back to it again and again. The check now waits for its answer at the body, a real guard sighting skips that body and moves on, and the log says "guard check pending" or "guard sees" instead of "player's dibs".
+- **Followers no longer pile onto the same loot.** A follower skips an item another follower is already walking to, unless it is within arm's reach.
+- **Looting by need takes the free loot first.** Items he has free access to come before items the player has dibs on, the same order the loot gambits use.
+- **Followers keep fighting a far foe that is fighting you.** A hurt follower used to drop his pinned target once it moved past his chase range unless it was fighting him, so a circling dragon was ignored. A pinned foe that is fighting him or the player now stays his target.
 - **Hot-swappable tuning files.** Every Sentient AI number now lives in a plain text file in `Data/SKSE/Plugins/MFO_Tuning`, one file per class (`melee.txt`, `ranged.txt`, `mage.txt`, and a `-off` file for each when the class tree is off), plus `shared.txt`, `potions.txt` and `looting.txt`. Edit a file and save it, and the change is live a few seconds later with no restart. A missing file or a deleted line means the built-in value. A bad line is skipped with a warning in `MFO.log` and the rest of the file still applies.
-- **Tuned values for the main classes.** The files for Melee, Ranged and Mage (and their `-off` versions) ship with values found by the simulator against the real enemies. Every other class file ships as comments only.
+- **Tuned values for the main classes.** The files for Melee, Ranged and Mage, and the `-off` files for Ranged and Mage, ship with values found by the simulator against the real enemies. Every other class file ships as comments only.
 - **The Sentient AI switch works from the Logistics page too.** Before, the switch only took effect from one page.
 - **Looting by need.** Finding loot is unchanged, but what a follower goes for follows what he needs. Ammo by class and launcher, potions, food, drink and poisons by all their effects, and soul gems only while a weapon he carries is below 50% charge (at most 3). Setting: `bIausLoot` (default on).
 - **Food, drink and potions are used with sense.** Food and drink are used in fights. Buff potions are used only when they are needed (resist potions against the incoming element, fortify at the start of an even fight, regen when low, invisibility while sneaking). A potion is weighed against what it costs, a scarce one is kept, and a follower won't drink what can't win him the fight.
