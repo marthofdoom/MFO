@@ -54,6 +54,7 @@
 #include "APMFBridge_internal.h"   // g_apmf, kOwnBasis
 #include "APMF_API.h"
 #include "Config.h"
+#include "Followers.h"           // ActiveSnapshot(): the stance probe walks the managed followers
 
 #include <chrono>
 #include <mutex>
@@ -76,6 +77,14 @@ namespace MFO::APMFBridge {
         constexpr std::uint32_t kRetrySweeps    = 75;
         constexpr std::uint32_t kLogBurst       = 12;
         constexpr double        kLogWindowSec   = 30.0;
+        // A claim is never released while the follower is mid draw / swing / cast (attack state != kNone): the
+        // release waits for the state to clear, at most kDeferReleaseSec, then goes anyway with a log line.
+        // Field 2026-11-13: a SneakStop sent mid bow shot was ignored by the graph and left her crouched.
+        constexpr double        kDeferReleaseSec = 2.0;
+        // The "IsSneaking" transition line waits this many sweeps (~1 s) after a filing: Harbinger applies the
+        // Request on its next game-thread drain, so a read before then says nothing about the claim.
+        constexpr std::uint32_t kSneakLogAfterSweeps = 8;
+        constexpr double        kStanceProbePeriodSec = 30.0;
 
         using Clock = std::chrono::steady_clock;
 
@@ -91,6 +100,9 @@ namespace MFO::APMFBridge {
             bool             hideHeld    = false;   // card G3 (Concealment): the hide run / G2 hold keeps the stance, in combat too
             int              lastSneak   = -1;      // last IsSneaking logged while claimed (-1 = none yet)
             bool             refusedLogged = false;
+            bool             releasePending = false;   // a release was asked for while he was mid attack state; the sweep finishes it
+            Clock::time_point deferSince{};
+            const char*      deferWhy    = "";
             // the rate limiter
             Clock::time_point logWindow{};
             std::uint32_t     logLines   = 0;
@@ -140,7 +152,29 @@ namespace MFO::APMFBridge {
 
         // g_sneakMx HELD. Releases the handle (if any). The entry stays so its log window survives a re-file.
         void ReleaseLocked(const APMF_API::APMF_API_v2* a_api, RE::FormID a_fid, SneakClaim& a_c, const char* a_why) {
-            if (a_c.handle == APMF_API::kInvalidHandle) return;
+            if (a_c.handle == APMF_API::kInvalidHandle) { a_c.releasePending = false; return; }
+            // Do not stand him up mid draw / swing / cast: the graph can swallow the SneakStop (field 2026-11-13).
+            // Not for a gone / dead / unloaded follower (nothing to protect), and bounded by kDeferReleaseSec.
+            if (a_api) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+                auto* st = (a && !a->IsDead() && a->Is3DLoaded()) ? a->AsActorState() : nullptr;
+                if (st && st->GetAttackState() != RE::ATTACK_STATE_ENUM::kNone) {
+                    const auto now = Clock::now();
+                    if (!a_c.releasePending) {
+                        a_c.releasePending = true;
+                        a_c.deferSince     = now;
+                        a_c.deferWhy       = a_why;
+                        if (MayLogLocked(a_fid, a_c))
+                            spdlog::info("[sneak] {:08X}: ch.3 stance release DEFERRED ({}): attack state {} (h={}), up to {:.0f} s",
+                                         a_fid, a_why, static_cast<int>(st->GetAttackState()), a_c.handle, kDeferReleaseSec);
+                        return;
+                    }
+                    if (std::chrono::duration<double>(now - a_c.deferSince).count() < kDeferReleaseSec) return;
+                    spdlog::warn("[sneak] {:08X}: ch.3 stance release waited {:.0f} s for the attack state to clear (now {}), releasing anyway ({})",
+                                 a_fid, kDeferReleaseSec, static_cast<int>(st->GetAttackState()), a_c.deferWhy);
+                }
+            }
+            a_c.releasePending = false;
             if (a_api) a_api->Release(a_c.handle);
             if (MayLogLocked(a_fid, a_c))
                 spdlog::info("[sneak] {:08X}: ch.3 stance claim RELEASED ({}, h={}, re-filed {} time{})", a_fid, a_why,
@@ -178,6 +212,7 @@ namespace MFO::APMFBridge {
         c.wanted   = true;
         c.idleLaps = 0;
         c.owner    = a_table;
+        c.releasePending = false;   // the rule stands again: a deferred release is void
         if (c.handle != APMF_API::kInvalidHandle && c.inCombat != inCombat && MayLogLocked(fid, c))
             spdlog::info("[sneak] {:08X}: the held claim crossed {} combat", fid, inCombat ? "INTO" : "OUT OF");
         c.inCombat = inCombat;
@@ -234,6 +269,7 @@ namespace MFO::APMFBridge {
             spdlog::info("[sneak] {:08X}: the hide hold (card G3) keeps the stance claim{}", fid,
                          inCombat ? " in combat (it overrides bSneakInCombat for this owner only)" : "");
         c.hideHeld = true;
+        c.releasePending = false;   // the hold stands again: a deferred release is void
         c.inCombat = inCombat;
         if (c.handle != APMF_API::kInvalidHandle) return nullptr;   // held
         if (a_follower->AsActorState()->IsSwimming() || a_follower->IsOnMount()) return "swimming or riding";
@@ -258,8 +294,11 @@ namespace MFO::APMFBridge {
         return it != g_sneaks.end() && it->second.handle != APMF_API::kInvalidHandle;
     }
 
+    static void StanceProbeTick();
+
     void SweepSneakClaims() {
         const auto* api = g_apmf.load(std::memory_order_relaxed);
+        StanceProbeTick();   // passive, bStanceProbe-gated; takes g_sneakMx only inside SneakClaimHeld, not held here
         if (!api) return;
         if (SneakGamePaused()) return;   // a menu holds every counter still (the scans do not run either)
         const bool combatRoad = Config::g_sneakInCombat.load(std::memory_order_relaxed);
@@ -276,6 +315,11 @@ namespace MFO::APMFBridge {
                 continue;
             }
             ++c.ageSweeps;
+            if (c.releasePending) {   // finish a deferred release (ReleaseLocked re-checks the attack state and the bound)
+                ReleaseLocked(api, fid, c, c.deferWhy);
+                ++it;
+                continue;
+            }
             auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
             const char* why = nullptr;
             // "The rule stopped standing" is not decided here: it is counted in table laps (NoteSneakTableLap).
@@ -289,7 +333,8 @@ namespace MFO::APMFBridge {
                 continue;
             }
             const bool sneaking = a->IsSneaking();
-            if (static_cast<int>(sneaking) != c.lastSneak) {
+            // Harbinger acts on the Request on its next drain: no "IsSneaking" verdict before the claim had its beat.
+            if (c.ageSweeps >= kSneakLogAfterSweeps && static_cast<int>(sneaking) != c.lastSneak) {
                 if (MayLogLocked(fid, c))
                     spdlog::info("[sneak] {:08X}: IsSneaking {} (claim h={}, {} sweeps old, {})", fid,
                                  sneaking ? "TRUE" : "FALSE", c.handle, c.ageSweeps,
@@ -309,6 +354,31 @@ namespace MFO::APMFBridge {
                                  old, ok ? std::to_string(c.handle) : std::string("refused"));
             }
             ++it;
+        }
+    }
+
+    // [stance-probe] (bStanceProbe, INI-only, default OFF): PASSIVE. Out of combat, once per kStanceProbePeriodSec per
+    // follower: the engine's IsSneaking() beside the behaviour graph's "IsSneaking" variable, and whether a ch.3 claim
+    // stands. Field 2026-11-13: she stayed crouched with IsSneaking() false; the two readings diverge when the graph
+    // keeps the pose. Reads only; no claim, no animation event.
+    static void StanceProbeTick() {
+        if (!Config::g_stanceProbe.load(std::memory_order_relaxed)) return;
+        static std::unordered_map<RE::FormID, Clock::time_point> s_last;   // pump worker only
+        const auto now  = Clock::now();
+        const auto snap = Followers::ActiveSnapshot();
+        for (const RE::FormID fid : *snap) {
+            if (fid == 0 || fid == 0x14) continue;
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!a || a->IsDead() || !a->Is3DLoaded() || InCombat(a)) continue;
+            auto& last = s_last[fid];
+            if (last.time_since_epoch().count() != 0 &&
+                std::chrono::duration<double>(now - last).count() < kStanceProbePeriodSec) continue;
+            last = now;
+            bool graph = false;
+            const bool read = a->GetGraphVariableBool("IsSneaking", graph);
+            spdlog::info("[stance-probe] {:08X}: engine IsSneaking={} graph IsSneaking={} (read {}) claim held={} swimming={} mounted={}",
+                         fid, a->IsSneaking(), graph, read ? "ok" : "FAILED", SneakClaimHeld(fid),
+                         a->AsActorState()->IsSwimming(), a->IsOnMount());
         }
     }
 
