@@ -639,9 +639,46 @@ namespace MFO::Logistics {
                     else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
                 };
-            for (int ci = 0; ci < nCells; ++ci) {
-                cells[ci]->ForEachReferenceInRange(origin, kLootRadius, scanOne);
-                if (candidates.size() >= kMaxCandidates) break;   // cap hit mid-set
+            // ONE CELL WALK PER FOLLOWER PER EVALUATION (perf, marth: "performance drops and stutters during looting"). The gambit table calls
+            // LootNearby once per category inside ONE service tick (same follower, same a_now), and each call used to re-walk every attached
+            // cell's whole reference list (~150 refs in range, 6-7 categories, ~3 ms a follower). The walk's RESULT -- the ordered in-range ref
+            // handles per cell -- does not depend on the category, so it is taken once and replayed through the SAME scanOne (every category keeps
+            // its own filters, order, cap and counters: same refs in the same order, so the same candidates). Worker-only, like every other
+            // static here. The key is exact (follower, a_now, origin, radius, the cell set); any miss re-walks as before.
+            {
+                struct WalkSnap {
+                    Clock::time_point now{}; RE::NiPoint3 origin{}; float radius = 0.0f; int nCells = 0;
+                    RE::TESObjectCELL* cells[3]{};
+                    std::vector<RE::ObjectRefHandle> refs[3];
+                    bool have = false;
+                };
+                static std::unordered_map<RE::FormID, WalkSnap> s_walk;
+                if (s_walk.size() > 32) s_walk.clear();
+                auto& snap = s_walk[a_follower->GetFormID()];
+                bool hit = snap.have && snap.now == a_now && snap.radius == kLootRadius && snap.nCells == nCells &&
+                           snap.origin.x == origin.x && snap.origin.y == origin.y && snap.origin.z == origin.z;
+                for (int ci = 0; hit && ci < nCells; ++ci) hit = snap.cells[ci] == cells[ci];
+                if (!hit) {
+                    snap.have = false;
+                    for (int ci = 0; ci < nCells; ++ci) {
+                        snap.refs[ci].clear();
+                        auto& out = snap.refs[ci];
+                        cells[ci]->ForEachReferenceInRange(origin, kLootRadius, [&out](RE::TESObjectREFR* a_r) {
+                            if (a_r) out.push_back(a_r->GetHandle());
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        });
+                        snap.cells[ci] = cells[ci];
+                    }
+                    snap.now = a_now; snap.origin = origin; snap.radius = kLootRadius; snap.nCells = nCells; snap.have = true;
+                }
+                for (int ci = 0; ci < nCells; ++ci) {
+                    for (const auto& rh : snap.refs[ci]) {
+                        auto rp = rh.get();   // a ref that has since unloaded resolves to null and is skipped (it would not have been walked either)
+                        if (!rp) continue;
+                        if (scanOne(rp.get()) == RE::BSContainer::ForEachResult::kStop) break;
+                    }
+                    if (candidates.size() >= kMaxCandidates) break;   // cap hit mid-set
+                }
             }
 
             // One diagnostic line per follower PER CATEGORY per ~10 s, so the walk

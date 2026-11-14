@@ -8,6 +8,8 @@
 >
 > **Last updated:** 2026-11-13 UTC (delta block only; the body below is 2026-09-07).
 
+- **2026-11-13 `fix/loot-scan-perf`:** one cell walk per follower per evaluation (was one per loot category), scanOne runs outside the cell lock; marth: "performance drops and stutters during looting". Field measure pending.
+
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 

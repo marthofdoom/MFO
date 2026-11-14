@@ -3391,3 +3391,7 @@ F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below,
 ### fix/sneak-release-hold (Opus 5.5 review, 2026-11-13, against 6f555217)
 - **(SEV-5):** a bow held drawn for more than 2 s still gets SneakStop mid-shot after the deferral bound (Harbinger's release confirm covers it).
 - **(SEV-5):** `s_last` in `StanceProbeTick` (native/apmf/SneakClaims.cpp) is never cleared across loads.
+
+### fix/loot-scan-perf (Opus 5.5 review, 2026-11-13, against 55b80011)
+- **(SEV-4, design):** the worker reads mutable container inventories (HasLoot LootScan.cpp:597, [arrowprobe] :611, PickLocks GetInventoryCounts :572, Take Analyse/RemoveItem, CorpseGuardWaived). Documented #72 worker-transfer pattern, no field crash attributed. Redesign as ONE per-tick per-ref main-side inventory snapshot shared across categories (also the next perf lever: HasLoot builds a GetInventory map per corpse/container 6-7x per follower per tick). The branch's main-side waiver move was reverted: it mirrored the race (main read vs MFO's own worker RemoveItem) instead of removing it.
+- **(SEV-5):** [arrowprobe] is diagnostic only; drop it.
