@@ -87,6 +87,15 @@ namespace MFO::Actuation {
         // claim already stands on asks for this.
         inline constexpr int kHealLosAgreeingReadings = 2;
 
+        // HOW LONG A HELD HEAL WAITS ON AN OCCLUDED RECIPIENT WITH NO APPROACH BRINGING SIGHT BACK, counted from THIS
+        // claim's lock stamp (field 11-13, Jesper: Harbinger's seat 0x06 CheckStartCast answered NO "own line of sight ...
+        // OCCLUDED" every AI tick for 3.5-9 s and the claim sat until the 6.5 s never-fired bound). Sized from the real
+        // cadence: Harbinger re-measures a pair at most every kLosRefreshMs = 250 ms while MFO keeps asking (NoteLosHold
+        // asks every lap), so 8 readings x 250 ms = 2000 ms, past the 1-2 s a caster needs to build
+        // (kHealLosAgreeingReadings' note) and well under the 6.5 s bound. Time, not Harbinger's per-pair OccludedRun,
+        // because that run does not reset on a new claim. NeverFiredRelease only.
+        inline constexpr long long kHealLosReleaseMs = 8 * 250;
+
         // ONE source of truth for the concentration STREAM TIME-CAP (marth: loose,
         // human timing -- each stream lasts a slightly different, RANDOMIZED duration
         // so channels never feel like a fixed constant). Drawn ONCE when a stream

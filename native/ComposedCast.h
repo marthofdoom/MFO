@@ -195,7 +195,7 @@ namespace MFO::ComposedCast {
     //                     when the claim is MINTED (Try()'s Claimed return, MFO-B176 /
     //                     MFO-B192; Actuation::EndDirectHealStreams), so the two
     //                     roads never overlap in this direction either.
-    //   DirectNoCombat -- Harbinger present and capable, but no CombatController (out
+    //   DirectNoCombat -- Harbinger present and capable, but no ACTIVE CombatController (inactive counts; out
     //                     of combat, an own-OOC follower in a party fight, a healer
     //                     who retreated). marth's D1 default: the direct road,
     //                     unanimated, with its own rate-limited [heal] line. A heal
@@ -227,6 +227,11 @@ namespace MFO::ComposedCast {
     // controller. ChooseHealRoad and HealClaimRoadOpen both call it, so they cannot drift. `a_noController` (optional) is set
     // true only when every other gate passed and the controller alone is missing (ChooseHealRoad's release/log branch).
     bool HealClaimGatesOpen(RE::Actor* a_follower, RE::SpellItem* a_spell, bool* a_noController = nullptr);
+    // "The follower has combat AI that can build a caster": combatController non-null AND !inactive (field 11-13: a ch.21
+    // StartCombat controller is INACTIVE until the engine's own detection activates it, and builds no caster meanwhile).
+    // The ONE test for the heal claim road's controller gate. `a_inactive` (optional) is set true when the pointer exists
+    // but the controller is inactive. Racy member loads, safe from the worker.
+    bool CombatAiLive(RE::Actor* a_follower, bool* a_inactive = nullptr);
 
     // NoteOocDirectHeal (review F2 on 3a42371): the out-of-combat heal callers
     // (CastSelfDirect / CastTargetDirect with g_firingRule == kNoRule) no longer ask

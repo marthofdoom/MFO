@@ -780,9 +780,24 @@ namespace MFO::ComposedCast {
         if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
             !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load())
             return false;
-        // THE TEST IS THE OBJECT THE SEATS HANG OFF: a plain member load through the SE/AE-shifted accessor, racy by design.
-        if (!a_follower->GetActorRuntimeData().combatController) {
+        // THE TEST IS THE OBJECT THE SEATS HANG OFF, AND IT MUST BE ACTIVE (field 11-13: Harbinger ch.21 StartCombat builds
+        // the controller INACTIVE and the behaviour tree builds no caster until the engine's own detection activates it).
+        if (!CombatAiLive(a_follower)) {
             if (a_noController) *a_noController = true;
+            return false;
+        }
+        return true;
+    }
+
+    bool CombatAiLive(RE::Actor* a_follower, bool* a_inactive) {
+        if (a_inactive) *a_inactive = false;
+        if (!a_follower) return false;
+        // A plain member load through the SE/AE-shifted accessor, racy by design. `inactive` sits at +0x43 of
+        // CombatController (fork RE/C/CombatController.h), below the +0x68 layout split, so it is the same on 1.5/1.6/1.7.
+        const auto* cc = a_follower->GetActorRuntimeData().combatController;
+        if (!cc) return false;
+        if (cc->inactive) {
+            if (a_inactive) *a_inactive = true;
             return false;
         }
         return true;
@@ -797,6 +812,7 @@ namespace MFO::ComposedCast {
         const auto fid     = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
         bool noController = false;
+        bool inactive     = false;   // [heal] road line: the controller exists but the engine has not activated it
         if (!HealClaimGatesOpen(a_follower, a_spell, &noController) && !noController) {
             // THE KILL SWITCH KILLS A STANDING CLAIM TOO (review F3). bHealAnimPackage
             // (or bEquipToCast) flipped OFF mid-fight: a heal claim minted before the
@@ -817,21 +833,24 @@ namespace MFO::ComposedCast {
         // THE CONTROLLER TEST (HealClaimGatesOpen's last gate; see CastTargetDirect's note): racy by design --
         // worst case one lap takes the other road.
         if (noController) {
+            CombatAiLive(a_follower, &inactive);
             // ONE ROAD PER ACTOR: a heal claim minted on an in-combat lap must not
             // outlive the controller it needed (RC-2 of 09-21: a claim nothing could
             // serve, heart-beaten for 9.7 s) while this lap casts direct beside it.
             const auto standing = APMFBridge::GetHealCastSpell(fid);
             if (standing != 0) {
                 // BOTH hands (feat/mfo-perhand-heal); MFO-B179: End alone left the lock naming it
-                Actuation::ReleaseHealClaimsAllHands(fid, "the combat controller is gone");
-                spdlog::info("[heal] {:08X} combat controller gone -- the standing heal claim "
+                Actuation::ReleaseHealClaimsAllHands(fid, inactive ? "the combat controller is INACTIVE" : "the combat controller is gone");
+                spdlog::info("[heal] {:08X} combat controller {} -- the standing heal claim "
                              "(spell {:08X}) is RELEASED; heals take the direct road until the "
-                             "follower is in combat again", fid, standing);
+                             "follower is in combat again", fid, inactive ? "INACTIVE" : "gone", standing);
             }
             if (RoadLogDue(fid, spellID, HealRoad::DirectNoCombat))
-                spdlog::info("[heal] {:08X} {} ({:08X}): no combat controller -- DIRECT road, "
-                             "unanimated (D1: the animated heal needs the follower's own combat AI)",
-                             fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+                spdlog::info("[heal] {:08X} {} ({:08X}): no live combat AI (controller {}, inactive={}) -- DIRECT road, "
+                             "unanimated (D1: the animated heal needs the follower's own ACTIVE combat AI)",
+                             fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
+                             a_follower->GetActorRuntimeData().combatController ? "present" : "absent",
+                             inactive ? "true" : "false");
             return HealRoad::DirectNoCombat;
         }
         // THE SELF-FLIP NEVER-LANDED BAR (review F1): a non-Self heal at its own caster whose claim fired repeatedly and
