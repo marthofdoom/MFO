@@ -777,7 +777,16 @@ namespace MFO::Actuation {
                         mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);
                     {
                         std::scoped_lock lk(g_forcedMx);
+                        const bool fresh = g_forcedWeapon.find(id) == g_forcedWeapon.end();
                         auto& hold = g_forcedWeapon[id];
+                        if (fresh) {   // what his hands held before this hold (StandDownCasterHands puts it back)
+                            const auto gear = [&](bool a_left) -> RE::FormID {
+                                auto* o = a_follower->GetEquippedObject(a_left);
+                                return o && (o->As<RE::TESObjectWEAP>() || o->As<RE::TESObjectARMO>()) && o != best ? o->GetFormID() : 0;
+                            };
+                            hold.prevRight = gear(false);
+                            hold.prevLeft  = gear(true);
+                        }
                         hold.right = best;
                         hold.forcedRight = !authority;   // runtime only: the legacy force-equip above
                         hold.rule  = g_firingRule;   // RANK STAMP (review round 2)
@@ -871,6 +880,49 @@ namespace MFO::Actuation {
         std::scoped_lock lk(g_forcedMx);
         const auto it = g_shieldRank.find(a_follower);
         return it == g_shieldRank.end() ? 0u : it->second.shield;
+    }
+
+    void StandDownCasterHands(RE::Actor* a_follower) {
+        if (!a_follower || a_follower->IsDead()) return;
+        const auto id = a_follower->GetFormID();
+        ForcedHold hold;
+        {
+            std::scoped_lock lk(g_forcedMx);
+            const auto it = g_forcedWeapon.find(id);
+            if (it == g_forcedWeapon.end()) return;
+            // NON-WEIGHING ROAD (bWeighWeapons 0, the default; review finding 1): ReleaseForcedWeapon unequips the hold's hands and re-arms them
+            // NON-forced two hops later, which would put the very dagger back. Mark the hold so that re-arm puts back the pre-fight hands
+            // (prevRight / prevLeft) instead, and skips a weapon that was not his.
+            if (!WeighingEquips()) { it->second.casterStandDown = true; return; }
+            hold = it->second;
+        }
+        if (hold.forcedLeft || hold.forcedRight) return;   // a legacy lock: ReleaseForcedWeapon clears and re-arms it
+        auto* mgr = RE::ActorEquipManager::GetSingleton();
+        if (!mgr) return;
+        const auto nm = [](RE::TESBoundObject* o) { return o && o->GetName() ? o->GetName() : "?"; };
+        // Queued, non-placed unequips (never seated): the same calls ReleaseForcedWeapon makes. The AI's spells come back on their own.
+        if (hold.right && a_follower->GetEquippedObject(false) == hold.right && hold.right->GetFormID() != hold.prevRight) {
+            mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
+            spdlog::info("[equip] {:08X}: caster stand-down -- '{}' taken out of the right hand (the fight is over; his hands go back to spells)",
+                         id, nm(hold.right));
+        }
+        if (hold.left && a_follower->GetEquippedObject(true) == hold.left && hold.left->GetFormID() != hold.prevLeft) {
+            mgr->UnequipObject(a_follower, hold.left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+            spdlog::info("[equip] {:08X}: caster stand-down -- '{}' taken out of the left hand", id, nm(hold.left));
+        }
+        for (const bool left : { false, true }) {
+            const RE::FormID prev = left ? hold.prevLeft : hold.prevRight;
+            if (prev == 0) continue;
+            auto* form = RE::TESForm::LookupByID(prev);
+            auto* obj  = form ? form->As<RE::TESBoundObject>() : nullptr;
+            if (!obj) continue;
+            const auto inv = a_follower->GetInventory();
+            const auto it  = inv.find(obj);
+            if (it == inv.end() || it->second.first <= 0) continue;   // sold / handed away since
+            WantPlacement(id, prev, PlacementSlotFor(obj, left), "caster stand-down: pre-fight hand");
+            spdlog::info("[equip] {:08X}: caster stand-down -- pre-fight {} hand '{}' asked back (ch.17 placement)", id,
+                         left ? "left" : "right", nm(obj));
+        }
     }
 
     void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown, bool a_leaving) {
@@ -1025,8 +1077,12 @@ namespace MFO::Actuation {
         // is never left without his main weapon); the left hand only on a stand-down, as before,
         // and the sheathe only on a stand-down.
         if ((a_standDown || silverMain != 0) && (hold.left || hold.right) && MainThread::IsInstalled()) {
-            const RE::FormID rightID = silverMain ? silverMain : (hold.right ? hold.right->GetFormID() : 0);
-            const RE::FormID leftID  = (a_standDown && hold.left) ? hold.left->GetFormID() : 0;
+            // CASTER STAND-DOWN (StandDownCasterHands marked it): the hands go back to what he held before the hold (a weapon not his is skipped).
+            const RE::FormID rightID = hold.casterStandDown ? hold.prevRight   // checked first: prevRight already excludes the hold's own weapon
+                                     : silverMain ? silverMain
+                                     : (hold.right ? hold.right->GetFormID() : 0);
+            const RE::FormID leftID  = hold.casterStandDown ? hold.prevLeft
+                                     : (a_standDown && hold.left) ? hold.left->GetFormID() : 0;
             const bool standDown = a_standDown;
             const bool silverBack = silverMain != 0;
             auto reArm = [id, rightID, leftID, standDown, silverBack]() {

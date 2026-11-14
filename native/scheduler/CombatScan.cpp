@@ -10,6 +10,7 @@
 #include "scheduler/Scheduler_internal.h"
 #include "scheduler/ChoiceSource.h"   // IAUS card I1: the combat scan reads its choices through the seam
 #include "scheduler/IausSource.h"     // IAUS card I6: the second source, for a follower whose FLWR bit 3 is set
+#include "iaus/SpellBook.h"      // caster stand-down: the class gate
 #include "iaus/TuningFile.h"           // MFO_Tuning/*.txt: the live tuning swap, at the top of Tick (between laps)
 #include "Evaluator.h"
 #include "cast/Actuation.h"
@@ -855,6 +856,10 @@ namespace MFO::Scheduler {
                 // "weapons vanishing" this comment already describes stops being visible.
                 // See ReleaseForcedWeapon's doc in cast/Actuation.h for why the unequip itself
                 // cannot go away.
+                // MAGE LINE (marth 2026-11-13): the weapon the posture layer or a gambit put in his hands for the fight is
+                // taken out and his pre-fight hands asked back, instead of keeping the dagger NON-forced for the engine to draw.
+                if (const auto g = Iaus::SpellBook::GateFor(id, false); g.resolved && g.casterLine)
+                    Actuation::StandDownCasterHands(f);
                 Actuation::ReleaseForcedWeapon(f, /*a_standDown=*/true);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
                 // SEV-3): an un-debounced erase on a 1-tick IsInCombat flap would

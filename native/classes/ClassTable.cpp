@@ -332,6 +332,7 @@ namespace MFO::Classes {
         constexpr float U = kShareUnset;   // ch.18 share not declared
         using namespace Flag;
         constexpr std::uint16_t kDisSpell = kDisengage | kSpellRange;   // Thief-and-mage family: disengage + spell range
+        constexpr std::uint16_t kDisDmg   = kDisSpell | kDamage;        // + a destruction caster (marth 2026-11-13: Evoker, Warlock, Wizard, Arch-Mage): attacks rank at or above buffs
         // RootT1 ordinals = State.h combatClassOverride (FROZEN; pinned against CombatStyle::Stance in Classes.cpp)
         constexpr RootT1 kRootMelee = 1, kRootRanged = 2, kRootMage = 3;
 
@@ -354,17 +355,17 @@ namespace MFO::Classes {
             Mk(Id::Mercenary, "mercenary", "Mercenary", 2, Line::Melee,  kRootMelee,  Req(Bit(Id::Melee)) ,  kMelee1H2H,           kMercenaryG, "passive.mercenary", 0.15f, U,    0),
             Mk(Id::Archer,    "archer",    "Archer",    2, Line::Ranged, kRootRanged, Req(Bit(Id::Ranged)) , kArcherSet,           kArcherG,    "passive.archer",    U,     U,    0),
             Mk(Id::Thief,     "thief",     "Thief",     2, Line::Ranged, kRootRanged, Req(Bit(Id::Ranged)) , kThiefSet,            kThiefG,     "passive.thief",     0.20f, U,    kDisengage | kSneakAlways),
-            Mk(Id::Evoker,    "evoker",    "Evoker",    2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kEvokerG,    "passive.evoker",    U,     U,    kDisSpell),
+            Mk(Id::Evoker,    "evoker",    "Evoker",    2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kEvokerG,    "passive.evoker",    U,     U,    kDisDmg),
             Mk(Id::Conjurer,  "conjurer",  "Conjurer",  2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kConjurerG,  "passive.conjurer",  U,     U,    kDisSpell),
             Mk(Id::Healer,    "healer",    "Healer",    2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kHealerG,    "passive.healer",    U,     U,    kDisSpell | kNearPlayer),
-            Mk(Id::Warlock,   "warlock",   "Warlock",   2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kWarlockG,   "passive.warlock",   U,     U,    kDisSpell),
+            Mk(Id::Warlock,   "warlock",   "Warlock",   2, Line::Mage,   kRootMage,   Req(Bit(Id::Mage)) ,   kMageSet,             kWarlockG,   "passive.warlock",   U,     U,    kDisDmg),
             // ── tier 3, pure ──
             Mk(Id::GreatKnight,  "great-knight", "Great Knight", 3, Line::Melee,  kRootMelee,  SameLine(Id::Knight, kMeleeT2),    kMelee1H2H | kShield, kGreatKnightG,  "passive.great-knight", 0.20f, U,    kShortLeash),
             Mk(Id::Champion,     "champion",     "Champion",     3, Line::Melee,  kRootMelee,  SameLine(Id::Warrior, kMeleeT2),   kMelee1H2H,           kChampionG,     "passive.champion",     U,     0.40f, 0),
             Mk(Id::Blademaster,  "blademaster",  "Blademaster",  3, Line::Melee,  kRootMelee,  SameLine(Id::Mercenary, kMeleeT2), kMelee1H2H,           kBlademasterG,  "passive.blademaster",  0.15f, U,    0),
             Mk(Id::Ranger,       "ranger",       "Ranger",       3, Line::Ranged, kRootRanged, SameLine(Id::Archer, kRangedT2),    kArcherSet,           kRangerG,       "passive.ranger",       U,     U,    0),
             Mk(Id::MasterThief,  "master-thief", "Master Thief", 3, Line::Ranged, kRootRanged, SameLine(Id::Thief, kRangedT2),     kThiefSet,            kMasterThiefG,  "passive.master-thief", 0.20f, U,    kDisengage | kSneakAlways),
-            Mk(Id::Wizard,       "wizard",       "Wizard",       3, Line::Mage,   kRootMage,   NeedTwo(Ms(Id::Evoker, Id::Warlock), kMageT2), kMageSet,    kWizardG,       "passive.wizard",       U,     U,    kDisSpell),
+            Mk(Id::Wizard,       "wizard",       "Wizard",       3, Line::Mage,   kRootMage,   NeedTwo(Ms(Id::Evoker, Id::Warlock), kMageT2), kMageSet,    kWizardG,       "passive.wizard",       U,     U,    kDisDmg),
             Mk(Id::Necromancer,  "necromancer",  "Necromancer",  3, Line::Mage,   kRootMage,   SameLine(Id::Conjurer, kMageT2),  kMageSet,             kNecromancerG,  "passive.necromancer",  U,     U,    kDisSpell),
             Mk(Id::Priest,       "priest",       "Priest",       3, Line::Mage,   kRootMage,   SameLine(Id::Healer, kMageT2),    kMageSet,             kPriestG,       "passive.priest",       U,     U,    kDisSpell | kNearPlayer),
             // ── tier 3, hybrids (armor is free inside every hybrid) ──
@@ -375,7 +376,7 @@ namespace MFO::Classes {
             Mk(Id::Witchhunter, "witchhunter", "Witchhunter", 3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Warlock)), kArcherSet,     kWitchhunterG, "passive.witchhunter", U, U, kDisSpell, GoIn::Never),
             Mk(Id::Scout,       "scout",       "Scout",       3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Healer)),  kArcherSet,      kScoutG,       "passive.scout",       U, U, kDisSpell | kNearPlayer, GoIn::None, 70),
             // ── tier 4 ──
-            Mk(Id::ArchMage,        "arch-mage",        "Arch-Mage",        4, Line::Mage,   kRootMage,   NOf(Ms(Id::Wizard, Id::Necromancer, Id::Priest), 2),     kMageSet,             kArchMageG,        "passive.arch-mage",        U,     U, kDisSpell),
+            Mk(Id::ArchMage,        "arch-mage",        "Arch-Mage",        4, Line::Mage,   kRootMage,   NOf(Ms(Id::Wizard, Id::Necromancer, Id::Priest), 2),     kMageSet,             kArchMageG,        "passive.arch-mage",        U,     U, kDisDmg),
             Mk(Id::LivingLegend,    "living-legend",    "Living Legend",    4, Line::Melee,  kRootMelee,  Req(Ms(Id::Blademaster, Id::Champion)),                   kMelee1H2H,           kLivingLegendG,    "passive.living-legend",    U,     0.40f, 0),
             Mk(Id::Nightingale,     "nightingale",      "Nightingale",      4, Line::Ranged, kRootRanged, Req(Ms(Id::MasterThief, Id::Witchhunter)),                kThiefSet,            kNightingaleG,     "passive.nightingale",      U,     U, kDisSpell | kSneakAlways),
             Mk(Id::Listener,        "listener",         "Listener",         4, Line::Ranged, kRootRanged, Req(Ms(Id::MasterThief, Id::Nightblade)),                 kThiefSet,            kListenerG,        "passive.listener",         0.25f, U, kDisSpell | kSneakAlways),

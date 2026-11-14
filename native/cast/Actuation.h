@@ -686,6 +686,12 @@ namespace MFO::Actuation {
     // ABI >= 22 a released silver hold's main weapon is then re-armed with the direct non-forced equip
     // (the documented Loadout::Restore exception: nothing will ever declare a placement for him).
     void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown = false, bool a_leaving = false);
+    // CASTING CLASS STAND-DOWN (marth 2026-11-13, "casting classes stay on spells"): call it just BEFORE ReleaseForcedWeapon(a_standDown)
+    // for a follower whose class casts. A weapon the posture layer or an equip gambit put in his hands for the fight is taken out again
+    // (queued, non-forced) and what he held when the hold began (a weapon or shield) is asked back as a ch.17 placement, so the next
+    // fight starts on his spells and the engine does not draw the dagger. Weighting road only (Harbinger places the hold); a legacy
+    // force-hold and a hold with no ledger are left to ReleaseForcedWeapon. Worker-serial.
+    void StandDownCasterHands(RE::Actor* a_follower);
     // IAUS card I6, review F1: the combat SOURCE changed for a_follower (the toggle edge). The weapon stays, but
     // the RANK its hold carries belongs to the old source: a table row index (0-254) would outrank every IAUS
     // heal (>= 1000) on the left hand (LeftHoldRule -> HealClaimTakesLeftFrom) until the new source re-stamped

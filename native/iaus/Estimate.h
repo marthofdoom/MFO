@@ -42,9 +42,10 @@ namespace MFO::Iaus::Estimate {
     // A foe that has to close to hurt (no bow, no spell in hand) counts as hitting a_who only inside this distance of
     // him: two swing reaches, about one second of closing. A brute that targets him from 15 m away is a THREAT (ThreatOn),
     // not damage coming in.
-    [[nodiscard]] inline float StrikeDistance(const Snapshot& a_s) {
-        return 2.0f * (std::max)(150.0f, std::isfinite(a_s.meleeReach) ? a_s.meleeReach : 200.0f);
+    [[nodiscard]] inline float StrikeDistance(float a_meleeReach) {
+        return 2.0f * (std::max)(150.0f, std::isfinite(a_meleeReach) ? a_meleeReach : 200.0f);
     }
+    [[nodiscard]] inline float StrikeDistance(const Snapshot& a_s) { return StrikeDistance(a_s.meleeReach); }
     [[nodiscard]] inline bool MustClose(const Combatant& a_f) { return !a_f.rangedWeapon && !a_f.caster && !a_f.hitIsMagic; }
     [[nodiscard]] inline float Apart(const Combatant& a_a, const Combatant& a_b) {
         const float dx = a_a.x - a_b.x, dy = a_a.y - a_b.y, dz = a_a.z - a_b.z;

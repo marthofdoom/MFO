@@ -157,6 +157,7 @@ struct SpellEntry {
         bool treeOn = false;
         bool strict = false;          // strict adherence: the posture layer's weapon gate (G16)
         bool spellsOnClass = true;    // ruling Q34: a casting class (mage line or a hybrid)
+        bool casterLine = false;      // marth 2026-11-13 "Mage line only": the Mage-line class (tree ON) or the Mage T1 root (tree OFF). NOT hybrids. Gates the posture / close-spell rules
         bool spellsFromMastered = false;   // ruling Q34: he has MASTERED a casting class
         bool scrollUser = true;       // ruling Q36
         bool powerAttack = false;     // a ch.18 power share or a power-attack default row
@@ -166,6 +167,7 @@ struct SpellEntry {
         bool taunt = false;           // a taunt default row
         float tauntCooldownSec = 0.0f;   // that row's cooldown; 0 = none declared (Tuning::rowlessTauntCooldownSec then)
         bool disengage = false;       // Flag::kDisengage (Retreat)
+        bool damage = false;          // Flag::kDamage: a destruction caster (Evoker, Warlock, Wizard, Arch-Mage): attacks rank at or above buffs. false with the tree OFF
         bool backOffPressed = false;  // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no
                                       // way out by design. false with the tree OFF
         bool sneakClass = false;      // Flag::kSneakAlways: a sneak class (card G3's hide run). false with the tree OFF
@@ -281,6 +283,7 @@ struct SpellEntry {
         bool  freeEntry = false;              // batch I item 2: this fight is a guaranteed stealth-entry fight and the entry is not spent (the gather
                                               // already read foes the engine has no verdict on as unaware; logged by Classes::StealthEntry)
         bool  blockRoad = false;          // Harbinger serves the held guard (ch.31 kCombatMove_Block) and his hands can block now (batch I item 4)
+        bool  spellsHoldPrev = false;     // last tick's Generated::spellsHold for him (Candidates::Build keeps it): the posture gate's latch, so the magicka cost edge cannot flip it
         bool  guardHeld = false;          // a block request of his is out or his guard is up (APMFBridge::BlockHoldLive): the held-guard gate
                                           // (marth Q-melee-3) -- no attack, power attack, bash, taunt, cast or weapon change is generated
         bool  bashRoad = false;           // Harbinger can make him bash now (lab only today)

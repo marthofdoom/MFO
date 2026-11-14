@@ -343,6 +343,7 @@ namespace MFO::Iaus {
         bool  foeTaunted = false;
         bool  foeOutOfMeleeReach = false;
         bool  foeUnholy = false;
+        bool  damageClass = false;        // a destruction caster (Classes::Flag::kDamage): Decide caps a buff's score at the best viable offense
         // resources (magicka absolute; cost <= 0 = no magicka cost, Affordable not applicable)
         float cost = 0.0f;
         float magicka = 0.0f;
@@ -546,6 +547,7 @@ namespace MFO::Iaus {
         std::size_t   vetoed = 0;
         std::size_t   pruned = 0;        // P5 early-out
         bool          overCap = false;   // more than maxCandidates offered (only the first maxCandidates scored)
+        std::size_t   buffCapped = 0;    // damage-class buffs held at the best viable offense score (Decide, marth 2026-11-13)
         std::size_t   badFacts = 0;      // candidates VETOED because a fact was NaN / inf (a reader bug: never masked)
         int           firstBadFact = -1; // the first such candidate's index, for the adapter's WARN
         float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score over its action weight (Retreat and the health drink read it)

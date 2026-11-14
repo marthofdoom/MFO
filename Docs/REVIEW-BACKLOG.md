@@ -3395,3 +3395,12 @@ F1-F6 of this review were FIXED in the fix round (not deferred). Deferred below,
 ### fix/loot-scan-perf (Opus 5.5 review, 2026-11-13, against 55b80011)
 - **(SEV-4, design):** the worker reads mutable container inventories (HasLoot LootScan.cpp:597, [arrowprobe] :611, PickLocks GetInventoryCounts :572, Take Analyse/RemoveItem, CorpseGuardWaived). Documented #72 worker-transfer pattern, no field crash attributed. Redesign as ONE per-tick per-ref main-side inventory snapshot shared across categories (also the next perf lever: HasLoot builds a GetInventory map per corpse/container 6-7x per follower per tick). The branch's main-side waiver move was reverted: it mirrored the race (main read vs MFO's own worker RemoveItem) instead of removing it.
 - **(SEV-5):** [arrowprobe] is diagnostic only; drop it.
+### fix/caster-posture (Opus 5.5 review, 2026-11-13, against 0ed9c705)
+SEV-2 findings 1, 2 and SEV-3 findings 3-5 were FIXED in the fix round. Deferred, status OPEN:
+- **(SEV-4, a):** verbatim: "Reposition.h RangeToHold / MageBackOffNeed read DefaultTuning().worth while Generate uses a_t.worth (sim mismatch; pass worth in)."
+- **(SEV-4, b):** verbatim: "HandsRange closeOk=false falls back to the book's longest spell without an affordability / free-hand check."
+- **(SEV-4, c):** verbatim: "the cap makes a tie and the tie-break prefers the lower cost (a cheaper buff can win); bestOffense ignores offense scrolls."
+- **(SEV-4, d):** verbatim: "the close-spell refusal is counted in droppedTarget."
+- **(SEV-4, e):** verbatim: "prevRight / prevLeft are captured only on the right-hand gambit path, a pre-drawn AI dagger may be 'restored', and the restore placement can sit 120 s."
+- **(SEV-4, f):** verbatim: "the static per-follower log maps are never cleared."
+- **(SEV-5, g, against aaacee6e):** verbatim: "s_spellsHold (Candidates.cpp) is not erased by Candidates::Forget; IausRetreatSelfHeal's Build resets the latch out of combat (harmless)."

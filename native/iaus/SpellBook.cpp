@@ -674,6 +674,7 @@ namespace MFO::Iaus::SpellBook {
             // OFF: the Mage T1 uses them); no scroll candidate is generated yet (card S3).
             g.resolved      = def != nullptr;
             g.spellsOnClass = true;
+            g.casterLine    = def && def->line == Classes::Line::Mage;   // tree OFF: def is the T1 root (kRootMage = the Mage T1)
             g.scrollUser    = def && CastingClass(*def);
             g.powerAttack   = true;
             g.taunt         = true;
@@ -684,6 +685,7 @@ namespace MFO::Iaus::SpellBook {
         g.resolved = true;
 
         g.spellsOnClass = CastingClass(*def);
+        g.casterLine    = def->line == Classes::Line::Mage;   // marth 2026-11-13: "Mage line only" (a hybrid keeps the weapon road)
         for (std::size_t i = 0; i < Classes::kClassCount; ++i) {
             const auto id = static_cast<Classes::Id>(i);
             if ((mastered & Classes::Bit(id)) != 0 && CastingClass(Classes::Get(id))) { g.spellsFromMastered = true; break; }
@@ -696,6 +698,7 @@ namespace MFO::Iaus::SpellBook {
         g.weaponCrossbow = any || (def->weapons & W::kCrossbow) != 0;
         g.weaponStaff    = any || (def->weapons & W::kStaff) != 0;
         g.disengage   = (def->flags & Classes::Flag::kDisengage) != 0;
+        g.damage      = (def->flags & Classes::Flag::kDamage) != 0;
         g.sneakClass  = (def->flags & Classes::Flag::kSneakAlways) != 0;   // card G3: only a sneak class runs to hide
         // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no way out BY DESIGN; the
         // Blademaster (its T3, "Mercenary, more extreme") is NOT included: a default taken, asked in the questions file.

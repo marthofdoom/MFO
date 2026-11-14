@@ -454,6 +454,11 @@ namespace MFO::Actuation {
             // toggled back on cannot leak its lock (review of e06a54f, SEV-3).
             bool forcedRight = false;
             bool forcedLeft  = false;
+            // RUNTIME ONLY (caster posture, marth 2026-11-13): what was in his hands when this hold was first
+            // created (a weapon / shield FormID, 0 = a spell, empty or unknown), read by StandDownCasterHands.
+            RE::FormID prevRight = 0;
+            RE::FormID prevLeft  = 0;
+            bool casterStandDown = false;   // StandDownCasterHands marked this hold's release: ReleaseForcedWeapon's non-weighing re-arm puts back prevRight / prevLeft, never the hold's weapon
             bool Empty() const { return !right && !left; }
         };
         extern std::unordered_map<RE::FormID, ForcedHold> g_forcedWeapon;

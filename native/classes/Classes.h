@@ -83,6 +83,7 @@ namespace MFO::Classes {
         inline constexpr std::uint16_t kDisengage    = 1 << 2;   // may disengage with regular movement (H3: Thief and mage lines)
         inline constexpr std::uint16_t kSpellRange   = 1 << 3;   // range follows the equipped spell (H4)
         inline constexpr std::uint16_t kSneakAlways  = 1 << 4;   // sneak regardless of player action (G1)
+        inline constexpr std::uint16_t kDamage       = 1 << 5;   // a destruction caster (marth 2026-11-13): IAUS keeps a buff at or below the best viable attack. Data only, never serialized
     }
 
     // Hybrid / T4 go-in rule id (card C9). None = no special rule (the class's normal package decides).

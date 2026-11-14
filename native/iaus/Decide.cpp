@@ -116,11 +116,37 @@ namespace MFO::Iaus {
             const Family f = cands[i].family;
             if (f == Family::Posture) { ++d.vetoed; continue; }   // posture is DecidePosture's layer
             if (detail::DependsOnHeal(f)) continue;
-            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]));
+            // A damage-class offense is never P5-pruned: the buff cap below reads the best offense score, and a pruned (below-cutoff because
+            // of uncapped buffs) offense would leave it at -1 (Opus review 2026-11-13, finding 3).
+            const bool exactOffense = f == Family::CastOffense && cands[i].f.damageClass;
+            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]) && !exactOffense);
         }
         // Pass 2: Retreat, DrinkHealth.
         for (std::size_t i = 0; i < lim; ++i)
             if (detail::DependsOnHeal(cands[i].family)) scoreOne(i, d.bestHeal, true);
+
+        // BUFF BELOW OFFENSE (marth 2026-11-13: a destruction caster's attacks rank at or above his buffs). For a Candidate::f.damageClass buff
+        // (a CastBuff, or a Scroll reading one) the score is capped at the best viable offense score on the board: viable = a CastOffense that
+        // cleared the floor (so castable and affordable, the generator dropped the rest) and whose foe is not Occluded (LoS > 0). An occluded foe
+        // leaves no viable offense, so the buffs stay as scored. The cap only lowers a score, never raises one, so the P5 prune cutoffs
+        // above stay sound; a tie falls to the usual tie-break (the cap makes it a tie).
+        {
+            float bestOffense = -1.0f;
+            for (const Scored& sc : d.ranked) {
+                const Candidate& c = cands[sc.idx];
+                if (c.family == Family::CastOffense && c.f.sight != Sight::Occluded) bestOffense = (std::max)(bestOffense, sc.score);
+            }
+            if (bestOffense >= 0.0f)
+                for (Scored& sc : d.ranked) {
+                    const Candidate& c = cands[sc.idx];
+                    const bool buff = c.family == Family::CastBuff || (c.family == Family::Scroll && c.scrollOf == Family::CastBuff);
+                    if (c.f.damageClass && buff && sc.score > bestOffense) {
+                        sc.base = sc.base * (bestOffense / sc.score);
+                        sc.score = bestOffense;
+                        ++d.buffCapped;
+                    }
+                }
+        }
 
         // Rank, then break ties (4.8): within |dS| < tieEps of a cluster head, the running decision, then the
         // current target, then the lower magicka cost, then the lower (family, posture, form, target) key.

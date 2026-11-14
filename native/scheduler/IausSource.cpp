@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <format>
+#include <unordered_map>
 
 namespace MFO::Scheduler {
 
@@ -133,11 +134,11 @@ namespace MFO::Scheduler {
         // a new one is filed only when the foe stands beyond that range, a standing one is refreshed every lap. Keeping BACK is the BackOff
         // family (H3). [Debug] bIausSpellRange (default ON: ch.24 on a foe is field-proven for healers). The claim is MFO's own and is not
         // a pick of the IAUS: it never costs a lap and names no action.
-        void ServiceSpellRange(RE::FormID a_id, const Iaus::Snapshot& a_snap, const Iaus::ClassGate& a_gate) {
+        void ServiceSpellRange(RE::FormID a_id, const Iaus::Snapshot& a_snap, const Iaus::ClassGate& a_gate, bool a_closeOk) {
             if (!Config::g_iausSpellRange.load(std::memory_order_relaxed) || !APMFBridge::RangeCloseSupported()) return;
             if (!Iaus::Reposition::SpellPhase(a_snap)) { APMFBridge::ReleaseRangeClose(a_id, "his hands hold a weapon, not a spell"); return; }
             Iaus::Reposition::Close c;
-            if (!Iaus::Reposition::RangeToHold(a_snap, a_gate, c)) return;   // the stale timer ends a claim nobody refreshes
+            if (!Iaus::Reposition::RangeToHold(a_snap, a_gate, c, a_closeOk)) return;   // the stale timer ends a claim nobody refreshes
             APMFBridge::ServiceRangeClose(a_id, c.foe, c.radius, c.far);
         }
 
@@ -249,7 +250,7 @@ namespace MFO::Scheduler {
         if (occFoe && !APMFBridge::DisengageStands(a_id) && !APMFBridge::OffenseApproachCannotFile(a_id, occFoe->id))
             APMFBridge::ReleaseRangeClose(a_id, "sight wins: every foe reads Occluded, the offense approach takes the ch.24 channel");
         else if (!APMFBridge::OffenseApproachStands(a_id))
-            ServiceSpellRange(a_id, m_set.snap, m_set.gate);
+            ServiceSpellRange(a_id, m_set.snap, m_set.gate, !m_set.gen.closeRefusing);   // the same tick's Generate answer
         ServiceOccludedApproach(a_id, m_set);
         auto& acts = m_set.gen.actions;
         Iaus::Engine::FillCooldowns(a_id, acts, m_tick, T);
@@ -261,6 +262,27 @@ namespace MFO::Scheduler {
             m_posture = Iaus::DecidePosture(Iaus::Engine::MindFor(a_id), m_set.gen.postures, ProfileOf(m_set.gate), T,
                                             a_rapportRank);
         Iaus::Candidates::NoteDecision(a_id, m_d, acts);
+        // Log the spells-stay-on-spells posture gate once per change (per follower; the tick is serial on the one worker).
+        if (m_postureKnown) {
+            static std::unordered_map<RE::FormID, bool> s_spellsHold;
+            const bool now = m_set.gen.spellsHold;
+            const auto it = s_spellsHold.find(a_id);
+            if (it == s_spellsHold.end() ? now : it->second != now) {
+                spdlog::info("[iaus] {:08X}: posture layer {} (a Mage-line class with an affordable offense / control spell keeps to "
+                             "spells; melee and silver postures are {} until the pool or the book changes)", a_id,
+                             now ? "STAYS ON SPELLS" : "may use a weapon again", now ? "gated off" : "scored");
+            }
+            s_spellsHold[a_id] = now;
+            // The close-spell rule (Reposition::SurvivesClosing), once per change: a touch / short-range spell (a stream that out-ranges melee is not one) is refused while
+            // the threat on him says he does not survive closing; the mage back-off minimum then comes from his ranged spells.
+            static std::unordered_map<RE::FormID, bool> s_closeRefused;
+            const bool refused = m_set.gen.closeRefused;
+            const auto ci = s_closeRefused.find(a_id);
+            if (ci == s_closeRefused.end() ? refused : ci->second != refused)
+                spdlog::info("[iaus] {:08X}: close spells {} (touch / range under the strike distance; he {} closing "
+                             "under the threat on him)", a_id, refused ? "REFUSED" : "allowed again", refused ? "does not survive" : "survives");
+            s_closeRefused[a_id] = refused;
+        }
 
         // The walk: the posture winner first, then the action order.
         if (m_posture >= 0 && static_cast<std::size_t>(m_posture) < m_set.gen.postures.size()) {

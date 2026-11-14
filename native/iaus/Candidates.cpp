@@ -559,13 +559,21 @@ namespace MFO::Iaus::Candidates {
                 std::vector<RE::FormID> foes;
                 foes.reserve(sn.foes.size());
                 for (const auto& f : sn.foes) foes.push_back(f.id);
-                if (Reposition::BackOffNeed(sn, a_out.gate) > 0.0f)
+                // the point is prepared if the need stands either way: Generate's close-spell answer (Ctx::closeRefusing) is not known yet and decides which
+                if (Reposition::BackOffNeed(sn, a_out.gate, true) > 0.0f || Reposition::BackOffNeed(sn, a_out.gate, false) > 0.0f)
                     sn.backOffPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::BackOff);
                 else if (const Combatant* tgt = Reposition::StepTarget(sn))
                     sn.stepPoint = Concealment::PrepareKind(a_follower, foes, Concealment::Kind::Step, tgt->id, sn.drawn == PostureKind::Bow);
             }
         }
-        a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
+        {   // the spellsHold latch (Generate::Postures): last tick's answer for this follower goes in, this tick's is kept
+            static std::unordered_map<RE::FormID, bool> s_spellsHold;
+            const RE::FormID id = a_follower->GetFormID();
+            const auto it = s_spellsHold.find(id);
+            a_out.snap.spellsHoldPrev = it != s_spellsHold.end() && it->second;
+            a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
+            s_spellsHold[id] = a_out.gen.spellsHold;
+        }
         return true;
     }
 
