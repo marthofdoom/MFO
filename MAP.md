@@ -3050,8 +3050,9 @@ The worker never walks an engine inventory list or active-effect list. It reads 
   can run, no follower decision is made, `Packages::Pump` must still run): it reads what is published. SOURCES and non-party actors (`InvSnap::FreshEnough`): InvSnapshot.cpp
   `kSourceRefreshTicks` 4, `kSourceMaxAgeTicks` 16, `kWantTtlTicks` 112 (~15 s), `kSourceBudget` 32 per pass; EffectMirror.cpp
   `kMaxAgeTicks` 4, `kWantTtlTicks` 112; no aging in a paused tick, and an unpaused tick needs a build made since the pause.
-- **Our own writes.** Worker-side: `InvSnap::Touch(ref)` after the write (readable for the rest of that tick, then withheld until
-  rebuilt). Sites: `TheftGate` `MoveNow` (container road), `GemRules::TakeAndProbe` (container road), `LearnCarriedTomes`
+- **Our own writes.** Worker-side: `InvSnap::Touch(ref)` after the write (a SOURCE stays readable for the rest of that tick, then
+  is withheld until rebuilt; for a party member the call changes nothing, the party's rule already puts the next read behind
+  the write). Sites: `TheftGate` `MoveNow` (container road), `GemRules::TakeAndProbe` (container road), `LearnCarriedTomes`
   (`logistics/Cast.cpp`), `TeachSpellNow` (`Board.cpp`, the player), `KeepHeadClear` (`logistics/Gear.cpp`), the smith charge
   (`logistics/ErrandSmith.cpp`), the two drinks (`Service.cpp` `DrinkBest`, `PotionFx.cpp` `DrinkPotionForm`). Main-side:
   `InvSnap::RebuildOnMain(ref)` in `TheftGate` `RunTransfer` (source and follower, BEFORE the drain pops the queue entry, so

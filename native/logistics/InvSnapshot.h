@@ -129,8 +129,9 @@ namespace MFO::InvSnap {
     // Keep a_ref's snapshot built every pass (the party and the player, each tick). No read.
     void Want(RE::TESObjectREFR* a_ref);
 
-    // MFO wrote a_ref's inventory ON THIS (worker) THREAD just now. Call it AFTER the write. The snapshot stays readable for the
-    // rest of this tick and is then withheld until the main thread has built one after the write.
+    // MFO wrote a_ref's inventory ON THIS (worker) THREAD just now. Call it AFTER the write. A SOURCE's snapshot stays readable
+    // for the rest of this tick and is then withheld until the main thread has built one after the write. For a party member
+    // or the player it changes nothing: the party's rule (the previous tick's pass) already puts every read behind the write.
     void Touch(RE::TESObjectREFR* a_ref);
     void Touch(RE::FormID a_ref);
     // MAIN THREAD: MFO wrote a_ref's inventory on the main thread just now; replace its snapshot in place (no "not yet" gap).

@@ -181,12 +181,14 @@ namespace MFO::InvSnap {
             const std::uint64_t a_now = a_clk.tick;
             if (!a_s.snap) return Miss::Never;
             if (a_s.init && !a_s.builtInit) return Miss::Never;   // built the no-init way, now asked the initialising way: not that answer
-            // A write MFO made since the walk: readable only for the rest of the tick that made it (tick-stable; the take road
-            // re-validates at its own write), then withheld until a snapshot built after the write is published.
+            // THE PARTY (and the player): the previous tick's pass has published it (TickClock::needPass), or the tick is paused.
+            // That rule already puts the snapshot behind every write the last tick made, so Touch adds nothing here, and a
+            // Touch must not make a party member unreadable for a whole pause (the gate would skip Packages::Pump under a menu).
+            if (a_s.standing) return PassReached(a_clk, a_s.everByPass, a_s.builtPass) ? Miss::None : Miss::Old;
+            // A SOURCE. A write MFO made since the walk: readable only for the rest of the tick that made it (tick-stable; the
+            // take road re-validates at its own write), then withheld until a snapshot built after the write is published.
             if (a_s.builtSeq != a_s.touchSeq && a_s.touchTick != a_now) return Miss::Touched;
-            if (a_s.standing) {   // the party's rule: the previous tick's pass has published it
-                if (!PassReached(a_clk, a_s.everByPass, a_s.builtPass)) return Miss::Old;
-            } else if (!FreshEnough(a_clk, a_s.builtTick, a_s.builtAge, kSourceMaxAgeTicks)) return Miss::Old;
+            if (!FreshEnough(a_clk, a_s.builtTick, a_s.builtAge, kSourceMaxAgeTicks)) return Miss::Old;
             return Miss::None;
         }
 
