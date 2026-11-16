@@ -153,8 +153,11 @@ namespace MFO::Diagnostics {
         // retried. Only C++ exceptions: an access violation is still a crash.
         //
         // RE-ARMED AT EVERY LOAD (review of ca0465c9, F3): a stage is stopped for the ARM it threw in. StartPump (after a load or
-        // a new game, when ResetAllState has wiped every state a stage could have half-written) moves g_stageArm on, so every
-        // stopped stage runs again and the table starts empty. A stage that throws again is stopped again, and said again.
+        // a new game, when ResetAllState has wiped the SAVE-SCOPED state a stage could have half-written) moves g_stageArm on, so
+        // every stopped stage runs again and the table starts empty. This clears the stop flags and the save-scoped state ONLY:
+        // process-lifetime statics inside a stage (Probe::Tick, AtkObserveTick, the Board publish caches) are NOT reset, so a
+        // re-armed stage may still read what it half-wrote (MFO-B859 F3, resetting them is backlogged). A stage that throws
+        // again is stopped again, and said again.
         //
         // CRITICAL STAGES (F3): Scheduler::Tick (it holds Packages::Pump, every claim and every release) and the snapshot bracket
         // (Snapshots::BeginTick / ReadyForTick / EndTick: a stopped one gates EVERY later tick body) leave followers frozen under
@@ -168,6 +171,13 @@ namespace MFO::Diagnostics {
         std::atomic<std::uint32_t> g_stoppedStageCount{ 0 };
         std::atomic<std::uint32_t> g_stageArm{ 1 };              // a stage is stopped while its own arm equals this (0 = never threw)
         std::atomic<std::uint32_t> g_criticalReleaseArm{ 0 };    // the arm whose critical release is already posted (once per arm)
+        // Review of 9ea0ec36 F4: true once a critical stage threw in this arm (its release is posted). The stages that could issue a
+        // NEW package / Harbinger claim (Errand::Sweep -> Sim::Sweep ClaimErrandTravel / hand-off, APMFBridge::Tick's approach and
+        // substrate sweeps) are skipped meanwhile, or they would re-freeze a follower the release just freed. Lotd::SweepTrip and
+        // Loadout::Tick only end / give back (no claim, no package) and keep running.
+        bool CriticalStageStopped() noexcept {
+            return g_criticalReleaseArm.load(std::memory_order_acquire) == g_stageArm.load(std::memory_order_acquire);
+        }
         void PostCriticalRelease(const char* a_stage) noexcept;  // defined after the pump atomics (it pauses the pump)
         void StageThrew(const char* a_stage, std::atomic<std::uint32_t>& a_offArm, bool a_critical, const char* a_what) noexcept {
             a_offArm.store(g_stageArm.load(std::memory_order_acquire), std::memory_order_release);
@@ -365,6 +375,9 @@ namespace MFO::Diagnostics {
         // The kSaveGame hold (HoldPumpForSave / ReleaseSaveHold, review of ca0465c9 F1). Its own flag: a Pause/Resume pair run
         // inside the save (SaveCallback, the critical release) must not lift it. Every PumpTickGate bails while it is set.
         std::atomic<bool>          g_saveHold{ false };
+        std::atomic<std::uint64_t> g_saveHoldGen{ 0 };        // bumped by every HoldPumpForSave; ReleaseSaveHold(gen) clears only a matching one
+        std::atomic<std::int64_t>  g_saveHoldSinceMs{ 0 };    // steady-clock ms the current hold was taken
+        std::atomic<std::uint64_t> g_saveHoldLeakLogGen{ 0 }; // the generation whose over-long hold was already logged
 
         // THE ONE guard shape for every MFO AddTask body queued in this file
         // (the sleeper tick and all four sinks). Two jobs:
@@ -1224,9 +1237,9 @@ namespace MFO::Diagnostics {
                         MFO_TICK_STAGE_CRITICAL("Scheduler::Tick",           Scheduler::Tick());
                         MFO_TICK_STAGE("Actuation::SelfCastReconcile",       Actuation::SelfCastReconcile());     // release self-cast channels when their rule goes stale (dispel lingering buffs)
                         MFO_TICK_STAGE("Actuation::TargetCastReconcile",     Actuation::TargetCastReconcile());   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
-                        MFO_TICK_STAGE("APMFBridge::Tick",                   APMFBridge::Tick());                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
+                        MFO_TICK_STAGE("APMFBridge::Tick",                   { if (!CriticalStageStopped()) APMFBridge::Tick(); });                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
                         MFO_TICK_STAGE("Lotd::SweepTrip",                    Lotd::SweepTrip());                  // LOTD: end an orphaned deposit trip whatever its owner is doing
-                        MFO_TICK_STAGE("Errand::Sweep",                      Logistics::Errand::Sweep());         // town errands: end one whose follower is gone / in combat / unserviced, or whose player left the town
+                        MFO_TICK_STAGE("Errand::Sweep",                      { if (!CriticalStageStopped()) Logistics::Errand::Sweep(); });         // town errands: end one whose follower is gone / in combat / unserviced, or whose player left the town
                         MFO_TICK_STAGE("APMFBridge::MaybeWarnAbsence",       APMFBridge::MaybeWarnAbsence());     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
                         MFO_TICK_STAGE("Classes::MaybeNoticeNotStarted",     Classes::MaybeNoticeNotStarted());
                         MFO_TICK_STAGE("Loadout::Tick",                      Loadout::Tick());   // hand back stowed two-handers
@@ -1311,6 +1324,14 @@ namespace MFO::Diagnostics {
                !g_pumpPaused.load(std::memory_order_seq_cst) &&
                !g_saveHold.load(std::memory_order_seq_cst) &&
                g_pumpEpoch.load(std::memory_order_seq_cst) == a_queuedEpoch;
+        if (!m_ok && g_saveHold.load(std::memory_order_seq_cst)) {
+            // A hold lasts one save (well under a second). A longer one is a leak: say so, once per hold, never silently.
+            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            const auto gen = g_saveHoldGen.load(std::memory_order_seq_cst);
+            if (nowMs - g_saveHoldSinceMs.load(std::memory_order_relaxed) > 5000 &&
+                g_saveHoldLeakLogGen.exchange(gen, std::memory_order_relaxed) != gen)
+                spdlog::error("[diag] save hold (gen {}) has lasted over 5s -- every tick body is bailing; the release never ran", gen);
+        }
     }
     PumpTickGate::~PumpTickGate() { g_tickActive.store(false, std::memory_order_seq_cst); }
 
@@ -1751,9 +1772,12 @@ namespace MFO::Diagnostics {
         g_pumpPaused.store(false, std::memory_order_seq_cst);
     }
 
-    void HoldPumpForSave() {
+    std::uint64_t HoldPumpForSave() {
         // Same Dekker handshake as PausePump: store the hold (seq_cst) before loading tickActive. The worker never waits on the
         // main thread (no tick body blocks on a post or a frame), so the one body in flight finishes; the cap is a backstop.
+        const auto gen = g_saveHoldGen.fetch_add(1, std::memory_order_seq_cst) + 1;
+        g_saveHoldSinceMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                std::memory_order_relaxed);
         g_saveHold.store(true, std::memory_order_seq_cst);
         int waited = 0;
         for (; g_tickActive.load(std::memory_order_seq_cst) && waited < 2000; ++waited)
@@ -1761,9 +1785,13 @@ namespace MFO::Diagnostics {
         if (g_tickActive.load(std::memory_order_seq_cst))
             spdlog::error("[diag] HoldPumpForSave: worker body STILL active after {}ms cap -- its posts may still be pending across "
                           "this save", waited);
+        return gen;
     }
 
-    void ReleaseSaveHold() {
+    void ReleaseSaveHold(std::uint64_t a_gen) {
+        // a_gen 0 = unconditional (SaveCallback's end). A posted release carries its hold's generation, so a leftover one from
+        // an earlier save cannot lift a later save's hold (review of 9ea0ec36 F1).
+        if (a_gen != 0 && g_saveHoldGen.load(std::memory_order_seq_cst) != a_gen) return;
         g_saveHold.store(false, std::memory_order_seq_cst);
     }
 

@@ -27,8 +27,9 @@ namespace MFO::Diagnostics {
     // MainThread::DrainForSave runs what the worker had posted. Its own flag, separate from PausePump's, so SaveCallback's (or any
     // other) Pause/Resume pair inside the save cannot lift it. ReleaseSaveHold lifts it: SaveCallback's end, and a closure
     // posted at kSaveGame (the next frame, if the co-save callback never ran); StartPump lifts it too (a load right after a save).
-    void HoldPumpForSave();
-    void ReleaseSaveHold();
+    // HoldPumpForSave returns the hold's generation; ReleaseSaveHold(gen) clears only that generation (0 = unconditional).
+    std::uint64_t HoldPumpForSave();
+    void ReleaseSaveHold(std::uint64_t a_gen = 0);
 
     // Full state dump to MFO.log. Safe to call from the main thread only.
     void DumpReport(const char* a_trigger);

@@ -481,9 +481,14 @@ namespace {
             // (MainThread::DrainForSave: one swap, FIFO, so a re-post waits for the next frame and the drain is bounded). The hold
             // lasts until SaveCallback ends (or the next frame, posted here, if the co-save callback never runs). The proxy sweep
             // runs AFTER the drain, because a drained cast may mint a proxy.
-            MFO::Diagnostics::HoldPumpForSave();
-            MFO::MainThread::DrainForSave();
-            MFO::MainThread::Post([] { MFO::Diagnostics::ReleaseSaveHold(); });
+            // Only where the pump exists (review of 9ea0ec36 F2): on a no-pump build (VR, unverified runtime) Post is a no-op, the
+            // release would be dropped, and a failed save would leave the hold set forever. There nothing was ever posted either.
+            // The posted release carries the hold's generation (F1): a leftover one from an earlier save cannot lift a later hold.
+            if (MFO::MainThread::IsInstalled()) {
+                const auto holdGen = MFO::Diagnostics::HoldPumpForSave();
+                MFO::MainThread::DrainForSave();
+                MFO::MainThread::Post([holdGen] { MFO::Diagnostics::ReleaseSaveHold(holdGen); });
+            }
             MFO::Actuation::ConcProxyPreSaveSweep();
             break;
 

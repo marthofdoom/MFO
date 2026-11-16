@@ -3053,8 +3053,8 @@ a job worker here, not main).
   posted closure in its own try/catch: a throw is an ERROR (`[mainthread] a posted closure THREW`, the first 8 then every
   256th), that closure's work is lost, the rest of the batch runs. `Diagnostics.cpp`'s tick body runs every stage through
   `MFO_TICK_STAGE` (`RunTickStage`): a stage that throws is an ERROR naming it and is STOPPED until the next load (never
-  re-entered before: its state may be half-written; `StartPump` re-arms every stopped stage, `RearmStoppedStages`, after
-  ResetAllState wiped their state); the other stages keep running; the sleeper names the stopped stages again every
+  re-entered before: its state may be half-written; `StartPump` re-arms every stopped stage's stop flag, `RearmStoppedStages`, after
+  ResetAllState wiped the save-scoped state; process-lifetime statics in `Probe::Tick` / `AtkObserveTick` / the Board publish caches are NOT reset, MFO-B859 F3); the other stages keep running; the sleeper names the stopped stages again every
   60 s (`LogStoppedStages`). C++ exceptions only: an access violation is still a crash. CRITICAL stages
   (`MFO_TICK_STAGE_CRITICAL`: `Scheduler::Tick`, which holds `Packages::Pump`, and the four snapshot bracket stages, which gate
   every later body) post ONE release per arm on their first throw (`PostCriticalRelease`): on main, under PausePump,
