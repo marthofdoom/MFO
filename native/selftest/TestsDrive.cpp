@@ -12,6 +12,7 @@
 // runner) and the posted main-thread reads (MainThread::Post) whose results are cached under a leaf lock.
 
 #include "selftest/SelfTest_internal.h"
+#include "iaus/EffectMirror.h"   // INVARIANTS #84
 #include "Config.h"
 #include "Followers.h"
 #include "MainThread.h"
@@ -305,11 +306,11 @@ namespace MFO::SelfTest {
             r.spawn.on = true;
         }
         bool EffectUp(RE::Actor* a, RE::SpellItem* sp) {
-            auto* mt = a ? a->AsMagicTarget() : nullptr;
-            if (!mt || !sp) return false;
+            const auto fx = a ? EffectMirror::Get(a) : nullptr;   // INVARIANTS #84: the main-built mirror (not yet = not up: a step polls again)
+            if (!fx || !sp) return false;
             for (auto* e : sp->effects) {
                 auto* mgef = e ? e->baseEffect : nullptr;
-                if (mgef && mt->HasMagicEffect(mgef)) return true;
+                if (mgef && fx->HasMagicEffect(mgef)) return true;
             }
             return false;
         }
@@ -491,14 +492,13 @@ namespace MFO::SelfTest {
         bool ReadCourage(Ctx& c, double& a_mag, bool& a_fresh) {
             auto* ally = OtherAlly(c);
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(VanillaForm(kCourage));
-            auto* mt = ally ? ally->AsMagicTarget() : nullptr;
-            auto* list = mt ? mt->GetActiveEffectList() : nullptr;
-            if (!list || !sp || sp->effects.empty() || !sp->effects[0]) return false;
+            const auto fx = ally ? EffectMirror::Get(ally) : nullptr;   // INVARIANTS #84: the main-built mirror
+            if (!fx || !fx->hasList || !sp || sp->effects.empty() || !sp->effects[0]) return false;
             auto* want = sp->effects[0]->baseEffect;
-            for (auto* ae : *list) {
-                if (!ae || !ae->effect || ae->effect->baseEffect != want) continue;
-                a_mag = ae->magnitude;
-                a_fresh = ae->elapsedSeconds < 4.0f;
+            for (const auto& f : fx->fx) {
+                if (!f.base || f.base != want) continue;
+                a_mag = f.magnitude;
+                a_fresh = f.elapsed < 4.0f;
                 return true;
             }
             return false;

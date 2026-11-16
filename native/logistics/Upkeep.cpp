@@ -170,7 +170,7 @@ namespace MFO::Logistics {
     int CountPotions(RE::Actor* a_follower, RE::ActorValue a_which) {
         if (!a_follower) return 0;
         int n = 0;
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0) continue;
             auto* alc = obj->As<RE::AlchemyItem>();
             if (alc && PotionRestores(alc) == a_which) n += data.first;
@@ -258,7 +258,7 @@ namespace MFO::Logistics {
             if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
                 light = l->GetFormID();
             else
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* lt = obj->As<RE::TESObjectLIGH>();
                     if (lt && lt->CanBeCarried()) { light = lt->GetFormID(); break; }
@@ -335,7 +335,7 @@ namespace MFO::Logistics {
             }
             g_torchRefusedLogged.erase(fid);
         }
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0) continue;
             auto* light = obj->As<RE::TESObjectLIGH>();
             if (!light || !light->CanBeCarried()) continue;
@@ -392,6 +392,7 @@ namespace MFO::Logistics {
     // needs the regenerated catalog). A no-op once healed, so it's safe to poll.
     void HealExcludedWeapon(RE::Actor* a_follower) {
         if (!RE::ActorEquipManager::GetSingleton()) return;   // (re-fetched on the main thread in doHeal)
+        if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate)
         for (int hand = 0; hand < 2; ++hand) {
             auto* eq  = a_follower->GetEquippedObject(hand == 1);   // false=right, true=left
             auto* bad = eq ? eq->As<RE::TESObjectWEAP>() : nullptr;
@@ -410,7 +411,7 @@ namespace MFO::Logistics {
             }
             RE::TESBoundObject* best    = nullptr;
             std::uint16_t       bestDmg = 0;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || Catalog::IsExcluded(obj->GetFormID()) || IsCreatureWeapon(w)) continue;
@@ -447,7 +448,7 @@ namespace MFO::Logistics {
             // re-ran this every ~5 s with a 3D rebuild each time, so it is not chased).
             if (!creature) {
                 bool questBound = false;
-                for (auto& [obj, data] : a_follower->GetInventory())
+                for (auto& [obj, data] : InvSnap::Items(a_follower))
                     if (obj == bad) { questBound = IsQuestObjectInstance(data.second.get()); break; }
                 if (!questBound) {
                     const std::uint64_t key = (static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | bad->GetFormID();
@@ -492,7 +493,7 @@ namespace MFO::Logistics {
                 else                      eq->UnequipObject(fol, badObj);  // nothing real carried (or W1: Harbinger places the replacement) -- just take it off
                 std::int32_t haveBad = 0;
                 bool         quest   = false;
-                for (auto& [obj, data] : fol->GetInventory())
+                for (auto& [obj, data] : InvSnap::Items(fol))
                     if (obj == badObj) { haveBad = data.first; quest = IsQuestObjectInstance(data.second.get()); break; }
                 // MEO-aware: a socketed weapon never leaves him (GemRules): strip it, retry next pass.
                 if (haveBad > 0 && GemRules::CheckRemovalLive(fol, badObj, "heal-evict", GemRules::Reason::Heal) == GemRules::Verdict::Held)
@@ -544,6 +545,7 @@ namespace MFO::Logistics {
     // SAME stable one LootEquipment loots by (ComputeWeaponRoles). Runs OUT of combat (post-battle dwell).
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         using WT = RE::WEAPON_TYPE;
+        if (!InvSnap::Ready(a_follower)) return false;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate) (the kept-for-deposit set is not cleared either)
 
         // MFO-B126 (review of 93613c4, SEV-3): the kept-for-deposit set is only as good
         // as THIS pass. Clear it first, so every early return below (the post-battle
@@ -631,11 +633,10 @@ namespace MFO::Logistics {
             // guard -- only under marth's rule above.
             return fistsValid;
         };
-        auto socketed = [](RE::InventoryEntryData* e) {
-            if (!e || !e->extraLists) return false;
-            for (auto* xl : *e->extraLists)
-                if (auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr; uid && uid->uniqueID != 0)
-                    return true;
+        auto socketed = [](const InvSnap::Entry* e) {
+            if (!e) return false;
+            for (const auto& c : e->copies)
+                if (c.hasUid && c.uid != 0) return true;
             return false;
         };
 
@@ -644,7 +645,7 @@ namespace MFO::Logistics {
         std::vector<RE::FormID> keptForDeposit;   // MFO-B126: handed to Lotd after the walk
         std::vector<RE::FormID> inRoleBases;      // ... with the in-role weapons Lotd re-checks at ship time
         std::vector<RE::FormID> keptUnworn;       // ... and the kept relics seen UNWORN (round 3: AI-equip proof)
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0) continue;
             auto* w = obj->As<RE::TESObjectWEAP>();
             if (!w || w->IsStaff()) continue;

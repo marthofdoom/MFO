@@ -33,7 +33,10 @@ namespace MFO::Logistics::TheftGate {
     // to say why (Pending = "guard check pending", Seen = "guard sees <guard>").
     // landing = the Pending came from the CORPSE-TRANSFER hold (Takeable, below), not from a guard answer: an item of the candidate's
     // form type is still on its way to the follower (queued to the main thread). Same contract as a pending guard answer: RETRY, never DONE.
-    struct GuardRefusal { std::uint32_t n = 0; GuardState state = GuardState::Clear; RE::FormID guard = 0; bool landing = false; };
+    // notYet (INVARIANTS #84) = the Pending came from a source whose inventory SNAPSHOT is not readable yet (never built, or withheld
+    // after a write, or the main thread stalled). It is recorded with landing = true: the same contract and the same short retry
+    // (the snapshot is built on the next frame), RETRY, never DONE.
+    struct GuardRefusal { std::uint32_t n = 0; GuardState state = GuardState::Clear; RE::FormID guard = 0; bool landing = false; bool notYet = false; };
     GuardRefusal GuardRefusalInfo();
 
     // INTERIM GUARD GATE. TRUE = refuse (a guard sees the follower or a_src, or the answer is not back yet).
@@ -55,11 +58,19 @@ namespace MFO::Logistics::TheftGate {
     const char* TakeBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj,
                            RE::ExtraDataList* a_xList, Road a_road);
 
+    // The same verdict from a copy's VALUES (the snapshot road, INVARIANTS #84): a_copyOwner = that copy's ExtraOwnership owner
+    // (InvSnap::Copy::owner; null = a plain copy or no ownership extra, judged by the container's owner).
+    const char* TakeBarredOwner(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESForm* a_copyOwner);
+
     // Read-only: is at least one copy of a_obj in a_src takeable? (the peek paths) Copies already QUEUED out of an actor source (below) do
     // not count. THE LANDING HOLD: FALSE, with a Pending refusal recorded (GuardRefusal::landing), while an item of a_obj's FORM TYPE is
     // still on its way to this follower: his pack does not show it yet, so a decision that counts or compares that kind of item (ammo and
     // potion counts, the gear baseline) would be made on a stale pack. The caller's guard-pending handling retries the visit.
     bool Takeable(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj);
+    // A reader of a_src's inventory got "not yet" from InvSnap::Get (INVARIANTS #84): record the Pending refusal (GuardRefusal::notYet,
+    // landing = true) so the visit is retried and the source is never marked done, and say it (rate-limited). Every loot reader that
+    // walks a SOURCE's snapshot calls this on a null one, then answers "nothing".
+    void NoteInventoryNotYet(RE::Actor* a_follower, RE::TESObjectREFR* a_src);
 
     // The take: moves up to a_count of a_obj from a_src into the follower, ONLY copies TakeBarred allows. A stack with no
     // barred copy is moved by the one plain RemoveItem the callers always made. Returns how many moved (0 = refused).

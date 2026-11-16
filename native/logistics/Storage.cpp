@@ -174,14 +174,12 @@ namespace MFO::Logistics::Storage {
 
         std::int32_t CountOf(RE::Actor* a_actor, RE::TESBoundObject* a_obj) {
             if (!a_actor || !a_obj) return 0;
-            const auto counts = a_actor->GetInventoryCounts([a_obj](RE::TESBoundObject& o) { return &o == a_obj; });
-            const auto it = counts.find(a_obj);
-            return it == counts.end() ? 0 : it->second;
+            return InvSnap::Items(a_actor).Count(a_obj);   // INVARIANTS #84
         }
         bool IsWornNow(RE::Actor* a_actor, RE::TESBoundObject* a_obj) {
-            for (auto& [obj, data] : a_actor->GetInventory([a_obj](RE::TESBoundObject& o) { return &o == a_obj; }))
-                if (obj == a_obj && data.second && data.second->IsWorn()) return true;
-            return false;
+            const auto inv = InvSnap::Items(a_actor);   // named: the view owns the snapshot the entry lives in
+            const auto* e = inv.Find(a_obj);
+            return e && e->IsWorn();
         }
 
         bool DecisionLogDue(RE::FormID a_fid, RE::FormID a_base, Clock::time_point a_now) {
@@ -443,7 +441,7 @@ namespace MFO::Logistics::Storage {
     }
 
     std::int32_t HoldFromSale(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_obj,
-                              RE::InventoryEntryData* a_entry, std::int32_t a_count, std::int32_t a_value) {
+                              const InvSnap::Entry* a_entry, std::int32_t a_count, std::int32_t a_value) {
         // CHEAP CHECKS FIRST (review F7): no inventory walk, no roles, no price until the piece is a planned off-class one.
         if (!a_follower || !a_obj || a_count <= 0 || !Enabled()) return 0;
         if (a_entry && a_entry->IsWorn()) return 0;   // a worn force-sell row: storage never takes anything off him
@@ -501,8 +499,8 @@ namespace MFO::Logistics::Storage {
                 in.bestOtherRank = r; bestOtherValue = v; bestOtherId = o->GetFormID();
             }
         };
-        for (auto& [o, data] : a_follower->GetInventory([](RE::TESBoundObject& b) { return b.IsWeapon() || b.IsArmor(); }))
-            if (data.first > 0) consider(o);
+        for (auto& [o, data] : InvSnap::Items(a_follower))
+            if (o && (o->IsWeapon() || o->IsArmor()) && data.first > 0) consider(o);
         for (const auto& i : mine) consider(RE::TESForm::LookupByID<RE::TESBoundObject>(i.base));
         if (bestOtherId && in.rank == in.bestOtherRank) {
             const std::int32_t myV = std::max<std::int32_t>(a_value, 0);
@@ -541,6 +539,7 @@ namespace MFO::Logistics::Storage {
 
     void Tick(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
         if (!a_follower || !a_follower->Is3DLoaded()) return;
+        if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: a move is confirmed from HIS count, so never on an unread pack (never inside a tick for a party member: the tick gate)
         const RE::FormID fid = a_follower->GetFormID();
         {
             std::scoped_lock lk(g_mx);

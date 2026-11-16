@@ -1,6 +1,7 @@
 #include "MEOBridge.h"
 #include "MEO_API.h"
 #include "MainThread.h"   // Build A: main-thread refresh of the carried-gem cache
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads by value
 
 #include <algorithm>
 #include <cctype>   // reconcile: case-insensitive gem-name preference match
@@ -47,9 +48,10 @@ namespace MFO::MEOBridge {
             return (static_cast<std::uint64_t>(a_base) << 16) | a_uid;
         }
 
-        bool IsWornXList(RE::ExtraDataList* a_xl) {
-            return a_xl && (a_xl->HasType(RE::ExtraDataType::kWorn) ||
-                            a_xl->HasType(RE::ExtraDataType::kWornLeft));
+        // INVARIANTS #84: every inventory read in this file goes through InvSnap (a main-built snapshot on the worker, the live list
+        // read in place on the main thread), by value. a_hand 0 = right (ExtraWorn), 1 = left (ExtraWornLeft), else either.
+        bool WornInHand(const InvSnap::Copy& a_c, int a_hand) {
+            return a_hand == 0 ? a_c.worn : a_hand == 1 ? a_c.wornLeft : (a_c.worn || a_c.wornLeft);
         }
 
         // Flush a pending gem move once the destination item is actually WORN --
@@ -111,18 +113,10 @@ namespace MFO::MEOBridge {
 
     std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base, int a_hand) {
         if (!a_actor || !a_base) return 0;
-        auto* ch = a_actor->GetInventoryChanges();
-        if (!ch || !ch->entryList) return 0;
-        for (auto* e : *ch->entryList) {
-            if (!e || e->object != a_base || !e->extraLists) continue;
-            for (auto* xl : *e->extraLists) {
-                const bool worn = a_hand == 0 ? (xl && xl->HasType(RE::ExtraDataType::kWorn))
-                                : a_hand == 1 ? (xl && xl->HasType(RE::ExtraDataType::kWornLeft))
-                                              : IsWornXList(xl);
-                if (!worn) continue;
-                if (auto* uid = xl->GetByType<RE::ExtraUniqueID>()) return uid->uniqueID;
-            }
-        }
+        const auto inv = InvSnap::Items(a_actor);   // named: the view owns the snapshot the entry lives in
+        if (const auto* e = inv.Find(a_base))        // not yet = 0 (no uid known this tick)
+            for (const auto& c : e->copies)
+                if (WornInHand(c, a_hand) && c.hasUid) return c.uid;
         return 0;
     }
 
@@ -242,12 +236,13 @@ namespace MFO::MEOBridge {
         }
         if (mine.empty()) return;
         std::set<std::pair<RE::FormID, std::uint16_t>> present;
-        for (auto& [o, d] : a_actor->GetInventory()) {
+        const auto inv = InvSnap::Items(a_actor);
+        if (!inv) return;   // not readable (never on the main thread): no hold is pruned on an unread pack
+        for (auto& [o, d] : inv) {
             auto* e = d.second.get();
-            if (!o || !e || !e->extraLists) continue;
-            for (auto* xl : *e->extraLists)
-                if (auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr)
-                    present.insert({ o->GetFormID(), u->uniqueID });
+            if (!o || !e) continue;
+            for (const auto& c : e->copies)
+                if (c.hasUid) present.insert({ o->GetFormID(), c.uid });
         }
         std::scoped_lock lk(g_mx);
         for (const auto& k : mine)
@@ -551,7 +546,7 @@ namespace MFO::MEOBridge {
                 if (auto* sh = left->As<RE::TESObjectARMO>(); sh && sh->IsShield()) worn |= kBlock;
                 else worn |= weaponBits(left->As<RE::TESObjectWEAP>());
             }
-            if (auto* body = a_actor ? a_actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr) {
+            if (auto* body = a_actor ? InvSnap::Items(a_actor).WornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr) {
                 if (body->IsHeavyArmor())      worn |= kHeavy;
                 else if (body->IsLightArmor()) worn |= kLight;
             }
@@ -671,19 +666,11 @@ namespace MFO::MEOBridge {
         // flag, and its identity: an identical dual-wield pair is TWO worn instances
         // of one base -- Fable SEV-4 on 1efa3e3 -- so a weapon is looked up by its
         // HAND: a_hand 0 = right (kWorn), 1 = left (kWornLeft), -1 = either (armor).
-        RE::ExtraDataList* WornXList(RE::Actor* a_actor, const RE::TESBoundObject* a_base, int a_hand) {
-            auto* ch = a_actor ? a_actor->GetInventoryChanges() : nullptr;
-            if (!ch || !ch->entryList) return nullptr;
-            for (auto* e : *ch->entryList) {
-                if (!e || e->object != a_base || !e->extraLists) continue;
-                for (auto* xl : *e->extraLists) {
-                    if (!xl) continue;
-                    const bool worn = a_hand == 0 ? xl->HasType(RE::ExtraDataType::kWorn)
-                                    : a_hand == 1 ? xl->HasType(RE::ExtraDataType::kWornLeft)
-                                                  : IsWornXList(xl);
-                    if (worn) return xl;
-                }
-            }
+        // (INVARIANTS #84: the worn COPY inside a_inv's snapshot, by value; it lives as long as a_inv does.)
+        const InvSnap::Copy* WornXList(const InvSnap::View& a_inv, const RE::TESBoundObject* a_base, int a_hand) {
+            if (const auto* e = a_inv.Find(a_base))
+                for (const auto& c : e->copies)
+                    if (WornInHand(c, a_hand)) return &c;
             return nullptr;
         }
 
@@ -815,23 +802,23 @@ namespace MFO::MEOBridge {
             //    SEV-4 on 1efa3e3: deduping by base hid the second dagger). A weapon
             //    with no worn xList for its hand is skipped -- MEO could not mint it in
             //    place either (its uid-0 path wants a worn xList, MEO plugin.cpp:9143).
-            struct WornItem { RE::FormID base; std::uint16_t uid; bool isArmor; bool xlEnchanted; const RE::ExtraDataList* xl; };
+            struct WornItem { RE::FormID base; std::uint16_t uid; bool isArmor; bool xlEnchanted; const InvSnap::Copy* xl; };
             std::vector<WornItem> items;
+            const auto inv = InvSnap::Items(a_actor);   // ONE read for the whole pass (main thread: the live list, in place)
             auto addItem = [&](RE::TESBoundObject* a_obj, bool a_isArmor, int a_hand) {
                 if (!a_obj) return;
                 const RE::FormID base = a_obj->GetFormID();
-                auto* xl = WornXList(a_actor, a_obj, a_hand);
+                auto* xl = WornXList(inv, a_obj, a_hand);
                 if (!xl) return;
                 for (const auto& it : items) if (it.base == base && it.xl == xl) return;   // dedupe (armor covers many biped slots)
-                std::uint16_t uid = 0;
-                if (auto* x = xl->GetByType<RE::ExtraUniqueID>()) uid = x->uniqueID;
-                items.push_back({ base, uid, a_isArmor, xl->HasType(RE::ExtraDataType::kEnchantment), xl });
+                const std::uint16_t uid = xl->hasUid ? xl->uid : std::uint16_t{ 0 };
+                items.push_back({ base, uid, a_isArmor, xl->hasEnch, xl });
             };
             for (int hand = 0; hand < 2; ++hand)
                 if (auto* eq = a_actor->GetEquippedObject(hand == 1))
                     if (auto* w = eq->As<RE::TESObjectWEAP>(); w && MeoSocketableWeapon(w)) addItem(w, false, hand);
             for (const auto s : kMeoArmorSlots)
-                if (auto* w = a_actor->GetWornArmor(s); w && MeoSocketableArmor(w)) addItem(w, true, -1);
+                if (auto* w = inv.WornArmor(s); w && MeoSocketableArmor(w)) addItem(w, true, -1);
 
 
             // Stall detector inputs: a fingerprint of this pass's loose-gem set and

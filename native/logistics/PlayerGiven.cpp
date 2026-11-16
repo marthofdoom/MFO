@@ -82,6 +82,7 @@ namespace MFO::PlayerGiven {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(a_follower);
             if (!a) return;   // unresolvable: keep (fail closed); revert clears it
             std::int32_t have = 0;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             for (auto& [obj, cnt] : a->GetInventoryCounts(
                      [a_base](RE::TESBoundObject& x) { return x.GetFormID() == a_base; }, false))
                 have += cnt;

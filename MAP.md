@@ -4,8 +4,8 @@ A **blast-radius map**, not a symbol index. Its job is to tell you what a change
 *breaks* before you make it. Every non-trivial claim carries a `file:line`
 citation so you can re-check it against the live code.
 
-Complements the prose docs: `Docs/INVARIANTS.md` (97 rules — 83 numbered `#1`–
-`#83` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
+Complements the prose docs: `Docs/INVARIANTS.md` (98 rules — 84 numbered `#1`–
+`#84` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
 engine mechanisms). This map is the "what-depends-on-what" layer those don't
 carry. `Docs/ARCHITECTURE.md` is HISTORICAL (2026-09-07 banner): it describes a
 pre-implementation design and contradicts shipped code; do not use it as intent.
@@ -2995,6 +2995,122 @@ a job worker here, not main).
   run on VR check `IsInstalled()` and fall back to a direct call.
 - `Clear()` (`:79`) — caller `Serialization.cpp:690`; drops pending work whose
   captured handles would re-resolve against the next session's reused handle table.
+- **WHICH THREAD IS THIS (2026-11-16, `fix/worker-snapshots`, INVARIANTS `#84`).** `InSeat()` (thread-local, set by the thunk's
+  `SeatScope` around the engine's player Update AND the drain), `IsMainThread()` (the thread id the thunk last ran on, unknown until
+  the first frame), `InWorkerTick()` (thread-local, set by `WorkerTickScope` in the pump's tick body, `Diagnostics.cpp`) and
+  `LiveReadsAllowed()` = no pump installed, OR (never inside a worker tick, and) in the seat or on the main thread. `InvSnap::Get` and
+  `EffectMirror::Get` branch on it. `NoteLiveRead(site)` / `NoteWriteRead(site)` are the invariant's self-check (see the section
+  "THE WORKER SNAPSHOTS" below).
+  - **What breaks:** `LiveReadsAllowed()` true on the worker = every reader walks live lists again (the race #84 removes). The
+    worker-tick flag is checked BEFORE the seat flag and the thread id on purpose: the job system may run the AddTask body on any
+    thread, the main one included, and that body must still read snapshots. Do not "simplify" it to a thread-id compare.
+- **P0 OVERLAP PROBE (same branch; passive, always on, no INI key).** The open question of INVARIANTS `#74`: does the worker tick
+  run WHILE the main thread is inside the player's Update, or while an NPC is inside `Character::UpdateCombat`? Main half here:
+  `SeatSeq` (odd inside the thunk, bumped at entry and exit), `SeatPhase` (1 the engine's update, 2 MFO's drain), `SeatSawWorker`
+  (thunk edges that found a tick in flight), `NpcCombatScope` (wrapped around the ORIGINAL in `Targeting.cpp`'s UpdateCombat
+  thunk: two atomics, nothing else). Worker half in `Diagnostics.cpp`: `OverlapTick` (the sequence detector: any overlap of a tick
+  with the thunk or with an UpdateCombat call), `HbStage` samples (names the first stage seen inside each phase), and one
+  `[overlap]` line per 60 s from the sleeper: `worker ticks`, `overlappedPlayerUpdate`, `overlappedNpcUpdateCombat`,
+  `ranOnMainThreadId`, the stage samples with the first stage of each kind, the main-side count, then the two #84 counts
+  (`live reads off the main thread` must be 0; `worker-side writes reading their own live list` is the M2 residue).
+  The line ends with `ticks skipped by the snapshot gate` and the build pass's measured cost on the main thread (`runs`, `avg`
+  and `worst` in microseconds). (`overlappedNpcUpdateCombat` and `inNpcUpdateCombat` stay 0 when the
+  UpdateCombat hook is not installed: `bCommandTarget`, `bWeaponStyleControl` and `iCastControl` all off, or an unverified build.)
+  **Reading it:** `overlappedPlayerUpdate=0` and `overlappedNpcUpdateCombat=0` across a looting session and a combat session =
+  the threads are phased (the audit's off-main rows stay SEV-3/4). Any non-zero = they overlap (M1/M4 were live races, H1 is one).
+  - **What breaks:** the scopes are in the hot path of every frame and every combatant's UpdateCombat. Keep them to relaxed atomics.
+    A lock or a log line there is a frame-time regression for the whole game.
+
+### THE WORKER SNAPSHOTS: `logistics/InvSnapshot.*` + `iaus/EffectMirror.*` (2026-11-16, `fix/worker-snapshots`, tier A threading; INVARIANTS `#84`, ENGINE_NOTES 0.30 amendment 2026-11-16; NOT merged, NOT field-run; NO co-save, ABI, address-id, INI or ESP change)
+The worker never walks an engine inventory list or active-effect list. It reads value copies the main thread builds.
+- **`InvSnap` (`native/logistics/InvSnapshot.h`, the public header other subsystems include).** `Items(ref[, noInit])` returns a
+  `View` shaped like the old `ref->GetInventory()` map: `for (auto& [obj, data] : InvSnap::Items(a))`, `data.first` the count,
+  `data.second` a never-null `unique_ptr<Entry>` (`IsWorn()`, `IsQuestObject()`, `IsEnchanted()`, `GetValue()`, `copies`). `Copy`
+  = one ExtraDataList by value (`n`, `worn`, `wornLeft`, `hasOwnership` / `owner`, `hasUid` / `uid`, `hasCharge` / `charge`,
+  `hasEnch` / `ench` / `enchCharge`, `hasHealth` / `health`, `hasText` / `displayName`, `cannotWear`, `questAlias`, `token`).
+  `View::Find / Count / WornArmor(slot | formID) / find / empty`. A null view (`if (!inv)`) = NOT YET.
+  `BuildLive` is the walk: the same two passes, order and rules as the fork's `TESObjectREFR::GetInventory`
+  (`src/RE/T/TESObjectREFR.cpp:331`: changes entries by `countDelta`, then base container objects unless the entry is leveled).
+  Slots are keyed by FormID and carry the asker's ref ADDRESS as an identity token: the main build publishes only when
+  `LookupByID` returns that same object (a reused temporary id names another one).
+- **`EffectMirror` (`native/iaus/EffectMirror.h`).** `Get(actor | formID)` returns a `Mirror`: `fx` (per effect: `spell`, `base`,
+  `inactive`, `dispelled`, `duration`, `elapsed`, `magnitude`, `summon` / `reanimate`, `commandedResolved` / `commandedLive` /
+  `commandedId`), and `HasMagicEffect(base)` = the ENGINE's own `MagicTarget::HasMagicEffect` answer: the set of non-null base
+  MGEFs the same list walk sees (no per-base engine call since review F7 of 35a8a778; the function's disassembly in all three
+  executables, ENGINE_NOTES 0.30 amendment, is the proof that set IS its answer). Each pass mirrors the player, every actor in `ProcessLists::highActorHandles`, and any id asked for in the
+  last ~15 s. `SpellBook::WantFoeFx / FoeFx` are views of it (the old foe-only cache and its 0.5 s / 4 s timers are gone).
+- **The tick bracket (`Diagnostics.cpp`).** `SnapshotsBeginTick` (after `Followers::Refresh`): `InvSnap::BeginTick(paused)`, then
+  `Want` every `Followers::g_active` actor (inventory and effects) and the player's EFFECTS only. `SnapshotsReadyForTick` = THE
+  TICK GATE: the body is skipped unless all of those are readable. THE PLAYER'S PACK is not a standing slot (review F2 of
+  35a8a778: a huge pack rebuilt with GetValue per entry every 133 ms): it is a SOURCE slot asked on demand by its only worker
+  readers, the Board's teachable-spell picker (`Board.cpp` row build, only while the board is OPEN) and `TeachSpellNow` (an
+  unread pack returns NotYet, the edit is queued again via `QueueEdit` and `[board] teach ... waits` is logged). `SnapshotsEndTick`: ONE `MainThread::Post` of `InvSnap::BuildPass(tick)` +
+  `EffectMirror::BuildPass(tick)`, behind every post the tick made (FIFO). A pass a newer queued one supersedes returns at once.
+  Under a pause one queued pass waits (no pass per paused tick), and `MainThread::ClearGeneration` un-queues it after a revert.
+- **Freshness (worker ticks, 133 ms).** THE PARTY'S RULE (`InvSnap::TickClock::needPass`, `PassReached`; both snapshot kinds):
+  a party member's snapshot / mirror (and the player's mirror) is readable in tick t only when the build pass tick t-1 posted has
+  published it. That pass is queued behind everything tick t-1 posted, so tick t reads what tick t-1 wrote or asked for, and
+  a main thread slower than the tick makes the worker skip ticks (the gate), never run ahead. A PAUSED tick is exempt (no pass
+  can run, no follower decision is made, `Packages::Pump` must still run): it reads what is published. SOURCES and non-party actors (`InvSnap::FreshEnough`): InvSnapshot.cpp
+  `kSourceRefreshTicks` 4, `kSourceMaxAgeTicks` 16, `kWantTtlTicks` 112 (~15 s), `kSourceBudget` 32 per pass; EffectMirror.cpp
+  `kMaxAgeTicks` 4, `kWantTtlTicks` 112; no aging in a paused tick, and an unpaused tick needs a build made since the pause.
+- **THE PASS AND THE TICK BODY ALTERNATE (unpaused).** The pass of tick t is posted at the END of tick t's body, and tick t+1's
+  body does not start until that pass has published the party (the gate; the effect mirrors are published last, at the very end
+  of the closure). So MFO's main-thread walks of the party's inventories and of the effect lists never run while the tick body
+  runs, and therefore never beside a worker-side write the body makes (the audit's M2 / M3 residue). Not covered: a tick that
+  BEGAN paused (exempt from the gate) whose body is still running when the first frame after the pause drains the queued pass,
+  and `RebuildOnMain` in the transfer drain (it runs in whatever frame the transfer lands, as `RunTransfer`'s own live read and
+  `RemoveItem` always did). The `[overlap]` line's `inMfoDrain` sample says how often a tick stage ran while the drain did.
+- **Our own writes.** Worker-side: `InvSnap::Touch(ref)` after the write (a SOURCE stays readable for the rest of that tick, then
+  is withheld until rebuilt; for a party member the call changes nothing, the party's rule already puts the next read behind
+  the write; the player's pack is a source here). Sites: `TheftGate` `MoveNow` (container road), `GemRules::TakeAndProbe` (container road), `LearnCarriedTomes`
+  (`logistics/Cast.cpp`), `TeachSpellNow` (`Board.cpp`, the player), `KeepHeadClear` (`logistics/Gear.cpp`), the smith charge
+  (`logistics/ErrandSmith.cpp`), the two drinks (`Service.cpp` `DrinkBest`, `PotionFx.cpp` `DrinkPotionForm`). Main-side:
+  `InvSnap::RebuildOnMain(ref)` in `TheftGate` `DrainTransfers` (each distinct source and follower the batch wrote, ONCE per
+  drain batch after every queued job ran, BEFORE the drain pops those entries, so
+  `QueuedOut` / `LandingHold` / `InFlightWeight` never read "nothing queued" beside the pre-take pack) and in
+  `Lotd` `TransferOnMain`. Equips are not touched: worn flags always lagged the call (the engine may queue an equip).
+- **Readers converted (every former `GetInventory` / `GetInventoryCounts` / `GetWornArmor` / `GetActiveEffectList` /
+  `HasMagicEffect` reachable from the worker):** `logistics/` TheftGate (`CorpseGuardWaived`, `Analyse`), LootTake (AmmoCount,
+  CoinCount and the eight `LootX`), LootScan (the pick-locks emptiness read), LootEquipment, LootNeed, Lotd, SwapUp, Silver,
+  Gear, GemRules (`Check`, `FindGemCandidate`), Economy, EquipAuthority (incl. the jewelry instance: `JewelInst` holds values),
+  ErrandRest, ErrandShops, ErrandSmith, Storage, Lockpick, Upkeep, PotionFx, Service, Cast, `Logistics_internal.h`
+  `EnsureStockSnapshot`; `cast/` Equip, EquipSilver, EquipWeigh, Summon (`CasterHasLiveSummon`), Auto (`ShouldApplyTo`),
+  SubstrateRoad; `apmf/` SpellAllowList, StyleClaims; `iaus/SpellBook.cpp` (FoeFx; the book's own reads were on main
+  already); `MEOBridge.cpp`; `Loadout.cpp`; `Board.cpp`; `ProgProbe.cpp`; `selftest/` Runner + TestsDrive.
+- **Live reads that remain, each self-checked (`MainThread::NoteLiveRead`), all main thread:** SelfStatus `ReadPoisoned`,
+  SpellBook `EffectLive / LiveFx / LiveBuffKinds` (inside `Measure`), `Inherit.cpp` `CollectMgefPerks`, SummonProbe, `Summon.cpp`
+  `SummonGate`, ProxySave (save / load handlers), ErrandRest's posted magic probe, `SustainConcentrationEffect` /
+  `SpellEffectPresentOn` / `DispelSpellEffectsOn` / `PumpSelfBuffReadback` (they WRITE the effect), Steal's `OwnedTakeOnMain`
+  helpers, `PlayerGiven::RecountOnMain`. **Counted exceptions (`NoteWriteRead`, the M2 residue):** `TheftGate` `AnalyseLive`
+  under the container-road `MoveNow`, and `GemRules` `FindOwned` + the uid re-find in `TakeAndProbe`.
+- **To add a fact a reader needs:** a field in `InvSnap::Copy` (per ExtraDataList) or `Entry` (per item) in `InvSnapshot.h`,
+  filled in `CopyOf` / `EntryOf` in `InvSnapshot.cpp` (main thread). For an effect: a field in `EffectMirror::Fx`, filled in
+  `EffectMirror::BuildLive`. **To change a freshness number:** the constants block at the top of each `.cpp`, counted in
+  ticks. **To add a reader:** `InvSnap::Items(ref)` / `EffectMirror::Get(actor)`, decide what NOT YET means there (rule 1 of
+  #84), never `GetInventory` on a path the tick can reach. **To add a worker-side write:** do not. Post it, or go through the
+  `TheftGate` queue. If one must exist for a while, `Touch` after it and `NoteWriteRead` at its read.
+- **What breaks if you change this:**
+  - **Treating NOT YET as empty.** `EnsureStockSnapshot` would record (and SAVE) an empty stock set, `Lotd` would hand a
+    follower's relic slots to another coverer and prune his seen-unworn proofs, `MEOBridge::PruneGoneHolds` and
+    `GemRules::Check` would release gem holds, `PotionFx::ConfirmDrinks` and `Storage::Tick` would confirm a move that never
+    happened, `Service.cpp`'s acquire confirm would latch the coin-purse road off. Each has its guard: keep it.
+  - **Removing or weakening the tick gate.** Every party reader then needs its own NOT YET branch (about 80 sites have none
+    because the gate makes it unreachable in a tick).
+  - **Making readability change inside a tick** (dropping a snapshot on a failed build, aging by wall clock, withholding at
+    `Touch` time). The gate's promise is gone: a reader late in the tick reads NOT YET after an early one read the pack.
+  - **Labelling a build with a later tick than the one that posted it, or moving `builtPass` in `RebuildOnMain`.** The party's
+    rule means "this build ran behind everything that tick posted". `RebuildOnMain` runs in the middle of the queue, so it
+    replaces the content and leaves the label. A wrong label lets a tick confirm from a pack that predates its own posted write:
+    `Service.cpp`'s coin-purse readback would then read "harvested but not credited" and latch that road off for the session.
+  - **Keeping an `ExtraDataList*` from a snapshot** (`Copy::token` is the address as a number, for identity only). It may be
+    freed. A write re-finds the copy by its unique id where it writes.
+  - **Reading a live list in a new place without `NoteLiveRead`.** The self-check is the only thing that would say so.
+  - **Posting more than one build pass a tick, or building in the engine's update instead of the drain.** The pass is the
+    main-thread cost of this design (party inventories + every high actor's effects, once per 133 ms).
+  - `InvSnap::Clear` / `EffectMirror::Clear` run in `ResetAllState` after `StopPump` + `MainThread::Clear` (FormIDs are reused
+    across loads). Moving them before `StopPump` races the tick.
+  - Open findings: Docs/REVIEW-BACKLOG.md MFO-B858 (what #84 leaves open).
 
 ---
 
@@ -4267,10 +4383,15 @@ module. Module layout:
   cost pacing and reduce no risk). An open inventory menu (`InventoryMenuOpen`, `Logistics_internal.h`, shared with Storage) makes
   `RunTransfer` return FALSE untouched: the drain reposts itself (next frame), queue order intact. A non-actor source (chest), a call already on main (the steal road,
   `OnMainThread` = the drain's thread id) and a runtime with no live pump (said once) keep the direct `MoveNow`.
-  THE WORKER NEVER WAITS; its LOGIC is kept honest by three reads of the queue (an entry stays queued while the drain runs it). This is
-  logic honesty only, not data-race freedom: the worker's reads of the corpse / follower inventories (`Analyse` / `GetInventory` in
-  `Takeable` / `Take`, `DeclareAtExit`, IAUS `ReadLootInv`) still race main-thread writes (the old race, the other direction; the optional
-  Dekker gate is in Docs/REVIEW-BACKLOG.md, section 4cb790da). The three reads:
+  THE WORKER NEVER WAITS; its LOGIC is kept honest by three reads of the queue (an entry stays queued while the drain runs it).
+  SINCE 2026-11-16 (`fix/worker-snapshots`, INVARIANTS `#84`) the worker's reads of the corpse / follower inventories no longer race
+  the drain: `Analyse` (every worker decision) reads the source's main-built snapshot (`InvSnap`), `AnalyseLive` (the old walk, with
+  the live extra lists) is called only by `MoveNow` and `RunTransfer` for the write they make. The drain runs EVERY queued job
+  (each stays queued while it runs), then replaces each distinct ref's snapshot ONCE (`InvSnap::RebuildOnMain`, collected by
+  `RunTransfer` via `AddRebuild`), then pops the entries that ran (by seq) and fires their follow-ups: N item kinds from one
+  corpse = one rebuild of each pack, not N (review F1 of 35a8a778). A source whose snapshot is not readable yet is a Pending
+  refusal (`TheftGate::NoteInventoryNotYet`, `GuardRefusal::notYet`, recorded with `landing = true`: the same 150 ms retry, never
+  DONE). See "THE WORKER SNAPSHOTS" in section 2. The three reads:
   `QueuedOut(src, item)` is subtracted in `Takeable` / `Take` (queued copies are not offered twice, to him or to another follower);
   `InFlightWeight(follower)` is added in `FitsCarryWeight` (`LootTake.cpp`); `LandingHold(follower, form type)` makes `Takeable` return FALSE
   with a Pending refusal (`GuardRefusal::landing`) while an item of the candidate's FORM TYPE is still on its way to him, so no count or
@@ -4574,7 +4695,7 @@ anonymous-namespace copy — that silently forks the instance).
   DIRECT `data` member, which on our SE+AE+VR build is the header's `#else` layout (0xB0, inside
   TESWeightForm, not 0x110): the "flags" it tested were the low byte of the weight float, so with no
   patcher catalog bow users bought and looted bolts. Every TESAmmo member read in `native/` goes through
-  `GetRuntimeData()` (SwapUp, TradeBridge; the `[arrowprobe]` diagnostic in `LootScan.cpp` now calls
+  `GetRuntimeData()` (SwapUp, TradeBridge; the `[arrowprobe]` diagnostic in `LootScan.cpp`, REMOVED 2026-11-16 with `fix/worker-snapshots`, called
   `AmmoIsBolt`). The fork fix is a separate brief (STATUS).
 - **Alias/travel:** `g_travelSlots` (`logistics/LootTravel_internal.h:91`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call

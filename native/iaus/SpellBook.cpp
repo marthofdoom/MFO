@@ -10,6 +10,7 @@
 #include "cast/Actuation.h"
 #include "iaus/ClassCurves.h"
 #include "iaus/Fills.h"
+#include "iaus/EffectMirror.h"   // INVARIANTS #84: the one per-actor effect mirror (FoeFx reads it)
 #include "logistics/Logistics.h"
 #include "logistics/PotionFx.h"   // feat/buff-potions: the buff kinds of a carried / live potion
 
@@ -57,10 +58,6 @@ namespace MFO::Iaus::SpellBook {
         std::unordered_map<RE::FormID, Slot> g_books;
         std::unordered_set<RE::FormID>       g_dropLogged;   // once per spell per session
         std::unordered_set<RE::FormID>       g_probeLogged;  // the passive probes: once per spell / staff per session
-        struct FoeSlot { std::vector<FxKey> fx; Clock::time_point stamp{}; Clock::time_point asked{}; };
-        std::unordered_map<RE::FormID, FoeSlot> g_foeFx;   // under g_mx
-        constexpr double kFoeFxAskSec   = 0.5;   // re-read a foe at most this often
-        constexpr double kFoeFxTrustSec = 4.0;   // a read older than this is not used (the lap period is N x 133 ms, principle 9)
         std::uint32_t                        g_gen = 0;      // bumped by Clear: a pre-Clear refresh is dropped
 
         double Age(const Clock::time_point& a_then, const Clock::time_point& a_now) {
@@ -78,6 +75,7 @@ namespace MFO::Iaus::SpellBook {
         // MAIN THREAD: a live (not dispelled, not inactive) effect of a_spell on a_actor (SelfStatus's walk).
         bool EffectLive(RE::Actor* a_actor, const RE::MagicItem* a_spell) {
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return false;
             for (auto* ae : *list) {
@@ -103,6 +101,7 @@ namespace MFO::Iaus::SpellBook {
         std::vector<FxKey> LiveFx(RE::Actor* a_actor) {
             std::vector<FxKey> out;
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return out;
             for (auto* ae : *list) {
@@ -137,6 +136,7 @@ namespace MFO::Iaus::SpellBook {
         std::array<bool, kBuffKinds> LiveBuffKinds(RE::Actor* a_actor) {
             std::array<bool, kBuffKinds> live{};
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return live;
             for (auto* ae : *list) {
@@ -415,7 +415,7 @@ namespace MFO::Iaus::SpellBook {
         // MAIN THREAD. The current charge of one carried staff stack. An EQUIPPED staff's live charge is the
         // actor value of its hand; an unequipped one carries it in ExtraCharge, and a stack with no ExtraCharge
         // has never been used (full: the record's EAMT).
-        float StaffCharge(RE::Actor* a_actor, RE::TESObjectWEAP* a_staff, const RE::InventoryEntryData* a_entry,
+        float StaffCharge(RE::Actor* a_actor, RE::TESObjectWEAP* a_staff, const InvSnap::Entry* a_entry,
                           Probes& a_probes) {
             auto* avo = a_actor->AsActorValueOwner();
             {   // MFO-B656: every input of the charge read, so one field log settles which of them is the truth.
@@ -425,9 +425,9 @@ namespace MFO::Iaus::SpellBook {
                 const float avL = avo ? avo->GetActorValue(RE::ActorValue::kLeftItemCharge) : 0.0f;
                 bool  hasExtra = false;
                 float extra = 0.0f;
-                if (a_entry && a_entry->extraLists)
-                    for (auto* xl : *a_entry->extraLists)
-                        if (auto* xc = xl ? xl->GetByType<RE::ExtraCharge>() : nullptr) { hasExtra = true; extra = xc->charge; break; }
+                if (a_entry)
+                    for (const auto& c : a_entry->copies)
+                        if (c.hasCharge) { hasExtra = true; extra = c.charge; break; }
                 auto* ench = a_staff->formEnchanting;
                 const float per = ench ? ench->CalculateMagickaCost(a_actor) : 0.0f;
                 a_probes.emplace_back(a_staff->GetFormID(),
@@ -442,9 +442,9 @@ namespace MFO::Iaus::SpellBook {
                 return avo->GetActorValue(RE::ActorValue::kRightItemCharge);
             if (avo && a_actor->GetEquippedObject(true) == a_staff)
                 return avo->GetActorValue(RE::ActorValue::kLeftItemCharge);
-            if (a_entry && a_entry->extraLists)
-                for (auto* xl : *a_entry->extraLists)
-                    if (auto* xc = xl ? xl->GetByType<RE::ExtraCharge>() : nullptr) return xc->charge;
+            if (a_entry)
+                for (const auto& c : a_entry->copies)
+                    if (c.hasCharge) return c.charge;
             return static_cast<float>(a_staff->amountofEnchantment);
         }
 
@@ -526,7 +526,7 @@ namespace MFO::Iaus::SpellBook {
 
             std::vector<Entry> scrolls, staves;
             book->kit.gold = 0.0f;   // a readable inventory with no Gold001 is a follower with no gold (unknown stays -1 only if the read never ran)
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* w = obj->As<RE::TESObjectWEAP>()) {
                     if (w->IsStaff()) {
@@ -755,54 +755,27 @@ namespace MFO::Iaus::SpellBook {
         if (auto it = g_books.find(a_new); a_new != 0 && it != g_books.end()) ++it->second.dirtySeq;
     }
 
+    // THE FOE MIRROR IS THE ONE EFFECT MIRROR NOW (INVARIANTS #84, iaus/EffectMirror.h): the main thread mirrors every high-process
+    // actor's effect list once per worker tick, so a foe's effects are one tick old instead of up to kFoeFxAskSec + a lap, and there
+    // is no second cache here. WantFoeFx keeps a foe mirrored when he is not in the high list; FoeFx is the same answer LiveFx gives
+    // (every live effect by its base MGEF), empty while the mirror has no readable entry for him (then nothing is pruned on it).
     void WantFoeFx(const std::vector<RE::FormID>& a_foes) {
-        if (a_foes.empty() || !MainThread::IsInstalled()) return;
-        const auto now = Clock::now();
-        std::vector<RE::FormID> due;
-        std::uint32_t gen = 0;
-        {
-            std::scoped_lock lk(g_mx);
-            gen = g_gen;
-            for (auto it = g_foeFx.begin(); it != g_foeFx.end();)   // forget foes not asked for a while
-                it = (Age(it->second.asked, now) > 30.0) ? g_foeFx.erase(it) : std::next(it);
-            for (const auto id : a_foes) {
-                auto& s = g_foeFx[id];
-                if (s.asked.time_since_epoch().count() != 0 && Age(s.asked, now) < kFoeFxAskSec) continue;
-                s.asked = now;
-                due.push_back(id);
-            }
-        }
-        if (due.empty()) return;
-        MainThread::Post([due = std::move(due), gen]() {
-            std::vector<std::pair<RE::FormID, std::vector<FxKey>>> read;
-            for (const auto id : due) {
-                auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
-                if (a && !a->IsDead()) read.emplace_back(id, LiveFx(a));
-            }
-            const auto stamp = Clock::now();
-            std::scoped_lock lk(g_mx);
-            if (gen != g_gen) return;
-            for (auto& [id, fx] : read) {
-                auto& s = g_foeFx[id];
-                s.fx    = std::move(fx);
-                s.stamp = stamp;
-            }
-        });
+        for (const auto id : a_foes) EffectMirror::Want(id);
     }
 
     std::vector<FxKey> FoeFx(RE::FormID a_foe) {
-        const auto now = Clock::now();
-        std::scoped_lock lk(g_mx);
-        const auto it = g_foeFx.find(a_foe);
-        if (it == g_foeFx.end() || it->second.stamp.time_since_epoch().count() == 0 || Age(it->second.stamp, now) > kFoeFxTrustSec) return {};
-        return it->second.fx;
+        std::vector<FxKey> out;
+        const auto fx = EffectMirror::Get(a_foe);
+        if (!fx) return out;
+        for (const auto& f : fx->fx)
+            if (f.base && f.Live()) out.push_back(FxOf(f.base));
+        return out;
     }
 
     void Clear() {
         std::scoped_lock lk(g_mx);
         ++g_gen;
         g_books.clear();
-        g_foeFx.clear();
         g_dropLogged.clear();
         g_probeLogged.clear();
     }

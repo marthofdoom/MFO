@@ -94,7 +94,7 @@ namespace MFO::Logistics {
             std::uint64_t key = 1469598103934665603ull;   // FNV-1a offset (never 0)
             for (int i = 0; i < 5; ++i) {
                 worn[i] = (kRows[i].slot == Slot::kHead) ? WornInLogicalSlot(a_follower, 0)
-                                                         : a_follower->GetWornArmor(kRows[i].slot);
+                                                         : InvSnap::Items(a_follower).WornArmor(kRows[i].slot);
                 key = (key ^ (worn[i] ? worn[i]->GetFormID() : 0u)) * 1099511628211ull;
             }
             key = (key ^ (a_clothing ? 0x43u : (a_pref.heavyClass ? 0x48u : 0x4Cu))) * 1099511628211ull;
@@ -172,7 +172,7 @@ namespace MFO::Logistics {
             for (const auto slot : kSlots) {
                 if (!(mask & static_cast<std::uint32_t>(slot))) continue;
                 overlapsAny = true;
-                if (beatenBy(a_follower->GetWornArmor(slot))) return false;
+                if (beatenBy(InvSnap::Items(a_follower).WornArmor(slot))) return false;
             }
             // Acquirable if it actually covers an armor slot (skip amulets/rings
             // whose bits are not in kSlots) and was beaten on none it would
@@ -205,7 +205,7 @@ namespace MFO::Logistics {
             const float cand = ArmorScore(a_pref, a_armo);
             const auto  mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
             if (mask == 0) return false;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* have = obj->As<RE::TESObjectARMO>();
                 if (!have || have == a_armo || IsCreatureArmor(have)) continue;
@@ -335,7 +335,7 @@ namespace MFO::Logistics {
             // mutates the inventory map.
             struct Hit { RE::TESObjectARMO* armo; std::int32_t count; bool del; const char* why; };
             std::vector<Hit> hits;
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!data.second || !data.second->IsWorn()) continue;
                 auto* armo = obj ? obj->As<RE::TESObjectARMO>() : nullptr;
                 if (!armo) continue;
@@ -364,8 +364,10 @@ namespace MFO::Logistics {
                 // marth 2026-10-18: no hand-back. A non-playable piece is DELETED; a playable one that will not
                 // render is only taken off (above) and stays for the sale path (ArmorWontRender keeps it out
                 // of every wear pick and keep set).
-                if (h.count > 0 && h.del)
+                if (h.count > 0 && h.del) {
                     a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                    InvSnap::Touch(a_actor);   // a worker-side write (stability audit M2 moves it): his snapshot is behind it
+                }
                 spdlog::info("[evict] {:08X}: {} {} '{}' ({:08X}) count={}",
                              a_actor->GetFormID(), h.del ? "DELETED" : "unequipped (kept for sale)",
                              h.why, nm ? nm : "?", h.armo->GetFormID(), h.count);
@@ -449,7 +451,7 @@ namespace MFO::Logistics {
         AmmoOwned CountAmmoOwned(RE::Actor* a_follower) {
             AmmoOwned o;
             if (!a_follower) return o;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* am = obj->As<RE::TESAmmo>()) (AmmoIsBolt(am) ? o.bolts : o.arrows) += data.first;
             }
@@ -487,7 +489,7 @@ namespace MFO::Logistics {
             std::vector<RE::TESObjectWEAP*> rangedCandidates;   // playable, non-relic ranged weapons carried
             std::vector<RE::TESObjectWEAP*> rangedRelics;       // museum relics: a pool of last resort
             AmmoOwned ammoOwned;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* w = obj->As<RE::TESObjectWEAP>()) {
                     switch (WeaponClassOf(w->GetWeaponType())) {
@@ -719,7 +721,7 @@ namespace MFO::Logistics {
         // of bLootSpecialItems (marth's decision); a base-record catalog
         // exclusion is a coarser, author-time signal and is what the toggle
         // governs.
-        bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry) {
+        bool IsQuestObjectInstance(const InvSnap::Entry* a_entry) {
             return a_entry && a_entry->IsQuestObject();
         }
 
@@ -759,15 +761,15 @@ namespace MFO::Logistics {
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
             switch (a_logicalSlot) {
             case 0:
-                if (auto* w = a_follower->GetWornArmor(Slot::kHead))    return w;
-                if (auto* w = a_follower->GetWornArmor(Slot::kHair))    return w;
-                if (auto* w = a_follower->GetWornArmor(Slot::kCirclet)) return w;
+                if (auto* w = InvSnap::Items(a_follower).WornArmor(Slot::kHead))    return w;
+                if (auto* w = InvSnap::Items(a_follower).WornArmor(Slot::kHair))    return w;
+                if (auto* w = InvSnap::Items(a_follower).WornArmor(Slot::kCirclet)) return w;
                 return nullptr;
-            case 1: return a_follower->GetWornArmor(Slot::kBody);
-            case 2: return a_follower->GetWornArmor(Slot::kHands);
-            case 3: return a_follower->GetWornArmor(Slot::kFeet);
-            case 4: return a_follower->GetWornArmor(Slot::kRing);
-            case 5: return a_follower->GetWornArmor(Slot::kAmulet);
+            case 1: return InvSnap::Items(a_follower).WornArmor(Slot::kBody);
+            case 2: return InvSnap::Items(a_follower).WornArmor(Slot::kHands);
+            case 3: return InvSnap::Items(a_follower).WornArmor(Slot::kFeet);
+            case 4: return InvSnap::Items(a_follower).WornArmor(Slot::kRing);
+            case 5: return InvSnap::Items(a_follower).WornArmor(Slot::kAmulet);
             default: return nullptr;
             }
         }
@@ -839,7 +841,7 @@ namespace MFO::Logistics {
                     const auto mask = static_cast<std::uint32_t>(newArmo->GetSlotMask());
                     for (const auto s : kSlots) {
                         if (!(mask & static_cast<std::uint32_t>(s))) continue;
-                        auto* worn = a_follower->GetWornArmor(s);
+                        auto* worn = InvSnap::Items(a_follower).WornArmor(s);
                         if (auto uid = worn ? MEOBridge::WornUid(a_follower, worn) : 0; uid != 0) {
                             oldItem = worn; fromUid = uid; break;
                         }

@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include "Loadout.h"
 #include "Config.h"
 #include "Followers.h"
@@ -1029,8 +1030,7 @@ namespace MFO::Loadout {
             // inventory, so nothing sold can be re-equipped (#16).
             if (!a->GetEquippedObject(true)) {
                 RE::TESObjectARMO* shield = nullptr;
-                auto inv = a->GetInventory([](RE::TESBoundObject& o) { return o.IsArmor(); });
-                for (auto& [obj, data] : inv) {
+                for (auto& [obj, data] : InvSnap::Items(a)) {   // INVARIANTS #84 (map order, as the filtered GetInventory gave)
                     auto* armo = obj ? obj->As<RE::TESObjectARMO>() : nullptr;
                     if (armo && armo->IsShield() && data.first > 0) { shield = armo; break; }
                 }

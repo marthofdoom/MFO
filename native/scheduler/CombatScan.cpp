@@ -6,6 +6,7 @@
 // Split out of native/Scheduler.cpp by IAUS card I0 (2026-11-10): a pure move,
 // proven function by function with tools/splitcheck.
 #include "PCH.h"
+#include "logistics/InvSnapshot.h"   // InvSnap::Now().paused: the tick-start pause sample (INVARIANTS #84)
 #include "Scheduler.h"
 #include "scheduler/Scheduler_internal.h"
 #include "scheduler/ChoiceSource.h"   // IAUS card I1: the combat scan reads its choices through the seam
@@ -677,7 +678,9 @@ namespace MFO::Scheduler {
             // UNPAUSED SERVICE CLOCK (see g_serviceClock): advance only on an
             // unpaused service, capped per step; a paused one just re-anchors.
             auto* ui = RE::UI::GetSingleton();
-            const bool paused = ui && ui->GameIsPaused();
+            // ... OR the tick BEGAN paused (INVARIANTS #84): a paused tick is exempt from the party's snapshot rule because no
+            // decision is made in one, so a pause that ended in the middle of this tick must not let this lap decide.
+            const bool paused = (ui && ui->GameIsPaused()) || InvSnap::Now().paused;
             if (!paused && g_serviceClockAt.time_since_epoch().count() != 0) {
                 const double dt = std::chrono::duration<double>(now - g_serviceClockAt).count();
                 g_serviceClock += std::clamp(dt, 0.0, kServiceClockMaxStep);

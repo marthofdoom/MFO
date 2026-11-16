@@ -96,6 +96,7 @@ namespace MFO::Actuation {
             if (p.summon == 0) {
                 RE::NiPointer<RE::Actor> found;   // holds the reference across the list walk
                 if (auto* mt = f->AsMagicTarget()) {
+                    MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                     if (auto* list = mt->GetActiveEffectList()) {
                         for (auto* ae : *list) {
                             if (!ae || !ae->spell || ae->spell->GetFormID() != p.spell) continue;
@@ -138,6 +139,7 @@ namespace MFO::Actuation {
         std::vector<RE::FormID> out;
         if (!a_caster) return out;
         if (auto* mt = a_caster->AsMagicTarget()) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             if (auto* list = mt->GetActiveEffectList()) {
                 for (auto* ae : *list) {
                     if (!ae || !ae->spell || ae->spell->GetFormID() != a_spell) continue;

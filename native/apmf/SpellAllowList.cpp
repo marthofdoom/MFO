@@ -5,6 +5,7 @@
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 // The bridge's shared claim state lives in apmf/APMFBridge_internal.h.
 #include "APMFBridge.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include "APMFBridge_internal.h"   // wave-1 split: the bridge's shared claim state
 #include "APMF_API.h"
 #include "ComposedCast.h"   // ObservedFiring (the idle-hand floor's unobserved gate) + ClearWatchHand
@@ -228,7 +229,7 @@ namespace MFO::APMFBridge {
                                    std::vector<PotionCand>& a_potions) {
             if (!a_actor) return;
             const auto add = [&out](RE::FormID f) { if (f != 0) out.push_back(f); };
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* w = obj->As<RE::TESObjectWEAP>(); w && w->IsStaff()) {
                     add(w->GetFormID());

@@ -1574,7 +1574,7 @@ namespace MFO::Logistics::Errand {
         auto* town = RE::TESForm::LookupByID<RE::BGSLocation>(a_townId);
         auto* ui = RE::UI::GetSingleton();
         auto* avo = a_follower->AsActorValueOwner();
-        if (!pc || !pc->Is3DLoaded() || !town || !a_follower->Is3DLoaded() || (ui && ui->GameIsPaused()) || APMFBridge::InCombat(a_follower) || pc->IsInCombat() ||
+        if (!pc || !pc->Is3DLoaded() || !town || !a_follower->Is3DLoaded() || (ui && ui->GameIsPaused()) || InvSnap::Now().paused ||   /* INVARIANTS #84: or the tick BEGAN paused (the party's snapshot rule is exempt there, so nothing is planned) */ APMFBridge::InCombat(a_follower) || pc->IsInCombat() ||
             SlotOf(fid) || (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) ||
             (!a_atInn && (a_follower->IsOnMount() || a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal)) ||   // (at the inn he sits / sleeps most of the stay)
             LocationTypes::TownAnchor(pc->GetCurrentLocation()) != town || LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != town ||
@@ -1857,7 +1857,7 @@ namespace MFO::Logistics::Errand {
             // F3: new-session triggers are the player leaving town (NoteTown), the end of combat (NoteCombat) and a NEEDED SHOP OPENING (here).
             auto* ui0 = RE::UI::GetSingleton();
             auto* avo0 = a_follower->AsActorValueOwner();
-            const bool canPlan = !(ui0 && ui0->GameIsPaused()) && !APMFBridge::InCombat(a_follower) && !pc->IsInCombat() && !SlotOf(fid) &&
+            const bool canPlan = !(ui0 && ui0->GameIsPaused()) && !InvSnap::Now().paused &&   /* #84: nor in a tick that began paused */ !APMFBridge::InCombat(a_follower) && !pc->IsInCombat() && !SlotOf(fid) &&
                               !(avo0 && avo0->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) && !a_follower->IsOnMount() &&
                               a_follower->AsActorState()->GetSitSleepState() == RE::SIT_SLEEP_STATE::kNormal && a_follower->Is3DLoaded() &&
                               LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) == playerTown &&
@@ -1882,7 +1882,7 @@ namespace MFO::Logistics::Errand {
 
         // A cheap gate set first; the plan below walks a cell and the follower's inventory.
         auto* ui = RE::UI::GetSingleton();
-        if (ui && ui->GameIsPaused()) { NotPlanning(a_follower, a_now, "game paused"); return true; }
+        if ((ui && ui->GameIsPaused()) || InvSnap::Now().paused) { NotPlanning(a_follower, a_now, "game paused"); return true; }   // #84: or the tick began paused
         if (APMFBridge::InCombat(a_follower) || pc->IsInCombat()) { NotPlanning(a_follower, a_now, "combat"); return true; }   // a Harbinger substrate is not combat (v26)
         if (SlotOf(fid)) { NotPlanning(a_follower, a_now, "he holds the looting slot"); return true; }   // looting: loot and errand never overlap
         auto* avo = a_follower->AsActorValueOwner();

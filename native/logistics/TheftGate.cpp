@@ -4,10 +4,12 @@
 #include "Sightline.h"        // the guard's line of sight (MeasureNow / PointSeenNow, main thread)
 #include "MainThread.h"
 #include "LocationTypes.h"   // CorpseGuardWaived: TownAnchor, the same town test the errands and the loot town bars use
+#include <algorithm>
 #include <array>
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace MFO::Logistics::TheftGate {
@@ -216,12 +218,12 @@ namespace MFO::Logistics::TheftGate {
         }
         if (a_peek) return GuardState::Pending;   // prefetch: the scan may be posted, nothing else (no stamp, no log, no refusal record)
         if (!have) {   // no fresh answer yet: the caller must retry next tick, never treat this as a verdict (no blocklist, no travel-fail)
-            ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0; t_lastRefusal.landing = false;
+            ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0; t_lastRefusal.landing = false; t_lastRefusal.notYet = false;
             Say(a_follower, Road::Guard, a_src, nullptr, 0, nullptr, how, "guard", /*a_pending*/ true);
             return GuardState::Pending;
         }
         if (!seen) return GuardState::Clear;
-        ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Seen; t_lastRefusal.guard = guard; t_lastRefusal.landing = false;
+        ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Seen; t_lastRefusal.guard = guard; t_lastRefusal.landing = false; t_lastRefusal.notYet = false;
         auto* g = guard ? RE::TESForm::LookupByID<RE::Actor>(guard) : nullptr;
         Say(a_follower, a_road == Road::Loose || a_road == Road::Flora ? a_road : Road::Guard, a_src, nullptr, 0,
             nullptr, how, "guard", /*a_pending*/ false, g);   // owner= stays the SOURCE's owner (none here); the guard prints as guard=<ref>(<base>)
@@ -245,15 +247,11 @@ namespace MFO::Logistics::TheftGate {
         // In a town (the player's location OR the corpse's): the corpse guard check stays. A null location (wilderness) is no town: it waives.
         if (!pc || LocationTypes::TownAnchor(pc->GetCurrentLocation()) || LocationTypes::TownAnchor(a_corpse->GetCurrentLocation())) return false;
         if (a_corpse->GetOwner()) return false;
-        auto inv = a_corpse->GetInventory();
-        for (const auto& [obj, data] : inv) {
-            auto* e = data.second.get();
-            if (!e || !e->extraLists) continue;
-            for (auto* xl : *e->extraLists) {
-                if (!xl) continue;
-                if (auto* own = xl->GetByType<RE::ExtraOwnership>(); own && own->owner) return false;   // one owned copy keeps every gate
-            }
-        }
+        const auto inv = InvSnap::Get(a_corpse);   // INVARIANTS #84: the main-built snapshot, never the live list
+        if (!inv) return false;                    // not yet: NOT waived (every gate stays), asked again next tick
+        for (const auto& [obj, data] : inv->items)
+            for (const auto& c : data.second->copies)
+                if (c.owner) return false;   // one owned copy keeps every gate
         const std::string key = std::format("waive|{:08X}|{:08X}", a_follower->GetFormID(), a_corpse->GetFormID());
         {
             std::scoped_lock lk(g_logMx);
@@ -281,8 +279,20 @@ namespace MFO::Logistics::TheftGate {
         return nullptr;
     }
 
+    // One copy's verdict from its VALUES (the snapshot road): the same two tests TakeBarred makes on a live list.
+    const char* TakeBarredOwner(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESForm* a_copyOwner) {
+        if (!a_follower || !a_src) return "no follower or source";
+        if (a_copyOwner)
+            return OtherOwner(a_copyOwner, a_follower) ? "this copy is owned by someone else (stolen goods)" : nullptr;
+        if (auto* co = a_src->GetOwner(); co && OtherOwner(co, a_follower)) return "the container's owner is someone else";
+        return nullptr;
+    }
+
     namespace {
-        struct Cp { RE::ExtraDataList* xl; std::int32_t n; const char* bar; RE::TESForm* owner; bool worn; };
+
+        // xl is set by AnalyseLive ONLY (a live ExtraDataList, valid for the write that follows on the same thread). The snapshot
+        // road leaves it null: an extra-list pointer does not survive a tick. uid = that copy's ExtraUniqueID (0 = none).
+        struct Cp { RE::ExtraDataList* xl; std::int32_t n; const char* bar; RE::TESForm* owner; bool worn; std::uint16_t uid; };
         struct Plan {
             std::vector<Cp> copies;
             std::int32_t total = 0;            // every copy of the object the source holds
@@ -292,9 +302,45 @@ namespace MFO::Logistics::TheftGate {
             bool anyWorn = false;              // a copy the source WEARS (ExtraWorn / ExtraWornLeft): taking it unequips it (3D side effects)
             RE::TESForm* contOwner = nullptr;
             bool found = false;
+            bool notYet = false;               // Analyse only: the source's snapshot is not readable yet (found stays false)
         };
+        // THE DECISION READ (INVARIANTS #84): the plan from the source's main-built snapshot. Every worker decision (Takeable, Take's
+        // plan for a queued corpse transfer) reads this one. On the main thread InvSnap::Get reads live, so the answer is the same
+        // as AnalyseLive's there. Cp::xl is null.
         Plan Analyse(RE::Actor* a_f, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, Road a_road) {
+            (void)a_road;
             Plan p;
+            const auto inv = InvSnap::Get(a_src);
+            if (!inv) { p.notYet = true; return p; }
+            const auto it = inv->items.find(a_obj);
+            if (it == inv->items.end() || it->second.first <= 0) return p;
+            p.found = true;
+            p.total = it->second.first;
+            p.contOwner = a_src->GetOwner();
+            std::int32_t xlTotal = 0;
+            for (const auto& c : it->second.second->copies) {
+                const char* bar = TakeBarredOwner(a_f, a_src, c.owner);
+                const bool worn = c.worn || c.wornLeft;
+                p.copies.push_back({ nullptr, c.n, bar, c.hasOwnership ? c.owner : p.contOwner, worn, c.hasUid ? c.uid : std::uint16_t{ 0 } });
+                xlTotal += c.n;
+                if (bar) p.anyBarred = true;
+                if (worn) p.anyWorn = true;
+            }
+            p.clean = std::max<std::int32_t>(0, it->second.first - xlTotal);
+            if (p.clean > 0) {
+                p.cleanBar = TakeBarredOwner(a_f, a_src, nullptr);
+                if (p.cleanBar) p.anyBarred = true;
+            }
+            return p;
+        }
+
+        // THE WRITE'S OWN READ: the live list, with the live ExtraDataList of each copy, for the RemoveItem that follows on the SAME
+        // thread. Callers: MoveNow and RunTransfer only. RunTransfer is the main thread. MoveNow on the worker is the CONTAINER road's
+        // transfer, the one worker-side inventory write #83 left on the worker (a non-actor source): its read stays with it and moves
+        // to the main thread with it (stability audit M2). Nothing else may call this.
+        Plan AnalyseLive(RE::Actor* a_f, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, Road a_road) {
+            Plan p;
+            MainThread::NoteWriteRead(__FUNCTION__);   // INVARIANTS #84: the live read of a write made right here (self-counted when off the main thread)
             auto inv = a_src->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
             auto it = inv.find(a_obj);
             if (it == inv.end() || it->second.first <= 0) return p;
@@ -311,7 +357,8 @@ namespace MFO::Logistics::TheftGate {
                     auto* own = xl->GetByType<RE::ExtraOwnership>();
                     const char* bar = TakeBarred(a_f, a_src, a_obj, xl, a_road);
                     const bool worn = xl->HasType<RE::ExtraWorn>() || xl->HasType<RE::ExtraWornLeft>();
-                    p.copies.push_back({ xl, n, bar, own ? own->owner : p.contOwner, worn });
+                    auto* u = xl->GetByType<RE::ExtraUniqueID>();
+                    p.copies.push_back({ xl, n, bar, own ? own->owner : p.contOwner, worn, u ? u->uniqueID : std::uint16_t{ 0 } });
                     xlTotal += n;
                     if (bar) p.anyBarred = true;
                     if (worn) p.anyWorn = true;
@@ -344,10 +391,11 @@ namespace MFO::Logistics::TheftGate {
             constexpr auto kReason = RE::ITEM_REMOVE_REASON::kStoreInContainer;
             std::int32_t moved = 0;
             for (int iter = 0; iter < 16 && moved < a_count; ++iter) {   // re-read the inventory each time: a RemoveItem invalidates its extra lists
-                const Plan p = Analyse(a_follower, a_src, a_obj, a_road);
+                const Plan p = AnalyseLive(a_follower, a_src, a_obj, a_road);
                 if (!p.found) break;
                 if (!p.anyBarred && iter == 0) {   // the unchanged road: one plain RemoveItem, exactly as every caller always made it
                     a_src->RemoveItem(a_obj, a_count, kReason, nullptr, a_follower);
+                    if (!a_landing) { InvSnap::Touch(a_src); InvSnap::Touch(a_follower); }   // a worker-side write: both snapshots are behind it
                     Say(a_follower, a_road, a_src, a_obj, a_count, p.contOwner, a_landing ? "landed on main" : p.contOwner ? "container" : "none", nullptr);
                     if (!a_landing) NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "take");
                     return a_count;
@@ -363,6 +411,7 @@ namespace MFO::Logistics::TheftGate {
                 }
                 const std::int32_t n = std::min(pick->n, a_count - moved);
                 a_src->RemoveItem(a_obj, n, kReason, pick->xl, a_follower);
+                if (!a_landing) { InvSnap::Touch(a_src); InvSnap::Touch(a_follower); }
                 moved += n;
                 Say(a_follower, a_road, a_src, a_obj, n, pick->owner, a_landing ? "xOwn, landed on main" : "xOwn", nullptr);
                 if (!a_landing) NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "take (clean copy)");
@@ -452,7 +501,12 @@ namespace MFO::Logistics::TheftGate {
         // build their lists from the containers this would mutate); nothing was touched, the entry stays queued. TRUE = it ran (or was
         // skipped, said loudly); a_moved = the copies that left the source. No per-frame cap on WORN pieces: on main each ARMO removal only
         // sets the deferred 3D-update flag (ENGINE_NOTES 0.30 amendment), and vanilla Take All removes a whole worn set in one frame.
-        bool RunTransfer(const Job& a_j, std::int32_t& a_moved) {
+        // a_rebuild collects the refs whose worker view the drain replaces once the whole batch has run (each distinct ref ONCE, F1).
+        void AddRebuild(std::vector<RE::TESObjectREFR*>& a_rebuild, RE::TESObjectREFR* a_ref) {
+            if (a_ref && std::find(a_rebuild.begin(), a_rebuild.end(), a_ref) == a_rebuild.end()) a_rebuild.push_back(a_ref);
+        }
+
+        bool RunTransfer(const Job& a_j, std::int32_t& a_moved, std::vector<RE::TESObjectREFR*>& a_rebuild) {
             a_moved = 0;
             if (InventoryMenuOpen()) return false;
             auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_j.fid);
@@ -469,13 +523,11 @@ namespace MFO::Logistics::TheftGate {
                              a_j.fid, a_j.sid, a_j.obj, a_j.n, skip);
                 return true;
             }
-            const Plan p = Analyse(fol, src, obj, a_j.road);
+            const Plan p = AnalyseLive(fol, src, obj, a_j.road);
             const Cp* named = nullptr;
             if (p.found && a_j.uid != 0)
-                for (const auto& c : p.copies) {
-                    auto* u = c.xl->GetByType<RE::ExtraUniqueID>();
-                    if (u && u->uniqueID == a_j.uid) { named = &c; break; }
-                }
+                for (const auto& c : p.copies)
+                    if (c.uid == a_j.uid) { named = &c; break; }
             if (!p.found || (a_j.uid != 0 && (!named || named->bar))) {
                 spdlog::warn("[take] F={:08X} src={:08X} item={:08X}x{}: queued take NOT run on the main thread: {} (nothing moved)",
                              a_j.fid, a_j.sid, a_j.obj, a_j.n,
@@ -486,7 +538,12 @@ namespace MFO::Logistics::TheftGate {
             const bool worn = named ? named->worn : p.anyWorn;
             if (named) src->RemoveItem(obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, named->xl, fol);
             else       MoveNow(fol, src, obj, a_j.n, a_j.road, /*a_landing*/ true);
-            const Plan q = Analyse(fol, src, obj, a_j.road);   // q.total is 0 when nothing is left
+            const Plan q = AnalyseLive(fol, src, obj, a_j.road);   // q.total is 0 when nothing is left
+            // INVARIANTS #84: the worker's view of both inventories is replaced in place, BEFORE the drain drops this entry from the
+            // queue (QueuedOut / LandingHold / InFlightWeight), so no worker tick sees "nothing queued" next to the pre-take inventory.
+            // The drain does it once per distinct ref after the batch (a corpse of N item kinds = one rebuild of each pack, not N).
+            AddRebuild(a_rebuild, src);
+            AddRebuild(a_rebuild, fol);
             a_moved = p.total - q.total;
             if (a_moved != a_j.n)
                 spdlog::warn("[take] F={:08X} src={:08X} item={:08X}: planned x{} on the worker, x{} left the source on the main thread ({} before, {} "
@@ -498,40 +555,83 @@ namespace MFO::Logistics::TheftGate {
         }
 
         // MAIN THREAD, at most once per frame (g_xPosted: one drain is posted at a time, and its own repost lands next frame).
+        // A batch: every queued job runs (each entry stays queued while it runs: QueuedOut / LandingHold keep counting it), then each
+        // distinct ref the batch wrote is rebuilt ONCE, then the entries that ran are popped and their follow-ups fire. Rebuild before
+        // pop (INVARIANTS #84) holds for the whole batch. Jobs read live (AnalyseLive), so a job never needs the rebuild of the one before.
         void DrainTransfers() {
             g_mainTid.store(std::this_thread::get_id(), std::memory_order_relaxed);
+            struct Ran { std::uint64_t seq; std::int32_t moved; RE::FormID fid, obj; };
             for (;;) {
-                Job j;
+                std::vector<Ran> ran;
+                std::vector<RE::TESObjectREFR*> rebuild;
+                bool blocked = false;
+                for (std::size_t i = 0;; ++i) {
+                    Job j;
+                    {
+                        std::scoped_lock lk(g_xMx);
+                        if (i >= g_xq.size()) break;
+                        j = g_xq[i].j;
+                    }
+                    std::int32_t moved = 0;
+                    if (!RunTransfer(j, moved, rebuild)) { blocked = true; break; }
+                    ran.push_back({ j.seq, moved, j.fid, j.obj });
+                }
+                for (auto* r : rebuild) InvSnap::RebuildOnMain(r);
+                std::vector<std::pair<const Ran*, std::vector<std::function<void(std::int32_t)>>>> after;
                 {
                     std::scoped_lock lk(g_xMx);
-                    if (g_xq.empty()) { g_xPosted = false; return; }
-                    j = g_xq.front().j;   // it stays queued while it runs: QueuedOut / LandingHold keep counting it
+                    for (const auto& r : ran) {   // found by seq (a revert may have cleared the queue meanwhile)
+                        const auto it = std::find_if(g_xq.begin(), g_xq.end(), [&](const Xfer& x) { return x.j.seq == r.seq; });
+                        if (it == g_xq.end()) continue;
+                        after.emplace_back(&r, std::move(it->after));
+                        g_xq.erase(it);
+                    }
                 }
-                std::int32_t moved = 0;
-                if (!RunTransfer(j, moved)) {
+                for (auto& [r, fns] : after) {
+                    if (r->moved > 0) { for (auto& fn : fns) if (fn) fn(r->moved); }
+                    else if (!fns.empty())
+                        spdlog::warn("[take] F={:08X} item={:08X}: {} follow-up(s) (the equip of the looted piece) DROPPED: the take moved nothing",
+                                     r->fid, r->obj, fns.size());
+                }
+                if (blocked) {
                     MainThread::Post([] { DrainTransfers(); });   // g_xPosted stays true: this repost IS the posted drain
                     return;
                 }
-                std::vector<std::function<void(std::int32_t)>> after;
-                {
-                    std::scoped_lock lk(g_xMx);
-                    if (!g_xq.empty() && g_xq.front().j.seq == j.seq) {   // (a revert may have cleared the queue meanwhile)
-                        after = std::move(g_xq.front().after);
-                        g_xq.pop_front();
-                    }
-                }
-                if (moved > 0) { for (auto& fn : after) if (fn) fn(moved); }
-                else if (!after.empty())
-                    spdlog::warn("[take] F={:08X} item={:08X}: {} follow-up(s) (the equip of the looted piece) DROPPED: the take moved nothing",
-                                 j.fid, j.obj, after.size());
+                std::scoped_lock lk(g_xMx);
+                if (g_xq.empty()) { g_xPosted = false; return; }
             }
+        }
+    }
+
+    void NoteInventoryNotYet(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
+        ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0; t_lastRefusal.landing = true; t_lastRefusal.notYet = true;
+        // The first ask about any source is "not yet" by design (the next tick has it), so one not-yet says nothing. A source that
+        // STAYS not-yet for kNotYetSay is said (principle 7: never a silent stall), then once per kLogEvery while it lasts.
+        constexpr auto kNotYetSay   = std::chrono::seconds(2);
+        constexpr auto kNotYetReset = std::chrono::seconds(5);   // no not-yet for this long = that episode ended
+        struct Run { SClock::time_point first{}, last{}, said{}; };
+        static std::unordered_map<std::uint64_t, Run> s_runs;   // g_logMx
+        const std::uint64_t key = (static_cast<std::uint64_t>(a_follower ? a_follower->GetFormID() : 0u) << 32) | (a_src ? a_src->GetFormID() : 0u);
+        const auto now = SClock::now();
+        std::scoped_lock lk(g_logMx);
+        if (s_runs.size() > 1024) s_runs.clear();
+        auto& r = s_runs[key];
+        if (r.first.time_since_epoch().count() == 0 || now - r.last > kNotYetReset) { r.first = now; r.said = {}; }
+        r.last = now;
+        if (now - r.first >= kNotYetSay && (r.said.time_since_epoch().count() == 0 || now - r.said >= kLogEvery)) {
+            r.said = now;
+            spdlog::warn("[theft-gate] F={:08X} src={:08X} held for {:.1f}s: the source's inventory snapshot is still not readable (it is built "
+                         "on the main thread, INVARIANTS #84). The main-thread pump is not draining, or the source no longer resolves. "
+                         "Judged again next tick; nothing is taken and the source is not marked done.",
+                         a_follower ? a_follower->GetFormID() : 0u, a_src ? a_src->GetFormID() : 0u,
+                         std::chrono::duration<float>(now - r.first).count());
         }
     }
 
     bool Takeable(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj) {
         if (!a_follower || !a_src || !a_obj) return false;
         if (LandingHold(a_follower->GetFormID(), a_obj->GetFormType())) {
-            ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0; t_lastRefusal.landing = true;
+            ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0; t_lastRefusal.landing = true; t_lastRefusal.notYet = false;
             const std::string key = std::format("land|{:08X}|{:02X}", a_follower->GetFormID(), static_cast<std::uint32_t>(a_obj->GetFormType()));
             std::scoped_lock lk(g_logMx);
             const auto now = SClock::now();
@@ -545,6 +645,7 @@ namespace MFO::Logistics::TheftGate {
             return false;
         }
         const Plan p = Analyse(a_follower, a_src, a_obj, Road::Container);
+        if (p.notYet) { NoteInventoryNotYet(a_follower, a_src); return false; }
         if (!p.found) return false;
         // Copies already queued out of an actor source are not offered twice (to him or to another follower).
         const std::int32_t queued = a_src->As<RE::Actor>() ? QueuedOut(a_src->GetFormID(), a_obj->GetFormID()) : 0;
@@ -566,6 +667,7 @@ namespace MFO::Logistics::TheftGate {
         }
         // AN ACTOR SOURCE, ON THE WORKER: plan here, transfer on main.
         const Plan p = Analyse(a_follower, a_src, a_obj, a_road);
+        if (p.notYet) { NoteInventoryNotYet(a_follower, a_src); return 0; }
         if (!p.found) return 0;
         const std::int32_t offer   = Offer(p);
         const std::int32_t planned = std::min(a_count, offer - QueuedOut(a_src->GetFormID(), a_obj->GetFormID()));

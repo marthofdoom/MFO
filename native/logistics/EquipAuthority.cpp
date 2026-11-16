@@ -72,7 +72,7 @@ namespace MFO::Logistics {
                 const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = IsNecromancerFollower(a_state);
                 const bool wearsHelmets  = WearsHelmets(&a_state);
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ArmorWontRender(a_follower, ar)) continue;   // wont-render armor is never worn (sells)
@@ -155,7 +155,7 @@ namespace MFO::Logistics {
                 const std::function<bool(RE::TESObjectARMO*)> wornCounts = [&](RE::TESObjectARMO* a_w) {
                     return !RelicOffBody(a_follower, a_state, a_w);
                 };
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar) || ArmorWontRender(a_follower, ar)) continue;
@@ -221,7 +221,7 @@ namespace MFO::Logistics {
             auto* leftForm = leftEq ? leftEq->As<RE::TESObjectWEAP>() : nullptr;   // a dual wielder's other hand
             RE::TESBoundObject* best = nullptr;
             float               bestScore = heldScore;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || w == a_myWeap || IsCreatureWeapon(w) || w->IsBound()) continue;
@@ -340,7 +340,7 @@ namespace MFO::Logistics {
             return RangedPickScore(RolesOf(a_style), a_weapon, AmmoOwned{ a_ammo.arrows, a_ammo.bolts });
         }
 
-        bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry) {
+        bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, const InvSnap::Entry* a_entry) {
             if (!a_weapon || !Catalog::IsExcluded(a_weapon->GetFormID()) || IsCreatureWeapon(a_weapon)) return false;
             return !(a_entry && IsQuestObjectInstance(a_entry));   // a quest-bound one is handed to the player instead
         }
@@ -388,7 +388,7 @@ namespace MFO::Logistics {
                     if (it != g_oc.end() && now - it->second.at < std::chrono::seconds(1)) return it->second.v;
                 }
                 bool any = false;
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
                     if (!w || w->IsBound() || IsCreatureWeapon(w)) continue;
@@ -405,7 +405,7 @@ namespace MFO::Logistics {
             }
         }
 
-        bool NeverWieldWeaponFor(RE::Actor* a_follower, const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry) {
+        bool NeverWieldWeaponFor(RE::Actor* a_follower, const RE::TESObjectWEAP* a_weapon, const InvSnap::Entry* a_entry) {
             if (NeverWieldWeapon(a_weapon, a_entry)) return true;
             if (!a_follower || !a_weapon) return false;
             const std::uint16_t set = ClassSet(a_follower->GetFormID());
@@ -629,7 +629,14 @@ namespace MFO::Logistics {
             // jewelInst[0] / [1] = the inventory INSTANCE (ExtraDataList + ExtraUniqueID) behind slot[4] / slot[5] when
             // ChooseJewelry chose it (null / 0 = a base-form pick). RefreshEquipDeclaration names that copy in the
             // ch.17 entry (APMF ABI v25, SetEquipEntryUid) when APMF supports it and the copy has a uid.
-            struct JewelInst { RE::ExtraDataList* xl = nullptr; std::uint16_t uid = 0; };
+            // INVARIANTS #84: the instance is carried BY VALUE from the inventory snapshot (its uid and its own ExtraEnchantment's
+            // enchantment); no ExtraDataList pointer is kept. listed = it has an extra list at all (false = a plain copy).
+            struct JewelInst { bool listed = false; std::uint16_t uid = 0; const RE::EnchantmentItem* xench = nullptr; };
+            JewelInst JewelInstOf(const InvSnap::Copy* a_c) {
+                JewelInst ji;
+                if (a_c) { ji.listed = true; ji.uid = a_c->hasUid ? a_c->uid : std::uint16_t{ 0 }; ji.xench = a_c->ench; }
+                return ji;
+            }
 
             // IS THE DECLARED COPY WORN (APMF ABI v25 review F1). uid 0: any copy of the base worn (the entry
             // names no instance, InventoryEntryData::IsWorn). uid != 0: only the list carrying THAT ExtraUniqueID
@@ -637,18 +644,15 @@ namespace MFO::Logistics {
             // declared is NOT worn). kMissing: the follower carries no list with that uid (the next ChooseJewelry
             // re-chooses). Shared by the drift re-send and slateLanded so the two cannot disagree.
             enum class DeclWorn { kNo, kYes, kMissing };
-            DeclWorn DeclaredCopyWorn(const RE::TESObjectREFR::InventoryItemMap& a_inv, RE::TESBoundObject* a_obj,
+            DeclWorn DeclaredCopyWorn(const InvSnap::View& a_inv, RE::TESBoundObject* a_obj,
                                       std::uint16_t a_uid) {
                 const auto it = a_inv.find(a_obj);
                 if (it == a_inv.end() || !it->second.second) return a_uid ? DeclWorn::kMissing : DeclWorn::kNo;
                 if (a_uid == 0) return it->second.second->IsWorn() ? DeclWorn::kYes : DeclWorn::kNo;
-                if (it->second.second->extraLists)
-                    for (auto* xl : *it->second.second->extraLists) {
-                        const auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                        if (!u || u->uniqueID != a_uid) continue;
-                        return (xl->HasType(RE::ExtraDataType::kWorn) || xl->HasType(RE::ExtraDataType::kWornLeft))
-                                   ? DeclWorn::kYes : DeclWorn::kNo;
-                    }
+                for (const auto& c : it->second.second->copies) {
+                    if (!c.hasUid || c.uid != a_uid) continue;
+                    return (c.worn || c.wornLeft) ? DeclWorn::kYes : DeclWorn::kNo;
+                }
                 return DeclWorn::kMissing;
             }
             struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; JewelInst jewelInst[2]; };
@@ -687,9 +691,8 @@ namespace MFO::Logistics {
             // The enchantment LIVE on an inventory instance: its ExtraEnchantment (a player-enchanted piece or an
             // MEO-socketed one) if the list carries one, else the base form's. Explicit extra-list read (the
             // fork's InventoryEntryData::GetEnchantmentCharge reads the same ExtraEnchantment ahead of the base).
-            const RE::EnchantmentItem* InstanceEnchant(const RE::TESObjectARMO* a_ar, RE::ExtraDataList* a_xl) {
-                if (a_xl)
-                    if (auto* xe = a_xl->GetByType<RE::ExtraEnchantment>(); xe && xe->enchantment) return xe->enchantment;
+            const RE::EnchantmentItem* InstanceEnchant(const RE::TESObjectARMO* a_ar, const JewelInst& a_inst) {
+                if (a_inst.xench) return a_inst.xench;
                 return a_ar ? a_ar->formEnchanting : nullptr;
             }
             float JewelryScore(RE::Actor* a_follower, bool a_caster, const RE::TESObjectARMO* a_ar,
@@ -773,25 +776,24 @@ namespace MFO::Logistics {
             // two methods declares each slot, the higher-scoring, the mage's on a tie). A mage candidate
             // must also pass MageApparelBuyKey (villain-coded / blacklisted / rated pieces stay out).
             void ChooseJewelry(RE::Actor* a_follower, const FollowerState& a_state, GearSlate& a_gs,
-                               const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+                               const InvSnap::View& a_inv) {
                 const RE::FormID id = a_follower->GetFormID();
                 const bool caster = IsCasterFollower(a_state);
                 const std::uint8_t top2 = a_gs.mage ? TopTwoSchoolMask(a_follower) : 0;
                 const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = a_gs.mage && IsNecromancerFollower(a_state);
                 const bool meoGems = MEOBridge::Available() && MEOBridge::CarriedGemsSupported();
-                const auto uidOf = [](RE::ExtraDataList* a_xl) -> std::uint16_t {
-                    auto* u = a_xl ? a_xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                    return u ? u->uniqueID : 0;
+                const auto uidOf = [](const InvSnap::Copy* a_c) -> std::uint16_t {
+                    return a_c && a_c->hasUid ? a_c->uid : std::uint16_t{ 0 };
                 };
                 for (const int slot : { 4, 5 }) {
                     auto* worn = WornInLogicalSlot(a_follower, slot);
                     // The worn instance (its list carries ExtraWorn; a single-instance entry has none to find).
-                    RE::ExtraDataList* wornXl = nullptr;
+                    const InvSnap::Copy* wornXl = nullptr;   // a copy inside a_inv's snapshot (alive for this call)
                     if (worn) {
-                        if (const auto it = a_inv.find(worn); it != a_inv.end() && it->second.second && it->second.second->extraLists) {
-                            for (auto* xl : *it->second.second->extraLists)
-                                if (xl && xl->GetByType<RE::ExtraWorn>()) { wornXl = xl; break; }
+                        if (const auto it = a_inv.find(worn); it != a_inv.end() && it->second.second) {
+                            for (const auto& c : it->second.second->copies)
+                                if (c.worn) { wornXl = &c; break; }
                         }
                     }
                     // A QUEST-BOUND worn piece (the engine's per-instance IsQuestObject, as the loot guard) is never
@@ -799,7 +801,7 @@ namespace MFO::Logistics {
                     if (worn)
                         if (const auto it = a_inv.find(worn); it != a_inv.end() && IsQuestObjectInstance(it->second.second.get())) {
                             a_gs.slot[slot] = worn;
-                            a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
+                            a_gs.jewelInst[slot - 4] = JewelInstOf(wornXl);
                             continue;
                         }
                     // MEO GUARD: MEO exposes no "reconcile in progress" signal (MEOBridge has none), so a worn piece
@@ -809,7 +811,7 @@ namespace MFO::Logistics {
                         MEOBridge::IsCarriedGemmed(id, worn->GetFormID(), uidOf(wornXl)) &&
                         !RelicOffBody(a_follower, a_state, worn)) {
                         a_gs.slot[slot] = worn;
-                        a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
+                        a_gs.jewelInst[slot - 4] = JewelInstOf(wornXl);
                         continue;
                     }
                     RE::TESObjectARMO* best = nullptr; float bestScore = 0.0f; JewelInst bestInst; bool bestIsWorn = false;
@@ -827,28 +829,28 @@ namespace MFO::Logistics {
                         }
                         // EVERY INSTANCE is scored on its own (a gemmed copy is not the plain copy of the same base);
                         // an entry with no extra lists is one plain instance.
-                        std::vector<RE::ExtraDataList*> insts;
-                        if (data.second && data.second->extraLists)
-                            for (auto* xl : *data.second->extraLists) insts.push_back(xl);
+                        std::vector<const InvSnap::Copy*> insts;
+                        if (data.second)
+                            for (const auto& c : data.second->copies) insts.push_back(&c);
                         if (insts.empty()) insts.push_back(nullptr);
                         for (auto* xl : insts) {
                             const std::uint16_t uid = uidOf(xl);
                             if (meoGems && uid != 0 && MEOBridge::RemovalHeld(id, ar->GetFormID(), uid)) continue;   // on its way out
-                            const float sc = JewelryScore(a_follower, caster, ar, InstanceEnchant(ar, xl));
+                            const float sc = JewelryScore(a_follower, caster, ar, InstanceEnchant(ar, JewelInstOf(xl)));
                             if (!(sc > 0.0f)) continue;
                             const bool isWorn = (ar == worn) && (xl == wornXl);
                             if (!best || sc > bestScore || (sc == bestScore && isWorn && !bestIsWorn) ||
                                 (sc == bestScore && !bestIsWorn && ar->GetFormID() > best->GetFormID())) {
-                                best = ar; bestScore = sc; bestInst = { xl, uid }; bestIsWorn = isWorn;
+                                best = ar; bestScore = sc; bestInst = JewelInstOf(xl); bestIsWorn = isWorn;
                             }
                         }
                     }
                     if (!best) continue;
                     if (a_gs.mage && a_gs.slot[slot]) {
-                        RE::ExtraDataList* mxl = nullptr;
-                        if (const auto it = a_inv.find(a_gs.slot[slot]); it != a_inv.end() && it->second.second && it->second.second->extraLists)
-                            for (auto* xl : *it->second.second->extraLists) { if (xl && (a_gs.slot[slot] != worn || xl == wornXl)) { mxl = xl; break; } }
-                        const float mageScore = JewelryScore(a_follower, caster, a_gs.slot[slot], InstanceEnchant(a_gs.slot[slot], mxl));
+                        const InvSnap::Copy* mxl = nullptr;
+                        if (const auto it = a_inv.find(a_gs.slot[slot]); it != a_inv.end() && it->second.second)
+                            for (const auto& c : it->second.second->copies) { if (a_gs.slot[slot] != worn || &c == wornXl) { mxl = &c; break; } }
+                        const float mageScore = JewelryScore(a_follower, caster, a_gs.slot[slot], InstanceEnchant(a_gs.slot[slot], JewelInstOf(mxl)));
                         if (!(bestScore > mageScore)) continue;   // the mage's own pick scores as high: it stands
                     }
                     a_gs.slot[slot] = best;
@@ -870,7 +872,7 @@ namespace MFO::Logistics {
             // Reads the caller's materialised inventory, so the slate adds NO GetInventory
             // walk (mage excepted: MageBestPerSlot walks its own, as it did before).
             void ComputeOwnedGearSlate(RE::Actor* a_follower, const FollowerState& a_state, GearSlate& a_out,
-                                       const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+                                       const InvSnap::View& a_inv) {
                 a_out = GearSlate{};
                 if (!a_follower || Config::g_dollsMode.load()) return;
                 if (UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load()) {
@@ -930,7 +932,7 @@ namespace MFO::Logistics {
         bool DeclaredSetKeeps(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectARMO* a_worn) {
             if (!a_follower || !a_worn) return false;
             GearSlate gs;
-            const auto inv = a_follower->GetInventory();
+            const auto inv = InvSnap::Items(a_follower);
             ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
             for (int i = 0; i < 6; ++i)
                 if (gs.slot[i] == a_worn) return true;
@@ -957,7 +959,7 @@ namespace MFO::Logistics {
             a_outRing = a_outAmulet = nullptr;
             if (!a_follower) return;
             GearSlate gs;
-            const auto inv = a_follower->GetInventory();
+            const auto inv = InvSnap::Items(a_follower);
             ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
             a_outRing = gs.slot[4]; a_outAmulet = gs.slot[5];
         }
@@ -1006,14 +1008,14 @@ namespace MFO::Logistics {
         std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower) {
             std::vector<RE::FormID> out;
             if (!a_follower) return out;
-            auto* mt = a_follower->AsMagicTarget();
-            auto* list = mt ? mt->GetActiveEffectList() : nullptr;
-            if (!list) return out;
-            using AF = RE::ActiveEffect::Flag;
-            for (auto* ae : *list) {
-                if (!ae || !ae->effect || !ae->effect->baseEffect) continue;
-                if (ae->flags.any(AF::kDispelled, AF::kInactive)) continue;
-                const auto& d = ae->effect->baseEffect->data;
+            // INVARIANTS #84: the main-built effect mirror (iaus/EffectMirror.h), never the live list on the worker. Not yet (never
+            // for a party member inside a tick: the tick gate) = no bound weapon known this tick.
+            const auto fx = EffectMirror::Get(a_follower);
+            if (!fx) return out;
+            for (const auto& f : fx->fx) {
+                if (!f.base) continue;
+                if (!f.Live()) continue;
+                const auto& d = f.base->data;
                 if (d.archetype != RE::EffectSetting::Archetype::kBoundWeapon) continue;
                 auto* w = d.associatedForm ? d.associatedForm->As<RE::TESObjectWEAP>() : nullptr;
                 if (!w) continue;
@@ -1028,6 +1030,7 @@ namespace MFO::Logistics {
                                      RE::FormID a_holdRight, RE::FormID a_holdLeft,
                                      bool a_leftReserved, bool a_judgeArmor, const char* a_why) {
             if (!a_follower) return;
+            if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate) (the standing declaration stands)
             const RE::FormID id = a_follower->GetFormID();
             if (a_state.mfoEnabled) OffClassTick(a_follower);   // card G16: the fallback-held edge (notice + penalty rank)
             if (!a_state.mfoEnabled || !APMFBridge::EquipAuthoritySupported()) {
@@ -1112,7 +1115,7 @@ namespace MFO::Logistics {
 
             EquipDecl decl;
             const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
-            auto inv = a_follower->GetInventory();
+            const auto inv = InvSnap::Items(a_follower);
             const auto resolve = [](RE::FormID a_fid) -> RE::TESBoundObject* {
                 if (!a_fid) return nullptr;
                 auto* form = RE::TESForm::LookupByID(a_fid);
@@ -1497,7 +1500,6 @@ namespace MFO::Logistics {
             std::vector<RE::TESObjectARMO*> slate;
             // The chosen ring / amulet COPY (ChooseJewelry), read below to name it in the declaration (ABI v25).
             RE::TESObjectARMO* jewelForm[2] = {};
-            RE::ExtraDataList* jewelXl[2]   = {};
             std::uint16_t      jewelUid[2]  = {};
             // The uid the declaration will name for a_ar (0 = the plain base-form entry).
             const auto declUid = [&](const RE::TESBoundObject* a_ar) -> std::uint16_t {
@@ -1508,13 +1510,12 @@ namespace MFO::Logistics {
             if (a_judgeArmor) {
                 GearSlate gs;
                 ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
-                for (int j = 0; j < 2; ++j) { jewelForm[j] = gs.slot[4 + j]; jewelXl[j] = gs.jewelInst[j].xl; }
+                for (int j = 0; j < 2; ++j) jewelForm[j] = gs.slot[4 + j];
                 // The copy's uid, read NOW from the follower's own list (the engine rewrites uids on a container
                 // transfer; MEOBridge::WornUid reads the same field). 0 = no uid, or APMF older than ABI v25.
                 if (APMFBridge::EquipInstanceSupported())
                     for (int j = 0; j < 2; ++j)
-                        if (jewelForm[j] && jewelXl[j])
-                            if (const auto* u = jewelXl[j]->GetByType<RE::ExtraUniqueID>()) jewelUid[j] = u->uniqueID;
+                        if (jewelForm[j] && gs.jewelInst[j].listed) jewelUid[j] = gs.jewelInst[j].uid;   // the uid the snapshot copied out
                 const auto accept = [&](RE::TESObjectARMO* b) {
                     if (!b || b->IsShield()) return;
                     if (pick && SlotsOverlap(pick, b)) return;
@@ -1539,7 +1540,7 @@ namespace MFO::Logistics {
                     s_jewelLogged[id] = now;
                     const bool jc = IsCasterFollower(a_state);
                     const auto jscore = [&](RE::TESObjectARMO* a, const JewelInst& ji) {
-                        return a ? JewelryScore(a_follower, jc, a, InstanceEnchant(a, ji.xl)) : 0.0f;
+                        return a ? JewelryScore(a_follower, jc, a, InstanceEnchant(a, ji)) : 0.0f;
                     };
                     spdlog::info("[jewelry] {:08X}: ring '{}' score={:.1f} | amulet '{}' score={:.1f}", id,
                                  gs.slot[4] && gs.slot[4]->GetName() ? gs.slot[4]->GetName() : "(none)", jscore(gs.slot[4], gs.jewelInst[0]),

@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include "apmf/APMFBridge.h"   // InCombat: a Harbinger combat substrate is not combat (ABI v26)
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 
@@ -1295,22 +1296,34 @@ namespace MFO::Board {
         // after the book was consumed/sold. Returns true when the follower KNOWS the spell afterwards (taught now, or already
         // known: then no book is consumed); false = book gone AND spell unknown (the caller sets nothing).
         // Shared by the gambit picker (a row) and the Classes tab's Teach Spells page (batch I item 7, no row).
-        bool TeachSpellNow(const EditCmd& c) {
+        // NOT YET (INVARIANTS #84): the player's pack is read on demand (a source slot, Diagnostics.cpp SnapshotsBeginTick), so off the
+        // main thread its first ask can be "not yet". Then nothing is taught or consumed, the edit is queued again for the next drain
+        // (the ask has requested the snapshot) and it is said: a teach is never dropped silently (review F2/F4 of 35a8a778).
+        enum class Teach { Known, Failed, NotYet };
+        Teach TeachSpellNow(const EditCmd& c) {
             auto* follower = c.fid ? RE::TESForm::LookupByID<RE::Actor>(c.fid) : nullptr;
             auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
             auto* book     = c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(c.book) : nullptr;
             auto* pc       = RE::PlayerCharacter::GetSingleton();
+            if (!follower || !spell) return Teach::Failed;
+            if (follower->HasSpell(spell)) return Teach::Known;   // already learned (a prior edit taught it): never consume a second book
+            if (!pc || !book) return Teach::Failed;
+            const auto inv = InvSnap::Items(pc);
+            if (!inv) {
+                QueueEdit(c);
+                spdlog::info("[board] teach {:08X} spell {:08X} (book {:08X}) waits: the player's inventory snapshot is not readable yet "
+                             "(built on the main thread, INVARIANTS #84); queued again for the next board drain", c.fid, c.spell, c.book);
+                return Teach::NotYet;
+            }
             bool hasBook = false;
-            if (pc && book)
-                for (auto& [o, d] : pc->GetInventory())
-                    if (o == book && d.first > 0) { hasBook = true; break; }
-            if (!follower || !spell) return false;
-            if (follower->HasSpell(spell)) return true;   // already learned (a prior edit taught it): never consume a second book
-            if (!hasBook) return false;
+            for (auto& [o, d] : inv)
+                if (o == book && d.first > 0) { hasBook = true; break; }
+            if (!hasBook) return Teach::Failed;
             follower->AddSpell(spell);
             pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+            InvSnap::Touch(pc);   // a worker-side write (stability audit M2 moves it): the player's pack (a source) is withheld until rebuilt
             spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}", c.fid, c.spell, c.book);
-            return true;
+            return Teach::Known;
         }
     }
 
@@ -1514,7 +1527,7 @@ namespace MFO::Board {
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             case EditKind::TeachSpell: {
                 // #4: teach the spell and CONSUME one spellbook (TeachSpellNow), then set it as the gambit's spell.
-                if (TeachSpellNow(c)) tab[i].actionParamForm = c.spell;
+                if (TeachSpellNow(c) == Teach::Known) tab[i].actionParamForm = c.spell;   // NotYet: queued again, the row waits
                 break;
             }
             case EditKind::SetCond: {
@@ -1824,9 +1837,12 @@ namespace MFO::Board {
                 // "Name (spellbook)"; teaching consumes the book. Read-only here
                 // (a snapshot); the actual AddSpell + book consume runs in
                 // ApplyEdits on the main thread.
-                if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc) {
+                // Only while the board is OPEN: the player's pack is an on-demand snapshot (INVARIANTS #84, review F2 of 35a8a778),
+                // and the closed board's periodic publish would keep it wanted (rebuilt) forever. A not-yet read lists nothing; the
+                // open board republishes every tick, so the list fills on the next publish or the one after.
+                if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && IsOpen()) {
                     const MFO::Iaus::ClassGate teachGate = MFO::Iaus::SpellBook::GateFor(a->GetFormID(), false);   // gating fields only, never the live class rows (TuningFile swaps them on the pump worker); once per row, not per tome
-                    for (auto& [obj, data] : pc->GetInventory()) {
+                    for (auto& [obj, data] : InvSnap::Items(pc)) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
                         if (!book || !book->TeachesSpell()) continue;

@@ -228,6 +228,7 @@ namespace MFO::Logistics::Errand::Rest {
                 if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid); f && f->Is3DLoaded()) {
                     v.valid = true;
                     if (auto* mt = f->AsMagicTarget()) {
+                        MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                         if (auto* list = mt->GetActiveEffectList()) {
                             for (auto* ae : *list) {
                                 if (!ae) continue;
@@ -266,14 +267,14 @@ namespace MFO::Logistics::Errand::Rest {
 
         int GoldOf(RE::Actor* a_actor) {
             std::int64_t n = 0;
-            for (auto& [obj, data] : a_actor->GetInventory())
+            for (auto& [obj, data] : InvSnap::Items(a_actor))
                 if (obj && data.first > 0 && obj->GetFormID() == 0x0000000F) n += data.first;
             return static_cast<int>(std::min<std::int64_t>(n, 2000000000));
         }
         // a_worthy: only foods the judge would STOCK (the inn's stock target); else every food (the meal detection).
         int CountFood(RE::Actor* a_actor, bool a_worthy) {
             int n = 0;
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
                 if (alc && alc->IsFood() && (!a_worthy || FoodWorth(alc) > 0.0f)) n += data.first;

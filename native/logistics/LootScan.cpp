@@ -569,7 +569,12 @@ namespace MFO::Logistics {
                     }
                     // act.pick_locks on a chest nobody can see into is a wasted walk: it must hold something, and it must not be
                     // owned by anyone unless the lock judge admitted it (a locked chest passed Admit just above; an unlocked one was skipped).
-                    if (a_cat == Category::PickLocks && ref->GetInventoryCounts().empty()) { ++dEmpty; return RE::BSContainer::ForEachResult::kContinue; }
+                    // (INVARIANTS #84: the chest's main-built snapshot. Not yet = not a candidate THIS scan, asked for, judged again next scan.)
+                    if (a_cat == Category::PickLocks) {
+                        const auto chestInv = InvSnap::Items(ref);
+                        if (!chestInv) { TheftGate::NoteInventoryNotYet(a_follower, ref); ++dEmpty; return RE::BSContainer::ForEachResult::kContinue; }
+                        if (chestInv.empty()) { ++dEmpty; return RE::BSContainer::ForEachResult::kContinue; }
+                    }
                     // Beyond the confidence leash from the player -- too far for
                     // this follower's nerve right now. This is the invisible
                     // string: the same corpse is in-reach when they feel safe and
@@ -595,32 +600,6 @@ namespace MFO::Logistics {
                     // A LOOSE ref (route 2b) IS the loot -- it has no inventory
                     // for HasLoot to peek, so the gate does not apply.
                     if (!loose && a_cat != Category::PickLocks && !HasLoot(a_follower, ref, a_cat, a_potionWant)) {
-                        // ARROW PROBE (temp, v0.8.17). marth: "multiple bodies with
-                        // arrows available" yet the arrow scan calls every corpse
-                        // empty. When an ARROW scan judges a lootable body empty,
-                        // dump the ammo it ACTUALLY holds -- if it shows "Iron Arrow
-                        // xN isBolt=0", HasLoot(arrows) is wrong on a body that has
-                        // them (vs the body genuinely lacking arrows / being an
-                        // adjacent-cell corpse the scan never sees). Per-body 15s.
-                        if (a_cat == Category::Arrows) {
-                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextAP;
-                            auto& an = s_nextAP[ref->GetFormID()];
-                            if (an.time_since_epoch().count() == 0 || a_now >= an) {
-                                an = a_now + std::chrono::seconds(15);
-                                std::string ad; int tot = 0;
-                                for (auto& [obj, data] : ref->GetInventory()) {
-                                    ++tot;
-                                    if (auto* am = obj ? obj->As<RE::TESAmmo>() : nullptr)
-                                        ad += std::format(" [{} x{} isBolt={}]",
-                                            am->GetFullName() ? am->GetFullName() : "?",
-                                            data.first, AmmoIsBolt(am) ? 1 : 0);   // not TESAmmo::IsBolt (wrong layout, see Upkeep.cpp)
-                                }
-                                if (!ad.empty())
-                                    spdlog::info("[arrowprobe] {:08X} EMPTY-verdict body {:08X} "
-                                                 "invItems={} but HAS ammo:{}",
-                                                 a_follower->GetFormID(), ref->GetFormID(), tot, ad);
-                            }
-                        }
                         ++dEmpty; return RE::BSContainer::ForEachResult::kContinue;
                     }
 

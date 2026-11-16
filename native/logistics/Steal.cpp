@@ -273,7 +273,7 @@ namespace MFO::Logistics::Steal {
 
         // The loot kinds act.steal takes from the floor (Q-L-1), judged on an INVENTORY item with the predicates the container loot
         // categories run (LootGold / Lockpicks / Valuables / SoulGems / Ingredients / Jewelry / Potions). Equipment and ammo are not here.
-        bool StealKind(RE::TESBoundObject* a_obj, RE::InventoryEntryData* a_entry) {
+        bool StealKind(RE::TESBoundObject* a_obj, const InvSnap::Entry* a_entry) {
             constexpr RE::FormID kGold001 = 0x0000000F, kLockpick = 0x0000000A;
             if (!a_obj) return false;
             if (a_entry && IsQuestObjectInstance(a_entry)) return false;   // a quest item never moves, whatever the toggle
@@ -294,6 +294,8 @@ namespace MFO::Logistics::Steal {
         }
 
         // One owned-and-selectable copy of an item, read fresh from the live inventory (extra-list pointers are never reused across a RemoveItem).
+        // MAIN THREAD ONLY (INVARIANTS #84): NextOwned, HeldLists, WhereListLanded and CountIn below read the LIVE lists for the
+        // RemoveItem / AddObjectToContainer OwnedTakeOnMain makes in the same call. Nothing on the worker calls them.
         struct Copy { RE::ExtraDataList* xl = nullptr; std::int32_t n = 0; RE::TESForm* owner = nullptr; bool found = false; };
 
         RE::TESForm* CellOwner(RE::TESObjectREFR* a_chest) {
@@ -306,6 +308,7 @@ namespace MFO::Logistics::Steal {
         // An off-limits chest with no explicit owner: every copy without its own ownership is the cell owner's.
         Copy NextOwned(RE::Actor* a_f, RE::TESObjectREFR* a_chest, RE::TESBoundObject* a_obj, bool a_cellOwnedOnly) {
             Copy c;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto inv = a_chest->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
             auto it = inv.find(a_obj);
             if (it == inv.end() || it->second.first <= 0) return c;
@@ -339,11 +342,11 @@ namespace MFO::Logistics::Steal {
             auto add = [&](RE::TESForm* o) { if (o && a_out.size() < 8 && std::find(a_out.begin(), a_out.end(), o) == a_out.end()) a_out.push_back(o); };
             if (a_ref->GetOwner()) add(a_ref->GetOwner());
             else if (a_ref->IsOffLimits()) add(CellOwner(a_ref));
-            for (auto& [obj, data] : a_ref->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_ref)) {   // main thread (Evaluate): read live, in place
                 auto* e = data.second.get();
-                if (!obj || !e || !e->extraLists) continue;
-                for (auto* xl : *e->extraLists)
-                    if (xl) if (auto* own = xl->GetByType<RE::ExtraOwnership>()) add(own->owner);
+                if (!obj || !e) continue;
+                for (const auto& c : e->copies)
+                    if (c.hasOwnership) add(c.owner);
             }
         }
 
@@ -436,6 +439,7 @@ namespace MFO::Logistics::Steal {
 
         // Every extra list the follower holds for a_obj, with its count. Empty when he has none.
         void HeldLists(RE::Actor* a_f, const RE::TESBoundObject* a_obj, std::vector<HeldList>& a_out) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* changes = a_f->GetInventoryChanges(true);
             if (!changes || !changes->entryList) return;
             for (auto* e : *changes->entryList) {
@@ -447,6 +451,7 @@ namespace MFO::Logistics::Steal {
 
         Landed WhereListLanded(RE::Actor* a_f, const RE::TESBoundObject* a_obj, const RE::ExtraDataList* a_xl, const std::vector<HeldList>& a_before,
                                std::int32_t a_moved) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* changes = a_f->GetInventoryChanges(true);
             if (!changes || !changes->entryList) return Landed::Unknown;
             bool merged = false;
@@ -465,6 +470,7 @@ namespace MFO::Logistics::Steal {
 
         // How many of a_obj the chest holds right now (the before / after of every RemoveItem).
         std::int32_t CountIn(RE::TESObjectREFR* a_chest, RE::TESBoundObject* a_obj) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto inv = a_chest->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
             auto it = inv.find(a_obj);
             return it == inv.end() ? 0 : std::max<std::int32_t>(0, it->second.first);
@@ -481,7 +487,7 @@ namespace MFO::Logistics::Steal {
             if (const char* bar = OwnedChestBarred(f, chest)) { Finish(a_fid, a_cid, OwnedTake::Cut, bar); return; }
             const bool cellOwnedOnly = chest->GetOwner() == nullptr && chest->IsOffLimits();
             std::vector<RE::TESBoundObject*> items;
-            for (auto& [obj, data] : chest->GetInventory())
+            for (auto& [obj, data] : InvSnap::Items(chest))   // main thread: read live, in place (the value shape StealKind takes)
                 if (obj && data.first > 0 && StealKind(obj, data.second.get()) && NextOwned(f, chest, obj, cellOwnedOnly).found) items.push_back(obj);
             if (items.empty()) { Finish(a_fid, a_cid, OwnedTake::Nothing, {}); return; }
             // ONE proof for the whole take, on this thread, immediately before the first RemoveItem (the RemoveItems below run in this one
@@ -575,11 +581,13 @@ namespace MFO::Logistics::Steal {
                 // copies that were not owned by someone else follow the normal theft-gate road (a plain RemoveItem if none is barred)
                 if (leftInChest) continue;
                 if (TheftGate::Takeable(f, chest, obj)) {
+                    MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                     auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
                     if (auto it = inv.find(obj); it != inv.end() && it->second.first > 0)
                         movedTotal += TheftGate::Take(f, chest, obj, it->second.first, TheftGate::Road::Container);
                 }
             }
+            if (movedTotal > 0) { InvSnap::RebuildOnMain(chest); InvSnap::RebuildOnMain(f); }   // INVARIANTS #84: the worker's view of both, replaced in place
             Finish(a_fid, a_cid, movedTotal > 0 ? OwnedTake::Took : OwnedTake::Nothing, {});
         }
     }

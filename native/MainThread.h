@@ -36,10 +36,51 @@ namespace MFO::MainThread {
     // Post is a documented no-op -- checks this and falls back to a direct call.
     bool IsInstalled();
 
+    // ── WHICH THREAD IS THIS (INVARIANTS #84: the worker never walks an engine inventory or active-effect list) ──
+    // InSeat: this thread is inside the player-Update thunk right now (the engine's update or the drain).
+    // IsMainThread: this thread is the one the thunk last ran on. False until the first frame has run.
+    // InWorkerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope), whichever OS thread the job system gave it.
+    // LiveReadsAllowed: may THIS call read a live engine inventory / effect list? Never inside a worker tick (checked first: the
+    // job system may run that task on any thread). Else true in the seat, on the main thread (event sinks, load handlers: as
+    // before), and when the pump is not installed (the documented legacy path).
+    // logistics/InvSnapshot and iaus/EffectMirror branch on it, so one helper serves both threads.
+    bool InSeat();
+    bool IsMainThread();
+    bool InWorkerTick();
+    bool LiveReadsAllowed();
+    // THE INVARIANT CHECKS ITSELF (#84, principle 5). Every place that still reads a LIVE engine inventory or active-effect list
+    // names itself here, on the line before the read:
+    //   NoteLiveRead   a read that must run in the seat or on the main thread outside a worker tick. Called anywhere else (inside the
+    //                  worker tick, or on a thread that is not the main one) it is a VIOLATION: counted, and said ONCE per site as an
+    //                  `[thread]` error. Passive: the read still runs (the engine call is the caller's), nothing is masked.
+    //   NoteWriteRead  the read that belongs to an engine WRITE made on the same thread right after it (it needs the live
+    //                  ExtraDataList). On the worker that is the known residue stability audit M2 moves to the main thread with its
+    //                  write: counted, never an error. Zero of these is M2's finish line.
+    // Diagnostics.cpp prints both counts in the `[overlap]` line.
+    void NoteLiveRead(const char* a_site);
+    void NoteWriteRead(const char* a_site);
+    std::uint64_t LiveReadViolations();
+    std::uint64_t WorkerWriteReads();
+    struct WorkerTickScope { WorkerTickScope(); ~WorkerTickScope(); WorkerTickScope(const WorkerTickScope&) = delete; WorkerTickScope& operator=(const WorkerTickScope&) = delete; };
+
+    // ── P0 OVERLAP PROBE (passive, always on: a few relaxed atomics per frame and per tick; Diagnostics.cpp prints `[overlap]`) ──
+    // SeatSeq is odd while the main thread is inside the thunk and moves at its entry and exit; SeatPhase is 1 in the engine's own
+    // player Update, 2 in MFO's drain, 0 outside. NpcCombat*: the same for Character::UpdateCombat (Targeting.cpp's hook wraps the
+    // original in NpcCombatScope). SeatSawWorker counts thunk entries / exits that found a worker tick in flight.
+    std::uint32_t SeatSeq();
+    int           SeatPhase();
+    std::uint32_t SeatSawWorker();
+    std::uint32_t NpcCombatSeq();
+    int           NpcCombatIn();
+    struct NpcCombatScope { NpcCombatScope(); ~NpcCombatScope(); NpcCombatScope(const NpcCombatScope&) = delete; NpcCombatScope& operator=(const NpcCombatScope&) = delete; };
+
     // Drop every queued closure without running it. Called on revert: a fn posted
     // before a load re-resolves its captured handle against the NEXT session's
     // handle table (handles are reused), so draining it post-load could run on the
     // wrong actor. The hook stays installed; only the pending work is discarded.
     void Clear();
+    // Bumped by every Clear(). A poster that keeps "my closure is queued" state compares it, so a Clear that dropped the closure
+    // cannot leave that state stuck (Diagnostics.cpp's snapshot build pass).
+    std::uint32_t ClearGeneration();
 
 }

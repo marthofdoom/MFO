@@ -28,6 +28,7 @@
 // ledger, acks) is under the LEAF lock g_mx, never held across an engine call.
 
 #include "selftest/SelfTest_internal.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84
 #include "Followers.h"
 #include "Vocabulary.h"
 #include "Config.h"
@@ -595,9 +596,7 @@ namespace MFO::SelfTest {
         if (!a_actor || !a_form) return 0;
         auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(a_form);
         if (!obj) return 0;
-        const auto counts = a_actor->GetInventoryCounts([obj](RE::TESBoundObject& o) { return &o == obj; });
-        const auto it     = counts.find(obj);
-        return it == counts.end() ? 0 : it->second;
+        return InvSnap::Items(a_actor).Count(obj);   // INVARIANTS #84: the main-built snapshot on the worker (not yet = 0: a step polls again)
     }
 
     RE::FormID VanillaForm(RE::FormID a_localID) {

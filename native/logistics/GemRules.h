@@ -45,7 +45,9 @@ namespace MFO::Logistics::GemRules {
     // WORKER (LootEquipment). A weapon/armor in a_src that is not otherwise being taken but may
     // carry gems (MEO mints an ExtraUniqueID when it sockets: a uid==0 item has none) and has not
     // been probed yet. Returns the item + the source's ExtraDataList for that instance, or null.
-    struct GemCandidate { RE::TESBoundObject* obj = nullptr; RE::ExtraDataList* xl = nullptr; std::uint16_t uid = 0; };
+    // copyOwner = that copy's ExtraOwnership owner when the source's snapshot was read (null = none). No extra-list pointer is
+    // carried (INVARIANTS #84): the take re-finds the copy by uid where it writes.
+    struct GemCandidate { RE::TESBoundObject* obj = nullptr; RE::TESForm* copyOwner = nullptr; std::uint16_t uid = 0; };
     GemCandidate FindGemCandidate(RE::Actor* a_follower, RE::TESObjectREFR* a_src);
     // WORKER: take the candidate (this instance only) and hand it to the main-thread probe.
     // True if it arrived.

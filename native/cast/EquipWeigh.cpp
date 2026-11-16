@@ -268,7 +268,7 @@ namespace MFO::Actuation {
         // his, or it did not land within kPlaceTtl (said loudly, never retried around: principle 7).
         const auto now  = Clock::now();
         const bool dead = a_follower->IsDead();
-        auto inv = a_follower->GetInventory();
+        const auto inv = InvSnap::Items(a_follower);
         std::vector<RE::FormID> done;
         for (const auto& w : wishes) {
             auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(w.form);

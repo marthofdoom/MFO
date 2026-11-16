@@ -176,7 +176,7 @@ namespace MFO::Logistics {
             for (const auto slot : kMageSlots) {
                 if (!(mask & static_cast<std::uint32_t>(slot))) continue;
                 overlapsAny = true;
-                auto* worn = a_follower->GetWornArmor(slot);
+                auto* worn = InvSnap::Items(a_follower).WornArmor(slot);
                 if (!worn) {
                     // Open slot -> nothing to beat. A GENERIC piece only earns
                     // its take here when it actually DRESSES him: a bare
@@ -340,7 +340,7 @@ namespace MFO::Logistics {
                 float slotRat[5]   = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot (0 head..4 shield): raw rating (diagnostic)
                 float slotScore[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot: ArmorScore -- THE buy baseline
                 const ArmorPref armorPref = ArmorPrefFor(a_follower);   // the loot judge's own class/perk bias
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     if (auto* w = obj->As<RE::TESObjectWEAP>()) {
                         if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
@@ -434,7 +434,7 @@ namespace MFO::Logistics {
                 // piece raises the bar and is not re-bought next visit; keepArmor
                 // protects it from re-sell.
                 if (buy.buyMageApparel) {
-                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                    for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                         if (!obj || data.first <= 0) continue;
                         auto* ar = obj->As<RE::TESObjectARMO>();
                         if (!ar || ar->GetArmorRating() > 0.0f) continue;
@@ -500,6 +500,7 @@ namespace MFO::Logistics {
                           const ErrandPlanned* a_share = nullptr, int a_purseCap = -1) {
             const auto& a_logistics = a_state.logistics();
             const auto fid = a_follower->GetFormID();
+            if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate)
 
             // Per-follower SCAN cooldown -- the cell walk itself is the
             // cost being limited here, same pattern as the other diagnostics.
@@ -652,17 +653,16 @@ namespace MFO::Logistics {
             const bool sellSocketed = Config::g_lootSpecialItems.load();   // v2-only: sell as-is instead of hoarding
             // Returns true = DON'T sell this scan; side-effect (v3 warm) = queue
             // the ungem so it can sell later.
-            auto gemHold = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
-                if (!gemSupported || !e || !e->extraLists) return false;
+            auto gemHold = [&](const InvSnap::Entry* e, RE::FormID base) -> bool {
+                if (!gemSupported || !e) return false;
                 bool hold = false;
-                for (auto* xl : *e->extraLists) {
-                    auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                    if (!uid || uid->uniqueID == 0) continue;
+                for (const auto& cp : e->copies) {
+                    if (!cp.hasUid || cp.uid == 0) continue;
                     if (!gemWarmed) { hold = true; continue; }   // cold: protect, can't extract yet
-                    if (MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID)) {
+                    if (MEOBridge::IsCarriedGemmed(fid, base, cp.uid)) {
                         if (gemUnsocket) {   // v3: extract this instance's gems -> sells ungemmed later
                             hold = true;
-                            MEOBridge::UnsocketItemGems(a_follower, base, uid->uniqueID);
+                            MEOBridge::UnsocketItemGems(a_follower, base, cp.uid);
                         } else if (!sellSocketed) {
                             hold = true;   // v2-only, toggle OFF: protect (shipped behavior)
                         }
@@ -712,7 +712,7 @@ namespace MFO::Logistics {
             };
             std::vector<SellCandidate> sellCandidates;
             std::vector<GemRules::HoldKey> saleTouched;   // items the sale path checked this scan (GemRules holds)
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
                 // LOTD (feat/mfo-lotd, marth 2026-09-24: "museum items cannot be sold if
@@ -939,7 +939,7 @@ namespace MFO::Logistics {
                 return a_obj ? a_obj->As<RE::BGSKeywordForm>() : nullptr;
             };
             const auto carriesLauncherFor = [a_follower](bool a_bolt) {
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
                     if (w && (a_bolt ? w->IsCrossbow() : w->IsBow())) return true;
@@ -1256,7 +1256,8 @@ namespace MFO::Logistics {
             a_out.clear();
             a_gold = 0;
             if (!a_follower) return;
-            for (auto& [obj, data] : a_follower->GetInventory())
+            if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate) (no need and no gold: nothing is bought)
+            for (auto& [obj, data] : InvSnap::Items(a_follower))
                 if (obj && data.first > 0 && obj->GetFormID() == 0x0000000F) a_gold += static_cast<int>(data.first);
             const auto addNeed = [&](TradeBridge::NeedCat::Kind a_kind, int have, int want) {
                 if (have < want) a_out.push_back({ static_cast<std::int32_t>(a_kind), static_cast<std::int32_t>(want - have) });

@@ -1,6 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include "State.h"
+#include "InvSnapshot.h"   // InvSnap::Entry in the public signatures (INVARIANTS #84)
 #include <unordered_set>   // T#69: stock-gear sets (CopyStockGear/LoadStockRecord)
 #include <functional>      // ForEachLoadedRef callbacks (std::function is not in the PCH)
 
@@ -361,7 +362,7 @@ namespace MFO::Logistics {
     // not a creature weapon and whose inventory entry is not quest-bound (`a_entry` may be null: no quest test).
     // Never a weapon choice of MFO (the combat judge, the owned-upgrade scan), and the per-item deny list
     // RefreshEquipDeclaration sends to Harbinger (ABI >= 33). Whatever bLootSpecialItems says. Worker road.
-    bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry);
+    bool NeverWieldWeapon(const RE::TESObjectWEAP* a_weapon, const InvSnap::Entry* a_entry);
 
     // OFF-CLASS WEAPON RULE (batch L, card G16, ClickUp 1dfcuabcn02). With the class tree ACTIVE, a follower whose class restricts its
     // weapons (Classes::Weapon bits; T1 and Dragonborn are unrestricted) never wields a weapon outside that set while he carries ANY
@@ -370,7 +371,7 @@ namespace MFO::Logistics {
     // equip of one. When he carries NO in-set weapon the rule stands down (he would otherwise be unarmed): the fallback is allowed,
     // OffClassTick then tells the player once and switches the damage penalty on (faction MFOC_OffClassWeapon rank 1, the add-on's
     // ModAttackDamage x0.5 perk). Bound weapons are never off-class. Worker road.
-    bool NeverWieldWeaponFor(RE::Actor* a_follower, const RE::TESObjectWEAP* a_weapon, RE::InventoryEntryData* a_entry);
+    bool NeverWieldWeaponFor(RE::Actor* a_follower, const RE::TESObjectWEAP* a_weapon, const InvSnap::Entry* a_entry);
     void OffClassTick(RE::Actor* a_follower);
 
     // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):

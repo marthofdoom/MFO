@@ -26,7 +26,7 @@ namespace MFO::Logistics {
         std::unordered_map<std::uint64_t, PendingDrink> g_pendingDrink;
 
         std::int32_t CarriedCount(RE::Actor* a_follower, const RE::AlchemyItem* a_alc) {
-            for (auto& [obj, data] : a_follower->GetInventory())
+            for (auto& [obj, data] : InvSnap::Items(a_follower))
                 if (obj == a_alc) return data.first;
             return 0;
         }
@@ -143,6 +143,7 @@ namespace MFO::Logistics {
         if (!mgr) return false;
         if (const auto pend = g_pendingDrink.find(key); pend != g_pendingDrink.end()) { ConfirmOne(a_follower, key, pend->second); g_pendingDrink.erase(pend); }
         mgr->EquipObject(a_follower, alc, nullptr, 1);   // the AlchemyItem equip path IS the vanilla drink; one unit, the engine removes it
+        InvSnap::Touch(a_follower);   // (a worker-side write, stability audit M2): his snapshot is behind it, so ConfirmDrinks reads one built after it
         g_pendingDrink[key] = PendingDrink{ carriedBefore, std::string(alc->GetName()) };   // proven (or not) on the next pass: ConfirmDrinks
 
         g_buffUntil[key] = now + std::chrono::milliseconds(static_cast<int>((std::max)(1.0f, item.maxDuration) * 1000.0f));   // the reader's longest effect (restores included) gates the stack
@@ -151,6 +152,7 @@ namespace MFO::Logistics {
 
     void ConfirmDrinks(RE::Actor* a_follower) {
         if (!a_follower || g_pendingDrink.empty()) return;
+        if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate) (a drink is confirmed by his count: the pending entries wait)
         const auto fid = static_cast<std::uint64_t>(a_follower->GetFormID());
         for (auto it = g_pendingDrink.begin(); it != g_pendingDrink.end();) {
             if ((it->first >> 32) == fid) { ConfirmOne(a_follower, it->first, it->second); it = g_pendingDrink.erase(it); }

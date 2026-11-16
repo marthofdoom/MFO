@@ -3,6 +3,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "MainThread.h"   // NoteLiveRead (INVARIANTS #84)
 #include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
@@ -33,18 +34,16 @@ namespace MFO::Actuation {
     // paths stay byte-identical. Reads the active-effect list only (no mutation).
     bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell) {
         if (!a_caster || !a_spell) return false;
-        auto* mt = a_caster->AsMagicTarget();
-        if (!mt) return false;
-        auto* list = mt->GetActiveEffectList();
-        if (!list) return false;
-        for (auto* ae : *list) {
-            if (!ae || ae->spell != a_spell) continue;
-            RE::ActorHandle h{};
-            if (auto* se = skyrim_cast<RE::SummonCreatureEffect*>(ae))      h = se->commandedActor;
-            else if (auto* re = skyrim_cast<RE::ReanimateEffect*>(ae))      h = re->commandedActor;
-            else continue;   // this spell's effect here is not a summon/reanimate
-            if (auto cmd = h.get(); cmd && !cmd->IsDead() && !cmd->IsDeleted())
-                return true;   // a live commanded summon from this spell is up
+        // INVARIANTS #84: the main-built effect mirror on the worker (iaus/EffectMirror.h), the live list read in place on the main
+        // thread. The same test per effect: this spell's summon / reanimate effect whose commanded actor resolves, alive, not deleted.
+        const auto fx = EffectMirror::Get(a_caster);
+        // Not yet (never for a party member inside a tick: the tick gate): answer "a live summon is up", the answer that casts
+        // NOTHING. Every caller reads true as "do not recast"; false here would let an unread caster stack a second creature.
+        if (!fx) return true;
+        for (const auto& f : fx->fx) {
+            if (f.spell != a_spell) continue;
+            if (!f.summon && !f.reanimate) continue;   // this spell's effect here is not a summon/reanimate
+            if (f.commandedLive) return true;          // a live commanded summon from this spell is up
         }
         return false;
     }
@@ -221,6 +220,7 @@ namespace MFO::Actuation {
         int  otherAppearing = 0;
         std::vector<RE::FormID> otherSpellsWithEffect;
         if (auto* mt = f->AsMagicTarget()) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             if (auto* list = mt->GetActiveEffectList()) {
                 for (auto* ae : *list) {
                     if (!ae || !ae->spell) continue;

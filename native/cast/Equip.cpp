@@ -138,7 +138,7 @@ namespace MFO::Actuation {
         RE::TESObjectWEAP* PickOffHandWeapon(RE::Actor* a_follower, const Logistics::CombatWeaponStyle& a_roles,
                                              bool a_daggerMelee, const RE::TESObjectWEAP* a_right) {
             RE::TESObjectWEAP* best = nullptr; float bestScore = 0.0f;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || w->IsStaff() || !IsOneHandMelee(w)) continue;
@@ -159,7 +159,7 @@ namespace MFO::Actuation {
         // unless the PLAYER gave it / put it on him (PlayerGiven, as IsMuseumRelic).
         RE::TESObjectARMO* PickShield(RE::Actor* a_follower) {
             RE::TESObjectARMO* best = nullptr; float bestAr = 0.0f;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* a = obj->As<RE::TESObjectARMO>();
                 if (!a || !a->IsShield()) continue;
@@ -490,7 +490,7 @@ namespace MFO::Actuation {
                 if (PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), hb)) return false;
                 if (!PlayerGiven::IsAiEquipped(a_follower->GetFormID(), hb) &&
                     heldHold.first != hb && heldHold.second != hb) return false;
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
                     if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) &&
@@ -507,7 +507,7 @@ namespace MFO::Actuation {
                 if (!hw) return false;
                 const Logistics::CombatAmmo have = Logistics::CombatAmmoOwned(a_follower);
                 if (have.For(hw) > 0) return false;
-                for (auto& [obj, data] : a_follower->GetInventory()) {
+                for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
                     if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) && have.For(w) > 0 &&
@@ -629,7 +629,7 @@ namespace MFO::Actuation {
             // used when NOTHING else of the category is carried.
             RE::TESObjectWEAP* best = nullptr; float bestScore = 0.0f;
             RE::TESObjectWEAP* bestRelic = nullptr; float bestRelicScore = 0.0f;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!eligible(w)) continue;   // staff / non-playable / category / mage daggers (above)
@@ -916,7 +916,7 @@ namespace MFO::Actuation {
             auto* form = RE::TESForm::LookupByID(prev);
             auto* obj  = form ? form->As<RE::TESBoundObject>() : nullptr;
             if (!obj) continue;
-            const auto inv = a_follower->GetInventory();
+            const auto inv = InvSnap::Items(a_follower);
             const auto it  = inv.find(obj);
             if (it == inv.end() || it->second.first <= 0) continue;   // sold / handed away since
             WantPlacement(id, prev, PlacementSlotFor(obj, left), "caster stand-down: pre-fight hand");
@@ -988,7 +988,7 @@ namespace MFO::Actuation {
                             auto* mgr   = RE::ActorEquipManager::GetSingleton();
                             auto* obj   = RE::TESForm::LookupByID<RE::TESBoundObject>(mainId);
                             if (!actor || !mgr || !obj || actor->IsDead() || actor->IsDisabled()) return;
-                            auto inv = actor->GetInventory();
+                            const auto inv = InvSnap::Items(actor);
                             const auto it = inv.find(obj);
                             if (it == inv.end() || it->second.first <= 0) return;
                             mgr->EquipObject(actor, obj, nullptr, 1, nullptr, true, false);   // forceEquip = FALSE
@@ -1089,7 +1089,7 @@ namespace MFO::Actuation {
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                 auto* mgr   = RE::ActorEquipManager::GetSingleton();
                 if (!actor || !mgr || actor->IsDead() || actor->IsDisabled()) return;
-                auto inv = actor->GetInventory();
+                const auto inv = InvSnap::Items(actor);
                 const auto owns = [&inv](RE::FormID a_form) -> RE::TESBoundObject* {
                     if (a_form == 0) return nullptr;
                     auto* form = RE::TESForm::LookupByID(a_form);
@@ -1502,13 +1502,11 @@ namespace MFO::Actuation {
                 // byte-identical: only this action changes. Still on the main thread (#62).
                 const auto locked = [actor](RE::TESBoundObject* a_obj) {
                     if (!a_obj) return false;
-                    auto inv = actor->GetInventory();
+                    const auto inv = InvSnap::Items(actor);
                     const auto it = inv.find(a_obj);
                     if (it == inv.end() || !it->second.second) return false;
-                    const auto* entry = it->second.second.get();
-                    if (!entry->extraLists) return false;
-                    for (auto* xList : *entry->extraLists)
-                        if (xList && xList->HasType(RE::ExtraDataType::kCannotWear)) return true;
+                    for (const auto& c : it->second.second->copies)   // main thread: InvSnap::Items read the live list in place
+                        if (c.cannotWear) return true;
                     return false;
                 };
                 bool anyLock = false;

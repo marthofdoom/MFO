@@ -221,9 +221,7 @@ namespace MFO::Logistics::Lockpick {
 
         std::int32_t CountOf(RE::TESObjectREFR* a_holder, RE::TESBoundObject* a_obj) {
             if (!a_holder || !a_obj) return 0;
-            auto counts = a_holder->GetInventoryCounts([a_obj](RE::TESBoundObject& o) { return &o == a_obj; });
-            const auto it = counts.find(a_obj);
-            return it == counts.end() ? 0 : it->second;
+            return InvSnap::Items(a_holder).Count(a_obj);   // INVARIANTS #84 (live on the main thread; not yet = 0 on the worker)
         }
         RE::TESBoundObject* LockpickObject() {
             static RE::TESBoundObject* const pick = RE::TESForm::LookupByID<RE::TESBoundObject>(kLockpickForm);

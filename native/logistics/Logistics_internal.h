@@ -9,6 +9,7 @@
 // API: only the four Logistics*.cpp TUs may include this.
 
 #include "PCH.h"
+#include "iaus/EffectMirror.h"       // INVARIANTS #84: active-effect reads through the main-built mirror
 #include "Logistics.h"
 #include "Evaluator.h"
 #include "Vocabulary.h"
@@ -29,6 +30,7 @@
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 #include "Progression.h"  // perk STYLE votes (TallyStyleVotes) -- weapon/armor style by perks
 #include "TheftGate.h"    // the universal theft gate: every take road (ClickUp 1dfcuabczbg)
+#include "InvSnapshot.h"  // INVARIANTS #84: the worker reads inventories through InvSnap, never a live engine list
 #include "Steal.h"        // batch L: the witness pre-check shared by act.steal (G13) and owned locks (G14)
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
@@ -741,7 +743,9 @@ namespace MFO::Logistics {
             // call and g_stockMx must never be held across one (a main-thread
             // SaveCallback could be blocked on it).
             std::unordered_set<RE::FormID> stock;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            const auto inv = InvSnap::Items(a_follower);
+            if (!inv) return;   // INVARIANTS #84: not readable yet. NO snapshot is recorded from an unread pack (it is taken once, and saved): the next call takes it
+            for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0) continue;
                 if (!obj->As<RE::TESObjectWEAP>() && !obj->As<RE::TESObjectARMO>()) continue;
                 const auto baseID = obj->GetFormID();
@@ -935,7 +939,7 @@ namespace MFO::Logistics {
     bool DropObjectAt(RE::Actor* a_fol, RE::TESBoundObject* a_item, RE::ExtraDataList* a_xl,
                       const RE::NiPoint3& a_loc, const RE::NiPoint3& a_rot);   // Upkeep.cpp: exact-position engine drop (GemRules)
     bool ValuableRatioClears(float a_value, float a_weight);   // the loot-valuables gambit's value/weight rule (Config::g_valuablesRatio)
-    bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry);
+    bool IsQuestObjectInstance(const InvSnap::Entry* a_entry);
     bool IsQuestObjectRef(RE::TESObjectREFR* a_ref);
     bool LooseSpecialItemBlocked(RE::TESObjectREFR* a_ref, RE::FormID a_formId);
 
@@ -1182,7 +1186,7 @@ namespace MFO::Logistics {
     }
     bool  AmmoSwapEligible(const RE::TESAmmo* a_ammo);   // playable (a bound bow's arrows are not ours)
     bool  AmmoIsSpecialBase(const RE::TESAmmo* a_ammo);  // the projectile carries an explosion
-    bool  AmmoIsSpecial(const RE::TESAmmo* a_ammo, RE::InventoryEntryData* a_entry);   // + an enchanted instance
+    bool  AmmoIsSpecial(const RE::TESAmmo* a_ammo, const InvSnap::Entry* a_entry);   // + an enchanted instance
     float AmmoDamage(const RE::TESAmmo* a_ammo);
     bool  UsesAmmoKind(const FollowerState* a_state, const WeaponRoles& a_roles, bool a_wantBolt);
     // 0 = not judged (a_usesKind false): never shed, never sold.

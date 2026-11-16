@@ -98,7 +98,7 @@ namespace MFO::Logistics {
 
             RE::AlchemyItem* strong = nullptr; float strongMag = -1.0f;
             RE::AlchemyItem* cover  = nullptr; float coverMag  = std::numeric_limits<float>::max();
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
                 if (!alc || PotionRestores(alc) != a_which) continue;
@@ -121,7 +121,7 @@ namespace MFO::Logistics {
                 if (pn.time_since_epoch().count() == 0 || tnow >= pn) {
                     pn = tnow + std::chrono::seconds(15);
                     std::string dump;
-                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                    for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                         if (!obj || data.first <= 0) continue;
                         auto* alc = obj->As<RE::AlchemyItem>();
                         if (!alc || alc->IsFood() || alc->IsPoison()) continue;
@@ -145,6 +145,7 @@ namespace MFO::Logistics {
             // Equipping a potion on an actor consumes it -- the documented Tier A
             // path. One unit; the engine removes it from the pack.
             mgr->EquipObject(a_follower, best, nullptr, 1);
+            InvSnap::Touch(a_follower);   // the drink takes one out of his pack (a worker-side write, stability audit M2): his snapshot is behind it
             if (a_which == RE::ActorValue::kHealth)   // [bleed] attribution (fix/mfo-can-act)
                 Actuation::NoteHealLanded(a_follower->GetFormID(), a_follower->GetFormID(), best->GetFormID());
             // Gate this AV for the potion's own duration (min one logistics
@@ -187,6 +188,7 @@ namespace MFO::Logistics {
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
+        if (!InvSnap::Ready(a_follower)) return;   // INVARIANTS #84: nothing here is decided, confirmed or pruned on an unread pack (never inside a tick for a party member: the tick gate)
         // #78: per-follower MFO master switch. The Scheduler already gates the
         // whole tick (combat + this OOC path) on mfoEnabled and releases held
         // state on the OFF edge, so this is pure defence-in-depth: a disabled
@@ -591,8 +593,8 @@ namespace MFO::Logistics {
                 }
                 const bool refGone = !aref || aref->IsDeleted() || aref->IsDisabled();
                 std::int32_t post = 0;
-                for (auto& [obj, n] : a_follower->GetInventoryCounts())
-                    if (obj && obj->GetFormID() == tr.acquireBase) { post = n; break; }
+                for (auto& [obj, data] : InvSnap::Items(a_follower))
+                    if (obj && obj->GetFormID() == tr.acquireBase) { post = data.first; break; }
                 const std::int32_t delta = post - tr.acquirePre;
                 if (refGone || delta != 0) {
                     spdlog::info("[acquire] {:08X}: TOOK {:08X} -- ref {}, inv {:+}",
@@ -958,8 +960,8 @@ namespace MFO::Logistics {
                         if (flora) {
                             pre = CoinCount(a_follower);
                         } else {
-                            for (auto& [obj, n] : a_follower->GetInventoryCounts())
-                                if (obj && base && obj->GetFormID() == base->GetFormID()) { pre = n; break; }
+                            for (auto& [obj, data] : InvSnap::Items(a_follower))
+                                if (obj && base && obj->GetFormID() == base->GetFormID()) { pre = data.first; break; }
                         }
                         // NATIVE activate on the MAIN THREAD (loose-loot fix, marth:
                         // "it's simple -- check other looting mods"). The VM
@@ -1115,7 +1117,8 @@ namespace MFO::Logistics {
                             nxtG = now + std::chrono::seconds(3);
                             spdlog::info("[loot] {:08X}: arrived at {:08X} -- {}, corpse kept, retrying next tick (until the excursion cap)",
                                          id, tref->GetFormID(),
-                                         guardAfter.landing ? "a take of this visit is still landing (queued to the main thread)" : "guard check pending");
+                                         guardAfter.notYet ? "its inventory snapshot is not readable yet (built on the main thread, INVARIANTS #84)"
+                                         : guardAfter.landing ? "a take of this visit is still landing (queued to the main thread)" : "guard check pending");
                         }
                         return;
                     }
@@ -1958,9 +1961,12 @@ namespace MFO::Logistics {
                 if (immediate) {
                     auto* ei   = sp->GetCostliestEffectItem();
                     auto* mgef = ei ? ei->baseEffect : nullptr;
-                    if (auto* mt = tgt->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
-                        start = choice.rank + 1; continue;
-                    }
+                    // INVARIANTS #84: the engine's HasMagicEffect answer from the main-built mirror (iaus/EffectMirror.h). Not yet
+                    // = treated as "still up": this cast waits a lap, the next rule is tried (never a re-stack on an unread target).
+                    if (mgef)
+                        if (const auto fx = EffectMirror::Get(tgt); !fx || fx->HasMagicEffect(mgef)) {
+                            start = choice.rank + 1; continue;
+                        }
                 }
                 // Pace per (follower, SPELL) -- keying on the follower alone would
                 // let one cast's window starve a sibling cast rule (candlelight

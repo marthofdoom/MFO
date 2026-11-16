@@ -36,6 +36,7 @@ namespace MFO::SelfStatus {
         // MAIN THREAD ONLY: the live effect list (it mutates under the magic caster on this thread).
         bool ReadPoisoned(RE::Actor* a_actor) {
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return false;
             for (auto* ae : *list) {
