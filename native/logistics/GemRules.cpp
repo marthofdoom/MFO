@@ -333,6 +333,7 @@ namespace MFO::Logistics::GemRules {
                 if (xl && UidOf(xl) == uid) { liveXl = xl; break; }
         }
         if (!liveXl || TheftGate::TakeBarred(a_follower, a_src, a_c.obj, liveXl, TheftGate::Road::Gear)) return false;   // gone, or its owner changed
+        MainThread::NoteEngineWrite("GemRules::TakeAndProbe");   // INVARIANTS #83: counted and said if a worker tick ever reaches this
         a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, liveXl, a_follower);
         InvSnap::Touch(a_src); InvSnap::Touch(a_follower);   // both snapshots are behind this write
         if (!FindOwned(a_follower, a_c.obj, uid, v)) return false;

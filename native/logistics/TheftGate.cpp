@@ -393,6 +393,7 @@ namespace MFO::Logistics::TheftGate {
             for (int iter = 0; iter < 16 && moved < a_count; ++iter) {   // re-read the inventory each time: a RemoveItem invalidates its extra lists
                 const Plan p = AnalyseLive(a_follower, a_src, a_obj, a_road);
                 if (!p.found) break;
+                MainThread::NoteEngineWrite("TheftGate::MoveNow");   // INVARIANTS #83: counted and said if a worker tick ever reaches a transfer
                 if (!p.anyBarred && iter == 0) {   // the unchanged road: one plain RemoveItem, exactly as every caller always made it
                     a_src->RemoveItem(a_obj, a_count, kReason, nullptr, a_follower);
                     if (!a_landing) { InvSnap::Touch(a_src); InvSnap::Touch(a_follower); }   // a direct take (the main thread, or no pump): both snapshots are behind it
@@ -536,7 +537,7 @@ namespace MFO::Logistics::TheftGate {
             }
             // A named copy is judged by itself; a counted take by the object (the plain RemoveItem lets the engine choose the copies).
             const bool worn = named ? named->worn : p.anyWorn;
-            if (named) src->RemoveItem(obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, named->xl, fol);
+            if (named) { MainThread::NoteEngineWrite("TheftGate::RunTransfer"); src->RemoveItem(obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, named->xl, fol); }
             else       MoveNow(fol, src, obj, a_j.n, a_j.road, /*a_landing*/ true);
             const Plan q = AnalyseLive(fol, src, obj, a_j.road);   // q.total is 0 when nothing is left
             // INVARIANTS #84: the worker's view of both inventories is replaced in place, BEFORE the drain drops this entry from the

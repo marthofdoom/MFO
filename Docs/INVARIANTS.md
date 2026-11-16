@@ -1246,7 +1246,10 @@ inventory (MFO's own snapshot build pass, the container menu, another plugin) st
 6. **Every transfer is queued, from every source** (a container as well as a corpse): `TheftGate::Take` / `QueueCopy`.
 7. **The write names itself.** `MainThread::NoteEngineWrite(site)` on the line before the engine call. Off the main thread it
    is counted and said once per site (`[thread] INVARIANTS #83 VIOLATED`), and `[overlap]` prints the count. It must stay 0.
-   `MainThread::NoteWriteRead` (a write's own live read) must now stay 0 too.
+   `MainThread::NoteWriteRead` (a write's own live read) must now stay 0 too. Every site this change moved calls it
+   (`EngineOps`, the transfers, the tome, the teach, the drive probe, the power attack event). The closures that were
+   already posted before it (the direct casts, `Upkeep`'s torch and heal equips, the loose-item activate) do not yet: a new
+   or touched one adds the call.
 
 **What still runs on the worker, and why (the complete list; anything else is a violation).**
 - *Not engine state:* MFO's own maps, atomics and ledgers; `Targeting::Command` (an atomic mirror); the equip declaration and
