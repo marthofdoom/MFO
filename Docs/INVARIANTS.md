@@ -19,7 +19,7 @@ one, because the next person will believe it.
 
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
-**95 rules: 81 numbered (`#1`–`#81`, each used exactly once) plus 14 lettered
+**96 rules: 82 numbered (`#1`–`#82`, each used exactly once) plus 14 lettered
 sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
 break a `#N` citation, and both are fixed here:
 
@@ -1168,3 +1168,24 @@ cadence, which the player saw as his placed points drifting (marth, 2026-09-13:
 there is no shift"). `Respec` returns ALL points: perks, every auto and manual
 skill point, the level ledger to zero -- re-spent by the class weights under auto,
 or pooled for the player under manual. **MFO** v2.0.7-dev, PRGN v7.
+
+### 82. A runtime (0xFF) form MFO mints never reaches the engine's save: sweep at kSaveGame, check in the co-save callback
+
+`#9` keeps 0xFF ids out of the CO-SAVE. This is the other half: the ENGINE's own records. A
+runtime form that sits in an actor slot the engine saves (a caster's `currentSpell`, an
+ActiveEffect's `spell`, a hand, a selected spell, the spell list) is written as its form id, and on
+load that id resolves to whatever live runtime form holds it then. When that form is destroyed the
+slot points at freed memory and the next reader crashes (Harbinger Save373, 2026-11-14: a cast
+proxy in a follower's hand, a third-party reader 0.8 s after the load). MFO's ConcProxy forms
+(`cast/Direct.cpp`) are in a caster and in an effect for the whole of a concentration stream.
+
+The ORDER is the rule. SKSE64 sends `kSaveGame` synchronously BEFORE the engine writes any record;
+the co-save save callback runs AFTER every actor record is in the buffer. So the sweep runs in the
+`kSaveGame` message (plugin.cpp, `Actuation::ConcProxyPreSaveSweep`): interrupt the channel, key
+each effect to its real source spell (same Effect*, same index). The co-save callback only CHECKS
+(`ConcProxySaveWrittenCheck`: a WARN means the .ess may hold one) and undoes the sweep's re-key. A
+sweep in the co-save callback protects nothing in that save. On load, a caster pointing at a
+destroyed form is cleared WITHOUT reading through the pointer (`ConcProxyLoadRepair`: guarded id
+read, then form-map identity). Any new runtime form MFO creates joins this sweep before it ships.
+**MFO** fix/save-integrity-mfo, 2026-11-15 (the class of the Harbinger 11-14 crash, its #19).
+

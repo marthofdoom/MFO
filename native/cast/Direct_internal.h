@@ -76,6 +76,20 @@ namespace MFO::Actuation {
                                RE::FormID a_spellID, bool a_guard, float a_chargeSec);
         void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID, RE::FormID a_ownerID);
 
+        // fix/save-integrity-mfo (INVARIANTS #82). One minted ConcProxy form as cast/ProxySave.cpp
+        // sees it: the form, its current owner (0 = free slot) and every source spell it was
+        // configured for this session (most recent last). ConcProxyPool() (cast/Direct.cpp) copies
+        // the pool; MAIN THREAD only, like the pool itself. ResetProxySaveState()
+        // (cast/ProxySave.cpp) drops the save sweep's state; ClearSelfCasts calls it on revert.
+        struct ConcProxyView {
+            RE::SpellItem*          form  = nullptr;
+            RE::FormID              owner = 0;
+            std::vector<RE::FormID> past;
+            std::vector<RE::FormID> targets;   // every actor this form streamed at this session (dedup)
+        };
+        std::vector<ConcProxyView> ConcProxyPool();
+        void                       ResetProxySaveState();
+
         // MFO-B173 (cast/Direct.cpp). The OUT-OF-COMBAT caller's heal gate for
         // CastSelfDirect / CastTargetDirect: true when the caller is NOT the combat
         // table (g_firingRule == kNoRule, i.e. Logistics or CastAuto reached from it),

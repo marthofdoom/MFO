@@ -483,6 +483,24 @@ namespace MFO::Actuation {
     // (feat/mfo-animheal-p0, 1m(c)).
     std::vector<RE::FormID> ConcProxyForms();
 
+    // SAVE / LOAD INTEGRITY of the ConcProxy forms (fix/save-integrity-mfo, INVARIANTS #82,
+    // cast/ProxySave.cpp). A save must never hold one: the engine writes a form id for a
+    // caster's current spell and for an active effect's spell, and on load an 0xFF id
+    // resolves to whatever live runtime form holds it then (the 11-14 Harbinger crash class).
+    //   ConcProxyPreSaveSweep: plugin.cpp's kSaveGame message, which SKSE sends BEFORE the
+    //     engine writes any record. Interrupts every caster channeling a pool form, then keys
+    //     every active effect of a pool form to its real source spell for the save.
+    //   ConcProxySaveWrittenCheck: the co-save save callback (AFTER the records, same save
+    //     call). WARNs if anything still named a pool form when the records were written, then
+    //     keys the effects back to their proxy (MFO's sustain finds them by the proxy).
+    //   ConcProxyLoadRepair: kPostLoadGame (and once more on the first pump). A caster whose
+    //     current spell is a DESTROYED form is reset without reading through the pointer; an
+    //     active effect with a destroyed spell is reported (not repairable).
+    // All three MAIN THREAD; the direct member reads / writes run on the three exact builds only.
+    void ConcProxyPreSaveSweep();
+    void ConcProxySaveWrittenCheck();
+    void ConcProxyLoadRepair(const char* a_when);
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.

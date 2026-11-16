@@ -69,6 +69,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/EquipSilver.cpp
     cast/EquipWeigh.cpp
     cast/Direct.cpp
+    cast/ProxySave.cpp
     cast/DirectSelf.cpp
     cast/DirectTarget.cpp
     cast/CanAct.cpp
