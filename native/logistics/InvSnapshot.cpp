@@ -301,14 +301,10 @@ namespace MFO::InvSnap {
 
     void BeginTick(bool a_paused) {
         const auto t = g_tick.fetch_add(1, std::memory_order_acq_rel) + 1;
-        const bool wasPaused = g_paused.exchange(a_paused, std::memory_order_acq_rel);
-        if (a_paused) {
-            g_lastPaused.store(t, std::memory_order_release);
-            if (!wasPaused) g_needPass.store(t - 1, std::memory_order_release);   // the pause begins: the tick before it, for the whole pause
-        } else {
-            g_age.fetch_add(1, std::memory_order_acq_rel);
-            g_needPass.store(t - 1, std::memory_order_release);                   // the pass the previous tick posted
-        }
+        g_paused.store(a_paused, std::memory_order_release);
+        g_needPass.store(t - 1, std::memory_order_release);   // the pass the previous tick posted (read in unpaused ticks only)
+        if (a_paused) g_lastPaused.store(t, std::memory_order_release);
+        else          g_age.fetch_add(1, std::memory_order_acq_rel);
     }
     std::uint64_t CurrentTick() { return g_tick.load(std::memory_order_acquire); }
     TickClock Now() {

@@ -3046,8 +3046,8 @@ The worker never walks an engine inventory list or active-effect list. It reads 
 - **Freshness (worker ticks, 133 ms).** THE PARTY'S RULE (`InvSnap::TickClock::needPass`, `PassReached`; both snapshot kinds):
   a party member's and the player's snapshot / mirror is readable in tick t only when the build pass tick t-1 posted has
   published it. That pass is queued behind everything tick t-1 posted, so tick t reads what tick t-1 wrote or asked for, and
-  a main thread slower than the tick makes the worker skip ticks (the gate), never run ahead. Under a pause `needPass` stays
-  at the tick before the pause began. SOURCES and non-party actors (`InvSnap::FreshEnough`): InvSnapshot.cpp
+  a main thread slower than the tick makes the worker skip ticks (the gate), never run ahead. A PAUSED tick is exempt (no pass
+  can run, no follower decision is made, `Packages::Pump` must still run): it reads what is published. SOURCES and non-party actors (`InvSnap::FreshEnough`): InvSnapshot.cpp
   `kSourceRefreshTicks` 4, `kSourceMaxAgeTicks` 16, `kWantTtlTicks` 112 (~15 s), `kSourceBudget` 32 per pass; EffectMirror.cpp
   `kMaxAgeTicks` 4, `kWantTtlTicks` 112; no aging in a paused tick, and an unpaused tick needs a build made since the pause.
 - **Our own writes.** Worker-side: `InvSnap::Touch(ref)` after the write (readable for the rest of that tick, then withheld until

@@ -1261,8 +1261,9 @@ the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `G
 4. **Freshness is counted in worker ticks, from the real cadence (principle 9).** One build pass per tick
    (133 ms): the party and the player every pass, a source when touched or 4 ticks old, at most 32 sources a pass.
    A source's snapshot is readable up to 16 unpaused ticks old and only if built since the last pause. Under a
-   PAUSE the player's Update does not run, so no pass can run and nothing the engine owns moves: the party keeps
-   reading the pass of the tick before the pause began, a source does not age, and one queued pass waits. The
+   PAUSE the player's Update does not run, so no pass can run and nothing the engine owns moves. `Scheduler::Tick`
+   makes no follower decision in a paused tick, but its bookkeeping must still run (`Packages::Pump`). So a paused
+   tick is not gated: it reads the published snapshots as they stand, nothing ages, and one queued pass waits. The
    first tick after the pause is skipped by the gate (its pass has not run) and the next one reads a pack built
    after the menu closed, because the player may have moved items in that menu.
 5. **One function serves both threads.** `InvSnap::Get` and `EffectMirror::Get` read the live list in place where

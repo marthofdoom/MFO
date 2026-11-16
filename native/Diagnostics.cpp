@@ -164,9 +164,11 @@ namespace MFO::Diagnostics {
         // That pass is queued behind every main-thread closure tick t-1 posted, so this tick reads everything the last one wrote
         // or asked for. FALSE = the body is skipped this tick: the main thread has not drained the previous tick's pass yet (a
         // frame longer than the tick, two ticks in one frame, the first frame after a pause or a load), or a follower just
-        // joined. The worker is paced by the main thread's frames, never ahead of them. A PAUSED tick keeps reading the pass of
-        // the tick before the pause began, so the bookkeeping that ran under a menu still runs. Nothing is decided on an unread
-        // pack; the skip is the same event as a tick the pump gate or Scheduler's pacing check drops.
+        // joined. The worker is paced by the main thread's frames, never ahead of them. A PAUSED tick is never skipped for this:
+        // no pass can run under a pause and no follower decision is made in one (Scheduler::Tick returns on pause before either
+        // table), so the bookkeeping that must run under a menu (Packages::Pump) reads the published snapshots as they stand.
+        // The first tick after a pause IS skipped (its pass was not posted: one queued pass waits out a pause). Nothing is
+        // decided on an unread pack; the skip is the same event as a tick the pump gate or Scheduler's pacing check drops.
         // Said when it lasts (principle 7): a run of kGateSayTicks skipped ticks logs who is not ready, then once a minute.
         constexpr std::uint32_t kGateSayTicks = 38;   // ~5 s of consecutive skipped ticks
         std::uint32_t g_gateSkipRun = 0;              // worker-serial (one tick body at a time: PumpTickGate)

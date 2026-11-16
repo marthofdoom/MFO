@@ -56,7 +56,7 @@ namespace MFO::EffectMirror {
     // Keep a_actor mirrored (the IAUS foes, any actor a reader will ask about). No read.
     void Want(RE::FormID a_actor);
     // The party and the player, every tick (Diagnostics.cpp): mirrored AND held to the party's rule (InvSnap::TickClock::needPass:
-    // readable in tick t only from the pass tick t-1 posted, so a cast or a dispel that tick posted is in it).
+    // readable in an unpaused tick t only from the pass tick t-1 posted, so a cast or a dispel that tick posted is in it).
     void WantParty(RE::FormID a_actor);
     // Would Get(a_actor) answer now? Asks like Get does (uncounted). The tick gate (Diagnostics.cpp).
     [[nodiscard]] bool Ready(RE::FormID a_actor);

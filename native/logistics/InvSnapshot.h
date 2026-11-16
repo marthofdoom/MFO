@@ -25,9 +25,10 @@
 //
 // Freshness (principle 9, sized from the real cadence): the worker posts ONE build pass per tick (133 ms); the pass rebuilds the
 // party and the player each time and a wanted source (container / corpse) when touched or kSourceRefreshTicks old.
-//   * THE PARTY AND THE PLAYER are readable in tick t only from the pass tick t-1 posted (TickClock::needPass). That pass runs
-//     behind every main-thread closure tick t-1 posted, so nothing MFO did or asked for in the last tick is missing from the
-//     view, and a main thread slower than the tick simply makes the worker skip ticks (Diagnostics.cpp's tick gate).
+//   * THE PARTY AND THE PLAYER are readable in an unpaused tick t only from the pass tick t-1 posted (TickClock::needPass).
+//     That pass runs behind every main-thread closure tick t-1 posted, so nothing MFO did or asked for in the last tick is
+//     missing from the view, and a main thread slower than the tick simply makes the worker skip ticks (Diagnostics.cpp's
+//     tick gate). A paused tick reads the published snapshot as it stands (nothing can be rebuilt under a pause).
 //   * A SOURCE is readable while it is no older than kSourceMaxAgeTicks and was built since the last pause.
 // A ref that fails its rule reads "not yet": the reader does nothing, it never acts on an inventory the main thread has not confirmed.
 namespace MFO::InvSnap {
@@ -147,11 +148,12 @@ namespace MFO::InvSnap {
         std::uint64_t age = 0;          // unpaused worker ticks only
         std::uint64_t lastPaused = 0;   // the last tick that began paused (0 = none)
         bool          paused = false;   // this tick began paused
-        // THE PARTY'S RULE: a party member's (and the player's) snapshot is readable in this tick only when it was published by
-        // the build pass of tick `needPass` or a later one. Unpaused: needPass = tick - 1, i.e. the pass the PREVIOUS tick posted
-        // has run. That pass is queued behind everything that tick posted to the main thread, so "tick t reads what tick t-1 wrote
-        // or posted" holds exactly (an equip, a pickup, a cast, a queued transfer). Paused: needPass = the tick before the pause
-        // began, and it stands for the whole pause (no pass can run under it).
+        // THE PARTY'S RULE: in an UNPAUSED tick a party member's (and the player's) snapshot is readable only when it was
+        // published by the build pass of tick `needPass` = tick - 1 or a later one, i.e. the pass the PREVIOUS tick posted has
+        // run. That pass is queued behind everything that tick posted to the main thread, so "tick t reads what tick t-1 wrote
+        // or posted" holds exactly (an equip, a pickup, a cast, a queued transfer). In a PAUSED tick no pass can run and no
+        // follower decision is made (Scheduler::Tick returns on pause before either table), so the published snapshot stands
+        // as it is for the bookkeeping that still runs under a menu (Packages::Pump must not skip a pause).
         std::uint64_t needPass = 0;
     };
     [[nodiscard]] TickClock Now();
@@ -161,7 +163,7 @@ namespace MFO::InvSnap {
     void BuildPass(std::uint64_t a_postTick);   // a_postTick = the tick whose end posted this pass (TickClock::tick then)
     // The party's rule (TickClock::needPass), for the effect mirror's party slots: a_builtPass = the a_postTick it was published by.
     [[nodiscard]] inline bool PassReached(const TickClock& a_now, bool a_everByPass, std::uint64_t a_builtPass) {
-        return a_everByPass && a_builtPass >= a_now.needPass;
+        return a_everByPass && (a_now.paused || a_builtPass >= a_now.needPass);
     }
     // Revert / load: drop everything (FormIDs are reused across loads).
     void Clear();
