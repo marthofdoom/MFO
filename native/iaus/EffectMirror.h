@@ -12,7 +12,8 @@
 //     their allies and every foe near enough to fight), the player, and any other actor asked for in the last ~15 s;
 //   * plain values per effect (the source form, the base MGEF, the flags, duration / elapsed / magnitude, and for a summon or
 //     reanimate effect whether its commanded actor is resolved and alive), plus the base MGEFs the ENGINE's own
-//     MagicTarget::HasMagicEffect answers yes for (asked on main, so the worker's answer is the engine's, not a re-derivation);
+//     MagicTarget::HasMagicEffect answers yes for (= every non-null base in the same list walk: the engine function's disassembly,
+//     ENGINE_NOTES 0.30 amendment 2026-11-16, is the proof, so no per-base engine call is made);
 //   * immutable once published. Get() never waits: an actor with no readable mirror returns null ("not yet") and is asked for.
 // It replaces SpellBook's foe-only mirror (WantFoeFx / FoeFx now read this one) and the worker walks in cast/Summon.cpp,
 // cast/Auto.cpp, logistics/EquipAuthority.cpp, logistics/Service.cpp, cast/SubstrateRoad.cpp and ProgProbe.cpp.
@@ -43,7 +44,7 @@ namespace MFO::EffectMirror {
         RE::FormID      actor = 0;
         bool            hasList = false;                // the actor had a magic target and an effect list (false = unreadable there too)
         std::vector<Fx> fx;                             // the list's order
-        std::vector<const RE::EffectSetting*> engineHas;// base MGEFs for which MagicTarget::HasMagicEffect returned true (sorted)
+        std::vector<const RE::EffectSetting*> engineHas;// base MGEFs MagicTarget::HasMagicEffect says yes to = every non-null base in the list (sorted, unique; disasm, ENGINE_NOTES 0.30)
         [[nodiscard]] bool HasMagicEffect(const RE::EffectSetting* a_base) const;
     };
     using Ptr = std::shared_ptr<const Mirror>;

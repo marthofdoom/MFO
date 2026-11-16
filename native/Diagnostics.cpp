@@ -145,10 +145,11 @@ namespace MFO::Diagnostics {
         void SnapshotsBeginTick() {
             auto* ui = RE::UI::GetSingleton();
             InvSnap::BeginTick(ui && ui->GameIsPaused());   // a paused tick does not age a snapshot (InvSnapshot.h BeginTick)
-            if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
-                InvSnap::Want(pc);
+            // The PLAYER: the effect mirror only. The player's PACK is not a standing slot (it can be huge, and a standing slot is
+            // rebuilt with GetValue per entry every pass): its only worker readers (the Board's teachable-spell picker and its
+            // spellbook teach) ask for it on demand like a source, and the tick never waits on it (review F2 of 35a8a778).
+            if (auto* pc = RE::PlayerCharacter::GetSingleton())
                 EffectMirror::WantParty(pc->GetFormID());
-            }
             for (const auto& h : Followers::g_active) {
                 auto ptr = h.get();   // HOLD the NiPointer
                 if (auto* a = ptr.get()) {
@@ -157,9 +158,10 @@ namespace MFO::Diagnostics {
                 }
             }
         }
-        // THE TICK GATE (INVARIANTS #84). TRUE = every party member's and the player's inventory snapshot and effect mirror is readable
-        // this tick. A snapshot's readability changes only at a tick boundary (InvSnapshot.cpp Readable), so once this passes, no
-        // reader in the tick body can get "not yet" for the party or the player; only a SOURCE (a container, a corpse, a foe) can.
+        // THE TICK GATE (INVARIANTS #84). TRUE = every party member's inventory snapshot and effect mirror, and the player's effect
+        // mirror, is readable this tick. A snapshot's readability changes only at a tick boundary (InvSnapshot.cpp Readable), so once
+        // this passes, no reader in the tick body can get "not yet" for the party; only a SOURCE (a container, a corpse, a foe, and
+        // the PLAYER's pack, which is read on demand: SnapshotsBeginTick) can.
         // THE PARTY'S RULE (InvSnapshot.h TickClock::needPass): readable in tick t = published by the build pass tick t-1 posted.
         // That pass is queued behind every main-thread closure tick t-1 posted, so this tick reads everything the last one wrote
         // or asked for. FALSE = the body is skipped this tick: the main thread has not drained the previous tick's pass yet (a
@@ -175,15 +177,15 @@ namespace MFO::Diagnostics {
         std::atomic<std::uint64_t> g_gateSkips{ 0 };
         bool SnapshotsReadyForTick() {
             RE::FormID who = 0; const char* what = nullptr;
-            const auto check = [&](RE::Actor* a_actor) {
+            const auto check = [&](RE::Actor* a_actor, bool a_inventory) {
                 if (!a_actor || who) return;
-                if (!InvSnap::Ready(a_actor))                         { who = a_actor->GetFormID(); what = "inventory snapshot"; }
+                if (a_inventory && !InvSnap::Ready(a_actor))          { who = a_actor->GetFormID(); what = "inventory snapshot"; }
                 else if (!EffectMirror::Ready(a_actor->GetFormID()))  { who = a_actor->GetFormID(); what = "effect mirror"; }
             };
-            check(RE::PlayerCharacter::GetSingleton());
+            check(RE::PlayerCharacter::GetSingleton(), /*a_inventory*/ false);   // the player's pack is on demand (SnapshotsBeginTick)
             for (const auto& h : Followers::g_active) {
                 auto ptr = h.get();   // HOLD the NiPointer
-                check(ptr.get());
+                check(ptr.get(), true);
             }
             if (!who) {
                 if (g_gateSkipRun >= kGateSayTicks)

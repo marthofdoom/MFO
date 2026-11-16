@@ -4,6 +4,7 @@
 #include "Sightline.h"        // the guard's line of sight (MeasureNow / PointSeenNow, main thread)
 #include "MainThread.h"
 #include "LocationTypes.h"   // CorpseGuardWaived: TownAnchor, the same town test the errands and the loot town bars use
+#include <algorithm>
 #include <array>
 #include <deque>
 #include <mutex>
@@ -500,7 +501,12 @@ namespace MFO::Logistics::TheftGate {
         // build their lists from the containers this would mutate); nothing was touched, the entry stays queued. TRUE = it ran (or was
         // skipped, said loudly); a_moved = the copies that left the source. No per-frame cap on WORN pieces: on main each ARMO removal only
         // sets the deferred 3D-update flag (ENGINE_NOTES 0.30 amendment), and vanilla Take All removes a whole worn set in one frame.
-        bool RunTransfer(const Job& a_j, std::int32_t& a_moved) {
+        // a_rebuild collects the refs whose worker view the drain replaces once the whole batch has run (each distinct ref ONCE, F1).
+        void AddRebuild(std::vector<RE::TESObjectREFR*>& a_rebuild, RE::TESObjectREFR* a_ref) {
+            if (a_ref && std::find(a_rebuild.begin(), a_rebuild.end(), a_ref) == a_rebuild.end()) a_rebuild.push_back(a_ref);
+        }
+
+        bool RunTransfer(const Job& a_j, std::int32_t& a_moved, std::vector<RE::TESObjectREFR*>& a_rebuild) {
             a_moved = 0;
             if (InventoryMenuOpen()) return false;
             auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_j.fid);
@@ -535,8 +541,9 @@ namespace MFO::Logistics::TheftGate {
             const Plan q = AnalyseLive(fol, src, obj, a_j.road);   // q.total is 0 when nothing is left
             // INVARIANTS #84: the worker's view of both inventories is replaced in place, BEFORE the drain drops this entry from the
             // queue (QueuedOut / LandingHold / InFlightWeight), so no worker tick sees "nothing queued" next to the pre-take inventory.
-            InvSnap::RebuildOnMain(src);
-            InvSnap::RebuildOnMain(fol);
+            // The drain does it once per distinct ref after the batch (a corpse of N item kinds = one rebuild of each pack, not N).
+            AddRebuild(a_rebuild, src);
+            AddRebuild(a_rebuild, fol);
             a_moved = p.total - q.total;
             if (a_moved != a_j.n)
                 spdlog::warn("[take] F={:08X} src={:08X} item={:08X}: planned x{} on the worker, x{} left the source on the main thread ({} before, {} "
@@ -548,32 +555,50 @@ namespace MFO::Logistics::TheftGate {
         }
 
         // MAIN THREAD, at most once per frame (g_xPosted: one drain is posted at a time, and its own repost lands next frame).
+        // A batch: every queued job runs (each entry stays queued while it runs: QueuedOut / LandingHold keep counting it), then each
+        // distinct ref the batch wrote is rebuilt ONCE, then the entries that ran are popped and their follow-ups fire. Rebuild before
+        // pop (INVARIANTS #84) holds for the whole batch. Jobs read live (AnalyseLive), so a job never needs the rebuild of the one before.
         void DrainTransfers() {
             g_mainTid.store(std::this_thread::get_id(), std::memory_order_relaxed);
+            struct Ran { std::uint64_t seq; std::int32_t moved; RE::FormID fid, obj; };
             for (;;) {
-                Job j;
+                std::vector<Ran> ran;
+                std::vector<RE::TESObjectREFR*> rebuild;
+                bool blocked = false;
+                for (std::size_t i = 0;; ++i) {
+                    Job j;
+                    {
+                        std::scoped_lock lk(g_xMx);
+                        if (i >= g_xq.size()) break;
+                        j = g_xq[i].j;
+                    }
+                    std::int32_t moved = 0;
+                    if (!RunTransfer(j, moved, rebuild)) { blocked = true; break; }
+                    ran.push_back({ j.seq, moved, j.fid, j.obj });
+                }
+                for (auto* r : rebuild) InvSnap::RebuildOnMain(r);
+                std::vector<std::pair<const Ran*, std::vector<std::function<void(std::int32_t)>>>> after;
                 {
                     std::scoped_lock lk(g_xMx);
-                    if (g_xq.empty()) { g_xPosted = false; return; }
-                    j = g_xq.front().j;   // it stays queued while it runs: QueuedOut / LandingHold keep counting it
+                    for (const auto& r : ran) {   // found by seq (a revert may have cleared the queue meanwhile)
+                        const auto it = std::find_if(g_xq.begin(), g_xq.end(), [&](const Xfer& x) { return x.j.seq == r.seq; });
+                        if (it == g_xq.end()) continue;
+                        after.emplace_back(&r, std::move(it->after));
+                        g_xq.erase(it);
+                    }
                 }
-                std::int32_t moved = 0;
-                if (!RunTransfer(j, moved)) {
+                for (auto& [r, fns] : after) {
+                    if (r->moved > 0) { for (auto& fn : fns) if (fn) fn(r->moved); }
+                    else if (!fns.empty())
+                        spdlog::warn("[take] F={:08X} item={:08X}: {} follow-up(s) (the equip of the looted piece) DROPPED: the take moved nothing",
+                                     r->fid, r->obj, fns.size());
+                }
+                if (blocked) {
                     MainThread::Post([] { DrainTransfers(); });   // g_xPosted stays true: this repost IS the posted drain
                     return;
                 }
-                std::vector<std::function<void(std::int32_t)>> after;
-                {
-                    std::scoped_lock lk(g_xMx);
-                    if (!g_xq.empty() && g_xq.front().j.seq == j.seq) {   // (a revert may have cleared the queue meanwhile)
-                        after = std::move(g_xq.front().after);
-                        g_xq.pop_front();
-                    }
-                }
-                if (moved > 0) { for (auto& fn : after) if (fn) fn(moved); }
-                else if (!after.empty())
-                    spdlog::warn("[take] F={:08X} item={:08X}: {} follow-up(s) (the equip of the looted piece) DROPPED: the take moved nothing",
-                                 j.fid, j.obj, after.size());
+                std::scoped_lock lk(g_xMx);
+                if (g_xq.empty()) { g_xPosted = false; return; }
             }
         }
     }

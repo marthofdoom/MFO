@@ -24,12 +24,12 @@
 // MainThread::LiveReadsAllowed() says this call may read live (the seat, the main thread outside a tick, or no pump at all).
 //
 // Freshness (principle 9, sized from the real cadence): the worker posts ONE build pass per tick (133 ms); the pass rebuilds the
-// party and the player each time and a wanted source (container / corpse) when touched or kSourceRefreshTicks old.
-//   * THE PARTY AND THE PLAYER are readable in an unpaused tick t only from the pass tick t-1 posted (TickClock::needPass).
+// party each time and a wanted source (container / corpse / the player's pack) when touched or kSourceRefreshTicks old.
+//   * THE PARTY is readable in an unpaused tick t only from the pass tick t-1 posted (TickClock::needPass).
 //     That pass runs behind every main-thread closure tick t-1 posted, so nothing MFO did or asked for in the last tick is
 //     missing from the view, and a main thread slower than the tick simply makes the worker skip ticks (Diagnostics.cpp's
 //     tick gate). A paused tick reads the published snapshot as it stands (nothing can be rebuilt under a pause).
-//   * A SOURCE is readable while it is no older than kSourceMaxAgeTicks and was built since the last pause.
+//   * A SOURCE (the player's pack included) is readable while it is no older than kSourceMaxAgeTicks and was built since the last pause.
 // A ref that fails its rule reads "not yet": the reader does nothing, it never acts on an inventory the main thread has not confirmed.
 namespace MFO::InvSnap {
 
@@ -126,12 +126,13 @@ namespace MFO::InvSnap {
 
     // Would Get(a_ref) answer now? Asks for it like Get does. The scheduler's lap gate.
     [[nodiscard]] bool Ready(RE::TESObjectREFR* a_ref);
-    // Keep a_ref's snapshot built every pass (the party and the player, each tick). No read.
+    // Keep a_ref's snapshot built every pass (the party, each tick; NOT the player, whose pack is read on demand as a source). No read.
     void Want(RE::TESObjectREFR* a_ref);
 
     // MFO wrote a_ref's inventory ON THIS (worker) THREAD just now. Call it AFTER the write. A SOURCE's snapshot stays readable
     // for the rest of this tick and is then withheld until the main thread has built one after the write. For a party member
-    // or the player it changes nothing: the party's rule (the previous tick's pass) already puts every read behind the write.
+    // it changes nothing: the party's rule (the previous tick's pass) already puts every read behind the write. The PLAYER's pack is
+    // a source here (not Want()ed): a Touch withholds it like any source.
     void Touch(RE::TESObjectREFR* a_ref);
     void Touch(RE::FormID a_ref);
     // MAIN THREAD: MFO wrote a_ref's inventory on the main thread just now; replace its snapshot in place (no "not yet" gap).
@@ -149,7 +150,7 @@ namespace MFO::InvSnap {
         std::uint64_t age = 0;          // unpaused worker ticks only
         std::uint64_t lastPaused = 0;   // the last tick that began paused (0 = none)
         bool          paused = false;   // this tick began paused
-        // THE PARTY'S RULE: in an UNPAUSED tick a party member's (and the player's) snapshot is readable only when it was
+        // THE PARTY'S RULE: in an UNPAUSED tick a party member's snapshot (and the player's effect mirror) is readable only when it was
         // published by the build pass of tick `needPass` = tick - 1 or a later one, i.e. the pass the PREVIOUS tick posted has
         // run. That pass is queued behind everything that tick posted to the main thread, so "tick t reads what tick t-1 wrote
         // or posted" holds exactly (an equip, a pickup, a cast, a queued transfer). In a PAUSED tick no pass can run and no

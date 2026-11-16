@@ -14,7 +14,7 @@ namespace MFO::InvSnap {
         // ── cadence (principle 9: every number here is counted in WORKER TICKS, 133 ms each, the unit the refresh really runs in) ──
         // The worker posts one build pass per tick and the main thread drains it on its next frame, so a snapshot read in tick k was
         // normally built between tick k-1 and k: age 1.
-        // (The party and the player have no age cap of their own: their rule is TickClock::needPass, the previous tick's pass.)
+        // (The party has no age cap of its own: its rule is TickClock::needPass, the previous tick's pass. The player's pack is a source.)
         constexpr std::uint64_t kSourceRefreshTicks  = 4;    // an untouched container / corpse is re-read every ~0.5 s while wanted
         constexpr std::uint64_t kSourceMaxAgeTicks   = 16;   // ~2 s = refresh x 4: three missed refreshes (a pass builds at most kSourceBudget sources)
         // A want outlives the asker's own cadence: a follower is serviced once per LAP (party size x 133 ms) and a loot scan asks about
@@ -25,8 +25,8 @@ namespace MFO::InvSnap {
         struct Slot {
             Ptr            snap;                 // immutable once published
             std::uintptr_t refToken = 0;         // the asker's ref ADDRESS (identity only): the main build must resolve the same object
-            bool           standing = false;     // Want()ed (the party and the player, every tick): rebuilt every pass, the short age cap.
-                                                 // Anything else is a SOURCE (a container, a corpse, another actor): refreshed and budgeted.
+            bool           standing = false;     // Want()ed (the party, every tick): rebuilt every pass, the short age cap.
+                                                 // Anything else is a SOURCE (a container, a corpse, another actor, the player's pack): refreshed and budgeted.
             std::uint64_t  wantedTick = 0;       // the last tick it was asked for
             std::uint64_t  builtTick = 0;        // the worker tick current when the published snapshot was built
             std::uint64_t  builtAge = 0;         // the age clock (unpaused ticks) at that moment
@@ -80,7 +80,6 @@ namespace MFO::InvSnap {
             auto e = std::make_unique<Entry>();
             e->object      = a_entry->object;
             e->worn        = a_entry->IsWorn();
-            e->enchanted   = a_entry->IsEnchanted();
             e->value       = a_entry->GetValue();
             if (a_entry->extraLists) {
                 e->hasLists = true;
@@ -89,6 +88,12 @@ namespace MFO::InvSnap {
             }
             // InventoryEntryData::IsQuestObject(): any list with a quest-object alias (the one engine call per list, made in CopyOf).
             for (const auto& c : e->copies) if (c.questAlias) { e->questObject = true; break; }
+            // InventoryEntryData::IsEnchanted(), from the copies: the base form's formEnchanting, or any list's ExtraEnchantment with an
+            // enchantment. (CommonLib's IsEnchanted dereferences every element of extraLists unchecked; the copies skip a null list.)
+            if (a_entry->object)
+                if (auto* ef = a_entry->object->As<RE::TESEnchantableForm>(); ef && ef->formEnchanting) e->enchanted = true;
+            if (!e->enchanted)
+                for (const auto& c : e->copies) if (c.hasEnch && c.ench) { e->enchanted = true; break; }
             return e;
         }
 
@@ -181,7 +186,7 @@ namespace MFO::InvSnap {
             const std::uint64_t a_now = a_clk.tick;
             if (!a_s.snap) return Miss::Never;
             if (a_s.init && !a_s.builtInit) return Miss::Never;   // built the no-init way, now asked the initialising way: not that answer
-            // THE PARTY (and the player): the previous tick's pass has published it (TickClock::needPass), or the tick is paused.
+            // THE PARTY: the previous tick's pass has published it (TickClock::needPass), or the tick is paused.
             // That rule already puts the snapshot behind every write the last tick made, so Touch adds nothing here, and a
             // Touch must not make a party member unreadable for a whole pause (the gate would skip Packages::Pump under a menu).
             if (a_s.standing) return PassReached(a_clk, a_s.everByPass, a_s.builtPass) ? Miss::None : Miss::Old;

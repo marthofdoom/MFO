@@ -1278,6 +1278,12 @@ the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `G
    container sources: `TheftGate` `MoveNow` and `GemRules::TakeAndProbe`. The stability audit's M2 moves each to the
    main thread with its read, and `[overlap]`'s second count reaches 0 then. No decision may call these readers.
 
-**What changes for the player:** nothing but freshness. A decision sees the inventory and the effects as of the
-start of its tick, at most one tick (133 ms) plus a frame behind the engine, where it used to read them live.
+**What changes for the player:** nothing but freshness, and it differs by kind. A decision sees the PARTY's
+inventories and effects as of the start of its tick, at most one tick (133 ms) plus a frame behind the engine, where it
+used to read them live. A SOURCE (a container, a corpse, a foe's pack, and the player's own pack, which is read on demand
+and is not a party slot) is refreshed every 4 ticks while wanted and readable up to 16 ticks old: typically ~0.5 s
+behind, at worst ~2 s. So when the player loots the same corpse or chest a follower planned from, the take on the main
+thread finds less than the plan counted and logs `[take] ... planned xN on the worker, x0 left the source on the main thread` (TheftGate RunTransfer).
+That line is this lag showing, not a fault: the take re-reads the source live at its own write and moves only what is
+there.
 Docs/REVIEW-BACKLOG.md MFO-B858 lists what is still open. **MFO** fix/worker-snapshots, 2026-11-16.

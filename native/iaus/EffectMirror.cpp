@@ -83,12 +83,14 @@ namespace MFO::EffectMirror {
                     f.commandedId       = cmd->GetFormID();
                 }
             }
-            if (f.base && std::find(m->engineHas.begin(), m->engineHas.end(), f.base) == m->engineHas.end() &&
-                mt->HasMagicEffect(const_cast<RE::EffectSetting*>(f.base)))
-                m->engineHas.push_back(f.base);
+            // MagicTarget::HasMagicEffect(base) is true exactly when some node of this same list (vslot 0x38 GetActiveEffectList) has
+            // GetBaseObject() == base, no flag test (disassembled in all three executables, ENGINE_NOTES 0.30 amendment 2026-11-16).
+            // So the engine's answers are the set of non-null bases this walk sees: no per-base engine call (review F7 of 35a8a778).
+            if (f.base) m->engineHas.push_back(f.base);
             m->fx.push_back(f);
         }
         std::sort(m->engineHas.begin(), m->engineHas.end());
+        m->engineHas.erase(std::unique(m->engineHas.begin(), m->engineHas.end()), m->engineHas.end());
         return m;
     }
 

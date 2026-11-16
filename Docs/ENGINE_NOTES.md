@@ -1360,7 +1360,8 @@ inside `Logistics::LootNearby`.
 > (`GetActiveEffectList`), walks the list's nodes, calls `ActiveEffect::GetBaseObject` (0x5AC560 / 0x53E110 / 0x5BB090)
 > on each non-null effect and returns true when one equals the argument. No flag is tested: an inactive or dispelled
 > effect still counts. So it is true for exactly the base MGEFs present in the list, which is what the mirror stores
-> (`engineHas`, asked from the engine itself per listed base, never re-derived).
+> (`engineHas`: since review F7 of 35a8a778 it is the set of non-null bases the same walk sees, with no per-base engine
+> call; this disassembly is the proof that the set IS the engine's answer).
 > **Per runtime:** nothing differs between 1.5.97, 1.6.1170 and 1.7.104 here. The ids behind `GetValue` (15757 / 15995)
 > and `HasQuestObjectAlias` (11913 / 12052) were already called by the readers this replaces. With no pump installed
 > (VR, an unverified build) `MainThread::LiveReadsAllowed()` is true and every reader reads live, as before.

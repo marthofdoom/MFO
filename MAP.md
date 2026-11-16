@@ -3035,16 +3035,20 @@ The worker never walks an engine inventory list or active-effect list. It reads 
   `LookupByID` returns that same object (a reused temporary id names another one).
 - **`EffectMirror` (`native/iaus/EffectMirror.h`).** `Get(actor | formID)` returns a `Mirror`: `fx` (per effect: `spell`, `base`,
   `inactive`, `dispelled`, `duration`, `elapsed`, `magnitude`, `summon` / `reanimate`, `commandedResolved` / `commandedLive` /
-  `commandedId`), and `HasMagicEffect(base)` = the ENGINE's own `MagicTarget::HasMagicEffect` answer, asked on main for every base
-  MGEF in the list. Each pass mirrors the player, every actor in `ProcessLists::highActorHandles`, and any id asked for in the
+  `commandedId`), and `HasMagicEffect(base)` = the ENGINE's own `MagicTarget::HasMagicEffect` answer: the set of non-null base
+  MGEFs the same list walk sees (no per-base engine call since review F7 of 35a8a778; the function's disassembly in all three
+  executables, ENGINE_NOTES 0.30 amendment, is the proof that set IS its answer). Each pass mirrors the player, every actor in `ProcessLists::highActorHandles`, and any id asked for in the
   last ~15 s. `SpellBook::WantFoeFx / FoeFx` are views of it (the old foe-only cache and its 0.5 s / 4 s timers are gone).
 - **The tick bracket (`Diagnostics.cpp`).** `SnapshotsBeginTick` (after `Followers::Refresh`): `InvSnap::BeginTick(paused)`, then
-  `Want` the player and every `Followers::g_active` actor (inventory and effects). `SnapshotsReadyForTick` = THE TICK GATE: the
-  body is skipped unless all of those are readable. `SnapshotsEndTick`: ONE `MainThread::Post` of `InvSnap::BuildPass(tick)` +
+  `Want` every `Followers::g_active` actor (inventory and effects) and the player's EFFECTS only. `SnapshotsReadyForTick` = THE
+  TICK GATE: the body is skipped unless all of those are readable. THE PLAYER'S PACK is not a standing slot (review F2 of
+  35a8a778: a huge pack rebuilt with GetValue per entry every 133 ms): it is a SOURCE slot asked on demand by its only worker
+  readers, the Board's teachable-spell picker (`Board.cpp` row build, only while the board is OPEN) and `TeachSpellNow` (an
+  unread pack returns NotYet, the edit is queued again via `QueueEdit` and `[board] teach ... waits` is logged). `SnapshotsEndTick`: ONE `MainThread::Post` of `InvSnap::BuildPass(tick)` +
   `EffectMirror::BuildPass(tick)`, behind every post the tick made (FIFO). A pass a newer queued one supersedes returns at once.
   Under a pause one queued pass waits (no pass per paused tick), and `MainThread::ClearGeneration` un-queues it after a revert.
 - **Freshness (worker ticks, 133 ms).** THE PARTY'S RULE (`InvSnap::TickClock::needPass`, `PassReached`; both snapshot kinds):
-  a party member's and the player's snapshot / mirror is readable in tick t only when the build pass tick t-1 posted has
+  a party member's snapshot / mirror (and the player's mirror) is readable in tick t only when the build pass tick t-1 posted has
   published it. That pass is queued behind everything tick t-1 posted, so tick t reads what tick t-1 wrote or asked for, and
   a main thread slower than the tick makes the worker skip ticks (the gate), never run ahead. A PAUSED tick is exempt (no pass
   can run, no follower decision is made, `Packages::Pump` must still run): it reads what is published. SOURCES and non-party actors (`InvSnap::FreshEnough`): InvSnapshot.cpp
@@ -3059,10 +3063,11 @@ The worker never walks an engine inventory list or active-effect list. It reads 
   `RemoveItem` always did). The `[overlap]` line's `inMfoDrain` sample says how often a tick stage ran while the drain did.
 - **Our own writes.** Worker-side: `InvSnap::Touch(ref)` after the write (a SOURCE stays readable for the rest of that tick, then
   is withheld until rebuilt; for a party member the call changes nothing, the party's rule already puts the next read behind
-  the write). Sites: `TheftGate` `MoveNow` (container road), `GemRules::TakeAndProbe` (container road), `LearnCarriedTomes`
+  the write; the player's pack is a source here). Sites: `TheftGate` `MoveNow` (container road), `GemRules::TakeAndProbe` (container road), `LearnCarriedTomes`
   (`logistics/Cast.cpp`), `TeachSpellNow` (`Board.cpp`, the player), `KeepHeadClear` (`logistics/Gear.cpp`), the smith charge
   (`logistics/ErrandSmith.cpp`), the two drinks (`Service.cpp` `DrinkBest`, `PotionFx.cpp` `DrinkPotionForm`). Main-side:
-  `InvSnap::RebuildOnMain(ref)` in `TheftGate` `RunTransfer` (source and follower, BEFORE the drain pops the queue entry, so
+  `InvSnap::RebuildOnMain(ref)` in `TheftGate` `DrainTransfers` (each distinct source and follower the batch wrote, ONCE per
+  drain batch after every queued job ran, BEFORE the drain pops those entries, so
   `QueuedOut` / `LandingHold` / `InFlightWeight` never read "nothing queued" beside the pre-take pack) and in
   `Lotd` `TransferOnMain`. Equips are not touched: worn flags always lagged the call (the engine may queue an equip).
 - **Readers converted (every former `GetInventory` / `GetInventoryCounts` / `GetWornArmor` / `GetActiveEffectList` /
@@ -4381,8 +4386,10 @@ module. Module layout:
   THE WORKER NEVER WAITS; its LOGIC is kept honest by three reads of the queue (an entry stays queued while the drain runs it).
   SINCE 2026-11-16 (`fix/worker-snapshots`, INVARIANTS `#84`) the worker's reads of the corpse / follower inventories no longer race
   the drain: `Analyse` (every worker decision) reads the source's main-built snapshot (`InvSnap`), `AnalyseLive` (the old walk, with
-  the live extra lists) is called only by `MoveNow` and `RunTransfer` for the write they make, and `RunTransfer` replaces both
-  snapshots (`InvSnap::RebuildOnMain`) before the drain pops the entry. A source whose snapshot is not readable yet is a Pending
+  the live extra lists) is called only by `MoveNow` and `RunTransfer` for the write they make. The drain runs EVERY queued job
+  (each stays queued while it runs), then replaces each distinct ref's snapshot ONCE (`InvSnap::RebuildOnMain`, collected by
+  `RunTransfer` via `AddRebuild`), then pops the entries that ran (by seq) and fires their follow-ups: N item kinds from one
+  corpse = one rebuild of each pack, not N (review F1 of 35a8a778). A source whose snapshot is not readable yet is a Pending
   refusal (`TheftGate::NoteInventoryNotYet`, `GuardRefusal::notYet`, recorded with `landing = true`: the same 150 ms retry, never
   DONE). See "THE WORKER SNAPSHOTS" in section 2. The three reads:
   `QueuedOut(src, item)` is subtracted in `Takeable` / `Take` (queued copies are not offered twice, to him or to another follower);
