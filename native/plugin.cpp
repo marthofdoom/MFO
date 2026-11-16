@@ -467,8 +467,25 @@ namespace {
             MFO::APMFBridge::ClearTransientState();
             break;
 
+        case SKSE::MessagingInterface::kSaveGame:
+            // INVARIANTS #82 (fix/save-integrity-mfo): a save must never hold one of MFO's runtime
+            // 0xFF ConcProxy spells. SKSE64 sends this message synchronously BEFORE the engine writes
+            // any record (SaveGame_Hook: Dispatch_Message, then the original); the co-save save
+            // callback runs AFTER the records, so this is the only seat that can keep them out.
+            // Main thread, inside the save call. Silent while no proxy is minted.
+            MFO::Actuation::ConcProxyPreSaveSweep();
+            break;
+
         case SKSE::MessagingInterface::kPostLoadGame:
         case SKSE::MessagingInterface::kNewGame:
+            // INVARIANTS #82, FIRST, before anything reads an actor: a save written before the
+            // kSaveGame sweep existed can leave a caster pointing at a destroyed runtime form. This
+            // message is synchronous when the engine's load returns, before the first frame of the
+            // loaded game. Posted once more for the first pump (a form destroyed in between).
+            if (a_msg->type == SKSE::MessagingInterface::kPostLoadGame) {
+                MFO::Actuation::ConcProxyLoadRepair("kPostLoadGame");
+                MFO::MainThread::Post([] { MFO::Actuation::ConcProxyLoadRepair("first pump after load"); });
+            }
             // MUST run AFTER the co-save has loaded, or ledgers look empty and
             // reconcile revokes nothing (ARCHITECTURE.md §9).
             //

@@ -520,6 +520,11 @@ namespace MFO {
     }
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc) {
+        // INVARIANTS #82 (fix/save-integrity-mfo): the ConcProxy SECOND CHECK. This callback runs
+        // AFTER the engine wrote every actor record (SKSE64's Papyrus global-data hook), so it can
+        // only say whether a proxy reached them, then key the kSaveGame sweep's re-keyed effects
+        // back to their proxy. Engine state only, main thread, nothing written to the co-save.
+        Actuation::ConcProxySaveWrittenCheck();
         // SEV-1 #3: quiesce the AddTask worker for the whole callback so the
         // count pass (below) and the write pass see the SAME g_followers. Without
         // this, the worker's Refresh/TryEnsureRecord insert (map rehash) or

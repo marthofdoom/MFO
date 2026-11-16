@@ -256,7 +256,13 @@ namespace MFO::Actuation {
         //   `g_healSlot` pool near here. This wave is NOT on that branch and only grows
         //   the existing g_slot pool -- reconcile the two pools when that branch merges.
         namespace ConcProxy {
-            struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0; };
+            // `past`: every source spell this form has been Configure'd for this session, the
+            // current one included (fix/save-integrity-mfo). An effect the form left on a target can
+            // outlive a FREE or a RECONFIG (a cap-only re-stream keeps its effect), and that
+            // effect's Effect* belongs to the source it was cast as. The save sweep
+            // (cast/ProxySave.cpp) keys such an effect back to its real spell from this list.
+            struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0;
+                          std::vector<RE::FormID> past; };
             constexpr std::size_t kSlotCount = 6;   // concurrent self-delivery conc streams (party healers)
             Slot g_slot[kSlotCount];
             // The minted forms' FormIDs, readable from ANY thread (feat/mfo-animheal-p0,
@@ -265,11 +271,15 @@ namespace MFO::Actuation {
             // g_slot. Written when a slot's form is created, cleared by Reset.
             std::atomic<RE::FormID> g_slotFormId[kSlotCount]{};
 
-            void Configure(RE::SpellItem* a_p, RE::SpellItem* a_src) {
-                a_p->data          = a_src->data;                                 // castingType/cost/etc.
-                a_p->data.delivery = RE::MagicSystem::Delivery::kTargetActor;     // the ONLY change
-                a_p->effects.clear();
-                for (auto* e : a_src->effects) a_p->effects.push_back(e);         // shared effect ptrs
+            void Configure(Slot& a_s, RE::SpellItem* a_src) {
+                auto* p = a_s.form;
+                p->data          = a_src->data;                                   // castingType/cost/etc.
+                p->data.delivery = RE::MagicSystem::Delivery::kTargetActor;       // the ONLY change
+                p->effects.clear();
+                for (auto* e : a_src->effects) p->effects.push_back(e);           // shared effect ptrs
+                const auto sid = a_src->GetFormID();
+                std::erase(a_s.past, sid);
+                a_s.past.push_back(sid);                                          // most recent last
             }
             // Acquire the owner's slot (its channel keeps its form for its whole life).
             // Reuse the owner's existing slot; else claim a FREE slot and Configure it;
@@ -279,7 +289,7 @@ namespace MFO::Actuation {
                 const auto sid = a_src->GetFormID();
                 for (auto& s : g_slot) if (s.owner == a_owner && s.form) {   // the owner's own slot
                     if (s.source != sid) {   // owner switched channel spell (its old channel already released)
-                        Configure(s.form, a_src); s.source = sid;
+                        Configure(s, a_src); s.source = sid;
                         spdlog::info("[cast] proxy slot RECONFIG owner {:08X} src {:08X}", a_owner, sid);
                     }
                     return s.form;
@@ -291,7 +301,7 @@ namespace MFO::Actuation {
                         if (!s.form) return nullptr;
                         g_slotFormId[&s - g_slot].store(s.form->GetFormID(), std::memory_order_release);
                     }
-                    Configure(s.form, a_src); s.source = sid; s.owner = a_owner;
+                    Configure(s, a_src); s.source = sid; s.owner = a_owner;
                     spdlog::info("[cast] proxy slot ACQUIRE owner {:08X} src {:08X} form {:08X}",
                                  a_owner, sid, s.form->GetFormID());
                     return s.form;
@@ -855,6 +865,8 @@ namespace MFO::Actuation {
         g_beneficialRecast.clear();   // fix #3/#6: per-buff recast windows likewise
         ConcProxy::Reset();           // null dangling 0xFF proxy forms + drop borrowed
                                       // source Effect* (cross-load UAF / double-free)
+        ResetProxySaveState();        // cast/ProxySave.cpp: the outgoing world's re-keyed effects
+                                      // and its posted key-back mean nothing in the next one
         CastBounds::Reset();          // drop every MFO-executed-cast bound (§2 registry)
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
         ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
@@ -881,6 +893,15 @@ namespace MFO::Actuation {
     // Called from ClearCastLock (Actuation.cpp) so both maps share one release
     // point. Idempotent; worker-serial, no lock (#4), same as the map itself.
     void ClearApmfRefusalLog(RE::FormID a_follower) { g_lastApmfRefusal.erase(a_follower); }
+
+    // Direct_internal.h (fix/save-integrity-mfo): the minted pool for cast/ProxySave.cpp's save
+    // sweep, check and their key-back. MAIN THREAD (g_slot is main-only).
+    std::vector<ConcProxyView> ConcProxyPool() {
+        std::vector<ConcProxyView> out;
+        for (const auto& s : ConcProxy::g_slot)
+            if (s.form) out.push_back({ s.form, s.owner, s.past });
+        return out;
+    }
 
     std::vector<RE::FormID> ConcProxyForms() {
         std::vector<RE::FormID> out;
