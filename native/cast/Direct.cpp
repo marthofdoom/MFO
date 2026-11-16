@@ -9,6 +9,7 @@
 // (2026-09-24), then cut again by the Direct.cpp split (2026-09-29, MFO-B152): pure
 // moves, proven function by function with tools/splitcheck.
 #include "Direct_internal.h"
+#include "MainThread.h"   // NoteLiveRead (INVARIANTS #84)
 #include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
@@ -84,6 +85,7 @@ namespace MFO::Actuation {
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sid);
                 if (!a || !sp) return;
                 auto* mt   = a->AsMagicTarget();
+                MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                 auto* list = mt ? mt->GetActiveEffectList() : nullptr;
                 int n = 0;
                 if (list)
@@ -210,6 +212,7 @@ namespace MFO::Actuation {
         void DispelSpellEffectsOn(RE::Actor* a_actor, RE::FormID a_spellID) {
             auto* mt = a_actor ? a_actor->AsMagicTarget() : nullptr;
             if (!mt) return;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt->GetActiveEffectList();
             if (!list) return;
             // Collect FIRST, then dispel -- Dispel can mutate the active-effect

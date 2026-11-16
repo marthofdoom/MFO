@@ -82,6 +82,7 @@ namespace MFO::Logistics::GemRules {
         RE::ExtraDataList* FindOwned(RE::Actor* a_fol, RE::TESBoundObject* a_obj, std::uint16_t a_uid,
                                      std::int32_t& a_value) {
             a_value = 0;
+            MainThread::NoteWriteRead(__FUNCTION__);   // INVARIANTS #84: the live read of a write made right here (self-counted when off the main thread)
             for (auto& [o, d] : a_fol->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; })) {
                 auto* e = d.second.get();
                 if (!e || !e->extraLists) continue;
@@ -324,6 +325,7 @@ namespace MFO::Logistics::GemRules {
         // source right here: an extra-list pointer from a snapshot would be a tick old. The ownership bar is re-read on that list.
         std::int32_t v = 0;
         RE::ExtraDataList* liveXl = nullptr;
+        MainThread::NoteWriteRead(__FUNCTION__);   // INVARIANTS #84: the live read of a write made right here (self-counted when off the main thread)
         for (auto& [o, d] : a_src->GetInventory([&](RE::TESBoundObject& x) { return &x == a_c.obj; })) {
             auto* e = d.second.get();
             if (!e || !e->extraLists) continue;

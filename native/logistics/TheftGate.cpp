@@ -8,6 +8,7 @@
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace MFO::Logistics::TheftGate {
@@ -319,7 +320,7 @@ namespace MFO::Logistics::TheftGate {
             for (const auto& c : it->second.second->copies) {
                 const char* bar = TakeBarredOwner(a_f, a_src, c.owner);
                 const bool worn = c.worn || c.wornLeft;
-                p.copies.push_back({ nullptr, c.n, bar, c.owner ? c.owner : p.contOwner, worn, c.uid });
+                p.copies.push_back({ nullptr, c.n, bar, c.hasOwnership ? c.owner : p.contOwner, worn, c.hasUid ? c.uid : std::uint16_t{ 0 } });
                 xlTotal += c.n;
                 if (bar) p.anyBarred = true;
                 if (worn) p.anyWorn = true;
@@ -338,6 +339,7 @@ namespace MFO::Logistics::TheftGate {
         // to the main thread with it (stability audit M2). Nothing else may call this.
         Plan AnalyseLive(RE::Actor* a_f, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, Road a_road) {
             Plan p;
+            MainThread::NoteWriteRead(__FUNCTION__);   // INVARIANTS #84: the live read of a write made right here (self-counted when off the main thread)
             auto inv = a_src->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
             auto it = inv.find(a_obj);
             if (it == inv.end() || it->second.first <= 0) return p;
@@ -578,15 +580,26 @@ namespace MFO::Logistics::TheftGate {
 
     void NoteInventoryNotYet(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
         ++t_lastRefusal.n; t_lastRefusal.state = GuardState::Pending; t_lastRefusal.guard = 0; t_lastRefusal.landing = true; t_lastRefusal.notYet = true;
-        const std::string key = std::format("snap|{:08X}|{:08X}", a_follower ? a_follower->GetFormID() : 0u, a_src ? a_src->GetFormID() : 0u);
-        std::scoped_lock lk(g_logMx);
+        // The first ask about any source is "not yet" by design (the next tick has it), so one not-yet says nothing. A source that
+        // STAYS not-yet for kNotYetSay is said (principle 7: never a silent stall), then once per kLogEvery while it lasts.
+        constexpr auto kNotYetSay   = std::chrono::seconds(2);
+        constexpr auto kNotYetReset = std::chrono::seconds(5);   // no not-yet for this long = that episode ended
+        struct Run { SClock::time_point first{}, last{}, said{}; };
+        static std::unordered_map<std::uint64_t, Run> s_runs;   // g_logMx
+        const std::uint64_t key = (static_cast<std::uint64_t>(a_follower ? a_follower->GetFormID() : 0u) << 32) | (a_src ? a_src->GetFormID() : 0u);
         const auto now = SClock::now();
-        if (g_logAt.size() > 512) g_logAt.clear();
-        auto& at = g_logAt[key];
-        if (at.time_since_epoch().count() == 0 || now - at >= kLogEvery) {
-            at = now;
-            spdlog::info("[theft-gate] F={:08X} src={:08X} held: the source's inventory snapshot is not readable yet (built on the main thread, "
-                         "INVARIANTS #84); judged again next tick", a_follower ? a_follower->GetFormID() : 0u, a_src ? a_src->GetFormID() : 0u);
+        std::scoped_lock lk(g_logMx);
+        if (s_runs.size() > 1024) s_runs.clear();
+        auto& r = s_runs[key];
+        if (r.first.time_since_epoch().count() == 0 || now - r.last > kNotYetReset) { r.first = now; r.said = {}; }
+        r.last = now;
+        if (now - r.first >= kNotYetSay && (r.said.time_since_epoch().count() == 0 || now - r.said >= kLogEvery)) {
+            r.said = now;
+            spdlog::warn("[theft-gate] F={:08X} src={:08X} held for {:.1f}s: the source's inventory snapshot is still not readable (it is built "
+                         "on the main thread, INVARIANTS #84). The main-thread pump is not draining, or the source no longer resolves. "
+                         "Judged again next tick; nothing is taken and the source is not marked done.",
+                         a_follower ? a_follower->GetFormID() : 0u, a_src ? a_src->GetFormID() : 0u,
+                         std::chrono::duration<float>(now - r.first).count());
         }
     }
 

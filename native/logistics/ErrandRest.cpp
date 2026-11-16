@@ -228,6 +228,7 @@ namespace MFO::Logistics::Errand::Rest {
                 if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid); f && f->Is3DLoaded()) {
                     v.valid = true;
                     if (auto* mt = f->AsMagicTarget()) {
+                        MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                         if (auto* list = mt->GetActiveEffectList()) {
                             for (auto* ae : *list) {
                                 if (!ae) continue;

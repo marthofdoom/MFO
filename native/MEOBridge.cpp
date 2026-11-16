@@ -113,7 +113,8 @@ namespace MFO::MEOBridge {
 
     std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base, int a_hand) {
         if (!a_actor || !a_base) return 0;
-        if (const auto* e = InvSnap::Items(a_actor).Find(a_base))   // not yet = 0 (no uid known this tick)
+        const auto inv = InvSnap::Items(a_actor);   // named: the view owns the snapshot the entry lives in
+        if (const auto* e = inv.Find(a_base))        // not yet = 0 (no uid known this tick)
             for (const auto& c : e->copies)
                 if (WornInHand(c, a_hand) && c.hasUid) return c.uid;
         return 0;

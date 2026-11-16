@@ -177,6 +177,7 @@ namespace MFO::Actuation {
                 if (PoolOf(a_pool, sel)) ++r.selected;
             for (auto* sp : rd.addedSpells)
                 if (PoolOf(a_pool, sp)) ++r.known;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             if (auto* list = a_actor->AsMagicTarget()->GetActiveEffectList())
                 for (auto* ae : *list)
                     if (ae && PoolOf(a_pool, ae->spell)) ++r.effects;
@@ -192,6 +193,7 @@ namespace MFO::Actuation {
             for (const auto& r : g_rekeyed) {
                 bool done = false;
                 if (auto* t = RE::TESForm::LookupByID<RE::Actor>(r.target); t && PoolOf(pool, r.proxy)) {
+                    MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                     if (auto* list = t->AsMagicTarget()->GetActiveEffectList()) {
                         for (auto* ae : *list) {
                             if (ae != r.ae) continue;
@@ -307,6 +309,7 @@ namespace MFO::Actuation {
         for (auto& ap : set) {
             auto*       actor = ap.get();
             const char* name  = actor->GetName();
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             if (auto* list = actor->AsMagicTarget()->GetActiveEffectList()) {
                 for (auto* ae : *list) {
                     if (!ae) continue;
@@ -435,6 +438,7 @@ namespace MFO::Actuation {
                 default: break;
                 }
             }
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             if (auto* list = actor->AsMagicTarget()->GetActiveEffectList()) {
                 std::uint32_t dead = 0;
                 for (auto* ae : *list) {

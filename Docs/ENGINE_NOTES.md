@@ -1338,6 +1338,35 @@ inside `Logistics::LootNearby`.
    lock (an attached cell's list qualifies) -- never chase unlocked globals. See
    INVARIANTS #72.
 
+> **AMENDED 2026-11-16 (`fix/worker-snapshots`, INVARIANTS #84): the worker reads no engine inventory list and no
+> active-effect list.** Finding 2 above set "read-only inside the walk, mutate after". That rule protects the CELL's
+> reference list (the cell spin lock). It does not protect what hangs off a reference:
+> - an inventory is `ExtraContainerChanges::changes->entryList`, a `BSSimpleList<InventoryEntryData*>`, and each entry
+>   holds a `BSSimpleList<ExtraDataList*>`. `RE::TESObjectREFR::GetInventory` (fork `src/RE/T/TESObjectREFR.cpp:331`)
+>   walks both with no lock, and copies each entry, which walks the inner list again. `GetInventoryCounts`,
+>   `Actor::GetWornArmor` and `Actor::GetGoldAmount` are that same walk.
+> - an actor's effects are `MagicTarget::GetActiveEffectList()`, a `BSSimpleList<ActiveEffect*>`.
+>   `MagicTarget::HasMagicEffect` walks it too.
+> - the writers are not ours to stop: the owner's own update (an equip, an expiry), a spell hit, the container menu,
+>   other plugins, and since #83 MFO's own main-thread transfer drain. `InventoryChanges::RemoveItem` (1.6.1170
+>   0x228180) frees a node when a stack empties. A worker standing on that node reads freed memory.
+> So both are read on the MAIN thread only, in the player-Update seat (`MainThread.cpp`), into value copies the worker
+> reads: `logistics/InvSnapshot.*` and `iaus/EffectMirror.*`. No engine address, offset or vtable slot is new: the
+> builders call the same CommonLib functions the readers called (`GetInventoryChanges`, `GetContainer`,
+> `ForEachContainerObject`, `ExtraDataList::GetByType / HasType / HasQuestObjectAlias`, `InventoryEntryData::IsWorn /
+> IsEnchanted / GetValue`, `GetActiveEffectList`, `HasMagicEffect`, `skyrim_cast`), on the thread that may.
+> **Per runtime:** nothing differs between 1.5.97, 1.6.1170 and 1.7.104 here. The ids behind `GetValue` (15757 / 15995)
+> and `HasQuestObjectAlias` (11913 / 12052) were already called by the readers this replaces. With no pump installed
+> (VR, an unverified build) `MainThread::LiveReadsAllowed()` is true and every reader reads live, as before.
+> **Whether the two threads ever overlap is still not proven (#74).** This branch ships the probe that settles it: the
+> `[overlap]` line (MAP "P0 OVERLAP PROBE"). Read `overlappedPlayerUpdate` and `overlappedNpcUpdateCombat` after a
+> looting session and a combat session. The same line carries #84's own two counts.
+> **What is NOT covered:** a worker-side engine WRITE still runs on the worker with its own live read (two container
+> transfers, the drinks, the tome, the board teach, the equips: stability audit M2 / M3), MEO's API walks the pack
+> inside MEO.dll when MFO calls it from the worker (`MEOBridge::CarriedGems`), and `ProcessLists::highActorHandles`
+> is still walked on the worker without a lock (audit M6: every handle is re-validated, so a reallocation yields a
+> missed or wrong actor, not a fault. The effect mirror's own walk of that array is on the main thread).
+
 ### 0.31 MCM Helper rejects a whole config for one bad field; bind with `id`, not `modSettingName` (2026-07-28)
 
 The MFO MCM never appeared in-game. MCM Helper's log (`MCMHelper.log` in the

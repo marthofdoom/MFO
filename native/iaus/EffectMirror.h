@@ -19,7 +19,8 @@
 //
 // Threads: Get / Want from any thread (a leaf mutex). BuildPass / BuildLive read the engine: MAIN ONLY, except BuildLive through
 // Get where MainThread::LiveReadsAllowed() (the seat, the main thread outside a tick, or no pump): then the list is read in place.
-// Freshness: one tick (133 ms) normally. A mirror older than kMaxAgeTicks (the main thread stalled / paused) is not readable.
+// Freshness: one tick (133 ms) normally. The party and the player follow the party's rule (WantParty); any other actor's mirror
+// is readable while it is no older than kMaxAgeTicks unpaused ticks and was built since the last pause.
 namespace MFO::EffectMirror {
 
     struct Fx {
@@ -52,12 +53,15 @@ namespace MFO::EffectMirror {
     [[nodiscard]] Ptr Get(RE::Actor* a_actor);
     // By FormID (a reader that only holds an id). Same answer; the live path resolves the id.
     [[nodiscard]] Ptr Get(RE::FormID a_actor);
-    // Keep a_actor mirrored (the party and the player each tick; the IAUS foes). No read.
+    // Keep a_actor mirrored (the IAUS foes, any actor a reader will ask about). No read.
     void Want(RE::FormID a_actor);
+    // The party and the player, every tick (Diagnostics.cpp): mirrored AND held to the party's rule (InvSnap::TickClock::needPass:
+    // readable in tick t only from the pass tick t-1 posted, so a cast or a dispel that tick posted is in it).
+    void WantParty(RE::FormID a_actor);
     // Would Get(a_actor) answer now? Asks like Get does (uncounted). The tick gate (Diagnostics.cpp).
     [[nodiscard]] bool Ready(RE::FormID a_actor);
 
-    void BuildPass();                       // MAIN THREAD, once per worker tick (Diagnostics.cpp posts it with InvSnap::BuildPass)
+    void BuildPass(std::uint64_t a_postTick);   // MAIN THREAD, once per worker tick (Diagnostics.cpp posts it with InvSnap::BuildPass)
     void Clear();                           // revert / load
     void LogStats();                        // `[fxmirror]`, one line per 60 s
 

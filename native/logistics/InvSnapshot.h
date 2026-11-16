@@ -23,10 +23,13 @@
 // BuildPass / RebuildOnMain / BuildLive read the engine and are MAIN ONLY, except BuildLive through Get when
 // MainThread::LiveReadsAllowed() says this call may read live (the seat, the main thread outside a tick, or no pump at all).
 //
-// Freshness (principle 9, sized from the real cadence): the worker posts ONE build pass per tick (133 ms); the pass rebuilds every
-// wanted actor each time and a wanted source (container / corpse) when touched or kSourceRefreshTicks old. So a readable snapshot is
-// normally one tick old. A snapshot older than its age cap (the main thread stalled or the game is paused) is NOT readable: the
-// reader gets "not yet" and does nothing, it never acts on an inventory the main thread has not confirmed for that long.
+// Freshness (principle 9, sized from the real cadence): the worker posts ONE build pass per tick (133 ms); the pass rebuilds the
+// party and the player each time and a wanted source (container / corpse) when touched or kSourceRefreshTicks old.
+//   * THE PARTY AND THE PLAYER are readable in tick t only from the pass tick t-1 posted (TickClock::needPass). That pass runs
+//     behind every main-thread closure tick t-1 posted, so nothing MFO did or asked for in the last tick is missing from the
+//     view, and a main thread slower than the tick simply makes the worker skip ticks (Diagnostics.cpp's tick gate).
+//   * A SOURCE is readable while it is no older than kSourceMaxAgeTicks and was built since the last pause.
+// A ref that fails its rule reads "not yet": the reader does nothing, it never acts on an inventory the main thread has not confirmed.
 namespace MFO::InvSnap {
 
     // One ExtraDataList of an entry, by value. The order is the engine list's order.
@@ -100,12 +103,18 @@ namespace MFO::InvSnap {
         View() = default;
         explicit View(Ptr a_snap) : _snap(std::move(a_snap)) {}
         [[nodiscard]] explicit operator bool() const noexcept { return _snap != nullptr; }
-        [[nodiscard]] const ItemMap& map() const noexcept;
-        [[nodiscard]] ItemMap::const_iterator begin() const noexcept { return map().begin(); }
-        [[nodiscard]] ItemMap::const_iterator end() const noexcept { return map().end(); }
-        [[nodiscard]] ItemMap::const_iterator find(const RE::TESBoundObject* a_obj) const { return map().find(const_cast<RE::TESBoundObject*>(a_obj)); }
-        [[nodiscard]] bool empty() const noexcept { return map().empty(); }
-        [[nodiscard]] const Entry* Find(const RE::TESBoundObject* a_obj) const { return _snap ? _snap->Find(a_obj) : nullptr; }
+        // Everything that hands out a pointer or an iterator INTO the snapshot is for a NAMED view only (`const auto inv = ...`):
+        // the view owns the snapshot, so `InvSnap::Items(a).Find(x)` would return a pointer into a snapshot that dies with the
+        // temporary. Those calls do not compile (the && overloads are deleted). Count / WornArmor return values and forms: fine.
+        [[nodiscard]] const ItemMap& map() const& noexcept;
+        const ItemMap& map() && = delete;
+        [[nodiscard]] ItemMap::const_iterator begin() const& noexcept { return map().begin(); }
+        [[nodiscard]] ItemMap::const_iterator end() const& noexcept { return map().end(); }
+        [[nodiscard]] ItemMap::const_iterator find(const RE::TESBoundObject* a_obj) const& { return map().find(const_cast<RE::TESBoundObject*>(a_obj)); }
+        ItemMap::const_iterator find(const RE::TESBoundObject* a_obj) && = delete;
+        [[nodiscard]] bool empty() const noexcept { return !_snap || _snap->items.empty(); }
+        [[nodiscard]] const Entry* Find(const RE::TESBoundObject* a_obj) const& { return _snap ? _snap->Find(a_obj) : nullptr; }
+        const Entry* Find(const RE::TESBoundObject* a_obj) && = delete;
         [[nodiscard]] std::int32_t Count(const RE::TESBoundObject* a_obj) const { return _snap ? _snap->Count(a_obj) : 0; }
         [[nodiscard]] RE::TESObjectARMO* WornArmor(RE::BGSBipedObjectForm::BipedObjectSlot a_slot) const { return _snap ? _snap->WornArmor(a_slot) : nullptr; }
         [[nodiscard]] RE::TESObjectARMO* WornArmor(RE::FormID a_formID) const { return _snap ? _snap->WornArmor(a_formID) : nullptr; }
@@ -138,12 +147,22 @@ namespace MFO::InvSnap {
         std::uint64_t age = 0;          // unpaused worker ticks only
         std::uint64_t lastPaused = 0;   // the last tick that began paused (0 = none)
         bool          paused = false;   // this tick began paused
+        // THE PARTY'S RULE: a party member's (and the player's) snapshot is readable in this tick only when it was published by
+        // the build pass of tick `needPass` or a later one. Unpaused: needPass = tick - 1, i.e. the pass the PREVIOUS tick posted
+        // has run. That pass is queued behind everything that tick posted to the main thread, so "tick t reads what tick t-1 wrote
+        // or posted" holds exactly (an equip, a pickup, a cast, a queued transfer). Paused: needPass = the tick before the pause
+        // began, and it stands for the whole pause (no pass can run under it).
+        std::uint64_t needPass = 0;
     };
     [[nodiscard]] TickClock Now();
     // Readable by the shared rule? a_builtTick / a_builtAge = the TickClock values stamped at the build; a_maxAge in unpaused ticks.
     [[nodiscard]] bool FreshEnough(const TickClock& a_now, std::uint64_t a_builtTick, std::uint64_t a_builtAge, std::uint64_t a_maxAge);
     [[nodiscard]] std::uint64_t CurrentTick();
-    void BuildPass();
+    void BuildPass(std::uint64_t a_postTick);   // a_postTick = the tick whose end posted this pass (TickClock::tick then)
+    // The party's rule (TickClock::needPass), for the effect mirror's party slots: a_builtPass = the a_postTick it was published by.
+    [[nodiscard]] inline bool PassReached(const TickClock& a_now, bool a_everByPass, std::uint64_t a_builtPass) {
+        return a_everByPass && a_builtPass >= a_now.needPass;
+    }
     // Revert / load: drop everything (FormIDs are reused across loads).
     void Clear();
 

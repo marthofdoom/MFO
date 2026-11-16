@@ -883,6 +883,7 @@ namespace MFO::Actuation {
                                         float a_window) {
             auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
             if (!mt || !a_spell) return false;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt->GetActiveEffectList();
             if (!list) return false;
             bool found = false;
@@ -911,6 +912,7 @@ namespace MFO::Actuation {
         inline bool SpellEffectPresentOn(RE::Actor* a_target, const RE::MagicItem* a_form) {
             auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
             if (!mt || !a_form) return false;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt->GetActiveEffectList();
             if (!list) return false;
             for (auto* ae : *list)

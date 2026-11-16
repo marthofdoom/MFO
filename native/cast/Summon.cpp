@@ -3,6 +3,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "MainThread.h"   // NoteLiveRead (INVARIANTS #84)
 #include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
@@ -219,6 +220,7 @@ namespace MFO::Actuation {
         int  otherAppearing = 0;
         std::vector<RE::FormID> otherSpellsWithEffect;
         if (auto* mt = f->AsMagicTarget()) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             if (auto* list = mt->GetActiveEffectList()) {
                 for (auto* ae : *list) {
                     if (!ae || !ae->spell) continue;

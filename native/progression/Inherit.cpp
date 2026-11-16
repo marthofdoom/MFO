@@ -38,6 +38,7 @@
 //   (value / spell / text) + identical conditions on every tab. Anything less is not a duplicate.
 //   EP22 is dropped (no follower activity: the skill rides a PlayerCharacter field).
 #include "PCH.h"
+#include "MainThread.h"   // NoteLiveRead (INVARIANTS #84)
 #include "ProgAllocator_internal.h"
 #include "Config.h"
 #include "Followers.h"
@@ -212,6 +213,7 @@ namespace MFO::ProgAllocator {
         void CollectMgefPerks(RE::PlayerCharacter* a_player, std::vector<Held>& a_out) {
             auto* mt = a_player->AsMagicTarget();
             if (!mt) return;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt->GetActiveEffectList();
             if (!list) return;
             for (auto* ae : *list) {

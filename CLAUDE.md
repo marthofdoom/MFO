@@ -100,7 +100,7 @@ regressions here; the ripple notes are why the map exists.
   re-verify it against current code (line numbers drift). **If the structure
   moved, update MAP.md as part of the change.** A stale map misleads the next
   session.
-- Also consult `Docs/INVARIANTS.md` (**97 rules: 83 numbered `#1`–`#83` plus 14
+- Also consult `Docs/INVARIANTS.md` (**98 rules: 84 numbered `#1`–`#84` plus 14
   lettered**) before non-trivial changes; MAP.md cites it as `#N`.
   **`Docs/ARCHITECTURE.md` is HISTORICAL** (banner-marked 2026-09-07; it describes
   a pre-implementation design and contradicts shipped code on hooks, records,

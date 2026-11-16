@@ -22,11 +22,20 @@ namespace MFO::EffectMirror {
             std::uint64_t builtTick = 0;
             std::uint64_t builtAge = 0;     // InvSnap::TickClock::age at the build (unpaused ticks)
             std::uint64_t wantedTick = 0;   // 0 = never asked by name (present only because he is in the high process list)
+            std::uint64_t partyTick = 0;    // the last tick WantParty named him (the party's rule applies while it is recent)
+            std::uint64_t builtPass = 0;    // the post tick of the pass that published the mirror
         };
         std::mutex                           g_mx;   // LEAF
         std::unordered_map<RE::FormID, Slot> g_slots;
         std::atomic<std::uint64_t> g_asks{ 0 }, g_hits{ 0 }, g_missNever{ 0 }, g_missOld{ 0 }, g_live{ 0 }, g_builds{ 0 }, g_passes{ 0 };
         std::atomic<std::uint64_t> g_lastPassActors{ 0 };
+
+        // Under g_mx. The party's rule for a slot WantParty named this tick or the last, the age rule for anyone else.
+        bool SlotReadable(const Slot& a_s, const InvSnap::TickClock& a_clk) {
+            if (!a_s.mirror) return false;
+            if (a_s.partyTick != 0 && a_s.partyTick + 1 >= a_clk.tick) return InvSnap::PassReached(a_clk, true, a_s.builtPass);
+            return InvSnap::FreshEnough(a_clk, a_s.builtTick, a_s.builtAge, kMaxAgeTicks);
+        }
 
         Ptr Ask(RE::FormID a_id) {
             const auto clk = InvSnap::Now();
@@ -35,7 +44,7 @@ namespace MFO::EffectMirror {
             auto& s = g_slots[a_id];
             s.wantedTick = clk.tick;
             if (!s.mirror) { g_missNever.fetch_add(1, std::memory_order_relaxed); return nullptr; }
-            if (!InvSnap::FreshEnough(clk, s.builtTick, s.builtAge, kMaxAgeTicks)) { g_missOld.fetch_add(1, std::memory_order_relaxed); return nullptr; }
+            if (!SlotReadable(s, clk)) { g_missOld.fetch_add(1, std::memory_order_relaxed); return nullptr; }
             g_hits.fetch_add(1, std::memory_order_relaxed);
             return s.mirror;
         }
@@ -108,7 +117,7 @@ namespace MFO::EffectMirror {
         std::scoped_lock lk(g_mx);
         auto& s = g_slots[a_actor];
         s.wantedTick = clk.tick;
-        return s.mirror && InvSnap::FreshEnough(clk, s.builtTick, s.builtAge, kMaxAgeTicks);
+        return SlotReadable(s, clk);
     }
 
     void Want(RE::FormID a_actor) {
@@ -118,8 +127,17 @@ namespace MFO::EffectMirror {
         g_slots[a_actor].wantedTick = now;
     }
 
+    void WantParty(RE::FormID a_actor) {
+        if (!a_actor || !MainThread::IsInstalled()) return;
+        const auto now = InvSnap::CurrentTick();
+        std::scoped_lock lk(g_mx);
+        auto& s = g_slots[a_actor];
+        s.wantedTick = now;
+        s.partyTick  = now;
+    }
+
     // MAIN THREAD.
-    void BuildPass() {
+    void BuildPass(std::uint64_t a_postTick) {
         const auto clk    = InvSnap::Now();
         const auto a_tick = clk.tick;
         g_passes.fetch_add(1, std::memory_order_relaxed);
@@ -141,7 +159,8 @@ namespace MFO::EffectMirror {
         std::vector<std::pair<RE::FormID, Ptr>> built;
         std::unordered_set<RE::FormID> seen;
         const auto add = [&](RE::Actor* a_actor) {
-            if (!a_actor || a_actor->IsDeleted() || !seen.insert(a_actor->GetFormID()).second) return;
+            // (No IsDeleted refusal: the tick gate waits on a party member's mirror, and a flagged actor's list is still readable here.)
+            if (!a_actor || !seen.insert(a_actor->GetFormID()).second) return;
             built.emplace_back(a_actor->GetFormID(), BuildLive(a_actor));
         };
         add(RE::PlayerCharacter::GetSingleton());
@@ -162,6 +181,7 @@ namespace MFO::EffectMirror {
             s.mirror    = std::move(m);
             s.builtTick = a_tick;
             s.builtAge  = clk.age;
+            s.builtPass = a_postTick;
         }
     }
 

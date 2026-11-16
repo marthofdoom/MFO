@@ -14,7 +14,7 @@ namespace MFO::InvSnap {
         // ── cadence (principle 9: every number here is counted in WORKER TICKS, 133 ms each, the unit the refresh really runs in) ──
         // The worker posts one build pass per tick and the main thread drains it on its next frame, so a snapshot read in tick k was
         // normally built between tick k-1 and k: age 1.
-        constexpr std::uint64_t kStandingMaxAgeTicks = 4;    // ~0.5 s: three missed passes. Older = the main thread is stalled or paused: not readable.
+        // (The party and the player have no age cap of their own: their rule is TickClock::needPass, the previous tick's pass.)
         constexpr std::uint64_t kSourceRefreshTicks  = 4;    // an untouched container / corpse is re-read every ~0.5 s while wanted
         constexpr std::uint64_t kSourceMaxAgeTicks   = 16;   // ~2 s = refresh x 4: three missed refreshes (a pass builds at most kSourceBudget sources)
         // A want outlives the asker's own cadence: a follower is serviced once per LAP (party size x 133 ms) and a loot scan asks about
@@ -30,6 +30,8 @@ namespace MFO::InvSnap {
             std::uint64_t  wantedTick = 0;       // the last tick it was asked for
             std::uint64_t  builtTick = 0;        // the worker tick current when the published snapshot was built
             std::uint64_t  builtAge = 0;         // the age clock (unpaused ticks) at that moment
+            std::uint64_t  builtPass = 0;        // the post tick of the BuildPass that published it (RebuildOnMain does not move it)
+            bool           everByPass = false;   // a BuildPass has published it at least once
             std::uint32_t  touchSeq = 0;         // bumped by Touch (a write MFO made)
             std::uint32_t  builtSeq = 0;         // the touchSeq captured BEFORE the published snapshot's walk began
             std::uint64_t  touchTick = 0;        // the tick of the last Touch: the snapshot stays readable for the rest of that tick
@@ -43,6 +45,7 @@ namespace MFO::InvSnap {
         std::atomic<std::uint64_t>           g_age{ 0 };          // unpaused ticks (BeginTick)
         std::atomic<std::uint64_t>           g_lastPaused{ 0 };   // the last tick that began paused
         std::atomic<bool>                    g_paused{ false };   // this tick began paused
+        std::atomic<std::uint64_t>           g_needPass{ 0 };     // TickClock::needPass
 
         // `[invsnap]` counters (relaxed; a session count)
         std::atomic<std::uint64_t> g_asks{ 0 }, g_hits{ 0 }, g_liveReads{ 0 };
@@ -141,7 +144,7 @@ namespace MFO::InvSnap {
         return it == items.end() ? 0 : it->second.first;
     }
 
-    const ItemMap& View::map() const noexcept {
+    const ItemMap& View::map() const& noexcept {
         static const ItemMap kNone;
         return _snap ? _snap->items : kNone;
     }
@@ -181,7 +184,9 @@ namespace MFO::InvSnap {
             // A write MFO made since the walk: readable only for the rest of the tick that made it (tick-stable; the take road
             // re-validates at its own write), then withheld until a snapshot built after the write is published.
             if (a_s.builtSeq != a_s.touchSeq && a_s.touchTick != a_now) return Miss::Touched;
-            if (!FreshEnough(a_clk, a_s.builtTick, a_s.builtAge, a_s.standing ? kStandingMaxAgeTicks : kSourceMaxAgeTicks)) return Miss::Old;
+            if (a_s.standing) {   // the party's rule: the previous tick's pass has published it
+                if (!PassReached(a_clk, a_s.everByPass, a_s.builtPass)) return Miss::Old;
+            } else if (!FreshEnough(a_clk, a_s.builtTick, a_s.builtAge, kSourceMaxAgeTicks)) return Miss::Old;
             return Miss::None;
         }
 
@@ -296,9 +301,14 @@ namespace MFO::InvSnap {
 
     void BeginTick(bool a_paused) {
         const auto t = g_tick.fetch_add(1, std::memory_order_acq_rel) + 1;
-        g_paused.store(a_paused, std::memory_order_release);
-        if (a_paused) g_lastPaused.store(t, std::memory_order_release);
-        else          g_age.fetch_add(1, std::memory_order_acq_rel);
+        const bool wasPaused = g_paused.exchange(a_paused, std::memory_order_acq_rel);
+        if (a_paused) {
+            g_lastPaused.store(t, std::memory_order_release);
+            if (!wasPaused) g_needPass.store(t - 1, std::memory_order_release);   // the pause begins: the tick before it, for the whole pause
+        } else {
+            g_age.fetch_add(1, std::memory_order_acq_rel);
+            g_needPass.store(t - 1, std::memory_order_release);                   // the pass the previous tick posted
+        }
     }
     std::uint64_t CurrentTick() { return g_tick.load(std::memory_order_acquire); }
     TickClock Now() {
@@ -307,6 +317,7 @@ namespace MFO::InvSnap {
         c.age        = g_age.load(std::memory_order_acquire);
         c.lastPaused = g_lastPaused.load(std::memory_order_acquire);
         c.paused     = g_paused.load(std::memory_order_acquire);
+        c.needPass   = g_needPass.load(std::memory_order_acquire);
         return c;
     }
     bool FreshEnough(const TickClock& a_now, std::uint64_t a_builtTick, std::uint64_t a_builtAge, std::uint64_t a_maxAge) {
@@ -320,7 +331,7 @@ namespace MFO::InvSnap {
 
     // MAIN THREAD. One pass per worker tick: Diagnostics.cpp posts it at the tick's end, behind every main-thread write that tick
     // posted (the queue is FIFO), and drops a pass that a newer queued one supersedes (a stalled frame).
-    void BuildPass() {
+    void BuildPass(std::uint64_t a_postTick) {
         const auto clk = Now();
         const auto now = clk.tick;
         g_passes.fetch_add(1, std::memory_order_relaxed);
@@ -358,13 +369,15 @@ namespace MFO::InvSnap {
             if (it == g_slots.end() || it->second.refToken != d.token) continue;
             // Unresolved (the ref is gone, deleted, or the id names another object now): nothing is published. The old snapshot is
             // NOT dropped here, so a reader's "ready" answer never changes in the middle of a tick; it ages out at a tick boundary
-            // (kStandingMaxAgeTicks / kSourceMaxAgeTicks) and reads "not yet" from then on.
+            // (the party at the next tick, by its pass rule; a source at kSourceMaxAgeTicks) and reads "not yet" from then on.
             if (!snap) continue;
             it->second.snap      = std::move(snap);
             it->second.builtSeq  = d.seq;
             it->second.builtTick = clk.tick;
             it->second.builtAge  = clk.age;
             it->second.builtInit = d.init;
+            it->second.builtPass = a_postTick;
+            it->second.everByPass = true;
         }
     }
 

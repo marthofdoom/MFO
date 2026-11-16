@@ -308,6 +308,7 @@ namespace MFO::Logistics::Steal {
         // An off-limits chest with no explicit owner: every copy without its own ownership is the cell owner's.
         Copy NextOwned(RE::Actor* a_f, RE::TESObjectREFR* a_chest, RE::TESBoundObject* a_obj, bool a_cellOwnedOnly) {
             Copy c;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto inv = a_chest->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
             auto it = inv.find(a_obj);
             if (it == inv.end() || it->second.first <= 0) return c;
@@ -438,6 +439,7 @@ namespace MFO::Logistics::Steal {
 
         // Every extra list the follower holds for a_obj, with its count. Empty when he has none.
         void HeldLists(RE::Actor* a_f, const RE::TESBoundObject* a_obj, std::vector<HeldList>& a_out) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* changes = a_f->GetInventoryChanges(true);
             if (!changes || !changes->entryList) return;
             for (auto* e : *changes->entryList) {
@@ -449,6 +451,7 @@ namespace MFO::Logistics::Steal {
 
         Landed WhereListLanded(RE::Actor* a_f, const RE::TESBoundObject* a_obj, const RE::ExtraDataList* a_xl, const std::vector<HeldList>& a_before,
                                std::int32_t a_moved) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* changes = a_f->GetInventoryChanges(true);
             if (!changes || !changes->entryList) return Landed::Unknown;
             bool merged = false;
@@ -467,6 +470,7 @@ namespace MFO::Logistics::Steal {
 
         // How many of a_obj the chest holds right now (the before / after of every RemoveItem).
         std::int32_t CountIn(RE::TESObjectREFR* a_chest, RE::TESBoundObject* a_obj) {
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto inv = a_chest->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; });
             auto it = inv.find(a_obj);
             return it == inv.end() ? 0 : std::max<std::int32_t>(0, it->second.first);
@@ -577,11 +581,13 @@ namespace MFO::Logistics::Steal {
                 // copies that were not owned by someone else follow the normal theft-gate road (a plain RemoveItem if none is barred)
                 if (leftInChest) continue;
                 if (TheftGate::Takeable(f, chest, obj)) {
+                    MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
                     auto inv = chest->GetInventory([&](RE::TESBoundObject& x) { return &x == obj; });
                     if (auto it = inv.find(obj); it != inv.end() && it->second.first > 0)
                         movedTotal += TheftGate::Take(f, chest, obj, it->second.first, TheftGate::Road::Container);
                 }
             }
+            if (movedTotal > 0) { InvSnap::RebuildOnMain(chest); InvSnap::RebuildOnMain(f); }   // INVARIANTS #84: the worker's view of both, replaced in place
             Finish(a_fid, a_cid, movedTotal > 0 ? OwnedTake::Took : OwnedTake::Nothing, {});
         }
     }

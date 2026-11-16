@@ -75,6 +75,7 @@ namespace MFO::Iaus::SpellBook {
         // MAIN THREAD: a live (not dispelled, not inactive) effect of a_spell on a_actor (SelfStatus's walk).
         bool EffectLive(RE::Actor* a_actor, const RE::MagicItem* a_spell) {
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return false;
             for (auto* ae : *list) {
@@ -100,6 +101,7 @@ namespace MFO::Iaus::SpellBook {
         std::vector<FxKey> LiveFx(RE::Actor* a_actor) {
             std::vector<FxKey> out;
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return out;
             for (auto* ae : *list) {
@@ -134,6 +136,7 @@ namespace MFO::Iaus::SpellBook {
         std::array<bool, kBuffKinds> LiveBuffKinds(RE::Actor* a_actor) {
             std::array<bool, kBuffKinds> live{};
             auto* mt   = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            MainThread::NoteLiveRead(__FUNCTION__);   // INVARIANTS #84: a live list, main thread only (self-checked)
             auto* list = mt ? mt->GetActiveEffectList() : nullptr;
             if (!list) return live;
             for (auto* ae : *list) {

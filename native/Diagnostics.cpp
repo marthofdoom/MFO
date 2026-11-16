@@ -140,30 +140,34 @@ namespace MFO::Diagnostics {
         // "not yet". End: post ONE main-thread build pass. It is queued behind every main-thread write this tick posted (FIFO), so
         // the next tick reads their result. A pass that a newer queued pass supersedes (the main thread stalled) returns at once.
         std::atomic<std::uint64_t> g_snapPassPosted{ 0 };
+        // What the build pass COSTS the main thread (principle 5: measured, not assumed): passes run, total and worst microseconds.
+        std::atomic<std::uint64_t> g_snapPassRuns{ 0 }, g_snapPassUsTotal{ 0 }, g_snapPassUsMax{ 0 };
         void SnapshotsBeginTick() {
             auto* ui = RE::UI::GetSingleton();
             InvSnap::BeginTick(ui && ui->GameIsPaused());   // a paused tick does not age a snapshot (InvSnapshot.h BeginTick)
             if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
                 InvSnap::Want(pc);
-                EffectMirror::Want(pc->GetFormID());
+                EffectMirror::WantParty(pc->GetFormID());
             }
             for (const auto& h : Followers::g_active) {
                 auto ptr = h.get();   // HOLD the NiPointer
                 if (auto* a = ptr.get()) {
                     InvSnap::Want(a);
-                    EffectMirror::Want(a->GetFormID());
+                    EffectMirror::WantParty(a->GetFormID());
                 }
             }
         }
         // THE TICK GATE (INVARIANTS #84). TRUE = every party member's and the player's inventory snapshot and effect mirror is readable
         // this tick. A snapshot's readability changes only at a tick boundary (InvSnapshot.cpp Readable), so once this passes, no
         // reader in the tick body can get "not yet" for the party or the player; only a SOURCE (a container, a corpse, a foe) can.
-        // FALSE = the body is skipped this tick: the first tick after a follower joins or a load, a tick that follows a worker-side
-        // write whose rebuild the main thread has not drained yet, the first tick(s) after a pause ends (until the pass posted
-        // under it has run), or the main thread stalled past the age cap while unpaused. A PAUSED tick is not skipped for age (the
-        // snapshots it had stand), so the bookkeeping that ran under a menu still runs. Nothing is decided on an unread pack; the
-        // skip is the same event as a tick the pump gate or Scheduler's pacing check drops.
-        // Said when it lasts (principle 7): a run of kGateSayTicks skipped ticks logs who is not ready, then every kGateSayTicks.
+        // THE PARTY'S RULE (InvSnapshot.h TickClock::needPass): readable in tick t = published by the build pass tick t-1 posted.
+        // That pass is queued behind every main-thread closure tick t-1 posted, so this tick reads everything the last one wrote
+        // or asked for. FALSE = the body is skipped this tick: the main thread has not drained the previous tick's pass yet (a
+        // frame longer than the tick, two ticks in one frame, the first frame after a pause or a load), or a follower just
+        // joined. The worker is paced by the main thread's frames, never ahead of them. A PAUSED tick keeps reading the pass of
+        // the tick before the pause began, so the bookkeeping that ran under a menu still runs. Nothing is decided on an unread
+        // pack; the skip is the same event as a tick the pump gate or Scheduler's pacing check drops.
+        // Said when it lasts (principle 7): a run of kGateSayTicks skipped ticks logs who is not ready, then once a minute.
         constexpr std::uint32_t kGateSayTicks = 38;   // ~5 s of consecutive skipped ticks
         std::uint32_t g_gateSkipRun = 0;              // worker-serial (one tick body at a time: PumpTickGate)
         std::atomic<std::uint64_t> g_gateSkips{ 0 };
@@ -186,7 +190,8 @@ namespace MFO::Diagnostics {
                 return true;
             }
             g_gateSkips.fetch_add(1, std::memory_order_relaxed);
-            if (++g_gateSkipRun % kGateSayTicks == 0)
+            ++g_gateSkipRun;
+            if (g_gateSkipRun == kGateSayTicks || g_gateSkipRun % (kGateSayTicks * 12) == 0)   // at ~5 s, then once a minute while it lasts
                 spdlog::warn("[invsnap] the worker tick has been SKIPPED for {} ticks in a row (~{:.0f} s): the {} of {:08X} is not readable "
                              "(built on the main thread, INVARIANTS #84). The main-thread pump is not draining (a stall), or that actor "
                              "no longer resolves. No follower decision is made on an unread pack.",
@@ -194,13 +199,31 @@ namespace MFO::Diagnostics {
             return false;
         }
 
+        // One pass stays queued for a whole PAUSE (nothing drains under it, and a pass per paused tick would grow the queue for as
+        // long as a menu stays open). The generation is MainThread::Clear's: a revert that dropped the queued pass un-queues it here.
+        std::atomic<bool>          g_snapPassQueued{ false };
+        std::atomic<std::uint32_t> g_snapPassQueuedGen{ 0 };
         void SnapshotsEndTick() {
-            const auto tick = InvSnap::CurrentTick();
+            const auto clk  = InvSnap::Now();
+            const auto tick = clk.tick;
+            const auto gen  = MainThread::ClearGeneration();
+            if (clk.paused && g_snapPassQueued.load(std::memory_order_acquire) &&
+                g_snapPassQueuedGen.load(std::memory_order_acquire) == gen) return;
             g_snapPassPosted.store(tick, std::memory_order_release);
+            g_snapPassQueuedGen.store(gen, std::memory_order_release);
+            g_snapPassQueued.store(true, std::memory_order_release);
             MainThread::Post([tick]() {
+                g_snapPassQueued.store(false, std::memory_order_release);
                 if (tick < g_snapPassPosted.load(std::memory_order_acquire)) return;   // a newer pass is queued behind this one
-                InvSnap::BuildPass();
-                EffectMirror::BuildPass();
+                const auto t0 = std::chrono::steady_clock::now();
+                InvSnap::BuildPass(tick);
+                EffectMirror::BuildPass(tick);
+                const auto us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - t0).count());
+                g_snapPassRuns.fetch_add(1, std::memory_order_relaxed);
+                g_snapPassUsTotal.fetch_add(us, std::memory_order_relaxed);
+                auto worst = g_snapPassUsMax.load(std::memory_order_relaxed);
+                while (us > worst && !g_snapPassUsMax.compare_exchange_weak(worst, us, std::memory_order_relaxed)) {}
             });
         }
 
@@ -208,14 +231,21 @@ namespace MFO::Diagnostics {
             const auto s = [](const std::atomic<const char*>& a) { const char* p = a.load(std::memory_order_relaxed); return p ? p : "-"; };
             spdlog::info("[overlap] since start: worker ticks={} overlappedPlayerUpdate={} overlappedNpcUpdateCombat={} ranOnMainThreadId={} | "
                          "stage samples={} inEngineUpdate={} (first '{}') inMfoDrain={} (first '{}') inNpcUpdateCombat={} (first '{}') | "
-                         "main thunk edges that saw a tick in flight={}",
+                         "main thunk edges that saw a tick in flight={} | INVARIANTS #84: live reads off the main thread={} (must be 0), "
+                         "worker-side writes reading their own live list={} (stability audit M2 residue), ticks skipped by the snapshot gate={} | "
+                         "snapshot build pass on the main thread: runs={} avg={} us worst={} us",
                          g_ov.ticks.load(std::memory_order_relaxed), g_ov.tickSeat.load(std::memory_order_relaxed),
                          g_ov.tickNpc.load(std::memory_order_relaxed), g_ov.tickOnMainTid.load(std::memory_order_relaxed),
                          g_ov.stageSamples.load(std::memory_order_relaxed),
                          g_ov.stageInEngine.load(std::memory_order_relaxed), s(g_ov.firstEngineStage),
                          g_ov.stageInDrain.load(std::memory_order_relaxed), s(g_ov.firstDrainStage),
                          g_ov.stageInNpc.load(std::memory_order_relaxed), s(g_ov.firstNpcStage),
-                         MainThread::SeatSawWorker());
+                         MainThread::SeatSawWorker(), MainThread::LiveReadViolations(), MainThread::WorkerWriteReads(),
+                         g_gateSkips.load(std::memory_order_relaxed),
+                         g_snapPassRuns.load(std::memory_order_relaxed),
+                         g_snapPassRuns.load(std::memory_order_relaxed)
+                             ? g_snapPassUsTotal.load(std::memory_order_relaxed) / g_snapPassRuns.load(std::memory_order_relaxed) : 0,
+                         g_snapPassUsMax.load(std::memory_order_relaxed));
         }
         // Generation token: StopPump/StartPump bump it, so a thread that was
         // mid-sleep across a revert->load exits instead of running alongside

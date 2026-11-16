@@ -19,7 +19,7 @@ one, because the next person will believe it.
 
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
-**97 rules: 83 numbered (`#1`–`#83`, each used exactly once) plus 14 lettered
+**98 rules: 84 numbered (`#1`–`#84`, each used exactly once) plus 14 lettered
 sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
 break a `#N` citation, and both are fixed here:
 
@@ -1209,7 +1209,74 @@ decisions (a Pending refusal, the guard-pending retry path, re-entered after 150
 queued copies are not offered twice, and their weight counts. That is LOGIC honesty only: the worker's own
 READS of the corpse and follower inventories (`Analyse` / `GetInventory` in `Takeable` / `Take`,
 `DeclareAtExit`, IAUS `ReadLootInv`) still run while main writes them, the old race in the other
-direction; this rule removes the worker WRITE to an actor, not every off-main read (REVIEW-BACKLOG). Anything that needs the item
+direction; this rule removes the worker WRITE to an actor, not every off-main read (closed 2026-11-16 by #84: those
+reads now go through the main-built snapshot, and the drain replaces both snapshots before it drops the queue entry). Anything that needs the item
 IN the pack (an equip) is attached with `TheftGate::AfterLanding`. A queued take that cannot run (the
 follower died, the corpse unloaded) is said loudly and moves nothing; it is never retried around.
 No new direct `actor->RemoveItem(.., follower)` from the tick. **MFO** fix/corpse-take-main, 2026-11-15.
+
+### 84. The worker never walks an engine inventory list or active-effect list: it reads the main-built snapshot
+
+An engine inventory (`InventoryChanges::entryList`, a `BSSimpleList` of entries, each with a `BSSimpleList` of
+`ExtraDataList`s) and an actor's active-effect list (`MagicTarget::GetActiveEffectList`, a
+`BSSimpleList<ActiveEffect*>`) have no lock a worker read would respect. The owner's own update, a spell hit, an
+expiry, the container menu, other plugins and (since #83) MFO's own main-thread transfer drain all change them.
+A walk that stands on a node while it is freed is a use-after-free. The AddTask tick runs on a job worker
+(ENGINE_NOTES 0.30), and #74 never proved that worker and the main thread exclusive. So no code that can run on
+the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `GetWornArmor`,
+`GetActiveEffectList` or `MagicTarget::HasMagicEffect`, and none dereferences an `InventoryEntryData` or an
+`ExtraDataList` of an inventory.
+
+**What it reads instead.**
+- **Inventory: `InvSnap` (`native/logistics/InvSnapshot.h`).** `InvSnap::Items(ref)` has the shape the old
+  `ref->GetInventory()` map had (`data.first` the count, `data.second` the entry), built on the main thread by
+  the same two-pass walk, as plain values. A copy's facts are copied out (count, worn, owner, unique id, charge,
+  enchantment, health, display name, the prevent-removal lock, the quest alias). No `ExtraDataList` pointer is
+  kept: one a tick old may be freed.
+- **Effects: `EffectMirror` (`native/iaus/EffectMirror.h`).** One mirror per actor (the party, the player, every
+  high-process actor, anyone asked for), with each effect's source form, base MGEF, flags, duration, elapsed and
+  magnitude, a summon's commanded-actor state, and the base MGEFs the engine's own `HasMagicEffect` answered yes
+  for. SpellBook's foe mirror (`WantFoeFx` / `FoeFx`) is a view of it.
+- Both are immutable once published. A reader never waits on the main thread. A ref with no readable snapshot
+  answers **"not yet"** (a null view), is asked for, and the next tick has it.
+
+**The rules a change must keep.**
+1. **Not yet is never "empty".** A reader that derives state from ABSENCE (prunes a ledger, confirms a move by a
+   count that fell, records "he no longer carries it", takes a once-only snapshot) tests the view first and does
+   nothing on a null one. A reader of a SOURCE (a container, a corpse) calls `TheftGate::NoteInventoryNotYet`,
+   which records the Pending refusal the landing hold uses: the visit is retried, the source is never marked done.
+2. **The party's rule, and the tick gate that enforces it.** Each tick ends by posting ONE build pass to the main
+   thread. The pump is first in, first out, so that pass runs behind every closure the tick posted. A party
+   member's (and the player's) snapshot and mirror are readable in tick t only when the pass tick t-1 posted has
+   published them. So tick t reads everything tick t-1 wrote or asked for: an equip, a pickup, a cast, a queued
+   transfer. `Diagnostics.cpp` skips the whole tick body until that holds for the player and every party member
+   (the gate). The worker is paced by the main thread's frames and never runs ahead of them. Readability changes
+   only at a tick boundary, so inside the body the party and the player never read "not yet". Only a source can.
+   A skip that lasts 5 s is said (`[invsnap]`).
+3. **Tick-stable, and behind no write of ours.** A tick reads the inventory as of its start. A SOURCE (a container,
+   a corpse) MFO writes on the worker is followed by `InvSnap::Touch(ref)`: its snapshot stays readable for the rest
+   of the tick and is then withheld until the main thread has built one after the write. (`Touch` is called for the
+   follower too. The party's rule already covers him.) A write MFO makes on the main thread through the #83 queue
+   calls `InvSnap::RebuildOnMain` before the queue entry is dropped.
+4. **Freshness is counted in worker ticks, from the real cadence (principle 9).** One build pass per tick
+   (133 ms): the party and the player every pass, a source when touched or 4 ticks old, at most 32 sources a pass.
+   A source's snapshot is readable up to 16 unpaused ticks old and only if built since the last pause. Under a
+   PAUSE the player's Update does not run, so no pass can run and nothing the engine owns moves: the party keeps
+   reading the pass of the tick before the pause began, a source does not age, and one queued pass waits. The
+   first tick after the pause is skipped by the gate (its pass has not run) and the next one reads a pack built
+   after the menu closed, because the player may have moved items in that menu.
+5. **One function serves both threads.** `InvSnap::Get` and `EffectMirror::Get` read the live list in place where
+   `MainThread::LiveReadsAllowed()` says so (inside the player-Update seat, on the main thread outside a worker
+   tick, or with no pump installed: the documented legacy path). So a helper shared by the worker and a posted
+   closure needs no second copy.
+6. **A live read names itself.** The places that still read a live list (the main-thread builders and writers)
+   call `MainThread::NoteLiveRead(__FUNCTION__)` on the line before. Off the main thread that is counted and said
+   once per site as an `[thread]` error, and the `[overlap]` line prints the count. It must stay 0.
+7. **The one exception is counted, not hidden.** An engine WRITE needs the live `ExtraDataList` of the copy it
+   moves, so the write's own read stays with it (`NoteWriteRead`). Two worker-side writes remain, both
+   container sources: `TheftGate` `MoveNow` and `GemRules::TakeAndProbe`. The stability audit's M2 moves each to the
+   main thread with its read, and `[overlap]`'s second count reaches 0 then. No decision may call these readers.
+
+**What changes for the player:** nothing but freshness. A decision sees the inventory and the effects as of the
+start of its tick, at most one tick (133 ms) plus a frame behind the engine, where it used to read them live.
+Docs/REVIEW-BACKLOG.md MFO-B858 lists what is still open. **MFO** fix/worker-snapshots, 2026-11-16.

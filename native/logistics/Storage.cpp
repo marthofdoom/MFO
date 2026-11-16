@@ -177,7 +177,8 @@ namespace MFO::Logistics::Storage {
             return InvSnap::Items(a_actor).Count(a_obj);   // INVARIANTS #84
         }
         bool IsWornNow(RE::Actor* a_actor, RE::TESBoundObject* a_obj) {
-            const auto* e = InvSnap::Items(a_actor).Find(a_obj);
+            const auto inv = InvSnap::Items(a_actor);   // named: the view owns the snapshot the entry lives in
+            const auto* e = inv.Find(a_obj);
             return e && e->IsWorn();
         }
 
