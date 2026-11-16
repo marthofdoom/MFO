@@ -25,6 +25,15 @@ This is a real release on top of 2.11.1. It needs Harbinger v0.20.2 (ABI v45, un
 - **New opt-in probe `bStanceProbe`** in the INI. It only logs a follower's stance state, and it is off by default.
 - **The shipped tuning files carry the final 2.11.1 round.** All 15 class cells and the potion values are updated.
 
+## v2.11.3 -- Saves are safe again: no more crash on loading a save made mid-cast
+
+This is a bug fix release. It needs Harbinger v0.20.3. No new co-save record.
+
+- **A save made while a follower was casting through a temporary spell could crash on load.** Harbinger and MFO both cast some spells through short-lived stand-in copies. The cleanup that removed them before a save ran too late, after the game had already written the characters, so a stand-in could be saved in a hand or on an effect and point at nothing after loading. Immersive Equipment Displays then crashed on it. Both mods now clean up before the game writes anything, check again right after, and say CLEAN or warn in the log.
+- **Saves already affected load again.** After every load, a hand, spell slot or caster that points at a spell that no longer exists is cleared before anything touches it, with one LOAD REPAIR line per character.
+- **MFO's own concentration heal stand-in is cleaned up the same way.** A caster streaming a heal at an ally is stopped for the save and resumes on its next beat.
+- **A follower in Harbinger's internal combat state no longer loads still in combat.** That state is closed before every save.
+
 ## Classes add-on v1.0.1 -- Alpha, tiers 1 and 2 tuned
 
 The class add-on is its own download (`MFO-Classes-Addon-v1.0.1.zip`, GitHub tag `classes-addon-v1.0.1`) and is not part of the MFO zip. It needs MFO v2.11.1 with its tuning update files, and Harbinger v0.20.1.
