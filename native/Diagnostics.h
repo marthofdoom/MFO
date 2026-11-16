@@ -21,6 +21,15 @@ namespace MFO::Diagnostics {
     void PausePump();
     void ResumePump();
 
+    // THE SAVE HOLD (review of ca0465c9, F1). plugin.cpp's kSaveGame handler, on the main thread, before the engine writes a
+    // record: HoldPumpForSave makes every PumpTickGate body bail (the sleeper tick and every sink body) and waits for the one
+    // already past its gate, so the worker posts nothing more and changes no ledger while the save is written; then
+    // MainThread::DrainForSave runs what the worker had posted. Its own flag, separate from PausePump's, so SaveCallback's (or any
+    // other) Pause/Resume pair inside the save cannot lift it. ReleaseSaveHold lifts it: SaveCallback's end, and a closure
+    // posted at kSaveGame (the next frame, if the co-save callback never ran); StartPump lifts it too (a load right after a save).
+    void HoldPumpForSave();
+    void ReleaseSaveHold();
+
     // Full state dump to MFO.log. Safe to call from the main thread only.
     void DumpReport(const char* a_trigger);
 

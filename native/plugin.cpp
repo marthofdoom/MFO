@@ -473,6 +473,17 @@ namespace {
             // any record (SaveGame_Hook: Dispatch_Message, then the original); the co-save save
             // callback runs AFTER the records, so this is the only seat that can keep them out.
             // Main thread, inside the save call. Silent while no proxy is minted.
+            //
+            // FIRST (review of ca0465c9, F1): no posted engine write is pending across the save. The worker's ledgers move when
+            // it ASKS for an engine write (INVARIANTS #83: the write itself is posted), so a save written before the post drains
+            // records the ledger after the write and the engine before it (the FWPN case: the hold erased, the weapon still
+            // locked). Hold the worker (it bails at its gate and the one tick in flight finishes), then run what it posted, once
+            // (MainThread::DrainForSave: one swap, FIFO, so a re-post waits for the next frame and the drain is bounded). The hold
+            // lasts until SaveCallback ends (or the next frame, posted here, if the co-save callback never runs). The proxy sweep
+            // runs AFTER the drain, because a drained cast may mint a proxy.
+            MFO::Diagnostics::HoldPumpForSave();
+            MFO::MainThread::DrainForSave();
+            MFO::MainThread::Post([] { MFO::Diagnostics::ReleaseSaveHold(); });
             MFO::Actuation::ConcProxyPreSaveSweep();
             break;
 
@@ -569,6 +580,9 @@ namespace {
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     SKSE::Init(a_skse);
+    // F2 (review of ca0465c9): SKSE loads plugins on the main thread. Record it now, so MainThread::EngineWritesAllowed() is
+    // true on the main thread before the first player Update (the first kPostLoadGame's Loadout::Reconcile runs before it).
+    MFO::MainThread::NoteMainThread();
     // F2b: on 1.7.104.0 the ids come from the fork's MIT id table, built into
     // this DLL since fork 57be9d67 (no file to install). MFO's 1.7.104 column
     // (VerifiedAddresses.h) and every id it reaches were verified against

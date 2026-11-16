@@ -48,6 +48,37 @@ namespace MFO::Actuation {
 
     namespace {
 
+        // ── A LOCK CLEAR IN FLIGHT STAYS IN FWPN (review of ca0465c9, F1; belt and braces to kSaveGame's drain) ──
+        // A release erases the hold from g_forcedWeapon at once (every reader wants "no hold" from that lap on) but, on the
+        // worker, the forced unequip that clears the prevent-removal lock (ExtraCannotWear) is POSTED (INVARIANTS #83). A save
+        // between the two would write the .ess with the lock on and FWPN without the hold: the load clear (CoLoadForcedWeapons)
+        // only visits FWPN pairs, so the weapon would stay locked for good. So the pair is kept HERE until the posted unequip has
+        // run: recorded before the posts, erased by a closure posted right behind them (FIFO: it runs after the unequips, on the
+        // main thread), and CoSaveForcedWeapons writes these pairs too (FWPN layout unchanged: the same (follower, weapon) pairs;
+        // the load clear only unequips a weapon that still carries the lock). Keyed by a sequence, so a second release of the
+        // same follower before the first closure ran keeps its own pair. Under g_forcedMx (the save callback reads it on main).
+        // Cleared with the ledger (ClearForcedWeapons): a revert drops the posted closures too (MainThread::Clear).
+        struct PendingLockClear { RE::FormID follower = 0; RE::TESBoundObject* right = nullptr; RE::TESBoundObject* left = nullptr; };
+        std::unordered_map<std::uint64_t, PendingLockClear> g_pendingLockClears;   // under g_forcedMx
+        std::uint64_t g_pendingLockSeq = 0;                                          // under g_forcedMx
+
+        // The forced unequip(s) that clear the lock on a released hand: left first (with its slot), then right, exactly the
+        // calls the release sites made. In place (main thread / no pump) nothing is pending. Engine calls outside g_forcedMx.
+        void UnequipLockedHands(RE::Actor* a_follower, RE::TESBoundObject* a_left, RE::TESBoundObject* a_right) {
+            if (!a_follower || (!a_left && !a_right)) return;
+            if (!RE::ActorEquipManager::GetSingleton()) return;
+            const bool posted = !MainThread::EngineWritesAllowed();
+            std::uint64_t seq = 0;
+            if (posted) {
+                std::scoped_lock lk(g_forcedMx);
+                seq = ++g_pendingLockSeq;
+                g_pendingLockClears[seq] = PendingLockClear{ a_follower->GetFormID(), a_right, a_left };
+            }
+            if (a_left)  EngineOps::Unequip(a_follower, a_left, 1, Loadout::LeftHandSlot(), true, true);
+            if (a_right) EngineOps::Unequip(a_follower, a_right, 1, nullptr, true, true);
+            if (posted) MainThread::Post([seq]() { std::scoped_lock lk(g_forcedMx); g_pendingLockClears.erase(seq); });
+        }
+
         // ── WEAPON STYLE BY PERKS, the COMBAT half (2026-09-13) ──────────────
         // marth: "perks in dual wielding -> the follower dual wields; perks in
         // greatswords -> strongly prefers greatswords." EquipWeapon consumes THE
@@ -961,12 +992,7 @@ namespace MFO::Actuation {
             // force-UNEQUIP (review of e06a54f, SEV-3), and on a stand-down its weapon is asked back as a ch.17
             // placement (never a direct re-equip). Engine calls outside g_forcedMx (the SEV-1 discipline).
             if (hold.forcedLeft || hold.forcedRight) {
-                if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
-                    if (hold.forcedLeft && hold.left)
-                        EngineOps::Unequip(a_follower, hold.left, 1, Loadout::LeftHandSlot(), true, true);
-                    if (hold.forcedRight && hold.right)
-                        EngineOps::Unequip(a_follower, hold.right, 1, nullptr, true, true);
-                }
+                UnequipLockedHands(a_follower, hold.forcedLeft ? hold.left : nullptr, hold.forcedRight ? hold.right : nullptr);   // F1: pair kept in FWPN until it ran
                 spdlog::info("[equip] {:08X}: legacy force-hold lock cleared on release ({}{})", id,
                              hold.forcedRight ? "right" : "", hold.forcedLeft ? (hold.forcedRight ? "+left" : "left") : "");
                 if (a_standDown && !a_leaving && !a_follower->IsDead()) {
@@ -1044,10 +1070,7 @@ namespace MFO::Actuation {
         // dual-wield left hold is released by the same call, same flags.
         // The LEFT hold names its slot (F4), mirroring EquipLeftHeld; the right
         // keeps the slot-less call it has always had.
-        if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
-            if (hold.left)  EngineOps::Unequip(a_follower, hold.left, 1, Loadout::LeftHandSlot(), true, true);
-            if (hold.right) EngineOps::Unequip(a_follower, hold.right, 1, nullptr, true, true);
-        }
+        UnequipLockedHands(a_follower, hold.left, hold.right);   // F1: the pair stays in FWPN until the posted unequip ran
         // ── STAND DOWN = SHEATHE, NOT UNEQUIP (marth 2026-09-22) ─────────────────
         // The force-unequip above stays exactly as it was -- it is the only way to
         // clear the prevent-removal lock, and a follower left locked to a weapon can
@@ -1188,10 +1211,7 @@ namespace MFO::Actuation {
         // standing and the hand unable to take a spell (heals are left-only).
         // The two-hander's unequip is ReleaseForcedWeapon's own right-hand call
         // (default slot, forced, which clears its prevent-removal lock).
-        if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
-            if (left)    EngineOps::Unequip(a_follower, left, 1, Loadout::LeftHandSlot(), true, true);
-            if (right2h) EngineOps::Unequip(a_follower, right2h, 1, nullptr, true, true);
-        }
+        UnequipLockedHands(a_follower, left, right2h);   // F1: the pair stays in FWPN until the posted unequip ran
         if (lastHold) APMFBridge::ReleaseEquipment(id);
         // W1 (D3): the hand now carries only the spell -- the ch.26 preference drops its weapon at once.
         // The unequip above stays: it is not an equip, it clears the hand for the cast's own spell
@@ -1400,6 +1420,7 @@ namespace MFO::Actuation {
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
         g_shieldRank.clear();
+        g_pendingLockClears.clear();   // F1: their erase closures went with MainThread::Clear on the same revert
     }
 
     // T#76 force-hold co-save. Persist the force-equip locks so a load clears the
@@ -1436,6 +1457,17 @@ namespace MFO::Actuation {
                     // would unequip the WRONG object and the real lock would survive.
                     // Persist weapon=0; CoLoad then sweeps BOTH hands to clear it.
                     snap.emplace_back(id, Followers::IsPersistableID(wid) ? wid : 0u);
+                }
+            }
+            // F1 (review of ca0465c9): a released hold whose lock-clearing unequip is still queued (UnequipLockedHands) is
+            // written too, the same pair shape, so a load clears that lock. Normally empty: kSaveGame's drain ran them.
+            for (const auto& [seq, p] : g_pendingLockClears) {
+                if (!Followers::IsPersistableID(p.follower)) continue;
+                for (RE::TESBoundObject* w : { p.right, p.left }) {
+                    if (!w) continue;
+                    const RE::FormID wid = w->GetFormID();
+                    const std::pair<RE::FormID, RE::FormID> pair{ p.follower, Followers::IsPersistableID(wid) ? wid : 0u };
+                    if (std::find(snap.begin(), snap.end(), pair) == snap.end()) snap.push_back(pair);
                 }
             }
         }

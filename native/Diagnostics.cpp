@@ -151,37 +151,69 @@ namespace MFO::Diagnostics {
         // half-written, so it is never re-entered); the other stages keep running. Loud, never a mask (principle 7): the ERROR is
         // printed at the throw, the stopped stages are named again every 60 s by the sleeper (LogStoppedStages), and nothing is
         // retried. Only C++ exceptions: an access violation is still a crash.
+        //
+        // RE-ARMED AT EVERY LOAD (review of ca0465c9, F3): a stage is stopped for the ARM it threw in. StartPump (after a load or
+        // a new game, when ResetAllState has wiped every state a stage could have half-written) moves g_stageArm on, so every
+        // stopped stage runs again and the table starts empty. A stage that throws again is stopped again, and said again.
+        //
+        // CRITICAL STAGES (F3): Scheduler::Tick (it holds Packages::Pump, every claim and every release) and the snapshot bracket
+        // (Snapshots::BeginTick / ReadyForTick / EndTick: a stopped one gates EVERY later tick body) leave followers frozen under
+        // MFO's alias packages and Harbinger's denies when they stop: nothing that would release them runs again. So the first
+        // throw of a critical stage in an arm also posts ONE release to the main thread (PostCriticalRelease): the pump is paused
+        // around it (PausePump, as SaveCallback does), Packages::ReleaseAll and APMFBridge::ClearTransientState run (the kPreLoadGame
+        // release set), and one in-game notification names the stage. Not a mask (principle 7): the ERROR stays, the stage stays
+        // stopped, nothing is retried, and the player is told.
         constexpr std::size_t kMaxStoppedStages = 24;
         std::atomic<const char*>  g_stoppedStages[kMaxStoppedStages]{};
         std::atomic<std::uint32_t> g_stoppedStageCount{ 0 };
-        void StageThrew(const char* a_stage, std::atomic<bool>& a_off, const char* a_what) noexcept {
-            a_off.store(true, std::memory_order_release);
+        std::atomic<std::uint32_t> g_stageArm{ 1 };              // a stage is stopped while its own arm equals this (0 = never threw)
+        std::atomic<std::uint32_t> g_criticalReleaseArm{ 0 };    // the arm whose critical release is already posted (once per arm)
+        void PostCriticalRelease(const char* a_stage) noexcept;  // defined after the pump atomics (it pauses the pump)
+        void StageThrew(const char* a_stage, std::atomic<std::uint32_t>& a_offArm, bool a_critical, const char* a_what) noexcept {
+            a_offArm.store(g_stageArm.load(std::memory_order_acquire), std::memory_order_release);
             const auto n = g_stoppedStageCount.fetch_add(1, std::memory_order_relaxed);
             if (n < kMaxStoppedStages) g_stoppedStages[n].store(a_stage, std::memory_order_release);
             try {
-                spdlog::error("[tick] the worker tick stage '{}' THREW: {}. This stage is STOPPED until the game restarts (it is never "
-                              "re-entered: its state may be half-written). The other stages keep running. Followers will be missing "
-                              "whatever this stage does.", a_stage, a_what ? a_what : "?");
+                spdlog::error("[tick] the worker tick stage '{}' THREW: {}. This stage is STOPPED until the next load (it is never "
+                              "re-entered before: its state may be half-written). The other stages keep running. Followers will be "
+                              "missing whatever this stage does.{}", a_stage, a_what ? a_what : "?",
+                              a_critical ? " It is a CRITICAL stage: MFO's packages and Harbinger claims are released now." : "");
             } catch (...) {}   // the log itself failed (out of memory): the stopped-stage table still says it
+            if (a_critical) PostCriticalRelease(a_stage);
         }
         template <class Fn>
-        inline void RunTickStage(const char* a_stage, std::atomic<bool>& a_off, Fn&& a_fn) {
-            if (a_off.load(std::memory_order_acquire)) return;
+        inline void RunTickStage(const char* a_stage, std::atomic<std::uint32_t>& a_offArm, bool a_critical, Fn&& a_fn) {
+            if (a_offArm.load(std::memory_order_acquire) == g_stageArm.load(std::memory_order_acquire)) return;
             HbStage(a_stage);
             try {
                 a_fn();
             } catch (const std::exception& e) {
-                StageThrew(a_stage, a_off, e.what());
+                StageThrew(a_stage, a_offArm, a_critical, e.what());
             } catch (...) {
-                StageThrew(a_stage, a_off, "a non-std exception");
+                StageThrew(a_stage, a_offArm, a_critical, "a non-std exception");
             }
         }
-        // One static stop flag per call site (the closure's operator() owns it).
-#define MFO_TICK_STAGE(a_name, a_expr)                                             \
+        // One static stop arm per call site (the closure's operator() owns it).
+#define MFO_TICK_STAGE_IMPL(a_name, a_critical, a_expr)                            \
         do {                                                                       \
-            static std::atomic<bool> s_stageOff{ false };                          \
-            RunTickStage(a_name, s_stageOff, [&]() { a_expr; });                   \
+            static std::atomic<std::uint32_t> s_stageOffArm{ 0 };                  \
+            RunTickStage(a_name, s_stageOffArm, a_critical, [&]() { a_expr; });    \
         } while (0)
+#define MFO_TICK_STAGE(a_name, a_expr)          MFO_TICK_STAGE_IMPL(a_name, false, a_expr)
+#define MFO_TICK_STAGE_CRITICAL(a_name, a_expr) MFO_TICK_STAGE_IMPL(a_name, true, a_expr)
+        // StartPump (no tick in flight: StopPump drained it, ResetAllState ran): every stopped stage runs again.
+        void RearmStoppedStages() {
+            const auto n = std::min<std::uint32_t>(g_stoppedStageCount.load(std::memory_order_relaxed), kMaxStoppedStages);
+            if (n > 0) {
+                std::string names;
+                for (std::uint32_t i = 0; i < n; ++i)
+                    if (const char* s = g_stoppedStages[i].load(std::memory_order_acquire)) { if (!names.empty()) names += ", "; names += s; }
+                spdlog::warn("[tick] load: {} stopped worker tick stage(s) re-armed (the load reset their state): {}", n, names);
+            }
+            for (auto& slot : g_stoppedStages) slot.store(nullptr, std::memory_order_relaxed);
+            g_stoppedStageCount.store(0, std::memory_order_relaxed);
+            g_stageArm.fetch_add(1, std::memory_order_acq_rel);
+        }
         void LogStoppedStages() {
             const auto n = std::min<std::uint32_t>(g_stoppedStageCount.load(std::memory_order_relaxed), kMaxStoppedStages);
             if (n == 0) return;
@@ -189,7 +221,7 @@ namespace MFO::Diagnostics {
             for (std::uint32_t i = 0; i < n; ++i)
                 if (const char* s = g_stoppedStages[i].load(std::memory_order_acquire)) { if (!names.empty()) names += ", "; names += s; }
             spdlog::error("[tick] {} worker tick stage(s) are STOPPED after an exception (see the '[tick] ... THREW' line): {}. They stay "
-                          "stopped until the game restarts.", n, names);
+                          "stopped until the next load.", n, names);
         }
 
         // ── THE WORKER SNAPSHOTS' TICK BRACKET (INVARIANTS #84; logistics/InvSnapshot.h, iaus/EffectMirror.h) ──
@@ -330,6 +362,9 @@ namespace MFO::Diagnostics {
         // then drains g_tickActive so the two FLWR passes see a STABLE
         // g_followers; ResumePump clears it.
         std::atomic<bool>          g_pumpPaused{ false };
+        // The kSaveGame hold (HoldPumpForSave / ReleaseSaveHold, review of ca0465c9 F1). Its own flag: a Pause/Resume pair run
+        // inside the save (SaveCallback, the critical release) must not lift it. Every PumpTickGate bails while it is set.
+        std::atomic<bool>          g_saveHold{ false };
 
         // THE ONE guard shape for every MFO AddTask body queued in this file
         // (the sleeper tick and all four sinks). Two jobs:
@@ -1178,15 +1213,15 @@ namespace MFO::Diagnostics {
                         // earlier: a stopped stage does not run) leaves `ready` false, so the body is skipped: nothing is decided on
                         // a tick clock that did not advance or on an unread party.
                         bool began = false, ready = false;
-                        MFO_TICK_STAGE("Snapshots::BeginTick", { SnapshotsBeginTick(); began = true; });
-                        if (began) MFO_TICK_STAGE("Snapshots::ReadyForTick", ready = SnapshotsReadyForTick());
+                        MFO_TICK_STAGE_CRITICAL("Snapshots::BeginTick", { SnapshotsBeginTick(); began = true; });
+                        if (began) MFO_TICK_STAGE_CRITICAL("Snapshots::ReadyForTick", ready = SnapshotsReadyForTick());
                         if (!ready) {   // THE TICK GATE: no reader runs on an unread party (see SnapshotsReadyForTick)
-                            MFO_TICK_STAGE("Snapshots::EndTick(gated)", SnapshotsEndTick());
+                            MFO_TICK_STAGE_CRITICAL("Snapshots::EndTick(gated)", SnapshotsEndTick());
                             HbStage("idle");
                             return;
                         }
 
-                        MFO_TICK_STAGE("Scheduler::Tick",                    Scheduler::Tick());
+                        MFO_TICK_STAGE_CRITICAL("Scheduler::Tick",           Scheduler::Tick());
                         MFO_TICK_STAGE("Actuation::SelfCastReconcile",       Actuation::SelfCastReconcile());     // release self-cast channels when their rule goes stale (dispel lingering buffs)
                         MFO_TICK_STAGE("Actuation::TargetCastReconcile",     Actuation::TargetCastReconcile());   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
                         MFO_TICK_STAGE("APMFBridge::Tick",                   APMFBridge::Tick());                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
@@ -1224,7 +1259,7 @@ namespace MFO::Diagnostics {
                         // every 4th -- a half-second echo made DragFloat crawl
                         // and hid whether a click registered (board review M2).
                         if (!published && (diagTurn || Board::IsOpen())) MFO_TICK_STAGE("Board::PublishSnapshot", Board::PublishSnapshot());
-                        MFO_TICK_STAGE("Snapshots::EndTick", SnapshotsEndTick());     // INVARIANTS #84: one main-thread build pass, behind this tick's posts
+                        MFO_TICK_STAGE_CRITICAL("Snapshots::EndTick", SnapshotsEndTick());     // INVARIANTS #84: one main-thread build pass, behind this tick's posts
                         HbStage("idle");
                     });
                 }
@@ -1274,9 +1309,40 @@ namespace MFO::Diagnostics {
         g_tickActive.store(true, std::memory_order_seq_cst);
         m_ok = g_pumpRunning.load(std::memory_order_seq_cst) &&
                !g_pumpPaused.load(std::memory_order_seq_cst) &&
+               !g_saveHold.load(std::memory_order_seq_cst) &&
                g_pumpEpoch.load(std::memory_order_seq_cst) == a_queuedEpoch;
     }
     PumpTickGate::~PumpTickGate() { g_tickActive.store(false, std::memory_order_seq_cst); }
+
+    namespace {
+        // F3: the one release a stopped CRITICAL stage posts (see MFO_TICK_STAGE_CRITICAL). Called on the worker, inside the tick.
+        void PostCriticalRelease(const char* a_stage) noexcept {
+            try {
+                const auto arm = g_stageArm.load(std::memory_order_acquire);
+                if (g_criticalReleaseArm.exchange(arm, std::memory_order_acq_rel) == arm) return;   // once per arm
+                const auto release = [a_stage](bool a_pause) {
+                    // a_pause: on the main thread, pause the worker around the release (PausePump, as SaveCallback does: it waits
+                    // for the one tick body in flight), so g_holder and the APMFBridge tables are not changed under a tick. With no
+                    // pump installed this runs IN the tick (serial with every stage), so there is nothing to pause.
+                    if (a_pause) PausePump();
+                    struct Resume { bool on; ~Resume() { if (on) ResumePump(); } } resume{ a_pause };
+                    spdlog::error("[tick] CRITICAL stage '{}' stopped: releasing MFO's packages and every Harbinger claim (the "
+                                  "kPreLoadGame release set) so no follower stays frozen under them. Load a save to re-arm it.", a_stage);
+                    Packages::ReleaseAll("critical tick stage stopped");
+                    APMFBridge::ClearTransientState();
+                    const std::string text = std::format("MFO hit an internal error in {} and stopped it. Your followers were released. "
+                                                         "Load a save to start it again.", a_stage);
+                    RE::DebugNotification(text.c_str());
+                };
+                if (MainThread::IsInstalled())
+                    MainThread::Post([release]() { release(true); });
+                else
+                    release(false);
+            } catch (...) {
+                try { spdlog::error("[tick] CRITICAL stage '{}': the release could not be queued (an exception)", a_stage); } catch (...) {}
+            }
+        }
+    }
 
     // ── [atk-obs] public entry points (worker / serial-pump domain) ─────────
     void DumpAttackHistogram(RE::FormID a_actorID) {
@@ -1685,8 +1751,26 @@ namespace MFO::Diagnostics {
         g_pumpPaused.store(false, std::memory_order_seq_cst);
     }
 
+    void HoldPumpForSave() {
+        // Same Dekker handshake as PausePump: store the hold (seq_cst) before loading tickActive. The worker never waits on the
+        // main thread (no tick body blocks on a post or a frame), so the one body in flight finishes; the cap is a backstop.
+        g_saveHold.store(true, std::memory_order_seq_cst);
+        int waited = 0;
+        for (; g_tickActive.load(std::memory_order_seq_cst) && waited < 2000; ++waited)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (g_tickActive.load(std::memory_order_seq_cst))
+            spdlog::error("[diag] HoldPumpForSave: worker body STILL active after {}ms cap -- its posts may still be pending across "
+                          "this save", waited);
+    }
+
+    void ReleaseSaveHold() {
+        g_saveHold.store(false, std::memory_order_seq_cst);
+    }
+
     void StartPump() {
+        g_saveHold.store(false, std::memory_order_seq_cst);   // a load right after a save: the posted release was dropped by Clear
         if (g_pumpRunning.exchange(true)) return;   // idempotent across loads
+        RearmStoppedStages();   // F3: no tick is in flight (StopPump drained it) and ResetAllState wiped their state
         const auto epoch = g_pumpEpoch.fetch_add(1) + 1;
         spdlog::info("[diag] pump {}ms (evaluator), diagnostics every {}th wake (~{}ms)",
                      kPumpMs, kDiagEveryNth, kPumpMs * kDiagEveryNth);

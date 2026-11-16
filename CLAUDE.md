@@ -332,6 +332,8 @@ of a given change.
   thread in `Diagnostics.cpp`, `kPumpMs=133`). `MainThread::Post` is the *only*
   road to the true main thread (for 3D/cell mutation, physics queries).
 - Combat-thread hooks read FormIDs / atomic mirrors, never the follower lists.
+- The worker makes NO engine write: equips, spell hands, drinks, package evaluates and caster calls go through
+  `native/EngineOps.h` (or `MainThread::RunOrPost`), and nothing posted is pending across a save. Rules: `Docs/INVARIANTS.md` #83.
 
 ## LOCAL CommonLibSSE SOURCE — verify symbols here, do NOT fetch upstream
 

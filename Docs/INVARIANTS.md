@@ -1250,6 +1250,15 @@ inventory (MFO's own snapshot build pass, the container menu, another plugin) st
    (`EngineOps`, the transfers, the tome, the teach, the drive probe, the power attack event). The closures that were
    already posted before it (the direct casts, `Upkeep`'s torch and heal equips, the loose-item activate) do not yet: a new
    or touched one adds the call.
+8. **No posted write is pending across a save** (review of ca0465c9, F1). The worker's ledgers move when it ASKS, the engine
+   when the post runs, so a save between them writes the ledger after the write and the engine before it (the FWPN case: the
+   hold erased, the weapon still locked, and the load clear only visits FWPN pairs). plugin.cpp's kSaveGame handler, on the
+   main thread before the engine writes a record: `Diagnostics::HoldPumpForSave()` (every `PumpTickGate` body bails, the one
+   in flight finishes), then `MainThread::DrainForSave()` (one queue swap, FIFO; a re-post lands in the new queue, so the drain
+   runs exactly the closures queued at the call), then the ConcProxy sweep (a drained cast may mint a proxy). The hold ends at
+   SaveCallback's end (or the next frame, or StartPump). `cast/Equip.cpp` also keeps a released hold's pair in FWPN until its
+   posted lock-clearing unequip has run (`UnequipLockedHands`). The main thread is known from SKSEPluginLoad on
+   (`MainThread::NoteMainThread`), so `EngineWritesAllowed()` is true on main before the first frame (F2).
 
 **What still runs on the worker, and why (the complete list; anything else is a violation).**
 - *Not engine state:* MFO's own maps, atomics and ledgers; `Targeting::Command` (an atomic mirror); the equip declaration and

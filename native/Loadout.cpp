@@ -998,6 +998,13 @@ namespace MFO::Loadout {
         // is holding MFO's choice; unequip it and let their AI take its own
         // gear back.
         int fixed = 0;
+        // F2 (review of ca0465c9): the shield give-back below reads the left hand AFTER the deselect, so it needs the deselect to
+        // have RUN, not been posted. kPostLoadGame is on the main thread and MainThread::NoteMainThread (SKSEPluginLoad /
+        // kDataLoaded) makes that true before the first frame. Off it, the deselect is posted and the shield check is SKIPPED with
+        // an ERROR (it would read the spell still in the hand and decide nothing): said, never guessed.
+        const bool inPlace = MainThread::EngineWritesAllowed();
+        if (!inPlace)
+            spdlog::error("[loadout] reconcile is not on the main thread: spell deselects are posted and the shield give-back is skipped");
         for (const auto& h : Followers::g_active) {
             auto* a = h.get().get();
             if (!a) continue;
@@ -1029,7 +1036,7 @@ namespace MFO::Loadout {
             // Bounded and safe: we only reach here because MFO's own spell was
             // provably in that hand, and we only touch what is still in their
             // inventory, so nothing sold can be re-equipped (#16).
-            if (!a->GetEquippedObject(true)) {
+            if (inPlace && !a->GetEquippedObject(true)) {   // F2: read after the deselect ran in place (above)
                 RE::TESObjectARMO* shield = nullptr;
                 for (auto& [obj, data] : InvSnap::Items(a)) {   // INVARIANTS #84 (map order, as the filtered GetInventory gave)
                     auto* armo = obj ? obj->As<RE::TESObjectARMO>() : nullptr;

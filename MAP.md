@@ -3041,14 +3041,28 @@ a job worker here, not main).
     closure that posts itself again: it lands after that tick's snapshot build pass (MFO-B858, the double-hop note).
     (5) `EngineOps::Equip`'s posted re-check (he still holds the item) skips an equip of an item that left his pack in the
     frame between: said, never retried. (6) Docs/REVIEW-BACKLOG.md MFO-B859 lists what is NOT moved (the quest alias fills).
+    (7) THE SAVE DRAIN (INVARIANTS `#83` rule 8): plugin.cpp kSaveGame runs `Diagnostics::HoldPumpForSave()`, then
+    `MainThread::DrainForSave()` (one swap, FIFO, bounded), then `ConcProxyPreSaveSweep`. Moving the sweep before the drain, or
+    dropping the hold, lets a posted write (an unequip that clears ExtraCannotWear) miss the save while its ledger change is in
+    it. The hold is its own flag (`g_saveHold`, checked in `PumpTickGate`): a PausePump / ResumePump pair inside the save must
+    not lift it. `cast/Equip.cpp` `UnequipLockedHands` keeps a released hold's pair in FWPN (`g_pendingLockClears`, under
+    `g_forcedMx`) until the posted unequip ran. (8) `MainThread::NoteMainThread` at SKSEPluginLoad / kDataLoaded: without it
+    `EngineWritesAllowed()` is false on main before the first frame and the first kPostLoadGame's `Loadout::Reconcile` posts
+    its deselect (its shield give-back then needs the in-place answer and is skipped with an ERROR otherwise).
 - **THE PUMP AND THE TICK CATCH THEIR OWN EXCEPTIONS (same branch, stability audit M5).** `MainThread.cpp`'s drain runs each
   posted closure in its own try/catch: a throw is an ERROR (`[mainthread] a posted closure THREW`, the first 8 then every
   256th), that closure's work is lost, the rest of the batch runs. `Diagnostics.cpp`'s tick body runs every stage through
-  `MFO_TICK_STAGE` (`RunTickStage`): a stage that throws is an ERROR naming it and is STOPPED until the game restarts (never
-  re-entered: its state may be half-written); the other stages keep running; the sleeper names the stopped stages again every
-  60 s (`LogStoppedStages`). C++ exceptions only: an access violation is still a crash. **What breaks:** a retry or a
+  `MFO_TICK_STAGE` (`RunTickStage`): a stage that throws is an ERROR naming it and is STOPPED until the next load (never
+  re-entered before: its state may be half-written; `StartPump` re-arms every stopped stage, `RearmStoppedStages`, after
+  ResetAllState wiped their state); the other stages keep running; the sleeper names the stopped stages again every
+  60 s (`LogStoppedStages`). C++ exceptions only: an access violation is still a crash. CRITICAL stages
+  (`MFO_TICK_STAGE_CRITICAL`: `Scheduler::Tick`, which holds `Packages::Pump`, and the four snapshot bracket stages, which gate
+  every later body) post ONE release per arm on their first throw (`PostCriticalRelease`): on main, under PausePump,
+  `Packages::ReleaseAll` + `APMFBridge::ClearTransientState` (the kPreLoadGame release set) and one in-game notification naming
+  the stage, so no follower stays frozen under MFO packages or Harbinger denies. **What breaks:** a retry or a
   "resume the stage after N seconds" here would be a mask (principle 7). A stopped `Snapshots::BeginTick` / `ReadyForTick`
-  leaves the whole body skipped (said by `[invsnap]`), which is the safe side.
+  leaves the whole body skipped (said by `[invsnap]`), which is the safe side ONLY because the critical release ran; a new stage
+  that owns a claim or a package must be CRITICAL too.
 - **THE BOARD TOGGLE IS SERVED INSIDE THE TICK (same branch, MFO-B858's off-tick AddTask item).** The board hotkey
   (`Board.cpp`, the input thread) and the Field Orders power (`Diagnostics.cpp`, the spell-cast sink) call
   `Diagnostics::RequestBoardToggle` (one atomic: the pump epoch + 1). The next tick body serves it where the regular publish
