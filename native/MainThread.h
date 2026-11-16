@@ -40,8 +40,9 @@ namespace MFO::MainThread {
     // InSeat: this thread is inside the player-Update thunk right now (the engine's update or the drain).
     // IsMainThread: this thread is the one the thunk last ran on. False until the first frame has run.
     // InWorkerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope), whichever OS thread the job system gave it.
-    // LiveReadsAllowed: may THIS call read a live engine inventory / effect list? True in the seat, on the main thread outside a
-    // worker tick (event sinks, load handlers: as before), and when the pump is not installed (the documented legacy path).
+    // LiveReadsAllowed: may THIS call read a live engine inventory / effect list? Never inside a worker tick (checked first: the
+    // job system may run that task on any thread). Else true in the seat, on the main thread (event sinks, load handlers: as
+    // before), and when the pump is not installed (the documented legacy path).
     // logistics/InvSnapshot and iaus/EffectMirror branch on it, so one helper serves both threads.
     bool InSeat();
     bool IsMainThread();

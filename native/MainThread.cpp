@@ -136,8 +136,9 @@ namespace MFO::MainThread {
     bool InWorkerTick() { return t_workerTick > 0; }
     bool LiveReadsAllowed() {
         if (!IsInstalled()) return true;                 // no pump (VR / unverified build): the documented legacy path, as before
+        if (t_workerTick > 0) return false;              // the worker tick ALWAYS reads snapshots, whichever thread the job system gave it
         if (t_inSeat) return true;                       // the main seat
-        return t_workerTick == 0 && IsMainThread();      // main-thread code outside the tick (sinks, load handlers): unchanged
+        return IsMainThread();                           // main-thread code outside the tick (sinks, load handlers): unchanged
     }
 
     namespace {
@@ -160,8 +161,9 @@ namespace MFO::MainThread {
         // Off the seat in a way that is NOT allowed for a plain live read: inside a worker tick, or on a thread that is provably
         // not the main one. Before the first frame the main thread is unknown: nothing is judged then.
         const char* OffSeat() {
-            if (!IsInstalled() || t_inSeat) return nullptr;
+            if (!IsInstalled()) return nullptr;
             if (t_workerTick > 0) return "inside the worker tick";
+            if (t_inSeat) return nullptr;
             const auto tid = g_mainTid.load(std::memory_order_relaxed);
             if (tid != std::thread::id{} && tid != std::this_thread::get_id()) return "on a thread that is not the main thread";
             return nullptr;

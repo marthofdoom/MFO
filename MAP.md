@@ -2998,12 +2998,12 @@ a job worker here, not main).
 - **WHICH THREAD IS THIS (2026-11-16, `fix/worker-snapshots`, INVARIANTS `#84`).** `InSeat()` (thread-local, set by the thunk's
   `SeatScope` around the engine's player Update AND the drain), `IsMainThread()` (the thread id the thunk last ran on, unknown until
   the first frame), `InWorkerTick()` (thread-local, set by `WorkerTickScope` in the pump's tick body, `Diagnostics.cpp`) and
-  `LiveReadsAllowed()` = no pump installed, OR in the seat, OR on the main thread outside a worker tick. `InvSnap::Get` and
+  `LiveReadsAllowed()` = no pump installed, OR (never inside a worker tick, and) in the seat or on the main thread. `InvSnap::Get` and
   `EffectMirror::Get` branch on it. `NoteLiveRead(site)` / `NoteWriteRead(site)` are the invariant's self-check (see the section
   "THE WORKER SNAPSHOTS" below).
   - **What breaks:** `LiveReadsAllowed()` true on the worker = every reader walks live lists again (the race #84 removes). The
-    worker-tick flag is checked BEFORE the thread id on purpose: the job system may run the AddTask body on any thread, the main
-    one included, and that body must still read snapshots. Do not "simplify" it to a thread-id compare.
+    worker-tick flag is checked BEFORE the seat flag and the thread id on purpose: the job system may run the AddTask body on any
+    thread, the main one included, and that body must still read snapshots. Do not "simplify" it to a thread-id compare.
 - **P0 OVERLAP PROBE (same branch; passive, always on, no INI key).** The open question of INVARIANTS `#74`: does the worker tick
   run WHILE the main thread is inside the player's Update, or while an NPC is inside `Character::UpdateCombat`? Main half here:
   `SeatSeq` (odd inside the thunk, bumped at entry and exit), `SeatPhase` (1 the engine's update, 2 MFO's drain), `SeatSawWorker`
