@@ -68,8 +68,8 @@ namespace MFO::Logistics::TheftGate {
     // AN ACTOR SOURCE (A CORPSE) IS NEVER TRANSFERRED ON THE WORKER (INVARIANTS #83, ENGINE_NOTES 0.30 amendment 2026-11-15). The gates
     // (guard, per-copy ownership) are decided here, on the calling thread, exactly as before; the transfer itself is QUEUED and runs on
     // the MAIN thread (MainThread::Post, FormIDs only, the copies re-picked there by the same Analyse), in queue order, one drain per
-    // frame, at most ONE take that removes a WORN piece per corpse per frame. The return value is then the PLANNED count and the items
-    // are in the pack one frame later. Until they land: Takeable / Take subtract the queued copies from what the source still offers,
+    // frame (the whole queue, no per-frame cap; an open inventory menu defers it a frame). The return value is then the PLANNED count
+    // and the items are in the pack one frame later. Until they land: Takeable / Take subtract the queued copies from what the source still offers,
     // InFlightWeight carries their weight, and Takeable holds same-type decisions (above). Never waits on main. With no live pump
     // (unsupported runtime) the transfer runs on the calling thread as before (said once). Called ON main (the steal road) it runs at once.
     std::int32_t Take(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, Road a_road);

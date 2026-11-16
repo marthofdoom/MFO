@@ -915,7 +915,8 @@ namespace MFO::Logistics {
                 const RE::FormID    itemID = a_item->GetFormID();
                 const std::uint8_t  slot   = Actuation::PlacementSlotFor(a_item, false);
                 auto place = [folID, itemID, slot]() { Actuation::WantPlacement(folID, itemID, slot, "owned / looted upgrade"); };
-                if (!TheftGate::AfterLanding(folID, itemID, place)) place();
+                const bool fromActor = a_src && a_src->As<RE::Actor>();   // only an actor source is queued (TheftGate::Take)
+                if (!fromActor || !TheftGate::AfterLanding(folID, itemID, place)) place();
             } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
                 // Actor*/item) and re-resolve on the frame that runs.
@@ -929,8 +930,8 @@ namespace MFO::Logistics {
                         eq->EquipObject(fol, item);
                 };
                 // A piece still on its way from a corpse is equipped right after its transfer lands (same main-thread drain, so the
-                // order holds even when the transfer waits a frame for the one-worn-piece-per-corpse rule).
-                if (TheftGate::AfterLanding(folID, itemID, doEquip)) { /* attached to the queued take */ }
+                // order holds even when the transfer waits a frame for an open inventory menu). Only an actor source is queued.
+                if (a_src && a_src->As<RE::Actor>() && TheftGate::AfterLanding(folID, itemID, doEquip)) { /* attached to the queued take */ }
                 else if (MainThread::IsInstalled()) MainThread::Post(doEquip);
                 else                                doEquip();   // VR: pump is a no-op, keep the direct path
             }

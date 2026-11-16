@@ -1201,10 +1201,15 @@ a corpse's 3D changes) have these worker-side corpse takes as their likely trigg
 
 So: a transfer whose SOURCE is an actor goes through `TheftGate::Take` (or `QueueCopy`), which decides
 the gates on the worker and runs the transfer on the main thread (`MainThread::Post`, FormIDs only, refs
-and copies re-resolved there), in queue order, at most one take that removes a worn piece per corpse per
-frame. The worker never waits on main. Until a take lands the worker must not trust the follower's pack
-for that kind of item: `Takeable` holds same-form-type decisions (a Pending refusal, the guard-pending
-retry path), queued copies are not offered twice, and their weight counts. Anything that needs the item
+and copies re-resolved there), in queue order, the whole queue in one drain (no per-frame cap: on main
+each armor removal only sets the deferred 3D flag, and vanilla Take All strips a worn set in one frame; an
+open inventory menu defers the drain a frame). The worker never waits on main. Until a take lands the
+worker must not trust the follower's pack for that kind of item: `Takeable` holds same-form-type
+decisions (a Pending refusal, the guard-pending retry path, re-entered after 150 ms, not the 1 s cadence),
+queued copies are not offered twice, and their weight counts. That is LOGIC honesty only: the worker's own
+READS of the corpse and follower inventories (`Analyse` / `GetInventory` in `Takeable` / `Take`,
+`DeclareAtExit`, IAUS `ReadLootInv`) still run while main writes them, the old race in the other
+direction; this rule removes the worker WRITE to an actor, not every off-main read (REVIEW-BACKLOG). Anything that needs the item
 IN the pack (an equip) is attached with `TheftGate::AfterLanding`. A queued take that cannot run (the
 follower died, the corpse unloaded) is said loudly and moves nothing; it is never retried around.
 No new direct `actor->RemoveItem(.., follower)` from the tick. **MFO** fix/corpse-take-main, 2026-11-15.

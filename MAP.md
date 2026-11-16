@@ -4262,17 +4262,25 @@ module. Module layout:
   FormIDs + count only) and `Take` returns the PLANNED count. `DrainTransfers` (ONE posted drain at a time, `g_xPosted`; `MainThread::Post`)
   runs the queue on main in FIFO order: `RunTransfer` re-resolves follower / source / item, skips loudly (`[take] ... NOT run`) when the
   follower is dead or disabled or the source is gone, disabled or in a detached cell, re-runs `Analyse` (the per-copy bar is re-read), then
-  `MoveNow` (the loop `Take` always ran, call shapes unchanged). ONE WORN TAKE PER CORPSE PER FRAME: a take whose stack holds a copy with
-  ExtraWorn / ExtraWornLeft (`Plan::anyWorn`) marks its corpse in the drain's `wornThisFrame`; a second such take for that corpse stops the
-  drain, which reposts itself (lands next frame), queue order intact. A non-actor source (chest), a call already on main (the steal road,
+  `MoveNow` (the loop `Take` always ran, call shapes unchanged). NO PER-FRAME CAP: the drain runs the whole queue, worn pieces included
+  (on main each ARMO removal only sets the deferred 3D-update flag, and vanilla Take All strips a worn set in one frame, so a cap would
+  cost pacing and reduce no risk). An open inventory menu (`InventoryMenuOpen`, `Logistics_internal.h`, shared with Storage) makes
+  `RunTransfer` return FALSE untouched: the drain reposts itself (next frame), queue order intact. A non-actor source (chest), a call already on main (the steal road,
   `OnMainThread` = the drain's thread id) and a runtime with no live pump (said once) keep the direct `MoveNow`.
-  THE WORKER NEVER WAITS; its view is kept honest by three reads of the queue (an entry stays queued while the drain runs it):
+  THE WORKER NEVER WAITS; its LOGIC is kept honest by three reads of the queue (an entry stays queued while the drain runs it). This is
+  logic honesty only, not data-race freedom: the worker's reads of the corpse / follower inventories (`Analyse` / `GetInventory` in
+  `Takeable` / `Take`, `DeclareAtExit`, IAUS `ReadLootInv`) still race main-thread writes (the old race, the other direction; the optional
+  Dekker gate is in Docs/REVIEW-BACKLOG.md, section 4cb790da). The three reads:
   `QueuedOut(src, item)` is subtracted in `Takeable` / `Take` (queued copies are not offered twice, to him or to another follower);
   `InFlightWeight(follower)` is added in `FitsCarryWeight` (`LootTake.cpp`); `LandingHold(follower, form type)` makes `Takeable` return FALSE
   with a Pending refusal (`GuardRefusal::landing`) while an item of the candidate's FORM TYPE is still on its way to him, so no count or
   baseline decision (ammo, potions, the gear baseline) is made on a pack that does not show it yet. The hold rides the existing guard-pending
-  path: `StripCorpse` sees the refusal count move, sets leftWaiting + guardHeld, the arrival (`Service.cpp`) keeps the body and retries next
-  tick (`[loot] ... a take of this visit is still landing`). `LootConsumablesNeed` (`LootNeed.cpp`) asks `Takeable` again per item for the
+  path: `StripCorpse` sees the refusal count move, sets leftWaiting + guardHeld, the arrival (`Service.cpp`) keeps the body and retries
+  (`[loot] ... a take of this visit is still landing`). A LANDING refusal re-arms `g_nextTick` to `kLandingRetry` (150 ms,
+  `RearmForLanding`, `Logistics_internal.h`) instead of the 1 s cadence, at the arrival and in both in-place drain roads of `LootNearby`
+  (`LootScan.cpp`, by reading `GuardRefusalInfo().landing` after `StripCorpse`); a guard-pending refusal keeps 1 s. The hold fires on any
+  `Takeable` of that form type, including objects the caller's later filters would reject (`LootEquipment.cpp` calls it first in the
+  loop), so a body often needs a second visit; the fast re-arm keeps that inside a fraction of a second. `LootConsumablesNeed` (`LootNeed.cpp`) asks `Takeable` again per item for the
   same reason (its re-judge reads the pack between takes).
   FOLLOW-UPS THAT NEED THE ITEM IN THE PACK: `TheftGate::AfterLanding(follower, item, fn)` attaches `fn` to the newest queued take of that
   item; it runs on main right after that take, only if something moved (else `[take] ... follow-up(s) DROPPED`). `AcquireEquip` (`Gear.cpp`)
@@ -4288,7 +4296,7 @@ module. Module layout:
   false` as "empty, mark DONE" without reading `GuardRefusalInfo()` strands loot when the cause was the hold (StripCorpse's refusal-count
   pattern is the contract). (e) The hold is by FORM TYPE on purpose (a superset of every counted family); narrowing it to the object brings
   back double takes of same-kind items from two corpses in one tick. (f) Moving the pop before the transfer (the entry must stay queued
-  while it runs) or posting a second drain breaks the one-worn-take-per-frame rule and the ledger. To add a main-thread follow-up for a
+  while it runs) or posting a second drain breaks the queue order and the ledger. To add a main-thread follow-up for a
   looted item: `AfterLanding`. To change the late-landing warning: `kLandLate` (5 s). Known limits (reviewer notes): a container -> follower
   transfer still adds to the FOLLOWER's inventory on the worker (unchanged road); two worn copies of ONE object (a dual-wielded pair) leave
   in one take; `Steal.cpp`'s main-thread `Takeable` can meet the hold and leave one item for the next visit.

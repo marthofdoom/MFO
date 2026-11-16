@@ -1108,6 +1108,7 @@ namespace MFO::Logistics {
                     }
                     if (guardHeld) {
                         GuardHeldAt()[tref->GetFormID()] = now;
+                        if (guardAfter.landing) RearmForLanding(id, now);   // a landing lands next frame: retry soon, not in 1 s
                         static std::unordered_map<RE::FormID, Clock::time_point> s_nextGuardHoldLog;
                         auto& nxtG = s_nextGuardHoldLog[id];
                         if (nxtG.time_since_epoch().count() == 0 || now >= nxtG) {

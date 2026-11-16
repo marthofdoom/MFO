@@ -56,7 +56,8 @@ namespace MFO::Logistics::TheftGate {
             const RE::FormID fid = a_f ? a_f->GetFormID() : 0u;
             const RE::FormID sid = a_src ? a_src->GetFormID() : 0u;
             const std::string verdict = a_pending ? std::string("pending") : a_barred ? std::string("BARRED:") + a_barred : std::string("take");
-            const std::string key = std::format("{:08X}|{:08X}|{}", fid, sid, verdict);
+            // via is in the key: the worker's "queued to main" and main's "landed on main" lines for one take are both kept (review F5)
+            const std::string key = std::format("{:08X}|{:08X}|{}|{}", fid, sid, verdict, a_via ? a_via : "-");
             {
                 std::scoped_lock lk(g_logMx);
                 const auto now = SClock::now();
@@ -378,11 +379,13 @@ namespace MFO::Logistics::TheftGate {
         // SOURCE is an actor is queued here by the take road (the worker) and run by ONE drain per frame on the main thread:
         //   * FIFO, FormIDs only; both refs and the copies are re-resolved on the frame that runs (extra-list pointers do not survive
         //     the hop), by the same Analyse, so the per-copy ownership bar is re-read there. The guard verdict was the worker's.
-        //   * at most ONE take that removes a WORN piece per corpse per frame: a second one stops the drain, which reposts itself
-        //     (the repost lands next frame) with the queue order intact.
+        //   * no per-frame cap: the whole queue runs in one drain, worn pieces included (vanilla Take All does the same in one frame).
+        //     Only an open inventory menu (InventoryMenuOpen) stops the drain, which reposts itself (next frame), queue order intact.
         //   * a follow-up that needs the item in the pack (the equip) is attached to its take (AfterLanding) and runs right after it.
         //   * the worker never waits: until a take lands, QueuedOut hides its copies from every worker decision about that source,
-        //     InFlightWeight carries its weight, and LandingHold makes Takeable hold same-type decisions for that follower.
+        //     InFlightWeight carries its weight, and LandingHold makes Takeable hold same-type decisions for that follower. That is
+        //     LOGIC honesty only: the worker's own reads of the corpse / follower inventories (Analyse / GetInventory here, DeclareAtExit,
+        //     IAUS ReadLootInv) still run while main writes them (the old race, the other direction). Docs/REVIEW-BACKLOG.md (F2).
         struct Job {
             std::uint64_t seq = 0;
             RE::FormID    fid = 0, sid = 0, obj = 0;
@@ -445,10 +448,13 @@ namespace MFO::Logistics::TheftGate {
             if (!g_xPosted) { g_xPosted = true; MainThread::Post([] { DrainTransfers(); }); }
         }
 
-        // MAIN THREAD. One queued take. FALSE = it must wait for the next frame (this corpse already lost a worn piece this frame);
-        // nothing was touched. TRUE = it ran (or was skipped, said loudly); a_moved = the copies that left the source.
-        bool RunTransfer(const Job& a_j, std::unordered_set<RE::FormID>& a_wornThisFrame, std::int32_t& a_moved) {
+        // MAIN THREAD. One queued take. FALSE = it must wait for the next frame (the player has an inventory menu open: the vanilla menus
+        // build their lists from the containers this would mutate); nothing was touched, the entry stays queued. TRUE = it ran (or was
+        // skipped, said loudly); a_moved = the copies that left the source. No per-frame cap on WORN pieces: on main each ARMO removal only
+        // sets the deferred 3D-update flag (ENGINE_NOTES 0.30 amendment), and vanilla Take All removes a whole worn set in one frame.
+        bool RunTransfer(const Job& a_j, std::int32_t& a_moved) {
             a_moved = 0;
+            if (InventoryMenuOpen()) return false;
             auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_j.fid);
             auto* src = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_j.sid);
             auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(a_j.obj);
@@ -478,10 +484,8 @@ namespace MFO::Logistics::TheftGate {
             }
             // A named copy is judged by itself; a counted take by the object (the plain RemoveItem lets the engine choose the copies).
             const bool worn = named ? named->worn : p.anyWorn;
-            if (worn && a_wornThisFrame.contains(a_j.sid)) return false;
             if (named) src->RemoveItem(obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, named->xl, fol);
             else       MoveNow(fol, src, obj, a_j.n, a_j.road, /*a_landing*/ true);
-            if (worn) a_wornThisFrame.insert(a_j.sid);
             const Plan q = Analyse(fol, src, obj, a_j.road);   // q.total is 0 when nothing is left
             a_moved = p.total - q.total;
             if (a_moved != a_j.n)
@@ -489,14 +493,13 @@ namespace MFO::Logistics::TheftGate {
                              "after){}", a_j.fid, a_j.sid, a_j.obj, a_j.n, a_moved, p.total, q.total, worn ? "; a WORN piece was in the stack" : "");
             else if (worn)
                 spdlog::info("[take] F={:08X} src={:08X} item={:08X}x{}: taken on the main thread from a stack the corpse WORE (the unequip ran "
-                             "on main; one such take per corpse per frame)", a_j.fid, a_j.sid, a_j.obj, a_moved);
+                             "on main)", a_j.fid, a_j.sid, a_j.obj, a_moved);
             return true;
         }
 
         // MAIN THREAD, at most once per frame (g_xPosted: one drain is posted at a time, and its own repost lands next frame).
         void DrainTransfers() {
             g_mainTid.store(std::this_thread::get_id(), std::memory_order_relaxed);
-            std::unordered_set<RE::FormID> wornThisFrame;   // corpses that lost a worn piece in THIS drain
             for (;;) {
                 Job j;
                 {
@@ -505,7 +508,7 @@ namespace MFO::Logistics::TheftGate {
                     j = g_xq.front().j;   // it stays queued while it runs: QueuedOut / LandingHold keep counting it
                 }
                 std::int32_t moved = 0;
-                if (!RunTransfer(j, wornThisFrame, moved)) {
+                if (!RunTransfer(j, moved)) {
                     MainThread::Post([] { DrainTransfers(); });   // g_xPosted stays true: this repost IS the posted drain
                     return;
                 }
