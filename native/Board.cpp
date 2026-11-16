@@ -40,6 +40,7 @@
 #include "ProgProbe.h"
 #include "progression/ProgAllocator.h"
 #include "MainThread.h"
+#include "EngineOps.h"   // INVARIANTS #83: LiveCountOnMain (the teach is re-checked on the main thread)
 #include "Vocabulary.h"
 #include "Taunt.h"   // MeleeInRightHand: act.taunt is offered only with a melee weapon in the right hand
 #include "Scheduler.h"
@@ -930,20 +931,10 @@ namespace MFO::Board {
                                 if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
                                 const int code = static_cast<int>(b->GetIDCode());
                                 if (bk > 0 && code == bk) {
-                                    // Same body as the Field Orders power (Diagnostics.cpp):
-                                    // PublishSnapshot reads g_followers, so it runs in a
-                                    // gated AddTask, never inline on the input thread.
-                                    const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
-                                    SKSE::GetTaskInterface()->AddTask([epoch]() {
-                                        MFO::Diagnostics::PumpTickGate gate(epoch);
-                                        if (!gate) return;
-                                        if (IsAvailable()) {
-                                            PublishSnapshot();
-                                            Toggle();
-                                        } else {
-                                            spdlog::info("[board] iBoardKey pressed but the overlay is unavailable");
-                                        }
-                                    });
+                                    // The same request the Field Orders power makes (Diagnostics.cpp): the next worker
+                                    // tick publishes the snapshot and toggles the board INSIDE its body (behind the tick
+                                    // gate), never in an AddTask closure of its own. One atomic store on the input thread.
+                                    MFO::Diagnostics::RequestBoardToggle(/*a_fromHotkey*/ true);
                                 } else if (hk > 0 && code == hk) {
                                     ToggleHud();   // a bare atomic flip, safe on the input thread
                                 }
@@ -1299,7 +1290,13 @@ namespace MFO::Board {
         // NOT YET (INVARIANTS #84): the player's pack is read on demand (a source slot, Diagnostics.cpp SnapshotsBeginTick), so off the
         // main thread its first ask can be "not yet". Then nothing is taught or consumed, the edit is queued again for the next drain
         // (the ask has requested the snapshot) and it is said: a teach is never dropped silently (review F2/F4 of 35a8a778).
-        enum class Teach { Known, Failed, NotYet };
+        // ON THE MAIN THREAD (INVARIANTS #83): AddSpell on the follower and RemoveItem on the PLAYER's pack are engine writes, and
+        // the board's edit drain runs in the worker tick. So the worker only JUDGES here (he lacks the spell, the snapshot shows
+        // the book) and POSTS the teach with FormIDs. On the main thread it is re-checked against the live pack (a double click
+        // or a sold book never eats a second book or grants a free spell), run, logged, and the SAME edit is queued again: the
+        // next drain finds the spell known and assigns it to the row (the path "already learned" always took). Posted = the row
+        // waits one drain, exactly like NotYet. A teach that fails on main is said and queues nothing.
+        enum class Teach { Known, Failed, NotYet, Posted };
         Teach TeachSpellNow(const EditCmd& c) {
             auto* follower = c.fid ? RE::TESForm::LookupByID<RE::Actor>(c.fid) : nullptr;
             auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
@@ -1319,11 +1316,35 @@ namespace MFO::Board {
             for (auto& [o, d] : inv)
                 if (o == book && d.first > 0) { hasBook = true; break; }
             if (!hasBook) return Teach::Failed;
-            follower->AddSpell(spell);
-            pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-            InvSnap::Touch(pc);   // a worker-side write (stability audit M2 moves it): the player's pack (a source) is withheld until rebuilt
-            spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}", c.fid, c.spell, c.book);
-            return Teach::Known;
+            const auto teachOnMain = [](const EditCmd& a_c) -> bool {
+                auto* f  = a_c.fid ? RE::TESForm::LookupByID<RE::Actor>(a_c.fid) : nullptr;
+                auto* sp = a_c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(a_c.spell) : nullptr;
+                auto* bk = a_c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(a_c.book) : nullptr;
+                auto* p  = RE::PlayerCharacter::GetSingleton();
+                if (!f || !sp || !bk || !p) {
+                    spdlog::warn("[board] teach {:08X} spell {:08X} (book {:08X}) NOT run on the main thread: the follower, spell or book no "
+                                 "longer resolves (nothing taught, no book consumed)", a_c.fid, a_c.spell, a_c.book);
+                    return false;
+                }
+                if (f->HasSpell(sp)) return true;   // taught in between (a double click): no second book
+                if (EngineOps::LiveCountOnMain(p, bk) <= 0) {
+                    spdlog::warn("[board] teach {:08X} spell {:08X} NOT run on the main thread: the player no longer carries book {:08X} "
+                                 "(nothing taught)", a_c.fid, a_c.spell, a_c.book);
+                    return false;
+                }
+                MainThread::NoteEngineWrite("Board::TeachSpellNow");
+                f->AddSpell(sp);
+                p->RemoveItem(bk, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                InvSnap::RebuildOnMain(p);   // the player's pack is a source slot: replace it in place, behind this write
+                spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}", a_c.fid, a_c.spell, a_c.book);
+                return f->HasSpell(sp);
+            };
+            if (MainThread::EngineWritesAllowed())   // the main thread, or no pump installed (the legacy path): at once, as before
+                return teachOnMain(c) ? Teach::Known : Teach::Failed;
+            MainThread::Post([c, teachOnMain]() {
+                if (teachOnMain(c)) QueueEdit(c);   // known now: the next drain assigns it to the row (uid 0, the Classes page: a no-op)
+            });
+            return Teach::Posted;
         }
     }
 
@@ -1527,7 +1548,7 @@ namespace MFO::Board {
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             case EditKind::TeachSpell: {
                 // #4: teach the spell and CONSUME one spellbook (TeachSpellNow), then set it as the gambit's spell.
-                if (TeachSpellNow(c) == Teach::Known) tab[i].actionParamForm = c.spell;   // NotYet: queued again, the row waits
+                if (TeachSpellNow(c) == Teach::Known) tab[i].actionParamForm = c.spell;   // NotYet / Posted: queued again, the row waits
                 break;
             }
             case EditKind::SetCond: {

@@ -20,6 +20,7 @@
 #include "CombatStyle.h"
 #include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 #include "classes/Classes.h"   // card C11: OnConfigRead after an MCM close
+#include "EngineOps.h"       // GetStats: the [overlap] line's INVARIANTS #83 counters
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
 #include "logistics/InvSnapshot.h"   // INVARIANTS #84: the worker snapshots' tick bracket
 #include "iaus/EffectMirror.h"
@@ -134,6 +135,63 @@ namespace MFO::Diagnostics {
                 if (npcIn0 || MainThread::NpcCombatSeq() != npc0)   g_ov.tickNpc.fetch_add(1, std::memory_order_relaxed);
             }
         };
+        // ── THE BOARD TOGGLE IS SERVED INSIDE THE TICK (stability audit M2 residue, MFO-B858) ──
+        // The board hotkey (the input thread) and the Field Orders power (the spell-cast sink) used to queue their OWN AddTask
+        // closure that ran Board::PublishSnapshot (ApplyEdits: the board's edit drain, the teach) and Board::Toggle outside the
+        // tick: no WorkerTickScope, no snapshot bracket, no tick gate. Now they only record a request (the pump epoch + 1, so a
+        // request made before a load or a stopped pump is dropped by the tick that finds it, as the old closure's PumpTickGate
+        // dropped it), and the next tick body serves it where the regular publish runs. Latency: at most one tick (133 ms), plus
+        // the ticks the snapshot gate skips.
+        std::atomic<std::uint64_t> g_boardToggleReqPower{ 0 }, g_boardToggleReqKey{ 0 };
+
+        // ── THE TICK'S EXCEPTION GUARD (stability audit M5) ──
+        // Each stage of the tick body runs in its own try/catch (MFO_TICK_STAGE). A stage that throws (in practice std::bad_alloc,
+        // or a std::format / container error in MFO's own code) used to unwind through the SKSE task and BSJobs: a CTD with a stack
+        // that names neither. Now: an ERROR naming the stage, and THAT stage is stopped until the game restarts (its state may be
+        // half-written, so it is never re-entered); the other stages keep running. Loud, never a mask (principle 7): the ERROR is
+        // printed at the throw, the stopped stages are named again every 60 s by the sleeper (LogStoppedStages), and nothing is
+        // retried. Only C++ exceptions: an access violation is still a crash.
+        constexpr std::size_t kMaxStoppedStages = 24;
+        std::atomic<const char*>  g_stoppedStages[kMaxStoppedStages]{};
+        std::atomic<std::uint32_t> g_stoppedStageCount{ 0 };
+        void StageThrew(const char* a_stage, std::atomic<bool>& a_off, const char* a_what) noexcept {
+            a_off.store(true, std::memory_order_release);
+            const auto n = g_stoppedStageCount.fetch_add(1, std::memory_order_relaxed);
+            if (n < kMaxStoppedStages) g_stoppedStages[n].store(a_stage, std::memory_order_release);
+            try {
+                spdlog::error("[tick] the worker tick stage '{}' THREW: {}. This stage is STOPPED until the game restarts (it is never "
+                              "re-entered: its state may be half-written). The other stages keep running. Followers will be missing "
+                              "whatever this stage does.", a_stage, a_what ? a_what : "?");
+            } catch (...) {}   // the log itself failed (out of memory): the stopped-stage table still says it
+        }
+        template <class Fn>
+        inline void RunTickStage(const char* a_stage, std::atomic<bool>& a_off, Fn&& a_fn) {
+            if (a_off.load(std::memory_order_acquire)) return;
+            HbStage(a_stage);
+            try {
+                a_fn();
+            } catch (const std::exception& e) {
+                StageThrew(a_stage, a_off, e.what());
+            } catch (...) {
+                StageThrew(a_stage, a_off, "a non-std exception");
+            }
+        }
+        // One static stop flag per call site (the closure's operator() owns it).
+#define MFO_TICK_STAGE(a_name, a_expr)                                             \
+        do {                                                                       \
+            static std::atomic<bool> s_stageOff{ false };                          \
+            RunTickStage(a_name, s_stageOff, [&]() { a_expr; });                   \
+        } while (0)
+        void LogStoppedStages() {
+            const auto n = std::min<std::uint32_t>(g_stoppedStageCount.load(std::memory_order_relaxed), kMaxStoppedStages);
+            if (n == 0) return;
+            std::string names;
+            for (std::uint32_t i = 0; i < n; ++i)
+                if (const char* s = g_stoppedStages[i].load(std::memory_order_acquire)) { if (!names.empty()) names += ", "; names += s; }
+            spdlog::error("[tick] {} worker tick stage(s) are STOPPED after an exception (see the '[tick] ... THREW' line): {}. They stay "
+                          "stopped until the game restarts.", n, names);
+        }
+
         // ── THE WORKER SNAPSHOTS' TICK BRACKET (INVARIANTS #84; logistics/InvSnapshot.h, iaus/EffectMirror.h) ──
         // Begin: advance the tick the freshness rules count in, and keep the party's and the player's inventory and effects wanted
         // (built every pass), whether or not this tick reads them: a follower is read once per LAP, and his first read must not be
@@ -233,11 +291,14 @@ namespace MFO::Diagnostics {
 
         void LogOverlap() {
             const auto s = [](const std::atomic<const char*>& a) { const char* p = a.load(std::memory_order_relaxed); return p ? p : "-"; };
+            const auto ops = EngineOps::GetStats();
             spdlog::info("[overlap] since start: worker ticks={} overlappedPlayerUpdate={} overlappedNpcUpdateCombat={} ranOnMainThreadId={} | "
                          "stage samples={} inEngineUpdate={} (first '{}') inMfoDrain={} (first '{}') inNpcUpdateCombat={} (first '{}') | "
                          "main thunk edges that saw a tick in flight={} | INVARIANTS #84: live reads off the main thread={} (must be 0), "
-                         "worker-side writes reading their own live list={} (stability audit M2 residue), ticks skipped by the snapshot gate={} | "
-                         "snapshot build pass on the main thread: runs={} avg={} us worst={} us",
+                         "worker-side writes reading their own live list={} (must be 0 since INVARIANTS #83's extension), ticks skipped by the snapshot gate={} | "
+                         "snapshot build pass on the main thread: runs={} avg={} us worst={} us | INVARIANTS #83: engine writes off the main "
+                         "thread={} (must be 0), EngineOps in place={} posted={} posted-but-not-run={} | closures that threw in the main pump={} "
+                         "worker tick stages stopped by an exception={}",
                          g_ov.ticks.load(std::memory_order_relaxed), g_ov.tickSeat.load(std::memory_order_relaxed),
                          g_ov.tickNpc.load(std::memory_order_relaxed), g_ov.tickOnMainTid.load(std::memory_order_relaxed),
                          g_ov.stageSamples.load(std::memory_order_relaxed),
@@ -249,7 +310,9 @@ namespace MFO::Diagnostics {
                          g_snapPassRuns.load(std::memory_order_relaxed),
                          g_snapPassRuns.load(std::memory_order_relaxed)
                              ? g_snapPassUsTotal.load(std::memory_order_relaxed) / g_snapPassRuns.load(std::memory_order_relaxed) : 0,
-                         g_snapPassUsMax.load(std::memory_order_relaxed));
+                         g_snapPassUsMax.load(std::memory_order_relaxed),
+                         MainThread::EngineWriteViolations(), ops.inPlace, ops.posted, ops.skipped, MainThread::PumpFaults(),
+                         g_stoppedStageCount.load(std::memory_order_relaxed));
         }
         // Generation token: StopPump/StartPump bump it, so a thread that was
         // mid-sleep across a revert->load exits instead of running alongside
@@ -515,22 +578,10 @@ namespace MFO::Diagnostics {
                 if (a_event->spell != Forms::g_fieldOrders->GetFormID())
                     return RE::BSEventNotifyControl::kContinue;
 
-                // Sinks queue; they never do engine work inline.
-                const auto epoch = CurrentPumpEpoch();
-                SKSE::GetTaskInterface()->AddTask([epoch]() {
-                    // DumpReport / PublishSnapshot read g_followers -- gate them.
-                    PumpTickGate gate(epoch);
-                    if (!gate) return;
-                    if (Board::IsAvailable()) {
-                        Board::PublishSnapshot();
-                        Board::Toggle();
-                    } else {
-                        // The overlay is not the only way to see state, and the
-                        // evaluator must never depend on the renderer
-                        // (INVARIANTS #25). Fall back to the log.
-                        DumpReport("power (overlay unavailable)");
-                    }
-                });
+                // Sinks queue; they never do engine work inline. The toggle is a REQUEST the next worker tick serves
+                // INSIDE its body (RequestBoardToggle, below): behind the tick gate and the snapshot bracket, never in
+                // a stray AddTask closure of its own (stability audit M2 residue, MFO-B858).
+                RequestBoardToggle(/*a_fromHotkey*/ false);
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
@@ -1120,31 +1171,60 @@ namespace MFO::Diagnostics {
                         // only the evaluator runs at the deadline.
                         // [hb] HbStage names the step about to run, so a body that
                         // never returns leaves its callee's name in the heartbeat.
-                        if (diagTurn) { HbStage("Followers::Refresh"); Followers::Refresh(); }
-                        HbStage("Snapshots::BeginTick");          SnapshotsBeginTick();   // INVARIANTS #84: after Refresh (the party list), before any reader
-                        if (!SnapshotsReadyForTick()) {   // THE TICK GATE: no reader runs on an unread party (see SnapshotsReadyForTick)
-                            HbStage("Snapshots::EndTick(gated)"); SnapshotsEndTick();
+                        // EVERY STAGE IS GUARDED (stability audit M5, MFO_TICK_STAGE above): a stage that throws is said and
+                        // stopped; the rest of the body still runs.
+                        if (diagTurn) MFO_TICK_STAGE("Followers::Refresh", Followers::Refresh());
+                        // INVARIANTS #84: after Refresh (the party list), before any reader. A BeginTick or a gate that threw (now or
+                        // earlier: a stopped stage does not run) leaves `ready` false, so the body is skipped: nothing is decided on
+                        // a tick clock that did not advance or on an unread party.
+                        bool began = false, ready = false;
+                        MFO_TICK_STAGE("Snapshots::BeginTick", { SnapshotsBeginTick(); began = true; });
+                        if (began) MFO_TICK_STAGE("Snapshots::ReadyForTick", ready = SnapshotsReadyForTick());
+                        if (!ready) {   // THE TICK GATE: no reader runs on an unread party (see SnapshotsReadyForTick)
+                            MFO_TICK_STAGE("Snapshots::EndTick(gated)", SnapshotsEndTick());
                             HbStage("idle");
                             return;
                         }
 
-                        HbStage("Scheduler::Tick");               Scheduler::Tick();
-                        HbStage("Actuation::SelfCastReconcile");  Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
-                        HbStage("Actuation::TargetCastReconcile"); Actuation::TargetCastReconcile();  // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
-                        HbStage("APMFBridge::Tick");              APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
-                        HbStage("Lotd::SweepTrip");               Lotd::SweepTrip();                  // LOTD: end an orphaned deposit trip whatever its owner is doing
-                        HbStage("Errand::Sweep");                 Logistics::Errand::Sweep();         // town errands: end one whose follower is gone / in combat / unserviced, or whose player left the town
-                        HbStage("APMFBridge::MaybeWarnAbsence");  APMFBridge::MaybeWarnAbsence(); HbStage("Classes::MaybeNoticeNotStarted");  Classes::MaybeNoticeNotStarted();     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
-                        HbStage("Loadout::Tick");                 Loadout::Tick();   // hand back stowed two-handers
-                        HbStage("AtkObserveTick");                AtkObserveTick();  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
+                        MFO_TICK_STAGE("Scheduler::Tick",                    Scheduler::Tick());
+                        MFO_TICK_STAGE("Actuation::SelfCastReconcile",       Actuation::SelfCastReconcile());     // release self-cast channels when their rule goes stale (dispel lingering buffs)
+                        MFO_TICK_STAGE("Actuation::TargetCastReconcile",     Actuation::TargetCastReconcile());   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
+                        MFO_TICK_STAGE("APMFBridge::Tick",                   APMFBridge::Tick());                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
+                        MFO_TICK_STAGE("Lotd::SweepTrip",                    Lotd::SweepTrip());                  // LOTD: end an orphaned deposit trip whatever its owner is doing
+                        MFO_TICK_STAGE("Errand::Sweep",                      Logistics::Errand::Sweep());         // town errands: end one whose follower is gone / in combat / unserviced, or whose player left the town
+                        MFO_TICK_STAGE("APMFBridge::MaybeWarnAbsence",       APMFBridge::MaybeWarnAbsence());     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
+                        MFO_TICK_STAGE("Classes::MaybeNoticeNotStarted",     Classes::MaybeNoticeNotStarted());
+                        MFO_TICK_STAGE("Loadout::Tick",                      Loadout::Tick());   // hand back stowed two-handers
+                        MFO_TICK_STAGE("AtkObserveTick",                     AtkObserveTick());  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
 
-                        if (diagTurn) { HbStage("Probe::Tick"); Probe::Tick(); }
+                        if (diagTurn) MFO_TICK_STAGE("Probe::Tick", Probe::Tick());
+                        // THE BOARD TOGGLE (the hotkey, the Field Orders power): served here, inside the tick (see
+                        // g_boardToggleReq* above). A request stamped by another pump epoch is dropped.
+                        bool published = false;
+                        const auto reqPower = g_boardToggleReqPower.exchange(0, std::memory_order_acq_rel);
+                        const auto reqKey   = g_boardToggleReqKey.exchange(0, std::memory_order_acq_rel);
+                        if (reqPower == a_epoch + 1 || reqKey == a_epoch + 1) {
+                            const bool fromPower = reqPower == a_epoch + 1;
+                            MFO_TICK_STAGE("Board::Toggle(request)", {
+                                if (Board::IsAvailable()) {
+                                    Board::PublishSnapshot();
+                                    published = true;
+                                    Board::Toggle();
+                                } else if (fromPower) {
+                                    // The overlay is not the only way to see state, and the evaluator must never depend on
+                                    // the renderer (INVARIANTS #25). Fall back to the log.
+                                    DumpReport("power (overlay unavailable)");
+                                } else {
+                                    spdlog::info("[board] iBoardKey pressed but the overlay is unavailable");
+                                }
+                            });
+                        }
                         // The board echoes edits back through the snapshot, so
                         // while it is OPEN publish every tick (133ms) instead of
                         // every 4th -- a half-second echo made DragFloat crawl
                         // and hid whether a click registered (board review M2).
-                        if (diagTurn || Board::IsOpen()) { HbStage("Board::PublishSnapshot"); Board::PublishSnapshot(); }
-                        HbStage("Snapshots::EndTick");            SnapshotsEndTick();     // INVARIANTS #84: one main-thread build pass, behind this tick's posts
+                        if (!published && (diagTurn || Board::IsOpen())) MFO_TICK_STAGE("Board::PublishSnapshot", Board::PublishSnapshot());
+                        MFO_TICK_STAGE("Snapshots::EndTick", SnapshotsEndTick());     // INVARIANTS #84: one main-thread build pass, behind this tick's posts
                         HbStage("idle");
                     });
                 }
@@ -1155,7 +1235,7 @@ namespace MFO::Diagnostics {
                 // that had run by the time it printed, so a stalled main shows
                 // as a drains count that stops moving while ticks (or this line)
                 // keep going. Post is a documented no-op on VR: drains stay 0.
-                if ((wake % (kOverlapLogMs / kPumpMs)) == 0) { LogOverlap(); InvSnap::LogStats(); EffectMirror::LogStats(); }   // P0 probe + #84 counters: one line each per 60 s, always on
+                if ((wake % (kOverlapLogMs / kPumpMs)) == 0) { LogOverlap(); InvSnap::LogStats(); EffectMirror::LogStats(); LogStoppedStages(); }   // P0 probe + #84 counters: one line each per 60 s, always on
                 if (Config::g_heartbeat.load(std::memory_order_relaxed) && (wake % (kHeartbeatMs / kPumpMs)) == 0) {
                     const auto nowMs   = std::chrono::duration_cast<std::chrono::milliseconds>(
                                              std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -1185,6 +1265,10 @@ namespace MFO::Diagnostics {
     // only the linkage/visibility changed (the SEV-1 wave shares the guard).
     std::uint64_t CurrentPumpEpoch() {
         return g_pumpEpoch.load(std::memory_order_seq_cst);
+    }
+    void RequestBoardToggle(bool a_fromHotkey) {
+        // Any thread (the input thread, an event sink): one atomic store. Served by the next worker tick body (SleeperLoop).
+        (a_fromHotkey ? g_boardToggleReqKey : g_boardToggleReqPower).store(g_pumpEpoch.load(std::memory_order_seq_cst) + 1, std::memory_order_release);
     }
     PumpTickGate::PumpTickGate(std::uint64_t a_queuedEpoch) {
         g_tickActive.store(true, std::memory_order_seq_cst);

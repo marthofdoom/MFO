@@ -366,7 +366,7 @@ namespace MFO::Logistics {
                 // of every wear pick and keep set).
                 if (h.count > 0 && h.del) {
                     a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                    InvSnap::Touch(a_actor);   // a worker-side write (stability audit M2 moves it): his snapshot is behind it
+                    InvSnap::Touch(a_actor);   // KeepHeadClear runs on the main thread (both callers post it): his snapshot is behind this write
                 }
                 spdlog::info("[evict] {:08X}: {} {} '{}' ({:08X}) count={}",
                              a_actor->GetFormID(), h.del ? "DELETED" : "unequipped (kept for sale)",
@@ -855,7 +855,7 @@ namespace MFO::Logistics {
                 if (oldItem) fromBase = oldItem->GetFormID();
             }
 
-            // A CORPSE source: the transfer is QUEUED to the main thread (TheftGate.h, INVARIANTS #83) and the piece is in his pack one
+            // ANY source (a corpse, a container): the transfer is QUEUED to the main thread (TheftGate.h, INVARIANTS #83) and the piece is in his pack one
             // frame later. Everything below that needs it THERE (the ch.17 placement wish, the direct EquipObject) is attached to that
             // take with TheftGate::AfterLanding, so it runs on main right after the transfer, in that order, and not at all when
             // nothing moved. The armor declaration names the piece from the service tick after it lands (ComputeOwnedGearPick reads
@@ -917,8 +917,8 @@ namespace MFO::Logistics {
                 const RE::FormID    itemID = a_item->GetFormID();
                 const std::uint8_t  slot   = Actuation::PlacementSlotFor(a_item, false);
                 auto place = [folID, itemID, slot]() { Actuation::WantPlacement(folID, itemID, slot, "owned / looted upgrade"); };
-                const bool fromActor = a_src && a_src->As<RE::Actor>();   // only an actor source is queued (TheftGate::Take)
-                if (!fromActor || !TheftGate::AfterLanding(folID, itemID, place)) place();
+                // Every source is queued from the worker (TheftGate::Take, INVARIANTS #83); AfterLanding is false when nothing is in flight.
+                if (!a_src || !TheftGate::AfterLanding(folID, itemID, place)) place();
             } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
                 // Actor*/item) and re-resolve on the frame that runs.
@@ -932,8 +932,8 @@ namespace MFO::Logistics {
                         eq->EquipObject(fol, item);
                 };
                 // A piece still on its way from a corpse is equipped right after its transfer lands (same main-thread drain, so the
-                // order holds even when the transfer waits a frame for an open inventory menu). Only an actor source is queued.
-                if (a_src && a_src->As<RE::Actor>() && TheftGate::AfterLanding(folID, itemID, doEquip)) { /* attached to the queued take */ }
+                // order holds even when the transfer waits a frame for an open inventory menu). Every source is queued from the worker.
+                if (a_src && TheftGate::AfterLanding(folID, itemID, doEquip)) { /* attached to the queued take */ }
                 else if (MainThread::IsInstalled()) MainThread::Post(doEquip);
                 else                                doEquip();   // VR: pump is a no-op, keep the direct path
             }

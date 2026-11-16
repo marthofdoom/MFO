@@ -1374,6 +1374,36 @@ inside `Logistics::LootNearby`.
 > is still walked on the worker without a lock (audit M6: every handle is re-validated, so a reallocation yields a
 > missed or wrong actor, not a fault. The effect mirror's own walk of that array is on the main thread).
 
+> **AMENDED 2026-11-16b (`fix/worker-writes-main`, INVARIANTS #83 extended): the worker makes no engine write. What was read,
+> on which executable.**
+> - **An unequip edits the inventory on the calling thread, for every form type.** `InventoryChanges`' unwear, 1.6.1170
+>   0x22CA20 (id 16067): the form-type dispatch found on 2026-11-15 (ARMO 0x711AC0 deferred flag; LIGH 0x2E9670 and AMMO
+>   0x2E9AA0 direct biped detach; WEAP: `0x6D1EE0` "is this thread in the main mask", else queue task type 0x16 through
+>   0x655FD0) is followed, on every path, by 0x22CDBB to 0x22CFEF: `0x15AB40` clears the worn extra under the list's lock
+>   (0xCC90C0 / 0xCC9380), `0x15F360` reads and `0x15B1D0` (`ExtraDataList::SetCount`, id 11617) writes the count, `0x1557F0`
+>   compares two lists, and an equal neighbour is merged: its node is unlinked from the entry's list and the list is destroyed
+>   and freed (0x1C1870 / 0x151EE0 / 0x153AB8C). So "the engine queues a weapon equip itself" is true of the 3D only. The
+>   same function on **1.5.97 is 0x1E0020** (id 15828: thread test 0x63F810, queue 0x5C4950, AMMO 0x295950, LIGH 0x2954F0,
+>   ARMO 0x67E3B0, then 0x10DE90, the lock 0xC072D0 / 0xC07590, `SetCount` 0x10E570 = id 11471, the frees 0x1076D0 /
+>   0x134A498) and on **1.7.104 it is 0x232330** (found by its first 24 bytes, which are unique next to the mapped
+>   neighbour 16059 at 0x22DA70: thread test 0x6E49E0 = id 39033 mapped, queue 0x6689C0, `SetCount` 0x160760 = id 11617
+>   mapped, the frees 0x157470 / 0x15A743C). The three have the same call order.
+> - **`ActorEquipManager::EquipObject`, 1.6.1170 0x6C9820 (id 38894; 1.7.104 0x6DC310):** a null-object test, a worn test on
+>   the passed extra list, then ONE global recursive spin lock (0x6C9883 to 0x6C990C, owner thread id + count) around the core
+>   0x6CBE30 (id 38929). It serializes equips against equips. It is not a lock any inventory reader takes.
+> - **NOT read (so nothing is claimed about them):** the equip core 0x6CBE30 beyond its call list, the ALCH (drink) branch,
+>   `EquipSpell` 0x6C9A00, `Actor::DeselectSpell` 0x6C4300, `Actor::InterruptCast` 0x6C3BD0, `Actor::EvaluatePackage`
+>   0x66CCF0, `NotifyAnimationGraph`. None of them needed a verdict: every one of these calls now runs on the main thread
+>   (`native/EngineOps.*`, `MainThread::RunOrPost`), which is where the engine's own callers run them.
+> - **`TESQuest::ForceRefTo`, 1.6.1170 0x3CDEE0 (id 25052), the one engine write MFO still makes on the worker
+>   (`Packages.cpp` alias fills):** it takes the quest's alias lock for writing at 0x3CDF41 (0xCC9140) and releases it at
+>   0x3CE18A (0xCC9390), with a read lock (0xCC90C0 / 0xCC9380) around the alias lookup inside. The inner calls (0x3CDB00,
+>   0x398D20, 0x3D1A00, 0x3D4870, 0x3A1770) were not read. That is a self-guard for the alias table, not a proof for what
+>   those calls touch on the reference. Docs/REVIEW-BACKLOG.md MFO-B859.
+> - **Per runtime:** no address, offset or vtable slot is new in MFO. Every engine call is the CommonLib function the code
+>   already called, on another thread. With no pump installed (VR, an unverified build) `EngineWritesAllowed()` is true and
+>   every call runs in place, as before.
+
 ### 0.31 MCM Helper rejects a whole config for one bad field; bind with `id`, not `modSettingName` (2026-07-28)
 
 The MFO MCM never appeared in-game. MCM Helper's log (`MCMHelper.log` in the

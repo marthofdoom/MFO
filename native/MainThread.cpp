@@ -58,6 +58,17 @@ namespace MFO::MainThread {
             }
         };
 
+        // The pump's fault count (PumpFaults) and its rate-limited ERROR: the first 8, then every 256th. Main thread only writes.
+        std::atomic<std::uint64_t> g_pumpFaults{ 0 };
+        void NotePumpFault(const char* a_what) noexcept {
+            const auto n = g_pumpFaults.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n > 8 && (n % 256) != 0) return;
+            try {
+                spdlog::error("[mainthread] a posted closure THREW on the main thread: {} (fault #{}). That closure's work is LOST; the pump "
+                              "keeps draining the others. Said for the first 8 faults, then every 256th.", a_what ? a_what : "?", n);
+            } catch (...) {}   // the log itself failed (out of memory): the count still says it
+        }
+
         struct PlayerUpdateHook {
             static void thunk(RE::PlayerCharacter* a_this, float a_delta) {
                 // Original FIRST, always -- the pump piggybacks on the engine's
@@ -89,8 +100,20 @@ namespace MFO::MainThread {
                                  batch.size());
                 }
 
+                // PER-TASK GUARD (stability audit M5): a closure that throws (in practice std::bad_alloc, or a std::format /
+                // container error in MFO's own code) must not unwind through PlayerCharacter::Update (a CTD with a stack that
+                // points at the engine) and must not take the rest of the batch with it. It is caught HERE, said loudly, and the
+                // drain goes on. Not a mask (principle 7): the closure's work is lost and the ERROR says so; nothing is retried.
+                // Only C++ exceptions: an access violation inside a closure is still a crash, as it must be.
                 for (auto& fn : batch) {
-                    if (fn) fn();
+                    if (!fn) continue;
+                    try {
+                        fn();
+                    } catch (const std::exception& e) {
+                        NotePumpFault(e.what());
+                    } catch (...) {
+                        NotePumpFault("a non-std exception");
+                    }
                 }
             }
 
@@ -141,8 +164,17 @@ namespace MFO::MainThread {
         return IsMainThread();                           // main-thread code outside the tick (sinks, load handlers): unchanged
     }
 
+    bool EngineWritesAllowed() { return LiveReadsAllowed(); }
+    bool RunOrPost(std::function<void()> a_fn) {
+        if (!a_fn) return false;
+        if (EngineWritesAllowed()) { a_fn(); return true; }
+        Post(std::move(a_fn));
+        return false;
+    }
+    std::uint64_t PumpFaults() { return g_pumpFaults.load(std::memory_order_relaxed); }
+
     namespace {
-        std::atomic<std::uint64_t> g_liveReadViolations{ 0 }, g_workerWriteReads{ 0 };
+        std::atomic<std::uint64_t> g_liveReadViolations{ 0 }, g_workerWriteReads{ 0 }, g_engineWriteViolations{ 0 };
         constexpr std::size_t kSaidSites = 64;
         std::atomic<const char*> g_saidSites[kSaidSites]{};
         // TRUE the first time a_site (a string literal / __FUNCTION__: compared by address) is seen. A full table says nothing more.
@@ -186,6 +218,16 @@ namespace MFO::MainThread {
             spdlog::info("[thread] '{}': a worker-side inventory WRITE reads the live list it writes (the known residue, stability audit M2: "
                          "the write moves to the main thread with this read). Counted in [overlap]. Said once per site.", a_site ? a_site : "?");
     }
+    void NoteEngineWrite(const char* a_site) {
+        const char* why = OffSeat();
+        if (!why) return;
+        g_engineWriteViolations.fetch_add(1, std::memory_order_relaxed);
+        if (FirstTime(a_site))
+            spdlog::error("[thread] INVARIANTS #83 VIOLATED at '{}': an engine actor / inventory / caster / graph WRITE runs {} (it must run "
+                          "on the main thread: EngineOps, or MainThread::Post). The write still ran. Said once per site.",
+                          a_site ? a_site : "?", why);
+    }
+    std::uint64_t EngineWriteViolations() { return g_engineWriteViolations.load(std::memory_order_relaxed); }
     std::uint64_t LiveReadViolations() { return g_liveReadViolations.load(std::memory_order_relaxed); }
     std::uint64_t WorkerWriteReads()   { return g_workerWriteReads.load(std::memory_order_relaxed); }
 

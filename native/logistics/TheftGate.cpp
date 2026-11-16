@@ -335,9 +335,9 @@ namespace MFO::Logistics::TheftGate {
         }
 
         // THE WRITE'S OWN READ: the live list, with the live ExtraDataList of each copy, for the RemoveItem that follows on the SAME
-        // thread. Callers: MoveNow and RunTransfer only. RunTransfer is the main thread. MoveNow on the worker is the CONTAINER road's
-        // transfer, the one worker-side inventory write #83 left on the worker (a non-actor source): its read stays with it and moves
-        // to the main thread with it (stability audit M2). Nothing else may call this.
+        // thread. Callers: MoveNow and RunTransfer only, and both run on the MAIN thread (or with no pump installed: the legacy
+        // path). Since fix/worker-writes-main a CONTAINER source is queued like an actor source (INVARIANTS #83), so no worker
+        // tick reaches this: NoteWriteRead below counts any that does (`[overlap]`, it must stay 0). Nothing else may call this.
         Plan AnalyseLive(RE::Actor* a_f, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, Road a_road) {
             Plan p;
             MainThread::NoteWriteRead(__FUNCTION__);   // INVARIANTS #84: the live read of a write made right here (self-counted when off the main thread)
@@ -395,7 +395,7 @@ namespace MFO::Logistics::TheftGate {
                 if (!p.found) break;
                 if (!p.anyBarred && iter == 0) {   // the unchanged road: one plain RemoveItem, exactly as every caller always made it
                     a_src->RemoveItem(a_obj, a_count, kReason, nullptr, a_follower);
-                    if (!a_landing) { InvSnap::Touch(a_src); InvSnap::Touch(a_follower); }   // a worker-side write: both snapshots are behind it
+                    if (!a_landing) { InvSnap::Touch(a_src); InvSnap::Touch(a_follower); }   // a direct take (the main thread, or no pump): both snapshots are behind it
                     Say(a_follower, a_road, a_src, a_obj, a_count, p.contOwner, a_landing ? "landed on main" : p.contOwner ? "container" : "none", nullptr);
                     if (!a_landing) NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "take");
                     return a_count;
@@ -419,7 +419,9 @@ namespace MFO::Logistics::TheftGate {
             return moved;
         }
 
-        // ── CORPSE TRANSFERS RUN ON THE MAIN THREAD (INVARIANTS #83, ENGINE_NOTES 0.30 amendment 2026-11-15) ──
+        // ── TRANSFERS RUN ON THE MAIN THREAD (INVARIANTS #83, ENGINE_NOTES 0.30 amendments 2026-11-15 and 2026-11-16b) ──
+        // Since fix/worker-writes-main this is every source's road from the worker, a container's as well as a corpse's: the text
+        // below was written for the actor source and holds unchanged for any source.
         // RemoveItem on an ACTOR is not an inventory-only call. InventoryChanges::RemoveItem (1.6.1170 0x228180) calls
         // ActorEquipManager::UnequipObject (0x6CA010, at 0x22A967) for a copy the actor WEARS, on the calling thread: an AMMO or a
         // torch is detached from the biped right there (0x2E9AA0 / 0x2E9670), an ARMO sets the actor's 3D update flag and calls
@@ -451,9 +453,7 @@ namespace MFO::Logistics::TheftGate {
         std::deque<Xfer> g_xq;                 // g_xMx. The front entry stays queued while the drain runs it
         bool             g_xPosted = false;    // g_xMx. One drain is posted (or reposted) and has not found the queue empty yet
         std::uint64_t    g_xSeq = 0;           // g_xMx
-        std::atomic<std::thread::id> g_mainTid{};   // the thread the drain last ran on (the main thread); default id until the first drain
 
-        bool OnMainThread() { return g_mainTid.load(std::memory_order_relaxed) == std::this_thread::get_id(); }
 
         // Copies of (source, item) already queued out and not landed. The entry the drain is running still counts.
         std::int32_t QueuedOut(RE::FormID a_sid, RE::FormID a_obj) {
@@ -559,7 +559,6 @@ namespace MFO::Logistics::TheftGate {
         // distinct ref the batch wrote is rebuilt ONCE, then the entries that ran are popped and their follow-ups fire. Rebuild before
         // pop (INVARIANTS #84) holds for the whole batch. Jobs read live (AnalyseLive), so a job never needs the rebuild of the one before.
         void DrainTransfers() {
-            g_mainTid.store(std::this_thread::get_id(), std::memory_order_relaxed);
             struct Ran { std::uint64_t seq; std::int32_t moved; RE::FormID fid, obj; };
             for (;;) {
                 std::vector<Ran> ran;
@@ -639,7 +638,7 @@ namespace MFO::Logistics::TheftGate {
             auto& at = g_logAt[key];
             if (at.time_since_epoch().count() == 0 || now - at >= kLogEvery) {
                 at = now;
-                spdlog::info("[theft-gate] F={:08X} src={:08X} item={:08X} held: an item of this form type is still on its way to him (a corpse take "
+                spdlog::info("[theft-gate] F={:08X} src={:08X} item={:08X} held: an item of this form type is still on its way to him (a take "
                              "queued to the main thread); judged again next tick", a_follower->GetFormID(), a_src->GetFormID(), a_obj->GetFormID());
             }
             return false;
@@ -647,8 +646,8 @@ namespace MFO::Logistics::TheftGate {
         const Plan p = Analyse(a_follower, a_src, a_obj, Road::Container);
         if (p.notYet) { NoteInventoryNotYet(a_follower, a_src); return false; }
         if (!p.found) return false;
-        // Copies already queued out of an actor source are not offered twice (to him or to another follower).
-        const std::int32_t queued = a_src->As<RE::Actor>() ? QueuedOut(a_src->GetFormID(), a_obj->GetFormID()) : 0;
+        // Copies already queued out of the source are not offered twice (to him or to another follower).
+        const std::int32_t queued = QueuedOut(a_src->GetFormID(), a_obj->GetFormID());
         return Offer(p) - queued > 0;   // nothing barred: the stack; else an extra-listed copy we can name (plain copies next to a barred one are not selectable)
     }
 
@@ -657,15 +656,17 @@ namespace MFO::Logistics::TheftGate {
         const bool actorSrc = a_src->As<RE::Actor>() != nullptr;
         if (a_road == Road::Container && actorSrc) a_road = Road::Corpse;
         if (!(a_road == Road::Corpse && CorpseGuardWaived(a_follower, a_src)) && GuardInterim(a_follower, a_src, a_road)) return 0;
-        if (!actorSrc || OnMainThread()) return MoveNow(a_follower, a_src, a_obj, a_count, a_road, /*a_landing*/ false);
         if (!MainThread::IsInstalled()) {   // no live pump (unsupported runtime): the documented direct road, as the other main-thread hops fall back
             static std::atomic<bool> s_said{ false };
             if (!s_said.exchange(true))
-                spdlog::warn("[take] the main-thread pump is not installed on this runtime: corpse transfers run on the calling thread (the "
+                spdlog::warn("[take] the main-thread pump is not installed on this runtime: transfers run on the calling thread (the "
                              "pre-2026-11-15 road). Said once.");
             return MoveNow(a_follower, a_src, a_obj, a_count, a_road, /*a_landing*/ false);
         }
-        // AN ACTOR SOURCE, ON THE WORKER: plan here, transfer on main.
+        // ON THE MAIN THREAD already (the steal road, a posted closure): at once. MainThread's own test, never a thread id kept
+        // here: a worker tick the job system happens to run on the main thread's id is still a worker tick.
+        if (MainThread::EngineWritesAllowed()) return MoveNow(a_follower, a_src, a_obj, a_count, a_road, /*a_landing*/ false);
+        // ANY SOURCE (a corpse, a container), ON THE WORKER: plan here, transfer on main (INVARIANTS #83).
         const Plan p = Analyse(a_follower, a_src, a_obj, a_road);
         if (p.notYet) { NoteInventoryNotYet(a_follower, a_src); return 0; }
         if (!p.found) return 0;
@@ -687,7 +688,7 @@ namespace MFO::Logistics::TheftGate {
     std::int32_t QueueCopy(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::uint16_t a_uid, Road a_road,
                            std::function<void(std::int32_t)> a_landed) {
         if (!a_follower || !a_src || !a_obj || a_uid == 0) return 0;
-        if (!a_src->As<RE::Actor>() || !MainThread::IsInstalled() || OnMainThread()) return 0;
+        if (MainThread::EngineWritesAllowed()) return 0;   // on the main thread already, or no pump: the caller's direct road is legal there
         Enqueue(a_follower, a_src, a_obj, 1, a_road, a_uid, std::move(a_landed));
         Say(a_follower, a_road, a_src, a_obj, 1, a_src->GetOwner(), "queued to main (named copy)", nullptr);
         NoteAction(a_follower->GetFormID(), a_road, a_src->GetFormID(), "take (queued to the main thread)");

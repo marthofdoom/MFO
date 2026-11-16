@@ -4,6 +4,7 @@
 #include "ItemCatalog.h"
 #include "cast/Actuation.h"
 #include "logistics/Logistics.h"
+#include "EngineOps.h"   // INVARIANTS #83: the drink runs on the main thread
 
 #include <algorithm>
 #include <chrono>
@@ -142,8 +143,10 @@ namespace MFO::Logistics {
         auto* mgr = RE::ActorEquipManager::GetSingleton();
         if (!mgr) return false;
         if (const auto pend = g_pendingDrink.find(key); pend != g_pendingDrink.end()) { ConfirmOne(a_follower, key, pend->second); g_pendingDrink.erase(pend); }
-        mgr->EquipObject(a_follower, alc, nullptr, 1);   // the AlchemyItem equip path IS the vanilla drink; one unit, the engine removes it
-        InvSnap::Touch(a_follower);   // (a worker-side write, stability audit M2): his snapshot is behind it, so ConfirmDrinks reads one built after it
+        // The AlchemyItem equip path IS the vanilla drink; one unit, the engine removes it. INVARIANTS #83: on the MAIN thread
+        // (EngineOps::Drink: posted from this tick, re-checked there). The post is queued ahead of this tick's snapshot build pass,
+        // so ConfirmDrinks (next pass) reads a pack built after the drink ran, or after it was refused (then it says NOT CONSUMED).
+        EngineOps::Drink(a_follower, alc, "drink (named potion)");
         g_pendingDrink[key] = PendingDrink{ carriedBefore, std::string(alc->GetName()) };   // proven (or not) on the next pass: ConfirmDrinks
 
         g_buffUntil[key] = now + std::chrono::milliseconds(static_cast<int>((std::max)(1.0f, item.maxDuration) * 1000.0f));   // the reader's longest effect (restores included) gates the stack

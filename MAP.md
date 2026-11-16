@@ -3004,6 +3004,58 @@ a job worker here, not main).
   - **What breaks:** `LiveReadsAllowed()` true on the worker = every reader walks live lists again (the race #84 removes). The
     worker-tick flag is checked BEFORE the seat flag and the thread id on purpose: the job system may run the AddTask body on any
     thread, the main one included, and that body must still read snapshots. Do not "simplify" it to a thread-id compare.
+- **ENGINE WRITES RUN ON THE MAIN THREAD: `native/EngineOps.{h,cpp}` (2026-11-16, `fix/worker-writes-main`, tier A threading;
+  INVARIANTS `#83` extended, ENGINE_NOTES 0.30 amendment 2026-11-16b; stability audit M2 / M3 / M5; NOT merged, NOT field-run).**
+  The worker tick makes NO engine call that writes an actor's inventory, equip state, spell hands, magic caster, package or
+  animation graph. `MainThread::EngineWritesAllowed()` (the same answer as `LiveReadsAllowed()`) says whether this call may write
+  in place; `MainThread::RunOrPost(fn)` runs in place there, else posts. `EngineOps` is the one road for the common calls:
+  `Equip` / `Unequip` (ActorEquipManager, null extra list), `EquipSpell` / `DeselectSpell`, `DrawHands`, `EvaluatePackage`
+  (always `(true, false)`), `InterruptCast(actor, source, refund)`, `Drink` (the ALCH equip, re-checked on main: he can still
+  act and still holds one), `LiveCountOnMain`. In place = the call it replaces, unchanged. Posted = FormIDs and values only,
+  re-resolved on the frame that runs, FIFO with every other post (so "unequip A, equip B, draw" keeps its order), one frame
+  later. A posted call that cannot run is said (`[engine-op] ... NOT run on the main thread`, once per 10 s per actor and form)
+  and does nothing. The worker's ledgers (`g_forcedWeapon`, Loadout's debt and clocks, the drink cooldowns, `g_pendingDrink`)
+  stay on the worker and record what it ASKED for, as they did when the engine queued the equip itself.
+  - **Who uses it:** `cast/Equip.cpp`, `cast/EquipSilver.cpp`, `Loadout.cpp` (every equip, unequip, spell hand and draw),
+    `Packages.cpp` (every `EvaluatePackage`, the concentration-stream `InterruptCast`), `cast/CastOn.cpp` (the bDriveCaster
+    probe: the interrupt, and CheckCast + desiredTarget + RequestCastImpl in one `RunOrPost` closure), `logistics/Service.cpp`
+    `DrinkBest` and `logistics/PotionFx.cpp` `DrinkPotionForm` (`Drink`).
+  - **The other moved writes (their own closures):** `logistics/Cast.cpp` `LearnCarriedTomes` (AddSpell + RemoveItem, re-checked:
+    still lacks the spell, still carries the tome); `Board.cpp` `TeachSpellNow` (AddSpell on the follower + RemoveItem on the
+    PLAYER: posted, re-checked against the live pack, then the SAME edit is queued again and the next drain assigns the now-known
+    spell to the row; `Teach::Posted`); `cast/Fire.cpp` the power attack's `road=graph` animation event (posted; the worker
+    pre-tests the attack state as the Harbinger road does; a graph that rejects it on main is a WARN); `logistics/TheftGate.cpp`
+    EVERY source's transfer (a container too) through the `#83` queue; `logistics/GemRules.cpp` `TakeAndProbe` through
+    `QueueCopy` for any source.
+  - **The self-check:** `MainThread::NoteEngineWrite(site)` on the line before each engine write. Off the main thread it is
+    counted and said once per site (`[thread] INVARIANTS #83 VIOLATED`). The `[overlap]` line prints: engine writes off the main
+    thread (must be 0), worker-side writes reading their own live list (must be 0 now), EngineOps in place / posted /
+    posted-but-not-run.
+  - **TO ADD AN ENGINE WRITE:** add a function to `EngineOps` (in-place body + posted body through `Run`), or wrap a one-off in
+    `MainThread::RunOrPost` with FormIDs only, call `NoteEngineWrite` before the engine call, and list it in INVARIANTS `#83`.
+  - **What breaks:** (1) a direct `mgr->EquipObject` / `actor->RemoveItem` / `AddSpell` / `EvaluatePackage` / `InterruptCast` /
+    `NotifyAnimationGraph` / `DrawWeaponMagicHands` in tick code puts the race back (and no self-check sees it: only code that
+    calls `NoteEngineWrite` is counted). (2) Passing an `ExtraDataList*` or an `Actor*` into a posted closure: neither survives
+    the hop. (3) Reading the RESULT of a posted write in the same tick (`GetEquippedObject` right after `Equip`, a count right
+    after `Drink`): it is the pre-write state; read it next lap, as `ConfirmDrinks` and the hold ledgers do. (4) Posting from a
+    closure that posts itself again: it lands after that tick's snapshot build pass (MFO-B858, the double-hop note).
+    (5) `EngineOps::Equip`'s posted re-check (he still holds the item) skips an equip of an item that left his pack in the
+    frame between: said, never retried. (6) Docs/REVIEW-BACKLOG.md MFO-B859 lists what is NOT moved (the quest alias fills).
+- **THE PUMP AND THE TICK CATCH THEIR OWN EXCEPTIONS (same branch, stability audit M5).** `MainThread.cpp`'s drain runs each
+  posted closure in its own try/catch: a throw is an ERROR (`[mainthread] a posted closure THREW`, the first 8 then every
+  256th), that closure's work is lost, the rest of the batch runs. `Diagnostics.cpp`'s tick body runs every stage through
+  `MFO_TICK_STAGE` (`RunTickStage`): a stage that throws is an ERROR naming it and is STOPPED until the game restarts (never
+  re-entered: its state may be half-written); the other stages keep running; the sleeper names the stopped stages again every
+  60 s (`LogStoppedStages`). C++ exceptions only: an access violation is still a crash. **What breaks:** a retry or a
+  "resume the stage after N seconds" here would be a mask (principle 7). A stopped `Snapshots::BeginTick` / `ReadyForTick`
+  leaves the whole body skipped (said by `[invsnap]`), which is the safe side.
+- **THE BOARD TOGGLE IS SERVED INSIDE THE TICK (same branch, MFO-B858's off-tick AddTask item).** The board hotkey
+  (`Board.cpp`, the input thread) and the Field Orders power (`Diagnostics.cpp`, the spell-cast sink) call
+  `Diagnostics::RequestBoardToggle` (one atomic: the pump epoch + 1). The next tick body serves it where the regular publish
+  runs (`Board::PublishSnapshot` then `Board::Toggle`, or the log report / the `[board] ... unavailable` line), behind the
+  snapshot tick gate and inside `WorkerTickScope`. A request from another pump epoch is dropped (what the old closure's
+  `PumpTickGate` did). **What breaks:** a new AddTask closure that calls `Board::PublishSnapshot` (it runs `ApplyEdits`, the
+  board's edit drain) outside the tick puts the unbracketed reads and the teach's post ordering back.
 - **P0 OVERLAP PROBE (same branch; passive, always on, no INI key).** The open question of INVARIANTS `#74`: does the worker tick
   run WHILE the main thread is inside the player's Update, or while an NPC is inside `Character::UpdateCombat`? Main half here:
   `SeatSeq` (odd inside the thunk, bumped at entry and exit), `SeatPhase` (1 the engine's update, 2 MFO's drain), `SeatSawWorker`
@@ -4373,7 +4425,12 @@ module. Module layout:
   minus dibs-tier categories, pass 1 = whole, `iausDone[pass]` (Service.cpp `runIausLoot`, LootScan.cpp `runIausExcursion`).
 - **LOOT SCAN PERF (2026-11-13, `fix/loot-scan-perf`):** `LootScan.cpp` `LootNearby` replays ONE cell walk per follower per `a_now` (`WalkSnap`, function-static, worker-only, keyed on follower; exact key a_now + origin + radius + cell list; ordered ref handles per cell, re-resolved at replay, null/deleted skipped) instead of one walk per category; `scanOne` and every per-category filter run unchanged at replay, and no longer under the cell spinLock. Off-main inventory reads (HasLoot, [arrowprobe], PickLocks GetInventoryCounts, Take Analyse/RemoveItem, CorpseGuardWaived) are unchanged: the #72 worker-transfer pattern; a main-side inventory snapshot is the backlog redesign (Docs/REVIEW-BACKLOG.md).
 - **CORPSE TRANSFERS RUN ON THE MAIN THREAD (2026-11-15, `fix/corpse-take-main`, tier A threading; INVARIANTS `#83`, ENGINE_NOTES 0.30
-  amendment; NOT merged, NOT field-run):** `logistics/TheftGate.cpp`. `TheftGate::Take` no longer calls `RemoveItem` on the worker when the
+  amendment; NOT merged, NOT field-run):** `logistics/TheftGate.cpp`. **EXTENDED 2026-11-16 (`fix/worker-writes-main`): EVERY source is
+  queued from the worker, a container as well as a corpse.** `Take` / `QueueCopy` test `MainThread::EngineWritesAllowed()` (the file's own
+  thread id is gone: a worker tick that the job system runs on the main thread's id is still a worker tick), `Takeable` subtracts
+  `QueuedOut` for any source, and the landing hold, `InFlightWeight`, `AfterLanding` (`Gear.cpp` attaches to any source's take) and the
+  rebuild-before-pop rule below hold for containers exactly as for corpses. `MoveNow` / `AnalyseLive` run on the main thread only (or with
+  no pump installed). Read "actor source" below as "any source". `TheftGate::Take` no longer calls `RemoveItem` on the worker when the
   SOURCE is an actor (a corpse): the gates (guard, per-copy ownership) run on the worker as before, then the take is QUEUED (`Enqueue`,
   FormIDs + count only) and `Take` returns the PLANNED count. `DrainTransfers` (ONE posted drain at a time, `g_xPosted`; `MainThread::Post`)
   runs the queue on main in FIFO order: `RunTransfer` re-resolves follower / source / item, skips loudly (`[take] ... NOT run`) when the
@@ -5096,7 +5153,8 @@ anonymous-namespace copy — that silently forks the instance).
   fill `TradeBridge::BuyThresholds` (weapon/armor/apparel/tome buy). `LearnCarriedTomes`
   (worker, gated on `HasCastGambit`, called from `ServiceFollower` beside the econ
   probe) auto-learns castable tomes a mage carries (copy of `Board.cpp`'s teach
-  primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
+  primitive; the worker picks the tome, the `AddSpell`+`RemoveItem` runs on the MAIN thread through `MainThread::RunOrPost`,
+  re-checked there, INVARIANTS `#83`; the old "worker/edit-drain-safe, never Post" note was wrong).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
   `mageMode` (`logistics/LootEquipment.cpp:80`, inside `BuildEquipmentContext`)

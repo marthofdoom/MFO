@@ -4,6 +4,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "EngineOps.h"     // INVARIANTS #83: every engine equip / spell-hand / draw call goes through here (main thread)
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
@@ -228,7 +229,7 @@ namespace MFO::Actuation {
                 auto* form = RE::TESForm::LookupByID(a_shield);
                 auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
                 if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq) {
-                    eq->EquipObject(fol, item);
+                    EngineOps::Equip(fol, item);
                     if (a_logWhy)
                         spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' ({})", a_follower,
                                      item->GetName() ? item->GetName() : "?", a_logWhy);
@@ -296,8 +297,8 @@ namespace MFO::Actuation {
                     oldLeft = it->second.left;
             }
             if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
-                mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, slot, true, true);
-            mgr->EquipObject(a_follower, a_weap, nullptr, 1, slot, true, true);
+                EngineOps::Unequip(a_follower, oldLeft, 1, slot, true, true);
+            EngineOps::Equip(a_follower, a_weap, 1, slot, true, true);
             {
                 std::scoped_lock lk(g_forcedMx);
                 g_forcedWeapon[id].left = a_weap;
@@ -335,7 +336,7 @@ namespace MFO::Actuation {
             }
             if (oldLeft)
                 if (auto* mgr = RE::ActorEquipManager::GetSingleton())
-                    mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+                    EngineOps::Unequip(a_follower, oldLeft, 1, Loadout::LeftHandSlot(), true, true);
             return oldLeft;
         }
 
@@ -585,7 +586,7 @@ namespace MFO::Actuation {
                                     held = EquipLeftHeld(a_follower, w, &whyNot);
                                 }
                                 if (held) {
-                                    a_follower->DrawWeaponMagicHands(true);
+                                    EngineOps::DrawHands(a_follower, true);
                                     spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
                                                  "perks, top-up{})", id, w->GetFullName() ? w->GetFullName() : "?",
                                                  authority ? ", declared" : "");
@@ -770,11 +771,11 @@ namespace MFO::Actuation {
                     if (!canReplace)   // MFO stays out: no unequip, no ledger, no direct equip
                         return { Result::NoOp, "equip authority refused (MFO leaves the hands to the engine)", true };
                     if (oldLeft && canReplace)   // the LEFT slot, as every left-hand unequip (F4 parity)
-                        mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+                        EngineOps::Unequip(a_follower, oldLeft, 1, Loadout::LeftHandSlot(), true, true);
                     if (oldForced && canReplace)
-                        mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
+                        EngineOps::Unequip(a_follower, oldForced, 1, nullptr, true, true);
                     if (!authority)
-                        mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);
+                        EngineOps::Equip(a_follower, best, 1, nullptr, true, true);
                     {
                         std::scoped_lock lk(g_forcedMx);
                         const bool fresh = g_forcedWeapon.find(id) == g_forcedWeapon.end();
@@ -811,7 +812,7 @@ namespace MFO::Actuation {
                                   "gambit equip, bWeaponStyleControl off");
                     DeclareFromLedger(a_follower, "gambit equip placement");
                 } else {
-                    mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
+                    EngineOps::Equip(a_follower, best);   // kill-switch off: today's behaviour exactly
                 }
             }
             // FLAIR #4: visibly COMMIT to the new tool -- steel out, squared up
@@ -820,7 +821,7 @@ namespace MFO::Actuation {
             // cast path; drawing while already drawn is a no-op, and this path
             // only runs on a real equip Fired (which buys a suppression window),
             // so it cannot repeat-fire.
-            a_follower->DrawWeaponMagicHands(true);
+            EngineOps::DrawHands(a_follower, true);
             const auto nm = [](RE::TESBoundObject* o) { return o && o->GetName() ? o->GetName() : "?"; };
             spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' dmg={}{}{}{}{}", a_follower->GetFormID(),
                          a_ranged ? "ranged" : "melee", nm(best), bestDmg,
@@ -902,12 +903,12 @@ namespace MFO::Actuation {
         const auto nm = [](RE::TESBoundObject* o) { return o && o->GetName() ? o->GetName() : "?"; };
         // Queued, non-placed unequips (never seated): the same calls ReleaseForcedWeapon makes. The AI's spells come back on their own.
         if (hold.right && a_follower->GetEquippedObject(false) == hold.right && hold.right->GetFormID() != hold.prevRight) {
-            mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
+            EngineOps::Unequip(a_follower, hold.right, 1, nullptr, true, true);
             spdlog::info("[equip] {:08X}: caster stand-down -- '{}' taken out of the right hand (the fight is over; his hands go back to spells)",
                          id, nm(hold.right));
         }
         if (hold.left && a_follower->GetEquippedObject(true) == hold.left && hold.left->GetFormID() != hold.prevLeft) {
-            mgr->UnequipObject(a_follower, hold.left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+            EngineOps::Unequip(a_follower, hold.left, 1, Loadout::LeftHandSlot(), true, true);
             spdlog::info("[equip] {:08X}: caster stand-down -- '{}' taken out of the left hand", id, nm(hold.left));
         }
         for (const bool left : { false, true }) {
@@ -962,9 +963,9 @@ namespace MFO::Actuation {
             if (hold.forcedLeft || hold.forcedRight) {
                 if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
                     if (hold.forcedLeft && hold.left)
-                        mgr->UnequipObject(a_follower, hold.left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+                        EngineOps::Unequip(a_follower, hold.left, 1, Loadout::LeftHandSlot(), true, true);
                     if (hold.forcedRight && hold.right)
-                        mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
+                        EngineOps::Unequip(a_follower, hold.right, 1, nullptr, true, true);
                 }
                 spdlog::info("[equip] {:08X}: legacy force-hold lock cleared on release ({}{})", id,
                              hold.forcedRight ? "right" : "", hold.forcedLeft ? (hold.forcedRight ? "+left" : "left") : "");
@@ -991,7 +992,7 @@ namespace MFO::Actuation {
                             const auto inv = InvSnap::Items(actor);
                             const auto it = inv.find(obj);
                             if (it == inv.end() || it->second.first <= 0) return;
-                            mgr->EquipObject(actor, obj, nullptr, 1, nullptr, true, false);   // forceEquip = FALSE
+                            EngineOps::Equip(actor, obj, 1, nullptr, true, false);   // forceEquip = FALSE
                             spdlog::info("[equip] {:08X}: leaving MFO -- main weapon '{}' re-armed in place of the "
                                          "silver one (direct, non-forced: ch.17 is already released)", id,
                                          obj->GetName() ? obj->GetName() : "?");
@@ -1008,7 +1009,7 @@ namespace MFO::Actuation {
                 MainThread::Post([id]() {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                     if (actor && !actor->IsDead() && !actor->IsDisabled() && !actor->IsInCombat())
-                        actor->DrawWeaponMagicHands(false);
+                        EngineOps::DrawHands(actor, false);
                 });
             }
             APMFBridge::ReleaseEquipment(id);   // ch.15, the single release choke point (below, unchanged)
@@ -1044,8 +1045,8 @@ namespace MFO::Actuation {
         // The LEFT hold names its slot (F4), mirroring EquipLeftHeld; the right
         // keeps the slot-less call it has always had.
         if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
-            if (hold.left)  mgr->UnequipObject(a_follower, hold.left,  nullptr, 1, Loadout::LeftHandSlot(), true, true);
-            if (hold.right) mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
+            if (hold.left)  EngineOps::Unequip(a_follower, hold.left, 1, Loadout::LeftHandSlot(), true, true);
+            if (hold.right) EngineOps::Unequip(a_follower, hold.right, 1, nullptr, true, true);
         }
         // ── STAND DOWN = SHEATHE, NOT UNEQUIP (marth 2026-09-22) ─────────────────
         // The force-unequip above stays exactly as it was -- it is the only way to
@@ -1100,11 +1101,11 @@ namespace MFO::Actuation {
                 };
                 int put = 0;
                 if (auto* r = owns(rightID); r && !actor->GetEquippedObject(false)) {
-                    mgr->EquipObject(actor, r, nullptr, 1, nullptr, true, false);   // forceEquip = FALSE
+                    EngineOps::Equip(actor, r, 1, nullptr, true, false);   // forceEquip = FALSE
                     ++put;
                 }
                 if (auto* l = owns(leftID); l && !actor->GetEquippedObject(true)) {
-                    mgr->EquipObject(actor, l, nullptr, 1, Loadout::LeftHandSlot(), true, false);
+                    EngineOps::Equip(actor, l, 1, Loadout::LeftHandSlot(), true, false);
                     ++put;
                 }
                 // SHEATHE: drop the drawn state, leave the weapon equipped. Only out of
@@ -1125,7 +1126,7 @@ namespace MFO::Actuation {
                 // is (an equipped weapon is drawn on the body, an unequipped one is
                 // not). If this one line ever proves to fight the AI, deleting it
                 // costs nothing and the fix still stands.
-                if (standDown && !actor->IsInCombat()) actor->DrawWeaponMagicHands(false);
+                if (standDown && !actor->IsInCombat()) EngineOps::DrawHands(actor, false);
                 if (put)
                     spdlog::info("[equip] {:08X}: {} re-arm -- {} weapon(s) put back NON-forced{}{} (the hold is "
                                  "over; the AI owns them again)", id, standDown ? "stand-down" : "release", put,
@@ -1188,8 +1189,8 @@ namespace MFO::Actuation {
         // The two-hander's unequip is ReleaseForcedWeapon's own right-hand call
         // (default slot, forced, which clears its prevent-removal lock).
         if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
-            if (left)    mgr->UnequipObject(a_follower, left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
-            if (right2h) mgr->UnequipObject(a_follower, right2h, nullptr, 1, nullptr, true, true);
+            if (left)    EngineOps::Unequip(a_follower, left, 1, Loadout::LeftHandSlot(), true, true);
+            if (right2h) EngineOps::Unequip(a_follower, right2h, 1, nullptr, true, true);
         }
         if (lastHold) APMFBridge::ReleaseEquipment(id);
         // W1 (D3): the hand now carries only the spell -- the ch.26 preference drops its weapon at once.
@@ -1523,10 +1524,10 @@ namespace MFO::Actuation {
                         // slot-less call by object, exactly as before.
                         const bool inLeft  = actor->GetEquippedObject(true)  == obj;
                         const bool inRight = actor->GetEquippedObject(false) == obj;
-                        if (inLeft)  mgr->UnequipObject(actor, obj, nullptr, 1, Loadout::LeftHandSlot(), true, true);
-                        if (inRight) mgr->UnequipObject(actor, obj, nullptr, 1, inLeft ? Loadout::RightHandSlot() : nullptr, true, true);
+                        if (inLeft)  EngineOps::Unequip(actor, obj, 1, Loadout::LeftHandSlot(), true, true);
+                        if (inRight) EngineOps::Unequip(actor, obj, 1, inLeft ? Loadout::RightHandSlot() : nullptr, true, true);
                         if (!inLeft && !inRight)
-                            mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                            EngineOps::Unequip(actor, obj, 1, nullptr, true, true);
                     }
                 } else {
                     // Unknown weapon (created/enchanted): force-unequip the held
@@ -1539,7 +1540,7 @@ namespace MFO::Actuation {
                         if (auto* held = actor->GetEquippedObject(leftHand))
                             if (auto* wep = held->As<RE::TESObjectWEAP>(); wep && locked(wep)) {   // MFO-B257: locked only
                                 anyLock = true;
-                                mgr->UnequipObject(actor, wep, nullptr, 1,
+                                EngineOps::Unequip(actor, wep, 1,
                                                    leftHand ? Loadout::LeftHandSlot() : nullptr, true, true);
                             }
                     }

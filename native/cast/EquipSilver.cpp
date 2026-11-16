@@ -57,6 +57,7 @@
 // small lock (never held across an engine call or together with g_forcedMx) because the revert
 // clear and ReleaseForcedWeapon reach it from the ledger's lifecycle.
 #include "Actuation_internal.h"
+#include "EngineOps.h"     // INVARIANTS #83: every engine equip / spell-hand / draw call goes through here (main thread)
 #include "apmf/APMFBridge.h"   // the equip authority + ch.15 claim, exactly as EquipWeapon uses them
 #include "CombatSense.h"      // FoeCount: the target gate's "foes remain" (MFO-B55 unknown)
 #include <chrono>
@@ -117,7 +118,7 @@ namespace MFO::Actuation {
                 if (!actor || !mgr || actor->IsDead() || actor->IsDisabled()) return;
                 auto* obj = OwnedObject(actor, a_main);
                 if (!obj || actor->GetEquippedObject(false)) return;
-                mgr->EquipObject(actor, obj, nullptr, 1, nullptr, true, false);   // forceEquip = FALSE
+                EngineOps::Equip(actor, obj, 1, nullptr, true, false);   // forceEquip = FALSE
                 spdlog::info("[silver] {:08X}: main weapon '{}' back in hand (non-forced; the AI owns it)",
                              a_id, NameOf(obj));
             };
@@ -181,9 +182,9 @@ namespace MFO::Actuation {
                     std::int32_t n = 1;
                     const auto inv = InvSnap::Items(a);
                     if (const auto it = inv.find(p); it != inv.end() && it->second.first > 0) n = it->second.first;
-                    mgr->EquipObject(a, p, nullptr, static_cast<std::uint32_t>(n), nullptr, true, false);   // forceEquip = FALSE
+                    EngineOps::Equip(a, p, static_cast<std::uint32_t>(n), nullptr, true, false);   // forceEquip = FALSE
                 } else if (auto* sv = OwnedObject(a, silverId)) {
-                    mgr->UnequipObject(a, sv, nullptr, 1, nullptr, true, false);
+                    EngineOps::Unequip(a, sv, 1, nullptr, true, false);
                 }
             };
             if (MainThread::IsInstalled()) MainThread::Post(act); else act();
@@ -249,7 +250,7 @@ namespace MFO::Actuation {
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return { Result::FailedOther, "no equip manager", true };
             if (!authority)
-                mgr->EquipObject(a_follower, best, nullptr, static_cast<std::uint32_t>(bestCount), nullptr, true, false);   // plain equip: no lock to leak
+                EngineOps::Equip(a_follower, best, static_cast<std::uint32_t>(bestCount), nullptr, true, false);   // plain equip: no lock to leak
             {
                 std::scoped_lock lk(g_silverMx);
                 auto [it, fresh] = g_silver.try_emplace(id);
@@ -387,12 +388,12 @@ namespace MFO::Actuation {
             WantPlacement(id, best->GetFormID(), PlacementSlotFor(best, false), "silver, bWeaponStyleControl off");
             DeclareLedger(a_follower, "silver placement");
         } else if (!styleControl) {
-            mgr->EquipObject(a_follower, best);   // kill switch off: EquipWeapon's plain equip, no ledger
+            EngineOps::Equip(a_follower, best);   // kill switch off: EquipWeapon's plain equip, no ledger
         } else {
             // The old right-hand hold leaves first (forced unequip clears its lock; unequips are
             // never seated), then the silver weapon is held in the right hand of the ledger.
-            if (oldForced) mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
-            if (!authority) mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);   // T#76 force-hold
+            if (oldForced) EngineOps::Unequip(a_follower, oldForced, 1, nullptr, true, true);
+            if (!authority) EngineOps::Equip(a_follower, best, 1, nullptr, true, true);   // T#76 force-hold
             {
                 std::scoped_lock lk(g_forcedMx);
                 auto& hold = g_forcedWeapon[id];
@@ -402,7 +403,7 @@ namespace MFO::Actuation {
             }
             if (authority) DeclareLedger(a_follower, "gambit equip silver");
         }
-        a_follower->DrawWeaponMagicHands(true);
+        EngineOps::DrawHands(a_follower, true);
         auto* mainForm = mainId ? RE::TESForm::LookupByID(mainId) : nullptr;
         spdlog::info("[silver] {:08X}: GAMBIT switch to silver '{}' dmg={} (replaces main '{}'{}){}{}", id,
                      NameOf(best), best->GetAttackDamage(), mainForm ? NameOf(mainForm) : "none",
@@ -462,7 +463,7 @@ namespace MFO::Actuation {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                     auto* m     = RE::ActorEquipManager::GetSingleton();
                     auto* obj   = actor ? OwnedObject(actor, mainId) : nullptr;
-                    if (actor && m && obj && !actor->IsDead()) m->EquipObject(actor, obj);
+                    if (actor && m && obj && !actor->IsDead()) EngineOps::Equip(actor, obj);
                 });
             }
             spdlog::info("[silver] {:08X}: no longer Unholy -- main weapon '{}' back (plain equip)", id,
@@ -499,10 +500,10 @@ namespace MFO::Actuation {
             spdlog::info("[silver] {:08X}: no longer Unholy -- the silver hold is already gone, nothing to switch back", id);
             return;
         }
-        if (mgr) mgr->UnequipObject(a_follower, silverObj, nullptr, 1, nullptr, true, true);   // clears the lock
+        if (mgr) EngineOps::Unequip(a_follower, silverObj, 1, nullptr, true, true);   // clears the lock
         if (restoreHold) {
             if (authority) DeclareLedger(a_follower, "silver ended: main weapon hold restored");
-            else if (mgr)  mgr->EquipObject(a_follower, mainObj, nullptr, 1, nullptr, true, true);   // T#76 force-hold
+            else if (mgr)  EngineOps::Equip(a_follower, mainObj, 1, nullptr, true, true);   // T#76 force-hold
         } else {
             if (entryGone) APMFBridge::ReleaseEquipment(id);   // the hands are free: the ch.15 claim goes too
             if (WeighingEquips()) {

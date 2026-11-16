@@ -61,6 +61,25 @@ namespace MFO::MainThread {
     void NoteWriteRead(const char* a_site);
     std::uint64_t LiveReadViolations();
     std::uint64_t WorkerWriteReads();
+
+    // ── ENGINE WRITES RUN ON THE MAIN THREAD (INVARIANTS #83; native/EngineOps.h is the one road) ──
+    // EngineWritesAllowed: may THIS call write engine actor / inventory / caster / graph state in place? The same answer as
+    // LiveReadsAllowed: never inside a worker tick, else in the seat, on the main thread, or with no pump installed (the legacy path).
+    // RunOrPost: run a_fn here when EngineWritesAllowed(), else Post it (first in, first out with every other post). TRUE = it ran
+    // in place. The closure must hold FormIDs / handles / values only: a frame passes before a posted one runs.
+    // NoteEngineWrite: the self-check, called on the line before an engine write. Off the seat (inside the worker tick, or on a
+    // thread that is not the main one) it is a VIOLATION: counted, said ONCE per site as an `[thread]` error; the write still runs
+    // (passive, nothing masked). Diagnostics.cpp prints the count in the `[overlap]` line. It must stay 0.
+    bool EngineWritesAllowed();
+    bool RunOrPost(std::function<void()> a_fn);
+    void NoteEngineWrite(const char* a_site);
+    std::uint64_t EngineWriteViolations();
+
+    // ── THE PUMP'S EXCEPTION GUARD (stability audit M5) ──
+    // Each posted closure runs in its own try/catch. A throw is an ERROR (rate-limited: the first 8, then every 256th), the closure
+    // that threw is lost, and the drain goes on with the next one: one bad closure never takes the rest of the batch or the frame.
+    // Nothing is retried and nothing is hidden: PumpFaults() is printed in the `[overlap]` line.
+    std::uint64_t PumpFaults();
     struct WorkerTickScope { WorkerTickScope(); ~WorkerTickScope(); WorkerTickScope(const WorkerTickScope&) = delete; WorkerTickScope& operator=(const WorkerTickScope&) = delete; };
 
     // ── P0 OVERLAP PROBE (passive, always on: a few relaxed atomics per frame and per tick; Diagnostics.cpp prints `[overlap]`) ──

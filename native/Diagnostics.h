@@ -69,6 +69,12 @@ namespace MFO::Diagnostics {
     // defined out-of-line in Diagnostics.cpp so they reach them.
     std::uint64_t CurrentPumpEpoch();
 
+    // Ask the next worker tick to toggle the board (publish its snapshot first; the log report when the overlay is unavailable).
+    // Callable from any thread: it only records the request. The tick serves it INSIDE its body, behind the snapshot tick gate
+    // (INVARIANTS #84) and inside the worker-tick scope, so the board's edit drain never runs in a stray task of its own.
+    // a_fromHotkey: the board hotkey (else the Field Orders power); only the "overlay unavailable" answer differs.
+    void RequestBoardToggle(bool a_fromHotkey);
+
     class PumpTickGate {
     public:
         explicit PumpTickGate(std::uint64_t a_queuedEpoch);

@@ -10,6 +10,7 @@
 #include "APMF_API.h"          // kCombatMove_Block / kCombatMove_PowerAttack: the "served on this game" question (review F3)
 #include "Concealment.h"       // card G3: act.disengage starts the hide run
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
+#include "MainThread.h"          // INVARIANTS #83: the power attack's graph event is sent on the main thread
 #include "logistics/PotionFx.h"   // act.drink_buff_potion: Logistics::DrinkPotionForm
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
@@ -584,8 +585,27 @@ namespace MFO::Actuation {
                              a_follower->GetFormID(), h, foe->GetFormID(), foeName, dist);
                 return { Result::Fired, std::format("power attack requested -> {} (road=harbinger, h={})", foeName, h) };
             }
-            if (!a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
-                return { Result::FailedOther, "power-attack anim rejected", true };
+            // INVARIANTS #83: the animation event is a write to his graph, so it is sent on the MAIN thread. In place there (and
+            // with no pump: the legacy path), where a rejected event is TRANSPARENT as it always was. From the worker tick it is
+            // POSTED and the graph answers a frame later, so the worker tests here what it can read, as the Harbinger road above
+            // does: an attack already in progress is the graph's first refusal and stays TRANSPARENT. Past that test the result is
+            // Fired; a graph that still rejects the event is said from the main thread (WARN), never hidden.
+            if (MainThread::EngineWritesAllowed()) {
+                MainThread::NoteEngineWrite("Fire::PowerAttackGraph");
+                if (!a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
+                    return { Result::FailedOther, "power-attack anim rejected", true };
+            } else {
+                if (a_follower->AsActorState()->GetAttackState() != RE::ATTACK_STATE_ENUM::kNone)
+                    return { Result::FailedOther, "power attack: an attack is already in progress", true };
+                MainThread::Post([fid = a_follower->GetFormID(), foeID = foe->GetFormID()]() {
+                    auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    if (!f) { spdlog::warn("[power-attack] {:08X}: road=graph NOT sent on the main thread: he no longer resolves", fid); return; }
+                    MainThread::NoteEngineWrite("Fire::PowerAttackGraph");
+                    if (!f->NotifyAnimationGraph("attackPowerStartInPlace"))
+                        spdlog::warn("[power-attack] {:08X}: road=graph -> {:08X}: the graph REJECTED attackPowerStartInPlace on the main thread "
+                                     "(the worker had answered Fired one frame earlier; no swing plays)", fid, foeID);
+                });
+            }
             Targeting::Command(a_follower->GetFormID(), a_choice.target);
             spdlog::info("[power-attack] {:08X}: road=graph (animation event attackPowerStartInPlace; {}) -> {:08X} '{}' at {:.0f}u",
                          a_follower->GetFormID(), unserved, foe->GetFormID(), foeName, dist);

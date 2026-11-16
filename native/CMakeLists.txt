@@ -159,6 +159,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     TradeBridge.cpp
     Targeting.cpp
     MainThread.cpp
+    EngineOps.cpp
     Packages.cpp
     Gait.cpp
     CasterConsent.cpp
