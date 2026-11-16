@@ -1117,7 +1117,8 @@ namespace MFO::Logistics {
                             nxtG = now + std::chrono::seconds(3);
                             spdlog::info("[loot] {:08X}: arrived at {:08X} -- {}, corpse kept, retrying next tick (until the excursion cap)",
                                          id, tref->GetFormID(),
-                                         guardAfter.landing ? "a take of this visit is still landing (queued to the main thread)" : "guard check pending");
+                                         guardAfter.notYet ? "its inventory snapshot is not readable yet (built on the main thread, INVARIANTS #84)"
+                                         : guardAfter.landing ? "a take of this visit is still landing (queued to the main thread)" : "guard check pending");
                         }
                         return;
                     }
