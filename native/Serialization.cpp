@@ -533,8 +533,9 @@ namespace MFO {
         // Scheduler::Tick rule-write between the two passes tears the FLWR record
         // or invalidates the iterator (co-save corruption). RAII so every early
         // return still resumes; no epoch bump, so gameplay resumes untouched.
+        // The guard also lifts kSaveGame's save hold (plugin.cpp, review of ca0465c9 F1): this callback is the end of the save.
         Diagnostics::PausePump();
-        struct ResumeGuard { ~ResumeGuard() { Diagnostics::ResumePump(); } } _resume;
+        struct ResumeGuard { ~ResumeGuard() { Diagnostics::ResumePump(); Diagnostics::ReleaseSaveHold(); } } _resume;
         // Review N1 (roster removal round): apply any queued respec rapport debits NOW,
         // before the FLWR pass. Rapport::Spend is deferred to the worker (F5), so a save
         // in the window after a respec would write PRGN with the respec applied but FLWR

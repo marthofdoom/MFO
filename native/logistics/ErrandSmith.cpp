@@ -562,7 +562,7 @@ namespace MFO::Logistics::Errand::Smith {
                 const std::int32_t n = std::min(c.count, it != counts.end() ? it->second : 0);
                 if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form); obj && n > 0) {
                     a_f->RemoveItem(obj, n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                    InvSnap::Touch(a_f);   // a worker-side write (stability audit M2 moves it): his snapshot is behind it
+                    InvSnap::Touch(a_f);   // Charge runs on the main thread (SettleLedger's callers are all posted): his snapshot is behind this write
                 }
                 if (n < c.count)
                     spdlog::warn("[smith] {:08X} '{}': only {} of {} {} could be consumed (the temper already took)", a_fid, a_l.name,

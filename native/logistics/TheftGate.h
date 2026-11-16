@@ -76,19 +76,22 @@ namespace MFO::Logistics::TheftGate {
     // barred copy is moved by the one plain RemoveItem the callers always made. Returns how many moved (0 = refused).
     // Checks the guard gate first. a_road is a hint (Container becomes Corpse for an actor source).
     //
-    // AN ACTOR SOURCE (A CORPSE) IS NEVER TRANSFERRED ON THE WORKER (INVARIANTS #83, ENGINE_NOTES 0.30 amendment 2026-11-15). The gates
+    // NO SOURCE IS TRANSFERRED ON THE WORKER (INVARIANTS #83, ENGINE_NOTES 0.30 amendments 2026-11-15 and 2026-11-16b): a corpse since
+    // fix/corpse-take-main, a container too since fix/worker-writes-main. Read "actor source" below as "any source". The gates
     // (guard, per-copy ownership) are decided here, on the calling thread, exactly as before; the transfer itself is QUEUED and runs on
     // the MAIN thread (MainThread::Post, FormIDs only, the copies re-picked there by the same Analyse), in queue order, one drain per
     // frame (the whole queue, no per-frame cap; an open inventory menu defers it a frame). The return value is then the PLANNED count
     // and the items are in the pack one frame later. Until they land: Takeable / Take subtract the queued copies from what the source still offers,
     // InFlightWeight carries their weight, and Takeable holds same-type decisions (above). Never waits on main. With no live pump
-    // (unsupported runtime) the transfer runs on the calling thread as before (said once). Called ON main (the steal road) it runs at once.
+    // (unsupported runtime) the transfer runs on the calling thread as before (said once). Called where MainThread::EngineWritesAllowed()
+    // (the steal road, a posted closure) it runs at once.
     std::int32_t Take(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, Road a_road);
 
-    // ONE NAMED COPY of an actor source (the copy whose ExtraUniqueID is a_uid; the gem probe's take), on the same queue and under the
+    // ONE NAMED COPY of a source (the copy whose ExtraUniqueID is a_uid; the gem probe's take), on the same queue and under the
     // same rules as Take. The caller has run its gates (guard, TakeBarred); the per-copy bar is re-read on main. a_landed runs on MAIN
     // right after the transfer with the count that moved, only when it is > 0. Returns the planned count (1), or 0 with nothing queued
-    // when a_src is no actor or the pump is not live (the caller keeps its own direct road).
+    // when this call may write in place (MainThread::EngineWritesAllowed: the main thread, or no live pump): the caller keeps its own
+    // direct road, which is legal there.
     std::int32_t QueueCopy(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::uint16_t a_uid, Road a_road,
                            std::function<void(std::int32_t)> a_landed);
 

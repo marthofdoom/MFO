@@ -21,6 +21,16 @@ namespace MFO::Diagnostics {
     void PausePump();
     void ResumePump();
 
+    // THE SAVE HOLD (review of ca0465c9, F1). plugin.cpp's kSaveGame handler, on the main thread, before the engine writes a
+    // record: HoldPumpForSave makes every PumpTickGate body bail (the sleeper tick and every sink body) and waits for the one
+    // already past its gate, so the worker posts nothing more and changes no ledger while the save is written; then
+    // MainThread::DrainForSave runs what the worker had posted. Its own flag, separate from PausePump's, so SaveCallback's (or any
+    // other) Pause/Resume pair inside the save cannot lift it. ReleaseSaveHold lifts it: SaveCallback's end, and a closure
+    // posted at kSaveGame (the next frame, if the co-save callback never ran); StartPump lifts it too (a load right after a save).
+    // HoldPumpForSave returns the hold's generation; ReleaseSaveHold(gen) clears only that generation (0 = unconditional).
+    std::uint64_t HoldPumpForSave();
+    void ReleaseSaveHold(std::uint64_t a_gen = 0);
+
     // Full state dump to MFO.log. Safe to call from the main thread only.
     void DumpReport(const char* a_trigger);
 
@@ -68,6 +78,12 @@ namespace MFO::Diagnostics {
     // canonical use. The pump atomics stay file-local; the gate's ctor/dtor are
     // defined out-of-line in Diagnostics.cpp so they reach them.
     std::uint64_t CurrentPumpEpoch();
+
+    // Ask the next worker tick to toggle the board (publish its snapshot first; the log report when the overlay is unavailable).
+    // Callable from any thread: it only records the request. The tick serves it INSIDE its body, behind the snapshot tick gate
+    // (INVARIANTS #84) and inside the worker-tick scope, so the board's edit drain never runs in a stray task of its own.
+    // a_fromHotkey: the board hotkey (else the Field Orders power); only the "overlay unavailable" answer differs.
+    void RequestBoardToggle(bool a_fromHotkey);
 
     class PumpTickGate {
     public:

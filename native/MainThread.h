@@ -38,7 +38,7 @@ namespace MFO::MainThread {
 
     // ── WHICH THREAD IS THIS (INVARIANTS #84: the worker never walks an engine inventory or active-effect list) ──
     // InSeat: this thread is inside the player-Update thunk right now (the engine's update or the drain).
-    // IsMainThread: this thread is the one the thunk last ran on. False until the first frame has run.
+    // IsMainThread: this thread is the main thread (NoteMainThread at SKSEPluginLoad / kDataLoaded, then the thunk every frame).
     // InWorkerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope), whichever OS thread the job system gave it.
     // LiveReadsAllowed: may THIS call read a live engine inventory / effect list? Never inside a worker tick (checked first: the
     // job system may run that task on any thread). Else true in the seat, on the main thread (event sinks, load handlers: as
@@ -46,6 +46,10 @@ namespace MFO::MainThread {
     // logistics/InvSnapshot and iaus/EffectMirror branch on it, so one helper serves both threads.
     bool InSeat();
     bool IsMainThread();
+    // Record THIS thread as the main thread. Called at SKSEPluginLoad and at kDataLoaded (Install), both on the main thread, so
+    // IsMainThread() / EngineWritesAllowed() answer correctly BEFORE the first player Update (review of ca0465c9, F2: the first
+    // kPostLoadGame runs before PlayerCharacter::Update has ever run). The thunk keeps storing it every frame, as before.
+    void NoteMainThread();
     bool InWorkerTick();
     bool LiveReadsAllowed();
     // THE INVARIANT CHECKS ITSELF (#84, principle 5). Every place that still reads a LIVE engine inventory or active-effect list
@@ -61,6 +65,25 @@ namespace MFO::MainThread {
     void NoteWriteRead(const char* a_site);
     std::uint64_t LiveReadViolations();
     std::uint64_t WorkerWriteReads();
+
+    // ── ENGINE WRITES RUN ON THE MAIN THREAD (INVARIANTS #83; native/EngineOps.h is the one road) ──
+    // EngineWritesAllowed: may THIS call write engine actor / inventory / caster / graph state in place? The same answer as
+    // LiveReadsAllowed: never inside a worker tick, else in the seat, on the main thread, or with no pump installed (the legacy path).
+    // RunOrPost: run a_fn here when EngineWritesAllowed(), else Post it (first in, first out with every other post). TRUE = it ran
+    // in place. The closure must hold FormIDs / handles / values only: a frame passes before a posted one runs.
+    // NoteEngineWrite: the self-check, called on the line before an engine write. Off the seat (inside the worker tick, or on a
+    // thread that is not the main one) it is a VIOLATION: counted, said ONCE per site as an `[thread]` error; the write still runs
+    // (passive, nothing masked). Diagnostics.cpp prints the count in the `[overlap]` line. It must stay 0.
+    bool EngineWritesAllowed();
+    bool RunOrPost(std::function<void()> a_fn);
+    void NoteEngineWrite(const char* a_site);
+    std::uint64_t EngineWriteViolations();
+
+    // ── THE PUMP'S EXCEPTION GUARD (stability audit M5) ──
+    // Each posted closure runs in its own try/catch. A throw is an ERROR (rate-limited: the first 8, then every 256th), the closure
+    // that threw is lost, and the drain goes on with the next one: one bad closure never takes the rest of the batch or the frame.
+    // Nothing is retried and nothing is hidden: PumpFaults() is printed in the `[overlap]` line.
+    std::uint64_t PumpFaults();
     struct WorkerTickScope { WorkerTickScope(); ~WorkerTickScope(); WorkerTickScope(const WorkerTickScope&) = delete; WorkerTickScope& operator=(const WorkerTickScope&) = delete; };
 
     // ── P0 OVERLAP PROBE (passive, always on: a few relaxed atomics per frame and per tick; Diagnostics.cpp prints `[overlap]`) ──
@@ -79,6 +102,15 @@ namespace MFO::MainThread {
     // handle table (handles are reused), so draining it post-load could run on the
     // wrong actor. The hook stays installed; only the pending work is discarded.
     void Clear();
+
+    // RUN WHAT IS QUEUED NOW, ONCE (review of ca0465c9, F1: no posted engine write may be pending across a save). Called from
+    // plugin.cpp's kSaveGame handler, on the main thread, AFTER Diagnostics::HoldPumpForSave() drained the worker tick and
+    // BEFORE the engine writes a record. Swaps the queue ONCE and runs that batch in post order (FIFO) under the same per-closure
+    // guard as the frame drain. THE BOUND: the batch is fixed at the swap; a closure that posts again (a two-hop re-arm, a
+    // self-posting poll) lands in the NEW queue and runs next frame, never in this drain, so it runs exactly the closures that
+    // were queued at the call and returns. Refused (an ERROR, nothing run) off the main thread or with no pump installed (then
+    // nothing is ever queued). Returns how many closures ran.
+    std::size_t DrainForSave();
     // Bumped by every Clear(). A poster that keeps "my closure is queued" state compares it, so a Clear that dropped the closure
     // cannot leave that state stuck (Diagnostics.cpp's snapshot build pass).
     std::uint32_t ClearGeneration();

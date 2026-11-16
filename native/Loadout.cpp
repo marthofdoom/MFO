@@ -5,6 +5,7 @@
 #include "Followers.h"
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
 #include "MainThread.h"      // animheal phase 2 (review F2): the DeselectSpell runs on the MAIN thread
+#include "EngineOps.h"     // INVARIANTS #83: every engine equip / spell-hand / draw call goes through here (main thread)
 #include "apmf/APMFBridge.h"   // MFO-B227 F5: a right-hand heal claim's spell is not deselected
 #include "Scheduler.h"       // equip-self-violations: PartyCombat (the shield backstop keys on PARTY combat)
 #include "cast/Actuation.h"   // MFO-B227: HealRestreamGap (a heal-displaced left weapon waits out the re-stream gap)
@@ -153,7 +154,7 @@ namespace MFO::Loadout {
             }
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return false;
-            mgr->EquipObject(a_actor, a_obj, nullptr, 1, a_slot);
+            EngineOps::Equip(a_actor, a_obj, 1, a_slot);
             return true;
         }
 
@@ -448,8 +449,8 @@ namespace MFO::Loadout {
                         RE::TESBoundObject* yr = nullptr;
                         if (a_yieldLeft(a_actor, &yl, &yr) && yl && yl == healDisplaced) healDisplaced = nullptr;
                     }
-                    m->EquipSpell(a_actor, a_spell, a_rightHand ? RightHandSlot() : LeftHandSlot());
-                    a_actor->DrawWeaponMagicHands(true);
+                    EngineOps::EquipSpell(a_actor, a_spell, a_rightHand ? RightHandSlot() : LeftHandSlot());
+                    EngineOps::DrawHands(a_actor, true);
                     if (healDisplaced) {
                         auto& hd = g_debt[id];
                         if (!hd.displacedLeft) {   // never overwrite an unpaid left debt
@@ -497,7 +498,7 @@ namespace MFO::Loadout {
                                     std::chrono::steady_clock::time_point{};
                             if (!otherClaim)
                                 if (auto* other = otherForm->As<RE::SpellItem>())
-                                    a_actor->DeselectSpell(other);
+                                    EngineOps::DeselectSpell(a_actor, other);
                         }
                     }
 
@@ -535,8 +536,8 @@ namespace MFO::Loadout {
             }
             auto* rmgr = RE::ActorEquipManager::GetSingleton();
             if (!rmgr) { a_why = "no equip manager"; return Ready::Failed; }
-            rmgr->EquipSpell(a_actor, a_spell, RightHandSlot());
-            a_actor->DrawWeaponMagicHands(true);
+            EngineOps::EquipSpell(a_actor, a_spell, RightHandSlot());
+            EngineOps::DrawHands(a_actor, true);
             g_equipClock[id] = now;
             g_mfoSpellRight[id] = a_spell->GetFormID();
             return Ready::Equipped;
@@ -585,8 +586,8 @@ namespace MFO::Loadout {
             // The point of no return, as below: a hold the ledger still names for
             // the left hand yields (it is not in the hand, so nothing is booked).
             if (a_yieldLeft) a_yieldLeft(a_actor, nullptr, nullptr);
-            mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
-            a_actor->DrawWeaponMagicHands(true);
+            EngineOps::EquipSpell(a_actor, a_spell, LeftHandSlot());
+            EngineOps::DrawHands(a_actor, true);
             g_equipClock[id] = now;              // a fresh equip, a fresh AI window
             g_mfoSpell[id] = a_spell->GetFormID();
             a_why = "heal re-equipped into the EMPTY left hand (live heal claim; the open gear "
@@ -634,8 +635,8 @@ namespace MFO::Loadout {
             }
         }
 
-        mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
-        a_actor->DrawWeaponMagicHands(true);
+        EngineOps::EquipSpell(a_actor, a_spell, LeftHandSlot());
+        EngineOps::DrawHands(a_actor, true);
 
         auto& debt = g_debt[id];
         debt.displacedLeft = willDisplaceLeft;
@@ -692,7 +693,7 @@ namespace MFO::Loadout {
                 } else if (rightHealSame && a->GetEquippedObject(false) == sp) {
                     return;   // skip: the right heal holds it
                 }
-                a->DeselectSpell(sp);
+                EngineOps::DeselectSpell(a, sp);
                 spdlog::debug("[loadout] {:08X} -- {} taken back{}", a_actorID,
                               sp->GetName() ? sp->GetName() : "?", a_right ? " (right hand)" : "");
             };
@@ -965,7 +966,7 @@ namespace MFO::Loadout {
             if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_actorID)) {
                 if (auto* s2 = RE::TESForm::LookupByID<RE::SpellItem>(sp->second);
                     s2 && a->GetEquippedObject(true) == s2) {
-                    a->DeselectSpell(s2);
+                    EngineOps::DeselectSpell(a, s2);
                 }
             }
             g_mfoSpell.erase(sp);
@@ -974,7 +975,7 @@ namespace MFO::Loadout {
             if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_actorID)) {
                 if (auto* s2 = RE::TESForm::LookupByID<RE::SpellItem>(sp->second);
                     s2 && a->GetEquippedObject(false) == s2 && a->GetEquippedObject(true) != s2) {
-                    a->DeselectSpell(s2);
+                    EngineOps::DeselectSpell(a, s2);
                 }
             }
             g_mfoSpellRight.erase(sp);
@@ -997,6 +998,13 @@ namespace MFO::Loadout {
         // is holding MFO's choice; unequip it and let their AI take its own
         // gear back.
         int fixed = 0;
+        // F2 (review of ca0465c9): the shield give-back below reads the left hand AFTER the deselect, so it needs the deselect to
+        // have RUN, not been posted. kPostLoadGame is on the main thread and MainThread::NoteMainThread (SKSEPluginLoad /
+        // kDataLoaded) makes that true before the first frame. Off it, the deselect is posted and the shield check is SKIPPED with
+        // an ERROR (it would read the spell still in the hand and decide nothing): said, never guessed.
+        const bool inPlace = MainThread::EngineWritesAllowed();
+        if (!inPlace)
+            spdlog::error("[loadout] reconcile is not on the main thread: spell deselects are posted and the shield give-back is skipped");
         for (const auto& h : Followers::g_active) {
             auto* a = h.get().get();
             if (!a) continue;
@@ -1018,7 +1026,7 @@ namespace MFO::Loadout {
             // InventoryEntryData that does not exist and silently does nothing
             // -- while the log claims success. This is the call Papyrus's
             // UnequipSpell makes.
-            a->DeselectSpell(spell);
+            EngineOps::DeselectSpell(a, spell);
             ++fixed;
 
             // MAJOR: removing the spell is only half the obligation. The ledger
@@ -1028,7 +1036,7 @@ namespace MFO::Loadout {
             // Bounded and safe: we only reach here because MFO's own spell was
             // provably in that hand, and we only touch what is still in their
             // inventory, so nothing sold can be re-equipped (#16).
-            if (!a->GetEquippedObject(true)) {
+            if (inPlace && !a->GetEquippedObject(true)) {   // F2: read after the deselect ran in place (above)
                 RE::TESObjectARMO* shield = nullptr;
                 for (auto& [obj, data] : InvSnap::Items(a)) {   // INVARIANTS #84 (map order, as the filtered GetInventory gave)
                     auto* armo = obj ? obj->As<RE::TESObjectARMO>() : nullptr;

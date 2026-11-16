@@ -4,6 +4,8 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include "EngineOps.h"     // INVARIANTS #83: caster writes run on the main thread
+#include "MainThread.h"
 #include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
@@ -1792,7 +1794,7 @@ namespace MFO::Actuation {
                     // that accepts nothing further.
                     const auto st = hand->state.get();
                     if (st != RE::MagicCaster::State::kNone) {
-                        hand->InterruptCast(true);      // refunds magicka
+                        EngineOps::InterruptCast(a_follower, src, true);   // refunds magicka; on the main thread (INVARIANTS #83)
                         // The state number belongs in its OWN line, not in the
                         // reason: the reason is the dedup key, and a number that
                         // moves makes every tick a new message.
@@ -1805,12 +1807,38 @@ namespace MFO::Actuation {
                     // probe's evidentiary value: it separates "the engine
                     // rejected the cast" from "the engine accepted it and the
                     // graph never released".
-                    float strength = 1.0f;
-                    RE::MagicSystem::CannotCastReason reason{};
-                    const bool ok = hand->CheckCast(spell, false, &strength, &reason, false);
-
-                    if (a_target) hand->desiredTarget = a_target->CreateRefHandle();
-                    hand->RequestCastImpl();
+                    // INVARIANTS #83: CheckCast, the desiredTarget write and RequestCastImpl are caster writes, so the whole ask
+                    // runs on the MAIN thread (in place there, else posted: ids only, the caster re-read on that frame; the
+                    // `[drive]` line prints from there, one frame later). The worker's verdicts above (selected, at rest) are
+                    // re-tested on main: a caster that moved on in between is said and not driven.
+                    {
+                        const RE::FormID fid = a_follower->GetFormID(), spid = spell->GetFormID();
+                        const RE::ObjectRefHandle tgt = a_target ? a_target->CreateRefHandle() : RE::ObjectRefHandle{};
+                        const bool hasTarget = a_target != nullptr;
+                        MainThread::RunOrPost([fid, spid, src, tgt, hasTarget]() {
+                            auto* f  = RE::TESForm::LookupByID<RE::Actor>(fid);
+                            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spid);
+                            auto* h  = f ? f->GetMagicCaster(src) : nullptr;
+                            if (!h || !sp) { spdlog::warn("[drive] {:08X} NOT driven on the main thread: the actor, spell or caster no longer resolves", fid); return; }
+                            const auto st0 = h->state.get();
+                            if (h->currentSpell != sp || st0 != RE::MagicCaster::State::kNone) {
+                                spdlog::warn("[drive] {:08X} {} NOT driven on the main thread: the caster moved on since the worker asked "
+                                             "(selected={}, state {})", fid, sp->GetName() ? sp->GetName() : "?", h->currentSpell == sp,
+                                             static_cast<std::uint32_t>(st0));
+                                return;
+                            }
+                            float strength = 1.0f;
+                            RE::MagicSystem::CannotCastReason reason{};
+                            MainThread::NoteEngineWrite("CastOn::DriveCaster");
+                            const bool ok = h->CheckCast(sp, false, &strength, &reason, false);
+                            if (hasTarget) h->desiredTarget = tgt;
+                            h->RequestCastImpl();
+                            spdlog::info("[drive] {:08X} {} -- CheckCast={} reason={} state {} -> {}", fid,
+                                         sp->GetName() ? sp->GetName() : "?", ok ? "OK" : "REFUSED",
+                                         static_cast<std::uint32_t>(reason), static_cast<std::uint32_t>(st0),
+                                         static_cast<std::uint32_t>(h->state.get()));
+                        });
+                    }
 
                     // ORDER IS LOAD-BEARING: ArmGrace before StartCooldown, so
                     // the minimum hold stops the cooldown yanking the spell out
@@ -1818,13 +1846,6 @@ namespace MFO::Actuation {
                     Loadout::ArmGrace(a_follower->GetFormID());
                     Loadout::StartCooldown(a_follower->GetFormID());
 
-                    spdlog::info("[drive] {:08X} {} -- CheckCast={} reason={} state {} -> {}",
-                                 a_follower->GetFormID(),
-                                 spell->GetName() ? spell->GetName() : "?",
-                                 ok ? "OK" : "REFUSED",
-                                 static_cast<std::uint32_t>(reason),
-                                 static_cast<std::uint32_t>(st),
-                                 static_cast<std::uint32_t>(hand->state.get()));
                     return { Result::Fired, "caster driven" };
                 }
             }

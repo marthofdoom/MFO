@@ -7,6 +7,7 @@
 #include "apmf/APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
 #include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate shared with the cast paths
 #include "logistics/TradePerks.h"  // AliasRefHandle(): the self-checked CreateRefHandleByAliasID (town S)
+#include "EngineOps.h"   // INVARIANTS #83: EvaluatePackage / InterruptCast run on the main thread
 #include "MainThread.h"  // the only road to the true main thread (§0.37) -- an
                          // EvaluatePackage is an engine AI write and this file's
                          // callers run on the AddTask job worker.
@@ -902,7 +903,7 @@ namespace MFO::Packages {
             // "the alias now holds the marker" is not proof the follower
             // detached. Re-evaluate so the framework reclaims him THIS tick.
             if (auto* actor = HolderActor()) {
-                actor->EvaluatePackage(true, false);   // never resetAI -- combat group
+                EngineOps::EvaluatePackage(actor);   // never resetAI -- combat group. INVARIANTS #83: posted from the tick, it runs on the next frame
                 // CONCENTRATION: CUT THE STREAM. Eviction re-evaluates the
                 // package away, but a channel the graph already opened can
                 // outlive the package by a beat -- and a beam that lingers
@@ -915,7 +916,7 @@ namespace MFO::Packages {
                 if (g_holder.hold.holdSeconds > 0.0f) {
                     using CS = RE::MagicSystem::CastingSource;
                     for (const auto src : { CS::kLeftHand, CS::kRightHand, CS::kInstant }) {
-                        if (auto* mc = actor->GetMagicCaster(src)) mc->InterruptCast(false);
+                        EngineOps::InterruptCast(actor, src, false);   // INVARIANTS #83: on the main thread, behind the evaluate above
                     }
                     spdlog::info("[pkg] {:08X}: concentration stream interrupted ({})",
                                  id, a_why);
@@ -1237,7 +1238,7 @@ namespace MFO::Packages {
                 // worker-side evaluate ran before this landed). (true, false):
                 // NEVER resetAI. The APMF road leaves evaluation to APMF's own
                 // deferred Engage nudge (DIAG-2026-09-06 fix 1).
-                if (a_legacy) a->EvaluatePackage(true, false);
+                if (a_legacy) EngineOps::EvaluatePackage(a);
                 const bool still = a->IsInCombat();
                 {
                     std::lock_guard lk(g_retreatLiveMx);
@@ -1471,7 +1472,7 @@ namespace MFO::Packages {
                 // CONDITION-driven selection, but this route selects by alias
                 // MEMBERSHIP, so the fill is itself the state change. Logged
                 // either way so the field can settle it.
-                actor->EvaluatePackage(true, false);
+                EngineOps::EvaluatePackage(actor);
                 spdlog::info("[pkg] {:08X}: EvaluatePackage(immediate, NO reset) after fill",
                              g_holder.actorID);
             } else if (Since(g_holder.startAt) > kFillTimeout) {
@@ -1866,7 +1867,7 @@ namespace MFO::Packages {
         }
         // Nudge the follower to evaluate now rather than wait for the engine's
         // own pass. (true, false): NEVER resetAI -- it clears the combat group.
-        a_follower->EvaluatePackage(true, false);
+        EngineOps::EvaluatePackage(a_follower);
         spdlog::info("[loot] {:08X}: travel dispatched to {:08X} (slot {}, quest prio={})",
                      a_follower->GetFormID(), a_ref->GetFormID(), a_slot,
                      static_cast<int>(quest->data.priority));
@@ -1936,7 +1937,7 @@ namespace MFO::Packages {
                 const RE::FormID nid = a_follower->GetFormID();
                 MainThread::Post([nid]() {
                     if (auto* a = RE::TESForm::LookupByID<RE::Actor>(nid))
-                        a->EvaluatePackage(true, false);   // never resetAI
+                        EngineOps::EvaluatePackage(a);   // never resetAI
                 });
             } else {
                 spdlog::error("[loot] {:08X}: APMF leg retarget could NOT re-plan -- no main-thread "
@@ -1956,7 +1957,7 @@ namespace MFO::Packages {
         if (!ForceRefToNativeAvailable())          return false;
         if (!quest->IsRunning())                   return false;
         if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
-        a_follower->EvaluatePackage(true, false);
+        EngineOps::EvaluatePackage(a_follower);
         spdlog::info("[loot] {:08X}: leg -> {:08X} (excursion, slot {}, prio={})",
                      a_follower->GetFormID(), a_ref->GetFormID(), a_slot,
                      static_cast<int>(quest->data.priority));
@@ -2076,7 +2077,7 @@ namespace MFO::Packages {
         // engine's slow pass. (true,false) -- never resetAI. Without the follower
         // here the eviction still frees him on the next engine evaluation.
         if (a_follower) {
-            a_follower->EvaluatePackage(true, false);
+            EngineOps::EvaluatePackage(a_follower);
             VerifyDetached(a_follower, a_why);   // prove the eviction actually freed him
         }
         spdlog::info("[loot] travel released ({}) -- slot {} evicted (marker)", a_why, a_slot);
@@ -2297,7 +2298,7 @@ namespace MFO::Packages {
         // Scheduler posts it again only when she RE-ENTERS combat mid-retreat.
         // Static 60 is already in the record; the fill IS the claim (0.36).
         // (true, false): NEVER resetAI -- it clears the combat group.
-        a_follower->EvaluatePackage(true, false);
+        EngineOps::EvaluatePackage(a_follower);
         RetreatHold h;
         h.actorID  = fid;
         h.startAt  = Clock::now();
@@ -2345,7 +2346,7 @@ namespace MFO::Packages {
         if (auto* ev = EvictionRef())
             ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op on VR, fine
         if (a_follower) {
-            a_follower->EvaluatePackage(true, false);   // reclaim THIS tick; never resetAI
+            EngineOps::EvaluatePackage(a_follower);   // reclaim on the next frame (INVARIANTS #83: the main thread); never resetAI
             VerifyDetachedFrom(quest, a_follower, "retreat", "MFO_RetreatQuest", a_why);
         }
         if (fid) {

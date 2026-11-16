@@ -1215,6 +1215,66 @@ IN the pack (an equip) is attached with `TheftGate::AfterLanding`. A queued take
 follower died, the corpse unloaded) is said loudly and moves nothing; it is never retried around.
 No new direct `actor->RemoveItem(.., follower)` from the tick. **MFO** fix/corpse-take-main, 2026-11-15.
 
+**EXTENDED 2026-11-16 (`fix/worker-writes-main`, stability audit M2 / M3): the worker never WRITES engine actor, inventory,
+caster, package or graph state.** #83 as first written covered one call (a transfer out of an actor). The same reasoning covers
+every engine write the tick used to make, and the disassembly removed the one excuse ("the engine queues weapon equips
+itself"): `InventoryChanges`' unwear (1.6.1170 0x22CA20, 1.5.97 0x1E0020, 1.7.104 0x232330) queues only a WEAPON's 3D to the
+main thread; on the CALLING thread, for every form type, it clears the worn extra, sets the copy's count, merges it back into
+its stack and unlinks and frees an `ExtraDataList` (ENGINE_NOTES 0.30, amendment 2026-11-16b). A main-thread walker of that
+inventory (MFO's own snapshot build pass, the container menu, another plugin) stands on those nodes. So:
+
+1. **No tick code calls an engine write directly.** Not `ActorEquipManager::EquipObject` / `UnequipObject` / `EquipSpell`,
+   `Actor::DeselectSpell` / `DrawWeaponMagicHands` / `EvaluatePackage` / `AddSpell` / `RemoveSpell` / `RemoveItem` / `AddItem`,
+   `MagicCaster::InterruptCast` / `RequestCastImpl` / `CastSpellImmediate` / a write to `desiredTarget`,
+   `NotifyAnimationGraph`, an actor-value write, a perk or faction write, `Activate`, `MoveTo`, `Enable` / `Disable`.
+   It calls `EngineOps` (`native/EngineOps.h`), or wraps a one-off in `MainThread::RunOrPost`. Both run the call in place where
+   `MainThread::EngineWritesAllowed()` (the main seat, the main thread outside a worker tick, or no pump installed: VR / an
+   unverified build, the documented legacy path) and post it anywhere else.
+2. **Only ids and values cross the hop.** FormIDs, handles, counts, flags. Never an `Actor*`, a `TESBoundObject*` that is not a
+   base form looked up again, or an `ExtraDataList*`. Both ends are re-resolved on the frame that runs.
+3. **The gate is the worker's, the re-check is main's.** The worker decides (its snapshot, its ledgers, its cooldowns) and
+   records what it ASKED for. The posted body re-checks what a frame can change (he still holds the potion / the tome / the
+   book / the item to equip, he can still act, he still lacks the spell) and, when the check fails, SAYS it and does nothing.
+   It is never retried and never worked around (principle 7).
+4. **Order is the queue's.** The pump is first in, first out, so calls posted in one tick run in the order they were asked
+   ("unequip the old hold, equip the new one, draw"), and all of them run before that tick's snapshot build pass (#84 rule
+   2): the next tick reads their result. A follow-up that needs a result (a log line, a row assignment, an equip after a
+   transfer) is part of the posted body, attached with `TheftGate::AfterLanding`, or queued back to the worker (the board
+   teach queues its edit again). The worker never reads the result of a posted write in the same tick.
+5. **Latency.** At most the next player Update (one frame), and the next tick reads it. A paused game holds posted calls
+   until it resumes (the worker makes no follower decision in a paused tick).
+6. **Every transfer is queued, from every source** (a container as well as a corpse): `TheftGate::Take` / `QueueCopy`.
+7. **The write names itself.** `MainThread::NoteEngineWrite(site)` on the line before the engine call. Off the main thread it
+   is counted and said once per site (`[thread] INVARIANTS #83 VIOLATED`), and `[overlap]` prints the count. It must stay 0.
+   `MainThread::NoteWriteRead` (a write's own live read) must now stay 0 too. Every site this change moved calls it
+   (`EngineOps`, the transfers, the tome, the teach, the drive probe, the power attack event). The closures that were
+   already posted before it (the direct casts, `Upkeep`'s torch and heal equips, the loose-item activate) do not yet: a new
+   or touched one adds the call.
+8. **No posted write is pending across a save** (review of ca0465c9, F1). The worker's ledgers move when it ASKS, the engine
+   when the post runs, so a save between them writes the ledger after the write and the engine before it (the FWPN case: the
+   hold erased, the weapon still locked, and the load clear only visits FWPN pairs). plugin.cpp's kSaveGame handler, on the
+   main thread before the engine writes a record: `Diagnostics::HoldPumpForSave()` (every `PumpTickGate` body bails, the one
+   in flight finishes), then `MainThread::DrainForSave()` (one queue swap, FIFO; a re-post lands in the new queue, so the drain
+   runs exactly the closures queued at the call), then the ConcProxy sweep (a drained cast may mint a proxy). The hold ends at
+   SaveCallback's end (or the next frame, or StartPump). `cast/Equip.cpp` also keeps a released hold's pair in FWPN until its
+   posted lock-clearing unequip has run (`UnequipLockedHands`). The main thread is known from SKSEPluginLoad on
+   (`MainThread::NoteMainThread`), so `EngineWritesAllowed()` is true on main before the first frame (F2).
+
+**What still runs on the worker, and why (the complete list; anything else is a violation).**
+- *Not engine state:* MFO's own maps, atomics and ledgers; `Targeting::Command` (an atomic mirror); the equip declaration and
+  every other call INTO Harbinger (`APMFBridge::*`) or MEO (`MEOBridge::*`): those DLLs own their threading (MEO's pack walk is
+  MFO-B858).
+- *Queued by construction:* a Papyrus dispatch (`Papyrus::Dispatch*`, `TradeBridge`, `Packages` `DispatchAlias`): the worker
+  hands the VM a call under the VM's own lock, and the VM runs it on its own threads.
+- *Left on the worker, NOT proven safe, Docs/REVIEW-BACKLOG.md MFO-B859:* the quest alias fills (`Packages.cpp`
+  `ForceRefToNative` = `TESQuest::ForceRefTo`, which takes the quest's alias write lock around the edit, 1.6.1170 0x3CDF41 to
+  0x3CE18A, but whose inner calls were not read) and the writes into MFO's own package forms' location / target data
+  (`Packages.cpp` `SetPackageLocation`, `SetAPMFLootTravelTarget`, the cast package's inputs). Their read-backs are
+  synchronous by design (CLAUDE.md "five things" 3), so moving them is its own change.
+- *No caller:* `Probe.cpp` `Fire` (the old debug harness actions) is not called from anywhere.
+- *Dev builds only (`MFO_DEV_SELFTEST`):* `selftest/Fixtures.cpp` spawns and moves its fixtures from the worker.
+**MFO** fix/worker-writes-main, 2026-11-16.
+
 ### 84. The worker never walks an engine inventory list or active-effect list: it reads the main-built snapshot
 
 An engine inventory (`InventoryChanges::entryList`, a `BSSimpleList` of entries, each with a `BSSimpleList` of
@@ -1257,7 +1317,8 @@ the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `G
    a corpse) MFO writes on the worker is followed by `InvSnap::Touch(ref)`: its snapshot stays readable for the rest
    of the tick and is then withheld until the main thread has built one after the write. (`Touch` is called for the
    follower too. The party's rule already covers him.) A write MFO makes on the main thread through the #83 queue
-   calls `InvSnap::RebuildOnMain` before the queue entry is dropped.
+   calls `InvSnap::RebuildOnMain` before the queue entry is dropped. Since #83's 2026-11-16 extension no tick code writes
+   an engine inventory at all: `Touch` is left only on the direct roads that run on the main thread or with no pump installed.
 4. **Freshness is counted in worker ticks, from the real cadence (principle 9).** One build pass per tick
    (133 ms): the party and the player every pass, a source when touched or 4 ticks old, at most 32 sources a pass.
    A source's snapshot is readable up to 16 unpaused ticks old and only if built since the last pause. Under a

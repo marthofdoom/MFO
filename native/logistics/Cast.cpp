@@ -6,6 +6,8 @@
 // cast DISPATCH itself (pacing via g_logiCastUntil, concentration direct
 // force, fire-and-forget) lives inside ServiceFollower in Logistics.cpp.
 #include "Logistics_internal.h"
+#include "MainThread.h"   // INVARIANTS #83: the tome teach runs on the main thread
+#include "EngineOps.h"
 #include "classes/Classes.h"   // mage line: Classes::Active(), GetEquipped(), Get().line (UsesMageClothing)
 
 namespace MFO::Logistics {
@@ -219,12 +221,15 @@ namespace MFO::Logistics {
         }
 
         // Learn (and consume) any spell tome the follower CARRIES whose spell it can
-        // cast and does not yet know -- the copy of Board.cpp's teach primitive on
-        // the worker (AddSpell/RemoveItem are edit-drain-safe, §0.32; NEVER
-        // MainThread::Post). Also learns a tome the PLAYER hands the follower. One
-        // tome per tick: the first AddSpell/RemoveItem mutates the live inventory,
-        // so we return after it and catch the rest next tick. Caller gates on the
-        // follower being a mage (HasCastGambit) -- only mages auto-consume tomes.
+        // cast and does not yet know. Also learns a tome the PLAYER hands the follower.
+        // The worker PICKS the tome (his pack's snapshot, the spell list); the teach
+        // itself (AddSpell + RemoveItem on an ACTOR) runs on the MAIN thread
+        // (INVARIANTS #83; the old "worker / edit-drain-safe, never Post" note was
+        // wrong: AddSpell reallocates his added-spell array and RemoveItem edits his
+        // inventory lists). Posted from the tick with FormIDs, re-checked there (he
+        // still lacks the spell and still carries the tome), logged after it landed.
+        // One tome per tick. Caller gates on the follower being a mage (HasCastGambit)
+        // -- only mages auto-consume tomes.
         void LearnCarriedTomes(RE::Actor* a_follower) {
             if (!a_follower) return;
             for (auto& [obj, data] : InvSnap::Items(a_follower)) {
@@ -235,12 +240,27 @@ namespace MFO::Logistics {
                 if (!sp || !Vocab::IsCastableSpell(sp)) continue;
                 if (Catalog::IsExcluded(book->GetFormID())) continue;
                 if (a_follower->HasSpell(sp)) continue;
-                a_follower->AddSpell(sp);
-                a_follower->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                InvSnap::Touch(a_follower);   // a worker-side write (stability audit M2 moves it): his snapshot is behind it
-                spdlog::info("[econ] {:08X} learned spell {:08X} from carried tome {:08X}",
-                             a_follower->GetFormID(), sp->GetFormID(), book->GetFormID());
-                return;   // one per tick -- the mutation ends this inventory walk
+                // In place on the main thread / with no pump; posted from the tick (ahead of this tick's snapshot build pass, so
+                // the next tick reads his pack and spell list after the teach).
+                MainThread::RunOrPost([fid = a_follower->GetFormID(), spid = sp->GetFormID(), bid = book->GetFormID()]() {
+                    auto* f    = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    auto* spl  = RE::TESForm::LookupByID<RE::SpellItem>(spid);
+                    auto* tome = RE::TESForm::LookupByID<RE::TESBoundObject>(bid);
+                    if (!f || !spl || !tome) {
+                        spdlog::warn("[econ] {:08X} tome {:08X} NOT learned on the main thread: the follower, spell or tome no longer resolves", fid, bid);
+                        return;
+                    }
+                    if (f->HasSpell(spl)) return;   // learned in between (a board teach): the tome stays his
+                    if (EngineOps::LiveCountOnMain(f, tome) <= 0) {
+                        spdlog::warn("[econ] {:08X} tome {:08X} NOT learned on the main thread: he no longer carries it (nothing taught)", fid, bid);
+                        return;
+                    }
+                    MainThread::NoteEngineWrite("LearnCarriedTomes");
+                    f->AddSpell(spl);
+                    f->RemoveItem(tome, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                    spdlog::info("[econ] {:08X} learned spell {:08X} from carried tome {:08X}", fid, spid, bid);
+                });
+                return;   // one per tick
             }
         }
 

@@ -35,6 +35,7 @@
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
+#include "EngineOps.h"     // INVARIANTS #83: the drink runs on the main thread
 #include "Sightline.h"    // LoS + line-of-fire gate on the OOC hostile-FF direct fallback
 #include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the loot-waiver sink
@@ -68,9 +69,9 @@ namespace MFO::Logistics {
 
         bool DrinkBest(RE::Actor* a_follower, RE::ActorValue a_which) {
             // CAN HE ACT (fix/mfo-can-act)? A bleeding-out / downed / paralysed
-            // follower drinks nothing. Checked here, in the same synchronous call as
-            // the EquipObject below (this road is not MainThread::Post'd), so it is
-            // "right before the apply". Refused = no potion consumed, logged once.
+            // follower drinks nothing. Checked here (the worker's gate), and AGAIN on the
+            // main thread right before the apply (EngineOps::Drink: the drink itself is
+            // posted, INVARIANTS #83). Refused = no potion consumed, logged once.
             if (const char* why = Actuation::CannotActReason(a_follower)) {
                 Actuation::NoteRefusedApply(a_follower->GetFormID(), "drink", why, 0, a_follower->GetFormID());
                 return false;
@@ -143,9 +144,12 @@ namespace MFO::Logistics {
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return false;
             // Equipping a potion on an actor consumes it -- the documented Tier A
-            // path. One unit; the engine removes it from the pack.
-            mgr->EquipObject(a_follower, best, nullptr, 1);
-            InvSnap::Touch(a_follower);   // the drink takes one out of his pack (a worker-side write, stability audit M2): his snapshot is behind it
+            // path. One unit; the engine removes it from the pack. INVARIANTS #83: the equip
+            // runs on the MAIN thread (EngineOps::Drink: posted from this tick, one frame later,
+            // re-checked there: he can still act and still holds one). It is queued ahead of this
+            // tick's snapshot build pass, so the next tick reads his pack after the drink. The
+            // cooldown and the [bleed] attribution below are the worker's ledger of what it ASKED.
+            EngineOps::Drink(a_follower, best, "drink (restore potion)");
             if (a_which == RE::ActorValue::kHealth)   // [bleed] attribution (fix/mfo-can-act)
                 Actuation::NoteHealLanded(a_follower->GetFormID(), a_follower->GetFormID(), best->GetFormID());
             // Gate this AV for the potion's own duration (min one logistics

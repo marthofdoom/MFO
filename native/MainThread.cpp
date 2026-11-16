@@ -23,7 +23,7 @@ namespace MFO::MainThread {
 
         // ── WHICH THREAD IS THIS (INVARIANTS #84) ──
         // t_inSeat: this thread is inside the thunk below right now (the engine's player Update, then the drain).
-        // g_mainTid: the thread the thunk last ran on (the main thread), stored every frame; default-constructed until the first frame.
+        // g_mainTid: the main thread. Stored at SKSEPluginLoad and kDataLoaded (NoteMainThread, both on main) and by the thunk every frame.
         // t_workerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope). The job system may hand that task to ANY
         // thread, so a tick that happens to run on the main thread's id is still a worker tick for every reader.
         thread_local bool              t_inSeat = false;
@@ -58,6 +58,31 @@ namespace MFO::MainThread {
             }
         };
 
+        // The pump's fault count (PumpFaults) and its rate-limited ERROR: the first 8, then every 256th. Main thread only writes.
+        std::atomic<std::uint64_t> g_pumpFaults{ 0 };
+        void NotePumpFault(const char* a_what) noexcept {
+            const auto n = g_pumpFaults.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n > 8 && (n % 256) != 0) return;
+            try {
+                spdlog::error("[mainthread] a posted closure THREW on the main thread: {} (fault #{}). That closure's work is LOST; the pump "
+                              "keeps draining the others. Said for the first 8 faults, then every 256th.", a_what ? a_what : "?", n);
+            } catch (...) {}   // the log itself failed (out of memory): the count still says it
+        }
+
+        // The per-closure guard both drains share (the frame drain below, DrainForSave).
+        void RunBatch(std::vector<std::function<void()>>& a_batch) {
+            for (auto& fn : a_batch) {
+                if (!fn) continue;
+                try {
+                    fn();
+                } catch (const std::exception& e) {
+                    NotePumpFault(e.what());
+                } catch (...) {
+                    NotePumpFault("a non-std exception");
+                }
+            }
+        }
+
         struct PlayerUpdateHook {
             static void thunk(RE::PlayerCharacter* a_this, float a_delta) {
                 // Original FIRST, always -- the pump piggybacks on the engine's
@@ -89,9 +114,12 @@ namespace MFO::MainThread {
                                  batch.size());
                 }
 
-                for (auto& fn : batch) {
-                    if (fn) fn();
-                }
+                // PER-TASK GUARD (stability audit M5): a closure that throws (in practice std::bad_alloc, or a std::format /
+                // container error in MFO's own code) must not unwind through PlayerCharacter::Update (a CTD with a stack that
+                // points at the engine) and must not take the rest of the batch with it. It is caught HERE, said loudly, and the
+                // drain goes on. Not a mask (principle 7): the closure's work is lost and the ERROR says so; nothing is retried.
+                // Only C++ exceptions: an access violation inside a closure is still a crash, as it must be.
+                RunBatch(batch);
             }
 
             static inline REL::Relocation<decltype(thunk)> func;
@@ -124,6 +152,26 @@ namespace MFO::MainThread {
     }
     std::uint32_t ClearGeneration() { return g_clearGen.load(std::memory_order_acquire); }
 
+    std::size_t DrainForSave() {
+        if (!IsInstalled()) return 0;   // no pump: Post is a no-op and every write ran in place, so nothing can be queued
+        if (!t_inSeat && !IsMainThread()) {
+            spdlog::error("[mainthread] kSaveGame drain REFUSED: called on a thread that is not the main thread. Posted engine writes "
+                          "stay queued across this save (a weapon unequipped by MFO just before it may load still locked).");
+            return 0;
+        }
+        std::vector<std::function<void()>> batch;
+        {
+            std::lock_guard lk(g_mx);
+            batch.swap(g_queue);   // ONCE: what a closure posts from here on lands in the new queue, not in this batch
+        }
+        if (batch.empty()) return 0;
+        const auto n = batch.size();
+        RunBatch(batch);
+        spdlog::info("[mainthread] kSaveGame: ran {} queued closure(s) before the engine wrote the save (no posted engine write is "
+                     "pending across it)", n);
+        return n;
+    }
+
     bool IsInstalled() {
         return g_installed.load() && !g_dead.load();
     }
@@ -133,6 +181,7 @@ namespace MFO::MainThread {
         const auto tid = g_mainTid.load(std::memory_order_relaxed);
         return tid != std::thread::id{} && tid == std::this_thread::get_id();
     }
+    void NoteMainThread() { g_mainTid.store(std::this_thread::get_id(), std::memory_order_relaxed); }
     bool InWorkerTick() { return t_workerTick > 0; }
     bool LiveReadsAllowed() {
         if (!IsInstalled()) return true;                 // no pump (VR / unverified build): the documented legacy path, as before
@@ -141,8 +190,17 @@ namespace MFO::MainThread {
         return IsMainThread();                           // main-thread code outside the tick (sinks, load handlers): unchanged
     }
 
+    bool EngineWritesAllowed() { return LiveReadsAllowed(); }
+    bool RunOrPost(std::function<void()> a_fn) {
+        if (!a_fn) return false;
+        if (EngineWritesAllowed()) { a_fn(); return true; }
+        Post(std::move(a_fn));
+        return false;
+    }
+    std::uint64_t PumpFaults() { return g_pumpFaults.load(std::memory_order_relaxed); }
+
     namespace {
-        std::atomic<std::uint64_t> g_liveReadViolations{ 0 }, g_workerWriteReads{ 0 };
+        std::atomic<std::uint64_t> g_liveReadViolations{ 0 }, g_workerWriteReads{ 0 }, g_engineWriteViolations{ 0 };
         constexpr std::size_t kSaidSites = 64;
         std::atomic<const char*> g_saidSites[kSaidSites]{};
         // TRUE the first time a_site (a string literal / __FUNCTION__: compared by address) is seen. A full table says nothing more.
@@ -159,7 +217,7 @@ namespace MFO::MainThread {
             return false;
         }
         // Off the seat in a way that is NOT allowed for a plain live read: inside a worker tick, or on a thread that is provably
-        // not the main one. Before the first frame the main thread is unknown: nothing is judged then.
+        // not the main one. Before NoteMainThread first ran (SKSEPluginLoad) the main thread is unknown: nothing is judged then.
         const char* OffSeat() {
             if (!IsInstalled()) return nullptr;
             if (t_workerTick > 0) return "inside the worker tick";
@@ -186,6 +244,16 @@ namespace MFO::MainThread {
             spdlog::info("[thread] '{}': a worker-side inventory WRITE reads the live list it writes (the known residue, stability audit M2: "
                          "the write moves to the main thread with this read). Counted in [overlap]. Said once per site.", a_site ? a_site : "?");
     }
+    void NoteEngineWrite(const char* a_site) {
+        const char* why = OffSeat();
+        if (!why) return;
+        g_engineWriteViolations.fetch_add(1, std::memory_order_relaxed);
+        if (FirstTime(a_site))
+            spdlog::error("[thread] INVARIANTS #83 VIOLATED at '{}': an engine actor / inventory / caster / graph WRITE runs {} (it must run "
+                          "on the main thread: EngineOps, or MainThread::Post). The write still ran. Said once per site.",
+                          a_site ? a_site : "?", why);
+    }
+    std::uint64_t EngineWriteViolations() { return g_engineWriteViolations.load(std::memory_order_relaxed); }
     std::uint64_t LiveReadViolations() { return g_liveReadViolations.load(std::memory_order_relaxed); }
     std::uint64_t WorkerWriteReads()   { return g_workerWriteReads.load(std::memory_order_relaxed); }
 
@@ -207,6 +275,7 @@ namespace MFO::MainThread {
     NpcCombatScope::~NpcCombatScope() { g_npcIn.fetch_sub(1, std::memory_order_acq_rel); }
 
     void Install() {
+        NoteMainThread();   // F2: kDataLoaded is on the main thread; the first frame has not run yet
         // SKYRIM_REL_VR_VIRTUAL: on VR the Update slot sits at a DIFFERENT
         // index, and writing 0x0AD there would vector every frame into an
         // arbitrary virtual -- an instant CTD pointing nowhere near MFO. Same

@@ -77,8 +77,8 @@ namespace MFO::Logistics::GemRules {
 
         // The follower's own xList for (obj,uid), plus the instance value. Null xl if gone.
         // A LIVE read (INVARIANTS #84 exception): it hands a live ExtraDataList to the engine write that follows on the same thread.
-        // Callers: Decide (the main thread) and TakeAndProbe's container road (the worker-side transfer that stays on the worker
-        // until stability audit M2 moves it, its read with it). No decision reads this.
+        // Callers: Decide and PumpOnMain (the main thread) and TakeAndProbe's direct road (the main thread, or no pump installed:
+        // from the worker tick every take is queued, INVARIANTS #83). No decision reads this.
         RE::ExtraDataList* FindOwned(RE::Actor* a_fol, RE::TESBoundObject* a_obj, std::uint16_t a_uid,
                                      std::int32_t& a_value) {
             a_value = 0;
@@ -310,9 +310,9 @@ namespace MFO::Logistics::GemRules {
             TheftGate::TakeBarredOwner(a_follower, a_src, a_c.copyOwner)) return false;   // theft gate
         g_probed.insert({ src, base, uid });   // never re-taken, whatever the probe decides
         const bool sellGambit = SellGambitActive(a_follower);
-        // A CORPSE source: the take is queued to the main thread like every corpse transfer (TheftGate.h, INVARIANTS #83), the copy
-        // named by its uid and re-found there; the probe runs right after it lands. 0 = not an actor source, no live pump, or already
-        // on main: the direct road below.
+        // ON THE WORKER the take is queued to the main thread like every transfer (TheftGate.h, INVARIANTS #83: a corpse AND a
+        // container source since fix/worker-writes-main), the copy named by its uid and re-found there; the probe runs right after
+        // it lands. 0 = this call is on the main thread already, or there is no live pump: the direct road below.
         if (TheftGate::QueueCopy(a_follower, a_src, a_c.obj, uid, TheftGate::Road::Gear,
                 [fol, base, uid, src, sellGambit](std::int32_t) {
                     spdlog::info("[gems] {:08X}: took '{}' from {:08X} to look for gems (on the main thread)", fol,
@@ -320,8 +320,8 @@ namespace MFO::Logistics::GemRules {
                     ProbeOnMain(fol, base, uid, src, sellGambit);
                 }) > 0)
             return true;
-        // THE CONTAINER ROAD: a worker-side transfer (the one kind #83 left on the worker), so its own read is LIVE and stays with it
-        // (INVARIANTS #84 exception; stability audit M2 moves both to the main thread). The copy is re-found by its uid in the live
+        // THE DIRECT ROAD: only on the main thread, or with no pump installed (the legacy path). Its own read is LIVE and stays with
+        // the write (NoteWriteRead counts a worker tick that reaches it; it must stay 0). The copy is re-found by its uid in the live
         // source right here: an extra-list pointer from a snapshot would be a tick old. The ownership bar is re-read on that list.
         std::int32_t v = 0;
         RE::ExtraDataList* liveXl = nullptr;
@@ -333,6 +333,7 @@ namespace MFO::Logistics::GemRules {
                 if (xl && UidOf(xl) == uid) { liveXl = xl; break; }
         }
         if (!liveXl || TheftGate::TakeBarred(a_follower, a_src, a_c.obj, liveXl, TheftGate::Road::Gear)) return false;   // gone, or its owner changed
+        MainThread::NoteEngineWrite("GemRules::TakeAndProbe");   // INVARIANTS #83: counted and said if a worker tick ever reaches this
         a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, liveXl, a_follower);
         InvSnap::Touch(a_src); InvSnap::Touch(a_follower);   // both snapshots are behind this write
         if (!FindOwned(a_follower, a_c.obj, uid, v)) return false;
