@@ -21,8 +21,13 @@
 // sweep is at kSaveGame, and the co-save callback can only CHECK (and undo the sweep's re-key).
 //
 // WHAT THE SWEEP DOES (main thread, inside the save call):
-//   1. Every caster (the four magicCasters of every process actor and the player) whose
-//      currentSpell is a pool form: MagicCaster::InterruptCast(false), the same call
+// THE ACTOR SET (SweepActors): every actor with an AI process (the four process lists), the
+// player, every pool slot's current owner, and every actor a pool form was handed out to stream at
+// this session (Slot::targets, recorded on the main thread by DeliverySpell). The recorded targets
+// cover a stream target that left the process lists inside the sustain window (a load-door
+// autosave mid-fight); a caster or target that is neither processed nor recorded is not covered.
+//   1. Every caster (the four magicCasters of every actor in the set) whose currentSpell is a pool
+//      form: MagicCaster::InterruptCast(false), the same call
 //      TargetCastEndActor makes at a stream's end. Disassembly, all three builds:
 //      InterruptCast (AE 34408 0x5BBFA0 / SE 33630 0x54CB70 / 1.7.104 0x5CAAE0) returns at once
 //      when currentSpell is null, else it ends with a tail jump to AE 34435 0x5BEB60 /
@@ -32,8 +37,10 @@
 //      as after any interrupted channel; MFO bills per beat, not through the channel.
 //   2. Every active effect of a pool form is re-keyed to the REAL spell that owns its Effect*
 //      (the slot's sources this session, newest first). A proxy shares its source's Effect* in
-//      the source's order, so the save writes a real form and the same effect index. Done AFTER
-//      the interrupts, so an effect the engine removed on an interrupt is never touched.
+//      the source's order, so the save writes a real form and the same effect index. A SECOND
+//      pass over the whole set, run only after step 1 has interrupted every caster on every actor
+//      (an ally stream's target can come before its caster), so an effect the engine removed on
+//      an interrupt is never touched.
 //   3. Hands, selected-spell slots and the spell list are only CHECKED: MFO never teaches or
 //      equips a proxy. A pool form found there is an ERROR (the save will hold it), not repaired.
 // The co-save callback puts each re-keyed effect back on its proxy (found again by address on its
@@ -54,6 +61,9 @@
 #include "MainThread.h"   // Post: the aborted-save key-back, the first-pump load repair
 
 #include <unordered_set>
+
+// <windows.h> is banned outside Board.cpp (ENGINE_NOTES §9); declared by hand as in Diagnostics.cpp.
+extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId();
 
 namespace MFO::Actuation {
 
@@ -79,9 +89,10 @@ namespace MFO::Actuation {
 
         std::string Hex(RE::FormID a_id) { return fmt::format("{:08X}", a_id); }
 
-        // Every actor with an AI process (the four process lists) plus the player, once each, held
-        // for the length of the pass. MAIN THREAD.
-        std::vector<RE::NiPointer<RE::Actor>> ProcessActors() {
+        // Every actor with an AI process (the four process lists), the player, and (with a pool)
+        // every pool slot's current owner and every actor a pool form streamed at this session,
+        // once each, held for the length of the pass. MAIN THREAD.
+        std::vector<RE::NiPointer<RE::Actor>> SweepActors(const std::vector<ConcProxyView>* a_pool = nullptr) {
             std::vector<RE::NiPointer<RE::Actor>> out;
             std::unordered_set<const RE::Actor*>  seen;
             auto add = [&](RE::NiPointer<RE::Actor> a_p) {
@@ -93,6 +104,16 @@ namespace MFO::Actuation {
                     for (auto& h : *arr) add(h.get());
             }
             if (auto* pc = RE::PlayerCharacter::GetSingleton()) add(RE::NiPointer<RE::Actor>(pc));
+            if (a_pool) {
+                auto addId = [&](RE::FormID a_id) {
+                    if (a_id)
+                        if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id)) add(RE::NiPointer<RE::Actor>(a));
+                };
+                for (const auto& v : *a_pool) {
+                    addId(v.owner);
+                    for (const auto id : v.targets) addId(id);
+                }
+            }
             return out;
         }
 
@@ -102,6 +123,10 @@ namespace MFO::Actuation {
                 if (static_cast<const RE::TESForm*>(v.form) == a_f) return &v;
             return nullptr;
         }
+
+        // What the actor set of a sweep / check covered, for its summary line.
+        constexpr const char* kSetText =
+            "process-list actors, the player, slot owners and every recorded stream target";
 
         std::string PoolText(const std::vector<ConcProxyView>& a_pool) {
             std::string s;
@@ -203,11 +228,22 @@ namespace MFO::Actuation {
         }
 
         // kUnverifiable: the memory reads id 0, which the form map never holds; a form outside the
-        // map cannot be told from garbage, so it is left alone and said.
+        // map cannot be told from garbage, so it is left alone and said. kDead also covers a form
+        // that is in the map under its id but is not a MagicItem type.
         Life Classify(const RE::TESForm* a_p, RE::FormID& a_id) {
             if (!ReadFormIdGuarded(a_p, a_id)) return Life::kDead;
             if (a_id == 0) return Life::kUnverifiable;
             if (RE::TESForm::LookupByID(a_id) != a_p) return Life::kDead;
+            // Map identity proven; the slot (a caster's spell, an effect's spell) must also hold a
+            // MagicItem. Anything else in that slot is treated as dead.
+            switch (a_p->GetFormType()) {
+            case RE::FormType::Spell:
+            case RE::FormType::Scroll:
+            case RE::FormType::Enchantment:
+            case RE::FormType::AlchemyItem:
+            case RE::FormType::Ingredient: break;
+            default: return Life::kDead;
+            }
             return a_id >= 0xFF000000 ? Life::kLiveRuntime : Life::kLive;
         }
 
@@ -237,12 +273,13 @@ namespace MFO::Actuation {
             return;
         }
         std::uint32_t actors = 0, interrupted = 0, leftCasters = 0, rekeyed = 0, unresolved = 0, foreign = 0;
-        for (auto& ap : ProcessActors()) {
+        const auto set = SweepActors(&pool);
+        // 1. Casters channeling a pool form, on EVERY actor of the set, before any effect is re-keyed.
+        for (auto& ap : set) {
             auto* actor = ap.get();
             ++actors;
             const char* name = actor->GetName();
-            // 1. Casters channeling a pool form.
-            auto& rd = actor->GetActorRuntimeData();
+            auto&       rd   = actor->GetActorRuntimeData();
             for (std::size_t i = 0; i < std::size(rd.magicCasters); ++i) {
                 auto* mc = rd.magicCasters[i];
                 if (!mc) continue;
@@ -264,7 +301,12 @@ namespace MFO::Actuation {
                                   mc->currentSpell ? Hex(mc->currentSpell->GetFormID()) : std::string("null"));
                 }
             }
-            // 2. Active effects of a pool form: key them to their real source spell for the save.
+        }
+        // 2. Active effects of a pool form, on every actor of the set: key them to their real source
+        //    spell for the save. 3. Slots MFO never fills: check only.
+        for (auto& ap : set) {
+            auto*       actor = ap.get();
+            const char* name  = actor->GetName();
             if (auto* list = actor->AsMagicTarget()->GetActiveEffectList()) {
                 for (auto* ae : *list) {
                     if (!ae) continue;
@@ -287,7 +329,6 @@ namespace MFO::Actuation {
                                  Hex(actor->GetFormID()), name ? name : "", Hex(v->form->GetFormID()), Hex(src->GetFormID()));
                 }
             }
-            // 3. Slots MFO never fills: check only.
             if (const Refs r = CountRefs(actor, pool); r.hand + r.selected + r.known != 0) {
                 foreign += r.hand + r.selected + r.known;
                 spdlog::error("[proxysave] kSaveGame: {} \"{}\" holds a ConcProxy form in {} -- MFO never puts one "
@@ -295,10 +336,11 @@ namespace MFO::Actuation {
                               Hex(actor->GetFormID()), name ? name : "", r.Text());
             }
         }
-        spdlog::info("[proxysave] kSaveGame sweep (before the engine writes): {} actor(s) checked against {} ConcProxy "
-                     "form(s) [{}] -- {} caster(s) interrupted, {} active effect(s) keyed to their source for the save; "
-                     "{} caster(s), {} effect(s) and {} other slot(s) could NOT be cleared.",
-                     actors, pool.size(), PoolText(pool), interrupted, rekeyed, leftCasters, unresolved, foreign);
+        spdlog::info("[proxysave] kSaveGame sweep (before the engine writes, thread {}): {} actor(s) ({}) checked "
+                     "against {} ConcProxy form(s) [{}] -- {} caster(s) interrupted, {} active effect(s) keyed to their "
+                     "source for the save; {} caster(s), {} effect(s) and {} other slot(s) could NOT be cleared.",
+                     ::GetCurrentThreadId(), actors, kSetText, pool.size(), PoolText(pool), interrupted, rekeyed,
+                     leftCasters, unresolved, foreign);
         if (!g_rekeyed.empty()) {
             // The co-save callback keys them back inside this save call. If it never comes (the save
             // did not complete), this does it on the next pump; it finds nothing when it did.
@@ -324,7 +366,7 @@ namespace MFO::Actuation {
         Refs        total;
         std::string who;
         std::uint32_t actors = 0;
-        for (auto& ap : ProcessActors()) {
+        for (auto& ap : SweepActors(&pool)) {
             auto* actor = ap.get();
             ++actors;
             const Refs r = CountRefs(actor, pool);
@@ -342,9 +384,9 @@ namespace MFO::Actuation {
                          "engine wrote the actors: {} -- THE .ESS MAY HOLD A RUNTIME FORM (INVARIANTS #82).",
                          total.Text(), PoolText(pool), who);
         else
-            spdlog::info("[proxysave] co-save check (after the records): {} actor(s), no caster, slot or active effect "
-                         "named any of the {} ConcProxy form(s) [{}] -- CLEAN.",
-                         actors, pool.size(), PoolText(pool));
+            spdlog::info("[proxysave] co-save check (after the records): {} actor(s) ({}), no caster, slot or active "
+                         "effect among them named any of the {} ConcProxy form(s) [{}] -- CLEAN for that set.",
+                         actors, kSetText, pool.size(), PoolText(pool));
         KeyBack("co-save callback");
     }
 
@@ -366,7 +408,7 @@ namespace MFO::Actuation {
             return l;
         };
         std::uint32_t actors = 0, cleared = 0, deadEffects = 0, liveRuntime = 0, unverifiable = 0;
-        for (auto& ap : ProcessActors()) {
+        for (auto& ap : SweepActors()) {
             auto* actor = ap.get();
             ++actors;
             const char* name = actor->GetName();
@@ -414,10 +456,11 @@ namespace MFO::Actuation {
                 }
             }
         }
-        spdlog::info("[proxysave] load repair ({}): {} actor(s) checked -- {} caster(s) holding a destroyed form cleared, "
-                     "{} active effect(s) with a destroyed spell reported; {} live runtime (0xFF) spell(s) in a caster or "
-                     "effect (not MFO's: its pool is empty after a load; left alone), {} unverifiable.",
-                     a_when, actors, cleared, deadEffects, liveRuntime, unverifiable);
+        spdlog::info("[proxysave] load repair ({}, thread {}): {} actor(s) checked (process lists + player) -- {} "
+                     "caster(s) holding a destroyed form cleared, {} active effect(s) with a destroyed spell reported; {} "
+                     "live runtime (0xFF) spell(s) in a caster or effect (live forms the map holds under that id: another "
+                     "mod's, or one an old save's 0xFF id now resolves to; left alone), {} unverifiable.",
+                     a_when, ::GetCurrentThreadId(), actors, cleared, deadEffects, liveRuntime, unverifiable);
     }
 
 }

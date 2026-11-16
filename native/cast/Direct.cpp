@@ -261,8 +261,12 @@ namespace MFO::Actuation {
             // outlive a FREE or a RECONFIG (a cap-only re-stream keeps its effect), and that
             // effect's Effect* belongs to the source it was cast as. The save sweep
             // (cast/ProxySave.cpp) keys such an effect back to its real spell from this list.
+            // `targets`: every actor this form was handed out to stream at this session (DeliverySpell,
+            // main thread), deduplicated, kept across Free/RECONFIG for the same reason as `past` and
+            // cleared only by Reset. The sweep adds them (and the owners) to its actor set, so a target
+            // that left the process lists inside the stream's sustain window is still swept.
             struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0;
-                          std::vector<RE::FormID> past; };
+                          std::vector<RE::FormID> past; std::vector<RE::FormID> targets; };
             constexpr std::size_t kSlotCount = 6;   // concurrent self-delivery conc streams (party healers)
             Slot g_slot[kSlotCount];
             // The minted forms' FormIDs, readable from ANY thread (feat/mfo-animheal-p0,
@@ -351,8 +355,20 @@ namespace MFO::Actuation {
             out_needsProxy = a_src && a_follower && a_tgt && a_tgt != a_follower &&
                              a_src->GetDelivery()    == RE::MagicSystem::Delivery::kSelf &&
                              a_src->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
-            if (out_needsProxy)
-                return ConcProxy::Acquire(a_follower->GetFormID(), a_src);   // proxy or nullptr(skip)
+            if (out_needsProxy) {
+                auto* proxy = ConcProxy::Acquire(a_follower->GetFormID(), a_src);   // proxy or nullptr(skip)
+                if (proxy) {
+                    // Record the stream target on the slot for the save sweep (fix/save-integrity-mfo).
+                    const auto tid = a_tgt->GetFormID();
+                    for (auto& s : ConcProxy::g_slot)
+                        if (s.form == proxy) {
+                            if (std::find(s.targets.begin(), s.targets.end(), tid) == s.targets.end())
+                                s.targets.push_back(tid);
+                            break;
+                        }
+                }
+                return proxy;
+            }
             return a_src;
         }
     }
@@ -899,7 +915,7 @@ namespace MFO::Actuation {
     std::vector<ConcProxyView> ConcProxyPool() {
         std::vector<ConcProxyView> out;
         for (const auto& s : ConcProxy::g_slot)
-            if (s.form) out.push_back({ s.form, s.owner, s.past });
+            if (s.form) out.push_back({ s.form, s.owner, s.past, s.targets });
         return out;
     }
 

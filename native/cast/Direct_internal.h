@@ -85,6 +85,7 @@ namespace MFO::Actuation {
             RE::SpellItem*          form  = nullptr;
             RE::FormID              owner = 0;
             std::vector<RE::FormID> past;
+            std::vector<RE::FormID> targets;   // every actor this form streamed at this session (dedup)
         };
         std::vector<ConcProxyView> ConcProxyPool();
         void                       ResetProxySaveState();

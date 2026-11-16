@@ -817,9 +817,14 @@ per concern:
     `state = kNone`; a destroyed effect spell is an ERROR line only). Every direct member read / write is gated
     on `Runtime::Known()`; offsets static_asserted (`MagicCaster` +0x28 / +0x30, `ActiveEffect` +0x40 / +0x48,
     `TESForm::formID` +0x14). Same shape as Harbinger `core/CastProxy.cpp` (its INVARIANTS #19). **What breaks:**
-    re-keying BEFORE the interrupts (an effect the engine removes on the interrupt would be recorded); trusting a
-    recorded `ActiveEffect*` without finding it on the list; reading through a caster / effect pointer on the load
-    path before the liveness test.
+    re-keying BEFORE the interrupts (an effect the engine removes on the interrupt would be recorded; the sweep runs
+    two passes, every caster on every actor first, then every effect); trusting a recorded `ActiveEffect*` without
+    finding it on the list; reading through a caster / effect pointer on the load path before the liveness test;
+    dropping `Slot::targets` (recorded by `DeliverySpell`, main thread) or the owners from `SweepActors` (a stream
+    target that left the process lists inside the sustain window, e.g. a load-door autosave mid-fight, is then not
+    swept). The load-repair liveness test also requires a MagicItem form type. **Open findings:**
+    `Docs/REVIEW-BACKLOG.md` "fix/save-integrity-mfo (Opus 5.5 review, against ab93a51c)" (no post-load watch with
+    Harbinger absent; load repair resets fewer fields than 34435).
   - `cast/DirectSelf.cpp` (358) = the SELF stream: `CastSelfDirect` (`:17`), `SelfCastReconcile` (`:239`).
     **SELF-BUFF RECAST LOCKOUT (`fix/mage-buff-loop`, 2026-11-12, NOT field-run):** `NoteSelfBuffApplied` / `SelfBuffRecastLocked` / `ClearSelfBuffLocks` /
     `PumpSelfBuffReadback` (`cast/Direct.cpp`, public in `cast/Actuation.h`; a LEAF mutex `g_buffLockMx`, written on MAIN by `ApplySelfEffect` after a landed

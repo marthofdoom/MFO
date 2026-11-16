@@ -3407,3 +3407,8 @@ SEV-2 findings 1, 2 and SEV-3 findings 3-5 were FIXED in the fix round. Deferred
 - **(SEV-4, e):** verbatim: "prevRight / prevLeft are captured only on the right-hand gambit path, a pre-drawn AI dagger may be 'restored', and the restore placement can sit 120 s."
 - **(SEV-4, f):** verbatim: "the static per-follower log maps are never cleared."
 - **(SEV-5, g, against aaacee6e):** verbatim: "s_spellsHold (Candidates.cpp) is not erased by Candidates::Forget; IausRetreatSelfHeal's Build resets the latch out of combat (harmless)."
+
+### fix/save-integrity-mfo (Opus 5.5 review, 2026-11-15, against ab93a51c)
+F1 (SEV-3, stream targets outside the process lists), F2 (SEV-4, two-pass sweep), F3 (SEV-4, MagicItem type check), F6 (SEV-5, thread id in the summary lines), F7 (SEV-5, CLAUDE.md rule count) and the F4 load-summary rewording were FIXED in the fix round. Deferred, status OPEN (cross-referenced from MAP.md's `cast/ProxySave.cpp` "What breaks"):
+- **(SEV-4, F4):** verbatim-ish: "no post-load watch. Harbinger's post-load watch covers MFO casters only on Harbinger fix/proxy-save-integrity, not with Harbinger absent; an old save whose caster / effect points at a form destroyed AFTER the post-load repair passes is not caught." Reviewer's reasoning: the repair runs at kPostLoadGame sync + first pump only.
+- **(SEV-5, F5):** verbatim-ish: "the load repair resets fewer fields than 34435: SetDualCasting(false), desiredTarget, the caster timers and SetCurrentSpellImpl(nullptr) are not reset." Reviewer's reasoning: the repair skips 34435's vcalls on purpose (they read the dead spell), so a field 34435 clears through them stays as it was; low impact, the caster's next cast rewrites them.
