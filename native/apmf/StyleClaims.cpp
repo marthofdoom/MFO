@@ -24,6 +24,7 @@
 // ClearStyleClaims in the drained-pump load window; its OWN mutex g_styleMx, never g_mx. Lock order: CombatStyle's own mutex
 // is taken and dropped inside SnapshotStyleDesires BEFORE g_styleMx; never the reverse.
 #include "APMFBridge.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
 #include "CombatStyle.h"
@@ -78,7 +79,7 @@ namespace MFO::APMFBridge {
         // MAIN THREAD only.
         bool WearsHeavyBody(RE::FormID a_fid) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_fid);
-            auto* body  = actor ? actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr;
+            auto* body  = actor ? InvSnap::Items(actor).WornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr;
             return body && body->GetArmorType() == RE::BGSBipedObjectForm::ArmorType::kHeavyArmor;
         }
 

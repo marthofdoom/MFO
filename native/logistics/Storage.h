@@ -1,6 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include "State.h"            // FollowerState
+#include "InvSnapshot.h"      // InvSnap::Entry (INVARIANTS #84)
 #include "classes/Classes.h"  // Classes::Mask / Id (the pure plan reads the class table)
 
 #include <chrono>
@@ -127,7 +128,7 @@ namespace MFO::Logistics::Storage {
     // Economy.cpp sell loop: how many copies of this sell candidate are held back from the sale (0 = sell as today, 1 = it
     // is going to storage). Records the piece on his want list; Tick moves it.
     std::int32_t HoldFromSale(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_obj,
-                              RE::InventoryEntryData* a_entry, std::int32_t a_count, std::int32_t a_value);
+                              const InvSnap::Entry* a_entry, std::int32_t a_count, std::int32_t a_value);
 
     // The service tick's idle branch (logistics/Service.cpp), out of combat, loaded: settle what a load restored mid-move,
     // confirm in-flight moves, dispatch wanted stores, retrieve one piece.

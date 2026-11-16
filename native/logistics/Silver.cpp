@@ -365,7 +365,7 @@ namespace MFO::Logistics {
         if (!a_follower) return nullptr;
         const WeaponRoles roles = a_state ? ComputeWeaponRoles(a_follower, *a_state) : WeaponRoles{};
         RE::TESObjectWEAP* best = nullptr; float bestScore = -1.0f;
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0) continue;
             auto* w = obj->As<RE::TESObjectWEAP>();
             if (!IsSilverMelee(w)) continue;
@@ -398,7 +398,7 @@ namespace MFO::Logistics {
         // off-hand in use (a shield / second weapon by perks, or a caster's spell hand) that is a
         // one-hander, so a lone silver greatsword does not end the restock.
         const bool oneHand = SilverNeedsOneHand(a_follower, a_state);
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0) continue;
             auto* w = obj->As<RE::TESObjectWEAP>();
             if (!IsSilverMelee(w)) continue;
@@ -420,7 +420,7 @@ namespace MFO::Logistics {
         if (a_outCount) *a_outCount = 0;
         if (!a_follower) return nullptr;
         RE::TESAmmo* best = nullptr; float bestDmg = 0.0f; std::int32_t bestVal = 0, bestCount = 0;
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0) continue;
             auto* am = obj->As<RE::TESAmmo>();
             if (!am || AmmoIsBolt(am) != a_wantBolt || !IsSilverAmmo(am)) continue;
@@ -446,7 +446,9 @@ namespace MFO::Logistics {
         if (!a_follower || !a_src) return false;
         // Collect first, mutate after (RemoveItem dispatches TESContainerChangedEvent synchronously).
         RE::TESBoundObject* best = nullptr; float bestDmg = 0.0f; std::int32_t bestVal = 0, bestCount = 0;
-        for (auto& [obj, data] : a_src->GetInventory()) {
+        const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+        if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+        for (auto& [obj, data] : srcInv) {
             if (!obj || data.first <= 0) continue;
             auto* am = obj->As<RE::TESAmmo>();
             if (!am || AmmoIsBolt(am) != a_wantBolt || !IsSilverAmmo(am)) continue;

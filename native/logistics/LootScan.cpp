@@ -608,7 +608,7 @@ namespace MFO::Logistics {
                             if (an.time_since_epoch().count() == 0 || a_now >= an) {
                                 an = a_now + std::chrono::seconds(15);
                                 std::string ad; int tot = 0;
-                                for (auto& [obj, data] : ref->GetInventory()) {
+                                for (auto& [obj, data] : InvSnap::Items(ref)) {
                                     ++tot;
                                     if (auto* am = obj ? obj->As<RE::TESAmmo>() : nullptr)
                                         ad += std::format(" [{} x{} isBolt={}]",

@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "iaus/EffectMirror.h"       // INVARIANTS #84: active-effect reads through the main-built mirror
 #include "ProgProbe.h"
 #include "Config.h"
 #include "Followers.h"
@@ -81,15 +82,13 @@ namespace MFO::ProgProbe {
         int CountEffect(RE::Actor* a_actor, RE::EffectSetting* a_mgef, int& a_outInactive) {
             a_outInactive = 0;
             if (!a_actor || !a_mgef) return -1;
-            auto* mt = a_actor->AsMagicTarget();
-            if (!mt) return -1;
-            auto* list = mt->GetActiveEffectList();
-            if (!list) return -1;
+            const auto fx = EffectMirror::Get(a_actor);   // INVARIANTS #84 (the live list in place on the main thread)
+            if (!fx || !fx->hasList) return -1;           // not yet / no magic target / no list: unreadable
             int n = 0;
-            for (auto* ae : *list) {
-                if (!ae || ae->GetBaseObject() != a_mgef) continue;
+            for (const auto& f : fx->fx) {
+                if (f.base != a_mgef) continue;
                 ++n;
-                if (ae->flags.any(RE::ActiveEffect::Flag::kInactive)) ++a_outInactive;
+                if (f.inactive) ++a_outInactive;
             }
             return n;
         }

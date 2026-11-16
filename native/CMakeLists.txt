@@ -100,6 +100,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Engine.cpp
     iaus/Generate.cpp
     iaus/SpellBook.cpp
+    iaus/EffectMirror.cpp
     iaus/Candidates.cpp
     iaus/Fills.cpp
     iaus/Hide.cpp
@@ -109,6 +110,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/LootNeed.cpp
     logistics/Sinks.cpp
     logistics/TheftGate.cpp
+    logistics/InvSnapshot.cpp
     logistics/Steal.cpp
     logistics/Service.cpp
     logistics/Cast.cpp

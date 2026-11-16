@@ -21,6 +21,8 @@
 #include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 #include "classes/Classes.h"   // card C11: OnConfigRead after an MCM close
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: the worker snapshots' tick bracket
+#include "iaus/EffectMirror.h"
 #include "logistics/GemRules.h"
 #include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
 #include "logistics/Errand.h"   // town errands: the owner-independent Sweep
@@ -90,7 +92,131 @@ namespace MFO::Diagnostics {
         std::atomic<std::uint64_t> g_hbMainDrains{ 0 };
         std::atomic<std::int64_t>  g_hbMainLastMs{ 0 };
         std::atomic<const char*>   g_hbWorkerStage{ "never" };
-        inline void HbStage(const char* a_stage) noexcept { g_hbWorkerStage.store(a_stage, std::memory_order_relaxed); }
+        // ── P0 OVERLAP PROBE, the worker half (stability audit 2026-11-16; MainThread.h has the main half) ──
+        // The question INVARIANTS #74 left open: does MFO's AddTask tick ever run WHILE the main thread is inside the player's
+        // Update (the engine's own update, or MFO's drain), or while an NPC is inside Character::UpdateCombat? Passive: a handful of
+        // relaxed atomics per tick, one `[overlap]` line per 60 s from the sleeper. Two detectors per tick, so no overlap is missed:
+        //   * the SEQUENCE: MainThread::SeatSeq is odd inside the thunk and moves at its entry and exit, so "odd at tick entry, or
+        //     changed by tick exit" is every overlap of [tick] with [thunk], whatever the stage. The same for NpcCombatSeq / In.
+        //   * the STAGE sample: at each HbStage the phase is read, so the line can name the first stage seen inside each phase.
+        struct OverlapProbe {
+            std::atomic<std::uint64_t> ticks{ 0 }, tickSeat{ 0 }, tickNpc{ 0 }, tickOnMainTid{ 0 };
+            std::atomic<std::uint64_t> stageSamples{ 0 }, stageInEngine{ 0 }, stageInDrain{ 0 }, stageInNpc{ 0 };
+            std::atomic<const char*>   firstEngineStage{ nullptr }, firstDrainStage{ nullptr }, firstNpcStage{ nullptr };
+        };
+        OverlapProbe g_ov;
+        constexpr std::uint32_t kOverlapLogMs = 60000;
+        inline void HbStage(const char* a_stage) noexcept {
+            g_hbWorkerStage.store(a_stage, std::memory_order_relaxed);
+            g_ov.stageSamples.fetch_add(1, std::memory_order_relaxed);
+            const auto first = [a_stage](std::atomic<const char*>& a_slot) {
+                const char* none = nullptr;
+                a_slot.compare_exchange_strong(none, a_stage, std::memory_order_relaxed);
+            };
+            switch (MainThread::SeatPhase()) {
+            case 1: g_ov.stageInEngine.fetch_add(1, std::memory_order_relaxed); first(g_ov.firstEngineStage); break;
+            case 2: g_ov.stageInDrain.fetch_add(1, std::memory_order_relaxed);  first(g_ov.firstDrainStage);  break;
+            default: break;
+            }
+            if (MainThread::NpcCombatIn() > 0) { g_ov.stageInNpc.fetch_add(1, std::memory_order_relaxed); first(g_ov.firstNpcStage); }
+        }
+        // One per tick body: the sequence detector, and whether the job system ran this tick on the main thread's own id.
+        struct OverlapTick {
+            std::uint32_t seat0 = MainThread::SeatSeq();
+            std::uint32_t npc0  = MainThread::NpcCombatSeq();
+            bool          npcIn0 = MainThread::NpcCombatIn() > 0;
+            OverlapTick() {
+                g_ov.ticks.fetch_add(1, std::memory_order_relaxed);
+                if (MainThread::IsMainThread()) g_ov.tickOnMainTid.fetch_add(1, std::memory_order_relaxed);
+            }
+            ~OverlapTick() {
+                if ((seat0 & 1u) || MainThread::SeatSeq() != seat0) g_ov.tickSeat.fetch_add(1, std::memory_order_relaxed);
+                if (npcIn0 || MainThread::NpcCombatSeq() != npc0)   g_ov.tickNpc.fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+        // ── THE WORKER SNAPSHOTS' TICK BRACKET (INVARIANTS #84; logistics/InvSnapshot.h, iaus/EffectMirror.h) ──
+        // Begin: advance the tick the freshness rules count in, and keep the party's and the player's inventory and effects wanted
+        // (built every pass), whether or not this tick reads them: a follower is read once per LAP, and his first read must not be
+        // "not yet". End: post ONE main-thread build pass. It is queued behind every main-thread write this tick posted (FIFO), so
+        // the next tick reads their result. A pass that a newer queued pass supersedes (the main thread stalled) returns at once.
+        std::atomic<std::uint64_t> g_snapPassPosted{ 0 };
+        void SnapshotsBeginTick() {
+            auto* ui = RE::UI::GetSingleton();
+            InvSnap::BeginTick(ui && ui->GameIsPaused());   // a paused tick does not age a snapshot (InvSnapshot.h BeginTick)
+            if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+                InvSnap::Want(pc);
+                EffectMirror::Want(pc->GetFormID());
+            }
+            for (const auto& h : Followers::g_active) {
+                auto ptr = h.get();   // HOLD the NiPointer
+                if (auto* a = ptr.get()) {
+                    InvSnap::Want(a);
+                    EffectMirror::Want(a->GetFormID());
+                }
+            }
+        }
+        // THE TICK GATE (INVARIANTS #84). TRUE = every party member's and the player's inventory snapshot and effect mirror is readable
+        // this tick. A snapshot's readability changes only at a tick boundary (InvSnapshot.cpp Readable), so once this passes, no
+        // reader in the tick body can get "not yet" for the party or the player; only a SOURCE (a container, a corpse, a foe) can.
+        // FALSE = the body is skipped this tick: the first tick after a follower joins or a load, a tick that follows a worker-side
+        // write whose rebuild the main thread has not drained yet, the first tick(s) after a pause ends (until the pass posted
+        // under it has run), or the main thread stalled past the age cap while unpaused. A PAUSED tick is not skipped for age (the
+        // snapshots it had stand), so the bookkeeping that ran under a menu still runs. Nothing is decided on an unread pack; the
+        // skip is the same event as a tick the pump gate or Scheduler's pacing check drops.
+        // Said when it lasts (principle 7): a run of kGateSayTicks skipped ticks logs who is not ready, then every kGateSayTicks.
+        constexpr std::uint32_t kGateSayTicks = 38;   // ~5 s of consecutive skipped ticks
+        std::uint32_t g_gateSkipRun = 0;              // worker-serial (one tick body at a time: PumpTickGate)
+        std::atomic<std::uint64_t> g_gateSkips{ 0 };
+        bool SnapshotsReadyForTick() {
+            RE::FormID who = 0; const char* what = nullptr;
+            const auto check = [&](RE::Actor* a_actor) {
+                if (!a_actor || who) return;
+                if (!InvSnap::Ready(a_actor))                         { who = a_actor->GetFormID(); what = "inventory snapshot"; }
+                else if (!EffectMirror::Ready(a_actor->GetFormID()))  { who = a_actor->GetFormID(); what = "effect mirror"; }
+            };
+            check(RE::PlayerCharacter::GetSingleton());
+            for (const auto& h : Followers::g_active) {
+                auto ptr = h.get();   // HOLD the NiPointer
+                check(ptr.get());
+            }
+            if (!who) {
+                if (g_gateSkipRun >= kGateSayTicks)
+                    spdlog::info("[invsnap] the worker tick runs again: every party snapshot is readable (after {} skipped ticks)", g_gateSkipRun);
+                g_gateSkipRun = 0;
+                return true;
+            }
+            g_gateSkips.fetch_add(1, std::memory_order_relaxed);
+            if (++g_gateSkipRun % kGateSayTicks == 0)
+                spdlog::warn("[invsnap] the worker tick has been SKIPPED for {} ticks in a row (~{:.0f} s): the {} of {:08X} is not readable "
+                             "(built on the main thread, INVARIANTS #84). The main-thread pump is not draining (a stall), or that actor "
+                             "no longer resolves. No follower decision is made on an unread pack.",
+                             g_gateSkipRun, g_gateSkipRun * kPumpMs / 1000.0, what, who);
+            return false;
+        }
+
+        void SnapshotsEndTick() {
+            const auto tick = InvSnap::CurrentTick();
+            g_snapPassPosted.store(tick, std::memory_order_release);
+            MainThread::Post([tick]() {
+                if (tick < g_snapPassPosted.load(std::memory_order_acquire)) return;   // a newer pass is queued behind this one
+                InvSnap::BuildPass();
+                EffectMirror::BuildPass();
+            });
+        }
+
+        void LogOverlap() {
+            const auto s = [](const std::atomic<const char*>& a) { const char* p = a.load(std::memory_order_relaxed); return p ? p : "-"; };
+            spdlog::info("[overlap] since start: worker ticks={} overlappedPlayerUpdate={} overlappedNpcUpdateCombat={} ranOnMainThreadId={} | "
+                         "stage samples={} inEngineUpdate={} (first '{}') inMfoDrain={} (first '{}') inNpcUpdateCombat={} (first '{}') | "
+                         "main thunk edges that saw a tick in flight={}",
+                         g_ov.ticks.load(std::memory_order_relaxed), g_ov.tickSeat.load(std::memory_order_relaxed),
+                         g_ov.tickNpc.load(std::memory_order_relaxed), g_ov.tickOnMainTid.load(std::memory_order_relaxed),
+                         g_ov.stageSamples.load(std::memory_order_relaxed),
+                         g_ov.stageInEngine.load(std::memory_order_relaxed), s(g_ov.firstEngineStage),
+                         g_ov.stageInDrain.load(std::memory_order_relaxed), s(g_ov.firstDrainStage),
+                         g_ov.stageInNpc.load(std::memory_order_relaxed), s(g_ov.firstNpcStage),
+                         MainThread::SeatSawWorker());
+        }
         // Generation token: StopPump/StartPump bump it, so a thread that was
         // mid-sleep across a revert->load exits instead of running alongside
         // its own replacement.
@@ -951,12 +1077,22 @@ namespace MFO::Diagnostics {
                         }
 
                         g_hbWorkerTicks.fetch_add(1, std::memory_order_relaxed);   // [hb]
+                        // INVARIANTS #84: every reader below is "in the worker tick" whichever OS thread runs this task, so the
+                        // inventory / effect readers answer from the main-built snapshots, never a live engine list.
+                        MainThread::WorkerTickScope tickScope;
+                        OverlapTick overlapTick;   // P0 probe: destroyed at the end of the body (after HbStage("idle"))
 
                         // Detection and the HUD stay on the old ~532 ms budget;
                         // only the evaluator runs at the deadline.
                         // [hb] HbStage names the step about to run, so a body that
                         // never returns leaves its callee's name in the heartbeat.
                         if (diagTurn) { HbStage("Followers::Refresh"); Followers::Refresh(); }
+                        HbStage("Snapshots::BeginTick");          SnapshotsBeginTick();   // INVARIANTS #84: after Refresh (the party list), before any reader
+                        if (!SnapshotsReadyForTick()) {   // THE TICK GATE: no reader runs on an unread party (see SnapshotsReadyForTick)
+                            HbStage("Snapshots::EndTick(gated)"); SnapshotsEndTick();
+                            HbStage("idle");
+                            return;
+                        }
 
                         HbStage("Scheduler::Tick");               Scheduler::Tick();
                         HbStage("Actuation::SelfCastReconcile");  Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
@@ -974,6 +1110,7 @@ namespace MFO::Diagnostics {
                         // every 4th -- a half-second echo made DragFloat crawl
                         // and hid whether a click registered (board review M2).
                         if (diagTurn || Board::IsOpen()) { HbStage("Board::PublishSnapshot"); Board::PublishSnapshot(); }
+                        HbStage("Snapshots::EndTick");            SnapshotsEndTick();     // INVARIANTS #84: one main-thread build pass, behind this tick's posts
                         HbStage("idle");
                     });
                 }
@@ -984,6 +1121,7 @@ namespace MFO::Diagnostics {
                 // that had run by the time it printed, so a stalled main shows
                 // as a drains count that stops moving while ticks (or this line)
                 // keep going. Post is a documented no-op on VR: drains stay 0.
+                if ((wake % (kOverlapLogMs / kPumpMs)) == 0) { LogOverlap(); InvSnap::LogStats(); EffectMirror::LogStats(); }   // P0 probe + #84 counters: one line each per 60 s, always on
                 if (Config::g_heartbeat.load(std::memory_order_relaxed) && (wake % (kHeartbeatMs / kPumpMs)) == 0) {
                     const auto nowMs   = std::chrono::duration_cast<std::chrono::milliseconds>(
                                              std::chrono::steady_clock::now().time_since_epoch()).count();

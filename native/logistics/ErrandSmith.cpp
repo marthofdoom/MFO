@@ -178,7 +178,7 @@ namespace MFO::Logistics::Errand::Smith {
         Have CountsOf(RE::Actor* a_f) {
             Have have;
             if (!a_f) return have;
-            for (auto& [obj, data] : a_f->GetInventory())
+            for (auto& [obj, data] : InvSnap::Items(a_f))
                 if (obj && data.first > 0) have[obj->GetFormID()] += data.first;
             return have;
         }
@@ -317,25 +317,23 @@ namespace MFO::Logistics::Errand::Smith {
 
         std::vector<Worn> ReadWorn(RE::Actor* a_f) {
             std::vector<Worn> out;
-            for (auto& [obj, data] : a_f->GetInventory()) {
-                if (!obj || data.first <= 0 || !data.second || !data.second->extraLists) continue;
+            for (auto& [obj, data] : InvSnap::Items(a_f)) {
+                if (!obj || data.first <= 0 || !data.second || !data.second->hasLists) continue;
                 auto* weap = obj->As<RE::TESObjectWEAP>();
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!weap && !armo) continue;
                 if (armo && LowestBit(static_cast<std::uint32_t>(armo->GetSlotMask())) == 0u) continue;   // slot mask 0 would take SKSE's WEAPON path
                 if (!data.second->IsWorn()) continue;
-                for (auto* xl : *data.second->extraLists) {
-                    if (!xl) continue;
-                    const bool worn = xl->HasType(RE::ExtraDataType::kWorn), wornL = xl->HasType(RE::ExtraDataType::kWornLeft);
+                for (const auto& cp : data.second->copies) {
+                    const bool worn = cp.worn, wornL = cp.wornLeft;
                     if (!worn && !wornL) continue;
                     Worn w;
                     w.obj = obj;
                     w.weapon = weap != nullptr;
                     w.left = wornL && !worn;
                     w.slot = armo ? LowestBit(static_cast<std::uint32_t>(armo->GetSlotMask())) : 0u;
-                    const auto* eh = xl->GetByType<RE::ExtraHealth>();
-                    w.health = eh ? eh->health : 1.0f;
-                    w.enchanted = xl->HasType(RE::ExtraDataType::kEnchantment) || (weap ? weap->formEnchanting != nullptr : armo->formEnchanting != nullptr);
+                    w.health = cp.hasHealth ? cp.health : 1.0f;
+                    w.enchanted = cp.hasEnch || (weap ? weap->formEnchanting != nullptr : armo->formEnchanting != nullptr);
                     out.push_back(w);
                 }
             }
@@ -562,8 +560,10 @@ namespace MFO::Logistics::Errand::Smith {
             for (const auto& c : a_l.comps) {
                 const auto it = counts.find(c.form);
                 const std::int32_t n = std::min(c.count, it != counts.end() ? it->second : 0);
-                if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form); obj && n > 0)
+                if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form); obj && n > 0) {
                     a_f->RemoveItem(obj, n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                    InvSnap::Touch(a_f);   // a worker-side write (stability audit M2 moves it): his snapshot is behind it
+                }
                 if (n < c.count)
                     spdlog::warn("[smith] {:08X} '{}': only {} of {} {} could be consumed (the temper already took)", a_fid, a_l.name,
                                  n, c.count, NameOf(RE::TESForm::LookupByID(c.form)));

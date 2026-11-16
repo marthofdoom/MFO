@@ -227,7 +227,7 @@ namespace MFO::Logistics {
         // follower being a mage (HasCastGambit) -- only mages auto-consume tomes.
         void LearnCarriedTomes(RE::Actor* a_follower) {
             if (!a_follower) return;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* book = obj->As<RE::TESObjectBOOK>();
                 if (!book || !book->TeachesSpell()) continue;
@@ -237,6 +237,7 @@ namespace MFO::Logistics {
                 if (a_follower->HasSpell(sp)) continue;
                 a_follower->AddSpell(sp);
                 a_follower->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                InvSnap::Touch(a_follower);   // a worker-side write (stability audit M2 moves it): his snapshot is behind it
                 spdlog::info("[econ] {:08X} learned spell {:08X} from carried tome {:08X}",
                              a_follower->GetFormID(), sp->GetFormID(), book->GetFormID());
                 return;   // one per tick -- the mutation ends this inventory walk

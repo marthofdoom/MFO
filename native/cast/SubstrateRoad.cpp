@@ -310,8 +310,11 @@ namespace MFO::Actuation {
             }
             auto* ei   = a_spell->GetCostliestEffectItem();
             auto* mgef = ei ? ei->baseEffect : nullptr;
-            if (auto* mt = recip->AsMagicTarget(); mgef && mt && ei->GetDuration() > 0 && mt->HasMagicEffect(mgef))
-                return SubstrateTry::Skipped;
+            // INVARIANTS #84: the engine's HasMagicEffect answer from the main-built mirror (iaus/EffectMirror.h). Not yet = Skipped
+            // (asked for now; the next lap has it), never a re-stack on an unread recipient.
+            if (mgef && ei->GetDuration() > 0)
+                if (const auto fx = EffectMirror::Get(recip); !fx || fx->HasMagicEffect(mgef))
+                    return SubstrateTry::Skipped;
         }
 
         // 6. FILE THE PAIR. MFO PUTS NOTHING IN HAND (marth 2026-10-19: "Remember we are porting everything to

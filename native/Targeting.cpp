@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "Targeting.h"
+#include "MainThread.h"   // NpcCombatScope: the P0 overlap probe around the original UpdateCombat
 #include "CombatSense.h"   // AnchorOnlyLeak: no style / redirect on a Harbinger anchor-only combat
 #include "Config.h"
 #include "CombatStyle.h"
@@ -58,7 +59,10 @@ namespace MFO::Targeting {
             static void thunk(RE::Actor* a_this) {
                 // ALWAYS run the original first. MFO corrects the engine's
                 // choice; it never replaces the engine's bookkeeping.
-                func(a_this);
+                {
+                    MainThread::NpcCombatScope probe;   // P0 overlap probe (MainThread.h): two atomics, no behaviour
+                    func(a_this);
+                }
 
                 // This hook is the ONE engine callback that hands a LIVE per-
                 // combat controller to us every combat tick for every combatant,

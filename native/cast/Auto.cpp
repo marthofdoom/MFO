@@ -245,7 +245,11 @@ namespace MFO::Actuation {
             if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
                 return true;
 
-            auto* mt   = a_target->AsMagicTarget();
+            // INVARIANTS #84: the target's effects from the main-built mirror (iaus/EffectMirror.h; every high-process actor is
+            // mirrored each tick), never the live list on the worker. Not yet (a target the mirror has not seen: asked for now, the
+            // next tick has it) = do NOT apply this lap; the fan re-asks next lap. Never "not affected" from an unread target.
+            const auto fx = EffectMirror::Get(a_target);
+            if (!fx) return false;
             auto* ei   = a_spell->GetCostliestEffectItem();
             auto* mgef = ei ? ei->baseEffect : nullptr;
             // #6a: ROBUST already-active detection. HasMagicEffect(costliest
@@ -256,13 +260,11 @@ namespace MFO::Actuation {
             // active-effect list for an effect cast by THIS spell that still has
             // remaining duration -- a light that never registers via HasMagicEffect
             // is caught here and treated as active, same as HasMagicEffect true.
-            bool active = (mgef && mt && mt->HasMagicEffect(mgef));
-            if (!active && mt) {
-                if (auto* list = mt->GetActiveEffectList()) {
-                    for (auto* ae : *list) {
-                        if (!ae || ae->spell != a_spell) continue;
-                        if ((ae->duration - ae->elapsedSeconds) > 0.0f) { active = true; break; }
-                    }
+            bool active = (mgef && fx->HasMagicEffect(mgef));   // the ENGINE's own MagicTarget::HasMagicEffect answer, asked on main
+            if (!active) {
+                for (const auto& f : fx->fx) {
+                    if (f.spell != a_spell) continue;
+                    if ((f.duration - f.elapsed) > 0.0f) { active = true; break; }
                 }
             }
             // Not currently affected (covers EVERY instant spell) -> apply.
@@ -284,12 +286,10 @@ namespace MFO::Actuation {
             // DoT time still to be delivered = max (duration - elapsed) across the
             // spell's active effects on this target.
             float timeRemaining = 0.0f;
-            if (auto* list = mt->GetActiveEffectList()) {
-                for (auto* ae : *list) {
-                    if (!ae || ae->spell != a_spell) continue;
-                    const float rem = ae->duration - ae->elapsedSeconds;
-                    if (rem > timeRemaining) timeRemaining = rem;
-                }
+            for (const auto& f : fx->fx) {
+                if (f.spell != a_spell) continue;
+                const float rem = f.duration - f.elapsed;
+                if (rem > timeRemaining) timeRemaining = rem;
             }
             const float ratio = Config::g_dotRecastBurstRatio.load();
             return burst >= dotRate * timeRemaining * ratio;

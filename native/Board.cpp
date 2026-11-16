@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include "apmf/APMFBridge.h"   // InCombat: a Harbinger combat substrate is not combat (ABI v26)
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 
@@ -1302,13 +1303,14 @@ namespace MFO::Board {
             auto* pc       = RE::PlayerCharacter::GetSingleton();
             bool hasBook = false;
             if (pc && book)
-                for (auto& [o, d] : pc->GetInventory())
+                for (auto& [o, d] : InvSnap::Items(pc))
                     if (o == book && d.first > 0) { hasBook = true; break; }
             if (!follower || !spell) return false;
             if (follower->HasSpell(spell)) return true;   // already learned (a prior edit taught it): never consume a second book
             if (!hasBook) return false;
             follower->AddSpell(spell);
             pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+            InvSnap::Touch(pc);   // a worker-side write (stability audit M2 moves it): the player's snapshot is behind it
             spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}", c.fid, c.spell, c.book);
             return true;
         }
@@ -1826,7 +1828,7 @@ namespace MFO::Board {
                 // ApplyEdits on the main thread.
                 if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc) {
                     const MFO::Iaus::ClassGate teachGate = MFO::Iaus::SpellBook::GateFor(a->GetFormID(), false);   // gating fields only, never the live class rows (TuningFile swaps them on the pump worker); once per row, not per tome
-                    for (auto& [obj, data] : pc->GetInventory()) {
+                    for (auto& [obj, data] : InvSnap::Items(pc)) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
                         if (!book || !book->TeachesSpell()) continue;

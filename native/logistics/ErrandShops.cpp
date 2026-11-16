@@ -25,6 +25,7 @@
 // alias reader (any thread). The stolen classification reads the follower's inventory on the worker (the serial #4 domain, the
 // same GetInventory the sell-row build already does). Session-only: nothing here is saved.
 #include "PCH.h"
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include "Errand_internal.h"
 #include "TradePerks.h"
 #include "Config.h"
@@ -243,17 +244,13 @@ namespace MFO::Logistics::ErrandShops {
     std::unordered_map<const RE::TESBoundObject*, Stolen> ClassifyStolen(RE::Actor* a_follower) {
         std::unordered_map<const RE::TESBoundObject*, Stolen> out;
         if (!a_follower) return out;
-        for (auto& [obj, data] : a_follower->GetInventory()) {
+        for (auto& [obj, data] : InvSnap::Items(a_follower)) {
             if (!obj || data.first <= 0 || !data.second) continue;
             std::int32_t stolen = 0;
-            if (data.second->extraLists)
-                for (auto* xl : *data.second->extraLists) {
-                    if (!xl) continue;
-                    auto* own = xl->GetByType<RE::ExtraOwnership>();
-                    if (!own || !StolenOwner(own->owner, a_follower)) continue;
-                    auto* cnt = xl->GetByType<RE::ExtraCount>();
-                    stolen += cnt && cnt->count > 0 ? static_cast<std::int32_t>(cnt->count) : 1;
-                }
+            for (const auto& cp : data.second->copies) {
+                if (!cp.hasOwnership || !StolenOwner(cp.owner, a_follower)) continue;
+                stolen += cp.n;
+            }
             out[obj] = stolen <= 0 ? Stolen::None : stolen >= data.first ? Stolen::All : Stolen::Mixed;
         }
         return out;

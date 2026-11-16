@@ -54,11 +54,19 @@ namespace MFO::Logistics::GemRules {
 
         // Is this instance's custom name MEO's socketed-item title? (the only gem tell a container or
         // world item gives before we own it)
+        // A LOOSE REF's own extra list (TESObjectREFR::extraList, not an inventory list): LooseNamedGemmed below.
         bool NamedGemmed(RE::ExtraDataList* a_xl, const RE::TESBoundObject* a_base) {
             auto* txt = a_xl ? a_xl->GetByType<RE::ExtraTextDisplayData>() : nullptr;
             if (!txt || !a_base) return false;
             std::string name = txt->displayName.c_str() ? txt->displayName.c_str() : "";
             if (txt->IsPlayerSet() && txt->customNameLength > 0 && txt->customNameLength <= name.size()) name.resize(txt->customNameLength);
+            return MatchesMeoTitle(name, a_base->GetName() ? a_base->GetName() : "");
+        }
+        // A copy in a container / corpse, from the source's snapshot (the same text, copied out on the main thread).
+        bool NamedGemmed(const InvSnap::Copy& a_copy, const RE::TESBoundObject* a_base) {
+            if (!a_copy.hasText || !a_base) return false;
+            std::string name = a_copy.displayName;
+            if (a_copy.playerSetName && a_copy.customNameLength > 0 && a_copy.customNameLength <= name.size()) name.resize(a_copy.customNameLength);
             return MatchesMeoTitle(name, a_base->GetName() ? a_base->GetName() : "");
         }
 
@@ -68,6 +76,9 @@ namespace MFO::Logistics::GemRules {
         }
 
         // The follower's own xList for (obj,uid), plus the instance value. Null xl if gone.
+        // A LIVE read (INVARIANTS #84 exception): it hands a live ExtraDataList to the engine write that follows on the same thread.
+        // Callers: Decide (the main thread) and TakeAndProbe's container road (the worker-side transfer that stays on the worker
+        // until stability audit M2 moves it, its read with it). No decision reads this.
         RE::ExtraDataList* FindOwned(RE::Actor* a_fol, RE::TESBoundObject* a_obj, std::uint16_t a_uid,
                                      std::int32_t& a_value) {
             a_value = 0;
@@ -86,12 +97,14 @@ namespace MFO::Logistics::GemRules {
             const RE::FormID fid = a_actor->GetFormID();
             if (a_live) MEOBridge::RefreshCarriedGems(a_actor);
             std::vector<std::uint16_t> uids;
-            for (auto& [o, d] : a_actor->GetInventory([&](RE::TESBoundObject& x) { return &x == a_obj; })) {
-                auto* e = d.second.get();
-                if (!e || !e->extraLists) continue;
-                for (auto* xl : *e->extraLists)
-                    if (const auto uid = UidOf(xl)) uids.push_back(uid);
+            const auto inv = InvSnap::Items(a_actor);   // INVARIANTS #84 (read live in place on the main thread: CheckRemovalLive)
+            if (!inv) {   // not yet: it does NOT leave on an unread pack (never "Clear" from absence)
+                spdlog::debug("[gems] {:08X}: '{}' held ({}): his inventory snapshot is not readable yet", fid, NameOf(a_obj), a_why);
+                return Verdict::Held;
             }
+            if (const auto* e = inv.Find(a_obj))
+                for (const auto& c : e->copies)
+                    if (c.hasUid && c.uid != 0) uids.push_back(c.uid);
             if (uids.empty()) return Verdict::Clear;   // no instance has a uid: MEO never socketed it
             // Whatever is about to leave takes no gem back from the reconcile (strip -> re-socket -> sell loop).
             // A hold found live lets the check read the cache; one armed NOW returns Held for this pass.
@@ -264,10 +277,12 @@ namespace MFO::Logistics::GemRules {
 
     GemCandidate FindGemCandidate(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
         if (!Active() || !MEOBridge::CarriedGemUnsocketSupported() || !a_follower || !a_src) return {};
-        for (auto& [obj, data] : a_src->GetInventory()) {
+        const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+        if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return {}; }   // not yet: retried next tick, the source is never marked done
+        for (auto& [obj, data] : srcInv) {
             if (!obj || data.first <= 0) continue;
             auto* e = data.second.get();
-            if (!e || !e->extraLists || IsQuestObjectInstance(e)) continue;
+            if (!e || !e->hasLists || IsQuestObjectInstance(e)) continue;
             if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
             if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                 if (IsCreatureArmor(armo) || Config::g_dollsMode.load()) continue;
@@ -275,12 +290,12 @@ namespace MFO::Logistics::GemRules {
                 if (IsCreatureWeapon(weap)) continue;
             } else continue;
             if (!FitsCarryWeight(a_follower, obj->GetWeight())) continue;
-            for (auto* xl : *e->extraLists) {
-                const auto uid = UidOf(xl);
-                if (uid == 0 || !NamedGemmed(xl, obj)) continue;   // only MEO-titled (socketed) instances are worth a take
-                if (TheftGate::TakeBarred(a_follower, a_src, obj, xl, TheftGate::Road::Gear)) continue;   // theft gate: this very copy may be stolen goods
+            for (const auto& c : e->copies) {
+                const std::uint16_t uid = c.hasUid ? c.uid : std::uint16_t{ 0 };
+                if (uid == 0 || !NamedGemmed(c, obj)) continue;   // only MEO-titled (socketed) instances are worth a take
+                if (TheftGate::TakeBarredOwner(a_follower, a_src, c.owner)) continue;   // theft gate: this very copy may be stolen goods
                 if (g_probed.contains({ a_src->GetFormID(), obj->GetFormID(), uid })) continue;
-                return { obj, xl, uid };
+                return { obj, c.owner, uid };
             }
         }
         return {};
@@ -291,7 +306,7 @@ namespace MFO::Logistics::GemRules {
         const RE::FormID fol = a_follower->GetFormID(), base = a_c.obj->GetFormID(), src = a_src->GetFormID();
         const std::uint16_t uid = a_c.uid;
         if (TheftGate::GuardInterim(a_follower, a_src, TheftGate::Road::Gear) ||
-            TheftGate::TakeBarred(a_follower, a_src, a_c.obj, a_c.xl, TheftGate::Road::Gear)) return false;   // theft gate
+            TheftGate::TakeBarredOwner(a_follower, a_src, a_c.copyOwner)) return false;   // theft gate
         g_probed.insert({ src, base, uid });   // never re-taken, whatever the probe decides
         const bool sellGambit = SellGambitActive(a_follower);
         // A CORPSE source: the take is queued to the main thread like every corpse transfer (TheftGate.h, INVARIANTS #83), the copy
@@ -304,8 +319,20 @@ namespace MFO::Logistics::GemRules {
                     ProbeOnMain(fol, base, uid, src, sellGambit);
                 }) > 0)
             return true;
+        // THE CONTAINER ROAD: a worker-side transfer (the one kind #83 left on the worker), so its own read is LIVE and stays with it
+        // (INVARIANTS #84 exception; stability audit M2 moves both to the main thread). The copy is re-found by its uid in the live
+        // source right here: an extra-list pointer from a snapshot would be a tick old. The ownership bar is re-read on that list.
         std::int32_t v = 0;
-        a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, a_c.xl, a_follower);
+        RE::ExtraDataList* liveXl = nullptr;
+        for (auto& [o, d] : a_src->GetInventory([&](RE::TESBoundObject& x) { return &x == a_c.obj; })) {
+            auto* e = d.second.get();
+            if (!e || !e->extraLists) continue;
+            for (auto* xl : *e->extraLists)
+                if (xl && UidOf(xl) == uid) { liveXl = xl; break; }
+        }
+        if (!liveXl || TheftGate::TakeBarred(a_follower, a_src, a_c.obj, liveXl, TheftGate::Road::Gear)) return false;   // gone, or its owner changed
+        a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, liveXl, a_follower);
+        InvSnap::Touch(a_src); InvSnap::Touch(a_follower);   // both snapshots are behind this write
         if (!FindOwned(a_follower, a_c.obj, uid, v)) return false;
         spdlog::info("[gems] {:08X}: took '{}' from {:08X} to look for gems", fol, NameOf(a_c.obj), src);
         const bool sell = sellGambit;

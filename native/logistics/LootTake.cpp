@@ -28,7 +28,7 @@ namespace MFO::Logistics {
         int AmmoCount(RE::Actor* a_actor, bool a_wantBolt) {
             if (!a_actor) return 0;
             int n = 0;
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && AmmoIsBolt(ammo) == a_wantBolt)
                     n += data.first;
@@ -105,7 +105,9 @@ namespace MFO::Logistics {
             // the load order's weakest tier (g_autoPotionFloor). Fortify/cure carry
             // magnitude 0 here and are never filtered.
             const float floor = PotionLootFloor();
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
                 if (a_want == RE::ActorValue::kNone) {
@@ -271,8 +273,8 @@ namespace MFO::Logistics {
         std::int32_t CoinCount(RE::Actor* a_actor) {
             std::int32_t n = 0;
             if (!a_actor) return 0;
-            for (auto& [obj, c] : a_actor->GetInventoryCounts())
-                if (obj && c > 0 && (obj->GetFormID() == 0x0000000F || IsCoinLoot(obj))) n += c;
+            for (auto& [obj, data] : InvSnap::Items(a_actor))
+                if (obj && data.first > 0 && (obj->GetFormID() == 0x0000000F || IsCoinLoot(obj))) n += data.first;
             return n;
         }
 
@@ -289,7 +291,9 @@ namespace MFO::Logistics {
             constexpr RE::FormID kGold001 = 0x0000000F;
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kGold001 && !IsCoinLoot(obj)) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
@@ -322,7 +326,9 @@ namespace MFO::Logistics {
         // nobody competes for them) -- so no carry-weight gate and no dibs wait.
         bool LootLockpicks(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             constexpr RE::FormID kLockpick = 0x0000000A;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kLockpick) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
@@ -357,7 +363,9 @@ namespace MFO::Logistics {
         bool LootJewelry(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!armo || !IsJewelryPiece(armo)) continue;
@@ -395,7 +403,9 @@ namespace MFO::Logistics {
         bool LootSoulGems(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 if (!IsSoulGemItem(obj)) continue;
                 // NEVER-LOOT: quest gems (Azura's Star et al.) stay engine-protected
@@ -424,7 +434,9 @@ namespace MFO::Logistics {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
             const auto fid = a_follower->GetFormID();
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 const std::int32_t want = Errand::Smith::Wanted(fid, obj->GetFormID());
                 if (want <= 0) continue;
@@ -460,7 +472,9 @@ namespace MFO::Logistics {
         bool LootIngredients(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 if (!IsIngredientItem(obj)) continue;
                 // NEVER-LOOT: quest ingredients stay engine-protected regardless
@@ -523,7 +537,9 @@ namespace MFO::Logistics {
             if (a_peek && LootGold(a_follower, a_src, true)) return true;
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 if (!IsValuableMisc(obj)) continue;
                 // NEVER-LOOT: quest MISC stays engine-protected regardless of

@@ -101,7 +101,7 @@ namespace MFO::Actuation {
             auto* form = RE::TESForm::LookupByID(a_form);
             auto* obj  = form ? form->As<RE::TESBoundObject>() : nullptr;
             if (!obj) return nullptr;
-            auto inv = a_actor->GetInventory();
+            const auto inv = InvSnap::Items(a_actor);
             const auto it = inv.find(obj);
             return (it != inv.end() && it->second.first > 0) ? obj : nullptr;
         }
@@ -144,7 +144,7 @@ namespace MFO::Actuation {
         RE::TESAmmo* WornAmmo(RE::Actor* a_actor, std::int32_t& a_outCount) {
             a_outCount = 0;
             if (!a_actor) return nullptr;
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 auto* am = obj->As<RE::TESAmmo>();
                 auto* entry = data.second.get();
@@ -179,7 +179,7 @@ namespace MFO::Actuation {
                     auto* p = OwnedObject(a, prevId);
                     if (!p) return;
                     std::int32_t n = 1;
-                    auto inv = a->GetInventory();
+                    const auto inv = InvSnap::Items(a);
                     if (const auto it = inv.find(p); it != inv.end() && it->second.first > 0) n = it->second.first;
                     mgr->EquipObject(a, p, nullptr, static_cast<std::uint32_t>(n), nullptr, true, false);   // forceEquip = FALSE
                 } else if (auto* sv = OwnedObject(a, silverId)) {

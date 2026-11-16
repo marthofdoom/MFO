@@ -36,6 +36,30 @@ namespace MFO::MainThread {
     // Post is a documented no-op -- checks this and falls back to a direct call.
     bool IsInstalled();
 
+    // ── WHICH THREAD IS THIS (INVARIANTS #84: the worker never walks an engine inventory or active-effect list) ──
+    // InSeat: this thread is inside the player-Update thunk right now (the engine's update or the drain).
+    // IsMainThread: this thread is the one the thunk last ran on. False until the first frame has run.
+    // InWorkerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope), whichever OS thread the job system gave it.
+    // LiveReadsAllowed: may THIS call read a live engine inventory / effect list? True in the seat, on the main thread outside a
+    // worker tick (event sinks, load handlers: as before), and when the pump is not installed (the documented legacy path).
+    // logistics/InvSnapshot and iaus/EffectMirror branch on it, so one helper serves both threads.
+    bool InSeat();
+    bool IsMainThread();
+    bool InWorkerTick();
+    bool LiveReadsAllowed();
+    struct WorkerTickScope { WorkerTickScope(); ~WorkerTickScope(); WorkerTickScope(const WorkerTickScope&) = delete; WorkerTickScope& operator=(const WorkerTickScope&) = delete; };
+
+    // ── P0 OVERLAP PROBE (passive, always on: a few relaxed atomics per frame and per tick; Diagnostics.cpp prints `[overlap]`) ──
+    // SeatSeq is odd while the main thread is inside the thunk and moves at its entry and exit; SeatPhase is 1 in the engine's own
+    // player Update, 2 in MFO's drain, 0 outside. NpcCombat*: the same for Character::UpdateCombat (Targeting.cpp's hook wraps the
+    // original in NpcCombatScope). SeatSawWorker counts thunk entries / exits that found a worker tick in flight.
+    std::uint32_t SeatSeq();
+    int           SeatPhase();
+    std::uint32_t SeatSawWorker();
+    std::uint32_t NpcCombatSeq();
+    int           NpcCombatIn();
+    struct NpcCombatScope { NpcCombatScope(); ~NpcCombatScope(); NpcCombatScope(const NpcCombatScope&) = delete; NpcCombatScope& operator=(const NpcCombatScope&) = delete; };
+
     // Drop every queued closure without running it. Called on revert: a fn posted
     // before a load re-resolves its captured handle against the NEXT session's
     // handle table (handles are reused), so draining it post-load could run on the

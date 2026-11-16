@@ -13,6 +13,8 @@
 // file-local in its module.
 
 #include "PCH.h"
+#include "iaus/EffectMirror.h"       // INVARIANTS #84: active-effect reads through the main-built mirror
+#include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include <map>
 #include <tuple>
 #include <unordered_set>

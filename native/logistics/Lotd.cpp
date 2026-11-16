@@ -514,12 +514,15 @@ namespace MFO::Lotd {
         };
 
         // ── the needs ─────────────────────────────────────────────────────────────
-        void AddCounts(RE::TESObjectREFR* a_ref, const Snapshot& a_snap, CountMap& a_out, bool a_noInit) {
-            if (!a_ref) return;
-            const auto counts = a_ref->GetInventoryCounts(
-                [&a_snap](RE::TESBoundObject& o) { return a_snap.bases.count(o.GetFormID()) != 0; }, a_noInit);
-            for (const auto& [obj, n] : counts)
-                if (obj && n > 0) a_out[obj->GetFormID()] += n;
+        // FALSE = a_ref's inventory is not readable yet (INVARIANTS #84: the worker reads the main-built snapshot); a_out is untouched.
+        // Never false on the main thread (the read is live there) or for a null ref (nothing to count).
+        bool AddCounts(RE::TESObjectREFR* a_ref, const Snapshot& a_snap, CountMap& a_out, bool a_noInit) {
+            if (!a_ref) return true;
+            const auto inv = InvSnap::Items(a_ref, a_noInit);
+            if (!inv) return false;
+            for (const auto& [obj, data] : inv)
+                if (obj && data.first > 0 && a_snap.bases.count(obj->GetFormID()) != 0) a_out[obj->GetFormID()] += data.first;
+            return true;
         }
 
         std::int32_t Sum(const CountMap& a_m) {
@@ -656,8 +659,9 @@ namespace MFO::Lotd {
                 for (auto fid : *ids) {
                     auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
                     CountMap m;
-                    AddCounts(a, *snap, m, false);
-                    g_retainedSupply[fid] = std::move(m);
+                    // Not readable yet (his first tick, or the main thread stalled): his LAST-READ counts stand, exactly as they do
+                    // for a follower outside the snapshot. An empty map here would hand his slots to another coverer (see above).
+                    if (AddCounts(a, *snap, m, false)) g_retainedSupply[fid] = std::move(m);
                     activeNow.insert(fid);
                     // Read WHILE he is in the snapshot (the loaded road every consumer here
                     // already uses): only a PERSISTENT ref may be looked up again once he
@@ -759,11 +763,11 @@ namespace MFO::Lotd {
         // How many copies of one inventory entry are WORN: one per extra list carrying
         // ExtraWorn (right / body) or ExtraWornLeft (left hand) -- the same reads
         // TransferOnMain unequips by (review R2-4: a stack is shipped copy by copy).
-        std::int32_t WornCopies(RE::InventoryEntryData* a_e) {
+        std::int32_t WornCopies(const InvSnap::Entry* a_e) {
             std::int32_t n = 0;
-            if (!a_e || !a_e->extraLists) return 0;
-            for (auto* xl : *a_e->extraLists)
-                if (xl && (xl->HasType(RE::ExtraDataType::kWorn) || xl->HasType(RE::ExtraDataType::kWornLeft))) ++n;
+            if (!a_e) return 0;
+            for (const auto& c : a_e->copies)
+                if (c.worn || c.wornLeft) ++n;
             return n;
         }
 
@@ -776,7 +780,7 @@ namespace MFO::Lotd {
         // names it (a hold is a gambit's choice: the relic was his only weapon of that
         // category), and he STILL carries one of the in-role weapons that pass saw (the
         // never-disarm guard, re-checked at ship time against a_inv). Worker.
-        bool KeptOffRoleWorn(RE::FormID a_follower, RE::FormID a_base, const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+        bool KeptOffRoleWorn(RE::FormID a_follower, RE::FormID a_base, const InvSnap::View& a_inv) {
             if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(a_follower, a_base)) return false;
             if (!PlayerGiven::IsAiEquipped(a_follower, a_base)) return false;
             const auto it = g_keptForDeposit.find(a_follower);
@@ -816,9 +820,11 @@ namespace MFO::Lotd {
             auto& at = g_relicScanAt[fid];
             if (at.time_since_epoch().count() != 0 && a_now - at < kUnwornScan) return;
             at = a_now;
+            const auto inv = InvSnap::Items(a_follower);
+            if (!inv) { at = {}; return; }   // not yet (INVARIANTS #84): no scan happened, so nothing is pruned and the next call scans
             auto& seen = g_relicSeenUnworn[fid];
             std::unordered_set<RE::FormID> carried;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0 || !a_n.snap->bases.count(obj->GetFormID())) continue;
                 carried.insert(obj->GetFormID());
                 auto* e = data.second.get();
@@ -859,7 +865,7 @@ namespace MFO::Lotd {
         //     him; never leave him without the launcher his ammo is for).
         // IsPlayerPick / stock gear / quest are filtered by Shippable itself. Worker.
         bool WornRelicShippable(RE::Actor* a_follower, RE::TESBoundObject* a_base,
-                                const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+                                const InvSnap::View& a_inv) {
             const RE::FormID fid = a_follower->GetFormID();
             const RE::FormID bid = a_base->GetFormID();
             if (KeptOffRoleWorn(fid, bid, a_inv)) return true;
@@ -900,7 +906,7 @@ namespace MFO::Lotd {
             const auto fid = a_follower->GetFormID();
             const auto& excl = UncoveredExcluding(a_n, fid);
             if (excl.empty()) return out;
-            const auto inv = a_follower->GetInventory();
+            const auto inv = InvSnap::Items(a_follower);
             for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0) continue;
                 auto it = excl.find(obj->GetFormID());
@@ -1258,9 +1264,8 @@ namespace MFO::Lotd {
             auto countIn = [](RE::TESObjectREFR* a_ref, RE::FormID a_base, bool a_noInit) {
                 std::int32_t n = 0;
                 if (!a_ref) return n;
-                for (auto& [o, cnt] : a_ref->GetInventoryCounts(
-                         [a_base](RE::TESBoundObject& x) { return x.GetFormID() == a_base; }, a_noInit))
-                    n += cnt;
+                for (auto& [o, d] : InvSnap::Items(a_ref, a_noInit))   // main thread: read live, in place
+                    if (o && o->GetFormID() == a_base) n += d.first;
                 return n;
             };
             std::int32_t moved = 0;
@@ -1279,17 +1284,17 @@ namespace MFO::Lotd {
                 // RemoveItem right after may free).
                 bool wornRight = false, wornLeft = false;
                 std::int32_t wornCopies = 0;   // review R2-4: an unworn item moves only unworn copies
-                for (auto& [o, d] : f->GetInventory([&](RE::TESBoundObject& x) { return x.GetFormID() == it.base; })) {
+                for (auto& [o, d] : InvSnap::Items(f)) {   // main thread: read live, in place
+                    if (!o || o->GetFormID() != it.base) continue;
                     have += d.first;
                     auto* e = d.second.get();
                     if (!e) continue;
                     if (e->IsQuestObject()) hold = true;
                     wornCopies += WornCopies(e);
-                    if (it.worn && e->extraLists)
-                        for (auto* xl : *e->extraLists) {
-                            if (!xl) continue;
-                            if (xl->HasType(RE::ExtraDataType::kWornLeft)) wornLeft = true;
-                            if (xl->HasType(RE::ExtraDataType::kWorn)) wornRight = true;
+                    if (it.worn)
+                        for (const auto& c : e->copies) {
+                            if (c.wornLeft) wornLeft = true;
+                            if (c.worn) wornRight = true;
                         }
                 }
                 // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
@@ -1318,6 +1323,7 @@ namespace MFO::Lotd {
                 std::scoped_lock lock(g_ledgerMx);
                 g_ledger.push_back({ it.base, delta, countIn(drop, it.base, true), a_crate });
             }
+            if (moved > 0) InvSnap::RebuildOnMain(f);   // INVARIANTS #84: the worker's view of his pack is replaced in place
             if (moved > 0)
                 spdlog::info("[lotd] {:08X}: DEPOSITED {} item(s) -> crate {:08X} ('{}'): {} (LOTD ships them to "
                              "DropoffCrate some game hours later; the ledger holds them until they arrive)",
@@ -1866,16 +1872,17 @@ namespace MFO::Lotd {
         // MEO-aware: a relic he no longer keeps for the museum is no longer on its way out of him.
         {
             std::vector<Logistics::GemRules::HoldKey> keep;
+            bool read = true;   // false = his inventory is not readable yet (INVARIANTS #84): no hold is released on an unread pack
             if (auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_follower)) {
-                for (auto& [o, d] : fol->GetInventory([&](RE::TESBoundObject& x) {
-                         return std::find(a_kept.begin(), a_kept.end(), x.GetFormID()) != a_kept.end(); })) {
-                    auto* e = d.second.get();
-                    if (e && e->extraLists)
-                        for (auto* xl : *e->extraLists)
-                            if (auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr) keep.push_back({ o->GetFormID(), u->uniqueID });
+                const auto inv = InvSnap::Items(fol);
+                read = static_cast<bool>(inv);
+                for (auto& [o, d] : inv) {
+                    if (!o || std::find(a_kept.begin(), a_kept.end(), o->GetFormID()) == a_kept.end()) continue;
+                    for (const auto& c : d.second->copies)
+                        if (c.hasUid) keep.push_back({ o->GetFormID(), c.uid });
                 }
             }
-            Logistics::GemRules::ReleaseHoldsExcept(a_follower, Logistics::GemRules::Reason::Museum, keep);
+            if (read) Logistics::GemRules::ReleaseHoldsExcept(a_follower, Logistics::GemRules::Reason::Museum, keep);
         }
         if (a_kept.empty()) { g_keptForDeposit.erase(a_follower); return; }
         auto& rec  = g_keptForDeposit[a_follower];
@@ -1917,7 +1924,9 @@ namespace MFO::Logistics {
         if (!needs.snap) return false;
         struct Take { RE::TESBoundObject* obj; std::int32_t count; };
         std::vector<Take> takes;
-        for (auto& [obj, data] : a_src->GetInventory()) {
+        const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+        if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+        for (auto& [obj, data] : srcInv) {
             if (!obj || data.first <= 0) continue;
             auto it = needs.uncoveredAll.find(obj->GetFormID());
             if (it == needs.uncoveredAll.end() || it->second <= 0) continue;

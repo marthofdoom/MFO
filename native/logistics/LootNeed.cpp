@@ -98,7 +98,7 @@ namespace MFO::Logistics {
         // Does he carry a launcher of the kind (bow for arrows, crossbow for bolts)? marth 2026-11-12: ammo need = class + gear.
         bool CarriesLauncher(RE::Actor* a_actor, bool a_bolt) {
             const auto want = a_bolt ? RE::WEAPON_TYPE::kCrossbow : RE::WEAPON_TYPE::kBow;
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* w = obj->As<RE::TESObjectWEAP>(); w && w->GetWeaponType() == want) return true;
             }
@@ -168,18 +168,14 @@ namespace MFO::Logistics {
 
         // The lowest charge fraction (1 = full or none) over every extra list of a weapon stack: ExtraCharge against the copy's own
         // ExtraEnchantment maximum, else the base enchantment's (the same two sources InventoryEntryData::GetEnchantmentCharge reads).
-        float LowestChargeFrac(RE::TESObjectWEAP* a_w, const RE::InventoryEntryData* a_entry) {
+        float LowestChargeFrac(RE::TESObjectWEAP* a_w, const InvSnap::Entry* a_entry) {
             float low = 1.0f;
-            if (!a_entry->extraLists) return low;
-            for (auto* xList : *a_entry->extraLists) {
-                if (!xList) continue;
-                const auto* xCharge = xList->GetByType<RE::ExtraCharge>();
-                if (!xCharge) continue;   // no ExtraCharge on this copy: full
-                const auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
+            for (const auto& c : a_entry->copies) {
+                if (!c.hasCharge) continue;   // no ExtraCharge on this copy: full
                 float max = 0.0f;
-                if (xEnch && xEnch->enchantment && xEnch->charge != 0) max = static_cast<float>(xEnch->charge);
+                if (c.ench && c.enchCharge != 0) max = static_cast<float>(c.enchCharge);
                 else if (a_w->formEnchanting && a_w->amountofEnchantment != 0) max = static_cast<float>(a_w->amountofEnchantment);
-                if (max > 0.0f) low = std::min(low, xCharge->charge / max);
+                if (max > 0.0f) low = std::min(low, c.charge / max);
             }
             return low;
         }
@@ -197,7 +193,7 @@ namespace MFO::Logistics {
             inv.ranged      = roles.doRanged;
             inv.caster      = IsCasterFollower(a_state);
             inv.sneaks      = TableHasAction(a_state.logistics(), Vocab::kActSneak) || TableHasAction(a_state.combat(), Vocab::kActSneak);
-            for (auto& [obj, data] : a_actor->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_actor)) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() == kLockpick) { inv.lockpicks += data.first; continue; }
                 if (IsSoulGemItem(obj)) { inv.soulGems += data.first; continue; }   // filled or empty
@@ -338,7 +334,9 @@ namespace MFO::Logistics {
         const RE::FormID fid = a_follower->GetFormID();
         struct Item { RE::TESBoundObject* obj; Iaus::Consumable c; std::int32_t count; float score; };
         std::vector<Item> items;
-        for (auto& [obj, data] : a_src->GetInventory()) {
+        const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+        if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+        for (auto& [obj, data] : srcInv) {
             if (!obj || data.first <= 0) continue;
             auto* alc = obj->As<RE::AlchemyItem>();
             if (!alc) continue;

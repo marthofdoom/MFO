@@ -75,7 +75,7 @@ namespace MFO::Logistics {
             // copy -- logistics/Storage.cpp asks "would the sale path keep it?" before it brings a stored piece back, through this
             // very set instead of a copy of its rules. nullptr (the sale path, the loot side) = exactly the carried inventory.
             std::vector<std::pair<RE::TESBoundObject*, std::int32_t>> carried;
-            for (auto& [obj, data] : a_follower->GetInventory()) carried.emplace_back(obj, data.first);
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) carried.emplace_back(obj, data.first);
             if (a_extra) {   // at the place the inventory map (ordered by form pointer) would hold it, so a rank TIE resolves as if carried
                 const auto at = std::upper_bound(carried.begin(), carried.end(), a_extra,
                     [](RE::TESBoundObject* a_x, const auto& a_e) { return std::less<RE::TESBoundObject*>{}(a_x, a_e.first); });
@@ -254,9 +254,9 @@ namespace MFO::Logistics {
                 for (int ls = 0; ls < 6; ++ls)
                     if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
                 for (auto sl : { Slot::kForearms, Slot::kCalves })
-                    if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
+                    if (auto* w = InvSnap::Items(a_follower).WornArmor(sl)) keepArmor.insert(w);
                 if (usesShield)
-                    if (auto* w = a_follower->GetWornArmor(Slot::kShield)) keepArmor.insert(w);
+                    if (auto* w = InvSnap::Items(a_follower).WornArmor(Slot::kShield)) keepArmor.insert(w);
 
                 // (b) The single best NEXT-UPGRADE per LOGICAL slot.
                 auto armorLogicalSlot = [](std::uint32_t mask) -> int {
@@ -387,7 +387,7 @@ namespace MFO::Logistics {
             return (proj && proj->data.explosionType) || IsSilverAmmo(a_ammo);
         }
 
-        bool AmmoIsSpecial(const RE::TESAmmo* a_ammo, RE::InventoryEntryData* a_entry) {
+        bool AmmoIsSpecial(const RE::TESAmmo* a_ammo, const InvSnap::Entry* a_entry) {
             return AmmoIsSpecialBase(a_ammo) || (a_entry && a_entry->IsEnchanted());
         }
 
@@ -424,7 +424,7 @@ namespace MFO::Logistics {
             std::vector<AmmoStack> out;
             if (!a_follower) return out;
             const RE::FormID fid = a_follower->GetFormID();
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* am = obj->As<RE::TESAmmo>();
                 if (!am || AmmoIsBolt(am) != a_wantBolt || !AmmoSwapEligible(am)) continue;
@@ -577,7 +577,9 @@ namespace MFO::Logistics {
             // TESContainerChangedEvent synchronously, so touching an inventory
             // mid-walk is the #2 landmine.
             std::vector<AmmoStack> body;
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 auto* am = obj->As<RE::TESAmmo>();
                 if (!am || AmmoIsBolt(am) != a_wantBolt || !AmmoSwapEligible(am)) continue;

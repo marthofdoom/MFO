@@ -165,7 +165,7 @@ namespace MFO::Logistics {
             // second one-hander must beat. A stack of >= 2 of one form covers
             // both hands, so it counts twice.
             ctx.wantOffHand = roles.offHand == 2 && ctx.meleeTargetClass == WepClass::OneHand;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            for (auto& [obj, data] : InvSnap::Items(a_follower)) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || IsCreatureWeapon(w) ||
@@ -321,7 +321,9 @@ namespace MFO::Logistics {
             RE::TESBoundObject* bestSilver    = nullptr;   // THE SILVER SLOT (86e3p2gp9): one silver melee weapon when he owns none
             float               bestSilverScore = -1.0f;   // best by WeaponScore among this body's silver weapons
 
-            for (auto& [obj, data] : a_src->GetInventory()) {
+            const auto srcInv = InvSnap::Items(a_src);   // INVARIANTS #84: the main-built snapshot, never the live list
+            if (!srcInv) { TheftGate::NoteInventoryNotYet(a_follower, a_src); return false; }   // not yet: retried next tick, the source is never marked done
+            for (auto& [obj, data] : srcInv) {
                 if (!obj || data.first <= 0) continue;
                 // NEVER-LOOT: quest items stay engine-protected regardless of
                 // bLootSpecialItems (per-instance alias check). The catalog

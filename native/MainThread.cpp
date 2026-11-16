@@ -20,12 +20,51 @@ namespace MFO::MainThread {
         // queueing them forever into a queue nothing will ever drain.
         std::atomic<bool> g_dead{ false };
 
+        // ── WHICH THREAD IS THIS (INVARIANTS #84) ──
+        // t_inSeat: this thread is inside the thunk below right now (the engine's player Update, then the drain).
+        // g_mainTid: the thread the thunk last ran on (the main thread), stored every frame; default-constructed until the first frame.
+        // t_workerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope). The job system may hand that task to ANY
+        // thread, so a tick that happens to run on the main thread's id is still a worker tick for every reader.
+        thread_local bool              t_inSeat = false;
+        thread_local int               t_workerTick = 0;
+        std::atomic<std::thread::id>   g_mainTid{};
+
+        // ── P0 OVERLAP PROBE (stability audit 2026-11-16, principle 5) ──
+        // g_seatSeq: +1 at the thunk's entry and +1 at its exit, so ODD = the main thread is inside the thunk now, and a value that
+        // moved between two reads = the thunk started or ended in between. g_seatPhase: 0 outside, 1 = the engine's own
+        // PlayerCharacter::Update, 2 = MFO's drain. g_npcIn / g_npcSeq: the same pair for Character::UpdateCombat (Targeting's hook).
+        std::atomic<std::uint32_t> g_seatSeq{ 0 };
+        std::atomic<int>           g_seatPhase{ 0 };
+        std::atomic<int>           g_npcIn{ 0 };
+        std::atomic<std::uint32_t> g_npcSeq{ 0 };
+        // The reverse sample: how many thunk entries / exits found a worker tick in flight (g_workerTicksInFlight > 0).
+        std::atomic<int>           g_workerTicksInFlight{ 0 };
+        std::atomic<std::uint32_t> g_seatSawWorker{ 0 };
+
+        struct SeatScope {
+            SeatScope() {
+                t_inSeat = true;
+                g_mainTid.store(std::this_thread::get_id(), std::memory_order_relaxed);
+                g_seatPhase.store(1, std::memory_order_relaxed);
+                g_seatSeq.fetch_add(1, std::memory_order_acq_rel);
+                if (g_workerTicksInFlight.load(std::memory_order_acquire) > 0) g_seatSawWorker.fetch_add(1, std::memory_order_relaxed);
+            }
+            ~SeatScope() {
+                if (g_workerTicksInFlight.load(std::memory_order_acquire) > 0) g_seatSawWorker.fetch_add(1, std::memory_order_relaxed);
+                g_seatSeq.fetch_add(1, std::memory_order_acq_rel);
+                g_seatPhase.store(0, std::memory_order_relaxed);
+                t_inSeat = false;
+            }
+        };
+
         struct PlayerUpdateHook {
             static void thunk(RE::PlayerCharacter* a_this, float a_delta) {
                 // Original FIRST, always -- the pump piggybacks on the engine's
                 // frame; it never runs ahead of the engine's own bookkeeping.
                 // Same doctrine as Targeting's UpdateCombat thunk.
+                SeatScope seat;   // INVARIANTS #84 + the P0 probe: this thread is in the main seat until the thunk returns
                 func(a_this, a_delta);
+                g_seatPhase.store(2, std::memory_order_relaxed);
 
                 // SWAP-THEN-RUN: take the whole queue under the lock, run it
                 // outside. A drained fn can then Post() again without
@@ -85,6 +124,35 @@ namespace MFO::MainThread {
     bool IsInstalled() {
         return g_installed.load() && !g_dead.load();
     }
+
+    bool InSeat() { return t_inSeat; }
+    bool IsMainThread() {
+        const auto tid = g_mainTid.load(std::memory_order_relaxed);
+        return tid != std::thread::id{} && tid == std::this_thread::get_id();
+    }
+    bool InWorkerTick() { return t_workerTick > 0; }
+    bool LiveReadsAllowed() {
+        if (!IsInstalled()) return true;                 // no pump (VR / unverified build): the documented legacy path, as before
+        if (t_inSeat) return true;                       // the main seat
+        return t_workerTick == 0 && IsMainThread();      // main-thread code outside the tick (sinks, load handlers): unchanged
+    }
+
+    WorkerTickScope::WorkerTickScope() {
+        ++t_workerTick;
+        g_workerTicksInFlight.fetch_add(1, std::memory_order_acq_rel);
+    }
+    WorkerTickScope::~WorkerTickScope() {
+        g_workerTicksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+        --t_workerTick;
+    }
+
+    std::uint32_t SeatSeq()        { return g_seatSeq.load(std::memory_order_acquire); }
+    int           SeatPhase()      { return g_seatPhase.load(std::memory_order_relaxed); }
+    std::uint32_t SeatSawWorker()  { return g_seatSawWorker.load(std::memory_order_relaxed); }
+    std::uint32_t NpcCombatSeq()   { return g_npcSeq.load(std::memory_order_acquire); }
+    int           NpcCombatIn()    { return g_npcIn.load(std::memory_order_acquire); }
+    NpcCombatScope::NpcCombatScope()  { g_npcIn.fetch_add(1, std::memory_order_acq_rel); g_npcSeq.fetch_add(1, std::memory_order_acq_rel); }
+    NpcCombatScope::~NpcCombatScope() { g_npcIn.fetch_sub(1, std::memory_order_acq_rel); }
 
     void Install() {
         // SKYRIM_REL_VR_VIRTUAL: on VR the Update slot sits at a DIFFERENT
