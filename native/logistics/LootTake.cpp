@@ -43,7 +43,8 @@ namespace MFO::Logistics {
             auto* avo = a_follower->AsActorValueOwner();
             if (!avo) return false;
             const float cap  = avo->GetActorValue(RE::ActorValue::kCarryWeight);
-            const float have = a_follower->GetWeightInContainer();
+            // + what is still on its way to him from a corpse (queued to the main thread, TheftGate.h): his pack does not weigh it yet.
+            const float have = a_follower->GetWeightInContainer() + TheftGate::InFlightWeight(a_follower->GetFormID());
             return (have + a_addWeight) <= cap;
         }
 

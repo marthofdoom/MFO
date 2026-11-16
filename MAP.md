@@ -4,8 +4,8 @@ A **blast-radius map**, not a symbol index. Its job is to tell you what a change
 *breaks* before you make it. Every non-trivial claim carries a `file:line`
 citation so you can re-check it against the live code.
 
-Complements the prose docs: `Docs/INVARIANTS.md` (95 rules — 81 numbered `#1`–
-`#81` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
+Complements the prose docs: `Docs/INVARIANTS.md` (97 rules — 83 numbered `#1`–
+`#83` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
 engine mechanisms). This map is the "what-depends-on-what" layer those don't
 carry. `Docs/ARCHITECTURE.md` is HISTORICAL (2026-09-07 banner): it describes a
 pre-implementation design and contradicts shipped code; do not use it as intent.
@@ -4256,6 +4256,50 @@ module. Module layout:
   (5) IAUS passes follow the dibs-tier order: `IsDibsTierCat` (`Logistics_internal.h`, the Category twin of `IsDibsTierLootOp`); pass 0 = the plan
   minus dibs-tier categories, pass 1 = whole, `iausDone[pass]` (Service.cpp `runIausLoot`, LootScan.cpp `runIausExcursion`).
 - **LOOT SCAN PERF (2026-11-13, `fix/loot-scan-perf`):** `LootScan.cpp` `LootNearby` replays ONE cell walk per follower per `a_now` (`WalkSnap`, function-static, worker-only, keyed on follower; exact key a_now + origin + radius + cell list; ordered ref handles per cell, re-resolved at replay, null/deleted skipped) instead of one walk per category; `scanOne` and every per-category filter run unchanged at replay, and no longer under the cell spinLock. Off-main inventory reads (HasLoot, [arrowprobe], PickLocks GetInventoryCounts, Take Analyse/RemoveItem, CorpseGuardWaived) are unchanged: the #72 worker-transfer pattern; a main-side inventory snapshot is the backlog redesign (Docs/REVIEW-BACKLOG.md).
+- **CORPSE TRANSFERS RUN ON THE MAIN THREAD (2026-11-15, `fix/corpse-take-main`, tier A threading; INVARIANTS `#83`, ENGINE_NOTES 0.30
+  amendment; NOT merged, NOT field-run):** `logistics/TheftGate.cpp`. `TheftGate::Take` no longer calls `RemoveItem` on the worker when the
+  SOURCE is an actor (a corpse): the gates (guard, per-copy ownership) run on the worker as before, then the take is QUEUED (`Enqueue`,
+  FormIDs + count only) and `Take` returns the PLANNED count. `DrainTransfers` (ONE posted drain at a time, `g_xPosted`; `MainThread::Post`)
+  runs the queue on main in FIFO order: `RunTransfer` re-resolves follower / source / item, skips loudly (`[take] ... NOT run`) when the
+  follower is dead or disabled or the source is gone, disabled or in a detached cell, re-runs `Analyse` (the per-copy bar is re-read), then
+  `MoveNow` (the loop `Take` always ran, call shapes unchanged). NO PER-FRAME CAP: the drain runs the whole queue, worn pieces included
+  (on main each ARMO removal only sets the deferred 3D-update flag, and vanilla Take All strips a worn set in one frame, so a cap would
+  cost pacing and reduce no risk). An open inventory menu (`InventoryMenuOpen`, `Logistics_internal.h`, shared with Storage) makes
+  `RunTransfer` return FALSE untouched: the drain reposts itself (next frame), queue order intact. A non-actor source (chest), a call already on main (the steal road,
+  `OnMainThread` = the drain's thread id) and a runtime with no live pump (said once) keep the direct `MoveNow`.
+  THE WORKER NEVER WAITS; its LOGIC is kept honest by three reads of the queue (an entry stays queued while the drain runs it). This is
+  logic honesty only, not data-race freedom: the worker's reads of the corpse / follower inventories (`Analyse` / `GetInventory` in
+  `Takeable` / `Take`, `DeclareAtExit`, IAUS `ReadLootInv`) still race main-thread writes (the old race, the other direction; the optional
+  Dekker gate is in Docs/REVIEW-BACKLOG.md, section 4cb790da). The three reads:
+  `QueuedOut(src, item)` is subtracted in `Takeable` / `Take` (queued copies are not offered twice, to him or to another follower);
+  `InFlightWeight(follower)` is added in `FitsCarryWeight` (`LootTake.cpp`); `LandingHold(follower, form type)` makes `Takeable` return FALSE
+  with a Pending refusal (`GuardRefusal::landing`) while an item of the candidate's FORM TYPE is still on its way to him, so no count or
+  baseline decision (ammo, potions, the gear baseline) is made on a pack that does not show it yet. The hold rides the existing guard-pending
+  path: `StripCorpse` sees the refusal count move, sets leftWaiting + guardHeld, the arrival (`Service.cpp`) keeps the body and retries
+  (`[loot] ... a take of this visit is still landing`). A LANDING refusal re-arms `g_nextTick` to `kLandingRetry` (150 ms,
+  `RearmForLanding`, `Logistics_internal.h`) instead of the 1 s cadence, at the arrival and in both in-place drain roads of `LootNearby`
+  (`LootScan.cpp`, by reading `GuardRefusalInfo().landing` after `StripCorpse`); a guard-pending refusal keeps 1 s. The hold fires on any
+  `Takeable` of that form type, including objects the caller's later filters would reject (`LootEquipment.cpp` calls it first in the
+  loop), so a body often needs a second visit; the fast re-arm keeps that inside a fraction of a second. `LootConsumablesNeed` (`LootNeed.cpp`) asks `Takeable` again per item for the
+  same reason (its re-judge reads the pack between takes).
+  FOLLOW-UPS THAT NEED THE ITEM IN THE PACK: `TheftGate::AfterLanding(follower, item, fn)` attaches `fn` to the newest queued take of that
+  item; it runs on main right after that take, only if something moved (else `[take] ... follow-up(s) DROPPED`). `AcquireEquip` (`Gear.cpp`)
+  uses it for the direct `EquipObject` hop and for the ch.17 `WantPlacement` wish (a wish made before the item lands is dropped by the next
+  declaration build as "no longer his"). The armor declaration names the piece from the service tick after it lands.
+  `GemRules::TakeAndProbe` takes its corpse copy through `TheftGate::QueueCopy` (the copy named by ExtraUniqueID, re-found on main, the probe
+  as its landing follow-up). `TheftGate::ClearTransfers` (from `Logistics::ClearTransientState`, `Upkeep.cpp`) drops the queue on revert:
+  `MainThread::Clear` has dropped the posted drain, so `g_xPosted` MUST be reset there or nothing drains after a load.
+  **What breaks:** (a) any new road that calls `RemoveItem` on an actor source from the worker re-opens the hole: go through `Take` /
+  `QueueCopy`. (b) A caller that reads the follower's pack right after `Take` and acts on it (equip, count, compare) sees the pack WITHOUT
+  the item for one frame: attach with `AfterLanding`, or re-ask `Takeable` (the hold). (c) `Take`'s return is a PLAN for a corpse; the truth
+  is the main-thread line (`[take] ... planned xN on the worker, xM left the source`, a WARN on any difference). (d) Treating `Takeable ==
+  false` as "empty, mark DONE" without reading `GuardRefusalInfo()` strands loot when the cause was the hold (StripCorpse's refusal-count
+  pattern is the contract). (e) The hold is by FORM TYPE on purpose (a superset of every counted family); narrowing it to the object brings
+  back double takes of same-kind items from two corpses in one tick. (f) Moving the pop before the transfer (the entry must stay queued
+  while it runs) or posting a second drain breaks the queue order and the ledger. To add a main-thread follow-up for a
+  looted item: `AfterLanding`. To change the late-landing warning: `kLandLate` (5 s). Known limits (reviewer notes): a container -> follower
+  transfer still adds to the FOLLOWER's inventory on the worker (unchanged road); two worn copies of ONE object (a dual-wielded pair) leave
+  in one take; `Steal.cpp`'s main-thread `Takeable` can meet the hold and leave one item for the next visit.
 - **THEFT GATE (2026-11-11, ClickUp 1dfcuabczbg; `fix/theft-gate`, not merged until reviewed + field run):** `logistics/TheftGate.{h,cpp}`
   (declared in `Logistics_internal.h`, so every logistics TU sees `TheftGate::`). Rules: (1) BAR ALL STOLEN: `TheftGate::Take` replaces every
   `RemoveItem(..., nullptr, follower)` take road (`LootTake.cpp` Potions / Gold / Lockpicks / Jewelry / SoulGems / SmithMats / Ingredients /

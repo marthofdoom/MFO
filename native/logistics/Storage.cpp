@@ -100,12 +100,7 @@ namespace MFO::Logistics::Storage {
         RE::TESObjectREFR* Chest() { return Forms::g_storageChest; }
 
         // The player handles his inventory (container / gift / barter menu): a count change may be the player's, so no confirm
-        // reads it and no new move starts (review F5). UI::IsMenuOpen is the read the logistics worker already uses (LootScan.cpp).
-        bool InventoryMenuOpen() {
-            auto* ui = RE::UI::GetSingleton();
-            return ui && (ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME) || ui->IsMenuOpen(RE::GiftMenu::MENU_NAME) ||
-                          ui->IsMenuOpen(RE::BarterMenu::MENU_NAME));
-        }
+        // reads it and no new move starts (review F5). The predicate is the shared MFO::Logistics::InventoryMenuOpen (Logistics_internal.h).
 
         // ── piece classification ──────────────────────────────────────────────────────────────────────────────────
         struct Piece {

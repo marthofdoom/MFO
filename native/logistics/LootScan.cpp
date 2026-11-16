@@ -806,9 +806,12 @@ namespace MFO::Logistics {
                         // runs (every tier dibs-gated through TierReleased inside
                         // StripCorpse), not one category per tick.
                         bool leftWaiting = false;
+                        const auto landN0 = TheftGate::GuardRefusalInfo().n;
                         const bool moved = g_svc
                             ? StripCorpse(a_follower, *g_svc, ref, a_now, &leftWaiting)
                             : LootHere(a_follower, ref, a_cat, a_potionWant);
+                        if (const auto ga = TheftGate::GuardRefusalInfo(); ga.n != landN0 && ga.landing)
+                            RearmForLanding(a_follower->GetFormID(), a_now);   // the landing hold refused part of it: retry soon
                         if (leftWaiting) g_scanSawWaiting = true;
                         if (moved) {
                             g_grabGrow.erase(rid);      // grabbed -> stale grow verdict
@@ -1022,7 +1025,11 @@ namespace MFO::Logistics {
                 // (travel unavailable -- the SE fallback) keeps the old
                 // one-transfer-per-tick shape.
                 if (grabOk && !LooseRef(ref) && g_svc) {
-                    if (StripCorpse(a_follower, *g_svc, ref, a_now, nullptr)) {
+                    const auto landN0 = TheftGate::GuardRefusalInfo().n;
+                    const bool stripped = StripCorpse(a_follower, *g_svc, ref, a_now, nullptr);
+                    if (const auto ga = TheftGate::GuardRefusalInfo(); ga.n != landN0 && ga.landing)
+                        RearmForLanding(a_follower->GetFormID(), a_now);   // the landing hold refused part of it: retry soon
+                    if (stripped) {
                         ++drained;
                         g_grabGrow.erase(rid);      // grabbed -> stale grow verdict
                         g_travelFailed.erase(rid);  // back to normal sort priority

@@ -1417,6 +1417,30 @@ corpses/containers after the walk on re-resolved handles (§0.30 / #72). Invento
 transfer does not tear 3D, so it is worker-safe; `PickUpObject`/`Activate` are
 not, and there is no shortcut around that.
 
+> **AMENDED 2026-11-15 (`fix/corpse-take-main`, INVARIANTS #83): "inventory transfer is worker-safe" holds for a
+> CONTAINER source only. Removing an item from an ACTOR is NOT worker-safe when the actor wears it.** Read from
+> the 1.6.1170 executable (the freeze deep dive of 2026-11-15 named MFO's corpse takes as the likely trigger of
+> the SKEE lock leak):
+> - `Actor::RemoveItem` (0x692800, id 37797) calls `TESObjectREFR::RemoveItem` (0x2E1750, id 19689), then for a
+>   LIVING non-player actor re-arms a weapon (`IsDead` vfunc 0x99 gates it; `ActorEquipManager::EquipObject`
+>   0x6C9820), and always marks the combat inventory dirty (0x559D90 on `[actor+0x160]`).
+> - `TESObjectREFR::RemoveItem` calls `InventoryChanges::RemoveItem` (0x228180). When the copy it removes carries
+>   ExtraWorn / ExtraWornLeft (test 0x15F0A0 at 0x2286BB, presence byte 2 bits 6 and 7) and the count covers it,
+>   it calls **`ActorEquipManager::UnequipObject` (0x6CA010, id 38901) at 0x22A967**, synchronously, on the calling
+>   thread (queueEquip 0, forceEquip 0, playSounds 1, applyNow 0), for any actor with a process, dead or alive.
+> - The unequip (0x6CC810 -> 0x6CB550 -> Actor 0x6A02A0 -> 0x6A0E70 -> the unwear routine 0x22CA20) dispatches on
+>   the form type: **ARMO (0x1A)** sets the deferred 3D flag (`AIProcess::Set3DUpdateFlag(1)`, 0x711AC0) and then
+>   calls `Actor::WornArmorChanged` (vfunc 0x121); **LIGH (0x1F)** detaches the torch from the biped right there
+>   (0x2E9670); **AMMO (0x2A)** removes the quiver from the biped / 3D right there (0x2E9AA0); **WEAP (0x29)** is
+>   the one case the engine guards itself: 0x6D1EE0 asks whether the calling thread is outside the main-thread
+>   mask and, if so, queues a task (0x655FD0, type 0x16) instead of calling vfunc 0x82.
+> So a follower taking a dead archer's equipped arrows on the job worker edited that corpse's biped on the
+> worker, and taking a worn cuirass + helmet + boots in one tick flagged the corpse's 3D rebuild while the worker
+> was still rewriting the inventory that rebuild walks. Not observed executing (principle 5): this is static
+> reading plus the freeze captures; the fix does not depend on which of these paths fired. **Rule: every transfer
+> whose source is an actor runs on the main thread** (`TheftGate::Take` queues it; MAP.md "CORPSE TRANSFERS RUN ON
+> THE MAIN THREAD"). A container -> follower transfer (which ADDS to the follower on the worker) is unchanged.
+
 ### 0.33 The Travel package for Option A — authored from the vanilla shape, locally verified (2026-07-29)
 
 Option A (walk-to-loot) needs a PACK riding the vanilla **Travel template

@@ -1108,12 +1108,14 @@ namespace MFO::Logistics {
                     }
                     if (guardHeld) {
                         GuardHeldAt()[tref->GetFormID()] = now;
+                        if (guardAfter.landing) RearmForLanding(id, now);   // a landing lands next frame: retry soon, not in 1 s
                         static std::unordered_map<RE::FormID, Clock::time_point> s_nextGuardHoldLog;
                         auto& nxtG = s_nextGuardHoldLog[id];
                         if (nxtG.time_since_epoch().count() == 0 || now >= nxtG) {
                             nxtG = now + std::chrono::seconds(3);
-                            spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard check pending, corpse kept, retrying next tick (until the excursion cap)",
-                                         id, tref->GetFormID());
+                            spdlog::info("[loot] {:08X}: arrived at {:08X} -- {}, corpse kept, retrying next tick (until the excursion cap)",
+                                         id, tref->GetFormID(),
+                                         guardAfter.landing ? "a take of this visit is still landing (queued to the main thread)" : "guard check pending");
                         }
                         return;
                     }

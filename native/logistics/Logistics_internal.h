@@ -94,6 +94,20 @@ namespace MFO::Logistics {
         // When each follower may next take a logistics action. The ~1 s cadence
         // gate; also the natural one-action-per-tick rate limit (§4.8.3).
         inline std::unordered_map<RE::FormID, Clock::time_point> g_nextTick;
+        // THE LANDING RETRY (INVARIANTS #83): a corpse visit the TheftGate landing hold refused (a take of the same form type is still
+        // queued to the main thread, which lands one frame later) is re-entered after kLandingRetry, not after the full cadence, so the
+        // "take everything in ONE visit" strip is not stretched by a second per retry. A guard-pending refusal keeps the full cadence.
+        constexpr auto kLandingRetry = std::chrono::milliseconds(150);
+        inline void RearmForLanding(RE::FormID a_id, Clock::time_point a_now) { g_nextTick[a_id] = a_now + kLandingRetry; }
+
+        // The player handles an inventory (container / gift / barter menu): the vanilla menus build their lists from the containers MFO
+        // would be mutating, so no transfer runs under one. Main-thread read (UI::IsMenuOpen; the logistics worker uses it too, LootScan).
+        // Shared by Storage (no confirm reads a count, no new move) and TheftGate's queued corpse transfers (wait for the next frame).
+        inline bool InventoryMenuOpen() {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && (ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME) || ui->IsMenuOpen(RE::GiftMenu::MENU_NAME) ||
+                          ui->IsMenuOpen(RE::BarterMenu::MENU_NAME));
+        }
 
         // POST-BATTLE SHED GATE. The last steady_clock instant each follower was
         // OBSERVED in a fight, stamped by NoteInCombat (below) from the Scheduler's

@@ -853,6 +853,11 @@ namespace MFO::Logistics {
                 if (oldItem) fromBase = oldItem->GetFormID();
             }
 
+            // A CORPSE source: the transfer is QUEUED to the main thread (TheftGate.h, INVARIANTS #83) and the piece is in his pack one
+            // frame later. Everything below that needs it THERE (the ch.17 placement wish, the direct EquipObject) is attached to that
+            // take with TheftGate::AfterLanding, so it runs on main right after the transfer, in that order, and not at all when
+            // nothing moved. The armor declaration names the piece from the service tick after it lands (ComputeOwnedGearPick reads
+            // the pack), and the gem move waits for the equip event as it always did.
             if (a_src && TheftGate::Take(a_follower, a_src, a_item, 1, TheftGate::Road::Gear) <= 0)
                 return false;   // theft gate: nothing he may own moved, so nothing is equipped or stocked
 
@@ -904,8 +909,14 @@ namespace MFO::Logistics {
                 // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility
                 // now."): the weapon (equip-in-place: the RIGHT hand that holds the same role) is a one-shot
                 // ch.17 placement carried by this service tick's declaration; Harbinger's equip pass puts it on.
-                Actuation::WantPlacement(a_follower->GetFormID(), a_item->GetFormID(),
-                                         Actuation::PlacementSlotFor(a_item, false), "owned / looted upgrade");
+                // A wish for an item that is not in his pack yet is dropped by the next declaration build ("no longer his"), so for a
+                // piece still on its way from a corpse the wish is made when it lands (WantPlacement is lock-guarded: any thread).
+                const RE::FormID    folID  = a_follower->GetFormID();
+                const RE::FormID    itemID = a_item->GetFormID();
+                const std::uint8_t  slot   = Actuation::PlacementSlotFor(a_item, false);
+                auto place = [folID, itemID, slot]() { Actuation::WantPlacement(folID, itemID, slot, "owned / looted upgrade"); };
+                const bool fromActor = a_src && a_src->As<RE::Actor>();   // only an actor source is queued (TheftGate::Take)
+                if (!fromActor || !TheftGate::AfterLanding(folID, itemID, place)) place();
             } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
                 // Actor*/item) and re-resolve on the frame that runs.
@@ -918,8 +929,11 @@ namespace MFO::Logistics {
                     if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
                         eq->EquipObject(fol, item);
                 };
-                if (MainThread::IsInstalled()) MainThread::Post(doEquip);
-                else                           doEquip();   // VR: pump is a no-op, keep the direct path
+                // A piece still on its way from a corpse is equipped right after its transfer lands (same main-thread drain, so the
+                // order holds even when the transfer waits a frame for an open inventory menu). Only an actor source is queued.
+                if (a_src && a_src->As<RE::Actor>() && TheftGate::AfterLanding(folID, itemID, doEquip)) { /* attached to the queued take */ }
+                else if (MainThread::IsInstalled()) MainThread::Post(doEquip);
+                else                                doEquip();   // VR: pump is a no-op, keep the direct path
             }
 
             // Move the old piece's gems onto the new one when it becomes worn.

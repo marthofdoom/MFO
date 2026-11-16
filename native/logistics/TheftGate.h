@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>   // std::function -- not in the PCH
 // logistics/TheftGate.h -- the UNIVERSAL THEFT GATE (ClickUp 1dfcuabczbg, SEV-1 user report: follower looting in Whiterun
 // gave the player 5 g theft bounties and the guards attacked). RE: Docs/research/2026-11/theft-and-crime-alarm-re.md.
 //
@@ -30,7 +31,9 @@ namespace MFO::Logistics::TheftGate {
     // The CALLING THREAD's last non-Clear GuardCheck result and a running count of them (thread_local, no lock). A caller whose call chain
     // passes several gates (StripCorpse -> LootHere / Take) snapshots n before and after to learn that a gate refused, and reads state / guard
     // to say why (Pending = "guard check pending", Seen = "guard sees <guard>").
-    struct GuardRefusal { std::uint32_t n = 0; GuardState state = GuardState::Clear; RE::FormID guard = 0; };
+    // landing = the Pending came from the CORPSE-TRANSFER hold (Takeable, below), not from a guard answer: an item of the candidate's
+    // form type is still on its way to the follower (queued to the main thread). Same contract as a pending guard answer: RETRY, never DONE.
+    struct GuardRefusal { std::uint32_t n = 0; GuardState state = GuardState::Clear; RE::FormID guard = 0; bool landing = false; };
     GuardRefusal GuardRefusalInfo();
 
     // INTERIM GUARD GATE. TRUE = refuse (a guard sees the follower or a_src, or the answer is not back yet).
@@ -52,13 +55,42 @@ namespace MFO::Logistics::TheftGate {
     const char* TakeBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj,
                            RE::ExtraDataList* a_xList, Road a_road);
 
-    // Read-only: is at least one copy of a_obj in a_src takeable? (the peek paths)
+    // Read-only: is at least one copy of a_obj in a_src takeable? (the peek paths) Copies already QUEUED out of an actor source (below) do
+    // not count. THE LANDING HOLD: FALSE, with a Pending refusal recorded (GuardRefusal::landing), while an item of a_obj's FORM TYPE is
+    // still on its way to this follower: his pack does not show it yet, so a decision that counts or compares that kind of item (ammo and
+    // potion counts, the gear baseline) would be made on a stale pack. The caller's guard-pending handling retries the visit.
     bool Takeable(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj);
 
     // The take: moves up to a_count of a_obj from a_src into the follower, ONLY copies TakeBarred allows. A stack with no
     // barred copy is moved by the one plain RemoveItem the callers always made. Returns how many moved (0 = refused).
     // Checks the guard gate first. a_road is a hint (Container becomes Corpse for an actor source).
+    //
+    // AN ACTOR SOURCE (A CORPSE) IS NEVER TRANSFERRED ON THE WORKER (INVARIANTS #83, ENGINE_NOTES 0.30 amendment 2026-11-15). The gates
+    // (guard, per-copy ownership) are decided here, on the calling thread, exactly as before; the transfer itself is QUEUED and runs on
+    // the MAIN thread (MainThread::Post, FormIDs only, the copies re-picked there by the same Analyse), in queue order, one drain per
+    // frame (the whole queue, no per-frame cap; an open inventory menu defers it a frame). The return value is then the PLANNED count
+    // and the items are in the pack one frame later. Until they land: Takeable / Take subtract the queued copies from what the source still offers,
+    // InFlightWeight carries their weight, and Takeable holds same-type decisions (above). Never waits on main. With no live pump
+    // (unsupported runtime) the transfer runs on the calling thread as before (said once). Called ON main (the steal road) it runs at once.
     std::int32_t Take(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::int32_t a_count, Road a_road);
+
+    // ONE NAMED COPY of an actor source (the copy whose ExtraUniqueID is a_uid; the gem probe's take), on the same queue and under the
+    // same rules as Take. The caller has run its gates (guard, TakeBarred); the per-copy bar is re-read on main. a_landed runs on MAIN
+    // right after the transfer with the count that moved, only when it is > 0. Returns the planned count (1), or 0 with nothing queued
+    // when a_src is no actor or the pump is not live (the caller keeps its own direct road).
+    std::int32_t QueueCopy(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::TESBoundObject* a_obj, std::uint16_t a_uid, Road a_road,
+                           std::function<void(std::int32_t)> a_landed);
+
+    // A MAIN-THREAD follow-up that needs the item IN the follower's pack (the equip of a looted piece). TRUE = a queued take of a_obj for
+    // a_follower is still in flight and a_onMain was attached to it: it runs on main right after that take lands, only if something moved
+    // (else it is dropped, said loudly). FALSE = nothing in flight (the take ran at once, or has landed): the caller runs its own road.
+    bool AfterLanding(RE::FormID a_follower, RE::FormID a_obj, std::function<void()> a_onMain);
+
+    // The weight of everything queued to a_follower and not landed yet (FitsCarryWeight adds it: his pack weight does not show it yet).
+    float InFlightWeight(RE::FormID a_follower);
+
+    // Drop the queue (revert / load: MainThread::Clear has dropped the posted drain). Logistics::ClearTransientState, after StopPump.
+    void ClearTransfers();
 
     // LOOSE REF: LooseRefBarred (any owner, off-limits, ...), and at ARRIVAL (a_arrival) the guard gate too. nullptr = may be taken.
     // a_road Loose or Flora. Any owner is barred, which is stricter than the engine's own pickup test (IsAnOwner needs a new
