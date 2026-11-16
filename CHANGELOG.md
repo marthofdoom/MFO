@@ -25,6 +25,14 @@ This is a real release on top of 2.11.1. It needs Harbinger v0.20.2 (ABI v45, un
 - **New opt-in probe `bStanceProbe`** in the INI. It only logs a follower's stance state, and it is off by default.
 - **The shipped tuning files carry the final 2.11.1 round.** All 15 class cells and the potion values are updated.
 
+## v2.11.4 -- No more freezes while followers loot
+
+This is a bug fix release. It works with Harbinger v0.20.3. No new co-save record.
+
+- **The game could freeze while followers looted corpses.** When a follower took armor, arrows or a torch the corpse was still wearing, the game unequipped it on MFO's background thread and changed the corpse's 3D there. RaceMenu updates bodies on its own threads, and when its morph code hit a broken shape mid-change it left the body locked, so the next frame waited forever. Every item taken from a corpse now moves on the main thread, the same way the game's own Take All does. Theft and guard checks are unchanged.
+- **Looting stays quick.** A follower waiting for a take to land retries within a fraction of a second instead of waiting a full second.
+- **No transfers while an inventory menu is open,** so the menu's lists stay in step.
+
 ## v2.11.3 -- Saves are safe again: no more crash on loading a save made mid-cast
 
 This is a bug fix release. It needs Harbinger v0.20.3. No new co-save record.
