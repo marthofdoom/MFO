@@ -359,6 +359,10 @@ namespace MFO::Logistics {
         std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.score > b.score; });
         bool moved = false;
         for (const auto& it : items) {
+            // A corpse take lands on the main thread one frame later (TheftGate.h): his pack cannot show it yet, so the re-judge below
+            // would count the same need again. Takeable is asked again per item: once a take of this visit is in flight it HOLDS the
+            // rest (a Pending refusal, so the body is kept and judged again next visit). A container take changes nothing here.
+            if (!TheftGate::Takeable(a_follower, a_src, it.obj)) continue;
             // Re-judged against what he carries NOW: an earlier take in this visit may have filled the need.
             const auto v = Iaus::ScoreConsumable(it.c, it.count, inv);
             if (!v.take) continue;

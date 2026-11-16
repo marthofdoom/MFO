@@ -293,11 +293,22 @@ namespace MFO::Logistics::GemRules {
         if (TheftGate::GuardInterim(a_follower, a_src, TheftGate::Road::Gear) ||
             TheftGate::TakeBarred(a_follower, a_src, a_c.obj, a_c.xl, TheftGate::Road::Gear)) return false;   // theft gate
         g_probed.insert({ src, base, uid });   // never re-taken, whatever the probe decides
+        const bool sellGambit = SellGambitActive(a_follower);
+        // A CORPSE source: the take is queued to the main thread like every corpse transfer (TheftGate.h, INVARIANTS #82), the copy
+        // named by its uid and re-found there; the probe runs right after it lands. 0 = not an actor source, no live pump, or already
+        // on main: the direct road below.
+        if (TheftGate::QueueCopy(a_follower, a_src, a_c.obj, uid, TheftGate::Road::Gear,
+                [fol, base, uid, src, sellGambit](std::int32_t) {
+                    spdlog::info("[gems] {:08X}: took '{}' from {:08X} to look for gems (on the main thread)", fol,
+                                 NameOf(RE::TESForm::LookupByID<RE::TESBoundObject>(base)), src);
+                    ProbeOnMain(fol, base, uid, src, sellGambit);
+                }) > 0)
+            return true;
         std::int32_t v = 0;
         a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, a_c.xl, a_follower);
         if (!FindOwned(a_follower, a_c.obj, uid, v)) return false;
         spdlog::info("[gems] {:08X}: took '{}' from {:08X} to look for gems", fol, NameOf(a_c.obj), src);
-        const bool sell = SellGambitActive(a_follower);
+        const bool sell = sellGambit;
         if (MainThread::IsInstalled()) MainThread::Post([fol, base, uid, src, sell]() { ProbeOnMain(fol, base, uid, src, sell); });
         else                           ProbeOnMain(fol, base, uid, src, sell);   // VR: no pump, same as the other gem reads
         return true;
