@@ -277,6 +277,11 @@ namespace MFO::Packages {
     // The fill is SAVE-SERIALIZED (#55): the caller MUST LootTravelClear() on
     // arrival, interrupt (combat), or timeout. ReleaseAll clears every slot on
     // load/revert/shutdown, so even a missed clear self-heals on the next load.
+    //
+    // THE ALIAS ROAD IS POSTED (INVARIANTS #83 rule 9, MFO-B859): every alias fill and eviction below (loot, retreat,
+    // the cast holder) is one alias op run on the MAIN thread; from the tick it is posted and lands on the next frame.
+    // TRUE from a Fill / Retarget on the alias road therefore means "posted", and the caller's own observation of the
+    // running package is the read-back (it always was the only proof). ReleaseAll stays synchronous on the main thread.
     bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, int a_slot);
     // A LEG BOUNDARY inside an ongoing batch excursion: retarget the follower to
     // the next loot ref (refill this slot's TARGET alias only) WITHOUT releasing

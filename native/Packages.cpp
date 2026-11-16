@@ -182,8 +182,11 @@ namespace MFO::Packages {
             // CastPackage). Selects which alias/package every lifecycle helper
             // observes and releases. Default false = the unchanged foe route.
             bool              self       = false;
+            // The posted fill this holder waits for (the alias op's failSeq). Pump compares it with g_castFillFailed.
+            std::uint32_t     fillSeq    = 0;
         };
         Holder g_holder;
+        std::uint32_t g_castFillSeq = 0;   // worker-only counter (same single-writer discipline as g_holder)
 
         // Which carrier alias / package the CURRENT holder occupies. Every
         // observe/release helper routes through these so the self and foe
@@ -343,6 +346,17 @@ namespace MFO::Packages {
             spdlog::error("[{}] {} -- alias {} occupancy unknown (alias reader seat refused): {}", a_tag, a_why, a_alias, a_evicted ? "evicted (marker, unconditional)" : "NOT swept (no marker or no native ForceRefTo)");
         }
 
+        // THE ONE ENGINE CALL. MAIN THREAD ONLY (INVARIANTS #83 rule 9, MFO-B859). Two kinds of caller: RunAliasOp (the posted
+        // alias op below) and ReleaseAll's sweeps (kPreLoadGame / post-load / revert / the critical-stage release: all on the
+        // main thread, synchronous, in their old order). NoteEngineWrite is the self-check: a call from the worker tick is
+        // counted in `[overlap]` and said once.
+        // WHAT THE ENGINE WRITES (read 2026-11-16 on all three binaries, Docs/ENGINE_NOTES.md 0.30 amendment 2026-11-16c):
+        // TESQuest::ForceRefTo (1.6.1170 0x3CDEE0, 1.7.104 0x3D4FA0, 1.5.97 0x375050) holds the quest's alias write lock and
+        // a global scoped lock, but under them it edits the REFERENCES: the old occupant loses its alias instance (extra
+        // list), its alias factions and spells, and its scene; the new one gets TESForm::AddChange(0x80000000), an
+        // ExtraAliasInstanceArray entry (that list's own lock), the alias factions / spells / items, and on an actor
+        // Actor::EndInterruptPackage plus three AI-process package calls with no lock at all; both go through
+        // BGSDynamicPersistenceManager (Promote / Demote). That is actor state, so it runs where every other actor write runs.
         bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,
                               RE::TESObjectREFR* a_ref) {
             if (!a_quest) return false;
@@ -350,9 +364,59 @@ namespace MFO::Packages {
 
             using func_t = std::uint32_t (*)(RE::TESQuest*, std::uint32_t, RE::TESObjectREFR*);
             static const REL::Relocation<func_t> func{ REL::RelocationID(24523, 25052) };
+            MainThread::NoteEngineWrite("Packages::ForceRefTo");
             func(a_quest, a_aliasID, a_ref);
             return true;
         }
+
+        // ── THE ALIAS OP (INVARIANTS #83 rule 9, MFO-B859) ──────────────────
+        // Every alias fill and eviction the worker asks for is ONE of these, run on the main thread by RunAliasOp (defined
+        // after the eviction marker, below) in a fixed order:
+        //   1. the package-form write the fill needs (the cast package's Spell / Target inputs),
+        //   2. the fill(s), first then second, with the second fill's roll-back,
+        //   3. Actor::EvaluatePackage in place (never resetAI) and, for a concentration release, InterruptCast,
+        //   4. the measured detach read-back (VerifyDetachedFrom).
+        // It holds FormIDs, handles and values only (a frame passes before a posted one runs) and the Packages GENERATION
+        // it was made under: ReleaseAll and ClearTransientState bump the generation, so an op made before a load or a
+        // release-all is dropped unrun when it is reached. PostAliasOp runs it in place where engine writes are allowed
+        // (the main thread: ReleaseAll's own ClearAlias, a main-thread dismissal; or no pump installed, the documented
+        // legacy path) and posts it otherwise (MainThread::Post, first in first out with every other post, so a fill
+        // posted before an eviction lands before it).
+        // The worker never reads a fill back in the tick that asked for it. The cast holder goes Requested -> (the next
+        // tick's FillObserved) -> Filled, bounded by kFillTimeout, exactly like the Papyrus dispatch road; a fill that
+        // failed on the main thread says so through g_castFillFailed and Pump releases at once. Loot travel and the
+        // retreat are observed by their own callers (the travel package running, the retreat's movement and timeout).
+        struct AliasFill {
+            enum class Ref : std::uint8_t { None, Handle, Marker, MarkerOrPlayer };
+            Ref                 kind        = Ref::None;
+            std::uint32_t       alias       = 0;
+            RE::ObjectRefHandle ref{};            // Ref::Handle: the reference to put in the alias
+            RE::FormID          refID       = 0;  // Ref::Handle: what the handle must still resolve to
+            RE::FormID          onlyIfHolds = 0;  // != 0: fill only if the alias holds this reference NOW (read on the main thread)
+        };
+        struct AliasOp {
+            enum class Write : std::uint8_t { None, CastFoe, CastSelf };
+            const char*   tag       = "pkg";               // log tag, a literal
+            const char*   questName = "MFO_CommandQuest";  // for the detach read-back, a literal
+            std::string   why;
+            std::string   done;                // the line said when the op ran to its end
+            RE::FormID    who       = 0;       // the follower the log lines name
+            RE::FormID    questID   = 0;
+            Write         write     = Write::None;
+            RE::FormID    spellID   = 0;
+            AliasFill     first, second;
+            bool          rollbackSecond = false;   // the second fill failed after the first landed: evict second.alias
+            bool          vmClear   = false;        // a marker eviction with no marker / no native: ReferenceAlias.Clear through the VM
+            RE::FormID    evalActor = 0;
+            bool          interrupt = false;        // InterruptCast on the three sources after the evaluate
+            RE::FormID    verifyActor = 0;
+            std::uint32_t failSeq   = 0;            // != 0: a failed op stores it in g_castFillFailed
+            std::uint32_t gen       = 0;            // set by PostAliasOp
+        };
+        std::atomic<std::uint32_t> g_opGen{ 0 };           // THE PACKAGES GENERATION (any thread)
+        std::atomic<std::uint32_t> g_castFillFailed{ 0 };  // the failSeq of the last cast fill that failed on the main thread
+        std::atomic<std::uint64_t> g_opsPosted{ 0 }, g_opsRan{ 0 }, g_opsStale{ 0 }, g_opsFailed{ 0 };
+        void PostAliasOp(AliasOp a_op);
 
         // Dispatch ReferenceAlias.ForceRefTo / .Clear through the VM.
         // The fallback when the native is unavailable (VR), and the route for
@@ -548,7 +612,10 @@ namespace MFO::Packages {
         // Point the package at a spell and a target. Returns false without
         // having written ANYTHING if either input fails its guard -- a
         // half-mutated package would cast the right spell at the wrong thing.
-        bool SetInputs(RE::SpellItem* a_spell, RE::TESObjectREFR* a_ref) {
+        // a_write=false runs the guards only (Begin, on the worker: the synchronous BadInputs decline). a_write=true is
+        // the write, and it runs inside the alias op on the main thread, in front of the fill (INVARIANTS #83 rule 9).
+        // Each field is stored only when it differs, so the steady state is ONE aligned pointer store (the spell).
+        bool SetInputs(RE::SpellItem* a_spell, bool a_foe, bool a_write = true) {
             auto* pkg = Forms::g_castPackage;
             if (!pkg) return false;
 
@@ -566,12 +633,15 @@ namespace MFO::Packages {
             auto* targetTarget = ReadTarget(targetPd, "Target");
             if (!spellTarget || !targetTarget) return false;
 
-            // BOTH guards passed -- only now do we write.
-            spellTarget->targType      = kTargTypeObjectID;
-            spellTarget->target.object = a_spell;
-            spellTarget->value         = 0;
+            if (!a_write) return true;
 
-            if (a_ref) {
+            // BOTH guards passed -- only now do we write.
+            MainThread::NoteEngineWrite("Packages::SetInputs");
+            if (spellTarget->targType != kTargTypeObjectID) spellTarget->targType = kTargTypeObjectID;
+            if (spellTarget->value != 0)                    spellTarget->value    = 0;
+            if (spellTarget->target.object != a_spell)      spellTarget->target.object = a_spell;
+
+            if (a_foe) {
                 // FOE ROUTE, field-proven (probe 5): targType 4 -> ALIAS 1.
                 //
                 // NOT a live ObjectRefHandle in targType 0. That route also
@@ -580,9 +650,12 @@ namespace MFO::Packages {
                 // can: the caller fills alias 1 with the victim, the package
                 // points at alias 1, and the same record serves every target.
                 // This is CWFinaleLeaderExecuteEnemyLeader's shape.
-                targetTarget->targType       = kTargTypeAlias;
-                targetTarget->target.aliasID = kAliasCommandTarget;
-                targetTarget->value          = 0;
+                if (targetTarget->targType != kTargTypeAlias || targetTarget->target.aliasID != kAliasCommandTarget) {
+                    targetTarget->targType       = kTargTypeAlias;
+                    targetTarget->target.object  = nullptr;   // the whole 8-byte union, then the 4-byte alias id
+                    targetTarget->target.aliasID = kAliasCommandTarget;
+                }
+                if (targetTarget->value != 0) targetTarget->value = 0;
             } else {
                 // SELF ROUTE -- UNREACHABLE from Begin(): SetInputs is called
                 // ONLY with a foe target. The forced self-cast (SPEC-self-cast-
@@ -603,16 +676,18 @@ namespace MFO::Packages {
         // targType into a self record (writing t6 into a QNAM-carrying record
         // was the rev-4 crash; §0.22 proved the static t6/no-QNAM shape clean).
         // Returns false without writing if the input fails its layout guard.
-        bool SetSelfSpell(RE::SpellItem* a_spell) {
+        bool SetSelfSpell(RE::SpellItem* a_spell, bool a_write = true) {
             auto* pkg = Forms::g_castPackageSelf;
             if (!pkg) return false;
             auto* spellPd = FindInput(pkg, kInputSpell);
             if (!spellPd) return false;
             auto* spellTarget = ReadTarget(spellPd, "Spell(self)");
             if (!spellTarget) return false;
-            spellTarget->targType      = kTargTypeObjectID;
-            spellTarget->target.object = a_spell;
-            spellTarget->value         = 0;
+            if (!a_write) return true;   // the guards only (Begin on the worker); the write runs in the alias op
+            MainThread::NoteEngineWrite("Packages::SetSelfSpell");
+            if (spellTarget->targType != kTargTypeObjectID) spellTarget->targType = kTargTypeObjectID;
+            if (spellTarget->value != 0)                    spellTarget->value    = 0;
+            if (spellTarget->target.object != a_spell)      spellTarget->target.object = a_spell;
             return true;
         }
 
@@ -700,16 +775,60 @@ namespace MFO::Packages {
         // runtime handle (targType/locType 0, "Near Reference") and a radius.
         // Returns false without writing anything if the input fails its layout
         // guard -- never a half-mutated package.
+        // ── A RUN-TIME REFERENCE IN ONE OF MFO'S OWN PACKAGE FORMS: ONE ALIGNED STORE (INVARIANTS #83 rule 9, MFO-B859) ──
+        // These writes STAY where the caller is (the worker tick): the Harbinger claim that hands the package out is filed
+        // by the same call, right behind the write, and a posted write would land AFTER the claim could be published
+        // (the follower would walk at the previous destination). They are safe on any thread because of what is stored:
+        //   * the reference is a 32-bit handle at an 8-byte aligned offset (PackageLocation::data +0x10, PackageTarget::
+        //     target +0x08): one `mov`, so a reader on any thread sees the old handle or the new one, never a mix, and
+        //     both are handles the engine resolves through its handle table (a stale one resolves to nothing).
+        //   * the DISCRIMINATOR of that union (locType / targType) is never changed here. Every package written through
+        //     these helpers is authored as type 0 with a handle (MFO_GenerateESP.py: the APMF travel / retreat packages'
+        //     PLDT, the errand work packages' PLDT and PTDA), so the value is already right. If one ever reads
+        //     differently, the write is REFUSED off the main thread (an ERROR, nothing written): re-typing a union
+        //     under a reader is the one store here that could make the engine read a handle as a pointer.
+        //   * the radius / count is its own aligned 32-bit store, written only when it differs. A reader that sees the
+        //     new reference with the old radius uses a different arrival distance for that one read.
+        // The engine's readers (the package's procedure on the actor's AI update) may run on the main thread or on an AI
+        // job; the argument above does not depend on which.
+        bool StoreLocationRef(RE::PackageLocation* a_loc, RE::TESObjectREFR* a_ref, std::uint32_t a_rad, RE::FormID a_pkg) {
+            if (a_loc->locType.get() != RE::PackageLocation::Type::kNearReference) {
+                if (!MainThread::EngineWritesAllowed()) {
+                    spdlog::error("[pkg] package {:08X}: its Location input is authored as type {} and not as a near reference; "
+                                  "MFO does not re-type a package input off the main thread. NOTHING written.",
+                                  a_pkg, static_cast<int>(a_loc->locType.get()));
+                    return false;
+                }
+                a_loc->data.object = nullptr;   // main thread: clear the whole union before it is read as a handle
+                a_loc->locType     = RE::PackageLocation::Type::kNearReference;
+            }
+            if (a_loc->rad != a_rad) a_loc->rad = a_rad;
+            a_loc->data.refHandle = a_ref->CreateRefHandle();   // THE ONE STORE
+            return true;
+        }
+        bool StoreTargetRef(RE::PackageTarget* a_t, RE::TESObjectREFR* a_ref, RE::FormID a_pkg) {
+            if (a_t->targType != kTargTypeRef) {
+                if (!MainThread::EngineWritesAllowed()) {
+                    spdlog::error("[pkg] package {:08X}: its target input is authored as type {} and not as a placed reference; "
+                                  "MFO does not re-type a package input off the main thread. NOTHING written.",
+                                  a_pkg, static_cast<int>(a_t->targType));
+                    return false;
+                }
+                a_t->target.object = nullptr;
+                a_t->targType      = kTargTypeRef;
+            }
+            if (a_t->value != 0) a_t->value = 0;
+            a_t->target.handle = a_ref->CreateRefHandle();   // THE ONE STORE
+            return true;
+        }
+
         bool SetAPMFLootTravelTarget(RE::TESPackage* a_pkg, RE::TESObjectREFR* a_ref, float a_radius) {
             if (!a_pkg || !a_ref) return false;
             auto* locPd = FindInput(a_pkg, kInputLocation);
             if (!locPd) return false;
             auto* loc = ReadLocation(locPd, "Location");
             if (!loc) return false;
-            loc->locType       = RE::PackageLocation::Type::kNearReference;
-            loc->data.refHandle = a_ref->CreateRefHandle();
-            loc->rad            = static_cast<std::uint32_t>(a_radius);
-            return true;
+            return StoreLocationRef(loc, a_ref, static_cast<std::uint32_t>(a_radius), a_pkg->GetFormID());
         }
 
         // ── TOWN PHASE 2 R7: the errand WORK packages' run-time inputs ───────────────────────────────────────────────
@@ -878,51 +997,31 @@ namespace MFO::Packages {
         void ClearAlias(const char* a_why) {
             const auto id    = g_holder.actorID;
             auto*      quest = Forms::g_commandQuest;
-            auto*      mark  = EvictMarkerRef();   // marker or null -- no player fallback here
 
             const std::uint32_t actorAlias = HolderActorAlias();   // 0 foe / 2 self
-            bool released = false;
-            if (quest && mark && ForceRefToNative(quest, actorAlias, mark)) {
-                spdlog::info("[pkg] {:08X}: released ({}) -- evicted (marker){}", id, a_why,
-                             g_holder.self ? " [self]" : "");
-                released = true;
-            } else if (DispatchAlias("Clear", nullptr, actorAlias)) {
-                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear alias {} (no marker/no native ForceRefTo)",
-                             id, a_why, actorAlias);
-                released = true;
-            }
-            if (!released) {
-                // The fill is SERIALIZED INTO THE SAVE. A release we could not
-                // perform is not a cosmetic miss -- it is a follower who comes
-                // back latched on every subsequent load. The ReleaseAll load
-                // sweep is the self-heal.
-                spdlog::error("[pkg] {:08X}: RELEASE FAILED on both routes ({}) -- the alias "
-                              "fill persists in the save; the load sweep will evict it", id, a_why);
-            }
-            // Measured readback, same idiom as every loot/retreat release:
-            // "the alias now holds the marker" is not proof the follower
-            // detached. Re-evaluate so the framework reclaims him THIS tick.
-            if (auto* actor = HolderActor()) {
-                EngineOps::EvaluatePackage(actor);   // never resetAI -- combat group. INVARIANTS #83: posted from the tick, it runs on the next frame
-                // CONCENTRATION: CUT THE STREAM. Eviction re-evaluates the
-                // package away, but a channel the graph already opened can
-                // outlive the package by a beat -- and a beam that lingers
-                // even one beat past "teammate crossed the line" is the
-                // friendly fire this hold exists to prevent. InterruptCast on
-                // all three plausible sources (the package's casting source
-                // is not observable); no refund -- package casts spend
-                // nothing (§0.22). Same worker-side call Actuation's
-                // bDriveCaster probe ships.
-                if (g_holder.hold.holdSeconds > 0.0f) {
-                    using CS = RE::MagicSystem::CastingSource;
-                    for (const auto src : { CS::kLeftHand, CS::kRightHand, CS::kInstant }) {
-                        EngineOps::InterruptCast(actor, src, false);   // INVARIANTS #83: on the main thread, behind the evaluate above
-                    }
-                    spdlog::info("[pkg] {:08X}: concentration stream interrupted ({})",
-                                 id, a_why);
-                }
-                VerifyDetachedFrom(quest, actor, "pkg", "MFO_CommandQuest", a_why);
-            }
+            // ONE ALIAS OP (INVARIANTS #83 rule 9), on the main thread and in this order: the eviction (the marker, or
+            // the VM Clear when there is no marker / no native; neither is the old "RELEASE FAILED" error), then
+            // EvaluatePackage in place so the framework reclaims him (never resetAI: the combat group), then for a
+            // concentration hold InterruptCast on the three sources (a beam that lingers one beat past "teammate crossed
+            // the line" is the friendly fire the hold exists to prevent), then the measured detach read-back.
+            // Posted from the tick; in place from ReleaseAll (the main thread). The holder is reset HERE, at once: a
+            // new Begin in this same tick posts its own op behind this one (first in, first out).
+            // The marker is resolved on the main thread, where the op runs: marker or nothing, NEVER the player here.
+            AliasOp op;
+            op.tag         = "pkg";
+            op.questName   = "MFO_CommandQuest";
+            op.why         = a_why ? a_why : "";
+            op.who         = id;
+            op.questID     = quest ? quest->GetFormID() : 0;
+            op.first.kind  = AliasFill::Ref::Marker;
+            op.first.alias = actorAlias;
+            op.vmClear     = true;
+            op.evalActor   = id;
+            op.interrupt   = g_holder.hold.holdSeconds > 0.0f;
+            op.verifyActor = id;
+            op.done        = std::format("[pkg] {:08X}: released ({}) -- evicted (marker){}", id, op.why,
+                                         g_holder.self ? " [self]" : "");
+            PostAliasOp(std::move(op));
             ResetHolder();
         }
 
@@ -1017,42 +1116,59 @@ namespace MFO::Packages {
             // authored statically and MUST NOT be rewritten at runtime (that
             // write, into a QNAM-carrying record, was the rev-4 crash; the self
             // record carries no QNAM and we never touch its target).
-            const bool inputsOk = self ? SetSelfSpell(a_spell)
-                                       : SetInputs(a_spell, a_target);
+            // HERE: the layout guards only (read-only; the package's input tables never change after load), so a bad
+            // record still declines in this call. The WRITE runs inside the alias op, on the main thread, in front of
+            // the fill (INVARIANTS #83 rule 9).
+            const bool inputsOk = self ? SetSelfSpell(a_spell, /*a_write=*/false)
+                                       : SetInputs(a_spell, /*a_foe=*/true, /*a_write=*/false);
             if (!inputsOk) return Decline::BadInputs;
 
-            // FOE ROUTE: fill the TARGET alias (1) with the victim BEFORE the
-            // actor alias, the same no-rooting order as loot/retreat -- the
-            // package's t4 target must resolve when alias 0 instances it.
-            // Native-only: alias 1 has no VM fallback, so without the native
-            // (VR) the foe route declines and the caller falls back. Self skips
-            // this entirely -- t6 aims the caster at himself, no target alias.
-            if (!self) {
-                if (!ForceRefToNativeAvailable()) return Decline::NoVM;
-                if (!ForceRefToNative(quest, kAliasCommandTarget, a_target)) {
-                    spdlog::error("[pkg] {:08X}: TARGET alias {} fill failed -- refusing to "
-                                  "cast at a stale target", id, kAliasCommandTarget);
-                    return Decline::NoVM;
-                }
-            }
+            // Both routes are native-only: the foe route's alias-1 target fill has no VM form, and the self route
+            // declined above without the native. (The old VM ForceRefTo arm behind the actor fill could not be reached:
+            // the native check in front of it had already returned.)
+            if (!ForceRefToNativeAvailable()) return Decline::NoVM;
 
-            // Fill the holder's carrier alias (0 foe / 2 self). Native first --
-            // synchronous, so the alias is filled when this returns. VM fallback
-            // only for the FOE route on VR (self already returned NoVM there,
-            // and the VM fallback fills alias 0 regardless of route).
-            bool filled = ForceRefToNative(quest, actorAlias, a_follower);
-            if (filled) {
-                spdlog::info("[pkg] {:08X}: alias {} filled NATIVELY (synchronous){}",
-                             id, actorAlias, self ? " [self]" : "");
-            } else if (!self && DispatchAlias("ForceRefTo", a_follower)) {
-                spdlog::info("[pkg] {:08X}: alias {} fill DISPATCHED via VM (async)",
-                             id, actorAlias);
-            } else {
-                spdlog::error("[pkg] {:08X}: ForceRefTo failed on BOTH routes", id);
-                return Decline::NoVM;
+            // ONE ALIAS OP, in this order on the main thread: the inputs, then for the FOE route the TARGET alias (1)
+            // with the victim BEFORE the actor alias (the same no-rooting order as loot / retreat: the package's t4
+            // target must resolve when alias 0 instances it; self has no target alias, t6 aims the caster at himself),
+            // then the holder's carrier alias (0 foe / 2 self), then EvaluatePackage in place (never resetAI: ALYSLC
+            // field-proved that resetting AI clears the combat group and the next hit does zero damage, and a gambit
+            // fires in combat by definition). A reference that no longer resolves there fails the op: nothing after it
+            // runs ("refusing to cast at a stale target"), and Pump releases on the failure it reports.
+            const std::uint32_t fillSeq = ++g_castFillSeq ? g_castFillSeq : ++g_castFillSeq;   // never 0
+            {
+                AliasOp op;
+                op.tag       = "pkg";
+                op.questName = "MFO_CommandQuest";
+                op.why       = self ? "cast fill [self]" : "cast fill";
+                op.who       = id;
+                op.questID   = quest->GetFormID();
+                op.write     = self ? AliasOp::Write::CastSelf : AliasOp::Write::CastFoe;
+                op.spellID   = a_spell->GetFormID();
+                AliasFill actorFill;
+                actorFill.kind  = AliasFill::Ref::Handle;
+                actorFill.alias = actorAlias;
+                actorFill.ref   = a_follower->CreateRefHandle();
+                actorFill.refID = id;
+                if (self) {
+                    op.first = actorFill;
+                } else {
+                    op.first.kind  = AliasFill::Ref::Handle;
+                    op.first.alias = kAliasCommandTarget;
+                    op.first.ref   = a_target->CreateRefHandle();
+                    op.first.refID = a_target->GetFormID();
+                    op.second      = actorFill;
+                }
+                op.evalActor = id;
+                op.failSeq   = fillSeq;
+                op.done      = std::format("[pkg] {:08X}: alias {} filled NATIVELY on the main thread{}; "
+                                           "EvaluatePackage(immediate, NO reset) after fill",
+                                           id, actorAlias, self ? " [self]" : "");
+                PostAliasOp(std::move(op));
             }
 
             ResetHolder();
+            g_holder.fillSeq  = fillSeq;
             g_holder.actorID  = id;
             g_holder.self     = self;
             g_holder.spellID  = a_spell->GetFormID();
@@ -1293,6 +1409,143 @@ namespace MFO::Packages {
             return RE::PlayerCharacter::GetSingleton();
         }
 
+        // ── THE ALIAS OP'S BODY. MAIN THREAD (or the legacy in-place path with no pump). See AliasOp above. ──
+        // It touches no worker-owned state (g_holder, the retreat holds, the APMF slot table): what it reports back goes
+        // through atomics. A failed CLAIM fill (a reference that no longer resolves) stops the op: nothing after it runs,
+        // and it is an ERROR. A failed EVICTION is the old "RELEASE FAILED" error and the evaluate / read-back still run,
+        // as they always did (the read-back then says EVICT INCOMPLETE). Nothing is retried (principle 7).
+        bool RunAliasOp(const AliasOp& a_op) {
+            using Ref = AliasFill::Ref;
+            if (a_op.gen != g_opGen.load(std::memory_order_acquire)) {
+                g_opsStale.fetch_add(1, std::memory_order_relaxed);
+                spdlog::info("[{}] {:08X}: alias op ({}) DROPPED unrun: it was made before a load or a release-all (its "
+                             "generation {} is not the current {}). Nothing was written.",
+                             a_op.tag, a_op.who, a_op.why, a_op.gen, g_opGen.load(std::memory_order_relaxed));
+                return false;
+            }
+            g_opsRan.fetch_add(1, std::memory_order_relaxed);
+            const auto fail = [&a_op](std::string_view a_what) {
+                g_opsFailed.fetch_add(1, std::memory_order_relaxed);
+                if (a_op.failSeq) g_castFillFailed.store(a_op.failSeq, std::memory_order_release);
+                spdlog::error("[{}] {:08X}: alias op ({}) FAILED on the main thread: {}. Not retried.", a_op.tag, a_op.who,
+                              a_op.why, a_what);
+                return false;
+            };
+            auto* quest = a_op.questID ? RE::TESForm::LookupByID<RE::TESQuest>(a_op.questID) : nullptr;
+            if (!quest) return fail("the quest does not resolve");
+
+            // 1. THE PACKAGE-FORM WRITE, in front of the fill that makes the engine read it.
+            if (a_op.write != AliasOp::Write::None) {
+                auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_op.spellID);
+                if (!spell) return fail("the spell no longer resolves; nothing written, nothing filled");
+                const bool ok = a_op.write == AliasOp::Write::CastSelf ? SetSelfSpell(spell) : SetInputs(spell, true);
+                if (!ok) return fail("the package inputs failed their layout guard; nothing written, nothing filled");
+            }
+
+            // 2. THE FILLS, in order.
+            enum class Did { None, Ran, NotHeld, Failed };
+            const char* whyNot = nullptr;
+            const auto fill = [&](const AliasFill& a_f) -> Did {
+                if (a_f.kind == Ref::None) return Did::None;
+                RE::NiPointer<RE::TESObjectREFR> hold;
+                RE::TESObjectREFR*               ref = nullptr;
+                switch (a_f.kind) {
+                case Ref::Handle:
+                    hold = a_f.ref.get();
+                    ref  = hold.get();
+                    if (!ref || ref->GetFormID() != a_f.refID) { whyNot = "the reference no longer resolves"; return Did::Failed; }
+                    break;
+                case Ref::Marker:
+                    ref = EvictMarkerRef();
+                    if (!ref) { whyNot = "no eviction marker"; return Did::Failed; }
+                    break;
+                default:
+                    ref = EvictionRef();
+                    if (!ref) { whyNot = "no eviction reference"; return Did::Failed; }
+                    break;
+                }
+                if (a_f.onlyIfHolds) {
+                    // The occupancy read belongs HERE: a fill the worker posted a moment ago has landed by now (first
+                    // in, first out), where a worker-side read could still see the alias as it was before it.
+                    const auto read = Logistics::TradePerks::AliasRefHandle(quest, a_f.alias);
+                    if (!read) {
+                        spdlog::error("[{}] {:08X} ({}): alias {} NOT checked: alias reader seat refused", a_op.tag, a_op.who,
+                                      a_op.why, a_f.alias);
+                        return Did::NotHeld;
+                    }
+                    RE::ObjectRefHandle h    = *read;
+                    auto                hp   = h.get();
+                    auto*               held = hp.get();
+                    if (!held || held->GetFormID() != a_f.onlyIfHolds) return Did::NotHeld;
+                }
+                if (!ForceRefToNative(quest, a_f.alias, ref)) { whyNot = "no verified native ForceRefTo on this runtime"; return Did::Failed; }
+                return Did::Ran;
+            };
+            const bool evicts = a_op.first.kind == Ref::Marker || a_op.first.kind == Ref::MarkerOrPlayer;
+            bool       sayDone = true;
+            switch (fill(a_op.first)) {
+            case Did::NotHeld:
+                return true;   // he is not in that alias: nothing to release, nothing to read back
+            case Did::Failed:
+                if (!evicts) return fail(whyNot);
+                sayDone = false;
+                if (a_op.vmClear && DispatchAlias("Clear", nullptr, a_op.first.alias)) {
+                    spdlog::info("[{}] {:08X}: released ({}) -- VM Clear alias {} ({})", a_op.tag, a_op.who, a_op.why,
+                                 a_op.first.alias, whyNot);
+                } else {
+                    // The fill is SERIALIZED INTO THE SAVE. A release we could not perform is a follower who comes back
+                    // latched on every later load. The ReleaseAll load sweep is the self-heal.
+                    g_opsFailed.fetch_add(1, std::memory_order_relaxed);
+                    spdlog::error("[{}] {:08X}: RELEASE FAILED ({}): {} -- the alias fill persists in the save; the load "
+                                  "sweep will evict it", a_op.tag, a_op.who, a_op.why, whyNot);
+                }
+                break;
+            default:
+                break;
+            }
+            if (fill(a_op.second) == Did::Failed) {
+                // The claim's own unwind: the first fill landed and the second did not. Evict the second alias (the
+                // ACTOR alias of the pair) so nothing stays half-claimed. Marker, or the player if none was minted,
+                // exactly as LootTravelClear / RetreatClear did for "actor fill failed".
+                if (a_op.rollbackSecond)
+                    if (auto* ev = EvictionRef()) ForceRefToNative(quest, a_op.second.alias, ev);
+                return fail(whyNot);
+            }
+
+            // 3. EVALUATE IN PLACE (never resetAI: it clears the combat group), then the stream cut.
+            auto* evalActor = a_op.evalActor ? RE::TESForm::LookupByID<RE::Actor>(a_op.evalActor) : nullptr;
+            if (evalActor) {
+                EngineOps::EvaluatePackage(evalActor);
+                if (a_op.interrupt) {
+                    // CONCENTRATION: CUT THE STREAM. Eviction re-evaluates the package away, but a channel the graph
+                    // already opened can outlive the package by a beat. All three plausible sources (the package's
+                    // casting source is not observable); no refund (package casts spend nothing, 0.22).
+                    using CS = RE::MagicSystem::CastingSource;
+                    for (const auto src : { CS::kLeftHand, CS::kRightHand, CS::kInstant })
+                        EngineOps::InterruptCast(evalActor, src, false);
+                    spdlog::info("[{}] {:08X}: concentration stream interrupted ({})", a_op.tag, a_op.who, a_op.why);
+                }
+            }
+
+            // 4. THE MEASURED READ-BACK: "the alias now holds the marker" is not proof the follower detached.
+            if (a_op.verifyActor)
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_op.verifyActor))
+                    VerifyDetachedFrom(quest, a, a_op.tag, a_op.questName, a_op.why.c_str());
+
+            if (sayDone && !a_op.done.empty()) spdlog::info("{}", a_op.done);
+            return true;
+        }
+
+        void PostAliasOp(AliasOp a_op) {
+            a_op.gen = g_opGen.load(std::memory_order_acquire);
+            if (MainThread::EngineWritesAllowed()) {   // the main thread outside a tick, or no pump (the legacy path)
+                RunAliasOp(a_op);
+                return;
+            }
+            g_opsPosted.fetch_add(1, std::memory_order_relaxed);
+            MainThread::Post([op = std::move(a_op)]() { RunAliasOp(op); });
+        }
+
     }  // namespace
 
     const char* PhaseName(Phase a_phase) {
@@ -1458,23 +1711,16 @@ namespace MFO::Packages {
 
         switch (g_holder.phase) {
         case Phase::Requested:
-            if (filled) {
+            // THE READ-BACK OF THE POSTED FILL (INVARIANTS #83 rule 9): the fill was posted by Begin and ran on the main
+            // thread before this tick (the tick gate: a tick's posts drain before the next tick runs). The alias op
+            // evaluated the package in place right behind the fill (never resetAI), so nothing is nudged here any more.
+            if (g_holder.fillSeq != 0 && g_castFillFailed.load(std::memory_order_acquire) == g_holder.fillSeq) {
+                ++g_declines;
+                spdlog::warn("[pkg] {:08X}: the posted alias fill FAILED on the main thread (its [pkg] ERROR line says "
+                             "why) -- releasing; this cast does not run", g_holder.actorID);
+                ClearAlias("fill failed on the main thread");
+            } else if (filled) {
                 SetPhase(Phase::Filled, "alias fill observed");
-                // Nudge the AI to reconsider now that alias membership changed.
-                //
-                // a_resetAI IS FALSE AND MUST STAY FALSE. ALYSLC field-proved
-                // that resetting AI clears the combat group and the NEXT HIT
-                // DOES ZERO DAMAGE -- and a gambit fires in combat by
-                // definition, so this call is always the in-combat case.
-                //
-                // Whether the nudge is even needed is an open question:
-                // ENGINE_NOTES §0.7 found EvaluatePackage a no-op for
-                // CONDITION-driven selection, but this route selects by alias
-                // MEMBERSHIP, so the fill is itself the state change. Logged
-                // either way so the field can settle it.
-                EngineOps::EvaluatePackage(actor);
-                spdlog::info("[pkg] {:08X}: EvaluatePackage(immediate, NO reset) after fill",
-                             g_holder.actorID);
             } else if (Since(g_holder.startAt) > kFillTimeout) {
                 ++g_timeouts;
                 spdlog::warn("[pkg] {:08X}: fill NEVER OBSERVED after {:.1f}s -- ForceRefTo was "
@@ -1624,6 +1870,16 @@ namespace MFO::Packages {
         // state that must self-heal on every load/revert exactly like
         // g_travelSlots does (Logistics.cpp) -- and any still-live claim must be
         // dropped so a stale package-offer never outlives its excursion.
+        // THE PACKAGES GENERATION (INVARIANTS #83 rule 9), FIRST: every alias op made before this point is stale from
+        // here on. One still queued (this is the kPreLoadGame / post-load / revert call, synchronous on the main thread,
+        // while the queue holds what the last tick posted) is dropped unrun when it is reached: a fill must not land
+        // behind this sweep, and an eviction it drops is done by this sweep, which evicts every actor occupant itself.
+        // The ops this function makes (ClearAlias at its end) carry the new generation and run in place.
+        if (const auto ran = g_opsRan.load(std::memory_order_relaxed), stale = g_opsStale.load(std::memory_order_relaxed); ran || stale)
+            spdlog::info("[pkg] {} -- alias ops so far this session: {} ran ({} of them posted from the tick), {} dropped stale, {} failed",
+                         a_why, ran, g_opsPosted.load(std::memory_order_relaxed), stale, g_opsFailed.load(std::memory_order_relaxed));
+        g_opGen.fetch_add(1, std::memory_order_acq_rel);
+
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {
             if (g_apmfSlotActive[slot]) {
                 APMFBridge::ReleaseOfferPackage(g_apmfSlotFollower[slot]);
@@ -1860,14 +2116,33 @@ namespace MFO::Packages {
         // re-arbitrated). TARGET (alias 1) first so the destination is resolved
         // when alias 0 instances the package -- no claimed-with-no-destination
         // (rooting) window.
-        if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
-        if (!ForceRefToNative(quest, LootActorAlias(a_slot), a_follower)) {
-            LootTravelClear("actor fill failed", nullptr, a_slot);
-            return false;
+        // ONE ALIAS OP on the main thread (INVARIANTS #83 rule 9): target, then actor (an actor fill that fails evicts
+        // the actor alias again, the old "actor fill failed" unwind), then EvaluatePackage in place so he evaluates now
+        // rather than on the engine's own pass (never resetAI: it clears the combat group). TRUE here means POSTED. The
+        // caller's own observation is the read-back: the leg counts as engaged only once the travel package is seen
+        // running (logistics/Service.cpp legEngaged), and a leg that never engages is ended by its engage window.
+        {
+            const RE::FormID fid = a_follower->GetFormID();
+            AliasOp op;
+            op.tag          = "loot";
+            op.questName    = "MFO_LootQuest";
+            op.why          = "travel fill";
+            op.who          = fid;
+            op.questID      = quest->GetFormID();
+            op.first.kind   = AliasFill::Ref::Handle;
+            op.first.alias  = LootTargetAlias(a_slot);
+            op.first.ref    = a_ref->CreateRefHandle();
+            op.first.refID  = a_ref->GetFormID();
+            op.second.kind  = AliasFill::Ref::Handle;
+            op.second.alias = LootActorAlias(a_slot);
+            op.second.ref   = a_follower->CreateRefHandle();
+            op.second.refID = fid;
+            op.rollbackSecond = true;
+            op.evalActor    = fid;
+            op.done         = std::format("[loot] {:08X}: travel aliases filled on the main thread (slot {}, target {:08X})",
+                                          fid, a_slot, a_ref->GetFormID());
+            PostAliasOp(std::move(op));
         }
-        // Nudge the follower to evaluate now rather than wait for the engine's
-        // own pass. (true, false): NEVER resetAI -- it clears the combat group.
-        EngineOps::EvaluatePackage(a_follower);
         spdlog::info("[loot] {:08X}: travel dispatched to {:08X} (slot {}, quest prio={})",
                      a_follower->GetFormID(), a_ref->GetFormID(), a_slot,
                      static_cast<int>(quest->data.priority));
@@ -1956,8 +2231,22 @@ namespace MFO::Packages {
         if (!quest)                                return false;
         if (!ForceRefToNativeAvailable())          return false;
         if (!quest->IsRunning())                   return false;
-        if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
-        EngineOps::EvaluatePackage(a_follower);
+        {
+            // ONE ALIAS OP on the main thread: the new destination into the target alias, then EvaluatePackage in place.
+            const RE::FormID fid = a_follower->GetFormID();
+            AliasOp op;
+            op.tag         = "loot";
+            op.questName   = "MFO_LootQuest";
+            op.why         = "leg retarget";
+            op.who         = fid;
+            op.questID     = quest->GetFormID();
+            op.first.kind  = AliasFill::Ref::Handle;
+            op.first.alias = LootTargetAlias(a_slot);
+            op.first.ref   = a_ref->CreateRefHandle();
+            op.first.refID = a_ref->GetFormID();
+            op.evalActor   = fid;
+            PostAliasOp(std::move(op));
+        }
         spdlog::info("[loot] {:08X}: leg -> {:08X} (excursion, slot {}, prio={})",
                      a_follower->GetFormID(), a_ref->GetFormID(), a_slot,
                      static_cast<int>(quest->data.priority));
@@ -2071,16 +2360,27 @@ namespace MFO::Packages {
         // furniture); the next dispatch replaces the marker.
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
-        if (auto* ev = EvictionRef())
-            ForceRefToNative(quest, LootActorAlias(a_slot), ev);   // no-op on VR, fine
-        // Re-evaluate NOW so the framework reclaims him this tick, not on the
-        // engine's slow pass. (true,false) -- never resetAI. Without the follower
-        // here the eviction still frees him on the next engine evaluation.
-        if (a_follower) {
-            EngineOps::EvaluatePackage(a_follower);
-            VerifyDetached(a_follower, a_why);   // prove the eviction actually freed him
+        // ONE ALIAS OP on the main thread (INVARIANTS #83 rule 9): the eviction (the marker, or the player if none was
+        // minted; nothing without the native, as before), then EvaluatePackage in place so the framework reclaims him
+        // now and not on the engine's slow pass (never resetAI), then the detach read-back. Without the follower here
+        // the eviction still frees him on the next engine evaluation.
+        const bool native = ForceRefToNativeAvailable();
+        AliasOp op;
+        op.tag       = "loot";
+        op.questName = "MFO_LootQuest";
+        op.why       = a_why ? a_why : "";
+        op.who       = a_follower ? a_follower->GetFormID() : 0;
+        op.questID   = quest->GetFormID();
+        if (native) {
+            op.first.kind  = AliasFill::Ref::MarkerOrPlayer;
+            op.first.alias = LootActorAlias(a_slot);
         }
-        spdlog::info("[loot] travel released ({}) -- slot {} evicted (marker)", a_why, a_slot);
+        op.evalActor   = op.who;
+        op.verifyActor = op.who;
+        op.done = native ? std::format("[loot] travel released ({}) -- slot {} evicted (marker)", op.why, a_slot)
+                         : std::format("[loot] travel released ({}) -- slot {}: no native ForceRefTo on this runtime, nothing evicted",
+                                       op.why, a_slot);
+        PostAliasOp(std::move(op));
     }
 
     // ROUTE FLAG: true while a_slot's excursion is APMF-routed and the claim
@@ -2144,17 +2444,23 @@ namespace MFO::Packages {
 
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
+        // ONE ALIAS OP PER SLOT, and the OCCUPANCY READ IS INSIDE IT (INVARIANTS #83 rule 9): fills are posted, so a
+        // read made here could still see the alias as it was before a fill this very tick posted, skip the eviction,
+        // and leave him latched when that fill lands a frame later. On the main thread, behind every earlier post, the
+        // op reads who holds the slot's actor alias and evicts only a_id, then proves the ex-actor detached.
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {
-            const auto read = Logistics::TradePerks::AliasRefHandle(quest, LootActorAlias(slot));
-            if (!read) { spdlog::error("[loot] {:08X} ({}): loot alias (slot {}) NOT checked: alias reader seat refused", a_id, a_why, slot); continue; }
-            RE::ObjectRefHandle h = *read;
-            auto* held = h.get() ? h.get().get() : nullptr;
-            if (!held || held->GetFormID() != a_id) continue;   // a_id is not in this slot
-
-            if (auto* ev = EvictionRef())
-                ForceRefToNative(quest, LootActorAlias(slot), ev);   // no-op on VR, fine
-            if (auto* actor = held->As<RE::Actor>())
-                VerifyDetached(actor, a_why);   // prove the ex-actor detached
+            AliasOp op;
+            op.tag               = "loot";
+            op.questName         = "MFO_LootQuest";
+            op.why               = a_why ? a_why : "";
+            op.who               = a_id;
+            op.questID           = quest->GetFormID();
+            op.first.kind        = AliasFill::Ref::MarkerOrPlayer;
+            op.first.alias       = LootActorAlias(slot);
+            op.first.onlyIfHolds = a_id;
+            op.verifyActor       = a_id;
+            op.done              = std::format("[loot] {:08X}: evicted from the loot alias he still held (slot {}, {})", a_id, slot, op.why);
+            PostAliasOp(std::move(op));
         }
     }
 
@@ -2280,10 +2586,29 @@ namespace MFO::Packages {
         // Fill the TARGET first, then the ACTOR -- same no-rooting order as
         // loot: the destination (the player) is resolved before alias 0
         // instances the travel package. Both fills synchronous native.
-        if (!ForceRefToNative(quest, kAliasRetreatTarget, player)) return false;
-        if (!ForceRefToNative(quest, kAliasRetreatActor, a_follower)) {
-            RetreatClear("actor fill failed");
-            return false;
+        // ONE ALIAS OP on the main thread (INVARIANTS #83 rule 9): target (the player), then actor (an actor fill that
+        // fails evicts the actor alias again, the old "actor fill failed" unwind), then EvaluatePackage in place. The
+        // posted StopCombat below lands behind it and re-evaluates after the disengage, as before. TRUE below means
+        // POSTED; the Scheduler's per-tick retreat watch (movement, the travel timeout) is the read-back.
+        {
+            AliasOp op;
+            op.tag          = "retreat";
+            op.questName    = "MFO_RetreatQuest";
+            op.why          = "retreat fill";
+            op.who          = fid;
+            op.questID      = quest->GetFormID();
+            op.first.kind   = AliasFill::Ref::Handle;
+            op.first.alias  = kAliasRetreatTarget;
+            op.first.ref    = player->CreateRefHandle();
+            op.first.refID  = player->GetFormID();
+            op.second.kind  = AliasFill::Ref::Handle;
+            op.second.alias = kAliasRetreatActor;
+            op.second.ref   = a_follower->CreateRefHandle();
+            op.second.refID = fid;
+            op.rollbackSecond = true;
+            op.evalActor    = fid;
+            op.done         = std::format("[retreat] {:08X}: retreat aliases filled on the main thread", fid);
+            PostAliasOp(std::move(op));
         }
         // DISENGAGE so the travel actually MOVES her. Field (Auri, v1.0.22): the
         // retreat package went active (took=true) but she never relocated -- an
@@ -2297,8 +2622,7 @@ namespace MFO::Packages {
         // (PostRetreatStopCombat, which re-evaluates after it on this road); the
         // Scheduler posts it again only when she RE-ENTERS combat mid-retreat.
         // Static 60 is already in the record; the fill IS the claim (0.36).
-        // (true, false): NEVER resetAI -- it clears the combat group.
-        EngineOps::EvaluatePackage(a_follower);
+        // (true, false): NEVER resetAI -- it clears the combat group. (The evaluate runs inside the alias op above.)
         RetreatHold h;
         h.actorID  = fid;
         h.startAt  = Clock::now();
@@ -2343,17 +2667,33 @@ namespace MFO::Packages {
         // ExtraAliasInstanceArray readback. NEVER a VM Clear.
         auto* quest = Forms::g_retreatQuest;
         if (!quest) return;
-        if (auto* ev = EvictionRef())
-            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op on VR, fine
-        if (a_follower) {
-            EngineOps::EvaluatePackage(a_follower);   // reclaim on the next frame (INVARIANTS #83: the main thread); never resetAI
-            VerifyDetachedFrom(quest, a_follower, "retreat", "MFO_RetreatQuest", a_why);
+        {
+            // ONE ALIAS OP on the main thread (INVARIANTS #83 rule 9): the eviction, EvaluatePackage in place (never
+            // resetAI), the detach read-back.
+            const bool native = ForceRefToNativeAvailable();
+            AliasOp op;
+            op.tag       = "retreat";
+            op.questName = "MFO_RetreatQuest";
+            op.why       = a_why ? a_why : "";
+            op.who       = fid;
+            op.questID   = quest->GetFormID();
+            if (native) {
+                op.first.kind  = AliasFill::Ref::MarkerOrPlayer;
+                op.first.alias = kAliasRetreatActor;
+            }
+            if (a_follower) {
+                op.evalActor   = fid;
+                op.verifyActor = fid;
+            }
+            op.done = native ? std::format("[retreat] {:08X}: travel released ({}) -- evicted (marker)", fid, op.why)
+                             : std::format("[retreat] {:08X}: travel released ({}) -- no native ForceRefTo on this runtime, nothing evicted",
+                                           fid, op.why);
+            PostAliasOp(std::move(op));
         }
         if (fid) {
             g_retreatHolds.erase(fid);
             UnpublishRetreatLive(fid);
         }
-        spdlog::info("[retreat] {:08X}: travel released ({}) -- evicted (marker)", fid, a_why);
     }
 
     bool IsRetreating(RE::FormID a_id) { return FindRetreatHold(a_id) != nullptr; }
@@ -2480,16 +2820,20 @@ namespace MFO::Packages {
         // re-latching on every load.
         auto* quest = Forms::g_retreatQuest;
         if (!quest) return;
-        const auto read = Logistics::TradePerks::AliasRefHandle(quest, kAliasRetreatActor);
-        if (!read) { spdlog::error("[retreat] {:08X}: retreat alias NOT checked on dismissal: alias reader seat refused", a_id); return; }
-        RE::ObjectRefHandle h = *read;
-        auto* held = h.get() ? h.get().get() : nullptr;
-        if (!held || held->GetFormID() != a_id) return;
-
-        if (auto* ev = EvictionRef())
-            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op on VR, fine
-        if (auto* actor = held->As<RE::Actor>())
-            VerifyDetachedFrom(quest, actor, "retreat", "MFO_RetreatQuest", "dismissed");
+        // ONE ALIAS OP with the OCCUPANCY READ INSIDE IT (see LootTravelEvictIf: a read made here could miss a fill this
+        // tick posted). On the main thread it evicts a_id only if he holds the retreat actor alias, then proves it.
+        AliasOp op;
+        op.tag               = "retreat";
+        op.questName         = "MFO_RetreatQuest";
+        op.why               = "dismissed";
+        op.who               = a_id;
+        op.questID           = quest->GetFormID();
+        op.first.kind        = AliasFill::Ref::MarkerOrPlayer;
+        op.first.alias       = kAliasRetreatActor;
+        op.first.onlyIfHolds = a_id;
+        op.verifyActor       = a_id;
+        op.done              = std::format("[retreat] {:08X}: evicted from the retreat alias he still held (dismissed)", a_id);
+        PostAliasOp(std::move(op));
     }
 
     // ── TOWN PHASE 2 R7: run-time inputs of the errand work packages (public; apmf/ErrandWork.cpp is the caller) ────────
@@ -2500,9 +2844,9 @@ namespace MFO::Packages {
         if (!pd) return false;
         auto* loc = ReadLocation(pd, a_input);
         if (!loc) return false;
-        loc->locType        = RE::PackageLocation::Type::kNearReference;
-        loc->data.refHandle = a_ref->CreateRefHandle();
-        loc->rad            = static_cast<std::uint32_t>(std::clamp(a_radius, 0.0f, 4096.0f));
+        // ONE ALIGNED STORE (see StoreLocationRef): safe from the worker tick, and it must stay in front of the claim.
+        if (!StoreLocationRef(loc, a_ref, static_cast<std::uint32_t>(std::clamp(a_radius, 0.0f, 4096.0f)), a_pkg->GetFormID()))
+            return false;
         spdlog::info("[pkg] errand work {:08X}: input '{}' (uid {}) -> near reference {:08X} radius {:.0f}",
                      a_pkg->GetFormID(), a_input, a_uidOut, a_ref->GetFormID(), a_radius);
         return true;
@@ -2515,9 +2859,7 @@ namespace MFO::Packages {
         if (!pd) return false;
         auto* t = ReadTarget(pd, a_input);
         if (!t) return false;
-        t->targType      = kTargTypeRef;
-        t->target.handle = a_ref->CreateRefHandle();
-        t->value         = 0;
+        if (!StoreTargetRef(t, a_ref, a_pkg->GetFormID())) return false;   // ONE ALIGNED STORE (see StoreLocationRef)
         spdlog::info("[pkg] errand work {:08X}: input '{}' (uid {}) -> specific reference {:08X}", a_pkg->GetFormID(), a_input, uid,
                      a_ref->GetFormID());
         return true;
@@ -2544,6 +2886,8 @@ namespace MFO::Packages {
     }
 
     void ClearTransientState() {
+        g_opGen.fetch_add(1, std::memory_order_acq_rel);   // an alias op made before the revert never runs after it
+        g_castFillFailed.store(0, std::memory_order_release);
         ResetHolder();
         g_retreatHolds.clear();
         UnpublishAllRetreatLive();
