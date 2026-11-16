@@ -19,7 +19,7 @@ one, because the next person will believe it.
 
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
-**96 rules: 82 numbered (`#1`–`#82`, each used exactly once) plus 14 lettered
+**97 rules: 83 numbered (`#1`–`#83`, each used exactly once) plus 14 lettered
 sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
 break a `#N` citation, and both are fixed here:
 
@@ -1189,3 +1189,22 @@ destroyed form is cleared WITHOUT reading through the pointer (`ConcProxyLoadRep
 read, then form-map identity). Any new runtime form MFO creates joins this sweep before it ships.
 **MFO** fix/save-integrity-mfo, 2026-11-15 (the class of the Harbinger 11-14 crash, its #19).
 
+### 83. An item never leaves an ACTOR's inventory on the worker: corpse transfers are queued to the main thread
+
+`RemoveItem` on an actor is not the inventory-only call §0.30 took it for. For a copy the actor WEARS the
+engine unequips it inside the call, on the calling thread (ENGINE_NOTES 0.30, amendment 2026-11-15, with
+the addresses): an arrow stack or a torch is detached from the biped right there, an armor sets the
+actor's 3D update flag and fires the equip event and `WornArmorChanged`. And main-thread code walks a
+corpse's inventory (its own 3D rebuild, the container menu, other plugins) with no lock a worker write
+respects. The Deck looting freezes (a BSDynamicTriShape lock leaked by RaceMenu's parallel morphing while
+a corpse's 3D changes) have these worker-side corpse takes as their likely trigger, not as a proven one.
+
+So: a transfer whose SOURCE is an actor goes through `TheftGate::Take` (or `QueueCopy`), which decides
+the gates on the worker and runs the transfer on the main thread (`MainThread::Post`, FormIDs only, refs
+and copies re-resolved there), in queue order, at most one take that removes a worn piece per corpse per
+frame. The worker never waits on main. Until a take lands the worker must not trust the follower's pack
+for that kind of item: `Takeable` holds same-form-type decisions (a Pending refusal, the guard-pending
+retry path), queued copies are not offered twice, and their weight counts. Anything that needs the item
+IN the pack (an equip) is attached with `TheftGate::AfterLanding`. A queued take that cannot run (the
+follower died, the corpse unloaded) is said loudly and moves nothing; it is never retried around.
+No new direct `actor->RemoveItem(.., follower)` from the tick. **MFO** fix/corpse-take-main, 2026-11-15.

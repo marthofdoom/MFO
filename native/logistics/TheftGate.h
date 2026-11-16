@@ -65,7 +65,7 @@ namespace MFO::Logistics::TheftGate {
     // barred copy is moved by the one plain RemoveItem the callers always made. Returns how many moved (0 = refused).
     // Checks the guard gate first. a_road is a hint (Container becomes Corpse for an actor source).
     //
-    // AN ACTOR SOURCE (A CORPSE) IS NEVER TRANSFERRED ON THE WORKER (INVARIANTS #82, ENGINE_NOTES 0.30 amendment 2026-11-15). The gates
+    // AN ACTOR SOURCE (A CORPSE) IS NEVER TRANSFERRED ON THE WORKER (INVARIANTS #83, ENGINE_NOTES 0.30 amendment 2026-11-15). The gates
     // (guard, per-copy ownership) are decided here, on the calling thread, exactly as before; the transfer itself is QUEUED and runs on
     // the MAIN thread (MainThread::Post, FormIDs only, the copies re-picked there by the same Analyse), in queue order, one drain per
     // frame, at most ONE take that removes a WORN piece per corpse per frame. The return value is then the PLANNED count and the items

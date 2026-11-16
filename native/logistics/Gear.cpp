@@ -853,7 +853,7 @@ namespace MFO::Logistics {
                 if (oldItem) fromBase = oldItem->GetFormID();
             }
 
-            // A CORPSE source: the transfer is QUEUED to the main thread (TheftGate.h, INVARIANTS #82) and the piece is in his pack one
+            // A CORPSE source: the transfer is QUEUED to the main thread (TheftGate.h, INVARIANTS #83) and the piece is in his pack one
             // frame later. Everything below that needs it THERE (the ch.17 placement wish, the direct EquipObject) is attached to that
             // take with TheftGate::AfterLanding, so it runs on main right after the transfer, in that order, and not at all when
             // nothing moved. The armor declaration names the piece from the service tick after it lands (ComputeOwnedGearPick reads

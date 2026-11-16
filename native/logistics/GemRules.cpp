@@ -294,7 +294,7 @@ namespace MFO::Logistics::GemRules {
             TheftGate::TakeBarred(a_follower, a_src, a_c.obj, a_c.xl, TheftGate::Road::Gear)) return false;   // theft gate
         g_probed.insert({ src, base, uid });   // never re-taken, whatever the probe decides
         const bool sellGambit = SellGambitActive(a_follower);
-        // A CORPSE source: the take is queued to the main thread like every corpse transfer (TheftGate.h, INVARIANTS #82), the copy
+        // A CORPSE source: the take is queued to the main thread like every corpse transfer (TheftGate.h, INVARIANTS #83), the copy
         // named by its uid and re-found there; the probe runs right after it lands. 0 = not an actor source, no live pump, or already
         // on main: the direct road below.
         if (TheftGate::QueueCopy(a_follower, a_src, a_c.obj, uid, TheftGate::Road::Gear,

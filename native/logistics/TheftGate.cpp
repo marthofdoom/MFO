@@ -369,7 +369,7 @@ namespace MFO::Logistics::TheftGate {
             return moved;
         }
 
-        // ── CORPSE TRANSFERS RUN ON THE MAIN THREAD (INVARIANTS #82, ENGINE_NOTES 0.30 amendment 2026-11-15) ──
+        // ── CORPSE TRANSFERS RUN ON THE MAIN THREAD (INVARIANTS #83, ENGINE_NOTES 0.30 amendment 2026-11-15) ──
         // RemoveItem on an ACTOR is not an inventory-only call. InventoryChanges::RemoveItem (1.6.1170 0x228180) calls
         // ActorEquipManager::UnequipObject (0x6CA010, at 0x22A967) for a copy the actor WEARS, on the calling thread: an AMMO or a
         // torch is detached from the biped right there (0x2E9AA0 / 0x2E9670), an ARMO sets the actor's 3D update flag and calls
