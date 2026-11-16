@@ -374,6 +374,33 @@ Force-fills MFO's quest aliases at static priority 60 to run MFO's packages
 (cast / loot-travel / retreat), observes engine state to advance a phase machine,
 releases **by eviction** with a non-actor XMarker.
 
+- **ALIAS OPS: every alias fill and eviction runs on the MAIN thread (2026-11-16, `fix/alias-ops-main`, tier A threading,
+  INVARIANTS `#83` rule 9, MFO-B859; NOT merged, NOT field-run).** `ForceRefToNative` (`Packages.cpp:361`) is the one engine
+  call and names itself (`NoteEngineWrite`). `AliasOp` / `AliasFill` (`:390`) describe one operation with FormIDs, handles
+  and the Packages generation `g_opGen`; `RunAliasOp` (`:1419`) runs it in a fixed order (cast inputs, fills with roll-back,
+  `EvaluatePackage` in place, concentration `InterruptCast`, `VerifyDetachedFrom`); `PostAliasOp` (`:1542`) runs it in place
+  on the main thread and posts it from the tick. Users: `Begin` (cast fill; inputs validated on the worker, written in the
+  op), `ClearAlias` (cast release), `LootTravelFill` / `Retarget` / `Clear` / `EvictIf` and `RetreatFill` / `Clear` /
+  `EvictIf` (their LEGACY alias branches; the Harbinger branches make no alias fill). `ReleaseAll` keeps its synchronous
+  sweeps. `Pump`'s Requested phase reads the posted fill back on a later tick (`g_castFillFailed` for a fill that failed on
+  main, else `FillObserved`, else `kFillTimeout`). `StoreLocationRef` / `StoreTargetRef` (`:796`) are the one-aligned-store
+  writers for a run-time reference in MFO's own package forms (they stay on the caller's thread).
+  - **TO ADD AN ALIAS FILL OR EVICTION:** build an `AliasOp` and call `PostAliasOp`. Never call `ForceRefToNative` from tick
+    code, and never read the alias back in the same tick.
+  - **What breaks:** (1) a direct `ForceRefToNative` in tick code: the engine edits the actor's extra list, change flags and
+    AI process from the worker again (`[thread] INVARIANTS #83 VIOLATED at 'Packages::ForceRefTo'`). (2) Reading alias
+    occupancy on the worker to decide an eviction (`LootTravelEvictIf` / `RetreatEvictIf` did): it can miss a fill posted
+    the same tick, so the follower stays latched; the test belongs in the op (`onlyIfHolds`). (3) Posting from inside the op
+    (an `EngineOps` call made off the main thread, a `MainThread::Post`): the kSaveGame drain is ONE swap, so that second
+    hop would be pending across the save. The op's evaluate / interrupt / read-back run in place for that reason. (4) Not
+    bumping `g_opGen` in a new release-all path: an op queued before a load would run against the next world.
+    (5) Writing a package input's type (`locType` / `targType`) off the main thread: a reader could take a handle for a
+    pointer; `StoreLocationRef` refuses it. (6) Moving `SetAPMFLootTravelTarget`'s store behind the Harbinger claim
+    (posting it): the package could be handed out before its destination is written. (7) Touching `g_holder`, the retreat
+    holds or the APMF slot table from `RunAliasOp`: it runs on the main thread while the tick owns those.
+  - **Field checks:** `[pkg] ... alias N filled NATIVELY on the main thread`, `[pkg] ... released (...) -- evicted (marker)`
+    and the `[overlap]` line's "engine writes off the main thread" count staying 0. `[pkg] <why> -- alias ops so far this
+    session: ...` is printed by each `ReleaseAll`.
 - `g_holder` (`Packages.cpp:175`) single-writer cast state (no lock);
   `g_liveStream` atomic mirror (`:195`) is the ONLY holder field the caster-thread
   consent hooks may read.
@@ -1130,7 +1157,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   MeasureNow, `Targeting.cpp:182` UpdateCombat hook, `MainThread.cpp:119` pump, `CasterConsent.cpp:1064` /
   `:1094` CheckCast / CheckStartCast hooks, `CombatStyle.cpp:364` equip gate, `EngageOnSight.cpp:402`,
   `logistics/Lockpick.cpp:173` Unlock, `Board.cpp:634` ToggleControls, `Board.cpp:1810` overlay Install, and
-  the retreat foe probe (`Packages.cpp:2333`). The StopCombat deferrals (`Packages.cpp:1215`, `Rapport.cpp:406`)
+  the retreat foe probe (`Packages.cpp:2670`). The StopCombat deferrals (`Packages.cpp:1333`, `Rapport.cpp:406`)
   are now `Known()` -> `MainThread::Post`, VR -> the documented AddTask compromise, anything else -> nothing
   (the pump is refused there, so the old Post was already a no-op: same effect, stated in code). Slot / offset picks: `logistics/Upkeep.cpp:529` DropObject slot (0xCB on the two builds,
   refused elsewhere; was `IsVR() ? 0xCD : 0xCB`), `cast/Summon.cpp:144` in-function offset (0xA1 / 0x51 by
@@ -2736,7 +2763,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   hpLoss, time below floor. What breaks: lowering the cap or the persistence re-opens the one-hit retreat; the Engage-on-sight
   bar (`OfFacing`) shares Vitality/Trend, so it moved too.
   **ch.22 RE-ENTRY DENY (feat/mfo-reentry-leash 2026-09-25, Harbinger >= v15; `apmf/ReentryDeny.cpp`).**
-  `RetreatFill` claims the deny instead of posting its StopCombat (`Packages.cpp:2195/:2253`, an
+  `RetreatFill` claims the deny instead of posting its StopCombat (`Packages.cpp:2514/:2572`, an
   in-place edit, the file did not grow); the bridge sweep posts the SINGLE StopCombat on the first
   LIVE read. TRAVEL re-entry (`:451`) reads `RetreatReentryDenyStateOf`: PENDING = nothing (the
   sweep posts it), LIVE = a WARN and NO StopCombat (a ch.21 entry passes by contract, anything else
@@ -3040,7 +3067,8 @@ a job worker here, not main).
     after `Drink`): it is the pre-write state; read it next lap, as `ConfirmDrinks` and the hold ledgers do. (4) Posting from a
     closure that posts itself again: it lands after that tick's snapshot build pass (MFO-B858, the double-hop note).
     (5) `EngineOps::Equip`'s posted re-check (he still holds the item) skips an equip of an item that left his pack in the
-    frame between: said, never retried. (6) Docs/REVIEW-BACKLOG.md MFO-B859 lists what is NOT moved (the quest alias fills).
+    frame between: said, never retried. (6) The quest alias fills are moved too (`fix/alias-ops-main`, the ALIAS OPS entry
+    under "Packages.cpp / Packages.h"); Docs/REVIEW-BACKLOG.md MFO-B859 lists what is still open.
     (7) THE SAVE DRAIN (INVARIANTS `#83` rule 8): plugin.cpp kSaveGame runs `Diagnostics::HoldPumpForSave()`, then
     `MainThread::DrainForSave()` (one swap, FIFO, bounded), then `ConcProxyPreSaveSweep`. Moving the sweep before the drain, or
     dropping the hold, lets a posted write (an unequip that clears ExtraCannotWear) miss the save while its ledger change is in
@@ -3552,7 +3580,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   every stale entry); Unknown on VR or an
   unresolvable / dead / unloaded pair (it does not let an older cache entry answer). Not throttled:
   its one caller bounds itself (<= 3 per probe, one probe per 0.3 s per follower).
-- `TeammateInFireLine` (`:149`) → `cast/DirectTarget.cpp:202`, `Packages.cpp:991`. Reads
+- `TeammateInFireLine` (`:149`) → `cast/DirectTarget.cpp:202`, `Packages.cpp:1092`. Reads
   `Followers::g_active` UNGUARDED (`:168`) — documented as joining an existing
   tolerated pattern. **UNVERIFIED — check before relying** if `g_active` is ever
   rebuilt reallocating concurrently with a worker read.
@@ -5567,7 +5595,7 @@ combat start is a SEPARATE combat behaviour, NOT built: it would go beside `Serv
   `Forms::ErrandWorkPackage(kind, slot)`), each instance mirrored from a vanilla exemplar (Activate 00019B2D <- 00100FA7, Sandbox 0001C254 <- 00000E8C, Eat 00019714 <- 0010C524,
   Sleep 00019717 <- 0010FB3E; `tools/esp_inspect.py` dumps, signature order identical), Location = PLDT type 0 + placeholder `FREF_PLAYER` (the DLL overwrites it), no QNAM, any-time PSDT.
   `NEXT_OBJECT_ID` was `0x916` after these (now `0x91A`: `0x917` + `0x919` = the off-class storage chest, `0x918` retired, see logistics/Storage.cpp). One slot per concurrent follower (4): two followers never share a record. WHAT BREAKS: changing a FormID orphans the records (frozen with the generator, `tools/audit_esp.py`).
-- **Writer** `Packages::SetPackageLocation` / `SetPackageTargetRef` (`Packages.cpp:2496/2510`, `FindInputAnyUid:720`): the SAME guarded offset model as `SetAPMFLootTravelTarget` (type name `Location` / `SingleRef`, pointer at `IPackageData*+0x10`), but the Sandbox's THREE inputs named
+- **Writer** `Packages::SetPackageLocation` / `SetPackageTargetRef` (`Packages.cpp:2853/2867`, `FindInputAnyUid:720`): the SAME guarded offset model as `SetAPMFLootTravelTarget` (type name `Location` / `SingleRef`, pointer at `IPackageData*+0x10`), but the Sandbox's THREE inputs named
   "Location" (uids 0, 9, 15) are resolved to the uid that has a value slot, and the resolved uid is LOGGED (`[pkg] errand work ... input 'Location' (uid N)`). **UNVERIFIED IN THE FIELD (P-PKG-LOC).** `Packages.cpp` is past 2500 lines (the cap is relaxed until the next major, memory 2500-cap-relaxed).
 - **Claim** `apmf/ErrandWork.cpp`: `APMFBridge::OfferErrandWork(follower, kind, ref, radius, why)` writes the slot record's run-time input, THEN files (or Repoints) ONE ch.9 `kIntent_OfferPackage` claim (own handle, own mutex, never `g_mx`); a failed guard files nothing and returns the reason.
   `ReleaseErrandWork` = claim first, slot after; `ReleaseErrand` (`ErrandClaims.cpp`) and `ClearErrandClaims` call it, so every errand end releases the work. Worker thread.
@@ -7248,7 +7276,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
     Harbinger's recipe "StopCombat once + deny re-entry". File-local `g_denies` under its OWN
     `g_denyMx` (never `g_mx`). `ClaimRetreatReentryDeny` (`:93`, from `Packages::RetreatFill` both
-    roads, `Packages.cpp:2195/:2253`) files `RequestEx(follower, 22, kOwnBasis, {fval =
+    roads, `Packages.cpp:2514/:2572`) files `RequestEx(follower, 22, kOwnBasis, {fval =
     kRetreatDenyWindowSecs 35})` (`:58`: TRAVEL's 30 s timeout + 5 s for the timeout being seen on
     his own service); true = filed, and RetreatFill then does NOT post its StopCombat. On filing it
     also `ForgetCombatEntry`s any standing ch.21 entry of his (engage-on-sight's), so a still-queued
@@ -8281,10 +8309,9 @@ decline-fallback.
   unchanged-claim fast path and APMF is never told anything happened — nothing but this call
   re-plans the running package to the rewritten runtime target. It is marshalled through
   `MFO::MainThread::Post` (FormID looked up inside the lambda); no pump (VR) → loud `spdlog::error`,
-  never an off-thread fallback. **LEGACY alias-route nudges are untouched and are still inline
-  off-worker** (`Packages.cpp` legacy branches of Fill/Retarget/Clear + `RetreatFill/Clear`) — a
-  pre-existing condition, deliberately out of scope for that fix; do not "tidy" them without a
-  field cycle, `LootTravelClear`'s legacy nudge in particular is ordered before `VerifyDetached`.
+  never an off-thread fallback. **The LEGACY alias-route nudges run inside the alias op on the main thread
+  since `fix/alias-ops-main`** (`Packages.cpp` legacy branches of Fill/Retarget/Clear + `RetreatFill/Clear`; INVARIANTS
+  `#83` rule 9): fill or eviction, then the nudge, then `VerifyDetached`, in that order, in one closure.
 - **RUNTIME-HANDLE TARGET (no alias to carry it):** the new packages are authored PLDT type 0
   ("Near Reference", `RE::PackageLocation::Type::kNearReference`) instead of type 8 (alias);
   `SetAPMFLootTravelTarget` (`Packages.cpp` ~`:628`) overwrites `PackageLocation::data.refHandle`
@@ -8292,7 +8319,7 @@ decline-fallback.
   offset model, generalised from `PackageTarget` to `PackageLocation`; guarded identically: any
   layout mismatch declines loudly, never a blind write).
 - **FIELD BUG FOUND + FIXED (2026-09-03, deck Tuxborn, first Cicero test): `kInputLocation` was
-  authored as `"Location"` — WRONG.** `FindInput`'s name→uid lookup (`Packages.cpp:390`) resolves
+  authored as `"Location"` — WRONG.** `FindInput`'s name→uid lookup (`Packages.cpp:456`) resolves
   the TEMPLATE's own BNAM-declared human parameter name (like `kInputSpell="Spell"`/`kInputTarget=
   "Target"` on the UseMagic template), NOT the ANAM type-string (`kTypeLocation="Location"`,
   ReadLocation's own, correct, unrelated guard). The one-shot both-maps-miss dump
@@ -8325,7 +8352,7 @@ decline-fallback.
   scoped into this dispatch, per marth's "keep it scoped" instruction and the existing
   concede-to-combat design.
 - **APMF RETREAT (ch.9 0x49 route, 2026-09-03), the same PASS B conversion applied to
-  `RetreatFill/Clear/EvictIf` (`Packages.cpp:1849-2022`) — shared by BOTH callers, the
+  `RetreatFill/Clear/EvictIf` (`Packages.cpp:2118-2324`) — shared by BOTH callers, the
   `act.flee` gambit (`cast/Fire.cpp:275`, `Vocab::kActFlee`) and the opt-in
   auto-retreat leash safety (`Scheduler.cpp:462`).** Same showpiece/commit principle as
   loot-travel: `Available() && Config::g_apmfRetreat` routes through `APMFBridge::
@@ -8382,7 +8409,7 @@ decline-fallback.
   wins (the disengage is the more urgent directive): `RetreatFill`'s APMF branch
   (right where the follower's `g_retreatHolds` entry is created) calls
   `LootTravelEvictIf(fid, "retreat engaging")` to drop any live loot claim BEFORE
-  finalizing the retreat hold; `LootTravelFill`/`LootTravelRetarget` (`Packages.cpp:1549`,
+  finalizing the retreat hold; `LootTravelFill`/`LootTravelRetarget` (`Packages.cpp:1808`,
   `1633`) reciprocally early-return `false` while that same follower holds a retreat
   (`FindRetreatHold`), covering the reverse race. `LootTravelEvictIf` gained an `a_why` parameter
   (default `"dismissed"`, its original/only caller `logistics/Upkeep.cpp:626` unaffected) so the

@@ -1259,6 +1259,37 @@ inventory (MFO's own snapshot build pass, the container menu, another plugin) st
    SaveCallback's end (or the next frame, or StartPump). `cast/Equip.cpp` also keeps a released hold's pair in FWPN until its
    posted lock-clearing unequip has run (`UnequipLockedHands`). The main thread is known from SKSEPluginLoad on
    (`MainThread::NoteMainThread`), so `EngineWritesAllowed()` is true on main before the first frame (F2).
+9. **A quest alias fill or eviction is ONE alias op, on the main thread, with the Packages generation** (MFO-B859,
+   `fix/alias-ops-main`, 2026-11-16). `TESQuest::ForceRefTo` holds the quest's alias write lock and a global scoped lock, but
+   under them it writes the REFERENCES: `TESForm::AddChange`, the alias instance in the extra list, alias factions and spells,
+   `Actor::EndInterruptPackage` and three AI-process package calls with no lock, and `BGSDynamicPersistenceManager` (read on
+   1.6.1170, 1.5.97 and 1.7.104, ENGINE_NOTES 0.30 amendment 2026-11-16c). So `Packages.cpp` has ONE engine call
+   (`ForceRefToNative`, which names itself with `NoteEngineWrite`) and two kinds of caller:
+   - **`RunAliasOp`, the posted alias op** (`AliasOp`: FormIDs, handles, values, the generation). Fixed order: the
+     package-form write the fill needs (the cast package's Spell / Target inputs), the fill(s) with the second fill's
+     roll-back, `EvaluatePackage` in place (never resetAI) and the concentration `InterruptCast`, then the measured detach
+     read-back (`VerifyDetachedFrom`). `PostAliasOp` runs it in place where `EngineWritesAllowed()` and posts it from the tick
+     (FIFO: a fill posted before an eviction lands before it). The cast holder, loot travel and the retreat all use it.
+   - **`Packages::ReleaseAll`** (kPreLoadGame, post-load, revert, the critical-stage release): SYNCHRONOUS on the main thread,
+     its sweeps and their order unchanged (CLAUDE.md "five things" 3).
+   - **The worker never reads a fill back in the tick that asked.** The cast holder is Requested until a LATER tick's
+     `FillObserved` (the Papyrus dispatch road's own state machine, bound `kFillTimeout`); a fill that failed on the main
+     thread reports it (`g_castFillFailed`) and `Pump` releases at once. Loot travel and the retreat return "posted" and are
+     observed by their callers (the travel package seen running, the retreat's movement and timeout).
+   - **An occupancy test that decides an eviction is made INSIDE the op** (`AliasFill::onlyIfHolds`: `LootTravelEvictIf`,
+     `RetreatEvictIf`). Read on the worker it could miss a fill the same tick posted, skip the eviction, and leave the
+     follower latched when the fill lands.
+   - **No alias op crosses a save or a load.** Save: rule 8's kSaveGame drain runs every queued op before the engine writes a
+     record, and an op posts nothing (its evaluate, interrupt and read-back run in place), so the one swap is enough. Load:
+     `ReleaseAll` and `ClearTransientState` bump the generation (`g_opGen`) and the revert clears the queue
+     (`MainThread::Clear`); an op made under an older generation is dropped unrun when reached, and `ReleaseAll`'s own sweep
+     evicts every actor occupant, so a dropped eviction is still done.
+   - **A run-time reference in one of MFO's own package forms is ONE aligned store and stays where its caller is**
+     (`StoreLocationRef` / `StoreTargetRef`: the APMF loot-travel and retreat packages, the errand work packages). The claim
+     that hands the package out is filed right behind the write, so the write cannot be posted behind it. What is stored is a
+     32-bit handle at an 8-byte aligned offset (old or new, never a mix, on any reader thread); the union's discriminator is
+     authored as type 0 in every such package and is never changed off the main thread (refused with an ERROR if it ever
+     differs); the radius is its own store, written only when it differs.
 
 **What still runs on the worker, and why (the complete list; anything else is a violation).**
 - *Not engine state:* MFO's own maps, atomics and ledgers; `Targeting::Command` (an atomic mirror); the equip declaration and
@@ -1266,11 +1297,10 @@ inventory (MFO's own snapshot build pass, the container menu, another plugin) st
   MFO-B858).
 - *Queued by construction:* a Papyrus dispatch (`Papyrus::Dispatch*`, `TradeBridge`, `Packages` `DispatchAlias`): the worker
   hands the VM a call under the VM's own lock, and the VM runs it on its own threads.
-- *Left on the worker, NOT proven safe, Docs/REVIEW-BACKLOG.md MFO-B859:* the quest alias fills (`Packages.cpp`
-  `ForceRefToNative` = `TESQuest::ForceRefTo`, which takes the quest's alias write lock around the edit, 1.6.1170 0x3CDF41 to
-  0x3CE18A, but whose inner calls were not read) and the writes into MFO's own package forms' location / target data
-  (`Packages.cpp` `SetPackageLocation`, `SetAPMFLootTravelTarget`, the cast package's inputs). Their read-backs are
-  synchronous by design (CLAUDE.md "five things" 3), so moving them is its own change.
+- *One aligned store, proven (rule 9):* the run-time reference handle in MFO's own package forms (`Packages.cpp`
+  `StoreLocationRef` / `StoreTargetRef`, reached from `SetAPMFLootTravelTarget`, `SetPackageLocation`,
+  `SetPackageTargetRef`). The quest alias fills and the cast package's inputs are NOT on this list any more: they run
+  inside the alias op on the main thread (rule 9, `fix/alias-ops-main`).
 - *No caller:* `Probe.cpp` `Fire` (the old debug harness actions) is not called from anywhere.
 - *Dev builds only (`MFO_DEV_SELFTEST`):* `selftest/Fixtures.cpp` spawns and moves its fixtures from the worker.
 **MFO** fix/worker-writes-main, 2026-11-16.

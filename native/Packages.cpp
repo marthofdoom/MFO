@@ -184,6 +184,7 @@ namespace MFO::Packages {
             bool              self       = false;
             // The posted fill this holder waits for (the alias op's failSeq). Pump compares it with g_castFillFailed.
             std::uint32_t     fillSeq    = 0;
+            bool              queuedSaid = false;   // the "still queued" line was said for this request
         };
         Holder g_holder;
         std::uint32_t g_castFillSeq = 0;   // worker-only counter (same single-writer discipline as g_holder)
@@ -410,11 +411,12 @@ namespace MFO::Packages {
             RE::FormID    evalActor = 0;
             bool          interrupt = false;        // InterruptCast on the three sources after the evaluate
             RE::FormID    verifyActor = 0;
-            std::uint32_t failSeq   = 0;            // != 0: a failed op stores it in g_castFillFailed
+            std::uint32_t failSeq   = 0;            // != 0 (the cast fill): stored in g_castFillFailed / g_castFillLanded when the op ends
             std::uint32_t gen       = 0;            // set by PostAliasOp
         };
         std::atomic<std::uint32_t> g_opGen{ 0 };           // THE PACKAGES GENERATION (any thread)
         std::atomic<std::uint32_t> g_castFillFailed{ 0 };  // the failSeq of the last cast fill that failed on the main thread
+        std::atomic<std::uint32_t> g_castFillLanded{ 0 };  // the failSeq of the last cast fill that ran to its end there
         std::atomic<std::uint64_t> g_opsPosted{ 0 }, g_opsRan{ 0 }, g_opsStale{ 0 }, g_opsFailed{ 0 };
         void PostAliasOp(AliasOp a_op);
 
@@ -1532,6 +1534,7 @@ namespace MFO::Packages {
                 if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_op.verifyActor))
                     VerifyDetachedFrom(quest, a, a_op.tag, a_op.questName, a_op.why.c_str());
 
+            if (a_op.failSeq) g_castFillLanded.store(a_op.failSeq, std::memory_order_release);
             if (sayDone && !a_op.done.empty()) spdlog::info("{}", a_op.done);
             return true;
         }
@@ -1721,6 +1724,16 @@ namespace MFO::Packages {
                 ClearAlias("fill failed on the main thread");
             } else if (filled) {
                 SetPhase(Phase::Filled, "alias fill observed");
+            } else if (g_holder.fillSeq != 0 && g_castFillLanded.load(std::memory_order_acquire) != g_holder.fillSeq) {
+                // The op has not run yet: it is still queued on the main thread. Only a PAUSED game does that for longer
+                // than a frame (Pump runs under a menu, the player's Update does not), and a pause is not a failed fill:
+                // kFillTimeout bounds "the fill RAN and the alias did not take", so its clock is not read here (principle 9:
+                // an expiry shorter than the real cadence kills live state). Said once per request, after that bound.
+                if (!g_holder.queuedSaid && Since(g_holder.startAt) > kFillTimeout) {
+                    g_holder.queuedSaid = true;
+                    spdlog::info("[pkg] {:08X}: the posted alias fill is still queued on the main thread after {:.1f}s (a "
+                                 "paused game holds posted calls); waiting for it, not timing out", g_holder.actorID, kFillTimeout);
+                }
             } else if (Since(g_holder.startAt) > kFillTimeout) {
                 ++g_timeouts;
                 spdlog::warn("[pkg] {:08X}: fill NEVER OBSERVED after {:.1f}s -- ForceRefTo was "
@@ -2888,6 +2901,7 @@ namespace MFO::Packages {
     void ClearTransientState() {
         g_opGen.fetch_add(1, std::memory_order_acq_rel);   // an alias op made before the revert never runs after it
         g_castFillFailed.store(0, std::memory_order_release);
+        g_castFillLanded.store(0, std::memory_order_release);
         ResetHolder();
         g_retreatHolds.clear();
         UnpublishAllRetreatLive();
