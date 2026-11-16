@@ -3050,6 +3050,13 @@ The worker never walks an engine inventory list or active-effect list. It reads 
   can run, no follower decision is made, `Packages::Pump` must still run): it reads what is published. SOURCES and non-party actors (`InvSnap::FreshEnough`): InvSnapshot.cpp
   `kSourceRefreshTicks` 4, `kSourceMaxAgeTicks` 16, `kWantTtlTicks` 112 (~15 s), `kSourceBudget` 32 per pass; EffectMirror.cpp
   `kMaxAgeTicks` 4, `kWantTtlTicks` 112; no aging in a paused tick, and an unpaused tick needs a build made since the pause.
+- **THE PASS AND THE TICK BODY ALTERNATE (unpaused).** The pass of tick t is posted at the END of tick t's body, and tick t+1's
+  body does not start until that pass has published the party (the gate; the effect mirrors are published last, at the very end
+  of the closure). So MFO's main-thread walks of the party's inventories and of the effect lists never run while the tick body
+  runs, and therefore never beside a worker-side write the body makes (the audit's M2 / M3 residue). Not covered: a tick that
+  BEGAN paused (exempt from the gate) whose body is still running when the first frame after the pause drains the queued pass,
+  and `RebuildOnMain` in the transfer drain (it runs in whatever frame the transfer lands, as `RunTransfer`'s own live read and
+  `RemoveItem` always did). The `[overlap]` line's `inMfoDrain` sample says how often a tick stage ran while the drain did.
 - **Our own writes.** Worker-side: `InvSnap::Touch(ref)` after the write (a SOURCE stays readable for the rest of that tick, then
   is withheld until rebuilt; for a party member the call changes nothing, the party's rule already puts the next read behind
   the write). Sites: `TheftGate` `MoveNow` (container road), `GemRules::TakeAndProbe` (container road), `LearnCarriedTomes`
