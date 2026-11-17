@@ -15,7 +15,7 @@
 // PROBE FIRST (principle 5: the disassembly proves a path exists, not that it runs). Every input is measured and LOGGED
 // next to what really happened before it may move a score:
 //   [Debug] bIausFillProbe = 1    -> `[iaus-fill]` lines (rate-limited). Nothing is written into the Snapshot.
-//   [Debug] bIausFill<Input> = 1  -> that one input is written. All default OFF (Config.h).
+//   [Debug] bIausFill<Input> = 1  -> that one input is written. Armor / Hit / Loss / Swing / Spells default ON, the rest OFF (Config.h).
 //   [Debug] bIausReachLearn = 1   -> DEFAULT ON since marth 2026-11-17 (the KILL SWITCH). The melee reach is LEARNED to the foe's
 //                                    EDGE per (follower, weapon, attack SEQUENCE) from his own hits and misses (iaus/Reach.h,
 //                                    iaus/ReachBook.h, iaus/SwingSeq.h; Docs/research/2026-11/anim-reach.md) and written to
@@ -84,6 +84,7 @@ namespace MFO::Iaus::Fills {
             bool  magic = false, ranged = false, swinging = false, casting = false;
             float leftShare = 0.0f;     // Combatant::weaponLeftShare
             float dr = 0.0f, armor = 0.0f, magicResist = 0.0f, loss = 0.0f;
+            float resFire = 0.0f, resFrost = 0.0f, resShock = 0.0f;   // 11-17b probe: the raw element resist AVs (the exploit term's input), logged only
             std::uint32_t src = 0;      // the weapon / spell / staff the hit estimate is for
             std::uint32_t srcLeft = 0;  // a second melee weapon in the left hand (0 = none)
             int   skillAv = -1;

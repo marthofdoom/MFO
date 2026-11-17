@@ -149,7 +149,7 @@ namespace MFO::Iaus {
         }
 
         // Rank, then break ties (4.8): within |dS| < tieEps of a cluster head, the running decision, then the
-        // current target, then the lower magicka cost, then the lower (family, posture, form, target) key.
+        // current target, then the higher effect per second, then the lower magicka cost per cast, then the lower (family, posture, form, target) key.
         auto& r = d.ranked;
         std::sort(r.begin(), r.end(), [&](const Scored& a, const Scored& b) {
             if (a.score != b.score) return a.score > b.score;
@@ -165,7 +165,14 @@ namespace MFO::Iaus {
                               const Candidate& cb = cands[b.idx];
                               if (a.running != b.running) return a.running;
                               if (ca.f.currentTarget != cb.f.currentTarget) return ca.f.currentTarget;
-                              if (ca.f.cost != cb.f.cost) return ca.f.cost < cb.f.cost;
+                              // 11-17b (field Jesper: every spell of a family tied and the CHEAPEST won, which is a concentration stream's per-second
+                              // cost, so the weakest spell was cast): the higher expected effect per second of cast first (Facts::effectRate; 0 when
+                              // unmeasured, which sorts last and changes nothing between two unmeasured), then the lower cost per CAST (a concentration
+                              // cost is per second: counted over its channel, Tuning::concChannelSec), then the key.
+                              if (ca.f.effectRate != cb.f.effectRate) return ca.f.effectRate > cb.f.effectRate;
+                              const float costA = ca.f.cost * (ca.f.concentration ? (std::max)(0.0f, t.concChannelSec) : 1.0f);
+                              const float costB = cb.f.cost * (cb.f.concentration ? (std::max)(0.0f, t.concChannelSec) : 1.0f);
+                              if (costA != costB) return costA < costB;
                               return TieKey(ca) < TieKey(cb);
                           });
             }

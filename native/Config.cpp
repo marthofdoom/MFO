@@ -472,12 +472,12 @@ namespace MFO::Config {
             g_iausThiefNeedSteal = true;    // a Thief-class follower steals a NEEDED item inside IAUS looting -- ON
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
             g_iausFillProbe      = false;   // [iaus-fill] probe lines -- OFF everywhere by default (the Deck INI arms it)
-            g_iausFillArmor      = false;   // the IAUS engine fills -- each OFF until its probe numbers are field-proven
-            g_iausFillHit        = false;
-            g_iausFillLoss       = false;
-            g_iausFillSwing      = false;
+            g_iausFillArmor      = true;    // default ON (marth 11-17b: without it no spell has a measured size and every choice ties); INI key = kill switch
+            g_iausFillHit        = true;    // default ON (11-17b review: without it Dps / ThreatOn / the time-to-live are all unknown)
+            g_iausFillLoss       = true;    // default ON (11-17b)
+            g_iausFillSwing      = true;    // default ON (11-17b review)
             g_iausFillCasting    = false;
-            g_iausFillSpells     = false;
+            g_iausFillSpells     = true;    // default ON (11-17b)
             g_iausFillMortal     = false;
             g_iausReachLearn     = true;    // marth 2026-11-17: the learned reach (per weapon + attack sequence) is ON; the key is a kill switch
             g_combatMoveProbe    = false;   // the dev bash probe -- OFF everywhere by default

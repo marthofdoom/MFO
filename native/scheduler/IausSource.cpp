@@ -148,7 +148,7 @@ namespace MFO::Scheduler {
         // 11-17 A3 / field: a foe kept past the chase cap (noApproach) is walked to for SIGHT only when it is inside his bow's range (the shot he
         // cannot take for want of a line); a foe kept only because it targets him is a threat read, never a destination.
         [[nodiscard]] bool ApproachEligible(const Iaus::Snapshot& a_s, const Iaus::Combatant& a_f) {
-            return !a_f.noApproach || Iaus::Reposition::InWeaponRange(a_s, a_f.dist, Iaus::DefaultTuning().bowWeaponRange);
+            return Iaus::Reposition::ApproachEligible(a_s, a_f, Iaus::DefaultTuning().bowWeaponRange);
         }
 
         // A blade (Melee / Silver drawn) with at least one approach-eligible foe, every one of which he cannot strike from where he stands
@@ -165,6 +165,11 @@ namespace MFO::Scheduler {
             return any;
         }
 
+        // 11-17b (field Adelinda: 128 of 155 rays Occluded, attacks 0 in every window, the approach filed only 3 times): sight is held by the foe he is ON, or with no
+        // listed target by a Visible foe he could shoot (the ONE reader, iaus/Reposition.h SightHeld / PinnedFoe; the old rule read ANY Visible foe as sight).
+        [[nodiscard]] const Iaus::Combatant* PinnedFoe(const Iaus::Snapshot& a_s) { return Iaus::Reposition::PinnedFoe(a_s, Iaus::DefaultTuning().bowWeaponRange); }
+        [[nodiscard]] bool SightHeld(const Iaus::Snapshot& a_s) { return Iaus::Reposition::SightHeld(a_s, Iaus::DefaultTuning().bowWeaponRange); }
+
         const Iaus::Combatant* OccludedFoe(const Iaus::Candidates::Set& a_set) {
             const Iaus::Snapshot& s = a_set.snap;
             if (s.meleeOnly || s.foes.empty()) return nullptr;
@@ -177,12 +182,20 @@ namespace MFO::Scheduler {
             const bool bladeAll = BladeAllUnreachable(s);
             if (blade && !bladeAll) return nullptr;
             // A foe kept past the chase cap (noApproach, 11-17 A3) counts here only when ApproachEligible (inside his bow's range).
-            bool any = false;
-            for (const auto& f : s.foes) {
-                if (!ApproachEligible(s, f)) continue;
-                if (!bladeAll && f.sight != Iaus::Sight::Occluded) return nullptr;   // a blade with every foe out of reach needs no occlusion
-                any = true;
+            // 11-17b: keyed on the foe he is ON (PinnedFoe): its own sight decides; with no listed target, no foe he could shoot (SightHeld) may stand visible.
+            const Iaus::Combatant* pin = PinnedFoe(s);
+            if (!bladeAll) {   // a blade with every foe out of reach needs no occlusion
+                if (pin ? pin->sight != Iaus::Sight::Occluded : SightHeld(s)) return nullptr;
+                if (!pin) {
+                    // no pinned foe: an eligible foe must be left to walk to, and one that is Unknown keeps the old reading (not Occluded = no approach)
+                    for (const auto& f : s.foes)
+                        if (ApproachEligible(s, f) && f.sight != Iaus::Sight::Occluded && !(s.drawn == Iaus::PostureKind::Bow &&
+                            !Iaus::Reposition::InWeaponRange(s, f.dist, Iaus::DefaultTuning().bowWeaponRange))) return nullptr;
+                }
             }
+            bool any = false;
+            for (const auto& f : s.foes)
+                if (ApproachEligible(s, f)) { any = true; break; }
             if (!any) return nullptr;
             auto listed = [&](std::uint32_t a_fid) -> const Iaus::Combatant* {
                 if (a_fid == 0) return nullptr;
@@ -208,11 +221,9 @@ namespace MFO::Scheduler {
         void ServiceOccludedApproach(RE::FormID a_id, const Iaus::Candidates::Set& a_set) {
             const Iaus::Snapshot& s = a_set.snap;
             if (s.meleeOnly || s.foes.empty()) return;
-            // Mirror of Evaluator.cpp PickFoe: a Visible read from any listed foe is sight (NoteOffenseSight); the approach is filed only when
-            // EVERY listed foe reads Occluded (a Visible or Unknown foe means no approach).
-            bool anyVisible = false;
-            for (const auto& f : s.foes) if (f.sight == Iaus::Sight::Visible && ApproachEligible(s, f)) anyVisible = true;
-            if (anyVisible && !BladeAllUnreachable(s)) { APMFBridge::NoteOffenseSight(a_id); return; }
+            // Mirror of Evaluator.cpp PickFoe, keyed on the foe he is ON (11-17b, SightHeld): a Visible read from it is sight (NoteOffenseSight); the approach is
+            // filed only when it reads Occluded (with no listed target: when no foe he could shoot is visible).
+            if (SightHeld(s) && !BladeAllUnreachable(s)) { APMFBridge::NoteOffenseSight(a_id); return; }   // 11-17b: keyed on the foe he is on (SightHeld)
             const Iaus::Combatant* foe = OccludedFoe(a_set);
             if (!foe) {
                 // 11-17 A1(a): his attack road is a melee swing this lap: a standing approach (filed under a spell lap) is released, not walked.

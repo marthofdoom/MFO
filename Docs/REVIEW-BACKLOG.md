@@ -3559,3 +3559,17 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - OPEN (feat/anim-reach, 11-17) the weapon learner starts at fMeleeReach, not at Precision's per-weapon value (iaus-i6 / Q64: a capsule
   length from the hand is not a centre-to-centre reach). A seed formula (length + arm + foe radius) needs a ruling.
 - OPEN (feat/anim-reach, 11-17) a left-hand-only chain (a left power attack) is learned for the right-hand weapon (the existing review F1 ambiguity).
+**fix/field-1117b-choice (2026-11-17, Sonnet 5.5 author, tier B; field Deck run 11-17b, Jesper's weak spells and death, Adelinda's approach; NOT merged, NOT field run; NO co-save, ABI or ESP change).** Open items the author names (no review yet):
+- OPEN (uncertain): `effectRate` divides a fire-and-forget total by the placeholder `Tuning::spellCastSec` (1.5 s) for EVERY spell; real cast times differ per spell and are not read. The damage / heal CONSIDERATIONS still compare per CAST (a stream's 1 s total against an instant spell's whole damage), so a stream still scores low in `damage`; only the tie-break and `heal_rate` are per second.
+- OPEN (uncertain): a concentration cost is counted over `Tuning::concChannelSec` (11.5 s, the heal / utility draw) in the tie-break for offense streams too.
+- OPEN (design): Harbinger's ch.25 cast guard has no per-cast readback, so `fireLineKeepSec` memory is fed by MFO's own mirror of the guard's test, not by an observed refusal.
+- OPEN (threading): `Actuation::NoteHealerThreat` / `g_healerThreat` is written by `Candidates::Build` and read by `CanPreemptHand`, both on the pump worker; clear on revert via `ClearCastLocks`.
+- OPEN (sim): `tools/iaus_sim` mirror not done: survival band per caster, `heal_rate`, the tie-break order, `t.spellCastSec` / `t.dyingSelfHp` / `t.fireLineKeepSec`.
+- OPEN (Harbinger ask): Adelinda's ch.3 in-combat sneak never takes (IsSneaking false x4); until it is field-proven the hide road stays OFF (`bIausHideRoad`, already default OFF). A per-cast ch.25 refusal readback would let the refusal memory use the real answer.
+**fix/field-1117b-choice review round 1 (Opus, c8ac55be; SEV-3s fixed in the next commit: Hit / Swing fills default ON, recipient-aware + healer-exposure heal refusal, heal_rate against his best castable heal, fireLineKeepSec 1 s + a per-minute fireBlocked log). SEV-4 / SEV-5 deferred:**
+- SEV-4: `Estimate::InLineOfFire` is a THIRD copy of the segment math (make Estimate.h `SegmentDist` the shared pure reader later); it does not exempt Harbinger-occluded friendlies and omits summons / bystanders; the Control family has WillWork but no SplashSafe.
+- SEV-4: `g_healerThreat` stays true after Sentient AI is toggled off mid-fight (stale until `CombatEnded` / `ClearCastLocks`), and there is a bounded heal <-> offense thrash; watch `THREAT ON THE HEALER` / `URGENT HEAL` in the field.
+- SEV-4: `Concealment.cpp` abort warn text (":772"), and `AbortHide` sets `g_stanceFailed`, which also bans the Step for the rest of the fight.
+- SEV-5: per-cast vs per-second scope: a concentration heal is never braked by `heal_size`.
+- Not checked in the heal fallback: the recast lockout / claim state of the fallback heal (only hands, cost, reach and sight).
+

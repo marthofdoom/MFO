@@ -81,6 +81,35 @@ namespace MFO::Iaus::Estimate {
         return h / in;
     }
 
+    // THE LINE OF FIRE (field 11-17b, Jesper: claims for Frostbite / Creeping Cold / Hailstone held 3-8.5 s and never fired because Harbinger's ch.25 cast guard
+    // refused them with a party member in the way, and the IAUS could not see it). ONE reader of the rule the guard enforces, so the pick and the refusal agree:
+    //   * the CORRIDOR: a party member within kFireLinePad of the segment caster -> target, where he projects BETWEEN the two ends (one behind the caster
+    //     or past the target is not in the line of fire) -- the rule of Sightline::TeammateInFireLine / CasterConsent::WouldHitTeammate;
+    //   * the BLAST: a spell with an area also catches a party member within area + kFireBodyPad of the TARGET.
+    // The two RE-side readers (Sightline.cpp, CasterConsent.cpp: segment math private to each) keep their copies; the constants below are the same numbers.
+    inline constexpr float kFireLinePad = 80.0f;   // ~a body off the line (Sightline.cpp / CasterConsent.cpp kLinePad)
+    inline constexpr float kFireBodyPad = 64.0f;   // a blast reaches a body this far past its area (CasterConsent.cpp: area + 64)
+
+    // Distance from a_p to the segment [a_a, a_b] when it projects between them, else +inf (the same math as Sightline.cpp SegDist).
+    [[nodiscard]] inline float SegmentDist(const Combatant& a_p, const Combatant& a_a, const Combatant& a_b) {
+        const float abx = a_b.x - a_a.x, aby = a_b.y - a_a.y, abz = a_b.z - a_a.z;
+        const float apx = a_p.x - a_a.x, apy = a_p.y - a_a.y, apz = a_p.z - a_a.z;
+        const float len2 = abx * abx + aby * aby + abz * abz;
+        if (!std::isfinite(len2)) return std::numeric_limits<float>::max();
+        if (len2 <= 1.0f) return std::sqrt(apx * apx + apy * apy + apz * apz);
+        const float t = (apx * abx + apy * aby + apz * abz) / len2;
+        if (!(t >= 0.0f && t <= 1.0f)) return std::numeric_limits<float>::max();
+        const float dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return std::isfinite(d) ? d : std::numeric_limits<float>::max();
+    }
+
+    // Would a cast from a_caster at a_target catch a_who? a_area = the spell's largest area (0 = none).
+    [[nodiscard]] inline bool InLineOfFire(const Combatant& a_caster, const Combatant& a_target, const Combatant& a_who, float a_area) {
+        if (a_area > 0.0f && Apart(a_who, a_target) <= a_area + kFireBodyPad) return true;
+        return SegmentDist(a_who, a_caster, a_target) <= kFireLinePad;
+    }
+
     // The chance one taunt attempt pins a foe (ruling Q69: stat-based and readable BEFORE he chooses). It is the taunt
     // executor's own rule (Taunt.cpp, the roll): 0.5 + 0.05 per level the taunter has over the foe, kept in [0.1, 0.9].
     // ONE formula for both, so the fact can never drift from the roll: the roll in Taunt.cpp (Resolve) calls this;
