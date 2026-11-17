@@ -6,7 +6,8 @@
 # THIS FILE: the looting table (LootTuning, native/iaus/LootNeed.h).
 #   loot.<name>=<v>           float: takeThreshold needBase needSlope roomKnee saleGoldPerWeight saleWeight gold equipment valuables jewelry
 #                             gemChargeTrigger buffScale foodScale poisonPowerRef poisonWeakScale stealNeedMin stealRiskWeight stealBountyPerGold
-#                             stealBountyRef guardBarFloorSec
+#                             stealBountyRef guardBarFloorSec guardFreshSec guardUnreadMaxSec guardRepostSec batchHoldMinSec gateConeDeg
+#                             gateBeyondU gateReadmitSec gateReadmitMoveU
 #                             whole number: soulGemTarget healthTarget staminaTarget staminaTargetNoWeapon magickaTarget resistTarget fortifyTarget
 #                             regenTarget invisTarget lockpickTarget poisonTarget      0 or 1: consumableSellRoad
 # Example:  loot.takeThreshold=0.5

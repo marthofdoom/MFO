@@ -22,9 +22,13 @@ namespace MFO::Logistics::TheftGate {
         // past the distance at which a guard in a street or a hall notices a sneaking player in the base game's detection
         // formula, and well inside the high-process list the scan walks. Inside it the line of sight decides.
         constexpr float kGuardRadius   = 3500.0f;
-        constexpr auto  kGuardFresh    = std::chrono::milliseconds(2000);   // a cached guard verdict is trusted this long
-        constexpr auto  kGuardUnreadMax = std::chrono::seconds(10);        // an answer nobody has read yet is usable once up to this age
-        constexpr auto  kGuardRepost   = std::chrono::milliseconds(500);    // and re-asked no faster than this per (follower, src)
+        // The three guard-cache timers are LootTuning rows (guardFreshSec / guardUnreadMaxSec / guardRepostSec, looting.txt; field 11-17c F1).
+        // kGuardFresh: a cached guard verdict is trusted this long; kGuardUnreadMax: an answer nobody has read yet is usable once up to this
+        // age; kGuardRepost: and re-asked no faster than this per (follower, src).
+        SClock::duration GuardSecs(float a_s) { return std::chrono::duration_cast<SClock::duration>(std::chrono::duration<float>(a_s)); }
+        SClock::duration GuardFreshD()     { return GuardSecs(Iaus::DefaultLootTuning().guardFreshSec); }
+        SClock::duration GuardUnreadMaxD() { return GuardSecs(Iaus::DefaultLootTuning().guardUnreadMaxSec); }
+        SClock::duration GuardRepostD()    { return GuardSecs(Iaus::DefaultLootTuning().guardRepostSec); }
         constexpr auto  kLogEvery      = std::chrono::seconds(30);          // [theft-gate] per (follower, src, verdict)
         constexpr RE::FormID kPlayerBaseNpc = 0x00000007;
         constexpr RE::FormID kPlayerFaction = 0x00000DB1;
@@ -185,6 +189,7 @@ namespace MFO::Logistics::TheftGate {
         const RE::FormID fid = a_follower->GetFormID(), sid = a_src ? a_src->GetFormID() : 0u;
         if (a_onMain) ScanGuards(fid, sid);   // the caller is ALREADY on the main thread (a posted lambda): answer now, never "pending"
         const auto now = SClock::now();
+        const auto kGuardFresh = GuardFreshD(), kGuardUnreadMax = GuardUnreadMaxD(), kGuardRepost = GuardRepostD();
         bool post = false, have = false, seen = true;
         const char* how = "pending";
         RE::FormID guard = 0;
@@ -229,6 +234,30 @@ namespace MFO::Logistics::TheftGate {
         Say(a_follower, a_road == Road::Loose || a_road == Road::Flora ? a_road : Road::Guard, a_src, nullptr, 0,
             nullptr, how, "guard", /*a_pending*/ false, g);   // owner= stays the SOURCE's owner (none here); the guard prints as guard=<ref>(<base>)
         return GuardState::Seen;   // a guard bar is a verdict, not a world action: it never enters the ring
+    }
+
+    // KEEP THE FOLLOWER-LEVEL ANSWER WARM (field 11-17c F1): the service lap calls this once per follower. A follower-only (src = 0) answer that
+    // a gate has READ lately and that is now older than half its freshness is re-asked (the approach-prefetch peek pattern: posts the main-thread
+    // scan, stamps nothing, logs nothing, repost-limited), so the loot scan's follower-level check never meets a lapsed answer in a guardless
+    // place. Never asks for a follower nothing has read in 15 s (no scans for a follower that is not looting).
+    void GuardKeepWarm(RE::Actor* a_follower) {
+        if (!a_follower) return;
+        const RE::FormID fid = a_follower->GetFormID();
+        const auto now = SClock::now();
+        const auto fresh = GuardFreshD(), repost = GuardRepostD();
+        bool post = false;
+        {
+            std::scoped_lock lk(g_gMx);
+            auto it = g_guard.find(GKey(fid, 0));
+            if (it == g_guard.end()) return;
+            auto& e = it->second;
+            const auto lastUse = e.readAt.time_since_epoch().count() != 0 ? e.readAt : e.at;
+            if (!e.have || now - lastUse > std::chrono::seconds(15)) return;
+            if (now - e.at > fresh / 2 && (e.posted.time_since_epoch().count() == 0 || now - e.posted >= repost)) { e.posted = now; post = true; }
+        }
+        if (!post) return;
+        if (MainThread::IsInstalled()) MainThread::Post([fid]() { ScanGuards(fid, 0u); });
+        else                           ScanGuards(fid, 0u);
     }
 
     GuardRefusal GuardRefusalInfo() { return t_lastRefusal; }

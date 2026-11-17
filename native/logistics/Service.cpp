@@ -270,10 +270,10 @@ namespace MFO::Logistics {
         // the per-follower branch below runs at. LootNearby (Logistics_Loot.cpp)
         // separately refuses to arm or continue any loot action while the
         // player is in combat, so the two can never fight over the same tick.
-        const bool playerInCombat = [] {
-            auto* pcc = RE::PlayerCharacter::GetSingleton();
-            return pcc && pcc->IsInCombat();
-        }();
+        // marth 2026-11-17 "Stop looting in party combat": the player OR any party member fighting ends every excursion (the one shared
+        // reader, LootPartyInCombat); LootNearby refuses to start or continue one while it holds. The end reason is logged once per trip
+        // (LootTravelClear names it).
+        const bool playerInCombat = LootPartyInCombat();
         // P7: sweep EVERY slot -- each traveller has his own excursion cap, and a
         // subsystem toggle-off must free them all. (Global backstop, keyed to no
         // follower in particular; runs once per serviced follower, idempotent.)
@@ -296,10 +296,10 @@ namespace MFO::Logistics {
                             spdlog::info("[loot] {:08X}: excursion cap while the guard check on {:08X} was still pending -- body kept, not blacklisted",
                                          tr.follower, tp->GetFormID());
                         else
-                            MarkTravelFailed(tp->GetFormID(), now);
+                            MarkTravelFailed(tp->GetFormID(), now, "excursion cap: target blacklisted");
                     }
                 }
-                Packages::LootTravelClear(playerInCombat ? "player combat"
+                Packages::LootTravelClear(playerInCombat ? "party combat"
                                           : (off ? "subsystem off" : "excursion cap"),
                                           nullptr, i);
                 tr = TravelIntent{};
@@ -475,6 +475,7 @@ namespace MFO::Logistics {
         // he hoovers a batch instead of returning to the player after each corpse.
         // Release only on combat, the excursion cap, leaving the leash, or the
         // batch running dry (after a short dibs linger).
+        TheftGate::GuardKeepWarm(a_follower);   // field 11-17c F1: the follower-level guard answer never lapses while he loots
         if (SlotIndexOf(id) < 0) g_actorDefer.erase(id);   // loot M1: a reorder lives one excursion
         if (const int slot = SlotIndexOf(id); slot >= 0) {
             TravelIntent& tr = g_travelSlots[slot];
@@ -590,7 +591,7 @@ namespace MFO::Logistics {
                         // Activate-failed verdict), never a 25 s re-walk loop.
                         MarkTravelSticky(tr.acquireRefID, now);
                     }
-                    MarkTravelFailed(tr.acquireRefID, now);
+                    MarkTravelFailed(tr.acquireRefID, now, "acquire readback: leg done (taken or the activation was a no-op)");
                     tr.phase = TravelPhase::Holding;
                     tr.lingerUntil = now + BatchLingerDur();
                     return;
@@ -611,7 +612,7 @@ namespace MFO::Logistics {
                                  id);
                 // Either way this leg is DONE: blocklist the ref (a persisting
                 // no-op must not be re-picked every tick) and continue the batch.
-                MarkTravelFailed(tr.acquireRefID, now);
+                MarkTravelFailed(tr.acquireRefID, now, "acquire readback: leg done (taken or the activation was a no-op)");
                 tr.phase = TravelPhase::Holding;
                 tr.lingerUntil = now + BatchLingerDur();
                 return;
@@ -964,7 +965,7 @@ namespace MFO::Logistics {
                         if (arrivalBar) {
                             spdlog::info("[acquire] {:08X}: loose ref {:08X} skipped at ARRIVAL -- {}",
                                          id, tref->GetFormID(), arrivalBar);
-                            MarkTravelFailed(tref->GetFormID(), now);
+                            MarkTravelFailed(tref->GetFormID(), now, "loose ref skipped at arrival (bar)");
                             tr.phase = TravelPhase::Holding;
                             tr.lingerUntil = now + BatchLingerDur();
                             return;
@@ -1056,7 +1057,7 @@ namespace MFO::Logistics {
                             /*a_allowOwned*/ tr.cat == Category::PickLocks);   // G14: an owned chest only through Steal::Check (Q-L-6)
                         if (pick == Lockpick::StepResult::kHold) return;   // the pick IS this tick's action
                         if (pick == Lockpick::StepResult::kRefused) {
-                            MarkTravelFailed(tref->GetFormID(), now);        // transient skip, never sticky
+                            MarkTravelFailed(tref->GetFormID(), now, "lockpick step refused it");        // transient skip, never sticky
                             tr.phase = TravelPhase::Holding;
                             tr.lingerUntil = now + BatchLingerDur();
                             return;
@@ -1075,7 +1076,7 @@ namespace MFO::Logistics {
                                      st == Steal::OwnedTake::Took ? "stole its contents" : st == Steal::OwnedTake::Nothing ? "nothing of the steal kinds to take"
                                                                                                                          : "steal CUT (nothing more moves)",
                                      stealWhy.empty() ? "" : ": ", stealWhy);
-                        MarkTravelFailed(tref->GetFormID(), now);   // done (Took / Nothing) or a transient skip (Cut): never sticky
+                        MarkTravelFailed(tref->GetFormID(), now, "owned chest: steal visit done");   // done (Took / Nothing) or a transient skip (Cut): never sticky
                         tr.phase = TravelPhase::Holding;
                         tr.lingerUntil = now + BatchLingerDur();
                         return;
@@ -1137,7 +1138,7 @@ namespace MFO::Logistics {
                         return;
                     }
                     if (!leftWaiting)
-                        MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
+                        MarkTravelFailed(tref->GetFormID(), now, "visited and fully stripped (done)");   // fully stripped -> DONE
                     tr.phase = TravelPhase::Holding;
                     tr.lingerUntil = now + BatchLingerDur();
                     spdlog::info("[loot] {:08X}: arrived -- {}{} (batch continues)", id,
@@ -1400,7 +1401,7 @@ namespace MFO::Logistics {
                         const bool ch19NoEngage  = ch19Leg && !tr.legEngaged && legClock &&
                                                    now - tr.legStart >= kCh19Concede;   // R4
                         if (tooManySteals || folInCombat || ch19NoEngage) {
-                            MarkTravelFailed(tref->GetFormID(), now);   // transient only -- ref was reachable
+                            MarkTravelFailed(tref->GetFormID(), now, "leg conceded (too many steal strikes / follower in combat / ch.19 never engaged)");   // transient only -- ref was reachable
                             g_stealStrikes.erase(skey);
                             spdlog::info("[loot] {:08X} leg {:08X} abandoned -- {} -- transient skip",
                                          id, tref->GetFormID(),
@@ -1440,7 +1441,7 @@ namespace MFO::Logistics {
                         }
                         // External claim outlasted the grace: give the LEG up, keep
                         // the ref honest (25s transient only) and seek/release below.
-                        MarkTravelFailed(tref->GetFormID(), now);
+                        MarkTravelFailed(tref->GetFormID(), now, "package held externally past the grace");
                         g_stealStrikes.erase(skey);
                         spdlog::info("[loot] {:08X} leg {:08X} abandoned -- package held "
                                      "externally past grace -- transient skip",
@@ -1484,7 +1485,7 @@ namespace MFO::Logistics {
                                 NotePathFail(tref->GetFormID());
                             }
                         } else {
-                            MarkTravelFailed(tref->GetFormID(), now);
+                            MarkTravelFailed(tref->GetFormID(), now, "leg deadline expired or target gone");
                         }
                     }
                     if (stalled && tref)
@@ -1556,21 +1557,55 @@ namespace MFO::Logistics {
                     noteNext("pending (holding: container menu open / player sneaking)");
                     return;   // hold, retry next tick
                 }
+                const auto& lt = Iaus::DefaultLootTuning();
+                const auto holdMin = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(lt.batchHoldMinSec));
+                // MINIMUM BATCH DWELL (field 11-17c, "stops and restarts more than the old system"): after "no valid item left" he holds in place
+                // for batchHoldMinSec and rescans ONCE before the release; no scan runs inside the window.
+                if (tr.emptySince.time_since_epoch().count() != 0 && now - tr.emptySince < holdMin) {
+                    noteNext("holding (minimum batch dwell, one rescan before the release)");
+                    return;
+                }
                 if (RunExcursionScan(a_follower, a_state, now)) {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse
                     // (still Holding) -- productive, so extend the linger.
                     if (tr.phase == TravelPhase::Holding)
                         tr.lingerUntil = now + BatchLingerDur();
+                    tr.emptySince = {};
+                    tr.guardHoldSince = {};
                     noteNext("none walked (took one within reach, scanning on)");
                     return;
                 }
+                // A PENDING guard answer dropped candidates unjudged (g_scanGuardPending): the batch is not empty. Keep it, fail-closed for the
+                // take itself; bounded by guardUnreadMaxSec and the excursion cap, and said loudly when the bound ends it.
+                if (g_scanGuardPending) {
+                    if (tr.guardHoldSince.time_since_epoch().count() == 0) tr.guardHoldSince = now;
+                    const auto bound = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(lt.guardUnreadMaxSec));
+                    if (now - tr.guardHoldSince < bound) {
+                        noteNext("pending (holding: the guard answer is not back)");
+                        return;
+                    }
+                    spdlog::warn("[loot] {:08X} guard answer still PENDING after {:.1f}s of holding the batch -- releasing it", id, lt.guardUnreadMaxSec);
+                } else tr.guardHoldSince = {};
+                // The dwell has run and the rescan found nothing. An ACTOR-BLOCKED item kept by the reorder is the fallback next item
+                // (the blocker was the reason it was skipped, not the item): re-dispatch it before releasing, unless a teammate has it.
+                if (tr.emptySince.time_since_epoch().count() != 0) {
+                    if (auto dit = g_actorDefer.find(id); dit != g_actorDefer.end()) {
+                        auto* fb = RE::TESForm::LookupByID<RE::TESObjectREFR>(dit->second.item);
+                        if (fb && !fb->IsDisabled() && !fb->IsMarkedForDeletion() && !TravelFailedRecently(fb->GetFormID(), now) &&
+                            !TargetedByOtherSlot(fb->GetFormID(), id) &&
+                            RetargetExcursionLeg(a_follower, slot, fb, tr.cat, tr.want, a_follower->GetPosition().GetDistance(fb->GetPosition()), now)) {
+                            spdlog::info("[loot] {:08X} rescan found nothing: the ACTOR-BLOCKED item {:08X} is the fallback next item", id, fb->GetFormID());
+                            return;
+                        }
+                    }
+                } else if (lt.batchHoldMinSec > 0.0f) {
+                    tr.emptySince = now;
+                    noteNext("none -- holding the minimum batch dwell before the rescan");
+                    return;
+                }
                 noteNext("none -- no valid item left, back to follow");
-                // No pause on an all-waiting dibs category (marth): even a
-                // g_scanSawWaiting-bounded hold here is a visible stall, so
-                // release the excursion immediately instead of lingering --
-                // the still-waiting item re-enters on a later tick once
-                // TierReleased flips. tr.lingerUntil is still written above
-                // (productive-scan case) but no longer gates a release.
+                // The dwell ran and the rescan was empty: release (tr.lingerUntil is still written above in the productive-scan case but no
+                // longer gates a release).
                 Packages::LootTravelClear("batch done", a_follower, slot);
                 tr = TravelIntent{};
                 return;

@@ -828,7 +828,8 @@ namespace MFO::Logistics {
             if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
                 a_cat == Category::Potions || a_cat == Category::Lockpicks ||
                 a_cat == Category::Ingredients || a_cat == Category::SmithMats ||
-                a_cat == Category::Steal || a_cat == Category::PickLocks)   // batch L: no player dibs on owned things
+                a_cat == Category::Steal || a_cat == Category::PickLocks ||   // batch L: no player dibs on owned things
+                a_cat == Category::Museum)   // marth 2026-11-17 (F3): museum-needed items skip the player-dibs wait; still only what the museum needs, still crime-checked
                 return true;
 
             const RE::FormID   srcId  = a_src->GetFormID();

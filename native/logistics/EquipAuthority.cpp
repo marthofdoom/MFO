@@ -428,6 +428,28 @@ namespace MFO::Logistics {
                     if (w && OffClassBit(w, set)) { held = w; break; }
                 }
             }
+            // FIELD 11-17d: an off-class weapon is a FALLBACK only when he carries no weapon of his class, and only once it has been held a
+            // moment (the engine briefly equips a hauled museum sword at 3D load before equip authority enforces). Otherwise it is a transient:
+            // no flag, no penalty, no notice, one debug line per weapon.
+            static std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> s_since;   // follower -> (weapon, first seen)
+            constexpr auto kOffClassDwell = std::chrono::seconds(3);   // PLACEHOLDER: how long an off-class weapon must stay in hand before it counts
+            if (held) {
+                if (CarriesOnClass(a_follower, set)) {
+                    auto& sn = s_since[id];
+                    const bool first = sn.first != held->GetFormID();
+                    sn = { held->GetFormID(), std::chrono::steady_clock::now() };   // the dwell restarts while an on-class weapon is carried
+                    if (first) {
+                        spdlog::debug("[equip-auth] {:08X}: off-class weapon '{}' in hand but he carries one of his class -- transient, no penalty", id,
+                                      held->GetName() ? held->GetName() : "?");
+                    }
+                    held = nullptr;
+                } else {
+                    auto& sn = s_since[id];
+                    const auto t = std::chrono::steady_clock::now();
+                    if (sn.first != held->GetFormID()) sn = { held->GetFormID(), t };
+                    if (t - sn.second < kOffClassDwell) held = nullptr;   // not long enough yet: judged again next tick
+                }
+            } else s_since.erase(id);
             const bool now = held != nullptr;
             auto it = s_held.find(id);
             const bool was = it != s_held.end() && it->second;
