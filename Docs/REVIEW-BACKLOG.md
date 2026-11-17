@@ -3468,3 +3468,10 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-5, F9):** verbatim-ish: "IAUS ReadLootInv inv.carried (LootNeed.cpp:226) ignores InFlightWeight", so the IAUS carry read is one frame behind for queued corpse takes.
 - **(SEV-5):** verbatim-ish: "Steal.cpp:577 reads Takeable == false as empty", so a landing hold there leaves one item for the next visit instead of retrying (also in MAP's known limits).
 - **(SEV-5, F1 residue):** the landing hold fires on any Takeable of the form type, including objects the caller's later filters reject (LootEquipment.cpp calls Takeable first in its inventory loop). Moving it after the armor / weapon filters is NOT a pure reorder (the loop's many branches each pick a best candidate), so it was left; the 150 ms re-arm bounds the cost.
+
+### fix/alias-ops-main (Opus 5.5 review, 2026-11-16, against af339fe7)
+- **(SEV-4, FIXED in the merge round):** Pump Requested tested `filled` before "has the op landed"; now the not-landed wait comes first.
+- **(SEV-4):** a loot or retreat fill that fails on main is not fed back to the worker (confirms the author's entry).
+- **(SEV-5):** the critical-stage release can drop a cast ClearAlias eviction queued behind it; if the holder was already reset, ReleaseAll's ClearAlias is skipped and that op's concentration InterruptCast is lost (the alias itself is still swept).
+- **(SEV-5):** on a runtime with no native, LootTravelEvictIf / RetreatEvictIf now log "RELEASE FAILED" as ERROR if the alias holds a_id (was a silent no-op; only from an earlier session's save).
+- **(SEV-5):** the single-store claim for StoreLocationRef / StoreTargetRef relies on MSVC emitting one mov; std::atomic_ref<std::uint32_t> would make it structural.

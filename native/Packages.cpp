@@ -1722,8 +1722,6 @@ namespace MFO::Packages {
                 spdlog::warn("[pkg] {:08X}: the posted alias fill FAILED on the main thread (its [pkg] ERROR line says "
                              "why) -- releasing; this cast does not run", g_holder.actorID);
                 ClearAlias("fill failed on the main thread");
-            } else if (filled) {
-                SetPhase(Phase::Filled, "alias fill observed");
             } else if (g_holder.fillSeq != 0 && g_castFillLanded.load(std::memory_order_acquire) != g_holder.fillSeq) {
                 // The op has not run yet: it is still queued on the main thread. Only a PAUSED game does that for longer
                 // than a frame (Pump runs under a menu, the player's Update does not), and a pause is not a failed fill:
@@ -1734,6 +1732,9 @@ namespace MFO::Packages {
                     spdlog::info("[pkg] {:08X}: the posted alias fill is still queued on the main thread after {:.1f}s (a "
                                  "paused game holds posted calls); waiting for it, not timing out", g_holder.actorID, kFillTimeout);
                 }
+            } else if (filled) {
+                // Accepted only once THIS request's op has landed (review F1: never read a fill back before it ran).
+                SetPhase(Phase::Filled, "alias fill observed");
             } else if (Since(g_holder.startAt) > kFillTimeout) {
                 ++g_timeouts;
                 spdlog::warn("[pkg] {:08X}: fill NEVER OBSERVED after {:.1f}s -- ForceRefTo was "
