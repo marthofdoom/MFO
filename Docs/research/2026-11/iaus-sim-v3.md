@@ -36,7 +36,8 @@ Each mechanism is one switch of `Sim::V3` (`Data.h`), `--v3 <name>=on|off[,...]`
 | `lof` | the line-of-fire hold | 4.1 |
 | `delivery` | claim to fire latency, the inactive controller, claim thrash (`--delivery main|old`) | 4.2 |
 | `hands` | the hand a cast takes, the channel that holds it, the two-handed weapon put away | 4.3 |
-| `stance` | the engine's movement by stance for followers and foes, attack slots around a target, strafing | 3.3 |
+| `stance` | the engine's movement by stance for followers and foes, attack slots around a target, foe fallback | 3.3 |
+| `sidestep` | a caster whose cast is held side steps (`--side-step random|away`). Its own switch: unsourced and load-bearing | 3.3 |
 | `casterhold` | the native rule of 11-13 mirrored: `ClassGate::casterLine`, `Snapshot::spellsHoldPrev` | 3.4 |
 | `blockdir` | a guard has an arc, blows are tallied by direction for every fight | 5 |
 | `areas` | an active area lives in the world: moves with the caster, or fixed at the cast point | 6 |
@@ -87,7 +88,7 @@ field figure starts at (2184).
 | The class style follows the stance | the package style of that stance | FACT | `CombatStyle.cpp:156`, `classes/Package.cpp:29` (v2 had it) |
 | A foe steps back after a blow | chance = CSCR fallback mult, 0.5 to 1.5 s | MODEL | v2 `--foe-styles`, now on with the switch |
 | Attack slots | two or more melee attackers on one target approach points 50 degrees apart on a ring around it, the first one straight on | ASSUMPTION | the engine spreads attackers around a target. The angle has no source |
-| A caster strafes when his cast is held | on each 0.25 s of a hold, with chance min(1, 2 x CSLR strafe mult), he side steps 160 units across the line, away from the friend in his way | ASSUMPTION | `Docs/ENGINE_NOTES.md:1165` (casters strafe and close while casting). Sensitivity in 12.3: without it most held casts never fire |
+| A caster side steps when his cast is held (switch `sidestep`, not `stance`) | on each 0.25 s of a hold, with chance min(1, 2 x CSLR strafe mult), he side steps 160 units across the line, to a RANDOM side. `--side-step away` = to the side the friend in his way is not on, which nothing says he knows | ASSUMPTION | `Docs/ENGINE_NOTES.md:1165` (casters strafe and close while casting) is the only source, and it gives no direction and no rate. Swept in 12.8 |
 
 Circling by CSCR circle mult is NOT modelled (it would be a third assumption about the same thing the slots already do).
 
@@ -109,9 +110,11 @@ Every cast a follower's decision fires goes through the stages below, and every 
 |---|---|---|---|
 | Corridor | a friendly within 80 units of the segment caster to target, 3D perpendicular, only between the two (t in 0..1) | FACT | `Sightline.cpp:429-440` `kFireLinePad = 80` |
 | Area clause | or a friendly within area + 64 of the aim | FACT | `APMF_API.h:801-806` |
-| Who is a friendly | the player and the active followers. Not summons | FACT for MFO's list (`Sightline.cpp:449-477`), ASSUMPTION for Harbinger's own list |
+| Who is a friendly | anyone not hostile to the caster: the player, followers, summons, allied NPCs (the lab has no allied NPCs) | FACT | `APMF_API.h:801-803`. MFO's own direct road walks the player and the active followers only (`Sightline.cpp:449-477`): the lab uses Harbinger's wider list for both |
 | Which casts | every hostile cast that is not Self delivered | FACT | `APMF_API.h:801`, `CombatScan.cpp:1078`, `bFriendlyFireHold` ships ON |
-| When | at the start and at the release. A held cast does not fire and is not paid for | FACT (0x06 start, 0x0A release) | same |
+| When | at the START (0x06 CheckStartCast) and at the RELEASE (0x0A). A held cast does not fire and is not paid for | FACT | `APMF_API.h:806,618` |
+| An engine-AI cast | a blocked start is never made: the AI passes that spell over and picks something else. A blocked release is refused and the cast is over. No hold | FACT for the two answers, MODEL for "picks something else" | same |
+| A claimed cast (a decision's) | MFO's claim stands while the guard says no: the start, then the release, wait in 0.25 s steps until the line is clear or the claim is 6 s old | FACT | `cast/Hands.cpp:369` `kInFlightHoldCap` |
 | A held stream | each 1 s beat is tested, a blocked beat does nothing | FACT | `cast/DirectTarget.cpp:234-239`, `kConcApplyPeriod` |
 
 ### 4.2 Claim, build and fire (`delivery`)
@@ -197,10 +200,12 @@ Assumed, each with a knob, in the order the reviewer should distrust them:
 1. Claim to fire 2.4 s for every non-heal cast and 4.5 s for a heal (`--deliver-sec o,h`). Two field points.
 2. The block arc of 180 degrees (`--block-arc`).
 3. The dragon's circuit (rFar, altitude).
-4. Attack slots 50 degrees apart, circling rate.
-5. The controller is inactive until a foe is within 2000 units in sight.
-6. The re-draw of 0.65 s.
-7. Friendlies for the line of fire are the player and followers, not summons.
+4. The held caster's side step (160 units, chance by CSLR, random side). Its own switch and knob. Swept in 12.8.
+5. Attack slots 50 degrees apart.
+6. The controller is inactive until a foe is within 2000 units in sight.
+7. The re-draw of 0.65 s.
+8. Who a foe picks (`World.h` `PickTarget`: nearness, x1.8 for its last attacker, x1.25 for the player). v2's MODEL of an
+   undecoded engine choice. It decides how often blades reach a caster. `--caster-pressure` adds fights where they do.
 
 What a field log would settle, and the log line that carries it: the share of chosen casts that fire
 (`[iaus]` pick against `[cast]` fire), the line-of-fire hold share (Harbinger's own log, MFO prints nothing),
@@ -214,11 +219,15 @@ the dragon's distance series (`[sense]` chase lines), the block arc (a probe).
 - N3. A live area (1dfcuabd246): a Snapshot list of his active areas (centre, radius, moves or fixed, time left).
 - N4. A "step for a clear line" road for a caster whose cast is held (the bow has the hidden step only).
 - N5. `tools/list_balance` extract: the hazard archetype (a circle is a spawned hazard) so section 6 does not read an editor id.
-- N6. FOUND BY THE MIRROR, verify in native before acting: the waiver keeps a held foe in the snapshot, but
-  `Generate.cpp:135-136` still gives act.attack the chase cap as its reach, so the range curve vetoes it past
-  1.15 x the cap. Then no candidate names it, the decision goes idle, and the pin that the waiver needs is no
-  longer renewed. In the lab the dragon is dropped on 21 percent of the laps even with `--waiver player` (12.2). The lab clears the pin the
-  moment a decision is idle, and the game's pin may outlive a few laps, so the lab's share is an upper reading.
+- N6. FOUND BY THE MIRROR, verify in native before acting. The waiver keeps a held foe in the snapshot, and then nothing
+  can name it. For every drawn state but a bow or a staff, act.attack reads RangeChase = distance / chase cap with
+  VetoAbove(1.0) (`Catalogue.cpp:313-315,796-799`, `Generate.cpp:135`). A waived foe is past the cap by definition, so
+  that attack is ALWAYS vetoed. A bow or a staff reads RangeSpell with the cap as its reach and is vetoed past 1.15 x
+  the cap. A cast is vetoed by its own spell range. So the decision goes idle and the pin the waiver needs is not renewed.
+  In the lab the dragon is still dropped on 20.5 percent of the laps with `--waiver player` (12.2). That share is an
+  UPPER reading for two reasons: the lab clears the pin the moment a decision is idle (the game's pin may outlive a few
+  laps), and the lab's `held` is the act.attack pin only, while the game also counts the ch.21 entry foe
+  (`entryFoeID`, `Candidates.cpp:321,351`), which the lab does not model.
 
 ## 11. Validation plan
 
@@ -237,31 +246,35 @@ Then: the shipped tunings on the v3 world, per class, against their v2 score (no
 
 ## 12. Results (built-in world, vanilla profile, shipped tunings of origin/main 0468bc3c)
 
-Commands: `tools/iaus_sim/run.sh --scenario <name> --fights 300 [arm]` for 12.1 to 12.5, and
-`--classes beta1 --seeds 1,2,3,4,5,6` for 12.6 and 12.7. The natural-bracket rows are from
-`tools/iaus_sim/baseline_v3_builtin.txt` (`--classes beta1 --baseline`, 8 fights x 5 ranks per cell).
+After the review fix round (line of fire tested at the start too, summons count as friends, the side step on its
+own switch with a random side). Commands: `tools/iaus_sim/run.sh --scenario <name> --fights 300 [arm]` for 12.1 to
+12.6, `--classes <cells> --seeds 1,2,3,4,5,6` for 12.7 and 12.8. Natural-bracket rows are from
+`tools/iaus_sim/baseline_v3_builtin.txt` (`--classes beta1 --baseline`).
 
 ### 12.1 Jesper with the dagger: REPRODUCED, with one honest limit
 
 `jesper-dagger`: an Evoker (level 25) with a dagger, a melee player, three bandits that start on him.
 
-| Arm | U | downs / fight | taken / s | blade drawn | in contact | cast dps |
-|---|---|---|---|---|---|---|
-| v2, old rule (the sim until today) | 89.23 | 0.09 | 7.50 | 58.5 % | 58.1 % | 20.3 |
-| v2, the 11-13 rule | 90.53 | 0.00 | 3.53 | 31.8 % | 48.5 % | 25.2 |
-| v3, old rule (`--v3 casterhold=off`) | 86.50 | 0.11 | 4.71 | 50.9 % | 42.0 % | 7.2 |
-| v3, the 11-13 rule (default) | 88.61 | 0.00 | 3.02 | 5.0 % | 31.6 % | 9.4 |
+| Arm | U | downs / fight | taken / s | blade drawn | in contact | nearest to target | cast dps |
+|---|---|---|---|---|---|---|---|
+| v2, old rule (the sim until today) | 89.23 | 0.09 | 7.50 | 58.5 % | 58.1 % | 138 | 20.3 |
+| v2, the 11-13 rule | 90.53 | 0.00 | 3.53 | 31.8 % | 48.5 % | 152 | 25.2 |
+| v3, old rule (`--v3 casterhold=off`) | 85.69 | 0.16 | 4.66 | 52.4 % | 41.7 % | 138 | 6.2 |
+| v3, the 11-13 rule (default) | 88.35 | 0.01 | 2.99 | 7.4 % | 31.7 % | 158 | 8.4 |
 
-With the foes on him the dagger arm goes down 0.11 times a fight against 0.00, and costs 2.1 U in v3
-(1.3 U in v2). The nearest he comes to his target is 142 units in the dagger arm (field: 209).
-The limit: v2 shows the same sign in THIS scenario. What v2 could not do is show it where the tuner looks.
-In the natural bracket and the headline scenarios the v2 Evoker stood 40 percent of his time in contact with
-his blade out and still went down in 5 percent of fights, so no search ever saw a cost. That part does not
-change in v3: over the six caster cells the rule is worth nothing on average (12.7, `casterhold=off` reads
-79.96 against 79.11, about one and a half standard errors the WRONG way). The reason is in 12.3: when four
-casts in five fire 2.4 s late, a dagger is extra damage. So the dagger is punished when blades reach him and is
-still read as useful in an average fight. That is a statement about the world model's foes (they rarely choose
-the caster) as much as about the rule, and it is the first thing a field log should check.
+With the foes on him the dagger arm goes down 0.16 times a fight against 0.01 and costs 2.7 U in v3 (1.3 U in v2).
+He comes within 138 units of his target (field: 209).
+The limit: v2 shows the same sign in THIS scenario. What v2 could not do is show it where the tuner looks: in the
+natural bracket and the headline scenarios its Evoker stood 40 percent of his time in contact with his blade out
+and went down in 5 percent of fights. In v3's headline the rule is still worth nothing measurable
+(`casterhold=off` 80.20 against 80.43, inside one standard error). The reason is who the lab's foes pick
+(section 9 item 8): they rarely go for the caster. With `--caster-pressure` (one dive fight per caster cell in the
+objective) the rule reads 80.98 against 80.44 without it in v3, and 82.52 against 82.26 in v2. Right sign, small.
+"Mean distance to his target" is NOT a standoff measure in these runs. Traced over 40 fights: on 54 percent of his
+laps no decision names a target, and the measured target is then his engine target, which on a third of those laps
+is a routed foe about 4800 units away. With the cap on, a routed foe past the cap also leaves the snapshot, so fewer
+laps are steered at one (3.7 against 12.7 percent). That mix is what moves the mean between `chase` on and off. Read
+`minTgt` and `contact%` instead.
 
 ### 12.2 The circling dragon: REPRODUCED
 
@@ -270,14 +283,14 @@ the caster) as much as about the rule, and it is the first thing a field log sho
 | Arm | laps with the dragon dropped | mean cap | kept by the waiver / fight | idle laps |
 |---|---|---|---|---|
 | v2 | 0.00 % | 4096 (flat) | 0 | 0.0 % |
-| v3 `--waiver none` | 36.87 % | 2093 | 0 | 23.9 % |
-| v3 `--waiver self` (the game of 10-19) | 25.63 % | 2066 | 33.8 | 17.8 % |
-| v3 `--waiver player` (the game today) | 20.70 % | 2051 | 48.3 | 15.0 % |
+| v3 `--waiver none` | 36.74 % | 2096 | 0 | 24.1 % |
+| v3 `--waiver self` (the game of 10-19) | 25.35 % | 2067 | 34.2 | 17.3 % |
+| v3 `--waiver player` (the game today) | 20.50 % | 2056 | 48.1 | 14.9 % |
 
-The cap reads 2051 to 2093 units against a dragon, the number the field figure starts at (2184). v2 never
-dropped it. The fix of 11-13 helps (25.6 to 20.7 percent) and does not close it: see item N6 in section 10.
-In the natural bracket the cap removes at least one live foe on 11 to 40 percent of a caster's laps
-(v2: never), because encounters start 900 to 2200 units out.
+The cap reads about 2060 to 2100 units against a dragon, the number the field figure starts at (2184). v2 never
+dropped it. The fix of 11-13 helps and does not close it: item N6 in section 10, with its two reasons why the
+lab's share is an upper reading. In the natural bracket the cap removes at least one live foe on 12 to 40 percent of
+a caster's laps (v2: never), because encounters start 900 to 2200 units out.
 
 ### 12.3 Missed casts: REPRODUCED
 
@@ -286,26 +299,26 @@ In the natural bracket the cap removes at least one live foe on 11 to 40 percent
 | Arm | fired of picked | held by the line of fire | given up after 6 s | claim to fire | cast dps |
 |---|---|---|---|---|---|
 | v2 | 99.4 % | 0 | 0 | 0.54 s | 23.0 |
-| v3 | 82.1 % | 25.2 % (2.7 s each) | 11.3 % | 2.75 s | 7.3 |
+| v3 (side step to a random side) | 67.4 % | 41.0 % (3.5 s each) | 26.0 % | 2.87 s | 6.7 |
 | v3 `--v3 lof=off` | 95.2 % | 0 | 0 | 2.33 s | 18.4 |
-| v3 `--v3 stance=off` (no side step, no slots) | 32.5 % | 68.5 % | 62.7 % | 2.73 s | 1.3 |
-| v3 `--deliver-sec 1.0,1.5` | 88.7 % | 21.0 % | 8.5 % | 1.28 s | 10.1 |
+| v3 `--v3 sidestep=off` | 57.2 % | 48.1 % | 36.4 % | 2.88 s | 5.3 |
+| v3 `--side-step away` | 78.9 % | 32.7 % | 15.0 % | 2.89 s | 8.9 |
+| v3 `--deliver-sec 1.0,1.5` | 73.0 % | 37.6 % | 23.0 % | 1.47 s | 9.6 |
 
-Natural bracket, v3, per class: picked casts that fired / held at least once / given up / released out of sight.
+Natural bracket, v3, per class.
 
-| Class | picks / fight | fired | held | given up | out of sight | direct road |
+| Class | picks / fight | fired | held at least once | given up | released out of sight | direct road |
 |---|---|---|---|---|---|---|
-| mage | 3.9 | 76.4 % | 21.0 % | 6.4 % | 1.3 % | 19.7 % |
-| evoker | 3.5 | 77.9 % | 26.4 % | 10.7 % | 0.7 % | 20.7 % |
-| conjurer | 4.2 | 85.2 % | 20.1 % | 4.1 % | 1.2 % | 16.6 % |
-| healer | 2.6 | 77.9 % | 12.5 % | 2.9 % | 1.9 % | 32.7 % |
-| warlock | 3.5 | 87.3 % | 10.6 % | 2.1 % | 0.0 % | 23.9 % |
-| mage-off | 5.4 | 87.1 % | 11.5 % | 3.7 % | 2.8 % | 14.3 % |
+| mage | 5.3 | 70.9 % | 32.9 % | 15.5 % | 0.0 % | 14.1 % |
+| evoker | 4.6 | 66.1 % | 39.9 % | 21.3 % | 0.5 % | 15.8 % |
+| conjurer | 5.1 | 68.5 % | 32.5 % | 17.2 % | 1.0 % | 13.8 % |
+| healer | 3.4 | 76.6 % | 21.2 % | 13.1 % | 0.7 % | 24.8 % |
+| warlock | 4.0 | 85.7 % | 13.0 % | 6.8 % | 1.2 % | 20.5 % |
+| mage-off | 7.8 | 78.8 % | 19.6 % | 12.9 % | 1.0 % | 9.3 % |
 
-The line of fire is the largest single cause, as the field said. Occlusion is small here: the built-in open
-fights carry 0 or 1 pillar, which is the world's cover density and not a finding. A caster's damage falls from
-about 23 a second to about 7, and that is the main reason the caster cells lose 2 to 16 J (12.7).
-The side step is an ASSUMPTION and the result leans on it hard (33 percent fired without it).
+The line of fire is the largest single cause, as the field said: one cast in three is held and one in six is never
+made. Occlusion is small here because the built-in open fights carry 0 or 1 pillar: that is the world's cover
+density, not a finding. A caster's damage falls from about 23 a second to about 7.
 
 ### 12.4 Delivery: REPRODUCED
 
@@ -313,73 +326,96 @@ Natural bracket, 60 fights, `--delivery old` against `main`.
 
 | Class | Arm | fired of picked | never built | picks dropped by a newer pick | picks / fight |
 |---|---|---|---|---|---|
-| evoker | old | 15.0 % | 5.1 % | 74 % | 13.2 |
-| evoker | main | 81.9 % | 0 | 0 | 4.0 |
-| conjurer | old | 16.4 % | 5.6 % | 73 % | 12.1 |
-| conjurer | main | 82.9 % | 0 | 0 | 3.5 |
+| evoker | old | 12.6 % | 3.9 % | 77 % | 17.4 |
+| evoker | main | 67.4 % | 0 | 0 | 5.0 |
+| conjurer | old | 14.3 % | 4.2 % | 76 % | 15.9 |
+| conjurer | main | 70.4 % | 0 | 0 | 4.6 |
 
-With the rules of before 11-13 a claim is replaced by the next lap's different pick again and again and five
-casts in six never happen (field: "22 laps in 10 s with 0 fires"). With main's guard it is gone.
-Headline J: 77.38 old against 79.11 main.
+With the rules of before 11-13 a waiting claim is replaced by the next lap's different pick again and again, and
+six casts in seven never happen (field: "22 laps in 10 s with 0 fires"). Headline J: 78.59 old, 80.43 main.
 
 ### 12.5 The knight's guard: REPRODUCED (a number now exists outside a taunt)
 
 | Cell | blows landed on him / fight | met his guard | guard up, blow from outside the arc | no guard up | the old `guard2%` |
 |---|---|---|---|---|---|
-| knight, natural bracket | 6.0 | 22.6 % | 2.1 % | 75.3 % | 71.0 % (on 0.8 of the 6.0 blows) |
+| knight, natural bracket | 6.1 | 22.6 % | 1.6 % | 75.7 % | 71.4 % (on 0.9 of the 6.1 blows) |
 | knight, `knight-ring` (four bandits around him) | 22.7 | 4.2 % | 0.7 % | 95.1 % | 69.0 % |
 | the same, `--block-arc 120` | 22.7 | 3.9 % | 1.0 % | 95.1 % | 68.5 % |
-| warrior, natural | 5.2 | 0.5 % | 0.0 % | 99.5 % | none |
+| warrior, natural | 5.0 | 1.0 % | 0.0 % | 99.0 % | none |
 
 `guard2%` looked at one blow in seven. Over all blows the Knight meets 23 percent with his guard, and 4 percent
-when he is surrounded. Direction matters little (1 to 2 percent). The guard is simply not up: the Block
-candidate needs a swing in the air on him or two taunted foes. Timing and candidate supply are the gap, not the arc.
+when surrounded. Direction matters little (1 to 2 percent). The guard is simply not up: the Block candidate needs a
+swing in the air on him or two taunted foes. Timing and candidate supply are the gap, not the arc.
 
 ### 12.6 The other mechanisms
 
 | Scenario | v2 | v3 |
 |---|---|---|
-| `bow-channel`: bow denied by a channelled self buff | 0 % of her time, dps 29.0 | 40.6 % of her time (217 weapon damage a fight), stream 10.8 s, dps 17.0 |
-| `cloak-area`: seconds a foe stands in his cloak, per fight | no area | 0.06 s, with the cloak up 13 % of the fight: he backs away from the foes it needs |
-| `circle-area`: time he stands outside his own circle | no area | 85 % of the time it is up |
+| `bow-channel`: bow denied by a channelled self buff | 0 % of her time, dps 29.0 | 46.9 % of her time (305 weapon damage a fight), stream 10.8 s, dps 12.7 |
+| `cloak-area`: seconds a foe stands in his cloak, per fight | no area | 0.07 s, with the cloak up 15 % of the fight: he backs away from the foes it needs |
+| `circle-area`: time he stands outside his own circle | no area | 61 % of the time it is up |
 | `ledge-archer` | U 92.4 | U 90.8 (the ranged player kills it, the warrior cannot) |
-| Oracle gap on `fire-lane` / `jesper-dagger` / `dragon-circle` (K 4, 30 s, 10 fights) | | +3.64 / +5.27 / +3.24 U. `ext:clear_line` is offered and is not among the oracle's top wins: a 1.2 s step rarely clears a friend who stands next to the target |
 
-### 12.7 The shipped tunings under v3 (no retune)
+### 12.7 The shipped tunings under v3, one switch off at a time, per class (no retune)
 
-Headline J, 6 seeds, `--classes beta1`: v2 81.76 (se 0.39), v3 79.11 (se 0.4).
-One switch off at a time: `delivery` 81.85, `lof` 81.43, `stance` 73.24, `casterhold` 79.96, `chase` 79.17,
-`hands` 79.00, `blockdir` 79.12. `--delivery old` 77.38. `--deliver-sec 1.0,1.5` 81.33. `--waiver self` 79.09.
+J, 6 seeds. `beta1` is the 15 cells run together (se about 0.4 to 0.6). Each other row is that cell run alone, so
+its standard error is 1 to 6 J: read a row's pattern, not a single cell. Columns after `v3` are v3 with that one
+switch off.
 
-Per class cell, each run alone (`--classes <cell> --seeds 1..6`, so the standard errors are wide):
+| cell | v2 | v3 | height | chase | lof | delivery | hands | stance | sidestep | casterhold | blockdir | areas | perks |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| beta1 | 81.76 | 80.43 | 80.13 | 79.90 | 81.43 | 82.11 | 80.41 | 78.55 | 79.66 | 80.20 | 80.42 | 80.43 | 80.47 |
+| melee | 83.20 | 80.19 | 80.19 | 80.52 | 81.46 | 81.54 | 80.20 | 81.00 | 80.23 | 80.16 | 80.19 | 80.19 | 80.20 |
+| ranged | 73.78 | 78.31 | 78.31 | 73.04 | 77.38 | 78.36 | 78.18 | 71.76 | 77.09 | 78.09 | 78.31 | 78.31 | 78.18 |
+| mage | 82.40 | 73.52 | 73.52 | 72.11 | 78.27 | 77.61 | 73.48 | 70.69 | 70.03 | 75.19 | 73.53 | 73.52 | 73.44 |
+| knight | 73.72 | 73.68 | 73.68 | 74.15 | 73.92 | 74.39 | 73.63 | 71.81 | 73.57 | 72.43 | 73.65 | 73.68 | 73.70 |
+| warrior | 88.48 | 88.30 | 88.30 | 89.52 | 88.43 | 89.19 | 88.23 | 88.25 | 88.81 | 88.36 | 88.30 | 88.30 | 88.30 |
+| mercenary | 81.36 | 82.85 | 82.85 | 82.03 | 83.18 | 82.72 | 83.00 | 81.41 | 83.08 | 82.80 | 82.85 | 82.85 | 82.78 |
+| archer | 83.74 | 84.01 | 84.01 | 83.85 | 83.53 | 85.45 | 84.01 | 82.45 | 83.51 | 83.50 | 84.01 | 84.01 | 84.06 |
+| thief | 86.48 | 88.00 | 88.00 | 87.62 | 88.06 | 88.73 | 88.55 | 84.89 | 88.16 | 87.98 | 88.00 | 88.00 | 88.00 |
+| evoker | 83.73 | 77.22 | 76.12 | 75.44 | 80.97 | 80.27 | 77.40 | 74.83 | 75.41 | 76.17 | 77.20 | 77.22 | 77.79 |
+| conjurer | 76.63 | 62.36 | 62.36 | 63.96 | 69.70 | 73.32 | 62.49 | 63.80 | 62.95 | 62.07 | 62.36 | 62.36 | 62.93 |
+| healer | 83.45 | 80.59 | 80.59 | 79.46 | 81.30 | 82.60 | 81.12 | 79.72 | 77.30 | 80.20 | 80.58 | 80.59 | 80.99 |
+| warlock | 80.00 | 73.79 | 73.79 | 73.37 | 75.49 | 81.15 | 73.54 | 74.27 | 75.99 | 76.22 | 73.79 | 73.79 | 73.91 |
+| melee-off | 76.74 | 80.52 | 80.52 | 78.59 | 79.30 | 81.23 | 74.56 | 76.50 | 78.75 | 80.52 | 80.52 | 80.52 | 80.44 |
+| ranged-off | 74.83 | 69.05 | 69.05 | 68.33 | 73.61 | 71.02 | 70.91 | 66.44 | 69.17 | 70.39 | 69.05 | 69.05 | 69.09 |
+| mage-off | 71.91 | 68.91 | 68.91 | 67.48 | 71.88 | 71.46 | 69.28 | 62.24 | 62.10 | 66.95 | 68.84 | 68.91 | 67.92 |
 
-| Cell | v2 | v3 | | Cell | v2 | v3 |
-|---|---|---|---|---|---|---|
-| melee | 83.20 | 77.98 | | evoker | 83.73 | 76.29 |
-| ranged | 73.78 | 77.06 | | conjurer | 76.63 | 66.27 |
-| mage | 82.40 | 73.67 | | healer | 83.45 | 67.13 |
-| knight | 73.72 | 73.32 | | warlock | 80.00 | 74.53 |
-| warrior | 88.48 | 88.87 | | melee-off | 76.74 | 79.10 |
-| mercenary | 81.36 | 83.04 | | ranged-off | 74.83 | 69.33 |
-| archer | 83.74 | 82.91 | | mage-off | 71.91 | 69.92 |
-| thief | 86.48 | 88.02 | | | | |
+What it says: the casters lose 3 to 14 J under v3 and `delivery` and `lof` are what take it (conjurer +11 and +7
+with one of them off, warlock +7 with delivery off). `height`, `blockdir`, `areas` and `perks` move nothing in the
+headline cells (no dragon in most fights, guards rarely up, no area spell in a random book, flat perk curve):
+their effect is in their own scenarios. `stance` and `sidestep` off both cost the casters.
+Other headline arms: `--delivery old` 78.59, `--deliver-sec 1.0,1.5` 81.56, `--waiver self` 80.36,
+`--caster-pressure` 80.98. LoreRim was not re-run after the fix round.
 
-The casters lose 2 to 16 J, the weapon classes move inside their noise. LoreRim (evoker, knight, archer, 2 seeds,
-legacy potion price): v2 58.57, v3 54.51.
+### 12.8 The side step sweep (review F4)
 
-### 12.8 Run time
+| Arm | headline J (beta1) | the six caster cells together | `fire-lane` fired | given up | cast dps |
+|---|---|---|---|---|---|
+| `--v3 sidestep=off` | 79.66 | 76.98 | 57.2 % | 36.4 % | 5.3 |
+| random side (default) | 80.43 | 78.70 | 67.4 % | 26.0 % | 6.7 |
+| `--side-step away` | 80.74 | 79.97 | 78.9 % | 15.0 % | 8.9 |
 
-`--classes beta1 --seeds 1,2,3,4,5,6 --threads 16`: v2 9.1 s CPU (0.75 to 0.9 s wall), v3 11.1 s CPU
-(0.85 s wall). About 22 percent more. `--world v2` in the new binary costs the same as the old binary.
+The whole assumption is worth about 1 J on the headline and 3 J on the caster cells, between "never steps" and
+"always steps the right way". The default sits in the middle. A retune should be checked at both ends.
 
-### 12.9 Checks
+### 12.9 Run time
+
+`--classes beta1 --seeds 1,2,3,4,5,6 --threads 16`: v2 9.0 s CPU (0.76 s wall), v3 11.2 s CPU (0.94 s wall).
+About 24 percent more. `--world v2` in the new binary costs the same as the old binary.
+
+### 12.10 Checks
 
 - `--world v2` is v2: the full metric dump of `--classes beta1` is identical to the binary of origin/main, line for
-  line, and `--compare baseline_builtin.txt` reads 0 metrics changed.
+  line, and `--compare baseline_builtin.txt` reads 0 metrics changed. Re-checked after the fix round.
 - `run.sh` CLI checks: the three exact v2 pins run with `--world v2`. Eight v3 checks added, all pass.
   One check fails and failed before this branch: "logistics world ... a list or an IAUS policy is refused"
   (`--logi-policy iaus` exists now, the check is stale).
-- `test_tune_driver.py`: 21 tests OK. The driver needs no change: `--sim-flags "--world v2"` runs it on v2.
-- Address and undefined-behaviour sanitizers: beta1, the field scenarios (both delivery modes), the oracle,
-  table mode and LoreRim, no report.
+- `tune_driver.py` now ALWAYS names the world: `--world v2` by default, `--world v3` to opt in, through the same
+  wrapper as `--sim-flags` (which may not carry `--world` itself). `test_tune_driver.py`: 23 tests OK.
+  `potion_worth.py` and `edge_search.py` run on their own still take the binary's default (v3) unless given a
+  wrapper or `--world v2` in their simulator flags.
+- Address and undefined-behaviour sanitizers (before the fix round): beta1, the field scenarios, the oracle, table
+  mode and LoreRim, no report.
 - The perk mirror is live: with `perks` on, `--curve evoker:cast_offense.94.py1=3` moves J. With it off it does not.
+- The banner prints the world (`IAUS SIM v3` / `IAUS SIM v2`).

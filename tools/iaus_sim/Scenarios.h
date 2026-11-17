@@ -39,7 +39,7 @@ namespace Sim {
         return m;
     }
 
-    inline std::vector<Scenario> AllScenarios(bool withStealth = false, bool withField = false) {
+    inline std::vector<Scenario> AllScenarios(bool withStealth = false, bool withField = false, bool withPressure = false) {
         using FS = FightSpec;
         auto base = [](const std::vector<SimClass>& c, const char* slug, int level, Cls player) { FS f; f.cls = ClassBySlug(c, slug); f.level = level; f.rank = 3; f.playerFam = player; f.foeDist = 1300; f.occluders = 0; return f; };
         std::vector<Scenario> v;
@@ -96,7 +96,17 @@ namespace Sim {
         v.push_back({ "hurt-knight", "the knight is at 30 percent and the player at 20 with a foe on him: the taunt is a sacrifice and it is right",
             "pdead%,U,taunt/min,downs/f", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "knight", 25, Cls::Mage);
                 f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 25, R, 1.5f, 1.2f)); f.foesOnPlayer = true; f.foeDist = 450; f.subjectHp = 0.30f; f.playerHp = 0.20f; f.playerPotions = 0; f.subjectPotionsH = 0; f.targetRatio = 0.60f; return f; } });
-        if (!withStealth) return v;
+        // ── SIM V3, --caster-pressure (review F6): foes that DIVE the caster. One per casting cell, appended after everything the headline already
+        // holds (a block of its own, so no existing scenario changes its index or its fights). The lab's foes rarely choose the caster on
+        // their own (World.h PickTarget, unsourced), so without these a caster's tuning never meets blades on him.
+        auto pressure = [&]() { if (!withPressure) return;
+            static const char* const kSlug[6] = { "mage", "evoker", "conjurer", "healer", "warlock", "mage-off" };
+            static const char* const kName[6] = { "dive-mage", "dive-evoker", "dive-conjurer", "dive-healer", "dive-warlock", "dive-mage-off" };
+            for (int i = 0; i < 6; ++i) { const char* slug = kSlug[i];
+                v.push_back({ kName[i], "three blades start on the caster and a melee player is beside him: stay on spells, keep the distance, live",
+                    "U,downs/f,taken/s,drawnMelee%,contact%,minTgt,dl.fired%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, slug, 25, Cls::Melee);
+                        for (int k = 0; k < 3; ++k) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt", "grunt" }; f.ensure = { "fire", "heal" }; f.onSubject = true; f.foeDist = 1100; f.targetRatio = 0.95f; return f; } }); } };
+        if (!withStealth) { pressure(); return v; }
         // ── the stealth and disengage lab (iaus-classes.md section 6, iaus-sim-v2.md section 30): meaningful under --stealth g1 | hide | g3; under off they are plain fights ──
         v.push_back({ "thief-cover", "three bandits have found the thief among the pillars of a lit hall: break their line of sight behind cover, crouch until their group loses him, come back with blows from stealth",
             "U,hideOk%,sneakDmg%,hidden%,taken/s,downs/f,hide/min,stealthMiss%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "thief", 25, Cls::Melee);
@@ -133,6 +143,7 @@ namespace Sim {
             "prio%,U,opener%,sneakDmg%,dur.s,win%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "listener", 30, Cls::Melee);
                 for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 28, R, 1.5f)); f.customFoes.push_back(Foe(D, { "healer" }, 26, R)); f.foeTags = { "grunt", "grunt", "healer" };
                 f.interior = true; f.light = 0.3f; f.occluders = 2; f.freeEntry = 1; f.foesOnPlayer = true; f.foeDist = 1100; f.targetRatio = 0.95f; return f; }, true, true });
+        pressure();
         if (!withField) return v;
         // ── SIM V3: the field failures the lab could not see (ClickUp 1dfcuabd44c; iaus-sim-v3.md 8 and 11). Open ground, no random cover: the geometry is the point ──
         v.push_back({ "jesper-dagger", "an evoker with a dagger on his belt behind a melee player, three bandits: he stays on his spells at spell range; with the blade drawn the engine walks him into the blades",

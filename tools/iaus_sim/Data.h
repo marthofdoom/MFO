@@ -57,18 +57,21 @@ namespace Sim {
         bool lof = true;         // the line-of-fire hold: a hostile cast is held while the player or a follower stands in the corridor
         bool delivery = true;    // cast delivery: claim-to-fire latency, the inactive controller, claim thrash
         bool hands = true;       // the hands: a cast takes a hand, a stream holds it, a two-handed weapon or a bow is put away and drawn again
-        bool stance = true;      // the engine's movement follows the stance (dry caster = melee), attack slots, circling, a held caster strafes, foe fallback
+        bool stance = true;      // the engine's movement follows the stance (dry caster = melee), attack slots around a target, foe fallback
+        bool sidestep = true;    // a caster whose cast is held by the line of fire side steps (ASSUMPTION, load-bearing: its own switch; --side-step random|away)
         bool casterhold = true;  // native 0ed9c705 / 6c5ba58d mirrored: ClassGate::casterLine + Snapshot::spellsHoldPrev (false = the game before 11-13)
         bool blockdir = true;    // a guard stops a blow only inside its arc; every blow on the subject is tallied by direction
         bool areas = true;       // an ACTIVE area (cloak = moves with the caster, circle / rune / wall = fixed at the cast point) lives in the world while it lasts
         bool perks = true;       // Snapshot::perks spell group (spellsRead, spellCost / spellMagnitude / spellCount per school), perk-effects.md section 9
-        void AllOff() { height = chase = lof = delivery = hands = stance = casterhold = blockdir = areas = perks = false; }
-        [[nodiscard]] bool Any() const { return height || chase || lof || delivery || hands || stance || casterhold || blockdir || areas || perks; }
+        void AllOff() { height = chase = lof = delivery = hands = stance = sidestep = casterhold = blockdir = areas = perks = false; }
+        [[nodiscard]] bool Any() const { return height || chase || lof || delivery || hands || stance || sidestep || casterhold || blockdir || areas || perks; }
     };
     inline V3 g_v3;
     inline int   g_waiver = 2;            // --waiver none|self|player: the chase cap's held-foe waiver. 2 = the game today (marth 11-13: the foe fights HIM or the player), 1 = the game of 10-19 (HIM only), 0 = none
     inline bool  g_deliveryOld = false;   // --delivery old: the game before fix/heal-claim-gates and fix/iaus-claim-thrash (a claim on an inactive controller never casts; a newer pick takes the hand)
     inline float g_deliverSec[2] = { 2.4f, 4.5f };   // --deliver-sec o,h: claim to FIRE of an offense cast / a heal (cast/Hands.cpp:362, CALIBRATED on one session each; the heal figure is soft)
+    inline int   g_sideStep = 1;          // --side-step random|away: which way a held caster steps across the line. 1 random (the default: no source says he knows where the friend is), 2 away from the friend in his way
+    inline bool  g_casterPressure = false;   // --caster-pressure: the caster cells' objective also plays the "dive" scenarios (foes that start on the caster); OFF by default so the headline keeps its composition
     inline float g_blockArc = 180.0f;     // --block-arc: the full angle in front of him a guard covers (ASSUMPTION: no engine source in Docs)
     inline float g_aimMiss = 0.12f;      // --aim-miss: the lab's chance that an UNCORRECTED aimed shot misses a moving target (MODEL; TM::aimMiss before)
     inline float g_dodgeFlight = 0.2f;    // MODEL: a side step clears a projectile only when it flies at least this long (a reaction time; --dodge-flight, sensitivity in section 31.4)

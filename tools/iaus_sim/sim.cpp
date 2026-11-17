@@ -146,8 +146,8 @@ namespace {
 
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
-        const std::vector<Scenario> all = AllScenarios(true, true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "field" = sim v3's field failures; "all,stealth" = both
-        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.field && (!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || (s.field && ("," + which + ",").find(",field,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
+        const std::vector<Scenario> all = AllScenarios(true, true, true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "field" = sim v3's field failures; "all,stealth" = both
+        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.field && std::strncmp(s.name, "dive-", 5) != 0 && (!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || (s.field && ("," + which + ",").find(",field,") != std::string::npos) || (!std::strncmp(s.name, "dive-", 5) && ("," + which + ",").find(",pressure,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; };
@@ -199,7 +199,7 @@ namespace {
 
     // The headline's scenarios: the 17 of main, and while a stealth road is modelled (--stealth g1|hide|g3, the default is g3) the
     // stealth / disengage scenarios that are not parked. The 17 keep their indexes, so their fights are the same in every mode.
-    std::vector<Scenario> HeadlineScenarios() { std::vector<Scenario> v; for (Scenario& s : AllScenarios(g_stealth > 0)) if (!s.parked || g_parked) v.push_back(std::move(s)); return v; }
+    std::vector<Scenario> HeadlineScenarios() { std::vector<Scenario> v; for (Scenario& s : AllScenarios(g_stealth > 0, false, g_casterPressure)) if (!s.parked || g_parked) v.push_back(std::move(s)); return v; }
     const char* StealthName() { static const char* n[] = { "off", "g1", "hide", "g3" }; return n[std::clamp(g_stealth, 0, 3)]; }
     // The T2 batch S switches of this run (section 31): "all" (the default), "off" (--t2 off), else what differs from the default.
     struct T2Flag { const char* name; bool T2::* m; };
@@ -208,14 +208,14 @@ namespace {
     // SIM V3: the world of this run. "" = v2 (every v3 switch off: the headline and the #meta line are v2's own, byte for byte);
     // else " world=v3" plus what differs from the v3 defaults.
     struct V3Flag { const char* name; bool V3::* m; };
-    inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance },
+    inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance }, { "sidestep", &V3::sidestep },
                                            { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks } };
     std::string WorldTag(const char* lead) {
         if (!g_v3.Any()) return "";
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
-        if (g_v3.delivery && (g_deliverSec[0] != 2.4f || g_deliverSec[1] != 4.5f)) o += "+deliver-sec"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc";
+        if (g_v3.delivery && (g_deliverSec[0] != 2.4f || g_deliverSec[1] != 4.5f)) o += "+deliver-sec"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
         return o;
     }
     std::string g_potTag;
@@ -627,6 +627,8 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--waiver") && i + 1 < argc) { const char* v = argv[++i]; g_waiver = !std::strcmp(v, "none") ? 0 : !std::strcmp(v, "self") ? 1 : !std::strcmp(v, "player") ? 2 : -1; if (g_waiver < 0) { std::fprintf(stderr, "--waiver none|self|player\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--delivery") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "old")) g_deliveryOld = true; else if (!std::strcmp(v, "main")) g_deliveryOld = false; else { std::fprintf(stderr, "--delivery main|old\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-sec") && i + 1 < argc) { if (std::sscanf(argv[++i], "%f,%f", &g_deliverSec[0], &g_deliverSec[1]) != 2 || g_deliverSec[0] < 0 || g_deliverSec[1] < 0) { std::fprintf(stderr, "--deliver-sec <offense>,<heal> (seconds)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--side-step") && i + 1 < argc) { const char* v = argv[++i]; g_sideStep = !std::strcmp(v, "random") ? 1 : !std::strcmp(v, "away") ? 2 : 0; if (!g_sideStep) { std::fprintf(stderr, "--side-step random|away (off: --v3 sidestep=off)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--caster-pressure")) g_casterPressure = true;
         else if (!std::strcmp(argv[i], "--block-arc") && i + 1 < argc) { g_blockArc = static_cast<float>(std::atof(argv[++i])); if (!(g_blockArc > 0.0f && g_blockArc <= 360.0f)) { std::fprintf(stderr, "--block-arc <degrees, 1..360>\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--t2") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_t2.AllOff(); else if (!std::strcmp(v, "on")) g_t2 = T2{}; else { std::fprintf(stderr, "--t2 off|on\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--feet-stop")) g_t2.feet = false;                 // Q-SIM-5: the lab before (a swap, a potion and a cast stop his feet)
@@ -814,13 +816,13 @@ static int RealMain(int argc, char** argv) {
         std::printf("HEADLINE  ORACLE J=%.2f (scenarios %.2f, natural %.2f)  %d fights per scenario, %d per class natural  covers=%s  [%s]\n", R.oracleJ, R.oracleJScen, R.oracleJNat, headlineOracle, std::max(1, headlineOracle / 2), ObjectiveCovers().c_str(), R.oracleOver.c_str()); }
     if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, hf, threads, &R.jScen, &R.jNat); R.hasJ = true; R.jFights = hf; R.jCovers = ObjectiveCovers(); std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  fights=%d per scenario  mode=%s  covers=%s  stealth=%s\n", R.jVal, R.jScen, R.jNat, hf, R.mode.c_str(), R.jCovers.c_str(), StealthName()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
     if (!scenario.empty()) {
-        std::printf("IAUS SIM v2  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
+        std::printf("IAUS SIM %s  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", g_v3.Any() ? "v3" : "v2", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
         if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
         const int rc = RunScenarios(D, allClasses, scenario, seed, fights, trace >= 0 ? 1 : threads, oracle, oc, g10Sticky, trace, R, estimates, scrollRoad); if (!noJson) R.Write(jsonPath); return rc; }
     std::vector<SimClass> classes;   // --classes a,b,c narrows the cells (slugs)
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
     if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
-    std::printf("IAUS SIM v2  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s  mode=%s\n", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default", g_tableMode ? "table" : "iaus");
+    std::printf("IAUS SIM %s  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s  mode=%s\n", g_v3.Any() ? "v3" : "v2", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default", g_tableMode ? "table" : "iaus");
     std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d unweighted=%d  kept for table rows: reanimate=%d\n",
                 D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown, D.dropUnweighted, D.keptReanim);
     const Rules& r = D.rules;

@@ -20,6 +20,16 @@ class LogiMid(unittest.TestCase):
         self.assertTrue(all(v > 0 for v in T.logi_mid(0.0, (0.6,), (-0.1, 0.1))))
 
 
+class World(unittest.TestCase):   # sim v3: the driver always names the world, v2 unless asked
+    def test_world_is_always_first(self):
+        self.assertEqual(T.world_flags("v2", ""), ["--world", "v2"])
+        self.assertEqual(T.world_flags("v3", "--ranged-perks --point-blank"), ["--world", "v3", "--ranged-perks", "--point-blank"])
+
+    def test_sim_flags_may_not_name_the_world(self):
+        with self.assertRaises(SystemExit):
+            T.world_flags("v2", "--world v3")
+
+
 class Edge(unittest.TestCase):
     def setUp(self):
         T.KNOB_META.clear()

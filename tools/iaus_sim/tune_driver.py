@@ -176,6 +176,14 @@ def key_of(world, classes, cfg, curves, sets, binary):
     return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)] + extra, separators=(",", ":"))
 
 
+def world_flags(world, sim_flags):
+    """The simulator switches of every run: `--world <v2|v3>` first, then --sim-flags. --sim-flags may not name the world itself."""
+    flags = (sim_flags or "").split()
+    if "--world" in flags:
+        raise SystemExit("--sim-flags may not carry --world: use the driver's own --world v2|v3")
+    return ["--world", world] + flags
+
+
 def uses_path():
     return os.path.join(A.out, "uses.txt")
 
@@ -2105,6 +2113,7 @@ def main():
     ap.add_argument("--no-worker", action="store_true", help="one simulator process per chunk instead of the persistent `sim --serve` workers")
     ap.add_argument("--no-race", action="store_true", help="measure every candidate of a sweep on every train seed (the pre-2.11.1 driver; the racing proof's reference)")
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
+    ap.add_argument("--world", choices=("v2", "v3"), default="v2", help="the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v2 (default, the lab every shipped tuning was searched in) until marth / the coordinator opts in to v3, the positional world. Passed to the simulator as --world, through the same wrapper as --sim-flags")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 16)
     ap.add_argument("--decisions", choices=("auto", "ask"), default="auto", help="auto (default): every former open decision is decided by a rule (class card + potion gates, tuner-auto-decisions.md) or is a report-only note, all in summary.json auto_decisions; ask: the old open decisions, no card / potion gate")
@@ -2121,8 +2130,9 @@ def main():
     A.bin = os.path.abspath(A.bin)
     CFG = SMOKE if A.smoke else FULL
     os.makedirs(A.out, exist_ok=True)
-    if A.sim_flags:   # batch 3: one wrapper per (binary, flags); its text carries the binary's sha256, so ident() (sha of A.bin) keys on both
-        flags = A.sim_flags.split()
+    sim_flags = world_flags(A.world, A.sim_flags)   # sim v3: the world is ALWAYS said (the binary's own default is v3)
+    if sim_flags:   # batch 3: one wrapper per (binary, flags); its text carries the binary's sha256, so ident() (sha of A.bin) keys on both
+        flags = sim_flags
         if any(f in ("--list", "--potion-worth", "--classes", "--seed", "--seeds", "--curve") for f in flags):
             raise SystemExit("--sim-flags takes model switches only, never a world, a class, a seed or a curve")
         body = "#!/bin/sh\n# tune_driver --sim-flags wrapper: binary sha256 %s\nexec %s %s \"$@\"\n" % (sha(A.bin), A.bin, " ".join(flags))
@@ -2143,7 +2153,7 @@ def main():
                 SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
         except ValueError:
             pass   # cut off by a kill: every stage it held replays from the cache
-    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, knobs=A.knobs)
+    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
     stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics, "worth": stage_worth, "loot": stage_loot}
     order = A.stages.split(",")

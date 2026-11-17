@@ -136,7 +136,7 @@ namespace Sim {
         float  fcx = 0, fcy = 0, fr0 = 0, frFar = 0, fAlt = 0, fTh0 = 0, fDir = 1; double fT0 = 0, fT = 12;   // the circuit: centre, start radius, far radius, altitude, start bearing, turn sense, take-off time, air time
         double claimAt = 0, claimUntil = 0;                          // delivery: the cast's claim was made at / its charge begins at (the wait between is the claim-to-fire latency)
         bool   ctrlLive = false;                                     // delivery: his combat controller is active (the engine's detection has seen a foe)
-        bool   lofWaited = false;                                    // lof: this cast has been held at least once (one count per cast)
+        bool   lofWaited = false, castStarted = false;               // lof: this cast has been held at least once (one count per cast) / its 0x06 start test has passed
         double strafeUntil = 0; float sgx = 0, sgy = 0;              // stance: a held caster's side step goal
         struct Stream { bool live = false; int spell = -1; std::uint32_t target = 0; double end = 0, nextBeat = 0; bool iaus = false, beats = false; } stream;   // hands: a concentration stream on his left hand
         double reDrawUntil = 0;                                      // hands: his two-handed weapon / bow is being drawn again until then
@@ -540,12 +540,12 @@ namespace Sim {
             return 600.0f + of * (3000.0f - 600.0f);   // Config.h g_chaseMin / g_chaseMax (the INI defaults)
         }
         // LINE OF FIRE (native/Sightline.cpp:429-477 TeammateInFireLine, kFireLinePad 80; APMF_API.h:801 kCastGuard_LineOfFire): a friendly
-        // (the player, an active follower; not the caster, not the target) within 80 units of the segment caster -> aim, measured in 3D and
+        // (anyone not hostile to the caster: the player, a follower, a summon; not the caster, not the target) within 80 units of the segment caster -> aim, measured in 3D and
         // only between the two ends, or within the spell's area + 64 of the aim. Returns the blocker (nullptr = clear).
         [[nodiscard]] const Body* LofBlocker(const Body& x, const Body& tg, float area) const {
             const float ax = x.c.x, ay = x.c.y, az = x.c.z, abx = tg.c.x - ax, aby = tg.c.y - ay, abz = tg.c.z - az, len2 = abx * abx + aby * aby + abz * abz;
             for (const Body& o : b) {
-                if (&o == &x || &o == &tg || !(o.role == Role::Player || o.role == Role::Follower) || !Up(o)) continue;
+                if (&o == &x || &o == &tg || o.Party() != x.Party() || !Up(o)) continue;   // a FRIENDLY = anyone not hostile to the caster (APMF_API.h:801-803): the player, followers, summons
                 const float apx = o.c.x - ax, apy = o.c.y - ay, apz = o.c.z - az;
                 if (area > 0.0f && std::hypot(o.c.x - tg.c.x, o.c.y - tg.c.y, o.c.z - tg.c.z) <= area + 64.0f) return &o;
                 if (len2 <= 1.0f) { if (std::hypot(apx, apy, apz) <= 80.0f) return &o; continue; }
@@ -557,7 +557,7 @@ namespace Sim {
         // The same question from a point he could stand at (the oracle's ext:clear_line).
         [[nodiscard]] bool LofClearFrom(const Body& x, float px, float py, const Body& tg) const {
             const float abx = tg.c.x - px, aby = tg.c.y - py, len2 = abx * abx + aby * aby; if (len2 <= 1.0f) return true;
-            for (const Body& o : b) { if (&o == &x || &o == &tg || !(o.role == Role::Player || o.role == Role::Follower) || !Up(o)) continue;
+            for (const Body& o : b) { if (&o == &x || &o == &tg || o.Party() != x.Party() || !Up(o)) continue;
                 const float apx = o.c.x - px, apy = o.c.y - py, tt = (apx * abx + apy * aby) / len2; if (tt < 0.0f || tt > 1.0f) continue;
                 if (std::hypot(apx - tt * abx, apy - tt * aby) <= 80.0f) return false; }
             return true;
@@ -566,13 +566,13 @@ namespace Sim {
         [[nodiscard]] bool LofGuarded(const Body& x, const SimSpell& s) const {
             return g_v3.lof && x.ctl >= 0 && !s.e.selfDelivery && !s.reanimate && (s.e.nature == Prune::Nature::Offense || s.e.nature == Prune::Nature::Control);
         }
-        // A held caster side steps across the line (ASSUMPTION, iaus-sim-v3.md 3.3): away from the friend in his way, 160 units, with
-        // the chance his style's long-range strafe mult gives (CSLR). One step at a time.
+        // A held caster side steps across the line (ASSUMPTION, iaus-sim-v3.md 3.3; its own switch `sidestep`): 160 units to a RANDOM side
+        // (--side-step away: to the side the friend in his way is not on), with the chance his style's long-range strafe mult gives (CSLR).
         void StrafeFrom(Body& x, const Body& tg, const Body& blocker) {
-            if (!g_v3.stance || now < x.strafeUntil) return;
+            if (!g_v3.sidestep || now < x.strafeUntil) return;
             if (!V.P(std::clamp(2.0f * StyleOf(x).strafe, 0.1f, 1.0f))) { x.strafeUntil = now + 0.4; x.sgx = x.c.x; x.sgy = x.c.y; return; }   // no step this time; asked again in 0.4 s
             const float dx = tg.c.x - x.c.x, dy = tg.c.y - x.c.y, l = std::max(1.0f, std::hypot(dx, dy)); float px = -dy / l, py = dx / l;
-            if ((blocker.c.x - x.c.x) * px + (blocker.c.y - x.c.y) * py > 0.0f) { px = -px; py = -py; }   // step to the side the friend is NOT on
+            if (g_sideStep == 2 ? (blocker.c.x - x.c.x) * px + (blocker.c.y - x.c.y) * py > 0.0f : V.P(0.5f)) { px = -px; py = -py; }
             x.sgx = x.c.x + px * 160.0f; x.sgy = x.c.y + py * 160.0f; x.strafeUntil = now + 0.8; if (x.ctl == 0) ++t.strafes;
         }
         // GUARD ARC (ASSUMPTION g_blockArc, iaus-sim-v3.md 5): the attacker stands inside the arc in front of the blocker.
@@ -804,6 +804,9 @@ namespace Sim {
             if (arenaR > 0.0f) { const float ax = x.c.x - arenaX, ay = x.c.y - arenaY, ad = std::hypot(ax, ay);   // --space: a wall stops him (backpedal, kite, flee)
                 if (ad > arenaR) { x.c.x = arenaX + ax * arenaR / ad; x.c.y = arenaY + ay * arenaR / ad; } }
         }
+        // WHO A FIGHTER PICKS. UNSOURCED (review F6 of d44d42a3): the weights below (nearness, x1.8 for his last attacker, x1.25 for the player,
+        // the +-15% draw) are v2's MODEL of the engine's target selection, which is not decoded. They decide how often a foe goes for a
+        // caster, and so what a blade in a caster's hand costs him (iaus-sim-v3.md 12.1). --caster-pressure adds fights where they do.
         [[nodiscard]] Body* PickTarget(Body& x) {
             Body* best = nullptr; Body* second = nullptr; float bs = -1, bs2 = -1;
             const bool frenzy = now < x.frenzyUntil;
@@ -989,16 +992,35 @@ namespace Sim {
         }
         // SIM V3 (lof): the release of a guarded cast while a friend stands in the corridor. true = no release now (held 0.25 s, the
         // guard's own refresh; or given up at the 6 s hold cap, cast/Hands.cpp kInFlightHoldCap). A held cast is not paid for.
+        // The guard answers at the START of a cast (0x06 CheckStartCast, APMF_API.h:806,618) and at its release (0x0A).
+        //   an ENGINE-AI cast: a blocked start is never made (BrainCast passes the spell over, the AI picks something else); a blocked
+        //     release is refused and the cast is over. No hold: nothing stands behind it.
+        //   a CLAIMED cast (a decision's): MFO's claim stands while the guard says no, so the start (StartTest) and the release wait in
+        //     0.25 s steps until the line is clear or the claim is 6 s old (kInFlightHoldCap).
         [[nodiscard]] bool HoldCast(Body& x, Body* tg) {
             const SimSpell* s = SpellOf(x, x.actSpell); if (!s || !tg || !Up(*tg) || !LofGuarded(x, *s)) return false;
             const Body* blocker = LofBlocker(x, *tg, s->e.areaUnits); if (!blocker) return false;
             const bool subj = x.ctl == 0 && x.actIaus;
+            if (!x.actIaus) { x.actEnd = now + TM::castRecover; StrafeFrom(x, *tg, *blocker); if (trace) std::fprintf(trace, "%7.2f  LOF %s's own cast of %s is refused at the release: %s stands in the line\n", now, x.c.name.c_str(), s->e.name.c_str(), blocker->c.name.c_str()); return true; }
             if (now - x.claimAt >= 6.0) { if (subj) ++t.castLofExpired; x.actEnd = now + TM::castRecover; if (trace) std::fprintf(trace, "%7.2f  LOF %s gives up %s: %s stood in the line for 6 s\n", now, x.c.name.c_str(), s->e.name.c_str(), blocker->c.name.c_str()); return true; }
             if (subj) { if (!x.lofWaited) ++t.castLofHeld; t.castLofSec += 0.25; }
             if (trace && !x.lofWaited) std::fprintf(trace, "%7.2f  LOF %s holds %s: %s stands in the line to %s\n", now, x.c.name.c_str(), s->e.name.c_str(), blocker->c.name.c_str(), tg->c.name.c_str());
             x.lofWaited = true; x.hitAt = now + 0.25; x.actEnd = std::max(x.actEnd, x.hitAt + static_cast<double>(TM::castRecover));
             StrafeFrom(x, *tg, *blocker);
             return true;
+        }
+        // The 0x06 start test of a CLAIMED cast, when its charge would begin (Body::claimUntil). Blocked: the charge does not begin, the
+        // claim waits (the same tallies as a held release). Clear: it begins, and the release is tested again.
+        void StartTest(Body& x) {
+            const SimSpell* s = SpellOf(x, x.actSpell); Body* tg = Find(x.actTarget);
+            if (!s || !tg || !Up(*tg) || !LofGuarded(x, *s)) { x.castStarted = true; return; }
+            const Body* blocker = LofBlocker(x, *tg, s->e.areaUnits); if (!blocker) { x.castStarted = true; return; }
+            const bool subj = x.ctl == 0;
+            if (now - x.claimAt >= 6.0) { if (subj) ++t.castLofExpired; x.hitAt = -1; x.actEnd = now + TM::castRecover; if (trace) std::fprintf(trace, "%7.2f  LOF %s gives up %s before it began: %s stood in the line for 6 s\n", now, x.c.name.c_str(), s->e.name.c_str(), blocker->c.name.c_str()); return; }
+            if (subj) { if (!x.lofWaited) ++t.castLofHeld; t.castLofSec += 0.25; }
+            if (trace && !x.lofWaited) std::fprintf(trace, "%7.2f  LOF %s may not begin %s: %s stands in the line to %s\n", now, x.c.name.c_str(), s->e.name.c_str(), blocker->c.name.c_str(), tg->c.name.c_str());
+            x.lofWaited = true; x.claimUntil += 0.25; x.hitAt += 0.25; x.actEnd = std::max(x.actEnd, x.hitAt + static_cast<double>(TM::castRecover));
+            StrafeFrom(x, *tg, *blocker);
         }
         // SIM V3 (hands): a concentration spell of a follower is a STREAM on his left hand. Length: cast/Actuation_internal.h DrawConcCap
         // (offense 2..6 s, heal and utility 8..15 s). beats = its effect and its cost come per 1 s beat (kConcApplyPeriod).
@@ -1147,7 +1169,7 @@ namespace Sim {
         void StartCast(Body& x, int idx, const SimSpell& s, std::uint32_t target, float cost, bool fromIaus) {
             x.act = Act::Cast; x.actSpell = idx; x.actTarget = target; x.actCost = cost; x.actIaus = fromIaus;
             x.hitAt = now + s.castSec; x.actEnd = x.hitAt + TM::castRecover; x.c.caster = true; Action(x, dg.soundNormal);
-            x.claimAt = now; x.claimUntil = now; x.lofWaited = false; x.reDrawUntil = 0;
+            x.claimAt = now; x.claimUntil = now; x.lofWaited = false; x.reDrawUntil = 0; x.castStarted = false;
             if (x.ctl == 0 && fromIaus) ++t.castPick;
             if (x.ctl >= 0) {   // SIM V3: a follower's cast is a claim that Harbinger builds and the engine fires (iaus-sim-v3.md 4.2, 4.3)
                 // hands: a stream has no charge of its own (the lab's 2 s is the lump of v2); MODEL 0.25 s to raise the hand
@@ -1187,6 +1209,7 @@ namespace Sim {
                 } else if (s->e.nature == Prune::Nature::Offense && tg && s->dmg + s->dot * s->dotDur > 0) {
                     const float d = Dist(x, *tg); if (!s->e.touch && d > s->e.reach && s->e.reach > 0) continue; if (s->e.touch && d > Reach(x)) continue;
                     if (!Sees(x, *tg)) continue;
+                    if (LofGuarded(x, *s)) if (const Body* blocker = LofBlocker(x, *tg, s->e.areaUnits)) { StrafeFrom(x, *tg, *blocker); continue; }   // SIM V3: 0x06 says no, the AI's start is refused and it picks something else
                     if (tg->c.outOfMeleeReach && s->e.touch) continue;
                     w = s->dmg + s->dot * s->dotDur; tid = tg->c.id;
                 }
@@ -1245,7 +1268,7 @@ namespace Sim {
                     Move(x, c->goalX, c->goalY, x.spec->run * (sp ? 1.5f : 1.0f)); Face(x, c->goalX, c->goalY); if (x.ctl == 0) t.moveOrderSec += TM::dt; return; }
                 if (!engaged) c->moveUntil = 0;
             }
-            if (c && g_v3.stance && now < x.strafeUntil && std::hypot(x.sgx - x.c.x, x.sgy - x.c.y) > 20.0f) { Move(x, x.sgx, x.sgy, x.spec->run); return; }   // SIM V3: the side step of a held caster
+            if (c && g_v3.sidestep && now < x.strafeUntil && std::hypot(x.sgx - x.c.x, x.sgy - x.c.y) > 20.0f) { Move(x, x.sgx, x.sgy, x.spec->run); return; }   // SIM V3: the side step of a held caster
             // target
             Body* tg = Find(x.c.targetId);
             const bool taunted = now < x.tauntUntil;
@@ -1271,6 +1294,7 @@ namespace Sim {
                 for (std::size_t i = 0; i < c->book.entries.size(); ++i) { const SpellEntry& e = c->book.entries[i];
                     if (e.source != SpellSource::Staff || !e.charged) continue;
                     if (!los || d > 2000.0f) { Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
+                    if (LofGuarded(x, c->build->spells[i])) if (const Body* blocker = LofBlocker(x, *tg, c->build->spells[i].e.areaUnits)) { StrafeFrom(x, *tg, *blocker); break; }   // SIM V3: the staff's start is refused too
                     StartCast(x, static_cast<int>(i), c->build->spells[i], tg->c.id, 0.0f, false); x.think = x.actEnd + R.U(TM::thinkMin, TM::thinkMax); return; }
             }
             if (x.casterMode) {
@@ -1337,7 +1361,7 @@ namespace Sim {
             Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
             if (c.runPhase) { RunMove(x, c); return; }
             if (x.ctl == 0) t.feetSec += TM::dt;
-            if (g_v3.stance && now < x.strafeUntil) { if (std::hypot(x.sgx - x.c.x, x.sgy - x.c.y) > 20.0f) Move(x, x.sgx, x.sgy, x.spec->run); return; }   // SIM V3: the side step of a held caster
+            if (g_v3.sidestep && now < x.strafeUntil) { if (std::hypot(x.sgx - x.c.x, x.sgy - x.c.y) > 20.0f) Move(x, x.sgx, x.sgy, x.spec->run); return; }   // SIM V3: the side step of a held caster
             const Body* threat = nullptr; { float bd = 1e9f; for (const Body& o : b) if (Up(o) && o.Party() != x.Party()) { const float d = Dist(x, o); if (d < bd) { bd = d; threat = &o; } } }
             if (!threat) return;
             if (now < x.fleeUntil || now < x.retreatUntil) {
@@ -1444,6 +1468,7 @@ namespace Sim {
                 if (now >= x.fleeUntil) x.c.fleeing = now < x.retreatUntil;
                 if (now >= x.blockUntil) x.c.blocking = false;
                 if (now >= x.tauntUntil) x.c.taunted = false;
+                if (g_v3.lof && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && !x.castStarted && now >= x.claimUntil && now >= x.staggerUntil && now >= x.ctrlUntil) StartTest(b[i]);   // SIM V3: the guard's 0x06 answer for a claimed cast
                 if (x.hitAt >= 0 && now >= x.hitAt && now >= x.staggerUntil && now >= x.ctrlUntil) Resolve(b[i]);
             }
             for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale; IntoRoom(n, std::max(0.5f * arenaR, arenaR - 50.0f));
