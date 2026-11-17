@@ -69,7 +69,45 @@ namespace Sim {
     inline V3 g_v3;
     inline int   g_waiver = 2;            // --waiver none|self|player: the chase cap's held-foe waiver. 2 = the game today (marth 11-13: the foe fights HIM or the player), 1 = the game of 10-19 (HIM only), 0 = none
     inline bool  g_deliveryOld = false;   // --delivery old: the game before fix/heal-claim-gates and fix/iaus-claim-thrash (a claim on an inactive controller never casts; a newer pick takes the hand)
-    inline float g_deliverSec[2] = { 2.4f, 4.5f };   // --deliver-sec o,h: claim to FIRE of an offense cast / a heal (cast/Hands.cpp:362, CALIBRATED on one session each; the heal figure is soft)
+    // CAST DELIVERY, MEASURED (sim mirror batch 11-17; tools/iaus_sim/calib_cast_delay.py over _evidence/deck-run-1117/part4 and
+    // _evidence/deck-run-1117b-full: MFO.log [iaus] pick=cast_* joined to APMF.log [ctcensus] OPEN / FIRED / CLOSE claim windows, repeats from
+    // MFO.log [cast] CFC-fired; 122 windows of ONE follower, Jesper, the only IAUS caster of both sessions; substrate windows and windows that
+    // overlap a main-thread stall left out). It replaces the two single-session figures (2.4 s offense / 4.5 s heal) of sim v3's first cut.
+    //   first    claim -> the first fire of a claim that fired, deciles (0, 10, .. 100 %), seconds. kPickToOpen is added (pick -> the claim at Harbinger)
+    //   repeat   fire -> the next fire while the claim stands (the engine casts again; in the lab: his next pick of that spell at that target
+    //            within kRepeatWindowSec of its release). No table (a stream, a buff): the first table
+    //   unfired  the share of claims that closed with NO fire, every cause except "a caster was built and CheckStartCast said NO each time"
+    //            (sight / line of fire / range: the lab holds those casts itself). It INCLUDES claims the game ended for reasons the lab also
+    //            models (the target died, a re-target), so it is an UPPER BOUND on delivery failure: --deliver-unfired <k> scales it (0 = all fire)
+    //   stood    how long such a claim stood before it closed (the body is the claim's for that long)
+    // Rows: [nature 0 offense / control, 1 heal, 2 buff / ward / summon][0 fire-and-forget, 1 concentration]. n = samples behind each table.
+    struct DeliveryRow { float first[11]; float repeat[11]; bool hasRepeat; float unfired; float stood[11]; int nFirst, nRepeat, nWindows; };
+    namespace Delivery {
+        inline constexpr float kPickToOpen = 0.11f;        // MEASURED median, n=57 (p25 0.06, p75 0.14)
+        inline constexpr float kRepeatWindowSec = 2.0f;    // ASSUMPTION: the claim still stands when he picks the same cast again this soon after its release (cast recover 0.45 s + one decision lap of a party of up to four)
+        inline constexpr float kStoodPooled[11] = { 0.21f, 0.64f, 1.67f, 2.81f, 2.95f, 3.25f, 3.72f, 4.80f, 6.14f, 6.41f, 19.30f };   // n=59
+        inline constexpr DeliveryRow kRow[3][2] = {
+            {   // offense
+                { { 1.00f, 1.14f, 1.29f, 1.30f, 1.52f, 1.72f, 2.06f, 2.61f, 3.82f, 4.96f, 24.09f }, { 0.66f, 0.96f, 1.00f, 1.07f, 1.13f, 1.22f, 1.32f, 1.78f, 2.12f, 2.86f, 3.55f }, true, 0.500f,
+                  { 0.21f, 0.65f, 1.49f, 2.82f, 2.96f, 3.25f, 3.39f, 3.45f, 4.23f, 6.14f, 19.30f }, 21, 39, 42 },
+                { { 0.29f, 0.30f, 0.44f, 0.56f, 0.59f, 0.61f, 1.05f, 1.34f, 1.69f, 2.30f, 3.32f }, {}, false, 0.654f,
+                  { 0.41f, 0.43f, 0.85f, 1.92f, 2.57f, 2.88f, 3.13f, 4.63f, 6.17f, 6.33f, 6.56f }, 9, 0, 26 } },
+            {   // heal (stood: the pooled table, one unfired window each)
+                { { 0.96f, 1.48f, 1.77f, 1.89f, 2.11f, 2.23f, 2.30f, 2.37f, 3.00f, 3.96f, 5.26f }, { 0.75f, 0.77f, 0.81f, 1.01f, 1.03f, 1.04f, 1.05f, 1.05f, 1.07f, 1.13f, 2.98f }, true, 0.111f,
+                  { 0.21f, 0.64f, 1.67f, 2.81f, 2.95f, 3.25f, 3.72f, 4.80f, 6.14f, 6.41f, 19.30f }, 8, 36, 9 },
+                { { 0.39f, 0.59f, 0.63f, 0.75f, 0.95f, 1.04f, 1.08f, 1.16f, 1.62f, 3.31f, 3.64f }, {}, false, 0.091f,
+                  { 0.21f, 0.64f, 1.67f, 2.81f, 2.95f, 3.25f, 3.72f, 4.80f, 6.14f, 6.41f, 19.30f }, 10, 9, 11 } },
+            {   // buff / ward / summon (no concentration window was seen: the same row)
+                { { 1.28f, 1.29f, 1.36f, 1.51f, 1.60f, 1.66f, 2.30f, 2.88f, 3.31f, 3.81f, 4.36f }, {}, false, 0.731f,
+                  { 0.44f, 1.22f, 2.73f, 3.22f, 3.82f, 4.74f, 5.28f, 6.12f, 6.17f, 6.41f, 7.16f }, 7, 0, 26 },
+                { { 1.28f, 1.29f, 1.36f, 1.51f, 1.60f, 1.66f, 2.30f, 2.88f, 3.31f, 3.81f, 4.36f }, {}, false, 0.731f,
+                  { 0.44f, 1.22f, 2.73f, 3.22f, 3.82f, 4.74f, 5.28f, 6.12f, 6.17f, 6.41f, 7.16f }, 7, 0, 26 } },
+        };
+        // u in [0, 1) -> the value at that quantile (linear between deciles)
+        [[nodiscard]] inline float At(const float (&d)[11], float u) { const float x = std::clamp(u, 0.0f, 0.99999f) * 10.0f; const int i = static_cast<int>(x); return d[i] + (d[i + 1] - d[i]) * (x - static_cast<float>(i)); }
+    }
+    inline float g_deliverSec[2] = { -1.0f, -1.0f };   // --deliver-sec o,h: a FIXED claim-to-fire for an offense cast / a heal, no unfired claims (sim v3's first cut ran 2.4,4.5). < 0 (the default) = the measured tables above
+    inline float g_deliverUnfired = 1.0f;              // --deliver-unfired k: scales every row's unfired share (0 = every claim fires)
     inline int   g_sideStep = 1;          // --side-step random|away: which way a held caster steps across the line. 1 random (the default: no source says he knows where the friend is), 2 away from the friend in his way
     inline bool  g_casterPressure = false;   // --caster-pressure: the caster cells' objective also plays the "dive" scenarios (foes that start on the caster); OFF by default so the headline keeps its composition
     inline float g_blockArc = 180.0f;     // --block-arc: the full angle in front of him a guard covers (ASSUMPTION: no engine source in Docs)

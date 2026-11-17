@@ -197,11 +197,12 @@ namespace Sim {
         c.armorWeight = static_cast<float>(fb->spec.pieces) * (sc.kit.heavy ? 9.0f : 3.0f);   // MODEL (Detect.h In::weight)
         { bool anyApplied = false; for (const GRow& r : sc.rows) anyApplied |= r.applied; for (const GRow& r : sc.rows) if (r.applied || !anyApplied) c.rows.push_back(r); }   /* T1: its data-only rows stand in for the kit of today */
         { const std::size_t cap = static_cast<std::size_t>(g_rowPrefix > 0 ? g_rowPrefix : CombatSlotsForRank(rank)); if (c.rows.size() > cap) c.rows.resize(cap); }   /* ruling Q74 */
-        if (g_learnReach) {   // ruling Q68: start at the vanilla reach; warm = what this session's earlier swings taught him
+        if (g_learnReach) {   // the reach book (iaus/ReachBook.h): starts at the seed edge; warm = what this session's earlier swings taught him
             const float truth = F.Reach(b) * 1.2f;
             Rng W; W.g.seed(977u + static_cast<unsigned>(truth * 16.0f));   // its own stream: the fight's draws stay the same in every --reach mode
-            for (auto& L : c.reach) { L.Reset(200.0f);
-                if (g_learnReach >= 2) for (int i = 0; i < 20; ++i) { const float d = W.U(0.5f, 1.1f) * truth; L.Observe(d, d + 0.04f * truth * (W.U(-1.0f, 1.0f) + W.U(-1.0f, 1.0f)) <= truth); } }
+            c.reach.Ensure(b.c.id, kReachWeapon, kReachSeedEdge);
+            if (g_learnReach >= 2) for (int i = 0; i < 20; ++i) { const float d = W.U(0.5f, 1.1f) * truth; const bool hit = d + 0.04f * truth * (W.U(-1.0f, 1.0f) + W.U(-1.0f, 1.0f)) <= truth;
+                c.reach.Observe(b.c.id, kReachWeapon, kReachSeedEdge, 1u, std::max(0.0f, d - MFO::Iaus::ReachBook::kRefRadius), hit); }
         }
         MfoPackage(sc, c);
         if (PackageHook() && F.ctl.empty()) PackageHook()(c);   // the package under search (the subject only)

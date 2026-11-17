@@ -46,10 +46,15 @@ namespace Sim {
         static constexpr float aimMiss = 0.12f;        // an aimed projectile at a moving target
     };
 
-    // Ruling Q68: the swing reach is learned per weapon from hits and misses (native/iaus/Reach.h). 0 = off (the constant
-    // fMeleeReach 200, as on main), 1 = cold (every fight starts at 200), 2 = warm (the session's earlier swings are replayed
-    // into the learner first: 20 outcomes around the weapon's true reach with 4% noise). The game's learner lives for the session.
+    // THE MELEE REACH IS LEARNED (ruling Q68; marth 2026-11-17 "Edge reach + split uses", native/iaus/ReachBook.h, the game's own book):
+    // per weapon, from hits and misses, as a reach to the foe's EDGE. 0 = off (the constant fMeleeReach 200), 1 = cold (every fight starts
+    // at the seed), 2 = warm (the session's earlier swings are replayed into the book first: 20 outcomes around the weapon's true reach with
+    // 4% noise). The game's book lives for the session. MODEL: the lab's fighters swing ONE blow at a time (no combo framework), so every
+    // outcome is a chain of one swing: the sequence learner of key 1 and the weapon's learner see the same outcomes and the two reads
+    // (Snapshot::weaponEdge, comboEdge) agree. The lab's foes carry no body radius (Combatant::bodyRadius 0 = the humanoid kRefRadius).
     inline int g_learnReach = 2;
+    inline constexpr std::uint32_t kReachWeapon = 1;   // the book's weapon key: one melee weapon per follower in the lab
+    inline constexpr float kReachSeedEdge = 200.0f - MFO::Iaus::ReachBook::kRefRadius;   // Fills.cpp LearnReach: fMeleeReach (200) less a humanoid radius
     // MODEL, UNPROVEN: a calmed foe that the party damages fights again (the common in-game reading: one free blow, then he is
     // back). false = the first model (a Calm holds for its whole duration whatever happens), kept for comparison (--calm-holds).
     inline bool g_consumables = false;   // --consumables on (tune 2.11.1, Setup.h FillConsumables): gold, item values, buff potions and food in every IAUS kit
@@ -213,10 +218,13 @@ namespace Sim {
         // after the hold cap (castLofExpired), claimed on an inactive controller and never cast (castNotBuilt), sent down the direct road
         // (castDirect), replaced by a newer pick while its claim waited (castThrash), ended by a stagger / his fall / the target's death (castLost).
         long   castPick = 0, castFired = 0, castNoLos = 0, castLofHeld = 0, castLofExpired = 0, castNotBuilt = 0, castDirect = 0, castThrash = 0, castLost = 0;
+        // sim mirror batch 11-17: claims that closed with no fire (the measured unfired share, Data.h Delivery) and the seconds they stood, self buffs /
+        // heals deferred for want of a combat controller (cast/CastOn.cpp, laps), heal claims released because the recipient was full before the charge began.
+        long   castUnfired = 0, castDeferred = 0, healFullExit = 0; double unfiredSec = 0;
         long   beats = 0, beatLof = 0, beatNoLos = 0, streams = 0; double castLofSec = 0, claimSec = 0, streamSec = 0;
         // CHASE CAP: his decision laps with a live foe (capLaps), laps on which the cap removed at least one live foe (capDropLaps), laps
         // on which it removed EVERY live foe (capStarveLaps), foes kept by the waiver (capWaived), the cap's sum (capSum / capLaps = mean).
-        long   capLaps = 0, capDropLaps = 0, capStarveLaps = 0, capWaived = 0; double capSum = 0;
+        long   capLaps = 0, capDropLaps = 0, capStarveLaps = 0, capWaived = 0, capKept = 0; double capSum = 0;   // capKept: foes kept past the cap as noApproach (11-17 A3)
         // GUARD BY DIRECTION: melee blows by a foe that land on him (inc), met by his guard inside its arc (incGuard), guard up but the
         // blow came from outside the arc (incArc), no guard up when it landed (incDown).
         long   inc = 0, incGuard = 0, incArc = 0, incDown = 0;
@@ -255,7 +263,7 @@ namespace Sim {
         std::vector<std::vector<std::pair<std::uint32_t, double>>> active;   // per entry: (recipient, until)
         std::vector<double> summonUntil;
         Mind  mind;
-        MFO::Iaus::Reach::Learner reach[2];   // ruling Q68: the learned swing reach of his melee weapon (0 plain swing, 1 power attack)
+        MFO::Iaus::ReachBook::Book reach;     // the learned EDGE reach of his melee weapon (iaus/ReachBook.h: the weapon's learner + the sequence learners; no light / power key)
         // THE CLASS PACKAGE (card C8): the combat style the DLL swaps on per stance (0 melee, 1 ranged, 2 cast), the ch.18
         // power-attack share (a scale on the engine AI's own power attacks) and the ch.23 pursuit leash (units from the player, 0 = none).
         Style pkg[3]; float powerShare = 1.0f, leash = 0.0f;
@@ -306,6 +314,13 @@ namespace Sim {
         // posture latch of Candidates::Build (last decision's Generated::spellsHold).
         mutable std::array<std::pair<double, float>, 32> trend{}; mutable std::size_t trendHead = 0, trendCount = 0;
         bool   spellsHold = false;
+        // sim mirror batch 11-17. His last RELEASED decision cast (the claim that stands: a re-pick of it draws the repeat table, Data.h Delivery),
+        // and whether the foe his act.attack names was kept past the chase cap without a waiver (Combatant::noApproach: he shoots, he does not walk to it).
+        std::uint32_t lastFireForm = 0, lastFireTarget = 0; double lastFireAt = -1e9;
+        bool   steerNoApproach = false;
+        // Harbinger's Standing combat ENTRY foe (APMFBridge::CombatEntryStateOf, the second id of Snapshot.h ChaseWaived). MODEL: the foe his
+        // combat was entered on = his engine target at his first decision; the entry is over when that foe falls or his engine target moves on.
+        mutable std::uint32_t entryFoe = 0; mutable bool entryEnded = false;
     };
 
     struct Policy;   // decides for one follower when he is served (Policy.h)
@@ -931,7 +946,7 @@ namespace Sim {
             Body* tg = Find(x.actTarget);
             if (kind == Act::Swing || kind == Act::Power || kind == Act::Bash) {
                 const bool whiff = tg && Up(*tg) && (Dist(x, *tg) > Reach(x) * 1.2f || tg->c.outOfMeleeReach);
-                if (tg && Up(*tg) && x.ctl >= 0 && kind != Act::Bash && g_learnReach) ctl[static_cast<std::size_t>(x.ctl)].reach[kind == Act::Power ? 1 : 0].Observe(x.swingDist, !whiff);   // Q68: one outcome
+                if (tg && Up(*tg) && x.ctl >= 0 && kind != Act::Bash && g_learnReach) ctl[static_cast<std::size_t>(x.ctl)].reach.Observe(x.c.id, kReachWeapon, kReachSeedEdge, 1u, std::max(0.0f, x.swingDist - (tg->c.bodyRadius > 0.0f ? tg->c.bodyRadius : MFO::Iaus::ReachBook::kRefRadius)), !whiff);   // Fills.cpp LearnReach: one outcome, a chain of one swing, the EDGE distance at its start
                 if (whiff && x.ctl == 0 && kind == Act::Power && x.actIaus) ++t.powerWhiffs;
                 if (!tg || !Up(*tg) || whiff) return;   // whiff
                 if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
@@ -1076,6 +1091,7 @@ namespace Sim {
         void ReleaseCast(Body& x, Body* tg) {
             const SimSpell* s = SpellOf(x, x.actSpell); if (!s) return;
             if (x.ctl == 0 && x.actIaus) { ++t.castFired; t.claimSec += now - x.claimAt; }
+            if (x.ctl >= 0 && x.actIaus) { Ctl& rc = ctl[static_cast<std::size_t>(x.ctl)]; rc.lastFireForm = s->e.form; rc.lastFireTarget = x.actTarget; rc.lastFireAt = now; }   // the claim that stands (Data.h Delivery: repeat)
             const bool stream = g_v3.hands && x.ctl >= 0 && s->e.concentration && s->e.source == SpellSource::Spell && !s->reanimate;
             if (stream && (s->e.nature == Prune::Nature::Offense || s->e.nature == Prune::Nature::Control || s->e.nature == Prune::Nature::Heal)) {
                 if (x.ctl == 0 && x.actIaus && s->e.nature != Prune::Nature::Heal && tg && Up(*tg) && !Sees(x, *tg)) ++t.castNoLos;
@@ -1181,8 +1197,21 @@ namespace Sim {
                         x.hitAt = -1; x.actEnd = now + 6.0; x.claimUntil = x.actEnd; if (x.ctl == 0) ++t.castNotBuilt;
                         if (trace) std::fprintf(trace, "%7.2f  NOT BUILT %s: %s claimed on an inactive controller, no cast for 6 s\n", now, x.c.name.c_str(), s.e.name.c_str());
                         return; }
+                    const int nat = s.e.nature == Prune::Nature::Heal ? 1 : (s.e.nature == Prune::Nature::Offense || s.e.nature == Prune::Nature::Control) ? 0 : 2;
                     if (!x.ctrlLive) { lat = std::max(charge, 1.0f); if (x.ctl == 0) ++t.castDirect; }   // main: the DIRECT road (ComposedCast.cpp:785; MODEL 1 s)
-                    else if (!direct) lat = std::max(charge, g_deliverSec[s.e.nature == Prune::Nature::Heal ? 1 : 0]);   // the composed / claimed road: the follower's own AI performs the cast (ComposedCast::Try)
+                    else if (g_deliverSec[0] >= 0.0f) { if (!direct) lat = std::max(charge, g_deliverSec[nat == 1 ? 1 : 0]); }   // --deliver-sec: the fixed figures of sim v3's first cut (a stream had no claim to wait for there)
+                    else {
+                        // THE CLAIMED ROAD, MEASURED (Data.h Delivery; the follower's own AI performs the cast, ComposedCast::Try). Draws come from V, never R.
+                        const DeliveryRow& row = Delivery::kRow[nat][s.e.concentration ? 1 : 0]; Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
+                        const bool again = row.hasRepeat && dc.lastFireForm == s.e.form && dc.lastFireTarget == target && now - dc.lastFireAt <= static_cast<double>(Delivery::kRepeatWindowSec);
+                        if (again) lat = std::max(charge, static_cast<float>(dc.lastFireAt - now) + Delivery::At(row.repeat, V.U(0.0f, 1.0f)));   // the claim stands and has fired: the engine casts again on its own beat
+                        else if (V.P(std::clamp(row.unfired * g_deliverUnfired, 0.0f, 1.0f))) {   // the claim closes with no fire: his body is the claim's for as long as it stood
+                            const float stood = Delivery::At(row.stood, V.U(0.0f, 1.0f));
+                            x.hitAt = -1; x.actEnd = now + static_cast<double>(stood); x.claimUntil = x.actEnd; if (x.ctl == 0) { ++t.castUnfired; t.unfiredSec += stood; }
+                            if (trace) std::fprintf(trace, "%7.2f  UNFIRED %s: the claim for %s stands %.1f s and closes with no cast\n", now, x.c.name.c_str(), s.e.name.c_str(), stood);
+                            return; }
+                        else lat = std::max(charge, Delivery::kPickToOpen + Delivery::At(row.first, V.U(0.0f, 1.0f)));
+                    }
                 }
                 x.hitAt = now + static_cast<double>(lat); x.claimUntil = x.hitAt - static_cast<double>(charge); x.actEnd = x.hitAt + TM::castRecover;
             }
@@ -1314,7 +1343,12 @@ namespace Sim {
                 x.casterMode = false;
             }
             if (x.rangedMode) {
-                if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
+                // 11-17 A3 (iaus/Candidates.cpp noApproach, scheduler/IausSource.cpp ApproachEligible): a foe his act.attack names past the chase cap is
+                // SHOT AT from where he stands, never walked to (the cap limits movement, not shots). MODEL: with a clear line he shoots at any
+                // distance the pick allowed (Tuning::bowWeaponRange); without one he waits.
+                const bool far = g_v3.chase && c && c->steerNoApproach && c->steer == tg->c.id;
+                if (far && !los) return;
+                if (!far && (!los || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
                 if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + R.U(TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
@@ -1468,6 +1502,13 @@ namespace Sim {
                 if (now >= x.fleeUntil) x.c.fleeing = now < x.retreatUntil;
                 if (now >= x.blockUntil) x.c.blocking = false;
                 if (now >= x.tauntUntil) x.c.taunted = false;
+                // field 1117 A2 (cast/HealRoad.cpp: "the recipient is at full health"): a heal claim is RELEASED when its recipient is full, unless a cast is
+                // in flight at that mark (it fires, then the claim goes). In the lab: a decision heal whose charge has not begun (the claim still waits) is
+                // dropped the step its recipient reads full (the stream's own 0.9995 line); a charge already running is let go. No magicka is spent.
+                if (g_v3.delivery && !g_deliveryOld && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && now < x.claimUntil) {
+                    const SimSpell* hs = SpellOf(x, x.actSpell); const Body* hr = hs && hs->e.nature == Prune::Nature::Heal ? Find(x.actTarget) : nullptr;
+                    if (hr && hr->c.hp >= 0.9995f * hr->c.hpMax) { x.hitAt = -1; x.actEnd = now; if (x.ctl == 0) ++t.healFullExit;
+                        if (trace) std::fprintf(trace, "%7.2f  HEAL RELEASED %s: %s is at full health before the cast began\n", now, x.c.name.c_str(), hr->c.name.c_str()); } }
                 if (g_v3.lof && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && !x.castStarted && now >= x.claimUntil && now >= x.staggerUntil && now >= x.ctrlUntil) StartTest(b[i]);   // SIM V3: the guard's 0x06 answer for a claimed cast
                 if (x.hitAt >= 0 && now >= x.hitAt && now >= x.staggerUntil && now >= x.ctrlUntil) Resolve(b[i]);
             }

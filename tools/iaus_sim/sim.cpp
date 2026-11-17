@@ -60,6 +60,7 @@ namespace {
             // sim v3
             S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
             S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
+            S(castUnfired); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
@@ -132,6 +133,8 @@ namespace {
           m["dl.pick/f"] = pk / n; m["dl.fired%"] = pct(double(s.castFired), pk); m["dl.landed%"] = pct(double(s.castFired - s.castNoLos), pk); m["dl.noLos%"] = pct(double(s.castNoLos), pk);
           m["dl.lofHeld%"] = pct(double(s.castLofHeld), pk); m["dl.lofExpired%"] = pct(double(s.castLofExpired), pk); m["dl.lofHold.s"] = s.castLofHeld ? s.castLofSec / double(s.castLofHeld) : -1;
           m["dl.notBuilt%"] = pct(double(s.castNotBuilt), pk); m["dl.direct%"] = pct(double(s.castDirect), pk); m["dl.thrash%"] = pct(double(s.castThrash), pk); m["dl.lost%"] = pct(double(s.castLost), pk);
+          m["dl.unfired%"] = pct(double(s.castUnfired), pk); m["dl.unfired.s"] = s.castUnfired ? s.unfiredSec / double(s.castUnfired) : -1; m["dl.deferred/f"] = double(s.castDeferred) / n; m["dl.healFull/f"] = double(s.healFullExit) / n;   // sim mirror batch 11-17 (Data.h Delivery, cast/CastOn.cpp deferrals, cast/HealRoad.cpp full exit)
+          m["cap.kept/f"] = double(s.capKept) / n;   // foes kept past the chase cap as noApproach (11-17 A3)
           m["dl.claim.s"] = s.castFired ? s.claimSec / double(s.castFired) : -1; m["dl.beatLof%"] = pct(double(s.beatLof), double(s.beats + s.beatLof + s.beatNoLos)); m["dl.stream.s"] = s.streams ? s.streamSec / double(s.streams) : -1;
           m["cap.mean"] = s.capLaps ? s.capSum / double(s.capLaps) : -1; m["cap.drop%"] = pct(double(s.capDropLaps), double(s.capLaps)); m["cap.starve%"] = pct(double(s.capStarveLaps), double(s.capLaps)); m["cap.waived/f"] = double(s.capWaived) / n;
           m["inc/f"] = double(s.inc) / n; m["guardAll%"] = pct(double(s.incGuard), double(s.inc)); m["arcMiss%"] = pct(double(s.incArc), double(s.inc)); m["guardDown%"] = pct(double(s.incDown), double(s.inc));
@@ -215,7 +218,7 @@ namespace {
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
-        if (g_v3.delivery && (g_deliverSec[0] != 2.4f || g_deliverSec[1] != 4.5f)) o += "+deliver-sec"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
+        if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
         return o;
     }
     std::string g_potTag;
@@ -627,6 +630,7 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--waiver") && i + 1 < argc) { const char* v = argv[++i]; g_waiver = !std::strcmp(v, "none") ? 0 : !std::strcmp(v, "self") ? 1 : !std::strcmp(v, "player") ? 2 : -1; if (g_waiver < 0) { std::fprintf(stderr, "--waiver none|self|player\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--delivery") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "old")) g_deliveryOld = true; else if (!std::strcmp(v, "main")) g_deliveryOld = false; else { std::fprintf(stderr, "--delivery main|old\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-sec") && i + 1 < argc) { if (std::sscanf(argv[++i], "%f,%f", &g_deliverSec[0], &g_deliverSec[1]) != 2 || g_deliverSec[0] < 0 || g_deliverSec[1] < 0) { std::fprintf(stderr, "--deliver-sec <offense>,<heal> (seconds)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--deliver-unfired") && i + 1 < argc) { g_deliverUnfired = static_cast<float>(std::atof(argv[++i])); if (!(g_deliverUnfired >= 0.0f)) { std::fprintf(stderr, "--deliver-unfired <k >= 0> (scales the measured unfired share of every claim; 0 = every claim fires)\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--side-step") && i + 1 < argc) { const char* v = argv[++i]; g_sideStep = !std::strcmp(v, "random") ? 1 : !std::strcmp(v, "away") ? 2 : 0; if (!g_sideStep) { std::fprintf(stderr, "--side-step random|away (off: --v3 sidestep=off)\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--caster-pressure")) g_casterPressure = true;
         else if (!std::strcmp(argv[i], "--block-arc") && i + 1 < argc) { g_blockArc = static_cast<float>(std::atof(argv[++i])); if (!(g_blockArc > 0.0f && g_blockArc <= 360.0f)) { std::fprintf(stderr, "--block-arc <degrees, 1..360>\n"); return 2; } }
