@@ -15,7 +15,7 @@
 // PROBE FIRST (principle 5: the disassembly proves a path exists, not that it runs). Every input is measured and LOGGED
 // next to what really happened before it may move a score:
 //   [Debug] bIausFillProbe = 1    -> `[iaus-fill]` lines (rate-limited). Nothing is written into the Snapshot.
-//   [Debug] bIausFill<Input> = 1  -> that one input is written. Armor / Loss / Spells default ON, the rest OFF (Config.h).
+//   [Debug] bIausFill<Input> = 1  -> that one input is written. Armor / Hit / Loss / Swing / Spells default ON, the rest OFF (Config.h).
 //   [Debug] bIausReachLearn = 1   -> Snapshot::swingReach (read by PowerAttack and Bash only) is the swing reach
 //                                    LEARNED from his own hits and misses (ruling Q68, iaus/Reach.h); 0 while the
 //                                    learner knows nothing, and those families then read fMeleeReach (MFO-B687).

@@ -155,9 +155,9 @@ namespace MFO::Iaus {
                             // needs that hand (bow, crossbow, two-hander) is put away. x = the share of the top foe's current health his weapon would have dealt in
                             // that time (Facts::handLost, iaus/Generate.cpp HandLostShare). NOT APPLICABLE (bit-identical) for any other candidate, a fire-and-forget
                             // spell, a follower whose weapon does not need that hand, or while his weapon damage is unmeasured
-        HealRate,           // (APPENDED, field 11-17b Jesper "when he does choose to heal it's a weak spell"): a heal by what it MENDS PER SECOND of cast against what the
-                            // recipient LOSES per second (Facts::healRate / Facts::recipientIncoming): a heal that cannot keep up with the blows is a weak one. HealSize stays
-                            // the overheal brake (a heal bigger than the missing health). NOT APPLICABLE while the heal is unmeasured or nothing is hitting the recipient
+        HealRate,           // (APPENDED, field 11-17b Jesper "when he does choose to heal it's a weak spell"): a heal by what it MENDS PER SECOND of cast against his BEST castable
+                            // heal on that recipient (Facts::healRate / Facts::bestHealRate, the bestDamage pattern): heals are ranked among themselves and healing as a family is never
+                            // penalised. HealSize stays the overheal brake (a heal bigger than the missing health). NOT APPLICABLE while the heal is unmeasured
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -283,7 +283,7 @@ namespace MFO::Iaus {
         float dyingSelfHp = 0.25f;
         // 11-17b: how long a (spell, foe) pair whose line of fire had a party member in it stays refused after the line cleared (a friendly stepping across the
         // line would otherwise flip the pick every lap). PLACEHOLDER: `t.fireLineKeepSec`.
-        float fireLineKeepSec = 4.0f;
+        float fireLineKeepSec = 1.0f;
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;
@@ -446,7 +446,7 @@ namespace MFO::Iaus {
         float foeHealth = 0.0f;           // the target's health now, absolute
         float expHeal = 0.0f;             // this cast's expected healing
         float healRate = 0.0f;            // this heal's expected healing per second of cast (Generate.cpp EffectRate); 0 = not measured
-        float recipientIncoming = 0.0f;   // health per second the heal's recipient is losing now (Estimate::IncomingOn); 0 = nothing known to be hitting him
+        float bestHealRate = 0.0f;        // his best healing per second of cast among the heals he can cast at THIS recipient now (Generate.cpp BestHealRateOn); 0 = none measured
         float effectRate = 0.0f;          // 11-17b: this spell's expected damage / healing per second of cast (the tie-break's first read; 0 = not measured)
         bool  concentration = false;      // 11-17b: a concentration stream (its cost is per second: the tie-break counts it over the channel, Tuning::concChannelSec)
         bool  recipientSelf = false;      // a heal for the caster himself (Cons::BoostRecipientDying's low-health read)

@@ -1844,16 +1844,16 @@ namespace {
             for (const auto& c : gen.actions) { if (c.form == 0x66001001) cw = &c; if (c.form == 0x66001002) cs = &c; }
             Check(cw && cs, "heal rate: both measured heals are candidates for himself");
             if (cw && cs) {
-                Check(cw->f.healRate > 0.0f && cs->f.healRate > cw->f.healRate && cs->f.recipientIncoming > 0.0f, "heal rate: Generate fills the heal's rate per cast second and what the recipient loses");
+                Check(cw->f.healRate > 0.0f && cs->f.healRate > cw->f.healRate && cs->f.bestHealRate == cs->f.healRate, "heal rate: Generate fills the heal's rate per cast second and his best castable heal's on this recipient");
                 const auto sc = [&](const Candidate& c) { return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr); };
                 Check(sc(*cs) > sc(*cw), "heal rate: the heal that mends more per second scores higher though both fit the missing health (they tied before)");
                 Check(sc(*cw) > 0.0f, "heal rate: a weak heal is a shape, never a veto");
                 // the tie-break reads the same rate
                 Check(cs->f.effectRate > cw->f.effectRate, "heal rate: the heal's effect rate is what the tie-break compares");
                 // not applicable while nothing hits him
-                Candidate q = *cs; q.f.recipientIncoming = 0.0f; Candidate q2 = *cw; q2.f.recipientIncoming = 0.0f;
+                Candidate q = *cs; q.f.bestHealRate = 0.0f; Candidate q2 = *cw; q2.f.bestHealRate = 0.0f;
                 q.f.expHeal = q2.f.expHeal = 1.0f;   // same HealSize
-                Check(sc(q) == sc(q2), "heal rate: nothing hitting the recipient = not applicable, two heals that fit alike tie again (the tie-break then decides)");
+                Check(sc(q) == sc(q2), "heal rate: no measured best heal = not applicable, two heals that fit alike tie again (the tie-break then decides)");
             }
             Check(static_cast<std::size_t>(Cons::HealRate) == static_cast<std::size_t>(Cons::HandLost) + 1 && RoleOf(Cons::HealRate) == Role::Shape && Name(Cons::HealRate) == "heal_rate",
                   "heal rate: APPENDED after hand_lost, a Shape, named heal_rate");
@@ -1918,6 +1918,15 @@ namespace {
             Snapshot only = s;
             for (auto& e : only.book.entries) if (e.form == 0x12FD2 || e.form == 0x12FCC) e.drop = Prune::Drop::Placement;
             Check(has(Generate(only, g, t), 0x66002001, s.allies[1].id), "heal safety: with no fire-and-forget heal in the book the concentration heal is kept");
+            // the HEALER exposed (a melee foe on him, he would not survive): the channel on a calm Lydia is refused too; his own self-delivery Healing counts for HIM
+            Snapshot hx = s;
+            hx.foes[1].targetId = hx.allies[1].id; hx.foes[1].x = 1500.0f;   // off Lydia
+            hx.foes[2].x = 60.0f; hx.foes[2].y = 0.0f; hx.foes[2].targetId = hx.self.id; hx.self.hp = 15.0f;
+            for (auto& a : hx.allies) a.hp = a.hpMax;
+            hx.allies[1].hp = 50.0f;   // hurt, not exposed
+            Generated gx = Generate(hx, g, t);
+            Check(!has(gx, 0x66002001, s.allies[1].id) && has(gx, 0x12FD2, s.allies[1].id), "heal safety: the healer is in a foe's reach and would not survive: the channel on a calm ally is refused, the aimed heal stays");
+            Check(!has(gx, 0x66002001, 0) && has(gx, 0x12FCC, 0), "heal safety: for his own heal the self-delivery fire-and-forget Healing is the fallback (the channel is refused)");
             // she is not threatened: kept
             Snapshot calm = s; calm.foes[1].targetId = 0; calm.foes[1].x = 1500.0f;
             Check(has(Generate(calm, g, t), 0x66002001, s.allies[1].id), "heal safety: no foe can hurt her = the concentration heal is a candidate");

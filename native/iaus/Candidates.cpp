@@ -608,6 +608,17 @@ namespace MFO::Iaus::Candidates {
             // 11-17b: the pairs Generate refused for a party member in the line of fire are stamped (refreshed each lap they stay blocked) ...
             if (!a_out.gen.fireBlocked.empty()) {
                 const double nowSec = NowSec();
+                {   // the field run's count: refusals the pick made itself, to read next to Harbinger's [ch.25] holds (per follower, once a minute)
+                    static std::unordered_map<RE::FormID, std::pair<double, std::uint32_t>> s_fireCount;   // worker only
+                    auto& fc = s_fireCount[id];
+                    if (fc.first == 0.0) fc.first = nowSec;
+                    fc.second += static_cast<std::uint32_t>(a_out.gen.fireBlocked.size());
+                    if (nowSec - fc.first >= 60.0) {
+                        spdlog::info("[iaus] {:08X}: fireBlocked {} (spell, foe) refusals in the last {:.0f} s (a party member in the line of fire; compare the [ch.25] holds)",
+                                     id, fc.second, nowSec - fc.first);
+                        fc = { nowSec, 0u };
+                    }
+                }
                 auto& v = g_fireRefused[id];
                 for (const auto& [sp, foe] : a_out.gen.fireBlocked) {
                     const auto f = std::find_if(v.begin(), v.end(), [&](const FireRefusal& r) { return r.spell == sp && r.foe == foe; });

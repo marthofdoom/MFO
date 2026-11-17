@@ -148,7 +148,7 @@ namespace MFO::Scheduler {
         // 11-17 A3 / field: a foe kept past the chase cap (noApproach) is walked to for SIGHT only when it is inside his bow's range (the shot he
         // cannot take for want of a line); a foe kept only because it targets him is a threat read, never a destination.
         [[nodiscard]] bool ApproachEligible(const Iaus::Snapshot& a_s, const Iaus::Combatant& a_f) {
-            return !a_f.noApproach || Iaus::Reposition::InWeaponRange(a_s, a_f.dist, Iaus::DefaultTuning().bowWeaponRange);
+            return Iaus::Reposition::ApproachEligible(a_s, a_f, Iaus::DefaultTuning().bowWeaponRange);
         }
 
         // A blade (Melee / Silver drawn) with at least one approach-eligible foe, every one of which he cannot strike from where he stands

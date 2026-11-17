@@ -121,7 +121,7 @@ namespace MFO::Iaus {
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
                             f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge, f.handLost,
-                            f.healRate, f.recipientIncoming, f.effectRate };
+                            f.healRate, f.bestHealRate, f.effectRate };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -399,8 +399,8 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 0.6f }, { 0.15f, 0.35f }, { 1.0f, 0.2f } } };
                 at(Cons::HandLost) = Piece(p);
             }
-            // heal_rate (field 11-17b, Jesper: "when he does choose to heal it's a weak spell"): x = the heal's healing per second of cast / the health per second the
-            // recipient is losing, capped at 1. A heal that mends what the blows take scores 1; one that mends a quarter of it 0.45; a trickle 0.2. A SHAPE, never a veto
+            // heal_rate (field 11-17b, Jesper: "when he does choose to heal it's a weak spell"): x = the heal's healing per second of cast / his BEST castable heal's on this
+            // recipient (the bestDamage pattern), capped at 1. His best heal scores 1; one that mends half of it 0.65; a trickle 0.2. A SHAPE, never a veto
             // (a weak heal is still better than none). PLACEHOLDER, NOT SEARCHED: the knobs are `c.heal_rate.py0 / py1 / py2` (the sim mirror is a listed follow-up).
             {
                 static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 0.2f }, { 0.5f, 0.65f }, { 1.0f, 1.0f } } };
@@ -820,8 +820,8 @@ namespace MFO::Iaus {
                 if (!(f.expHeal > 0.0f)) return In::Off();
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
             case Cons::HealRate:
-                if (!(f.healRate > 0.0f) || !(f.recipientIncoming > 0.0f)) return In::Off();
-                return Clamp(f.healRate / f.recipientIncoming, 0.0f, 1.0f);
+                if (!(f.healRate > 0.0f) || !(f.bestHealRate > 0.0f)) return In::Off();
+                return Clamp(f.healRate / f.bestHealRate, 0.0f, 1.0f);
             case Cons::RangeChase:
                 if (!f.meleeRange) return In::Off();
                 if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(ChaseX(c, f.dist / (f.reach * 20.0f), 1.0f)) : In::Off();   // no cap known: 20 reaches

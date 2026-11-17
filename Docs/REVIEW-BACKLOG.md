@@ -3550,4 +3550,10 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - OPEN (threading): `Actuation::NoteHealerThreat` / `g_healerThreat` is written by `Candidates::Build` and read by `CanPreemptHand`, both on the pump worker; clear on revert via `ClearCastLocks`.
 - OPEN (sim): `tools/iaus_sim` mirror not done: survival band per caster, `heal_rate`, the tie-break order, `t.spellCastSec` / `t.dyingSelfHp` / `t.fireLineKeepSec`.
 - OPEN (Harbinger ask): Adelinda's ch.3 in-combat sneak never takes (IsSneaking false x4); until it is field-proven the hide road stays OFF (`bIausHideRoad`, already default OFF). A per-cast ch.25 refusal readback would let the refusal memory use the real answer.
+**fix/field-1117b-choice review round 1 (Opus, c8ac55be; SEV-3s fixed in the next commit: Hit / Swing fills default ON, recipient-aware + healer-exposure heal refusal, heal_rate against his best castable heal, fireLineKeepSec 1 s + a per-minute fireBlocked log). SEV-4 / SEV-5 deferred:**
+- SEV-4: `Estimate::InLineOfFire` is a THIRD copy of the segment math (make Estimate.h `SegmentDist` the shared pure reader later); it does not exempt Harbinger-occluded friendlies and omits summons / bystanders; the Control family has WillWork but no SplashSafe.
+- SEV-4: `g_healerThreat` stays true after Sentient AI is toggled off mid-fight (stale until `CombatEnded` / `ClearCastLocks`), and there is a bounded heal <-> offense thrash; watch `THREAT ON THE HEALER` / `URGENT HEAL` in the field.
+- SEV-4: `Concealment.cpp` abort warn text (":772"), and `AbortHide` sets `g_stanceFailed`, which also bans the Step for the rest of the fight.
+- SEV-5: per-cast vs per-second scope: a concentration heal is never braked by `heal_size`.
+- Not checked in the heal fallback: the recast lockout / claim state of the fallback heal (only hands, cost, reach and sight).
 

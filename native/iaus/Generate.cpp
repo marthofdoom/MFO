@@ -595,21 +595,43 @@ namespace MFO::Iaus {
         // close-spell rule's shape (CloseRefused) applied to a heal. A CONCENTRATION or TOUCH heal holds the healer on the spot for its whole channel / until he is
         // beside the recipient, so it is refused while a foe can hurt the RECIPIENT here and the recipient would not survive (Reposition::SurvivesNear), as long as the book
         // keeps a fire-and-forget aimed heal to fall back to (a book of channelled heals alone keeps them, as the close-spell rule keeps a book of close spells).
-        bool FastHealAvailable(const Ctx& x) {
-            const float pool = Finite(x.s.self.mp, 0.0f);
-            const bool  poolOk = std::isfinite(x.s.self.mpMax) && x.s.self.mpMax > 0.0f;
-            for (const SpellEntry& o : x.s.book.entries) {
-                if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Heal) continue;
-                if (o.concentration || o.touch || o.selfDelivery) continue;
-                if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
-                return true;
-            }
+        // RECIPIENT-AWARE (review of c8ac55be): a fallback counts only when it can be cast at THIS recipient now, by the heal loop's own tests: a fire-and-forget heal
+        // (not concentration, not touch) that is affordable, with a hand free, and either self-delivery for himself (vanilla Fast Healing) or, for another, aimed (or served at an
+        // ally by a proxy road: allyRoad) inside its reach and not Occluded.
+        // Can this kept heal entry be cast at THIS recipient now (the heal loop's own tests)? a_fastOnly = a fire-and-forget heal only (not concentration, not touch).
+        bool HealCastableOn(const Ctx& x, const SpellEntry& o, const Combatant& a_recipient, bool a_self, bool a_fastOnly) {
+            const Snapshot& s = x.s;
+            if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Heal) return false;
+            if (a_fastOnly && (o.concentration || o.touch)) return false;
+            const float pool = Finite(s.self.mp, 0.0f);
+            const bool  poolOk = std::isfinite(s.self.mpMax) && s.self.mpMax > 0.0f;
+            const bool  anyBusy = s.handBusyLeft || s.handBusyRight, bothBusy = s.handBusyLeft && s.handBusyRight;
+            if (o.twoHanded ? anyBusy : bothBusy) return false;
+            if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) return false;
+            if (a_self) return true;   // his own heal: self-delivery or aimed, either lands on him
+            if (o.selfDelivery && !o.allyRoad) return false;
+            return !((o.reach > 0.0f && a_recipient.dist > o.reach) || a_recipient.sight == Sight::Occluded);
+        }
+        bool FastHealAvailable(const Ctx& x, const Combatant& a_recipient, bool a_self) {
+            for (const SpellEntry& o : x.s.book.entries)
+                if (HealCastableOn(x, o, a_recipient, a_self, true)) return true;
             return false;
         }
-        bool HealRefused(const Ctx& x, const SpellEntry& e, const Combatant& a_recipient) {
+        // His best healing per second of cast among the heals he can cast at this recipient now (Cons::HealRate's yardstick: heals are ranked among themselves,
+        // never against offense). 0 = none measured.
+        float BestHealRateOn(const Ctx& x, const Combatant& a_recipient, bool a_self) {
+            float best = 0.0f;
+            for (const SpellEntry& o : x.s.book.entries)
+                if (HealCastableOn(x, o, a_recipient, a_self, false)) best = (std::max)(best, EffectRate(x, o, o.heal));
+            return best;
+        }
+        // A concentration / touch heal holds the HEALER where he stands (the channel, or the walk to touch range): refused when the recipient is in a foe's reach and would not
+        // survive, AND when the healer himself is in a foe's reach and would not survive (Jesper died of his own exposure channelling on Cicero), while a fallback exists for this recipient.
+        bool HealRefused(const Ctx& x, const SpellEntry& e, const Combatant& a_recipient, bool a_self) {
             if (!(e.concentration || e.touch)) return false;
-            if (!Reposition::FoeCanHurtHere(x.s, a_recipient) || Reposition::SurvivesNear(x.s, a_recipient, x.t.worth)) return false;
-            return FastHealAvailable(x);
+            const auto exposed = [&](const Combatant& c) { return Reposition::FoeCanHurtHere(x.s, c) && !Reposition::SurvivesNear(x.s, c, x.t.worth); };
+            if (!exposed(a_recipient) && !(!a_self && exposed(x.s.self))) return false;
+            return FastHealAvailable(x, a_recipient, a_self);
         }
 
         // THE ONE SET OF CAST GATES a kept offense / control spell meets before any foe is looked at (Casts and CanCastOffense both read them,
@@ -871,7 +893,7 @@ namespace MFO::Iaus {
                             ++x.out.droppedTarget;
                             continue;
                         }
-                        if (heal && !scroll && HealRefused(x, e, *r)) { ++x.out.droppedTarget; x.out.healRefused = true; continue; }   // 11-17b: the heal safety rule
+                        if (heal && !scroll && HealRefused(x, e, *r, self)) { ++x.out.droppedTarget; x.out.healRefused = true; continue; }   // 11-17b: the heal safety rule
                         Candidate c = base(self ? nullptr : r);
                         if (self) c.targetName = s.self.name;
                         c.f.inHealReach = Tri::Yes;
@@ -885,7 +907,7 @@ namespace MFO::Iaus {
                             c.f.concentration = e.concentration;
                             c.f.healRate = EffectRate(x, e, e.heal);
                             c.f.effectRate = c.f.healRate;
-                            c.f.recipientIncoming = Estimate::IncomingOn(s, *r);
+                            c.f.bestHealRate = BestHealRateOn(x, *r, self);
                             c.f.recipientSelf = self;
                             c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
                             c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));

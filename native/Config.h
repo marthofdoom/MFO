@@ -543,7 +543,7 @@ namespace MFO::Config {
     // one `[iaus-why]` line per top-3 candidate (every consideration's input and value) after each `[iaus]` line.
     // LOG-ONLY: the board's Thinking panel does not read it. Read by scheduler/IausSource.cpp on the worker.
     inline std::atomic<bool>  g_iausExplain{ false };
-    // IAUS ENGINE FILLS ([Debug], INI-only; Armor / Loss / Spells default ON since 11-17b (the INI key is the kill switch), the rest OFF; iaus/Fills.h, Docs/research/2026-11/iaus-engine-fills.md).
+    // IAUS ENGINE FILLS ([Debug], INI-only; Armor / Hit / Loss / Swing / Spells default ON since 11-17b (the INI key is the kill switch), the rest OFF; iaus/Fills.h, Docs/research/2026-11/iaus-engine-fills.md).
     // The phase-2 considerations read measured inputs (how hard a foe hits, armor, what a spell does, who is mid-swing).
     // The engine side that measures them is PROBE FIRST (principle 5):
     //   bIausFillProbe = 1  -> every input is measured and LOGGED (`[iaus-fill]` lines, rate-limited) next to what really
@@ -554,9 +554,9 @@ namespace MFO::Config {
     // sink (any thread): plain atomic loads.
     inline std::atomic<bool>  g_iausFillProbe{ false };
     inline std::atomic<bool>  g_iausFillArmor{ true };      // (default ON, marth 11-17b) Combatant::armor, magicResist
-    inline std::atomic<bool>  g_iausFillHit{ false };       // Combatant::hit, hitsPerSec, hitIsMagic, rangedWeapon
+    inline std::atomic<bool>  g_iausFillHit{ true };        // Combatant::hit, hitsPerSec, hitIsMagic, rangedWeapon
     inline std::atomic<bool>  g_iausFillLoss{ true };       // (default ON, marth 11-17b) Combatant::lossPerSec
-    inline std::atomic<bool>  g_iausFillSwing{ false };     // Combatant::swinging
+    inline std::atomic<bool>  g_iausFillSwing{ true };      // Combatant::swinging
     inline std::atomic<bool>  g_iausFillCasting{ false };   // Combatant::casting
     inline std::atomic<bool>  g_iausFillSpells{ true };     // (default ON, marth 11-17b) SpellEntry::damage, heal, controlSec, measured
     inline std::atomic<bool>  g_iausFillMortal{ false };    // Snapshot::mortal

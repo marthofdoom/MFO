@@ -473,9 +473,9 @@ namespace MFO::Config {
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
             g_iausFillProbe      = false;   // [iaus-fill] probe lines -- OFF everywhere by default (the Deck INI arms it)
             g_iausFillArmor      = true;    // default ON (marth 11-17b: without it no spell has a measured size and every choice ties); INI key = kill switch
-            g_iausFillHit        = false;
+            g_iausFillHit        = true;    // default ON (11-17b review: without it Dps / ThreatOn / the time-to-live are all unknown)
             g_iausFillLoss       = true;    // default ON (11-17b)
-            g_iausFillSwing      = false;
+            g_iausFillSwing      = true;    // default ON (11-17b review)
             g_iausFillCasting    = false;
             g_iausFillSpells     = true;    // default ON (11-17b)
             g_iausFillMortal     = false;
