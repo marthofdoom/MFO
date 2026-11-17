@@ -536,7 +536,10 @@ namespace {
                     up.z = 350.0f; Check(Reposition::MeleeUnreachableNow(bs, up), "field: one storey (350 u) behind a wall counts (the h + reach line, not StrikeDistance)");
                     up.z = 900.0f;
                     up.sight = Sight::Visible;
-                    Check(!Reposition::MeleeUnreachableNow(bs, up), "field: the same foe in view is not read as unreachable");
+                    Check(Reposition::MeleeUnreachableNow(bs, up), "field: a VISIBLE foe above the vertical reach line (a tower top) is unreachable");
+                    up.z = 100.0f;
+                    Check(!Reposition::MeleeUnreachableNow(bs, up), "field: the same visible foe at reach height is reachable");
+                    up.z = 900.0f;
                     bs.drawn = PostureKind::Bow; up.sight = Sight::Occluded;
                     Check(!Reposition::MeleeUnreachableNow(bs, up), "field: the reachability read is for a blade only");
                 }

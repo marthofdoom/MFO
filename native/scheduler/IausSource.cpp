@@ -151,6 +151,20 @@ namespace MFO::Scheduler {
             return !a_f.noApproach || Iaus::Reposition::InWeaponRange(a_s, a_f.dist, Iaus::DefaultTuning().bowWeaponRange);
         }
 
+        // A blade (Melee / Silver drawn) with at least one approach-eligible foe, every one of which he cannot strike from where he stands
+        // (Reposition::MeleeUnreachableNow: above / below the vertical reach line, visible or not, or occluded on another level). The
+        // sight verdict does not matter then: the engine swings at the air instead of pathing, so the approach is the road to him.
+        [[nodiscard]] bool BladeAllUnreachable(const Iaus::Snapshot& a_s) {
+            if (!(a_s.drawn == Iaus::PostureKind::Melee || a_s.drawn == Iaus::PostureKind::Silver)) return false;
+            bool any = false;
+            for (const auto& f : a_s.foes) {
+                if (!ApproachEligible(a_s, f)) continue;
+                if (!Iaus::Reposition::MeleeUnreachableNow(a_s, f)) return false;
+                any = true;
+            }
+            return any;
+        }
+
         const Iaus::Combatant* OccludedFoe(const Iaus::Candidates::Set& a_set) {
             const Iaus::Snapshot& s = a_set.snap;
             if (s.meleeOnly || s.foes.empty()) return nullptr;
@@ -160,14 +174,13 @@ namespace MFO::Scheduler {
             // swings at a foe it counts as in reach instead of pathing, so the approach is filed at the touch standoff (128) and the engine paths
             // to the foe (up the stairs). A reachable foe anywhere in the list = no approach.
             const bool blade = s.drawn == Iaus::PostureKind::Melee || s.drawn == Iaus::PostureKind::Silver;
-            if (blade)
-                for (const auto& f : s.foes)
-                    if (ApproachEligible(s, f) && !Iaus::Reposition::MeleeUnreachableNow(s, f)) return nullptr;
+            const bool bladeAll = BladeAllUnreachable(s);
+            if (blade && !bladeAll) return nullptr;
             // A foe kept past the chase cap (noApproach, 11-17 A3) counts here only when ApproachEligible (inside his bow's range).
             bool any = false;
             for (const auto& f : s.foes) {
                 if (!ApproachEligible(s, f)) continue;
-                if (f.sight != Iaus::Sight::Occluded) return nullptr;
+                if (!bladeAll && f.sight != Iaus::Sight::Occluded) return nullptr;   // a blade with every foe out of reach needs no occlusion
                 any = true;
             }
             if (!any) return nullptr;
@@ -199,7 +212,7 @@ namespace MFO::Scheduler {
             // EVERY listed foe reads Occluded (a Visible or Unknown foe means no approach).
             bool anyVisible = false;
             for (const auto& f : s.foes) if (f.sight == Iaus::Sight::Visible && ApproachEligible(s, f)) anyVisible = true;
-            if (anyVisible) { APMFBridge::NoteOffenseSight(a_id); return; }
+            if (anyVisible && !BladeAllUnreachable(s)) { APMFBridge::NoteOffenseSight(a_id); return; }
             const Iaus::Combatant* foe = OccludedFoe(a_set);
             if (!foe) {
                 // 11-17 A1(a): his attack road is a melee swing this lap: a standing approach (filed under a spell lap) is released, not walked.
