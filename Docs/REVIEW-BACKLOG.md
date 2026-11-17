@@ -3584,3 +3584,13 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **OPEN (SEV-4):** `StrikeReady` for a bow still reads the chase cap (the game's own code, candidate to move to `InWeaponRange`).
 - **OPEN (SEV-4):** the survival band numbers (0.35 downs a fight, 25 to 75 percent) are judgement, not a card value.
 - **FIXED here (pre-existing):** the run.sh logistics CLI check expected `--logi-policy iaus` to be refused. It failed at f5249bce before any edit of this batch.
+
+### feat/sim-mirror-1117 review round 1 (Opus 5.5 @ 5749026a; fixed in the next commit)
+
+- **F1 (SEV-2, FIXED):** the unfired shares counted windows whose target died and NOT BUILT windows of spell shapes Harbinger never builds a caster for. Both are out of the shares now: offense 0.344, offense concentration 0.182, heal 0.111, heal concentration 0.091, a cloak 0.125. The buff row is a cloak's only: summons, wards and armor spells always fire after the pooled first-fire time (assumption, never sampled).
+- **HARBINGER (to file):** no caster is built for Frost Cloak 0003AEA2, Flame Cloak 0003AE9F, Lightning Cloak 0003AEA3 ("no-row"), Frostbite 0002B96B and Creeping Cold 800279BD ("av26 row-without-caster"), Turn Lesser Undead 0004D3F8 ("TargetEffect no-row"). Counts: iaus-sim-v3.md 13.2.
+- **F2 (SEV-3, FIXED):** `load_cards` parses `inRange()` and refuses a raw `Band{ }`.
+- **F3 (SEV-3, FIXED + NATIVE FOLLOW-UP OPEN):** `t.waivedRangeX` and `t.bowRange` are out of the driver's `GLOBALS`. Native: add both to `SetTuningScalar` (iaus/Catalogue.cpp), then search them.
+- **F4 (SEV-3, FIXED):** the entry foe is behind `--engage-on-sight` / `FightSpec::engageOnSight`, OFF by default.
+- **F5 (marth ruling "Oracle downs", DONE):** the caster survival bands are oracle-relative (`downs/f`, `selfHealLow%`), measured with the gap pass's `ORCSURV` line. OPEN SEV-4: the bounds are static numbers from one 160-fight oracle run and must be re-measured when the world or the oracle changes. OPEN SEV-4: a tiny `downs/f` bound costs almost no persona credit (the credit's scale has a floor of 5).
+- The earlier entry "the survival band numbers (0.35 downs a fight, 25 to 75 percent) are judgement" is superseded by F5.

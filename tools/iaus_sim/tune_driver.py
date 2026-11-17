@@ -417,7 +417,10 @@ def load_cards():
                 v = float(b.group(3))
                 CARDS[cur]["bands"].append((b.group(2), v if b.group(1) == "Least" else -INF, INF if b.group(1) == "Least" else v, n))
                 got += 1
-            calls = len(re.findall(r'\bat(?:Least|Most)\(', line))
+            for b in re.finditer(r'inRange\("([^"]+)", ([-0-9.]+), ([-0-9.]+)', line):   # a two-sided band (review F2 of 5749026a)
+                CARDS[cur]["bands"].append((b.group(1), float(b.group(2)), float(b.group(3)), n))
+                got += 1
+            calls = len(re.findall(r'\b(?:atLeast|atMost|inRange)\(|\bBand\{', line))   # a raw Band{ ... } is a band too: it must be written with a helper
             if calls != got:   # a band this parser cannot read would silently leave the class's identity ungated
                 CARDS.clear()
                 raise RuntimeError("Playstyles.h:%d: %d band call(s), %d parsed (class %s): the card parser needs updating" % (n, calls, got, cur))
@@ -1219,9 +1222,8 @@ def stage_edge():
 
 
 GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0]),
-           # sim mirror batch 11-17: the game ships these as labelled PLACEHOLDERS "for the sim to search" (iaus/Core.h Tuning): the waived
-           # foe's ranged edge (fix/chase-waiver-veto) and the bow's range past the chase cap (field 11-17 A3). Both act in --world v3 only.
-           ("t.waivedRangeX", 0.85, [0.7, 0.78, 0.92, 1.0]), ("t.bowRange", 3000.0, [2000.0, 2500.0, 3500.0, 4000.0]),
+           # NOT searched here (review F3 of 5749026a): t.waivedRangeX and t.bowRange. The lab knows both (Tune.h), but the game's tuning file has no entry
+           # for them (iaus/Catalogue.cpp SetTuningScalar), so a found value could not be shipped. They stay fixed placeholders until native adds the names.
            # fix/field-1117b-choice placeholders: the cast time a fire-and-forget spell's effect is divided by, the health under which his own heal gets the dying boost
            ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35])]
 

@@ -430,7 +430,7 @@ marth 11-17: "for some reason we didn't retune when new features were added". Th
 |---|---|---|
 | perk-effect reader spell boost (`c.spell_perks`) | already in v3 (section 7), checked against `iaus/PerkEffects.cpp` | `perks` |
 | `hand_lost` (1dfcuabd22x) | `Combatant::weaponLeftShare` = 1 for a bow or a two-hander in hand (`Policy.h MakeSnapshot`, the rule of `Fills.cpp:345`). The lab has no second melee weapon, so no 0.5 row. `t.concChannelSec`, `t.handRedrawSec` in `Tune.h` | `hands` |
-| chase-waiver veto fix | the waiver goes through the game's `ChaseWaived` reader, the kept foe is marked `chaseWaived`, the generator clamps it (compiled in). Entry foe: MODEL, his engine target at his first decision, over when it falls or his target moves on. `t.waivedRangeX` | `chase` |
+| chase-waiver veto fix | the waiver goes through the game's `ChaseWaived` reader, the kept foe is marked `chaseWaived`, the generator clamps it (compiled in). Entry foe: OFF by default as ch.21 EngageOnSight ships (`--engage-on-sight`); when on, a MODEL: his engine target at his first decision, over when it falls or his target moves on. `t.waivedRangeX` | `chase` |
 | noApproach foes (11-17 A3) | a foe past the cap in bow range, or one that targets him, is kept and marked. `Brain`: a named noApproach foe is shot at from where he stands, never walked to. `t.bowRange`. Ranking, Swings, RangeFoe and the cast skips are the game's own code | `chase` |
 | engagement fixes | the reachable-foe preference and `MeleeUnreachableNow` are the game's code and read the lab's z. The 128 approach on a ledge with a way up is a climb MODEL (a path three times the height, at run speed, `FightSpec::perchPath`). A ledge with no way up stays out of reach. See 13.4 for what has no lab counterpart | `height` |
 | melee reach model | `Ctl::reach` is the game's `ReachBook::Book`. Outcomes are EDGE distances, one chain of one swing each (the lab has no combo framework). `weaponEdge` and `comboEdge` are read from it only with a blade in hand. This fixes the N3 line of `Policy.h` (it fed a centre value less a radius for any weapon drawn) | `--reach` |
@@ -451,19 +451,39 @@ Tool: `tools/iaus_sim/calib_cast_delay.py`. Source: `_evidence/deck-run-1117/par
 | heal, concentration | 11 | 10 | 0.68 | 1.04 | 1.19 | 2.26 (9) | 9.1 % |
 | buff | 28 | 7 | 1.43 | 1.66 | 3.09 | none | 75.0 % |
 
-Pick to claim at Harbinger: median 0.108 s (n=57). Never fired by cause, offense: replaced by a newer claim 26.1 %, refused by CheckStartCast every time 8.7 %, built and answered yes but not fired 6.5 %, no caster built 13.0 %. Buff: no caster built 39.3 %, replaced 25.0 %.
+Pick to claim at Harbinger: median 0.108 s (n=57).
 
-In the lab (`Data.h Delivery`, `World.h StartCast`): a claimed cast draws its first fire from the decile table of its row plus 0.11 s. A re-pick of the same cast at the same target within 2 s of its release (ASSUMPTION) draws the repeat table. With the row's unfired share the claim closes with no cast after a time drawn from how long such claims stood. The unfired share leaves out "refused" (sight, line of fire and range are held by the lab itself), so the lab uses offense 0.500, offense concentration 0.654, heal 0.111, heal concentration 0.091, buff 0.731. It still includes claims the game ended for reasons the lab also models (the target died, a re-target), so it is an upper bound. `--deliver-unfired k` scales it, `--deliver-sec o,h` is the fixed model of the first cut.
+**Never fired is mostly not delivery failure (review F1 of 5749026a).** By cause, per row:
+
+| Row | Fired | Replaced | Built, yes, not released | Not built | Refused | Target died | Shape gap |
+|---|---|---|---|---|---|---|---|
+| offense (46) | 21 | 7 | 1 | 3 | 3 | 11 | 0 |
+| offense, concentration (28) | 9 | 2 | 0 | 0 | 2 | 8 | 7 |
+| heal (9) | 8 | 0 | 1 | 0 | 0 | 0 | 0 |
+| heal, concentration (11) | 10 | 0 | 1 | 0 | 0 | 0 | 0 |
+| buff (28) | 7 | 1 | 0 | 0 | 2 | 2 | 16 |
+
+- Target died: the window's target died inside it or within 1.5 s of its close. The lab ends such a cast itself (`castLost`).
+- Refused: a caster was built and CheckStartCast said no every time (sight, line of fire, range). The lab holds those casts itself.
+- Shape gap: no caster was ever built, for a spell shape Harbinger never builds one for. It is the same every cast, so it is a framework gap and not a chance. FOR HARBINGER: Frost Cloak 0003AEA2 (10 of 16 windows), Flame Cloak 0003AE9F (5 of 7), Lightning Cloak 0003AEA3 (1 of 1), all "no-row". Frostbite 0002B96B (6 of 14) and Creeping Cold 800279BD (1 of 10), "av26 row-without-caster". Turn Lesser Undead 0004D3F8 "TargetEffect no-row" (the review counts 4 not-built windows. Here each also had its target die, so they sit in the target-died column).
+
+The lab's unfired share is (replaced + built not released + not built) over (those + fired): **offense 0.344 (11 of 32), offense concentration 0.182 (2 of 11), heal 0.111 (1 of 9), heal concentration 0.091 (1 of 11), a cloak 0.125 (1 of 8)**. The first cut of this batch used 0.500 / 0.654 / 0.111 / 0.091 / 0.731.
+
+In the lab (`Data.h Delivery`, `World.h StartCast`): a claimed cast draws its first fire from the decile table of its row plus 0.11 s. A re-pick of the same cast at the same target within 2 s of its release (ASSUMPTION) draws the repeat table (`dl.repeat%` counts how often). With the row's unfired share the claim closes with no cast after a time drawn from how long such claims stood. The buff row is a CLOAK's only: a summon, a ward, an armor spell or any other buff was never sampled, so it always fires, after the pooled first-fire time of the fire-and-forget claims (n=36, ASSUMPTION). `--deliver-unfired k` scales the shares, `--deliver-sec o,h` is the fixed model of the first cut.
 
 ### 13.3 Field cases of 11-17, before and after (built-in world, shipped tunings, 96 fights)
 
+What "before" means differs by row. For `heal-channel` and `offense-pick` it is the GAME before fix/field-1117b-choice (the lab built against native f5249bce). For `bow-occluded`, `tower-blade` and `cap-archer` it is only the LAB's own model switched off (`--mirror off`): the same game code, without this batch's lab side. It is not the game before 11-17, so those three rows show what the lab model adds, not what the fix changed in the field.
+
 | Scenario | Before | After |
 |---|---|---|
-| `heal-channel` (before = game f5249bce) | channelled heals 66.3 %, mean heal 37.5, self heal at 53 % health, player dead 24.0 %, downs 0.03, U 65.8 | channelled 3.3 %, mean heal 72.9, self heal at 46 %, player dead 10.4 %, downs 0.01, U 77.5 |
-| `offense-pick` (before = game f5249bce) | pick damage 34.4, cost 17.3, resisted 0 %, dps 3.63, U 83.7 | pick damage 33.2, cost 16.6, resisted 0 %, dps 4.93, U 84.0 |
-| `bow-occluded` (before = `--mirror off`) | first hit 5.27 s, idle 39.2 %, hide runs 0.41 / min, U 89.8 | first hit 4.61 s, idle 33.2 %, hide runs 0.42 / min, U 90.4 |
-| `tower-blade` (before = `--mirror off`) | never hits (100 % of fights), fight 20.1 s | first hit 8.1 s, 4.6 hits a fight, fight 15.1 s |
-| `cap-archer` (before = `--mirror off`) | idle 94.9 %, empty foe list 94.8 % of laps, shooting 22.4 % of his time, downs 0.92, U 77.8 | idle 27.4 %, empty 27.4 %, shooting 32.3 %, downs 1.12, U 78.7 |
+| `heal-channel` (before = game f5249bce, first cut's shares) | channelled heals 66.3 %, mean heal 37.5, self heal at 53 % health, player dead 24.0 %, downs 0.03, U 65.8 | channelled 6.1 %, mean heal 71.5, self heal at 45 %, player dead 12.5 %, downs 0.00, U 76.9 |
+| `offense-pick` (before = game f5249bce, first cut's shares) | pick damage 34.4, cost 17.3, resisted 0 %, dps 3.63, U 83.7 | pick damage 32.9, cost 16.4, resisted 0 %, dps 5.10, U 88.3 |
+| `bow-occluded` (before = `--mirror off`) | first hit 5.27 s, idle 39.2 %, hide runs 0.41 / min, U 89.8 | first hit 5.17 s, idle 42.4 %, hide runs 0.29 / min, U 89.7 |
+| `tower-blade` (before = `--mirror off`) | never hits (100 % of fights), fight 20.1 s | first hit 8.1 s, 4.3 hits a fight, fight 15.0 s |
+| `cap-archer` (before = `--mirror off`) | idle 94.9 %, empty foe list 94.8 % of laps, shooting 22.4 % of his time, downs 0.92, U 77.8 | idle 7.2 %, empty 7.2 %, shooting 27.8 %, downs 1.22, U 76.7 |
+
+The "after" column is the final build (corrected unfired shares, the entry foe off). The two game-before rows were measured with the first cut's shares, so part of their gain in dps and U is the delivery correction and not the 1117b fix. `bow-occluded` shows no gain from the lab model (its two runs differ by noise).
 
 Limits. The lab does not reproduce Jesper being burst down (0.03 downs a fight before): the evoker survives the pile. `offense-pick` shows no cheapest-spell pick before the fix either (the lab's books are measured by default). In `cap-archer` the lab's engine model shoots on its own when IAUS is idle, so the hits barely move and he goes down a little more often once he answers. `bow-occluded` keeps its hide runs: the 11-17b stance check has no lab counterpart (the lab's sneak stance always takes).
 
@@ -477,26 +497,44 @@ Limits. The lab does not reproduce Jesper being burst down (0.03 downs a fight b
 
 ### 13.5 Tuning
 
-`tune_driver.py --world` defaults to v3 (v2 still runs). Its shared placeholders now include `t.waivedRangeX`, `t.bowRange`, `t.spellCastSec`, `t.dyingSelfHp`. `Playstyles.h`: the mage, evoker, conjurer and warlock rows carry a survival band (`downs/f` at most 0.35, `selfHealAt%` between 25 and 75, a new metric: his health when a decision of his begins to mend himself).
+`tune_driver.py --world` defaults to v3 (v2 still runs). Its shared placeholders now include `t.spellCastSec` and `t.dyingSelfHp`. `t.waivedRangeX` and `t.bowRange` are lab knobs (`Tune.h`) but are NOT searched: the game's tuning file has no entry for them (`iaus/Catalogue.cpp SetTuningScalar`), so a found value could not ship. NATIVE FOLLOW-UP: add both names there, then put them back into `GLOBALS`.
 
-Shipped tunings, 8 seeds, J (se):
+The entry foe of the chase waiver is behind a switch that is OFF by default (`--engage-on-sight`, or `FightSpec::engageOnSight` for a scenario that models it), because the game only has an entry foe through ch.21 EngageOnSight, which ships OFF.
+
+**Survival bands, oracle-relative (marth 11-17, verbatim: "Oracle downs").** No oracle-relative band existed in the lab before, so this is the first: the gap pass prints an `ORCSURV` line per class (IAUS and the class oracle on the same natural fights), and the band's bound is the oracle's value plus a labelled margin, written into `Playstyles.h` with the measurement in the reason. Measured on 160 natural fights per class, built-in world, v3, class rulings in force:
+
+| Class | Oracle downs / fight | Bound (+ 0.05) | IAUS downs / fight | Oracle self heals begun under 25 % health | Bound (+ 5 points) | IAUS |
+|---|---|---|---|---|---|---|
+| mage | 0.044 | 0.09 | 0.031 | 5.3 % | 10 % | 10.6 % |
+| evoker | 0.000 | 0.05 | 0.013 | 1.0 % | 6 % | 15.0 % |
+| conjurer | 0.000 | 0.05 | 0.000 | 0.0 % | 5 % | 4.7 % |
+| healer | 0.006 | 0.06 | 0.025 | 0.9 % | 6 % | 6.2 % |
+| warlock | 0.013 | 0.06 | 0.019 | 1.5 % | 7 % | 13.0 % |
+
+The self-heal timing band replaces the mean `selfHealAt%` (still a metric) with `selfHealLow%`, the share of his self heals (a heal cast at himself, a health potion) that BEGIN under a quarter of his health. The oracle can express it (it fires through the same code), so the band is kept and is oracle-relative too. With the shipped tunings the evoker and the warlock are outside it, the mage and the healer just outside. The bounds must be re-measured when the world or the oracle changes. One weakness: the persona credit of a band falls off over max(5, half the bound), so a `downs/f` bound of 0.05 costs almost no persona when it is broken. The driver's "no band may end further outside its bound" gate reads the raw distance and does bind.
+
+`tune_driver.py load_cards` now parses a two-sided `inRange()` band and refuses a raw `Band{ }` in a class row (review F2).
+
+Shipped tunings, 8 seeds, J (se). "v3 before" is the build before this batch (f5249bce, 2.4 / 4.5 s delivery). The other columns are the final build:
 
 | Class | v3 before | v3 after | v2 after |
 |---|---|---|---|
-| melee | 81.88 (3.10) | 81.32 (2.85) | 84.48 (2.49) |
-| ranged | 77.75 (3.50) | 75.68 (3.87) | 72.24 (2.51) |
-| mage | 73.55 (1.45) | 76.66 (2.00) | 79.90 (2.29) |
-| knight | 74.10 (1.21) | 75.81 (0.70) | 74.21 (0.65) |
-| warrior | 87.51 (1.14) | 88.22 (1.12) | 87.73 (1.26) |
-| mercenary | 82.24 (1.11) | 82.68 (1.17) | 80.36 (1.34) |
-| archer | 82.46 (1.99) | 82.37 (2.26) | 81.45 (2.40) |
-| thief | 88.54 (0.75) | 88.46 (0.81) | 86.69 (0.63) |
-| evoker | 75.32 (2.30) | 75.95 (2.00) | 81.13 (1.50) |
-| conjurer | 64.90 (4.79) | 68.71 (3.50) | 76.83 (2.48) |
-| healer | 77.45 (2.91) | 79.42 (1.81) | 80.64 (2.49) |
-| warlock | 74.47 (1.76) | 76.84 (2.65) | 79.03 (3.47) |
-| melee-off | 81.28 (3.20) | 78.37 (3.38) | 74.52 (3.19) |
-| ranged-off | 68.53 (4.36) | 74.29 (3.75) | 76.21 (3.74) |
-| mage-off | 70.81 (4.36) | 71.95 (2.82) | 73.96 (2.98) |
+| melee | 81.88 (3.10) | 82.96 (3.05) | 84.48 (2.49) |
+| ranged | 77.75 (3.50) | 76.48 (3.06) | 72.24 (2.51) |
+| mage | 73.55 (1.45) | 77.03 (2.58) | 79.90 (2.29) |
+| knight | 74.10 (1.21) | 75.85 (0.76) | 74.21 (0.65) |
+| warrior | 87.51 (1.14) | 87.50 (0.99) | 87.73 (1.26) |
+| mercenary | 82.24 (1.11) | 81.78 (1.31) | 80.36 (1.34) |
+| archer | 82.46 (1.99) | 82.98 (2.31) | 81.45 (2.40) |
+| thief | 88.54 (0.75) | 88.77 (0.78) | 86.69 (0.63) |
+| evoker | 75.32 (2.30) | 76.55 (2.17) | 81.13 (1.50) |
+| conjurer | 64.90 (4.79) | 69.97 (4.68) | 76.83 (2.48) |
+| healer | 77.45 (2.91) | 78.76 (2.25) | 80.64 (2.49) |
+| warlock | 74.47 (1.76) | 77.66 (2.69) | 79.03 (3.47) |
+| melee-off | 81.28 (3.20) | 77.67 (3.07) | 74.52 (3.19) |
+| ranged-off | 68.53 (4.36) | 74.42 (3.57) | 76.21 (3.74) |
+| mage-off | 70.81 (4.36) | 73.00 (2.55) | 73.96 (2.98) |
+
+Natural bracket, how often the repeat table is drawn (`dl.repeat%` of his cast picks): mage 29 %, evoker 21 %, conjurer 27 %, healer 33 %, warlock 27 %. Unfired: mage 12.6 %, evoker 18.2 %, conjurer 9.6 %, healer 13.6 %, warlock 7.8 %.
 
 Both baselines are regenerated (`baseline_builtin.txt`, `baseline_v3_builtin.txt`). v2 moved because the game's generator and the reach book moved: with `--reach off` the build before this batch and the build after it agreed draw for draw on v2 until the 1117b merge.

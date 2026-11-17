@@ -221,8 +221,9 @@ namespace Sim {
         long   castPick = 0, castFired = 0, castNoLos = 0, castLofHeld = 0, castLofExpired = 0, castNotBuilt = 0, castDirect = 0, castThrash = 0, castLost = 0;
         // sim mirror batch 11-17: claims that closed with no fire (the measured unfired share, Data.h Delivery) and the seconds they stood, self buffs /
         // heals deferred for want of a combat controller (cast/CastOn.cpp, laps), heal claims released because the recipient was full before the charge began.
-        long   castUnfired = 0, castDeferred = 0, healFullExit = 0; double unfiredSec = 0;
+        long   castUnfired = 0, castDeferred = 0, healFullExit = 0, castRepeat = 0; double unfiredSec = 0;   // castRepeat: picks that drew the repeat table (the claim stood and had fired)
         // THE SELF-HEAL POINT (the caster survival band, Playstyles.h): his health share each time a decision of his began to mend HIMSELF (a heal cast at himself, a health potion).
+        long   selfHealLowN = 0;   // ... and how many of those began under a quarter of his health (the oracle-relative survival band)
         long   selfHealN = 0; double selfHealAtSum = 0; long healYield = 0;   // healYield: his channelled heal gave its hand to a non-heal pick under threat (11-17b)
         // THE FIELD SCENARIOS' READS (11-17): his first damage on a foe (per fight: N is 0 or 1) and what his cast decisions picked: offense (the spell's own
         // damage and cost) and heals (the heal's size, how many were channelled, how many were for himself).
@@ -328,7 +329,8 @@ namespace Sim {
         // member in the line of fire, with when (fed back as will-not-work notes for Tuning::fireLineKeepSec), and whether a foe is hurting him now.
         struct FireRefusal { std::uint32_t spell = 0, foe = 0; double at = 0; }; std::vector<FireRefusal> fireRefused;
         bool   healerThreat = false;
-        // Harbinger's Standing combat ENTRY foe (APMFBridge::CombatEntryStateOf, the second id of Snapshot.h ChaseWaived). MODEL: the foe his
+        // Harbinger's Standing combat ENTRY foe (APMFBridge::CombatEntryStateOf, the second id of Snapshot.h ChaseWaived). Only a fight that models ch.21
+        // EngageOnSight has one (Fight::entryRoad, OFF by default as the game ships it). MODEL: the foe his
         // combat was entered on = his engine target at his first decision; the entry is over when that foe falls or his engine target moves on.
         mutable std::uint32_t entryFoe = 0; mutable bool entryEnded = false;
     };
@@ -350,6 +352,7 @@ namespace Sim {
         double decCrossAt[10] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }; bool decDowned = false;   // the decline record's per-fight state (Tally::decCross)
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
+        bool entryRoad = false;                    // ch.21 EngageOnSight is modelled in this fight (ships OFF: Data.h g_engageOnSight, FightSpec::engageOnSight)
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
         float arenaX = 0, arenaY = 0, arenaR = 0; bool arenaSet = false;   // --space: the enclosed fight's bounds (0 = open)
         float light = 0.6f; bool interior = false; double nextDetect = 0; Detect::Gmst dg;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
@@ -1213,8 +1216,9 @@ namespace Sim {
                     else if (g_deliverSec[0] >= 0.0f) { if (!direct) lat = std::max(charge, g_deliverSec[nat == 1 ? 1 : 0]); }   // --deliver-sec: the fixed figures of sim v3's first cut (a stream had no claim to wait for there)
                     else {
                         // THE CLAIMED ROAD, MEASURED (Data.h Delivery; the follower's own AI performs the cast, ComposedCast::Try). Draws come from V, never R.
-                        const DeliveryRow& row = Delivery::kRow[nat][s.e.concentration ? 1 : 0]; Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
+                        const DeliveryRow& row = nat == 2 && s.areaKind != 1 ? Delivery::kUnsampled : Delivery::kRow[nat][s.e.concentration ? 1 : 0]; Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];   // the buff row is a CLOAK's only (Data.h)
                         const bool again = row.hasRepeat && dc.lastFireForm == s.e.form && dc.lastFireTarget == target && now - dc.lastFireAt <= static_cast<double>(Delivery::kRepeatWindowSec);
+                        if (again && x.ctl == 0) ++t.castRepeat;
                         if (again) lat = std::max(charge, static_cast<float>(dc.lastFireAt - now) + Delivery::At(row.repeat, V.U(0.0f, 1.0f)));   // the claim stands and has fired: the engine casts again on its own beat
                         else if (V.P(std::clamp(row.unfired * g_deliverUnfired, 0.0f, 1.0f))) {   // the claim closes with no fire: his body is the claim's for as long as it stood
                             const float stood = Delivery::At(row.stood, V.U(0.0f, 1.0f));

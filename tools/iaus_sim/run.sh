@@ -11,7 +11,7 @@
 #        [--class-oracle N] [--gap-scenarios N] (the per-class oracle gap; a run that writes a results file runs 4 + 2 by itself, 0 = off)
 #        SIM V3 (iaus-sim-v3.md): [--world v2|v3] (default v3, the positional world; v2 = the lab before it, draw for draw)
 #        [--v3 height|chase|lof|delivery|hands|stance|sidestep|casterhold|blockdir|areas|perks=on|off[,...]] [--waiver none|self|player] [--delivery main|old]
-#        [--deliver-sec <offense>,<heal>] (a FIXED claim-to-fire; default = the measured tables of Data.h Delivery) [--deliver-unfired <k>] [--mirror on|off] [--block-arc <degrees>] [--scenario field] (the field failures of ClickUp 1dfcuabd44c)
+#        [--deliver-sec <offense>,<heal>] (a FIXED claim-to-fire; default = the measured tables of Data.h Delivery) [--deliver-unfired <k>] [--mirror on|off] [--engage-on-sight] (ch.21 entry foe modelled; ships OFF) [--block-arc <degrees>] [--scenario field] (the field failures of ClickUp 1dfcuabd44c)
 #        [--side-step random|away] (a held caster's side step; off: --v3 sidestep=off) [--caster-pressure] (the caster cells' objective also plays the dive scenarios)
 #        [--decline N] (health-decline curves and the best drink line per class) [--curve <class>:<family>.<cons>.<param>=<v>]
 #        [--disengage-report N] (card G3's usefulness: the same fights without the run, with it, and with the D&D variant)

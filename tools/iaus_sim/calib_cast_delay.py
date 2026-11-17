@@ -25,7 +25,9 @@ WHAT IS REPORTED, per nature:
             MFO.log's own cast observer ([cast] ... CFC-fired, one line per fire; the census logs a window's FIRST fire only)
   unfired   windows that closed with no fire, by cause: replaced (the claim was repointed by a newer pick), refused (a caster was
             built and CheckStartCast answered NO every time: sight / line of fire / range, which the sim models itself), not-built
-            (no caster was ever built: the delivery failure the sim has no other model for), and how long each stood
+            (no caster was ever built), target-died (the window's target died inside it or within 1.5 s of its close: the lab ends that cast
+            itself), shape-gap (not built, for a spell shape Harbinger never builds a caster for: SHAPE_GAP), and how long each stood.
+            The lab's unfired share = (replaced + built-yes-unfired + not-built) / (those + fired).
 --cpp prints the decile tables and the unfired shares as the rows of Data.h (Delivery).
 """
 import os, re, statistics as st, sys, collections
@@ -40,6 +42,15 @@ NAMED = re.compile(r'cast_(offense|control|heal|buff|ward|summon) [^|(]*\(([0-9A
 CFC = re.compile(r'\[cast\] ([0-9A-F]{8}) .*? CFC-fired .*?\(([0-9A-F]{8})\)')
 HB = re.compile(r'\[hb\] .*? mainAge=(\d+)ms')
 SUBST = re.compile(r'\[substrate\] ([0-9A-F]{8}) CAST CLAIMED: .*? \(([0-9A-F]{8})\) at [0-9A-F]{8}, proxy ([0-9A-F]{8})')
+DEATH = re.compile(r'died|dead\b|DEAD')
+FORM = re.compile(r'\b([0-9A-F]{8})\b')
+# SPELL SHAPES HARBINGER DOES NOT BUILD A CASTER FOR (review F1 of 5749026a): a NOT BUILT window of one of these is a classification gap of the
+# framework (the census's own `predicted` label), the same every time, not a per-cast chance. They are left out of the unfired share and listed for
+# Harbinger. form -> (name, the census label).
+SHAPE_GAP = {'0003AE9F': ('Flame Cloak', 'no-row'), '0003AEA2': ('Frost Cloak', 'no-row'), '0003AEA3': ('Lightning Cloak', 'no-row'),
+             '0002B96B': ('Frostbite', 'av26 row-without-caster'), '800279BD': ('Creeping Cold', 'av26 row-without-caster'),
+             '0004D3F8': ('Turn Lesser Undead', 'TargetEffect no-row')}
+UNFIRED = ('replaced', 'not-built', 'built-yes-unfired')   # what the lab's unfired share counts
 NAT = {'offense': 'offense', 'control': 'offense', 'heal': 'heal', 'buff': 'buff', 'ward': 'buff', 'summon': 'buff'}
 TYPE_NAT = {'Restore': 'heal', 'Offensive': 'offense', 'TargetEffect': 'offense', 'Stagger': 'offense', 'Paralyze': 'offense', 'Disarm': 'offense'}
 
@@ -58,9 +69,12 @@ def q(v, p):   # linear-interpolated quantile
 
 def read_run(d):
     mfo, apmf = os.path.join(d, 'MFO.log'), os.path.join(d, 'APMF.log')
-    named, picks, subst, cfc, paused = {}, [], [], [], []
+    named, picks, subst, cfc, paused, deaths = {}, [], [], [], [], []
     with open(mfo, errors='replace') as f:
         for line in f:
+            if DEATH.search(line):   # any line that says an actor died names it by FormID: the window's target dying is the lab's own castLost
+                t = secs(line)
+                if t is not None: deaths += [(t, f) for f in FORM.findall(line)]
             if '[iaus]' in line:
                 for fam, form in NAMED.findall(line): named.setdefault(form, collections.Counter())[NAT[fam]] += 1
                 m = PICK.search(line)
@@ -101,6 +115,7 @@ def read_run(d):
     for w in wins:
         end = w['open'] + (w['dur'] if w['dur'] is not None else 1e9)
         w['paused'] = any(a < end and b > w['open'] for a, b in paused)
+        w['died'] = any(f == w['target'] and w['open'] - 0.5 <= t <= end + 1.5 for t, f in deaths)   # inside the window or within 1.5 s of its close
         # every fire of the window, from MFO's own cast observer (the census logs the FIRST fire only): the form is the driven one
         w['cfc'] = sorted(ts - w['open'] for ts, a, form in cfc if a == w['actor'] and form in (w['driven'], w['spell']) and w['open'] - 0.05 <= ts <= end + 0.3)
         # the substrate road: its claim is logged by MFO within a second of the window's open, for that follower and source spell
@@ -121,6 +136,8 @@ def read_run(d):
 def cause(w):
     if w['fires']: return 'fired'
     if w['dur'] is None: return 'open-at-log-end'
+    if w.get('died'): return 'target-died'   # the lab ends such a cast itself (castLost)
+    if not w['built'] and w['spell'] in SHAPE_GAP: return 'shape-gap'   # no caster was built for a shape Harbinger never builds one for, however the window closed
     if 'repointed' in w['why']: return 'replaced'
     if w['built']: return 'refused' if not any(y for _, y, _ in w['built']) else 'built-yes-unfired'
     return 'not-built'
@@ -154,7 +171,7 @@ def main():
             if first: print(f'  first   claim -> fire  n={len(first):3d}  p25 {q(first, .25):.2f}  median {q(first, .5):.2f}  p75 {q(first, .75):.2f}  max {max(first):.2f}   (+ pick -> OPEN {lagmed:.2f})')
             if rep: print(f'  repeat  fire  -> fire  n={len(rep):3d}  p25 {q(rep, .25):.2f}  median {q(rep, .5):.2f}  p75 {q(rep, .75):.2f}  max {max(rep):.2f}')
             n = len(ws)
-            for k in ('fired', 'replaced', 'refused', 'built-yes-unfired', 'not-built', 'open-at-log-end'):
+            for k in ('fired', 'replaced', 'refused', 'target-died', 'shape-gap', 'built-yes-unfired', 'not-built', 'open-at-log-end'):
                 if cs[k]:
                     du = [w['dur'] for w in ws if cause(w) == k and w['dur'] is not None]
                     print(f'  {k:18s} {cs[k]:3d}  {100.0 * cs[k] / n:5.1f} %' + (f'   stood: median {q(du, .5):.2f} s  p25 {q(du, .25):.2f}  p75 {q(du, .75):.2f}' if du else ''))
@@ -163,17 +180,25 @@ def main():
         # World.h Delivery rows. unfired = every close with no fire EXCEPT `refused` (sight / line of fire / range: the sim holds those casts itself),
         # over the windows that were not refused; stood = how long such a claim stood. A table with under 5 samples is the pooled one.
         def dec(v): return '{ ' + ', '.join(f'{q(v, i / 10):.2f}f' for i in range(11)) + ' }'
-        pool_stood = [w['dur'] for w in use if cause(w) in ('replaced', 'not-built', 'built-yes-unfired') and w['dur'] is not None]
+        pool_stood = [w['dur'] for w in use if cause(w) in UNFIRED and w['dur'] is not None]
+        pool_first = [w['fires'][0] for w in use if w['fires'] and not w['conc']]
+        print(f'// pooled first fire, fire-and-forget (the rows never sampled: summon, ward, armor) n={len(pool_first)}: {dec(pool_first)}')
         print(f'\n// World.h Delivery (deciles 0, 10, .. 100 %, seconds). pick -> OPEN {lagmed:.2f} s. pooled stood n={len(pool_stood)}: {dec(pool_stood)}')
         for (nat, conc), (first, rep, cs, n) in rows.items():
             ws = [w for w in use if w['nat'] == nat and w['conc'] == conc]
-            unf = [w for w in ws if cause(w) in ('replaced', 'not-built', 'built-yes-unfired')]
-            den = sum(1 for w in ws if cause(w) not in ('refused', 'open-at-log-end'))
+            unf = [w for w in ws if cause(w) in UNFIRED]
+            den = sum(1 for w in ws if cause(w) in UNFIRED or cause(w) == 'fired')   # refused, target-died, shape-gap and open-at-log-end are in neither
             stood = [w['dur'] for w in unf if w['dur'] is not None]
             print(f'//   {nat}{"/conc" if conc else ""}: unfired {len(unf)}/{den} = {len(unf) / max(1, den):.3f}')
             print(f'//     first  n={len(first):2d} {dec(first) if len(first) >= 5 else "(pooled)"}')
             print(f'//     repeat n={len(rep):2d} {dec(rep) if len(rep) >= 5 else "(none: the first table)"}')
             print(f'//     stood  n={len(stood):2d} {dec(stood) if len(stood) >= 5 else "(pooled)"}')
+    gaps = collections.Counter((w['spell'], w['nat'], w['conc']) for w in use if cause(w) == 'shape-gap')
+    if gaps:
+        print('\nNOT BUILT by shape (for Harbinger: a claim for one of these builds no caster):')
+        for (sp, nat, conc), n in sorted(gaps.items(), key=lambda kv: -kv[1]):
+            tot = sum(1 for w in use if w['spell'] == sp)
+            print(f'  {sp} {SHAPE_GAP[sp][0]:20s} {SHAPE_GAP[sp][1]:26s} not built {n} of {tot} windows ({nat}{", concentration" if conc else ""})')
     return 0
 
 

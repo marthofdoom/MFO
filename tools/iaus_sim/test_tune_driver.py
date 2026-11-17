@@ -30,6 +30,21 @@ class World(unittest.TestCase):   # sim v3: the driver always names the world (v
             T.world_flags("v2", "--world v3")
 
 
+class Cards(unittest.TestCase):   # review F2 of 5749026a: every band of Playstyles.h is parsed, a two-sided or raw one is never silently dropped
+    def test_survival_bands_are_parsed(self):
+        T.CARDS.clear()
+        cards = T.load_cards()
+        for cls in ("mage", "evoker", "conjurer", "warlock", "healer"):
+            self.assertIn("downs/f", [b[0] for b in cards[cls]["bands"]], cls)
+            self.assertIn("selfHealLow%", [b[0] for b in cards[cls]["bands"]], cls)
+
+    def test_band_regexes(self):
+        import re
+        line = 'inRange("x%", 25, 75, "why"), atMost("y", 3, "why"), Band{ "z", 1, 2, "raw" }'
+        self.assertEqual(len(re.findall(r'\b(?:atLeast|atMost|inRange)\(|\bBand\{', line)), 3)
+        self.assertEqual(re.findall(r'inRange\("([^"]+)", ([-0-9.]+), ([-0-9.]+)', line), [("x%", "25", "75")])
+
+
 class Edge(unittest.TestCase):
     def setUp(self):
         T.KNOB_META.clear()

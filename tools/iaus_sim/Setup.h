@@ -137,6 +137,7 @@ namespace Sim {
         // SIM V3 scenario geometry. ring > 0: the custom foes stand evenly on a circle of that radius AROUND THE SUBJECT (they come from every side).
         // perch >= 0: that custom foe stands on a ledge perchZ units up (height switch; not airborne, so the game's OutOfMeleeReach is false for it).
         float ring = 0; int perch = -1; float perchZ = 350;
+        bool  engageOnSight = false;   // the fight models Harbinger's ch.21 entry (Fight::entryRoad): his first engine target is his Standing entry foe
         int   onSubjectN = 0;      // the first N foes start on the subject and stay on him 8 s (the others follow foesOnPlayer): a fight on two fronts
         bool  perchPath = false;   // the ledge has a way up (a tower's stair): a blade that files the 128 approach on it paths there (World.h Brain, the climb MODEL)
     };
@@ -307,7 +308,7 @@ namespace Sim {
         { Kit& k0 = F.ctl[0].book.kit; if (g_forcePot[0] >= 0) k0.potionsHealth = g_forcePot[0]; if (g_forcePot[1] >= 0) k0.potionsMagicka = g_forcePot[1]; if (g_forcePot[2] >= 0) k0.potionsStamina = g_forcePot[2]; }   // --potion-calib
         if (g_consumables) for (Ctl& c : F.ctl) FillConsumables(c, fs.seed);
         for (Ctl& c : F.ctl) { c.potions0 = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina; c.pot0[0] = c.book.kit.potionsHealth; c.pot0[1] = c.book.kit.potionsMagicka; c.pot0[2] = c.book.kit.potionsStamina; }
-        F.interior = fs.interior;
+        F.interior = fs.interior; F.entryRoad = fs.engageOnSight || g_engageOnSight;
         if (g_stealth > 0) {   // drawn from a stream of their own, so a fight is the same fight in every stealth mode (and mode 0 is main's, draw for draw)
             Rng S; S.g.seed(fs.seed * 0x9E3779B97F4A7C15ULL + 77u);
             F.light = fs.light >= 0 ? fs.light : fs.interior ? S.U(0.15f, 0.6f) : S.P(0.35f) ? 0.2f : 0.9f;
