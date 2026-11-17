@@ -25,6 +25,17 @@ This is a real release on top of 2.11.1. It needs Harbinger v0.20.2 (ABI v45, un
 - **New opt-in probe `bStanceProbe`** in the INI. It only logs a follower's stance state, and it is off by default.
 - **The shipped tuning files carry the final 2.11.1 round.** All 15 class cells and the potion values are updated.
 
+## v2.11.5 -- Stability: every engine change MFO makes now happens on the game's main thread
+
+This is a stability release. It needs Harbinger v0.20.4. No new co-save record and no change to your saves.
+
+- **MFO's background thread no longer touches live game data.** Followers' decisions are still made in the background, but every read of an inventory or of active effects now comes from a copy built on the main thread, and every change (equips, drinks, spell teaching, item moves, package and alias changes) is sent to the main thread and checked again there. Before, some of these ran beside the game's own updates of the same data, which could crash or freeze in rare timing.
+- **Quest alias fills run on the main thread.** The game's alias call edits the follower directly, so it is no longer made from the background.
+- **Nothing MFO queued is left half done in a save.** Before a save, MFO finishes its current background pass and runs every queued change, so the save never holds a change that was only half applied.
+- **A failure stops only its own part, loudly.** If one part of MFO's update ever throws an error, only that part stops, the log names it, followers are released to the game's own AI if it was a core part, and a notice tells you. It comes back on the next load.
+- **Looting stays smooth.** A follower's pack is rebuilt once per frame after a take, and your own pack is only read when the follower menu needs it.
+- **New diagnostics.** An [overlap] line every minute counts any background work that ran beside the game's updates, and any engine change made off the main thread. Both should read 0.
+
 ## v2.11.4 -- No more freezes while followers loot
 
 This is a bug fix release. It works with Harbinger v0.20.3. No new co-save record.
