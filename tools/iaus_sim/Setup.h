@@ -134,6 +134,9 @@ namespace Sim {
         // Scenario geometry: solid cover placed by hand, in the fight's own frame (u = units from the player toward the foes' centre,
         // v = units to the left of that line). Added to the random occluders (`occluders`).
         struct Cover { float u, v, r; }; std::vector<Cover> cover;
+        // SIM V3 scenario geometry. ring > 0: the custom foes stand evenly on a circle of that radius AROUND THE SUBJECT (they come from every side).
+        // perch >= 0: that custom foe stands on a ledge perchZ units up (height switch; not airborne, so the game's OutOfMeleeReach is false for it).
+        float ring = 0; int perch = -1; float perchZ = 350;
     };
 
     // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
@@ -257,7 +260,7 @@ namespace Sim {
         food(1, 0xFC000002u, 15.0f, 8.0f, "FoodVenisonStew");
     }
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
-        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
+        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); F.V.g.seed(fs.seed * 0xA24BAED4963EE407ULL + 0x9FB21C651E98DF25ULL); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
         const SimClass& pc = t1[static_cast<std::size_t>(fs.playerFam)];
         { auto pb = BuildFollower(D, pc.fam, pc.kit, pc.gate, fs.level, R); auto ps = std::make_shared<ActorSpec>(pb.spec); ps->name = "Player"; ps->spells.clear();
@@ -277,7 +280,11 @@ namespace Sim {
             Body& nf = F.b.back(); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : 0.0f, ft ? ft->c.y : 0.0f);   // a foe starts facing its target, else the party
         };
         for (const auto& m : fs.foes) addFoe(std::shared_ptr<const ActorSpec>(std::shared_ptr<const ActorSpec>{}, &D.specs[static_cast<std::size_t>(m.first)]), m.second.first, m.second.second);
-        for (const auto& s : fs.customFoes) { const float dy = G.U(-fs.foeSpread, fs.foeSpread), dx = G.U(-fs.foeSpread, fs.foeSpread); addFoe(s, dx, dy); }   // dy FIRST: the order the old call's arguments were drawn in (g++ evaluates them right to left), now fixed in the source so every compiler builds the same fights
+        for (std::size_t ci = 0; ci < fs.customFoes.size(); ++ci) { const auto& s = fs.customFoes[ci]; const float dy = G.U(-fs.foeSpread, fs.foeSpread), dx = G.U(-fs.foeSpread, fs.foeSpread); addFoe(s, dx, dy);
+            Body& nf = F.b.back();
+            if (fs.ring > 0.0f) { const Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; const float a = ang + 6.2831853f * static_cast<float>(ci) / static_cast<float>(fs.customFoes.size());
+                nf.c.x = s0.c.x + fs.ring * std::cos(a); nf.c.y = s0.c.y + fs.ring * std::sin(a); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : s0.c.x, ft ? ft->c.y : s0.c.y); }
+            if (static_cast<int>(ci) == fs.perch && g_v3.height) { nf.perch = true; nf.c.z = fs.perchZ; } }   // dy FIRST: the order the old call's arguments were drawn in (g++ evaluates them right to left), now fixed in the source so every compiler builds the same fights
         for (std::size_t i = 0; i < fs.late.size(); ++i) { const float lx = G.U(-200, 200), ly = G.U(-200, 200); F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + lx, cy + ly, i < fs.lateTags.size() ? fs.lateTags[i] : std::string() }); }
         if (fs.targetRatio > 0) {   // late foes count toward the strength as if present
             float ratio = 0.0f;

@@ -119,6 +119,17 @@ namespace Sim {
         s.summon = na == Prune::Nature::Summon; s.ctrl = na == Prune::Nature::Control; return s;
     }
 
+    // SIM V3 fixtures (hand-written, the SHAPE of Skyrim.esm's Flame Cloak and Circle of Protection, and of the concentration self buff of the
+    // field report in ClickUp 1dfcuabd22x; the numbers are fixtures, not read from the game). They enter a book only by name (ensure "cloak" /
+    // "circle" / "stream") and only when the loaded world has no spell of that shape: no book's random draw sees them.
+    inline const std::vector<SimSpell>& AreaFixtures() {
+        static const std::vector<SimSpell> v = [] { using N = Prune::Nature;
+            SimSpell cloak = Fx("FixFlameCloak", N::Buff, kAvDestruction, kAvResistFire, 289, 0, 0, 10, 0.5f, 50); cloak.areaKind = 1; cloak.areaDps = 8; cloak.areaDur = 60; cloak.e.meleeBuff = true; cloak.e.resistAv = -1; cloak.e.role = Prune::RoleOf(N::Buff, -1);
+            SimSpell circle = Fx("FixCircleOfProtection", N::Buff, kAvRestoration, -1, 171, 0, 0, 20, 0.5f, 50); circle.areaKind = 2; circle.areaArmor = 60; circle.areaDur = 60;
+            SimSpell stride = Fx("FixChannelledStride", N::Buff, kAvAlteration, -1, 30, 0, 0, 0, 2.0f, 25); stride.e.concentration = true; stride.buffDur = 15;
+            return std::vector<SimSpell>{ cloak, circle, stride }; }();
+        return v;
+    }
     inline Data BuiltinData() {
         Data b;   // rules = Skyrim.esm values (the struct's defaults)
         b.buckets = { 5, 12, 20, 28, 38, 50 };
@@ -218,6 +229,7 @@ namespace Sim {
         if (tok == "heal") return s.e.nature == Prune::Nature::Heal && s.e.selfDelivery; if (tok == "healOther") return s.healOther;
         if (tok == "fire" || tok == "frost" || tok == "shock") return off && s.element == tok && s.e.areaUnits <= 0 && !s.e.touch && !s.e.selfDelivery;
         if (tok == "armor") return s.armor > 0; if (tok == "summon") return s.summon; if (tok == "reanimate") return s.reanimate;
+        if (tok == "cloak") return s.areaKind == 1; if (tok == "circle") return s.areaKind == 2; if (tok == "stream") return s.e.concentration && s.e.selfDelivery && s.e.nature == Prune::Nature::Buff && s.areaKind == 0;
         return false;
     }
 
@@ -265,6 +277,11 @@ namespace Sim {
             if (s.school >= 18 && s.school <= 22) { static const char* sn[5] = { "Alteration", "Conjuration", "Destruction", "Illusion", "Restoration" };
                 auto i = D.pSpellCost.find(sn[s.school - 18]); if (i != D.pSpellCost.end()) for (const auto& p : i->second) if (p.first <= sk && std::fabs(p.first - static_cast<float>(s.skillReq)) < 1.0f) { m *= p.second; break; } }
             return s.cost0 * m; };
+        // SIM V3 (perk-effects.md 9): the ModSpellCost share of costOf alone (the perk row of his school at this spell's tier), for Snapshot::perks.spellCost
+        auto perkCostOf = [&](const SimSpell& s) { const float sk = s.school >= 0 ? a.Skill(s.school) : 15.0f;
+            if (s.school >= 18 && s.school <= 22) { static const char* sn[5] = { "Alteration", "Conjuration", "Destruction", "Illusion", "Restoration" };
+                auto i = D.pSpellCost.find(sn[s.school - 18]); if (i != D.pSpellCost.end()) for (const auto& p : i->second) if (p.first <= sk && std::fabs(p.first - static_cast<float>(s.skillReq)) < 1.0f) return p.second; }
+            return 1.0f; };
         const bool casts = gate.spellsOnClass;
         std::vector<const SimSpell*> afford;
         for (const SimSpell& s : D.spells) if (static_cast<float>(s.skillReq) <= (s.school >= 0 ? a.Skill(s.school) : 15.0f) + 10 && costOf(s) <= a.mp * 0.7f) afford.push_back(&s);
@@ -283,7 +300,9 @@ namespace Sim {
         if (ensure) for (const std::string& tok : *ensure) {   // a scenario needs him to know one: the dearest he can afford twice, else the cheapest
             bool have = false; for (const SimSpell& s : fb.spells) have |= SpellIs(s, tok); if (have) continue;
             const SimSpell* pick = nullptr; const SimSpell* cheap = nullptr;
-            for (const SimSpell& s : (tok == "reanimate" ? D.reanimSpells : D.spells)) { if (!SpellIs(s, tok)) continue; const float c0 = costOf(s); if (!cheap || c0 < costOf(*cheap)) cheap = &s; if (c0 <= a.mp * 0.45f && (!pick || c0 > costOf(*pick))) pick = &s; }
+            const bool v3tok = tok == "cloak" || tok == "circle" || tok == "stream"; bool inList = false;   // SIM V3: the list's own spell of that shape first, else the fixture
+            if (v3tok) for (const SimSpell& s : D.spells) inList |= SpellIs(s, tok);
+            for (const SimSpell& s : (tok == "reanimate" ? D.reanimSpells : (v3tok && !inList) ? AreaFixtures() : D.spells)) { if (!SpellIs(s, tok)) continue; const float c0 = costOf(s); if (!cheap || c0 < costOf(*cheap)) cheap = &s; if (c0 <= a.mp * 0.45f && (!pick || c0 > costOf(*pick))) pick = &s; }
             if (!pick) pick = cheap; if (pick) fb.spells.push_back(*pick);
         }
         if (kc.staff && withKit && R.I(0, 1) == 0) {   // a staff: an entry with no magicka cost and charges
@@ -300,13 +319,13 @@ namespace Sim {
             { static constexpr std::int8_t kId[5] = { MFO::Iaus::kAlteration, MFO::Iaus::kConjuration, MFO::Iaus::kDestruction, MFO::Iaus::kIllusion, MFO::Iaus::kRestoration };
               s.e.school = s.school >= 18 && s.school <= 22 ? kId[s.school - 18] : static_cast<std::int8_t>(-1); }
             if (static_cast<int>(i) != fb.staffIdx && i < firstScroll) {
-                s.e.cost = costOf(s);
+                s.e.cost = costOf(s); s.perkCost = perkCostOf(s);
                 static const char* sn[5] = { "Alteration", "Conjuration", "Destruction", "Illusion", "Restoration" };
                 if (s.school >= 18 && s.school <= 22) {   // ModSpellMagnitude perks of his school (and element)
                     const float sk = a.Skill(s.school); const std::string sc = sn[s.school - 18];
                     const std::string el = s.element == "fire" ? "MagicDamageFire" : s.element == "frost" ? "MagicDamageFrost" : s.element == "shock" ? "MagicDamageShock" : "";
                     const float m = PerkBest(D.pSpellMag, sc + ":all", sk) * (el.empty() ? 1.0f : PerkBest(D.pSpellMag, sc + ":" + el, sk));
-                    s.dmg *= m; s.dot *= m; s.heal *= m; s.hot *= m;
+                    s.dmg *= m; s.dot *= m; s.heal *= m; s.hot *= m; s.perkMag = m;
                 }
             }
             fb.book.entries.push_back(s.e);
