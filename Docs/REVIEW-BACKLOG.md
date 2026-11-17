@@ -3520,3 +3520,9 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** a staff in the LEFT hand is not priced: `EstimateHit`'s staff-in-left path returns before `leftShare`, so a staff right + melee left reads 0.
 - **(SEV-5):** heals and ally buffs: a channelled HEAL is not priced (heal-hold rules own the hand); a buff at an ally through the ConcProxy is priced the same as a self buff (it holds the same hand).
 - **(SEV-5):** mid-channel the bow is unequipped (`cast/Hands.cpp:977`), so `w` is likely null and the cost reads not applicable then. Harmless: the stream runs to its cap, and the price matters at the pick, before the bow leaves his hand.
+
+## fix/field-1117-cast (Sonnet 5.5 author, 2026-11-17, tier B; against aeb8d543)
+- OPEN (design, not built): a self-delivered AoE OFFENSE spell (Frost Nova, shape ScriptRider, Self / FF, kind Offense) still takes the unanimated `self-stream` road (`cast/CastOn.cpp` self fork, `CastSelfDirect`). `ChooseBuffRoad` answers NotBuff for Offense kind, so there is no claim road to hand it to. It needs Offense-kind spells routed through the buff claim shape (ClaimOffenseCast, target = the caster's own FormID, Script row) and a Harbinger field proof that an Offensive-row self claim fires; that is a new road/claim shape (animations required for ALL actions). Field 1117 Arch-Mage 10:36:54.
+- PLACEHOLDERS (labelled, derive from the sim / field): `SubstrateTuning::kUnfiredBackoffMs` 30 s (cast/SubstrateRoad.cpp), `kUnholyHoldMs` 6 s (logistics/Silver.cpp), `kFullFireWindowMs` 60 s (cast/HealRoad.cpp, only a recency guard).
+- A7 backs off ANY unfired close of the pair, not only "the behaviour tree never ran" (MFO cannot read Harbinger's close reason; its own `closeReason` is closed-unfired / cast-claim-ended / not-opened). Harbinger ask: expose the close reason, and diagnose why the substrate tree no longer starts (FINDINGS A7).
+

@@ -43,6 +43,18 @@ namespace MFO::Actuation {
     namespace {
         using RoadClock = std::chrono::steady_clock;
 
+        // THE SUBSTRATE ROAD'S TUNABLES (principle 12: one named place). Both are LABELLED PLACEHOLDERS.
+        //   kUnfiredBackoffMs: after a pair for (spell, target) CLOSES UNFIRED (field 1117: "the behaviour tree never
+        //     ran within the start floor", 8 of 11 Candlelight windows, each re-filed ~1 s later), the same pair is not
+        //     filed again for this long. A placeholder: 30 s is not derived from any measurement. The start floor
+        //     is 10 s, so one retry per 3 floors.
+        //   kOccludedTrustSec: how old an own-ray verdict may be and still refuse an open toward an OCCLUDED recipient
+        //     (the heal road's kHealLosTrustSec shape).
+        struct SubstrateTuning {
+            static constexpr std::uint32_t kUnfiredBackoffMs = 30000;   // PLACEHOLDER
+            static constexpr float         kOccludedTrustSec = 3.0f;    // PLACEHOLDER (= kHealLosTrustSec)
+        };
+
         std::mutex g_roadMx;
         // (follower, spell, recipient) -> this cast's pacing on this road. PER RECIPIENT, so AUTO's series reaches the
         // next ally in need while the one just served is paced. TWO windows (review F4 on 733c20cc): the SHORT floor
@@ -286,12 +298,33 @@ namespace MFO::Actuation {
             if (!HealInReach(a_follower, recip, a_spell)) return SubstrateTry::Skipped;
         }
 
+        // 4b. NEVER OPEN TOWARD AN OCCLUDED RECIPIENT (A7, field 1117: Cicero 2000 u away behind geometry, 10:24:46): the
+        //     tree starts, the spell cannot reach him, the pair closes unfired. Own-ray verdict (Basis::Own, every MFO spell
+        //     decision); Unknown opens as today (fail-open by design, Sightline.h). Want()ed so the verdict lands next frame.
+        if (other) {
+            Sightline::Want(fid, { rid }, Sightline::Basis::Own);
+            if (Sightline::CheckWithin(fid, rid, SubstrateTuning::kOccludedTrustSec, Sightline::Basis::Own) ==
+                Sightline::Verdict::Occluded) {
+                NoteRefused(fid, a_spell, 10, std::format("the recipient {:08X} reads OCCLUDED on his own ray (site {})", rid, site));
+                return SubstrateTry::Skipped;
+            }
+        }
+
         // The ch.8b target convention (BuffClaim / ComposedCast::Try): 0 = self for a Self-delivery or placement
         // spell; the caster's own FormID for a self cast of any other delivery (Harbinger's self-flip proxy, substrate
         // S1 R2 / ExplicitSelfBuff); the recipient otherwise.
         const bool placement = BuffPlacementSpell(a_spell);
         RE::FormID target = rid;
         if (!other && (placement || a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf)) target = 0;
+
+        // 4c. BACK OFF AN UNFIRED CLOSE (A7): this (spell, target) pair closed without firing within the backoff (a tree
+        //     that never ran): not re-filed on the next lap. Logged by NoteRefused (10 s per check). Placement spells too.
+        if (APMFBridge::SubstrateUnfiredWithin(fid, spellID, target, SubstrateTuning::kUnfiredBackoffMs)) {
+            NoteRefused(fid, a_spell, 11, std::format("this pair closed UNFIRED within the last {} s (the substrate's tree "
+                                                      "never ran?): backing off, never the direct road (site {})",
+                                                      SubstrateTuning::kUnfiredBackoffMs / 1000, site));
+            return SubstrateTry::Skipped;
+        }
 
         // 5. PACING and ALREADY UP (not for a placement spell: SummonGate decides a summon).
         const auto now = RoadClock::now();

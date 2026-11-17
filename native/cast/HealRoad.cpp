@@ -86,11 +86,19 @@ namespace MFO::Actuation {
             // hold in progress, from the claim's age so lost sight is not counted against the bound.
             long long         losAccumMs = 0;
             Clock::time_point losAccumStamp{};
+            // A2 (field 1117): when the recipient was first read at FULL while a cast of his was in flight on this
+            // hand (RecipientLost's D8 "finish first"); zeroed whenever he reads below full. A hand fire observed
+            // since this mark ends the hold: the cast that was in flight has landed, and the standing claim's next
+            // re-charge is not a cast anybody asked for.
+            Clock::time_point fullSince{};
             RE::FormID        displacing     = 0;
             int               displacingRule = kNoRule;
         };
         struct FollowerHealHands { HealHand hand[kHandCount]; };
         std::unordered_map<RE::FormID, FollowerHealHands> g_healHands;
+        // A2: how far back a hand fire may be and still count against HealHand::fullSince (the mark is the real bound;
+        // this only keeps HandFireSince's recency test from rejecting a fire the sweep lap was late to see).
+        constexpr std::uint32_t kFullFireWindowMs = 60000;
 
         // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (marth 2026-10-06, ClickUp 86e3m36qr: "We dont want to
         // end the heal claim in harbinger until that person is full healed. lost sight can interrupt the cast,
@@ -163,8 +171,10 @@ namespace MFO::Actuation {
         //   * at or above the rule's own HP threshold (only while NO claim serves him yet: the
         //     threshold starts a heal, it does not end one), or at full health -- unless a cast
         //     at him is in flight on that hand (D8: it finishes first).
+        // a_keepSpell (optional out): set true for the A2 exit (full health, the in-flight cast has FIRED since the
+        // full mark), which the caller releases with keepSpell so the hand is not interrupted mid-re-charge.
         const char* RecipientLost(RE::Actor* a_follower, RE::Actor* a_recipient, RE::SpellItem* a_spell,
-                                  std::size_t a_hand) {
+                                  std::size_t a_hand, bool* a_keepSpell = nullptr) {
             if (!a_recipient) return "the recipient is gone";
             if (a_recipient->IsDead()) return "the recipient is dead";
             if (a_recipient->IsDisabled()) return "the recipient is gone (disabled)";
@@ -180,8 +190,27 @@ namespace MFO::Actuation {
             if (a_hand >= kHandCount && g_firingAllyThreshold >= 0.0f &&
                 hp >= std::min(g_firingAllyThreshold, Vocab::kHealFull))
                 return "the recipient is at or above the rule's HP threshold";
-            if (hp >= Vocab::kHealFull && !inFlight)
+            if (hp >= Vocab::kHealFull && !inFlight) {
+                if (a_hand < kHandCount) g_healHands[fid].hand[a_hand].fullSince = {};
                 return "the recipient is at full health";
+            }
+            // A2 (field 1117, Jesper 10:28:40-48, 10:39:17-22): at full with a cast "in flight" is D8's finish-first
+            // ONLY for a charge begun before he reached full. The standing claim re-charges the spell right after each
+            // fire, so in flight stayed true for ever and the claim fired ~1/s on a full recipient until the expiry
+            // sweep. Mark the first full read; once a fire is observed on this hand since the mark, release (keepSpell).
+            if (a_hand < kHandCount) {
+                auto& hh = g_healHands[fid].hand[a_hand];
+                if (hp >= Vocab::kHealFull) {
+                    if (hh.fullSince == Clock::time_point{}) hh.fullSince = Clock::now();
+                    if (HandFireSince(fid, a_hand, hh.fullSince, kFullFireWindowMs)) {
+                        hh.fullSince = {};
+                        if (a_keepSpell) *a_keepSpell = true;
+                        return "the recipient is at full health (the cast in flight at the mark has fired)";
+                    }
+                } else {
+                    hh.fullSince = {};
+                }
+            }
             return nullptr;
         }
 
@@ -487,8 +516,9 @@ namespace MFO::Actuation {
             else if (rid != 0 && rcp &&
                      a_follower->GetPosition().GetDistance(rcp->GetPosition()) > Config::g_sharedRadius.load())
                 gone = "the recipient left the shared radius";
-            if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand)) {
-                ReleaseWithExit(a_follower, a_hand, hs, lost, gone ? "gone" : LostToken(lost));
+            bool keepLost = false;
+            if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand, &keepLost)) {
+                ReleaseWithExit(a_follower, a_hand, hs, lost, gone ? "gone" : LostToken(lost), keepLost);
                 return;
             }
             if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
@@ -949,8 +979,9 @@ namespace MFO::Actuation {
         // refresh). Lost -> a claim (or re-stream gap lock) of this rule's aimed at HIM is
         // released now, even mid-cast; transparent either way, the rules below run. Not a
         // fallback: nothing else casts this heal this lap.
-        if (const char* lost = RecipientLost(a_follower, recipient, a_spell, servedOn)) {
-            if (servedOn < kHandCount) ReleaseWithExit(a_follower, servedOn, spellID, lost, LostToken(lost));
+        bool keepLost = false;
+        if (const char* lost = RecipientLost(a_follower, recipient, a_spell, servedOn, &keepLost)) {
+            if (servedOn < kHandCount) ReleaseWithExit(a_follower, servedOn, spellID, lost, LostToken(lost), keepLost);
             return Outcome{ Result::FailedOther, std::format("animated heal not cast: {}", lost), true };
         }
 

@@ -100,6 +100,10 @@ namespace MFO::APMFBridge {
         std::unordered_map<RE::FormID, Pair> g_pairs;   // guarded by g_subMx
         // (follower, spell, target) -> the last FIRE seen for a pair (SubstrateFiredSince). Guarded by g_subMx.
         std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, Clock::time_point> g_fires;
+        // (follower, spell, target) -> when a pair for it last CLOSED WITHOUT FIRING (A7, field 1117: 8 of 11 Candlelight
+        // windows closed "the behaviour tree never ran" and MFO re-filed within ~1 s). SubstrateUnfiredWithin reads it;
+        // a fire of the pair erases it. Guarded by g_subMx; cleared with the pairs on load.
+        std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, Clock::time_point> g_unfired;
 
         std::atomic<bool> g_tooOldNoted{ false };
         // Re-review of 9bdd6fa: monotonic pair sequence. Opens run on the worker AND the main thread, and every
@@ -278,6 +282,15 @@ namespace MFO::APMFBridge {
         return it != g_fires.end() && it->second >= a_since;
     }
 
+    bool SubstrateUnfiredWithin(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, std::uint32_t a_withinMs) {
+        std::scoped_lock lock(g_subMx);
+        const auto it = g_unfired.find({ a_follower, a_spell, a_target });
+        if (it == g_unfired.end()) return false;
+        if (const auto f = g_fires.find({ a_follower, a_spell, a_target }); f != g_fires.end() && f->second >= it->second)
+            return false;   // it fired after that close: the road works for this pair
+        return MsSince(it->second, Clock::now()) < static_cast<long long>(a_withinMs);
+    }
+
     void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why) {
         bool styled = false;
         std::uint64_t seq = 0;
@@ -381,6 +394,7 @@ namespace MFO::APMFBridge {
                              "road=substrate-claim", fid, pr.closeReason ? pr.closeReason : "?",
                              MsSince(pr.filed, now), SpellName(pr.spell), pr.spell, pr.target, pr.site,
                              pr.held ? ", was held" : "", pr.claimed ? ", was claimed" : "");
+                if (!pr.fired) g_unfired[{ fid, pr.spell, pr.target }] = now;   // A7: the cast side backs off this pair
                 if (pr.styleWanted) styleClear.emplace_back(fid, pr.seq);
                 it = g_pairs.erase(it);
                 continue;
@@ -409,5 +423,6 @@ namespace MFO::APMFBridge {
         for (auto& [fid, pr] : g_pairs) ReleasePairLocked(api, pr);   // Harbinger wipes its own at kPreLoadGame: harmless
         g_pairs.clear();
         g_fires.clear();
+        g_unfired.clear();
     }
 }

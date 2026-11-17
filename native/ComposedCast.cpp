@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <spdlog/spdlog.h>
 
@@ -1021,6 +1022,8 @@ namespace MFO::ComposedCast {
         // g_watch): HealObsNoteClaimFire reads it right after NoteObservedCast on the same task.
         struct LastFire { RE::FormID form = 0; std::int32_t hand = 0; };
         std::unordered_map<RE::FormID, LastFire> g_lastFire;
+        // NoteObservedCast's "OTHER FIRED" once-per-pair keys. Worker-serial, like g_watch; cleared in Reset.
+        std::unordered_set<std::uint64_t> g_otherFired;
         // How far back an anim-graph SpellFire event may precede the TESSpellCastEvent's
         // AddTask'd read: the release event comes first (ENGINE_NOTES: MRh_SpellFire_Event ->
         // StartCastImpl), and the sink's task can wait a pump lap or more behind it.
@@ -1086,6 +1089,19 @@ namespace MFO::ComposedCast {
                 }
             }
         }
+        // OTHER FIRED (field 1117, Harbinger's [ctcensus] OTHER FIRED twin): the engine cast something that NO standing claim of
+        // this follower names -- the AI's own spell beside our claim (Jesper's Incinerate beside MFO's Shadow Drain claim,
+        // 10:36:55). Passive; info, once per (follower, claimed spell, fired form) pair so a repeating AI cast is one line.
+        if (!mark[0] && !mark[1]) {
+            const RE::FormID claimed = it->second.hand[0].spell != 0 ? it->second.hand[0].spell : it->second.hand[1].spell;
+            if (claimed != 0) {
+                const auto key = (static_cast<std::uint64_t>(a_follower) * 0x9E3779B97F4A7C15ull) ^
+                                 (static_cast<std::uint64_t>(claimed) << 32) ^ a_spell;
+                if (g_otherFired.insert(key).second)
+                    spdlog::info("[cfc] {:08X} OTHER FIRED {:08X} while MFO's claim drives {:08X} -- the engine cast "
+                                 "something the claim did not name (logged once per pair)", a_follower, a_spell, claimed);
+            }
+        }
         g_lastFire[a_follower] = LastFire{ a_spell, hand };
         for (int i = 0; i < 2; ++i) {
             if (!mark[i]) continue;
@@ -1119,6 +1135,7 @@ namespace MFO::ComposedCast {
         g_lastHoldLog.clear();
         g_roadLog.clear();
         g_lastFire.clear();
+        g_otherFired.clear();
     }
 
 }

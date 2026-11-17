@@ -1161,6 +1161,8 @@ hybrid all run), now hand-aware:
 - **An Offense spell at a real (non-self) target** — the only real decision:
   `Loadout::PlanCastHand`'s result is passed straight through.
 
+**2026-11-17 field fixes (`fix/field-1117-cast`).** A Buff-kind self cast in the combat table whose follower has NO combat controller is no longer delivered on the unanimated `self-stream` road: it is deferred until his own combat starts (the animated buff claim road needs the controller). A self-delivered AoE OFFENSE spell (Frost Nova) still takes `self-stream`: open design item, `Docs/REVIEW-BACKLOG.md`. A heal claim on a recipient at full health releases (keepSpell) at the first hand fire since the full mark instead of re-charging for ever.
+
 **2026-11-13 hand-lock rules (`fix/iaus-claim-thrash`).** (1) A fresh unfired NON-HEAL incumbent (claim younger than `kInFlightHoldCap`) is not preempted by a higher NON-HEAL asker (`CanPreemptHand`; was Offense over Offense only, which let two cloaks swap the hand every lap). (2) A fire-and-forget self-cast on the direct `self-stream` road (unanimated, instant apply) holds NO hand lock: `CastOn` clears it (only a lock naming that spell, never under a standing claim) after Applied instead of `lockHands`; a paced Refreshed lap returns the transparent NoOp before any preempt or lock. Claim roads and concentration streams still lock.
 
 `ResolveCastHand` implements THE JUGGLE per `HandPick`, checking `HandFree`

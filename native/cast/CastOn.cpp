@@ -852,6 +852,26 @@ namespace MFO::Actuation {
                 // persistently-true combat cast_self does not starve attack/drink/
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
                 // no-op tick.
+                // A6 (field 1117, Jesper 10:25:03-08 and 10:27:43-50: 21 UNANIMATED self-stream buffs cast with his own combat
+                // off, 2000-5000 u from the fight). A Buff-kind spell in the combat table with NO combat controller would
+                // take CastSelfDirect's unanimated road (animations are required for ALL actions). It is DEFERRED instead:
+                // transparent, the rules below run, and the buff is asked again every lap until his own combat starts and
+                // the controller is live (the claim road then serves it). ONLY the DirectNoCombat answer defers: a shape
+                // the claim road can never serve (no seat / row, Harbinger absent) keeps its declared direct road.
+                if (buffKind && g_firingRule != kNoRule) {
+                    const char* roadWhy = nullptr;
+                    if (ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr, &roadWhy) == BuffRoad::DirectNoCombat) {
+                        static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_deferLog;   // worker-serial
+                        const auto now = std::chrono::steady_clock::now();
+                        auto& at = s_deferLog[(static_cast<std::uint64_t>(id) << 32) | a_spellID];
+                        if (at == std::chrono::steady_clock::time_point{} || now - at >= std::chrono::seconds(15)) {
+                            at = now;
+                            spdlog::info("[buff] {:08X} self-buff {:08X} DEFERRED -- no combat controller yet (his own combat "
+                                         "is off): the animated claim road needs it, never the unanimated direct cast", id, a_spellID);
+                        }
+                        return { Result::NoOp, "self-buff deferred: no combat controller (animated road only)", true };
+                    }
+                }
                 if (BuffUpTransparent(a_follower, spell))   // F2: BEFORE the preempt (cast/BuffRoad.cpp)
                     return { Result::NoOp, "self-buff already up (or its read is pending)", true };
                 // A LIVE FIRE-AND-FORGET STREAM OF THIS SPELL ALREADY HOLDS ITS CLAIM: this lap neither preempts nor locks unless the beat

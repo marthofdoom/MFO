@@ -62,7 +62,9 @@
 // The inventory walks (BestSilverWeapon, TrackedSilver, WantsSilverWeapon) are worker / main
 // pump only like every other GetInventory caller here.
 #include "Logistics_internal.h"
+#include <chrono>
 #include <mutex>
+#include <unordered_map>
 
 namespace MFO::Logistics {
 
@@ -354,11 +356,35 @@ namespace MFO::Logistics {
         return false;
     }
 
+    namespace {
+        // THE UNHOLY READ'S HOLD (field 1117, Cicero vs an Ash Spawn: "GAMBIT switch to silver" / "no longer Unholy -- Silver
+        // Sword out" four times in 24 s). The rule tables read live state (keywords, factions, a race that a transform or a
+        // morph swaps), so one actor can read Unholy, not Unholy, Unholy within seconds and every flip swapped the weapon.
+        // IsUnholy is the ONE reader every consumer calls (the condition evaluator, the silver gambit, the IAUS candidates),
+        // so the debounce lives here: a TRUE read holds for kUnholyHoldMs; a FALSE read inside it answers true. LABELLED
+        // PLACEHOLDER (6 s, three silver dwells; not derived). A false -> true flip is NOT delayed. Leaf mutex, any thread.
+        constexpr std::chrono::milliseconds kUnholyHoldMs{ 6000 };
+        std::mutex g_unholyMx;
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_unholyTrueAt;   // under g_unholyMx
+    }
+
     bool IsUnholy(RE::Actor* a_actor) {
         if (!a_actor) return false;
+        bool now = false;
         for (const auto& rule : R().unholy)
-            if (RuleTrue(rule, a_actor)) return true;
-        return false;
+            if (RuleTrue(rule, a_actor)) { now = true; break; }
+        const auto t  = std::chrono::steady_clock::now();
+        const auto id = a_actor->GetFormID();
+        std::scoped_lock lk(g_unholyMx);
+        if (now) {
+            g_unholyTrueAt[id] = t;
+            if (g_unholyTrueAt.size() > 256)
+                for (auto it = g_unholyTrueAt.begin(); it != g_unholyTrueAt.end();)
+                    it = t - it->second > kUnholyHoldMs ? g_unholyTrueAt.erase(it) : std::next(it);
+            return true;
+        }
+        const auto it = g_unholyTrueAt.find(id);
+        return it != g_unholyTrueAt.end() && t - it->second < kUnholyHoldMs;
     }
 
     RE::TESObjectWEAP* BestSilverWeapon(RE::Actor* a_follower, const FollowerState* a_state, bool a_oneHandOnly) {
