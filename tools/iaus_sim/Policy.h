@@ -369,14 +369,16 @@ namespace Sim {
             const SpellEntry& e = c.book.entries[static_cast<std::size_t>(si)]; const SimSpell& s = c.build->spells[static_cast<std::size_t>(si)];
             if (fam == Family::Scroll) { if (e.source != SpellSource::Scroll || e.count <= 0 || !c.gate.scrollUser) return Fired::Invalid; }
             else if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
+            bool thrashed = false;
             if (bodyHeld) {
                 // SIM V3 (delivery, --delivery old = before fix/iaus-claim-thrash): while a claim waits for its cast, a DIFFERENT non-heal pick takes the hand
                 // and the wait starts again ("swapped the left hand 22 laps in 10 s with 0 fires"). On main a fresh incumbent keeps the hand: Declined.
                 const SimSpell* cur = F.SpellOf(x, x.actSpell);
                 const bool thrash = g_v3.delivery && g_deliveryOld && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && F.now < x.claimUntil && F.now >= x.staggerUntil && F.now >= x.ctrlUntil
-                                    && x.actSpell != si && cur && cur->e.nature != Prune::Nature::Heal && s.e.nature != Prune::Nature::Heal;
+                                    && x.actSpell != si && cur && cur->e.nature != Prune::Nature::Heal && s.e.nature != Prune::Nature::Heal
+                                    && !(cur->e.nature == Prune::Nature::Offense && s.e.nature == Prune::Nature::Offense);   // the guard before the fix covered Offense over Offense only (cast/Hands.cpp CanPreemptHand)
                 if (!thrash) return Fired::Declined;
-                if (subj) ++t.castThrash;
+                thrashed = true;
             }
             const std::uint32_t target = hostile ? tg->c.id : (k.target ? k.target : x.c.id);
             if (hostile) {   // cast/Fire.cpp:430: a spell that can never affect this target is passed over, transparently, once the mirror has a verdict
@@ -390,6 +392,7 @@ namespace Sim {
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
                     (void)r; }
             }
+            if (thrashed && subj) ++t.castThrash;   // the waiting claim is dropped; the new one starts its own wait
             F.StartCast(x, si, s, target, e.source == SpellSource::Staff ? 0.0f : e.cost, true); if (hostile) { c.lastTarget = tg->c.id; peel(); }
             return Fired::Yes; }
         default: return Fired::Invalid;

@@ -494,10 +494,10 @@ namespace Sim {
         }
 
         // ── SIM V3 (iaus-sim-v3.md): the positional world's own questions. Each is asked only while its switch is on ──
-        // HANDS. His drawn weapon needs both hands (a bow, a crossbow, a staff, a two-hander): a cast puts it away (field 11-12, Auri).
+        // HANDS. His drawn weapon needs both hands (a bow, a crossbow, a two-hander; a staff is one-handed): a cast puts it away (field 11-12, Auri).
         [[nodiscard]] bool TwoHandWeapon(const Body& x) const {
             if (x.ctl < 0) return false; const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
-            return c.drawn == PostureKind::Bow || c.drawn == PostureKind::Staff || ((c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver) && x.spec->melee.TwoH());
+            return c.drawn == PostureKind::Bow || ((c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver) && x.spec->melee.TwoH());
         }
         // A spell stands on his left hand (cast/Actuation_internal.h:162: a self cast, a heal, a buff and any concentration spell are forced LEFT).
         [[nodiscard]] bool LeftHeld(const Body& x) const { return g_v3.hands && x.ctl >= 0 && (x.stream.live || (x.act == Act::Cast && now < x.actEnd)); }
@@ -797,7 +797,7 @@ namespace Sim {
         // ── the engine's combat AI (MODEL from the combat style) ──
         void Move(Body& x, float tx, float ty, float speed) {
             const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f) return;
-            if (x.airborne) return;   // SIM V3: on the wing he flies his circuit (FlightStep), nothing walks him
+            if (x.airborne || x.perch) return;   // SIM V3: on the wing he flies his circuit (FlightStep), on a ledge he stays on it; nothing walks him
             x.ranLast = speed >= 0.9f * x.spec->run;   // MODEL: combat movement is at the engine's RUN speed and a crouched run is still IsRunning (probe P1 logs it); a backpedal is not
             if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait (the crouched run)
             const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
@@ -1151,7 +1151,8 @@ namespace Sim {
             if (x.ctl == 0 && fromIaus) ++t.castPick;
             if (x.ctl >= 0) {   // SIM V3: a follower's cast is a claim that Harbinger builds and the engine fires (iaus-sim-v3.md 4.2, 4.3)
                 // hands: a stream has no charge of its own (the lab's 2 s is the lump of v2); MODEL 0.25 s to raise the hand
-                const float charge = g_v3.hands && s.e.concentration && s.e.source == SpellSource::Spell ? 0.25f : s.castSec;
+                const bool direct = g_v3.hands && s.e.concentration && s.e.source == SpellSource::Spell;   // a stream goes down the DIRECT road (CastTargetDirect / CastSelfDirect, Docs/CAST-DELIVERY.md): no claim to wait for
+                const float charge = direct ? 0.25f : s.castSec;
                 float lat = charge;
                 if (g_v3.delivery && fromIaus) {
                     if (!x.ctrlLive && g_deliveryOld) {   // before fix/heal-claim-gates: the controller is INACTIVE, the behaviour tree builds no caster, the claim stands with no cast until the hold cap
@@ -1159,7 +1160,7 @@ namespace Sim {
                         if (trace) std::fprintf(trace, "%7.2f  NOT BUILT %s: %s claimed on an inactive controller, no cast for 6 s\n", now, x.c.name.c_str(), s.e.name.c_str());
                         return; }
                     if (!x.ctrlLive) { lat = std::max(charge, 1.0f); if (x.ctl == 0) ++t.castDirect; }   // main: the DIRECT road (ComposedCast.cpp:785; MODEL 1 s)
-                    else lat = std::max(charge, g_deliverSec[s.e.nature == Prune::Nature::Heal ? 1 : 0]);
+                    else if (!direct) lat = std::max(charge, g_deliverSec[s.e.nature == Prune::Nature::Heal ? 1 : 0]);   // the composed / claimed road: the follower's own AI performs the cast (ComposedCast::Try)
                 }
                 x.hitAt = now + static_cast<double>(lat); x.claimUntil = x.hitAt - static_cast<double>(charge); x.actEnd = x.hitAt + TM::castRecover;
             }

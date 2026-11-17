@@ -60,9 +60,9 @@ namespace Sim {
     }
 
     // ── the extended action set ─────────────────────────────────────────────────────────────────────────
-    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, Hide, Flee, kCount };
+    enum class Ext : std::uint8_t { None = 0, StepBack, SprintBack, ToPlayer, ToHealer, GetSight, Block, Bash, Scroll, Hide, Flee, ClearLine, kCount };
     inline const char* Name(Ext e) {
-        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll", "ext:hide", "ext:flee" };
+        static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll", "ext:hide", "ext:flee", "ext:clear_line" };
         return n[static_cast<std::size_t>(e)];
     }
     struct Opt {                       // one thing he could do now
@@ -105,6 +105,8 @@ namespace Sim {
             bool heals = false; for (const SimSpell& s : o.build->spells) heals |= s.healOther; if (heals && o.gate.spellsOnClass) { out.push_back({ nullptr, Ext::ToHealer, -1, ob.c.id }); break; } }
         const Body* tg = F.Find(c.steer ? c.steer : x.c.targetId);
         if (tg && Fight::Up(*tg) && !F.Sees(x, *tg) && (c.drawn == PostureKind::Bow || c.drawn == PostureKind::Staff || c.gate.spellsOnClass)) out.push_back({ nullptr, Ext::GetSight, -1, tg->c.id });
+        // SIM V3 (lof): a friend stands in his line to the target and his hands are on spells: a short side step to a clear line (the catalogue has no family for it: design note N4)
+        if (g_v3.lof && tg && Fight::Up(*tg) && F.Sees(x, *tg) && c.gate.spellsOnClass && (c.drawn == PostureKind::None || c.drawn == PostureKind::Staff) && F.LofBlocker(x, *tg, 0.0f)) out.push_back({ nullptr, Ext::ClearLine, -1, tg->c.id });
         const bool blade = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         if (onMe && blade) out.push_back({ nullptr, Ext::Block, -1, onMe->c.id });
         if (blade && x.c.sp >= 20.0f) { if (casting) out.push_back({ nullptr, Ext::Bash, -1, casting->c.id }); else if (onMe && nd < F.Reach(x)) out.push_back({ nullptr, Ext::Bash, -1, onMe->c.id }); }
@@ -204,6 +206,10 @@ namespace Sim {
             case Ext::GetSight: { const Body* tg = G.Find(o.target); if (!tg) return false;
                 for (float r : { 250.0f, 450.0f, 700.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
                     if (SeesFrom(G, gx, gy, *tg)) return move(gx, gy, 2.5, false); }
+                return false; }
+            case Ext::ClearLine: { const Body* tg = G.Find(o.target); if (!tg) return false;   // the nearest point that sees him with no friend in the corridor
+                for (float r : { 120.0f, 200.0f, 320.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
+                    if (G.Standable(gx, gy) && SeesFrom(G, gx, gy, *tg) && G.LofClearFrom(x, gx, gy, *tg)) return move(gx, gy, 1.2, false); }
                 return false; }
             case Ext::Hide: case Ext::Flee: { const bool fl = o.ext == Ext::Flee; float gx = 0, gy = 0; if (c.runPhase != 0 || !G.ConcealPick(x, c, fl, gx, gy)) return false;
                 c.pick.valid = true; c.pick.flee = fl; c.pick.kind = fl ? 1 : 0; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl, true)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }

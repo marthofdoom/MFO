@@ -14,8 +14,9 @@ namespace Sim {
         bool lowerBetter;       // for the primary metric
         bool stealth = false;   // a scenario of the stealth / disengage lab (G1, G2, G3): part of the headline J and of "--scenario all" only while a stealth road is modelled (--stealth g1|hide|g3); by name or --scenario stealth always
         bool parked = false;    // a PARKED class's scenario (T3 / T4): excluded unless --parked
+        bool field = false;     // SIM V3: a FIELD FAILURE reproduction (iaus-sim-v3.md 8): by name or --scenario field only, never part of "all" or of the headline J
         std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> make;
-        Scenario(const char* n, const char* w, const char* m, bool lb, std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> mk, bool st = false, bool pk = false) : name(n), what(w), metrics(m), lowerBetter(lb), stealth(st), parked(pk), make(std::move(mk)) {}
+        Scenario(const char* n, const char* w, const char* m, bool lb, std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> mk, bool st = false, bool pk = false, bool fd = false) : name(n), what(w), metrics(m), lowerBetter(lb), stealth(st), parked(pk), field(fd), make(std::move(mk)) {}
     };
 
     inline const SimClass* ClassBySlug(const std::vector<SimClass>& v, const char* slug) {
@@ -38,7 +39,7 @@ namespace Sim {
         return m;
     }
 
-    inline std::vector<Scenario> AllScenarios(bool withStealth = false) {
+    inline std::vector<Scenario> AllScenarios(bool withStealth = false, bool withField = false) {
         using FS = FightSpec;
         auto base = [](const std::vector<SimClass>& c, const char* slug, int level, Cls player) { FS f; f.cls = ClassBySlug(c, slug); f.level = level; f.rank = 3; f.playerFam = player; f.foeDist = 1300; f.occluders = 0; return f; };
         std::vector<Scenario> v;
@@ -132,6 +133,33 @@ namespace Sim {
             "prio%,U,opener%,sneakDmg%,dur.s,win%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "listener", 30, Cls::Melee);
                 for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 28, R, 1.5f)); f.customFoes.push_back(Foe(D, { "healer" }, 26, R)); f.foeTags = { "grunt", "grunt", "healer" };
                 f.interior = true; f.light = 0.3f; f.occluders = 2; f.freeEntry = 1; f.foesOnPlayer = true; f.foeDist = 1100; f.targetRatio = 0.95f; return f; }, true, true });
+        if (!withField) return v;
+        // ── SIM V3: the field failures the lab could not see (ClickUp 1dfcuabd44c; iaus-sim-v3.md 8 and 11). Open ground, no random cover: the geometry is the point ──
+        v.push_back({ "jesper-dagger", "an evoker with a dagger on his belt behind a melee player, three bandits: he stays on his spells at spell range; with the blade drawn the engine walks him into the blades",
+            "U,downs/f,taken/s,drawnMelee%,contact%,minTgt,tgtDist,dl.fired%,dl.lofHeld%,dps", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 25, Cls::Melee);
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt", "grunt" }; f.ensure = { "fire", "heal" }; f.onSubject = true; f.foeDist = 1100; f.targetRatio = 0.95f; return f; }, false, false, true });
+        v.push_back({ "dragon-circle", "a dragon circles and fights the player: the evoker keeps it as his target for the whole circuit and casts whenever it is in range, he never drops it",
+            "cap.drop%,cap.starve%,cap.mean,cap.waived/f,nocand%,idle%,U,win%,dps", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 30, Cls::Ranged);
+                f.customFoes.push_back(Foe(D, { "dragon" }, 30, R)); f.foeTags = { "boss" }; f.ensure = { "fire", "frost", "shock" }; f.foesOnPlayer = true; f.foeDist = 1500; f.targetRatio = 0.90f; return f; }, false, false, true });
+        v.push_back({ "fire-lane", "the player and a knight stand between the evoker and two bandits: a bolt through a friend's back is held, so step to a clear line first",
+            "dl.fired%,dl.landed%,dl.lofHeld%,dl.lofHold.s,dl.lofExpired%,dl.claim.s,strafe/f,U,dps", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 26, Cls::Melee);
+                f.others.push_back(ClassBySlug(c, "knight")); for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 25, R, 2.0f)); f.foeTags = { "grunt", "grunt" };
+                f.ensure = { "fire", "shock" }; f.foesOnPlayer = true; f.foeDist = 700; f.foeSpread = 120; f.targetRatio = 0.90f; return f; }, false, false, true });
+        v.push_back({ "knight-ring", "four bandits come at the knight from four sides, no taunt: a guard only stops what is in front of him, so face the one that swings and keep the wall at his back",
+            "guardAll%,arcMiss%,guardDown%,inc/f,guard2%,guard%,U,downs/f,taken/s", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "knight", 26, Cls::Ranged);
+                for (int i = 0; i < 4; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt", "grunt", "grunt" }; f.onSubject = true; f.ring = 700; f.targetRatio = 0.95f; return f; }, false, false, true });
+        v.push_back({ "bow-channel", "an archer knows a channelled self buff (the field report of 11-12): while it runs her bow is off her back, so the buff is cast before the arrows fly or not at all",
+            "handLost%,handLostDmg/f,dl.stream.s,reDraw/f,dl.pick/f,U,dps,dur.s", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "ranged-off", 26, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 25, R, 1.5f)); f.foeTags = { "grunt", "grunt" }; f.ensure = { "stream" }; f.foesOnPlayer = true; f.foeDist = 1400; f.targetRatio = 0.90f; return f; }, false, false, true });
+        v.push_back({ "ledge-archer", "an archer shoots from a ledge no blade can reach and one bandit is on the ground: kill what can be reached, then answer the ledge with a bow or a spell, never swing at the air under it",
+            "U,win%,timeout%,dur.s,idle%,taken/s", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Ranged);
+                f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R)); f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "archer", "grunt" }; f.perch = 0; f.foeDist = 1000; f.targetRatio = 0.80f; return f; }, false, false, true });
+        v.push_back({ "cloak-area", "the evoker knows a flame cloak and three bandits are on him: the cloak is worth its magicka only while foes stand inside it, and it is not cast again while it burns",
+            "area.up%,area.foe.s/f,area.ally.s/f,area.recast%,U,downs/f,dps", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 28, Cls::Melee);
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 25, R)); f.foeTags = { "grunt", "grunt", "grunt" }; f.ensure = { "cloak", "fire" }; f.onSubject = true; f.foeDist = 600; f.targetRatio = 0.85f; return f; }, false, false, true });
+        v.push_back({ "circle-area", "a healer knows a protective circle and two bandits are on the player: the circle helps whoever stands in it, so it goes where the fight is and he does not walk out of it",
+            "area.up%,area.out%,area.recast%,U,pTaken/s,pdead%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "healer", 28, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 26, R, 1.5f)); f.foeTags = { "grunt", "grunt" }; f.ensure = { "circle", "healOther", "heal" }; f.foesOnPlayer = true; f.foeDist = 600; f.targetRatio = 0.90f; return f; }, false, false, true });
         return v;
     }
 

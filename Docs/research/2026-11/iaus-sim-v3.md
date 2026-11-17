@@ -54,8 +54,9 @@ shift the draws of another mechanism.
 |---|---|---|---|
 | Distance | 3D between the two origins whenever either z is not 0 | FACT | `iaus/Candidates.cpp:344` `GetPosition().GetDistance` and `Combatant::dist` |
 | Out of melee reach | airborne and abs(dz) > body height 120 + fMeleeReach 200 | FACT | `CombatSense.h:211-221`, `kNominalBodyHeight`, horizontal distance is not part of it |
-| A dragon's air time and ground time | 12 s and 15 s | MODEL (v2, kept) | iaus-sim-v2.md model table |
-| Flight path | a circuit around the party's centroid at take-off: radius r(t) = r0 + (rFar - r0) sin^2(pi t / T), one turn per air phase, altitude ramps to `alt` in 1.5 s | ASSUMPTION | the brief's field figure "2184 to 13242 u" is the only number. rFar = U(3000, 9000), alt = U(900, 2400): 3D distance to a follower then spans about 2000 to 9500 |
+| A dragon's ground time | 15 s | MODEL (v2, kept) | iaus-sim-v2.md model table |
+| A dragon's air time | T = U(12, 20) s (v2: 12 s) | ASSUMPTION | long enough to fly the circuit below at a plausible speed |
+| Flight path | a circuit around the party's centroid at take-off: radius r(t) = r0 + (rFar - r0) sin^2(pi t / T), half a turn per air phase (he lands on the far side), altitude ramps to `alt` in 1.5 s | ASSUMPTION | two field figures give the size: "2184 to 13242 u" (ClickUp 1dfcuabd44c) and "an airborne Alduin 5-11k away" (`CombatSense.h:124`). rFar = U(4000, 11000), alt = U(900, 2400) |
 | A perched foe (scenario `ledge-archer`) | stands at z 350, not airborne | MODEL | the game's OutOfMeleeReach is false for it (not airborne), so IAUS offers Attack and the swing can never land. The sim shows the same thing: he runs under the ledge and whiffs |
 
 ### 3.2 Chase cap and the waiver (`chase`)
@@ -86,8 +87,9 @@ field figure starts at (2184).
 | The class style follows the stance | the package style of that stance | FACT | `CombatStyle.cpp:156`, `classes/Package.cpp:29` (v2 had it) |
 | A foe steps back after a blow | chance = CSCR fallback mult, 0.5 to 1.5 s | MODEL | v2 `--foe-styles`, now on with the switch |
 | Attack slots | two or more melee attackers on one target approach points 50 degrees apart on a ring around it, the first one straight on | ASSUMPTION | the engine spreads attackers around a target. The angle has no source |
-| Circling | a melee fighter in reach sidesteps along the tangent with chance circle mult x 0.25 per think | ASSUMPTION | CSCR circle mult is the record value, the mapping to a rate is ours |
-| A caster strafes when his cast was held | after a line-of-fire hold the engine side steps 120 to 220 units across the line | ASSUMPTION | `Docs/ENGINE_NOTES.md:1165` (casters strafe and close while casting). CSLR strafe mult scales the chance |
+| A caster strafes when his cast is held | on each 0.25 s of a hold, with chance min(1, 2 x CSLR strafe mult), he side steps 160 units across the line, away from the friend in his way | ASSUMPTION | `Docs/ENGINE_NOTES.md:1165` (casters strafe and close while casting). Sensitivity in 12.3: without it most held casts never fire |
+
+Circling by CSCR circle mult is NOT modelled (it would be a third assumption about the same thing the slots already do).
 
 ### 3.4 Casters stay on spells (`casterhold`)
 
@@ -116,6 +118,7 @@ Every cast a follower's decision fires goes through the stages below, and every 
 
 | Row | Value | Level | Source |
 |---|---|---|---|
+| Which road | a fire-and-forget cast is CLAIMED and the follower's own AI performs it (`ComposedCast::Try`). A concentration spell goes down the DIRECT road (1 s beats), with no claim to wait for | FACT | `Docs/CAST-DELIVERY.md` "WHICH PATH IS PRIMARY", `cast/Roads.cpp:200-213` |
 | Claim to fire, offense | 2.4 s from the pick to the release (the charge time is inside it) | CALIBRATED, 1 session | `cast/Hands.cpp:362`: "2.3-2.5 s is an offense cast's claim to FIRE (Firebolt, DIAG 2026-09-06)" |
 | Claim to fire, heal | 4.5 s | CALIBRATED, one cast, soft | same comment: "4.5 s ... for the one heal ... treat it as soft" |
 | Self buff, summon, ward | as offense | ASSUMPTION | no measurement |
@@ -132,7 +135,7 @@ While a claim waits his feet move (Q-SIM-5) and his body does nothing else.
 | Row | Value | Level | Source |
 |---|---|---|---|
 | Which hand | a self cast, a heal, a buff and any concentration spell take the LEFT hand. Offense at a target takes a free hand, never the weapon hand | FACT | `cast/Actuation_internal.h:162-165` |
-| A weapon that needs both hands (bow, crossbow, two-hander, staff) | is put away for the cast and drawn again after it: + 0.65 s | FACT that it is denied (field 11-12, Auri), ASSUMPTION for 0.65 s (half of the v2 swap time) |
+| A weapon that needs both hands (bow, crossbow, two-hander; a staff is one-handed) | is put away for the cast and drawn again after it: + 0.65 s | FACT that it is denied (field 11-12, Auri), ASSUMPTION for 0.65 s (half of the v2 swap time) |
 | A shield | is off the arm while a cast holds the left hand: no guard for that time | MODEL | the left hand holds the spell |
 | Stream length | offense U(2, 6) s, heal and utility U(8, 15) s, a heal stops when the recipient is full | FACT | `Actuation_internal.h:115-119` `DrawConcCap` |
 | A stream's effect | per second: the record's magnitude and cost each 1 s beat (v2: a 2 s lump) | FACT (`kConcApplyPeriod = 1.0`) | |
@@ -156,12 +159,13 @@ An `Area` lives in the fight from the cast until its duration ends: centre, radi
 protective, and whether it MOVES WITH THE CASTER (a cloak) or stays FIXED at the cast point (a circle, a rune,
 a wall). Each second it applies its effect to whoever stands in it.
 
-- Which spell makes one: a Self delivered spell with an area and a duration. FACT that these are the shapes
-  (`iaus/Prune.h:59,70,93`). The world extract does not carry the effect archetype yet, so the kind is read
-  from the editor id (cloak = moves, circle / rune / wall = fixed). MODEL, and a `tools/list_balance` field
-  (`archetype`) is the proper fix: listed in section 10.
-- Built-in fixtures: Flame Cloak (moves, 8 per second, 60 s, 150 units) and Circle of Protection (fixed,
-  +armor to allies inside, 60 s, 300 units).
+- Which spell makes one. A cloak: a Self delivered effect of archetype Cloak (35), read from the world extract
+  (FACT, `Data.h` `kArCloak`). It moves with him. A circle: a Self delivered spell with an area whose editor id
+  holds "Circle" (MODEL: the hazard archetype is not in the extract, section 10 item N5). It stays where it was cast.
+  Runes and walls are dropped as Placement before IAUS sees them (`iaus/Prune.h:70,93`), in the game and here.
+- Fixtures (`Load.h` `AreaFixtures`, by name only, used when the loaded world has no spell of that shape):
+  FixFlameCloak (moves, 8 health per second, 60 s, 10 ft), FixCircleOfProtection (fixed, +60 armor to friends
+  inside, 60 s, 20 ft) and FixChannelledStride (a concentration self buff, for the weapon-hand scenario).
 - Tallies: seconds an area of his was up, foe seconds inside his hostile area, ally seconds inside it, seconds
   he stood outside his own protective circle, recasts while one was still up.
 - IAUS has no consideration for a live area. The sim only measures the cost today. Section 10 item N3.
@@ -209,7 +213,11 @@ the dragon's distance series (`[sense]` chase lines), the block arc (a probe).
   the stream's expected length, whether his fighting weapon needs that hand, and his weapon damage rate.
 - N3. A live area (1dfcuabd246): a Snapshot list of his active areas (centre, radius, moves or fixed, time left).
 - N4. A "step for a clear line" road for a caster whose cast is held (the bow has the hidden step only).
-- N5. `tools/list_balance` extract: the effect archetype per spell (cloak, hazard, rune) for section 6.
+- N5. `tools/list_balance` extract: the hazard archetype (a circle is a spawned hazard) so section 6 does not read an editor id.
+- N6. FOUND BY THE MIRROR, verify in native before acting: the waiver keeps a held foe in the snapshot, but
+  `Generate.cpp:135-136` still gives act.attack the chase cap as its reach, so the range curve vetoes it past
+  1.15 x the cap. Then no candidate names it, the decision goes idle, and the pin that the waiver needs is no
+  longer renewed. In the lab the dragon is dropped on 21 percent of the laps even with `--waiver player` (12.2).
 
 ## 11. Validation plan
 
@@ -226,6 +234,152 @@ shipped tunings. The numbers are in section 12.
 
 Then: the shipped tunings on the v3 world, per class, against their v2 score (no retune here).
 
-## 12. Results
+## 12. Results (built-in world, vanilla profile, shipped tunings of origin/main 0468bc3c)
 
-(filled by the validation run, see the end of this file)
+Commands: `tools/iaus_sim/run.sh --scenario <name> --fights 300 [arm]` for 12.1 to 12.5, and
+`--classes beta1 --seeds 1,2,3,4,5,6` for 12.6 and 12.7. The natural-bracket rows are from
+`tools/iaus_sim/baseline_v3_builtin.txt` (`--classes beta1 --baseline`, 8 fights x 5 ranks per cell).
+
+### 12.1 Jesper with the dagger: REPRODUCED, with one honest limit
+
+`jesper-dagger`: an Evoker (level 25) with a dagger, a melee player, three bandits that start on him.
+
+| Arm | U | downs / fight | taken / s | blade drawn | in contact | cast dps |
+|---|---|---|---|---|---|---|
+| v2, old rule (the sim until today) | 89.23 | 0.09 | 7.50 | 58.5 % | 58.1 % | 20.3 |
+| v2, the 11-13 rule | 90.53 | 0.00 | 3.53 | 31.8 % | 48.5 % | 25.2 |
+| v3, old rule (`--v3 casterhold=off`) | 85.57 | 0.11 | 3.92 | 37.3 % | 37.5 % | 5.4 |
+| v3, the 11-13 rule (default) | 87.63 | 0.00 | 2.64 | 4.2 % | 30.0 % | 6.9 |
+
+With the foes on him the dagger arm goes down 0.11 times a fight against 0.00, and costs 2.1 U in v3
+(1.3 U in v2). The nearest he comes to his target is 143 units in the dagger arm (field: 209).
+The limit: v2 shows the same sign in THIS scenario. What v2 could not do is show it where the tuner looks.
+In the natural bracket and the headline scenarios the v2 Evoker stood 40 percent of his time in contact with
+his blade out and still went down in 5 percent of fights, so no search ever saw a cost. That part does not
+change in v3: over the six caster cells the rule is worth nothing on average (12.7, `casterhold=off` reads
+79.96 against 79.11, about one and a half standard errors the WRONG way). The reason is in 12.3: when four
+casts in five fire 2.4 s late, a dagger is extra damage. So the dagger is punished when blades reach him and is
+still read as useful in an average fight. That is a statement about the world model's foes (they rarely choose
+the caster) as much as about the rule, and it is the first thing a field log should check.
+
+### 12.2 The circling dragon: REPRODUCED
+
+`dragon-circle`: an Evoker (level 30), a ranged player, one dragon that fights the player.
+
+| Arm | laps with the dragon dropped | mean cap | kept by the waiver / fight | idle laps |
+|---|---|---|---|---|
+| v2 | 0.00 % | 4096 (flat) | 0 | 0.0 % |
+| v3 `--waiver none` | 36.57 % | 2099 | 0 | 23.8 % |
+| v3 `--waiver self` (the game of 10-19) | 26.70 % | 2070 | 30.4 | 18.9 % |
+| v3 `--waiver player` (the game today) | 21.06 % | 2058 | 47.2 | 15.9 % |
+
+The cap reads 2058 to 2099 units against a dragon, the number the field figure starts at (2184). v2 never
+dropped it. The fix of 11-13 helps (26.7 to 21.1 percent) and does not close it: see item N6 in section 10.
+In the natural bracket the cap removes at least one live foe on 11 to 40 percent of a caster's laps
+(v2: never), because encounters start 900 to 2200 units out.
+
+### 12.3 Missed casts: REPRODUCED
+
+`fire-lane` (the player and a knight between the Evoker and two bandits) and the natural bracket.
+
+| Arm | fired of picked | held by the line of fire | given up after 6 s | claim to fire | cast dps |
+|---|---|---|---|---|---|
+| v2 | 99.4 % | 0 | 0 | 0.54 s | 23.0 |
+| v3 | 83.2 % | 24.3 % (2.7 s each) | 11.4 % | 2.73 s | 5.8 |
+| v3 `--v3 lof=off` | 96.3 % | 0 | 0 | 2.36 s | 14.0 |
+| v3 `--v3 stance=off` (no side step, no slots) | 33.3 % | 67.9 % | 62.3 % | 2.75 s | 1.1 |
+| v3 `--deliver-sec 1.0,1.5` | 89.3 % | 20.4 % | 8.2 % | 1.28 s | 8.5 |
+
+Natural bracket, v3, per class: picked casts that fired / held at least once / given up / released out of sight.
+
+| Class | picks / fight | fired | held | given up | out of sight | direct road |
+|---|---|---|---|---|---|---|
+| mage | 3.9 | 76.4 % | 21.0 % | 6.4 % | 1.3 % | 19.7 % |
+| evoker | 3.5 | 77.9 % | 26.4 % | 10.7 % | 0.7 % | 20.7 % |
+| conjurer | 4.2 | 85.2 % | 20.1 % | 4.1 % | 1.2 % | 16.6 % |
+| healer | 2.6 | 77.9 % | 12.5 % | 2.9 % | 1.9 % | 32.7 % |
+| warlock | 3.5 | 87.3 % | 10.6 % | 2.1 % | 0.0 % | 23.9 % |
+| mage-off | 5.4 | 87.1 % | 11.5 % | 3.7 % | 2.8 % | 14.3 % |
+
+The line of fire is the largest single cause, as the field said. Occlusion is small here: the built-in open
+fights carry 0 or 1 pillar, which is the world's cover density and not a finding. A caster's damage falls from
+about 23 a second to about 5.5, and that is the main reason the caster cells lose 5 to 15 J (12.6).
+The side step is an ASSUMPTION and the result leans on it hard (33 percent fired without it).
+
+### 12.4 Delivery: REPRODUCED
+
+Natural bracket, 60 fights, `--delivery old` against `main`.
+
+| Class | Arm | fired of picked | never built | picks dropped by a newer pick | picks / fight |
+|---|---|---|---|---|---|
+| evoker | old | 15.9 % | 4.6 % | most of them | 14.9 |
+| evoker | main | 82.4 % | 0 | 0 | 4.5 |
+| conjurer | old | 16.3 % | 4.8 % | most of them | 13.9 |
+| conjurer | main | 83.6 % | 0 | 0 | 4.1 |
+
+With the rules of before 11-13 a claim is replaced by the next lap's different pick again and again and five
+casts in six never happen (field: "22 laps in 10 s with 0 fires"). With main's guard it is gone.
+Headline J: 77.38 old against 79.11 main.
+
+### 12.5 The knight's guard: REPRODUCED (a number now exists outside a taunt)
+
+| Cell | blows landed on him / fight | met his guard | guard up, blow from outside the arc | no guard up | the old `guard2%` |
+|---|---|---|---|---|---|
+| knight, natural bracket | 6.0 | 22.6 % | 2.1 % | 75.3 % | 71.0 % (on 0.8 of the 6.0 blows) |
+| knight, `knight-ring` (four bandits around him) | 22.7 | 4.2 % | 0.7 % | 95.1 % | 69.0 % |
+| the same, `--block-arc 120` | 22.7 | 3.9 % | 1.0 % | 95.1 % | 68.5 % |
+| warrior, natural | 5.2 | 0.5 % | 0.0 % | 99.5 % | none |
+
+`guard2%` looked at one blow in seven. Over all blows the Knight meets 23 percent with his guard, and 4 percent
+when he is surrounded. Direction matters little (1 to 2 percent). The guard is simply not up: the Block
+candidate needs a swing in the air on him or two taunted foes. Timing and candidate supply are the gap, not the arc.
+
+### 12.6 The other mechanisms
+
+| Scenario | v2 | v3 |
+|---|---|---|
+| `bow-channel`: bow denied by a channelled self buff | 0 % of her time, dps 29.0 | 40.6 % of her time (217 weapon damage a fight), stream 10.8 s, dps 17.0 |
+| `cloak-area`: seconds a foe stands in his cloak, per fight | no area | 0.06 s, with the cloak up 16 % of the fight: he backs away from the foes it needs |
+| `circle-area`: time he stands outside his own circle | no area | 83 % of the time it is up |
+| `ledge-archer` | U 92.4 | U 90.8 (the ranged player kills it, the warrior cannot) |
+| Oracle gap on `fire-lane` / `jesper-dagger` / `dragon-circle` (K 4, 30 s, 10 fights) | | +3.64 / +5.27 / +3.24 U. `ext:clear_line` is offered and is not among the oracle's top wins: a 1.2 s step rarely clears a friend who stands next to the target |
+
+### 12.7 The shipped tunings under v3 (no retune)
+
+Headline J, 6 seeds, `--classes beta1`: v2 81.76 (se 0.39), v3 79.11 (se 0.4).
+One switch off at a time: `delivery` 81.85, `lof` 81.43, `stance` 73.24, `casterhold` 79.96, `chase` 79.17,
+`hands` 79.00, `blockdir` 79.12. `--delivery old` 77.38. `--deliver-sec 1.0,1.5` 81.33. `--waiver self` 79.09.
+
+Per class cell, each run alone (`--classes <cell> --seeds 1..6`, so the standard errors are wide):
+
+| Cell | v2 | v3 | | Cell | v2 | v3 |
+|---|---|---|---|---|---|---|
+| melee | 83.20 | 79.08 | | evoker | 83.73 | 74.70 |
+| ranged | 73.78 | 77.00 | | conjurer | 76.63 | 63.48 |
+| mage | 82.40 | 71.82 | | healer | 83.45 | 68.14 |
+| knight | 73.72 | 73.28 | | warlock | 80.00 | 75.43 |
+| warrior | 88.48 | 88.75 | | melee-off | 76.74 | 79.18 |
+| mercenary | 81.36 | 83.05 | | ranged-off | 74.83 | 69.31 |
+| archer | 83.74 | 82.87 | | mage-off | 71.91 | 69.51 |
+| thief | 86.48 | 88.59 | | | | |
+
+(These cells were scored before the staff was made one-handed. The headline and every other table are after it.)
+The casters lose 5 to 15 J, the weapon classes move inside their noise. LoreRim (evoker, knight, archer, 2 seeds,
+legacy potion price): v2 58.57, v3 54.51.
+
+### 12.8 Run time
+
+`--classes beta1 --seeds 1,2,3,4,5,6 --threads 16`: v2 9.1 s CPU (0.75 to 0.9 s wall), v3 11.1 s CPU
+(0.85 s wall). About 22 percent more. `--world v2` in the new binary costs the same as the old binary.
+
+### 12.9 Checks
+
+- `--world v2` is v2: the full metric dump of `--classes beta1` is identical to the binary of origin/main, line for
+  line, and `--compare baseline_builtin.txt` reads 0 metrics changed.
+- `run.sh` CLI checks: the three exact v2 pins run with `--world v2`. Eight v3 checks added, all pass.
+  One check fails and failed before this branch: "logistics world ... a list or an IAUS policy is refused"
+  (`--logi-policy iaus` exists now, the check is stale).
+- `test_tune_driver.py`: 21 tests OK. The driver needs no change: `--sim-flags "--world v2"` runs it on v2.
+- Address and undefined-behaviour sanitizers: beta1, the field scenarios (both delivery modes), the oracle,
+  table mode and LoreRim, no report.
+- The perk mirror is live: with `perks` on, `--curve evoker:cast_offense.94.py1=3` moves J. With it off it does not.

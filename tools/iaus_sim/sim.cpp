@@ -138,6 +138,7 @@ namespace {
           const double up = std::max(1e-9, s.upSec);
           m["handLost%"] = 100.0 * s.handLostSec / up; m["handLostDmg/f"] = s.handLostDmg / n; m["reDraw/f"] = double(s.reDraws) / n;
           m["area.up%"] = 100.0 * s.areaUpSec / up; m["area.foe.s/f"] = s.areaFoeSec / n; m["area.ally.s/f"] = s.areaAllySec / n; m["area.out%"] = pct(s.areaOutSec, s.areaUpSec); m["area.recast%"] = pct(double(s.areaRecast), double(s.areaOwnCasts));
+          m["drawnMelee%"] = 100.0 * s.drawnSec[1] / up;
           m["minTgt"] = a.minTgtN ? a.minTgtSum / double(a.minTgtN) : -1; m["strafe/f"] = double(s.strafes) / n; }
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
@@ -145,8 +146,8 @@ namespace {
 
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
-        const std::vector<Scenario> all = AllScenarios(true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "all,stealth" = both
-        for (const Scenario& s : all) if (!(s.parked && !g_parked) && (((!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
+        const std::vector<Scenario> all = AllScenarios(true, true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "field" = sim v3's field failures; "all,stealth" = both
+        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.field && (!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || (s.field && ("," + which + ",").find(",field,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; };
