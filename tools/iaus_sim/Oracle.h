@@ -3,12 +3,25 @@
 //
 // A rollout search with full information and no time budget over the same world. At each decision of a free
 // follower every option is tried in a copy of the fight, held for a commitment (as a person holds a choice), rolled
-// forward with the base policy for everyone over K random streams shared by all options, and scored by Utility().
+// forward with the base policy for everyone over random streams shared by all options, and scored by Utility().
 // The best option is taken. A written ruling acts as a constraint: an option a ruling forbids is never tried.
 //
-// OPTIONS = the catalogue's candidates (Generate) + "let his own AI run" + THE EXTENDED ACTION SET (Ext below):
-// what a follower can physically do that the catalogue has no family for yet (scrolls, deliberate repositioning,
-// block, bash). An oracle limited to the catalogue would hide exactly those gaps.
+// THE STANDING TUNING RULE (marth 2026-11-17, verbatim): "as a standing tuning rule the Oracle gets as many tries as it
+// wants for the best class based decisions. The tuning then follows the Oracle as its guide. The Oracle only has the
+// classes abilities at its disposal". And the goal: "The goal is that a classes tune will be the actual best possible
+// class behavior". What that means here (iaus-sim-v3.md section 14):
+//   NO QUALITY CAP   every candidate the generator offers is an option (no option limit); he decides at every decision
+//                    point the game has (each time the pump serves him and his body is free: OracleCfg::every = 0);
+//                    a rollout runs to the fight's end (H = Fight::maxSec); the streams per option are not a fixed K:
+//                    they run until the best option is STATISTICALLY SEPARATED from every other (Race below) or the
+//                    safety ceiling is hit (OracleCfg::ceiling, reported with how often it binds).
+//   CLASS-BOUND      every option, the extended set included, must be an ability of HIS CLASS (ClassRefuses: the ONE
+//                    reader of that rule) and may not break a written ruling of the class (RulingRefuses, Playstyles.h).
+//                    Every refusal is counted by reason (OracleStats::refused, the ORCREFUSED lines).
+//
+// OPTIONS = EVERY candidate of the catalogue (Generate) + every posture + "let his own AI run" + THE EXTENDED ACTION
+// SET (Ext below): what a follower of that class can physically do that the catalogue has no family for yet (scrolls,
+// deliberate repositioning, block, bash). An oracle limited to the catalogue would hide exactly those gaps.
 //
 // Every decision where IAUS's own pick differs from the oracle's is logged with the utility it cost (Disagreement):
 // the gap ledger's evidence.
@@ -90,9 +103,11 @@ namespace Sim {
         for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o)) continue; const float d = Fight::Dist(x, o); if (d < nd) { nd = d; near = &o; }
             if (o.c.targetId == x.c.id && d < F.Reach(o) * 1.6f) onMe = &o; if (o.act == Act::Cast && o.hitAt >= 0 && d < F.Reach(x)) casting = &o; }
         if (!near) return;
-        // Card G3's two runs as a PERSON would use them, free of the generator's gates (class flag, "a foe has found him", the 30% health
+        // Card G3's two runs as a PERSON would use them, free of the generator's SITUATION gates ("a foe has found him", the 30% health
         // line): a hide run for anyone who sneaks and is detected, a flee for anyone with a foe on him and under 60% health. The road
-        // and the hard cooldown still bind (a cooldown binds a person too). What the oracle gains with them is the gates' cost.
+        // and the hard cooldown still bind (a cooldown binds a person too). What the oracle gains with them is those gates' cost.
+        // WHO may run is the class's own flag: ClassRefuses drops a hide of a class that is no sneak class and any run of a class
+        // without Flag::kDisengage (marth 11-17: the oracle only has the class's abilities).
         if (g_stealth >= 3 && c.runPhase == 0) {
             const auto it = c.firedAt.find(CooldownId(DisengageKey())); const bool cool = it == c.firedAt.end() || F.now - it->second >= static_cast<double>(ActiveTuning()->disengageCooldownSec);
             float gx = 0, gy = 0;
@@ -125,12 +140,63 @@ namespace Sim {
         }
     }
 
+    // ── THE CLASS-BOUND ACTION SET (marth 2026-11-17: "The Oracle only has the classes abilities at its disposal") ─────────
+    // THE ONE READER of "is this option an ability of his class". nullptr = yes; else the reason it is refused (a fixed token: the key of
+    // OracleStats::refused). The class is the game's own: Ctl::gate is the ClassGate RealClasses.cpp builds from native/classes/
+    // ClassTable.cpp (flags, weapon set, default gambit rows), his book is the spell book of that class (Load.h BuildFollower), his kit the
+    // class's weapon set (KitChoice). An unresolved gate (no class known) gates nothing, as in the game (Snapshot.h ClassGate::resolved).
+    //   catalogue candidate   the generator already holds every family to the gate (Generate.cpp); each line below RE-CHECKS the same bit, so
+    //                         a refusal here is a generator leak and is counted, never silently dropped ("cat:" reasons, expected 0)
+    //   Ext::Block / Bash     only with the shield or a melee weapon of the class's weapon set in hand
+    //   Ext::Scroll           only a scroll user (ruling Q36: ClassGate::scrollUser) and only a scroll he carries
+    //   Ext::Hide             only a sneak class with Flag::kDisengage (card G3's hide run is theirs: Generate.cpp `hide`)
+    //   Ext::Flee             only a class with Flag::kDisengage (the Retreat / Disengage families' own gate)
+    //   potions               no class gate exists in the game (ClassGate has none: every follower drinks what he carries), so none here
+    //   REPOSITIONING         Ext::StepBack / SprintBack / ToPlayer / ToHealer / GetSight / ClearLine, and the catalogue's Regroup / GiveGround /
+    //                         BackOff / Step: ALWAYS a class ability. Movement is not an ability (coordinator brief 11-17). The class's written
+    //                         rulings may still forbid a move (RulingRefuses: kPsNoRetreat, kPsBackOnly, kPsNearPlayer).
+    // To add an ability rule: one line here. To add an Ext action: its enum, its ExtOptions offer, its Apply case and its line here.
+    [[nodiscard]] inline const char* ClassRefuses(const Fight& F, const Ctl& c, const Opt& o) {
+        const ClassGate& g = c.gate; if (!g.resolved) return nullptr;
+        const Body& x = F.b[static_cast<std::size_t>(c.body)];
+        const bool blade = x.spec->shield || (g.weaponMelee && x.spec->melee.Has());   // the shield, or a melee weapon of the class set
+        switch (o.ext) {
+        case Ext::None: break;
+        case Ext::Block: return blade ? nullptr : "ext:block:no shield or class melee weapon";
+        case Ext::Bash:  return blade ? nullptr : "ext:bash:no shield or class melee weapon";
+        case Ext::Scroll: return !g.scrollUser ? "ext:scroll:not a scroll user" : (o.idx < 0 || static_cast<std::size_t>(o.idx) >= c.book.entries.size() || c.book.entries[static_cast<std::size_t>(o.idx)].source != SpellSource::Scroll) ? "ext:scroll:not a scroll he carries" : nullptr;
+        case Ext::Hide: return !g.disengage ? "ext:hide:class has no disengage" : !(c.sneakClass || g.sneakClass) ? "ext:hide:not a sneak class" : nullptr;
+        case Ext::Flee: return g.disengage ? nullptr : "ext:flee:class has no disengage";
+        default: return nullptr;   // repositioning: movement is not an ability
+        }
+        const Candidate* k = o.k; if (!k) return nullptr;   // idle: his own AI
+        switch (k->family) {
+        case Family::PowerAttack: return g.powerAttack ? nullptr : "cat:power_attack:not a class row";
+        case Family::Taunt:       return g.taunt ? nullptr : "cat:taunt:not a class row";
+        case Family::Block:       return g.block ? nullptr : "cat:block:not a class row";
+        case Family::Bash:        return blade ? nullptr : "cat:bash:no shield or class melee weapon";
+        case Family::Retreat: case Family::Disengage: return g.disengage ? nullptr : "cat:retreat:class has no disengage";
+        case Family::Posture: { const PostureKind p = k->f.posture;
+            const bool ok = p == PostureKind::Melee || p == PostureKind::Silver ? g.weaponMelee : p == PostureKind::Bow ? (g.weaponBow || g.weaponCrossbow) : p == PostureKind::Staff ? g.weaponStaff : true;
+            return ok ? nullptr : "cat:posture:weapon outside the class set"; }   // whatever ClassGate::strict says (G16 is whether IAUS enforces the set; the oracle plays the class): his kit is built from the class set (RealClasses.cpp KitChoice), so expected 0
+        case Family::Scroll: case Family::CastOffense: case Family::CastControl: case Family::CastHeal: case Family::CastBuff: case Family::CastSummon: case Family::CastWard: case Family::Exploit: {
+            const SpellEntry* e = nullptr; for (const SpellEntry& b : c.book.entries) if (b.form == k->form) e = &b;
+            if (!e) return "cat:cast:not in his book";
+            if (e->source == SpellSource::Scroll) return g.scrollUser ? nullptr : "cat:scroll:not a scroll user";
+            if (e->source == SpellSource::Staff) return nullptr;   // a staff he carries: the kit is the class's weapon set (KitChoice::staff)
+            return g.spellsOnClass || g.spellsFromMastered ? nullptr : "cat:cast:not a casting class"; }
+        default: return nullptr;   // Attack, Sneak, the drinks, the repositioning families
+        }
+    }
+
     // THE CLASS RULINGS AS CONSTRAINTS (Playstyles.h): an option the follower's class forbids is never tried, so the oracle is an
-    // expert who plays THAT class. They are OFF unless --class-rulings (or --class-oracle) is given: the default oracle is main's unconstrained one (doc sections 9 to 27).
-    inline bool g_classRulings = false;   // OFF by default (main's oracle); --class-rulings, or --class-oracle, turns it on
-    [[nodiscard]] inline bool ClassAllows(const Fight& F, const Ctl& c, const Opt& o) {
+    // expert who plays THAT class. ON for every oracle since the standing rule of 11-17 (it was off unless --class-oracle before);
+    // --no-class-rulings is a DIAGNOSTIC only (the results file's oracle kind then says so). nullptr = allowed; else the ruling's token.
+    inline bool g_classRulings = true;
+    [[nodiscard]] inline const char* RulingRefuses(const Fight& F, const Ctl& c, const Opt& o) {
         const Body& x = F.b[static_cast<std::size_t>(c.body)]; const Candidate* k = o.k; const unsigned fb = c.forbid;
-        if (k && k->f.hasArea && !k->f.splashSafe) return false;                                  // never splash the party (every class)
+        if (k && k->f.hasArea && !k->f.splashSafe) return "ruling:never splash the party";                                  // every class
+        if (k && k->family == Family::Posture && !k->f.classAllowsWeapon) return "ruling:posture the game forbids";   // Generate.cpp's own fact: the strict weapon gate (G16), or "spells stay on spells" (marth 11-13, Mage line only: no melee posture while he can pay for an offense spell)
         const bool toMelee = k && k->family == Family::Posture && (k->f.posture == PostureKind::Melee || k->f.posture == PostureKind::Silver);
         const bool meleeAct = (k && (k->family == Family::PowerAttack || k->family == Family::Bash)) || o.ext == Ext::Bash;
         const bool flee = (k && k->family == Family::Retreat) || o.ext == Ext::Flee || (k && k->family == Family::Disengage && k->f.disengageFlee), back = o.ext == Ext::StepBack || (k && k->family == Family::GiveGround), run = o.ext == Ext::SprintBack,
@@ -138,14 +204,15 @@ namespace Sim {
         if ((fb & kPsNoMelee) && (toMelee || meleeAct)) {   // the blade only when he has nothing else left
             bool other = c.book.kit.potionsMagicka > 0;
             for (const SpellEntry& e : c.book.entries) other |= e.nature == Prune::Nature::Offense && (e.source == SpellSource::Staff ? e.charged : e.source == SpellSource::Scroll ? e.count > 0 : e.cost <= x.c.mp);
-            if (other) return false; }
-        if ((fb & kPsNoMeleeSwap) && toMelee && x.arrows > 0) return false;
-        if ((fb & kPsGoIn) && (toMelee || meleeAct) && !F.GoInOk(c, x)) return false;
-        if ((fb & kPsNoRetreat) && (flee || back || run || hide)) return false;
-        if ((fb & kPsBackOnly) && (flee || run)) return false;
-        if ((fb & kPsNearPlayer) && (flee || back || run) && Fight::Dist(x, F.b[0]) > 900.0f) return false;
-        return true;
+            if (other) return "ruling:kPsNoMelee"; }
+        if ((fb & kPsNoMeleeSwap) && toMelee && x.arrows > 0) return "ruling:kPsNoMeleeSwap";
+        if ((fb & kPsGoIn) && (toMelee || meleeAct) && !F.GoInOk(c, x)) return "ruling:kPsGoIn";
+        if ((fb & kPsNoRetreat) && (flee || back || run || hide)) return "ruling:kPsNoRetreat";
+        if ((fb & kPsBackOnly) && (flee || run)) return "ruling:kPsBackOnly";
+        if ((fb & kPsNearPlayer) && (flee || back || run) && Fight::Dist(x, F.b[0]) > 900.0f) return "ruling:kPsNearPlayer";
+        return nullptr;
     }
+    [[nodiscard]] inline bool ClassAllows(const Fight& F, const Ctl& c, const Opt& o) { return RulingRefuses(F, c, o) == nullptr; }
 
     struct Disagreement {      // one cluster: IAUS picked a, the oracle picked b
         long n = 0; double dU = 0;
@@ -166,7 +233,42 @@ namespace Sim {
              + ",foes:" + (n <= 1 ? std::to_string(n) : n <= 3 ? "2-3" : "4+");
     }
 
-    struct OracleCfg { int K = 8; double H = 150.0, every = 0.4, commit = 2.5; std::size_t maxOptions = 14; double minDU = 1.0; bool allFollowers = true, ext = true; };
+    // THE SEARCH SETTING. Nothing here is a budget that changes the choice (standing rule above):
+    //   every    0 = he decides at EVERY decision point the game has: each time the pump serves him (Diagnostics kPumpMs 133 ms x followers,
+    //            World.h TM::pump) with his body free. (It was a 0.4 s throttle: with three followers a lap is 0.399 s, so the throttle skipped
+    //            every second lap; with one or two it skipped more.) A value > 0 is a DIAGNOSTIC throttle.
+    //   H        how long a rollout runs past the decision. 150 = Fight::maxSec: every fight is over by then, so a rollout always runs to the
+    //            fight's END (RunFor reads H >= maxSec as "to the end" whatever maxSec is). --oracle-h below maxSec is a DIAGNOSTIC cut.
+    //   nMin, ceiling, pOne   the stopping rule of Race: every option gets nMin shared streams, then the streams double (8, 16, 32, ...) and
+    //            after each round an option is dropped once the best option's PAIRED lead over it (the same streams, so the fight's luck
+    //            cancels) is above the one-sided Student-t bound at pOne (0.001) for that many streams; he stops when one option is left, or
+    //            at the safety ceiling. At the ceiling the options still standing are within noise of each other at 512 paired fights each
+    //            (OracleStats::unresolved is their mean lead: what a wrong pick there could cost); the best mean is taken.
+    //   K        0 = the stopping rule. K > 0 (--oracle-k) is a DIAGNOSTIC fixed ceiling of K streams (the CLI checks' one-stream smoke runs,
+    //            and the rule before 11-17 was K = 8): never a tuning setting; the results file records it.
+    //   commit   how long a rollout HOLDS the option before the base policy takes over again (an attack order, a retreat, his own AI). It is
+    //            part of the rollout MODEL, not a budget: the oracle itself is asked again at his next decision point.
+    struct OracleCfg { int K = 0, nMin = 8, ceiling = 512; double pOne = 0.001; double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true; };
+
+    // One-sided Student-t critical value at p for n paired samples (df = n - 1): the Cornish-Fisher expansion about the normal quantile
+    // (4.76 at n = 8 against the table's 4.785, 3.73 at 16, 3.37 at 32, 3.12 at 256 for p = 0.001). n < 2 has no variance: +infinity.
+    [[nodiscard]] inline double TCrit(int n, double p) {
+        if (n < 2) return 1e300;
+        // the normal quantile of 1 - p
+        const double q = std::sqrt(-2.0 * std::log(std::clamp(p, 1e-12, 0.5)));
+        const double z = q - (2.515517 + 0.802853 * q + 0.010328 * q * q) / (1.0 + 1.432788 * q + 0.189269 * q * q + 0.001308 * q * q * q);   // Abramowitz-Stegun 26.2.23, |error| < 4.5e-4
+        const double d = n - 1, z3 = z * z * z, z5 = z3 * z * z, z7 = z5 * z * z;
+        return z + (z3 + z) / (4 * d) + (5 * z5 + 16 * z3 + 3 * z) / (96 * d * d) + (3 * z7 + 19 * z5 + 17 * z3 - 15 * z) / (384 * d * d * d);
+    }
+
+    // What the search did (summed over an oracle's decisions; sim.cpp prints it per class: the ORCSTOP and ORCREFUSED lines).
+    struct OracleStats {
+        long decisions = 0, options = 0, rollouts = 0, streams = 0;   // options offered after the class filter; rollouts run; streams at the stop (summed)
+        long bound = 0, standing = 0; double unresolved = 0, unresolvedMax = 0;   // decisions the ceiling ended with more than one option standing; how many stood; the best's lead over the best other standing (summed, and the largest)
+        std::map<std::string, long> refused;   // option offers refused, by reason (ClassRefuses / RulingRefuses token)
+        void Merge(const OracleStats& o) { decisions += o.decisions; options += o.options; rollouts += o.rollouts; streams += o.streams; bound += o.bound; standing += o.standing; unresolved += o.unresolved; unresolvedMax = std::max(unresolvedMax, o.unresolvedMax);
+            for (const auto& kv : o.refused) refused[kv.first] += kv.second; }
+    };
 
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
     struct RolloutPolicy : Policy {
@@ -178,7 +280,12 @@ namespace Sim {
         OracleCfg cfg;
         IausPolicy iaus;                       // followers the oracle does not drive, and IAUS's own pick for the log
         std::function<bool(const Fight&, const Ctl&, const Opt&)> allowed;   // extra constraints of the caller (nullptr = none); the class rulings are ClassAllows
-        [[nodiscard]] bool Ok(const Fight& F, const Ctl& c, const Opt& o) const { return (!g_classRulings || ClassAllows(F, c, o)) && (!allowed || allowed(F, c, o)); }
+        OracleStats st;
+        // The class filter (the abilities, then the written rulings), counted by reason; then the caller's own constraint.
+        [[nodiscard]] bool Ok(const Fight& F, const Ctl& c, const Opt& o) {
+            const char* why = ClassRefuses(F, c, o); if (!why && g_classRulings) why = RulingRefuses(F, c, o);
+            if (why) { ++st.refused[why]; if (F.trace) std::fprintf(F.trace, "%7.2f  ORACLE REFUSED %s: %s (%s)\n", F.now, F.b[static_cast<std::size_t>(c.body)].c.name.c_str(), o.Label().c_str(), why); return false; }
+            return !allowed || allowed(F, c, o); }
         std::map<std::string, Disagreement>* log = nullptr;
         std::vector<double> last;
         long decisions = 0, disagreed = 0; double dUSum = 0;
@@ -186,14 +293,14 @@ namespace Sim {
         std::array<long, kFamilies>* gen = nullptr;            // --gap-dump: candidates his generator offered per family, summed over the oracle's decisions for him
         long subjDec = 0;                                      // --gap-dump: the oracle's decisions for the subject
 
-        static void RunFor(Fight& G, Policy& P, double until) {
-            while (!G.over && G.now < until) {
+        static void RunFor(Fight& G, Policy& P, double until) {   // until < 0: to the fight's end
+            while (!G.over && (until < 0 || G.now < until)) {
                 if (G.now >= G.nextPump && !G.ctl.empty()) { G.nextPump += TM::pump; P.Serve(G, G.rr); G.rr = (G.rr + 1) % static_cast<int>(G.ctl.size()); }
                 G.StepWorld();
             }
         }
         // Apply an option for follower ci in G. false = it cannot be done now.
-        static bool Apply(Fight& G, int ci, const Opt& o, double commit) {
+        static bool Apply(Fight& G, int ci, const Opt& o, double commit, double every = 0.0) {
             Ctl& c = G.ctl[static_cast<std::size_t>(ci)]; Body& x = G.b[static_cast<std::size_t>(c.body)];
             const bool held = x.hitAt >= 0 || G.now < x.staggerUntil || G.now < x.ctrlUntil || (x.actIaus && G.now < x.actEnd);
             auto move = [&](float gx, float gy, double sec, bool sprint) { c.goalX = gx; c.goalY = gy; c.moveUntil = G.now + sec; c.sprint = sprint; c.moveFight = false; c.commitUntil = c.moveUntil; return true; };
@@ -213,7 +320,8 @@ namespace Sim {
                 return false; }
             case Ext::Hide: case Ext::Flee: { const bool fl = o.ext == Ext::Flee; float gx = 0, gy = 0; if (c.runPhase != 0 || !G.ConcealPick(x, c, fl, gx, gy)) return false;
                 c.pick.valid = true; c.pick.flee = fl; c.pick.kind = fl ? 1 : 0; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl, true)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }
-            case Ext::Block: if (held) return false; x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.commitUntil = x.actEnd; return true;
+            case Ext::Block: if (held || G.now < c.blockRestUntil) return false;   // the guard's rest binds a person too (apmf/BlockClaims.cpp kRest: no new guard for 1.5 s after any hold ends; Policy.h Family::Block)
+                x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.blockRestUntil = x.blockUntil + 1.5; c.commitUntil = x.actEnd; return true;
             case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f) return false; G.StartSwing(x, *tg, Act::Bash, true); c.commitUntil = x.actEnd; return true; }
             case Ext::Scroll: { if (held || o.idx < 0 || c.book.entries[static_cast<std::size_t>(o.idx)].count <= 0) return false;
                 G.StartCast(x, o.idx, c.build->spells[static_cast<std::size_t>(o.idx)], o.target, 0.0f, true); c.commitUntil = x.actEnd; return true; }
@@ -226,7 +334,7 @@ namespace Sim {
                 c.drawn = k->f.posture; x.act = Act::Swap; x.actEnd = G.now + TM::swap; x.hitAt = -1; x.actIaus = true; c.commitUntil = x.actEnd; return true;
             }
             if (Fire(G, ci, *k) != Fired::Yes) return false;
-            if (k->family == Family::Sneak) x.holdUntil = std::max(x.holdUntil, G.now + 0.45);   // the oracle decides every 0.4 s: its hold lasts until its next decision
+            if (k->family == Family::Sneak && every > 0.0) x.holdUntil = std::max(x.holdUntil, G.now + every + 0.05);   // a throttled oracle (DIAGNOSTIC): its hold lasts until its next decision. Unthrottled, Fire's own hold (one lap) is exactly that
             c.firedAt[CooldownId(KeyOf(*k))] = G.now;
             c.commitUntil = (k->family == Family::Attack || k->family == Family::Retreat) ? G.now + commit : std::max(G.now + 0.3, x.actEnd);
             return true;
@@ -245,44 +353,58 @@ namespace Sim {
             if (subj) IausPolicy::Account(F, c, x, sv);
             if (held || F.now - last[static_cast<std::size_t>(ci)] < cfg.every) return;
             last[static_cast<std::size_t>(ci)] = F.now;
-            // the options: IAUS's ranked list first, then the best-looking candidate of every family it did not rank, postures, the extended set, idle
+            // THE OPTIONS: EVERY candidate the generator offers (IAUS's ranked list first, so a tie keeps IAUS's order), every posture, the
+            // extended set, idle. No option limit (marth 11-17). Each passes the class filter (Ok) or is counted as refused.
             const auto& acts = sv.g.actions; std::vector<Opt> opt;
-            auto add = [&](const Candidate* k) { if (opt.size() >= cfg.maxOptions) return; Opt o; o.k = k;
+            std::vector<const Candidate*> seen;   // offered once each (the ranked list and the full list overlap), so a refusal is counted once
+            auto add = [&](const Candidate* k) { Opt o; o.k = k;
+                if (std::find(seen.begin(), seen.end(), k) != seen.end()) return; seen.push_back(k);
                 if (k->f.hardCooldownSec > 0.0f && k->f.hardCooldownLeft > 0.0f) return;   /* rulings Q7 / Q69 / Q73: a hard cooldown (the power attack's, the taunt's 30 s) binds a person too */
-                if (!Ok(F, c, o)) return; for (const Opt& e : opt) if (e.Same(o)) return; opt.push_back(o); };
+                for (const Opt& e : opt) if (e.Same(o)) return; if (!Ok(F, c, o)) return; opt.push_back(o); };
             const Candidate* iausPick = nullptr;
             if (sv.d.verdict != Verdict::Idle && !sv.d.order.empty() && sv.d.order[0].idx < acts.size()) iausPick = &acts[sv.d.order[0].idx];
-            for (std::size_t i = 0; i < sv.d.ranked.size() && opt.size() + 4 < cfg.maxOptions; ++i) if (sv.d.ranked[i].idx < acts.size()) add(&acts[sv.d.ranked[i].idx]);
-            for (std::size_t f = 0; f < kFamilies; ++f) {
-                const Candidate* lo = nullptr; const Candidate* onP = nullptr; const Candidate* cast = nullptr; const Candidate* rec = nullptr;
-                for (const Candidate& k : acts) { if (static_cast<std::size_t>(k.family) != f) continue;
-                    if (!lo || k.f.foeHpPct < lo->f.foeHpPct) lo = &k; if (k.f.foeOnPlayer && !onP) onP = &k; if (k.f.foeCaster && !cast) cast = &k; if (!rec || k.f.recipientHp < rec->f.recipientHp) rec = &k; }
-                for (const Candidate* k : { lo, onP, cast, rec }) if (k) add(k);
-            }
+            for (const Scored& r : sv.d.ranked) if (r.idx < acts.size()) add(&acts[r.idx]);
+            for (const Candidate& k : acts) add(&k);
             for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { Opt o; o.k = &k; if (Ok(F, c, o)) opt.push_back(o); }
             if (cfg.ext) { std::vector<Opt> ex; ExtOptions(F, ci, ex); for (const Opt& o : ex) if (Ok(F, c, o)) opt.push_back(o); }
             opt.push_back(Opt{});   // idle: his own AI
-            // evaluate
-            std::vector<double> u(opt.size(), -1e9); const std::uint64_t s0 = F.R.g();
-            for (std::size_t i = 0; i < opt.size(); ++i) {
-                double sum = 0; int n = 0;
-                for (int k = 0; k < cfg.K; ++k) {
+            // EVALUATE: the race (OracleCfg). Streams are shared by all options (stream k has one seed for every option), so two options are
+            // compared on the same luck and the test is on their PAIRED difference.
+            const std::size_t N = opt.size(); std::vector<std::vector<double>> U(N); std::vector<char> alive(N, 1); std::vector<double> u(N, -1e9);
+            const std::uint64_t s0 = F.R.g(); const int ceil = std::max(1, cfg.K > 0 ? cfg.K : cfg.ceiling), nmin = std::clamp(cfg.nMin, 1, ceil);
+            const double until = cfg.H >= F.maxSec ? -1.0 : F.now + cfg.H;
+            auto lead = [&](std::size_t a, std::size_t b, double* sd) {   // the mean and the sample deviation of U[a] - U[b] over the streams both ran
+                const std::size_t m = std::min(U[a].size(), U[b].size()); if (!m) { if (sd) *sd = 0; return 0.0; }
+                double sum = 0, sq = 0; for (std::size_t k = 0; k < m; ++k) { const double d = U[a][k] - U[b][k]; sum += d; sq += d * d; }
+                const double mean = sum / double(m); if (sd) *sd = m > 1 ? std::sqrt(std::max(0.0, (sq - sum * mean) / double(m - 1))) : 0.0; return mean; };
+            std::size_t best = N - 1, live = N; int n = 0;
+            for (int next = nmin;;) {
+                for (int k = n; k < next; ++k) for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue;
                     Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k));
-                    if (!Apply(G, ci, opt[i], cfg.commit)) break;
-                    RolloutPolicy rp; RunFor(G, rp, F.now + cfg.H); sum += Utility(G); ++n;
-                }
-                if (n) u[i] = sum / n;
+                    if (!Apply(G, ci, opt[i], cfg.commit, cfg.every)) { alive[i] = 0; continue; }   // it cannot be done now
+                    RolloutPolicy rp; RunFor(G, rp, until); U[i].push_back(Utility(G)); ++st.rollouts; }
+                n = next; bool any = false;
+                for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; double sum = 0; for (double v : U[i]) sum += v; u[i] = sum / double(U[i].size()); if (!any || u[i] > u[best]) { best = i; any = true; } }   // the first of equal means stands (IAUS's order)
+                const double tc = TCrit(n, cfg.pOne), rn = std::sqrt(double(n)); live = 0;
+                for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; if (i == best) { ++live; continue; }
+                    double sd = 0; const double d = lead(best, i, &sd);
+                    if (n >= 2 && (sd <= 0.0 ? d >= 0.0 : d > tc * sd / rn)) alive[i] = 0; else ++live; }   // sd 0: the same outcome on every stream (a duplicate of the best, or beaten on every one)
+                if (live <= 1 || n >= ceil) break;
+                next = std::min(ceil, n * 2);
             }
-            // pick: the best; the action he is already on wins a near tie (a person does not dither)
-            std::size_t best = opt.size() - 1; for (std::size_t i = 0; i < opt.size(); ++i) if (u[i] > u[best]) best = i;
-            if (c.hasLastKey) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey && u[i] > -1e8 && u[i] >= u[best] - 0.3) { best = i; break; }
+            st.options += static_cast<long>(N); st.streams += n; ++st.decisions;
+            if (live > 1) { ++st.bound; st.standing += static_cast<long>(live); double other = -1e9; for (std::size_t i = 0; i < N; ++i) if (alive[i] && i != best) other = std::max(other, u[i]); st.unresolved += u[best] - other; st.unresolvedMax = std::max(st.unresolvedMax, u[best] - other); }
+            // pick: the best; the action he is already on wins when it still stands (not separated from the best) and is within 0.3 U of it (a person does not dither)
+            if (c.hasLastKey) for (std::size_t i = 0; i < N; ++i) if (alive[i] && opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey && u[i] >= u[best] - 0.3) { best = i; break; }
+            // what IAUS's own pick costs: the oracle's PAIRED lead over it, on the streams both ran (an option dropped early ran fewer)
+            auto cost = [&](std::size_t i) { return U[i].empty() ? 0.0 : lead(best, i, nullptr); };
             ++decisions;
             // the disagreement with IAUS's own pick
             std::size_t ii = opt.size() - 1; if (iausPick) for (std::size_t i = 0; i < opt.size(); ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == KeyOf(*iausPick)) { ii = i; break; }
             if (subj && (sit || gen)) {
                 ++subjDec;
                 if (gen) for (const Candidate& k : acts) ++(*gen)[static_cast<std::size_t>(k.family)];
-                const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
+                const double dU = cost(ii);
                 if (sit && ii != best && dU >= cfg.minDU) {
                     const bool iFound = !iausPick || ii != opt.size() - 1;   // IAUS's pick is among the options (idle is last and has no candidate)
                     const Opt& ob = opt[best]; bool ranked = false;
@@ -293,7 +415,7 @@ namespace Sim {
                 }
             }
             if (log) {
-                const double dU = u[ii] > -1e8 ? u[best] - u[ii] : 0.0;
+                const double dU = cost(ii);
                 if (ii != best && dU >= cfg.minDU) {
                     ++disagreed; dUSum += dU;
                     const Candidate* a = opt[ii].k; const Candidate* b = opt[best].k;
@@ -310,11 +432,11 @@ namespace Sim {
             const Key key = k ? KeyOf(*k) : Key{ Family::kCount, PostureKind::None, static_cast<std::uint32_t>(o.ext) * 1000u + static_cast<std::uint32_t>(o.idx + 1), o.target };
             if (!Apply(F, ci, o, 0.0)) return;
             c.commitUntil = 0;
-            if (F.trace && (!c.hasLastKey || !(c.lastKey == key))) std::fprintf(F.trace, "%7.2f  ORACLE %s: %s%s%s -> %u  U %.2f (IAUS would: %s, U %.2f)\n", F.now, x.c.name.c_str(), o.Label().c_str(), k && !k->formName.empty() ? " " : "", k ? std::string(k->formName).c_str() : "", k ? k->target : o.target, u[best], opt[ii].Label().c_str(), u[ii]);
+            if (F.trace && (!c.hasLastKey || !(c.lastKey == key))) std::fprintf(F.trace, "%7.2f  ORACLE %s: %s%s%s -> %u  U %.2f (IAUS would: %s, U %.2f)  [%zu options, %d streams, %zu standing]\n", F.now, x.c.name.c_str(), o.Label().c_str(), k && !k->formName.empty() ? " " : "", k ? std::string(k->formName).c_str() : "", k ? k->target : o.target, u[best], opt[ii].Label().c_str(), u[ii], N, n, live);
             if (subj) {
                 if (o.ext != Ext::None) ++t.extActions;
                 if (k) { ++t.fired; if (k->family != Family::Posture) { ++t.hist[static_cast<std::size_t>(k->family)];
-                        t.actSec[static_cast<std::size_t>(k->family)] += k->family == Family::Attack ? cfg.every : k->family == Family::Retreat ? TM::retreatSec : std::max(0.0, x.actEnd - F.now); } else ++t.postureSwaps;
+                        t.actSec[static_cast<std::size_t>(k->family)] += k->family == Family::Attack ? std::max(cfg.every, double(TM::pump) * double(F.ctl.size())) : k->family == Family::Retreat ? TM::retreatSec : std::max(0.0, x.actEnd - F.now); } else ++t.postureSwaps;
                     if ((k->family == Family::DrinkHealth || k->family == Family::CastHeal) && c.lowSince >= 0 && !c.lowHealed && c.lowHadCand) { c.lowHealed = true; ++t.lowHealed; t.lowHealSecSum += F.now - c.lowSince; } }
                 if (!c.hasLastKey || !(c.lastKey == key)) ++t.switches;
             }

@@ -1233,16 +1233,17 @@ GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0
 # it (iaus-sim-v2.md section 25), and where the oracle's version is known to be MORE FAVOURABLE than the game's (class d, with the
 # evidence). Edited only with a source; a label missing here is classified by the generic rule and says so.
 EXT_FAMILY = {"ext:block": "block", "ext:bash": "bash", "ext:hide": "disengage", "ext:flee": "disengage", "ext:scroll": "use_scroll", "ext:to_player": "regroup",
-              "ext:to_healer": "regroup", "ext:step_back": "give_ground", "ext:sprint_back": "back_off", "ext:get_sight": None}
+              "ext:to_healer": "regroup", "ext:step_back": "give_ground", "ext:sprint_back": "back_off", "ext:get_sight": None, "ext:clear_line": None}
 EXT_ROAD = {"ext:step_back": "no road today (section 25: PROVEN LIMIT; needs a Harbinger combat area centred on a point, tier A); GiveGround is lab-only",
             "ext:sprint_back": "the BackOff family (batch I, H3 run) where its gate allows; otherwise no road (section 25)",
             "ext:to_player": "ROAD EXISTS (Harbinger ch.24 CombatApproach): the Regroup family is built and never generated (Snapshot::regroupRoad, section 25.1)",
             "ext:to_healer": "ROAD EXISTS (Harbinger ch.24): the Regroup family is built and never generated (section 25.1)",
             "ext:get_sight": "ROAD EXISTS for casts only (apmf/OffenseApproach.cpp, ch.24); no IAUS family",
+            "ext:clear_line": "no IAUS family (iaus-sim-v3.md 4.1, design note N4: a side step to a clear line of fire); the game only HOLDS a cast through a friend",
             "ext:scroll": "card S3 (the lab's --scroll-road), planned", "ext:bash": "a timed bash has no road (section 25: PROVEN LIMIT); the Bash family needs the leaf promote",
             "ext:block": "Harbinger held guard (batch S, Q-melee-1)", "ext:hide": "card G3 hide run (Disengage family, its class gate)", "ext:flee": "card G3 flee (Disengage family, its 30% line)"}
-FIDELITY = {"ext:block": "the oracle's guard (Oracle.h Apply, Ext::Block) is raised for 1.5 s at any moment with NO cooldown and NO rest after it; the game's "
-                         "Harbinger guard holds 2.5 s, its row cools 4 s and a 1.5 s rest follows a hold (Q-melee-1, section 33.2)",
+FIDELITY = {"ext:block": "the oracle's guard (Oracle.h Apply, Ext::Block) is raised for 1.5 s with NO row cooldown (the 1.5 s rest after a hold binds it since "
+                         "11-17); the game's Harbinger guard holds 2.5 s and its row cools 4 s (Q-melee-1, section 33.2)",
             "ext:bash": "the oracle's bash (Oracle.h Apply, Ext::Bash) has NO cooldown and lands on demand; IAUS's Bash family is held to Tuning::bashCooldownSec "
                         "and the game has no road for a timed bash at all (section 25)"}
 GAP_SEEDS0 = 6001   # a fresh range (1.., 1001.., 3001.., 4001.., 5001.., 8001.., 9001.. are used by the other stages)
