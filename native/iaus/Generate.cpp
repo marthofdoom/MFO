@@ -581,6 +581,37 @@ namespace MFO::Iaus {
             return (std::clamp)(share * dps * secs / hp, 0.0f, 1.0f);
         }
 
+        // 11-17b (field Jesper): a spell's effect per SECOND OF CAST, the rate the tie-break and Cons::HealRate compare at. A concentration stream's measured effect
+        // is already per second (Fills.cpp counts it for 1 s); a fire-and-forget cast's total is spread over Tuning::spellCastSec. 0 = not measured.
+        float EffectRate(const Ctx& x, const SpellEntry& e, float a_effect) {
+            const float v = Estimate::Pos(a_effect);
+            if (!(v > 0.0f) || !e.measured) return 0.0f;
+            if (e.concentration) return v;
+            const float sec = Finite(x.t.spellCastSec, 0.0f);
+            return sec > 0.0f ? v / sec : v;
+        }
+
+        // THE HEAL SAFETY RULE (field 11-17b, Jesper stood channelling a concentration heal on a recipient a foe was already on, and died holding the hand): the
+        // close-spell rule's shape (CloseRefused) applied to a heal. A CONCENTRATION or TOUCH heal holds the healer on the spot for its whole channel / until he is
+        // beside the recipient, so it is refused while a foe can hurt the RECIPIENT here and the recipient would not survive (Reposition::SurvivesNear), as long as the book
+        // keeps a fire-and-forget aimed heal to fall back to (a book of channelled heals alone keeps them, as the close-spell rule keeps a book of close spells).
+        bool FastHealAvailable(const Ctx& x) {
+            const float pool = Finite(x.s.self.mp, 0.0f);
+            const bool  poolOk = std::isfinite(x.s.self.mpMax) && x.s.self.mpMax > 0.0f;
+            for (const SpellEntry& o : x.s.book.entries) {
+                if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Heal) continue;
+                if (o.concentration || o.touch || o.selfDelivery) continue;
+                if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
+                return true;
+            }
+            return false;
+        }
+        bool HealRefused(const Ctx& x, const SpellEntry& e, const Combatant& a_recipient) {
+            if (!(e.concentration || e.touch)) return false;
+            if (!Reposition::FoeCanHurtHere(x.s, a_recipient) || Reposition::SurvivesNear(x.s, a_recipient, x.t.worth)) return false;
+            return FastHealAvailable(x);
+        }
+
         // THE ONE SET OF CAST GATES a kept offense / control spell meets before any foe is looked at (Casts and CanCastOffense both read them,
         // so the posture layer's "he can cast" never disagrees with the cast layer's "he can cast").
         bool CastBarred(const Ctx& x, const SpellEntry& e) {
@@ -780,12 +811,14 @@ namespace MFO::Iaus {
                         x.Foe(c.f, *foe, true);
                         c.f.meleeRange = false;
                         c.f.reach = (std::max)(0.0f, Finite(reach, 0.0f));
+                        c.f.concentration = e.concentration;
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
                         if (e.nature == Prune::Nature::Control && e.measured) c.f.controlSec = Estimate::Pos(e.controlSec);
                         if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
                         if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
                             c.f.expDamage = e.measured ? Estimate::SpellOn(e, *foe) : -1.0f;   // < 0: not measured (MFO-B684)
+                            c.f.effectRate = EffectRate(x, e, c.f.expDamage);   // 11-17b: the tie-break's first read
                             c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
                             c.f.bestDamage = bestOn[ti];
                         }
@@ -795,12 +828,24 @@ namespace MFO::Iaus {
                             for (const Combatant* o : a_foes)
                                 if (Between(*o, centre) <= e.areaUnits) ++inArea;
                             bool safe = true;   // marth: never splash the party (his own blast does not hit him)
+                            // 11-17b: a blast at the TARGET reaches a body past its area (Estimate::kFireBodyPad, the ch.25 cast guard's area + 64); his own does not
+                            const float reachOut = e.areaUnits + (e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
                             for (const auto& a : s.allies)
-                                if (Between(a, centre) <= e.areaUnits) { safe = false; break; }
+                                if (Between(a, centre) <= reachOut) { safe = false; break; }
                             c.f.hasArea = true;
                             c.f.foesInArea = static_cast<float>(inArea);
                             c.f.splashSafe = safe;
                         }
+                        // 11-17b THE LINE OF FIRE (field Jesper): the ch.25 cast guard refuses a cast with a party member in the corridor (80 u) or the blast, and the
+                        // claim then sat 3-8.5 s unfired. The same test, ONE reader (Estimate::InLineOfFire), vetoes the candidate through splash_safe (a gate), and the
+                        // pair is noted so Candidates remembers it a few seconds (Tuning::fireLineKeepSec) and the next lap re-picks instead of re-claiming it.
+                        if (!e.selfDelivery && !e.touch)
+                            for (const auto& a : s.allies)
+                                if (Readable(a) && Estimate::InLineOfFire(s.self, *foe, a, e.areaUnits)) {
+                                    c.f.splashSafe = false;
+                                    x.out.fireBlocked.emplace_back(e.form, foe->id);
+                                    break;
+                                }
                         x.Push(std::move(c));
                     }
                     break;
@@ -826,6 +871,7 @@ namespace MFO::Iaus {
                             ++x.out.droppedTarget;
                             continue;
                         }
+                        if (heal && !scroll && HealRefused(x, e, *r)) { ++x.out.droppedTarget; x.out.healRefused = true; continue; }   // 11-17b: the heal safety rule
                         Candidate c = base(self ? nullptr : r);
                         if (self) c.targetName = s.self.name;
                         c.f.inHealReach = Tri::Yes;
@@ -836,6 +882,11 @@ namespace MFO::Iaus {
                         c.f.recipientDowned = r->downed;
                         if (heal) {
                             c.f.expHeal = e.measured ? Estimate::Pos(e.heal) : 0.0f;
+                            c.f.concentration = e.concentration;
+                            c.f.healRate = EffectRate(x, e, e.heal);
+                            c.f.effectRate = c.f.healRate;
+                            c.f.recipientIncoming = Estimate::IncomingOn(s, *r);
+                            c.f.recipientSelf = self;
                             c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
                             c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
                             c.f.recipientBeingHealed = r->beingHealed;

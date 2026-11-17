@@ -440,6 +440,9 @@ namespace MFO::Iaus::Fills {
             e.armor = (std::isfinite(a) && std::isfinite(cap)) ? std::clamp(a, 0.0f, (std::max)(0.0f, cap * 0.01f)) : 0.0f;
             const float mr = avo->GetActorValue(AV::kResistMagic);
             e.magicResist = std::isfinite(mr) ? mr : 0.0f;
+            // 11-17b probe (the 524-of-524 `exploit = 0.00` question): the element resist AVs next to what the exploit term reads. LOG ONLY.
+            const auto rd = [&](AV a_av) { const float v = avo->GetActorValue(a_av); return std::isfinite(v) ? v : 0.0f; };
+            e.resFire = rd(AV::kResistFire); e.resFrost = rd(AV::kResistFrost); e.resShock = rd(AV::kResistShock);
         }
 
         EstimateHit(a_actor, avo, a_u, e);
@@ -547,6 +550,17 @@ namespace MFO::Iaus::Fills {
                          "the weapon's own resist value, a spell's element or poison resist, spell cost reductions",
                          NameOf(a_s, e.id), e.id, RoleName(e.role), a_s.self.id, e.hit, e.kind, e.src, e.skillAv, e.skill, e.rate,
                          e.magic, e.ranged, e.dr, e.armor, e.magicResist, e.loss, e.atkState, e.swinging, e.castState, e.casting);
+            if (e.role == Role::Foe) {   // 11-17b: what the exploit term (Cons::Exploit) is fed, beside the raw element resist AVs of this foe
+                std::string exploitIn;
+                for (const auto& u : a_s.foes)
+                    if (u.id == e.id) {
+                        for (const auto& [av, v] : u.resists) exploitIn += std::format(" av{}={:.1f}", av, v);
+                        break;
+                    }
+                spdlog::info("[iaus-fill] resist {} ({:08X}): ResistFire {:.1f} ResistFrost {:.1f} ResistShock {:.1f} ResistMagic {:.1f} | the exploit "
+                             "term reads (av=value, the elements the book keys on):{} (0 = this foe has no resist to exploit)",
+                             NameOf(a_s, e.id), e.id, e.resFire, e.resFrost, e.resShock, e.magicResist, exploitIn.empty() ? " none" : exploitIn);
+            }
         }
 
         // ── the hits whose TARGET this lap sampled: the estimate next to the health it took ──────────────────────

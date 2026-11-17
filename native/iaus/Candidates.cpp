@@ -17,6 +17,7 @@
 #include "iaus/Disengage.h"
 #include "iaus/Engine.h"    // Q-I-2: the Mind's last fired decision (touchSpent)
 #include "iaus/Fills.h"
+#include "iaus/Estimate.h"
 #include "iaus/Hide.h"
 #include "iaus/PerkEffects.h"
 #include "iaus/Reposition.h"   // batch I: H4, the back-off, the hidden step
@@ -48,6 +49,11 @@ namespace MFO::Iaus::Candidates {
         std::unordered_map<std::uint64_t, std::uint32_t>         g_replaceLogged;   // (follower << 32 | spell, target mix) -> the active spell it would replace: logged once per change
         std::unordered_map<RE::FormID, std::uint32_t>             g_chosenCast;   // Q-I-2: the cast form ranked first on the last decision
         std::unordered_map<RE::FormID, std::vector<AskedPair>>   g_wants;   // G10's ask list (Generate.h NextAskList)
+        // 11-17b (field Jesper): the (spell, foe) pairs Generate refused for a party member in the line of fire (the ch.25 cast guard's own test), by follower,
+        // with when it last did. They are fed back as WILL-NOT-WORK notes for Tuning::fireLineKeepSec so the next laps re-pick instead of claiming the pair again
+        // the moment a friendly steps off the line. Worker only (the same domain as g_wants).
+        struct FireRefusal { std::uint32_t spell = 0, foe = 0; double at = 0.0; };
+        std::unordered_map<RE::FormID, std::vector<FireRefusal>> g_fireRefused;
 
         // fix/mage-buff-loop: drop a follower's self-buff recast lockout and its once-per-fight log marks. Worker domain.
         void ClearBuffLockState(RE::FormID a_follower) {
@@ -509,6 +515,19 @@ namespace MFO::Iaus::Candidates {
             }
         }
 
+        // ── 11-17b: the pairs refused for a party member in the line of fire stay refused for a few seconds (the willWork note, the same pattern) ──
+        if (auto it = g_fireRefused.find(selfID); it != g_fireRefused.end()) {
+            const double nowSec = NowSec();
+            const double keep   = static_cast<double>((std::max)(0.0f, DefaultTuning().fireLineKeepSec));
+            std::erase_if(it->second, [&](const FireRefusal& r) { return nowSec - r.at > keep; });
+            for (const FireRefusal& r : it->second) {
+                const auto n = std::find_if(s.willWork.begin(), s.willWork.end(), [&](const SpellTargetNote& w) { return w.spell == r.spell && w.target == r.foe; });
+                if (n != s.willWork.end()) n->answer = Tri::No;
+                else s.willWork.push_back({ r.spell, r.foe, Tri::No });
+            }
+            if (it->second.empty()) g_fireRefused.erase(it);
+        }
+
         // ── heals already running (worker-serial registries + the bridge's claim table) ──────────────────
         for (const auto& e : s.book.entries) {
             if (e.source != SpellSource::Spell || e.nature != Prune::Nature::Heal || e.drop != Prune::Drop::Keep) continue;
@@ -586,6 +605,18 @@ namespace MFO::Iaus::Candidates {
             a_out.snap.spellsHoldPrev = it != s_spellsHold.end() && it->second;
             a_out.gen  = Generate(a_out.snap, a_out.gate, a_t);
             s_spellsHold[id] = a_out.gen.spellsHold;
+            // 11-17b: the pairs Generate refused for a party member in the line of fire are stamped (refreshed each lap they stay blocked) ...
+            if (!a_out.gen.fireBlocked.empty()) {
+                const double nowSec = NowSec();
+                auto& v = g_fireRefused[id];
+                for (const auto& [sp, foe] : a_out.gen.fireBlocked) {
+                    const auto f = std::find_if(v.begin(), v.end(), [&](const FireRefusal& r) { return r.spell == sp && r.foe == foe; });
+                    if (f != v.end()) f->at = nowSec;
+                    else if (v.size() < 64) v.push_back({ sp, foe, nowSec });
+                }
+            }
+            // ... and the cast layer learns whether a foe is hurting the healer now (a heal's hand lock gives way to a higher-ranked non-heal while it is true).
+            Actuation::NoteHealerThreat(id, Estimate::IncomingOn(a_out.snap, a_out.snap.self) > 0.0f);
         }
         return true;
     }
@@ -608,6 +639,8 @@ namespace MFO::Iaus::Candidates {
         g_fights.erase(a_follower);
         g_wants.erase(a_follower);
         g_chosenCast.erase(a_follower);
+        g_fireRefused.erase(a_follower);               // 11-17b
+        Actuation::NoteHealerThreat(a_follower, false);
     }
 
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }
@@ -619,6 +652,8 @@ namespace MFO::Iaus::Candidates {
         g_fights.clear();
         g_wants.clear();
         g_chosenCast.clear();
+        g_fireRefused.clear();                         // 11-17b
+        Actuation::NoteHealerThreat(0, false);
         Fills::Clear();   // the fills' tracker and pending hit records: the same domain and the same moment
     }
 

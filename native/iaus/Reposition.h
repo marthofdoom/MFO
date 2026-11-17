@@ -73,6 +73,20 @@ namespace MFO::Iaus::Reposition {
         return DeathWinFloor(Estimate::Ttl(a_s.self.hp, Estimate::ThreatOn(a_s, a_s.self)), a_w) <= 0.0f;
     }
 
+    // 11-17b: the same survival test for ANY party member (a heal's recipient), under every foe that targets HIM (Estimate::ThreatOn), and "a foe can hurt
+    // him here": a foe that has to close stands within the strike distance, or any other foe has him as its target.
+    [[nodiscard]] inline bool SurvivesNear(const Snapshot& a_s, const Combatant& a_who, const WorthTable& a_w) {
+        return DeathWinFloor(Estimate::Ttl(a_who.hp, Estimate::ThreatOn(a_s, a_who)), a_w) <= 0.0f;
+    }
+    [[nodiscard]] inline bool FoeCanHurtHere(const Snapshot& a_s, const Combatant& a_who) {
+        const float strike = Estimate::StrikeDistance(a_s);
+        for (const Combatant& f : a_s.foes) {
+            if (f.paralysed || f.fleeing) continue;
+            if (Estimate::MustClose(f) ? Estimate::Apart(f, a_who) <= strike : (f.targetId != 0 && f.targetId == a_who.id)) return true;
+        }
+        return false;
+    }
+
     // Does the book keep an offense / control spell that is NOT close (the fallback the close-spell rule needs)?
     [[nodiscard]] inline bool HasFarOffense(const Book& a_book, float a_meleeReach) {
         for (const SpellEntry& e : a_book.entries) {
@@ -166,6 +180,28 @@ namespace MFO::Iaus::Reposition {
     // that outruns the cap (a melee swing or a spell never does: those keep the cap / their own reach). a_bowRange = Tuning::bowWeaponRange.
     [[nodiscard]] inline bool InWeaponRange(const Snapshot& a_s, float a_dist, float a_bowRange) {
         return a_s.drawn == PostureKind::Bow && std::isfinite(a_dist) && a_dist <= (std::max)(0.0f, Prune::Finite(a_bowRange, 0.0f));
+    }
+
+    // 11-17b (field Adelinda): THE ONE READER of "sight is held" for the occluded approach (scheduler/IausSource.cpp files it, the harness checks it). A foe is
+    // ELIGIBLE for the approach unless it is kept past the chase cap outside his weapon's range (noApproach). Keyed on the foe he is ON (Snapshot::currentTargetId, when it
+    // is a listed eligible foe): its own sight verdict decides. With no listed target, sight is held by a Visible foe he could SHOOT: inside his bow's reach when a bow is
+    // drawn, any Visible foe otherwise. (The old rule: ANY Visible foe held it, so a visible foe past her bow while the pinned one sat behind a wall kept her standing.)
+    [[nodiscard]] inline bool ApproachEligible(const Snapshot& a_s, const Combatant& a_f, float a_bowRange) {
+        return !a_f.noApproach || InWeaponRange(a_s, a_f.dist, a_bowRange);
+    }
+    [[nodiscard]] inline const Combatant* PinnedFoe(const Snapshot& a_s, float a_bowRange) {
+        if (a_s.currentTargetId == 0) return nullptr;
+        for (const auto& f : a_s.foes)
+            if (f.id == a_s.currentTargetId && ApproachEligible(a_s, f, a_bowRange)) return &f;
+        return nullptr;
+    }
+    [[nodiscard]] inline bool SightHeld(const Snapshot& a_s, float a_bowRange) {
+        if (const auto* pin = PinnedFoe(a_s, a_bowRange)) return pin->sight == Sight::Visible;
+        for (const auto& f : a_s.foes) {
+            if (f.sight != Sight::Visible || !ApproachEligible(a_s, f, a_bowRange)) continue;
+            if (a_s.drawn != PostureKind::Bow || InWeaponRange(a_s, f.dist, a_bowRange)) return true;
+        }
+        return false;
     }
 
     // 11-17 field (Cicero swung at a foe above him through a wall while a reachable one stood by): a melee blade cannot hurt this foe NOW. The

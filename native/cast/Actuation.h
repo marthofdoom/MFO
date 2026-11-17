@@ -829,6 +829,11 @@ namespace MFO::Actuation {
     // passed with no Yes -> the R2-1 WARN + g_neverFired hold-off; else it keeps waiting. Worker only.
     void TickBuffLanded(RE::Actor* a_follower);
 
+    // 11-17b (field Jesper): a foe is hurting this follower NOW (the IAUS gather's Estimate::IncomingOn > 0). While it is true, a heal's hand lock (a concentration or
+    // touch heal holding the hand) gives way to a higher-ranked non-heal cast instead of waiting out the channel (cast/Hands.cpp CanPreemptHand). a_follower 0 with
+    // false = clear every follower. Worker only.
+    void NoteHealerThreat(RE::FormID a_follower, bool a_threatened);
+
     // Revert/load: drop every follower's lock. No engine call -- the world is
     // being replaced (mirrors ClearForcedWeapons/ClearSelfCasts). Called from
     // ClearSelfCasts(), not wired as a separate Serialization.cpp call site.

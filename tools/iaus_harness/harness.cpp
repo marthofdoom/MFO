@@ -1807,6 +1807,141 @@ namespace {
               "hand lost: the channel length and the redraw time are tunable by name (t.concChannelSec / t.handRedrawSec)");
     }
 
+
+    // ── field 11-17b (Jesper's weak spells and death, Adelinda's approach) ──────────────────────────────────────────────────
+    void Field1117bRows() {
+        std::printf("\n=== field 11-17b: tie-break by effect, heal rate, self dying, line of fire, heal safety, approach keyed on the pinned foe ===\n");
+        const Tuning& t = DefaultTuning();
+        const ClassGate g{};
+        const Foe foe{ "Draugr", 0x3B500, 100.0f, 1.0f, 1.0f, false, false, false, false, true, false, false, 0.0f, 0.0f, 0.0f };
+        // 1. The tie-break: higher effect per second first; equal effect: the lower cost PER CAST (a concentration cost is per second, counted over its channel).
+        {
+            Candidate a = Offense("Frostbite", 0x2B96B, RoleTag::Frost, 20, 2000, foe, 0.0f, 100.0f, 200.0f);
+            Candidate b = Offense("Ice Spike", 0x2B96C, RoleTag::Frost, 20, 2000, foe, 0.0f, 100.0f, 200.0f);
+            a.f.effectRate = 5.0f;  b.f.effectRate = 20.0f;
+            std::vector<Candidate> c{ a, b };
+            Decision d = Decide(Mind{}, c, Profile{}, t, Tick(1, 10.0));
+            Check(!d.order.empty() && S0(d).idx == 1, "tie-break: equal scores, the spell with the higher effect per second wins (the lower form id would have won before)");
+            c[0].f.effectRate = c[1].f.effectRate = 0.0f;
+            c[0].f.concentration = true;   // cost 20 PER SECOND over 11.5 s = 230 per cast against a fire-and-forget 20
+            d = Decide(Mind{}, c, Profile{}, t, Tick(1, 10.0));
+            Check(!d.order.empty() && S0(d).idx == 1, "tie-break: equal effect, a concentration cost is counted over its channel (the stream is no longer the cheapest)");
+            c[0].f.concentration = false;
+            d = Decide(Mind{}, c, Profile{}, t, Tick(1, 10.0));
+            Check(!d.order.empty() && S0(d).idx == 0, "tie-break: nothing differs but the key = the lower key (unchanged)");
+        }
+        // 2. Heal rate: of two heals that both fit the missing health, the one that keeps up with the blows scores higher.
+        {
+            Snapshot s = MageFight();
+            s.self.hp = 80.0f; s.self.hpMax = 200.0f;
+            for (auto& f : s.foes) { f.hit = 20.0f; f.hitsPerSec = 1.0f; f.rangedWeapon = true; }
+            s.foes[0].targetId = s.self.id;   // 20 health a second on him
+            SpellEntry weak = Spell("Weak Heal", 0x66001001, Prune::Nature::Heal, 20, 0); weak.selfDelivery = true; weak.measured = true; weak.heal = 6.0f;
+            SpellEntry strong = Spell("Strong Heal", 0x66001002, Prune::Nature::Heal, 20, 0); strong.selfDelivery = true; strong.measured = true; strong.heal = 30.0f;
+            s.book.entries.push_back(weak); s.book.entries.push_back(strong);
+            const auto gen = Generate(s, g, t);
+            const Candidate *cw = nullptr, *cs = nullptr;
+            for (const auto& c : gen.actions) { if (c.form == 0x66001001) cw = &c; if (c.form == 0x66001002) cs = &c; }
+            Check(cw && cs, "heal rate: both measured heals are candidates for himself");
+            if (cw && cs) {
+                Check(cw->f.healRate > 0.0f && cs->f.healRate > cw->f.healRate && cs->f.recipientIncoming > 0.0f, "heal rate: Generate fills the heal's rate per cast second and what the recipient loses");
+                const auto sc = [&](const Candidate& c) { return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr); };
+                Check(sc(*cs) > sc(*cw), "heal rate: the heal that mends more per second scores higher though both fit the missing health (they tied before)");
+                Check(sc(*cw) > 0.0f, "heal rate: a weak heal is a shape, never a veto");
+                // the tie-break reads the same rate
+                Check(cs->f.effectRate > cw->f.effectRate, "heal rate: the heal's effect rate is what the tie-break compares");
+                // not applicable while nothing hits him
+                Candidate q = *cs; q.f.recipientIncoming = 0.0f; Candidate q2 = *cw; q2.f.recipientIncoming = 0.0f;
+                q.f.expHeal = q2.f.expHeal = 1.0f;   // same HealSize
+                Check(sc(q) == sc(q2), "heal rate: nothing hitting the recipient = not applicable, two heals that fit alike tie again (the tie-break then decides)");
+            }
+            Check(static_cast<std::size_t>(Cons::HealRate) == static_cast<std::size_t>(Cons::HandLost) + 1 && RoleOf(Cons::HealRate) == Role::Shape && Name(Cons::HealRate) == "heal_rate",
+                  "heal rate: APPENDED after hand_lost, a Shape, named heal_rate");
+        }
+        // 3. His own dying boost below t.dyingSelfHp even with the time-to-live unknown.
+        {
+            Snapshot s = MageFight();
+            s.self.hp = 30.0f; s.self.hpMax = 200.0f;   // 15%, nothing hits him
+            const auto gen = Generate(s, g, t);
+            const Candidate* heal = nullptr;
+            for (const auto& c : gen.actions) if (c.form == 0x12FCC) heal = &c;
+            Check(heal && heal->f.recipientSelf && !std::isfinite(heal->f.recipientTtl), "self dying: his own heal is flagged recipientSelf with the time-to-live unknown");
+            if (heal) {
+                Candidate other = *heal; other.f.recipientSelf = false;
+                const float with = ScoreOne(*heal, Mind{}, Profile{}, t, 3, 0.0f, nullptr), without = ScoreOne(other, Mind{}, Profile{}, t, 3, 0.0f, nullptr);
+                Check(with > without * 1.3f, "self dying: his own heal at 15% health scores x1.4 with the dying boost (ttl unknown)");
+                Candidate hi = *heal; hi.f.recipientHp = 0.40f; Candidate hi2 = hi; hi2.f.recipientSelf = false;
+                Check(ScoreOne(hi, Mind{}, Profile{}, t, 3, 0.0f, nullptr) == ScoreOne(hi2, Mind{}, Profile{}, t, 3, 0.0f, nullptr), "self dying: at 40% health there is no boost");
+            }
+        }
+        // 4. The line of fire.
+        {
+            Combatant caster = Actor("Mage", 1, 100, 100, 0, 0), target = Actor("Foe", 2, 100, 100, 600, 0);
+            const auto at = [&](float x, float y) { return Actor("Ally", 3, 100, 100, x, y); };
+            Check(Estimate::InLineOfFire(caster, target, at(300, 70), 0.0f), "line of fire: an ally 70 units off the middle of the line is in it");
+            Check(!Estimate::InLineOfFire(caster, target, at(300, 90), 0.0f), "line of fire: 90 units off the line is clear (corridor 80)");
+            Check(!Estimate::InLineOfFire(caster, target, at(-300, 0), 0.0f) && !Estimate::InLineOfFire(caster, target, at(900, 0), 0.0f), "line of fire: behind the caster or past the target is not in the line");
+            Check(!Estimate::InLineOfFire(caster, target, at(600, 100), 0.0f) && Estimate::InLineOfFire(caster, target, at(600, 100), 50.0f) && !Estimate::InLineOfFire(caster, target, at(600, 120), 50.0f),
+                  "line of fire: a blast reaches a body area + 64 from the target (50 -> 114)");
+            Snapshot s = MageFight();   // the player stands at (300, 0): on the line to the foe at (600, 0)
+            Generated gen = Generate(s, g, t);
+            const Candidate* bolt = nullptr;
+            for (const auto& c : gen.actions) if (c.form == 0x12FCD && c.target == 0x3B500) bolt = &c;
+            Check(bolt && !bolt->f.splashSafe && ScoreOne(*bolt, Mind{}, Profile{}, t, 3, 0.0f, nullptr) == 0.0f,
+                  "line of fire: Firebolt at the foe with the player in the line is vetoed (splash_safe gate, no area needed)");
+            bool noted = false;
+            for (const auto& pr : gen.fireBlocked) if (pr.first == 0x12FCD && pr.second == 0x3B500) noted = true;
+            Check(noted, "line of fire: the refused (spell, foe) pair is reported for the refusal memory");
+            s.allies[0].y = 300.0f; s.allies[0].dist = std::sqrt(300.0f * 300.0f + 300.0f * 300.0f);   // the player steps off the line
+            s.allies[1].x = 0.0f; s.allies[1].y = 300.0f;
+            gen = Generate(s, g, t);
+            bolt = nullptr;
+            for (const auto& c : gen.actions) if (c.form == 0x12FCD && c.target == 0x3B500) bolt = &c;
+            Check(bolt && bolt->f.splashSafe && ScoreOne(*bolt, Mind{}, Profile{}, t, 3, 0.0f, nullptr) > 0.0f, "line of fire: with the party off the line the same cast is a candidate again");
+        }
+        // 5. Heal safety: no concentration / touch heal for a recipient a foe can hurt who would not survive, while an aimed heal is available.
+        {
+            Snapshot s = MageFight();
+            s.allies[1].hp = 15.0f;   // Lydia (250, 250), 15%
+            for (auto& f : s.foes) { f.hit = 50.0f; f.hitsPerSec = 1.0f; }
+            s.foes[1].x = 330.0f; s.foes[1].y = 250.0f; s.foes[1].targetId = s.allies[1].id;   // a melee foe on her
+            SpellEntry conc = Spell("Channel Heal", 0x66002001, Prune::Nature::Heal, 10, 1000); conc.concentration = true; conc.measured = true; conc.heal = 10.0f;
+            s.book.entries.push_back(conc);
+            const auto has = [&](const Generated& gn, std::uint32_t form, std::uint32_t tgt) {
+                for (const auto& c : gn.actions) if (c.form == form && c.target == tgt) return true;
+                return false;
+            };
+            Generated gn = Generate(s, g, t);
+            Check(!has(gn, 0x66002001, s.allies[1].id) && has(gn, 0x12FD2, s.allies[1].id) && gn.healRefused,
+                  "heal safety: the concentration heal on Lydia is refused (a foe on her, she would not survive) and the aimed Heal Other stays");
+            // no aimed heal to fall back to: the channelled heal stays (the close-spell rule's shape)
+            Snapshot only = s;
+            for (auto& e : only.book.entries) if (e.form == 0x12FD2 || e.form == 0x12FCC) e.drop = Prune::Drop::Placement;
+            Check(has(Generate(only, g, t), 0x66002001, s.allies[1].id), "heal safety: with no fire-and-forget heal in the book the concentration heal is kept");
+            // she is not threatened: kept
+            Snapshot calm = s; calm.foes[1].targetId = 0; calm.foes[1].x = 1500.0f;
+            Check(has(Generate(calm, g, t), 0x66002001, s.allies[1].id), "heal safety: no foe can hurt her = the concentration heal is a candidate");
+        }
+        // 6. The occluded approach is keyed on the foe he is ON.
+        {
+            Snapshot s = MageFight();
+            s.drawn = PostureKind::Bow;
+            for (auto& f : s.foes) f.sight = Sight::Visible;
+            s.currentTargetId = 0x3B500;
+            const float bow = t.bowWeaponRange;
+            Check(Reposition::SightHeld(s, bow), "approach: the pinned foe visible = sight held");
+            s.foes[0].sight = Sight::Occluded;
+            Check(!Reposition::SightHeld(s, bow) && Reposition::PinnedFoe(s, bow) && Reposition::PinnedFoe(s, bow)->id == 0x3B500,
+                  "approach: the pinned foe occluded while another foe is visible = sight NOT held (the approach files for it)");
+            s.currentTargetId = 0;
+            Check(Reposition::SightHeld(s, bow), "approach: no pinned foe, a visible foe inside the bow's reach = sight held");
+            for (auto& f : s.foes) f.dist = 5000.0f;
+            Check(!Reposition::SightHeld(s, bow), "approach: no pinned foe, every visible foe past the bow's reach = sight NOT held");
+            s.drawn = PostureKind::None;
+            Check(Reposition::SightHeld(s, bow), "approach: a caster keeps the old reading (any visible foe holds sight)");
+        }
+    }
+
     void SchoolAffinityRows() {
         namespace CC = MFO::Iaus::ClassCurves;
         std::printf("\n=== school affinity ===\n");
@@ -2250,6 +2385,7 @@ int main() {
     SchoolAffinityRows();
     SpellPerkRows();
     HandLostRows();
+    Field1117bRows();
     BuffPotions();
     ConsumablesWorth();
     LootNeedScores();
