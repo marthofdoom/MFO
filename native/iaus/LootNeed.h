@@ -116,6 +116,10 @@ namespace MFO::Iaus {
         //   stealBountyPerGold the bounty a theft would cost per gold of the item's value (an estimate; the engine's own figure is not read).
         //   stealBountyRef     the bounty at which the risk term reaches stealRiskWeight.
         float stealNeedMin = 0.8f, stealRiskWeight = 0.3f, stealBountyPerGold = 1.0f, stealBountyRef = 500.0f;
+        // GUARD-BARRED CORPSE (field 2026-11-17 L1, Raven Rock: four bodies, 19 BARRED:guard arrivals as three followers cycled A->C, B->A):
+        // a corpse a guard barred is skipped by EVERY follower's candidate scan for at least this many seconds, then while a guard still
+        // sees it (re-asked every few seconds). A FLOOR, not an expiry (the bar outlives it while the guard can see). PLACEHOLDER.
+        float guardBarFloorSec = 20.0f;
     };
     // DefaultLootTuning() is the LIVE table: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/looting.txt) swaps edited ones in on the worker between
     // ticks. ShippedLootTuning() is never edited (a reload starts from it); LiveLootTuning() is the editable object (TuningFile only).
@@ -137,6 +141,7 @@ namespace MFO::Iaus {
             { "foodScale", &LootTuning::foodScale, false, kInf }, { "poisonPowerRef", &LootTuning::poisonPowerRef, true, kInf }, { "poisonWeakScale", &LootTuning::poisonWeakScale, false, kInf },
             { "stealNeedMin", &LootTuning::stealNeedMin, false, 1.0f }, { "stealRiskWeight", &LootTuning::stealRiskWeight, false, kInf },
             { "stealBountyPerGold", &LootTuning::stealBountyPerGold, false, kInf }, { "stealBountyRef", &LootTuning::stealBountyRef, true, kInf },
+            { "guardBarFloorSec", &LootTuning::guardBarFloorSec, false, kInf },
         };
         for (const F& k : kFloats) if (a_name == k.name) {
             if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kInf ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kInf ? "out of range: must be 0..1" : "out of range: must be >= 0"));

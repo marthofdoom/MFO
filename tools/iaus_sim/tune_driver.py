@@ -1595,6 +1595,7 @@ LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.nee
 LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "no theft road in the lab (thief steal-by-need, feat/iaus-loot-paths): PLACEHOLDER",
                      "loot.stealRiskWeight": "no theft road in the lab: PLACEHOLDER", "loot.stealBountyPerGold": "no theft road in the lab: PLACEHOLDER",
                      "loot.stealBountyRef": "no theft road in the lab: PLACEHOLDER",
+                     "loot.guardBarFloorSec": "no guards in the lab (a guard-barred corpse is a town witness rule): PLACEHOLDER",
                      "loot.gemChargeTrigger": "no weapon-recharge road (ClickUp 1dfcuabd356): a carried gem is worth 0 in the lab",
                      "loot.soulGemTarget": "no weapon-recharge road: a carried gem is worth 0 in the lab",
                      "loot.poisonTarget": "no poison-apply road: a carried poison is worth 0 in the lab",

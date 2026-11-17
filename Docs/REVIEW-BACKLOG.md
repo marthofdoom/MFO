@@ -3520,3 +3520,15 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** a staff in the LEFT hand is not priced: `EstimateHit`'s staff-in-left path returns before `leftShare`, so a staff right + melee left reads 0.
 - **(SEV-5):** heals and ally buffs: a channelled HEAL is not priced (heal-hold rules own the hand); a buff at an ally through the ConcProxy is priced the same as a self buff (it holds the same hand).
 - **(SEV-5):** mid-channel the bow is unequipped (`cast/Hands.cpp:977`), so `w` is likely null and the cost reads not applicable then. Harmless: the stream runs to its cap, and the price matters at the pick, before the bow leaves his hand.
+
+### fix/field-1117-loot (author notes, 2026-11-17)
+- **(SEV-4):** the hostile-to-the-player read is taken once at death and kept as a FormID set (session state, not saved): a hostile body that died before the sink saw it (loaded corpse, previous session) is NOT waived in a town (fail closed). Could be widened with a live faction / aggression read of the corpse once one is verified to survive death.
+- **(SEV-5):** the party-wide corpse bar's re-ask uses `GuardCheck(follower, corpse)`, which answers "a guard sees THIS follower or the body", so a bar can lift or hold on the asking follower's position, not the first follower's.
+- **(SEV-5):** the near-face reach uses the base's `boundData` min horizontal half-extent unscaled by the ref (the LOTD crate reader's rule); a scaled container is under-measured (conservative).
+
+### fix/field-1117-loot (Opus 5.5 review, 2026-11-17, against 156aa06e): MERGE after the SEV-3 (fixed: ClearHostileDeaths on revert)
+- **(SEV-4):** LootScan.cpp:95 opens the full in-town scan whenever any hostile death is known; keep the early exit for categories that cannot source a corpse (Steal, PickLocks, loose-only) or gate on a hostile body in the scan's cells (Steal::Check main-thread scans and dibs accrual now run under guard sight only to be discarded at :619).
+- **(SEV-4):** a hostile body that died before the death sink saw it (loaded corpse, earlier session) stays barred (fail closed) but the log does not say why: add "not known hostile (died before this session)" to the BarCorpse / waiver line.
+- **(SEV-4):** L2 near-face reach (fActivatePickLength + smaller horizontal half-extent, unscaled) likely does not cover the 225-306 u field stops; the 2-strike blocklist does the work. Next field run's far-arrival line prints the reach. Root cause (Harbinger navmesh goal far from a shelf/counter ref) out of scope.
+- **(SEV-4):** g_farArrivals erased only on a real arrival or a strike; stale entries can count as "2nd in a row" later (64-entry cap).
+- **(SEV-5):** near-face reach unscaled by ref scale (under-measures scale > 1); kFarArrivalProgress / kFarArrivalMax / kBarRecheck are constexpr, not LootTuning rows; a ~3 s old Clear verdict can lift a bar; a near-face arrival can bypass the player bubble for reach > 200 u; hostility also counts a combat target that is a teammate (wider than marth's "hostile to the player": ask marth).

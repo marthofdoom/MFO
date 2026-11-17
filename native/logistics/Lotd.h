@@ -40,6 +40,13 @@ namespace MFO::Lotd {
     bool Enabled();                    // Detected() && bLootLOTD
     bool GambitOffered();              // the board lists "Loot museum items" (== Enabled())
 
+    // INTERACTION REACH (field 2026-11-17 L2; the ONE reader of "is he at the object's near face"): TRUE = he stands within the engine's
+    // activation pick length (fActivatePickLength:Interface) plus the ref's base smaller horizontal half-extent of it AND on its floor
+    // (SameFloor). The same two tests the museum deposit's BLOCKED stop uses; the loot road calls it for a CONTAINER's arrival. Works
+    // without LOTD (the reach is read at Detect / post-load either way; unreadable = never true). a_dist / a_reach optional out-values
+    // (the distance to the origin, the reach it was measured against; 0 on a null ref). Worker road (form reads).
+    bool WithinInteractionReach(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, float* a_dist = nullptr, float* a_reach = nullptr);
+
     // ── worker road (the per-follower service tick) ──────────────────────────
     // The act.loot_museum dispatch: loot museum items. True = it acted. (The deposit
     // is PriorityDeposit's since the museum-priority round, 2026-09-28.)

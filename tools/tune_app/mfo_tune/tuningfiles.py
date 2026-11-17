@@ -37,7 +37,7 @@ WORTH = {"ratioCap": (0, True, INF), "pressureFull": (0, True, INF), "dangerSpan
 LOOT_F = {"takeThreshold": (False, 1), "needBase": (False, INF), "needSlope": (False, INF), "roomKnee": (True, 1), "saleGoldPerWeight": (True, INF),
           "saleWeight": (False, INF), "gold": (False, INF), "equipment": (False, INF), "valuables": (False, INF), "jewelry": (False, INF),
           "gemChargeTrigger": (False, 1), "buffScale": (False, INF), "foodScale": (False, INF), "poisonPowerRef": (True, INF), "poisonWeakScale": (False, INF),
-          "stealNeedMin": (False, 1), "stealRiskWeight": (False, INF), "stealBountyPerGold": (False, INF), "stealBountyRef": (True, INF)}
+          "stealNeedMin": (False, 1), "stealRiskWeight": (False, INF), "stealBountyPerGold": (False, INF), "stealBountyRef": (True, INF), "guardBarFloorSec": (False, INF)}
 LOOT_I = ("soulGemTarget", "healthTarget", "staminaTarget", "staminaTargetNoWeapon", "magickaTarget", "resistTarget", "fortifyTarget", "regenTarget",
           "invisTarget", "lockpickTarget", "poisonTarget")
 KNOWN_STEMS = set(names.CLASS_SLUGS) | set(names.BASE_OFF_SLUGS) | {"shared", "potions", "looting"}

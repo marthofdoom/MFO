@@ -1053,7 +1053,7 @@ namespace MFO::Lotd {
             const float was = g_activateReach.exchange(v);
             if (v <= 0.0f)
                 spdlog::warn("[lotd] 'fActivatePickLength:Interface' is unreadable -- a deposit walk that ends "
-                             "BLOCKED short of the crate is NOT counted as arrived (it fails as before)");
+                             "BLOCKED short of the crate (and a container's near-face arrival on the loot road) is NOT counted as arrived (it fails as before)");
             else if (was != v)
                 spdlog::info("[lotd] interaction reach for a BLOCKED deposit walk: fActivatePickLength = {:.0f} u "
                              "(+ the crate's near-face half-extent)", v);
@@ -1384,7 +1384,14 @@ namespace MFO::Lotd {
         if (dh)
             if (auto* g = dh->LookupForm<RE::TESGlobal>(Forms::kLotdDetectedGlob, Forms::kPlugin))
                 g->value = g_detected.load() ? 1.0f : 0.0f;
-        if (g_detected.load()) ReadActivateReach();   // main thread (kDataLoaded)
+        ReadActivateReach();   // main thread (kDataLoaded); the loot road's container arrival reads it too, so not gated on LOTD
+    }
+
+    bool WithinInteractionReach(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, float* a_dist, float* a_reach) {
+        if (a_dist) *a_dist = 0.0f;
+        if (a_reach) *a_reach = 0.0f;
+        if (!a_follower || !a_ref) return false;
+        return SameFloor(a_follower, a_ref, nullptr, nullptr) && WithinReach(a_follower, a_ref, a_dist, a_reach);
     }
 
     void RegisterSinks() {
@@ -1403,8 +1410,8 @@ namespace MFO::Lotd {
         // The toggle-on edge is a change DURING play: a save loaded with it already on
         // is not an edge.
         g_lastEnabled.store(Enabled());
+        ReadActivateReach();   // main thread; an INI edit / setini between loads is picked up (also without LOTD: the loot road reads it)
         if (!g_detected.load()) return;
-        ReadActivateReach();   // main thread; an INI edit / setini between loads is picked up
         // Main thread already: read now. On a new game the API script may not be bound
         // yet; LOTD's MCMRefresh (all patches registered) triggers the real read.
         RebuildSnapshot(a_newGame ? "new game" : "post-load");
