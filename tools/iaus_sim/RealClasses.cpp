@@ -126,6 +126,7 @@ namespace Sim {
             g.disengage = (d.flags & C::Flag::kDisengage) != 0; c.shortLeash = (d.flags & C::Flag::kShortLeash) != 0;
             c.sneakAlways = (d.flags & C::Flag::kSneakAlways) != 0; g.sneakClass = c.sneakAlways;   /* SpellBook::GateFor: Flag::kSneakAlways with the tree on (card G3's hide run) */ c.nearPlayer = (d.flags & C::Flag::kNearPlayer) != 0; c.goIn = static_cast<int>(d.goIn); c.partyPct = d.partyHealthyPct;
             c.pureMage = d.line == C::Line::Mage;
+            if (g_v3.casterhold) g.casterLine = d.line == C::Line::Mage;   // SIM V3: SpellBook::GateFor (iaus/SpellBook.cpp:688), marth 11-13 "Mage line only"; off = the game before 0ed9c705
             if (const Playstyle* ps = ActivePlaystyle(c.name)) { c.forbid = ps->forbid; c.playstyle = ps->does; }
             for (std::size_t i = 0; i < d.gambitCount; ++i) { using R = C::SpellRole; const char* tok = nullptr; const char* tok2 = nullptr;   // the roles his own rows name (todo rows too: the card names them)
                 switch (d.gambits[i].role) { case R::Fire: tok = "fire"; break; case R::Frost: tok = "frost"; break; case R::Shock: tok = "shock"; break; case R::Heal: tok = "healOther"; tok2 = "heal"; break;
@@ -198,6 +199,7 @@ namespace Sim {
             c.name = kOff[i]; c.line = "Base"; c.tier = 1; c.planned = false; c.playstyle.clear(); c.forbid = 0;
             ClassGate& g = c.gate; g = ClassGate{}; g.resolved = true; g.treeOn = false; g.strict = false;
             g.spellsOnClass = true; g.scrollUser = Casting(d); g.powerAttack = true; g.taunt = true; g.disengage = true;
+            if (g_v3.casterhold) g.casterLine = d.line == C::Line::Mage;   // SIM V3: tree OFF, def is the T1 root (iaus/SpellBook.cpp:677)
             const std::size_t row = MFO::Iaus::ClassCurves::kBaseOffFirst + i;
             MFO::Iaus::ClassCurves::Apply(g_curveTable[row], static_cast<std::uint8_t>(row), g); c.profile = MFO::Iaus::ClassCurves::Build(g_curveTable[row]);
             c.csDisengage = 0; c.avoidThreat = 0.20f; c.shareMax = c.shareMin = -1.0f; c.leashScaled = false; c.aversion = 0.0f; c.aimBudget = -1;

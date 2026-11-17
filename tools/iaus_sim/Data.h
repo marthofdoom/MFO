@@ -47,7 +47,30 @@ namespace Sim {
         void AllOff() { feet = c8 = dodge = aversion = aim = block = range = hands = backoff = step = c13built = unweighted = reanimate = false; }
     };
     inline T2 g_t2;
-    inline float g_aimMiss = 0.12f;       // --aim-miss: the lab's chance that an UNCORRECTED aimed shot misses a moving target (MODEL; TM::aimMiss before)
+    // ── SIM V3 (Docs/research/2026-11/iaus-sim-v3.md): THE POSITIONAL WORLD. marth 11-13: "We've proved the sim doesn't work without
+    // distance and movement". Each mechanism is ONE switch, ON by default. `--world v2` turns every one off and the lab is v2, draw
+    // for draw (run.sh pins it). A switch never draws from the fight's random stream R while it is off; the draws v3 adds come from a
+    // stream of their own (Fight::V), so one v3 switch never shifts the draws of another mechanism.
+    struct V3 {
+        bool height = true;      // z and 3D distance: a dragon flies a circuit at altitude, a perched foe stands on a ledge; the game's own OutOfMeleeReach test
+        bool chase = true;       // Confidence::ChaseRadius (fChaseMin 600 .. fChaseMax 3000 by confidence), 3D, with the held-foe waiver (iaus/Candidates.cpp)
+        bool lof = true;         // the line-of-fire hold: a hostile cast is held while the player or a follower stands in the corridor
+        bool delivery = true;    // cast delivery: claim-to-fire latency, the inactive controller, claim thrash
+        bool hands = true;       // the hands: a cast takes a hand, a stream holds it, a two-handed weapon or a bow is put away and drawn again
+        bool stance = true;      // the engine's movement follows the stance (dry caster = melee), attack slots, circling, a held caster strafes, foe fallback
+        bool casterhold = true;  // native 0ed9c705 / 6c5ba58d mirrored: ClassGate::casterLine + Snapshot::spellsHoldPrev (false = the game before 11-13)
+        bool blockdir = true;    // a guard stops a blow only inside its arc; every blow on the subject is tallied by direction
+        bool areas = true;       // an ACTIVE area (cloak = moves with the caster, circle / rune / wall = fixed at the cast point) lives in the world while it lasts
+        bool perks = true;       // Snapshot::perks spell group (spellsRead, spellCost / spellMagnitude / spellCount per school), perk-effects.md section 9
+        void AllOff() { height = chase = lof = delivery = hands = stance = casterhold = blockdir = areas = perks = false; }
+        [[nodiscard]] bool Any() const { return height || chase || lof || delivery || hands || stance || casterhold || blockdir || areas || perks; }
+    };
+    inline V3 g_v3;
+    inline int   g_waiver = 2;            // --waiver none|self|player: the chase cap's held-foe waiver. 2 = the game today (marth 11-13: the foe fights HIM or the player), 1 = the game of 10-19 (HIM only), 0 = none
+    inline bool  g_deliveryOld = false;   // --delivery old: the game before fix/heal-claim-gates and fix/iaus-claim-thrash (a claim on an inactive controller never casts; a newer pick takes the hand)
+    inline float g_deliverSec[2] = { 2.4f, 4.5f };   // --deliver-sec o,h: claim to FIRE of an offense cast / a heal (cast/Hands.cpp:362, CALIBRATED on one session each; the heal figure is soft)
+    inline float g_blockArc = 180.0f;     // --block-arc: the full angle in front of him a guard covers (ASSUMPTION: no engine source in Docs)
+    inline float g_aimMiss = 0.12f;      // --aim-miss: the lab's chance that an UNCORRECTED aimed shot misses a moving target (MODEL; TM::aimMiss before)
     inline float g_dodgeFlight = 0.2f;    // MODEL: a side step clears a projectile only when it flies at least this long (a reaction time; --dodge-flight, sensitivity in section 31.4)
     inline float g_aimScatter = 0.0f;     // --aim-scatter P: every UNCORRECTED follower shot also misses with this chance, moving target or not. The engine scatters by
                                           // aimController+0xA0 x fCombatAimProjectileRandomOffset (class-m0-re.md); how often that misses is not measured, so the default is none
@@ -116,6 +139,11 @@ namespace Sim {
         float recovery = 0;         // shout recovery (its cooldown)
         bool  healOther = false;    // a heal that is not self-only
         std::string element;        // "fire" / "frost" / "shock" / ""
+        // SIM V3. An ACTIVE area (iaus-sim-v3.md 6): 0 none, 1 it moves with the caster (a cloak: effect archetype Cloak, FACT), 2 it stays at
+        // the cast point (a circle: MODEL, read from the editor id). areaDps = health per second to a foe inside, areaArmor = armor to a friend inside.
+        int   areaKind = 0; float areaDps = 0, areaArmor = 0, areaDur = 0;
+        // The perk-effect mirror (perk-effects.md 9): what his perks multiply this spell's cost and magnitude by (ModSpellCost / ModSpellMagnitude), set when a follower is built.
+        float perkCost = 1, perkMag = 1;
     };
 
     struct Style {   // CSTY (CSGD / CSME / CSCR / CSLR / DATA)
@@ -298,7 +326,7 @@ namespace Sim {
                 if (arch == kArTurnUndead) { out.turnUndead = true; e.undeadOnly = true; }
             }
             if (arch == kArStagger) out.stagger = true;
-            if (arch == kArCloak && self) cloak = true;
+            if (arch == kArCloak && self) { cloak = true; out.areaKind = 1; out.areaDps = std::max(out.areaDps, static_cast<float>(mag)); out.areaDur = std::max(out.areaDur, static_cast<float>(d)); }   // SIM V3: a cloak is an area that moves with him
             if (host || detr) { hostileAny = true; if (ec > topHostCost) { topHostCost = ec; resist = static_cast<int>(x["resist"].num(-1)); } }
             const bool vm = arch == kArValueMod || arch == kArPeakValueMod || arch == kArAbsorb || arch == kArDualValueMod;
             if ((host || detr) && vm) {
@@ -332,6 +360,7 @@ namespace Sim {
         out.element = resist == kAvResistFire ? "fire" : resist == kAvResistFrost ? "frost" : resist == kAvResistShock ? "shock" : "";
         e.role = Prune::RoleOf(e.nature, e.resistAv);
         e.selfDelivery = self; e.touch = dl == "Touch"; e.concentration = conc;
+        if (self && !cloak && e.areaUnits > 0.0f && sp["edid"].s.find("Circle") != std::string::npos) { out.areaKind = 2; out.areaArmor = out.armor; out.areaDur = out.buffDur; }   // SIM V3 (MODEL): a circle stays where it was cast
         // Actuation::AimedReachOf (cast/CanAct.cpp): the record's range counts only from kMinSaneReach (300) up, else the projectile's
         // (not extracted: 4096 stands in). Requiem's target heals carry range 30, which the game does not read as a reach.
         e.reach = (e.selfDelivery || e.touch) ? 0.0f : static_cast<float>(sp["range"].num()) >= 300.0f ? static_cast<float>(sp["range"].num()) : 4096.0f;

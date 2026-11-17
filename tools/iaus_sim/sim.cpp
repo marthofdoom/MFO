@@ -33,6 +33,7 @@ namespace {
     struct Agg {   // a cell's tallies, summed
         Tally s; long fights = 0, wins = 0, losses = 0, playerDeaths = 0, forced = 0, timeouts = 0;
         double durSum = 0, firstKillSum = 0; long firstKillN = 0; double uSum = 0, pMinSum = 0, mpLateSum = 0; long mpLateN = 0, fightsWithDown = 0, foes = 0;
+        double minTgtSum = 0; long minTgtN = 0;   // sim v3: the nearest the subject came to his target, per fight
         void Add(const Tally& t, bool forcedBracket) {
             ++fights; wins += t.won; losses += t.lost; playerDeaths += t.playerDied; forced += forcedBracket; timeouts += !t.won && !t.lost; durSum += t.dur;
             if (t.firstKill >= 0) { firstKillSum += t.firstKill; ++firstKillN; }
@@ -56,6 +57,11 @@ namespace {
             for (std::size_t i = 0; i < 10; ++i) { s.decBandSec[i] += t.decBandSec[i]; s.decBandLoss[i] += t.decBandLoss[i]; s.decLethal[i] += t.decLethal[i]; s.decToDownSec[i] += t.decToDownSec[i]; s.decCross[i] += t.decCross[i]; s.decDownAfter[i] += t.decDownAfter[i]; }
             S(drinksH); S(downsWithPotH); S(downsMidDrink); S(potFracN); S(drinkAtSum); S(potHeal); S(potWaste); S(potFracSum);
             for (int k = 0; k < 4; ++k) S(drawnSec[k]); for (int k = 0; k < 3; ++k) S(nearOnMeSec[k]); S(drawSpoiled); S(pointBlankShots);
+            // sim v3
+            S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
+            S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
+            S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
+            if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -120,6 +126,19 @@ namespace {
           m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
         // sim batch (section 32): the drink record (the full decline curve is the --decline report)
         m["drinkH/f"] = double(s.drinksH) / n; m["drinkAt%"] = s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1; m["potWaste%"] = pct(s.potWaste, s.potHeal); m["dnPot/f"] = double(s.downsWithPotH) / n; m["dnMidDrink/f"] = double(s.downsMidDrink) / n;
+        // SIM V3 (iaus-sim-v3.md): what became of the casts his decisions fired, the chase cap, the guard by direction, the weapon hand, the areas.
+        // fired% = released / picked. landed% = released at a target he could see / picked. Each cause is a share of the picks.
+        { const double pk = double(s.castPick);
+          m["dl.pick/f"] = pk / n; m["dl.fired%"] = pct(double(s.castFired), pk); m["dl.landed%"] = pct(double(s.castFired - s.castNoLos), pk); m["dl.noLos%"] = pct(double(s.castNoLos), pk);
+          m["dl.lofHeld%"] = pct(double(s.castLofHeld), pk); m["dl.lofExpired%"] = pct(double(s.castLofExpired), pk); m["dl.lofHold.s"] = s.castLofHeld ? s.castLofSec / double(s.castLofHeld) : -1;
+          m["dl.notBuilt%"] = pct(double(s.castNotBuilt), pk); m["dl.direct%"] = pct(double(s.castDirect), pk); m["dl.thrash%"] = pct(double(s.castThrash), pk); m["dl.lost%"] = pct(double(s.castLost), pk);
+          m["dl.claim.s"] = s.castFired ? s.claimSec / double(s.castFired) : -1; m["dl.beatLof%"] = pct(double(s.beatLof), double(s.beats + s.beatLof + s.beatNoLos)); m["dl.stream.s"] = s.streams ? s.streamSec / double(s.streams) : -1;
+          m["cap.mean"] = s.capLaps ? s.capSum / double(s.capLaps) : -1; m["cap.drop%"] = pct(double(s.capDropLaps), double(s.capLaps)); m["cap.starve%"] = pct(double(s.capStarveLaps), double(s.capLaps)); m["cap.waived/f"] = double(s.capWaived) / n;
+          m["inc/f"] = double(s.inc) / n; m["guardAll%"] = pct(double(s.incGuard), double(s.inc)); m["arcMiss%"] = pct(double(s.incArc), double(s.inc)); m["guardDown%"] = pct(double(s.incDown), double(s.inc));
+          const double up = std::max(1e-9, s.upSec);
+          m["handLost%"] = 100.0 * s.handLostSec / up; m["handLostDmg/f"] = s.handLostDmg / n; m["reDraw/f"] = double(s.reDraws) / n;
+          m["area.up%"] = 100.0 * s.areaUpSec / up; m["area.foe.s/f"] = s.areaFoeSec / n; m["area.ally.s/f"] = s.areaAllySec / n; m["area.out%"] = pct(s.areaOutSec, s.areaUpSec); m["area.recast%"] = pct(double(s.areaRecast), double(s.areaOwnCasts));
+          m["minTgt"] = a.minTgtN ? a.minTgtSum / double(a.minTgtN) : -1; m["strafe/f"] = double(s.strafes) / n; }
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
     }
@@ -185,6 +204,19 @@ namespace {
     struct T2Flag { const char* name; bool T2::* m; };
     inline constexpr T2Flag kT2Flags[] = { { "c8", &T2::c8 }, { "dodge", &T2::dodge }, { "aversion", &T2::aversion }, { "aim", &T2::aim }, { "block", &T2::block }, { "range", &T2::range }, { "hands", &T2::hands },
                                            { "backoff", &T2::backoff }, { "step", &T2::step }, { "unweighted", &T2::unweighted }, { "reanimate", &T2::reanimate } };
+    // SIM V3: the world of this run. "" = v2 (every v3 switch off: the headline and the #meta line are v2's own, byte for byte);
+    // else " world=v3" plus what differs from the v3 defaults.
+    struct V3Flag { const char* name; bool V3::* m; };
+    inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance },
+                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks } };
+    std::string WorldTag(const char* lead) {
+        if (!g_v3.Any()) return "";
+        std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
+        if (!off.empty()) o += "(" + off + ")";
+        if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
+        if (g_v3.delivery && (g_deliverSec[0] != 2.4f || g_deliverSec[1] != 4.5f)) o += "+deliver-sec"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc";
+        return o;
+    }
     std::string g_potTag;
     std::string T2Name() {
         std::string o; bool anyOn = g_t2.feet || g_t2.c13built; for (const T2Flag& f : kT2Flags) anyOn |= g_t2.*(f.m);
@@ -582,7 +614,20 @@ static int RealMain(int argc, char** argv) {
         bool t2Arg = false;
         for (const T2Flag& f : kT2Flags) if (!std::strcmp(argv[i] + (argv[i][0] == '-' && argv[i][1] == '-' ? 2 : 0), f.name) && argv[i][0] == '-' && i + 1 < argc && (!std::strcmp(argv[i + 1], "off") || !std::strcmp(argv[i + 1], "on"))) { g_t2.*(f.m) = !std::strcmp(argv[++i], "on"); t2Arg = true; break; }
         if (t2Arg) continue;
-        if (!std::strcmp(argv[i], "--t2") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_t2.AllOff(); else if (!std::strcmp(v, "on")) g_t2 = T2{}; else { std::fprintf(stderr, "--t2 off|on\n"); return 2; } }
+        // SIM V3 (iaus-sim-v3.md section 2): --world v2|v3, --v3 <name>=on|off[,...], --waiver, --delivery, --deliver-sec, --block-arc
+        if (!std::strcmp(argv[i], "--world") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "v2")) g_v3.AllOff(); else if (!std::strcmp(v, "v3")) g_v3 = V3{}; else { std::fprintf(stderr, "--world v2|v3\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--v3") && i + 1 < argc) { std::string v = argv[++i]; std::size_t p0 = 0;
+            while (p0 <= v.size()) { const std::size_t q = v.find(',', p0); const std::string tok = v.substr(p0, q == std::string::npos ? std::string::npos : q - p0); const std::size_t eq = tok.find('=');
+                const std::string nm = tok.substr(0, eq), val = eq == std::string::npos ? "on" : tok.substr(eq + 1); bool known = false;
+                if (val != "on" && val != "off") { std::fprintf(stderr, "--v3 %s: on|off\n", tok.c_str()); return 2; }
+                for (const V3Flag& f : kV3Flags) if (nm == f.name) { g_v3.*(f.m) = val == "on"; known = true; }
+                if (!known) { std::fprintf(stderr, "unknown --v3 switch '%s'. Known:", nm.c_str()); for (const V3Flag& f : kV3Flags) std::fprintf(stderr, " %s", f.name); std::fprintf(stderr, "\n"); return 2; }
+                if (q == std::string::npos) break; p0 = q + 1; } }
+        else if (!std::strcmp(argv[i], "--waiver") && i + 1 < argc) { const char* v = argv[++i]; g_waiver = !std::strcmp(v, "none") ? 0 : !std::strcmp(v, "self") ? 1 : !std::strcmp(v, "player") ? 2 : -1; if (g_waiver < 0) { std::fprintf(stderr, "--waiver none|self|player\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--delivery") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "old")) g_deliveryOld = true; else if (!std::strcmp(v, "main")) g_deliveryOld = false; else { std::fprintf(stderr, "--delivery main|old\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--deliver-sec") && i + 1 < argc) { if (std::sscanf(argv[++i], "%f,%f", &g_deliverSec[0], &g_deliverSec[1]) != 2 || g_deliverSec[0] < 0 || g_deliverSec[1] < 0) { std::fprintf(stderr, "--deliver-sec <offense>,<heal> (seconds)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--block-arc") && i + 1 < argc) { g_blockArc = static_cast<float>(std::atof(argv[++i])); if (!(g_blockArc > 0.0f && g_blockArc <= 360.0f)) { std::fprintf(stderr, "--block-arc <degrees, 1..360>\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--t2") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_t2.AllOff(); else if (!std::strcmp(v, "on")) g_t2 = T2{}; else { std::fprintf(stderr, "--t2 off|on\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--feet-stop")) g_t2.feet = false;                 // Q-SIM-5: the lab before (a swap, a potion and a cast stop his feet)
         else if (!std::strcmp(argv[i], "--c13") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "built")) g_t2.c13built = true; else if (!std::strcmp(v, "lever")) g_t2.c13built = false; else { std::fprintf(stderr, "--c13 built|lever\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--disengage-dnd")) g_t2.dnd = true;               // marth 11-12: a disengage drops him as a valid target for 6 s (NOT built in the game)
@@ -759,7 +804,7 @@ static int RealMain(int argc, char** argv) {
         double m = 0; for (double x : js) m += x; m /= double(js.size()); double v = 0; for (double x : js) v += (x - m) * (x - m);
         const double se = js.size() > 1 ? std::sqrt(v / double(js.size() - 1) / double(js.size())) : -1.0;   // n=1 has no spread: print n/a
         char seb[32]; if (se < 0) std::snprintf(seb, sizeof seb, "n/a"); else std::snprintf(seb, sizeof seb, "%.2f", se);
-        std::printf("HEADLINE  J mean=%.2f  se=%s  n=%zu seeds  fights=%d per scenario  covers=%s  mode=%s  stealth=%s  t2=%s\n", m, seb, js.size(), hf, ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus", StealthName(), T2Name().c_str()); return 0; }
+        std::printf("HEADLINE  J mean=%.2f  se=%s  n=%zu seeds  fights=%d per scenario  covers=%s  mode=%s  stealth=%s%s  t2=%s\n", m, seb, js.size(), hf, ObjectiveCovers().c_str(), g_tableMode ? "table" : "iaus", StealthName(), WorldTag("  ").c_str(), T2Name().c_str()); return 0; }
     Results R; R.list = D.name; R.seed = seed; R.fights = fights; R.mode = g_tableMode ? "table" : "iaus"; R.stealth = StealthName(); R.sneakProfile = sneakProfile;
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (!noJson && opt.empty() && headlineOracle > 0) {   // the oracle on the first fights of the same seeds
@@ -879,7 +924,7 @@ static int RealMain(int argc, char** argv) {
         std::printf("  %-12s rank%d  idle %.1f%%  hold %.1f%%  sw/min %.1f\n", classes[static_cast<std::size_t>(c)].name.c_str(), rk + 1, 100.0 * double(A.s.idle) / t, 100.0 * double(A.s.hold) / t, double(A.s.switches) / std::max(1e-9, A.durSum / 60.0)); }
     totalBad += ratingBad;   // the rating battery's fights are held to the same two checks
     std::printf("\nCHECKS: BAD-FACTS ticks=%ld (must be 0)  invalid picks=%ld (must be 0)  => %s\n", totalBad, totalInvalid, totalBad == 0 && totalInvalid == 0 ? "PASS" : "FAIL");
-    char meta[480]; std::snprintf(meta, sizeof meta, "#meta fights=%d seed=%llu stealth=%s profile=%s classes=%s t2=%s", fights, (unsigned long long)seed, StealthName(), sneakProfile.c_str(), only.empty() ? (legacy ? "legacy" : "real") : only.c_str(), T2Name().c_str());
+    char meta[480]; std::snprintf(meta, sizeof meta, "#meta fights=%d seed=%llu stealth=%s profile=%s classes=%s%s t2=%s", fights, (unsigned long long)seed, StealthName(), sneakProfile.c_str(), only.empty() ? (legacy ? "legacy" : "real") : only.c_str(), WorldTag(" ").c_str(), T2Name().c_str());
     if (outBase) { std::ofstream o(outBase); o << meta << "\n"; for (auto& kv : all) for (auto& m : kv.second) if (m.first.find("dec.") == std::string::npos) o << kv.first << "|" << m.first << "=" << m.second << "\n"; std::printf("baseline written: %s\n", outBase); }
     if (cmp) {
         std::ifstream f(cmp); std::string line; int diffs = 0; std::printf("\nCOMPARE vs %s (|delta| > max(0.5, 5%%)):\n", cmp);

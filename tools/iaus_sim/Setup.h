@@ -257,7 +257,7 @@ namespace Sim {
         food(1, 0xFC000002u, 15.0f, 8.0f, "FoodVenisonStew");
     }
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
-        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
+        Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); F.V.g.seed(fs.seed * 0xA24BAED4963EE407ULL + 0x9FB21C651E98DF25ULL); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
         const SimClass& pc = t1[static_cast<std::size_t>(fs.playerFam)];
         { auto pb = BuildFollower(D, pc.fam, pc.kit, pc.gate, fs.level, R); auto ps = std::make_shared<ActorSpec>(pb.spec); ps->name = "Player"; ps->spells.clear();
