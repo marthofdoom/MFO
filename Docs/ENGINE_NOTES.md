@@ -1374,6 +1374,31 @@ inside `Logistics::LootNearby`.
 > is still walked on the worker without a lock (audit M6: every handle is re-validated, so a reallocation yields a
 > missed or wrong actor, not a fault. The effect mirror's own walk of that array is on the main thread).
 
+> **AMENDED 2026-11-16c (`fix/alias-ops-main`, INVARIANTS #83 rule 9): what a quest alias fill writes. Read on all three
+> executables (objdump over `binaries/1.6.1170` and `binaries/1.5.97` unpacked, `binaries/1.7.104` as shipped).**
+> - **`TESQuest::ForceRefTo(aliasID, ref)`**: 1.6.1170 0x3CDEE0 (id 25052), 1.7.104 0x3D4FA0 (the fork's id table row 25052;
+>   the SAME 20 calls in the same order as 1.6.1170), 1.5.97 0x375050 (id 24523; the same logic with the hash-map steps
+>   inlined, 23 calls). It looks the alias up (0x3CC1A0), takes a global scoped lock (0x2000B0 / 0x2000E0, ids 15339 / 15340,
+>   beside `BGSDynamicPersistenceManager`'s 15330 / 15331) and the quest's alias write lock (quest +0xD0, 0xCC9140 to
+>   0xCC9390), makes the ref's handle, and returns at once when the alias already holds that handle.
+> - **The old occupant is removed by 0x3CDB00** (id 25051; 1.7.104 0x3D4BC0; 1.5.97 0x374B20): erased from the quest's
+>   ref-alias map; on that reference vfunc 0x4A / 0x4B (current scene: cleared when the scene is this quest's); 0x399150 (id
+>   24012, the alias's clear-ref: an actor call 0x66CCF0, the alias factions out, `RemoveSpell` 0x6C14B0 for the alias spells,
+>   the alias instance out of the reference's extra list 0x2E0300); the reserved count; the quest's promoted-refs array
+>   (+0x250); `BGSDynamicPersistenceManager::DemoteReference` (0x1FF470).
+> - **The new occupant**: appended to +0x250 and `PromoteReference` (0x1FF290); inserted in the ref-alias map (0x292160);
+>   then **0x398D20** (id 24011; 1.7.104 0x39FDE0; 1.5.97 0x340500; the SAME 23 calls in the same order on all three):
+>   0x2E02A0 = the reference's `TESForm::AddChange(0x80000000)` (vfunc 0xA) and the `ExtraAliasInstanceArray` entry carrying
+>   the alias's packages (0x16D350, under the extra list's own lock); each alias faction (0x68A930) and alias spell
+>   (`Actor::AddSpell` 0x6C12A0, id 38716); then, for an actor with a process (actor +0xF8): a test (0x6E25D0),
+>   `Actor::EndInterruptPackage(false)` (0x6745C0, id 37474) and three more calls on the process (0x6D5690, 0x713CE0,
+>   0x6E32F0) with NO lock held on the actor; the alias items (0x2E21F0) and the display name.
+> - **Not reached for MFO's aliases** (no stored text, no scenes): the alias flag 0x100 branch (0x3D1A00 / 0x392A10 /
+>   0x3D4870) and the quest's scene loop (+0x208, 0x3A1770).
+> - **So the fill is not a quest-only edit.** The quest's lock covers the quest's maps. The change flag, the AI process
+>   package state and the persistence manager are actor and world state with no lock of their own in this function. A
+>   worker-side fill races the actor's own update exactly as a worker-side equip did. It runs on the main thread now.
+>
 > **AMENDED 2026-11-16b (`fix/worker-writes-main`, INVARIANTS #83 extended): the worker makes no engine write. What was read,
 > on which executable.**
 > - **An unequip edits the inventory on the calling thread, for every form type.** `InventoryChanges`' unwear, 1.6.1170
