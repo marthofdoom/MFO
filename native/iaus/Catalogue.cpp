@@ -648,12 +648,18 @@ namespace MFO::Iaus {
             return (std::max)((std::max)(byHp, byTtl), byKite);
         }
 
+        // act.attack's range x = distance / cap. A chase-waived foe is past the cap by definition, so the cap's own veto would drop it
+        // and the pin the waiver needs would lapse: it is scored at the cap's edge instead (x = 1.0, the curve's value there), which
+        // still ranks every nearer foe above it. A ranged act.attack reads RangeSpell, whose curve is ~0.18 at 1.0 (under the act floor), so its edge is
+        // Tuning::waivedRangeX (0.5 on the curve, parity with melee). Only act.attack: a spell's own range veto is its reach, not the chase cap.
+        float ChaseX(const Candidate& c, float x, float a_edge) { return (c.family == Family::Attack && c.f.foeChaseWaived) ? (std::min)(x, a_edge) : x; }
+
         In Input(Cons k, const Candidate& c, const Mind& m, float bestHeal, const Tuning& t) {
             const Facts& f = c.f;
             const bool melee = f.posture == PostureKind::Melee || f.posture == PostureKind::Silver;
             switch (k) {
             case Cons::RangeMelee:    return (f.reach > 0.0f && f.meleeRange) ? f.dist / f.reach : In::Off();
-            case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? f.dist / f.reach : In::Off();
+            case Cons::RangeSpell:    return (f.reach > 0.0f && !f.meleeRange) ? ChaseX(c, f.dist / f.reach, t.waivedRangeX) : In::Off();
             case Cons::RangeTaunt:    return (f.reach > 0.0f && c.family == Family::Taunt) ? f.dist / f.reach : In::Off();
             case Cons::Los:
                 switch (f.sight) {
@@ -795,8 +801,8 @@ namespace MFO::Iaus {
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
             case Cons::RangeChase:
                 if (!f.meleeRange) return In::Off();
-                if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(f.dist / (f.reach * 20.0f)) : In::Off();   // no cap known: 20 reaches
-                return f.dist / f.chase;
+                if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(ChaseX(c, f.dist / (f.reach * 20.0f), 1.0f)) : In::Off();   // no cap known: 20 reaches
+                return ChaseX(c, f.dist / f.chase, 1.0f);
             case Cons::BoostControlled:     return B(f.foeHelpless);
             case Cons::TauntChance:         return f.tauntChance < 0.0f ? In::Off() : In(Clamp(f.tauntChance, 0.0f, 1.0f));
             // Off when nobody else is healing him: an input that is on counts toward n (the I4 rule), and a

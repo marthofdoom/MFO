@@ -222,6 +222,9 @@ namespace MFO::Iaus {
         float postureMomentum = 1.5f;          // the running weapon category
         float preemptMargin = 0.25f;           // fIausPreemptMargin: commitment window
         float actFloor = 0.20f;                // fIausActFloor: below it IAUS issues nothing
+        // PLACEHOLDER (sim N6 to search it): a chase-waived foe's RangeSpell x is clamped to this for a ranged act.attack. 0.85 is the
+        // Logi(-10, 0.85) midpoint (0.5 on the curve), the parity of the melee waived foe's 0.5 on RangeChase at its cap edge.
+        float waivedRangeX = 0.85f;
         float tieEps = 0.005f;                 // |dS| below this is a tie (section 4.8)
         int   maxTries = 6;                    // the walk cap per tick (design 1.1)
         int   maxCandidates = 384;             // iIausMaxCandidates
@@ -349,6 +352,7 @@ namespace MFO::Iaus {
         bool  foeStronger = false;
         bool  foeControlled = false;
         bool  foeTaunted = false;
+        bool  foeChaseWaived = false;     // the foe is chase-waived (Combatant::chaseWaived): act.attack's range input clamps to the cap's edge, no veto
         bool  foeOutOfMeleeReach = false;
         bool  foeUnholy = false;
         bool  damageClass = false;        // a destruction caster (Classes::Flag::kDamage): Decide caps a buff's score at the best viable offense

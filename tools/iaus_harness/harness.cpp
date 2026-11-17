@@ -499,6 +499,31 @@ namespace {
                 Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &byFar);
                 Check(sNear > sMid && sMid > 0.0f, "Q70: a nearer foe is the better attack, a farther one still an attack");
                 Check(sFar == 0.0f && byFar == Cons::RangeChase, "Q70: a foe beyond the chase cap is vetoed");
+                {   // N6 (ClickUp 1dfcuabd8fw): a chase-waived (held) foe past the cap is named by act.attack, at the cap's edge; a non-held one stays vetoed.
+                    Candidate held = farC; held.f.foeChaseWaived = true;
+                    Candidate heldFar = farC; heldFar.f.foeChaseWaived = true; heldFar.f.dist = 13000.0f;
+                    Candidate edge = farC; edge.f.dist = 4096.0f;
+                    const float sHeld = ScoreOne(held, Mind{}, Profile{}, t, 1, 0, nullptr), sHeldFar = ScoreOne(heldFar, Mind{}, Profile{}, t, 1, 0, nullptr);
+                    Check(sHeld > 0.0f && sHeldFar > 0.0f, "N6: a chase-waived foe past the cap gets an act.attack score (no cap veto)");
+                    // A dragon-like foe (twice his level, on the player, the player's target) past the cap must clear the act floor on BOTH
+                    // roads: melee (RangeChase) and a drawn bow / staff (RangeSpell, whose own curve is ~0.18 at the cap).
+                    for (int rng = 0; rng < 2; ++rng) {
+                        Candidate dr = PlainAttack(1, 2.0f, 0.9f);
+                        dr.f.foeOnMe = false; dr.f.foeOnPlayer = true; dr.f.playerTarget = true; dr.f.foeChaseWaived = true; dr.f.dist = 6000.0f;
+                        if (rng) { dr.f.meleeRange = false; dr.f.chase = 0.0f; dr.f.reach = 4096.0f; } else dr.f.chase = 4096.0f;
+                        const float sd = ScoreOne(dr, Mind{}, Profile{}, t, 1, 0, nullptr);
+                        std::printf("   N6 waived dragon %s = %.3f (floor %.2f)\n", rng ? "ranged" : "melee", sd, t.actFloor);
+                        Check(sd >= t.actFloor, rng ? "N6: a waived dragon past the cap clears the act floor (ranged act.attack)" : "N6: a waived dragon past the cap clears the act floor (melee act.attack)");
+                        dr.f.foeChaseWaived = false; Cons bd = Cons::kCount;
+                        Check(ScoreOne(dr, Mind{}, Profile{}, t, 1, 0, nullptr, &bd) == 0.0f, "N6: the same dragon not waived is vetoed past the cap");
+                    }
+                    Check(sHeld == sHeldFar && sHeld == ScoreOne(edge, Mind{}, Profile{}, t, 1, 0, nullptr), "N6: a waived foe scores at the cap's edge, whatever its distance");
+                    Check(sHeld < sMid, "N6: a nearer foe still outranks a waived one");
+                    Cons by2 = Cons::kCount;
+                    Check(ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &by2) == 0.0f && by2 == Cons::RangeChase, "N6: a non-waived foe past the cap is still vetoed");
+                    Check(ChaseWaived(7, 7, 0, true) && ChaseWaived(7, 0, 7, true) && !ChaseWaived(7, 7, 0, false) && !ChaseWaived(7, 8, 9, true) && !ChaseWaived(0, 0, 0, true),
+                          "N6: the waiver rule (held or entry foe, fighting him or the player)");
+                }
                 Check(Estimate::TauntChance(20, 20) == 0.5f && Estimate::TauntChance(30, 20) == 0.9f && Estimate::TauntChance(10, 30) == 0.1f,
                       "Q69: the taunt chance is the executor's rule (0.5 + 0.05 per level, kept in 0.1 .. 0.9)");
             }
