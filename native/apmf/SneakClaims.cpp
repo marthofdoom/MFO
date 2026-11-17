@@ -53,6 +53,7 @@
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"   // g_apmf, kOwnBasis
 #include "APMF_API.h"
+#include "Concealment.h"     // AbortHide: a hide stance that did not take (11-17 A1d)
 #include "Config.h"
 #include "MainThread.h"        // Post(): the stance probe reads the graph variable on the main thread
 #include "Followers.h"           // ActiveSnapshot(): the stance probe walks the managed followers
@@ -304,6 +305,8 @@ namespace MFO::APMFBridge {
         if (!api) return;
         if (SneakGamePaused()) return;   // a menu holds every counter still (the scans do not run either)
         const bool combatRoad = Config::g_sneakInCombat.load(std::memory_order_relaxed);
+        std::vector<RE::FormID> abortHide;   // 11-17 A1d: hide holds whose first RE-FILE did not take; ended below, outside g_sneakMx
+        {
         std::scoped_lock lk(g_sneakMx);
         for (auto it = g_sneaks.begin(); it != g_sneaks.end();) {
             const RE::FormID fid = it->first;
@@ -345,6 +348,19 @@ namespace MFO::APMFBridge {
             }
             // THE RE-ASSERT: the claim has had its beat, he is standing, and he is not swimming or riding.
             if (!sneaking && c.ageSweeps >= kReassertSweeps && !a->AsActorState()->IsSwimming() && !a->IsOnMount()) {
+                // 11-17 A1d (Adelinda: a hide run that never crouched held the ch.7 Offense|Cast deny through the whole fight): the hide hold's FIRST
+                // re-file already happened and he is STILL standing: the stance is not going to take. Stop re-filing; the run (and its deny) ends.
+                if (c.hideHeld && c.refiles >= 1) {
+                    if (MayLogLocked(fid, c))
+                        spdlog::warn("[sneak] {:08X}: the hide hold's RE-FILE #{} did not take (IsSneaking still false after {} sweeps, {}): "
+                                     "the hide run is aborted and its ch.7 deny released", fid, c.refiles, c.ageSweeps,
+                                     InCombat(a) ? "in combat" : "out of combat");
+                    abortHide.push_back(fid);
+                    c.hideHeld = false;
+                    if (!c.wanted) ReleaseLocked(api, fid, c, "the hide hold's stance did not take");
+                    ++it;
+                    continue;
+                }
                 const APMF_API::Handle old = c.handle;
                 api->Release(old);   // Release then Request: Harbinger applies both, in order, on its next drain
                 c.handle = APMF_API::kInvalidHandle;
@@ -357,6 +373,8 @@ namespace MFO::APMFBridge {
             }
             ++it;
         }
+        }
+        for (const RE::FormID fid : abortHide) Concealment::AbortHide(fid, "the stance claim did not take after its re-file (IsSneaking still false)");
     }
 
     // [stance-probe] (bStanceProbe, INI-only, default OFF): PASSIVE. Out of combat, once per kStanceProbePeriodSec per

@@ -208,6 +208,7 @@ namespace MFO::Scheduler {
                 note.reentries       = 0;
                 note.skipStay        = !inCombat;
                 note.fleeHoldAt      = -1.0;
+                note.travelClockAt   = g_serviceClock;
                 note.fightConf       = inCombat ? Confidence::Of(a_f) : 1.0f;
             }
 
@@ -306,12 +307,21 @@ namespace MFO::Scheduler {
                         }
                     }
                 }
-                if (note.phase == RetreatPhase::Travel && secs > kRetreatTimeout) {
+                // 11-17 A5: the travel clock is the UNPAUSED service clock (field: the game sat in a menu for 70 s, wall time said "timeout" at
+                // 73.6 s against a 30 s limit). A stuck travel (moved under kRetreatStallMove) gives up after kRetreatStallSecs of unpaused time.
+                const double travelSecs = g_serviceClock - note.travelClockAt;
+                if (note.phase == RetreatPhase::Travel && travelSecs > kRetreatStallSecs && moved < kRetreatStallMove) {
+                    spdlog::warn("[retreat] {:08X}: STALLED -- moved {:.0f}u in {:.1f}s unpaused (took={}, dPlayer={:.0f}, re-entries={}) -- "
+                                 "the retreat package never took him anywhere; giving up", a_id, moved, travelSecs, note.took, a_dPlayer, note.reentries);
+                    finish("stalled");
+                    return true;
+                }
+                if (note.phase == RetreatPhase::Travel && travelSecs > kRetreatTimeout) {
                     // Transition-only: one line when the fall-back gives up. moved
                     // tells "she walked but too slow" (large) from "controller never
                     // yielded" (near 0).
-                    spdlog::warn("[retreat] {:08X}: gave up after {:.1f}s (took={}, moved={:.0f}, dPlayer={:.0f}, "
-                                 "re-entries={})", a_id, secs, note.took, moved, a_dPlayer, note.reentries);
+                    spdlog::warn("[retreat] {:08X}: gave up after {:.1f}s (unpaused {:.1f}s, took={}, moved={:.0f}, dPlayer={:.0f}, "
+                                 "re-entries={})", a_id, secs, travelSecs, note.took, moved, a_dPlayer, note.reentries);
                     finish("timeout");
                     return true;
                 }

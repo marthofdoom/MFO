@@ -2,6 +2,7 @@
 #include "PCH.h"
 #include <cmath>   // std::sqrt -- FoeWeight; std::fabs / std::isfinite -- the melee-reach read
 #include "Config.h" // g_meleeReach -- the melee-reach read
+#include "iaus/Reposition.h"   // OutOfVerticalReach: the one vertical reach line (no include of CombatSense there)
 
 // Harbinger ABI v26 substrate reads (apmf/Bridge.cpp; declared in apmf/APMFBridge.h, which this header cannot
 // include without a cycle). Any thread, lock-free.
@@ -217,7 +218,7 @@ namespace MFO::CombatSense {
                                        : BodyHeight(a_foe);
         const float line  = h + reach + a_slack;
         if (a_out) { a_out->dz = dz; a_out->line = line; }
-        return std::fabs(dz) > line;
+        return Iaus::Reposition::OutOfVerticalReach(dz, dz >= 0.0f ? h : 0.0f, dz >= 0.0f ? 0.0f : h, reach, a_slack);   // the ONE line (iaus/Reposition.h)
     }
 
     // THE HOLD QUESTION (the Scheduler's ch.23 leash): over a_self's combat group, how many

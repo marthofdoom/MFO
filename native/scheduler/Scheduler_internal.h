@@ -122,6 +122,9 @@ namespace MFO::Scheduler {
             std::chrono::steady_clock::time_point stayAt{};
             // STAY start on the UNPAUSED service clock (g_serviceClock).
             double stayClockAt = 0.0;
+            // 11-17 A5: the TRAVEL start on the same UNPAUSED service clock, and the unpaused seconds he has been under kRetreatStallMove
+            // from the retreat's start (the travel timeout and the stall give-up both count unpaused time: a menu is not a stall).
+            double travelClockAt = 0.0;
             // COOLDOWN: the next auto-fill waits until BOTH floors pass.
             std::chrono::steady_clock::time_point rearmAt{};
             std::uint32_t rearmLaps = 0;   // own services still to wait
@@ -265,7 +268,11 @@ namespace MFO::Scheduler {
         constexpr double kRetreatBelowSecs = 1.5;
         constexpr float kRetreatMinDist    = 400.0f;
         constexpr float kRetreatArriveDist = 200.0f;
-        constexpr float kRetreatTimeout    = 30.0f;
+        constexpr float kRetreatTimeout    = 30.0f;   // UNPAUSED service seconds (11-17 A5: it was wall time, a 73 s menu pause tripped it)
+        // PLACEHOLDERS (11-17 A5, Jesper stood 73 s at a retreat package): a travel that has moved him less than kRetreatStallMove units in
+        // kRetreatStallSecs unpaused seconds is stuck (the package never took him anywhere): give up then, not only at the total timeout.
+        constexpr float kRetreatStallMove  = 50.0f;
+        constexpr double kRetreatStallSecs = 10.0;
         // STAY (marth 2026-09-25: "about ten seconds, or until fully healed",
         // whichever comes FIRST). After a follower has fallen back to the player,
         // STAY holds him there so he does not walk straight back out to the

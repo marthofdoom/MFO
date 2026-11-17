@@ -160,6 +160,7 @@ namespace MFO::Iaus::Candidates {
             ReadPool(a_actor, RE::ActorValue::kStamina, u.sp, u.spMax);
             const auto pos = a_actor->GetPosition();
             u.x = pos.x; u.y = pos.y; u.z = pos.z;
+            u.bodyHeight = CombatSense::BodyHeight(a_actor);
             if (a_actor != a_self) {
                 const float d = a_self->GetPosition().GetDistance(pos);
                 u.dist = std::isfinite(d) ? d : 0.0f;
@@ -344,16 +345,22 @@ namespace MFO::Iaus::Candidates {
             if (!foe->IsHostileToActor(a_self)) continue;                           // the brawl gate (#34)
             auto tgt = foe->GetActorRuntimeData().currentCombatTarget.get();        // HOLD it for the tests
             const float dist = a_self->GetPosition().GetDistance(foe->GetPosition());
-            bool waived = false;
+            bool waived = false, noApproach = false;
             if (dist > s.chaseCap) {
                 // The chase cap waiver (marth 2026-10-19): kept while Harbinger holds the engagement on it AND
                 // it is fighting this follower OR the player (marth 2026-11-13: "fighting the player is enough doesnt need
                 // to be HIM"; Jesper dropped a circling dragon that targeted the player).
                 waived = ChaseWaived(fid, heldFoeID, entryFoeID, tgt.get() == a_self || (tgt && tgt->IsPlayerRef()));
-                if (!waived) continue;
+                if (!waived) {
+                    // 11-17 A3 (Adelinda: sense foes=5, iaus-gen foes 0/0, idle while hit): the cap limits MOVEMENT, not shots and not the threat read.
+                    // Kept, marked noApproach: a foe inside the bow's own range, and any foe that targets HIM (the Retreat family must see it).
+                    if (!(Reposition::InWeaponRange(s, dist, DefaultTuning().bowWeaponRange) || tgt.get() == a_self)) continue;
+                    noApproach = true;
+                }
             }
             Combatant u;
             FillUnit(u, foe, a_self);
+            u.noApproach = noApproach;
             u.chaseWaived = waived;   // act.attack must not veto it for the very cap the waiver lifted (Catalogue.cpp ChaseX)
             if (tgt) {
                 u.targetId = tgt->GetFormID();

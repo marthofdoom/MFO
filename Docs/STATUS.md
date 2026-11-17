@@ -3113,3 +3113,5 @@ See INDEX.md's routing table. Durable facts about *this session's* mechanisms ar
 already in the memory store (furniture latch, cast spell-choice, LoS worker-safe
 pattern, MCM schema, release scope/publish hygiene). Engine findings → ENGINE_NOTES
 §0; incident-born rules → INVARIANTS; symptom→cause→fix → DEBUGGING.
+
+- 2026-11-17 `fix/field-1117-engage` (NOT merged, NOT field run): field Deck findings A1 (occluded approach standoff / tightening / block scope / hide-run abort), A3 (bow foes past the chase cap kept, no-approach), A5 (retreat clock was wall time; stall give-up), prefer a reachable foe for a blade. Details: Docs/REVIEW-BACKLOG.md.

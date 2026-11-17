@@ -13,11 +13,13 @@
 #include "iaus/Hide.h"           // G2 Layer 1's verdict: does this foe's group still have him
 
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 // Card G3. The header has the contract. What each constant is sized from:
 //   kRing / kBearings     the candidates: 12 bearings on two rings around him. FindEmptySpace walks a straight chest-height
@@ -137,6 +139,7 @@ namespace MFO::Concealment {
         std::unordered_map<RE::FormID, Pick> g_picks;
         std::unordered_map<RE::FormID, Run>  g_runs;
         std::unordered_map<RE::FormID, Stance> g_stances;
+        std::unordered_set<RE::FormID>       g_stanceFailed;   // A1d: the stance did not take in this fight (cleared by Release at the fight's end / ClearTransientState)
         std::uint64_t                        g_epoch = 0;   // bumped by ClearTransientState: a pick of the old world is dropped
 
         struct Job {
@@ -509,6 +512,8 @@ namespace MFO::Concealment {
             if (const auto r = g_runs.find(a_follower); r != g_runs.end() && r->second.phase != Phase::None) return false;
             // He is already hidden and holding: no hide run. A BackOff or a Step is exactly what a hold may want (batch I).
             if ((a_kind == Kind::Hide || a_kind == Kind::Flee) && g_stances.contains(a_follower)) return false;
+            // A1d: the stance (crouch claim) already failed to take once in this fight: no new run that needs it (the Flee needs none).
+            if ((a_kind == Kind::Hide || a_kind == Kind::Step) && g_stanceFailed.contains(a_follower)) return false;
             Pick&      p   = g_picks[a_follower];
             const auto now = Clock::now();
             fresh = p.valid && p.kind == a_kind && (a_kind != Kind::Step || p.target == a_target) && now - p.at < kFreshMs;
@@ -545,6 +550,8 @@ namespace MFO::Concealment {
             if (p == g_picks.end() || !p->second.valid || Clock::now() - p->second.at >= kFreshMs)
                 return "no fresh concealment point (the pick found none, or its answer is older than 3 s)";
             // act.disengage asks for ONE kind (0 = the hide run or the flee, whichever the pick is for): a pick for another kind is not it.
+            if ((p->second.kind == Kind::Hide || p->second.kind == Kind::Step) && g_stanceFailed.contains(id))
+                return "the stance claim already failed to take in this fight (IsSneaking stayed false after its re-file)";
             const Kind pk = p->second.kind;
             if (a_want == Kind::Hide ? (pk != Kind::Hide && pk != Kind::Flee) : pk != a_want)
                 return "the fresh point is for another kind of run";
@@ -777,10 +784,25 @@ namespace MFO::Concealment {
                      "(his hit, or his swing / shot / cast ending)", a_follower);
     }
 
+    namespace {
+        void ReleaseImpl(RE::FormID a_follower, const char* a_why, bool a_stanceFailed, bool a_forget);
+    }
+    // Only the fight's end (combat ended, dismissed, down / disabled) forgets a failed stance; a mid-fight release (retreating, a source toggle) keeps it.
     void Release(RE::FormID a_follower, const char* a_why) {
+        const bool fightOver = a_why && (!std::strcmp(a_why, "combat ended") || !std::strcmp(a_why, "dismissed") || !std::strcmp(a_why, "follower down/disabled"));
+        ReleaseImpl(a_follower, a_why, false, fightOver);
+    }
+    void AbortHide(RE::FormID a_follower, const char* a_why) {
+        spdlog::warn("[conceal] {:08X}: the hide stance did not take ({}): the run and its ch.7 deny are released; no new hide run or step this fight",
+                     a_follower, a_why ? a_why : "");
+        ReleaseImpl(a_follower, a_why, true, false);
+    }
+    namespace {
+    void ReleaseImpl(RE::FormID a_follower, const char* a_why, bool a_stanceFailed, bool a_forget) {
         bool had = false, stance = false, shortRun = false;
         {
             std::scoped_lock lk(g_mx);
+            if (a_stanceFailed) g_stanceFailed.insert(a_follower); else if (a_forget) g_stanceFailed.erase(a_follower);
             if (const auto r = g_runs.find(a_follower); r != g_runs.end())
                 shortRun = r->second.kind == Kind::BackOff || r->second.kind == Kind::Step;   // batch I: no hide cooldown stamp
             had    = g_runs.erase(a_follower) != 0;
@@ -793,6 +815,7 @@ namespace MFO::Concealment {
         if (had) spdlog::info("[conceal] {:08X}: {} released ({})", a_follower, shortRun ? "short run" : "hide run", a_why ? a_why : "");
         if (stance) spdlog::info("[conceal] {:08X}: the hide hold's stance is released ({})", a_follower, a_why ? a_why : "");
     }
+    }
 
     void ClearTransientState() {
         std::scoped_lock lk(g_mx);
@@ -800,5 +823,6 @@ namespace MFO::Concealment {
         g_picks.clear();
         g_runs.clear();
         g_stances.clear();
+        g_stanceFailed.clear();
     }
 }

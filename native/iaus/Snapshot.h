@@ -230,6 +230,7 @@ struct SpellEntry {
         float sp = 0.0f, spMax = 0.0f;
         float x = 0.0f, y = 0.0f, z = 0.0f;
         float dist = 0.0f;                  // from the follower (0 for the follower himself)
+        float bodyHeight = 0.0f;            // CombatSense::BodyHeight (0 = not read: the nominal 120 is used); the vertical-reach line reads it
         int   level = 1;
         std::uint32_t targetId = 0;         // its current combat target, 0 = none
         bool  targetIsAlly = false;         // ...and that target is a party member other than the follower and the player
@@ -249,6 +250,8 @@ struct SpellEntry {
         bool  tauntedByMe = false;          // under a live taunt of THIS follower (Taunt::TauntedBy; the Knight line's guard count, Q-S-5)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
         bool  chaseWaived = false;          // ChaseWaived() held for it (Candidates.cpp): kept past the chase cap; act.attack scores it at the cap's edge
+        bool  noApproach = false;           // 11-17 A3: kept past the chase cap WITHOUT a waiver (a bow's shot in weapon range, or a foe that targets him): the cap limits
+                                            // MOVEMENT, not shots or the threat read. No approach, no chase, no melee pick is made on it (Reposition::InWeaponRange)
         // G2 Layer 1 (iaus/Hide.h): the FOE's combat group's record of the follower. Yes = a live, positive detect level;
         // No = absent / lost / detect level <= 0 (hidden from this foe); Unknown = the foe has no group (and every actor that is not a foe).
         Tri   detectsMe = Tri::Unknown;

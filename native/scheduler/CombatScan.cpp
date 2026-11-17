@@ -1246,6 +1246,7 @@ namespace MFO::Scheduler {
                     if (Packages::RetreatFill(f)) {
                         Actuation::ReleaseHealClaimForRetreat(f);
                         note.phase           = RetreatPhase::Travel;
+                        note.travelClockAt   = g_serviceClock;
                         note.fleeHoldAt      = -1.0;
                         note.took            = false;
                         note.outOfCombatSeen = false;

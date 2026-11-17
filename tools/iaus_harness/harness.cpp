@@ -525,6 +525,24 @@ namespace {
                     Check(ChaseWaived(7, 7, 0, true) && ChaseWaived(7, 0, 7, true) && !ChaseWaived(7, 7, 0, false) && !ChaseWaived(7, 8, 9, true) && !ChaseWaived(0, 0, 0, true),
                           "N6: the waiver rule (held or entry foe, fighting him or the player)");
                 }
+                {   // 11-17 A3 + field: the one weapon-range reader, and the reachable-foe reader (Reposition.h)
+                    Snapshot bs; bs.drawn = PostureKind::Bow; bs.self.z = 0.0f; bs.meleeReach = 200.0f;
+                    Check(Reposition::InWeaponRange(bs, 2500.0f, t.bowWeaponRange) && !Reposition::InWeaponRange(bs, t.bowWeaponRange + 1.0f, t.bowWeaponRange),
+                          "A3: a foe inside the bow's range (past the chase cap) is in weapon range, one past it is not");
+                    bs.drawn = PostureKind::Melee;
+                    Check(!Reposition::InWeaponRange(bs, 500.0f, t.bowWeaponRange), "A3: a blade has no weapon range past the chase cap");
+                    Combatant up; up.z = 900.0f; up.sight = Sight::Occluded;
+                    Check(Reposition::MeleeUnreachableNow(bs, up), "field: a foe on another level behind a wall is unreachable for a blade");
+                    up.z = 350.0f; Check(Reposition::MeleeUnreachableNow(bs, up), "field: one storey (350 u) behind a wall counts (the h + reach line, not StrikeDistance)");
+                    up.z = 900.0f;
+                    up.sight = Sight::Visible;
+                    Check(Reposition::MeleeUnreachableNow(bs, up), "field: a VISIBLE foe above the vertical reach line (a tower top) is unreachable");
+                    up.z = 100.0f;
+                    Check(!Reposition::MeleeUnreachableNow(bs, up), "field: the same visible foe at reach height is reachable");
+                    up.z = 900.0f;
+                    bs.drawn = PostureKind::Bow; up.sight = Sight::Occluded;
+                    Check(!Reposition::MeleeUnreachableNow(bs, up), "field: the reachability read is for a blade only");
+                }
                 Check(Estimate::TauntChance(20, 20) == 0.5f && Estimate::TauntChance(30, 20) == 0.9f && Estimate::TauntChance(10, 30) == 0.1f,
                       "Q69: the taunt chance is the executor's rule (0.5 + 0.05 per level, kept in 0.1 .. 0.9)");
             }
