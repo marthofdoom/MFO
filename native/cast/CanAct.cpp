@@ -165,6 +165,10 @@ namespace MFO::Actuation {
         const auto* st = a_follower->AsActorState();
         if (!st) return;
         const auto  life = st->GetLifeState();
+        // A9 (field 1117: "DOWN (?(9)) hp 100%" for a follower who kept acting): the mit-3.7 fork names life states 0-8 only; 9 and
+        // up are UNNAMED, not a down state (CanAct treats them as able, NoteUnknownLifeState says so once per value). They
+        // are neither a DOWN nor an UP: the last NAMED state stands, so no [bleed] line and no heal-count reset is made for them.
+        if (LifeName(life)[0] == '?') return;
         const auto  now  = SelfClock::now();
         const float hp   = Vocab::HealthPct(a_follower);
         auto& n = g_life[id];

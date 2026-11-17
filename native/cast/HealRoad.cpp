@@ -86,11 +86,19 @@ namespace MFO::Actuation {
             // hold in progress, from the claim's age so lost sight is not counted against the bound.
             long long         losAccumMs = 0;
             Clock::time_point losAccumStamp{};
+            // A2 (field 1117): when the recipient was first read at FULL while a cast of his was in flight on this
+            // hand (RecipientLost's D8 "finish first"); zeroed whenever he reads below full. A hand fire observed
+            // since this mark ends the hold: the cast that was in flight has landed, and the standing claim's next
+            // re-charge is not a cast anybody asked for.
+            Clock::time_point fullSince{};
             RE::FormID        displacing     = 0;
             int               displacingRule = kNoRule;
         };
         struct FollowerHealHands { HealHand hand[kHandCount]; };
         std::unordered_map<RE::FormID, FollowerHealHands> g_healHands;
+        // A2: how far back a hand fire may be and still count against HealHand::fullSince (the mark is the real bound;
+        // this only keeps HandFireSince's recency test from rejecting a fire the sweep lap was late to see).
+        constexpr std::uint32_t kFullFireWindowMs = 60000;
 
         // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (marth 2026-10-06, ClickUp 86e3m36qr: "We dont want to
         // end the heal claim in harbinger until that person is full healed. lost sight can interrupt the cast,
@@ -180,8 +188,28 @@ namespace MFO::Actuation {
             if (a_hand >= kHandCount && g_firingAllyThreshold >= 0.0f &&
                 hp >= std::min(g_firingAllyThreshold, Vocab::kHealFull))
                 return "the recipient is at or above the rule's HP threshold";
-            if (hp >= Vocab::kHealFull && !inFlight)
+            if (hp >= Vocab::kHealFull && !inFlight) {
+                if (a_hand < kHandCount) g_healHands[fid].hand[a_hand].fullSince = {};
                 return "the recipient is at full health";
+            }
+            // A2 (field 1117, Jesper 10:28:40-48, 10:39:17-22): at full with a cast "in flight" is D8's finish-first
+            // ONLY for a charge begun before he reached full. The standing claim re-charges the spell right after each
+            // fire, so in flight stayed true for ever and the claim fired ~1/s on a full recipient until the expiry
+            // sweep. Mark the first full read; once a fire is observed on this hand since the mark, release (terminal, never keepSpell).
+            if (a_hand < kHandCount) {
+                auto& hh = g_healHands[fid].hand[a_hand];
+                if (hp >= Vocab::kHealFull) {
+                    if (hh.fullSince == Clock::time_point{}) hh.fullSince = Clock::now();
+                    if (HandFireSince(fid, a_hand, hh.fullSince, kFullFireWindowMs)) {
+                        hh.fullSince = {};
+                        // A TERMINAL full release, like the !inFlight branch above: not keepSpell (that is the stream cap's
+                        // re-stream contract: it keeps the lock and skips HealHandEnded), so the re-charge is interrupted.
+                        return "the recipient is at full health (the cast in flight at the mark has fired)";
+                    }
+                } else {
+                    hh.fullSince = {};
+                }
+            }
             return nullptr;
         }
 

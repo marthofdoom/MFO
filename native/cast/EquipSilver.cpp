@@ -59,6 +59,7 @@
 #include "Actuation_internal.h"
 #include "EngineOps.h"     // INVARIANTS #83: every engine equip / spell-hand / draw call goes through here (main thread)
 #include "apmf/APMFBridge.h"   // the equip authority + ch.15 claim, exactly as EquipWeapon uses them
+#include "Evaluator.h"       // CurrentTargetIfTrackable: the silver diagnostic
 #include "CombatSense.h"      // FoeCount: the target gate's "foes remain" (MFO-B55 unknown)
 #include <chrono>
 #include <mutex>
@@ -127,6 +128,19 @@ namespace MFO::Actuation {
     }
 
     namespace {
+
+        // THE SILVER DIAGNOSTIC (field 1117, Cicero: four swaps in 24 s, cause unproven): one info line at each silver switch /
+        // switch-back naming the raw read the decision stands on -- his currentCombatTarget and its raw Logistics::IsUnholy,
+        // whether that target is trackable (Eval::CurrentTargetIfTrackable), and his foe count. The IAUS posture winner is the
+        // [iaus] line of the same lap.
+        void SilverDiag(RE::Actor* a_follower, const char* a_what) {
+            auto  tp  = a_follower->GetActorRuntimeData().currentCombatTarget.get();
+            auto* tgt = tp.get();
+            const auto trackable = Eval::CurrentTargetIfTrackable(a_follower);
+            spdlog::info("[silver] {:08X}: {} diag -- target {:08X} rawUnholy={} trackable={} foes={}", a_follower->GetFormID(), a_what,
+                         tgt ? tgt->GetFormID() : 0u, tgt ? (Logistics::IsUnholy(tgt) ? 1 : 0) : -1, trackable ? 1 : 0,
+                         CombatSense::FoeCount(a_follower));
+        }
 
         bool IsLauncher(const RE::TESForm* a_form) {
             const auto* w = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
@@ -405,6 +419,7 @@ namespace MFO::Actuation {
         }
         EngineOps::DrawHands(a_follower, true);
         auto* mainForm = mainId ? RE::TESForm::LookupByID(mainId) : nullptr;
+        SilverDiag(a_follower, "switch");
         spdlog::info("[silver] {:08X}: GAMBIT switch to silver '{}' dmg={} (replaces main '{}'{}){}{}", id,
                      NameOf(best), best->GetAttackDamage(), mainForm ? NameOf(mainForm) : "none",
                      mainWasHeld ? ", an equip-gambit hold" : "", oneHandOnly ? " [one-handed: off-hand in use]" : "",
@@ -447,6 +462,7 @@ namespace MFO::Actuation {
             g_silver.erase(it);
         }
 
+        SilverDiag(a_follower, "switch-back");
         auto* mgr     = RE::ActorEquipManager::GetSingleton();
         auto* mainObj = OwnedObject(a_follower, ep.mainRight);   // still his? (sold / handed back -> nothing to restore)
 

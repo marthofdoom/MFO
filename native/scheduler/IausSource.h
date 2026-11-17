@@ -64,7 +64,9 @@ namespace MFO::Scheduler {
         [[nodiscard]] bool SilverEvaluatedAboveStop(const Eval::Choice&) const override { return m_postureKnown; }
         // The posture layer had NO ANSWER this lap (no fresh spell book, or no readable foe): the equip truth and
         // the silver truth are UNKNOWN, not false, and the holds are kept (the MFO-B55 shape).
-        [[nodiscard]] bool UnholySilverEvaluated(const Eval::Choice&) const override { return !m_postureKnown; }
+        // Also UNKNOWN (field 1117, Cicero silver thrash): a posture answer judged for ANOTHER foe because his current
+        // target is not among the listed foes (Generated::postureNoCurrentTarget) says nothing about the target he fights.
+        [[nodiscard]] bool UnholySilverEvaluated(const Eval::Choice&) const override { return !m_postureKnown || m_set.gen.postureNoCurrentTarget; }
         [[nodiscard]] bool EquipRangeUndecidable(RE::Actor*, const Eval::Choice&) const override { return !m_postureKnown; }
 
         // Tick's IAUS branch, right after the scan. (1) Verdict::Hold that took no action is the "suppressed"

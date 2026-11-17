@@ -45,6 +45,7 @@ namespace MFO::Iaus {
         std::size_t foesKept = 0;
         bool  closeRefused = false;        // Casts: a Mage-line class dropped a close spell (touch / reach under the strike distance) because he does not survive closing (Reposition::SurvivesClosing)
         bool  closeRefusing = false;       // the ONE answer to "is a close spell refused now" (a Mage-line class that does not survive closing and can cast a non-close offense): Casts, the range claim and the back-off all read it
+        bool  postureNoCurrentTarget = false;   // Postures: his currentCombatTarget is not among the listed foes, so no posture candidate was judged FOR IT: the silver / equip truth is UNKNOWN, not false (field 1117 Cicero)
         bool  spellsHold = false;          // Postures: a Mage-line class (ClassGate::casterLine) with an affordable kept offense / control spell -> no melee / silver posture candidate wins
         std::array<std::uint16_t, kFamilies> perFamily{};   // candidates per family (the over-cap WARN, tests)
         // P1 / P2 drops, for the generation log line: spells dropped as unaffordable, off-class, two-handed with a
