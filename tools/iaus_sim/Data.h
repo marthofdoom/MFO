@@ -69,7 +69,59 @@ namespace Sim {
     inline V3 g_v3;
     inline int   g_waiver = 2;            // --waiver none|self|player: the chase cap's held-foe waiver. 2 = the game today (marth 11-13: the foe fights HIM or the player), 1 = the game of 10-19 (HIM only), 0 = none
     inline bool  g_deliveryOld = false;   // --delivery old: the game before fix/heal-claim-gates and fix/iaus-claim-thrash (a claim on an inactive controller never casts; a newer pick takes the hand)
-    inline float g_deliverSec[2] = { 2.4f, 4.5f };   // --deliver-sec o,h: claim to FIRE of an offense cast / a heal (cast/Hands.cpp:362, CALIBRATED on one session each; the heal figure is soft)
+    // CAST DELIVERY, MEASURED (sim mirror batch 11-17; tools/iaus_sim/calib_cast_delay.py over _evidence/deck-run-1117/part4 and
+    // _evidence/deck-run-1117b-full: MFO.log [iaus] pick=cast_* joined to APMF.log [ctcensus] OPEN / FIRED / CLOSE claim windows, repeats from
+    // MFO.log [cast] CFC-fired; 122 windows of ONE follower, Jesper, the only IAUS caster of both sessions; substrate windows and windows that
+    // overlap a main-thread stall left out). It replaces the two single-session figures (2.4 s offense / 4.5 s heal) of sim v3's first cut.
+    //   first    claim -> the first fire of a claim that fired, deciles (0, 10, .. 100 %), seconds. kPickToOpen is added (pick -> the claim at Harbinger)
+    //   repeat   fire -> the next fire while the claim stands (the engine casts again; in the lab: his next pick of that spell at that target
+    //            within kRepeatWindowSec of its release). No table (a stream, a buff): the first table
+    //   unfired  the share of claims that closed with NO fire, over fired + unfired, where unfired = replaced by a newer claim, a caster built and answered
+    //            yes but never released, or no caster built. LEFT OUT of both sides (review F1 of 5749026a): refused (CheckStartCast said NO each time: sight,
+    //            line of fire, range, which the lab holds itself), target-died (the target died inside the window or within 1.5 s of its close: the lab's
+    //            own castLost), and shape-gap (no caster built for a spell shape Harbinger never builds one for: the three cloaks "no-row", Frostbite and
+    //            Creeping Cold "av26 row-without-caster", Turn Lesser Undead "TargetEffect no-row": a framework gap that is the same every cast, listed
+    //            for Harbinger, not a per-cast chance). --deliver-unfired <k> scales it (0 = all fire)
+    //   stood    how long such a claim stood before it closed (the body is the claim's for that long)
+    // Rows: [nature 0 offense / control, 1 heal, 2 a cloak][0 fire-and-forget, 1 concentration]; every other buff / ward / summon: kUnsampled. n = samples behind each table.
+    struct DeliveryRow { float first[11]; float repeat[11]; bool hasRepeat; float unfired; float stood[11]; int nFirst, nRepeat, nWindows; };
+    namespace Delivery {
+        inline constexpr float kPickToOpen = 0.11f;        // MEASURED median, n=57 (p25 0.06, p75 0.14)
+        inline constexpr float kRepeatWindowSec = 2.0f;    // ASSUMPTION: the claim still stands when he picks the same cast again this soon after its release (cast recover 0.45 s + one decision lap of a party of up to four)
+        inline constexpr float kStoodPooled[11] = { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f };   // n=16
+        inline constexpr DeliveryRow kRow[3][2] = {
+            {   // offense
+                { { 1.00f, 1.14f, 1.29f, 1.30f, 1.52f, 1.72f, 2.06f, 2.61f, 3.82f, 4.96f, 24.09f }, { 0.66f, 0.96f, 1.00f, 1.07f, 1.13f, 1.22f, 1.32f, 1.78f, 2.12f, 2.86f, 3.55f }, true, 0.344f,   // 11 / 32
+                  { 0.21f, 0.64f, 0.65f, 2.77f, 2.82f, 3.12f, 3.25f, 3.43f, 3.45f, 6.14f, 8.11f }, 21, 39, 32 },
+                { { 0.29f, 0.30f, 0.44f, 0.56f, 0.59f, 0.61f, 1.05f, 1.34f, 1.69f, 2.30f, 3.32f }, {}, false, 0.182f,   // 2 / 11 (stood: pooled)
+                  { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f }, 9, 0, 11 } },
+            {   // heal (stood: the pooled table, one unfired window each)
+                { { 0.96f, 1.48f, 1.77f, 1.89f, 2.11f, 2.23f, 2.30f, 2.37f, 3.00f, 3.96f, 5.26f }, { 0.75f, 0.77f, 0.81f, 1.01f, 1.03f, 1.04f, 1.05f, 1.05f, 1.07f, 1.13f, 2.98f }, true, 0.111f,   // 1 / 9
+                  { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f }, 8, 36, 9 },
+                { { 0.39f, 0.59f, 0.63f, 0.75f, 0.95f, 1.04f, 1.08f, 1.16f, 1.62f, 3.31f, 3.64f }, {}, false, 0.091f,   // 1 / 11
+                  { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f }, 10, 9, 11 } },
+            {   // A CLOAK (the only buff shape sampled: Flame / Frost Cloak and one Candlelight claim; both columns the same row). 1 / 8 once the shape gaps are out
+                { { 1.28f, 1.29f, 1.36f, 1.51f, 1.60f, 1.66f, 2.30f, 2.88f, 3.31f, 3.81f, 4.36f }, {}, false, 0.125f,
+                  { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f }, 7, 0, 8 },
+                { { 1.28f, 1.29f, 1.36f, 1.51f, 1.60f, 1.66f, 2.30f, 2.88f, 3.31f, 3.81f, 4.36f }, {}, false, 0.125f,
+                  { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f }, 7, 0, 8 } },
+        };
+        // NEVER SAMPLED (a summon, a ward, an armor spell, any buff that is not a cloak): no claim of that shape is in the logs, so the cloak row is NOT
+        // applied to it (review F1c). ASSUMPTION: it fires, after the pooled first-fire time of every fire-and-forget claim that fired (n=36).
+        inline constexpr DeliveryRow kUnsampled = { { 0.96f, 1.15f, 1.29f, 1.41f, 1.71f, 1.90f, 2.27f, 2.63f, 3.45f, 4.80f, 24.09f }, {}, false, 0.0f,
+                  { 0.21f, 0.65f, 2.77f, 2.81f, 3.07f, 3.18f, 3.26f, 3.44f, 3.64f, 6.35f, 8.11f }, 36, 0, 0 };
+        // u in [0, 1) -> the value at that quantile (linear between deciles)
+        [[nodiscard]] inline float At(const float (&d)[11], float u) { const float x = std::clamp(u, 0.0f, 0.99999f) * 10.0f; const int i = static_cast<int>(x); return d[i] + (d[i + 1] - d[i]) * (x - static_cast<float>(i)); }
+    }
+    inline float g_deliverSec[2] = { -1.0f, -1.0f };   // --deliver-sec o,h: a FIXED claim-to-fire for an offense cast / a heal, no unfired claims (sim v3's first cut ran 2.4,4.5). < 0 (the default) = the measured tables above
+    // --mirror off: the lab WITHOUT the game changes of 11-16 / 11-17 that this batch mirrored on the sim's side (the chase-waived mark, the foes kept past the
+    // cap as noApproach, the entry foe, the left-hand share of hand_lost, the cast deferrals, the heal's full-health release, the 128 approach up a
+    // ledge path). For before / after runs of the field scenarios only; what the game's own generator does (compiled in) is not switched.
+    inline bool  g_mirror = true;
+    // --engage-on-sight: Harbinger's ch.21 combat ENTRY is modelled (the second id of Snapshot.h ChaseWaived). OFF by default, as the game ships it
+    // ([CombatEntry] EngageOnSight, Config.cpp:328); a scenario that models engage-on-sight sets FightSpec::engageOnSight.
+    inline bool  g_engageOnSight = false;
+    inline float g_deliverUnfired = 1.0f;              // --deliver-unfired k: scales every row's unfired share (0 = every claim fires)
     inline int   g_sideStep = 1;          // --side-step random|away: which way a held caster steps across the line. 1 random (the default: no source says he knows where the friend is), 2 away from the friend in his way
     inline bool  g_casterPressure = false;   // --caster-pressure: the caster cells' objective also plays the "dive" scenarios (foes that start on the caster); OFF by default so the headline keeps its composition
     inline float g_blockArc = 180.0f;     // --block-arc: the full angle in front of him a guard covers (ASSUMPTION: no engine source in Docs)
@@ -90,7 +142,7 @@ namespace Sim {
     inline float g_spaceSize = 0.0f;      // --space R: an ENCLOSED fight (the encounter's cell is an interior) is bounded by a disc of radius >= R around its start (Part C); 0 = open everywhere
     inline int   g_spaceForce = -1;       // --space-force enclosed|open: every fight that type (the sensitivity axis); -1 = by the encounter's cell
     inline bool  g_buffDurReal = false;   // --buff-dur real: a cast buff is up for its record duration (the lab used max(30 s, duration))
-    inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships OFF; without it no Block candidate exists)
+    inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships ON since 11-17b, as Armor / Hit / Loss / Spells: the lab's default is the shipped one; without it no Block candidate exists)
 
     // Actor values (CommonLib RE::ActorValue, the same numbers the records store).
     inline constexpr int kAvOneHanded = 6, kAvTwoHanded = 7, kAvMarksman = 8, kAvBlock = 9, kAvHeavy = 11, kAvLight = 12,

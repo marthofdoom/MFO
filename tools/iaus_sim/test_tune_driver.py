@@ -20,7 +20,7 @@ class LogiMid(unittest.TestCase):
         self.assertTrue(all(v > 0 for v in T.logi_mid(0.0, (0.6,), (-0.1, 0.1))))
 
 
-class World(unittest.TestCase):   # sim v3: the driver always names the world, v2 unless asked
+class World(unittest.TestCase):   # sim v3: the driver always names the world (v3 by default since the sim mirror batch of 11-17; --world v2 still works)
     def test_world_is_always_first(self):
         self.assertEqual(T.world_flags("v2", ""), ["--world", "v2"])
         self.assertEqual(T.world_flags("v3", "--ranged-perks --point-blank"), ["--world", "v3", "--ranged-perks", "--point-blank"])
@@ -28,6 +28,21 @@ class World(unittest.TestCase):   # sim v3: the driver always names the world, v
     def test_sim_flags_may_not_name_the_world(self):
         with self.assertRaises(SystemExit):
             T.world_flags("v2", "--world v3")
+
+
+class Cards(unittest.TestCase):   # review F2 of 5749026a: every band of Playstyles.h is parsed, a two-sided or raw one is never silently dropped
+    def test_survival_bands_are_parsed(self):
+        T.CARDS.clear()
+        cards = T.load_cards()
+        for cls in ("mage", "evoker", "conjurer", "warlock", "healer"):
+            self.assertIn("downs/f", [b[0] for b in cards[cls]["bands"]], cls)
+            self.assertIn("selfHealLow%", [b[0] for b in cards[cls]["bands"]], cls)
+
+    def test_band_regexes(self):
+        import re
+        line = 'inRange("x%", 25, 75, "why"), atMost("y", 3, "why"), Band{ "z", 1, 2, "raw" }'
+        self.assertEqual(len(re.findall(r'\b(?:atLeast|atMost|inRange)\(|\bBand\{', line)), 3)
+        self.assertEqual(re.findall(r'inRange\("([^"]+)", ([-0-9.]+), ([-0-9.]+)', line), [("x%", "25", "75")])
 
 
 class Edge(unittest.TestCase):

@@ -127,7 +127,10 @@ namespace Sim {
             SimSpell cloak = Fx("FixFlameCloak", N::Buff, kAvDestruction, kAvResistFire, 289, 0, 0, 10, 0.5f, 50); cloak.areaKind = 1; cloak.areaDps = 8; cloak.areaDur = 60; cloak.e.meleeBuff = true; cloak.e.resistAv = -1; cloak.e.role = Prune::RoleOf(N::Buff, -1);
             SimSpell circle = Fx("FixCircleOfProtection", N::Buff, kAvRestoration, -1, 171, 0, 0, 20, 0.5f, 50); circle.areaKind = 2; circle.areaArmor = 60; circle.areaDur = 60;
             SimSpell stride = Fx("FixChannelledStride", N::Buff, kAvAlteration, -1, 30, 0, 0, 0, 2.0f, 25); stride.e.concentration = true; stride.buffDur = 15;
-            return std::vector<SimSpell>{ cloak, circle, stride }; }();
+            // the field case of 11-17b (Jesper): a WEAK channelled heal at an ally (the shape of Skyrim.esm's Healing Hands: 10 health a second; the lab's stream
+            // convention is 2 s lumps, as "Healing" above). By name only (ensure "healStream").
+            SimSpell hands = Fx("FixHealingHands", N::Heal, kAvRestoration, -1, 26, 0, 20, 0, 2.0f); hands.e.concentration = true; hands.healOther = true;
+            return std::vector<SimSpell>{ cloak, circle, stride, hands }; }();
         return v;
     }
     inline Data BuiltinData() {
@@ -227,6 +230,7 @@ namespace Sim {
         const bool off = s.e.nature == Prune::Nature::Offense;
         if (tok == "area") return off && s.e.areaUnits > 0 && !s.e.selfDelivery; if (tok == "paralyze") return s.ctrlPar; if (tok == "fear") return s.ctrlFlee && !s.turnUndead;
         if (tok == "heal") return s.e.nature == Prune::Nature::Heal && s.e.selfDelivery; if (tok == "healOther") return s.healOther;
+        if (tok == "healStream") return s.healOther && s.e.concentration; if (tok == "healShot") return s.healOther && !s.e.concentration;   // the field scenarios: a channelled heal at an ally / a fire-and-forget one
         if (tok == "fire" || tok == "frost" || tok == "shock") return off && s.element == tok && s.e.areaUnits <= 0 && !s.e.touch && !s.e.selfDelivery;
         if (tok == "armor") return s.armor > 0; if (tok == "summon") return s.summon; if (tok == "reanimate") return s.reanimate;
         if (tok == "cloak") return s.areaKind == 1; if (tok == "circle") return s.areaKind == 2; if (tok == "stream") return s.e.concentration && s.e.selfDelivery && s.e.nature == Prune::Nature::Buff && s.areaKind == 0;
@@ -300,7 +304,7 @@ namespace Sim {
         if (ensure) for (const std::string& tok : *ensure) {   // a scenario needs him to know one: the dearest he can afford twice, else the cheapest
             bool have = false; for (const SimSpell& s : fb.spells) have |= SpellIs(s, tok); if (have) continue;
             const SimSpell* pick = nullptr; const SimSpell* cheap = nullptr;
-            const bool v3tok = tok == "cloak" || tok == "circle" || tok == "stream"; bool inList = false;   // SIM V3: the list's own spell of that shape first, else the fixture
+            const bool v3tok = tok == "cloak" || tok == "circle" || tok == "stream" || tok == "healStream"; bool inList = false;   // SIM V3: the list's own spell of that shape first, else the fixture
             if (v3tok) for (const SimSpell& s : D.spells) inList |= SpellIs(s, tok);
             for (const SimSpell& s : (tok == "reanimate" ? D.reanimSpells : (v3tok && !inList) ? AreaFixtures() : D.spells)) { if (!SpellIs(s, tok)) continue; const float c0 = costOf(s); if (!cheap || c0 < costOf(*cheap)) cheap = &s; if (c0 <= a.mp * 0.45f && (!pick || c0 > costOf(*pick))) pick = &s; }
             if (!pick) pick = cheap; if (pick) fb.spells.push_back(*pick);

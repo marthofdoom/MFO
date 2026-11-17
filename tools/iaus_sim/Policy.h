@@ -61,10 +61,19 @@ namespace Sim {
     }
     inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) { return PreparePickKind(F, c, self, flee ? 1 : 0); }
 
-    inline void MakeSnapshot(const Fight& F, int ci, Snapshot& sn) {
+    // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
+    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
+
+    // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
+    // `t.bowRange` moves the gather and the generator together).
+    inline void MakeSnapshot(const Fight& F, int ci, Snapshot& sn, const Tuning& a_t = *ActiveTuning()) {
         const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& self = F.b[static_cast<std::size_t>(c.body)];
         sn.self = self.c; sn.self.dist = 0; sn.self.targetId = c.steer ? c.steer : self.c.targetId;
+        sn.drawn = c.drawn;   // before the foes: Reposition::InWeaponRange reads it (iaus/Candidates.cpp fills the posture first too)
         if (F.estimates) FillEstimate(F, self, sn.self);
+        // 1dfcuabd22x (iaus/Fills.cpp:345): the share of his weapon damage that needs the LEFT hand, 1 = a bow / crossbow / two-hander (the lab carries no
+        // second melee weapon: no 0.5 row). Filled with `hit`, and only where a stream HOLDS a hand (the `hands` switch): the v2 world has no such cost.
+        if (F.estimates && g_v3.hands && g_mirror && !self.casterMode && sn.self.hit > 0.0f && F.TwoHandWeapon(self)) sn.self.weaponLeftShare = 1.0f;
         std::vector<int> elems;
         for (const auto& e : c.book.entries) if (e.resistAv >= 0 && std::find(elems.begin(), elems.end(), e.resistAv) == elems.end()) elems.push_back(e.resistAv);
         const Body& pl = F.b[0];
@@ -73,19 +82,27 @@ namespace Sim {
         const Tri detects = g_stealth > 0 ? (F.GroupDetects(self) ? Tri::Yes : Tri::No) : Tri::Unknown;
         // SIM V3 (chase): the game's confidence cap (Confidence::ChaseRadius), in 3D, and the held-foe waiver of iaus/Candidates.cpp:345-353.
         if (g_v3.chase) sn.chaseCap = F.ChaseCap(self, c);
-        int capLive = 0, capDropped = 0, capWaived = 0;
+        int capLive = 0, capDropped = 0, capWaived = 0, capKept = 0;
+        if (g_v3.chase && g_mirror && F.entryRoad && !c.entryEnded) {   // the Standing entry foe (World.h Ctl::entryFoe, MODEL)
+            if (c.entryFoe == 0) { const Body* e = F.Find(self.c.targetId); if (e && e->role == Role::Foe && Fight::Up(*e)) c.entryFoe = e->c.id; }
+            else { const Body* e = F.Find(c.entryFoe); if (!e || !Fight::Up(*e) || (self.c.targetId != 0 && self.c.targetId != c.entryFoe)) { c.entryFoe = 0; c.entryEnded = true; } } }
         for (const Body& o : F.b) {
             if (&o == &self || !o.alive) continue;
             if (o.role == Role::Foe) {
                 if (o.c.downed) continue;
                 Combatant k = o.c; k.dist = Fight::Dist(self, o); ++capLive;
                 if (k.dist > sn.chaseCap) {
-                    // kept while Harbinger holds the engagement on it (his act.attack pin: Ctl::steer) AND it fights him or the player (marth 11-13);
+                    // kept while Harbinger holds the engagement on it AND it fights him or the player (marth 11-13), through the game's ONE reader
+                    // (Snapshot.h ChaseWaived). heldId = his act.attack pin (Ctl::steer, APMFBridge::PinnedTarget). entryId = Harbinger's Standing-entry
+                    // foe (APMFBridge::CombatEntryStateOf): MODEL, the foe his combat was entered on (World.h Ctl::entryFoe).
                     // --waiver self = the game of 10-19 (it must fight HIM); --waiver none = no waiver. v2 has no waiver.
-                    const bool held = g_v3.chase && c.steer != 0 && c.steer == o.c.id;
+                    const std::uint32_t heldId = g_v3.chase ? c.steer : 0u, entryId = g_v3.chase && F.entryRoad ? c.entryFoe : 0u;
                     const bool fights = g_waiver == 2 ? (o.c.targetId == self.c.id || o.c.targetId == pl.c.id) : g_waiver == 1 ? o.c.targetId == self.c.id : false;
-                    if (!(held && fights)) { ++capDropped; continue; }
-                    ++capWaived;
+                    if (ChaseWaived(o.c.id, heldId, entryId, fights)) { ++capWaived; k.chaseWaived = g_mirror; }   // act.attack scores it at the cap's edge (Catalogue.cpp ChaseX), no veto
+                    // 11-17 A3 (iaus/Candidates.cpp): the cap limits MOVEMENT, not shots and not the threat read. Kept, marked noApproach: a foe inside
+                    // his bow's range (Reposition::InWeaponRange, Tuning::bowWeaponRange) and any foe that targets HIM. v2 keeps none.
+                    else if (g_v3.chase && g_mirror && (Reposition::InWeaponRange(sn, k.dist, a_t.bowWeaponRange) || o.c.targetId == self.c.id)) { ++capKept; k.noApproach = true; }
+                    else { ++capDropped; continue; }
                 }
                 k.rangedWeapon = o.rangedMode; k.swinging = g_fillSwing && (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;   // swinging: [Debug] bIausFillSwing (--no-fill-swing = the shipped default)
                 if (!F.tauntVisible) k.taunted = false;
@@ -112,7 +129,7 @@ namespace Sim {
             }
         }
         if (ci == 0) { Tally& vt = const_cast<Fight&>(F).t;   // the cap's tallies (a rollout copy's tallies are thrown away with it)
-            if (capLive > 0) { ++vt.capLaps; vt.capSum += sn.chaseCap; if (capDropped > 0) ++vt.capDropLaps; if (capDropped == capLive) ++vt.capStarveLaps; vt.capWaived += capWaived; } }
+            if (capLive > 0) { ++vt.capLaps; vt.capSum += sn.chaseCap; if (capDropped > 0) ++vt.capDropLaps; if (capDropped == capLive) ++vt.capStarveLaps; vt.capWaived += capWaived; vt.capKept += capKept; } }
         sn.playerId = pl.c.id; sn.currentTargetId = sn.self.targetId; sn.playerTargetId = pl.alive ? pl.c.targetId : 0;
         sn.hasBook = true; sn.book = c.book;
         for (std::size_t i = 0; i < sn.book.entries.size(); ++i) {
@@ -133,9 +150,12 @@ namespace Sim {
                 sn.perks.spellsRead = true;
                 for (std::size_t si = 0; si < kSchools; ++si) if (n[si] > 0) { sn.perks.spellCost[si] = cs[si] / static_cast<float>(n[si]); sn.perks.spellMagnitude[si] = ms[si] / static_cast<float>(n[si]); sn.perks.spellCount[si] = static_cast<std::uint8_t>(std::min(n[si], 255)); }
             } }
-        sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
+        sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
-        if (g_learnReach && c.reach[0].Known()) sn.comboEdge = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Value() - MFO::Iaus::ReachBook::kRefRadius;   // ruling Q68: the power attack's own outcomes once it has three (the sim's foes carry no radius: the humanoid kRefRadius is added back, so the gate reads Value() x kGate as before)   // ruling Q68: the power attack's own outcomes once it has three
+        // THE REACH READS (iaus/Fills.cpp LearnReach step 3, iaus/ReachBook.h): both EDGE values of the blade in his hand, 0 while nothing is learned or
+        // another weapon is drawn (the readers then answer fMeleeReach). weaponEdge = one blow (the height line, StrikeReady); comboEdge = the sequence he
+        // would start (the attack's range test, the swing gate of PowerAttack / Bash). marth 2026-11-17 supersedes rulings Q68 / Q70 here.
+        if (g_learnReach && sn.meleeInRightHand && self.spec->melee.Has()) { sn.weaponEdge = c.reach.BlowEdge(self.c.id, kReachWeapon); sn.comboEdge = c.reach.ComboEdge(self.c.id, kReachWeapon); }
         sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad; sn.groundRoad = g_groundRoad; sn.bashRoad = g_bashRoad;
         // The held guard (iaus/Candidates.cpp): Harbinger serves ch.31 Block and his hands can block now (MODEL: a melee weapon is drawn).
         // guardHeld = a request of his is out or the guard is up (APMFBridge::BlockHoldLive). --roads block keeps the older lab switch.
@@ -174,6 +194,10 @@ namespace Sim {
                 }
             }
         }
+        if (g_mirror) for (const Ctl::FireRefusal& r : c.fireRefused) {   // 11-17b (iaus/Candidates.cpp): a pair refused for the line of fire stays refused for Tuning::fireLineKeepSec
+            if (F.now - r.at > static_cast<double>((std::max)(0.0f, a_t.fireLineKeepSec))) continue;
+            const auto n = std::find_if(sn.willWork.begin(), sn.willWork.end(), [&](const SpellTargetNote& w) { return w.spell == r.spell && w.target == r.foe; });
+            if (n != sn.willWork.end()) n->answer = Tri::No; else sn.willWork.push_back({ r.spell, r.foe, Tri::No }); }
         for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
             const Body* d = F.Find(w.target); if (!d) continue;
             for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWork(c.build->spells[i], *d) });
@@ -289,6 +313,9 @@ namespace Sim {
         if (hostile && (!tg || !Fight::Up(*tg) || tg->Party())) return Fired::Invalid;
         const bool bodyHeld = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd);
         auto peel = [&]() { if (subj && tg && c.pressureSince >= 0 && tg->c.targetId == F.b[0].c.id) { t.peelSum += F.now - c.pressureSince; ++t.peelN; c.pressureSince = -2; } };
+        // 11-17b (cast/Hands.cpp CanPreemptHand, THREAT ON THE HEALER): a concentration heal does not keep its hand from a non-heal pick while a foe is hurting him.
+        if (x.stream.live && g_mirror && c.healerThreat && (fam == Family::CastOffense || fam == Family::CastControl || fam == Family::CastBuff || fam == Family::CastSummon || fam == Family::CastWard)) {
+            const SimSpell* hs = F.SpellOf(x, x.stream.spell); if (hs && hs->e.nature == Prune::Nature::Heal) { F.EndStream(x, false); if (subj) ++t.healYield; } }
         if (x.stream.live) switch (fam) {   // SIM V3 (hands): a stream stands on his left hand. No second cast; a potion or a run ends it; a blow needs a one-handed blade
             case Family::Scroll: case Family::CastOffense: case Family::CastControl: case Family::CastHeal: case Family::CastBuff: case Family::CastSummon: case Family::CastWard: return Fired::Declined;
             case Family::PowerAttack: case Family::Bash: case Family::Block: case Family::Taunt: if (F.StreamHolds(x)) return Fired::Declined; break;
@@ -360,6 +387,7 @@ namespace Sim {
             Kit& kit = c.book.kit; std::int32_t& n = fam == Family::DrinkHealth ? kit.potionsHealth : fam == Family::DrinkStamina ? kit.potionsStamina : kit.potionsMagicka;
             if (n <= 0) return Fired::Invalid;
             if (bodyHeld) return Fired::Declined;
+            if (subj && fam == Family::DrinkHealth) { ++t.selfHealN; t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
             if (subj && fam == Family::DrinkHealth) { ++t.drinksH; t.drinkAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); t.potFracSum += c.potH * std::max(1.0f, c.potDur[0]) / std::max(1.0f, x.c.hpMax); ++t.potFracN; }   // the decline record: when he drinks
             --n; take(Act::Drink, TM::drink, TM::drinkAt); x.actSpell = fam == Family::DrinkHealth ? 0 : fam == Family::DrinkMagicka ? 1 : 2; return Fired::Yes; }
         case Family::Scroll:
@@ -369,6 +397,11 @@ namespace Sim {
             const SpellEntry& e = c.book.entries[static_cast<std::size_t>(si)]; const SimSpell& s = c.build->spells[static_cast<std::size_t>(si)];
             if (fam == Family::Scroll) { if (e.source != SpellSource::Scroll || e.count <= 0 || !c.gate.scrollUser) return Fired::Invalid; }
             else if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
+            // field 1117 A6 / the disengage ruling (cast/CastOn.cpp): with NO combat controller a combat-table SELF buff / ward is DEFERRED (transparent,
+            // asked again every lap; never the unanimated direct cast), and so is a heal while a disengage runs. Other casts keep the direct road.
+            if (g_v3.delivery && g_mirror && !g_deliveryOld && !x.ctrlLive && fam != Family::Scroll
+                && (((fam == Family::CastBuff || fam == Family::CastWard) && (k.target == 0 || k.target == x.c.id)) || (fam == Family::CastHeal && c.runPhase != 0))) {
+                if (subj) ++t.castDeferred; return Fired::Declined; }
             bool thrashed = false;
             if (bodyHeld) {
                 // SIM V3 (delivery, --delivery old = before fix/iaus-claim-thrash): while a claim waits for its cast, a DIFFERENT non-heal pick takes the hand
@@ -388,6 +421,9 @@ namespace Sim {
             }
             if (subj) {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
+                if (fam == Family::CastOffense) { ++t.offPickN; t.offPickDmg += s.dmg + s.dot * s.dotDur; t.offPickCost += e.cost; }
+                if (fam == Family::CastHeal) { ++t.healPickN; t.healPickSize += s.heal + s.hot * s.hotDur; if (s.e.concentration) ++t.healPickConc; if (target == x.c.id) ++t.healPickSelf; }
+                if (fam == Family::CastHeal && target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
                 if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; }
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
                     (void)r; }
@@ -415,8 +451,6 @@ namespace Sim {
         virtual void Serve(Fight& F, int ci) = 0;
     };
 
-    // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
-    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
     inline void (*&ProfileHook())(Profile&) { static void (*h)(Profile&) = nullptr; return h; }   // weight overrides for every follower (Tune.h)
 
     struct IausPolicy : Policy {
@@ -428,10 +462,16 @@ namespace Sim {
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; Tally& t = F.t; const bool subj = ci == 0;
             if (ServiceRun(F, ci)) return;   // card G3: while a hide run or its hold stands his scan is skipped (Concealment::Service); a run ends when he goes down
             if (!Fight::Up(x)) return;
-            MakeSnapshot(F, ci, sv.sn);
+            MakeSnapshot(F, ci, sv.sn, *T);
             const auto t0 = timeIt ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             sv.g = Generate(sv.sn, c.gate, *T);
             c.spellsHold = sv.g.spellsHold;
+            if (g_mirror) {   // 11-17b (iaus/Candidates.cpp Build): the refused pairs are stamped (refreshed each lap they stay blocked), the cast layer learns the threat on the healer
+                std::erase_if(c.fireRefused, [&](const Ctl::FireRefusal& r) { return F.now - r.at > static_cast<double>((std::max)(0.0f, T->fireLineKeepSec)); });
+                for (const auto& [sp, foe] : sv.g.fireBlocked) { const auto f = std::find_if(c.fireRefused.begin(), c.fireRefused.end(), [&](const Ctl::FireRefusal& r) { return r.spell == sp && r.foe == foe; });
+                    if (f != c.fireRefused.end()) f->at = F.now; else if (c.fireRefused.size() < 64) c.fireRefused.push_back({ sp, foe, F.now }); }
+                c.healerThreat = Estimate::IncomingOn(sv.sn, sv.sn.self) > 0.0f;
+            }
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);
@@ -464,6 +504,7 @@ namespace Sim {
                     if (r == Fired::Invalid) { if (subj) ++t.invalid; continue; }
                     if (r == Fired::Declined) continue;
                     fired = true; OnFired(c.mind, k, st, F.now); c.firedAt[CooldownId(KeyOf(k))] = F.now;
+                    if (k.family == Family::Attack) { c.steerNoApproach = false; for (const Combatant& f : sv.sn.foes) if (f.id == k.target) { c.steerNoApproach = f.noApproach; break; } }   // World.h Brain: a foe kept past the cap is shot at, not walked to
                     if (F.trace && (k.family != Family::Attack || d.newDecision)) std::fprintf(F.trace, "%7.2f  IAUS %s: %s%s%s -> %u  score %.3f  (%s, try %zu)\n", F.now, x.c.name.c_str(), std::string(Name(k.family)).c_str(), k.formName.empty() ? "" : " ", std::string(k.formName).c_str(), k.target, s < d.ranked.size() ? d.ranked[0].score : 0.0f, d.verdict == Verdict::Hold ? "hold" : "act", s);
                     if (subj) { ++t.fired; ++t.hist[static_cast<std::size_t>(k.family)]; if (d.newDecision && s == 0) ++t.switches;
                         t.actSec[static_cast<std::size_t>(k.family)] += k.family == Family::Attack ? TM::pump * static_cast<double>(F.ctl.size()) : k.family == Family::Retreat ? TM::retreatSec : k.family == Family::Sneak ? TM::pump * static_cast<double>(F.ctl.size()) : k.family == Family::Disengage ? 2.0 : std::max(0.0, x.actEnd - F.now);

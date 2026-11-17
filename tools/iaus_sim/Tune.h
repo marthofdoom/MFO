@@ -35,6 +35,10 @@ namespace Sim {
         { "t.noHealDrink", &Tuning::noHealDrink }, { "t.noHealRetreat", &Tuning::noHealRetreat }, { "t.emergencyHpHigh", &Tuning::emergencyHpHigh }, { "t.emergencyHpLow", &Tuning::emergencyHpLow },
         { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
         { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
+        // sim mirror batch 11-17: the placeholders the game ships until the sim searches them. hand_lost (1dfcuabd22x; the game's tuning file knows the
+        // first two by these names), the waived foe's range edge (fix/chase-waiver-veto), the bow's range past the chase cap (field 11-17 A3).
+        { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec }, { "t.waivedRangeX", &Tuning::waivedRangeX }, { "t.bowRange", &Tuning::bowWeaponRange },
+        { "t.spellCastSec", &Tuning::spellCastSec }, { "t.dyingSelfHp", &Tuning::dyingSelfHp }, { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // fix/field-1117b-choice placeholders
     };
 
     // tune 2.11.1: the worth-the-gold table (iaus/ConsumableWorth.h WorthTable, carried in Tuning::worth) and the loot table

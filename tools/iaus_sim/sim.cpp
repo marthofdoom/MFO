@@ -60,6 +60,7 @@ namespace {
             // sim v3
             S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
             S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
+            S(castUnfired); S(castRepeat); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealLowN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
@@ -123,7 +124,7 @@ namespace {
               m["pr.spoiled/f"] = double(s.drawSpoiled) / n; m["pr.pointBlank%"] = pct(double(s.pointBlankShots), double(s.arrowsShot)); }
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
-          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
+          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["selfHealAt%"] = s.selfHealN ? 100.0 * s.selfHealAtSum / double(s.selfHealN) : -1; m["selfHealLow%"] = s.selfHealN ? 100.0 * double(s.selfHealLowN) / double(s.selfHealN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
         // sim batch (section 32): the drink record (the full decline curve is the --decline report)
         m["drinkH/f"] = double(s.drinksH) / n; m["drinkAt%"] = s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1; m["potWaste%"] = pct(s.potWaste, s.potHeal); m["dnPot/f"] = double(s.downsWithPotH) / n; m["dnMidDrink/f"] = double(s.downsMidDrink) / n;
         // SIM V3 (iaus-sim-v3.md): what became of the casts his decisions fired, the chase cap, the guard by direction, the weapon hand, the areas.
@@ -132,6 +133,11 @@ namespace {
           m["dl.pick/f"] = pk / n; m["dl.fired%"] = pct(double(s.castFired), pk); m["dl.landed%"] = pct(double(s.castFired - s.castNoLos), pk); m["dl.noLos%"] = pct(double(s.castNoLos), pk);
           m["dl.lofHeld%"] = pct(double(s.castLofHeld), pk); m["dl.lofExpired%"] = pct(double(s.castLofExpired), pk); m["dl.lofHold.s"] = s.castLofHeld ? s.castLofSec / double(s.castLofHeld) : -1;
           m["dl.notBuilt%"] = pct(double(s.castNotBuilt), pk); m["dl.direct%"] = pct(double(s.castDirect), pk); m["dl.thrash%"] = pct(double(s.castThrash), pk); m["dl.lost%"] = pct(double(s.castLost), pk);
+          m["dl.unfired%"] = pct(double(s.castUnfired), pk); m["dl.repeat%"] = pct(double(s.castRepeat), pk); m["dl.unfired.s"] = s.castUnfired ? s.unfiredSec / double(s.castUnfired) : -1; m["dl.deferred/f"] = double(s.castDeferred) / n; m["dl.healFull/f"] = double(s.healFullExit) / n;   // sim mirror batch 11-17 (Data.h Delivery, cast/CastOn.cpp deferrals, cast/HealRoad.cpp full exit)
+          m["tfh.s"] = s.firstHitN ? s.firstHitSum / double(s.firstHitN) : -1; m["nohit%"] = 100.0 * (1.0 - double(s.firstHitN) / n); m["hits/f"] = double(s.wpnHits) / n;   // the field scenarios (11-17): time to his first damage, fights with none, weapon hits
+          m["cast.dmg"] = s.offPickN ? s.offPickDmg / double(s.offPickN) : -1; m["cast.cost"] = s.offPickN ? s.offPickCost / double(s.offPickN) : -1; m["off/f"] = double(s.offPickN) / n;
+          m["heal.size"] = s.healPickN ? s.healPickSize / double(s.healPickN) : -1; m["heal.conc%"] = pct(double(s.healPickConc), double(s.healPickN)); m["heal.self%"] = pct(double(s.healPickSelf), double(s.healPickN)); m["heal/f"] = double(s.healPickN) / n; m["healYield/f"] = double(s.healYield) / n;
+          m["cap.kept/f"] = double(s.capKept) / n;   // foes kept past the chase cap as noApproach (11-17 A3)
           m["dl.claim.s"] = s.castFired ? s.claimSec / double(s.castFired) : -1; m["dl.beatLof%"] = pct(double(s.beatLof), double(s.beats + s.beatLof + s.beatNoLos)); m["dl.stream.s"] = s.streams ? s.streamSec / double(s.streams) : -1;
           m["cap.mean"] = s.capLaps ? s.capSum / double(s.capLaps) : -1; m["cap.drop%"] = pct(double(s.capDropLaps), double(s.capLaps)); m["cap.starve%"] = pct(double(s.capStarveLaps), double(s.capLaps)); m["cap.waived/f"] = double(s.capWaived) / n;
           m["inc/f"] = double(s.inc) / n; m["guardAll%"] = pct(double(s.incGuard), double(s.inc)); m["arcMiss%"] = pct(double(s.incArc), double(s.inc)); m["guardDown%"] = pct(double(s.incDown), double(s.inc));
@@ -215,7 +221,7 @@ namespace {
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
-        if (g_v3.delivery && (g_deliverSec[0] != 2.4f || g_deliverSec[1] != 4.5f)) o += "+deliver-sec"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
+        if (!g_mirror) o += "+mirror=off"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
         return o;
     }
     std::string g_potTag;
@@ -627,6 +633,9 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--waiver") && i + 1 < argc) { const char* v = argv[++i]; g_waiver = !std::strcmp(v, "none") ? 0 : !std::strcmp(v, "self") ? 1 : !std::strcmp(v, "player") ? 2 : -1; if (g_waiver < 0) { std::fprintf(stderr, "--waiver none|self|player\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--delivery") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "old")) g_deliveryOld = true; else if (!std::strcmp(v, "main")) g_deliveryOld = false; else { std::fprintf(stderr, "--delivery main|old\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-sec") && i + 1 < argc) { if (std::sscanf(argv[++i], "%f,%f", &g_deliverSec[0], &g_deliverSec[1]) != 2 || g_deliverSec[0] < 0 || g_deliverSec[1] < 0) { std::fprintf(stderr, "--deliver-sec <offense>,<heal> (seconds)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--engage-on-sight")) g_engageOnSight = true;   // ch.21 EngageOnSight modelled in every fight (ships OFF)
+        else if (!std::strcmp(argv[i], "--mirror") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_mirror = false; else if (!std::strcmp(v, "on")) g_mirror = true; else { std::fprintf(stderr, "--mirror on|off\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--deliver-unfired") && i + 1 < argc) { g_deliverUnfired = static_cast<float>(std::atof(argv[++i])); if (!(g_deliverUnfired >= 0.0f)) { std::fprintf(stderr, "--deliver-unfired <k >= 0> (scales the measured unfired share of every claim; 0 = every claim fires)\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--side-step") && i + 1 < argc) { const char* v = argv[++i]; g_sideStep = !std::strcmp(v, "random") ? 1 : !std::strcmp(v, "away") ? 2 : 0; if (!g_sideStep) { std::fprintf(stderr, "--side-step random|away (off: --v3 sidestep=off)\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--caster-pressure")) g_casterPressure = true;
         else if (!std::strcmp(argv[i], "--block-arc") && i + 1 < argc) { g_blockArc = static_cast<float>(std::atof(argv[++i])); if (!(g_blockArc > 0.0f && g_blockArc <= 360.0f)) { std::fprintf(stderr, "--block-arc <degrees, 1..360>\n"); return 2; } }
@@ -863,7 +872,7 @@ static int RealMain(int argc, char** argv) {
     if (classOracle > 0) {   // THE GAP PASS: per class, the SAME fights played by IAUS and by the oracle held to the class's rulings: its natural fights and its own named scenarios
         const std::vector<Scenario> hs = HeadlineScenarios(); std::vector<std::pair<int, int>> sj;   // (headline scenario index, class index in `classes`)
         if (gapScen > 0) { Rng R0; R0.g.seed(1); for (std::size_t i = 0; i < hs.size(); ++i) { FightSpec fs = hs[i].make(D, allClasses, R0); for (int c = 0; c < nc; ++c) if (classes[static_cast<std::size_t>(c)].name == fs.cls->name) sj.push_back({ static_cast<int>(i), c }); } }
-        struct CO { double uI = 0, uO = 0; Agg orc; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; std::map<std::string, SitRec> sit; std::array<long, kFamilies> gen{}; long dec = 0; }; std::vector<CO> co(static_cast<std::size_t>(nc));
+        struct CO { double uI = 0, uO = 0; Agg orc, iaus; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; std::map<std::string, SitRec> sit; std::array<long, kFamilies> gen{}; long dec = 0; }; std::vector<CO> co(static_cast<std::size_t>(nc));
         struct SO { double uI = 0, uO = 0; Agg iaus, orc; }; std::vector<SO> so(sj.size());
         std::vector<int> gidx(static_cast<std::size_t>(nc), 0); for (int c = 0; c < nc; ++c) for (std::size_t i = 0; i < allClasses.size(); ++i) if (allClasses[i].name == classes[static_cast<std::size_t>(c)].name) gidx[static_cast<std::size_t>(c)] = static_cast<int>(i);
         std::atomic<int> nx{ 0 }; const int natJobs = nc * classOracle, jobs = natJobs + static_cast<int>(sj.size()) * gapScen;
@@ -879,7 +888,7 @@ static int RealMain(int argc, char** argv) {
             std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI);
             if (gapDump) { std::printf("GAPFIGHT %s %s %d %.4f %.4f\n", classes[static_cast<std::size_t>(c)].name.c_str(), sidx < 0 ? "nat" : hs[static_cast<std::size_t>(sj[static_cast<std::size_t>(sidx)].first)].name, job, uI, uO);
                 for (const auto& kv : sl) { SitRec& q = r.sit[kv.first]; q.n += kv.second.n; q.dU += kv.second.dU; } for (std::size_t f = 0; f < kFamilies; ++f) r.gen[f] += gn[f]; r.dec += O.subjDec; }
-            if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); }
+            if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); r.iaus.uSum += uI; r.iaus.Add(F.t, false); }
             else { r.sI += uI; r.sO += uO; ++r.sN; SO& q = so[static_cast<std::size_t>(sidx)]; q.uI += uI; q.uO += uO; q.iaus.uSum += uI; q.iaus.Add(F.t, false); q.orc.uSum += uO; q.orc.Add(Gf.t, false); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(w2); for (auto& x : th) x.join(); }
         std::printf("\nCLASS ORACLE GAP (%d natural fights per class + %d of each of its own scenarios, class rulings %s, K=%d H=%.0fs)\n%-17s %7s %7s %7s  %7s %7s  %7s %5s %6s   (gap = oracle U - IAUS U over all of the class's gap fights; persona: the oracle's own play against the class signature)\n", classOracle, gapScen, g_classRulings ? "IN FORCE" : "off", oc.K, oc.H, "class", "IAUS U", "orc U", "nat gap", "pers.I", "pers.O", "GAP", "se", "fights");
@@ -890,6 +899,8 @@ static int RealMain(int argc, char** argv) {
             ClassGapRow cg; cg.cls = sc.name; cg.fights = static_cast<long>(r.d.size()); cg.natFights = classOracle; cg.natGap = sr.gap; cg.scenFights = r.sN; cg.scenGap = r.sN ? (r.sO - r.sI) / double(r.sN) : 0.0;
             { double m = 0; for (double x : r.d) m += x; m /= std::max<double>(1, double(r.d.size())); double v = 0; for (double x : r.d) v += (x - m) * (x - m); cg.gap = m; cg.se = r.d.size() > 1 ? std::sqrt(v / double(r.d.size() - 1) / double(r.d.size())) : 0.0; }
             for (ResultRow& rr : R.rows) if (rr.cls == sc.name && rr.bracket == "natural") { rr.hasGap = true; rr.mainGap = cg.gap; pI = rr.metrics["persona"]; sr.metrics = rr.metrics; }
+            { auto mi = Metrics(r.iaus); auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? -1.0 : i->second; };   // THE ORACLE-RELATIVE SURVIVAL READ (marth 11-17 "Oracle downs"; Playstyles.h): the same natural fights, IAUS and the class oracle
+              std::printf("ORCSURV %s %d  iaus downs/f %.3f selfHealLow%% %.1f  |  oracle downs/f %.3f selfHealLow%% %.1f\n", sc.name.c_str(), classOracle, G(mi, "downs/f"), G(mi, "selfHealLow%"), G(sr.oracleMetrics, "downs/f"), G(sr.oracleMetrics, "selfHealLow%")); }
             std::printf("%-17s %7.2f %7.2f %+7.2f  %7.1f %7.1f  %+7.2f %5.2f %6ld\n", sc.name.c_str(), sr.iausU, sr.oracleU, sr.gap, pI, pO, cg.gap, cg.se, cg.fights); R.scen.push_back(std::move(sr)); R.classGaps.push_back(std::move(cg)); }
         for (std::size_t i = 0; i < sj.size(); ++i) { const Scenario& scn = hs[static_cast<std::size_t>(sj[i].first)]; const SO& q = so[i]; const double n = gapScen;
             ScenarioRow sr; sr.name = scn.name; sr.cls = classes[static_cast<std::size_t>(sj[i].second)].name; sr.iausU = q.uI / n; sr.oracleU = q.uO / n; sr.gap = sr.oracleU - sr.iausU; sr.hasOracle = true; sr.metrics = Metrics(q.iaus); sr.oracleMetrics = Metrics(q.orc);

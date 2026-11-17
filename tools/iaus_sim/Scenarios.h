@@ -171,6 +171,24 @@ namespace Sim {
         v.push_back({ "circle-area", "a healer knows a protective circle and two bandits are on the player: the circle helps whoever stands in it, so it goes where the fight is and he does not walk out of it",
             "area.up%,area.out%,area.recast%,U,pTaken/s,pdead%", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "healer", 28, Cls::Melee);
                 for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 26, R, 1.5f)); f.foeTags = { "grunt", "grunt" }; f.ensure = { "circle", "healOther", "heal" }; f.foesOnPlayer = true; f.foeDist = 600; f.targetRatio = 0.90f; return f; }, false, false, true });
+        // ── THE DECK FAILURES OF 11-17 (sim mirror batch; marth: "I would update the sim and run at least a few things through it"). Before / after: --mirror off|on
+        // for the engagement cases, the build before / after the fix/field-1117b-choice mirror for the choice cases ──
+        v.push_back({ "heal-channel", "bandits come from every side at the hurt player and the evoker beside him: a weak channelled heal roots him while he is cut down. Heal with the stronger cast, from range, and mend himself under a quarter health before any attack",
+            "downs/f,heal.conc%,heal.size,heal.self%,selfHealAt%,heal/f,pdead%,U", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 28, Cls::Melee);
+                for (int i = 0; i < 5; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 27, R, 1.0f, 1.6f)); f.foeTags = { "grunt", "grunt", "grunt", "grunt", "grunt" };
+                f.ensure = { "healStream", "healShot", "heal", "fire" }; f.foesOnPlayer = true; f.playerHp = 0.6f; f.playerPotions = 1; f.subjectPotionsH = 0; f.onSubjectN = 2; f.foeDist = 700; f.ring = 420; f.targetRatio = 1.0f; return f; }, false, false, true });
+        v.push_back({ "offense-pick", "two frost-resistant draugr and the evoker knows a frost, a fire and a shock spell, measured: the strongest spell that WORKS on the target, never the cheapest, never frost into the resistance",
+            "cast.dmg,cast.cost,resisted%,weak%,immune%,off/f,dps,U", false, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 28, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "frost_atronach", "draugr" }, 27, R, 1.4f)); f.foeTags = { "grunt", "grunt" }; f.ensure = { "frost", "fire", "shock" }; f.foesOnPlayer = true; f.foeDist = 1300; f.targetRatio = 0.90f; return f; }, false, false, true });
+        v.push_back({ "bow-occluded", "a bow thief's own target stands behind a pillar and another bandit is in the open: she walks until she sees her target (or shoots the one in sight), she does not start a hide run and she does not stand idle",
+            "tfh.s,nohit%,hits/f,b.shoot,idle%,run/f,hide/min,U", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "thief", 26, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 25, R, 1.3f)); f.foeTags = { "grunt", "grunt" }; f.onSubject = true; f.foeDist = 1500; f.foeSpread = 450; f.cover = { { 900.0f, 0.0f, 170.0f }, { 1150.0f, 260.0f, 120.0f } }; f.targetRatio = 0.85f; return f; }, false, false, true });
+        v.push_back({ "tower-blade", "an archer shoots from a tower top that has a stair: the warrior walks to it and up (the 128 approach), he does not swing at the air under it",
+            "tfh.s,nohit%,hits/f,win%,timeout%,dur.s,idle%,U", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Ranged);
+                f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R, 1.5f)); f.foeTags = { "archer" }; f.perch = 0; f.perchPath = true; f.foeDist = 1000; f.targetRatio = 0.60f; return f; }, false, false, true });
+        v.push_back({ "cap-archer", "two archers shoot a hurt bow follower from past his chase cap: he shoots back from where he stands (or retreats), he never stands idle under fire",
+            "idle%,nocand%,tfh.s,nohit%,b.shoot,cap.kept/f,cap.starve%,retreat%,downs/f,U", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "archer", 26, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 25, R)); f.foeTags = { "archer", "archer" }; f.onSubject = true; f.subjectHp = 0.45f; f.subjectPotionsH = 0; f.foeDist = 2300; f.targetRatio = 0.80f; return f; }, false, false, true });
         return v;
     }
 

@@ -417,7 +417,10 @@ def load_cards():
                 v = float(b.group(3))
                 CARDS[cur]["bands"].append((b.group(2), v if b.group(1) == "Least" else -INF, INF if b.group(1) == "Least" else v, n))
                 got += 1
-            calls = len(re.findall(r'\bat(?:Least|Most)\(', line))
+            for b in re.finditer(r'inRange\("([^"]+)", ([-0-9.]+), ([-0-9.]+)', line):   # a two-sided band (review F2 of 5749026a)
+                CARDS[cur]["bands"].append((b.group(1), float(b.group(2)), float(b.group(3)), n))
+                got += 1
+            calls = len(re.findall(r'\b(?:atLeast|atMost|inRange)\(|\bBand\{', line))   # a raw Band{ ... } is a band too: it must be written with a helper
             if calls != got:   # a band this parser cannot read would silently leave the class's identity ungated
                 CARDS.clear()
                 raise RuntimeError("Playstyles.h:%d: %d band call(s), %d parsed (class %s): the card parser needs updating" % (n, calls, got, cur))
@@ -1218,7 +1221,11 @@ def stage_edge():
         log("edge: no accepted value sits at the edge of its range")
 
 
-GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0])]
+GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0]),
+           # NOT searched here (review F3 of 5749026a): t.waivedRangeX and t.bowRange. The lab knows both (Tune.h), but the game's tuning file has no entry
+           # for them (iaus/Catalogue.cpp SetTuningScalar), so a found value could not be shipped. They stay fixed placeholders until native adds the names.
+           # fix/field-1117b-choice placeholders: the cast time a fire-and-forget spell's effect is divided by, the health under which his own heal gets the dying boost
+           ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35])]
 
 
 # ── the gap stage ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -2114,7 +2121,7 @@ def main():
     ap.add_argument("--no-worker", action="store_true", help="one simulator process per chunk instead of the persistent `sim --serve` workers")
     ap.add_argument("--no-race", action="store_true", help="measure every candidate of a sweep on every train seed (the pre-2.11.1 driver; the racing proof's reference)")
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
-    ap.add_argument("--world", choices=("v2", "v3"), default="v2", help="the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v2 (default, the lab every shipped tuning was searched in) until marth / the coordinator opts in to v3, the positional world. Passed to the simulator as --world, through the same wrapper as --sim-flags")
+    ap.add_argument("--world", choices=("v2", "v3"), default="v3", help="the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v3 (the default since the sim mirror batch of 11-17, marth 11-16 'v3 default after data': the field cast delay and the chase-waiver fix are in), the positional world; v2 = the lab every tuning up to 2.11.5 was searched in, kept working. Passed to the simulator as --world, through the same wrapper as --sim-flags")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 16)
     ap.add_argument("--decisions", choices=("auto", "ask"), default="auto", help="auto (default): every former open decision is decided by a rule (class card + potion gates, tuner-auto-decisions.md) or is a report-only note, all in summary.json auto_decisions; ask: the old open decisions, no card / potion gate")

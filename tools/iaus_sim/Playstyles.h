@@ -14,6 +14,16 @@
 //
 // A band's numbers are set from the CARD on this lab's scales (see the doc's "Scales" table), never fitted to what IAUS
 // does today: a band IAUS fails is a finding. Metric names are the results file's (Results.h SchemaMetrics).
+// SURVIVAL BANDS, ORACLE-RELATIVE (sim mirror batch 11-17; marth's ruling on the bound, verbatim: "Oracle downs"). The Mage line's T1 / T2 rows (mage,
+// evoker, conjurer, warlock) and the healer carry two bands whose bound is what the CLASS ORACLE does on the same fights, plus a small labelled margin:
+//   downs/f       <= the oracle's downs a fight + 0.05 (one down in twenty fights: about four standard errors of these rates over 160 fights)
+//   selfHealLow%  <= the oracle's share of self heals (a heal cast at himself, a health potion) that BEGIN under a quarter of his health, + 5 points
+// The oracle's numbers are MEASURED, not chosen: 160 natural fights per class, built-in world, --world v3, class rulings in force, the build of this
+// batch (`sim --seed 1 --fights 1 --rating 0 --class-oracle 160 --gap-scenarios 0 --classes mage,evoker,conjurer,warlock,healer`, the ORCSURV lines):
+//   mage 0.044 / 5.3 %, evoker 0.000 / 1.0 %, conjurer 0.000 / 0.0 %, healer 0.006 / 0.9 %, warlock 0.013 / 1.5 %.
+// Re-measure and rewrite the bounds whenever the world or the oracle changes (they are the oracle's play, not a card value). No oracle-relative band
+// existed before this one; the pattern is: measure with ORCSURV, write oracle + margin into the row, name both in the band's reason.
+// Before this batch no band of a caster measured whether he lived, so a tuning that traded his life for cast time scored as "in class".
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -48,6 +58,8 @@ namespace Sim {
     inline const std::vector<Playstyle>& Playstyles() {
         auto atLeast = [](const char* m, double v, const char* why) { return Band{ m, v, kOpen, why }; };
         auto atMost = [](const char* m, double v, const char* why) { return Band{ m, -kOpen, v, why }; };
+        auto inRange = [](const char* m, double lo, double hi, const char* why) { return Band{ m, lo, hi, why }; };   // two-sided; tune_driver.py load_cards parses these three helpers and refuses a raw Band{ }
+        (void)inRange;
         static const std::vector<Playstyle> v = {
             // ── tier 1: "t1 behaves vanilla for those roles" (marth). Only the IAUS rulings bind ──
             { "melee", "closes and fights with his weapon the way the vanilla AI does; drinks when low; no class package",
@@ -58,7 +70,7 @@ namespace Sim {
               { atLeast("b.shoot", 45, "a ranged follower spends his time shooting"), atMost("contact%", 25, "he keeps his distance") }, 0, "" },
             { "mage", "casts from range; reaches for magicka, a staff or distance before a blade",
               "melees while any affordable cast, magicka potion or staff charge is left (marth 11-10)",
-              { atMost("melee_share_pct", 5, "marth 11-10: a T1 mage almost never melees"), atLeast("b.cast", 40, "he spends his time casting"), atMost("contact%", 20, "spell range, not melee range") }, kPsNoMelee, "" },
+              { atMost("melee_share_pct", 5, "marth 11-10: a T1 mage almost never melees"), atLeast("b.cast", 40, "he spends his time casting"), atMost("contact%", 20, "spell range, not melee range"), atMost("downs/f", 0.09, "SURVIVAL, oracle-relative (marth 11-17: Oracle downs): the class oracle goes down 0.044 times a fight on his natural fights, + 0.05"), atMost("selfHealLow%", 10, "SURVIVAL, oracle-relative: the class oracle begins 5.3% of his self heals under a quarter health, + 5 points") }, kPsNoMelee, "" },
 
             // ── tier 2 ──
             { "knight", "the wall: stays on the player, taunts what attacks an ally, keeps his guard up and drops it only to attack, bashes; little circling, no flank",
@@ -80,16 +92,16 @@ namespace Sim {
                 atLeast("b.shoot", 30, "otherwise an undetected bow"), atMost("contact%", 40, "dagger only when close and flanking"), atMost("powShare%", 20, "ch.18 cap 0.20 (ruling Q27)") }, 0, "C-G1,C-G2,C-G3,C-G13" },
             { "evoker", "stays at the furthest range his spell works at, steps out of incoming spells; fire on a fire-weak foe, else the nearest; a magicka potion when low",
               "melees; casts into a resistance; blasts the party",
-              { atLeast("b.cast", 50, "Destruction is all he does"), atMost("melee_share_pct", 3, "marth 11-10: pure mages up the tree melee even less"), atMost("contact%", 15, "spell range (H4)"), atMost("immune%", 0, "never casts into an immunity"), atMost("resisted%", 15, "picks the element by the target") }, kPsNoMelee, "C-H3,C-H4,C-FLEE2" },
+              { atLeast("b.cast", 50, "Destruction is all he does"), atMost("melee_share_pct", 3, "marth 11-10: pure mages up the tree melee even less"), atMost("contact%", 15, "spell range (H4)"), atMost("immune%", 0, "never casts into an immunity"), atMost("resisted%", 15, "picks the element by the target"), atMost("downs/f", 0.05, "SURVIVAL, oracle-relative (marth 11-17: Oracle downs): the class oracle goes down 0.000 times a fight on his natural fights, + 0.05"), atMost("selfHealLow%", 6, "SURVIVAL, oracle-relative: the class oracle begins 1.0% of his self heals under a quarter health, + 5 points") }, kPsNoMelee, "C-H3,C-H4,C-FLEE2" },
             { "conjurer", "summons first and stays behind it, re-summons the moment it falls, puts the summon on the ground near the foe; shoots what attacks his summon; a dagger only when something is on him",
               "fights without a summon up; stands in front of it",
-              { atLeast("summonUp%", 60, "summon first, re-summon"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "behind his summon"), atLeast("b.cast", 30, "he casts between summons") }, kPsNoMelee, "C-G5,C-H2,C-H3,C-FLEE2" },
+              { atLeast("summonUp%", 60, "summon first, re-summon"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "behind his summon"), atLeast("b.cast", 30, "he casts between summons"), atMost("downs/f", 0.05, "SURVIVAL, oracle-relative (marth 11-17: Oracle downs): the class oracle goes down 0.000 times a fight on his natural fights, + 0.05"), atMost("selfHealLow%", 5, "SURVIVAL, oracle-relative: the class oracle begins 0.0% of his self heals under a quarter health, + 5 points") }, kPsNoMelee, "C-G5,C-H2,C-H3,C-FLEE2" },
             { "healer", "the medic: behind the party and near the player; heals the player, then an ally, then himself below half; attacks only when nobody needs him",
               "lets someone die with a heal in hand; wanders from the player; two heals on one wound; melees",
-              { atMost("pDist", 600, "leashed near the player"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "behind the party"), atMost("healAt%", 60, "heals below half (his rows say 50)"), atMost("dwh/f", 0.1, "nobody goes down while he holds a heal"), atMost("overheal_pct", 35, "the heal fits the wound") }, kPsNoMelee | kPsNearPlayer, "C-H2,C-H3,C-FLEE2" },
+              { atMost("pDist", 600, "leashed near the player"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "behind the party"), atMost("healAt%", 60, "heals below half (his rows say 50)"), atMost("dwh/f", 0.1, "nobody goes down while he holds a heal"), atMost("downs/f", 0.06, "SURVIVAL, oracle-relative (marth 11-17: Oracle downs): the class oracle goes down 0.006 times a fight on his natural fights, + 0.05"), atMost("selfHealLow%", 6, "SURVIVAL, oracle-relative: the class oracle begins 0.9% of his self heals under a quarter health, + 5 points"), atMost("overheal_pct", 35, "the heal fits the wound") }, kPsNoMelee | kPsNearPlayer, "C-H2,C-H3,C-FLEE2" },
             { "warlock", "the controller: paralyses or frightens the stronger foe first, keeps his armor spell up, then Destruction on the nearest; never spends a cast on a foe his spell cannot touch",
               "casts a level-capped spell at a foe above its cap (the base will-work rule); melees",
-              { atLeast("a.cast_control", 8, "control comes first"), atMost("ctrlFail%", 10, "marth: a spell that will never work is skipped"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "spell range") }, kPsNoMelee, "C-H3,C-FLEE2" },
+              { atLeast("a.cast_control", 8, "control comes first"), atMost("ctrlFail%", 10, "marth: a spell that will never work is skipped"), atMost("melee_share_pct", 3, "a pure mage"), atMost("contact%", 15, "spell range"), atMost("downs/f", 0.06, "SURVIVAL, oracle-relative (marth 11-17: Oracle downs): the class oracle goes down 0.013 times a fight on his natural fights, + 0.05"), atMost("selfHealLow%", 7, "SURVIVAL, oracle-relative: the class oracle begins 1.5% of his self heals under a quarter health, + 5 points") }, kPsNoMelee, "C-H3,C-FLEE2" },
 
             // ═══ PARKED (marth 2026-11-11: the class release order is T2 first, Classes Beta 1, THEN T3) ═══════════════════════════
             // Everything below this line (tier 3, tier 4, the Dragonborn) is a FIRST DRAFT written before the scope change. It was
