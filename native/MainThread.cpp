@@ -46,7 +46,7 @@ namespace MFO::MainThread {
         std::atomic<std::uint32_t> g_seatMismatches{ 0 };
         void NoteSeatThread(std::uint32_t a_recorded, std::uint32_t a_seat) noexcept {
             g_mainTid.store(a_seat, std::memory_order_relaxed);
-            g_seatMismatches.fetch_add(1, std::memory_order_relaxed);   // counted always; the log below stops at 4 (principle 7)
+            if (a_recorded != 0) g_seatMismatches.fetch_add(1, std::memory_order_relaxed);   // true mismatches only (a refused seed is said at kDataLoaded); counted always, the log below stops at 4 (principle 7)
             static std::atomic<int> s_said{ 0 };
             if (s_said.fetch_add(1, std::memory_order_relaxed) >= 4) return;
             try {

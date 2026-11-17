@@ -3434,7 +3434,7 @@ them clobbers unrelated engine vtables).
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
   `:684`). Fast-out needs ALL THREE `g_wantCount==0 && g_styleSwapCount==0 &&
   g_ctrlCount==0` (`:516`). `WouldHitTeammate`'s `highActorHandles` walk is
-  main-thread-gated (`:763,818`), fails open off-main (§0.30 crash). **REVIEW-BACKLOG MFO-B861 (items 1/2 done):** the old private `g_mainThread` (kDataLoaded = the engine's InitTESThread,
+  the pre-charge friendly-fire walk is CLOSED (kFriendlyFireWalkOpen = false; it had never run). **REVIEW-BACKLOG MFO-B861 (items 1/2 done):** the old private `g_mainThread` (kDataLoaded = the engine's InitTESThread,
   ENGINE_NOTES 0.55) is gone; the walk is behind `kFriendlyFireWalkOpen = false` (closed, one-time `[consent]` info line says so).
   It never ran in the field. Opening it (`MainThread::IsMainThread()`) is its own decision, still open in B861. Read B861 first.
 
