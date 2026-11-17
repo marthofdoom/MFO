@@ -351,6 +351,7 @@ namespace MFO::Logistics {
         }
         holder->AddEventSink<RE::TESContainerChangedEvent>(ContainerSink::GetSingleton());
         holder->AddEventSink<RE::TESEquipEvent>(BeastHeadSink::GetSingleton());   // #62 beast-head reattach
+        TheftGate::RegisterHostileDeathSink();   // L1 (2026-11-17): who was hostile to the player at death (town corpse guard waiver)
         // loot M1: GATED re-admit signals (a door/gate/lever near a gate, a gated
         // item's cell attaching again). Each is a no-op while nothing is gated.
         holder->AddEventSink<RE::TESOpenCloseEvent>(GateSink::GetSingleton());

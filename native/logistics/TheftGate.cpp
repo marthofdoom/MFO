@@ -3,6 +3,7 @@
 #include "TheftGate.h"
 #include "Sightline.h"        // the guard's line of sight (MeasureNow / PointSeenNow, main thread)
 #include "MainThread.h"
+#include "iaus/LootNeed.h"      // LootTuning::guardBarFloorSec
 #include "LocationTypes.h"   // CorpseGuardWaived: TownAnchor, the same town test the errands and the loot town bars use
 #include <algorithm>
 #include <array>
@@ -241,11 +242,94 @@ namespace MFO::Logistics::TheftGate {
         return !pc || LocationTypes::TownAnchor(pc->GetCurrentLocation());   // no player: fail closed (the bar stays)
     }
 
+    namespace {
+        std::mutex g_hostileMx;
+        std::unordered_set<RE::FormID> g_hostileDead;   // actors that were hostile to the player when they died (session state)
+
+        class HostileDeathSink final : public RE::BSTEventSink<RE::TESDeathEvent> {
+        public:
+            static HostileDeathSink* GetSingleton() { static HostileDeathSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESDeathEvent* a_ev, RE::BSTEventSource<RE::TESDeathEvent>*) override {
+                // Fires twice (dying, dead): the first is the live read; both are idempotent. Reads only, queues nothing.
+                auto* a = a_ev && a_ev->actorDying ? a_ev->actorDying->As<RE::Actor>() : nullptr;
+                auto* pc = RE::PlayerCharacter::GetSingleton();
+                if (!a || !pc || a->IsPlayerRef()) return RE::BSEventNotifyControl::kContinue;
+                bool hostile = false;
+                {
+                    auto tp = a->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+                    auto* t = tp.get();
+                    hostile = t && (t->IsPlayerRef() || t->IsPlayerTeammate());
+                }
+                if (!hostile) hostile = a->IsHostileToActor(pc);   // the engine's own predicate (EngageOnSight.cpp precedent: worker or main)
+                if (hostile) {
+                    std::scoped_lock lk(g_hostileMx);
+                    if (g_hostileDead.size() > 512) g_hostileDead.clear();
+                    g_hostileDead.insert(a->GetFormID());
+                }
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
+    bool WasHostileToPlayer(RE::FormID a_actor) {
+        std::scoped_lock lk(g_hostileMx);
+        return g_hostileDead.contains(a_actor);
+    }
+    bool HostileDeathsKnown() {
+        std::scoped_lock lk(g_hostileMx);
+        return !g_hostileDead.empty();
+    }
+    void RegisterHostileDeathSink() {
+        if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
+            holder->AddEventSink<RE::TESDeathEvent>(HostileDeathSink::GetSingleton());
+            spdlog::info("[theft-gate] hostile-death sink installed (a corpse that was hostile to the player waives the town guard check; the crime gates stay)");
+        } else spdlog::warn("[theft-gate] no event source holder -- hostile-death sink NOT installed (no town corpse waiver)");
+    }
+
+    namespace {
+        struct CorpseBar { RE::FormID guard = 0; SClock::time_point at{}, lastCheck{}; };
+        std::unordered_map<RE::FormID, CorpseBar> g_corpseBars;   // worker only
+        constexpr auto kBarRecheck = std::chrono::seconds(3);
+    }
+
+    void BarCorpse(RE::FormID a_corpse, RE::FormID a_guard, SClock::time_point a_now) {
+        if (!a_corpse) return;
+        if (g_corpseBars.size() > 64) g_corpseBars.clear();
+        auto [it, fresh] = g_corpseBars.try_emplace(a_corpse);
+        if (fresh) {
+            it->second = CorpseBar{ a_guard, a_now, a_now };
+            spdlog::info("[theft-gate] corpse {:08X} BARRED party-wide: guard {:08X} sees it (no follower scans it for >= {:.0f} s, then while a guard still sees it)",
+                         a_corpse, a_guard, Iaus::DefaultLootTuning().guardBarFloorSec);
+        } else if (a_guard) it->second.guard = a_guard;
+    }
+
+    bool CorpseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse, SClock::time_point a_now) {
+        if (g_corpseBars.empty() || !a_corpse) return false;
+        auto it = g_corpseBars.find(a_corpse->GetFormID());
+        if (it == g_corpseBars.end()) return false;
+        auto& b = it->second;
+        if (a_now - b.at < std::chrono::duration_cast<SClock::duration>(std::chrono::duration<float>(Iaus::DefaultLootTuning().guardBarFloorSec))) return true;
+        if (a_now - b.lastCheck < kBarRecheck) return true;
+        b.lastCheck = a_now;
+        switch (GuardCheck(a_follower, a_corpse, Road::Corpse, false)) {
+            case GuardState::Clear:
+                spdlog::info("[theft-gate] corpse {:08X} bar LIFTED: no guard sees it any more", a_corpse->GetFormID());
+                g_corpseBars.erase(it);
+                return false;
+            default: return true;   // Seen keeps the bar; Pending (no answer yet) fails closed
+        }
+    }
+
+    void ClearCorpseBars() { g_corpseBars.clear(); }
+
     bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse) {
         if (!a_follower || !a_corpse || !a_corpse->As<RE::Actor>()) return false;
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        // In a town (the player's location OR the corpse's): the corpse guard check stays. A null location (wilderness) is no town: it waives.
-        if (!pc || LocationTypes::TownAnchor(pc->GetCurrentLocation()) || LocationTypes::TownAnchor(a_corpse->GetCurrentLocation())) return false;
+        // In a town (the player's location OR the corpse's): the corpse guard check stays, UNLESS the dead was HOSTILE to the player
+        // (WasHostileToPlayer; marth 2026-11-17) -- the ownership checks below still apply. A null location (wilderness) is no town: it waives.
+        const bool inTown = !pc || LocationTypes::TownAnchor(pc->GetCurrentLocation()) || LocationTypes::TownAnchor(a_corpse->GetCurrentLocation());
+        const bool hostile = inTown && WasHostileToPlayer(a_corpse->GetFormID());
+        if (inTown && !hostile) return false;
         if (a_corpse->GetOwner()) return false;
         const auto inv = InvSnap::Get(a_corpse);   // INVARIANTS #84: the main-built snapshot, never the live list
         if (!inv) return false;                    // not yet: NOT waived (every gate stays), asked again next tick
@@ -260,8 +344,9 @@ namespace MFO::Logistics::TheftGate {
             auto& at = g_logAt[key];
             if (at.time_since_epoch().count() == 0 || now - at >= kLogEvery) {
                 at = now;
-                spdlog::info("[theft-gate] F={:08X} road=corpse src={:08X} guard check WAIVED: outside a town and the corpse carries no ownership",
-                             a_follower->GetFormID(), a_corpse->GetFormID());
+                spdlog::info("[theft-gate] F={:08X} road=corpse src={:08X} guard check WAIVED: {} and the corpse carries no ownership",
+                             a_follower->GetFormID(), a_corpse->GetFormID(),
+                             hostile ? "in a town, but the dead was hostile to the player" : "outside a town");
             }
         }
         return true;

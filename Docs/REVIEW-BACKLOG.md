@@ -3520,3 +3520,8 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** a staff in the LEFT hand is not priced: `EstimateHit`'s staff-in-left path returns before `leftShare`, so a staff right + melee left reads 0.
 - **(SEV-5):** heals and ally buffs: a channelled HEAL is not priced (heal-hold rules own the hand); a buff at an ally through the ConcProxy is priced the same as a self buff (it holds the same hand).
 - **(SEV-5):** mid-channel the bow is unequipped (`cast/Hands.cpp:977`), so `w` is likely null and the cost reads not applicable then. Harmless: the stream runs to its cap, and the price matters at the pick, before the bow leaves his hand.
+
+### fix/field-1117-loot (author notes, 2026-11-17)
+- **(SEV-4):** the hostile-to-the-player read is taken once at death and kept as a FormID set (session state, not saved): a hostile body that died before the sink saw it (loaded corpse, previous session) is NOT waived in a town (fail closed). Could be widened with a live faction / aggression read of the corpse once one is verified to survive death.
+- **(SEV-5):** the party-wide corpse bar's re-ask uses `GuardCheck(follower, corpse)`, which answers "a guard sees THIS follower or the body", so a bar can lift or hold on the asking follower's position, not the first follower's.
+- **(SEV-5):** the near-face reach uses the base's `boundData` min horizontal half-extent unscaled by the ref (the LOTD crate reader's rule); a scaled container is under-measured (conservative).

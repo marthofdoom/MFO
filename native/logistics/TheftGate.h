@@ -49,6 +49,25 @@ namespace MFO::Logistics::TheftGate {
     // stays: "Outside of towns") and for any corpse holding one owned copy (every crime gate stays, everywhere). Reads the inventory: worker.
     bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse);
 
+    // HOSTILE-TO-THE-PLAYER CORPSE (marth 2026-11-17, "1, but still crime guard"): the ONE reader of "was this actor hostile to the player".
+    // Read ONCE, AT DEATH, by a TESDeathEvent sink (RegisterHostileDeathSink): the dying actor's currentCombatTarget is the player or a
+    // teammate, or the engine's IsHostileToActor(player) is true. It is recorded as a FormID (bounded set) because that read does not
+    // survive death (the combat target clears; faction / aggression reads of a corpse are not the live ones). An actor that died before the
+    // sink saw it (loaded corpse, earlier session: the set is session state, never saved) is NOT hostile here: fail closed, every gate stays.
+    // CorpseGuardWaived honours it inside a town: a hostile body's guard check is waived, every ownership / crime pre-check stays.
+    // Any thread.
+    bool WasHostileToPlayer(RE::FormID a_actor);
+    // TRUE while the set is non-empty (the scan's cheap early-out). Any thread.
+    bool HostileDeathsKnown();
+    void RegisterHostileDeathSink();   // kDataLoaded, main thread, once
+
+    // PARTY-WIDE CORPSE BAR (field 2026-11-17 L1): a corpse the guard gate barred at arrival is skipped by every follower's candidate scan
+    // for LootTuning::guardBarFloorSec, then for as long as a guard still sees it (re-asked at most every few seconds, through GuardCheck).
+    // BarCorpse logs one line per corpse. Worker only; both are session state, cleared on revert (ClearCorpseBars).
+    void BarCorpse(RE::FormID a_corpse, RE::FormID a_guard, std::chrono::steady_clock::time_point a_now);
+    bool CorpseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse, std::chrono::steady_clock::time_point a_now);
+    void ClearCorpseBars();
+
     // TRUE = the player stands in a town (or there is no player): LootNearby keeps its follower-level guard bar for every category. Outside a
     // town the bar moves into the scan's candidate filter so an unowned corpse (CorpseGuardWaived) is not blocked by it.
     bool PlayerInTown();

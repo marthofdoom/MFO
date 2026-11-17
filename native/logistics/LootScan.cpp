@@ -90,7 +90,9 @@ namespace MFO::Logistics {
             // Inside a town the bar is follower-level for every category. Outside one it moves into the candidate filter (below), so an
             // unowned corpse (marth 2026-11-13: guard check skipped outside towns) is not barred by it; Pending still bars (fail closed).
             const bool guardSeen = TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard);
-            if (guardSeen && TheftGate::PlayerInTown()) return false;
+            // A town stays barred at the follower level unless a hostile-to-the-player body is known (L1, 2026-11-17: its guard check is waived,
+            // so the per-candidate filter below decides); with none known the early exit is the old one.
+            if (guardSeen && TheftGate::PlayerInTown() && !TheftGate::HostileDeathsKnown()) return false;
             // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
             // immediately cancel a loot excursion and pull followers back").
             // A follower must never BEGIN or CONTINUE a loot action while the
@@ -575,6 +577,8 @@ namespace MFO::Logistics {
                         if (!chestInv) { TheftGate::NoteInventoryNotYet(a_follower, ref); ++dEmpty; return RE::BSContainer::ForEachResult::kContinue; }
                         if (chestInv.empty()) { ++dEmpty; return RE::BSContainer::ForEachResult::kContinue; }
                     }
+                    // PARTY-WIDE GUARD BAR (L1, 2026-11-17): a corpse a guard barred at arrival is no candidate for ANY follower while the bar holds.
+                    if (!loose && ref->As<RE::Actor>() && TheftGate::CorpseBarred(a_follower, ref, a_now)) { return RE::BSContainer::ForEachResult::kContinue; }
                     // Beyond the confidence leash from the player -- too far for
                     // this follower's nerve right now. This is the invisible
                     // string: the same corpse is in-reach when they feel safe and

@@ -14,6 +14,7 @@
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
 #include "classes/Classes.h"
+#include "iaus/LootNeed.h"
 #include "iaus/Reposition.h"
 #include "iaus/SpellBook.h"
 #include "logistics/Steal.h"
@@ -325,6 +326,22 @@ namespace MFO::SelfTest {
             // the worker's read of the same pair (fail-closed Pending is a valid answer, noted)
             const auto w = Logistics::TheftGate::GuardCheck(c.follower, nullptr, Logistics::TheftGate::Road::Loose, false);
             r.text += std::format("worker GuardCheck = {}", w == Logistics::TheftGate::GuardState::Clear ? "Clear" : w == Logistics::TheftGate::GuardState::Seen ? "Seen" : "Pending (stale: re-asked, fail closed)");
+            // e. (field 2026-11-17 L1, pure) the party-wide corpse bar holds inside its floor for ANY follower and ClearCorpseBars lifts it; an
+            //    unseen FormID was not hostile to the player (fail closed); the floor knob validates (>= 0). Uses the follower's own ref as the stand-in
+            //    corpse. Dev-build only: it clears every live bar afterwards.
+            {
+                namespace Tg = Logistics::TheftGate;
+                const auto now = std::chrono::steady_clock::now();
+                Tg::BarCorpse(c.id, 0x00000014, now);
+                const bool held = Tg::CorpseBarred(c.follower, c.follower, now);
+                Tg::ClearCorpseBars();
+                const bool lifted = !Tg::CorpseBarred(c.follower, c.follower, now);
+                const bool unseen = !Tg::WasHostileToPlayer(0x0DEADBEEu);
+                Iaus::LootTuning lt; std::string why;
+                const bool knob = Iaus::SetLootKnob(lt, "guardBarFloorSec", 20.0f) && !Iaus::SetLootKnob(lt, "guardBarFloorSec", -1.0f, &why);
+                r.text += std::format("; e: bar held={} lifted={} unseenNotHostile={} knob={}", held, lifted, unseen, knob);
+                if (!(held && lifted && unseen && knob)) r.fail = true;
+            }
             if (r.fail) return Step::Fail(r.text);
             if (r.info) return Step::Info(r.text);   // a-c judged above; d could not be (sneak-always class, or no 3D)
             return Step::Pass(r.text);

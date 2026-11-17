@@ -891,6 +891,14 @@ namespace MFO::Logistics {
                 // reach) arrival honours the player bubble -- never hoover a
                 // body the player is standing over.
                 float arrivalDist = kArrivalDist;
+                // A CONTAINER is measured against its NEAR FACE (field 2026-11-17 L2): the engine's activation reach plus the base's
+                // smaller horizontal half-extent, from the LOTD crate's reader (Lotd::WithinInteractionReach, one reader), on the same
+                // floor. A big strongbox whose origin sits 225-306 u away while he stands at its face is arrived; the take is a direct
+                // transfer, not a physical reach. Corpses (actors) and loose refs keep their own tests.
+                bool  faceReach = false;
+                float faceD = 0.0f, faceR = 0.0f;
+                if (tref && !LooseRef(tref) && !tref->As<RE::Actor>())
+                    faceReach = Lotd::WithinInteractionReach(a_follower, tref, &faceD, &faceR);
                 if (tref && LooseRef(tref)) {
                     arrivalDist = Config::g_looseAcquireDist.load();
                 } else if (tref) {
@@ -910,13 +918,14 @@ namespace MFO::Logistics {
                 // ARRIVED radius (128 u) sits inside kArrivalDist (200 u), so a genuine
                 // ARRIVED passes this same tick; an ARRIVED he has since drifted away
                 // from is restarted below (ch19FarArrival), never looted remotely.
-                if (!gone && dist <= arrivalDist) {
+                if (!gone && (dist <= arrivalDist || faceReach)) {
                     // REACHED it -> this body is provably reachable: clear any stall
                     // strike so a merely-transient earlier block (boxed in by an actor,
                     // a door) never accumulates toward the sticky verdict. Only bodies
                     // he can NEVER close on keep striking -> those go sticky (above).
                     g_stallStrikes.erase(tref->GetFormID());
                     g_stealStrikes.erase(StealKey(id, tref->GetFormID()));   // reachable -> reset steal back-off
+                    g_farArrivals.erase(StealKey(id, tref->GetFormID()));    // a real arrival ends the far-arrival run
                     // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || PlayerActivelyStealthing())
                         return;   // arrived, holding under the bar -- retry next tick
@@ -1106,6 +1115,7 @@ namespace MFO::Logistics {
                     // excursion cap (the slot sweep at the top of the service tick ends it, WITHOUT blocklisting a guard-held body: GuardHeldAt()).
                     // Seen = a guard sees him or the body: the body is KEPT (leftWaiting, never DONE) but the batch moves on (Holding), as before.
                     if (!guardHeld && guardAfter.n != guardN0 && guardAfter.state == TheftGate::GuardState::Seen) {
+                        TheftGate::BarCorpse(tref->GetFormID(), guardAfter.guard, now);   // L1: party-wide, so the others stop cycling to it
                         spdlog::info("[loot] {:08X}: arrived at {:08X} -- guard sees {:08X} (follower or body), corpse kept, batch continues",
                                      id, tref->GetFormID(), guardAfter.guard);
                         tr.phase = TravelPhase::Holding;
@@ -1265,11 +1275,25 @@ namespace MFO::Logistics {
                     ab = FindActorBlocker(a_follower, tref);
                 }
                 if (ch19FarArrival) {
+                    // L2: the 2nd consecutive far arrival that closed no ground is a stall strike (blocklist; the 2nd strike is sticky).
+                    auto& fa = g_farArrivals[StealKey(id, tref->GetFormID())];
+                    if (fa.n > 0 && dist > fa.lastDist - kFarArrivalProgress) ++fa.n; else fa.n = 1;
+                    fa.lastDist = dist;
+                    const bool farStrike = fa.n >= kFarArrivalMax;
+                    if (g_farArrivals.size() > 64) g_farArrivals.clear();
                     spdlog::info("[loot] {:08X} leg->{:08X}: Harbinger ARRIVED but he is {:.0f} u away now "
-                                 "(> {:.0f}) -- the leg ended, re-dispatching (no blocklist, no strike)",
-                                 id, tref->GetFormID(), dist, arrivalDist);
+                                 "(> {:.0f}{}) -- the leg ended, {}",
+                                 id, tref->GetFormID(), dist, arrivalDist,
+                                 faceR > 0.0f ? std::format(", near-face reach {:.0f}", faceR) : std::string(),
+                                 farStrike ? "no progress on the 2nd far arrival in a row: STRIKE (blocklisted)"
+                                           : "re-dispatching (no blocklist, no strike)");
+                    if (farStrike) {
+                        g_farArrivals.erase(StealKey(id, tref->GetFormID()));
+                        MarkTravelStalled(tref->GetFormID(), now);
+                    }
                     skippedRef      = tref->GetFormID();
-                    skipWhy         = "ARRIVED per Harbinger but drifted away (leg restarted)";
+                    skipWhy         = farStrike ? "ARRIVED per Harbinger but drifted away twice with no progress (struck)"
+                                                : "ARRIVED per Harbinger but drifted away (leg restarted)";
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                     tr.blockedSince = {};
                     tr.stolenSince  = {};

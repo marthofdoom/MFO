@@ -790,6 +790,7 @@ namespace MFO::Logistics {
         g_travelFailed.clear();
         g_travelUnreach.clear();
         g_stallStrikes.clear();
+        g_farArrivals.clear();
         g_grabGrow.clear();   // grown-grab radii are per-session verdicts
         ClearUnreachableLog();   // LootReach: logged-once unreachable set
         ClearGates();         // loot M1: GATED records are per-session skips
@@ -797,6 +798,7 @@ namespace MFO::Logistics {
         g_actorDefer.clear(); // loot M1: actor-block reorder records
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
+        TheftGate::ClearCorpseBars();   // L1: party-wide guard bars are per-session verdicts
         TheftGate::ClearTransfers();   // corpse takes queued to the main thread (INVARIANTS #83): MainThread::Clear dropped their drain
         Lockpick::Clear();    // LP-M1: pick jobs, verdicts and their Harbinger holds are per-session
         Lotd::ClearTransientState();   // LOTD: the deposit trip + its claims, the needs cache, the ledger

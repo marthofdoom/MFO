@@ -174,6 +174,14 @@ namespace MFO::Logistics {
         // Worker-tick-only, erased on resolution like g_stallStrikes, never
         // serialized.
         inline std::unordered_map<std::uint64_t, int> g_stealStrikes;
+        // FAR ARRIVALS (field 2026-11-17 L2, the East Empire Company strongbox: Harbinger ARRIVED, then he stood 225-306 u from the ref and
+        // the leg was re-dispatched four times, each "lockpick abandoned"). Consecutive "ARRIVED but drifted" ends per (follower, target)
+        // that made NO progress toward it (his distance did not fall by kFarArrivalProgress since the previous one); the kFarArrivalMax-th
+        // is a stall strike (MarkTravelStalled). Reset on a real arrival. Worker-tick-only, cleared on revert with g_stallStrikes.
+        struct FarArrival { int n = 0; float lastDist = 0.0f; };
+        inline std::unordered_map<std::uint64_t, FarArrival> g_farArrivals;
+        constexpr int   kFarArrivalMax      = 2;      // consecutive no-progress far arrivals before the strike
+        constexpr float kFarArrivalProgress = 25.0f;  // u he must have closed since the previous far arrival to count as progress
         constexpr int kStealStrikeMax = 4;
         inline std::uint64_t StealKey(RE::FormID a_fol, RE::FormID a_tgt) {
             return (static_cast<std::uint64_t>(a_fol) << 32) | a_tgt;
