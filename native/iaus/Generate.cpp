@@ -103,7 +103,7 @@ namespace MFO::Iaus {
                 f.foeHelpless = a_foe.paralysed;
                 f.foeTaunted = a_foe.taunted;
                 f.foeOutOfMeleeReach = a_foe.outOfMeleeReach;
-                f.foeChaseWaived = a_foe.chaseWaived;
+                f.foeChaseWaived = a_foe.chaseWaived || a_foe.noApproach;   // noApproach: the same clamp, a shot past the cap (11-17 A3)
                 f.foeUnholy = a_foe.unholy;
                 f.foeUnaware = a_foe.detectsMe == Tri::No ? Tri::Yes : (a_foe.detectsMe == Tri::Yes ? Tri::No : Tri::Unknown);
             }
@@ -122,7 +122,15 @@ namespace MFO::Iaus {
             if (x.fleeRun) return;   // card G3: during the flee he heals, he does not swing, shout or start another retreat
             const bool ranged = s.drawn == PostureKind::Bow || s.drawn == PostureKind::Staff;
             const bool melee  = s.drawn == PostureKind::Melee || s.drawn == PostureKind::Silver;
+            // 11-17 field: a blade prefers a foe he can reach. An unreachable one (Reposition::MeleeUnreachableNow) is named only when no listed
+            // foe is reachable (then the engine's own pursuit and the occluded approach are all there is).
+            bool anyReachable = false;
+            if (melee) for (const Combatant* f : x.top) if (!Reposition::MeleeUnreachableNow(s, *f)) { anyReachable = true; break; }
             for (const Combatant* foe : x.top) {
+                if (melee && anyReachable && Reposition::MeleeUnreachableNow(s, *foe)) continue;
+                // 11-17 A3: a foe kept past the chase cap (noApproach) is shot at inside the bow's range and read by the Retreat family; nothing
+                // else is named on it (no chase, no melee pick, no taunt): the cap limits movement, not shots.
+                if (foe->noApproach && !Reposition::InWeaponRange(s, foe->dist, x.t.bowWeaponRange)) continue;
                 // G2 Layer 1: while the hold row stands (he sneaks, no listed foe detects him) a blow is named only on a foe he
                 // can strike now. An unaware foe still out of reach is waited for, not chased: the chase is the noise.
                 const bool holdsOff = x.hold && foe->detectsMe == Tri::No && !x.StrikeReady(*foe);

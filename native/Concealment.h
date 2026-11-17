@@ -75,8 +75,13 @@ namespace MFO::Concealment {
     // the bounded hold, every failure said out loud. True = the run holds him this lap (the caller runs no scan).
     bool Service(RE::Actor* a_follower);
 
-    // Any worker road: combat ended, a retreat, dismissal, the source toggle. Idempotent.
+    // Any worker road: combat ended, a retreat, dismissal, the source toggle. Idempotent. Also forgets a failed stance (below).
     void Release(RE::FormID a_follower, const char* a_why);
+
+    // 11-17 A1d. WORKER (apmf/SneakClaims.cpp sweep, never under its mutex). The hide hold's stance claim did not take (IsSneaking still false after
+    // its re-file): ends the run / hold exactly as Release does (the ch.24 drive AND its ch.7 Offense|Cast deny go at once) and remembers that the
+    // stance failed in this fight: no new Hide / Step run (both need the stance) is prepared or begun for him until Release (combat end).
+    void AbortHide(RE::FormID a_follower, const char* a_why);
 
     // revert / load (pump drained).
     void ClearTransientState();

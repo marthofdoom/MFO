@@ -162,10 +162,27 @@ namespace MFO::Iaus::Reposition {
         return a_s.drawn == PostureKind::None || a_s.drawn == PostureKind::Staff;
     }
 
+    // 11-17 A3: THE ONE READER of "this foe is inside the weapon in his hands' range" for a foe past the chase cap. Only a bow / crossbow has a range
+    // that outruns the cap (a melee swing or a spell never does: those keep the cap / their own reach). a_bowRange = Tuning::bowWeaponRange.
+    [[nodiscard]] inline bool InWeaponRange(const Snapshot& a_s, float a_dist, float a_bowRange) {
+        return a_s.drawn == PostureKind::Bow && std::isfinite(a_dist) && a_dist <= (std::max)(0.0f, Prune::Finite(a_bowRange, 0.0f));
+    }
+
+    // 11-17 field (Cicero swung at a foe above him through a wall while a reachable one stood by): a melee blade cannot hurt this foe NOW. The
+    // engine's airborne test (outOfMeleeReach, CombatSense::OutOfMeleeReach) OR a foe on another level (further than StrikeDistance above or
+    // below him) that his own ray does not see. ONE reader; the generator uses it to prefer a reachable foe. Melee / silver drawn only.
+    [[nodiscard]] inline bool MeleeUnreachableNow(const Snapshot& a_s, const Combatant& a_foe) {
+        if (!(a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver)) return false;
+        if (a_foe.outOfMeleeReach) return true;
+        const float dz = std::fabs(Prune::Finite(a_foe.z, 0.0f) - Prune::Finite(a_s.self.z, 0.0f));
+        return a_foe.sight == Sight::Occluded && dz > Estimate::StrikeDistance(a_s.meleeReach);
+    }
+
     // The foe he fights the spell at: his current target if it is a listed foe, else the nearest one that is not fleeing or paralysed.
     [[nodiscard]] inline const Combatant* RangeFoe(const Snapshot& a_s) {
         const Combatant* near = nullptr;
         for (const Combatant& f : a_s.foes) {
+            if (f.noApproach) continue;   // past the chase cap: the spell range close never walks to it
             if (f.paralysed || f.fleeing || !std::isfinite(f.dist) || !(f.hpMax > 0.0f)) continue;
             if (a_s.currentTargetId != 0 && f.id == a_s.currentTargetId) return &f;
             if (!near || f.dist < near->dist) near = &f;

@@ -18,6 +18,10 @@
 // toward kApproachMinRadius while Holding and still occluded), Repointed every kTightenGap; Harbinger's ch.23 leash
 // clamp ends the claim as Leashed (logged, never fought, foe blocked this fight); at the floor with sight still lost
 // for kFloorGiveUp the approach is BLOCKED (released, foe not re-filed this fight).
+// 11-17 field fixes: (b) the tightening floor is kMinRadius, not the standoff: while Holding and still occluded INSIDE the standoff the
+// claim keeps tightening and stops at the first point with sight (the sight dwell releases it); the 15 s regular-movement release is the
+// true floor only. (c) A block (g_offBlocked) is scoped: it lapses when the follower's leash radius has grown, or he has moved more than
+// kBlockMoveUnits, since it was made (the ch.23 leash that blocked it was a verdict about THAT radius at THAT place).
 // PRECEDENCE: a held-heal approach on the same follower wins (ONE ch.24 claim per follower): this file never files
 // while apmf/CombatApproach.cpp's table holds one, and ServiceHealApproach releases ours first.
 // Threads: the pump's AddTask worker; its OWN mutex, never g_mx and never nested with g_approachMx.
@@ -25,6 +29,7 @@
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
 #include "Config.h"
+#include "Confidence.h"   // LeashRadius: the block is scoped to the radius it was given up at
 #include "Packages.h"   // IsRetreating
 
 #include <algorithm>
@@ -65,6 +70,10 @@ namespace MFO::APMFBridge {
         // the claim so the engine's own combat movement runs, and do not re-claim for THAT follower+foe for this long.
         // NOT a fight-long block: after it, the normal flow may claim again.
         constexpr std::int64_t          kOffenseRegularMoveMs = 15000;
+        // PLACEHOLDERS (11-17 A1c, the sim tunes them): a block made by a ch.23 leash verdict lapses (the foe may be filed again) when the
+        // follower's leash radius has grown by more than kBlockLeashGrow, or he stands more than kBlockMoveUnits from where it was made.
+        constexpr float                 kBlockLeashGrow = 150.0f;
+        constexpr float                 kBlockMoveUnits = 300.0f;
 
         struct Claim {
             APMF_API::Handle handle = APMF_API::kInvalidHandle;
@@ -80,7 +89,10 @@ namespace MFO::APMFBridge {
         };
         std::mutex                                                        g_offMx;
         std::unordered_map<RE::FormID, Claim>                             g_off;          // guarded by g_offMx
-        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>    g_offBlocked;   // follower -> foes given up on this fight
+        // A block and the world it was made in (A1c). armed = stamped (pos / leash filled after the sweep released g_offMx: LeashRadius takes the
+        // combat group lock, never taken under g_offMx); an unstamped block stands until the fight ends, as every block did before.
+        struct Blk { bool armed = false; float x = 0, y = 0, z = 0, leash = 0; };
+        std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, Blk>> g_offBlocked;   // follower -> foes given up on this fight
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_offRefileAfter;
         struct Regular { RE::FormID foe = 0; std::chrono::steady_clock::time_point until{}; };
         std::unordered_map<RE::FormID, Regular> g_offRegular;   // follower -> foe whose re-claim is suppressed; g_offMx
@@ -106,13 +118,45 @@ namespace MFO::APMFBridge {
             return reinterpret_cast<const APMF_API::APMF_API_v19*>(api);
         }
 
-        float Tight(RE::FormID a_follower, RE::FormID a_foe, float a_radius, bool a_touch) {
+        // a_tightening: a standing claim that is still occluded (A1b): its floor is kMinRadius, so inside the standoff it keeps closing. The FIRST
+        // filing (and a repoint to another foe) is bounded by the standoff as before.
+        float Tight(RE::FormID a_follower, RE::FormID a_foe, float a_radius, bool a_touch, bool a_tightening = false) {
             const auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
             const auto* r = RE::TESForm::LookupByID<RE::Actor>(a_foe);
             if (!f || !r) return a_radius;
             const float d = f->GetPosition().GetDistance(r->GetPosition());
-            const float standoff = a_touch ? kTouchStandoff : kOffenseStandoff;
+            const float standoff = a_tightening ? kMinRadius : (a_touch ? kTouchStandoff : kOffenseStandoff);
             return std::max(standoff, std::min(a_radius, std::max(kMinRadius, kTightenFrac * d)));
+        }
+
+        // Is a_foe still blocked for a_follower? Not called under g_offMx (reads LeashRadius). A stamped block lapses when the leash radius has
+        // grown or the follower has moved (see the banner); the entry is erased and the lapse logged.
+        bool BlockStands(RE::FormID a_follower, RE::FormID a_foe) {
+            {
+                std::scoped_lock lock(g_offMx);
+                const auto bit = g_offBlocked.find(a_follower);
+                if (bit == g_offBlocked.end()) return false;
+                const auto fit = bit->second.find(a_foe);
+                if (fit == bit->second.end()) return false;
+                if (!fit->second.armed) return true;
+            }
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+            if (!f) return true;
+            const auto  pos   = f->GetPosition();
+            const float leash = Confidence::LeashRadius(f);
+            std::scoped_lock lock(g_offMx);
+            const auto bit = g_offBlocked.find(a_follower);
+            if (bit == g_offBlocked.end()) return false;
+            const auto fit = bit->second.find(a_foe);
+            if (fit == bit->second.end()) return false;
+            const Blk& b = fit->second;
+            const float moved = pos.GetDistance(RE::NiPoint3{ b.x, b.y, b.z });
+            const bool grown = leash > b.leash + kBlockLeashGrow;
+            if (!grown && !(moved > kBlockMoveUnits)) return true;
+            spdlog::info("[offense-approach] {:08X}: block on {:08X} lapsed ({}: leash {:.0f} -> {:.0f}, moved {:.0f} u) -- he may be filed again",
+                         a_follower, a_foe, grown ? "his leash radius grew" : "he moved on", b.leash, leash, moved);
+            bit->second.erase(fit);
+            return false;
         }
 
         const char* Word(std::uint32_t a_state) {
@@ -153,9 +197,7 @@ namespace MFO::APMFBridge {
 
     bool OffenseApproachCannotFile(RE::FormID a_follower, RE::FormID a_foe) {
         if (!OffApi() || g_offSeatRefused.load(std::memory_order_relaxed)) return true;
-        std::scoped_lock lock(g_offMx);
-        const auto bit = g_offBlocked.find(a_follower);
-        return bit != g_offBlocked.end() && bit->second.count(a_foe) != 0;
+        return BlockStands(a_follower, a_foe);
     }
 
     void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe, bool a_touchSpell) {
@@ -167,6 +209,7 @@ namespace MFO::APMFBridge {
         const float radius = Config::g_healApproachRadius.load();
         if (!(radius > 0.0f) || !std::isfinite(radius)) return;
         if (HealApproachStands(a_follower)) return;   // taken BEFORE g_offMx: the held heal owns the one ch.24 claim
+        const bool blocked = BlockStands(a_follower, a_foe);   // BEFORE g_offMx: a stamped block reads the leash radius
 
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_offMx);
@@ -176,7 +219,7 @@ namespace MFO::APMFBridge {
             if (rg->second.foe == a_foe && now < rg->second.until) return;   // regular movement window
             g_offRegular.erase(rg);
         }
-        if (const auto bit = g_offBlocked.find(a_follower); bit != g_offBlocked.end() && bit->second.count(a_foe)) {
+        if (blocked) {
             if (it != g_off.end() && it->second.foe != a_foe) {
                 const auto h = it->second.handle;
                 const RE::FormID old = it->second.foe;
@@ -218,11 +261,11 @@ namespace MFO::APMFBridge {
         if (c.foe == a_foe) {
             if (now - c.lastTighten < kTightenGap) return;
             if (Read(api, a_follower).state != APMF_API::kApproachState_Holding) { c.floorSince = {}; return; }
-            const float r2 = Tight(a_follower, a_foe, radius, a_touchSpell);
+            const float r2 = Tight(a_follower, a_foe, radius, a_touchSpell, /*a_tightening=*/true);   // A1b: floor kMinRadius, not the standoff
             if (r2 >= c.radius - 1.0f) {
                 if (c.floorSince == std::chrono::steady_clock::time_point{}) { c.floorSince = now; return; }
                 if (now - c.floorSince < kFloorGiveUp) return;
-                spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} inside standoff and still occluded: regular "
+                spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} at the tightening floor and still occluded: regular "
                              "movement for {} s (R {:.0f}, Holding, no sight for {} s; standoff={:.0f} ({})) -- released, not blocked",
                              a_follower, a_foe, kOffenseRegularMoveMs / 1000, c.radius,
                              std::chrono::duration_cast<std::chrono::seconds>(now - c.floorSince).count(), standoff, standoffWhy);
@@ -292,6 +335,7 @@ namespace MFO::APMFBridge {
         const auto* api = OffApi();
         if (!api) return;
         std::vector<std::pair<RE::FormID, const char*>> drop;   // follower, why: released below (outside g_offMx)
+        std::vector<std::pair<RE::FormID, RE::FormID>> stamp;   // follower, foe: blocks made this sweep, stamped below (A1c)
         {
             std::scoped_lock lock(g_offMx);
             if (g_off.empty()) return;
@@ -314,7 +358,7 @@ namespace MFO::APMFBridge {
                         spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} is LEASHED by MFO's ch.23 pursuit leash "
                                      "(no point within R {:.0f} of him lies inside it) -- not fought; released and not re-filed "
                                      "for him this fight", fid, c.foe, c.radius);
-                        g_offBlocked[fid].insert(c.foe);
+                        g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe);
                         api->Release(c.handle);
                         c.handle = APMF_API::kInvalidHandle;
                         done.push_back(fid);
@@ -334,14 +378,14 @@ namespace MFO::APMFBridge {
                 if (!c.everLive && !(ours && IsEnd(info.state))) {
                     spdlog::warn("[offense-approach] {:08X}: ch.24 approach to {:08X} NEVER WENT LIVE (h={}, {} unpaused sweeps) -- "
                                  "released; not re-filed for him this fight", fid, c.foe, c.handle, c.unpausedSweeps);
-                    g_offBlocked[fid].insert(c.foe);
+                    g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe);
                 } else {
                     const bool block = ours && Blocks(info.state);
                     if (ours && info.state == APMF_API::kApproachState_CombatEnded) g_offRefileAfter[fid] = now + kRefileGap;
                     spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} ENDED BY HARBINGER: {} (distance {:.0f} / R {:.0f}, "
                                  "h={}){}", fid, c.foe, Word(info.state), info.distance, info.radius, c.handle,
                                  block ? " -- not re-filed for him this fight" : "");
-                    if (block) g_offBlocked[fid].insert(c.foe);
+                    if (block) g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe);
                 }
                 api->Release(c.handle);
                 c.handle = APMF_API::kInvalidHandle;
@@ -350,6 +394,19 @@ namespace MFO::APMFBridge {
             for (const auto fid : done) g_off.erase(fid);
         }
         for (const auto& [fid, why] : drop) ReleaseOffenseApproach(fid, why, false);
+        // A1c: stamp each block with where and at what leash radius it was made. Read here, outside g_offMx (LeashRadius takes the combat group lock).
+        for (const auto& [fid, foe] : stamp) {
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!f) continue;
+            const auto  pos   = f->GetPosition();
+            const float leash = Confidence::LeashRadius(f);
+            std::scoped_lock lock(g_offMx);
+            const auto bit = g_offBlocked.find(fid);
+            if (bit == g_offBlocked.end()) continue;
+            const auto fit = bit->second.find(foe);
+            if (fit == bit->second.end()) continue;
+            fit->second = Blk{ true, pos.x, pos.y, pos.z, leash };
+        }
     }
 
     void ClearOffenseApproaches() {
