@@ -48,6 +48,7 @@ namespace MFO::Iaus::SwingSeq {
             std::atomic<std::uint32_t>  events{ 0 };    // every graph event seen (the attached proof)
             std::atomic<std::uint32_t>  swings{ 0 }, power{ 0 }, bash{ 0 };
             std::atomic<std::int64_t>   lastSwingMs{ 0 };
+            std::atomic<std::int64_t>   ts[8]{};         // the last 8 counted swings' times (ring), so a chain can be split at an instant
             // worker only
             std::int64_t lastAttachMs = 0, lastServiceMs = 0;
         };
@@ -69,7 +70,10 @@ namespace MFO::Iaus::SwingSeq {
                 case Tag::Swing: {
                     const std::int64_t now = NowMs();
                     const std::int64_t was = s.lastSwingMs.exchange(now, std::memory_order_relaxed);
-                    if (was == 0 || now - was >= kSameSwingMs) s.swings.fetch_add(1, std::memory_order_relaxed);
+                    if (was == 0 || now - was >= kSameSwingMs) {
+                        const std::uint32_t n = s.swings.fetch_add(1, std::memory_order_relaxed);   // this swing's index (0-based)
+                        s.ts[n % 8].store(now, std::memory_order_relaxed);
+                    }
                     break;
                 }
                 case Tag::Power: s.power.fetch_add(1, std::memory_order_relaxed); break;
@@ -115,6 +119,7 @@ namespace MFO::Iaus::SwingSeq {
             a_s.power.store(0, std::memory_order_relaxed);
             a_s.bash.store(0, std::memory_order_relaxed);
             a_s.lastSwingMs.store(0, std::memory_order_relaxed);
+            for (auto& t : a_s.ts) t.store(0, std::memory_order_relaxed);
         }
     }
 
@@ -165,6 +170,7 @@ namespace MFO::Iaus::SwingSeq {
             o.power       = s.power.load(std::memory_order_relaxed);
             o.bash        = s.bash.load(std::memory_order_relaxed);
             o.lastSwingMs = s.lastSwingMs.load(std::memory_order_relaxed);
+            for (std::size_t i = 0; i < 8; ++i) o.ts[i] = s.ts[i].load(std::memory_order_relaxed);
             break;
         }
         return o;

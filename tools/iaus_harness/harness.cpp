@@ -1044,6 +1044,19 @@ namespace {
             Check(ReachBook::CentreReach(b.BlowEdge(F, W), b.ComboEdge(F, W), Use::Combo, giantR, 200.0f) > 300.0f,
                   "edge reach: against the giant itself the reach is long (the radius is added back)");
         }
+        {   // review N1: a chain split at an instant (the grace ran out unseen, he is already in the next attack)
+            // swings 1-3 were the old chain's (t = 100, 400, 700 ms), swing 4 the new attack's (t = 1300 ms); the split is at 1000 ms
+            std::int64_t ts[8]{ 100, 400, 700, 1300, 0, 0, 0, 0 };
+            const unsigned after = ReachBook::SwingsAfter(ts, 4, 1000);
+            Check(after == 1 && 4u - after == 3u, "split: the new attack's swing after the split is counted to the NEW chain, the old chain keeps its 3");
+            Check(ReachBook::SwingsAfter(ts, 3, 1000) == 0, "split: no swing after the split -> the old chain keeps all of them");
+            std::int64_t ring[8]{ 9000, 9100, 9200, 9300, 9400, 9500, 9600, 9700 };   // 10 swings counted; the ring holds swings 3..10
+            Check(ReachBook::SwingsAfter(ring, 10, 9350) == 4, "split: a ring that wrapped still answers from the last 8 swings");
+            // hits: the old chain's window ends at the split, the new one's starts there (a hit exactly at noneAt is the old chain's)
+            Check(ReachBook::InChainWindow(5.0, 4.0, 6.0) && !ReachBook::InChainWindow(6.5, 4.0, 6.0), "split: a hit after the split is not the old chain's");
+            Check(ReachBook::InChainWindow(6.5, 6.0, 0.0) && !ReachBook::InChainWindow(5.5, 6.0, 0.0), "split: the reopened chain's window starts at the split, with no end");
+            Check(!ReachBook::InChainWindow(0.0, 0.0, 0.0), "split: an empty latch row (t = 0) is never a hit");
+        }
         {   // the published pair: any thread, both 0 erases, CentreReach / SwingLimit are the one fallback
             ReachBook::ClearPublished();
             Check(ReachBook::CentreReach(F, Use::Blow, 22.0f, 200.0f) == 200.0f && ReachBook::SwingLimit(F, 22.0f, 200.0f) == 200.0f, "reach book: nothing published reads fMeleeReach (the executors too)");

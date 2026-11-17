@@ -142,14 +142,16 @@ namespace MFO::Iaus::Fills {
             // so a resolved chain's swing count is (counter now - base). Worker domain, like the rest of the state.
             std::uint32_t swingBase = 0, powerBase = 0, bashBase = 0;
             double noneAt = 0.0;        // the first lap of this chain that saw his attack state kNone (0 = he is in it)
+            double splitAt = 0.0;       // review N1: the instant a chain was split from the next attack (the reopened chain's window starts here)
         };
         std::unordered_map<RE::FormID, ReachState>         g_reach;   // by follower
         ReachBook::Book                                    g_learn;   // by (follower, weapon, sequence): runtime only (Q68, 11-17 sequences)
         // A chain of swings is over when his attack state has been kNone for this long (review F2a; was "no swing event for 1.1 s",
         // which merged separate attacks: the engine decides the next attack about 0.6 s after one ends, so a chain ran to the cap).
-        // Sized from that measured gap (principle 9): shorter than it, so two attacks are two chains, and longer than a lap, so a
-        // one-lap flicker of the state inside a combo does not end it. NOT field proven for the combo frameworks: the swing line
-        // prints the chain's swing count so a run can show whether a combo's steps stay in the chain.
+        // Sized from that measured gap (principle 9): shorter than it, so two attacks are two chains. A lap is party x 133 ms, so
+        // 0.45 s is longer than a lap only for a party of three or fewer; with four or more the grace is shorter than a lap and the
+        // end is seen late (the split below keeps it exact). NOT field proven for the combo frameworks: the swing line prints the
+        // chain's swing count and the lap length so a run can show whether a combo's steps stay in the chain.
         constexpr double kChainGraceSec = 0.45;
         constexpr double kChainCapSec   = 8.0;     // a hard stop for a chain that never ends (a loop, a held power attack)
         Bucket g_swingLines{ 6.0, 6.0, 3.0 };
@@ -659,6 +661,7 @@ namespace MFO::Iaus::Fills {
         // kill switch's business: with bIausReachLearn = 0 only the probe runs, and it has no use for the chain.
         if (m_reach) SwingSeq::Service(a_self);
         const SwingSeq::Obs ob = m_reach ? SwingSeq::Read(a_s.self.id) : SwingSeq::Obs{};
+        const double lapSec = rs.lastLap > 0.0 ? m_now - rs.lastLap : 0.0;   // the swing line prints it (review N2)
         // In a chain once a swing event has come since the last chain ended (and the sink is proven attached).
         const bool chain = rs.open && ob.live && ob.swings != rs.swingBase;
         const bool none  = me->atkState == static_cast<int>(RE::ATTACK_STATE_ENUM::kNone);
@@ -675,6 +678,12 @@ namespace MFO::Iaus::Fills {
         const bool swingDone = !chain && rs.leftAt != 0.0 && m_now - rs.leftAt >= kSwingGraceSec;
         if (rs.open && (chainDone || swingDone || swingsAgain || m_now - rs.t0 > (chain ? kChainCapSec : kSwingCapSec))) {
             const bool again = chainDone && !none;   // he is already in the next attack: reopen it below
+            // SPLIT AT noneAt (review N1): the grace ran out unseen between laps, so what came after noneAt is the NEXT attack's:
+            // the old chain keeps the hits up to noneAt and the swings before it, the reopened one starts its window at noneAt and
+            // counts the swings raised after it (the sink's swing times are on a steady clock: noneAt is mapped onto it).
+            const double endAt = again ? rs.noneAt : 0.0;
+            const unsigned newSwings = again ? ReachBook::SwingsAfter(ob.ts, ob.swings, SwingSeq::NowMs() - static_cast<std::int64_t>((m_now - rs.noneAt) * 1000.0)) : 0u;
+            rs.splitAt = again ? rs.noneAt : 0.0;
             rs.open = false;
             rs.leftAt = 0.0;
             rs.noneAt = 0.0;
@@ -685,16 +694,17 @@ namespace MFO::Iaus::Fills {
                 std::scoped_lock lk(g_hitMx);
                 if (const auto fl = g_latch.find(a_s.self.id); fl != g_latch.end())
                     for (const Latch& c : fl->second.s) {
-                        if (c.t == 0.0 || c.t < rs.windowStart) continue;
+                        if (!ReachBook::InChainWindow(c.t, rs.windowStart, endAt)) continue;
                         const bool right = c.source == rs.weapon, left = rs.weaponLeft != 0 && c.source == rs.weaponLeft;
                         if (!right && !left) continue;   // a cloak, an enchantment, a spell: not a blow of his weapons
                         if (right && c.target == rs.target) { hit = true; flags = c.flags; }
                         else other = true;               // someone else, or his target by the left-hand weapon (review F1)
                     }
             }
-            const unsigned steps = chain ? (std::min)(ob.swings - rs.swingBase, static_cast<std::uint32_t>(ReachBook::kMaxSteps)) : 0u;
+            const std::uint32_t chainSwings = ob.swings - rs.swingBase;
+            const unsigned steps = chain ? (std::min)(chainSwings > newSwings ? chainSwings - newSwings : 0u, static_cast<std::uint32_t>(ReachBook::kMaxSteps)) : 0u;
             const std::uint32_t powerMarks = ob.power - rs.powerBase, bashMarks = ob.bash - rs.bashBase;   // observability only (review F1)
-            rs.swingBase = ob.swings; rs.powerBase = ob.power; rs.bashBase = ob.bash;
+            rs.swingBase = ob.swings - newSwings; rs.powerBase = ob.power; rs.bashBase = ob.bash;   // the reopened chain counts from the split
             const ReachBook::WeaponReach* wr = g_learn.Find(a_s.self.id, rs.weapon);
             if (wr && (hit || !other)) {
                 const float before = wr->weapon.Value();
@@ -703,11 +713,11 @@ namespace MFO::Iaus::Fills {
                 if (m_probe && g_swingLines.Take(m_now)) {
                     const auto sq = steps > 0 ? wr->seq.find(ReachBook::SeqKey(steps)) : wr->seq.end();
                     spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units to the edge of {:08X} (radius {:.0f}): {}{} | chain {} swing(s), "
-                                 "tags seen: power windows {} bash {}, left {} | learned edge reach (weapon, one blow) {:.0f} -> {:.0f} (start {:.0f}, {} hits {} misses), "
+                                 "tags seen: power windows {} bash {}, left {}, lap {:.0f} ms | learned edge reach (weapon, one blow) {:.0f} -> {:.0f} (start {:.0f}, {} hits {} misses), "
                                  "sequence {} | reads: blow {:.0f} combo {:.0f} | feeds the reach readers: {}",
                                  a_s.self.name, a_s.self.id, rs.weapon, rs.dist, rs.target, rs.radius, hit ? "HIT" : "miss",
                                  hit ? std::format(" (power={} blocked={})", (flags & 1) != 0, (flags & 8) != 0) : std::string(),
-                                 chain ? std::to_string(steps) : std::string("? (no graph events)"), powerMarks, bashMarks, rs.weaponLeft != 0,
+                                 chain ? std::to_string(steps) : std::string("? (no graph events)"), powerMarks, bashMarks, rs.weaponLeft != 0, lapSec * 1000.0,
                                  before, wr->weapon.Value(), wr->weapon.start, wr->weapon.hits, wr->weapon.misses,
                                  sq != wr->seq.end() ? std::format("{:.0f} ({} hits {} misses)", sq->second.Value(), sq->second.hits, sq->second.misses)
                                                      : std::string("none"),
@@ -738,6 +748,7 @@ namespace MFO::Iaus::Fills {
                 // The swing began after the last lap saw him not swinging, so a hit since then belongs to it.
                 rs.windowStart = (rs.lastLap > 0.0 && m_now - rs.lastLap < kSwingCapSec) ? rs.lastLap : m_now - 0.5;
                 rs.windowStart = (std::max)(rs.windowStart, rs.resolvedAt);   // review F4: never before the last resolution
+                if (rs.splitAt != 0.0) { rs.windowStart = rs.splitAt; rs.splitAt = 0.0; }   // review N1: a split-off attack's window starts at the split
                 rs.leftAt = 0.0;
                 rs.noneAt = 0.0;
                 rs.radius = f.bodyRadius > 0.0f ? f.bodyRadius : ReachBook::kRefRadius;
@@ -748,6 +759,7 @@ namespace MFO::Iaus::Fills {
                 break;
             }
         }
+        if (!rs.open) rs.splitAt = 0.0;   // a split that did not reopen (no foe matched) does not leak into a later chain
         rs.wasSwinging = me->swinging;
         rs.lastLap     = m_now;
 

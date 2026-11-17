@@ -41,6 +41,20 @@ namespace MFO::Iaus::ReachBook {
 
     [[nodiscard]] inline std::uint8_t SeqKey(unsigned a_steps) { return static_cast<std::uint8_t>((std::min)(a_steps, static_cast<unsigned>(kMaxSteps))); }
 
+    // A chain SPLIT at an instant (review N1): the number of the swings counted so far (a_swings, the sink's monotonic counter) that
+    // came AFTER a_splitMs, from the ring of the last 8 swing times (swing n is a_ts[(n - 1) % 8]). Capped at 8; the swings of the
+    // old chain are the total minus this. A swing whose slot was already overwritten counts as before the split.
+    [[nodiscard]] inline unsigned SwingsAfter(const std::int64_t* a_ts, std::uint32_t a_swings, std::int64_t a_splitMs) {
+        unsigned n = 0;
+        for (std::uint32_t k = 0; k < (std::min)(a_swings, 8u); ++k)
+            if (a_ts[(a_swings - 1u - k) % 8u] > a_splitMs) ++n;
+        return n;
+    }
+    // A hit belongs to the chain whose window it falls in: since a_windowStart, and (a split chain) up to a_endAt (0 = no end).
+    [[nodiscard]] inline bool InChainWindow(double a_t, double a_windowStart, double a_endAt) {
+        return a_t != 0.0 && a_t >= a_windowStart && (a_endAt == 0.0 || a_t <= a_endAt);
+    }
+
     struct WeaponReach {
         Reach::Learner weapon;                                  // the per-weapon edge value (no lunge)
         std::unordered_map<std::uint8_t, Reach::Learner> seq;   // by SeqKey (swing count), edge values

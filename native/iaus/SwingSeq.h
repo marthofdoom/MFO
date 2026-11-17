@@ -25,6 +25,7 @@ namespace MFO::Iaus::SwingSeq {
         std::uint32_t power = 0;             // monotonic
         std::uint32_t bash = 0;              // monotonic
         std::int64_t  lastSwingMs = 0;       // steady-clock ms of the last counted swing, 0 = none
+        std::int64_t  ts[8]{};               // the steady-clock ms of the last 8 counted swings (ring: swing n is ts[(n - 1) % 8]); ReachBook::SwingsAfter reads it
     };
 
     // WORKER: claim / refresh his slot and (every kAttachMs) post the idempotent attach. Cheap when nothing is due.
