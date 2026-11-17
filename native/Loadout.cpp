@@ -999,8 +999,8 @@ namespace MFO::Loadout {
         // gear back.
         int fixed = 0;
         // F2 (review of ca0465c9): the shield give-back below reads the left hand AFTER the deselect, so it needs the deselect to
-        // have RUN, not been posted. kPostLoadGame is on the main thread and MainThread::NoteMainThread (SKSEPluginLoad /
-        // kDataLoaded) makes that true before the first frame. Off it, the deselect is posted and the shield check is SKIPPED with
+        // have RUN, not been posted. kPostLoadGame is on the main thread and MainThread knows that thread before the first frame
+        // (the engine's own record, read at kDataLoaded). Off it, the deselect is posted and the shield check is SKIPPED with
         // an ERROR (it would read the spell still in the hand and decide nothing): said, never guessed.
         const bool inPlace = MainThread::EngineWritesAllowed();
         if (!inPlace)
