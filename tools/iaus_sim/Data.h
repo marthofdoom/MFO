@@ -132,7 +132,7 @@ namespace Sim {
     inline float g_spaceSize = 0.0f;      // --space R: an ENCLOSED fight (the encounter's cell is an interior) is bounded by a disc of radius >= R around its start (Part C); 0 = open everywhere
     inline int   g_spaceForce = -1;       // --space-force enclosed|open: every fight that type (the sensitivity axis); -1 = by the encounter's cell
     inline bool  g_buffDurReal = false;   // --buff-dur real: a cast buff is up for its record duration (the lab used max(30 s, duration))
-    inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships OFF; without it no Block candidate exists)
+    inline bool  g_fillSwing = true;      // --no-fill-swing: Combatant::swinging is not filled ([Debug] bIausFillSwing ships ON since 11-17b, as Armor / Hit / Loss / Spells: the lab's default is the shipped one; without it no Block candidate exists)
 
     // Actor values (CommonLib RE::ActorValue, the same numbers the records store).
     inline constexpr int kAvOneHanded = 6, kAvTwoHanded = 7, kAvMarksman = 8, kAvBlock = 9, kAvHeavy = 11, kAvLight = 12,

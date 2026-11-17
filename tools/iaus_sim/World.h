@@ -223,7 +223,7 @@ namespace Sim {
         // heals deferred for want of a combat controller (cast/CastOn.cpp, laps), heal claims released because the recipient was full before the charge began.
         long   castUnfired = 0, castDeferred = 0, healFullExit = 0; double unfiredSec = 0;
         // THE SELF-HEAL POINT (the caster survival band, Playstyles.h): his health share each time a decision of his began to mend HIMSELF (a heal cast at himself, a health potion).
-        long   selfHealN = 0; double selfHealAtSum = 0;
+        long   selfHealN = 0; double selfHealAtSum = 0; long healYield = 0;   // healYield: his channelled heal gave its hand to a non-heal pick under threat (11-17b)
         // THE FIELD SCENARIOS' READS (11-17): his first damage on a foe (per fight: N is 0 or 1) and what his cast decisions picked: offense (the spell's own
         // damage and cost) and heals (the heal's size, how many were channelled, how many were for himself).
         long   firstHitN = 0, offPickN = 0, healPickN = 0, healPickConc = 0, healPickSelf = 0; double firstHitSum = 0, offPickDmg = 0, offPickCost = 0, healPickSize = 0;
@@ -324,6 +324,10 @@ namespace Sim {
         // and whether the foe his act.attack names was kept past the chase cap without a waiver (Combatant::noApproach: he shoots, he does not walk to it).
         std::uint32_t lastFireForm = 0, lastFireTarget = 0; double lastFireAt = -1e9;
         bool   steerNoApproach = false;
+        // fix/field-1117b-choice (iaus/Candidates.cpp g_fireRefused, cast/Hands.cpp g_healerThreat): the (spell, foe) pairs his generator refused for a party
+        // member in the line of fire, with when (fed back as will-not-work notes for Tuning::fireLineKeepSec), and whether a foe is hurting him now.
+        struct FireRefusal { std::uint32_t spell = 0, foe = 0; double at = 0; }; std::vector<FireRefusal> fireRefused;
+        bool   healerThreat = false;
         // Harbinger's Standing combat ENTRY foe (APMFBridge::CombatEntryStateOf, the second id of Snapshot.h ChaseWaived). MODEL: the foe his
         // combat was entered on = his engine target at his first decision; the entry is over when that foe falls or his engine target moves on.
         mutable std::uint32_t entryFoe = 0; mutable bool entryEnded = false;

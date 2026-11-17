@@ -1221,7 +1221,9 @@ def stage_edge():
 GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0, [5.0, 7.0]), ("t.postureMomentum", 1.5, [1.75, 2.0]),
            # sim mirror batch 11-17: the game ships these as labelled PLACEHOLDERS "for the sim to search" (iaus/Core.h Tuning): the waived
            # foe's ranged edge (fix/chase-waiver-veto) and the bow's range past the chase cap (field 11-17 A3). Both act in --world v3 only.
-           ("t.waivedRangeX", 0.85, [0.7, 0.78, 0.92, 1.0]), ("t.bowRange", 3000.0, [2000.0, 2500.0, 3500.0, 4000.0])]
+           ("t.waivedRangeX", 0.85, [0.7, 0.78, 0.92, 1.0]), ("t.bowRange", 3000.0, [2000.0, 2500.0, 3500.0, 4000.0]),
+           # fix/field-1117b-choice placeholders: the cast time a fire-and-forget spell's effect is divided by, the health under which his own heal gets the dying boost
+           ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35])]
 
 
 # ── the gap stage ────────────────────────────────────────────────────────────────────────────────────────────────────────────

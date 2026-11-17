@@ -194,6 +194,10 @@ namespace Sim {
                 }
             }
         }
+        if (g_mirror) for (const Ctl::FireRefusal& r : c.fireRefused) {   // 11-17b (iaus/Candidates.cpp): a pair refused for the line of fire stays refused for Tuning::fireLineKeepSec
+            if (F.now - r.at > static_cast<double>((std::max)(0.0f, a_t.fireLineKeepSec))) continue;
+            const auto n = std::find_if(sn.willWork.begin(), sn.willWork.end(), [&](const SpellTargetNote& w) { return w.spell == r.spell && w.target == r.foe; });
+            if (n != sn.willWork.end()) n->answer = Tri::No; else sn.willWork.push_back({ r.spell, r.foe, Tri::No }); }
         for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
             const Body* d = F.Find(w.target); if (!d) continue;
             for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWork(c.build->spells[i], *d) });
@@ -309,6 +313,9 @@ namespace Sim {
         if (hostile && (!tg || !Fight::Up(*tg) || tg->Party())) return Fired::Invalid;
         const bool bodyHeld = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd);
         auto peel = [&]() { if (subj && tg && c.pressureSince >= 0 && tg->c.targetId == F.b[0].c.id) { t.peelSum += F.now - c.pressureSince; ++t.peelN; c.pressureSince = -2; } };
+        // 11-17b (cast/Hands.cpp CanPreemptHand, THREAT ON THE HEALER): a concentration heal does not keep its hand from a non-heal pick while a foe is hurting him.
+        if (x.stream.live && g_mirror && c.healerThreat && (fam == Family::CastOffense || fam == Family::CastControl || fam == Family::CastBuff || fam == Family::CastSummon || fam == Family::CastWard)) {
+            const SimSpell* hs = F.SpellOf(x, x.stream.spell); if (hs && hs->e.nature == Prune::Nature::Heal) { F.EndStream(x, false); if (subj) ++t.healYield; } }
         if (x.stream.live) switch (fam) {   // SIM V3 (hands): a stream stands on his left hand. No second cast; a potion or a run ends it; a blow needs a one-handed blade
             case Family::Scroll: case Family::CastOffense: case Family::CastControl: case Family::CastHeal: case Family::CastBuff: case Family::CastSummon: case Family::CastWard: return Fired::Declined;
             case Family::PowerAttack: case Family::Bash: case Family::Block: case Family::Taunt: if (F.StreamHolds(x)) return Fired::Declined; break;
@@ -459,6 +466,12 @@ namespace Sim {
             const auto t0 = timeIt ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             sv.g = Generate(sv.sn, c.gate, *T);
             c.spellsHold = sv.g.spellsHold;
+            if (g_mirror) {   // 11-17b (iaus/Candidates.cpp Build): the refused pairs are stamped (refreshed each lap they stay blocked), the cast layer learns the threat on the healer
+                std::erase_if(c.fireRefused, [&](const Ctl::FireRefusal& r) { return F.now - r.at > static_cast<double>((std::max)(0.0f, T->fireLineKeepSec)); });
+                for (const auto& [sp, foe] : sv.g.fireBlocked) { const auto f = std::find_if(c.fireRefused.begin(), c.fireRefused.end(), [&](const Ctl::FireRefusal& r) { return r.spell == sp && r.foe == foe; });
+                    if (f != c.fireRefused.end()) f->at = F.now; else if (c.fireRefused.size() < 64) c.fireRefused.push_back({ sp, foe, F.now }); }
+                c.healerThreat = Estimate::IncomingOn(sv.sn, sv.sn.self) > 0.0f;
+            }
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);

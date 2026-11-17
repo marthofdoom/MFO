@@ -60,7 +60,7 @@ namespace {
             // sim v3
             S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
             S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
-            S(castUnfired); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealAtSum); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
+            S(castUnfired); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
@@ -136,7 +136,7 @@ namespace {
           m["dl.unfired%"] = pct(double(s.castUnfired), pk); m["dl.unfired.s"] = s.castUnfired ? s.unfiredSec / double(s.castUnfired) : -1; m["dl.deferred/f"] = double(s.castDeferred) / n; m["dl.healFull/f"] = double(s.healFullExit) / n;   // sim mirror batch 11-17 (Data.h Delivery, cast/CastOn.cpp deferrals, cast/HealRoad.cpp full exit)
           m["tfh.s"] = s.firstHitN ? s.firstHitSum / double(s.firstHitN) : -1; m["nohit%"] = 100.0 * (1.0 - double(s.firstHitN) / n); m["hits/f"] = double(s.wpnHits) / n;   // the field scenarios (11-17): time to his first damage, fights with none, weapon hits
           m["cast.dmg"] = s.offPickN ? s.offPickDmg / double(s.offPickN) : -1; m["cast.cost"] = s.offPickN ? s.offPickCost / double(s.offPickN) : -1; m["off/f"] = double(s.offPickN) / n;
-          m["heal.size"] = s.healPickN ? s.healPickSize / double(s.healPickN) : -1; m["heal.conc%"] = pct(double(s.healPickConc), double(s.healPickN)); m["heal.self%"] = pct(double(s.healPickSelf), double(s.healPickN)); m["heal/f"] = double(s.healPickN) / n;
+          m["heal.size"] = s.healPickN ? s.healPickSize / double(s.healPickN) : -1; m["heal.conc%"] = pct(double(s.healPickConc), double(s.healPickN)); m["heal.self%"] = pct(double(s.healPickSelf), double(s.healPickN)); m["heal/f"] = double(s.healPickN) / n; m["healYield/f"] = double(s.healYield) / n;
           m["cap.kept/f"] = double(s.capKept) / n;   // foes kept past the chase cap as noApproach (11-17 A3)
           m["dl.claim.s"] = s.castFired ? s.claimSec / double(s.castFired) : -1; m["dl.beatLof%"] = pct(double(s.beatLof), double(s.beats + s.beatLof + s.beatNoLos)); m["dl.stream.s"] = s.streams ? s.streamSec / double(s.streams) : -1;
           m["cap.mean"] = s.capLaps ? s.capSum / double(s.capLaps) : -1; m["cap.drop%"] = pct(double(s.capDropLaps), double(s.capLaps)); m["cap.starve%"] = pct(double(s.capStarveLaps), double(s.capLaps)); m["cap.waived/f"] = double(s.capWaived) / n;
