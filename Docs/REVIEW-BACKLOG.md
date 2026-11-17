@@ -3488,3 +3488,10 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-5):** the critical-stage release can drop a cast ClearAlias eviction queued behind it; if the holder was already reset, ReleaseAll's ClearAlias is skipped and that op's concentration InterruptCast is lost (the alias itself is still swept).
 - **(SEV-5):** on a runtime with no native, LootTravelEvictIf / RetreatEvictIf now log "RELEASE FAILED" as ERROR if the alias holds a_id (was a silent no-op; only from an earlier session's save).
 - **(SEV-5):** the single-store claim for StoreLocationRef / StoreTargetRef relies on MSVC emitting one mov; std::atomic_ref<std::uint32_t> would make it structural.
+
+### feat/perk-effects (Opus 5.5 review, 2026-11-16, against a314a21b)
+- **(SEV-3, RESOLVED by marth 11-16 "Ship 0 plan tune soon"):** armor / weapon perk factors shipped at weight 0 (t.perkArmor, t.perkWeapon). Before turning on: the sim needs a gear pick to tune them; address the feedback loop (armor mean over carried pieces; weapon kind factor from one probe weapon), in-combat condition swings (freeze the table in combat), and double counting with kStyleBias / kArmorPerkBias (skill must still decide armor class).
+- **(SEV-3, FIXED):** tune app lists: spell_perks cons, t.perkArmor / t.perkWeapon scalars. Pre-existing SEV-4: the app accepts only a|b|floor curve fields, not py0..py2.
+- **(SEV-4):** main-thread cost: ~80 HandleEntryPoint calls per typical build, up to ~970 worst, each follower every ~2 s; raise kRefreshTicks (~112) or rebuild on a change signature; cap the armor asks.
+- **(SEV-4):** seeds: EP35/EP85 seeded with base not skill-scaled values, EP38 with 100 not the spell cost, EP39 with 1.0: Add entries distorted.
+- **(SEV-5):** harness.cpp "// School affinity" comment now above SpellPerkRows; generic armor probe counted in armorPieces; [perk-fx] line length / reprint per flip (B860 item 8).

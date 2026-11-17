@@ -275,8 +275,8 @@ namespace MFO::Iaus {
         // 1dfcuabd2pk THE PERK-EFFECT WEIGHTS OF THE GEAR PICKS (iaus/PerkEffects.h). PLACEHOLDERS, not searched (the combat sim has no gear pick; marth
         // tunes them in MFO_Tuning/shared.txt as `t.perkArmor` / `t.perkWeapon`). The factor a piece of gear earns is 1 + weight x (multiplier - 1), where the
         // multiplier is what the ENGINE says his perks do to that armor type's rating / that weapon kind's damage. 0 = the perks are not weighed (the old pick).
-        float perkArmorWeight = 1.0f;            // armor pick (logistics/Gear.cpp ArmorPrefFor): light / heavy by the engine's ModArmorRating answer
-        float perkWeaponWeight = 1.0f;           // weapon pick (Logistics_internal.h WeaponScore): the weapon kind by the engine's ModAttackDamage answer
+        float perkArmorWeight = 0.0f;            // SHIPPED INERT (marth 11-16 "Ship 0 plan tune soon"): armor pick (logistics/Gear.cpp ArmorPrefFor): light / heavy by the engine's ModArmorRating answer
+        float perkWeaponWeight = 0.0f;           // SHIPPED INERT (marth 11-16): weapon pick (Logistics_internal.h WeaponScore): the weapon kind by the engine's ModAttackDamage answer
         WorthTable worth{};
     };
 
