@@ -419,3 +419,84 @@ About 24 percent more. `--world v2` in the new binary costs the same as the old 
   mode and LoreRim, no report.
 - The perk mirror is live: with `perks` on, `--curve evoker:cast_offense.94.py1=3` moves J. With it off it does not.
 - The banner prints the world (`IAUS SIM v3` / `IAUS SIM v2`).
+
+## 13. The sim mirror batch of 2026-11-17 (feat/sim-mirror-1117)
+
+marth 11-17: "for some reason we didn't retune when new features were added". This batch brings the lab level with `origin/main` 6e0ccfe1 (anim-reach, field-1117 cast / engage, chase-waiver, hand_lost, perk effects, field-1117b choice), replaces the two single-session delivery figures with the Deck's measured distributions, and makes v3 the tuning default (his 11-16 ruling "v3 default after data").
+
+### 13.1 What is mirrored, and where
+
+| Game change | Lab | Switch |
+|---|---|---|
+| perk-effect reader spell boost (`c.spell_perks`) | already in v3 (section 7), checked against `iaus/PerkEffects.cpp` | `perks` |
+| `hand_lost` (1dfcuabd22x) | `Combatant::weaponLeftShare` = 1 for a bow or a two-hander in hand (`Policy.h MakeSnapshot`, the rule of `Fills.cpp:345`). The lab has no second melee weapon, so no 0.5 row. `t.concChannelSec`, `t.handRedrawSec` in `Tune.h` | `hands` |
+| chase-waiver veto fix | the waiver goes through the game's `ChaseWaived` reader, the kept foe is marked `chaseWaived`, the generator clamps it (compiled in). Entry foe: MODEL, his engine target at his first decision, over when it falls or his target moves on. `t.waivedRangeX` | `chase` |
+| noApproach foes (11-17 A3) | a foe past the cap in bow range, or one that targets him, is kept and marked. `Brain`: a named noApproach foe is shot at from where he stands, never walked to. `t.bowRange`. Ranking, Swings, RangeFoe and the cast skips are the game's own code | `chase` |
+| engagement fixes | the reachable-foe preference and `MeleeUnreachableNow` are the game's code and read the lab's z. The 128 approach on a ledge with a way up is a climb MODEL (a path three times the height, at run speed, `FightSpec::perchPath`). A ledge with no way up stays out of reach. See 13.4 for what has no lab counterpart | `height` |
+| melee reach model | `Ctl::reach` is the game's `ReachBook::Book`. Outcomes are EDGE distances, one chain of one swing each (the lab has no combo framework). `weaponEdge` and `comboEdge` are read from it only with a blade in hand. This fixes the N3 line of `Policy.h` (it fed a centre value less a radius for any weapon drawn) | `--reach` |
+| cast fixes | a self buff or ward with no combat controller is deferred, so is a heal during a run. A heal claim whose recipient reads full before the charge began is released. The substrate back-off has no lab counterpart (no out of combat phase) | `delivery` |
+| field-1117b choice | heal_rate, the effect-rate tie-break, the line of fire gate, HealRefused and the self dying boost are the game's code. Lab side: the refused (spell, foe) pairs are remembered for `t.fireLineKeepSec`, a channelled heal yields its hand to a non-heal pick while a foe hurts him. `t.spellCastSec`, `t.dyingSelfHp`. The fills the game now ships ON were already on in the lab | none |
+
+`--mirror off` turns the lab side of this batch off (not the delivery tables, not the reach book, not the game's own generator) for before / after runs.
+
+### 13.2 Cast delivery, measured
+
+Tool: `tools/iaus_sim/calib_cast_delay.py`. Source: `_evidence/deck-run-1117/part4` and `_evidence/deck-run-1117b-full`. The join: an `[iaus] pick=cast_*` line fires its claim in the same lap, Harbinger's caster census opens one `[ctcensus]` window per claim (its `spell=` is the pick's form whatever proxy drives the hand), `FIRED +ms` is the claim to fire time, `CLOSE` carries the verdict. Repeat fires come from MFO's `CFC-fired` lines. Substrate claims (40 windows) and windows over a main thread stall (5) are left out. 122 windows remain, ALL of one follower (Jesper).
+
+| Nature | Windows | First fire n | p25 | median | p75 | Repeat median (n) | Never fired |
+|---|---|---|---|---|---|---|---|
+| offense | 46 | 21 | 1.29 | 1.72 | 2.66 | 1.22 (39) | 54.3 % |
+| offense, concentration | 28 | 9 | 0.54 | 0.61 | 1.46 | none | 67.9 % |
+| heal | 9 | 8 | 1.82 | 2.23 | 2.64 | 1.04 (36) | 11.1 % |
+| heal, concentration | 11 | 10 | 0.68 | 1.04 | 1.19 | 2.26 (9) | 9.1 % |
+| buff | 28 | 7 | 1.43 | 1.66 | 3.09 | none | 75.0 % |
+
+Pick to claim at Harbinger: median 0.108 s (n=57). Never fired by cause, offense: replaced by a newer claim 26.1 %, refused by CheckStartCast every time 8.7 %, built and answered yes but not fired 6.5 %, no caster built 13.0 %. Buff: no caster built 39.3 %, replaced 25.0 %.
+
+In the lab (`Data.h Delivery`, `World.h StartCast`): a claimed cast draws its first fire from the decile table of its row plus 0.11 s. A re-pick of the same cast at the same target within 2 s of its release (ASSUMPTION) draws the repeat table. With the row's unfired share the claim closes with no cast after a time drawn from how long such claims stood. The unfired share leaves out "refused" (sight, line of fire and range are held by the lab itself), so the lab uses offense 0.500, offense concentration 0.654, heal 0.111, heal concentration 0.091, buff 0.731. It still includes claims the game ended for reasons the lab also models (the target died, a re-target), so it is an upper bound. `--deliver-unfired k` scales it, `--deliver-sec o,h` is the fixed model of the first cut.
+
+### 13.3 Field cases of 11-17, before and after (built-in world, shipped tunings, 96 fights)
+
+| Scenario | Before | After |
+|---|---|---|
+| `heal-channel` (before = game f5249bce) | channelled heals 66.3 %, mean heal 37.5, self heal at 53 % health, player dead 24.0 %, downs 0.03, U 65.8 | channelled 3.3 %, mean heal 72.9, self heal at 46 %, player dead 10.4 %, downs 0.01, U 77.5 |
+| `offense-pick` (before = game f5249bce) | pick damage 34.4, cost 17.3, resisted 0 %, dps 3.63, U 83.7 | pick damage 33.2, cost 16.6, resisted 0 %, dps 4.93, U 84.0 |
+| `bow-occluded` (before = `--mirror off`) | first hit 5.27 s, idle 39.2 %, hide runs 0.41 / min, U 89.8 | first hit 4.61 s, idle 33.2 %, hide runs 0.42 / min, U 90.4 |
+| `tower-blade` (before = `--mirror off`) | never hits (100 % of fights), fight 20.1 s | first hit 8.1 s, 4.6 hits a fight, fight 15.1 s |
+| `cap-archer` (before = `--mirror off`) | idle 94.9 %, empty foe list 94.8 % of laps, shooting 22.4 % of his time, downs 0.92, U 77.8 | idle 27.4 %, empty 27.4 %, shooting 32.3 %, downs 1.12, U 78.7 |
+
+Limits. The lab does not reproduce Jesper being burst down (0.03 downs a fight before): the evoker survives the pile. `offense-pick` shows no cheapest-spell pick before the fix either (the lab's books are measured by default). In `cap-archer` the lab's engine model shoots on its own when IAUS is idle, so the hits barely move and he goes down a little more often once he answers. `bow-occluded` keeps its hide runs: the 11-17b stance check has no lab counterpart (the lab's sneak stance always takes).
+
+### 13.4 Not mirrored
+
+- The occluded approach's standoff by attack road, its tightening and the leash block scoping: the lab's engine model already walks a caster or archer toward a target it cannot see until it has sight, and a blade always closes. No navmesh, no leash block list.
+- The failed-hide abort and the 11-17b stance check: the lab's stance always takes.
+- The substrate back-off: no out of combat casting in the lab.
+- Combo sequences: every lab swing is a chain of one, so the sequence learner equals the weapon's.
+- The unreachable pin release: the lab's pin follows the pick every lap.
+
+### 13.5 Tuning
+
+`tune_driver.py --world` defaults to v3 (v2 still runs). Its shared placeholders now include `t.waivedRangeX`, `t.bowRange`, `t.spellCastSec`, `t.dyingSelfHp`. `Playstyles.h`: the mage, evoker, conjurer and warlock rows carry a survival band (`downs/f` at most 0.35, `selfHealAt%` between 25 and 75, a new metric: his health when a decision of his begins to mend himself).
+
+Shipped tunings, 8 seeds, J (se):
+
+| Class | v3 before | v3 after | v2 after |
+|---|---|---|---|
+| melee | 81.88 (3.10) | 81.32 (2.85) | 84.48 (2.49) |
+| ranged | 77.75 (3.50) | 75.68 (3.87) | 72.24 (2.51) |
+| mage | 73.55 (1.45) | 76.66 (2.00) | 79.90 (2.29) |
+| knight | 74.10 (1.21) | 75.81 (0.70) | 74.21 (0.65) |
+| warrior | 87.51 (1.14) | 88.22 (1.12) | 87.73 (1.26) |
+| mercenary | 82.24 (1.11) | 82.68 (1.17) | 80.36 (1.34) |
+| archer | 82.46 (1.99) | 82.37 (2.26) | 81.45 (2.40) |
+| thief | 88.54 (0.75) | 88.46 (0.81) | 86.69 (0.63) |
+| evoker | 75.32 (2.30) | 75.95 (2.00) | 81.13 (1.50) |
+| conjurer | 64.90 (4.79) | 68.71 (3.50) | 76.83 (2.48) |
+| healer | 77.45 (2.91) | 79.42 (1.81) | 80.64 (2.49) |
+| warlock | 74.47 (1.76) | 76.84 (2.65) | 79.03 (3.47) |
+| melee-off | 81.28 (3.20) | 78.37 (3.38) | 74.52 (3.19) |
+| ranged-off | 68.53 (4.36) | 74.29 (3.75) | 76.21 (3.74) |
+| mage-off | 70.81 (4.36) | 71.95 (2.82) | 73.96 (2.98) |
+
+Both baselines are regenerated (`baseline_builtin.txt`, `baseline_v3_builtin.txt`). v2 moved because the game's generator and the reach book moved: with `--reach off` the build before this batch and the build after it agreed draw for draw on v2 until the 1117b merge.

@@ -3573,3 +3573,14 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - SEV-5: per-cast vs per-second scope: a concentration heal is never braked by `heal_size`.
 - Not checked in the heal fallback: the recast lockout / claim state of the fallback heal (only hands, cost, reach and sight).
 
+
+## feat/sim-mirror-1117 (Fable author, 2026-11-17, tools/iaus_sim only; record: Docs/research/2026-11/iaus-sim-v3.md section 13)
+
+- **CLOSED by this batch (the SIM MIRROR entries above):** fix/chase-waiver-veto items (1) and (2) (the waived mark, the entry foe as a MODEL), feat/conc-hand-cost's sim mirror (`weaponLeftShare`, `t.concChannelSec`, `t.handRedrawSec`), fix/field-1117-engage's sim mirror (`noApproach`, `t.bowRange`), feat/anim-reach N3 (`Policy.h` reads the game's `ReachBook`, the duplicated comment is gone), fix/field-1117b-choice (refusal memory, healer threat, placeholders).
+- **OPEN (not re-run):** the N6 dragon laps after the waived mark. `dragon-circle` runs in the CLI checks, the 20.5 percent figure was not re-measured.
+- **OPEN (SEV-3, data):** every cast delivery figure comes from ONE follower (Jesper) in two sessions of one day. Small rows: buff first fire n=7, offense concentration n=9, heal n=8.
+- **OPEN (SEV-3, model):** the unfired share counts claims the game ended for reasons the lab also models (target death, a re-target), so delivery failure is over-stated by an unknown amount. `--deliver-unfired` scales it.
+- **OPEN (SEV-4, model):** the repeat window (2 s) and the climb (a path three times the ledge height) are assumptions. The entry foe is a model of Harbinger's Standing entry.
+- **OPEN (SEV-4):** `StrikeReady` for a bow still reads the chase cap (the game's own code, candidate to move to `InWeaponRange`).
+- **OPEN (SEV-4):** the survival band numbers (0.35 downs a fight, 25 to 75 percent) are judgement, not a card value.
+- **FIXED here (pre-existing):** the run.sh logistics CLI check expected `--logi-policy iaus` to be refused. It failed at f5249bce before any edit of this batch.
