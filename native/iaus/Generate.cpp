@@ -716,6 +716,9 @@ namespace MFO::Iaus {
                     // marth 11-12: scrolls IGNORE school affinity (no wave, no mastery bump).
                     if (!scroll) c.school = e.school;
                     if (!scroll && e.school >= 0 && static_cast<std::size_t>(e.school) < kSchools) c.schoolBump = x.g.schoolBump[static_cast<std::size_t>(e.school)];
+                    // 1dfcuabd2pk: what his perks do for this spell's school (a spell he casts himself only: a scroll or a staff pays no magicka and
+                    // the cost / magnitude entry points were asked about his SPELLS). < 0 = not known: Cons::BoostSpellPerks is then not applicable.
+                    if (e.source == SpellSource::Spell) c.f.spellPerkEdge = PerkSpellEdge(s.perks, e.school);
                     c.form = e.form;
                     c.formName = e.name;
                     if (priced) { c.f.cost = e.cost; c.f.magicka = pool; c.f.magickaMax = s.self.mpMax; }

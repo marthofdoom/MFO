@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <array>
 #include "logistics/Pricing.h"   // town phase 2 R2: the dispatch quote rides the order
 
 // #21 ECON BRIDGE -- native side (Fable's ECON_PAPYRUS_PLAN).
@@ -73,6 +74,9 @@ namespace MFO::TradeBridge {
         // and loot rank a greatsword vs a warhammer identically.
         float         meleeBaseScore = 0.0f;
         std::int32_t  preferKinds    = 0;    // Progression::WeaponKind bits the perks prefer (0 = none)
+        // 1dfcuabd2pk: WeaponRoles::perkKind (what his perks do to each weapon kind's damage, by WeaponKind bit index; 1.0 = none), so
+        // PlanBuy's WeaponBuyScore is the very score the owned thresholds above were built with.
+        std::array<float, 9> perkKind{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
         bool          doRanged     = false;
         bool          wantCrossbow = false;  // meaningful only when doRanged
         std::int32_t  rangedBaseDmg= 0;      // best owned bow/crossbow dmg

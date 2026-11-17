@@ -9,6 +9,7 @@
 #include "progression/ProgAllocator.h"   // ReapplyPending: no perk tally is trusted before his perks are back
 #include "PlayerGiven.h"      // IsPlayerEquipped: ... unless the PLAYER put it on him
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
+#include "iaus/PerkEffects.h"   // 1dfcuabd2pk: the engine's answer for what his perks do to armor rating / weapon damage
 
 namespace MFO::Logistics {
 
@@ -60,6 +61,13 @@ namespace MFO::Logistics {
             (p.heavyClass ? p.heavyBias : p.lightBias) *= kArmorClassBias;
             if (p.heavyVotes > p.lightVotes)      p.heavyBias *= kArmorPerkBias;
             else if (p.lightVotes > p.heavyVotes) p.lightBias *= kArmorPerkBias;
+            // WHAT HIS PERKS DO TO EACH TYPE'S RATING (ClickUp 1dfcuabd2pk, marth 2026-11-12: "Armor to pick, it needs to read perks like potions
+            // and see how they affect the world"): the engine's own ModArmorRating answer per type, weighted by Tuning::perkArmorWeight
+            // (iaus/PerkEffects.h). A multiplier on the score like the two above, never a filter; 1.0 while his table is not known yet.
+            p.heavyPerk = PerkEffects::ArmorFactor(a_follower->GetFormID(), Iaus::PerkArmor::Heavy);
+            p.lightPerk = PerkEffects::ArmorFactor(a_follower->GetFormID(), Iaus::PerkArmor::Light);
+            p.heavyBias *= p.heavyPerk;
+            p.lightBias *= p.lightPerk;
             return p;
         }
 
@@ -121,11 +129,11 @@ namespace MFO::Logistics {
                                        worn[i]->GetFullName() ? worn[i]->GetFullName() : "?", typeTag(worn[i]),
                                        worn[i]->GetArmorRating(), ArmorScore(a_pref, worn[i]));
             }
-            spdlog::info("[armor] {:08X} '{}': heavy={:.0f} light={:.0f} -> class {} votes h/l={}/{} bias h/l={:.2f}/{:.2f} | worn {}",
+            spdlog::info("[armor] {:08X} '{}': heavy={:.0f} light={:.0f} -> class {} votes h/l={}/{} bias h/l={:.2f}/{:.2f} (perk effects h/l x{:.2f}/x{:.2f} inside) | worn {}",
                          a_follower->GetFormID(), a_follower->GetName() ? a_follower->GetName() : "?",
                          a_pref.heavySkill, a_pref.lightSkill,
                          a_clothing ? "CLOTHING (mage line: rated armor is never chosen)" : (a_pref.heavyClass ? "HEAVY" : "LIGHT"),
-                         a_pref.heavyVotes, a_pref.lightVotes, a_pref.heavyBias, a_pref.lightBias, wornStr);
+                         a_pref.heavyVotes, a_pref.lightVotes, a_pref.heavyBias, a_pref.lightBias, a_pref.heavyPerk, a_pref.lightPerk, wornStr);
         }
 
         // Is this candidate an upgrade over what the follower WEARS, judged by
@@ -517,6 +525,8 @@ namespace MFO::Logistics {
             }
 
             WeaponRoles roles;
+            // 1dfcuabd2pk: what his perks do to each weapon kind's damage (the engine's answer, weighted), for every WeaponScore run on these roles.
+            roles.perkKind = PerkEffects::WeaponFactors(a_follower->GetFormID());
             // ROLES (marth 2026-10-18): the CLASS sets the base role; an equip-melee / equip-ranged gambit is an
             // OVERRIDE that adds that role for ANY class ("gambits are viewed as an override"); casting gambits
             // never change anything; carried weapons never do ("Fix roles, sell off-role"):

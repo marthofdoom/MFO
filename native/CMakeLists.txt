@@ -101,6 +101,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Generate.cpp
     iaus/SpellBook.cpp
     iaus/EffectMirror.cpp
+    iaus/PerkEffects.cpp
     iaus/Candidates.cpp
     iaus/Fills.cpp
     iaus/Hide.cpp
@@ -218,6 +219,7 @@ if(MFO_DEV_SELFTEST)
         selftest/TestsDrive.cpp
         selftest/TestsT2.cpp
         selftest/TestsBuffPotion.cpp
+        selftest/TestsPerkEffects.cpp
         selftest/TestsStorage.cpp
         selftest/Setup.cpp
     )

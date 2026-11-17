@@ -47,6 +47,12 @@ namespace MFO::Logistics::TradePerks {
     //                           76 kModTemperingHealth (Item = the TESBoundObject),
     //                           59 kModLockpickSweetSpot (Locked Ref)
     //   no condition argument:  63 kSetLockpickStartingArc, 65 kMakeLockpicksUnbreakable
+    // and the perk-effect reader's shapes (ClickUp 1dfcuabd2pk, iaus/PerkEffects.cpp; decoded on all three executables,
+    // Docs/research/2026-11/perk-effects.md section 2):
+    //   no condition argument:  39 kModPercentBlocked
+    //   one condition argument: 38 kModSpellCost (Spell), 75 kCanDualCastSpell (Spell), 85 kModArmorRating (Armor = the
+    //                           TESObjectARMO, the engine tests its form type before the call)
+    //   two condition arguments: 29 kModSpellMagnitude (Spell, Target), 35 kModAttackDamage (Weapon = the TESObjectWEAP, Target)
     // Any other entry point, or the wrong overload for one of these, is refused (nullopt + an
     // error line): a wrong argument count makes the engine read a condition pointer as the value
     // pointer. A null condition argument is refused too: the engine never null-checks condition
@@ -58,6 +64,15 @@ namespace MFO::Logistics::TradePerks {
     std::optional<float> EntryPointValue(RE::BGSEntryPoint::ENTRY_POINT a_ep, RE::Actor* a_owner, float a_seed);
     std::optional<float> EntryPointValue(RE::BGSEntryPoint::ENTRY_POINT a_ep, RE::Actor* a_owner,
                                          RE::TESForm* a_arg, float a_seed);
+    // The two-argument shapes (item, then Target). Both must be non-null and of the engine's type for that entry point.
+    std::optional<float> EntryPointValue(RE::BGSEntryPoint::ENTRY_POINT a_ep, RE::Actor* a_owner,
+                                         RE::TESForm* a_arg, RE::TESObjectREFR* a_target, float a_seed);
+    // Would EntryPointValue evaluate for this owner now: the seat verified AND he has the middle-high process and perk
+    // data the engine's walk needs. No log line (EntryPointValue warns on every refused call): a caller on a cadence asks
+    // this first and simply waits. MAIN THREAD (reads the process).
+    bool EntryPointEvaluable(RE::Actor* a_owner);
+    // The HandleEntryPoint seat verified on this runtime (the seat's own one refusal line is its log). Any thread.
+    bool EntryPointSeatVerified();
 
     // TESCondition::IsTrue(action, target) (1.6.1170 id 29888, 1.5.97 id 29074). An empty
     // condition list is true, as in the engine. nullopt = the seat was refused.

@@ -18,6 +18,7 @@
 #include "iaus/Engine.h"    // Q-I-2: the Mind's last fired decision (touchSpent)
 #include "iaus/Fills.h"
 #include "iaus/Hide.h"
+#include "iaus/PerkEffects.h"
 #include "iaus/Reposition.h"   // batch I: H4, the back-off, the hidden step
 #include "iaus/SpellBook.h"
 #include "logistics/Logistics.h"
@@ -253,6 +254,9 @@ namespace MFO::Iaus::Candidates {
             }
         }
         s.drawn            = Drawn(a_self);
+        // 1dfcuabd2pk: what his perks do, by effect (iaus/PerkEffects.h: built on the main thread, read here). No table yet = every group unread =
+        // the perk considerations are not applicable this lap (never a made-up 1.0).
+        if (const auto perkTable = PerkEffects::Get(selfID)) s.perks = perkTable->read;
         // H4 (batch I): the spell in his hand, right first (a one-handed cast comes from it; a dual cast holds the same in both). The book
         // supplies its reach / delivery (iaus/Reposition.h EquippedEntry); 0 = none.
         {

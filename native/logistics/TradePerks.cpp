@@ -80,8 +80,47 @@ namespace MFO::Logistics::TradePerks {
             case EP::kModLockpickSweetSpot:     return 1;   // 59 Perk Owner, Locked Ref
             case EP::kSetLockpickStartingArc:   return 0;   // 63 Perk Owner
             case EP::kMakeLockpicksUnbreakable: return 0;   // 65 Perk Owner
+            // The perk-effect reader's shapes (ClickUp 1dfcuabd2pk; call sites decoded on 1.6.1170 / 1.5.97 / 1.7.104 with
+            // tools/entrypoint_census, listed in Docs/research/2026-11/perk-effects.md section 2 and ENGINE_NOTES 0.54):
+            case EP::kModPercentBlocked:        return 0;   // 39 Perk Owner
+            case EP::kModSpellCost:             return 1;   // 38 Perk Owner, Spell
+            case EP::kCanDualCastSpell:         return 1;   // 75 Perk Owner, Spell
+            case EP::kModArmorRating:           return 1;   // 85 Perk Owner, Armor
+            case EP::kModSpellMagnitude:        return 2;   // 29 Perk Owner, Spell, Target
+            case EP::kModAttackDamage:          return 2;   // 35 Perk Owner, Weapon, Target
             default:                            return -1;
             }
+        }
+
+        // What the engine reads condition argument a_index of a_ep AS (MFO-B323: a form of another type would be read as that
+        // type). The names are the engine's own argument names for the entry point; the types are what its call sites pass.
+        enum class ArgKind { Refr, Bound, Spell, Armor, Weapon };
+        ArgKind ArgKindOf(RE::BGSEntryPoint::ENTRY_POINT a_ep, int a_index) {
+            using EP = RE::BGSEntryPoint::ENTRY_POINT;
+            if (a_index == 1) return ArgKind::Refr;   // the second condition argument of both two-argument shapes is the Target
+            switch (a_ep) {
+            case EP::kModTemperingHealth: return ArgKind::Bound;
+            case EP::kModSpellCost: case EP::kCanDualCastSpell: case EP::kModSpellMagnitude: return ArgKind::Spell;
+            case EP::kModArmorRating:     return ArgKind::Armor;
+            case EP::kModAttackDamage:    return ArgKind::Weapon;
+            default:                      return ArgKind::Refr;   // 8 / 60 Target, 59 Locked Ref
+            }
+        }
+        bool ArgTypeOk(RE::BGSEntryPoint::ENTRY_POINT a_ep, int a_index, RE::TESForm* a_arg) {
+            const char* want = "reference";
+            bool ok = false;
+            switch (ArgKindOf(a_ep, a_index)) {
+            case ArgKind::Refr:   ok = a_arg->As<RE::TESObjectREFR>() != nullptr; break;
+            case ArgKind::Bound:  ok = a_arg->IsBoundObject(); want = "bound object"; break;
+            case ArgKind::Spell:  ok = a_arg->As<RE::MagicItem>() != nullptr; want = "magic item"; break;
+            case ArgKind::Armor:  ok = a_arg->Is(RE::FormType::Armor); want = "armor"; break;
+            case ArgKind::Weapon: ok = a_arg->Is(RE::FormType::Weapon); want = "weapon"; break;
+            }
+            if (!ok)
+                spdlog::error("[trade] EntryPointValue REFUSED: entry point {} condition argument {} ({:08X}) is not a {} "
+                              "-- no answer",
+                              std::to_underlying(a_ep), a_index, a_arg->GetFormID(), want);
+            return ok;
         }
 
         // Shape + seat + owner checks shared by both overloads. Refusals log every time: each is a
@@ -127,25 +166,38 @@ namespace MFO::Logistics::TradePerks {
                           std::to_underlying(a_ep));
             return std::nullopt;
         }
-        // MFO-B323: the conditions read the argument as the engine's own type for that entry point (R0-1
-        // arg names): a REFR (Target / Locked Ref) for 8 / 60 / 59, a TESBoundObject (Item) for 76. A form
-        // of the wrong type would be read as that type, so refuse it.
-        {
-            using EP = RE::BGSEntryPoint::ENTRY_POINT;
-            const bool wantsBound = (a_ep == EP::kModTemperingHealth);
-            const bool typeOk = wantsBound ? a_arg->IsBoundObject() : (a_arg->As<RE::TESObjectREFR>() != nullptr);
-            if (!typeOk) {
-                spdlog::error("[trade] EntryPointValue REFUSED: entry point {} condition argument {:08X} is not a {} "
-                              "-- no answer",
-                              std::to_underlying(a_ep), a_arg->GetFormID(),
-                              wantsBound ? "bound object" : "reference");
-                return std::nullopt;
-            }
-        }
+        // MFO-B323: the conditions read the argument as the engine's own type for that entry point (ArgKindOf). A form of
+        // the wrong type would be read as that type, so refuse it.
+        if (!ArgTypeOk(a_ep, 0, a_arg)) return std::nullopt;
         if (!EntryPointCallable(a_ep, a_owner, 1)) return std::nullopt;
         float v = a_seed;
         EntryPointRel()(std::to_underlying(a_ep), a_owner, a_arg, &v);
         return v;
+    }
+
+    std::optional<float> EntryPointValue(RE::BGSEntryPoint::ENTRY_POINT a_ep, RE::Actor* a_owner,
+                                         RE::TESForm* a_arg, RE::TESObjectREFR* a_target, float a_seed) {
+        if (!a_arg || !a_target) {
+            spdlog::error("[trade] EntryPointValue REFUSED: entry point {} with a null condition argument "
+                          "(no null is passed here: the two-argument shapes are asked with a real item and a real target) -- no answer",
+                          std::to_underlying(a_ep));
+            return std::nullopt;
+        }
+        if (!ArgTypeOk(a_ep, 0, a_arg) || !ArgTypeOk(a_ep, 1, a_target)) return std::nullopt;
+        if (!EntryPointCallable(a_ep, a_owner, 2)) return std::nullopt;
+        float v = a_seed;
+        EntryPointRel()(std::to_underlying(a_ep), a_owner, a_arg, a_target, &v);
+        return v;
+    }
+
+    bool EntryPointEvaluable(RE::Actor* a_owner) {
+        if (!a_owner || !EntryPointSeatOk()) return false;
+        auto* proc = a_owner->GetActorRuntimeData().currentProcess;
+        return proc && proc->middleHigh && proc->middleHigh->perkData;
+    }
+
+    bool EntryPointSeatVerified() {
+        return EntryPointSeatOk();
     }
 
     std::optional<bool> ConditionTrue(const RE::TESCondition& a_cond, RE::TESObjectREFR* a_action,

@@ -134,13 +134,43 @@ struct SpellEntry {
     // follow-up ClickUp 1dfcuabd2pk extends it to spell choice and armor / weapon pick). A small GENERAL reader keyed by entry point and effect,
     // never by perk name: each value is the multiplier his perks give that effect (1.0 = no perk). Room is left for the spell entries
     // (ModSpellCost / ModSpellMagnitude per school) and armor rating per type; only weapon damage is defined now.
-    // NOT FILLED IN THE GAME YET (read = false): evaluating ModAttackDamage per weapon kind on the actor is a main-thread engine read of its
-    // own brief, so every perk consideration is NOT APPLICABLE in game. The simulator fills it from its perk chain (tools/iaus_sim/Policy.h).
+    // FILLED IN THE GAME by iaus/PerkEffects.h (ClickUp 1dfcuabd2pk): the ENGINE's own answer per entry point (HandleEntryPoint on the main thread, with
+    // his own weapons / spells / armor as the items asked about), published as a table the worker reads. The simulator fills the weapon group from its
+    // perk chain (tools/iaus_sim/Policy.h) and nothing else yet.
     enum class PerkWeapon : std::uint8_t { OneHand = 0, TwoHand, Bow, Crossbow, kCount };
+    enum class PerkArmor : std::uint8_t { Light = 0, Heavy, Shield, kCount };   // APPEND ONLY (logs print the index)
     struct PerkRead {
         bool read = false;
         std::array<float, static_cast<std::size_t>(PerkWeapon::kCount)> weaponDamage{ 1.0f, 1.0f, 1.0f, 1.0f };   // entry point ModAttackDamage, by weapon kind
+        // ── APPENDED, ClickUp 1dfcuabd2pk (iaus/PerkEffects.h fills all of it in the game; each group has its OWN read flag, because the simulator
+        // sets `read` for the weapon group alone and a group nobody filled must stay NOT APPLICABLE, never a real 1.0) ──
+        // SPELLS, per School identity (iaus/Core.h): the mean over the spells HE KNOWS of that school. spellCount = how many were asked (0 = none: the
+        // 1.0 beside it is "not known"). spellCost < 1 = cheaper (entry point ModSpellCost); spellMagnitude > 1 = stronger (ModSpellMagnitude).
+        bool spellsRead = false;
+        std::array<float, kSchools>        spellCost{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+        std::array<float, kSchools>        spellMagnitude{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+        std::array<std::uint8_t, kSchools> spellCount{};
+        std::array<bool, kSchools>         dualCast{};   // entry point CanDualCastSpell says yes for at least one of his spells of the school
+        // ARMOR, per PerkArmor: the multiplier his perks give a piece's rating (entry point ModArmorRating; 1.0 = no perk).
+        bool armorRead = false;
+        std::array<float, static_cast<std::size_t>(PerkArmor::kCount)> armorRating{ 1.0f, 1.0f, 1.0f };
+        // BLOCK: the multiplier on the share of a blow his guard stops (entry point ModPercentBlocked). Recorded, not scored yet.
+        bool  blockRead = false;
+        float blockPct = 1.0f;
     };
+
+    // WHAT HIS PERKS ARE WORTH TO A CAST OF ONE SCHOOL, as the consideration input of Cons::BoostSpellPerks: the share of the cast's worth the perks
+    // pay for, 1 - (cost multiplier / magnitude multiplier). 0 = no perk in the school (or they make it worse), 0.5 = the perks double what a point of
+    // magicka buys. < 0 = NOT KNOWN (group not read, no school, or no spell of the school was asked): the consideration is then not applicable.
+    [[nodiscard]] inline float PerkSpellEdge(const PerkRead& a_p, int a_school) {
+        if (!a_p.spellsRead || a_school < 0 || static_cast<std::size_t>(a_school) >= kSchools) return -1.0f;
+        const auto i = static_cast<std::size_t>(a_school);
+        if (a_p.spellCount[i] == 0) return -1.0f;
+        const float c = a_p.spellCost[i], m = a_p.spellMagnitude[i];
+        if (!(c >= 0.0f) || !(m > 0.0f) || c > 1.0e6f || m > 1.0e6f) return -1.0f;   // NaN, negative or absurd: a reader fault is "not known", never a score
+        const float per = (std::max)(c, 0.05f) / m;   // a free spell is floored, so the edge never reaches 1
+        return per >= 1.0f ? 0.0f : 1.0f - per;
+    }
 
     struct Book {
         std::vector<SpellEntry> entries;   // spells first, then scrolls, then staves
@@ -259,7 +289,7 @@ struct SpellEntry {
         Book book;
 
         PostureKind drawn = PostureKind::None;   // the weapon category in his hands now
-        PerkRead perks;                          // batch 3 part C: what his perks multiply, by effect (not filled in game yet: read = false)
+        PerkRead perks;                          // what his perks multiply, by effect (iaus/PerkEffects.h in the game; a group whose read flag is false is not known)
         bool  meleeInRightHand = false;   // Taunt::MeleeInRightHand (the act.taunt offer gate)
         bool  meleeOnly = false;          // Actuation::MeleeOnly (the reach gate's subject)
         bool  handBusyLeft = false;       // a heal stands on that hand (design 1.3: never preempted)
