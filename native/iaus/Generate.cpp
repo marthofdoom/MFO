@@ -103,6 +103,7 @@ namespace MFO::Iaus {
                 f.foeHelpless = a_foe.paralysed;
                 f.foeTaunted = a_foe.taunted;
                 f.foeOutOfMeleeReach = a_foe.outOfMeleeReach;
+                f.foeChaseWaived = a_foe.chaseWaived;
                 f.foeUnholy = a_foe.unholy;
                 f.foeUnaware = a_foe.detectsMe == Tri::No ? Tri::Yes : (a_foe.detectsMe == Tri::Yes ? Tri::No : Tri::Unknown);
             }

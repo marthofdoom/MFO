@@ -3509,3 +3509,7 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **F3 SEV-4:** sneak-line rows (Thief, Master Thief, Nightingale, Listener: kSneakAlways, Steal / PickLocks rows) give no Sneak / Lockpicking / Pickpocket weight in `ClassProfile`. Reasoning: the profile reads weapons and spell roles only; a thief's signature skills get only the Progression list's own share. Deferred: a table row in `ClassProfile` when tuned.
 - **F4 SEV-4:** the perk pick (Verbs.cpp:253, the `WeightsFor` fallback in `AllocateNextEligible`) ignores the class profile and the crafting share, so perks follow the Progression list while skill points follow the class. Reasoning: scoped out ("auto skill allocation"); a perk-order change is its own decision.
 - **F6 SEV-5:** the crafting ceiling is checked once per grant batch (`GrantWeightsFor`), so a large batch of pending levels can push a crafting skill slightly past 50. Reasoning: tiny share (4 %), floors keep it bounded.
+
+## fix/chase-waiver-veto (Sonnet 5.5 author, 2026-11-16, tier B)
+
+- **SIM MIRROR (open, Fable-only, `tools/iaus_sim`):** (1) the sim's act.attack range input must score a waived foe at x = min(dist/cap, 1.0) instead of vetoing it (Policy.h where the cap veto is applied; Generate mirror: `Facts::foeChaseWaived` set from the waiver in Policy.h ~:84-86); (2) the sim's held test omits `entryFoeID` (native already includes a Standing-entry foe via `ChaseWaived`), model a `--waiver` arm for it or note it. Re-run the N6 laps (dragon dropped 20.5 percent with `--waiver player`) after (1).

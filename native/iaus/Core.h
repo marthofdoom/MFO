@@ -349,6 +349,7 @@ namespace MFO::Iaus {
         bool  foeStronger = false;
         bool  foeControlled = false;
         bool  foeTaunted = false;
+        bool  foeChaseWaived = false;     // the foe is chase-waived (Combatant::chaseWaived): act.attack's range input clamps to the cap's edge, no veto
         bool  foeOutOfMeleeReach = false;
         bool  foeUnholy = false;
         bool  damageClass = false;        // a destruction caster (Classes::Flag::kDamage): Decide caps a buff's score at the best viable offense

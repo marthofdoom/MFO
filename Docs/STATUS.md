@@ -1726,6 +1726,8 @@ The declaration (`logistics/EquipAuthority.cpp` `ChooseJewelry`) names the most 
 
 ### What is merged but UNRELEASED
 
+- `fix/chase-waiver-veto` (2026-11-16, NOT merged, ClickUp 1dfcuabd8fw): a chase-waived (held) foe is no longer vetoed by act.attack's range cap; scored at the cap's edge (`ChaseWaived` / `Combatant::chaseWaived` / `ChaseX`). Harness rows N6.
+
 | repo | branch | what it fixes | state |
 |---|---|---|---|
 | APMF | `fix/apmf-offerpackage-nudge-ordering` (head `8daa27f`, a `docs(status)` commit; the nudge fix itself is `3b9b29c`/`e27e22a`) | Publish/drain BEFORE the 0x49 nudge (loot DIAG RC#1's other half) | **merged to APMF `main`**, in NO release tag |

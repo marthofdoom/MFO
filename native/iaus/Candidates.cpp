@@ -344,15 +344,17 @@ namespace MFO::Iaus::Candidates {
             if (!foe->IsHostileToActor(a_self)) continue;                           // the brawl gate (#34)
             auto tgt = foe->GetActorRuntimeData().currentCombatTarget.get();        // HOLD it for the tests
             const float dist = a_self->GetPosition().GetDistance(foe->GetPosition());
+            bool waived = false;
             if (dist > s.chaseCap) {
                 // The chase cap waiver (marth 2026-10-19): kept while Harbinger holds the engagement on it AND
                 // it is fighting this follower OR the player (marth 2026-11-13: "fighting the player is enough doesnt need
                 // to be HIM"; Jesper dropped a circling dragon that targeted the player).
-                const bool held = fid != 0 && (fid == heldFoeID || fid == entryFoeID);
-                if (!(held && (tgt.get() == a_self || (tgt && tgt->IsPlayerRef())))) continue;
+                waived = ChaseWaived(fid, heldFoeID, entryFoeID, tgt.get() == a_self || (tgt && tgt->IsPlayerRef()));
+                if (!waived) continue;
             }
             Combatant u;
             FillUnit(u, foe, a_self);
+            u.chaseWaived = waived;   // act.attack must not veto it for the very cap the waiver lifted (Catalogue.cpp ChaseX)
             if (tgt) {
                 u.targetId = tgt->GetFormID();
                 u.targetIsAlly = tgt.get() != a_self && !tgt->IsPlayerRef() && Taunt::IsPartyMember(tgt.get());

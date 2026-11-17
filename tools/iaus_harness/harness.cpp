@@ -499,6 +499,19 @@ namespace {
                 Cons byFar = Cons::kCount; const float sFar = ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &byFar);
                 Check(sNear > sMid && sMid > 0.0f, "Q70: a nearer foe is the better attack, a farther one still an attack");
                 Check(sFar == 0.0f && byFar == Cons::RangeChase, "Q70: a foe beyond the chase cap is vetoed");
+                {   // N6 (ClickUp 1dfcuabd8fw): a chase-waived (held) foe past the cap is named by act.attack, at the cap's edge; a non-held one stays vetoed.
+                    Candidate held = farC; held.f.foeChaseWaived = true;
+                    Candidate heldFar = farC; heldFar.f.foeChaseWaived = true; heldFar.f.dist = 13000.0f;
+                    Candidate edge = farC; edge.f.dist = 4096.0f;
+                    const float sHeld = ScoreOne(held, Mind{}, Profile{}, t, 1, 0, nullptr), sHeldFar = ScoreOne(heldFar, Mind{}, Profile{}, t, 1, 0, nullptr);
+                    Check(sHeld > 0.0f && sHeldFar > 0.0f, "N6: a chase-waived foe past the cap gets an act.attack score (no cap veto)");
+                    Check(sHeld == sHeldFar && sHeld == ScoreOne(edge, Mind{}, Profile{}, t, 1, 0, nullptr), "N6: a waived foe scores at the cap's edge, whatever its distance");
+                    Check(sHeld < sMid, "N6: a nearer foe still outranks a waived one");
+                    Cons by2 = Cons::kCount;
+                    Check(ScoreOne(farC, Mind{}, Profile{}, t, 1, 0, nullptr, &by2) == 0.0f && by2 == Cons::RangeChase, "N6: a non-waived foe past the cap is still vetoed");
+                    Check(ChaseWaived(7, 7, 0, true) && ChaseWaived(7, 0, 7, true) && !ChaseWaived(7, 7, 0, false) && !ChaseWaived(7, 8, 9, true) && !ChaseWaived(0, 0, 0, true),
+                          "N6: the waiver rule (held or entry foe, fighting him or the player)");
+                }
                 Check(Estimate::TauntChance(20, 20) == 0.5f && Estimate::TauntChance(30, 20) == 0.9f && Estimate::TauntChance(10, 30) == 0.1f,
                       "Q69: the taunt chance is the executor's rule (0.5 + 0.05 per level, kept in 0.1 .. 0.9)");
             }

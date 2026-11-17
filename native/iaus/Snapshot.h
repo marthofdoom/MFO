@@ -213,6 +213,13 @@ struct SpellEntry {
         float touchSpentSec = 3.0f;                 // Candidates.cpp: how long after a touch cast he is "backing out"
     };
 
+    // The chase cap waiver (marth 2026-10-19 / 11-13), the ONE reader of its rule: Candidates.cpp keeps a foe past the cap in the snapshot
+    // by it and marks Combatant::chaseWaived from it; the range inputs (Catalogue.cpp ChaseX) read only that mark. a_heldId / a_entryId are
+    // Harbinger's pinned and Standing-entry foes (0 = none); a_fightsHimOrPlayer = its combat target is the follower or the player.
+    [[nodiscard]] inline bool ChaseWaived(std::uint32_t a_foeId, std::uint32_t a_heldId, std::uint32_t a_entryId, bool a_fightsHimOrPlayer) {
+        return a_foeId != 0 && (a_foeId == a_heldId || a_foeId == a_entryId) && a_fightsHimOrPlayer;
+    }
+
     // ── One actor ─────────────────────────────────────────────────────────────────────────────────────────
     struct Combatant {
         std::uint32_t id = 0;
@@ -241,6 +248,7 @@ struct SpellEntry {
         bool  taunted = false;              // already under a live taunt (any taunter)
         bool  tauntedByMe = false;          // under a live taunt of THIS follower (Taunt::TauntedBy; the Knight line's guard count, Q-S-5)
         bool  outOfMeleeReach = false;      // airborne beyond a swing (CombatSense::OutOfMeleeReach)
+        bool  chaseWaived = false;          // ChaseWaived() held for it (Candidates.cpp): kept past the chase cap; act.attack scores it at the cap's edge
         // G2 Layer 1 (iaus/Hide.h): the FOE's combat group's record of the follower. Yes = a live, positive detect level;
         // No = absent / lost / detect level <= 0 (hidden from this foe); Unknown = the foe has no group (and every actor that is not a foe).
         Tri   detectsMe = Tri::Unknown;
