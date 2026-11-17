@@ -80,7 +80,7 @@ namespace MFO::Concealment {
 
     // 11-17 A1d. WORKER (apmf/SneakClaims.cpp sweep, never under its mutex). The hide hold's stance claim did not take (IsSneaking still false after
     // its re-file): ends the run / hold exactly as Release does (the ch.24 drive AND its ch.7 Offense|Cast deny go at once) and remembers that the
-    // stance failed in this fight: no new Hide / Step run (both need the stance) is prepared or begun for him until Release (combat end).
+    // stance failed in this fight: no new Hide / Step run (both need the stance) is prepared or begun for him until Release at the fight's end (combat ended / dismissed / down).
     void AbortHide(RE::FormID a_follower, const char* a_why);
 
     // revert / load (pump drained).

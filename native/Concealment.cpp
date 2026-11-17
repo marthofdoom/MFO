@@ -13,6 +13,7 @@
 #include "iaus/Hide.h"           // G2 Layer 1's verdict: does this foe's group still have him
 
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -138,7 +139,7 @@ namespace MFO::Concealment {
         std::unordered_map<RE::FormID, Pick> g_picks;
         std::unordered_map<RE::FormID, Run>  g_runs;
         std::unordered_map<RE::FormID, Stance> g_stances;
-        std::unordered_set<RE::FormID>       g_stanceFailed;   // A1d: the stance did not take in this fight (cleared by Release / ClearTransientState)
+        std::unordered_set<RE::FormID>       g_stanceFailed;   // A1d: the stance did not take in this fight (cleared by Release at the fight's end / ClearTransientState)
         std::uint64_t                        g_epoch = 0;   // bumped by ClearTransientState: a pick of the old world is dropped
 
         struct Job {
@@ -784,20 +785,24 @@ namespace MFO::Concealment {
     }
 
     namespace {
-        void ReleaseImpl(RE::FormID a_follower, const char* a_why, bool a_stanceFailed);
+        void ReleaseImpl(RE::FormID a_follower, const char* a_why, bool a_stanceFailed, bool a_forget);
     }
-    void Release(RE::FormID a_follower, const char* a_why) { ReleaseImpl(a_follower, a_why, false); }
+    // Only the fight's end (combat ended, dismissed, down / disabled) forgets a failed stance; a mid-fight release (retreating, a source toggle) keeps it.
+    void Release(RE::FormID a_follower, const char* a_why) {
+        const bool fightOver = a_why && (!std::strcmp(a_why, "combat ended") || !std::strcmp(a_why, "dismissed") || !std::strcmp(a_why, "follower down/disabled"));
+        ReleaseImpl(a_follower, a_why, false, fightOver);
+    }
     void AbortHide(RE::FormID a_follower, const char* a_why) {
         spdlog::warn("[conceal] {:08X}: the hide stance did not take ({}): the run and its ch.7 deny are released; no new hide run or step this fight",
                      a_follower, a_why ? a_why : "");
-        ReleaseImpl(a_follower, a_why, true);
+        ReleaseImpl(a_follower, a_why, true, false);
     }
     namespace {
-    void ReleaseImpl(RE::FormID a_follower, const char* a_why, bool a_stanceFailed) {
+    void ReleaseImpl(RE::FormID a_follower, const char* a_why, bool a_stanceFailed, bool a_forget) {
         bool had = false, stance = false, shortRun = false;
         {
             std::scoped_lock lk(g_mx);
-            if (a_stanceFailed) g_stanceFailed.insert(a_follower); else g_stanceFailed.erase(a_follower);
+            if (a_stanceFailed) g_stanceFailed.insert(a_follower); else if (a_forget) g_stanceFailed.erase(a_follower);
             if (const auto r = g_runs.find(a_follower); r != g_runs.end())
                 shortRun = r->second.kind == Kind::BackOff || r->second.kind == Kind::Step;   // batch I: no hide cooldown stamp
             had    = g_runs.erase(a_follower) != 0;

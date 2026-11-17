@@ -38,6 +38,7 @@
 #include <cmath>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -91,7 +92,10 @@ namespace MFO::APMFBridge {
         std::unordered_map<RE::FormID, Claim>                             g_off;          // guarded by g_offMx
         // A block and the world it was made in (A1c). armed = stamped (pos / leash filled after the sweep released g_offMx: LeashRadius takes the
         // combat group lock, never taken under g_offMx); an unstamped block stands until the fight ends, as every block did before.
-        struct Blk { bool armed = false; float x = 0, y = 0, z = 0, leash = 0; };
+        // leashed: made by the ch.23 LEASHED verdict, which depends on the PLAYER's and the FOE's positions and the leash radius (apmf/PursuitLeash.cpp),
+        // not on where the follower stands: such a block lapses when either of them moved; any other block (never went live, Harbinger-ended) lapses
+        // on the follower's own move.
+        struct Blk { bool armed = false, leashed = false; float x = 0, y = 0, z = 0, leash = 0, px = 0, py = 0, pz = 0, fx = 0, fy = 0, fz = 0; };
         std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, Blk>> g_offBlocked;   // follower -> foes given up on this fight
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_offRefileAfter;
         struct Regular { RE::FormID foe = 0; std::chrono::steady_clock::time_point until{}; };
@@ -144,6 +148,10 @@ namespace MFO::APMFBridge {
             if (!f) return true;
             const auto  pos   = f->GetPosition();
             const float leash = Confidence::LeashRadius(f);
+            const auto* pc    = RE::PlayerCharacter::GetSingleton();
+            const auto* foeA  = RE::TESForm::LookupByID<RE::Actor>(a_foe);
+            const RE::NiPoint3 ppos = pc ? pc->GetPosition() : RE::NiPoint3{};
+            const RE::NiPoint3 fpos = foeA ? foeA->GetPosition() : RE::NiPoint3{};
             std::scoped_lock lock(g_offMx);
             const auto bit = g_offBlocked.find(a_follower);
             if (bit == g_offBlocked.end()) return false;
@@ -152,9 +160,16 @@ namespace MFO::APMFBridge {
             const Blk& b = fit->second;
             const float moved = pos.GetDistance(RE::NiPoint3{ b.x, b.y, b.z });
             const bool grown = leash > b.leash + kBlockLeashGrow;
-            if (!grown && !(moved > kBlockMoveUnits)) return true;
-            spdlog::info("[offense-approach] {:08X}: block on {:08X} lapsed ({}: leash {:.0f} -> {:.0f}, moved {:.0f} u) -- he may be filed again",
-                         a_follower, a_foe, grown ? "his leash radius grew" : "he moved on", b.leash, leash, moved);
+            float lapseMove = moved;   // a non-leashed block: the follower's own move
+            if (b.leashed) {           // a ch.23 verdict: the player or the foe moved
+                const float pm = pc ? ppos.GetDistance(RE::NiPoint3{ b.px, b.py, b.pz }) : 0.0f;
+                const float fm = foeA ? fpos.GetDistance(RE::NiPoint3{ b.fx, b.fy, b.fz }) : 0.0f;
+                lapseMove = std::max(pm, fm);
+            }
+            if (!(b.leashed && grown) && !(lapseMove > kBlockMoveUnits)) return true;
+            spdlog::info("[offense-approach] {:08X}: block on {:08X} lapsed ({}: leash {:.0f} -> {:.0f}, {} moved {:.0f} u) -- he may be filed again",
+                         a_follower, a_foe, (b.leashed && grown) ? "the leash radius grew" : "things moved on", b.leash, leash,
+                         b.leashed ? "player / foe" : "he", lapseMove);
             bit->second.erase(fit);
             return false;
         }
@@ -266,9 +281,9 @@ namespace MFO::APMFBridge {
                 if (c.floorSince == std::chrono::steady_clock::time_point{}) { c.floorSince = now; return; }
                 if (now - c.floorSince < kFloorGiveUp) return;
                 spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} at the tightening floor and still occluded: regular "
-                             "movement for {} s (R {:.0f}, Holding, no sight for {} s; standoff={:.0f} ({})) -- released, not blocked",
+                             "movement for {} s (R {:.0f}, Holding, no sight for {} s; floor={:.0f}) -- released, not blocked",
                              a_follower, a_foe, kOffenseRegularMoveMs / 1000, c.radius,
-                             std::chrono::duration_cast<std::chrono::seconds>(now - c.floorSince).count(), standoff, standoffWhy);
+                             std::chrono::duration_cast<std::chrono::seconds>(now - c.floorSince).count(), kMinRadius);
                 g_offRegular[a_follower] = Regular{ a_foe, now + std::chrono::milliseconds(kOffenseRegularMoveMs) };
                 const auto h = c.handle;
                 g_off.erase(it);
@@ -280,7 +295,7 @@ namespace MFO::APMFBridge {
             tp.target = a_foe; tp.fval = r2; tp.ival = APMF_API::kApproach_Hold;
             api->Repoint(c.handle, &tp);
             spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} TIGHTENED R {:.0f} -> {:.0f} (inside the bound "
-                         "but still no sight; standoff={:.0f} ({}))", a_follower, a_foe, c.radius, r2, standoff, standoffWhy);
+                         "but still no sight; floor={:.0f})", a_follower, a_foe, c.radius, r2, kMinRadius);
             c.radius = r2; c.lastTighten = now; c.lastSeq = 0;
             return;
         }
@@ -335,7 +350,7 @@ namespace MFO::APMFBridge {
         const auto* api = OffApi();
         if (!api) return;
         std::vector<std::pair<RE::FormID, const char*>> drop;   // follower, why: released below (outside g_offMx)
-        std::vector<std::pair<RE::FormID, RE::FormID>> stamp;   // follower, foe: blocks made this sweep, stamped below (A1c)
+        std::vector<std::tuple<RE::FormID, RE::FormID, bool>> stamp;   // follower, foe: blocks made this sweep, stamped below (A1c)
         {
             std::scoped_lock lock(g_offMx);
             if (g_off.empty()) return;
@@ -358,7 +373,7 @@ namespace MFO::APMFBridge {
                         spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} is LEASHED by MFO's ch.23 pursuit leash "
                                      "(no point within R {:.0f} of him lies inside it) -- not fought; released and not re-filed "
                                      "for him this fight", fid, c.foe, c.radius);
-                        g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe);
+                        g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe, true);
                         api->Release(c.handle);
                         c.handle = APMF_API::kInvalidHandle;
                         done.push_back(fid);
@@ -378,14 +393,14 @@ namespace MFO::APMFBridge {
                 if (!c.everLive && !(ours && IsEnd(info.state))) {
                     spdlog::warn("[offense-approach] {:08X}: ch.24 approach to {:08X} NEVER WENT LIVE (h={}, {} unpaused sweeps) -- "
                                  "released; not re-filed for him this fight", fid, c.foe, c.handle, c.unpausedSweeps);
-                    g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe);
+                    g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe, false);
                 } else {
                     const bool block = ours && Blocks(info.state);
                     if (ours && info.state == APMF_API::kApproachState_CombatEnded) g_offRefileAfter[fid] = now + kRefileGap;
                     spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} ENDED BY HARBINGER: {} (distance {:.0f} / R {:.0f}, "
                                  "h={}){}", fid, c.foe, Word(info.state), info.distance, info.radius, c.handle,
                                  block ? " -- not re-filed for him this fight" : "");
-                    if (block) g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe);
+                    if (block) { g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe, info.state == APMF_API::kApproachState_Leashed); }
                 }
                 api->Release(c.handle);
                 c.handle = APMF_API::kInvalidHandle;
@@ -395,7 +410,7 @@ namespace MFO::APMFBridge {
         }
         for (const auto& [fid, why] : drop) ReleaseOffenseApproach(fid, why, false);
         // A1c: stamp each block with where and at what leash radius it was made. Read here, outside g_offMx (LeashRadius takes the combat group lock).
-        for (const auto& [fid, foe] : stamp) {
+        for (const auto& [fid, foe, leashed] : stamp) {
             auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!f) continue;
             const auto  pos   = f->GetPosition();
@@ -405,7 +420,10 @@ namespace MFO::APMFBridge {
             if (bit == g_offBlocked.end()) continue;
             const auto fit = bit->second.find(foe);
             if (fit == bit->second.end()) continue;
-            fit->second = Blk{ true, pos.x, pos.y, pos.z, leash };
+            Blk nb; nb.armed = true; nb.leashed = leashed; nb.x = pos.x; nb.y = pos.y; nb.z = pos.z; nb.leash = leash;
+            if (const auto* pc = RE::PlayerCharacter::GetSingleton()) { const auto pp = pc->GetPosition(); nb.px = pp.x; nb.py = pp.y; nb.pz = pp.z; }
+            if (const auto* fa = RE::TESForm::LookupByID<RE::Actor>(foe)) { const auto fp = fa->GetPosition(); nb.fx = fp.x; nb.fy = fp.y; nb.fz = fp.z; }
+            fit->second = nb;
         }
     }
 

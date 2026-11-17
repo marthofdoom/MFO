@@ -169,13 +169,22 @@ namespace MFO::Iaus::Reposition {
     }
 
     // 11-17 field (Cicero swung at a foe above him through a wall while a reachable one stood by): a melee blade cannot hurt this foe NOW. The
-    // engine's airborne test (outOfMeleeReach, CombatSense::OutOfMeleeReach) OR a foe on another level (further than StrikeDistance above or
-    // below him) that his own ray does not see. ONE reader; the generator uses it to prefer a reachable foe. Melee / silver drawn only.
+    // engine's airborne test (outOfMeleeReach, CombatSense::OutOfMeleeReach) OR a foe beyond the vertical reach line (OutOfVerticalReach, the same
+    // line CombatSense uses: the lower body's height + the melee reach) that his own ray does not see. ONE reader; the generator uses it to prefer a reachable foe. Melee / silver drawn only.
+    // THE vertical reach line, shared with CombatSense::OutOfMeleeReach (which calls it): the taller of the two bodies is not used, the LOWER
+    // one's height: his own when the foe is above him, the foe's when below, plus the melee reach (+ a_slack). a_dz = foe z - self z.
+    [[nodiscard]] inline bool OutOfVerticalReach(float a_dz, float a_selfH, float a_foeH, float a_reach, float a_slack = 0.0f) {
+        const float h = a_dz >= 0.0f ? a_selfH : a_foeH;
+        return std::fabs(a_dz) > h + a_reach + a_slack;
+    }
     [[nodiscard]] inline bool MeleeUnreachableNow(const Snapshot& a_s, const Combatant& a_foe) {
         if (!(a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver)) return false;
         if (a_foe.outOfMeleeReach) return true;
-        const float dz = std::fabs(Prune::Finite(a_foe.z, 0.0f) - Prune::Finite(a_s.self.z, 0.0f));
-        return a_foe.sight == Sight::Occluded && dz > Estimate::StrikeDistance(a_s.meleeReach);
+        constexpr float kNominalH = 120.0f;   // CombatSense::kNominalBodyHeight
+        const float dz = Prune::Finite(a_foe.z, 0.0f) - Prune::Finite(a_s.self.z, 0.0f);
+        const float sh = a_s.self.bodyHeight > 0.0f ? a_s.self.bodyHeight : kNominalH;
+        const float fh = a_foe.bodyHeight > 0.0f ? a_foe.bodyHeight : kNominalH;
+        return a_foe.sight == Sight::Occluded && OutOfVerticalReach(dz, sh, fh, Prune::Finite(a_s.meleeReach, 0.0f));
     }
 
     // The foe he fights the spell at: his current target if it is a listed foe, else the nearest one that is not fleeing or paralysed.

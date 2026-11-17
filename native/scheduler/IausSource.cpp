@@ -156,7 +156,13 @@ namespace MFO::Scheduler {
             if (s.meleeOnly || s.foes.empty()) return nullptr;
             // 11-17 A1(a): the standoff comes from THIS lap's attack road. A melee swing (his hands hold a blade) is closed by the engine's own
             // pursuit: the 1024 ranged standoff parked a sword fighter who merely carries spells 1000 u from the foe. No approach is filed for it.
-            if (s.drawn == Iaus::PostureKind::Melee || s.drawn == Iaus::PostureKind::Silver) return nullptr;
+            // EXCEPT when every foe is unreachable for the blade (Reposition::MeleeUnreachableNow: a storey up behind a wall): the engine then
+            // swings at a foe it counts as in reach instead of pathing, so the approach is filed at the touch standoff (128) and the engine paths
+            // to the foe (up the stairs). A reachable foe anywhere in the list = no approach.
+            const bool blade = s.drawn == Iaus::PostureKind::Melee || s.drawn == Iaus::PostureKind::Silver;
+            if (blade)
+                for (const auto& f : s.foes)
+                    if (ApproachEligible(s, f) && !Iaus::Reposition::MeleeUnreachableNow(s, f)) return nullptr;
             // A foe kept past the chase cap (noApproach, 11-17 A3) counts here only when ApproachEligible (inside his bow's range).
             bool any = false;
             for (const auto& f : s.foes) {
@@ -209,12 +215,30 @@ namespace MFO::Scheduler {
                 return;
             }
             // A touch spell closes to touch range (Evaluator's a_touchSpell): the spell of his hands that IAUS would cast at him.
-            bool touch = false;
+            bool touch = s.drawn == Iaus::PostureKind::Melee || s.drawn == Iaus::PostureKind::Silver;   // a blade: path to the foe (see OccludedFoe)
             if (Iaus::Reposition::SpellPhase(s)) {
                 const auto h = Iaus::Reposition::HandsRange(s);
                 touch = h.touchForm != 0 && (!h.mixed || h.touchChosen);
             }
             APMFBridge::ServiceOffenseApproach(a_id, foe->id, touch);
+        }
+
+        // 11-17 field (Cicero's pin on a foe a storey up behind a wall, filed by MFO's own rule while it was Occluded): a blade whose pinned foe reads
+        // MeleeUnreachableNow while another listed foe is reachable gives the pin up, so the engine's target choice is free to take the reachable one.
+        void ReleaseUnreachablePin(RE::FormID a_id, const Iaus::Snapshot& a_s) {
+            if (!(a_s.drawn == Iaus::PostureKind::Melee || a_s.drawn == Iaus::PostureKind::Silver)) return;
+            const auto pinned = Targeting::Current(a_id).get();
+            if (!pinned) return;
+            const RE::FormID pid = pinned->GetFormID();
+            const Iaus::Combatant* pf = nullptr;
+            bool otherReachable = false;
+            for (const auto& f : a_s.foes) {
+                if (f.id == pid) pf = &f;
+                else if (ApproachEligible(a_s, f) && !Iaus::Reposition::MeleeUnreachableNow(a_s, f)) otherReachable = true;
+            }
+            if (!pf || !otherReachable || !Iaus::Reposition::MeleeUnreachableNow(a_s, *pf)) return;
+            spdlog::info("[iaus] {:08X}: the pin on {:08X} is released: the foe is out of his blade's reach (another level / airborne, behind a wall) and a reachable foe stands", a_id, pid);
+            Targeting::Clear(a_id);
         }
 
         // RELEASE WHAT A RUNNING DECISION HOLDS (the toggle edge). Every call is the existing, idempotent release
@@ -267,6 +291,7 @@ namespace MFO::Scheduler {
         // H4 is released only when the approach could actually file at that foe (not blocked this fight, seat not refused); otherwise H4
         // works as on main. While an offense approach stands H4 is not filed at all: the approach's own 1.5 s sight dwell is the hysteresis,
         // so a flicker of sight does not swap the two claims every lap.
+        ReleaseUnreachablePin(a_id, m_set.snap);
         const Iaus::Combatant* occFoe = OccludedFoe(m_set);
         if (occFoe && !APMFBridge::DisengageStands(a_id) && !APMFBridge::OffenseApproachCannotFile(a_id, occFoe->id))
             APMFBridge::ReleaseRangeClose(a_id, "sight wins: every foe reads Occluded, the offense approach takes the ch.24 channel");

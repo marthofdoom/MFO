@@ -230,6 +230,7 @@ struct SpellEntry {
         float sp = 0.0f, spMax = 0.0f;
         float x = 0.0f, y = 0.0f, z = 0.0f;
         float dist = 0.0f;                  // from the follower (0 for the follower himself)
+        float bodyHeight = 0.0f;            // CombatSense::BodyHeight (0 = not read: the nominal 120 is used); the vertical-reach line reads it
         int   level = 1;
         std::uint32_t targetId = 0;         // its current combat target, 0 = none
         bool  targetIsAlly = false;         // ...and that target is a party member other than the follower and the player

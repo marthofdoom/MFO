@@ -860,7 +860,7 @@ namespace MFO::Packages {
         }
 
         constexpr float kAPMFTravelRadius = 128.0f;   // matches make_travel_package()'s slots
-        constexpr float kAPMFRetreatRadius = 200.0f;  // = Scheduler kRetreatArriveDist (11-17 A5: the package ends where the driver calls it arrived; keep in step)
+        constexpr float kAPMFRetreatRadius = 150.0f;  // matches make_retreat_package()'s legacy radius; strictly below Scheduler kRetreatArriveDist (200): the arrival margin
 
         // Per-slot bookkeeping for the APMF route -- file-local, NEVER serialized
         // (the claim itself is runtime-only, apmf/APMFBridge.h). Mirrors g_travelSlots'

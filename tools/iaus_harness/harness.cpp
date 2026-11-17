@@ -533,6 +533,8 @@ namespace {
                     Check(!Reposition::InWeaponRange(bs, 500.0f, t.bowWeaponRange), "A3: a blade has no weapon range past the chase cap");
                     Combatant up; up.z = 900.0f; up.sight = Sight::Occluded;
                     Check(Reposition::MeleeUnreachableNow(bs, up), "field: a foe on another level behind a wall is unreachable for a blade");
+                    up.z = 350.0f; Check(Reposition::MeleeUnreachableNow(bs, up), "field: one storey (350 u) behind a wall counts (the h + reach line, not StrikeDistance)");
+                    up.z = 900.0f;
                     up.sight = Sight::Visible;
                     Check(!Reposition::MeleeUnreachableNow(bs, up), "field: the same foe in view is not read as unreachable");
                     bs.drawn = PostureKind::Bow; up.sight = Sight::Occluded;

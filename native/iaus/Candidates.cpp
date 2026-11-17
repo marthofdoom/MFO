@@ -160,6 +160,7 @@ namespace MFO::Iaus::Candidates {
             ReadPool(a_actor, RE::ActorValue::kStamina, u.sp, u.spMax);
             const auto pos = a_actor->GetPosition();
             u.x = pos.x; u.y = pos.y; u.z = pos.z;
+            u.bodyHeight = CombatSense::BodyHeight(a_actor);
             if (a_actor != a_self) {
                 const float d = a_self->GetPosition().GetDistance(pos);
                 u.dist = std::isfinite(d) ? d : 0.0f;

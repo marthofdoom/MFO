@@ -125,12 +125,13 @@ namespace MFO::Iaus {
             // 11-17 field: a blade prefers a foe he can reach. An unreachable one (Reposition::MeleeUnreachableNow) is named only when no listed
             // foe is reachable (then the engine's own pursuit and the occluded approach are all there is).
             bool anyReachable = false;
-            if (melee) for (const Combatant* f : x.top) if (!Reposition::MeleeUnreachableNow(s, *f)) { anyReachable = true; break; }
+            const auto skipped = [&](const Combatant& f) { return f.noApproach && !Reposition::InWeaponRange(s, f.dist, x.t.bowWeaponRange); };
+            if (melee) for (const Combatant* f : x.top) if (!skipped(*f) && !Reposition::MeleeUnreachableNow(s, *f)) { anyReachable = true; break; }
             for (const Combatant* foe : x.top) {
                 if (melee && anyReachable && Reposition::MeleeUnreachableNow(s, *foe)) continue;
                 // 11-17 A3: a foe kept past the chase cap (noApproach) is shot at inside the bow's range and read by the Retreat family; nothing
                 // else is named on it (no chase, no melee pick, no taunt): the cap limits movement, not shots.
-                if (foe->noApproach && !Reposition::InWeaponRange(s, foe->dist, x.t.bowWeaponRange)) continue;
+                if (skipped(*foe)) continue;
                 // G2 Layer 1: while the hold row stands (he sneaks, no listed foe detects him) a blow is named only on a foe he
                 // can strike now. An unaware foe still out of reach is waited for, not chased: the chase is the noise.
                 const bool holdsOff = x.hold && foe->detectsMe == Tri::No && !x.StrikeReady(*foe);
@@ -615,7 +616,7 @@ namespace MFO::Iaus {
                 if (a_costOnly) return true;   // the latch's release test: only the pool and a free hand count
                 if (close && (a_nonCloseOnly || CloseRefused(x, e))) continue;   // a spell he may not pick is no reason to keep the dagger away
                 for (const Combatant* foe : x.top)
-                    if (!FoeBarred(e, *foe)) return true;
+                    if (!foe->noApproach && !FoeBarred(e, *foe)) return true;
             }
             return false;
         }
@@ -769,6 +770,7 @@ namespace MFO::Iaus {
                     if (CastBarred(x, e)) { ++x.out.droppedTarget; break; }   // (the guard / holdQuiet gates were met above; this is the blast-area one)
                     for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                         const Combatant* foe = x.top[ti];
+                        if (foe->noApproach) continue;   // 11-17: a foe kept past the chase cap is a threat read, never a cast target (spell reach 0 would not veto it)
                         if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule (FoeBarred's)
                         // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
                         // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
@@ -913,7 +915,15 @@ namespace MFO::Iaus {
             rel.push_back(in);
         }
         x.foeCount = static_cast<int>(foes.size());
-        for (const std::size_t i : Prune::TopFoes(rel)) x.top.push_back(foes[i]);
+        {   // 11-17: foes kept past the chase cap (noApproach: threat / detection reads, a bow's shots) rank AFTER every eligible foe, so a far foe
+            // that targets him (onMe) cannot crowd a near one out of the top five.
+            std::vector<Prune::FoeIn> relNear, relFar;
+            std::vector<std::size_t>  idxNear, idxFar;
+            for (std::size_t i = 0; i < foes.size(); ++i) (foes[i]->noApproach ? relFar : relNear).push_back(rel[i]), (foes[i]->noApproach ? idxFar : idxNear).push_back(i);
+            for (const std::size_t i : Prune::TopFoes(relNear)) x.top.push_back(foes[idxNear[i]]);
+            if (x.top.size() < Prune::kTopFoes)
+                for (const std::size_t i : Prune::TopFoes(relFar, Prune::kTopFoes - x.top.size())) x.top.push_back(foes[idxFar[i]]);
+        }
         {   // feat/consumables: the fight's pressure, from the kept foes' levels against his (the same ratio Cons::FoeThreat reads)
             float share = 0.0f;
             for (const Combatant* f : x.top)
