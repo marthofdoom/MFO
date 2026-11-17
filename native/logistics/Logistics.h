@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <array>
 #include "State.h"
 #include "InvSnapshot.h"   // InvSnap::Entry in the public signatures (INVARIANTS #84)
 #include <unordered_set>   // T#69: stock-gear sets (CopyStockGear/LoadStockRecord)
@@ -103,7 +104,8 @@ namespace MFO::Logistics {
     // the perk-style bias when the weapon's kind is in a_preferKinds
     // (Progression::WeaponKind bits, from BuyThresholds::preferKinds). Pure form
     // read (keywords + weapon type). a_preferKinds == 0 -> the plain damage.
-    float WeaponBuyScore(RE::TESObjectWEAP* a_weap, int a_preferKinds);
+    // a_perkKind = WeaponRoles::perkKind (BuyThresholds::perkKind): what his perks do to each kind's damage (1dfcuabd2pk; all 1.0 = none).
+    float WeaponBuyScore(RE::TESObjectWEAP* a_weap, int a_preferKinds, const std::array<float, 9>& a_perkKind);
 
     // Revert/reload: drop the perk-style mirror (worker-read copies of
     // Progression::TallyStyleVotes + their MainThread::Post in-flight latches).
@@ -345,7 +347,12 @@ namespace MFO::Logistics {
     struct CombatWeaponStyle {
         std::uint16_t preferKinds = 0;
         std::uint8_t  offHand     = 0;
+        // 1dfcuabd2pk: WeaponRoles::perkKind, carried so the combat pick scores a weapon exactly as loot / keep / buy do (1.0 = no perk weighed).
+        std::array<float, 9> perkKind{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
     };
+    // Which Progression::WeaponKind bit a weapon IS (0 = none: a staff, fists): wraps the internal WeaponKindOf, THE classifier WeaponScore
+    // uses, so the perk-effect reader (iaus/PerkEffects.cpp) asks the engine about the same kinds the weapon pick scores. Form data: any thread.
+    std::uint16_t WeaponKindBits(const RE::TESObjectWEAP* a_weapon);
     // Rounds carried per ammo family (mirror of the internal AmmoOwned; For() picks the family by the
     // weapon's own record, the same test the internal one runs).
     struct CombatAmmo {

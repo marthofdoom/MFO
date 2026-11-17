@@ -1632,6 +1632,69 @@ namespace {
     }
 
     // School affinity (ruling Q-school-affinity): a smooth wave over the school circle, a multiplier only.
+    // ── spell perks (ClickUp 1dfcuabd2pk): Snapshot::PerkRead's spell group -> Facts::spellPerkEdge -> Cons::BoostSpellPerks ──
+    void SpellPerkRows() {
+        std::printf("\n=== spell perks (perk-effect reader) ===\n");
+        const Tuning& t = DefaultTuning();
+        // The pure input rule.
+        PerkRead p;
+        Check(PerkSpellEdge(p, 0) < 0.0f, "spell perks: an unread group is not known (edge < 0)");
+        p.spellsRead = true;
+        Check(PerkSpellEdge(p, 0) < 0.0f, "spell perks: a school with no spell asked is not known");
+        p.spellCount[0] = 2;
+        Check(PerkSpellEdge(p, 0) == 0.0f, "spell perks: no perk in the school = edge 0");
+        p.spellCost[0] = 0.5f;
+        Check(std::fabs(PerkSpellEdge(p, 0) - 0.5f) < 1e-6f, "spell perks: half cost = edge 0.5");
+        p.spellMagnitude[0] = 2.0f;
+        Check(std::fabs(PerkSpellEdge(p, 0) - 0.75f) < 1e-6f, "spell perks: half cost and double magnitude = edge 0.75");
+        p.spellCost[0] = 0.0f;
+        Check(PerkSpellEdge(p, 0) < 1.0f && PerkSpellEdge(p, 0) > 0.9f, "spell perks: a free spell is floored, the edge never reaches 1");
+        p.spellCost[0] = 2.0f; p.spellMagnitude[0] = 1.0f;
+        Check(PerkSpellEdge(p, 0) == 0.0f, "spell perks: perks that make the school worse read 0, never negative");
+        p.spellCost[0] = std::numeric_limits<float>::quiet_NaN();
+        Check(PerkSpellEdge(p, 0) < 0.0f, "spell perks: a NaN multiplier is not known, never a score");
+        Check(PerkSpellEdge(p, -1) < 0.0f && PerkSpellEdge(p, 5) < 0.0f, "spell perks: no school / out of range is not known");
+
+        // The scorer: not applicable = bit-identical; the shipped PLACEHOLDER curve is x1.00 at 0, x1.15 at 0.5 and after.
+        const Foe foe{ "Bandit", 0x0003DF30, 600.0f, 1.0f, 1.0f, false, false, false, false, true, false, false, 0.0f, 0.0f, 0.0f };
+        Candidate c = Offense("Spell", 0x00012FCD, RoleTag::Fire, 30, 3000, foe, 0.0f, 100.0f, 100.0f);
+        const Mind m{};
+        const Profile none;
+        const float base = ScoreOne(c, m, none, t, 3, 0.0f, nullptr);
+        c.f.spellPerkEdge = 0.0f;
+        Check(base > 0.0f && ScoreOne(c, m, none, t, 3, 0.0f, nullptr) == base, "spell perks: edge 0 scores exactly as a cast with no perk read");
+        c.f.spellPerkEdge = 0.5f;
+        const float half = ScoreOne(c, m, none, t, 3, 0.0f, nullptr);
+        Check(std::fabs(half / base - 1.15f) < 1e-4f, "spell perks: the shipped placeholder gives x1.15 at edge 0.5");
+        c.f.spellPerkEdge = 0.25f;
+        const float quarter = ScoreOne(c, m, none, t, 3, 0.0f, nullptr);
+        Check(quarter > base && quarter < half, "spell perks: the boost rises with the edge");
+        c.f.spellPerkEdge = 1.0f;
+        Check(ScoreOne(c, m, none, t, 3, 0.0f, nullptr) == half, "spell perks: flat after 0.5 (a boost, never more than x1.15)");
+        Check(RoleOf(Cons::BoostSpellPerks) == Role::Boost && Name(Cons::BoostSpellPerks) == "spell_perks" &&
+              static_cast<std::size_t>(Cons::BoostSpellPerks) == static_cast<std::size_t>(Cons::ConsumableWorth) + 1,
+              "spell perks: the consideration is APPENDED after consumable_worth, a Boost, named spell_perks");
+
+        // Generate: only a spell he casts himself carries the edge; an unread table leaves every candidate untouched.
+        Snapshot s = MageFight();
+        for (auto& e : s.book.entries) e.school = static_cast<std::int8_t>(kDestruction);
+        const ClassGate g{};
+        const auto edgeOf = [&](const Snapshot& a_s, std::uint32_t a_form, bool a_scroll) {
+            const auto gen = Generate(a_s, g, t);
+            for (const auto& cand : gen.actions)
+                if (cand.form == a_form && (cand.family == Family::Scroll) == a_scroll) return cand.f.spellPerkEdge;
+            return -2.0f;
+        };
+        Check(edgeOf(s, 0x12FCD, false) == -1.0f, "spell perks: an unread perk table leaves the cast's edge not known (the simulator today)");
+        s.perks.read = true;   // the weapon group alone, as the simulator fills it
+        Check(edgeOf(s, 0x12FCD, false) == -1.0f, "spell perks: the weapon group's read flag does not make the spell group known");
+        s.perks.spellsRead = true; s.perks.spellCount[static_cast<std::size_t>(kDestruction)] = 3; s.perks.spellCost[static_cast<std::size_t>(kDestruction)] = 0.5f;
+        Check(std::fabs(edgeOf(s, 0x12FCD, false) - 0.5f) < 1e-6f, "spell perks: Generate copies his school's edge onto the spell cast");
+        s.scrollRoad = true;
+        const float scrollEdge = edgeOf(s, 0xA44C5, true);
+        Check(scrollEdge == -1.0f || scrollEdge == -2.0f, "spell perks: a scroll never carries the edge");
+    }
+
     void SchoolAffinityRows() {
         namespace CC = MFO::Iaus::ClassCurves;
         std::printf("\n=== school affinity ===\n");
@@ -2073,6 +2136,7 @@ int main() {
     BatchI();
     ClassCurveRows();
     SchoolAffinityRows();
+    SpellPerkRows();
     BuffPotions();
     ConsumablesWorth();
     LootNeedScores();

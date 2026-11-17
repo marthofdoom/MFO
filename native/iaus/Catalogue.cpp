@@ -82,7 +82,7 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
-            "buff_foes", "perks", "consumable_worth",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
+            "buff_foes", "perks", "consumable_worth", "spell_perks",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -101,7 +101,7 @@ namespace MFO::Iaus {
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
         case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
-        case Cons::BoostBuffThreat: case Cons::BoostPosturePerks:
+        case Cons::BoostBuffThreat: case Cons::BoostPosturePerks: case Cons::BoostSpellPerks:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -120,7 +120,7 @@ namespace MFO::Iaus {
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
-                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth };
+                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -380,6 +380,15 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 1.0f }, { 1.0f, 1.0f } } };
                 at(Cons::BoostPosturePerks) = Piece(p);
             }
+            // spell perks (ClickUp 1dfcuabd2pk, marth 11-12: "Perks are just one more thing that needs a weight ... And what spells to use"). A BOOST on every
+            // spell cast (never a scroll or a staff). x = Snapshot.h PerkSpellEdge of the spell's school: 0 = his perks do nothing for the school, 0.5 = they
+            // double what a point of magicka buys there. PLACEHOLDER, NOT SEARCHED: x1.00 at 0 rising to x1.15 at 0.5 and flat after (a perked school leads
+            // an unperked one by at most 15%, less than every searched class weight, so it re-orders near-equal spells and no more). The three points are
+            // the knobs (`c.spell_perks.py0 / py1 / py2`); the sim batch that mirrors the reader searches them. NOT APPLICABLE in the sim today.
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 1.15f }, { 1.0f, 1.15f } } };
+                at(Cons::BoostSpellPerks) = Piece(p);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -451,6 +460,7 @@ namespace MFO::Iaus {
             { "t.noHealDrink", &Tuning::noHealDrink }, { "t.noHealRetreat", &Tuning::noHealRetreat }, { "t.emergencyHpHigh", &Tuning::emergencyHpHigh }, { "t.emergencyHpLow", &Tuning::emergencyHpLow },
             { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
+            { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
         for (const Scalar& k : kScalars) if (a_name == k.name) {
@@ -520,6 +530,7 @@ namespace MFO::Iaus {
                 { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::SplashSafe, 1 }, { Cons::AreaValue, 1 },
                 { Cons::Variety, 0.5f }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 }, { Cons::ClassFit, 1 },
                 { Cons::DamageValue, 0.9975f }, { Cons::Overkill, 0.931f },   // set A2
+                { Cons::BoostSpellPerks, 1 },
             };
             constexpr U kExploit[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -527,33 +538,36 @@ namespace MFO::Iaus {
                 { Cons::PlayerTarget, 1 }, { Cons::CurrentTarget, 1 }, { Cons::Exploit, 2.0f },
                 { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::SplashSafe, 1 }, { Cons::AreaValue, 1 },
                 { Cons::Variety, 0.5f }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 }, { Cons::ClassFit, 1 },
+                { Cons::BoostSpellPerks, 1 },
             };
             constexpr U kControl[] = {
                 { Cons::RangeSpell, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
                 { Cons::CooldownSoft, 1 }, { Cons::FoeThreat, 1.5f }, { Cons::BoostCaster, 1 },
                 { Cons::FoeControlled, 1 }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 },
                 { Cons::FoeCountControl, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
-                { Cons::ControlWorth, 1 },
+                { Cons::ControlWorth, 1 }, { Cons::BoostSpellPerks, 1 },
             };
             constexpr U kHeal[] = {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
                 { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::BoostFleeHeal, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
                 { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
                 { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 }, { Cons::HealClaimed, 1 }, { Cons::HealUrgency, 0.7f },
+                { Cons::BoostSpellPerks, 1 },
             };
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
                 { Cons::BuffEarly, 1 }, { Cons::BuffMelee, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f },
-                { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 },
+                { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 }, { Cons::BoostSpellPerks, 1 },
             };
             constexpr U kSummon[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::CooldownSoft, 1 }, { Cons::SummonLive, 1 },
                 { Cons::SummonFoes, 1 }, { Cons::BoostOutnumbered, 1 }, { Cons::Affordable, 1 },
-                { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
+                { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 }, { Cons::BoostSpellPerks, 1 },
             };
             constexpr U kWard[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::WardCaster, 1 }, { Cons::WardHp, 1 },
                 { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
+                { Cons::BoostSpellPerks, 1 },
             };
             // Scrolls: the spell family's set without the magicka terms (a scroll costs none), plus the stock
             // gate, scroll_stock and mp_low (section 3.2).
@@ -720,6 +734,7 @@ namespace MFO::Iaus {
             case Cons::BuffThreat:    return (c.family == Family::DrinkBuff && f.buffThreat >= 0.0f) ? In(Clamp(f.buffThreat, 0.0f, 1.0f)) : In::Off();
             case Cons::BuffStealth:   return (c.family == Family::DrinkBuff && f.buffStealth != Tri::Unknown) ? In(B(f.buffStealth == Tri::Yes)) : In::Off();
             case Cons::BoostPosturePerks: return c.family == Family::Posture && f.perkShare >= 0.0f ? In(f.perkShare) : In::Off();
+            case Cons::BoostSpellPerks: return f.spellPerkEdge >= 0.0f ? In(Clamp(f.spellPerkEdge, 0.0f, 1.0f)) : In::Off();   // only a spell cast carries it (Generate.cpp)
             case Cons::BoostBuffThreat: return c.family == Family::CastBuff ? In(static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f) : In::Off();
             case Cons::DrinkNeed:
                 if (c.family == Family::DrinkBuff) return f.buffRegenPct >= 0.0f ? In(Clamp(f.buffRegenPct, 0.0f, 1.0f)) : In::Off();   // a regen kind reads its resource's pct

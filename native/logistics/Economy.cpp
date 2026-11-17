@@ -375,6 +375,7 @@ namespace MFO::Logistics {
                 buy.meleeClass    = static_cast<std::int32_t>(meleeTargetClass);
                 buy.meleeBaseScore = baseScore;
                 buy.preferKinds    = static_cast<std::int32_t>(roles.preferKinds);
+                buy.perkKind       = roles.perkKind;   // 1dfcuabd2pk: the buy planner scores a candidate with the same perk factors
                 buy.wantOffHand      = wantOffHand;
                 buy.offHandBaseScore = wantOffHand ? secondScore : 0.0f;
                 // THE SILVER SLOT (ClickUp 86e3p2gp9): an enabled act.equip_silver rule and no silver
@@ -1286,9 +1287,10 @@ namespace MFO::Logistics {
         return static_cast<int>(WeaponClassOf(a_type));   // WepClass: 0=1H 1=2H 2=Ranged 3=Other
     }
 
-    float WeaponBuyScore(RE::TESObjectWEAP* a_weap, int a_preferKinds) {
+    float WeaponBuyScore(RE::TESObjectWEAP* a_weap, int a_preferKinds, const std::array<float, 9>& a_perkKind) {
         WeaponRoles r;
         r.preferKinds = static_cast<std::uint16_t>(a_preferKinds);
+        r.perkKind    = a_perkKind;
         return WeaponScore(r, a_weap);   // the loot judge's own score, same bias
     }
 

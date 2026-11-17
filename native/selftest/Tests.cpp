@@ -654,6 +654,7 @@ namespace MFO::SelfTest {
         RegisterT2();   // TestsT2.cpp: the T2 field-session tests (quick, no spawn except t2.block_hands)
         RegisterBuffPotion();   // TestsBuffPotion.cpp: buffpotion.resist_scores (feat/buff-potions)
         RegisterStorage();      // TestsStorage.cpp: storage.* (feat/offclass-storage, pure + one INFO)
+        RegisterPerkEffects();  // TestsPerkEffects.cpp: perk.effects_table (1dfcuabd2pk, read-only)
     }
 
 }

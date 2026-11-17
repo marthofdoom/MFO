@@ -7,6 +7,7 @@
 #include "classes/Classes.h"
 #include "iaus/ClassCurves.h"
 #include "iaus/LootNeed.h"
+#include "iaus/PerkEffects.h"
 
 #include <algorithm>
 #include <cctype>
@@ -304,6 +305,7 @@ namespace MFO::Iaus::TuningFile {
             } else if (!a_firstLoad) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
             t.worth = g.worth;   // potions.txt owns the worth table
             LiveTuning() = t;
+            PerkEffects::SetWeights(t.perkArmorWeight, t.perkWeaponWeight);   // 1dfcuabd2pk: the gear picks read these on either thread (atomics)
             CC::SetSharedWeights(weights);
             return true;
         }

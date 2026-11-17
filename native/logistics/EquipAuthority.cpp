@@ -315,14 +315,17 @@ namespace MFO::Logistics {
                 WeaponRoles r;
                 r.preferKinds = a_style.preferKinds;
                 r.offHand     = a_style.offHand;
+                r.perkKind    = a_style.perkKind;
                 return r;
             }
         }
 
         CombatWeaponStyle CombatStyleFor(RE::Actor* a_follower, const FollowerState& a_state) {
             const WeaponRoles r = ComputeWeaponRoles(a_follower, a_state);
-            return { r.preferKinds, r.offHand };
+            return { r.preferKinds, r.offHand, r.perkKind };
         }
+
+        std::uint16_t WeaponKindBits(const RE::TESObjectWEAP* a_weapon) { return WeaponKindOf(a_weapon); }
 
         int CombatAmmo::For(const RE::TESObjectWEAP* a_w) const { return RangedUsesBolts(a_w) ? bolts : arrows; }
 

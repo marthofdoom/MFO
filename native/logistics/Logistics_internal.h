@@ -303,6 +303,11 @@ namespace MFO::Logistics {
             // allows it (MFO_MeleeStyle does not) and the combat equip lives
             // in Actuation -- both outside this change (see MAP.md).
             std::uint8_t  offHand = 0;
+            // ── WHAT HIS PERKS DO TO EACH WEAPON KIND'S DAMAGE (ClickUp 1dfcuabd2pk, marth 2026-11-12) ──
+            // By Progression::WeaponKind bit index: 1 + Tuning::perkWeaponWeight x (the engine's ModAttackDamage multiplier for the kind - 1),
+            // from the perk-effect table (iaus/PerkEffects.h WeaponFactors; ComputeWeaponRoles fills it). 1.0 everywhere = no table yet, no
+            // perk on any kind, or the weight is 0: WeaponScore is then exactly what it was. Consumed by WeaponScore below.
+            std::array<float, 9> perkKind{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
         };
 
         // "Strongly prefers": the multiplier a perk-preferred weapon kind
@@ -356,8 +361,12 @@ namespace MFO::Logistics {
         inline float WeaponScore(const WeaponRoles& a_roles, const RE::TESObjectWEAP* a_w) {
             if (!a_w) return 0.0f;
             float s = static_cast<float>(a_w->GetAttackDamage());
-            if (a_roles.preferKinds != 0 && (WeaponKindOf(a_w) & a_roles.preferKinds) != 0)
+            const std::uint16_t kind = WeaponKindOf(a_w);
+            if (a_roles.preferKinds != 0 && (kind & a_roles.preferKinds) != 0)
                 s *= kStyleBias;
+            // 1dfcuabd2pk: the engine's own answer for what his perks do to this kind's damage (1.0 = none known: unchanged).
+            for (std::size_t i = 0; i < a_roles.perkKind.size(); ++i)
+                if (kind & (1u << i)) { s *= a_roles.perkKind[i]; break; }
             return s;
         }
 
@@ -459,6 +468,10 @@ namespace MFO::Logistics {
             float lightSkill = 0.0f;    // base Light Armor
             int   heavyVotes = 0;       // StyleVotes::armor[0]
             int   lightVotes = 0;       // StyleVotes::armor[1]
+            // 1dfcuabd2pk: the perk-effect factors ALREADY multiplied into the two biases (iaus/PerkEffects.h ArmorFactor: 1 + weight x (the
+            // engine's ModArmorRating multiplier for the type - 1)). Kept for the [armor] line; 1.0 = none known.
+            float heavyPerk  = 1.0f;
+            float lightPerk  = 1.0f;
         };
 
         // THE rated-armor score: rating x the follower's multiplier for the

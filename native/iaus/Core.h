@@ -148,6 +148,9 @@ namespace MFO::Iaus {
                             // Ships FLAT 1.0 (bit-identical); NOT APPLICABLE while Snapshot::perks is unread (the game today)
         ConsumableWorth,    // (APPENDED, feat/consumables, marth 2026-11-13): is this potion / food worth its gold, needed enough here to win (iaus/ConsumableWorth.h).
                             // NOT APPLICABLE (flat-safe) while Facts::consumableWorth < 0; a veto below WorthTable::floor
+        BoostSpellPerks,    // multiplier (APPENDED, ClickUp 1dfcuabd2pk, marth 11-12 "what spells to use ... it needs to read perks like potions"): a spell
+                            // cast by what his perks do for that spell's SCHOOL (Facts::spellPerkEdge = 1 - cost multiplier / magnitude multiplier,
+                            // iaus/Snapshot.h PerkSpellEdge). NOT APPLICABLE while Snapshot::perks.spellsRead is false (the sim today) or the cast is a scroll / staff
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -269,6 +272,11 @@ namespace MFO::Iaus {
         float stepCooldownSec = 3.0f;            // batch I item 5: one quiet step, then the hold row looks again (chosen)
         float regroupCooldownSec = 6.0f;         // a regroup is a walk of seconds: no second order inside this (no yo-yo)
         // feat/consumables: THE ONE TABLE of the worth-the-gold rule (iaus/ConsumableWorth.h). PLACEHOLDERS, not searched; the sim sets them later.
+        // 1dfcuabd2pk THE PERK-EFFECT WEIGHTS OF THE GEAR PICKS (iaus/PerkEffects.h). PLACEHOLDERS, not searched (the combat sim has no gear pick; marth
+        // tunes them in MFO_Tuning/shared.txt as `t.perkArmor` / `t.perkWeapon`). The factor a piece of gear earns is 1 + weight x (multiplier - 1), where the
+        // multiplier is what the ENGINE says his perks do to that armor type's rating / that weapon kind's damage. 0 = the perks are not weighed (the old pick).
+        float perkArmorWeight = 0.0f;            // SHIPPED INERT (marth 11-16 "Ship 0 plan tune soon"): armor pick (logistics/Gear.cpp ArmorPrefFor): light / heavy by the engine's ModArmorRating answer
+        float perkWeaponWeight = 0.0f;           // SHIPPED INERT (marth 11-16): weapon pick (Logistics_internal.h WeaponScore): the weapon kind by the engine's ModAttackDamage answer
         WorthTable worth{};
     };
 
@@ -397,6 +405,7 @@ namespace MFO::Iaus {
         bool  staffCharged = true;
         bool  classAllowsWeapon = true;   // false only under strict adherence (G16)
         float perkShare = -1.0f;          // batch 3 part C: this posture's share of his weapon-damage perk multipliers, mine / (mine + the other side's); < 0 = not read
+        float spellPerkEdge = -1.0f;      // 1dfcuabd2pk: the share of this spell's worth his perks pay for in its school, 0..1 (Snapshot.h PerkSpellEdge); < 0 = not read
         // class (ruling Q34). onClass: the ability belongs to the follower's current class (tree OFF: its T1
         // class). fromMastered: a class the follower has MASTERED grants it. emergency: EmergencyLevel().
         bool  onClass = true;

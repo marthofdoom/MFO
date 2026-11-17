@@ -427,7 +427,7 @@ namespace MFO::TradeBridge {
                   for (auto& c : cands) {
                       if (c.kind != NeedCat::kWeaponMelee || !affordReserve(c.value)) continue;
                       auto* w = c.f->As<RE::TESObjectWEAP>();
-                      const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds) : 0.0f;
+                      const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds, b.perkKind) : 0.0f;
                       if (score > bestScore ||
                           (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
                           best = c.idx; bestScore = score; bestVal = c.value; }
@@ -449,7 +449,7 @@ namespace MFO::TradeBridge {
                         if (c.kind != NeedCat::kWeaponMelee || !affordReserve(c.value)) continue;
                         if (plan[c.idx] >= c.avail) continue;   // the primary took the only copy
                         auto* w = c.f->As<RE::TESObjectWEAP>();
-                        const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds) : 0.0f;
+                        const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds, b.perkKind) : 0.0f;
                         if (score > bestScore ||
                             (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
                             best = c.idx; bestScore = score; bestVal = c.value; }
@@ -464,7 +464,7 @@ namespace MFO::TradeBridge {
                     for (auto& c : cands) {
                         if (c.kind != NeedCat::kWeaponSilver || !affordReserve(c.value)) continue;
                         auto* w = c.f->As<RE::TESObjectWEAP>();
-                        const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds) : 0.0f;
+                        const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds, b.perkKind) : 0.0f;
                         if (score > bestScore ||
                             (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
                             best = c.idx; bestScore = score; bestVal = c.value; }

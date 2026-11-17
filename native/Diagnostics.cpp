@@ -24,6 +24,7 @@
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
 #include "logistics/InvSnapshot.h"   // INVARIANTS #84: the worker snapshots' tick bracket
 #include "iaus/EffectMirror.h"
+#include "iaus/PerkEffects.h"
 #include "logistics/GemRules.h"
 #include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
 #include "logistics/Errand.h"   // town errands: the owner-independent Sweep
@@ -255,6 +256,7 @@ namespace MFO::Diagnostics {
                 if (auto* a = ptr.get()) {
                     InvSnap::Want(a);
                     EffectMirror::WantParty(a->GetFormID());
+                    PerkEffects::Want(a->GetFormID());   // 1dfcuabd2pk: keep his perk-effect table built (no tick gate: no table = not known)
                 }
             }
         }
@@ -322,6 +324,7 @@ namespace MFO::Diagnostics {
                 const auto t0 = std::chrono::steady_clock::now();
                 InvSnap::BuildPass(tick);
                 EffectMirror::BuildPass(tick);
+                PerkEffects::BuildPass(tick);   // 1dfcuabd2pk: at most ONE follower's perk-effect table per pass (inside the measured pass time)
                 const auto us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                     std::chrono::steady_clock::now() - t0).count());
                 g_snapPassRuns.fetch_add(1, std::memory_order_relaxed);
