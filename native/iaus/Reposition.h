@@ -177,6 +177,11 @@ namespace MFO::Iaus::Reposition {
         const float h = a_dz >= 0.0f ? a_selfH : a_foeH;
         return std::fabs(a_dz) > h + a_reach + a_slack;
     }
+    // THE blade reach reader (marth 2026-11-17): the learned reach of the weapon in his hand (Snapshot::bladeReach, iaus/ReachBook.h), else fMeleeReach.
+    [[nodiscard]] inline float BladeReach(const Snapshot& a_s) {
+        const float b = Prune::Finite(a_s.bladeReach, 0.0f);
+        return b > 0.0f ? b : Prune::Finite(a_s.meleeReach, 0.0f);
+    }
     [[nodiscard]] inline bool MeleeUnreachableNow(const Snapshot& a_s, const Combatant& a_foe) {
         if (!(a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver)) return false;
         if (a_foe.outOfMeleeReach) return true;
@@ -184,7 +189,7 @@ namespace MFO::Iaus::Reposition {
         const float dz = Prune::Finite(a_foe.z, 0.0f) - Prune::Finite(a_s.self.z, 0.0f);
         const float sh = a_s.self.bodyHeight > 0.0f ? a_s.self.bodyHeight : kNominalH;
         const float fh = a_foe.bodyHeight > 0.0f ? a_foe.bodyHeight : kNominalH;
-        return OutOfVerticalReach(dz, sh, fh, Prune::Finite(a_s.meleeReach, 0.0f));   // visible or not: the engine swings at the air either way
+        return OutOfVerticalReach(dz, sh, fh, BladeReach(a_s));   // visible or not: the engine swings at the air either way
         // (the occluded-on-another-level case is a subset of the vertical line, so it needs no clause of its own)
     }
 
@@ -276,7 +281,7 @@ namespace MFO::Iaus::Reposition {
     [[nodiscard]] inline bool StrikeReady(const Snapshot& a_s, const Combatant& a_foe) {
         if (a_foe.detectsMe != Tri::No || !std::isfinite(a_foe.dist)) return false;
         if (a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver)
-            return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, Prune::Finite(a_s.meleeReach, 0.0f));
+            return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, BladeReach(a_s));
         if (a_s.drawn == PostureKind::Bow)
             return a_foe.sight == Sight::Visible && a_foe.dist <= (std::max)(0.0f, Prune::Finite(a_s.chaseCap, 0.0f));
         return false;

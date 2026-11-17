@@ -67,7 +67,7 @@ namespace MFO::Iaus {
             // else fMeleeReach (MFO-B687). No other family reads the learned value (Q70).
             [[nodiscard]] float SwingReach() const {
                 const float learned = Finite(s.swingReach, 0.0f);
-                return (std::max)(0.0f, learned > 0.0f ? learned : Finite(s.meleeReach, 0.0f));
+                return (std::max)(0.0f, learned > 0.0f ? learned : Reposition::BladeReach(s));
             }
             // What every family may read about the follower and the fight.
             void Common(Facts& f) const {
@@ -143,7 +143,7 @@ namespace MFO::Iaus {
                     c.role = ranged ? RoleTag::Ranged : RoleTag::Melee;
                     c.f.meleeRange = !ranged;
                     if (!ranged) c.f.chase = (std::max)(0.0f, Finite(s.chaseCap, 0.0f));   // act.attack names the target; the engine closes
-                    c.f.reach = (std::max)(0.0f, Finite(ranged ? s.chaseCap : s.meleeReach, 0.0f));
+                    c.f.reach = (std::max)(0.0f, ranged ? Finite(s.chaseCap, 0.0f) : Reposition::BladeReach(s));
                     x.Push(std::move(c));
                 }
                 if (!holdsOff && x.g.powerAttack && melee && !foe->outOfMeleeReach) {

@@ -2,6 +2,7 @@
 #include "PCH.h"
 #include <cmath>   // std::sqrt -- FoeWeight; std::fabs / std::isfinite -- the melee-reach read
 #include "Config.h" // g_meleeReach -- the melee-reach read
+#include "iaus/ReachBook.h" // ReachOr: the learned blade reach (marth 2026-11-17)
 #include "iaus/Reposition.h"   // OutOfVerticalReach: the one vertical reach line (no include of CombatSense there)
 
 // Harbinger ABI v26 substrate reads (apmf/Bridge.cpp; declared in apmf/APMFBridge.h, which this header cannot
@@ -212,7 +213,7 @@ namespace MFO::CombatSense {
     inline bool OutOfMeleeReach(RE::Actor* a_self, RE::Actor* a_foe, float a_slack = 0.0f,
                                 ReachRead* a_out = nullptr, float a_selfHeight = 0.0f) {
         if (!a_self || !a_foe || !IsAirborne(a_foe)) return false;
-        const float reach = Config::g_meleeReach.load(std::memory_order_relaxed);
+        const float reach = Iaus::ReachBook::ReachOr(a_self->GetFormID(), Config::g_meleeReach.load(std::memory_order_relaxed));   // the learned blade reach, else fMeleeReach
         const float dz    = a_foe->GetPosition().z - a_self->GetPosition().z;
         const float h     = dz >= 0.0f ? (a_selfHeight > 0.0f ? a_selfHeight : BodyHeight(a_self))
                                        : BodyHeight(a_foe);

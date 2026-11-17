@@ -560,11 +560,14 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_iausFillCasting{ false };   // Combatant::casting
     inline std::atomic<bool>  g_iausFillSpells{ false };    // SpellEntry::damage, heal, controlSec, measured
     inline std::atomic<bool>  g_iausFillMortal{ false };    // Snapshot::mortal
-    // [Debug] bIausReachLearn (INI-only, default OFF; ruling Q68). 1 = Snapshot::swingReach (the swing gate of the
-    // power attack and the bash, nothing else) is the reach LEARNED from his own hits and misses with the weapon in his
-    // hand (iaus/Reach.h), fMeleeReach until the learner has a value (MFO-B687). The learner itself runs, and logs `[iaus-fill] swing`, with this key
-    // OR bIausFillProbe on.
-    inline std::atomic<bool>  g_iausReachLearn{ false };
+    // [Debug] bIausReachLearn (INI-only, default ON since marth 2026-11-17; the key is the KILL SWITCH). 1 = the reach is
+    // LEARNED from his own hits and misses, keyed per (follower, weapon, attack SEQUENCE: a combo chain of swings the list
+    // does not let him steer), seeded from the weapon's value and then fMeleeReach (iaus/Reach.h, iaus/ReachBook.h,
+    // iaus/SwingSeq.h). It feeds Snapshot::bladeReach (every melee "reachable" decision: MeleeUnreachableNow, StrikeReady,
+    // the attack's range test, CombatSense::OutOfMeleeReach) and Snapshot::swingReach (the swing gate of the power attack and
+    // the bash). 0 = every one of those reads the flat fMeleeReach, as before. The learner itself runs, and logs
+    // `[iaus-fill] swing`, with this key OR bIausFillProbe on.
+    inline std::atomic<bool>  g_iausReachLearn{ true };
     // COMBAT MOVE PROBE ([Debug] bCombatMoveProbe, INI-only, default OFF; Harbinger ch.31, ABI v38). 1 = a follower in
     // combat whose combat target is inside melee reach asks Harbinger for a BASH every 6 s, whatever his gambits or
     // Sentient AI would do. DEV-ONLY: it proves the road (apmf/CombatMove.cpp CombatMoveProbeTick), nothing ships on it.

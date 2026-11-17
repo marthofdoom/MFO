@@ -16,9 +16,11 @@
 // next to what really happened before it may move a score:
 //   [Debug] bIausFillProbe = 1    -> `[iaus-fill]` lines (rate-limited). Nothing is written into the Snapshot.
 //   [Debug] bIausFill<Input> = 1  -> that one input is written. All default OFF (Config.h).
-//   [Debug] bIausReachLearn = 1   -> Snapshot::swingReach (read by PowerAttack and Bash only) is the swing reach
-//                                    LEARNED from his own hits and misses (ruling Q68, iaus/Reach.h); 0 while the
-//                                    learner knows nothing, and those families then read fMeleeReach (MFO-B687).
+//   [Debug] bIausReachLearn = 1   -> DEFAULT ON since marth 2026-11-17 (the KILL SWITCH). The melee reach is LEARNED per
+//                                    (follower, weapon, attack SEQUENCE) from his own hits and misses (iaus/Reach.h,
+//                                    iaus/ReachBook.h, iaus/SwingSeq.h; Docs/research/2026-11/anim-reach.md) and written to
+//                                    Snapshot::bladeReach (every reachability read) and Snapshot::swingReach (PowerAttack and
+//                                    Bash); 0 while nothing is learned, and those readers then read fMeleeReach (MFO-B687).
 // With every key OFF: StartupCheck still resolves the GMST pointers and the entry-point row once at load and logs its
 // status lines (gmst, switches, plus the sink's registration line). After that the module does nothing per tick: the
 // gather's Pass is unarmed (no read, no map entry, no line), MeasureSpell returns at once, the sink returns at once.

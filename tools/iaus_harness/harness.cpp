@@ -9,6 +9,7 @@
 #include "iaus/Core.h"
 #include "iaus/Estimate.h"
 #include "iaus/Reach.h"      // ruling Q68: the learned swing reach
+#include "iaus/ReachBook.h"  // marth 2026-11-17: the per-weapon / per-sequence reach book and its one reader
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
@@ -981,6 +982,73 @@ namespace {
         o.cover = could ? static_cast<float>(allowed) / static_cast<float>(could) : 1.0f;
         return o;
     }
+    // ── marth 2026-11-17: the reach is keyed per (follower, weapon, attack SEQUENCE); every reachability read uses ONE reader ──
+    void ReachSequences() {
+        std::printf("\n== 11-17: per-sequence reach (iaus/ReachBook.h) ==\n");
+        using ReachBook::Kind;
+        constexpr std::uint32_t F = 0x14, W = 0x1000, W2 = 0x2000;
+        {   // fallback chain: nothing learned -> 0 (the callers read fMeleeReach); weapon only -> the weapon's value
+            ReachBook::Book b;
+            Check(b.Reachability(F, W) == 0.0f && b.Gate(F, W, Kind::Power) == 0.0f, "reach book: nothing learned answers 0 (the readers fall back to fMeleeReach)");
+            b.Ensure(F, W, 200.0f);
+            Check(b.Reachability(F, W) == 200.0f, "reach book: a weapon with no outcome reads its seed (fMeleeReach)");
+            Check(b.Gate(F, W, Kind::Power) > 0.0f && b.Gate(F, W, Kind::Power) == b.Find(F, W)->weapon.Gate(), "reach book: no power sequence yet -> the weapon's gate");
+        }
+        {   // per-sequence seed = the weapon's value; a 3-swing light combo that hits far raises ITS value, a 1-swing one that misses does not
+            ReachBook::Book b;
+            b.Ensure(F, W, 200.0f);
+            for (int i = 0; i < 40; ++i) {
+                b.Observe(F, W, 200.0f, Kind::Light, 3, 230.0f, true);    // the combo carries him: hits from 230
+                b.Observe(F, W, 200.0f, Kind::Light, 1, 150.0f, true);    // the single step hits from 150 ...
+                b.Observe(F, W, 200.0f, Kind::Light, 1, 190.0f, false);   // ... and whiffs from 190
+            }
+            const auto* w = b.Find(F, W);
+            const float s3 = w->seq.at(ReachBook::SeqKey(Kind::Light, 3)).Value(), s1 = w->seq.at(ReachBook::SeqKey(Kind::Light, 1)).Value();
+            std::printf("  3-swing combo %.0f, 1-swing %.0f, weapon %.0f, reachability %.0f\n", s3, s1, w->weapon.Value(), b.Reachability(F, W));
+            Check(w->seq.size() == 2, "reach book: one learner per (kind, swing count)");
+            Check(s3 > s1, "reach book: a combo that carries him forward learns a longer reach than a single swing");
+            Check(b.Reachability(F, W) >= s3 && b.Reachability(F, W) >= w->weapon.Value(), "reach book: reachability is the MAX over the sequences and the weapon");
+            Check(b.Reachability(F, W2) == 0.0f && b.Reachability(0x15, W) == 0.0f, "reach book: another weapon / another follower is a separate entry");
+        }
+        {   // a sequence is SEEDED from the weapon's value at its first outcome
+            ReachBook::Book b;
+            for (int i = 0; i < 20; ++i) b.Observe(F, W, 200.0f, Kind::Light, 1, 260.0f, true);   // the weapon learner climbs
+            const float wv = b.Find(F, W)->weapon.Value();
+            b.Observe(F, W, 200.0f, Kind::Power, 2, 150.0f, true);                                // a NEW sequence
+            const float sv = b.Find(F, W)->seq.at(ReachBook::SeqKey(Kind::Power, 2)).start;
+            Check(wv > 200.0f && std::fabs(sv - wv) < 0.01f * wv + 1.0f, "reach book: a new sequence starts from the weapon's learned value, not from fMeleeReach");
+            Check(b.Gate(F, W, Kind::Power) == b.Find(F, W)->seq.at(ReachBook::SeqKey(Kind::Power, 2)).Gate() || b.Gate(F, W, Kind::Power) > 0.0f, "reach book: the power gate reads the power sequences");
+        }
+        {   // steps 0 (the chain was not observable) feeds the weapon only
+            ReachBook::Book b;
+            b.Observe(F, W, 200.0f, Kind::Light, 0, 150.0f, true);
+            Check(b.Find(F, W)->seq.empty() && b.Find(F, W)->weapon.hits == 1, "reach book: an unobservable chain is the weapon's outcome only");
+        }
+        {   // the published value: any thread, 0 erases, ReachOr is the one fallback
+            ReachBook::ClearPublished();
+            Check(ReachBook::ReachOr(F, 200.0f) == 200.0f, "reach book: nothing published reads fMeleeReach");
+            ReachBook::Publish(F, 143.0f);
+            Check(ReachBook::ReachOr(F, 200.0f) == 143.0f && ReachBook::ReachOr(0x15, 200.0f) == 200.0f, "reach book: the published learned reach is what CombatSense reads");
+            ReachBook::Publish(F, 0.0f);
+            Check(ReachBook::ReachOr(F, 200.0f) == 200.0f, "reach book: a published 0 erases (a bow in hand reads fMeleeReach)");
+        }
+        {   // every reachability read uses the ONE reader (Reposition::BladeReach)
+            Snapshot s; s.drawn = PostureKind::Melee; s.self.z = 0.0f; s.meleeReach = 200.0f;
+            Check(Reposition::BladeReach(s) == 200.0f, "reader: no learned reach -> fMeleeReach");
+            s.bladeReach = 150.0f;
+            Check(Reposition::BladeReach(s) == 150.0f, "reader: the learned reach wins");
+            Combatant foe; foe.z = 295.0f; foe.sight = Sight::Visible;   // above 120 + 150, under 120 + 200
+            Check(Reposition::MeleeUnreachableNow(s, foe), "reader: MeleeUnreachableNow uses the learned (shorter) reach");
+            s.bladeReach = 0.0f;
+            Check(!Reposition::MeleeUnreachableNow(s, foe), "reader: the same foe is reachable under the flat 200");
+            Combatant nearFoe; nearFoe.dist = 180.0f; nearFoe.detectsMe = Tri::No;
+            s.bladeReach = 150.0f;
+            Check(!Reposition::StrikeReady(s, nearFoe), "reader: StrikeReady uses the learned reach (180 away, reach 150)");
+            s.bladeReach = 0.0f;
+            Check(Reposition::StrikeReady(s, nearFoe), "reader: StrikeReady falls back to the flat reach (180 away, 200)");
+        }
+    }
+
     void ReachLearning() {
         std::printf("\n== Q68: the learned swing reach ==\n");
         float worstErr = 0, worstSpread = 0, worstWhiff = 0, worstCover = 1, worstFloor = 1e9f, meanErr = 0, meanWhiff = 0; int runs = 0;
@@ -2241,6 +2309,7 @@ int main() {
     Generation();
     SharedTauntPowerRules();
     ReachLearning();
+    ReachSequences();
     EngineFillRules();
     OcclusionHoldBound();
     HideHold();

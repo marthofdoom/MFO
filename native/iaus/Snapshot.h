@@ -340,9 +340,13 @@ struct SpellEntry {
                                           // refuses (Taunt::Fire), so no taunt candidate is made (card I6)
         float tauntReach = 0.0f;
         float meleeReach = 200.0f;        // fMeleeReach
-        float swingReach = 0.0f;          // ruling Q68: the reach LEARNED for the weapon in his hand (iaus/Reach.h Gate()).
-                                          // Read by the swing families ONLY (PowerAttack, Bash). 0 = not learned: they
-                                          // read meleeReach. Everything else always reads meleeReach (Q70).
+        float swingReach = 0.0f;          // ruling Q68: the reach LEARNED for the weapon in his hand (iaus/Reach.h Gate(), the
+                                          // power sequences' gate, iaus/ReachBook.h). Read by the swing families ONLY (PowerAttack,
+                                          // Bash). 0 = not learned: they read bladeReach / meleeReach.
+        float bladeReach = 0.0f;          // marth 2026-11-17: the reach every "can he hit it from here" question reads: the max over
+                                          // his weapon's sequences (iaus/ReachBook.h Reachability()). 0 = not learned (or the kill
+                                          // switch bIausReachLearn is 0): Reposition::BladeReach answers meleeReach. Touch spells,
+                                          // the buff test and the strike distance stay on meleeReach (they are not a weapon's reach).
         float chaseCap = 4096.0f;         // Confidence::ChaseRadius
         float combatSec = 0.0f;           // seconds since this fight started for him
 

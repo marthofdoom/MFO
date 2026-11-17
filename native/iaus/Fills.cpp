@@ -6,6 +6,8 @@
 #include "MainThread.h"
 #include "Runtime.h"
 #include "iaus/Reach.h"
+#include "iaus/ReachBook.h"
+#include "iaus/SwingSeq.h"
 
 #include <algorithm>
 #include <atomic>
@@ -134,9 +136,17 @@ namespace MFO::Iaus::Fills {
             RE::FormID target = 0, weapon = 0, weaponLeft = 0;
             bool   wasSwinging = false;
             double lastLap = 0.0;
+            // The sequence (marth 2026-11-17): the counters of the graph sink as of the last lap he was NOT in a chain,
+            // so a resolved chain's swing count is (counter now - base). Worker domain, like the rest of the state.
+            std::uint32_t swingBase = 0, powerBase = 0, bashBase = 0;
         };
         std::unordered_map<RE::FormID, ReachState>         g_reach;   // by follower
-        std::unordered_map<std::uint64_t, Reach::Learner>  g_learn;   // by (follower, weapon): runtime only (Q68)
+        ReachBook::Book                                    g_learn;   // by (follower, weapon, sequence): runtime only (Q68, 11-17 sequences)
+        // A chain of swings is over when no swing event has come for this long and his attack state is none. Sized from the
+        // combo cadence (principle 9): a combo window between two steps is 0.3 - 0.8 s, so a flat 0.9 s would split a slow
+        // chain; the frameworks' own windows are open for the whole step, and a swing event lands every step.
+        constexpr std::int64_t kChainQuietMs = 1100;
+        constexpr double       kChainCapSec  = 8.0;     // a hard stop for a chain that never goes quiet (a loop, a held power attack)
         Bucket g_swingLines{ 6.0, 6.0, 3.0 };
 
         class HitSink final : public RE::BSTEventSink<RE::TESHitEvent> {
@@ -607,18 +617,24 @@ namespace MFO::Iaus::Fills {
         }
     }
 
-    // RULING Q68 (marth 2026-11-11): the swing reach is learned per weapon from what hit and what missed. This is the
-    // engine feed of iaus/Reach.h: ONE outcome per swing of HIS melee weapon at his engine combat target.
-    //   hit   = a TESHitEvent he caused on that target with that weapon since the swing began (a blocked hit reached);
-    //   miss  = the swing ended with no hit of his on anything;
+    // RULING Q68 (marth 2026-11-11): the swing reach is learned from what hit and what missed. This is the engine feed of
+    // iaus/Reach.h + iaus/ReachBook.h: ONE outcome per CHAIN of swings of HIS melee weapon at his engine combat target.
+    //   hit   = a TESHitEvent he caused on that target with that weapon since the chain began (a blocked hit reached);
+    //   miss  = the chain ended with no hit of his on anything;
     //   a hit on someone else only = no outcome (it says nothing about the distance to his target);
     //   a hit on his target by his LEFT-hand weapon only = no outcome (review F1: the attack state does not say which
     //   hand swung, and the learner is the right-hand weapon's. A dual wielder's miss stays ambiguous the same way and
     //   is counted for the right-hand weapon: the estimator's stray-miss tolerance carries it).
-    // The distance is centre to centre at the lap the swing was first seen, the same measure the swing gate compares
-    // (Facts::dist against Facts::reach). ONE learner per (follower, weapon): plain swings and power attacks share it,
-    // because a missed swing does not say which it was (the hit's power flag is in the line, so a field log shows whether
-    // they need two). Bare hands are not learned (no weapon to key on). Runtime only, emptied on a load.
+    // THE CHAIN (marth 2026-11-17: "it will be the sequence thats tracked"): lists with combo frameworks chain light (and
+    // maybe power) attacks into a sequence that cannot be steered once started. The unit is the sequence, from the first
+    // blow until no swing event has come for kChainQuietMs and his attack state is none. The swing events are the graph's
+    // (iaus/SwingSeq.h; list-agnostic tag names). Its key is (kind, number of swings): the learner of that key is seeded
+    // from the weapon's value, so the fallback is sequence -> weapon -> fMeleeReach (ReachBook.h). When no graph event has
+    // arrived for him (VR, the sink not attached yet, a framework that raises none) a swing is one attack-state window as
+    // before and only the weapon's learner takes it.
+    // The distance is centre to centre at the lap the chain was first seen, the same measure the swing gate compares
+    // (Facts::dist against Facts::reach), so what is learned is how far a chain STARTED from there reaches, its forward
+    // carry included. Bare hands are not learned (no weapon to key on). Runtime only, emptied on a load.
     void Pass::LearnReach(Snapshot& a_s, RE::Actor* a_self) {
         const Est* me = nullptr;
         for (const Est& e : m_est)
@@ -626,12 +642,24 @@ namespace MFO::Iaus::Fills {
         if (!me) return;
         ReachState& rs = g_reach[a_s.self.id];
         const bool  melee = !me->magic && !me->ranged && me->src != 0;
-        const auto  keyOf = [&](RE::FormID a_weapon) { return (static_cast<std::uint64_t>(a_s.self.id) << 32) | a_weapon; };
+        const float seed  = Config::g_meleeReach.load(std::memory_order_relaxed);
 
-        // 1. the open swing has landed or gone by: one outcome, after the grace (review F4)
+        // The sequence counters (WORKER read of the sink's atomics). Claiming his slot and posting the attach is the
+        // kill switch's business: with bIausReachLearn = 0 only the probe runs, and it has no use for the chain.
+        if (m_reach) SwingSeq::Service(a_self);
+        const SwingSeq::Obs ob = m_reach ? SwingSeq::Read(a_s.self.id) : SwingSeq::Obs{};
+        const std::int64_t nowMs = SwingSeq::NowMs();
+        // In a chain once a swing event has come since the last chain ended (and the sink is proven attached).
+        const bool chain = rs.open && ob.live && ob.swings != rs.swingBase;
+        if (chain && me->swinging) rs.leftAt = 0.0;   // a combo step: he is still in it
+
+        // 1. the open chain / swing has landed or gone by: one outcome, after the grace (review F4)
         if (rs.open && !me->swinging && rs.leftAt == 0.0) rs.leftAt = m_now;
-        const bool swingsAgain = rs.open && rs.leftAt != 0.0 && me->swinging;
-        if (rs.open && ((rs.leftAt != 0.0 && m_now - rs.leftAt >= kSwingGraceSec) || swingsAgain || m_now - rs.t0 > kSwingCapSec)) {
+        const bool swingsAgain = !chain && rs.open && rs.leftAt != 0.0 && me->swinging;
+        const bool chainDone = chain && !me->swinging && rs.leftAt != 0.0 && ob.lastSwingMs != 0 && nowMs - ob.lastSwingMs >= kChainQuietMs &&
+                               m_now - rs.leftAt >= kSwingGraceSec;
+        const bool swingDone = !chain && rs.leftAt != 0.0 && m_now - rs.leftAt >= kSwingGraceSec;
+        if (rs.open && (chainDone || swingDone || swingsAgain || m_now - rs.t0 > (chain ? kChainCapSec : kSwingCapSec))) {
             rs.open = false;
             rs.leftAt = 0.0;
             rs.resolvedAt = m_now;
@@ -647,22 +675,37 @@ namespace MFO::Iaus::Fills {
                     else other = true;               // someone else, or his target by the left-hand weapon (review F1)
                 }
             }
-            auto it = g_learn.find(keyOf(rs.weapon));
-            if (it != g_learn.end() && (hit || !other)) {
-                Reach::Learner& L = it->second;
-                const float before = L.Value();
-                L.Observe(rs.dist, hit);
-                if (m_probe && g_swingLines.Take(m_now))
-                    spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: {}{} | learned reach {:.0f} -> "
-                                 "{:.0f} (start {:.0f}, gate {:.0f}, {} hits {} misses) | gates the power attack: {}",
+            const unsigned steps = chain ? (std::min)(ob.swings - rs.swingBase, static_cast<std::uint32_t>(ReachBook::kMaxSteps)) : 0u;
+            ReachBook::Kind kind = ReachBook::Kind::Light;
+            if (ob.power != rs.powerBase || (hit && (flags & 1) != 0)) kind = ReachBook::Kind::Power;
+            else if (ob.bash != rs.bashBase) kind = ReachBook::Kind::Bash;
+            rs.swingBase = ob.swings; rs.powerBase = ob.power; rs.bashBase = ob.bash;
+            const ReachBook::WeaponReach* wr = g_learn.Find(a_s.self.id, rs.weapon);
+            if (wr && (hit || !other)) {
+                const float before = wr->weapon.Value();
+                g_learn.Observe(a_s.self.id, rs.weapon, seed, kind, steps, rs.dist, hit);
+                wr = g_learn.Find(a_s.self.id, rs.weapon);
+                if (m_probe && g_swingLines.Take(m_now)) {
+                    const auto sq = steps > 0 ? wr->seq.find(ReachBook::SeqKey(kind, steps)) : wr->seq.end();
+                    spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: {}{} | chain {} swing(s) kind {} "
+                                 "| learned reach (weapon) {:.0f} -> {:.0f} (start {:.0f}, gate {:.0f}, {} hits {} misses), sequence {} | "
+                                 "reads: reach {:.0f} power gate {:.0f} | gates the power attack: {}",
                                  a_s.self.name, a_s.self.id, rs.weapon, rs.dist, rs.target, hit ? "HIT" : "miss",
                                  hit ? std::format(" (power={} blocked={})", (flags & 1) != 0, (flags & 8) != 0) : std::string(),
-                                 before, L.Value(), L.start, L.Gate(), L.hits, L.misses, m_reach ? "yes" : "no (bIausReachLearn=0)");
+                                 chain ? std::to_string(steps) : std::string("? (no graph events)"), static_cast<int>(kind),
+                                 before, wr->weapon.Value(), wr->weapon.start, wr->weapon.Gate(), wr->weapon.hits, wr->weapon.misses,
+                                 sq != wr->seq.end() ? std::format("{:.0f} ({} hits {} misses)", sq->second.Value(), sq->second.hits, sq->second.misses)
+                                                     : std::string("none"),
+                                 g_learn.Reachability(a_s.self.id, rs.weapon), g_learn.Gate(a_s.self.id, rs.weapon, ReachBook::Kind::Power),
+                                 m_reach ? "yes" : "no (bIausReachLearn=0)");
+                }
             } else if (m_probe && g_swingLines.Take(m_now)) {
                 spdlog::info("[iaus-fill] swing {} ({:08X}) weapon {:08X} at {:.0f} units on {:08X}: hit someone else or with the left-hand weapon only, no outcome",
                              a_s.self.name, a_s.self.id, rs.weapon, rs.dist, rs.target);
             }
         }
+        // Between chains the baselines follow the counters, so the next chain's swing count starts from here.
+        if (!rs.open && !me->swinging) { rs.swingBase = ob.swings; rs.powerBase = ob.power; rs.bashBase = ob.bash; }
 
         // 2. a new swing begins this lap (he was not swinging at the last one)
         if (!rs.open && melee && me->swinging && (!rs.wasSwinging || swingsAgain)) {
@@ -670,12 +713,10 @@ namespace MFO::Iaus::Fills {
             if (auto tp = a_self->GetActorRuntimeData().currentCombatTarget.get(); tp) target = tp->GetFormID();
             for (const Combatant& f : a_s.foes) {
                 if (f.id != target || !std::isfinite(f.dist) || !(f.dist > 0.0f)) continue;
-                // The learner starts at fMeleeReach (Snapshot::meleeReach before any override). Precision's capsule
+                // The weapon's learner starts at fMeleeReach (Snapshot::meleeReach before any override). Precision's capsule
                 // length is a weapon LENGTH from the hand, not a centre-to-centre reach, so it is not a start value
                 // (Docs/research/2026-11/iaus-i6.md "Precision reach").
-                if (g_learn.size() > 512) g_learn.clear();   // a bound, never reached by a real party
-                Reach::Learner& L = g_learn[keyOf(me->src)];
-                if (!L.Known()) L.Reset(Config::g_meleeReach.load(std::memory_order_relaxed));
+                g_learn.Ensure(a_s.self.id, me->src, seed);
                 rs.open   = true;
                 rs.t0     = m_now;
                 // The swing began after the last lap saw him not swinging, so a hit since then belongs to it.
@@ -692,16 +733,24 @@ namespace MFO::Iaus::Fills {
         rs.wasSwinging = me->swinging;
         rs.lastLap     = m_now;
 
-        // 3. the swing gate's reach: the learned value for the weapon in his hand, in Snapshot::swingReach, which ONLY
-        // the swing families read (PowerAttack, Bash: review F5, rulings Q68 / Q70). Snapshot::meleeReach is never
-        // touched: the attack's target naming, touch spells, the melee-buff test and the strike distance keep
-        // fMeleeReach. No learner yet (he has not swung it) or nothing learnable: swingReach stays 0 and those families
-        // read meleeReach (MFO-B687: an unknown learner's Gate() is 0, which would switch the range test off).
-        if (m_reach && melee)
-            if (auto it = g_learn.find(keyOf(me->src)); it != g_learn.end() && it->second.Known()) {
-                const float gate = it->second.Gate();
+        // 3. THE READS (iaus/ReachBook.h, ONE shared reader). bladeReach = what every "can he hit it from here" question
+        // reads (the max over the sequences he is likely to swing, marth 2026-11-17: this supersedes ruling Q70 for
+        // reachability; Q70 still holds that the TARGET CHOICE is not gated by the swing gate). swingReach = the swing
+        // gate of the families that time a swing themselves (PowerAttack, Bash): the power sequences' gate, else the
+        // weapon's. Both stay 0 while nothing is learned (he has not swung it: MFO-B687, an unknown learner's Gate() is
+        // 0, which would switch the range test off) and the readers then fall back to fMeleeReach. The published value
+        // is the same number for the readers that have no Snapshot (CombatSense::OutOfMeleeReach). With the kill switch
+        // off nothing is written or published.
+        if (m_reach) {
+            float reach = 0.0f;
+            if (melee) {
+                reach = g_learn.Reachability(a_s.self.id, me->src);
+                const float gate = g_learn.Gate(a_s.self.id, me->src, ReachBook::Kind::Power);
                 if (std::isfinite(gate) && gate > 0.0f) a_s.swingReach = gate;
+                if (std::isfinite(reach) && reach > 0.0f) a_s.bladeReach = reach; else reach = 0.0f;
             }
+            ReachBook::Publish(a_s.self.id, reach);   // 0 erases: a bow in hand reads fMeleeReach
+        }
     }
 
     void MeasureSpell(RE::Actor* a_caster, RE::SpellItem* a_spell, SpellEntry& a_e, std::string& a_probe,
@@ -783,7 +832,9 @@ namespace MFO::Iaus::Fills {
         g_pruned = 0.0;
         g_hitAged = 0;
         g_reach.clear();
-        g_learn.clear();   // Q68: runtime only. FormIDs are save-scoped (a dynamic weapon's id is reused across saves)
+        g_learn.Clear();   // Q68: runtime only. FormIDs are save-scoped (a dynamic weapon's id is reused across saves)
+        ReachBook::ClearPublished();
+        SwingSeq::Clear();
         std::scoped_lock lk(g_hitMx);
         g_hits.clear();
         g_hitOverflow = 0;

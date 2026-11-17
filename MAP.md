@@ -9638,6 +9638,16 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   OPEN review findings for the sim (batch 3 + part C): `Docs/REVIEW-BACKLOG.md` "feat/oracle-gap batch 3 + part C review" F1 (SEV-4, `--space` first step), F3, F4, F5, F6 (SEV-5).
 - IAUS sim DASHBOARD (host-only, stdlib curses, never in the DLL): `tools/iaus_dash/dash.py [--runs DIR] [--report [--run ID] [--compare ID]] [--json-check FILE]` views the simulator's per-run JSON (schema v2, reads v1) per class: Classes page column 3 = `Rating (Tx)` (rank inside the tier on the shared battery, ` !` = below tier), Gap from `class_gaps` / `main_gap` / scenario rows / the ledger rows whose group covers the class, Trend against the nearest earlier comparable run that has that class's gap; with rulings, scenario gaps, gap ledger and trends; `tools/iaus_dash/test.sh` checks the non-interactive modes on synthetic fixtures. README there has the keys + schema.
   `native/iaus/` except Engine.*.
+- **THE MELEE REACH (feat/anim-reach, 2026-11-17; note `Docs/research/2026-11/anim-reach.md`).** `iaus/Reach.h` (estimator) +
+  `iaus/ReachBook.h` (keys: per (follower, weapon, attack SEQUENCE = a combo chain; fallback sequence -> weapon -> fMeleeReach;
+  the ONE reader `Reachability` / `Gate`; `Publish` / `Published` / `ReachOr` for any-thread readers) + `iaus/SwingSeq.h/.cpp` (the
+  graph sink: per-follower swing / power / bash counters, atomics only, attach main-thread Posted) + `Fills.cpp` `LearnReach` (the
+  chain state machine). ON by default; `[Debug] bIausReachLearn` is the kill switch. READERS: `Snapshot::bladeReach` via
+  `Reposition::BladeReach` (`MeleeUnreachableNow`, `StrikeReady`, `Generate` Attack reach), `CombatSense::OutOfMeleeReach`
+  (`ReachBook::ReachOr`), `Snapshot::swingReach` (`Ctx::SwingReach`: PowerAttack, Bash). TO ADD A REACH SOURCE: a key in
+  `ReachBook::Book::Observe` + a term in `Reachability` / `Gate`; to add a swing tag, `SwingSeq.cpp` `Classify`. What breaks: a
+  second reader of `Config::g_meleeReach` for a blade question skips the learned value (touch spells, the buff test and
+  `StrikeDistance` stay on `meleeReach` on purpose). Supersedes Q70 for reachability; the target choice stays un-gated by the swing gate.
 - **PHASE 2 (sim v2, `feat/iaus-sim-v2`; `Docs/research/2026-11/iaus-sim-v2.md` sections 24-28) -- WHAT IS LIVE.** Pure-layer
   files: `iaus/Estimate.h` (the fight in numbers: `TauntChance`, which `Taunt.cpp`'s roll calls too, `SpellOn`, `ThreatOn`,
   `IncomingOn`, ...), `iaus/Reach.h` (Q68 learned swing reach; no engine file includes it yet). LIVE for a follower on
