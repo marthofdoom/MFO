@@ -317,7 +317,7 @@ namespace MFO::ProgAllocator {
             float classShare;        // fraction of the grant that follows the equipped class's profile
             float craftShare;        // TOTAL fraction into Smithing / Enchanting / Alchemy (0 = off)
             float craftCeiling;      // a crafting skill at or above this base takes no share
-            float weaponUnit, shieldUnit, armorUnit, schoolUnitPerRow;   // profile building units
+            float weaponUnit, backupWeaponUnit, shieldUnit, armorUnit, schoolUnitPerRow;   // profile building units
         };
         extern const ClassWeightTuning kClassWeightTuning;
         std::vector<std::pair<RE::ActorValue, float>> ClassProfile(const Classes::ClassDef& a_def);

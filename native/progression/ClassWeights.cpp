@@ -9,14 +9,14 @@
 // THE CLASS ROW CARRIES NO SKILL LIST, so the profile is DERIVED from what the row does declare (classes/Classes.h ClassDef):
 //   weapons  : Weapon:: bits -> OneHanded (dagger / 1H; a mage's dagger does not count), TwoHanded, Marksman (bow / crossbow), Block (shield);
 //   armor    : any melee weapon or a shield -> Heavy + Light (SkillScale prunes to the follower's dominant one, the WeightsFor rule);
-//              a bow / crossbow / non-mage dagger without melee -> Light; a pure caster -> none;
-//   schools  : the applied default gambit rows' SpellRole -> school (Fire/Frost/Shock/Area/Destruction -> Destruction, Heal / TurnUndead /
+//              a bow / crossbow / non-mage dagger without melee -> Light; a pure caster -> none; a Ranged-line 1H is only a BACKUP weapon (backupWeaponUnit, sets no melee, so an archer stays Light);
+//   schools  : the default gambit rows' DECLARED SpellRole (applied or still a todo opcode: the role is declared either way; a pendingRuling row is skipped) -> school (Fire/Frost/Shock/Area/Destruction -> Destruction, Heal / TurnUndead /
 //              Ward -> Restoration, Summon / BoundWeapon / Reanimate -> Conjuration, Armor / Paralyze -> Alteration, Fear / Calm -> Illusion),
 //              one unit per row;
 //   unrestricted rows (T1, Dragonborn) fall back to the LINE (Melee: both weapons + armor; Ranged: bow + light; Mage / Hybrid: nothing).
 // A class that yields no profile leaves the Progression weights untouched.
 //
-// TO CHANGE: edit `kClassWeightTuning` (shares, ceiling, units) or the three tables in ProfileFor (weapon bit / role / armor rules).
+// TO CHANGE: edit `kClassWeightTuning` (shares, ceiling, units) or the rules in ClassProfile / SchoolOf (weapon bit / role / armor rules).
 // Nothing here is serialized (PRGN / MCLS untouched): the weights only decide where FUTURE points go, placed points never move.
 // THREADING: pure; the caller runs where RecomputeSkills runs today.
 #include "PCH.h"
@@ -32,6 +32,7 @@ namespace MFO::ProgAllocator {
         /*craftShare*/        0.04f,   // TOTAL fraction into Smithing / Enchanting / Alchemy, split equally over the ones still under the ceiling; 0 = off
         /*craftCeiling*/      50.0f,   // a crafting skill whose base is at or above this takes no crafting share
         /*weaponUnit*/        2.0f,
+        /*backupWeaponUnit*/  0.5f,    // a Ranged-line class's 1H (Archer set): backup weapon, PLACEHOLDER
         /*shieldUnit*/        1.0f,
         /*armorUnit*/         1.0f,
         /*schoolUnitPerRow*/  1.0f,
@@ -85,7 +86,10 @@ namespace MFO::ProgAllocator {
             default: break;   // Mage / Hybrid unrestricted (T1 Mage, Dragonborn): the gambit rows below, else nothing
             }
         } else {
-            if (a_def.weapons & W::kOneHand)  { Add(v, AV::kOneHanded, T.weaponUnit); melee = true; }
+            if (a_def.weapons & W::kOneHand) {
+                if (a_def.line == Classes::Line::Ranged) Add(v, AV::kOneHanded, T.backupWeaponUnit);   // backup only: no melee, armor stays Light
+                else { Add(v, AV::kOneHanded, T.weaponUnit); melee = true; }
+            }
             if (a_def.weapons & W::kTwoHand)  { Add(v, AV::kTwoHanded, T.weaponUnit); melee = true; }
             if (a_def.weapons & W::kDagger && !mage) { Add(v, AV::kOneHanded, T.weaponUnit); bow = true; }   // dagger line (Thief): light armor
             if (a_def.weapons & (W::kBow | W::kCrossbow)) { Add(v, AV::kArchery, T.weaponUnit); bow = true; }
@@ -96,7 +100,7 @@ namespace MFO::ProgAllocator {
 
         for (std::uint8_t i = 0; a_def.gambits && i < a_def.gambitCount; ++i) {
             const auto& g = a_def.gambits[i];
-            if (!g.IsApplied() || g.pendingRuling) continue;
+            if (g.pendingRuling) continue;   // the role is declared even when the opcode is a todo (planCard set)
             const AV s = SchoolOf(g.role);
             if (s != AV::kNone) Add(v, s, T.schoolUnitPerRow);
         }
