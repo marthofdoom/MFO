@@ -1257,8 +1257,8 @@ inventory (MFO's own snapshot build pass, the container menu, another plugin) st
    in flight finishes), then `MainThread::DrainForSave()` (one queue swap, FIFO; a re-post lands in the new queue, so the drain
    runs exactly the closures queued at the call), then the ConcProxy sweep (a drained cast may mint a proxy). The hold ends at
    SaveCallback's end (or the next frame, or StartPump). `cast/Equip.cpp` also keeps a released hold's pair in FWPN until its
-   posted lock-clearing unequip has run (`UnequipLockedHands`). The main thread is known from SKSEPluginLoad on
-   (`MainThread::NoteMainThread`), so `EngineWritesAllowed()` is true on main before the first frame (F2).
+   posted lock-clearing unequip has run (`UnequipLockedHands`). The main thread is known from `MainThread::Install` on
+   (the engine's own record, #84 rule 8), so `EngineWritesAllowed()` is true on main before the first frame (F2).
 9. **A quest alias fill or eviction is ONE alias op, on the main thread, with the Packages generation** (MFO-B859,
    `fix/alias-ops-main`, 2026-11-16). `TESQuest::ForceRefTo` holds the quest's alias write lock and a global scoped lock, but
    under them it writes the REFERENCES: `TESForm::AddChange`, the alias instance in the extra list, alias factions and spells,
@@ -1368,6 +1368,22 @@ the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `G
    moves, so the write's own read stays with it (`NoteWriteRead`). Two worker-side writes remain, both
    container sources: `TheftGate` `MoveNow` and `GemRules::TakeAndProbe`. The stability audit's M2 moves each to the
    main thread with its read, and `[overlap]`'s second count reaches 0 then. No decision may call these readers.
+8. **"The main thread" is the engine's own record, never the thread a SKSE message arrived on** (`fix/main-thread-id`,
+   2026-11-16; Deck field 11-16: the first kPostLoadGame of the session was judged off-main, a false "#84 VIOLATED at
+   ConcProxyLoadRepair" and `Loadout::Reconcile`'s shield give-back skipped). The main thread is the WinMain thread: WinMain
+   builds `Main` (its constructor stores `GetCurrentThreadId()` at `Main +0x28` and the window at `+0x18`), runs the init
+   and then the frame loop that calls `Main::Update`. `MainThread::Install` reads that id once (`SeedMainThread`), behind
+   `Runtime::Known()`, and refuses it (the id stays unknown, said as an ERROR) when it is 0 or when the OS says the
+   engine's window is owned by another thread. The player-Update thunk checks the id every frame: the first frame says
+   "it is the recorded main thread", a different thread is an ERROR ("MAIN THREAD MISMATCH") and is adopted.
+   **kDataLoaded is NOT on the main thread.** SKSE sends it from the engine's `InitTESThread` (the data-load worker; the
+   main thread only pumps window messages meanwhile), on 1.5.97 and 1.6.1170 by disassembly of both SKSE builds, and
+   that thread is gone when the load ends. Code that runs at kDataLoaded is single-threaded INIT code (older comments
+   call it "main thread"); it must never keep `std::this_thread::get_id()` / `GetCurrentThreadId()` as "the main
+   thread". kInputLoaded (inside `Main`'s constructor) and kPreLoadGame / kPostLoadGame (under `Main::Update`) are on the
+   main thread; nothing relies on that. Evidence and addresses: ENGINE_NOTES 0.55. A new "am I on main" test calls
+   `MainThread::IsMainThread()` / `LiveReadsAllowed()` / `EngineWritesAllowed()`; it never stores its own id
+   (REVIEW-BACKLOG MFO-B861: two older private copies that still do).
 
 **What changes for the player:** nothing but freshness, and it differs by kind. A decision sees the PARTY's
 inventories and effects as of the start of its tick, at most one tick (133 ms) plus a frame behind the engine, where it

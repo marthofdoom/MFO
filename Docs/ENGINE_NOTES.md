@@ -2764,6 +2764,59 @@ So an entry is `{ TESNPC* npc; FormID ref; u32 pad; BGSLocation* editorLoc; }`. 
 
 EP7 and EP52 are generic despite a player compare elsewhere in the function. This is class data for `progression/Inherit.cpp`; a new runtime regenerates it with the tools above and diffs it.
 
+### 0.55 Which thread is "main", and which thread each SKSE message arrives on (fix/main-thread-id, 2026-11-16)
+
+**Field (Deck 11-16, Tuxborn, 1.6.1170):** MFO logged `main thread 1908` at kDataLoaded; the frame thread was 1364
+(Harbinger's `[threadcheck] PlayerCharacter/Drain thread 1364`, MFO's kPostLoadGame load repair `thread 1364`). MFO had
+recorded "the main thread" as the thread kDataLoaded arrived on, so the whole first kPostLoadGame was judged off-main.
+
+**The main thread is the WinMain thread, and the engine records its id itself.** Offline disassembly of our three
+executables (capstone, `.pdata` bounds, direct-call xrefs; RVAs, image base 0x140000000):
+
+| | 1.5.97 | 1.6.1170 | 1.7.104 |
+|---|---|---|---|
+| WinMain (called from the CRT's main) | 0x5ACBD0 | 0x63E970 | 0x651300 |
+| creates `Main` (calls the constructor) | 0x5AE010, call at 0x5AE905 | 0x640120, call at 0x640DBC | 0x652AB0, call at 0x65374C |
+| `Main` constructor | 0x5ACC20 | 0x63EB50 | 0x6514E0 |
+| `call GetCurrentThreadId` + `mov [this+0x28], eax` | 0x5AD88A | 0x63F7FE | 0x65218E |
+| `Main` singleton global, stored right after the constructor returns | 0x2F26BF8 | 0x31872C0 | 0x3230530 |
+| init (starts `InitTESThread`, then `Sleep` + `PeekMessage` until it ends) | 0x5AEC80 | 0x641190 | 0x653B40 |
+| the frame loop (`PeekMessage` / `DispatchMessage`, then `Main::Update`) | 0x5AF3D0 | inline in WinMain | inline in WinMain |
+| `Main::Update` | 0x5B2FF0 | 0x645EA0 | 0x658870 |
+
+The constructor also stores the window handle at `+0x18` and the instance at `+0x20` (1.6.1170 0x63F805 / 0x63F809):
+the fork's `RE::Main` (`wnd` 0x18, `threadID` 0x28). The singleton globals equal the fork's `Offset::Main::Singleton`
+(`RELOCATION_ID(516943, 403449)`): Address Library 1.5.97 and 1.6.1170 decode to the values above, and the fork's
+1.7.104 id map row for 403449 is 0x3230530. WinMain runs all of it in sequence on one thread, so `Main::threadID` is
+the id of the thread that calls `Main::Update` from the frame loop. (1.6.1170 has a second direct caller of
+`Main::Update`, 0x641AD0 at 0x641BEF, with no direct caller and no `lea` reference; not traced.)
+
+**kDataLoaded is sent from `InitTESThread`, not from the main thread.** Disassembly of the two SKSE builds here:
+
+| | skse64_1_5_97.dll | skse64_1_6_1170.dll |
+|---|---|---|
+| sha256 (first 8) | 20627f8f | c9a2c8a8 |
+| `Dispatch_Message` | 0x81000 | 0x82A80 |
+| kDataLoaded (8) hook body: calls the game function, then dispatches | 0xA560 (game 0x1713D0) | 0xA680 (game 0x1BCBC0) |
+| installed as an `E8` call at game RVA | 0x5B0508 | 0x642FC7 |
+| inside the game function | 0x5B0120 | 0x642BD0 (AE id 36553) |
+| whose only direct caller is | 0x5B85E0 | 0x64C5A0 |
+| which is slot 1 of the `.?AVInitTESThread@@` vtable | 0x164D900 | 0x18966A8 |
+| kInputLoaded (6) hook site, inside `Main`'s constructor | 0x5AD96B | 0x63F8CA |
+| kPreLoadGame / kPostLoadGame (2 / 3) hook site | not resolved | 0x61564F in 0x615300 <- 0x6130B0 <- `Main::Update` (call at 0x645F3A) |
+| kNewGame (7) hook site | not resolved | 0x9426F9 in 0x9426A0 (no direct caller) |
+
+So on both runtimes kDataLoaded runs on the data-load worker while the main thread sits in its message pump, and that
+worker is torn down when the load ends: its id never matches a later thread except by reuse. 1.7.104 has the same
+engine shape (`InitTESThread` vtable 0x1914350, thread proc 0x65EF90 -> 0x655580); there is no SKSE build for it here.
+`SKSEPluginLoad`'s thread was not traced. The load messages are reached from `Main::Update` on 1.6.1170 (other callers
+of 0x6130B0's callee chain exist and were not all traced); the field log agrees (kPostLoadGame on the frame thread).
+
+**What MFO does with it:** `MainThread::SeedMainThread` (INVARIANTS #84 rule 8) reads `Main::threadID` once at
+`MainThread::Install`, never the calling thread. Harbinger (0.20.5, report only): `hook::OnMainThread` learns the thread
+from its player-Update seat only, so it answers "no" until the first frame (the same first-load window, by omission);
+`papyruscaller` stores the calling thread at kDataLoaded (the wrong one) and again at kPostLoadGame / kNewGame.
+
 ## 1. Actor control — Tier A primitives
 
 **Status: PROVEN (sibling).** Each has a working call site in shipped code.

@@ -3023,8 +3023,13 @@ a job worker here, not main).
 - `Clear()` (`:79`) — caller `Serialization.cpp:690`; drops pending work whose
   captured handles would re-resolve against the next session's reused handle table.
 - **WHICH THREAD IS THIS (2026-11-16, `fix/worker-snapshots`, INVARIANTS `#84`).** `InSeat()` (thread-local, set by the thunk's
-  `SeatScope` around the engine's player Update AND the drain), `IsMainThread()` (the thread id the thunk last ran on, unknown until
-  the first frame), `InWorkerTick()` (thread-local, set by `WorkerTickScope` in the pump's tick body, `Diagnostics.cpp`) and
+  `SeatScope` around the engine's player Update AND the drain), `IsMainThread()` (the engine's own main-thread id, `Main +0x28`,
+  read once by `Install` -> `SeedMainThread`, cross-checked against the owner thread of the engine's window, refused = unknown until
+  the first frame; the thunk checks it every frame and says `MAIN THREAD MISMATCH` as an ERROR; INVARIANTS `#84` rule 8,
+  ENGINE_NOTES 0.55, `fix/main-thread-id`. **kDataLoaded arrives on the engine's InitTESThread, not on main: never record "this
+  thread" there.** What breaks: seeding it from any SKSE message thread again makes the whole first kPostLoadGame of a session
+  off-main (posted deselect, skipped shield give-back, an empty LOTD supply read, false `#83` / `#84` errors). To add another
+  main-thread test, call `IsMainThread()`; open: REVIEW-BACKLOG MFO-B861), `InWorkerTick()` (thread-local, set by `WorkerTickScope` in the pump's tick body, `Diagnostics.cpp`) and
   `LiveReadsAllowed()` = no pump installed, OR (never inside a worker tick, and) in the seat or on the main thread. `InvSnap::Get` and
   `EffectMirror::Get` branch on it. `NoteLiveRead(site)` / `NoteWriteRead(site)` are the invariant's self-check (see the section
   "THE WORKER SNAPSHOTS" below).
@@ -3074,7 +3079,8 @@ a job worker here, not main).
     dropping the hold, lets a posted write (an unequip that clears ExtraCannotWear) miss the save while its ledger change is in
     it. The hold is its own flag (`g_saveHold`, checked in `PumpTickGate`): a PausePump / ResumePump pair inside the save must
     not lift it. `cast/Equip.cpp` `UnequipLockedHands` keeps a released hold's pair in FWPN (`g_pendingLockClears`, under
-    `g_forcedMx`) until the posted unequip ran. (8) `MainThread::NoteMainThread` at SKSEPluginLoad / kDataLoaded: without it
+    `g_forcedMx`) until the posted unequip ran. (8) the main thread id is known from `MainThread::Install` on (the engine's
+    own record, never the kDataLoaded thread: `#84` rule 8): without it
     `EngineWritesAllowed()` is false on main before the first frame and the first kPostLoadGame's `Loadout::Reconcile` posts
     its deselect (its shield give-back then needs the in-place answer and is skipped with an ERROR otherwise).
 - **THE PUMP AND THE TICK CATCH THEIR OWN EXCEPTIONS (same branch, stability audit M5).** `MainThread.cpp`'s drain runs each
@@ -3428,7 +3434,9 @@ them clobbers unrelated engine vtables).
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
   `:684`). Fast-out needs ALL THREE `g_wantCount==0 && g_styleSwapCount==0 &&
   g_ctrlCount==0` (`:516`). `WouldHitTeammate`'s `highActorHandles` walk is
-  main-thread-gated (`:763,818`), fails open off-main (§0.30 crash).
+  main-thread-gated (`:763,818`), fails open off-main (§0.30 crash). **OPEN, REVIEW-BACKLOG MFO-B861:** that gate compares
+  against a private `g_mainThread` captured at kDataLoaded, which is the engine's InitTESThread and not the main thread
+  (ENGINE_NOTES 0.55), so the legacy CheckCast friendly-fire walk never runs. Read B861 before touching it.
 
 ### CombatStyle.cpp — weapon stance + equip gate (T#75)
 **T2 batch M item 5 (2026-11-11): with Harbinger ABI >= 45 `ApplyTick` returns at its top and writes nothing; the desire is
@@ -9582,6 +9590,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
 - `iaus/Curves.cpp` (curve library), `iaus/Score.cpp` (`detail::Score` `:26`: bad-fact veto, gates, boosts, compensation, P5 early-out),
   `iaus/Decide.cpp` (`Decide` `:68`: two passes, prune `:90`, ties, window/pick `:166`; `DecidePosture`; `OnFired`), `iaus/Explain.cpp`
   (`[iaus]` / `[iaus-why]` text, log pacing, readout). `iaus/Iaus_internal.h` is shared by these only.
+- *(open: REVIEW-BACKLOG MFO-B861, the probe's private "main thread" id in `Fills.cpp` is the kDataLoaded thread, ENGINE_NOTES 0.55)*
 - **`iaus/Fills.h` / `iaus/Fills.cpp` -- THE ENGINE FILLS (card "IAUS engine fills", `feat/iaus-engine-fills`, 2026-11-11;
   note `Docs/research/2026-11/iaus-engine-fills.md`).** Measures the phase-2 inputs: `Combatant::armor / magicResist / hit /
   hitsPerSec / hitIsMagic / rangedWeapon / lossPerSec / swinging / casting`, `SpellEntry::damage / heal / controlSec /

@@ -587,9 +587,6 @@ namespace {
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     SKSE::Init(a_skse);
-    // F2 (review of ca0465c9): SKSE loads plugins on the main thread. Record it now, so MainThread::EngineWritesAllowed() is
-    // true on the main thread before the first player Update (the first kPostLoadGame's Loadout::Reconcile runs before it).
-    MFO::MainThread::NoteMainThread();
     // F2b: on 1.7.104.0 the ids come from the fork's MIT id table, built into
     // this DLL since fork 57be9d67 (no file to install). MFO's 1.7.104 column
     // (VerifiedAddresses.h) and every id it reaches were verified against
