@@ -19,7 +19,7 @@ one, because the next person will believe it.
 
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
-**98 rules: 84 numbered (`#1`–`#84`, each used exactly once) plus 14 lettered
+**99 rules: 85 numbered (`#1`–`#85`, each used exactly once) plus 14 lettered
 sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
 break a `#N` citation, and both are fixed here:
 
@@ -1378,3 +1378,31 @@ thread finds less than the plan counted and logs `[take] ... planned xN on the w
 That line is this lag showing, not a fault: the take re-reads the source live at its own write and moves only what is
 there.
 Docs/REVIEW-BACKLOG.md MFO-B858 lists what is still open. **MFO** fix/worker-snapshots, 2026-11-16.
+
+### 85. Perks are evaluated on the main thread, through a proven shape, and read from the main-built table
+
+What a follower's perks do is never derived from a perk's name, editor id or tree position, and never from MFO's own
+reading of a perk entry's conditions. It is the ENGINE's answer: `BGSEntryPoint::HandleEntryPoint` asked with the
+follower as the perk owner and a real item (`native/iaus/PerkEffects.cpp`, design
+`Docs/research/2026-11/perk-effects.md`). Three rules follow.
+
+1. **Main thread only, and never from the worker tick.** Entry-point conditions read live actor and world state with
+   no lock, and the perk arrays change on the main thread. The worker reads the published table
+   (`PerkEffects::Get`: an immutable `shared_ptr<const Table>` behind a leaf mutex, never a wait), exactly as it
+   reads `InvSnap` and `EffectMirror` (#84). `PerkEffects::BuildPass` runs inside the posted snapshot pass and builds
+   at most one follower per pass.
+2. **Only a shape decoded from an engine call site, on every supported executable.** Every entry point asked goes
+   through `Logistics::TradePerks::EntryPointValue`, whose `ProvenCondArgs` table holds the condition-argument count
+   per entry point and whose `ArgKindOf` holds each argument's type. The function is C-variadic: a wrong count makes
+   the engine read a condition pointer as the value pointer, and a null or wrong-typed argument is dereferenced as
+   the type the entry point expects. A new entry point is added there only with its call sites recorded (the design
+   note's table, ENGINE_NOTES 0.54). A refused ask is "no answer": the multiplier stays 1.00 and the refusal is
+   counted in the table line. Nothing is substituted.
+3. **Not known is not 1.0.** No table yet, or a group whose read flag is false, means the perk considerations are
+   NOT APPLICABLE and the gear picks use the factor 1.0 (the pick made before the reader existed). Each group of
+   `Iaus::PerkRead` has its own read flag, because the simulator fills the weapon group alone. The table has no
+   expiry: a follower who cannot be evaluated now (unloaded) keeps his last one.
+
+**What changes for the player:** nothing by itself. The table is up to ~2 s (plus one pass per other follower) behind
+a new perk, a new weapon or a new armor piece.
+**MFO** feat/perk-effects, 2026-11-16.

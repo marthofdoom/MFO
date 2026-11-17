@@ -28,7 +28,7 @@ code path and no per-runtime branch. Tab i of a perk entry's conditions is argum
 | EP | Name | Shape (after the owner) | Seed MFO passes | Engine call site (1.6.1170 / 1.5.97 / 1.7.104) | Feeds |
 |---|---|---|---|---|---|
 | 35 | ModAttackDamage | weapon (TESObjectWEAP), target (Actor), &value | the weapon's base damage (min 1) | display read `0x72816E` / `0x6943A6` / `0x73AC9E` (target = the player singleton); real hit `0x7DCB86` / `0x744391` / `0x7F1856` | weapon pick, posture |
-| 85 | ModArmorRating | armor (TESObjectARMO), &value | the piece's rating | `0x726BDD`, `0x728346` / `0x692DCD`, `0x694576` / `0x73970D`, `0x73AE76` (form type 0x1A tested before the call; the result is added into the actor's total) | armor pick |
+| 85 | ModArmorRating | armor (TESObjectARMO), &value | the piece's rating | `0x726BDD`, `0x728346` / `0x692DCD`, `0x694576` / `0x73970D`, `0x73AE76` (form type 0x1A tested and armor type 2 = clothing skipped before the call, so MFO asks about light and heavy pieces only; the result is added into the actor's total) | armor pick |
 | 38 | ModSpellCost | spell, &value | 100 | `0x14C2C8` / `0x101B0B` / `0x151858` (`MagicItem::CalculateCost`) | spell choice |
 | 29 | ModSpellMagnitude | spell, target, &value | the costliest effect's magnitude (100 when it has none) | `0x5ABE68` / `0x53DADF` / `0x5BA998` (already used by `iaus/Fills.cpp`) | spell choice |
 | 75 | CanDualCastSpell | spell, &value | 0 (the engine's own seed; any other value out = yes) | `0x6C3F4A` / `0x63214D` / `0x6D6A0A` | recorded only |

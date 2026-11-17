@@ -78,14 +78,14 @@ namespace MFO::PerkEffects {
             }
         }
 
+        // The engine asks entry point 85 only about a LIGHT or HEAVY piece (its two call sites skip armor type 2, clothing, before the call), so a
+        // clothing-type piece is never asked here either, shield or not. A rated light / heavy shield is its own kind.
         PerkArmor ArmorKindOf(const RE::TESObjectARMO* a_armo, bool& a_ok) {
-            a_ok = true;
+            const auto type = a_armo->GetArmorType();
+            a_ok = type == RE::BGSBipedObjectForm::ArmorType::kLightArmor || type == RE::BGSBipedObjectForm::ArmorType::kHeavyArmor;
+            if (!a_ok) return PerkArmor::Light;
             if (a_armo->IsShield()) return PerkArmor::Shield;
-            switch (a_armo->GetArmorType()) {
-            case RE::BGSBipedObjectForm::ArmorType::kLightArmor: return PerkArmor::Light;
-            case RE::BGSBipedObjectForm::ArmorType::kHeavyArmor: return PerkArmor::Heavy;
-            default: a_ok = false; return PerkArmor::Light;   // clothing: no rating for a perk to multiply
-            }
+            return type == RE::BGSBipedObjectForm::ArmorType::kHeavyArmor ? PerkArmor::Heavy : PerkArmor::Light;
         }
 
         struct SpellVisitor final : RE::Actor::ForEachSpellVisitor {

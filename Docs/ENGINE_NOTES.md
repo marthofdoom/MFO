@@ -2796,6 +2796,19 @@ EP7 and EP52 are generic despite a player compare elsewhere in the function. Thi
   (routes through `As<T>()`) or the non-template lookup plus `->As<T>()`.
   *This one cost MEO a 10,146-row table that resolved "0 live."*
 
+**Addendum 2026-11-16 (ClickUp 1dfcuabd2pk, `feat/perk-effects`): six more argument shapes, decoded with `tools/entrypoint_census` (`ep_census.py` -> `arity.py` -> `dz.py`) on all three executables. Identical on all three.** Sites are 1.6.1170 / 1.5.97 / 1.7.104.
+
+| EP | Name | Call | Seed and use at the site | Sites |
+|---|---|---|---|---|
+| 35 | kModAttackDamage | `(owner, TESObjectWEAP* weapon, Actor* target, &v)` | display read (holder AE id 40291 / SE 39215): target = the PlayerCharacter singleton, owner = `this`. Real hit (HitData::Populate chain): target = the victim | `0x72816E` / `0x6943A6` / `0x73AC9E`; `0x7DCB86` / `0x744391` / `0x7F1856` |
+| 85 | kModArmorRating | `(owner, TESObjectARMO* armor, &v)` | the piece's form type byte (+0x1A) is compared with 0x1A and its armor type (+0x1BC) with 2 (clothing: skipped) before the call; `v` is seeded with the piece's skill-scaled rating and ADDED into the actor's running total after | `0x726BDD`, `0x728346` / `0x692DCD`, `0x694576` / `0x73970D`, `0x73AE76` |
+| 38 | kModSpellCost | `(owner, MagicItem* spell, &v)` | `MagicItem::CalculateCost`: seeded with the skill-adjusted cost | `0x14C2C8` / `0x101B0B` / `0x151858` |
+| 39 | kModPercentBlocked | `(owner, &v)` | seeded with the computed share of the blow the guard stops (written through the same pointer just before) | `0x7DC153` / `0x74395D` / `0x7F0E03` |
+| 75 | kCanDualCastSpell | `(player, MagicItem* spell, &v)` | register-passed id (`lea ecx,[rax+0x4B]`, rax = 0); `v` is seeded integer 0 and compared with 0.0 after: any other value = may dual cast. Player only (class 1 above) | `0x6C3F4A` / `0x63214D` / `0x6D6A0A` |
+| 29 | kModSpellMagnitude | `(owner, MagicItem* spell, target, &v)` | already recorded (`iaus/Fills.cpp`); the two ItemCard description sites pass `r9 = 0` as the target (`0x93306D`, `0x934016`), which is the only place the engine itself passes a null condition argument. MFO never does | `0x5ABE68` / `0x53DADF` / `0x5BA998` |
+
+Shipped as `logistics/TradePerks.cpp ProvenCondArgs` / `ArgKindOf`; the reader is `iaus/PerkEffects.cpp` (INVARIANTS #85, `Docs/research/2026-11/perk-effects.md`).
+
 ### 1.1 The Tier-A trap MFO steps on constantly
 
 **Equip/unequip dispatch is SYNCHRONOUS into every registered sink.** Cycling
