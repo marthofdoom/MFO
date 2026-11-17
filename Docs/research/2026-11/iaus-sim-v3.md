@@ -217,7 +217,8 @@ the dragon's distance series (`[sense]` chase lines), the block arc (a probe).
 - N6. FOUND BY THE MIRROR, verify in native before acting: the waiver keeps a held foe in the snapshot, but
   `Generate.cpp:135-136` still gives act.attack the chase cap as its reach, so the range curve vetoes it past
   1.15 x the cap. Then no candidate names it, the decision goes idle, and the pin that the waiver needs is no
-  longer renewed. In the lab the dragon is dropped on 21 percent of the laps even with `--waiver player` (12.2).
+  longer renewed. In the lab the dragon is dropped on 21 percent of the laps even with `--waiver player` (12.2). The lab clears the pin the
+  moment a decision is idle, and the game's pin may outlive a few laps, so the lab's share is an upper reading.
 
 ## 11. Validation plan
 
@@ -248,11 +249,11 @@ Commands: `tools/iaus_sim/run.sh --scenario <name> --fights 300 [arm]` for 12.1 
 |---|---|---|---|---|---|---|
 | v2, old rule (the sim until today) | 89.23 | 0.09 | 7.50 | 58.5 % | 58.1 % | 20.3 |
 | v2, the 11-13 rule | 90.53 | 0.00 | 3.53 | 31.8 % | 48.5 % | 25.2 |
-| v3, old rule (`--v3 casterhold=off`) | 85.57 | 0.11 | 3.92 | 37.3 % | 37.5 % | 5.4 |
-| v3, the 11-13 rule (default) | 87.63 | 0.00 | 2.64 | 4.2 % | 30.0 % | 6.9 |
+| v3, old rule (`--v3 casterhold=off`) | 86.50 | 0.11 | 4.71 | 50.9 % | 42.0 % | 7.2 |
+| v3, the 11-13 rule (default) | 88.61 | 0.00 | 3.02 | 5.0 % | 31.6 % | 9.4 |
 
 With the foes on him the dagger arm goes down 0.11 times a fight against 0.00, and costs 2.1 U in v3
-(1.3 U in v2). The nearest he comes to his target is 143 units in the dagger arm (field: 209).
+(1.3 U in v2). The nearest he comes to his target is 142 units in the dagger arm (field: 209).
 The limit: v2 shows the same sign in THIS scenario. What v2 could not do is show it where the tuner looks.
 In the natural bracket and the headline scenarios the v2 Evoker stood 40 percent of his time in contact with
 his blade out and still went down in 5 percent of fights, so no search ever saw a cost. That part does not
@@ -269,12 +270,12 @@ the caster) as much as about the rule, and it is the first thing a field log sho
 | Arm | laps with the dragon dropped | mean cap | kept by the waiver / fight | idle laps |
 |---|---|---|---|---|
 | v2 | 0.00 % | 4096 (flat) | 0 | 0.0 % |
-| v3 `--waiver none` | 36.57 % | 2099 | 0 | 23.8 % |
-| v3 `--waiver self` (the game of 10-19) | 26.70 % | 2070 | 30.4 | 18.9 % |
-| v3 `--waiver player` (the game today) | 21.06 % | 2058 | 47.2 | 15.9 % |
+| v3 `--waiver none` | 36.87 % | 2093 | 0 | 23.9 % |
+| v3 `--waiver self` (the game of 10-19) | 25.63 % | 2066 | 33.8 | 17.8 % |
+| v3 `--waiver player` (the game today) | 20.70 % | 2051 | 48.3 | 15.0 % |
 
-The cap reads 2058 to 2099 units against a dragon, the number the field figure starts at (2184). v2 never
-dropped it. The fix of 11-13 helps (26.7 to 21.1 percent) and does not close it: see item N6 in section 10.
+The cap reads 2051 to 2093 units against a dragon, the number the field figure starts at (2184). v2 never
+dropped it. The fix of 11-13 helps (25.6 to 20.7 percent) and does not close it: see item N6 in section 10.
 In the natural bracket the cap removes at least one live foe on 11 to 40 percent of a caster's laps
 (v2: never), because encounters start 900 to 2200 units out.
 
@@ -285,10 +286,10 @@ In the natural bracket the cap removes at least one live foe on 11 to 40 percent
 | Arm | fired of picked | held by the line of fire | given up after 6 s | claim to fire | cast dps |
 |---|---|---|---|---|---|
 | v2 | 99.4 % | 0 | 0 | 0.54 s | 23.0 |
-| v3 | 83.2 % | 24.3 % (2.7 s each) | 11.4 % | 2.73 s | 5.8 |
-| v3 `--v3 lof=off` | 96.3 % | 0 | 0 | 2.36 s | 14.0 |
-| v3 `--v3 stance=off` (no side step, no slots) | 33.3 % | 67.9 % | 62.3 % | 2.75 s | 1.1 |
-| v3 `--deliver-sec 1.0,1.5` | 89.3 % | 20.4 % | 8.2 % | 1.28 s | 8.5 |
+| v3 | 82.1 % | 25.2 % (2.7 s each) | 11.3 % | 2.75 s | 7.3 |
+| v3 `--v3 lof=off` | 95.2 % | 0 | 0 | 2.33 s | 18.4 |
+| v3 `--v3 stance=off` (no side step, no slots) | 32.5 % | 68.5 % | 62.7 % | 2.73 s | 1.3 |
+| v3 `--deliver-sec 1.0,1.5` | 88.7 % | 21.0 % | 8.5 % | 1.28 s | 10.1 |
 
 Natural bracket, v3, per class: picked casts that fired / held at least once / given up / released out of sight.
 
@@ -303,7 +304,7 @@ Natural bracket, v3, per class: picked casts that fired / held at least once / g
 
 The line of fire is the largest single cause, as the field said. Occlusion is small here: the built-in open
 fights carry 0 or 1 pillar, which is the world's cover density and not a finding. A caster's damage falls from
-about 23 a second to about 5.5, and that is the main reason the caster cells lose 5 to 15 J (12.6).
+about 23 a second to about 7, and that is the main reason the caster cells lose 2 to 16 J (12.7).
 The side step is an ASSUMPTION and the result leans on it hard (33 percent fired without it).
 
 ### 12.4 Delivery: REPRODUCED
@@ -312,10 +313,10 @@ Natural bracket, 60 fights, `--delivery old` against `main`.
 
 | Class | Arm | fired of picked | never built | picks dropped by a newer pick | picks / fight |
 |---|---|---|---|---|---|
-| evoker | old | 15.9 % | 4.6 % | most of them | 14.9 |
-| evoker | main | 82.4 % | 0 | 0 | 4.5 |
-| conjurer | old | 16.3 % | 4.8 % | most of them | 13.9 |
-| conjurer | main | 83.6 % | 0 | 0 | 4.1 |
+| evoker | old | 15.0 % | 5.1 % | 74 % | 13.2 |
+| evoker | main | 81.9 % | 0 | 0 | 4.0 |
+| conjurer | old | 16.4 % | 5.6 % | 73 % | 12.1 |
+| conjurer | main | 82.9 % | 0 | 0 | 3.5 |
 
 With the rules of before 11-13 a claim is replaced by the next lap's different pick again and again and five
 casts in six never happen (field: "22 laps in 10 s with 0 fires"). With main's guard it is gone.
@@ -339,8 +340,8 @@ candidate needs a swing in the air on him or two taunted foes. Timing and candid
 | Scenario | v2 | v3 |
 |---|---|---|
 | `bow-channel`: bow denied by a channelled self buff | 0 % of her time, dps 29.0 | 40.6 % of her time (217 weapon damage a fight), stream 10.8 s, dps 17.0 |
-| `cloak-area`: seconds a foe stands in his cloak, per fight | no area | 0.06 s, with the cloak up 16 % of the fight: he backs away from the foes it needs |
-| `circle-area`: time he stands outside his own circle | no area | 83 % of the time it is up |
+| `cloak-area`: seconds a foe stands in his cloak, per fight | no area | 0.06 s, with the cloak up 13 % of the fight: he backs away from the foes it needs |
+| `circle-area`: time he stands outside his own circle | no area | 85 % of the time it is up |
 | `ledge-archer` | U 92.4 | U 90.8 (the ranged player kills it, the warrior cannot) |
 | Oracle gap on `fire-lane` / `jesper-dagger` / `dragon-circle` (K 4, 30 s, 10 fights) | | +3.64 / +5.27 / +3.24 U. `ext:clear_line` is offered and is not among the oracle's top wins: a 1.2 s step rarely clears a friend who stands next to the target |
 
@@ -354,17 +355,16 @@ Per class cell, each run alone (`--classes <cell> --seeds 1..6`, so the standard
 
 | Cell | v2 | v3 | | Cell | v2 | v3 |
 |---|---|---|---|---|---|---|
-| melee | 83.20 | 79.08 | | evoker | 83.73 | 74.70 |
-| ranged | 73.78 | 77.00 | | conjurer | 76.63 | 63.48 |
-| mage | 82.40 | 71.82 | | healer | 83.45 | 68.14 |
-| knight | 73.72 | 73.28 | | warlock | 80.00 | 75.43 |
-| warrior | 88.48 | 88.75 | | melee-off | 76.74 | 79.18 |
-| mercenary | 81.36 | 83.05 | | ranged-off | 74.83 | 69.31 |
-| archer | 83.74 | 82.87 | | mage-off | 71.91 | 69.51 |
-| thief | 86.48 | 88.59 | | | | |
+| melee | 83.20 | 77.98 | | evoker | 83.73 | 76.29 |
+| ranged | 73.78 | 77.06 | | conjurer | 76.63 | 66.27 |
+| mage | 82.40 | 73.67 | | healer | 83.45 | 67.13 |
+| knight | 73.72 | 73.32 | | warlock | 80.00 | 74.53 |
+| warrior | 88.48 | 88.87 | | melee-off | 76.74 | 79.10 |
+| mercenary | 81.36 | 83.04 | | ranged-off | 74.83 | 69.33 |
+| archer | 83.74 | 82.91 | | mage-off | 71.91 | 69.92 |
+| thief | 86.48 | 88.02 | | | | |
 
-(These cells were scored before the staff was made one-handed. The headline and every other table are after it.)
-The casters lose 5 to 15 J, the weapon classes move inside their noise. LoreRim (evoker, knight, archer, 2 seeds,
+The casters lose 2 to 16 J, the weapon classes move inside their noise. LoreRim (evoker, knight, archer, 2 seeds,
 legacy potion price): v2 58.57, v3 54.51.
 
 ### 12.8 Run time
