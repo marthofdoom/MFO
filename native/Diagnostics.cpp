@@ -343,7 +343,7 @@ namespace MFO::Diagnostics {
                          "worker-side writes reading their own live list={} (must be 0 since INVARIANTS #83's extension), ticks skipped by the snapshot gate={} | "
                          "snapshot build pass on the main thread: runs={} avg={} us worst={} us | INVARIANTS #83: engine writes off the main "
                          "thread={} (must be 0), EngineOps in place={} posted={} posted-but-not-run={} | closures that threw in the main pump={} "
-                         "worker tick stages stopped by an exception={}",
+                         "worker tick stages stopped by an exception={} | main-thread record != player Update thread (adoptions)={} (must be 0)",
                          g_ov.ticks.load(std::memory_order_relaxed), g_ov.tickSeat.load(std::memory_order_relaxed),
                          g_ov.tickNpc.load(std::memory_order_relaxed), g_ov.tickOnMainTid.load(std::memory_order_relaxed),
                          g_ov.stageSamples.load(std::memory_order_relaxed),
@@ -357,7 +357,7 @@ namespace MFO::Diagnostics {
                              ? g_snapPassUsTotal.load(std::memory_order_relaxed) / g_snapPassRuns.load(std::memory_order_relaxed) : 0,
                          g_snapPassUsMax.load(std::memory_order_relaxed),
                          MainThread::EngineWriteViolations(), ops.inPlace, ops.posted, ops.skipped, MainThread::PumpFaults(),
-                         g_stoppedStageCount.load(std::memory_order_relaxed));
+                         g_stoppedStageCount.load(std::memory_order_relaxed), MainThread::SeatThreadMismatches());
         }
         // Generation token: StopPump/StartPump bump it, so a thread that was
         // mid-sleep across a revert->load exits instead of running alongside

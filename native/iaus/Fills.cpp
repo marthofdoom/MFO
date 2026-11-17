@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "Followers.h"
+#include "MainThread.h"
 #include "Runtime.h"
 #include "iaus/Reach.h"
 
@@ -45,8 +46,8 @@ namespace MFO::Iaus::Fills {
         std::atomic<RE::Setting*> g_gm[kGmCount]{};
         std::atomic<bool>         g_epOk{ false };   // the HandleEntryPoint row verified (StartupCheck)
         // Review F3: the thread TESHitEvent arrives on is NOT known (CrimeProbe.cpp treats it so). The sink reads the
-        // target's health only when it runs on THIS thread (captured at kDataLoaded); 0 = not captured, never equal.
-        std::atomic<std::uint32_t> g_mainThread{ 0 };
+        // target's health only when MainThread::IsMainThread() (the engine's own record, INVARIANTS #84), never a thread
+        // captured at kDataLoaded (that is the engine's InitTESThread, which is gone after the load).
 
         // NaN = the GMST is missing or not finite: the estimate that needs it is then NOT produced.
         float G(Gm a_g) {
@@ -159,7 +160,7 @@ namespace MFO::Iaus::Fills {
                 r.thread = static_cast<std::uint32_t>(::GetCurrentThreadId());
                 // The at-event health: an actor-value read, so ONLY on the main thread (review F3). Anywhere else it
                 // stays NaN and the line still has the worker's before / after samples.
-                if (probe && r.thread != 0 && r.thread == g_mainThread.load(std::memory_order_relaxed))
+                if (probe && MainThread::IsMainThread())
                     if (auto* avo = target->AsActorValueOwner()) r.hpEvt = avo->GetActorValue(AV::kHealth);
                 std::scoped_lock lk(g_hitMx);
                 if (byFollower) {
@@ -383,14 +384,13 @@ namespace MFO::Iaus::Fills {
             else   missing += std::format(" {}", kGmName[i]);
         }
         g_epOk.store(EntryPointOk(), std::memory_order_relaxed);
-        g_mainThread.store(static_cast<std::uint32_t>(::GetCurrentThreadId()), std::memory_order_relaxed);
         spdlog::info("[iaus-fill] gmst{}", vals);
         if (!missing.empty())
             spdlog::error("[iaus-fill] GMST NOT FOUND:{} -- every estimate that needs one stays unmeasured (0), nothing is guessed",
                           missing);
         spdlog::info("[iaus-fill] probe {} (bIausFillProbe) | inputs written: armor={} hit={} loss={} swing={} casting={} spells={} "
                      "mortal={} (bIausFill<Input>, all default OFF) learned reach={} (bIausReachLearn) | spell magnitude perks "
-                     "(EP 0x1D): {} | main thread {}",
+                     "(EP 0x1D): {} | kDataLoaded thread {} (the engine's InitTESThread, not the main thread)",
                      On(Config::g_iausFillProbe) ? "ON" : "off", On(Config::g_iausFillArmor), On(Config::g_iausFillHit),
                      On(Config::g_iausFillLoss), On(Config::g_iausFillSwing), On(Config::g_iausFillCasting),
                      On(Config::g_iausFillSpells), On(Config::g_iausFillMortal), On(Config::g_iausReachLearn),

@@ -93,6 +93,10 @@ namespace MFO::MainThread {
     std::uint32_t SeatSeq();
     int           SeatPhase();
     std::uint32_t SeatSawWorker();
+    // How many times the thunk's thread differed from the recorded main thread (the log says the first 4; this counts all;
+    // Diagnostics.cpp prints it in the `[overlap]` line). 0 unless the engine's record ever disagreed with the player Update thread;
+    // a refused seed (no record) adopting the first frame's thread is not counted.
+    std::uint32_t SeatThreadMismatches();
     std::uint32_t NpcCombatSeq();
     int           NpcCombatIn();
     struct NpcCombatScope { NpcCombatScope(); ~NpcCombatScope(); NpcCombatScope(const NpcCombatScope&) = delete; NpcCombatScope& operator=(const NpcCombatScope&) = delete; };

@@ -43,8 +43,10 @@ namespace MFO::MainThread {
         // THE SEAT'S THREAD IS NOT THE RECORDED ONE (cold: at most once per frame, and only while they differ). The thunk runs
         // inside the engine's player Update, so its thread IS the frame thread by observation: it is adopted, and the
         // difference is SAID (principle 7: every main-thread test since the seeding answered for the other id).
+        std::atomic<std::uint32_t> g_seatMismatches{ 0 };
         void NoteSeatThread(std::uint32_t a_recorded, std::uint32_t a_seat) noexcept {
             g_mainTid.store(a_seat, std::memory_order_relaxed);
+            if (a_recorded != 0) g_seatMismatches.fetch_add(1, std::memory_order_relaxed);   // true mismatches only (a refused seed is said at kDataLoaded); counted always, the log below stops at 4 (principle 7)
             static std::atomic<int> s_said{ 0 };
             if (s_said.fetch_add(1, std::memory_order_relaxed) >= 4) return;
             try {
@@ -348,6 +350,7 @@ namespace MFO::MainThread {
 
     std::uint32_t SeatSeq()        { return g_seatSeq.load(std::memory_order_acquire); }
     int           SeatPhase()      { return g_seatPhase.load(std::memory_order_relaxed); }
+    std::uint32_t SeatThreadMismatches() { return g_seatMismatches.load(std::memory_order_relaxed); }
     std::uint32_t SeatSawWorker()  { return g_seatSawWorker.load(std::memory_order_relaxed); }
     std::uint32_t NpcCombatSeq()   { return g_npcSeq.load(std::memory_order_acquire); }
     int           NpcCombatIn()    { return g_npcIn.load(std::memory_order_acquire); }
