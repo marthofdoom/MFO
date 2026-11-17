@@ -1049,6 +1049,7 @@ namespace MFO::ComposedCast {
         const auto now = Clock::now();
         auto names = [&](const Watch& w) { return w.spell == a_spell || (w.proxy != 0 && w.proxy == a_spell); };
         bool mark[2] = { names(it->second.hand[0]), names(it->second.hand[1]) };
+        const bool watchedHere = mark[0] || mark[1];   // before the undecided branch below clears the marks: OTHER FIRED must not read that as 'no claim names it'
         // PER-HAND FIRE EVIDENCE FROM THE MOMENT OF THE FIRE (review R2-1 on 57bd5e7). The
         // cast event names no hand and a caster's currentSpell is its SELECTED spell, not a
         // fire marker (ENGINE_NOTES 0.15), so the hand comes from the animation graph's own
@@ -1092,7 +1093,7 @@ namespace MFO::ComposedCast {
         // OTHER FIRED (field 1117, Harbinger's [ctcensus] OTHER FIRED twin): the engine cast something that NO standing claim of
         // this follower names -- the AI's own spell beside our claim (Jesper's Incinerate beside MFO's Shadow Drain claim,
         // 10:36:55). Passive; info, once per (follower, claimed spell, fired form) pair so a repeating AI cast is one line.
-        if (!mark[0] && !mark[1]) {
+        if (!watchedHere) {
             const RE::FormID claimed = it->second.hand[0].spell != 0 ? it->second.hand[0].spell : it->second.hand[1].spell;
             if (claimed != 0) {
                 const auto key = (static_cast<std::uint64_t>(a_follower) * 0x9E3779B97F4A7C15ull) ^

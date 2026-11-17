@@ -144,10 +144,11 @@ namespace MFO::APMFBridge {
     // cleared with the pairs on load.
     bool SubstrateFiredSince(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                              std::chrono::steady_clock::time_point a_since);
-    // Did a pair for (a_follower, a_spell, a_target) CLOSE WITHOUT FIRING within the last a_withinMs (and no fire since)?
+    // Did a pair for (a_follower, a_spell, a_target) CLOSE WITHOUT FIRING within the last a_withinMs (and no fire since), at least
+    // a_minRun times in a row (a fire starts the run over)?
     // The cast side's back-off (A7, field 1117: a tree that never ran closes the pair unfired and MFO re-filed within ~1 s).
     // ANY thread (g_subMx).
-    bool SubstrateUnfiredWithin(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, std::uint32_t a_withinMs);
+    bool SubstrateUnfiredWithin(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, std::uint32_t a_withinMs, std::uint32_t a_minRun = 1);
     // Release the pair now (dismissal / MFO switched off for him). Idempotent.
     void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why);
 

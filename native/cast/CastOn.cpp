@@ -409,6 +409,12 @@ namespace MFO::Actuation {
             // gates by a hand claim (APMF d41ed43). Everything else keeps its road.
             const auto healRoad  = ComposedCast::ChooseHealRoad(a_follower, spell, a_target);
             const bool healClaim = healRoad == ComposedCast::HealRoad::Claim;
+            // A DISENGAGE (a sprint away, marth 11-17: "A disengage is a proper sprint away") defers a heal that would take the
+            // unanimated direct road (no combat controller): transparent, asked again every lap, so it lands animated once the
+            // disengage ends (the retreat is the other case: StopCombat has landed there, see the Scheduler's retreat branch).
+            if (healRoad == ComposedCast::HealRoad::DirectNoCombat && g_firingRule != kNoRule &&
+                APMFBridge::DisengageStands(a_follower->GetFormID()))
+                return { Result::NoOp, "heal deferred: a disengage is running and he has no combat controller (animated road only)", true };
             // THE PER-HAND HEAL ROAD (feat/mfo-perhand-heal, cast/HealRoad.cpp): the lap's
             // recipient re-judged (dead / beyond reach / at threshold or
             // full -> released, transparent), this rule's heal on the OTHER hand maintained,

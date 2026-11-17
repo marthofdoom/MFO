@@ -621,6 +621,7 @@ namespace MFO::Iaus {
             const Combatant* tgt = nullptr;
             for (const Combatant* f : a_foes)
                 if (s.currentTargetId != 0 && f->id == s.currentTargetId) { tgt = f; break; }
+            x.out.postureNoCurrentTarget = s.currentTargetId != 0 && !tgt;   // the fallback below judges ANOTHER foe: no answer for his own target
             if (!tgt)
                 for (const Combatant* f : a_foes)
                     if (!tgt || f->dist < tgt->dist) tgt = f;

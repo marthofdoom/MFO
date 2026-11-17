@@ -52,6 +52,7 @@ namespace MFO::Actuation {
         //     (the heal road's kHealLosTrustSec shape).
         struct SubstrateTuning {
             static constexpr std::uint32_t kUnfiredBackoffMs = 30000;   // PLACEHOLDER
+            static constexpr std::uint32_t kUnfiredRun       = 2;       // PLACEHOLDER: consecutive unfired closes before the back-off (a lone one retries: 10:25:22 / 10:30:13 fired after one)
             static constexpr float         kOccludedTrustSec = 3.0f;    // PLACEHOLDER (= kHealLosTrustSec)
         };
 
@@ -319,10 +320,12 @@ namespace MFO::Actuation {
 
         // 4c. BACK OFF AN UNFIRED CLOSE (A7): this (spell, target) pair closed without firing within the backoff (a tree
         //     that never ran): not re-filed on the next lap. Logged by NoteRefused (10 s per check). Placement spells too.
-        if (APMFBridge::SubstrateUnfiredWithin(fid, spellID, target, SubstrateTuning::kUnfiredBackoffMs)) {
-            NoteRefused(fid, a_spell, 11, std::format("this pair closed UNFIRED within the last {} s (the substrate's tree "
+        // A heal that heals health is exempt: its retry is what lands the heal.
+        if (!HealsHealth(a_spell) &&
+            APMFBridge::SubstrateUnfiredWithin(fid, spellID, target, SubstrateTuning::kUnfiredBackoffMs, SubstrateTuning::kUnfiredRun)) {
+            NoteRefused(fid, a_spell, 11, std::format("this pair closed UNFIRED {} times in a row, the last within {} s (the substrate's tree "
                                                       "never ran?): backing off, never the direct road (site {})",
-                                                      SubstrateTuning::kUnfiredBackoffMs / 1000, site));
+                                                      SubstrateTuning::kUnfiredRun, SubstrateTuning::kUnfiredBackoffMs / 1000, site));
             return SubstrateTry::Skipped;
         }
 

@@ -171,10 +171,8 @@ namespace MFO::Actuation {
         //   * at or above the rule's own HP threshold (only while NO claim serves him yet: the
         //     threshold starts a heal, it does not end one), or at full health -- unless a cast
         //     at him is in flight on that hand (D8: it finishes first).
-        // a_keepSpell (optional out): set true for the A2 exit (full health, the in-flight cast has FIRED since the
-        // full mark), which the caller releases with keepSpell so the hand is not interrupted mid-re-charge.
         const char* RecipientLost(RE::Actor* a_follower, RE::Actor* a_recipient, RE::SpellItem* a_spell,
-                                  std::size_t a_hand, bool* a_keepSpell = nullptr) {
+                                  std::size_t a_hand) {
             if (!a_recipient) return "the recipient is gone";
             if (a_recipient->IsDead()) return "the recipient is dead";
             if (a_recipient->IsDisabled()) return "the recipient is gone (disabled)";
@@ -197,14 +195,15 @@ namespace MFO::Actuation {
             // A2 (field 1117, Jesper 10:28:40-48, 10:39:17-22): at full with a cast "in flight" is D8's finish-first
             // ONLY for a charge begun before he reached full. The standing claim re-charges the spell right after each
             // fire, so in flight stayed true for ever and the claim fired ~1/s on a full recipient until the expiry
-            // sweep. Mark the first full read; once a fire is observed on this hand since the mark, release (keepSpell).
+            // sweep. Mark the first full read; once a fire is observed on this hand since the mark, release (terminal, never keepSpell).
             if (a_hand < kHandCount) {
                 auto& hh = g_healHands[fid].hand[a_hand];
                 if (hp >= Vocab::kHealFull) {
                     if (hh.fullSince == Clock::time_point{}) hh.fullSince = Clock::now();
                     if (HandFireSince(fid, a_hand, hh.fullSince, kFullFireWindowMs)) {
                         hh.fullSince = {};
-                        if (a_keepSpell) *a_keepSpell = true;
+                        // A TERMINAL full release, like the !inFlight branch above: not keepSpell (that is the stream cap's
+                        // re-stream contract: it keeps the lock and skips HealHandEnded), so the re-charge is interrupted.
                         return "the recipient is at full health (the cast in flight at the mark has fired)";
                     }
                 } else {
@@ -516,9 +515,8 @@ namespace MFO::Actuation {
             else if (rid != 0 && rcp &&
                      a_follower->GetPosition().GetDistance(rcp->GetPosition()) > Config::g_sharedRadius.load())
                 gone = "the recipient left the shared radius";
-            bool keepLost = false;
-            if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand, &keepLost)) {
-                ReleaseWithExit(a_follower, a_hand, hs, lost, gone ? "gone" : LostToken(lost), keepLost);
+            if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand)) {
+                ReleaseWithExit(a_follower, a_hand, hs, lost, gone ? "gone" : LostToken(lost));
                 return;
             }
             if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
@@ -979,9 +977,8 @@ namespace MFO::Actuation {
         // refresh). Lost -> a claim (or re-stream gap lock) of this rule's aimed at HIM is
         // released now, even mid-cast; transparent either way, the rules below run. Not a
         // fallback: nothing else casts this heal this lap.
-        bool keepLost = false;
-        if (const char* lost = RecipientLost(a_follower, recipient, a_spell, servedOn, &keepLost)) {
-            if (servedOn < kHandCount) ReleaseWithExit(a_follower, servedOn, spellID, lost, LostToken(lost), keepLost);
+        if (const char* lost = RecipientLost(a_follower, recipient, a_spell, servedOn)) {
+            if (servedOn < kHandCount) ReleaseWithExit(a_follower, servedOn, spellID, lost, LostToken(lost));
             return Outcome{ Result::FailedOther, std::format("animated heal not cast: {}", lost), true };
         }
 
