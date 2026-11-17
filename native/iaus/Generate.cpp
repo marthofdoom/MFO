@@ -552,6 +552,26 @@ namespace MFO::Iaus {
             return x.closeRefusing && Reposition::CloseSpell(e, x.s.meleeReach);
         }
 
+        // THE WEAPON HAND LOST TO A CHANNEL (ClickUp 1dfcuabd22x, field 11-12: Auri's bow was denied for as long as Transmutate Stride channelled). A
+        // CONCENTRATION buff / ward holds his left hand for the whole stream (cast/Actuation_internal.h: a self cast, heal, buff and any concentration
+        // spell take the left hand), so a weapon that needs that hand (Combatant::weaponLeftShare: bow, crossbow, two-hander; half for a second melee
+        // weapon) is put away for the channel and drawn again after it. The cost is the weapon damage forgone, as the share of the foes' health still to
+        // deal on the foe he is on: share x his damage per second on the top kept foe x (the channel + the redraw) / that foe's current health (the share of
+        // the current target's time-to-kill the channel costs), clamped 0..1.
+        // < 0 = NOT APPLICABLE (bit-identical): not a concentration spell, a weapon that does not need the hand, damage not measured, or no foe.
+        // Fire-and-forget spells release on fire and never reach this. Tunables: Tuning::concChannelSec / handRedrawSec, the curve of Cons::HandLost.
+        float HandLostShare(const Ctx& x, const SpellEntry& e) {
+            if (!e.concentration) return -1.0f;
+            const float share = Finite(x.s.self.weaponLeftShare, 0.0f);
+            if (!(share > 0.0f) || x.top.empty()) return -1.0f;
+            const float dps = Estimate::Dps(x.s.self, *x.top.front());
+            if (!(dps > 0.0f)) return -1.0f;
+            const float hp = (std::max)(0.0f, Finite(x.top.front()->hp, 0.0f));
+            if (!(hp > 0.0f)) return -1.0f;
+            const float secs = (std::max)(0.0f, Finite(x.t.concChannelSec, 0.0f)) + (std::max)(0.0f, Finite(x.t.handRedrawSec, 0.0f));
+            return (std::clamp)(share * dps * secs / hp, 0.0f, 1.0f);
+        }
+
         // THE ONE SET OF CAST GATES a kept offense / control spell meets before any foe is looked at (Casts and CanCastOffense both read them,
         // so the posture layer's "he can cast" never disagrees with the cast layer's "he can cast").
         bool CastBarred(const Ctx& x, const SpellEntry& e) {
@@ -813,6 +833,7 @@ namespace MFO::Iaus {
                             c.f.alreadyActive = Note(s.liveStreams, e.form, self ? 0u : r->id) == Tri::Yes;
                         } else {
                             c.f.meleeBuff = e.meleeBuff;
+                            if (!scroll) c.f.handLost = HandLostShare(x, e);   // a scroll is read, never channelled
                             for (const Combatant* foe : a_foes)
                                 if (Between(*foe, *r) <= s.meleeReach) { c.f.recipientInMelee = true; break; }
                         }
@@ -829,6 +850,7 @@ namespace MFO::Iaus {
                 }
                 case Prune::Nature::Ward: {
                     Candidate c = base(nullptr);
+                    if (!scroll) c.f.handLost = HandLostShare(x, e);
                     c.f.casterOnMe = casterOnMe;
                     c.f.alreadyActive = std::find(e.activeOn.begin(), e.activeOn.end(), s.self.id) != e.activeOn.end();
                     x.Push(std::move(c));

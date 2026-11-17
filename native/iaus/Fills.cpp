@@ -318,6 +318,9 @@ namespace MFO::Iaus::Fills {
                 const float rate = w->GetSpeed() * (e.ranged ? G(kDpsBowSpeedMult) : meleeMult);
                 e.hit  = (std::isfinite(hit) && hit > 0.0f) ? hit : 0.0f;
                 e.rate = (std::isfinite(rate) && rate > 0.0f) ? rate : 0.0f;
+                // 1dfcuabd22x: the weapons that need his left hand (a bow, a crossbow, a two-hander), or a second melee weapon held in it
+                if (e.ranged || w->IsTwoHandedSword() || w->IsTwoHandedAxe()) e.leftShare = 1.0f;
+                else if (e.srcLeft != 0) e.leftShare = 0.5f;
                 return;
             }
 
@@ -500,7 +503,7 @@ namespace MFO::Iaus::Fills {
 
         // ── write what is switched on ────────────────────────────────────────────────────────────────────────────
         if (m_armor) { a_u.armor = e.armor; a_u.magicResist = e.magicResist; }
-        if (m_hit) { a_u.hit = e.hit; a_u.hitsPerSec = e.rate; a_u.hitIsMagic = e.magic; a_u.rangedWeapon = e.ranged; }
+        if (m_hit) { a_u.hit = e.hit; a_u.hitsPerSec = e.rate; a_u.hitIsMagic = e.magic; a_u.rangedWeapon = e.ranged; a_u.weaponLeftShare = e.leftShare; }
         if (m_loss) a_u.lossPerSec = e.loss;
         if (m_swing) a_u.swinging = e.swinging;
         if (m_casting) a_u.casting = e.casting;

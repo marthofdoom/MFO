@@ -16,6 +16,7 @@
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
 #include <limits>
+#include <optional>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1720,6 +1721,74 @@ namespace {
         Check(scrollEdge == -1.0f || scrollEdge == -2.0f, "spell perks: a scroll never carries the edge");
     }
 
+    // ── hand lost (ClickUp 1dfcuabd22x, field 11-12 Auri): a concentration buff holds the left hand, a bow is put away for the channel ──
+    void HandLostRows() {
+        std::printf("\n=== hand lost (concentration buff and the weapon hand) ===\n");
+        const Tuning& t = DefaultTuning();
+        const ClassGate g{};
+        const auto build = [&](bool a_conc, float a_leftShare) {
+            Snapshot s = MageFight();
+            SpellEntry stride = Spell("Transmutate Stride", 0x6600541E, Prune::Nature::Buff, 20, 0);
+            stride.selfDelivery = true; stride.concentration = a_conc; s.book.entries.push_back(stride);
+            s.self.hit = 30.0f; s.self.hitsPerSec = 1.0f; s.self.weaponLeftShare = a_leftShare;
+            return s;
+        };
+        const auto find = [&](const Snapshot& a_s) -> std::optional<Candidate> {
+            const auto gen = Generate(a_s, g, t);
+            for (const auto& cand : gen.actions)
+                if (cand.form == 0x6600541E) return cand;
+            return std::nullopt;
+        };
+        const auto score = [&](const Candidate& c) { return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr); };
+
+        const auto bow = find(build(true, 1.0f)), none = find(build(true, 0.0f)), fire = find(build(false, 1.0f));
+        Check(bow && none && fire, "hand lost: the concentration buff is a candidate in all three cases");
+        if (!(bow && none && fire)) return;
+        Check(bow->f.handLost > 0.0f && bow->f.handLost <= 1.0f, "hand lost: a bow follower's channelled buff carries the share of foe health the bow would deal");
+        Check(none->f.handLost < 0.0f, "hand lost: a follower whose weapon needs no hand (a mage with no weapon) carries nothing (not applicable)");
+        Check(fire->f.handLost < 0.0f, "hand lost: a fire-and-forget buff carries nothing (it releases on fire)");
+        Check(score(*bow) < score(*none), "hand lost: Auri's channelled self buff scores LOWER with the bow than the same buff with no bow");
+        Check(score(*fire) == score(*none), "hand lost: a fire-and-forget buff scores the same with or without a bow (bit-identical)");
+        Check(score(*bow) > 0.0f, "hand lost: it is a cost, never a veto (marth: buff-then-bow stays possible)");
+        // a quiet fight loses nothing: a trivial foe's health against a weak hit
+        Snapshot weak = build(true, 1.0f);
+        weak.self.hit = 0.5f;
+        for (auto& f : weak.foes) f.hp = 100000.0f;
+        const auto w = find(weak);
+        Check(w && w->f.handLost >= 0.0f && w->f.handLost < 0.01f && score(*w) > score(*bow), "hand lost: against a foe the bow barely scratches the buff costs almost nothing");
+        // unmeasured damage: not applicable
+        Snapshot blind = build(true, 1.0f);
+        blind.self.hit = 0.0f;
+        const auto b = find(blind);
+        Check(b && b->f.handLost < 0.0f && score(*b) == score(*none), "hand lost: damage unmeasured = not applicable, bit-identical");
+        // ENGINE-REALISTIC (review SEV-3): a bow's AI rate is weaponData.speed x fCombatDPSBowSpeedMult = 0.2/s (iaus-i8-damage-research.md:106), hit ~20,
+        // top foe ~450 hp. The cost is on the TOP foe only, so a crowd behind it does not dilute it.
+        {
+            const auto real = [&](float a_share) {
+                Snapshot s = build(true, a_share);
+                s.self.hit = 20.0f; s.self.hitsPerSec = 0.2f;
+                for (auto& f : s.foes) f.hp = 450.0f;
+                return find(s);
+            };
+            const auto rb = real(1.0f), rn = real(0.0f);
+            Check(rb && rn && rb->f.handLost > 0.04f && rb->f.handLost < 0.15f, "hand lost (realistic): a 20 x 0.2/s bow on a 450 hp top foe costs a few percent of its time-to-kill");
+            if (rb && rn) {
+                const float sb = score(*rb), sn = score(*rn);
+                std::printf("  realistic row: no bow %.4f, bow %.4f (ratio %.3f)\n", static_cast<double>(sn), static_cast<double>(sb), static_cast<double>(sb / sn));
+                Check(sb > 0.0f && sb < 0.9f * sn, "hand lost (realistic): the channelled self buff scores at least 10% below the no-bow case and stays above 0");
+            }
+        }
+        // a half share (a second weapon in the left hand) costs less than a bow
+        const auto half = [&] { Snapshot hs = build(true, 0.5f); hs.self.hit = 20.0f; hs.self.hitsPerSec = 0.2f; for (auto& f : hs.foes) f.hp = 450.0f; return find(hs); }();
+        const auto full = [&] { Snapshot fs = build(true, 1.0f); fs.self.hit = 20.0f; fs.self.hitsPerSec = 0.2f; for (auto& f : fs.foes) f.hp = 450.0f; return find(fs); }();
+        Check(half && full && half->f.handLost < full->f.handLost && score(*half) > score(*full), "hand lost: a left-hand second weapon costs less than a bow");
+        Check(static_cast<std::size_t>(Cons::HandLost) == static_cast<std::size_t>(Cons::BoostSpellPerks) + 1 && RoleOf(Cons::HandLost) == Role::Shape && Name(Cons::HandLost) == "hand_lost",
+              "hand lost: the consideration is APPENDED after spell_perks, a Shape, named hand_lost");
+        Tuning tt = t; std::string why;
+        Check(SetTuningScalar(tt, "t.concChannelSec", 5.0f, &why) && tt.concChannelSec == 5.0f && SetTuningScalar(tt, "t.handRedrawSec", 1.0f, &why) && tt.handRedrawSec == 1.0f,
+              "hand lost: the channel length and the redraw time are tunable by name (t.concChannelSec / t.handRedrawSec)");
+    }
+
     void SchoolAffinityRows() {
         namespace CC = MFO::Iaus::ClassCurves;
         std::printf("\n=== school affinity ===\n");
@@ -2162,6 +2231,7 @@ int main() {
     ClassCurveRows();
     SchoolAffinityRows();
     SpellPerkRows();
+    HandLostRows();
     BuffPotions();
     ConsumablesWorth();
     LootNeedScores();
