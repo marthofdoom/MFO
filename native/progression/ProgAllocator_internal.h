@@ -13,6 +13,7 @@
 #include "PCH.h"
 #include "ProgAllocator.h"
 #include "Progression.h"
+#include "classes/Classes.h"   // ClassWeights.cpp: the equipped class row (public header)
 #include "Followers.h"   // wave-1 split: IsActiveFollower (below) reads Followers::IsTrackedFast
 #include <mutex>          // g_hmsFireMx (worker-thread fire mirror)
 #include <array>          // HmsFireCounts
@@ -311,6 +312,20 @@ namespace MFO::ProgAllocator {
         // Skill points (progression/SkillScale.cpp):
         std::vector<std::pair<RE::ActorValue, float>> WeightsFor(RE::Actor* a_actor,
                                                                  const ClassDef& a_def);
+        // Class-weighted auto skill points (progression/ClassWeights.cpp): the tunables (ONE table) and the two pure pieces.
+        struct ClassWeightTuning {
+            float classShare;        // fraction of the grant that follows the equipped class's profile
+            float craftShare;        // TOTAL fraction into Smithing / Enchanting / Alchemy (0 = off)
+            float craftCeiling;      // a crafting skill at or above this base takes no share
+            float weaponUnit, backupWeaponUnit, shieldUnit, armorUnit, schoolUnitPerRow;   // profile building units
+        };
+        extern const ClassWeightTuning kClassWeightTuning;
+        std::vector<std::pair<RE::ActorValue, float>> ClassProfile(const Classes::ClassDef& a_def);
+        std::vector<std::pair<RE::ActorValue, float>> BlendGrantWeights(const std::vector<std::pair<RE::ActorValue, float>>& a_base,
+                                                                        const std::vector<std::pair<RE::ActorValue, float>>& a_profile,
+                                                                        const std::vector<RE::ActorValue>& a_craftUnder);
+        // The weights the auto GRANT uses (class-weighted + crafting share, SkillScale.cpp); WeightsFor stays the Progression list's own.
+        std::vector<std::pair<RE::ActorValue, float>> GrantWeightsFor(RE::Actor* a_actor, const ClassDef& a_def, std::string* a_note);
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log);
         void HoldUnledgeredSkills(RE::Actor* a_actor, const ProgState& a_st);
         // Roster removal (ClickUp 86e3eewaf): every ledgered skill back to its

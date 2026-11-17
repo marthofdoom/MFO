@@ -3495,3 +3495,9 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** main-thread cost: ~80 HandleEntryPoint calls per typical build, up to ~970 worst, each follower every ~2 s; raise kRefreshTicks (~112) or rebuild on a change signature; cap the armor asks.
 - **(SEV-4):** seeds: EP35/EP85 seeded with base not skill-scaled values, EP38 with 100 not the spell cost, EP39 with 1.0: Add entries distorted.
 - **(SEV-5):** harness.cpp "// School affinity" comment now above SpellPerkRows; generic armor probe counted in armorPieces; [perk-fx] line length / reprint per flip (B860 item 8).
+
+## feat/prog-class-weight (Opus 5.5, 2026-11-16, against 0892051b)
+
+- **F3 SEV-4:** sneak-line rows (Thief, Master Thief, Nightingale, Listener: kSneakAlways, Steal / PickLocks rows) give no Sneak / Lockpicking / Pickpocket weight in `ClassProfile`. Reasoning: the profile reads weapons and spell roles only; a thief's signature skills get only the Progression list's own share. Deferred: a table row in `ClassProfile` when tuned.
+- **F4 SEV-4:** the perk pick (Verbs.cpp:253, the `WeightsFor` fallback in `AllocateNextEligible`) ignores the class profile and the crafting share, so perks follow the Progression list while skill points follow the class. Reasoning: scoped out ("auto skill allocation"); a perk-order change is its own decision.
+- **F6 SEV-5:** the crafting ceiling is checked once per grant batch (`GrantWeightsFor`), so a large batch of pending levels can push a crafting skill slightly past 50. Reasoning: tiny share (4 %), floors keep it bounded.

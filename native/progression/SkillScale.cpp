@@ -186,6 +186,48 @@ namespace MFO::ProgAllocator {
             return out;
         }
 
+        // The weights the auto GRANT uses (ClickUp 1dfcuabd3tr): WeightsFor (the Progression list's own) blended with the EQUIPPED Classes
+        // add-on class's profile (classes ACTIVE + a class equipped; else the profile is empty and this is WeightsFor as it was) and a very
+        // small capped crafting share for every follower (ClassWeights.cpp holds the tunables). Sibling skills the profile adds (One/Two-
+        // handed, Heavy/Light) are pruned to the follower's dominant one, the same rule WeightsFor applies. a_note = what to log, or null.
+        std::vector<std::pair<RE::ActorValue, float>> GrantWeightsFor(RE::Actor* a_actor, const ClassDef& a_def, std::string* a_note) {
+            auto base = WeightsFor(a_actor, a_def);
+            if (base.empty()) return base;
+            std::vector<std::pair<RE::ActorValue, float>> profile;
+            std::string clsName;
+            if (Classes::Active()) {
+                const std::uint8_t eq = Classes::GetEquipped(a_actor->GetFormID());
+                if (eq < Classes::kClassCount) {
+                    const auto& row = Classes::Get(static_cast<Classes::Id>(eq));
+                    profile = ClassProfile(row);
+                    clsName = std::string(row.name);
+                }
+            }
+            auto has = [&](RE::ActorValue a) {
+                return std::any_of(profile.begin(), profile.end(), [a](const auto& e) { return e.first == a; });
+            };
+            auto drop = [&](RE::ActorValue a) {
+                profile.erase(std::remove_if(profile.begin(), profile.end(), [a](const auto& e) { return e.first == a; }), profile.end());
+            };
+            if (has(RE::ActorValue::kOneHanded) && has(RE::ActorValue::kTwoHanded))
+                drop(DominantWeaponSkill(a_actor) == RE::ActorValue::kOneHanded ? RE::ActorValue::kTwoHanded : RE::ActorValue::kOneHanded);
+            if (has(RE::ActorValue::kHeavyArmor) && has(RE::ActorValue::kLightArmor))
+                drop(DominantArmorSkill(a_actor) == RE::ActorValue::kHeavyArmor ? RE::ActorValue::kLightArmor : RE::ActorValue::kHeavyArmor);
+            float t = 0.0f;
+            for (const auto& e : profile) t += e.second;
+            if (t > 0.0f) for (auto& e : profile) e.second /= t; else profile.clear();
+
+            std::vector<RE::ActorValue> craftUnder;
+            if (auto* avo = a_actor->AsActorValueOwner())
+                for (const auto av : { RE::ActorValue::kSmithing, RE::ActorValue::kEnchanting, RE::ActorValue::kAlchemy })
+                    if (avo->GetBaseActorValue(av) < kClassWeightTuning.craftCeiling) craftUnder.push_back(av);
+            auto out = BlendGrantWeights(base, profile, craftUnder);
+            if (a_note)
+                *a_note = std::format("class-profile {}{} crafting {}/{} under {:g}", clsName.empty() ? "none" : clsName,
+                                      profile.empty() ? " (empty)" : "", craftUnder.size(), 3, kClassWeightTuning.craftCeiling);
+            return out;
+        }
+
         // ── the auto-scale (§15) — PRGN v7 ACCUMULATOR (marth: "auto placed
         // skill points are equally as permanent, there is no shift"). 1) GRANT
         // the not-yet-granted auto levels × skillPointsPerLevel by the weights
@@ -219,7 +261,8 @@ namespace MFO::ProgAllocator {
             // exact share (20 levels × 5 → 40/30/20/10, not 40/40/20/0).
             if (pending > 0) {
                 const float pts = g_econ.skillPointsPerLevel * static_cast<float>(pending);
-                const auto weights = WeightsFor(a_actor, *def);
+                std::string note;
+                const auto weights = GrantWeightsFor(a_actor, *def, &note);
                 if (pts > 0.0f && !weights.empty()) {
                     std::string diag;
                     for (const auto& [av, w] : weights) {
@@ -235,9 +278,9 @@ namespace MFO::ProgAllocator {
                         diag += std::format("{}{}+{:.2f}={:.2f}", diag.empty() ? "" : " ", AvName(av), share, e->autoPoints);
                     }
                     if (a_log)
-                        spdlog::info("[prog] {:08X}: GRANT {} auto level(s) = {:g} point(s) by class \"{}\": {} "
+                        spdlog::info("[prog] {:08X}: GRANT {} auto level(s) = {:g} point(s) by class \"{}\" [{}]: {} "
                                      "(granted levels {} -> {}; placed points never move)",
-                                     id, pending, pts, def->name, diag, a_st.autoLevelsGranted, targetGranted);
+                                     id, pending, pts, def->name, note, diag, a_st.autoLevelsGranted, targetGranted);
                 }
                 a_st.autoLevelsGranted = static_cast<std::uint16_t>(std::min(targetGranted, 0xFFFF));
             }
