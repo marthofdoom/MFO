@@ -40,8 +40,8 @@ namespace MFO::MainThread {
     // InSeat: this thread is inside the player-Update thunk right now (the engine's update or the drain).
     // IsMainThread: this thread is the main thread = the WinMain thread that runs the engine's frame loop. Its id is the ENGINE'S
     // OWN record (Main +0x28, written by Main's constructor), read once by Install() and checked against the owner thread of the
-    // engine's window; the player-Update thunk checks it every frame and says a mismatch loudly. MainThreadId: that id, 0 while
-    // unknown (before Install, on an unsupported runtime, or refused): then IsMainThread() is false everywhere off the seat.
+    // engine's window; the player-Update thunk checks it every frame and says a mismatch loudly. While it is unknown (before
+    // Install, on an unsupported runtime, or refused) IsMainThread() is false everywhere off the seat.
     // NEVER "the thread a SKSE message arrived on": kDataLoaded is sent from the engine's InitTESThread (INVARIANTS #84).
     // InWorkerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope), whichever OS thread the job system gave it.
     // LiveReadsAllowed: may THIS call read a live engine inventory / effect list? Never inside a worker tick (checked first: the
@@ -50,7 +50,6 @@ namespace MFO::MainThread {
     // logistics/InvSnapshot and iaus/EffectMirror branch on it, so one helper serves both threads.
     bool InSeat();
     bool IsMainThread();
-    std::uint32_t MainThreadId();
     bool InWorkerTick();
     bool LiveReadsAllowed();
     // THE INVARIANT CHECKS ITSELF (#84, principle 5). Every place that still reads a LIVE engine inventory or active-effect list

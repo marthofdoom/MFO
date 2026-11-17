@@ -223,7 +223,6 @@ namespace MFO::MainThread {
         const auto tid = g_mainTid.load(std::memory_order_relaxed);
         return tid != 0 && tid == static_cast<std::uint32_t>(::GetCurrentThreadId());
     }
-    std::uint32_t MainThreadId() { return g_mainTid.load(std::memory_order_relaxed); }
 
     namespace {
         // THE MAIN THREAD, FROM THE ENGINE (see g_mainTid). Read once, at Install (kDataLoaded: Main exists since WinMain built it,
