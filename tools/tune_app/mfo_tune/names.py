@@ -16,7 +16,7 @@ CONS = (
     "mp_low", "engaged", "caster", "downed", "outnumbered", "damage", "overkill", "survive", "danger", "heal_size",
     "player_dying", "recipient_dying", "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency", "control_worth",
     "magicka_buys", "range", "mortal", "mortal_danger", "trade", "need", "far", "need", "need", "need", "strike", "hold", "need",
-    "flee_heal", "need", "guard_line", "buff_threat", "buff_stealth", "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost",
+    "flee_heal", "need", "guard_line", "buff_threat", "buff_stealth", "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",
 )
 CLASS_SLUGS = (
     "melee", "ranged", "mage", "knight", "warrior", "mercenary", "archer", "thief", "evoker", "conjurer", "healer", "warlock",

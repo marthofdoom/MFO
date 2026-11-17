@@ -82,7 +82,7 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
-            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
+            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -120,7 +120,8 @@ namespace MFO::Iaus {
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
-                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge, f.handLost };
+                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge, f.handLost,
+                            f.healRate, f.bestHealRate, f.effectRate };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -398,6 +399,13 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 0.6f }, { 0.15f, 0.35f }, { 1.0f, 0.2f } } };
                 at(Cons::HandLost) = Piece(p);
             }
+            // heal_rate (field 11-17b, Jesper: "when he does choose to heal it's a weak spell"): x = the heal's healing per second of cast / his BEST castable heal's on this
+            // recipient (the bestDamage pattern), capped at 1. His best heal scores 1; one that mends half of it 0.65; a trickle 0.2. A SHAPE, never a veto
+            // (a weak heal is still better than none). PLACEHOLDER, NOT SEARCHED: the knobs are `c.heal_rate.py0 / py1 / py2` (the sim mirror is a listed follow-up).
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 0.2f }, { 0.5f, 0.65f }, { 1.0f, 1.0f } } };
+                at(Cons::HealRate) = Piece(p);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -469,7 +477,8 @@ namespace MFO::Iaus {
             { "t.noHealDrink", &Tuning::noHealDrink }, { "t.noHealRetreat", &Tuning::noHealRetreat }, { "t.emergencyHpHigh", &Tuning::emergencyHpHigh }, { "t.emergencyHpLow", &Tuning::emergencyHpLow },
             { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
-            { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
+            { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },
+            { "t.spellCastSec", &Tuning::spellCastSec }, { "t.dyingSelfHp", &Tuning::dyingSelfHp }, { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // 11-17b: game only until the sim mirror   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
             { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
@@ -562,7 +571,7 @@ namespace MFO::Iaus {
                 { Cons::HealNeed, 1 }, { Cons::BoostDowned, 1 }, { Cons::BoostFleeHeal, 1 }, { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 },
                 { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
                 { Cons::HealSize, 0.8f }, { Cons::BoostRecipientDying, 1 }, { Cons::HealClaimed, 1 }, { Cons::HealUrgency, 0.7f },
-                { Cons::BoostSpellPerks, 1 },
+                { Cons::BoostSpellPerks, 1 }, { Cons::HealRate, 1 },
             };
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
@@ -714,7 +723,7 @@ namespace MFO::Iaus {
             case Cons::TargetCond:    return f.targetCond == Tri::No ? 0.0f : 1.0f;
             case Cons::AlreadyActive: return B(!f.alreadyActive);
             case Cons::HandFree:      return B(f.handFree);
-            case Cons::SplashSafe:    return f.hasArea ? B(f.splashSafe) : In::Off();
+            case Cons::SplashSafe:    return (f.hasArea || !f.splashSafe) ? B(f.splashSafe) : In::Off();   // 11-17b: a blocked line of fire (no area) vetoes too
             case Cons::Exploit:       return f.resist;
             case Cons::ClassFit:
                 // Ruling Q34. On-class: not applicable (no shading), unless the strict reading is on and this is
@@ -810,6 +819,9 @@ namespace MFO::Iaus {
             case Cons::HealSize:
                 if (!(f.expHeal > 0.0f)) return In::Off();
                 return Clamp(f.recipientMissing / f.expHeal, 0.0f, 1.0f);
+            case Cons::HealRate:
+                if (!(f.healRate > 0.0f) || !(f.bestHealRate > 0.0f)) return In::Off();
+                return Clamp(f.healRate / f.bestHealRate, 0.0f, 1.0f);
             case Cons::RangeChase:
                 if (!f.meleeRange) return In::Off();
                 if (!(f.chase > 0.0f)) return (f.reach > 0.0f) ? In(ChaseX(c, f.dist / (f.reach * 20.0f), 1.0f)) : In::Off();   // no cap known: 20 reaches
@@ -867,7 +879,9 @@ namespace MFO::Iaus {
                 if (c.family != Family::DrinkMagicka || f.castsWanted < 0.0f) return In::Off();
                 return Clamp(f.castsWanted / 3.0f, 0.0f, 1.0f);
             case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
-            case Cons::BoostRecipientDying: return B(std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f);
+            case Cons::BoostRecipientDying:
+                // seconds to live under 5, or (11-17b, Jesper died from full health in one burst with no hit rate known) his OWN health under Tuning::dyingSelfHp
+                return B((std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f) || (f.recipientSelf && f.recipientHp < t.dyingSelfHp));
             case Cons::kCount:        break;
             }
             return In::Off();

@@ -618,6 +618,21 @@ namespace MFO::Actuation {
                 g_preemptWhy[a_hand] = "the caster was idle between casts";
                 return true;
             }
+            // THE HEALER IS BEING HIT (field 11-17b, Jesper: "cast gambit locked -- spell still firing" held the left hand on a concentration heal while a foe
+            // killed him). A concentration or touch HEAL incumbent does not protect its channel from a higher-ranked non-heal asker while a foe is on the healer:
+            // the asker takes the hand now (the IAUS gather writes the threat every lap, Actuation::NoteHealerThreat). A heal asker never takes it from a heal.
+            if (const auto th = g_healerThreat.find(fid); th != g_healerThreat.end() && th->second) {
+                auto* inc = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+                auto* ask = RE::TESForm::LookupByID<RE::SpellItem>(a_askerSpell);
+                if (inc && ask && CasterConsent::ClassifySpell(inc) == CasterConsent::SpellKind::Heal &&
+                    CasterConsent::ClassifySpell(ask) != CasterConsent::SpellKind::Heal &&
+                    (inc->GetCastingType() == RE::MagicSystem::CastingType::kConcentration ||
+                     inc->GetDelivery() == RE::MagicSystem::Delivery::kTouch)) {
+                    g_preemptWhy[a_hand] = "THREAT ON THE HEALER: a foe is hurting him, so a higher-ranked non-heal takes the hand from his "
+                                           "concentration / touch heal instead of waiting the channel out";
+                    return true;
+                }
+            }
             if (a_urgentHeal) {
                 auto* inc = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
                 if (inc && CasterConsent::ClassifySpell(inc) == CasterConsent::SpellKind::Offense) {
@@ -1544,4 +1559,11 @@ namespace MFO::Actuation {
         }
         }
     }
+
+    void NoteHealerThreat(RE::FormID a_follower, bool a_threatened) {
+        if (a_follower == 0) { if (!a_threatened) g_healerThreat.clear(); return; }
+        if (a_threatened) g_healerThreat[a_follower] = true;
+        else g_healerThreat.erase(a_follower);
+    }
+
 }

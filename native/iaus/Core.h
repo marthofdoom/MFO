@@ -155,6 +155,9 @@ namespace MFO::Iaus {
                             // needs that hand (bow, crossbow, two-hander) is put away. x = the share of the top foe's current health his weapon would have dealt in
                             // that time (Facts::handLost, iaus/Generate.cpp HandLostShare). NOT APPLICABLE (bit-identical) for any other candidate, a fire-and-forget
                             // spell, a follower whose weapon does not need that hand, or while his weapon damage is unmeasured
+        HealRate,           // (APPENDED, field 11-17b Jesper "when he does choose to heal it's a weak spell"): a heal by what it MENDS PER SECOND of cast against his BEST castable
+                            // heal on that recipient (Facts::healRate / Facts::bestHealRate, the bestDamage pattern): heals are ranked among themselves and healing as a family is never
+                            // penalised. HealSize stays the overheal brake (a heal bigger than the missing health). NOT APPLICABLE while the heal is unmeasured
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -272,6 +275,15 @@ namespace MFO::Iaus {
         // ASSUMPTION (0.65 s, half of the v2 swap time, iaus-sim-v3.md 4.3). PLACEHOLDERS: the sim decides them. `t.concChannelSec` / `t.handRedrawSec`.
         float concChannelSec = 11.5f;
         float handRedrawSec = 0.65f;
+        // 11-17b (field Jesper): the rate a spell is compared at is its effect per second OF CAST. A concentration stream's effect is already per second (Fills.cpp
+        // counts it for 1 s); a fire-and-forget cast's total is divided by this. PLACEHOLDER (engine cast times differ per spell and are not read yet): `t.spellCastSec`.
+        float spellCastSec = 1.5f;
+        // 11-17b: his OWN heal gets the dying boost (Cons::BoostRecipientDying) below this health fraction even while the time-to-live is unknown (nothing seen
+        // hitting him: a burst takes the rest in one blow). PLACEHOLDER, not searched: `t.dyingSelfHp`.
+        float dyingSelfHp = 0.25f;
+        // 11-17b: how long a (spell, foe) pair whose line of fire had a party member in it stays refused after the line cleared (a friendly stepping across the
+        // line would otherwise flip the pick every lap). PLACEHOLDER: `t.fireLineKeepSec`.
+        float fireLineKeepSec = 1.0f;
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;
@@ -433,6 +445,11 @@ namespace MFO::Iaus {
         float bestDamage = 0.0f;          // the best expDamage among his castable offense spells on this target
         float foeHealth = 0.0f;           // the target's health now, absolute
         float expHeal = 0.0f;             // this cast's expected healing
+        float healRate = 0.0f;            // this heal's expected healing per second of cast (Generate.cpp EffectRate); 0 = not measured
+        float bestHealRate = 0.0f;        // his best healing per second of cast among the heals he can cast at THIS recipient now (Generate.cpp BestHealRateOn); 0 = none measured
+        float effectRate = 0.0f;          // 11-17b: this spell's expected damage / healing per second of cast (the tie-break's first read; 0 = not measured)
+        bool  concentration = false;      // 11-17b: a concentration stream (its cost is per second: the tie-break counts it over the channel, Tuning::concChannelSec)
+        bool  recipientSelf = false;      // a heal for the caster himself (Cons::BoostRecipientDying's low-health read)
         float recipientMissing = 0.0f;    // health the recipient is missing, absolute
         float selfTtl = kInf;             // seconds he lives at the present incoming damage
         float tauntTtl = kInf;            // ... with this foe on him as well (taunt)

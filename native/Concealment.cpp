@@ -72,6 +72,11 @@ namespace MFO::Concealment {
         constexpr std::chrono::milliseconds kFreshMs{ 3000 };
         constexpr std::chrono::milliseconds kRunMaxMs{ 10000 };
         constexpr std::chrono::milliseconds kHideHoldMs{ 12000 };
+        // 11-17b (field Adelinda: ch.3 in-combat sneak never took, engine IsSneaking false x4, and G2's "hidden" verdict ended the run as a success anyway): a hide
+        // run that has ARRIVED and still reads IsSneaking false this long later is a stance that did not take. It is the same failure SneakClaims' first re-file
+        // reports (apmf/SneakClaims.cpp, ~23 sweeps), judged at the point instead: AbortHide fires, the ch.7 deny is released, no new hide or step this fight.
+        // PLACEHOLDER (principle 9: a claim needs one Harbinger drain and one engine tick to show; 1 s is about 7 service laps).
+        constexpr std::chrono::milliseconds kStanceTakeMs{ 1000 };
         constexpr int kHiddenReads = 2;
         constexpr std::chrono::milliseconds kBlowCapMs{ 6000 };
         constexpr std::chrono::milliseconds kBlowFlightMs{ 1500 };
@@ -723,8 +728,11 @@ namespace MFO::Concealment {
             if (reads >= kHiddenReads) {
                 if (const char* why = APMFBridge::HoldSneakForHide(a_follower))
                     spdlog::warn("[conceal] {:08X}: hidden, but NOT sneaking: {}. G2's hold row needs the stance.", id, why);
-                return end(run.phase == Phase::Hiding ? "hidden at the point: no foe detects him (G2's verdict)"
-                                                      : "hidden on the way: no foe detects him (G2's verdict)", false, true);
+                // 11-17b: G2's verdict says no foe detects him, but the hold row needs the STANCE (a sneaking follower). Without IsSneaking the run is not a success:
+                // it goes on (the stance claim is held each lap) until the stance takes or the arrival check below aborts it.
+                if (a_follower->IsSneaking())
+                    return end(run.phase == Phase::Hiding ? "hidden at the point: no foe detects him (G2's verdict)"
+                                                          : "hidden on the way: no foe detects him (G2's verdict)", false, true);
             }
         }
 
@@ -763,6 +771,11 @@ namespace MFO::Concealment {
             }
             spdlog::warn("[conceal] {:08X}: at the point but NOT sneaking: {}. He holds there standing; the engine's own rules "
                          "decide whether a foe loses him.", id, why);
+        }
+        // 11-17b: arrived, the claim has been held for kStanceTakeMs and the engine still says he is standing: the stance did not take (see kStanceTakeMs).
+        if (now - run.arrivedAt > kStanceTakeMs && !a_follower->IsSneaking()) {
+            AbortHide(id, "arrived at the hide point and IsSneaking is still false after 1 s");
+            return false;   // AbortHide released the run, its drive and the ch.7 deny: the scan runs this lap
         }
         if (Health(a_follower) < run.hpAtArrival - 1.0f) return end("he was hit at the point (a foe found him)", false, false);
         if (now - run.arrivedAt > kHideHoldMs)

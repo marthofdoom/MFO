@@ -335,6 +335,10 @@ namespace MFO::Actuation {
         };
         struct FollowerCastLocks { CastLock hand[kHandCount]; };
         inline std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
+        // 11-17b (field Jesper, died holding a concentration heal): a foe is hurting the HEALER now (iaus/Candidates.cpp writes it every lap from
+        // Estimate::IncomingOn; Actuation::NoteHealerThreat). CanPreemptHand reads it so a heal's hand lock gives way to a higher-ranked non-heal. Worker-serial
+        // like g_castLock: both ends run on the scan's worker; ClearCastLocks empties it on a revert / load.
+        inline std::unordered_map<RE::FormID, bool> g_healerThreat;
 
         // Rate-limited [eval] log -- one line per (follower, hand, spell) per
         // ~2s window, the SAME dedup shape as CasterConsent.cpp's
