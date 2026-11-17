@@ -30,7 +30,7 @@ namespace MFO::MainThread {
         // g_mainTid: the main thread's OS id, 0 = not known yet. SEEDED ONCE from the ENGINE'S OWN RECORD (SeedMainThread, called
         // by Install): Main's constructor stores GetCurrentThreadId() at Main +0x28 on the WinMain thread, the thread that then
         // runs the frame loop (Main::Update). It is NOT "the thread this DLL was called on": SKSE sends kDataLoaded from the
-        // engine's InitTESThread (INVARIANTS #84 "which thread is main"), which is how the first kPostLoadGame of a session
+        // engine's InitTESThread (INVARIANTS #84 rule 8, ENGINE_NOTES 0.55), which is how the first kPostLoadGame of a session
         // used to be judged off-main. The thunk only CHECKS it from then on (NoteSeatThread says so loudly if a frame differs).
         // t_workerTick: this thread is inside MFO's AddTask tick body (WorkerTickScope). The job system may hand that task to ANY
         // thread, so a tick that happens to run on the main thread's id is still a worker tick for every reader.
@@ -237,18 +237,18 @@ namespace MFO::MainThread {
         // and nothing is judged by NoteLiveRead / NoteEngineWrite until the first player Update names the thread.
         void SeedMainThread() {
             const auto here = static_cast<std::uint32_t>(::GetCurrentThreadId());
-            const auto* main = RE::Main::GetSingleton();
-            const std::uint32_t tid = main ? main->threadID : 0;
+            const auto* engine = RE::Main::GetSingleton();
+            const std::uint32_t tid = engine ? engine->threadID : 0;
             if (tid == 0) {
                 spdlog::error("[mainthread] main thread NOT recorded: {} (this call is on thread {}). Until the first player "
                               "Update, engine writes off the seat are posted and live reads wait.",
-                              main ? "the engine's Main holds thread id 0" : "the engine's Main singleton is null", here);
+                              engine ? "the engine's Main holds thread id 0" : "the engine's Main singleton is null", here);
                 return;
             }
             const char* window = "its window's owner thread agrees";
-            const std::uint32_t owner = main->wnd ? static_cast<std::uint32_t>(::GetWindowThreadProcessId(main->wnd, nullptr)) : 0;
+            const std::uint32_t owner = engine->wnd ? static_cast<std::uint32_t>(::GetWindowThreadProcessId(engine->wnd, nullptr)) : 0;
             if (owner == 0) {
-                window = main->wnd ? "its window could not be asked for its owner thread (not cross-checked)"
+                window = engine->wnd ? "its window could not be asked for its owner thread (not cross-checked)"
                                    : "it holds no window yet (not cross-checked)";
             } else if (owner != tid) {
                 spdlog::error("[mainthread] main thread NOT recorded: the engine's Main says thread {} but its window is owned by "
