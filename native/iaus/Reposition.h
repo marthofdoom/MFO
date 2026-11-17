@@ -6,6 +6,7 @@
 // Standard types only (iaus/Snapshot.h), so the off-line harness and the simulator read the very same answers as the game.
 #include "iaus/ConsumableWorth.h"   // DeathWinFloor: the survival signal the close-spell rule reuses
 #include "iaus/Estimate.h"
+#include "iaus/ReachBook.h"   // CentreReach: the one reach formula (marth 2026-11-17)
 #include "iaus/Snapshot.h"
 
 #include <algorithm>
@@ -177,6 +178,23 @@ namespace MFO::Iaus::Reposition {
         const float h = a_dz >= 0.0f ? a_selfH : a_foeH;
         return std::fabs(a_dz) > h + a_reach + a_slack;
     }
+    // THE blade reach readers (marth 2026-11-17 "Edge reach + split uses"), centre to centre for THIS foe: the learned edge reach + his
+    // radius, else fMeleeReach (iaus/ReachBook.h CentreReach, the one formula). BladeReach = one blow, no lunge (the height line,
+    // StrikeReady); ComboReach = the sequence he would start (the attack's range test, the swing gate).
+    [[nodiscard]] inline float BladeReach(const Snapshot& a_s, const Combatant& a_foe) {
+        return ReachBook::CentreReach(Prune::Finite(a_s.weaponEdge, 0.0f), Prune::Finite(a_s.comboEdge, 0.0f), ReachBook::Use::Blow,
+                                      Prune::Finite(a_foe.bodyRadius, 0.0f), Prune::Finite(a_s.meleeReach, 0.0f));
+    }
+    // The HEIGHT line's reach: the one-blow edge value + a humanoid radius (kRefRadius), NOT the foe's: how high a blade reaches does
+    // not grow with the width of what is up there, so a dragon 450 up stays out of reach (marth 2026-11-17).
+    [[nodiscard]] inline float HeightReach(const Snapshot& a_s) {
+        return ReachBook::CentreReach(Prune::Finite(a_s.weaponEdge, 0.0f), Prune::Finite(a_s.comboEdge, 0.0f), ReachBook::Use::Blow,
+                                      0.0f, Prune::Finite(a_s.meleeReach, 0.0f));
+    }
+    [[nodiscard]] inline float ComboReach(const Snapshot& a_s, const Combatant& a_foe) {
+        return ReachBook::CentreReach(Prune::Finite(a_s.weaponEdge, 0.0f), Prune::Finite(a_s.comboEdge, 0.0f), ReachBook::Use::Combo,
+                                      Prune::Finite(a_foe.bodyRadius, 0.0f), Prune::Finite(a_s.meleeReach, 0.0f));
+    }
     [[nodiscard]] inline bool MeleeUnreachableNow(const Snapshot& a_s, const Combatant& a_foe) {
         if (!(a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver)) return false;
         if (a_foe.outOfMeleeReach) return true;
@@ -184,7 +202,7 @@ namespace MFO::Iaus::Reposition {
         const float dz = Prune::Finite(a_foe.z, 0.0f) - Prune::Finite(a_s.self.z, 0.0f);
         const float sh = a_s.self.bodyHeight > 0.0f ? a_s.self.bodyHeight : kNominalH;
         const float fh = a_foe.bodyHeight > 0.0f ? a_foe.bodyHeight : kNominalH;
-        return OutOfVerticalReach(dz, sh, fh, Prune::Finite(a_s.meleeReach, 0.0f));   // visible or not: the engine swings at the air either way
+        return OutOfVerticalReach(dz, sh, fh, HeightReach(a_s));   // visible or not: the engine swings at the air either way
         // (the occluded-on-another-level case is a subset of the vertical line, so it needs no clause of its own)
     }
 
@@ -276,7 +294,7 @@ namespace MFO::Iaus::Reposition {
     [[nodiscard]] inline bool StrikeReady(const Snapshot& a_s, const Combatant& a_foe) {
         if (a_foe.detectsMe != Tri::No || !std::isfinite(a_foe.dist)) return false;
         if (a_s.drawn == PostureKind::Melee || a_s.drawn == PostureKind::Silver)
-            return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, Prune::Finite(a_s.meleeReach, 0.0f));
+            return !a_foe.outOfMeleeReach && a_foe.dist <= (std::max)(0.0f, BladeReach(a_s, a_foe));
         if (a_s.drawn == PostureKind::Bow)
             return a_foe.sight == Sight::Visible && a_foe.dist <= (std::max)(0.0f, Prune::Finite(a_s.chaseCap, 0.0f));
         return false;

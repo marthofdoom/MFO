@@ -105,6 +105,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/PerkEffects.cpp
     iaus/Candidates.cpp
     iaus/Fills.cpp
+    iaus/SwingSeq.cpp
     iaus/Hide.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp

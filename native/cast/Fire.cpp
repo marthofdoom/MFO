@@ -538,7 +538,10 @@ namespace MFO::Actuation {
             // reporting Fired is a single consistent outcome (no fall-through), so
             // it does NOT reintroduce the "latch + transparent-reject" two-mutation
             // tick the anim path below still guards against.
-            if (dist > Config::g_meleeReach.load()) {
+            // The swing gate's own limit (iaus/ReachBook.h SwingLimit: the learned sequence reach to THIS foe's edge x the gate's veto line),
+            // so a power attack the IAUS picked at the learned reach is not turned into a closing Fired here (review F4); the flat
+            // fMeleeReach while nothing is learned.
+            if (dist > Iaus::ReachBook::SwingLimit(a_follower->GetFormID(), CombatSense::BodyRadius(foe), Config::g_meleeReach.load())) {
                 // Report Fired only while a latch / pin actually HOLDS the foe (a new one,
                 // or the standing one). A Suppressed pin holds nothing, so nothing is
                 // closing on this foe on our order -- an honest NoOp (opaque, like Attack).
@@ -623,7 +626,7 @@ namespace MFO::Actuation {
             if (!APMFBridge::CombatMoveSupported())
                 return { Result::FailedOther, "no bash road (Harbinger absent or older than ABI 38)", true };
             const float dist = a_follower->GetPosition().GetDistance(foe->GetPosition());
-            if (dist > Config::g_meleeReach.load())
+            if (dist > Iaus::ReachBook::SwingLimit(a_follower->GetFormID(), CombatSense::BodyRadius(foe), Config::g_meleeReach.load()))   // the swing gate's limit (review F4)
                 return { Result::FailedSkill, "bash: the foe is out of melee reach", true };
             const std::uint32_t h = APMFBridge::RequestBash(a_follower->GetFormID(), foe->GetFormID(), /*a_power=*/false);
             if (h == 0) return { Result::FailedOther, "bash refused by Harbinger at the call", true };

@@ -16,9 +16,12 @@
 // next to what really happened before it may move a score:
 //   [Debug] bIausFillProbe = 1    -> `[iaus-fill]` lines (rate-limited). Nothing is written into the Snapshot.
 //   [Debug] bIausFill<Input> = 1  -> that one input is written. All default OFF (Config.h).
-//   [Debug] bIausReachLearn = 1   -> Snapshot::swingReach (read by PowerAttack and Bash only) is the swing reach
-//                                    LEARNED from his own hits and misses (ruling Q68, iaus/Reach.h); 0 while the
-//                                    learner knows nothing, and those families then read fMeleeReach (MFO-B687).
+//   [Debug] bIausReachLearn = 1   -> DEFAULT ON since marth 2026-11-17 (the KILL SWITCH). The melee reach is LEARNED to the foe's
+//                                    EDGE per (follower, weapon, attack SEQUENCE) from his own hits and misses (iaus/Reach.h,
+//                                    iaus/ReachBook.h, iaus/SwingSeq.h; Docs/research/2026-11/anim-reach.md) and written to
+//                                    Snapshot::weaponEdge (one blow, the height line and StrikeReady) and Snapshot::comboEdge (the
+//                                    sequence he would start: the approach and the swing gate); 0 while nothing is learned, and the
+//                                    readers then read fMeleeReach (MFO-B687).
 // With every key OFF: StartupCheck still resolves the GMST pointers and the entry-point row once at load and logs its
 // status lines (gmst, switches, plus the sink's registration line). After that the module does nothing per tick: the
 // gather's Pass is unarmed (no read, no map entry, no line), MeasureSpell returns at once, the sink returns at once.
@@ -70,7 +73,7 @@ namespace MFO::Iaus::Fills {
         [[nodiscard]] bool Armed() const { return m_armed; }
         // Measure a_actor and write the switched-on inputs into a_u. a_u's id / pools / position are already filled.
         void Unit(Combatant& a_u, RE::Actor* a_actor, Role a_role);
-        // Snapshot::mortal, the learned swing reach (Snapshot::swingReach), then the probe lines of this lap (unit lines, the hits whose
+        // Snapshot::mortal, the learned edge reaches (Snapshot::weaponEdge / comboEdge), then the probe lines of this lap (unit lines, the hits whose
         // target this lap sampled).
         void Finish(Snapshot& a_s, RE::Actor* a_self);
 
@@ -109,5 +112,7 @@ namespace MFO::Iaus::Fills {
 
     // ResetAllState, after StopPump.
     void Clear();
+    // CombatEnded / Forget (Candidates): erase his published reach (review F5a); the next lap republishes it. WORKER.
+    void ForgetReach(RE::FormID a_follower);
 
 }

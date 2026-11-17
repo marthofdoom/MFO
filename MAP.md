@@ -1059,7 +1059,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - **PowerAttack (`kActPowerAttack`) is RANGE-GATED** (`cast/Fire.cpp:290`): it
   latches the chosen foe (`Targeting::Command`, so the engine's combat AI closes
   distance — MFO invents no approach) and fires `attackPowerStartInPlace` ONLY when
-  `GetDistance(follower,foe) <= Config::g_meleeReach` (200u, `fMeleeReach`).
+  `GetDistance(follower,foe) <= ReachBook::SwingLimit(...)` (the learned sequence reach x the swing gate's veto line, `fMeleeReach` 200u while nothing is learned; `cast/Fire.cpp`, bash executor the same, feat/anim-reach F4).
   Out of reach → latch + `Fired` "closing" (OPAQUE, like Attack); in reach → anim
   then latch (reject = transparent fall-through, mutates nothing). Foe = PickFoe's
   target (the specific blocking foe for `kCondFoeBlocking`). Without the gate it
@@ -3653,8 +3653,8 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   Perching, Landing; never `IsFlying()` alone, which counts Landing). FLY_STATE = ActorState1 bits
   18-20 via `AsActorState()` (0xB8 SE / 0xC0 AE), verified in both unpacked binaries (1.6.1170
   inlined IsFlying `[actor+0xC8] & 0x1C0000, cmp 0x140000`; 1.5.97 `[actor+0xC0] >> 18 & 7, cmp 5`):
-  one path. `OutOfMeleeReach` (`:175`) = airborne AND foe above: `dz > selfHeight + fMeleeReach`,
-  foe below: `-dz > foeHeight + fMeleeReach` (+ slack); horizontal distance ignored.
+  one path. `OutOfMeleeReach` (`:175`) = airborne AND foe above: `dz > selfHeight + reach`,
+  foe below: `-dz > foeHeight + reach` (+ slack); horizontal distance ignored. `reach` = the follower's plain per-weapon edge reach + a humanoid radius (`ReachBook::CentreReach(Use::Blow)`, never the combo max), `fMeleeReach` while nothing is learned.
   `BodyHeight` (`:147`) = FIELD READS ONLY: the high process's cachedActorHeight if set, else the
   base form's OBND z-extent x `GetBaseHeight`, else 120. NEVER `Actor::GetHeight` or the bound
   virtuals 0x73/0x74: their bodies walk currentProcess and write process-global statics (1.6.1170
@@ -9598,8 +9598,8 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
 - **`iaus/Fills.h` / `iaus/Fills.cpp` -- THE ENGINE FILLS (card "IAUS engine fills", `feat/iaus-engine-fills`, 2026-11-11;
   note `Docs/research/2026-11/iaus-engine-fills.md`).** Measures the phase-2 inputs: `Combatant::armor / magicResist / hit /
   hitsPerSec / hitIsMagic / rangedWeapon / lossPerSec / swinging / casting`, `SpellEntry::damage / heal / controlSec /
-  measured`, `Snapshot::mortal`, and the learned `Snapshot::swingReach` (ruling Q68, `iaus/Reach.h`; read ONLY by
-  PowerAttack and Bash through `Generate.cpp` `Ctx::SwingReach`, never `meleeReach`: review F5 / Q70). A foe's spell
+  measured`, `Snapshot::mortal`, and the learned `Snapshot::weaponEdge / comboEdge` (ruling Q68 + 11-17, `iaus/Reach.h`, `iaus/ReachBook.h`;
+  the swing gate of PowerAttack and Bash reads `comboEdge` through `Generate.cpp` `Ctx::SwingReach(foe)`). A foe's spell
   rate is an ESTIMATE from magicka, regen, record cost and charge time (`CastsPerSec`, ruling Q86), never a measured
   per-actor rate. PROBE FIRST:
   `[Debug] bIausFillProbe` logs `[iaus-fill]` lines (gmst, unit, hit, cast-start, swing-start, spell, mortal, swing) and
@@ -9618,7 +9618,7 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   (4) `SpellEntry::measured` (MFO-B684) is what tells a real 0 from "not known". A fill that writes `damage` without
   it is ignored by `Estimate::SpellOn` and the best-damage denominator. The sim sets it in `tools/iaus_sim/Policy.h`.
   (5) HandleEntryPoint is main thread only: never move `MeasureSpell` into the gather. (6) An unknown
-  `Reach::Learner` has `Gate() == 0`: the wiring must leave `swingReach` at 0 then, so the swing families read
+  `Reach::Learner` has `Gate() == 0`: the wiring must leave `comboEdge` at 0 then, so the swing families read
   fMeleeReach (MFO-B687). (7) The hit sink may read an actor value ONLY on the main thread (`MainThread::IsMainThread()`, review
   F3; B861 item 2): the TESHitEvent thread is not known. (8) An offense spell whose damage is indirect (hazard, cloak, script,
   weapon carrier) must stay `measured = false` (review F2), or MFO-B684 scores it 0.
@@ -9638,9 +9638,24 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   OPEN review findings for the sim (batch 3 + part C): `Docs/REVIEW-BACKLOG.md` "feat/oracle-gap batch 3 + part C review" F1 (SEV-4, `--space` first step), F3, F4, F5, F6 (SEV-5).
 - IAUS sim DASHBOARD (host-only, stdlib curses, never in the DLL): `tools/iaus_dash/dash.py [--runs DIR] [--report [--run ID] [--compare ID]] [--json-check FILE]` views the simulator's per-run JSON (schema v2, reads v1) per class: Classes page column 3 = `Rating (Tx)` (rank inside the tier on the shared battery, ` !` = below tier), Gap from `class_gaps` / `main_gap` / scenario rows / the ledger rows whose group covers the class, Trend against the nearest earlier comparable run that has that class's gap; with rulings, scenario gaps, gap ledger and trends; `tools/iaus_dash/test.sh` checks the non-interactive modes on synthetic fixtures. README there has the keys + schema.
   `native/iaus/` except Engine.*.
+- **THE MELEE REACH (feat/anim-reach, 2026-11-17; note `Docs/research/2026-11/anim-reach.md`).** `iaus/Reach.h` (estimator) +
+  `iaus/ReachBook.h` (keys: per (follower, weapon, attack SEQUENCE = the number of swings in a combo chain; learned to the foe's EDGE
+  (centre distance minus its body radius, `CombatSense::BodyRadius`); fallback sequence -> weapon -> fMeleeReach; the ONE reader
+  `CentreReach(use, foeRadius, flat)` with two uses: `Use::Blow` = the plain per-weapon value, no lunge, for the HEIGHT line
+  (`MeleeUnreachableNow` / `OutOfMeleeReach`) and `StrikeReady`; `Use::Combo` = the max over the sequences, lunge included, for the
+  approach and the swing gate (the attack's range test, PowerAttack, Bash, the executors' `SwingLimit` in `cast/Fire.cpp`);
+  `Publish` / `Published` for any-thread readers) + `iaus/SwingSeq.h/.cpp` (the graph sink: per-follower swing counts, atomics only, attach
+  main-thread Posted) + `Fills.cpp` `LearnReach` (the chain state machine: a chain ends when his attack state has been kNone for
+  `kChainGraceSec`; the hit latch is per follower). ON by default; `[Debug] bIausReachLearn` is the kill switch. Snapshot fields:
+  `weaponEdge`, `comboEdge`, `Combatant::bodyRadius`. TO ADD A REACH SOURCE: a key in `ReachBook::Book::Observe` + a term in
+  `BlowEdge` / `ComboEdge`; to add a swing tag, `SwingSeq.cpp` `Classify`; to prove a light / power tag, give `SeqKey` a kind back.
+  What breaks: a second reader of `Config::g_meleeReach` for a blade question skips the learned value (touch spells, the buff test and
+  `StrikeDistance` stay on `meleeReach` on purpose). LOCK ORDER: the ReachBook published mutex is a leaf, taken inside the combat
+  group's read lock by `CombatSense::OutOfMeleeReach`; nothing is taken under it. Supersedes Q70 for reachability; the target choice
+  stays un-gated by the swing gate.
 - **PHASE 2 (sim v2, `feat/iaus-sim-v2`; `Docs/research/2026-11/iaus-sim-v2.md` sections 24-28) -- WHAT IS LIVE.** Pure-layer
   files: `iaus/Estimate.h` (the fight in numbers: `TauntChance`, which `Taunt.cpp`'s roll calls too, `SpellOn`, `ThreatOn`,
-  `IncomingOn`, ...), `iaus/Reach.h` (Q68 learned swing reach; no engine file includes it yet). LIVE for a follower on
+  `IncomingOn`, ...), `iaus/Reach.h` (Q68 learned swing reach; included by `iaus/ReachBook.h`, which `Fills.cpp`, `Reposition.h`, `CombatSense.h` and `cast/Fire.cpp` read). LIVE for a follower on
   Sentient AI with no further wiring: set A2 as `DefaultTuning()` (more power attacks and control casts, fewer magicka
   potions), `Cons::TauntChance` (a taunt scaled by its level-rule chance: about 44 percent lower on a foe 2 levels up),
   `Cons::RangeTaunt` in place of RangeSpell in the taunt set, `Cons::BoostControlled` x1.3 on a PARALYSED foe only

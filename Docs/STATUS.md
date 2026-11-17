@@ -3115,3 +3115,13 @@ pattern, MCM schema, release scope/publish hygiene). Engine findings → ENGINE_
 §0; incident-born rules → INVARIANTS; symptom→cause→fix → DEBUGGING.
 
 - 2026-11-17 `fix/field-1117-engage` (NOT merged, NOT field run): field Deck findings A1 (occluded approach standoff / tightening / block scope / hide-run abort), A3 (bow foes past the chase cap kept, no-approach), A5 (retreat clock was wall time; stall give-up), prefer a reachable foe for a blade. Details: Docs/REVIEW-BACKLOG.md.
+
+- **feat/anim-reach (2026-11-17, Sonnet 5.5 author, tier B; NOT merged, NOT field run; NO co-save, ABI or ESP change).** marth: "Yes on,
+  it will need to read each animation too" and "it will be the sequence thats tracked". The learned melee reach is keyed per (follower,
+  weapon, attack SEQUENCE: the combo chain of swings counted from the graph's `weaponSwing` events, `iaus/SwingSeq`), fallback
+  sequence -> weapon -> fMeleeReach (`iaus/ReachBook.h`), ON by default (`bIausReachLearn` = kill switch), learned to the foe's EDGE
+  (marth: "Edge reach + split uses") and read through one reader with two uses: one blow, no lunge, for the height line and
+  `StrikeReady`; the sequence value for the approach, the swing gate and the executors. Review round 1 fixes: no light / power key
+  (nothing proves a tag), chains end on attack state kNone, a per-follower hit latch, the executors use the same limit. Ruling Q70
+  superseded for reachability. The single clip is not observable (no reach field in `BGSAttackData`, no clip tag): the chain is the unit.
+  Field check: `[iaus-fill] swing` lines with bIausFillProbe = 1 name the chain's swing count, the weapon and sequence values.

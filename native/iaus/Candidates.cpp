@@ -161,6 +161,7 @@ namespace MFO::Iaus::Candidates {
             const auto pos = a_actor->GetPosition();
             u.x = pos.x; u.y = pos.y; u.z = pos.z;
             u.bodyHeight = CombatSense::BodyHeight(a_actor);
+            u.bodyRadius = CombatSense::BodyRadius(a_actor);
             if (a_actor != a_self) {
                 const float d = a_self->GetPosition().GetDistance(pos);
                 u.dist = std::isfinite(d) ? d : 0.0f;
@@ -608,6 +609,7 @@ namespace MFO::Iaus::Candidates {
         g_fights.erase(a_follower);
         g_wants.erase(a_follower);
         g_chosenCast.erase(a_follower);
+        Fills::ForgetReach(a_follower);   // review F5a: his published reach goes with the fight
     }
 
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }
