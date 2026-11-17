@@ -4,6 +4,7 @@
 #include <algorithm>       // std::find over the not-engaged give-ups (PickFoe)
 #include <vector>
 #include "Evaluator.h"
+#include "iaus/Snapshot.h"   // ChaseWaived -- the one reader of the chase cap waiver rule
 #include "Vocabulary.h"
 #include "logistics/Logistics.h"   // supply-condition reads (counts of potions / arrows)
 #include "Followers.h"   // g_active -- the maintained teammate list (ally selector)
@@ -545,9 +546,9 @@ namespace MFO::Eval {
                     // never reach this scan.)
                     if (dist > chaseCap) {
                         const auto fid = foe->GetFormID();
-                        const bool held = fid != 0 && (fid == heldFoeID || fid == entryFoeID);
-                        // marth 2026-11-13: fighting HIM OR the PLAYER is enough.
-                        if (!(held && (FoeTargets(foe, a_self) || FoeTargets(foe, RE::PlayerCharacter::GetSingleton())))) continue;
+                        // marth 2026-11-13: fighting HIM OR the PLAYER is enough. The rule is Iaus::ChaseWaived, the one reader.
+                        if (!Iaus::ChaseWaived(fid, heldFoeID, entryFoeID,
+                                               FoeTargets(foe, a_self) || FoeTargets(foe, RE::PlayerCharacter::GetSingleton()))) continue;
                         if (!waivedFoe) waivedFoe = fid;
                     }
 

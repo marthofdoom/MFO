@@ -505,6 +505,18 @@ namespace {
                     Candidate edge = farC; edge.f.dist = 4096.0f;
                     const float sHeld = ScoreOne(held, Mind{}, Profile{}, t, 1, 0, nullptr), sHeldFar = ScoreOne(heldFar, Mind{}, Profile{}, t, 1, 0, nullptr);
                     Check(sHeld > 0.0f && sHeldFar > 0.0f, "N6: a chase-waived foe past the cap gets an act.attack score (no cap veto)");
+                    // A dragon-like foe (twice his level, on the player, the player's target) past the cap must clear the act floor on BOTH
+                    // roads: melee (RangeChase) and a drawn bow / staff (RangeSpell, whose own curve is ~0.18 at the cap).
+                    for (int rng = 0; rng < 2; ++rng) {
+                        Candidate dr = PlainAttack(1, 2.0f, 0.9f);
+                        dr.f.foeOnMe = false; dr.f.foeOnPlayer = true; dr.f.playerTarget = true; dr.f.foeChaseWaived = true; dr.f.dist = 6000.0f;
+                        if (rng) { dr.f.meleeRange = false; dr.f.chase = 0.0f; dr.f.reach = 4096.0f; } else dr.f.chase = 4096.0f;
+                        const float sd = ScoreOne(dr, Mind{}, Profile{}, t, 1, 0, nullptr);
+                        std::printf("   N6 waived dragon %s = %.3f (floor %.2f)\n", rng ? "ranged" : "melee", sd, t.actFloor);
+                        Check(sd >= t.actFloor, rng ? "N6: a waived dragon past the cap clears the act floor (ranged act.attack)" : "N6: a waived dragon past the cap clears the act floor (melee act.attack)");
+                        dr.f.foeChaseWaived = false; Cons bd = Cons::kCount;
+                        Check(ScoreOne(dr, Mind{}, Profile{}, t, 1, 0, nullptr, &bd) == 0.0f, "N6: the same dragon not waived is vetoed past the cap");
+                    }
                     Check(sHeld == sHeldFar && sHeld == ScoreOne(edge, Mind{}, Profile{}, t, 1, 0, nullptr), "N6: a waived foe scores at the cap's edge, whatever its distance");
                     Check(sHeld < sMid, "N6: a nearer foe still outranks a waived one");
                     Cons by2 = Cons::kCount;
