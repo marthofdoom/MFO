@@ -230,6 +230,7 @@ struct SpellEntry {
         float sp = 0.0f, spMax = 0.0f;
         float x = 0.0f, y = 0.0f, z = 0.0f;
         float dist = 0.0f;                  // from the follower (0 for the follower himself)
+        float bodyRadius = 0.0f;            // CombatSense::BodyRadius (0 = not read: ReachBook::kRefRadius); the edge reach adds it back
         float bodyHeight = 0.0f;            // CombatSense::BodyHeight (0 = not read: the nominal 120 is used); the vertical-reach line reads it
         int   level = 1;
         std::uint32_t targetId = 0;         // its current combat target, 0 = none
@@ -340,13 +341,14 @@ struct SpellEntry {
                                           // refuses (Taunt::Fire), so no taunt candidate is made (card I6)
         float tauntReach = 0.0f;
         float meleeReach = 200.0f;        // fMeleeReach
-        float swingReach = 0.0f;          // ruling Q68: the reach LEARNED for the weapon in his hand (iaus/Reach.h Gate(), the
-                                          // power sequences' gate, iaus/ReachBook.h). Read by the swing families ONLY (PowerAttack,
-                                          // Bash). 0 = not learned: they read bladeReach / meleeReach.
-        float bladeReach = 0.0f;          // marth 2026-11-17: the reach every "can he hit it from here" question reads: the max over
-                                          // his weapon's sequences (iaus/ReachBook.h Reachability()). 0 = not learned (or the kill
-                                          // switch bIausReachLearn is 0): Reposition::BladeReach answers meleeReach. Touch spells,
-                                          // the buff test and the strike distance stay on meleeReach (they are not a weapon's reach).
+        float weaponEdge = 0.0f;          // marth 2026-11-17 "Edge reach + split uses": the learned reach to a foe's EDGE of the weapon in his hand,
+                                          // one blow, NO lunge (iaus/ReachBook.h BlowEdge). Read by "can one blow land / is it in height
+                                          // reach" (Reposition::BladeReach: MeleeUnreachableNow, StrikeReady). 0 = not learned (or the kill
+                                          // switch bIausReachLearn is 0): fMeleeReach.
+        float comboEdge = 0.0f;           // ...the same for the sequence he would start (ComboEdge: the max over his weapon's chains, lunge
+                                          // included). Read by the approach and the swing gate: the attack's range test, PowerAttack, Bash
+                                          // (Reposition::ComboReach; Generate Ctx::SwingReach). 0 = not learned. Touch spells, the buff test and
+                                          // the strike distance stay on meleeReach (they are not a weapon's reach).
         float chaseCap = 4096.0f;         // Confidence::ChaseRadius
         float combatSec = 0.0f;           // seconds since this fight started for him
 

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <utility>
 
 // iaus/SwingSeq.h is the contract; this file is the sink, the slot table and the main-thread attach.
 // The sink / attach shape is Diagnostics.cpp's [atk-obs] (same graph, same pins), with a SEPARATE sink object so the
@@ -31,8 +32,10 @@ namespace MFO::Iaus::SwingSeq {
         }
 
         enum class Tag : std::uint8_t { Other, Swing, Power, Bash };
-        // The graph-raised tags of a swing / a power chain / a bash. Exact names: the combo frameworks' power windows
-        // (MCO_PowerWinOpen, BFCO_NextPowerWinStart) and the vanilla starts (raised only by a behaviour that raises them).
+        // The graph-raised tags of a swing, and the tags a power / bash MIGHT be told by. Only the swing keys the learner
+        // (review F1): MCO_PowerWinOpen / BFCO_NextPowerWinStart are combo WINDOWS (a chance to chain into a power attack),
+        // not a power attack, and bashStart / bashPowerStart / attackPowerStart* are behaviour INPUTS a graph sink never sees.
+        // They are COUNTED so the `[iaus-fill] swing` line shows what each chain raised and a field run can prove one.
         Tag Classify(const char* a_tag) noexcept {
             if (Eq(a_tag, "weaponSwing") || Eq(a_tag, "weaponLeftSwing")) return Tag::Swing;
             if (Eq(a_tag, "MCO_PowerWinOpen") || Eq(a_tag, "BFCO_NextPowerWinStart") || Prefix(a_tag, "attackPowerStart")) return Tag::Power;
@@ -52,7 +55,8 @@ namespace MFO::Iaus::SwingSeq {
 
         class Sink final : public RE::BSTEventSink<RE::BSAnimationGraphEvent> {
         public:
-            std::size_t slot = 0;
+            explicit Sink(std::size_t a_slot) : slot(a_slot) {}   // set ONCE, before any graph can hold the sink (review F6)
+            const std::size_t slot;
             RE::BSEventNotifyControl ProcessEvent(const RE::BSAnimationGraphEvent* a_ev, RE::BSTEventSource<RE::BSAnimationGraphEvent>*) override {
                 if (!a_ev || !a_ev->holder) return RE::BSEventNotifyControl::kContinue;
                 Slot&      s = g_slots[slot];
@@ -75,7 +79,9 @@ namespace MFO::Iaus::SwingSeq {
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
-        std::array<Sink, kSlots> g_sinks;
+        template <std::size_t... I>
+        std::array<Sink, kSlots> MakeSinks(std::index_sequence<I...>) { return { { Sink(I)... } }; }
+        std::array<Sink, kSlots> g_sinks = MakeSinks(std::make_index_sequence<kSlots>{});
 
         // MAIN thread: attach this slot's sink to every graph of the actor (AddEventSink dedupes under its spin lock).
         void PostAttach(RE::FormID a_fid, std::size_t a_slot) {
@@ -85,7 +91,6 @@ namespace MFO::Iaus::SwingSeq {
                 if (!actor || g_slots[a_slot].fid.load(std::memory_order_acquire) != a_fid) return;   // gone, or the slot moved on
                 RE::BSTSmartPointer<RE::BSAnimationGraphManager> mgr;
                 if (!actor->GetAnimationGraphManager(mgr) || !mgr) return;
-                g_sinks[a_slot].slot = a_slot;
                 for (auto& g : mgr->graphs) {
                     if (!g) continue;
                     // BShkbAnimationGraph carries TWO BSTEventSource bases; name the one we mean (as [atk-obs] does).

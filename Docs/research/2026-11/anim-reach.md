@@ -28,35 +28,42 @@ and maybe on heavy, and dont allow adjustment during. so it will be the sequence
   bound the chain, the `TESHitEvent` sink MFO already runs (`[iaus-fill]` hit records) says whether a blow of it hit. The existing
   swing tracker already resolves one outcome per attack-state window; a chain is that window stretched over the swing events.
 
-## Design
+## Design (after the Opus review, same day)
 
-- **Unit = the sequence.** A chain runs from the first swing (attack state Draw / Swing at a lap, with his combat target in
-  the list) until no swing event has come for 1.1 s and his attack state is none (cap 8 s). Its key is (kind, swing count): kind
-  light / power / bash (a power window tag or a power-flagged hit, a bash tag), swing count from the graph's `weaponSwing` events
-  (a both-hands swing within 150 ms counts once), capped at 15. LIST-AGNOSTIC: tag names only, no framework check, no list data.
-- **Outcome** (as before, per chain): distance at the chain's start and whether a blow of his weapon hit his target. So a
-  sequence's learned value is how far a chain STARTED from there reaches, its forward carry included. The carry is not measured
-  separately (laps are 133 ms x party, too coarse to place a mid-chain position).
-- **Fallback chain:** sequence -> weapon -> fMeleeReach. A sequence learner is created at its first outcome and seeded with the
-  weapon learner's value then; the weapon learner (seeded fMeleeReach) also takes every outcome. With no graph events for him (VR,
-  sink not attached, a framework that raises none) the chain is one attack-state window and only the weapon learner takes it.
-- **ONE reader** (`iaus/ReachBook.h`): `Reachability` = max over the weapon's value and its sequences ("the longest thing he is
-  likely to swing"), `Gate(kind)` = the swing gate of that kind's sequences else the weapon's. Published per follower
-  (`Publish` / `Published`, leaf mutex, any thread) for readers with no Snapshot.
-- **Readers moved to it:** `Snapshot::bladeReach` through `Reposition::BladeReach` (`MeleeUnreachableNow`, `StrikeReady`,
-  `Generate` Attack family reach), `CombatSense::OutOfMeleeReach` (through `ReachBook::ReachOr`, which feeds the vertical line
-  `Reposition::OutOfVerticalReach` and `Combatant::outOfMeleeReach`), `Snapshot::swingReach` (PowerAttack, Bash). Not moved (they are
-  not a weapon's reach): touch spells, the melee-buff test and `Estimate::StrikeDistance` (`Snapshot::meleeReach`).
-- **Ruling Q70 ("never the target choice") is SUPERSEDED for reachability** by marth's 2026-11-17 answer: whether a foe is
-  reachable is read from the learned reach. What Q70 still means in code: the swing gate (the 1.15 x veto) stays the swing
-  families'; the Attack family's range curve reads `bladeReach` as its reach (it did read `meleeReach` before).
+- **Unit = the sequence.** A chain runs from the first swing (attack state Draw / Swing at a lap, with his combat target in the
+  list) until his attack state has been kNone for 0.45 s (cap 8 s). The grace is sized under the measured ~0.6 s the engine takes
+  to decide the next attack (so two attacks are two chains) and over a lap; it is NOT field proven for the combo frameworks (the
+  `[iaus-fill] swing` line prints each chain's swing count). The key is the NUMBER OF SWINGS (capped at 15; a both-hands swing within
+  150 ms counts once). LIST-AGNOSTIC: tag names only, no list data. There is NO light / power / bash key: `MCO_PowerWinOpen` /
+  `BFCO_NextPowerWinStart` are combo WINDOWS for chaining into a power attack (09-21: 18 of them against 25 swings), `bashStart` and
+  `attackPowerStart*` are behaviour inputs a graph sink never sees, and the hit's power flag only exists on a hit. The swing line
+  prints the power-window and bash tag counts per chain so a field run can prove one; then the key gets a kind back.
+- **Edge reach (marth, "Edge reach + split uses").** The outcome's distance is the centre distance at the chain's start minus the
+  foe's body radius (`CombatSense::BodyRadius`: half the wider OBND x / y extent x the base height, field reads only), so a giant's
+  size drops out. A reader adds ITS foe's radius back. The seed is fMeleeReach less a humanoid radius (22), which reads back as
+  exactly 200 on a humanoid. `TESObjectWEAP::Data::reach` (fork TESObjectWEAP.h:169) is NOT used as a seed: nothing here proves
+  Precision / the engine's hit geometry follows it, so the learner's own seed stays flat and the field line should log it first.
+- **Two uses, one reader (`iaus/ReachBook.h`).** `Use::Blow` = the plain per-weapon edge value (fed by single swings and by chains
+  whose swings could not be counted, the closest observable thing to one blow without lunge): the HEIGHT line
+  (`MeleeUnreachableNow`, `CombatSense::OutOfMeleeReach`; with a humanoid radius, not the foe's: how high a blade reaches does not
+  grow with the width of what is up there, so a dragon 450 up stays unreachable) and `StrikeReady`. `Use::Combo` = the max over the
+  weapon's sequences and the weapon (lunge included): the approach and the swing gate (the attack's range test, PowerAttack, Bash,
+  and the `cast/Fire.cpp` executors' close-or-swing limit through `SwingLimit`, so a power attack the IAUS picked at the learned
+  gate is not turned into a closing Fired). Never the max over chains for the height line.
+- **Fallback chain.** Sequence -> weapon -> fMeleeReach. A new sequence learner is seeded from the weapon learner's value at its
+  first outcome. With no graph events for him (VR, sink not attached, a framework that raises none) the chain is one attack-state
+  window and only the weapon learner takes it.
+- **Hit attribution.** A per-follower latch (the latest time of each (target, source) pair he hit, eight pairs), not a shared ring: a
+  cloak tick or a neighbour's hits cannot evict a chain's early blow and file a false miss.
 - **ON by default**, `bIausReachLearn` is the kill switch (INI key unchanged). Off = the flat fMeleeReach everywhere, nothing
-  published, the sink not attached.
-- **Threading:** the sink writes fixed-size atomics only (the [atk-obs] contract); attach / detach are `MainThread::Post`ed; the
-  book and the chain state are the g_followers worker's; no worker walks a live engine list for this. Session state only (no
-  co-save), cleared in `Fills::Clear` after `StopPump`.
+  published, the sink not attached. The published pair is erased at `CombatEnded` / `Forget`.
+- **Ruling Q70 ("never the target choice") is SUPERSEDED for reachability** by marth's 2026-11-17 answer. What it still means in code:
+  the swing gate stays the swing families', and no reach decides WHICH foe is named.
+- **Threading:** the sink writes fixed-size atomics only (the [atk-obs] contract); attach / detach are `MainThread::Post`ed; the book
+  and the chain state are the g_followers worker's; no worker walks a live engine list for this. Session state only (no co-save),
+  cleared in `Fills::Clear` after `StopPump`.
 
 ## To add a reach source
 
-Add a key to `ReachBook::Book::Observe` (and a term to `Reachability` / `Gate`); the engine feed is `Fills.cpp` `LearnReach`; the
+Add a key to `ReachBook::Book::Observe` (and a term to `BlowEdge` / `ComboEdge`); the engine feed is `Fills.cpp` `LearnReach`; the
 tag classifier is `SwingSeq.cpp` `Classify`. No reader changes.

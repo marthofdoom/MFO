@@ -982,69 +982,95 @@ namespace {
         o.cover = could ? static_cast<float>(allowed) / static_cast<float>(could) : 1.0f;
         return o;
     }
-    // ── marth 2026-11-17: the reach is keyed per (follower, weapon, attack SEQUENCE); every reachability read uses ONE reader ──
+    // ── marth 2026-11-17: the reach is keyed per (follower, weapon, attack SEQUENCE), learned to the foe's EDGE, and read by ONE reader
+    // with two uses (Use::Blow: one blow, no lunge, the height line; Use::Combo: the sequence he would start, the approach) ──
     void ReachSequences() {
-        std::printf("\n== 11-17: per-sequence reach (iaus/ReachBook.h) ==\n");
-        using ReachBook::Kind;
+        std::printf("\n== 11-17: per-sequence edge reach (iaus/ReachBook.h) ==\n");
+        using ReachBook::Use;
         constexpr std::uint32_t F = 0x14, W = 0x1000, W2 = 0x2000;
-        {   // fallback chain: nothing learned -> 0 (the callers read fMeleeReach); weapon only -> the weapon's value
+        constexpr float kSeed = 200.0f - ReachBook::kRefRadius;   // the weapon learner's start: fMeleeReach 200 less a humanoid radius
+        {   // fallback chain: nothing learned -> 0 (the readers answer fMeleeReach); weapon only -> the weapon's value
             ReachBook::Book b;
-            Check(b.Reachability(F, W) == 0.0f && b.Gate(F, W, Kind::Power) == 0.0f, "reach book: nothing learned answers 0 (the readers fall back to fMeleeReach)");
-            b.Ensure(F, W, 200.0f);
-            Check(b.Reachability(F, W) == 200.0f, "reach book: a weapon with no outcome reads its seed (fMeleeReach)");
-            Check(b.Gate(F, W, Kind::Power) > 0.0f && b.Gate(F, W, Kind::Power) == b.Find(F, W)->weapon.Gate(), "reach book: no power sequence yet -> the weapon's gate");
+            Check(b.BlowEdge(F, W) == 0.0f && b.ComboEdge(F, W) == 0.0f, "reach book: nothing learned answers 0 (the readers fall back to fMeleeReach)");
+            b.Ensure(F, W, kSeed);
+            Check(b.BlowEdge(F, W) == kSeed && b.ComboEdge(F, W) == kSeed, "reach book: a weapon with no outcome reads its seed (fMeleeReach less a radius) for both uses");
+            Check(ReachBook::CentreReach(kSeed, kSeed, Use::Blow, ReachBook::kRefRadius, 200.0f) == 200.0f &&
+                  ReachBook::CentreReach(0.0f, 0.0f, Use::Blow, 80.0f, 200.0f) == 200.0f,
+                  "reach book: the seed on a humanoid is exactly the flat fMeleeReach, and nothing learned answers it for any foe");
         }
-        {   // per-sequence seed = the weapon's value; a 3-swing light combo that hits far raises ITS value, a 1-swing one that misses does not
+        {   // a 3-swing combo that carries him forward learns a longer reach than a single swing; Blow stays the single-swing value
             ReachBook::Book b;
-            b.Ensure(F, W, 200.0f);
+            b.Ensure(F, W, kSeed);
             for (int i = 0; i < 40; ++i) {
-                b.Observe(F, W, 200.0f, Kind::Light, 3, 230.0f, true);    // the combo carries him: hits from 230
-                b.Observe(F, W, 200.0f, Kind::Light, 1, 150.0f, true);    // the single step hits from 150 ...
-                b.Observe(F, W, 200.0f, Kind::Light, 1, 190.0f, false);   // ... and whiffs from 190
+                b.Observe(F, W, kSeed, 3, 208.0f, true);    // the combo carries him: hits from 208 to the edge
+                b.Observe(F, W, kSeed, 1, 150.0f, true);    // the single swing hits from 150 ...
+                b.Observe(F, W, kSeed, 1, 190.0f, false);   // ... and whiffs from 190
             }
             const auto* w = b.Find(F, W);
-            const float s3 = w->seq.at(ReachBook::SeqKey(Kind::Light, 3)).Value(), s1 = w->seq.at(ReachBook::SeqKey(Kind::Light, 1)).Value();
-            std::printf("  3-swing combo %.0f, 1-swing %.0f, weapon %.0f, reachability %.0f\n", s3, s1, w->weapon.Value(), b.Reachability(F, W));
-            Check(w->seq.size() == 2, "reach book: one learner per (kind, swing count)");
+            const float s3 = w->seq.at(ReachBook::SeqKey(3)).Value(), s1 = w->seq.at(ReachBook::SeqKey(1)).Value();
+            std::printf("  3-swing combo %.0f, 1-swing %.0f, weapon %.0f, blow %.0f combo %.0f\n", s3, s1, w->weapon.Value(), b.BlowEdge(F, W), b.ComboEdge(F, W));
+            Check(w->seq.size() == 2, "reach book: one learner per swing count (no light / power key)");
             Check(s3 > s1, "reach book: a combo that carries him forward learns a longer reach than a single swing");
-            Check(b.Reachability(F, W) >= s3 && b.Reachability(F, W) >= w->weapon.Value(), "reach book: reachability is the MAX over the sequences and the weapon");
-            Check(b.Reachability(F, W2) == 0.0f && b.Reachability(0x15, W) == 0.0f, "reach book: another weapon / another follower is a separate entry");
+            Check(b.ComboEdge(F, W) >= s3 && b.BlowEdge(F, W) == w->weapon.Value(), "reach book: Combo is the MAX over the sequences, Blow is the weapon's own value");
+            Check(b.BlowEdge(F, W) < s3, "reach book: the plain per-weapon value is not raised by the lunge of a combo");
+            Check(b.BlowEdge(F, W2) == 0.0f && b.BlowEdge(0x15, W) == 0.0f, "reach book: another weapon / another follower is a separate entry");
         }
         {   // a sequence is SEEDED from the weapon's value at its first outcome
             ReachBook::Book b;
-            for (int i = 0; i < 20; ++i) b.Observe(F, W, 200.0f, Kind::Light, 1, 260.0f, true);   // the weapon learner climbs
+            for (int i = 0; i < 20; ++i) b.Observe(F, W, kSeed, 1, 235.0f, true);   // the weapon learner climbs
             const float wv = b.Find(F, W)->weapon.Value();
-            b.Observe(F, W, 200.0f, Kind::Power, 2, 150.0f, true);                                // a NEW sequence
-            const float sv = b.Find(F, W)->seq.at(ReachBook::SeqKey(Kind::Power, 2)).start;
-            Check(wv > 200.0f && std::fabs(sv - wv) < 0.01f * wv + 1.0f, "reach book: a new sequence starts from the weapon's learned value, not from fMeleeReach");
-            Check(b.Gate(F, W, Kind::Power) == b.Find(F, W)->seq.at(ReachBook::SeqKey(Kind::Power, 2)).Gate() || b.Gate(F, W, Kind::Power) > 0.0f, "reach book: the power gate reads the power sequences");
+            b.Observe(F, W, kSeed, 2, 150.0f, true);                                // a NEW sequence
+            const float sv = b.Find(F, W)->seq.at(ReachBook::SeqKey(2)).start;
+            Check(wv > kSeed && std::fabs(sv - wv) < 0.01f * wv + 1.0f, "reach book: a new sequence starts from the weapon's learned value, not from the flat seed");
         }
-        {   // steps 0 (the chain was not observable) feeds the weapon only
+        {   // an uncountable chain (steps 0) feeds the weapon only; a long chain feeds its sequence only
             ReachBook::Book b;
-            b.Observe(F, W, 200.0f, Kind::Light, 0, 150.0f, true);
-            Check(b.Find(F, W)->seq.empty() && b.Find(F, W)->weapon.hits == 1, "reach book: an unobservable chain is the weapon's outcome only");
+            b.Observe(F, W, kSeed, 0, 150.0f, true);
+            Check(b.Find(F, W)->seq.empty() && b.Find(F, W)->weapon.hits == 1, "reach book: an uncountable chain is the weapon's outcome only");
+            b.Observe(F, W, kSeed, 4, 150.0f, true);
+            Check(b.Find(F, W)->seq.size() == 1 && b.Find(F, W)->weapon.hits == 1, "reach book: a 4-swing chain feeds its own sequence, not the plain weapon value");
         }
-        {   // the published value: any thread, 0 erases, ReachOr is the one fallback
+        {   // EDGE REACH: a giant series does not inflate the reach against a human (the reviewer's sim S2, fixed)
+            ReachBook::Book b; b.Ensure(F, W, kSeed);
+            const float giantR = 150.0f;
+            for (int i = 0; i < 40; ++i) {   // a giant whose centre is 300 - 420 away: its EDGE is 150 - 270 away; the blow lands to 200 of edge
+                const float centre = 300.0f + 3.0f * static_cast<float>(i), edge = centre - giantR;
+                b.Observe(F, W, kSeed, 1 + static_cast<unsigned>(i % 3), edge, edge <= 178.0f);
+            }
+            const float afterGiants = b.ComboEdge(F, W);
+            const float vsHuman = ReachBook::CentreReach(b.BlowEdge(F, W), b.ComboEdge(F, W), Use::Blow, ReachBook::kRefRadius, 200.0f);
+            std::printf("  after 40 giant chains: blow edge %.0f combo edge %.0f -> reach vs a human %.0f (flat 200)\n", b.BlowEdge(F, W), afterGiants, vsHuman);
+            Check(vsHuman <= 215.0f, "edge reach: a long series of giants (centre 300+ away) does not inflate the reach against a human (<= 215)");
+            Check(ReachBook::CentreReach(b.BlowEdge(F, W), b.ComboEdge(F, W), Use::Combo, giantR, 200.0f) > 300.0f,
+                  "edge reach: against the giant itself the reach is long (the radius is added back)");
+        }
+        {   // the published pair: any thread, both 0 erases, CentreReach / SwingLimit are the one fallback
             ReachBook::ClearPublished();
-            Check(ReachBook::ReachOr(F, 200.0f) == 200.0f, "reach book: nothing published reads fMeleeReach");
-            ReachBook::Publish(F, 143.0f);
-            Check(ReachBook::ReachOr(F, 200.0f) == 143.0f && ReachBook::ReachOr(0x15, 200.0f) == 200.0f, "reach book: the published learned reach is what CombatSense reads");
-            ReachBook::Publish(F, 0.0f);
-            Check(ReachBook::ReachOr(F, 200.0f) == 200.0f, "reach book: a published 0 erases (a bow in hand reads fMeleeReach)");
+            Check(ReachBook::CentreReach(F, Use::Blow, 22.0f, 200.0f) == 200.0f && ReachBook::SwingLimit(F, 22.0f, 200.0f) == 200.0f, "reach book: nothing published reads fMeleeReach (the executors too)");
+            ReachBook::Publish(F, 120.0f, 160.0f);
+            Check(ReachBook::CentreReach(F, Use::Blow, 22.0f, 200.0f) == 142.0f && ReachBook::CentreReach(F, Use::Combo, 22.0f, 200.0f) == 182.0f &&
+                  ReachBook::CentreReach(0x15, Use::Blow, 22.0f, 200.0f) == 200.0f, "reach book: published edge + the foe's radius; another follower is unaffected");
+            const float lim = ReachBook::SwingLimit(F, 22.0f, 200.0f);
+            Check(std::fabs(lim - 182.0f * Reach::kGate * 1.15f) < 0.01f, "reach book: the executors' limit is the swing gate's own veto line (review F4)");
+            ReachBook::Publish(F, 0.0f, 0.0f);
+            Check(ReachBook::CentreReach(F, Use::Combo, 22.0f, 200.0f) == 200.0f, "reach book: a published 0 erases (a bow in hand, the fight ended)");
         }
-        {   // every reachability read uses the ONE reader (Reposition::BladeReach)
+        {   // every reachability read uses the ONE reader (Reposition::BladeReach / ComboReach)
             Snapshot s; s.drawn = PostureKind::Melee; s.self.z = 0.0f; s.meleeReach = 200.0f;
-            Check(Reposition::BladeReach(s) == 200.0f, "reader: no learned reach -> fMeleeReach");
-            s.bladeReach = 150.0f;
-            Check(Reposition::BladeReach(s) == 150.0f, "reader: the learned reach wins");
-            Combatant foe; foe.z = 295.0f; foe.sight = Sight::Visible;   // above 120 + 150, under 120 + 200
-            Check(Reposition::MeleeUnreachableNow(s, foe), "reader: MeleeUnreachableNow uses the learned (shorter) reach");
-            s.bladeReach = 0.0f;
-            Check(!Reposition::MeleeUnreachableNow(s, foe), "reader: the same foe is reachable under the flat 200");
-            Combatant nearFoe; nearFoe.dist = 180.0f; nearFoe.detectsMe = Tri::No;
-            s.bladeReach = 150.0f;
-            Check(!Reposition::StrikeReady(s, nearFoe), "reader: StrikeReady uses the learned reach (180 away, reach 150)");
-            s.bladeReach = 0.0f;
+            Combatant human; human.bodyRadius = 22.0f; human.z = 295.0f; human.sight = Sight::Visible;
+            Check(Reposition::BladeReach(s, human) == 200.0f && Reposition::ComboReach(s, human) == 200.0f, "reader: nothing learned -> fMeleeReach for both uses");
+            s.weaponEdge = 128.0f; s.comboEdge = 178.0f;
+            Check(Reposition::BladeReach(s, human) == 150.0f && Reposition::ComboReach(s, human) == 200.0f, "reader: Blow reads the weapon edge + radius, Combo the sequence edge + radius");
+            Check(Reposition::MeleeUnreachableNow(s, human), "reader: the height line uses the one-blow reach (a human 295 up is out of 120 + 150) though the combo would reach 320");
+            Combatant dragon; dragon.bodyRadius = 150.0f; dragon.z = 450.0f; dragon.sight = Sight::Visible;
+            s.weaponEdge = 178.0f; s.comboEdge = 400.0f;   // a long combo series learned against big foes
+            Check(Reposition::MeleeUnreachableNow(s, dragon), "edge reach: a dragon 450 up stays unreachable (the height line is the one-blow value, never the combo max)");
+            s.weaponEdge = 0.0f; s.comboEdge = 0.0f;
+            Check(!Reposition::MeleeUnreachableNow(s, human), "reader: the same human is reachable under the flat 200 (nothing learned)");
+            Combatant nearFoe; nearFoe.dist = 180.0f; nearFoe.detectsMe = Tri::No; nearFoe.bodyRadius = 22.0f;
+            s.weaponEdge = 128.0f;
+            Check(!Reposition::StrikeReady(s, nearFoe), "reader: StrikeReady uses the one-blow reach (180 away, reach 150)");
+            s.weaponEdge = 0.0f;
             Check(Reposition::StrikeReady(s, nearFoe), "reader: StrikeReady falls back to the flat reach (180 away, 200)");
         }
     }
@@ -1319,11 +1345,11 @@ namespace {
                 return -1.0f;
             };
             const bool unknownOk = reachOf(Family::PowerAttack) == 200.0f;
-            s.swingReach = 150.0f;
-            Check(unknownOk && reachOf(Family::PowerAttack) == 150.0f,
-                  "F5 / B687: the power attack reads the learned swing reach, and fMeleeReach while nothing is learned");
-            Check(reachOf(Family::Attack) == 200.0f && Estimate::StrikeDistance(s) == 400.0f,
-                  "F5: the attack and the strike distance keep fMeleeReach whatever was learned");
+            s.comboEdge = 150.0f / Reach::kGate - ReachBook::kRefRadius;   // learned: a sequence reaching 150 / kGate centre to centre on a humanoid
+            Check(unknownOk && std::fabs(reachOf(Family::PowerAttack) - 150.0f) < 0.01f,
+                  "F5 / B687: the power attack reads the learned combo reach x the gate, and fMeleeReach while nothing is learned");
+            Check(std::fabs(reachOf(Family::Attack) - 150.0f / Reach::kGate) < 0.01f && Estimate::StrikeDistance(s) == 400.0f,
+                  "11-17: the attack's range test reads the learned combo reach (approach), the strike distance keeps fMeleeReach");
         }
     }
 }

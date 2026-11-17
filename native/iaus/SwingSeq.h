@@ -9,7 +9,7 @@
 // Lists with combo frameworks (MCO / ADXP style: Tuxborn, LoreRim) chain light attacks (and maybe power attacks) into a
 // sequence he cannot steer once it starts. The swing events of that chain are raised by the animation graph, so this module
 // listens to the follower's graph and COUNTS, per follower: swings (weaponSwing / weaponLeftSwing, a both-hands swing within
-// kSameSwingMs counts once), power marks (the combo framework's power window, a power start), bash marks, and every event
+// kSameSwingMs counts once), power-window and bash tag counts (OBSERVABILITY ONLY: they do not key the learner, review F1; the swing log line prints them per chain), and every event
 // it saw at all (the "is the sink really attached" proof). LIST-AGNOSTIC: tag names only, no list file, no framework check.
 // A graph sink sees graph-RAISED events only (never NotifyAnimationGraph inputs): attackStart is invisible, the swing is not.
 //

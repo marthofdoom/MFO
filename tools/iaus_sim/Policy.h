@@ -135,7 +135,7 @@ namespace Sim {
             } }
         sn.drawn = c.drawn; sn.meleeInRightHand = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
         sn.meleeOnly = c.fam == Cls::Melee && sn.meleeInRightHand && !c.gate.spellsOnClass;
-        if (g_learnReach && c.reach[0].Known()) sn.swingReach = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Gate();   // ruling Q68: the power attack's own outcomes once it has three
+        if (g_learnReach && c.reach[0].Known()) sn.comboEdge = (c.reach[1].hits + c.reach[1].misses >= 3 ? c.reach[1] : c.reach[0]).Value() - MFO::Iaus::ReachBook::kRefRadius;   // ruling Q68: the power attack's own outcomes once it has three (the sim's foes carry no radius: the humanoid kRefRadius is added back, so the gate reads Value() x kGate as before)   // ruling Q68: the power attack's own outcomes once it has three
         sn.mortal = g_followerDeath && g_mortalKnown; sn.regroupRoad = g_regroupRoad; sn.groundRoad = g_groundRoad; sn.bashRoad = g_bashRoad;
         // The held guard (iaus/Candidates.cpp): Harbinger serves ch.31 Block and his hands can block now (MODEL: a melee weapon is drawn).
         // guardHeld = a request of his is out or the guard is up (APMFBridge::BlockHoldLive). --roads block keeps the older lab switch.

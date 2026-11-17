@@ -3119,7 +3119,9 @@ pattern, MCM schema, release scope/publish hygiene). Engine findings → ENGINE_
 - **feat/anim-reach (2026-11-17, Sonnet 5.5 author, tier B; NOT merged, NOT field run; NO co-save, ABI or ESP change).** marth: "Yes on,
   it will need to read each animation too" and "it will be the sequence thats tracked". The learned melee reach is keyed per (follower,
   weapon, attack SEQUENCE: the combo chain of swings counted from the graph's `weaponSwing` events, `iaus/SwingSeq`), fallback
-  sequence -> weapon -> fMeleeReach (`iaus/ReachBook.h`), ON by default (`bIausReachLearn` = kill switch), and read by every melee
-  reachability decision through one reader (`Snapshot::bladeReach`, `CombatSense::OutOfMeleeReach`). Ruling Q70 superseded for
-  reachability. The single clip is not observable (no reach field in `BGSAttackData`, no clip tag): the chain is the unit.
+  sequence -> weapon -> fMeleeReach (`iaus/ReachBook.h`), ON by default (`bIausReachLearn` = kill switch), learned to the foe's EDGE
+  (marth: "Edge reach + split uses") and read through one reader with two uses: one blow, no lunge, for the height line and
+  `StrikeReady`; the sequence value for the approach, the swing gate and the executors. Review round 1 fixes: no light / power key
+  (nothing proves a tag), chains end on attack state kNone, a per-follower hit latch, the executors use the same limit. Ruling Q70
+  superseded for reachability. The single clip is not observable (no reach field in `BGSAttackData`, no clip tag): the chain is the unit.
   Field check: `[iaus-fill] swing` lines with bIausFillProbe = 1 name the chain's swing count, the weapon and sequence values.

@@ -3546,8 +3546,11 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - OPEN (feat/anim-reach, 11-17) the chain's forward carry is not measured: laps (133 ms x party) are too coarse to place a mid-chain
   position, so a sequence's value is "reach from the chain's START". A graph-event timestamp pair (`weaponSwing` + `HitFrame`) with
   a main-thread position read would measure it.
-- OPEN (feat/anim-reach, 11-17) Bash uses the power sequences' gate (`Snapshot::swingReach` is one number); bash chains are keyed and
-  learned (kind Bash) but only `Reachability` reads them.
+- OPEN (feat/anim-reach, 11-17) there is no light / power / bash key: no graph tag is proven to tell a power chain from a light one (`MCO_PowerWinOpen` is a combo window). The swing line logs the power-window / bash tag counts per chain; when a run proves one, give `ReachBook::SeqKey` a kind back.
+- OPEN (feat/anim-reach, 11-17) `TESObjectWEAP::Data::reach` (fork TESObjectWEAP.h:169) is not a seed: nothing proves the engine / Precision hit geometry follows it. Log it with the swing line in a field run, then decide.
+- OPEN (feat/anim-reach, 11-17, review F5b) lock order: the ReachBook published mutex is a leaf taken inside the combat group's read lock (`CombatSense::OutOfMeleeReach`); nothing may be taken under it.
+- OPEN (feat/anim-reach, 11-17, review F6) the sink's swing / power / bash counters are uint32 and monotonic; the chain's swing count is an unsigned difference, so a wrap is harmless, but nothing exercises it.
+- OPEN (feat/anim-reach, 11-17) the chain grace (0.45 s of attack state kNone) is sized from the engine's ~0.6 s attack-decision gap, not measured for the combo frameworks: if a combo's steps drop to kNone for longer than a lap between swings, a chain splits into several.
 - OPEN (feat/anim-reach, 11-17) the weapon learner starts at fMeleeReach, not at Precision's per-weapon value (iaus-i6 / Q64: a capsule
   length from the hand is not a centre-to-centre reach). A seed formula (length + arm + foe radius) needs a ruling.
 - OPEN (feat/anim-reach, 11-17) a left-hand-only chain (a left power attack) is learned for the right-hand weapon (the existing review F1 ambiguity).

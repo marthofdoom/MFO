@@ -2,7 +2,7 @@
 #include "PCH.h"
 #include <cmath>   // std::sqrt -- FoeWeight; std::fabs / std::isfinite -- the melee-reach read
 #include "Config.h" // g_meleeReach -- the melee-reach read
-#include "iaus/ReachBook.h" // ReachOr: the learned blade reach (marth 2026-11-17)
+#include "iaus/ReachBook.h" // CentreReach: the learned reach (marth 2026-11-17)
 #include "iaus/Reposition.h"   // OutOfVerticalReach: the one vertical reach line (no include of CombatSense there)
 
 // Harbinger ABI v26 substrate reads (apmf/Bridge.cpp; declared in apmf/APMFBridge.h, which this header cannot
@@ -196,6 +196,22 @@ namespace MFO::CombatSense {
         return (std::isfinite(h) && h > 1.0f) ? h : kNominalBodyHeight;
     }
 
+    // A body's RADIUS for the edge reach (iaus/ReachBook.h; marth 2026-11-17 "Edge reach + split uses"): half the wider of the base
+    // form's OBND x / y extents x TESObjectREFR::GetBaseHeight (refScale x race height), the same field-reads-only road as
+    // BodyHeight (no engine call: safe on the job worker and inside the combat group's read lock). A dragon's OBND is far wider than
+    // a human's, which is the point. kRefRadius (a humanoid's) when the record has no bound or it reads nonsense.
+    inline float BodyRadius(RE::Actor* a_actor) {
+        constexpr float kRef = Iaus::ReachBook::kRefRadius;
+        if (!a_actor) return kRef;
+        const auto* base = a_actor->GetObjectReference();
+        if (!base) return kRef;
+        const auto& bd = base->boundData;
+        const float ext = (std::max)(static_cast<float>(bd.boundMax.x) - static_cast<float>(bd.boundMin.x),
+                                     static_cast<float>(bd.boundMax.y) - static_cast<float>(bd.boundMin.y));
+        const float r = 0.5f * ext * a_actor->GetBaseHeight();
+        return (std::isfinite(r) && r > 1.0f) ? r : kRef;
+    }
+
     struct ReachRead {
         float dz    = 0.0f;   // foe origin z - his origin z (+ = the foe is above him)
         float line  = 0.0f;   // |dz| past which the foe is out of reach (height + reach + slack)
@@ -213,7 +229,10 @@ namespace MFO::CombatSense {
     inline bool OutOfMeleeReach(RE::Actor* a_self, RE::Actor* a_foe, float a_slack = 0.0f,
                                 ReachRead* a_out = nullptr, float a_selfHeight = 0.0f) {
         if (!a_self || !a_foe || !IsAirborne(a_foe)) return false;
-        const float reach = Iaus::ReachBook::ReachOr(a_self->GetFormID(), Config::g_meleeReach.load(std::memory_order_relaxed));   // the learned blade reach, else fMeleeReach
+        // THE HEIGHT LINE reads the plain per-weapon edge value (Use::Blow: no lunge, never the max over chains) + a humanoid radius
+        // (not the foe's: how high a blade reaches does not grow with the width of what is up there), else fMeleeReach (iaus/ReachBook.h; marth 2026-11-17 "Edge reach + split uses").
+        const float reach = Iaus::ReachBook::CentreReach(a_self->GetFormID(), Iaus::ReachBook::Use::Blow, 0.0f,
+                                                         Config::g_meleeReach.load(std::memory_order_relaxed));
         const float dz    = a_foe->GetPosition().z - a_self->GetPosition().z;
         const float h     = dz >= 0.0f ? (a_selfHeight > 0.0f ? a_selfHeight : BodyHeight(a_self))
                                        : BodyHeight(a_foe);
