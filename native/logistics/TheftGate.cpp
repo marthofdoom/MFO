@@ -321,6 +321,8 @@ namespace MFO::Logistics::TheftGate {
     }
 
     void ClearCorpseBars() { g_corpseBars.clear(); }
+    // Review SEV-3: the hostile-death set is session state too (FF actor ids are reused across loads); cleared on revert = fail closed.
+    void ClearHostileDeaths() { std::scoped_lock lk(g_hostileMx); g_hostileDead.clear(); }
 
     bool CorpseGuardWaived(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse) {
         if (!a_follower || !a_corpse || !a_corpse->As<RE::Actor>()) return false;

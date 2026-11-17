@@ -67,6 +67,7 @@ namespace MFO::Logistics::TheftGate {
     void BarCorpse(RE::FormID a_corpse, RE::FormID a_guard, std::chrono::steady_clock::time_point a_now);
     bool CorpseBarred(RE::Actor* a_follower, RE::TESObjectREFR* a_corpse, std::chrono::steady_clock::time_point a_now);
     void ClearCorpseBars();
+    void ClearHostileDeaths();   // revert: the hostile-death set never outlives a load
 
     // TRUE = the player stands in a town (or there is no player): LootNearby keeps its follower-level guard bar for every category. Outside a
     // town the bar moves into the scan's candidate filter so an unowned corpse (CorpseGuardWaived) is not blocked by it.
