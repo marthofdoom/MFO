@@ -107,6 +107,10 @@ namespace Sim {
         [[nodiscard]] inline float At(const float (&d)[11], float u) { const float x = std::clamp(u, 0.0f, 0.99999f) * 10.0f; const int i = static_cast<int>(x); return d[i] + (d[i + 1] - d[i]) * (x - static_cast<float>(i)); }
     }
     inline float g_deliverSec[2] = { -1.0f, -1.0f };   // --deliver-sec o,h: a FIXED claim-to-fire for an offense cast / a heal, no unfired claims (sim v3's first cut ran 2.4,4.5). < 0 (the default) = the measured tables above
+    // --mirror off: the lab WITHOUT the game changes of 11-16 / 11-17 that this batch mirrored on the sim's side (the chase-waived mark, the foes kept past the
+    // cap as noApproach, the entry foe, the left-hand share of hand_lost, the cast deferrals, the heal's full-health release, the 128 approach up a
+    // ledge path). For before / after runs of the field scenarios only; what the game's own generator does (compiled in) is not switched.
+    inline bool  g_mirror = true;
     inline float g_deliverUnfired = 1.0f;              // --deliver-unfired k: scales every row's unfired share (0 = every claim fires)
     inline int   g_sideStep = 1;          // --side-step random|away: which way a held caster steps across the line. 1 random (the default: no source says he knows where the friend is), 2 away from the friend in his way
     inline bool  g_casterPressure = false;   // --caster-pressure: the caster cells' objective also plays the "dive" scenarios (foes that start on the caster); OFF by default so the headline keeps its composition

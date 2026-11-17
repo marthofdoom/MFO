@@ -137,6 +137,8 @@ namespace Sim {
         // SIM V3 scenario geometry. ring > 0: the custom foes stand evenly on a circle of that radius AROUND THE SUBJECT (they come from every side).
         // perch >= 0: that custom foe stands on a ledge perchZ units up (height switch; not airborne, so the game's OutOfMeleeReach is false for it).
         float ring = 0; int perch = -1; float perchZ = 350;
+        int   onSubjectN = 0;      // the first N foes start on the subject and stay on him 8 s (the others follow foesOnPlayer): a fight on two fronts
+        bool  perchPath = false;   // the ledge has a way up (a tower's stair): a blade that files the 128 approach on it paths there (World.h Brain, the climb MODEL)
     };
 
     // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
@@ -276,6 +278,7 @@ namespace Sim {
             Body& f = F.Add(Role::Foe, std::move(sp), cx + std::clamp(dx, -700.0f, 700.0f), cy + std::clamp(dy, -700.0f, 700.0f));
             TagFoe(D, f); if (ti < fs.foeTags.size() && !fs.foeTags[ti].empty()) f.tag = fs.foeTags[ti]; ++ti;
             if (fs.foesOnPlayer) { f.c.targetId = 2; f.retargetAt = 6.0; }
+            if (ti <= static_cast<std::size_t>(fs.onSubjectN)) { f.c.targetId = F.b[static_cast<std::size_t>(F.ctl[0].body)].c.id; f.retargetAt = 8.0; }   // ti was advanced above: foe number ti (1-based)
             if (fs.onSubject) { Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; f.c.targetId = s0.c.id; f.retargetAt = 8.0;
                 if (s0.stealthy) { s0.rec.level = 100; s0.rec.sp = 0.0f; s0.rec.known = true; s0.rec.lost = false; s0.rec.lastKnown = 0.0; s0.rec.lx = s0.c.x; s0.rec.ly = s0.c.y; } }   // "they are on him": their group has found him
             Body& nf = F.b.back(); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : 0.0f, ft ? ft->c.y : 0.0f);   // a foe starts facing its target, else the party
@@ -285,7 +288,7 @@ namespace Sim {
             Body& nf = F.b.back();
             if (fs.ring > 0.0f) { const Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; const float a = ang + 6.2831853f * static_cast<float>(ci) / static_cast<float>(fs.customFoes.size());
                 nf.c.x = s0.c.x + fs.ring * std::cos(a); nf.c.y = s0.c.y + fs.ring * std::sin(a); const Body* ft = F.Find(nf.c.targetId); Fight::Face(nf, ft ? ft->c.x : s0.c.x, ft ? ft->c.y : s0.c.y); }
-            if (static_cast<int>(ci) == fs.perch && g_v3.height) { nf.perch = true; nf.c.z = fs.perchZ; } }   // dy FIRST: the order the old call's arguments were drawn in (g++ evaluates them right to left), now fixed in the source so every compiler builds the same fights
+            if (static_cast<int>(ci) == fs.perch && g_v3.height) { nf.perch = true; nf.perchPath = fs.perchPath; nf.c.z = fs.perchZ; } }   // dy FIRST: the order the old call's arguments were drawn in (g++ evaluates them right to left), now fixed in the source so every compiler builds the same fights
         for (std::size_t i = 0; i < fs.late.size(); ++i) { const float lx = G.U(-200, 200), ly = G.U(-200, 200); F.late.push_back({ fs.late[i].first, fs.late[i].second, cx + lx, cy + ly, i < fs.lateTags.size() ? fs.lateTags[i] : std::string() }); }
         if (fs.targetRatio > 0) {   // late foes count toward the strength as if present
             float ratio = 0.0f;

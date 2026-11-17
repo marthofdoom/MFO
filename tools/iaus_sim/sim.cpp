@@ -60,7 +60,7 @@ namespace {
             // sim v3
             S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
             S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
-            S(castUnfired); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept);   // sim mirror batch 11-17
+            S(castUnfired); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealAtSum); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
@@ -124,7 +124,7 @@ namespace {
               m["pr.spoiled/f"] = double(s.drawSpoiled) / n; m["pr.pointBlank%"] = pct(double(s.pointBlankShots), double(s.arrowsShot)); }
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
-          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
+          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["selfHealAt%"] = s.selfHealN ? 100.0 * s.selfHealAtSum / double(s.selfHealN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
         // sim batch (section 32): the drink record (the full decline curve is the --decline report)
         m["drinkH/f"] = double(s.drinksH) / n; m["drinkAt%"] = s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1; m["potWaste%"] = pct(s.potWaste, s.potHeal); m["dnPot/f"] = double(s.downsWithPotH) / n; m["dnMidDrink/f"] = double(s.downsMidDrink) / n;
         // SIM V3 (iaus-sim-v3.md): what became of the casts his decisions fired, the chase cap, the guard by direction, the weapon hand, the areas.
@@ -134,6 +134,9 @@ namespace {
           m["dl.lofHeld%"] = pct(double(s.castLofHeld), pk); m["dl.lofExpired%"] = pct(double(s.castLofExpired), pk); m["dl.lofHold.s"] = s.castLofHeld ? s.castLofSec / double(s.castLofHeld) : -1;
           m["dl.notBuilt%"] = pct(double(s.castNotBuilt), pk); m["dl.direct%"] = pct(double(s.castDirect), pk); m["dl.thrash%"] = pct(double(s.castThrash), pk); m["dl.lost%"] = pct(double(s.castLost), pk);
           m["dl.unfired%"] = pct(double(s.castUnfired), pk); m["dl.unfired.s"] = s.castUnfired ? s.unfiredSec / double(s.castUnfired) : -1; m["dl.deferred/f"] = double(s.castDeferred) / n; m["dl.healFull/f"] = double(s.healFullExit) / n;   // sim mirror batch 11-17 (Data.h Delivery, cast/CastOn.cpp deferrals, cast/HealRoad.cpp full exit)
+          m["tfh.s"] = s.firstHitN ? s.firstHitSum / double(s.firstHitN) : -1; m["nohit%"] = 100.0 * (1.0 - double(s.firstHitN) / n); m["hits/f"] = double(s.wpnHits) / n;   // the field scenarios (11-17): time to his first damage, fights with none, weapon hits
+          m["cast.dmg"] = s.offPickN ? s.offPickDmg / double(s.offPickN) : -1; m["cast.cost"] = s.offPickN ? s.offPickCost / double(s.offPickN) : -1; m["off/f"] = double(s.offPickN) / n;
+          m["heal.size"] = s.healPickN ? s.healPickSize / double(s.healPickN) : -1; m["heal.conc%"] = pct(double(s.healPickConc), double(s.healPickN)); m["heal.self%"] = pct(double(s.healPickSelf), double(s.healPickN)); m["heal/f"] = double(s.healPickN) / n;
           m["cap.kept/f"] = double(s.capKept) / n;   // foes kept past the chase cap as noApproach (11-17 A3)
           m["dl.claim.s"] = s.castFired ? s.claimSec / double(s.castFired) : -1; m["dl.beatLof%"] = pct(double(s.beatLof), double(s.beats + s.beatLof + s.beatNoLos)); m["dl.stream.s"] = s.streams ? s.streamSec / double(s.streams) : -1;
           m["cap.mean"] = s.capLaps ? s.capSum / double(s.capLaps) : -1; m["cap.drop%"] = pct(double(s.capDropLaps), double(s.capLaps)); m["cap.starve%"] = pct(double(s.capStarveLaps), double(s.capLaps)); m["cap.waived/f"] = double(s.capWaived) / n;
@@ -218,7 +221,7 @@ namespace {
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
-        if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
+        if (!g_mirror) o += "+mirror=off"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
         return o;
     }
     std::string g_potTag;
@@ -630,6 +633,7 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--waiver") && i + 1 < argc) { const char* v = argv[++i]; g_waiver = !std::strcmp(v, "none") ? 0 : !std::strcmp(v, "self") ? 1 : !std::strcmp(v, "player") ? 2 : -1; if (g_waiver < 0) { std::fprintf(stderr, "--waiver none|self|player\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--delivery") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "old")) g_deliveryOld = true; else if (!std::strcmp(v, "main")) g_deliveryOld = false; else { std::fprintf(stderr, "--delivery main|old\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-sec") && i + 1 < argc) { if (std::sscanf(argv[++i], "%f,%f", &g_deliverSec[0], &g_deliverSec[1]) != 2 || g_deliverSec[0] < 0 || g_deliverSec[1] < 0) { std::fprintf(stderr, "--deliver-sec <offense>,<heal> (seconds)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--mirror") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_mirror = false; else if (!std::strcmp(v, "on")) g_mirror = true; else { std::fprintf(stderr, "--mirror on|off\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-unfired") && i + 1 < argc) { g_deliverUnfired = static_cast<float>(std::atof(argv[++i])); if (!(g_deliverUnfired >= 0.0f)) { std::fprintf(stderr, "--deliver-unfired <k >= 0> (scales the measured unfired share of every claim; 0 = every claim fires)\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--side-step") && i + 1 < argc) { const char* v = argv[++i]; g_sideStep = !std::strcmp(v, "random") ? 1 : !std::strcmp(v, "away") ? 2 : 0; if (!g_sideStep) { std::fprintf(stderr, "--side-step random|away (off: --v3 sidestep=off)\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--caster-pressure")) g_casterPressure = true;

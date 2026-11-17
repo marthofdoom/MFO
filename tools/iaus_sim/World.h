@@ -137,6 +137,7 @@ namespace Sim {
         bool   corpseUsed = false;      // card G7: this corpse was raised once (a body is raised one time)
         float  hx = -1, hy = 0;         // where he faces (unit). A fighter faces his combat target; without one, the way he last moved
         // ── SIM V3 (iaus-sim-v3.md). All of it is inert while its switch is off ──
+        bool   perchPath = false; double climbAt = -1e9;             // height: his ledge has a way up / a follower: the last step he was on that way (the climb MODEL, Brain)
         bool   airborne = false, perch = false;                      // height: on the wing (a dragon's circuit) / standing on a ledge (c.z holds the height)
         float  fcx = 0, fcy = 0, fr0 = 0, frFar = 0, fAlt = 0, fTh0 = 0, fDir = 1; double fT0 = 0, fT = 12;   // the circuit: centre, start radius, far radius, altitude, start bearing, turn sense, take-off time, air time
         double claimAt = 0, claimUntil = 0;                          // delivery: the cast's claim was made at / its charge begins at (the wait between is the claim-to-fire latency)
@@ -221,6 +222,11 @@ namespace Sim {
         // sim mirror batch 11-17: claims that closed with no fire (the measured unfired share, Data.h Delivery) and the seconds they stood, self buffs /
         // heals deferred for want of a combat controller (cast/CastOn.cpp, laps), heal claims released because the recipient was full before the charge began.
         long   castUnfired = 0, castDeferred = 0, healFullExit = 0; double unfiredSec = 0;
+        // THE SELF-HEAL POINT (the caster survival band, Playstyles.h): his health share each time a decision of his began to mend HIMSELF (a heal cast at himself, a health potion).
+        long   selfHealN = 0; double selfHealAtSum = 0;
+        // THE FIELD SCENARIOS' READS (11-17): his first damage on a foe (per fight: N is 0 or 1) and what his cast decisions picked: offense (the spell's own
+        // damage and cost) and heals (the heal's size, how many were channelled, how many were for himself).
+        long   firstHitN = 0, offPickN = 0, healPickN = 0, healPickConc = 0, healPickSelf = 0; double firstHitSum = 0, offPickDmg = 0, offPickCost = 0, healPickSize = 0;
         long   beats = 0, beatLof = 0, beatNoLos = 0, streams = 0; double castLofSec = 0, claimSec = 0, streamSec = 0;
         // CHASE CAP: his decision laps with a live foe (capLaps), laps on which the cap removed at least one live foe (capDropLaps), laps
         // on which it removed EVERY live foe (capStarveLaps), foes kept by the waiver (capWaived), the cap's sum (capSum / capLaps = mean).
@@ -659,7 +665,8 @@ namespace Sim {
             if (!x.alive || x.c.downed || dmg <= 0) return 0;
             const float before = x.c.hp; x.c.hp -= dmg; x.regenAt[0] = now + D->rules.delayHp; x.recentDmg += dmg;
             const float dealt = std::min(before, dmg);
-            if (by) { by->dmgDealt += dealt; x.lastAttacker = by->c.id; if (by->ctl == 0) { t.dmgDone += dealt; if (x.spec->undead) t.undeadDmg += dealt; } }
+            if (by) { by->dmgDealt += dealt; x.lastAttacker = by->c.id; if (by->ctl == 0 && x.role == Role::Foe && dealt > 0.0f && t.firstHitN == 0) { t.firstHitN = 1; t.firstHitSum = now; }
+            if (by->ctl == 0) { t.dmgDone += dealt; if (x.spec->undead) t.undeadDmg += dealt; } }
             if (fromIaus && by && by->ctl == 0) { t.iausDmg += dmg; t.overkill += dmg - dealt; }
             if (x.role == Role::Player) t.playerDmgTaken += dealt;
             if (x.Party()) t.partyDmgTaken += dealt;
@@ -1366,6 +1373,13 @@ namespace Sim {
             // melee
             const float reach = Reach(x);
             if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash
+            // THE 128 APPROACH UP A LEDGE (field 11-17, scheduler/IausSource.cpp: when every foe is out of the blade's reach the offense approach is filed at the
+            // touch standoff 128 on the foe's reference and the ENGINE paths it, "which is what climbs a tower"). MODEL: a ledge with a way up
+            // (FightSpec::perchPath) is climbed once he is within 128 units of the point under it, along a path three times its height (ASSUMPTION: a
+            // stair / ramp), at his run speed; he comes down the same way when he turns to another foe (StepWorld). A ledge with no way up stays out of reach.
+            if (c && g_v3.height && g_mirror && tg->perch && tg->perchPath && c->steer == tg->c.id && std::hypot(tg->c.x - x.c.x, tg->c.y - x.c.y) <= 128.0f && x.c.z < tg->c.z) {
+                x.c.z = std::min(tg->c.z, x.c.z + x.spec->run * TM::dt / 3.0f); x.climbAt = now; x.movedAt = now; if (x.c.z < tg->c.z) return; }
+            else if (c && x.c.z > 0.0f && tg->perch && c->steer == tg->c.id) x.climbAt = now;   // on the ledge with him: he stays up
             float slotX = tg->c.x, slotY = tg->c.y; if (g_v3.stance) SlotPoint(x, *tg, reach * 0.8f, slotX, slotY);   // SIM V3: attackers spread around their target
             if (d > reach * 0.9f || tg->c.outOfMeleeReach) { if (!tg->c.outOfMeleeReach) Move(x, slotX, slotY, x.spec->run); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f); return; }
             if (now < x.think) { if ((slotX != tg->c.x || slotY != tg->c.y) && std::hypot(slotX - x.c.x, slotY - x.c.y) > 60.0f) Move(x, slotX, slotY, x.spec->run * 0.55f); return; }
@@ -1495,6 +1509,7 @@ namespace Sim {
                 if (x.role == Role::Summon && x.airUntil < 0 && now >= -x.airUntil) { x.alive = false; continue; }
                 Regen(x); if (!Up(x)) continue;
                 if (x.airborne) FlightStep(x);   // SIM V3 (height): the circuit, in 3D
+                if (x.ctl >= 0 && x.c.z > 0.0f && now - x.climbAt > 0.25) x.c.z = std::max(0.0f, x.c.z - x.spec->run * TM::dt / 3.0f);   // the climb MODEL: off the way up, he walks down
                 if (g_v3.delivery && x.ctl >= 0 && !x.ctrlLive) {   // ASSUMPTION (iaus-sim-v3.md 4.2): the engine's detection activates his controller when a foe stands within 2000 units in his sight, or he is hit
                     if (x.lastAttacker) x.ctrlLive = true; else for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Dist(x, o) < 2000.0f && Sees(x, o)) { x.ctrlLive = true; break; } }
                 if (x.role == Role::Foe && now < x.fleeUntil && Dist(x, b[0]) > 4096.0f) { x.alive = false; ++t.escaped; if (trace) std::fprintf(trace, "%7.2f  ESCAPED %s (%u)\n", now, x.c.name.c_str(), x.c.id); continue; }   // a routed foe past the chase cap has left the fight
@@ -1505,7 +1520,7 @@ namespace Sim {
                 // field 1117 A2 (cast/HealRoad.cpp: "the recipient is at full health"): a heal claim is RELEASED when its recipient is full, unless a cast is
                 // in flight at that mark (it fires, then the claim goes). In the lab: a decision heal whose charge has not begun (the claim still waits) is
                 // dropped the step its recipient reads full (the stream's own 0.9995 line); a charge already running is let go. No magicka is spent.
-                if (g_v3.delivery && !g_deliveryOld && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && now < x.claimUntil) {
+                if (g_v3.delivery && g_mirror && !g_deliveryOld && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && now < x.claimUntil) {
                     const SimSpell* hs = SpellOf(x, x.actSpell); const Body* hr = hs && hs->e.nature == Prune::Nature::Heal ? Find(x.actTarget) : nullptr;
                     if (hr && hr->c.hp >= 0.9995f * hr->c.hpMax) { x.hitAt = -1; x.actEnd = now; if (x.ctl == 0) ++t.healFullExit;
                         if (trace) std::fprintf(trace, "%7.2f  HEAL RELEASED %s: %s is at full health before the cast began\n", now, x.c.name.c_str(), hr->c.name.c_str()); } }

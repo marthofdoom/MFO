@@ -73,7 +73,7 @@ namespace Sim {
         if (F.estimates) FillEstimate(F, self, sn.self);
         // 1dfcuabd22x (iaus/Fills.cpp:345): the share of his weapon damage that needs the LEFT hand, 1 = a bow / crossbow / two-hander (the lab carries no
         // second melee weapon: no 0.5 row). Filled with `hit`, and only where a stream HOLDS a hand (the `hands` switch): the v2 world has no such cost.
-        if (F.estimates && g_v3.hands && !self.casterMode && sn.self.hit > 0.0f && F.TwoHandWeapon(self)) sn.self.weaponLeftShare = 1.0f;
+        if (F.estimates && g_v3.hands && g_mirror && !self.casterMode && sn.self.hit > 0.0f && F.TwoHandWeapon(self)) sn.self.weaponLeftShare = 1.0f;
         std::vector<int> elems;
         for (const auto& e : c.book.entries) if (e.resistAv >= 0 && std::find(elems.begin(), elems.end(), e.resistAv) == elems.end()) elems.push_back(e.resistAv);
         const Body& pl = F.b[0];
@@ -83,7 +83,7 @@ namespace Sim {
         // SIM V3 (chase): the game's confidence cap (Confidence::ChaseRadius), in 3D, and the held-foe waiver of iaus/Candidates.cpp:345-353.
         if (g_v3.chase) sn.chaseCap = F.ChaseCap(self, c);
         int capLive = 0, capDropped = 0, capWaived = 0, capKept = 0;
-        if (g_v3.chase && !c.entryEnded) {   // the Standing entry foe (World.h Ctl::entryFoe, MODEL)
+        if (g_v3.chase && g_mirror && !c.entryEnded) {   // the Standing entry foe (World.h Ctl::entryFoe, MODEL)
             if (c.entryFoe == 0) { const Body* e = F.Find(self.c.targetId); if (e && e->role == Role::Foe && Fight::Up(*e)) c.entryFoe = e->c.id; }
             else { const Body* e = F.Find(c.entryFoe); if (!e || !Fight::Up(*e) || (self.c.targetId != 0 && self.c.targetId != c.entryFoe)) { c.entryFoe = 0; c.entryEnded = true; } } }
         for (const Body& o : F.b) {
@@ -98,10 +98,10 @@ namespace Sim {
                     // --waiver self = the game of 10-19 (it must fight HIM); --waiver none = no waiver. v2 has no waiver.
                     const std::uint32_t heldId = g_v3.chase ? c.steer : 0u, entryId = g_v3.chase ? c.entryFoe : 0u;
                     const bool fights = g_waiver == 2 ? (o.c.targetId == self.c.id || o.c.targetId == pl.c.id) : g_waiver == 1 ? o.c.targetId == self.c.id : false;
-                    if (ChaseWaived(o.c.id, heldId, entryId, fights)) { ++capWaived; k.chaseWaived = true; }   // act.attack scores it at the cap's edge (Catalogue.cpp ChaseX), no veto
+                    if (ChaseWaived(o.c.id, heldId, entryId, fights)) { ++capWaived; k.chaseWaived = g_mirror; }   // act.attack scores it at the cap's edge (Catalogue.cpp ChaseX), no veto
                     // 11-17 A3 (iaus/Candidates.cpp): the cap limits MOVEMENT, not shots and not the threat read. Kept, marked noApproach: a foe inside
                     // his bow's range (Reposition::InWeaponRange, Tuning::bowWeaponRange) and any foe that targets HIM. v2 keeps none.
-                    else if (g_v3.chase && (Reposition::InWeaponRange(sn, k.dist, a_t.bowWeaponRange) || o.c.targetId == self.c.id)) { ++capKept; k.noApproach = true; }
+                    else if (g_v3.chase && g_mirror && (Reposition::InWeaponRange(sn, k.dist, a_t.bowWeaponRange) || o.c.targetId == self.c.id)) { ++capKept; k.noApproach = true; }
                     else { ++capDropped; continue; }
                 }
                 k.rangedWeapon = o.rangedMode; k.swinging = g_fillSwing && (o.act == Act::Swing || o.act == Act::Power) && o.hitAt >= 0; k.casting = o.act == Act::Cast && o.hitAt >= 0;   // swinging: [Debug] bIausFillSwing (--no-fill-swing = the shipped default)
@@ -380,6 +380,7 @@ namespace Sim {
             Kit& kit = c.book.kit; std::int32_t& n = fam == Family::DrinkHealth ? kit.potionsHealth : fam == Family::DrinkStamina ? kit.potionsStamina : kit.potionsMagicka;
             if (n <= 0) return Fired::Invalid;
             if (bodyHeld) return Fired::Declined;
+            if (subj && fam == Family::DrinkHealth) { ++t.selfHealN; t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); }
             if (subj && fam == Family::DrinkHealth) { ++t.drinksH; t.drinkAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); t.potFracSum += c.potH * std::max(1.0f, c.potDur[0]) / std::max(1.0f, x.c.hpMax); ++t.potFracN; }   // the decline record: when he drinks
             --n; take(Act::Drink, TM::drink, TM::drinkAt); x.actSpell = fam == Family::DrinkHealth ? 0 : fam == Family::DrinkMagicka ? 1 : 2; return Fired::Yes; }
         case Family::Scroll:
@@ -391,7 +392,7 @@ namespace Sim {
             else if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
             // field 1117 A6 / the disengage ruling (cast/CastOn.cpp): with NO combat controller a combat-table SELF buff / ward is DEFERRED (transparent,
             // asked again every lap; never the unanimated direct cast), and so is a heal while a disengage runs. Other casts keep the direct road.
-            if (g_v3.delivery && !g_deliveryOld && !x.ctrlLive && fam != Family::Scroll
+            if (g_v3.delivery && g_mirror && !g_deliveryOld && !x.ctrlLive && fam != Family::Scroll
                 && (((fam == Family::CastBuff || fam == Family::CastWard) && (k.target == 0 || k.target == x.c.id)) || (fam == Family::CastHeal && c.runPhase != 0))) {
                 if (subj) ++t.castDeferred; return Fired::Declined; }
             bool thrashed = false;
@@ -413,6 +414,9 @@ namespace Sim {
             }
             if (subj) {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
+                if (fam == Family::CastOffense) { ++t.offPickN; t.offPickDmg += s.dmg + s.dot * s.dotDur; t.offPickCost += e.cost; }
+                if (fam == Family::CastHeal) { ++t.healPickN; t.healPickSize += s.heal + s.hot * s.hotDur; if (s.e.concentration) ++t.healPickConc; if (target == x.c.id) ++t.healPickSelf; }
+                if (fam == Family::CastHeal && target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; }
                 if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; }
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
                     (void)r; }

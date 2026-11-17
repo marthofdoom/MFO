@@ -20,7 +20,7 @@ class LogiMid(unittest.TestCase):
         self.assertTrue(all(v > 0 for v in T.logi_mid(0.0, (0.6,), (-0.1, 0.1))))
 
 
-class World(unittest.TestCase):   # sim v3: the driver always names the world, v2 unless asked
+class World(unittest.TestCase):   # sim v3: the driver always names the world (v3 by default since the sim mirror batch of 11-17; --world v2 still works)
     def test_world_is_always_first(self):
         self.assertEqual(T.world_flags("v2", ""), ["--world", "v2"])
         self.assertEqual(T.world_flags("v3", "--ranged-perks --point-blank"), ["--world", "v3", "--ranged-perks", "--point-blank"])
