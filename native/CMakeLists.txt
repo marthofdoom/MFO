@@ -51,6 +51,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Progression.cpp
     progression/Allocator.cpp
     progression/SkillScale.cpp
+    progression/ClassWeights.cpp
     progression/PerkGate.cpp
     progression/BoardViews.cpp
     progression/Poll.cpp
