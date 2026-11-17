@@ -2,10 +2,10 @@
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include <unordered_set>   // g_otherCast -- NOT in the PCH (the v1.0.8/9 CI lesson)
 #include <mutex>           // ClassifySpell control-log dedup
-#include <thread>          // g_mainThread: std::this_thread::get_id (FF world-walk gate)
 #include "CasterConsent.h"
 #include "Config.h"
 #include "Followers.h"
+#include "MainThread.h"
 #include "Forms.h"         // P1 probe: the MFO caster-forward combat style
 #include "Packages.h"      // StreamLive -- the LEGACY package concentration bound
 #include "CastBounds.h"    // Live -- the GENERAL "this is an MFO-executed cast" bound
@@ -852,11 +852,13 @@ namespace MFO::CasterConsent {
         // is written; read on the cast threads.
         std::atomic<bool> g_guardOnly{ false };
         constexpr std::size_t kCheckCast = 0x0A;   // the "can I cast this?" gate, PRE-charge
-        // Captured at install (kDataLoaded = main thread). The friendly-fire world
-        // walk only runs when SpellCast fires on this thread; off-main it is
-        // skipped (fail-open) so a jobified anim-graph release can never iterate
-        // highActorHandles concurrently with a main-thread resize (§0.30).
-        std::thread::id g_mainThread;
+        // The pre-charge friendly-fire world walk (WouldHitTeammate over highActorHandles) is CLOSED. It used to run only on
+        // a thread recorded at kDataLoaded, which is the engine's InitTESThread (INVARIANTS #84 rule 8, ENGINE_NOTES 0.55): gone
+        // after the load, so the walk has never run in the field, and Windows may hand its id to a later thread, which would
+        // then run the walk OFF main (a jobified anim-graph release iterating highActorHandles against a main-thread resize,
+        // §0.30). The code of the walk stays. Opening it (MainThread::IsMainThread()) turns on a path no field log has
+        // shown, with CheckCast's firing thread still unknown: its own decision (MFO-B861).
+        constexpr bool kFriendlyFireWalkOpen = false;
 
         // Shared deny decision (SpellCast side): should this LATCHED follower be
         // denied from casting this NON-gambit spell right now, per the slider?
@@ -985,8 +987,9 @@ namespace MFO::CasterConsent {
 
             static std::atomic<bool> s_threadLogged{ false };
             if (!s_threadLogged.exchange(true))
-                spdlog::info("[consent] CheckCast fires on {} thread",
-                             std::this_thread::get_id() == g_mainThread ? "the MAIN" : "a NON-main");
+                spdlog::info("[consent] CheckCast fires on the {} thread; the pre-charge friendly-fire walk is DISABLED "
+                             "(pending its own brief, MFO-B861): it has never run in the field and stays closed",
+                             MainThread::IsMainThread() ? "main" : "a non-main");
 
             const bool ff = Config::g_friendlyFireHold.load(std::memory_order_relaxed);
             // The fast-out stays open when cast control is at EXACT (4) -- the
@@ -1087,7 +1090,7 @@ namespace MFO::CasterConsent {
             if (ff && actor->IsPlayerTeammate() &&
                 a_spell->GetFormID() != want &&
                 a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
-                std::this_thread::get_id() == g_mainThread &&
+                kFriendlyFireWalkOpen &&
                 ClassifySpell(a_spell) == SpellKind::Offense) {
                 if (WouldHitTeammate(actor, a_spell)) {
                     if (FFHold(fid)) {
@@ -1105,7 +1108,6 @@ namespace MFO::CasterConsent {
         void InstallCheckCastHook() {
             if (g_castHooked.exchange(true)) return;
             if (!Runtime::Known()) return;   // same exact-build guard as InstallHook (G1; was VR-only)
-            g_mainThread = std::this_thread::get_id();   // InstallHook runs at kDataLoaded (main)
             // ONLY vtable [0]. VTABLE_ActorMagicCaster's three entries are the three
             // BASE-SUBOBJECT vtables of ONE class (MagicCaster @0, the anim-graph
             // holder @0x48, the BSTEventSink @0x60) -- NOT separate casters. Every

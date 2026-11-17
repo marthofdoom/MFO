@@ -1380,10 +1380,11 @@ the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `G
    main thread only pumps window messages meanwhile), on 1.5.97 and 1.6.1170 by disassembly of both SKSE builds, and
    that thread is gone when the load ends. Code that runs at kDataLoaded is single-threaded INIT code (older comments
    call it "main thread"); it must never keep `std::this_thread::get_id()` / `GetCurrentThreadId()` as "the main
-   thread". kInputLoaded (inside `Main`'s constructor) and kPreLoadGame / kPostLoadGame (under `Main::Update`) are on the
-   main thread; nothing relies on that. Evidence and addresses: ENGINE_NOTES 0.55. A new "am I on main" test calls
+   thread". kInputLoaded (inside `Main`'s constructor) and kPreLoadGame / kPostLoadGame are on the main thread: 1.6.1170 by
+   disassembly plus the Deck field (thread 1364); 1.5.97 not resolved. Nothing relies on that. Evidence and addresses: ENGINE_NOTES 0.55. A new "am I on main" test calls
    `MainThread::IsMainThread()` / `LiveReadsAllowed()` / `EngineWritesAllowed()`; it never stores its own id
-   (REVIEW-BACKLOG MFO-B861: two older private copies that still do).
+   (REVIEW-BACKLOG MFO-B861: the two older private copies are gone; the legacy CheckCast friendly-fire walk is CLOSED, not
+   switched to IsMainThread(), until its own brief).
 
 **What changes for the player:** nothing but freshness, and it differs by kind. A decision sees the PARTY's
 inventories and effects as of the start of its tick, at most one tick (133 ms) plus a frame behind the engine, where it

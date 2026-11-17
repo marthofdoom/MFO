@@ -3434,9 +3434,9 @@ them clobbers unrelated engine vtables).
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
   `:684`). Fast-out needs ALL THREE `g_wantCount==0 && g_styleSwapCount==0 &&
   g_ctrlCount==0` (`:516`). `WouldHitTeammate`'s `highActorHandles` walk is
-  main-thread-gated (`:763,818`), fails open off-main (§0.30 crash). **OPEN, REVIEW-BACKLOG MFO-B861:** that gate compares
-  against a private `g_mainThread` captured at kDataLoaded, which is the engine's InitTESThread and not the main thread
-  (ENGINE_NOTES 0.55), so the legacy CheckCast friendly-fire walk never runs. Read B861 before touching it.
+  main-thread-gated (`:763,818`), fails open off-main (§0.30 crash). **REVIEW-BACKLOG MFO-B861 (items 1/2 done):** the old private `g_mainThread` (kDataLoaded = the engine's InitTESThread,
+  ENGINE_NOTES 0.55) is gone; the walk is behind `kFriendlyFireWalkOpen = false` (closed, one-time `[consent]` info line says so).
+  It never ran in the field. Opening it (`MainThread::IsMainThread()`) is its own decision, still open in B861. Read B861 first.
 
 ### CombatStyle.cpp — weapon stance + equip gate (T#75)
 **T2 batch M item 5 (2026-11-11): with Harbinger ABI >= 45 `ApplyTick` returns at its top and writes nothing; the desire is
@@ -9615,8 +9615,8 @@ the scan integration is I6 (LANDED 2026-11-10: `scheduler/IausSource.cpp`, secti
   it is ignored by `Estimate::SpellOn` and the best-damage denominator. The sim sets it in `tools/iaus_sim/Policy.h`.
   (5) HandleEntryPoint is main thread only: never move `MeasureSpell` into the gather. (6) An unknown
   `Reach::Learner` has `Gate() == 0`: the wiring must leave `swingReach` at 0 then, so the swing families read
-  fMeleeReach (MFO-B687). (7) The hit sink may read an actor value ONLY on the main thread (`g_mainThread`, review
-  F3): the TESHitEvent thread is not known. (8) An offense spell whose damage is indirect (hazard, cloak, script,
+  fMeleeReach (MFO-B687). (7) The hit sink may read an actor value ONLY on the main thread (`MainThread::IsMainThread()`, review
+  F3; B861 item 2): the TESHitEvent thread is not known. (8) An offense spell whose damage is indirect (hazard, cloak, script,
   weapon carrier) must stay `measured = false` (review F2), or MFO-B684 scores it 0.
 - `iaus/Engine.h/.cpp` — the THIN adapter, the only file that touches the engine side: `MakeTick` `:36` (window = `g_suppressWindow` x
   (0.88 + 0.24 Temperament), the #26 length), `FillCooldowns` `:49` (the SHARED `Cooldowns` store, `Kind::IausAction`), `MindFor` `:64`,
