@@ -250,6 +250,8 @@ struct SpellEntry {
         bool  hitIsMagic = false;           // the hit is a spell in hand (armor does not apply)
         int   incomingAv = -1;              // buff potions: the resist actor value of the element it hits with (the spell in its hand or the one it is
                                             // casting: the costliest hostile effect's resist), -1 = none known (Candidates.cpp FoeElementAv)
+        float weaponLeftShare = 0.0f;       // 1dfcuabd22x: the share of its weapon damage that needs the LEFT hand: 1 = a bow / crossbow / two-hander, 0.5 = a melee weapon
+                                            // in each hand (the left one), 0 = a one-hander in the right hand, a staff, a spell or bare hands. Filled with `hit` (Fills.cpp)
         float armor = 0.0f;                 // its physical mitigation, 0..1
         float magicResist = 0.0f;           // kResistMagic, points
         float lossPerSec = 0.0f;            // health it has been losing per second (observed)

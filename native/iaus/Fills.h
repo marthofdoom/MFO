@@ -79,6 +79,7 @@ namespace MFO::Iaus::Fills {
             Role  role = Role::Foe;
             float hit = 0.0f, rate = 0.0f;
             bool  magic = false, ranged = false, swinging = false, casting = false;
+            float leftShare = 0.0f;     // Combatant::weaponLeftShare
             float dr = 0.0f, armor = 0.0f, magicResist = 0.0f, loss = 0.0f;
             std::uint32_t src = 0;      // the weapon / spell / staff the hit estimate is for
             std::uint32_t srcLeft = 0;  // a second melee weapon in the left hand (0 = none)

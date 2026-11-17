@@ -151,6 +151,10 @@ namespace MFO::Iaus {
         BoostSpellPerks,    // multiplier (APPENDED, ClickUp 1dfcuabd2pk, marth 11-12 "what spells to use ... it needs to read perks like potions"): a spell
                             // cast by what his perks do for that spell's SCHOOL (Facts::spellPerkEdge = 1 - cost multiplier / magnitude multiplier,
                             // iaus/Snapshot.h PerkSpellEdge). NOT APPLICABLE while Snapshot::perks.spellsRead is false (the sim today) or the cast is a scroll / staff
+        HandLost,           // (APPENDED, ClickUp 1dfcuabd22x, field 11-12 Auri): a CONCENTRATION buff / ward holds his left hand for the whole channel, so a weapon that
+                            // needs that hand (bow, crossbow, two-hander) is put away. x = the share of the fight's remaining foe health his weapon would have dealt in
+                            // that time (Facts::handLost, iaus/Generate.cpp HandLostShare). NOT APPLICABLE (bit-identical) for any other candidate, a fire-and-forget
+                            // spell, a follower whose weapon does not need that hand, or while his weapon damage is unmeasured
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -257,6 +261,11 @@ namespace MFO::Iaus {
         // 0 = off. Tunable in the sim.
         float occlusionHoldSec = 4.0f;
         float rowlessTauntCooldownSec = kTauntCooldownSec;   // marth Q69: 30 s, the executor's own cooldown
+        // HAND LOST (ClickUp 1dfcuabd22x): how long a concentration buff / ward holds his hand, and what putting the weapon away costs. The stream's own cap is a
+        // random draw per stream (cast/Actuation_internal.h DrawConcCap: 8-15 s for a heal / utility / self buff), so the mean is 11.5 s. The redraw is the sim's
+        // ASSUMPTION (0.65 s, half of the v2 swap time, iaus-sim-v3.md 4.3). PLACEHOLDERS: the sim decides them. `t.concChannelSec` / `t.handRedrawSec`.
+        float concChannelSec = 11.5f;
+        float handRedrawSec = 0.65f;
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;
@@ -405,6 +414,7 @@ namespace MFO::Iaus {
         bool  staffCharged = true;
         bool  classAllowsWeapon = true;   // false only under strict adherence (G16)
         float perkShare = -1.0f;          // batch 3 part C: this posture's share of his weapon-damage perk multipliers, mine / (mine + the other side's); < 0 = not read
+        float handLost = -1.0f;           // 1dfcuabd22x: the share of the fight's foe health his weapon would deal while a concentration stream holds his hand, 0..1; < 0 = not applicable
         float spellPerkEdge = -1.0f;      // 1dfcuabd2pk: the share of this spell's worth his perks pay for in its school, 0..1 (Snapshot.h PerkSpellEdge); < 0 = not read
         // class (ruling Q34). onClass: the ability belongs to the follower's current class (tree OFF: its T1
         // class). fromMastered: a class the follower has MASTERED grants it. emergency: EmergencyLevel().

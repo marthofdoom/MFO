@@ -82,7 +82,7 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
-            "buff_foes", "perks", "consumable_worth", "spell_perks",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
+            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -120,7 +120,7 @@ namespace MFO::Iaus {
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
-                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge };
+                            f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge, f.handLost };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -389,6 +389,15 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 1.15f }, { 1.0f, 1.15f } } };
                 at(Cons::BoostSpellPerks) = Piece(p);
             }
+            // hand_lost (ClickUp 1dfcuabd22x, field 11-12 Auri): x = the share of the fight's foe health his weapon would have dealt in the time a
+            // concentration buff / ward holds his left hand (Generate.cpp HandLostShare); NOT APPLICABLE for everything else. A SHAPE, never a veto:
+            // 1.0 at 0 (a trivial fight, nothing lost), 0.55 at half the foes' health, 0.2 at all of it. PLACEHOLDERS, NOT SEARCHED (the sim decides;
+            // the knobs are `c.hand_lost.py0 / py1 / py2` and `t.concChannelSec` / `t.handRedrawSec`). marth ruled buff-then-bow on 11-12: the buff is
+            // not barred, it pays for the damage it costs, so a quiet fight still buffs first and a hard one with a bow in hand does not.
+            {
+                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 0.55f }, { 1.0f, 0.2f } } };
+                at(Cons::HandLost) = Piece(p);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -460,6 +469,7 @@ namespace MFO::Iaus {
             { "t.noHealDrink", &Tuning::noHealDrink }, { "t.noHealRetreat", &Tuning::noHealRetreat }, { "t.emergencyHpHigh", &Tuning::emergencyHpHigh }, { "t.emergencyHpLow", &Tuning::emergencyHpLow },
             { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
+            { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },   // 1dfcuabd22x: the sim mirrors both
             { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
@@ -557,7 +567,7 @@ namespace MFO::Iaus {
             constexpr U kBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
                 { Cons::BuffEarly, 1 }, { Cons::BuffMelee, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f },
-                { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 }, { Cons::BoostSpellPerks, 1 },
+                { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 }, { Cons::BoostSpellPerks, 1 }, { Cons::HandLost, 1 },
             };
             constexpr U kSummon[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::CooldownSoft, 1 }, { Cons::SummonLive, 1 },
@@ -567,7 +577,7 @@ namespace MFO::Iaus {
             constexpr U kWard[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::WardCaster, 1 }, { Cons::WardHp, 1 },
                 { Cons::AlreadyActive, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
-                { Cons::BoostSpellPerks, 1 },
+                { Cons::BoostSpellPerks, 1 }, { Cons::HandLost, 1 },
             };
             // Scrolls: the spell family's set without the magicka terms (a scroll costs none), plus the stock
             // gate, scroll_stock and mp_low (section 3.2).
@@ -734,6 +744,7 @@ namespace MFO::Iaus {
             case Cons::BuffThreat:    return (c.family == Family::DrinkBuff && f.buffThreat >= 0.0f) ? In(Clamp(f.buffThreat, 0.0f, 1.0f)) : In::Off();
             case Cons::BuffStealth:   return (c.family == Family::DrinkBuff && f.buffStealth != Tri::Unknown) ? In(B(f.buffStealth == Tri::Yes)) : In::Off();
             case Cons::BoostPosturePerks: return c.family == Family::Posture && f.perkShare >= 0.0f ? In(f.perkShare) : In::Off();
+            case Cons::HandLost:      return f.handLost >= 0.0f ? In(Clamp(f.handLost, 0.0f, 1.0f)) : In::Off();   // only a concentration buff / ward carries it (Generate.cpp)
             case Cons::BoostSpellPerks: return f.spellPerkEdge >= 0.0f ? In(Clamp(f.spellPerkEdge, 0.0f, 1.0f)) : In::Off();   // only a spell cast carries it (Generate.cpp)
             case Cons::BoostBuffThreat: return c.family == Family::CastBuff ? In(static_cast<float>((std::min)((std::max)(f.foeCount, 0), 4)) / 4.0f) : In::Off();
             case Cons::DrinkNeed:
