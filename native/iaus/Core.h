@@ -152,7 +152,7 @@ namespace MFO::Iaus {
                             // cast by what his perks do for that spell's SCHOOL (Facts::spellPerkEdge = 1 - cost multiplier / magnitude multiplier,
                             // iaus/Snapshot.h PerkSpellEdge). NOT APPLICABLE while Snapshot::perks.spellsRead is false (the sim today) or the cast is a scroll / staff
         HandLost,           // (APPENDED, ClickUp 1dfcuabd22x, field 11-12 Auri): a CONCENTRATION buff / ward holds his left hand for the whole channel, so a weapon that
-                            // needs that hand (bow, crossbow, two-hander) is put away. x = the share of the fight's remaining foe health his weapon would have dealt in
+                            // needs that hand (bow, crossbow, two-hander) is put away. x = the share of the top foe's current health his weapon would have dealt in
                             // that time (Facts::handLost, iaus/Generate.cpp HandLostShare). NOT APPLICABLE (bit-identical) for any other candidate, a fire-and-forget
                             // spell, a follower whose weapon does not need that hand, or while his weapon damage is unmeasured
         kCount

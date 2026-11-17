@@ -389,13 +389,13 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 1.15f }, { 1.0f, 1.15f } } };
                 at(Cons::BoostSpellPerks) = Piece(p);
             }
-            // hand_lost (ClickUp 1dfcuabd22x, field 11-12 Auri): x = the share of the fight's foe health his weapon would have dealt in the time a
+            // hand_lost (ClickUp 1dfcuabd22x, field 11-12 Auri): x = the share of the top foe's current health his weapon would have dealt in the time a
             // concentration buff / ward holds his left hand (Generate.cpp HandLostShare); NOT APPLICABLE for everything else. A SHAPE, never a veto:
-            // 1.0 at 0 (a trivial fight, nothing lost), 0.55 at half the foes' health, 0.2 at all of it. PLACEHOLDERS, NOT SEARCHED (the sim decides;
+            // 1.0 at 0 (a trivial fight, nothing lost), 0.6 at 0.05, 0.35 at 0.15, 0.2 at all of it (x is a share of the TOP foe's time-to-kill; a bow's engine rate is only ~0.2 hits/s, so real shares are small). PLACEHOLDERS, NOT SEARCHED (the sim decides;
             // the knobs are `c.hand_lost.py0 / py1 / py2` and `t.concChannelSec` / `t.handRedrawSec`). marth ruled buff-then-bow on 11-12: the buff is
             // not barred, it pays for the damage it costs, so a quiet fight still buffs first and a hard one with a bow in hand does not.
             {
-                static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 1.0f }, { 0.5f, 0.55f }, { 1.0f, 0.2f } } };
+                static constexpr std::array<std::array<float, 2>, 4> p{ { { 0.0f, 1.0f }, { 0.05f, 0.6f }, { 0.15f, 0.35f }, { 1.0f, 0.2f } } };
                 at(Cons::HandLost) = Piece(p);
             }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -469,7 +469,7 @@ namespace MFO::Iaus {
             { "t.noHealDrink", &Tuning::noHealDrink }, { "t.noHealRetreat", &Tuning::noHealRetreat }, { "t.emergencyHpHigh", &Tuning::emergencyHpHigh }, { "t.emergencyHpLow", &Tuning::emergencyHpLow },
             { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
-            { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },   // 1dfcuabd22x: the sim mirrors both
+            { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
             { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }

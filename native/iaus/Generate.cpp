@@ -555,7 +555,8 @@ namespace MFO::Iaus {
         // CONCENTRATION buff / ward holds his left hand for the whole stream (cast/Actuation_internal.h: a self cast, heal, buff and any concentration
         // spell take the left hand), so a weapon that needs that hand (Combatant::weaponLeftShare: bow, crossbow, two-hander; half for a second melee
         // weapon) is put away for the channel and drawn again after it. The cost is the weapon damage forgone, as the share of the foes' health still to
-        // deal: share x his damage per second on the foe he is on x (the channel + the redraw) / the summed health of the kept foes, clamped 0..1.
+        // deal on the foe he is on: share x his damage per second on the top kept foe x (the channel + the redraw) / that foe's current health (the share of
+        // the current target's time-to-kill the channel costs), clamped 0..1.
         // < 0 = NOT APPLICABLE (bit-identical): not a concentration spell, a weapon that does not need the hand, damage not measured, or no foe.
         // Fire-and-forget spells release on fire and never reach this. Tunables: Tuning::concChannelSec / handRedrawSec, the curve of Cons::HandLost.
         float HandLostShare(const Ctx& x, const SpellEntry& e) {
@@ -564,8 +565,7 @@ namespace MFO::Iaus {
             if (!(share > 0.0f) || x.top.empty()) return -1.0f;
             const float dps = Estimate::Dps(x.s.self, *x.top.front());
             if (!(dps > 0.0f)) return -1.0f;
-            float hp = 0.0f;
-            for (const Combatant* f : x.top) hp += (std::max)(0.0f, Finite(f->hp, 0.0f));
+            const float hp = (std::max)(0.0f, Finite(x.top.front()->hp, 0.0f));
             if (!(hp > 0.0f)) return -1.0f;
             const float secs = (std::max)(0.0f, Finite(x.t.concChannelSec, 0.0f)) + (std::max)(0.0f, Finite(x.t.handRedrawSec, 0.0f));
             return (std::clamp)(share * dps * secs / hp, 0.0f, 1.0f);

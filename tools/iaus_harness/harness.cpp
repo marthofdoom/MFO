@@ -1736,9 +1736,27 @@ namespace {
         blind.self.hit = 0.0f;
         const auto b = find(blind);
         Check(b && b->f.handLost < 0.0f && score(*b) == score(*none), "hand lost: damage unmeasured = not applicable, bit-identical");
+        // ENGINE-REALISTIC (review SEV-3): a bow's AI rate is weaponData.speed x fCombatDPSBowSpeedMult = 0.2/s (iaus-i8-damage-research.md:106), hit ~20,
+        // top foe ~450 hp. The cost is on the TOP foe only, so a crowd behind it does not dilute it.
+        {
+            const auto real = [&](float a_share) {
+                Snapshot s = build(true, a_share);
+                s.self.hit = 20.0f; s.self.hitsPerSec = 0.2f;
+                for (auto& f : s.foes) f.hp = 450.0f;
+                return find(s);
+            };
+            const auto rb = real(1.0f), rn = real(0.0f);
+            Check(rb && rn && rb->f.handLost > 0.04f && rb->f.handLost < 0.15f, "hand lost (realistic): a 20 x 0.2/s bow on a 450 hp top foe costs a few percent of its time-to-kill");
+            if (rb && rn) {
+                const float sb = score(*rb), sn = score(*rn);
+                std::printf("  realistic row: no bow %.4f, bow %.4f (ratio %.3f)\n", static_cast<double>(sn), static_cast<double>(sb), static_cast<double>(sb / sn));
+                Check(sb > 0.0f && sb < 0.9f * sn, "hand lost (realistic): the channelled self buff scores at least 10% below the no-bow case and stays above 0");
+            }
+        }
         // a half share (a second weapon in the left hand) costs less than a bow
-        const auto half = find(build(true, 0.5f));
-        Check(half && half->f.handLost < bow->f.handLost && score(*half) > score(*bow), "hand lost: a left-hand second weapon costs less than a bow");
+        const auto half = [&] { Snapshot hs = build(true, 0.5f); hs.self.hit = 20.0f; hs.self.hitsPerSec = 0.2f; for (auto& f : hs.foes) f.hp = 450.0f; return find(hs); }();
+        const auto full = [&] { Snapshot fs = build(true, 1.0f); fs.self.hit = 20.0f; fs.self.hitsPerSec = 0.2f; for (auto& f : fs.foes) f.hp = 450.0f; return find(fs); }();
+        Check(half && full && half->f.handLost < full->f.handLost && score(*half) > score(*full), "hand lost: a left-hand second weapon costs less than a bow");
         Check(static_cast<std::size_t>(Cons::HandLost) == static_cast<std::size_t>(Cons::BoostSpellPerks) + 1 && RoleOf(Cons::HandLost) == Role::Shape && Name(Cons::HandLost) == "hand_lost",
               "hand lost: the consideration is APPENDED after spell_perks, a Shape, named hand_lost");
         Tuning tt = t; std::string why;
