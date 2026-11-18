@@ -3630,3 +3630,8 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** OffenseApproach.cpp:413 `static_cast<int>(offenseApproachDropCap)` is UB above INT_MAX (SetTuningScalar only rejects negative / non-finite): clamp before the cast or bound the scalar.
 - **(SEV-4):** CastOn.cpp:719-735 the Sightline-timed fallback also runs for IAUS followers whenever OwnOccludedAgeSec returns 0 (incl. a fresh not-occluded record): two readers of the bound (fails safe via the stamp min).
 - **Note:** with 8+ followers the occluded bound may never fire (Sightline 1 s freshness vs the lap): watch in the field.
+
+### fix/heal-timing (author notes, 2026-11-17, awaiting Opus review)
+- **(SEV-4, author):** the gross floor uses the attacker's estimate from ITS LAST lap (one lap stale; first hit of a new attacker has no floor, only the net drop).
+- **(SEV-5, author):** `kGrossWindowSec` 4 s / `kMaxHitWindowSec` 8 s and `t.dyingHitsToDown` / `t.urgencyHitsDiv` / `t.dyingAllyHp` are placeholders for the sim to search.
+- **(SEV-5, author):** a hit with no TESHitEvent (poison, cloak tick, script damage) is gross-counted by its net drop only and never enters `maxHit`.

@@ -1975,11 +1975,57 @@ namespace {
             Check(heal && heal->f.recipientSelf && !std::isfinite(heal->f.recipientTtl), "self dying: his own heal is flagged recipientSelf with the time-to-live unknown");
             if (heal) {
                 Candidate other = *heal; other.f.recipientSelf = false;
-                const float with = ScoreOne(*heal, Mind{}, Profile{}, t, 3, 0.0f, nullptr), without = ScoreOne(other, Mind{}, Profile{}, t, 3, 0.0f, nullptr);
+                Tuning tSelfOnly = t; tSelfOnly.dyingAllyHp = 0.0f;   // 11-17g: the ally fallback would boost the copy too; this row is about the SELF read
+                const float with = ScoreOne(*heal, Mind{}, Profile{}, tSelfOnly, 3, 0.0f, nullptr), without = ScoreOne(other, Mind{}, Profile{}, tSelfOnly, 3, 0.0f, nullptr);
                 Check(with > without * 1.3f, "self dying: his own heal at 15% health scores x1.4 with the dying boost (ttl unknown)");
                 Candidate hi = *heal; hi.f.recipientHp = 0.40f; Candidate hi2 = hi; hi2.f.recipientSelf = false;
-                Check(ScoreOne(hi, Mind{}, Profile{}, t, 3, 0.0f, nullptr) == ScoreOne(hi2, Mind{}, Profile{}, t, 3, 0.0f, nullptr), "self dying: at 40% health there is no boost");
+                Check(ScoreOne(hi, Mind{}, Profile{}, tSelfOnly, 3, 0.0f, nullptr) == ScoreOne(hi2, Mind{}, Profile{}, tSelfOnly, 3, 0.0f, nullptr), "self dying: at 40% health there is no boost");
             }
+        }
+        // 3b. 11-17g (field heal-timing): bursts and the gross incoming rate. Heal Other on the player (50 of 100).
+        {
+            const auto healOnPlayer = [&](const Snapshot& s) -> Candidate {
+                const auto gen = Generate(s, g, t);
+                for (const auto& c : gen.actions) if (c.form == 0x12FD2 && c.target == 0x14) return c;
+                return Candidate{};
+            };
+            const auto sc = [&](const Candidate& c) { return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr); };
+            Snapshot base = MageFight();
+            const Candidate c0 = healOnPlayer(base);
+            Check(c0.form == 0x12FD2 && !std::isfinite(c0.f.recipientHitsToDown), "burst: no hit seen = hits-to-down unknown (the pre-11-17g read)");
+            // the largest recent hit 60 of his 50 health: the next one downs him; 40: he has 1.25 left
+            Snapshot b60 = MageFight(); for (auto& a : b60.allies) if (a.isPlayer) a.maxHit = 60.0f;
+            Snapshot b40 = MageFight(); for (auto& a : b40.allies) if (a.isPlayer) a.maxHit = 40.0f;
+            const Candidate c60 = healOnPlayer(b60), c40 = healOnPlayer(b40);
+            Check(c60.form == 0x12FD2 && c60.f.recipientHitsToDown < 1.0f && c40.f.recipientHitsToDown > 1.0f, "burst: hits-to-down = health / the largest recent hit (50/60, 50/40)");
+            Candidate noBoost = c60; noBoost.f.recipientHitsToDown = 1.25f;
+            Check(sc(c60) > sc(noBoost) * 1.2f, "burst: an ally with one hit left to down him gets the dying boost with the time-to-live unknown");
+            // urgency: x = min(ttl / 10, hitsToDown / 3). 50/60 over 3 = 0.28 is the lower read; infinite ttl alone would be Off
+            Candidate lowH = c60; lowH.f.recipientHitsToDown = 1.5f; Candidate highH = c60; highH.f.recipientHitsToDown = 9.0f;
+            lowH.f.recipientTtl = highH.f.recipientTtl = kInf;
+            Check(sc(lowH) != sc(highH), "burst: the heal urgency reads hits-to-down when the time-to-live is unknown");
+            Candidate ttlOnly = c60; ttlOnly.f.recipientHitsToDown = kInf; ttlOnly.f.recipientTtl = 20.0f;
+            Candidate both = ttlOnly; both.f.recipientHitsToDown = 1.5f;
+            Check(sc(both) > sc(ttlOnly) || sc(both) == sc(ttlOnly), "burst: a close hits-to-down never lowers the heal below the time-to-live read alone");
+            // the ally fallback: under t.dyingAllyHp the boost fires with nothing known
+            Snapshot low = MageFight(); for (auto& a : low.allies) if (a.isPlayer) a.hp = 20.0f;
+            Snapshot mid = MageFight(); for (auto& a : mid.allies) if (a.isPlayer) a.hp = 40.0f;
+            const Candidate cl = healOnPlayer(low), cm = healOnPlayer(mid);
+            Candidate cl2 = cl; cl2.f.recipientHp = 0.40f;
+            Check(cl.form == 0x12FD2 && !cl.f.recipientSelf && sc(cl) > sc(cl2) * 0.0f && cm.f.recipientHp > t.dyingAllyHp, "burst: the ally fallback reads recipientHp, not recipientSelf");
+            Candidate hiA = cl; hiA.f.recipientHp = 0.30f;
+            Check(sc(cl) != sc(hiA), "burst: an ally under t.dyingAllyHp (20%) scores differently from one at 30% (the dying boost, he is not recipientSelf)");
+            // gross vs net: a heal stream cancels the observed loss; the gross rate does not
+            Snapshot gross = MageFight();
+            for (auto& a : gross.allies) if (a.isPlayer) { a.lossPerSec = 0.0f; a.grossPerSec = 25.0f; }
+            const Combatant* pcg = nullptr; for (const auto& a : gross.allies) if (a.isPlayer) pcg = &a;
+            Check(pcg && Estimate::IncomingOn(gross, *pcg) == 25.0f && Estimate::Ttl(pcg->hp, Estimate::IncomingOn(gross, *pcg)) == 2.0f,
+                  "gross rate: net loss 0 under a heal stream, gross 25 a second: the incoming rate is 25 and the time-to-live 2 s");
+            Snapshot netOnly = MageFight();
+            const Combatant* pcn = nullptr; for (const auto& a : netOnly.allies) if (a.isPlayer) pcn = &a;
+            Check(pcn && !std::isfinite(Estimate::Ttl(pcn->hp, Estimate::IncomingOn(netOnly, *pcn))), "gross rate: nothing measured stays unknown");
+            const Candidate cg = healOnPlayer(gross);
+            Check(cg.form == 0x12FD2 && cg.f.recipientTtl < 5.0f, "gross rate: the recipient's time-to-live comes from the gross rate (dying under 5 s)");
         }
         // 4. The line of fire.
         {

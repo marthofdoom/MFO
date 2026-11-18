@@ -13,7 +13,9 @@
 //   Combatant::hitIsMagic   the hit is a spell (armor does not apply)
 //   Combatant::armor        its physical mitigation, 0..1
 //   Combatant::magicResist  kResistMagic, points
-//   Combatant::lossPerSec   health it has been LOSING per second (observed: CombatSense)
+//   Combatant::lossPerSec   health it has been LOSING per second, net of heals (observed: Fills.cpp)
+//   Combatant::grossPerSec  health it has been HIT for per second, heals not subtracted (Fills.cpp, from the hit sink)
+//   Combatant::maxHit       the largest single hit it took lately (Fills.cpp)
 //   SpellEntry::damage/heal expected health damage / healing of one cast on an unresisting target, after perks
 // The formulas are the engine's (Docs/research/2026-11/iaus-i8-damage-research.md 2.1 - 2.4).
 //
@@ -71,7 +73,18 @@ namespace MFO::Iaus::Estimate {
             if (MustClose(f) && Apart(f, a_who) > strike) continue;
             sum += Dps(f, a_who);
         }
-        return (std::max)(sum, Pos(a_who.lossPerSec));
+        // 11-17g (field heal-timing): GROSS, not net. A stream of heals cancels lossPerSec (a drop of 30 after a heal of 30 reads 0), so the time-to-live of
+        // a recipient that was still being hit read "unknown" or far too long. grossPerSec is what the hits did before the heals.
+        return (std::max)(sum, (std::max)(Pos(a_who.lossPerSec), Pos(a_who.grossPerSec)));
+    }
+
+    // 11-17g (field Jesper: 172 -> 5.6 health in 0.13 s, the per-hit estimate 6x under): how many of the largest recent hit the recipient has health
+    // for. 1 = the next such hit downs him. kUnknown when no hit has been seen (the time-to-live is then the only fact). ONE reader: the dying boost and
+    // the heal urgency (Catalogue.cpp) both read it through Facts::recipientHitsToDown.
+    [[nodiscard]] inline float HitsToDown(float a_health, const Combatant& a_who) {
+        const float h = Pos(a_health), m = Pos(a_who.maxHit);
+        if (!(m > 0.0f)) return kUnknown;
+        return h / m;
     }
 
     // Seconds until a_health is gone at a_incoming per second. kUnknown when nothing is coming in.

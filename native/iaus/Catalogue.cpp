@@ -126,7 +126,7 @@ namespace MFO::Iaus {
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
         return !std::isnan(f.sinceFired) && !std::isnan(f.selfTtl) && !std::isnan(f.tauntTtl) && !std::isnan(f.playerTtl) &&
-               !std::isnan(f.recipientTtl) && !std::isnan(f.meleeThreatDist) && !std::isnan(f.threatTtl);
+               !std::isnan(f.recipientTtl) && !std::isnan(f.recipientHitsToDown) && !std::isnan(f.meleeThreatDist) && !std::isnan(f.threatTtl);
     }
 
     float EmergencyLevel(float worst, const Tuning& t) {
@@ -478,7 +478,8 @@ namespace MFO::Iaus {
             { "t.offClassBase", &Tuning::offClassBase }, { "t.groundCd", &Tuning::groundCooldownSec }, { "t.blockCd", &Tuning::blockCooldownSec }, { "t.bashCd", &Tuning::bashCooldownSec },
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
             { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },
-            { "t.spellCastSec", &Tuning::spellCastSec }, { "t.dyingSelfHp", &Tuning::dyingSelfHp }, { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // 11-17b: game only until the sim mirror   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
+            { "t.spellCastSec", &Tuning::spellCastSec }, { "t.dyingSelfHp", &Tuning::dyingSelfHp }, { "t.dyingAllyHp", &Tuning::dyingAllyHp }, { "t.dyingHitsToDown", &Tuning::dyingHitsToDown }, { "t.urgencyHitsDiv", &Tuning::urgencyHitsDiv },   // 11-17g: game only until the sim mirror
+             { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // 11-17b: game only until the sim mirror   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
             { "t.occClaimRelease", &Tuning::occludedClaimReleaseSec }, { "t.offApproachBackoff", &Tuning::offenseApproachBackoffSec }, { "t.sharedRadiusMargin", &Tuning::sharedRadiusMarginUnits }, { "t.preemptSettle", &Tuning::preemptFireSettleSec }, { "t.offApproachDropCap", &Tuning::offenseApproachDropCap },   // 11-17f: game only until the sim mirror
             { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
         };
@@ -832,7 +833,13 @@ namespace MFO::Iaus {
             // Off when nobody else is healing him: an input that is on counts toward n (the I4 rule), and a
             // constant 1.0 on every heal raised each heal's compensation (review of 303c14d, F4).
             case Cons::HealClaimed:         return f.recipientBeingHealed ? In(1.0f) : In::Off();
-            case Cons::HealUrgency:         return std::isfinite(f.recipientTtl) ? In(Clamp(f.recipientTtl / 10.0f, 0.0f, 1.0f)) : In::Off();
+            case Cons::HealUrgency: {
+                // 11-17g: the lower of the seconds-to-live read and the hits-to-down read (a burst downs him before the rate says so)
+                float x = kInf;
+                if (std::isfinite(f.recipientTtl)) x = f.recipientTtl / 10.0f;
+                if (std::isfinite(f.recipientHitsToDown) && t.urgencyHitsDiv > 0.0f) x = (std::min)(x, f.recipientHitsToDown / t.urgencyHitsDiv);
+                return std::isfinite(x) ? In(Clamp(x, 0.0f, 1.0f)) : In::Off();
+            }
             case Cons::GroundNeed: {
                 if (c.family != Family::GiveGround) return In::Off();
                 // BEATEN: what is hitting him now leaves him seconds (6 s and more = no need).
@@ -882,7 +889,10 @@ namespace MFO::Iaus {
             case Cons::BoostPlayerDying:    return B(std::isfinite(f.playerTtl) && f.playerTtl < 5.0f);
             case Cons::BoostRecipientDying:
                 // seconds to live under 5, or (11-17b, Jesper died from full health in one burst with no hit rate known) his OWN health under Tuning::dyingSelfHp
-                return B((std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f) || (f.recipientSelf && f.recipientHp < t.dyingSelfHp));
+                // 11-17g: or the next hit of the size he has been taking downs him (burst), or an ALLY's health under Tuning::dyingAllyHp (was his own only)
+                return B((std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f) || (f.recipientSelf && f.recipientHp < t.dyingSelfHp) ||
+                         (!f.recipientSelf && f.recipientHp < t.dyingAllyHp) ||
+                         (std::isfinite(f.recipientHitsToDown) && f.recipientHitsToDown <= t.dyingHitsToDown));
             case Cons::kCount:        break;
             }
             return In::Off();

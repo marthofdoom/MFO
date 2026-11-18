@@ -266,7 +266,9 @@ struct SpellEntry {
                                             // in each hand (the left one), 0 = a one-hander in the right hand, a staff, a spell or bare hands. Filled with `hit` (Fills.cpp)
         float armor = 0.0f;                 // its physical mitigation, 0..1
         float magicResist = 0.0f;           // kResistMagic, points
-        float lossPerSec = 0.0f;            // health it has been losing per second (observed)
+        float lossPerSec = 0.0f;            // health it has been losing per second (observed, NET of heals landing on it)
+        float grossPerSec = 0.0f;           // 11-17g: health it has been HIT for per second over the last Fills kGrossWindowSec, heals not subtracted (0 = none seen)
+        float maxHit = 0.0f;                // 11-17g: the largest single hit it took in the last Fills kMaxHitWindowSec, absolute health (0 = none seen)
         bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
