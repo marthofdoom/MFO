@@ -1323,7 +1323,10 @@ namespace MFO::Lotd {
                 // RemoveItem right after may free).
                 bool wornRight = false, wornLeft = false;
                 const InvSnap::Entry* ent = nullptr;
-                for (auto& [o, d] : InvSnap::Items(f)) {   // main thread: read live, in place
+                // CRASH FIX (Deck 11-17 19:07, AV here): the View OWNS the snapshot (InvSnapshot.h), so `ent` must not outlive it:
+                // keep the view alive past JudgeShip and the worn unequip below, which read through `ent`.
+                const auto fView = InvSnap::Items(f);   // main thread: read live, in place
+                for (auto& [o, d] : fView) {
                     if (!o || o->GetFormID() != it.base) continue;
                     have += d.first;
                     auto* e = d.second.get();
