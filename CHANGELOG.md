@@ -25,6 +25,21 @@ This is a real release on top of 2.11.1. It needs Harbinger v0.20.2 (ABI v45, un
 - **New opt-in probe `bStanceProbe`** in the INI. It only logs a follower's stance state, and it is off by default.
 - **The shipped tuning files carry the final 2.11.1 round.** All 15 class cells and the potion values are updated.
 
+## v2.11.6 -- Followers fight smarter, loot properly and find a way to the enemy
+
+Use it with Harbinger v0.20.5.
+
+- **Followers now reach enemies they cannot see or reach.** A follower whose enemy is behind a wall or up a tower keeps moving in until he can see it, and a melee fighter paths up the stairs to an enemy he cannot strike from below. Melee fighters prefer an enemy they can actually reach.
+- **Archers keep shooting.** A ranged follower keeps enemies in bow range in mind and shoots or retreats instead of standing idle. A class combat style is now set before a follower opens a fight himself, so a bow user no longer holds her bow without shooting.
+- **The party fights together.** A follower who cannot sense an enemy joins the fight through a teammate who is fighting it, inside your leash. Loot trips stop while anyone in the party is in combat.
+- **Casters pick better spells and heals.** Spells are now measured, so the stronger spell or heal wins instead of the cheapest one. A heal stops the moment its target is full. A caster no longer channels a heal while standing where he would die, and heals himself first when he is badly hurt. Casters stop picking a spell the line of fire guard will refuse.
+- **Melee reach is learned.** Each follower learns how far his weapon and his combo chains reach from his own hits and misses, so he knows which enemies he can hit from where he stands. The learning is on by default.
+- **Looting no longer ignores items or stops and starts.** A guard check that had not answered yet used to drop every item in a place with no guards. It now waits for the answer. Museum items are taken right away. Corpses of enemies that attacked you can be looted in town (the crime check still applies), and a corpse a guard is watching is skipped by the whole party instead of being visited again and again.
+- **Museum deposits are fixed.** A deposit could crash the game, and some items were planned for the crate but never moved. Both are fixed, and any item left behind now says why in the log.
+- **No more false off-class weapon warnings** when a follower briefly holds a museum weapon while loading in.
+- **Retreats that do not move give up quickly,** and a paused game no longer counts against a retreat.
+- **Thread safety.** MFO now reads the game's own main thread id, so the first load of a session is no longer treated as off the main thread.
+
 ## v2.11.5 -- Stability: every engine change MFO makes now happens on the game's main thread
 
 This is a stability release. It needs Harbinger v0.20.4. No new co-save record and no change to your saves.
