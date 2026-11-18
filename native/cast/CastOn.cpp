@@ -9,6 +9,7 @@
 #include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "iaus/Candidates.h"   // OwnOccludedAgeSec: the occluded-claim bound reads the picker's own record
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
@@ -693,6 +694,45 @@ namespace MFO::Actuation {
                             }
                             return { Result::FailedOther,
                                      "pure-Script offense claim never fired: released, held off this fight", true };
+                        }
+                    }
+                }
+                // ── AN OFFENSE CLAIM ON A FOE HE CANNOT SEE IS BOUNDED (field 11-17f, Jesper "spell stuttering") ──────────────────────────
+                // The refresh below renews a standing claim in place WITHOUT asking whether its target is in sight, so Ice Spike + Elemental Flare on
+                // an occluded foe were renewed for ~75 s, both hands locked, the seat's CheckStartCast answering NO every ~1.6 s, while visible foes,
+                // a buff and a reposition were never reached. The one reader of how long his OWN ray to the foe has read Occluded without a break is
+                // the picker's (Candidates::OwnOccludedAgeSec); past Tuning::occludedClaimReleaseSec the claim is RELEASED, loudly, and the pair is held
+                // off while he still reads Occluded (g_unsightedCharge, the twin of the charged bound above), so the next lap picks another foe, a buff or a
+                // reposition. Skipped while a fire was observed within the same window (a cast that is landing is not stuck). Never a direct cast.
+                if (offenseSpell && a_target && a_target != a_follower && (handPlan.left || handPlan.right)) {
+                    const float limit = Iaus::DefaultTuning().occludedClaimReleaseSec;
+                    const float age   = limit > 0.0f ? Iaus::Candidates::OwnOccludedAgeSec(id, a_target->GetFormID()) : 0.0f;
+                    if (limit > 0.0f && age >= limit) {
+                        const std::size_t hands[2]  = { kHandLeft, kHandRight };
+                        const bool        planned[2] = { handPlan.left, handPlan.right };
+                        bool fired = false;
+                        for (int i = 0; i < 2 && !fired; ++i)
+                            if (planned[i])
+                                fired = ComposedCast::ObservedFiring(id, hands[i] == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                                                : APMFBridge::kApmfHandRight,
+                                                                     a_spellID, static_cast<std::uint32_t>(limit * 1000.0f));
+                        if (!fired) {
+                            spdlog::warn("[cast] {:08X} offense cast {:08X} at {:08X} RELEASED: his own ray to the foe has read OCCLUDED for {:.1f} s "
+                                         "without a break (bound {:.1f} s, Tuning::occludedClaimReleaseSec) and nothing fired -- the claim would be "
+                                         "renewed forever; the pair is held off until he reads visible so the next lap picks another foe, a buff or a "
+                                         "reposition (rule {})",
+                                         id, a_spellID, a_target->GetFormID(), age, limit, g_firingRule);
+                            APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
+                            for (int i = 0; i < 2; ++i) {
+                                if (!planned[i]) continue;
+                                ClearCastLockHand(id, hands[i]);
+                                ComposedCast::ClearWatchHand(id, i == 0 ? APMFBridge::kApmfHandLeft
+                                                                        : APMFBridge::kApmfHandRight);
+                            }
+                            g_unsightedCharge[id] = { a_spellID, a_target->GetFormID() };
+                            return { Result::FailedOther,
+                                     "offense claim released: its foe has been out of sight past the occluded-claim bound",
+                                     true };
                         }
                     }
                 }

@@ -13,6 +13,7 @@
 // file-local in its module.
 
 #include "PCH.h"
+#include "iaus/Core.h"             // Iaus::DefaultTuning: the shared-radius margin, the occluded-claim release
 #include "iaus/EffectMirror.h"       // INVARIANTS #84: active-effect reads through the main-built mirror
 #include "logistics/InvSnapshot.h"   // INVARIANTS #84: inventory reads through the main-built snapshot
 #include <map>
@@ -97,6 +98,17 @@ namespace MFO::Actuation {
         // (kHealLosAgreeingReadings' note) and well under the 6.5 s bound. Time, not Harbinger's per-pair OccludedRun,
         // because that run does not reset on a new claim. NeverFiredRelease only.
         inline constexpr long long kHealLosReleaseMs = 8 * 250;
+
+        // THE ONE SHARED-RADIUS REACH TEST of a heal / buff recipient (field 11-17f, Jesper: five heal claims, no fire, in 3 s on an ally at the radius
+        // edge: the picker named him inside fSharedRadius and MaintainCompanion released him at the same line, one lap apart). Both read it: a NEW recipient
+        // is named only inside fSharedRadius (a_standing = false); the recipient of a STANDING claim is kept out to fSharedRadius +
+        // Tuning::sharedRadiusMarginUnits (`t.sharedRadiusMargin`, placeholder). Origin = the caster's position, metric = the 3-D distance, for both.
+        inline bool WithinSharedRadius(const RE::Actor* a_from, const RE::Actor* a_to, bool a_standing) {
+            if (!a_from || !a_to) return false;
+            const float reach = Config::g_sharedRadius.load() +
+                                (a_standing ? (std::max)(0.0f, Iaus::DefaultTuning().sharedRadiusMarginUnits) : 0.0f);
+            return a_from->GetPosition().GetDistance(a_to->GetPosition()) <= reach;
+        }
 
         // ONE source of truth for the concentration STREAM TIME-CAP (marth: loose,
         // human timing -- each stream lasts a slightly different, RANDOMIZED duration

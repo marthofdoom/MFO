@@ -284,6 +284,20 @@ namespace MFO::Iaus {
         // 11-17b: how long a (spell, foe) pair whose line of fire had a party member in it stays refused after the line cleared (a friendly stepping across the
         // line would otherwise flip the pick every lap). PLACEHOLDER: `t.fireLineKeepSec`.
         float fireLineKeepSec = 1.0f;
+        // 11-17f (field Jesper, "spell stuttering"): how long a standing claim may aim at a target his OWN ray has read Occluded without a break before it is
+        // RELEASED (an offense claim on a foe: cast/CastOn.cpp; a heal on a recipient: cast/HealRoad.cpp HealOccludedBound). The same 4 s as occlusionHoldSec
+        // (the pick's keep-current-attack hold), so the claim and the pick give up on an unseen target on the same clock. 0 = off. PLACEHOLDER: `t.occClaimRelease`.
+        float occludedClaimReleaseSec = 4.0f;
+        // 11-17f: how long a foe whose ch.24 approach ended ENGINE DROPPED (its own path to him failed) waits before the approach is filed again (apmf/OffenseApproach.cpp;
+        // it used to be blocked for the whole fight). Sized past the 3 s tightening gap so a path that failed from this spot is retried from another. PLACEHOLDER: `t.offApproachBackoff`.
+        float offenseApproachBackoffSec = 6.0f;
+        // 11-17f: how far past fSharedRadius the recipient of a STANDING heal / buff claim is kept before it is released (cast/Actuation_internal.h WithinSharedRadius):
+        // the picker names a NEW recipient only inside the radius, so a claim is not released and re-named one lap apart at the edge. World units, 10% of the default
+        // 3000. PLACEHOLDER: `t.sharedRadiusMargin`.
+        float sharedRadiusMarginUnits = 300.0f;
+        // 11-17f: a hand is not taken from its incumbent within this long of an observed fire on it (cast/Hands.cpp CanPreemptHand): the take in the same frame as the
+        // fire was read as the taker's own cast and threw away the next charge. About two service laps. 0 = off. PLACEHOLDER: `t.preemptSettle`.
+        float preemptFireSettleSec = 0.25f;
         // KITE (RetreatDanger): a follower who fights at range backs off from a foe that has to close once it is inside this
         // distance, by how little he could afford the trade. 0 = off (the default until the lab shows a gain on every list).
         float kiteDistance = 0.0f;

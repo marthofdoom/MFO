@@ -479,6 +479,7 @@ namespace MFO::Iaus {
             { "t.backOffCd", &Tuning::backOffCooldownSec }, { "t.stepCd", &Tuning::stepCooldownSec }, { "t.regroupCd", &Tuning::regroupCooldownSec },
             { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec },
             { "t.spellCastSec", &Tuning::spellCastSec }, { "t.dyingSelfHp", &Tuning::dyingSelfHp }, { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // 11-17b: game only until the sim mirror   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
+            { "t.occClaimRelease", &Tuning::occludedClaimReleaseSec }, { "t.offApproachBackoff", &Tuning::offenseApproachBackoffSec }, { "t.sharedRadiusMargin", &Tuning::sharedRadiusMarginUnits }, { "t.preemptSettle", &Tuning::preemptFireSettleSec },   // 11-17f: game only until the sim mirror
             { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }

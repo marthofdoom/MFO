@@ -50,6 +50,12 @@ namespace MFO::Iaus::Candidates {
     // answered No stays on the list while the refusal stands (Generate.h NextAskList, sim finding D1).
     void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands);
 
+    // WORKER. THE ONE READER of how long a_self's OWN ray to a_foe has read Occluded without a break (the same record Gather feeds
+    // the picker's los term and keep-current-attack hold with, Snapshot Combatant::occludedSec). 0 = not occluded, never
+    // gathered, or not fed within a_freshSec (a stale record is no age). The cast layer's claim bound reads this, so the claim and the pick
+    // can never disagree about how long a foe has been unseen.
+    float OwnOccludedAgeSec(RE::FormID a_self, RE::FormID a_foe, float a_freshSec = 3.0f);
+
     // WORKER. The fight ended for a_follower (his combat clock restarts at the next Gather) / he was dismissed
     // or his IAUS toggle went off.
     void CombatEnded(RE::FormID a_follower);

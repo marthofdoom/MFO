@@ -1755,6 +1755,15 @@ holds that are in no actor-value perk tree and classifies them; copies nothing t
 
 **2026-11-11, `feat/g2-hide-layer1` (NOT merged, NOT field-run, card G2 Layer 1):** hide-when-unseen with NO engine seat. The foe's own combat-group record of the follower is READ (`iaus/Hide.cpp`) into the IAUS gather; a Sneak-family hold row and a blow-from-stealth boost use it; passive `[stealth-probe]` lines (INI `[Debug] bStealthProbe`, default 0) log the follower's detection inputs (P1), each foe's view of him (P2) and every sneak hit with the Q87 per-weapon aggregate (P3). `bSneakInCombat` stays default OFF, so none of it acts in combat until the P1 field check flips it. In-game steps: `Docs/research/2026-11/class-build-plan.md` card G2.
 
+### 2026-11-17 -- `fix/cast-stutter` (NOT merged, NOT field-run): Jesper's "spell stuttering", code half
+
+Diagnosis: `agentlogs/diag-stutter-1117f.md`. Four bounds, each a row in the one IAUS tuning table (placeholders, game only until the sim mirror): an offense claim on a foe unseen
+past `t.occClaimRelease` (4 s) is released loudly and the pair held off (a ~75 s double-hand lock in the field); a heal on an unseen recipient likewise (`HealOccludedBound`, the
+two 14 s Charged heals behind a STAT); an approach ended ENGINE DROPPED is retried after `t.offApproachBackoff` (6 s) instead of blocked for the fight; heal claims keep their
+recipient to the shared radius + `t.sharedRadiusMargin` (300), one shared reader for picker and maintainer; no preempt within `t.preemptSettle` (0.25 s) of a fire, and no
+boundary preempt of a non-heal incumbent by a non-heal asker. Harbinger asks (not done here): self Frost Cloak never charges (ClickUp 1dfcuabdb2u?), OOC substrate Candlelight
+15/16 closed-unfired. Sim mirror items (tools/iaus_sim untouched): the four new scalars, the occluded-claim release in the sim's claim model. Buff churn tuning knobs left alone: `t.momentum`, `t.preempt`, `t.softCd`.
+
 ### Next actions
 
 1. Cut the APMF release that carries `ed637fe` + `8daa27f` (both are already on APMF

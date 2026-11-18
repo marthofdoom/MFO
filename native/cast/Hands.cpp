@@ -614,6 +614,30 @@ namespace MFO::Actuation {
                     }
                 }
             }
+            // 11-17f (field Jesper, buff churn): NEVER PREEMPT IN THE SAME FRAME AS A FIRE. A hand taken the instant its incumbent fired reads, to the
+            // fire watch and the attribution, as the taker's own cast ("their own spell" 19:44:54.231) and throws away the next charge before it began. Within
+            // Tuning::preemptFireSettleSec (`t.preemptSettle`, placeholder; 0 = off) of an observed fire on this hand the asker waits a lap. An urgent heal is
+            // exempt (a life outranks an attribution). Not a tenure: it is one lap, and the fire is what starts it.
+            if (!a_urgentHeal) {
+                const float settle = Iaus::DefaultTuning().preemptFireSettleSec;
+                if (settle > 0.0f) {
+                    const std::int32_t apmfHand = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
+                                                                        : APMFBridge::kApmfHandRight;
+                    if (ComposedCast::ObservedFiring(fid, apmfHand, a_lock.spell,
+                                                     static_cast<std::uint32_t>(settle * 1000.0f))) {
+                        static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_settleLog;   // worker-serial (#4); throttle
+                        auto& last = s_settleLog[(static_cast<std::uint64_t>(fid) << 8) ^ static_cast<std::uint64_t>(g_firingRule & 0xFF)];
+                        const auto nowT = std::chrono::steady_clock::now();
+                        if (nowT - last >= std::chrono::seconds(2)) {
+                            last = nowT;
+                            spdlog::info("[eval] {:08X} rule {} waits a lap: incumbent rule {} (spell {:08X}) fired within the last {:.0f} ms, so the hand is "
+                                         "not taken in the same frame as the fire (Tuning::preemptFireSettleSec)",
+                                         fid, g_firingRule, a_lock.owningRule, a_lock.spell, settle * 1000.0f);
+                        }
+                        return false;
+                    }
+                }
+            }
             if (!CastInFlightOnHand(a_follower, a_hand, a_lock.spell, CastProxyOnHand(fid, a_hand))) {
                 g_preemptWhy[a_hand] = "the caster was idle between casts";
                 return true;
@@ -657,7 +681,17 @@ namespace MFO::Actuation {
             if (a_lock.waiterRule == g_firingRule) a_lock.waitLast = now;
             if (a_lock.waiterRule != g_firingRule) return false;   // a higher rule is already waiting
             const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(now - a_lock.waitSince);
-            if (waited.count() > 0) {
+            // 11-17f (field Jesper, buff churn): a NON-HEAL asker does not take the hand at the charge boundary from a NON-HEAL incumbent whose caster is
+            // Charging or Charged (CastInFlightOnHand, true here: the idle case returned above). The boundary exists for the heal starved behind a back-to-back
+            // offense (field 2026-09-29); a buff or offense over a buff or offense only throws the next charge away. The WAIT CAP below stays the floor.
+            bool nonHealPair = false;
+            {
+                auto* askSp = RE::TESForm::LookupByID<RE::SpellItem>(a_askerSpell);
+                auto* incSp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+                nonHealPair = askSp && incSp && CasterConsent::ClassifySpell(askSp) != CasterConsent::SpellKind::Heal &&
+                              CasterConsent::ClassifySpell(incSp) != CasterConsent::SpellKind::Heal;
+            }
+            if (waited.count() > 0 && !nonHealPair) {
                 const std::int32_t apmfHand = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
                                                                     : APMFBridge::kApmfHandRight;
                 if (ComposedCast::ObservedFiring(fid, apmfHand, a_lock.spell,

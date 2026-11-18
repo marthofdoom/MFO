@@ -2479,6 +2479,21 @@ namespace {
     }
 }
 
+// field 11-17f (Jesper, "spell stuttering"): the cast-delivery bounds are rows of the one tuning table. The bounds themselves live in the cast layer
+// (CastOn / HealRoad / Hands / OffenseApproach, engine-bound), so what this checks is the table: shipped values, `t.<name>` setters, and the range guard.
+void CastStutterRows() {
+    std::printf("\n=== field 11-17f: cast-delivery bound rows ===\n");
+    Tuning t = ShippedTuning();
+    Check(t.occludedClaimReleaseSec == t.occlusionHoldSec, "occluded-claim release: ships at the pick's own occlusion hold, so claim and pick give up together");
+    Check(t.offenseApproachBackoffSec > 3.0f && t.sharedRadiusMarginUnits > 0.0f && t.preemptFireSettleSec > 0.0f, "shipped rows are on (placeholders)");
+    std::string why;
+    Check(SetTuningScalar(t, "t.occClaimRelease", 7.0f, &why) && t.occludedClaimReleaseSec == 7.0f, "t.occClaimRelease sets occludedClaimReleaseSec");
+    Check(SetTuningScalar(t, "t.offApproachBackoff", 9.0f, &why) && t.offenseApproachBackoffSec == 9.0f, "t.offApproachBackoff sets offenseApproachBackoffSec");
+    Check(SetTuningScalar(t, "t.sharedRadiusMargin", 150.0f, &why) && t.sharedRadiusMarginUnits == 150.0f, "t.sharedRadiusMargin sets sharedRadiusMarginUnits");
+    Check(SetTuningScalar(t, "t.preemptSettle", 0.0f, &why) && t.preemptFireSettleSec == 0.0f, "t.preemptSettle 0 = off");
+    Check(!SetTuningScalar(t, "t.occClaimRelease", -1.0f, &why), "a negative bound is refused");
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -2503,6 +2518,7 @@ int main() {
     SpellPerkRows();
     HandLostRows();
     Field1117bRows();
+    CastStutterRows();
     BuffPotions();
     ConsumablesWorth();
     LootNeedScores();

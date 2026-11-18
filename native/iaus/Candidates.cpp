@@ -82,15 +82,19 @@ namespace MFO::Iaus::Candidates {
         // Q93). Each basis has its own age: a candidate reads the age of the ray it reads (Generate's Foe: the engine ray
         // for a melee swing). Worker only (the gather runs on the serial pump job). Returns seconds occluded without a
         // break, 0 = not. The hold's expiry is logged once per occlusion, for the foe he is on.
+        // `last` = the lap this record was last fed (OwnOccludedAgeSec reads it for freshness).
+        struct OccRec { std::chrono::steady_clock::time_point since; std::chrono::steady_clock::time_point last; bool logged = false; };
+        std::unordered_map<std::uint64_t, OccRec> g_occBasis[2];
+
         float NoteOcclusion(RE::FormID a_self, RE::FormID a_foe, bool a_engine, bool a_occluded, bool a_current, float a_holdSec) {
-            struct Rec { std::chrono::steady_clock::time_point since; bool logged = false; };
-            static std::unordered_map<std::uint64_t, Rec> g_occBasis[2];
+            using Rec = OccRec;
             auto& occ = g_occBasis[a_engine ? 1 : 0];
             const std::uint64_t key = (static_cast<std::uint64_t>(a_self) << 32) | a_foe;
             if (!a_occluded) { occ.erase(key); return 0.0f; }
             if (occ.size() > 512) occ.clear();
             const auto now = std::chrono::steady_clock::now();
-            auto [it, fresh] = occ.try_emplace(key, Rec{ now, false });
+            auto [it, fresh] = occ.try_emplace(key, Rec{ now, now, false });
+            it->second.last = now;
             const float sec = std::chrono::duration<float>(now - it->second.since).count();
             if (a_current && !it->second.logged && sec >= a_holdSec) {
                 it->second.logged = true;
@@ -654,6 +658,15 @@ namespace MFO::Iaus::Candidates {
         Fills::ForgetReach(a_follower);   // review F5a: his published reach goes with the fight
         g_fireRefused.erase(a_follower);               // 11-17b
         Actuation::NoteHealerThreat(a_follower, false);
+    }
+
+    float OwnOccludedAgeSec(RE::FormID a_self, RE::FormID a_foe, float a_freshSec) {
+        const auto& occ = g_occBasis[0];
+        const auto  it  = occ.find((static_cast<std::uint64_t>(a_self) << 32) | a_foe);
+        if (it == occ.end()) return 0.0f;
+        const auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration<float>(now - it->second.last).count() > a_freshSec) return 0.0f;   // not fed lately: no age to speak of
+        return (std::max)(std::chrono::duration<float>(now - it->second.since).count(), 1.0e-3f);
     }
 
     void Forget(RE::FormID a_follower) { CombatEnded(a_follower); }

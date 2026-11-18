@@ -491,8 +491,6 @@ namespace MFO::Actuation {
                     if (m == a_follower) {
                         if (!selfOk) return;
                     } else {
-                        if (selfPos.GetDistance(m->GetPosition()) > radius) return;
-                        sightWant.push_back(m->GetFormID());
                         // The STANDING claim's recipient is judged for reach only (marth
                         // 2026-09-30b: line of sight never drops it, the heal waits charged).
                         // EITHER hand's standing claim (feat/mfo-perhand-heal).
@@ -500,6 +498,10 @@ namespace MFO::Actuation {
                         for (const std::int32_t h : { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight })
                             incumbent = incumbent || (APMFBridge::GetHealCastSpell(id, h) == a_spellID &&
                                                       APMFBridge::GetHealCastTarget(id, h) == m->GetFormID());
+                        // THE SHARED RADIUS TEST (WithinSharedRadius, with MaintainCompanion's release): the standing claim's
+                        // recipient is kept out to radius + margin, a new one is named only inside radius (no flap at the edge).
+                        if (!WithinSharedRadius(a_follower, m, incumbent)) return;
+                        sightWant.push_back(m->GetFormID());
                         if (incumbent ? HealRecipientUnreachable(a_follower, m, spell)
                                       : (!HealInReach(a_follower, m, spell) ||
                             Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==

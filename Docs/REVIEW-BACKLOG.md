@@ -3613,3 +3613,9 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **OPEN (SEV-5):** a perk-voted dual wielder's pre-entry melee style is the single-weapon flavour (EngageOnSight has no FollowerState for `CombatStyleFor`); the fight's Want re-points it.
 - **OPEN (SEV-4):** a through-teammate join sets the entry's engage range to the LEASH; Harbinger's range drop is then the leash, so a foe the teammate fights far from the joiner can pull him a long way (marth ruling 11-17: within the leash). Tune the reach if the field shows over-chasing.
 
+**fix/cast-stutter (2026-11-17, author notes, no review yet):**
+- OPEN (SEV-4): the occluded-claim bound covers OFFENSE claims (CastOn) and HEAL claims (HealRoad); a buff claim aimed at an occluded ally is bounded only by BuffRoad's own never-fired bound.
+- OPEN (design): the heal-claim expiry sweep (apmf/Bridge.cpp) still ends a heal nobody refreshes while the rule is "asking" (matched/asked skips in `HealSustainLap`); the root cause of the unrefreshed claim was not traced, only its sight half is bounded.
+- OPEN (sim): `tools/iaus_sim` mirror not done for `t.occClaimRelease`, `t.offApproachBackoff`, `t.sharedRadiusMargin`, `t.preemptSettle`.
+- OPEN (Harbinger): self Frost Cloak never charges; OOC substrate Candlelight closed-unfired 15/16 (ClickUp 1dfcuabdb2u?).
+
