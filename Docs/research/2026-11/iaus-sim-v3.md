@@ -541,6 +541,8 @@ Both baselines are regenerated (`baseline_builtin.txt`, `baseline_v3_builtin.txt
 
 ## 14. The oracle under the standing tuning rule (feat/oracle-unbounded, 2026-11-17)
 
+**Read 14.10 first.** Sections 14.1 to 14.9 are the first round (d8b686a7) and keep its numbers as the record. 14.10 is the fix round after the Opus review and marth's rulings of the same day. It changes the oracle (random streams per actor, cooldowns, hide and flee, the sprint away) and re-measures everything. Where 14.10 and an earlier subsection disagree, 14.10 is the oracle that ships.
+
 marth, 2026-11-17, verbatim: "as a standing tuning rule the Oracle gets as many tries as it wants for the best class based decisions. The tuning then follows the Oracle as its guide. The Oracle only has the classes abilities at its disposal". And the goal: "The goal is that a classes tune will be the actual best possible class behavior".
 
 Code: `tools/iaus_sim/Oracle.h` (the search, the class filter), `sim.cpp` (the gap pass prints), `tune_driver.py` (the tables of the extended set), `Playstyles.h` (the survival bounds). No native change.
@@ -553,7 +555,7 @@ Code: `tools/iaus_sim/Oracle.h` (the search, the class filter), `sim.cpp` (the g
 | Decision points | at most one every 0.4 s. With three followers a lap is 0.399 s, so every second lap was skipped | every time the pump serves him with his body free (`every = 0`). That is every decision point the game has: `kPumpMs` 133 ms times the followers |
 | Rollout length | 150 s | to the fight's end. 150 s is `Fight::maxSec`, so this was already true. It is now stated and `RunFor` no longer depends on the number |
 | Streams per option | 8, fixed | 8, then 16, 32, 64, 128. After each round an option is dropped once the best option's paired lead over it passes a one-sided Student-t bound at p = 0.001. The race ends when one option stands or at the safety ceiling of 128 |
-| Random streams | shared by all options | unchanged. Stream k has one seed for every option |
+| Random streams | shared by all options | first round: unchanged. Fix round (14.10): one stream per actor and draw site inside a rollout |
 | Class rulings | off unless `--class-oracle` | on for every oracle. `--no-class-rulings` is a labelled diagnostic |
 | Automatic gap pass of a results file | a cut oracle (K = 6, 90 s) | the same oracle as everywhere |
 | What IAUS's pick costs (the ledger's dU) | difference of two means | the paired lead on the streams both options ran |
@@ -773,3 +775,114 @@ Gap on these fights (every follower planned, 160 fights): mage +11.22 (se 2.17),
 - Determinism: a gap run with `--threads 1` and with 16 prints the same `GAPFIGHT`, `GAPSIT`, `GAPGEN`, `GAPDEC`, `ORCSURV`, `ORCSTOP` and `ORCREFUSED` lines. Only the wall-clock `decide_us` column of the class table differs, as it does on main.
 - `--world v2` with the class oracle runs and passes its fact checks.
 - No `cat:` refusal on any of the 1,280 measured fights: the generator leaks no candidate past the class gate.
+
+### 14.10 The fix round (Opus review of d8b686a7, marth's rulings of 11-17)
+
+marth's rulings, verbatim: ceiling "128 + fix the noise". "Bash/block cooldowns bind". "Hide/flee gates bind". "It may disengage whenever it wants. That's not flee for its purposes".
+
+**Random streams per actor (the noise fix).** `World.h Fight::split`. A real fight draws from its two streams in world order, exactly as before, so no fight and no baseline moves (the regenerated baselines differ in U lines only, see F3). Inside an oracle rollout every draw comes from a stream of its own per (actor, draw site): the n-th draw of that actor at that site is the same number in every option's rollout of one stream index. There are 36 draw sites (24 of the base world, 12 of v3), each with a fixed number. The actor is the body the draw belongs to: the one who dodges, blocks, thinks, aims, picks a target. What an option does not touch therefore plays out the same in both rollouts, and the paired test compares the options on their own consequences. The streams are 8 bytes of state each (a splitmix counter), created on first use. `--oracle-shared-stream` brings the single stream back as a labelled diagnostic.
+
+**What changed in the action set.**
+
+| Item | Before (d8b686a7) | Now |
+|---|---|---|
+| `ext:block` (review F2, "cooldowns bind") | any blade, the lab's own 1.5 s guard, the rest only | only a class with a Block default row (`ClassGate::block`, as `Generate.cpp:291`). It IS that row's guard: `Fire` of the Block family (the Harbinger hold of 2.5 s, its renewal, its 1.5 s rest), under the row's cooldown (`blockCooldownSec`, else the tuning's), written to the same cooldown slot the catalogue's Block candidate uses. What the oracle keeps: it may raise the guard when it wants. The generator offers it only against a coming swing or on the guard line |
+| `ext:bash` ("cooldowns bind") | no cooldown | `Tuning::bashCooldownSec`, in the Bash family's own slot, and 20 stamina as `Fire` asks |
+| `ext:hide`, `ext:flee` ("gates bind", review F4) | the oracle's own ungated runs (anyone in stealth and detected, anyone under 60 % with a foe on him) | not offered. The game's runs are the catalogue's Disengage candidates behind the game's own gates (a sneak class a foe has found. 30 % health and threatened, tree ON, no sneak class) and the oracle takes those. The two names stay in the tables for old logs |
+| `ext:sprint_back` ("it may disengage whenever it wants") | movement, anyone | only a class with the disengage flag. No situation gate |
+| Targets of an extended action (review F5) | one or two picked for him: the nearest foe to step away from, the strongest foe and the foe on the player for a scroll, a heal scroll only under 70 %, the first healer, a guard only against the foe on him, a bash only at a caster or the foe on him | every target: a step and a sprint away from each foe within 900 units, a scroll at every foe it can work on that he sees and at every hurt friend, every healer, a bash at every foe in reach, a guard with no target |
+
+**What is still part of the model, declared (review F5):**
+
+- The catalogue's candidates are the game's: the generator works on the game's own foe list, which keeps the top five foes (`Prune::kTopFoes`). The oracle sees what the game's snapshot gives.
+- A step or a sprint away needs a foe within 900 units to move away from. A move to the player or a healer needs him to be 350 or 300 units from them. These are "there is something to do" conditions, not choices.
+- `ext:get_sight` and `ext:clear_line` act on the foe he is fighting. They move him to a line on his target. Another target is the Attack candidate's job.
+- A rollout holds an option for 2.5 s and the search is one step deep (14.1).
+- The incumbent rule: the action he is on wins when the race has not dropped it and it is within 0.3 U of the best mean.
+
+**Review fixes.**
+
+- F1: a divergence is logged in the gap ledger only when the race DROPPED IAUS's pick. Before, a pick still standing (not told apart from the oracle's) was logged too. The reviewer measured 45 of 194 logged disagreements and 20 % of their cost in that state.
+- F2, F4, F5: the table above.
+- F3: `Utility` paid every follower for magicka left, so a Knight was paid for a pool he cannot use and his magicka potion (worth 0 in `PotionWorth.h`) was free utility. The term is now 1 for a follower with no class spell he may cast (`Oracle.h Casts`). This touches J. Both baselines are regenerated: only U lines changed, 88 of 17,176 lines in v2 and 89 of 17,178 in v3, by +0.01 to +0.13 U (the largest: archer and thief +0.13 and +0.12 in one bracket. Per class mean +0.01 to +0.07). The three exact pins of the CLI checks run with the legacy potion rate, which keeps its own raw term, and did not move. Open: the potion-worth tables were measured with the old term, so a non-caster's magicka row should be re-measured by the driver's prep stage before the retune reads it.
+- F6 (not fixed, stated): an option can be dropped after 8 streams by a test that assumes a roughly normal paired difference, and the looks at 8, 16, 32, 64 and 128 are not corrected for multiplicity. Utility differences have a heavy tail (a down, a player death). So a small share of early drops are wrong. The bound is p = 0.001 per look to keep that share small. No measurement of it exists.
+- F7 (stated): the survival bounds of 14.8 and below are measured with EVERY follower planned by the oracle, not the subject only. The companions are oracle-planned too, so the subject is better protected than he would be beside IAUS companions. The gap stage's own runs are subject only.
+- F8 (stated): with `--oracle-every` (a diagnostic throttle) a sneak hold lasts until his next decision. Two options with the same outcome on every stream are treated as one (the later is dropped). `edge_search.py:99` writes the same small oracle report run as the driver's `emit_run` and so also runs the new oracle.
+- `tune_driver.py FIDELITY` is empty now: no extended action is better than the game's any more, so no divergence is classified (d). A bash the Bash family did not offer is (b) or (c) by the generic rule.
+
+## 15. Incoming damage on followers: the field against the lab (2026-11-17)
+
+marth, verbatim: "Healing seems to come too late ... If it's the same timing a restoration class would have, it's way too late" and "Which tells me the sim is wrong with incoming damage rates or something".
+
+Tools: `tools/iaus_sim/calib_damage.py <run-dir> ...` reads the field side. `sim --damage-report N [--damage-bracket <name>] [--list <world>]` computes the same numbers in the lab. Sources: `_evidence/deck-run-1117/part4`, `deck-run-1117b-full`, `deck-run-1117f` (three Deck sessions of 11-17, the same three followers: Cicero melee, Adelinda ranged, Jesper mage, level 45 and 46).
+
+### 15.1 What the logs hold
+
+No per-hit damage line exists in two of the three sessions. What every session has:
+
+- `[sense]`, one line per follower about every 3.3 s: `hpLoss` is `Confidence::HpLossRate`, the NET health fraction lost over the last 5 s, the loss CAPPED at 25 % of his maximum. It tops out at 5.0 %/s. A one-hit kill reads 5.0. The lab computes the same capped number, so the columns compare.
+- `[bleed] DOWN (essential down ...)`. Four lines that read `DOWN (?(9); ...) hp 100%` are life state 9, which the log itself says is not a down. They are not counted.
+- Health points of heal recipients (`[heal-obs]`, the `recipient_hp` fact).
+
+Only `deck-run-1117f` has the fill probe's hit lines (`[iaus-fill] hit`, `bIausFillProbe`): 140 lines, 39 of them a foe's hit on a follower, one fight.
+
+Not in any log: a foe's level, who a foe is attacking, a follower's maximum health. So incoming damage per foe class and level, which the brief asked for, cannot be measured from these sessions. What can be measured is below.
+
+### 15.2 Field numbers
+
+| | n | |
+|---|---|---|
+| In-combat samples (own combat flag, foes > 0) | 749 | 40.0 follower-minutes |
+| Share of samples losing health, all | 749 | 10.1 % |
+| at 1 to 2 foes | 371 | 4.9 %, mean 0.11 %/s |
+| at 3 to 4 foes | 252 | 10.3 %, mean 0.17 %/s |
+| at 5 or more foes | 126 | 25.4 %, mean 0.91 %/s, 14.3 % of samples at the 5.0 cap |
+| Mean capped loss while losing | 76 | 2.60 %/s (13 % of his health in the window) |
+| Downs | 9 | 6 first downs, 3 re-downs within 60 s of getting up at 1 to 3 % health. 0.225 per follower-minute (first downs 0.150). With 9 events the 95 % range is 0.10 to 0.43 |
+| First downs by foes count | 6 | all six at 5 or more foes |
+| Downs within 12 s of another follower's | 9 | 5 |
+| From his last no-loss sample to the down, first downs | 6 | Jesper (cloth, mage) 0.4 s, 1.2 s, 3.2 s. Cicero 5.9 s and 8.3 s. Adelinda 9.1 s |
+| Loss between two health points of a heal recipient | 19 | median 15 %/s, p90 57 %/s |
+
+Per-hit lines of 1117f: Jesper (armor 0) went from 172.0 to 5.6 health inside one 0.13 s window, five hit events of a Conqueror Archer with four other hits on him in it, and was down 0.4 s later. Arrows on Cicero (armor 0.51 to 0.63): 18 to 20 a shot most times, 34 to 41 twice, 70 once, about 1.9 s between shots of one archer. One melee blow of a Conqueror Berserker took 92.6 from Adelinda (armor 0.75). Field followers: Cicero at least 426 health, Adelinda 308, Jesper at least 172 (the only value seen for him, so not known to be his maximum).
+
+### 15.3 The lab on the same statistics (before any change; no change was made, see 15.4)
+
+Tuxborn world (the Deck's list), IAUS, the three T1 cells with their companions, 288 fights per bracket. A bracket is a window of the lab's party-against-foes strength ratio:
+
+| | Field | natural | balanced | strong1 | strong2 |
+|---|---|---|---|---|---|
+| Downs per follower-minute | 0.225 (0.10 to 0.43) | 0.008 | 0.071 | 0.214 | 0.301 |
+| Losing share at 1 to 2 foes | 4.9 % | 12.8 % | 21.7 % | 29.9 % | 25.4 % |
+| at 3 to 4 foes | 10.3 % | 17.5 % | 29.0 % | 40.4 % | 33.9 % |
+| at 5 or more | 25.4 % | 17.4 % | 24.7 % | 28.1 % | 27.6 % |
+| Mean capped loss at 5 or more, %/s | 0.91 | 0.34 | 0.55 | 0.78 | 0.81 |
+| At the cap, at 5 or more | 14.3 % | 2.9 % | 3.2 % | 7.5 % | 8.1 % |
+| Mean capped loss while losing, %/s | 2.60 | 1.92 | 2.15 | 2.49 | 2.67 |
+| Downs under 3.5 s after a no-loss sample | 3 of 6 first downs | 0 of 1 | 4 of 13 | 4 of 34 | 4 of 44 |
+| Foes a sample | 1-2: 50 %, 3-4: 34 %, 5+: 17 % | 2.4 mean | 3.7 | 4.7 | 4.6 |
+
+Built-in world, downs per follower-minute: natural 0.021, balanced 0.027, strong1 0.107, strong2 0.170. Its fixture groups never reach five foes.
+
+The lab's followers on Tuxborn: level 29 to 30 (drawn 12 to 45), melee 380 health and armor 0.41, ranged 332 and 0.30, mage 292 and 0.00. Foes level 15 in the natural bracket, 23 in strong1.
+
+### 15.4 What this says, and why no damage constant was changed
+
+1. **The lab's damage rate is not off by a constant.** In the brackets where the lab's followers go down as often as the field's (strong1 and strong2 on Tuxborn: 0.21 and 0.30 a minute against 0.225), the capped loss at five or more foes is 0.78 to 0.81 %/s against the field's 0.91, and the loss while losing 2.5 to 2.7 against 2.6. Those agree.
+2. **The natural bracket is far gentler than the field day.** 0.008 downs a follower-minute on Tuxborn and 0.021 on the built-in world against 0.225. The field is 11 to 28 times that. Every survival band, the heal timing and the oracle-relative bounds are measured on natural fights. So they are measured where almost nobody goes down, and "healing comes too late" cannot show there. This is what the field data supports as the answer to marth's question. Caveat: the field day is three sessions in one hard place (Ash Spawn groups and reavers on Solstheim). It is not a sample of all play. The natural bracket draws any encounter of the list at a random level, wolves included.
+3. **The lab's damage arrives too evenly.** At one to four foes a field follower is losing health in 5 to 10 % of the samples. The lab's is in 13 to 40 %. And three of the six field first downs came within 3.5 s of a sample that read no loss, all three the cloth mage. The lab does that for 9 to 12 % of its downs in the strong brackets. The field's shape is quiet, then a burst.
+4. **What cannot be decided from these logs.** Point 3 rests on 623 samples for the quiet part, which is solid, and on six downs for the burst part, which is not. The burst has at least three possible causes the logs cannot separate: who the foes pick as a group grows (no log line says who a foe attacks), several hits landing at once (one 0.13 s window, once), and the followers' own health and armor (the field mage has at most 172 health seen once, the lab's 292 at a lower level. The field's ranged follower has armor 0.75, the lab's 0.30). Each would be a different constant. Fitting one of them to six downs would be a guess that reads as a calibration.
+
+So no world constant was changed in this batch. The one lever the solid part points at, the foes' preference for the player (`World.h PickTarget`, the 1.25 on a foe's score for the player, a model value), was not moved either: raising it makes followers safer in small fights, which the field supports, and safer in large ones too, which the field contradicts.
+
+**What was done instead:**
+
+- The like-for-like read exists on both sides and is in the CLI checks, so a later session can be compared in one command.
+- The gap pass takes `--gap-bracket <name>`, so the oracle and IAUS can be read under field pressure. The bracket whose downs match the field: strong1 on Tuxborn (0.214), strong2 on the built-in world (0.170, the nearest it has).
+- The survival bounds are re-measured on natural fights as before (the bands the driver gates on are natural-row bands), and once under pressure for the record (14.10, 15.5).
+
+**What it needs to go further (asks, not done):**
+
+- Run every field session with `bIausFillProbe = 1`. Only one of three had it. Its hit lines give damage per hit, the attacker and the target's health before and after. A dozen fights of that would decide between the three causes above.
+- One passive line per foe per few seconds with its current target would settle who the foes pick.
+- A ruling on whether the survival bands should also gate under pressure (a second band row per caster on the strong bracket). That is a change of what the tune optimises and was not made here.
