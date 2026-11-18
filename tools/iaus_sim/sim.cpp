@@ -60,7 +60,7 @@ namespace {
             // sim v3
             S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
             S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
-            S(castUnfired); S(castRepeat); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealLowN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
+            S(castUnfired); S(castRepeat); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealLowN); S(healLateN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
@@ -124,7 +124,7 @@ namespace {
               m["pr.spoiled/f"] = double(s.drawSpoiled) / n; m["pr.pointBlank%"] = pct(double(s.pointBlankShots), double(s.arrowsShot)); }
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
-          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["selfHealAt%"] = s.selfHealN ? 100.0 * s.selfHealAtSum / double(s.selfHealN) : -1; m["selfHealLow%"] = s.selfHealN ? 100.0 * double(s.selfHealLowN) / double(s.selfHealN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
+          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["healLate%"] = s.healAtN ? 100.0 * double(s.healLateN) / double(s.healAtN) : -1; m["selfHealAt%"] = s.selfHealN ? 100.0 * s.selfHealAtSum / double(s.selfHealN) : -1; m["selfHealLow%"] = s.selfHealN ? 100.0 * double(s.selfHealLowN) / double(s.selfHealN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
         // sim batch (section 32): the drink record (the full decline curve is the --decline report)
         m["drinkH/f"] = double(s.drinksH) / n; m["drinkAt%"] = s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1; m["potWaste%"] = pct(s.potWaste, s.potHeal); m["dnPot/f"] = double(s.downsWithPotH) / n; m["dnMidDrink/f"] = double(s.downsMidDrink) / n;
         // SIM V3 (iaus-sim-v3.md): what became of the casts his decisions fired, the chase cap, the guard by direction, the weapon hand, the areas.
@@ -231,7 +231,7 @@ namespace {
     // else " world=v3" plus what differs from the v3 defaults.
     struct V3Flag { const char* name; bool V3::* m; };
     inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance }, { "sidestep", &V3::sidestep },
-                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks } };
+                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks }, { "hittail", &V3::hittail } };
     std::string WorldTag(const char* lead) {
         if (!g_v3.Any()) return "";
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
@@ -994,6 +994,7 @@ static int RealMain(int argc, char** argv) {
             for (ResultRow& rr : R.rows) if (rr.cls == sc.name && rr.bracket == "natural") { rr.hasGap = true; rr.mainGap = cg.gap; pI = rr.metrics["persona"]; sr.metrics = rr.metrics; }
             { auto mi = Metrics(r.iaus); auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? -1.0 : i->second; };   // THE ORACLE-RELATIVE SURVIVAL READ (marth 11-17 "Oracle downs"; Playstyles.h): the same natural fights, IAUS and the class oracle
               std::printf("ORCSURV %s %d  iaus downs/f %.3f selfHealLow%% %.1f  |  oracle downs/f %.3f selfHealLow%% %.1f\n", sc.name.c_str(), classOracle, G(mi, "downs/f"), G(mi, "selfHealLow%"), G(sr.oracleMetrics, "downs/f"), G(sr.oracleMetrics, "selfHealLow%"));
+              std::printf("ORCHEAL %s %d  iaus healLate%% %.1f healAt%% %.1f dwh/f %.3f  |  oracle healLate%% %.1f healAt%% %.1f dwh/f %.3f\n", sc.name.c_str(), classOracle, G(mi, "healLate%"), G(mi, "healAt%"), G(mi, "dwh/f"), G(sr.oracleMetrics, "healLate%"), G(sr.oracleMetrics, "healAt%"), G(sr.oracleMetrics, "dwh/f"));   // the heal-timing and ally-survival bands (Playstyles.h): his heals on another begun under Policy.h kOneHitLine, allies down while he held a heal
               std::printf("ORCSTOP %s %s\n", sc.name.c_str(), StopLine(r.st).c_str());   // the search's stopping rule at work (Oracle.h OracleCfg), over ALL the class's gap fights
               for (const auto& kv : r.st.refused) std::printf("ORCREFUSED %s %ld %s\n", sc.name.c_str(), kv.second, kv.first.c_str()); }   // options the class filter refused, by reason
             std::printf("%-17s %7.2f %7.2f %+7.2f  %7.1f %7.1f  %+7.2f %5.2f %6ld\n", sc.name.c_str(), sr.iausU, sr.oracleU, sr.gap, pI, pO, cg.gap, cg.se, cg.fights); R.scen.push_back(std::move(sr)); R.classGaps.push_back(std::move(cg)); }
