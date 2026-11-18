@@ -60,7 +60,11 @@ namespace MFO::APMFBridge {
         // controller the entry builds reads it). The value = sweeps held without the entry standing. A hold keeps the claim past
         // step 1 ("nobody wants it": CombatScan has not Wanted anything yet, he is not in combat) until the fight's own desire takes
         // it over, or the entry is gone (ended, forgotten) for kEntryHoldGrace sweeps. Guarded by g_styleMx.
-        constexpr std::uint32_t kEntryHoldGrace = 30;   // ~4 s of 133 ms sweeps: covers the caller's next lap after a deferral
+        constexpr std::uint32_t kEntryHoldGrace = 30;   // ~4 s of 133 ms sweeps: a hold whose claim is filed (the entry is requested in the same call)
+        // A hold with NO claim yet is a deferral (the first armor read outstanding): the caller's next lap is one service period away
+        // (roster x 133 ms, so it grows with the party), and a hold that aged out between laps would lose the read (step 1b) and defer
+        // forever. Sized well past any roster's period instead of from a guess; it only bounds the leak when no entry is ever requested.
+        constexpr std::uint32_t kEntryHoldPendingGrace = 600;   // ~80 s
         std::unordered_map<RE::FormID, std::uint32_t> g_entryHolds;
 
         const APMF_API::APMF_API_v6* StyleApi() {
@@ -151,7 +155,6 @@ namespace MFO::APMFBridge {
             if (it == g_styles.end()) return;
             h = it->second.handle;
             g_styles.erase(it);
-            g_entryHolds.erase(a_follower);
         }
         if (auto* api = g_apmf.load(std::memory_order_relaxed); api && h != APMF_API::kInvalidHandle) api->Release(h);
         if (h != APMF_API::kInvalidHandle) spdlog::info("[wstyle] {:08X}: ch.33 combat style claim released ({})", a_follower, a_why);
@@ -173,6 +176,14 @@ namespace MFO::APMFBridge {
         std::string_view tag{};
         RE::FormID style = CombatStyle::ClassRestingStyle(a_follower, &tag);
         if (style == 0) return true;   // no class style at rest: nothing to file, the entry goes ahead as before
+        // The sweep stays the ONLY owner of a style the fight / the OOC substrate cast pair already wants: a standing substrate cast
+        // claim (EquipChoiceOnly MFO_CastStyle) must not be repointed to the class style and back (the two owners never mix).
+        if (SubstrateOnly(a_follower)) return true;
+        {
+            std::vector<CombatStyle::StyleDesire> held;
+            CombatStyle::SnapshotStyleDesires(held);   // CombatStyle's own mutex, taken and dropped before g_styleMx
+            for (const auto& d : held) if (d.follower == a_follower) return true;
+        }
         { std::scoped_lock lock(g_styleMx); g_entryHolds[a_follower] = 0; }   // before the heavy read: keeps its state alive (step 1b)
         bool heavy = false;
         if (!HeavyKnown(a_follower, heavy)) return false;   // first armor read outstanding: the entry waits one lap (never a dodging heavy)
@@ -252,7 +263,9 @@ namespace MFO::APMFBridge {
             bool owned = false, standing = false;
             for (const Want& w : wants) owned = owned || w.fid == it->first;
             for (const RE::FormID f : holdStanding) standing = standing || f == it->first;
-            if (owned || (!standing && ++it->second > kEntryHoldGrace)) it = g_entryHolds.erase(it);
+            const auto sc = g_styles.find(it->first);
+            const bool claimed = sc != g_styles.end() && sc->second.handle != APMF_API::kInvalidHandle;
+            if (owned || (!standing && ++it->second > (claimed ? kEntryHoldGrace : kEntryHoldPendingGrace))) it = g_entryHolds.erase(it);
             else ++it;
         }
         // 1. Claims nobody wants any more (the stance was cleared: combat end, dismissal, the cast pair closed).
