@@ -538,3 +538,216 @@ Shipped tunings, 8 seeds, J (se). "v3 before" is the build before this batch (f5
 Natural bracket, how often the repeat table is drawn (`dl.repeat%` of his cast picks): mage 29 %, evoker 21 %, conjurer 27 %, healer 33 %, warlock 27 %. Unfired: mage 12.6 %, evoker 18.2 %, conjurer 9.6 %, healer 13.6 %, warlock 7.8 %.
 
 Both baselines are regenerated (`baseline_builtin.txt`, `baseline_v3_builtin.txt`). v2 moved because the game's generator and the reach book moved: with `--reach off` the build before this batch and the build after it agreed draw for draw on v2 until the 1117b merge.
+
+## 14. The oracle under the standing tuning rule (feat/oracle-unbounded, 2026-11-17)
+
+marth, 2026-11-17, verbatim: "as a standing tuning rule the Oracle gets as many tries as it wants for the best class based decisions. The tuning then follows the Oracle as its guide. The Oracle only has the classes abilities at its disposal". And the goal: "The goal is that a classes tune will be the actual best possible class behavior".
+
+Code: `tools/iaus_sim/Oracle.h` (the search, the class filter), `sim.cpp` (the gap pass prints), `tune_driver.py` (the tables of the extended set), `Playstyles.h` (the survival bounds). No native change.
+
+### 14.1 What changed in the search
+
+| | Before | Now |
+|---|---|---|
+| Options per decision | at most 14 (IAUS's ranked list, then one to four per family) | every candidate the generator offers, every posture, the extended set, his own AI. No limit |
+| Decision points | at most one every 0.4 s. With three followers a lap is 0.399 s, so every second lap was skipped | every time the pump serves him with his body free (`every = 0`). That is every decision point the game has: `kPumpMs` 133 ms times the followers |
+| Rollout length | 150 s | to the fight's end. 150 s is `Fight::maxSec`, so this was already true. It is now stated and `RunFor` no longer depends on the number |
+| Streams per option | 8, fixed | 8, then 16, 32, 64, 128. After each round an option is dropped once the best option's paired lead over it passes a one-sided Student-t bound at p = 0.001. The race ends when one option stands or at the safety ceiling of 128 |
+| Random streams | shared by all options | unchanged. Stream k has one seed for every option |
+| Class rulings | off unless `--class-oracle` | on for every oracle. `--no-class-rulings` is a labelled diagnostic |
+| Automatic gap pass of a results file | a cut oracle (K = 6, 90 s) | the same oracle as everywhere |
+| What IAUS's pick costs (the ledger's dU) | difference of two means | the paired lead on the streams both options ran |
+
+`--oracle-k N` and `--oracle-h S` still exist as labelled diagnostics (the CLI checks use one stream and 5 s for speed). `--oracle-ceiling N` moves the ceiling. `--oracle-every S` brings a throttle back. The results file and every oracle print say which setting ran.
+
+One part of the rollout is a model and not a budget: an option is held for 2.5 s inside a rollout (an attack order, a retreat, his own AI) before the base policy takes over. The oracle itself is asked again at his next decision point. The search is still one step deep over IAUS as the base policy. It is not an exhaustive plan, and no feasible search is.
+
+### 14.2 The stopping rule, the ceiling, and how often it binds
+
+The honest finding: **the ceiling ends most races.** Most options of a decision differ by less than a fight's luck. The shared seed stops pairing two rollouts as soon as they diverge, because the world draws from one stream. So the paired difference of two options has a deviation of about 5 U, and a lead of half a U cannot be separated at any stream count we can pay for.
+
+Measured on 16 natural fights per class, subject only, the same fights at every ceiling. Oracle U, then the paired change against the next lower ceiling (se):
+
+| Class | ceiling 8 | 32 | 128 | 512 | 8 to 32 | 32 to 128 | 128 to 512 |
+|---|---|---|---|---|---|---|---|
+| knight | 79.65 | 84.06 | 82.60 | 87.59 | +4.41 (4.27) | -1.47 (5.03) | +5.00 (4.54) |
+| warrior | 92.36 | 91.80 | 92.45 | 92.39 | -0.55 (0.67) | +0.65 (0.65) | -0.06 (0.41) |
+| evoker | 88.29 | 94.28 | 94.17 | 94.27 | +6.00 (5.90) | -0.12 (0.69) | +0.10 (0.55) |
+| thief | 94.98 | 94.43 | 94.29 | 94.47 | -0.56 (0.35) | -0.14 (0.44) | +0.18 (0.44) |
+| healer | 93.12 | 92.64 | 92.68 | 93.66 | -0.48 (0.74) | +0.05 (0.62) | +0.98 (0.51) |
+
+How the race ended at each ceiling (share of decisions the ceiling ended with more than one option standing, and the best option's mean lead over the best other one standing):
+
+| Class | 8 | 32 | 128 | 512 |
+|---|---|---|---|---|
+| knight | 72 %, 0.90 U | 46 %, 0.97 U | 39 %, 0.69 U | 64 %, 0.40 U |
+| warrior | 89 %, 1.30 U | 76 %, 0.73 U | 72 %, 0.40 U | 67 %, 0.32 U |
+| evoker | 88 %, 1.02 U | 91 %, 0.72 U | 77 %, 0.40 U | 64 %, 0.28 U |
+| thief | 87 %, 0.88 U | 80 %, 0.62 U | 78 %, 0.33 U | 77 %, 0.18 U |
+| healer | 76 %, 2.51 U | 36 %, 1.00 U | 75 %, 0.51 U | 63 %, 0.15 U |
+
+Reading. No step from 32 to 128 or from 128 to 512 is outside two standard errors for the warrior, the evoker and the thief. The healer's last step is +0.98 (0.51), which is 1.9 se. The knight is too noisy on 16 fights to say anything. Ceiling 128 was chosen because it is four times past the last ceiling at which any class moved, and 512 costs four times more for a gain this data cannot show. The ceiling is one number (`OracleCfg::ceiling`, `--oracle-ceiling`). This is the first thing the reviewer should weigh. If marth wants the larger number, 512 is a flag away and the cost is in 14.4.
+
+What would sharpen the race itself, and is not done here: one random stream per actor inside a rollout, so two options stay paired on everything the changed action does not touch. That is a change of the world's draw order (24 draw sites in `World.h`), so it belongs in its own batch with its own baselines.
+
+On the 32 natural fights per class of 14.5, at ceiling 128: the ceiling ended 34 to 88 percent of the decisions, with 3.4 to 9.1 options standing and a mean unresolved lead of 0.28 to 0.88 U. The gap pass prints this per class (`ORCSTOP`).
+
+### 14.3 The class-bound action set
+
+`Oracle.h ClassRefuses` is the one reader of "is this option an ability of his class". It returns the reason an option is refused. `RulingRefuses` (the old `ClassAllows`) is the written rulings of `Playstyles.h`. Every refusal is counted by reason and printed per class (`ORCREFUSED`), and a trace run prints each one.
+
+| Option | Rule |
+|---|---|
+| A catalogue candidate | the generator already holds it to the class gate (`ClassGate`, built by `RealClasses.cpp` from `native/classes/ClassTable.cpp`). The filter checks the same bit again per family: power attack, taunt, block, retreat and disengage, the weapon of a posture, a spell by its source (class spell, scroll, staff). A refusal here would be a generator leak. Reasons start with `cat:`. Measured: 0 |
+| `ext:block`, `ext:bash` | only with the shield, or a melee weapon of the class's weapon set, in hand. The guard also honours the game's rest now (no new guard for 1.5 s after a hold, `apmf/BlockClaims.cpp kRest`) |
+| `ext:scroll` | only a scroll user (ruling Q36) and only a scroll he carries |
+| `ext:hide` | only a sneak class that has the disengage flag. Before: anyone who was in stealth |
+| `ext:flee` | only a class with the disengage flag. Before: anyone under 60 percent health with a foe on him |
+| Potions | the game has no class gate for a potion, so there is none here |
+| Repositioning (`ext:step_back`, `sprint_back`, `to_player`, `to_healer`, `get_sight`, `clear_line`, and the Regroup, GiveGround, BackOff and Step families) | always allowed by the class filter. Movement is not an ability. The written rulings can still forbid a move (never retreats, backs off only, stays near the player) |
+| A posture the game forbids | new ruling line: a posture candidate whose `classAllowsWeapon` fact is false is refused. That is the strict weapon gate, or "spells stay on spells" for the Mage line. The old oracle could draw the dagger there |
+
+The oracle stays free of the generator's situation gates (the 30 percent flee line, "a foe has found him"). Those are decisions, not abilities, and what the oracle gains by ignoring them is their cost.
+
+A class's spell book in the lab is what `Load.h BuildFollower` gives a follower of that class, plus the spells its own default rows name. The game's class table has no school list per class, so there is no school filter to mirror.
+
+Refused option offers on the 32 natural fights per class of 14.5 (subject only). An offer is one option at one decision:
+
+| Class | By the ability filter | By a written ruling |
+|---|---|---|
+| melee | 109 flee (no disengage) | 0 |
+| ranged | 14 flee | 0 |
+| mage | 19 flee | 306 splash, 555 forbidden posture, 5 no-melee |
+| knight | 183 flee | 1859 never retreats |
+| warrior | 131 flee | 2065 never retreats |
+| mercenary | 47 flee | 885 backs off only |
+| archer | 3 flee | 0 |
+| thief | 0 | 0 |
+| evoker | 0 | 409 splash, 522 forbidden posture, 6 no-melee |
+| conjurer | 0 | 354 splash, 558 forbidden posture, 3 no-melee |
+| healer | 0 | 1722 splash, 1198 forbidden posture, 948 near the player, 75 no-melee |
+| warlock | 0 | 763 splash, 592 forbidden posture, 32 no-melee |
+| melee-off, ranged-off | 0 | 0 |
+| mage-off | 0 | 181 splash, 628 forbidden posture |
+
+No `cat:` refusal, no scroll, block or bash refusal: the kit of a lab follower is built from his class's weapon set, so those rules guard against a future kit change. The only ability the old oracle used outside a class was the flee run of a class without the disengage flag.
+
+### 14.4 Run time
+
+CPU seconds per natural fight (IAUS arm and oracle arm together), 32 fights per class, subject only, which is the gap stage's shape. One CPU of a 16-core host:
+
+| Class | Before | Now | x |
+|---|---|---|---|
+| melee | 3.8 | 32.6 | 8.5 |
+| ranged | 0.5 | 6.0 | 12 |
+| mage | 4.2 | 43.5 | 10 |
+| knight | 3.7 | 30.7 | 8.4 |
+| warrior | 1.8 | 22.2 | 12 |
+| mercenary | 1.4 | 30.2 | 22 |
+| archer | 0.7 | 9.6 | 14 |
+| thief | 0.4 | 4.4 | 11 |
+| evoker | 6.2 | 57.4 | 9.2 |
+| conjurer | 4.0 | 41.1 | 10 |
+| healer | 2.7 | 36.6 | 14 |
+| warlock | 8.3 | 80.6 | 9.7 |
+| melee-off | 3.9 | 66.5 | 17 |
+| ranged-off | 1.1 | 22.9 | 21 |
+| mage-off | 2.9 | 51.8 | 18 |
+| all 15 | 3.05 | 35.8 | 11.7 |
+
+The search inside one fight is serial on purpose. Every caller already runs one fight per core (the gap pass's worker threads, the driver's process pool), so threads inside a decision would add nothing to a tune round, and a fight's result cannot depend on the thread count. Nothing is cached, because no two decisions share a state.
+
+What a tune round pays. Only the gap stage, the gap order and the dashboard's small report runs use the oracle. The search stages judge on IAUS's own J and are untouched. The gap stage's first pass is 15 cells times 12 seeds times about 5 fights times 2 tables, subject only, plus 900 fights with every follower planned: about 2,700 fights, about 30 CPU hours, about 2 hours on 16 cores per world. Cells that grow to 48 seeds and the re-measures after an accepted value add to that. It was about 10 minutes. Levers if a round must be shorter: `--oracle-ceiling 32` costs about a third and lost nothing measurable in 14.2.
+
+A single run with few fights uses the cores badly (its wall time is its longest fight). The 32-fight runs of this section took 22 to 750 s of wall time each.
+
+### 14.5 The gap per class, before and after
+
+Natural bracket, built-in world, v3, shipped tunings, seed 1, 32 fights per class, subject only (his companions play IAUS in both arms). IAUS U is the same number in both columns, because IAUS did not change:
+
+| Class | IAUS U | Oracle U before | Gap before (se) | Oracle U now | Gap now (se) |
+|---|---|---|---|---|---|
+| melee | 84.28 | 85.62 | +1.34 (3.65) | 89.38 | +5.11 (2.63) |
+| ranged | 72.84 | 75.78 | +2.94 (2.40) | 76.33 | +3.49 (2.54) |
+| mage | 75.22 | 82.46 | +7.24 (3.64) | 85.30 | +10.09 (4.48) |
+| knight | 84.49 | 88.02 | +3.54 (1.45) | 87.99 | +3.50 (3.01) |
+| warrior | 82.39 | 88.10 | +5.71 (3.17) | 89.80 | +7.42 (3.48) |
+| mercenary | 88.55 | 89.58 | +1.02 (2.75) | 92.62 | +4.06 (1.49) |
+| archer | 72.63 | 73.43 | +0.80 (3.57) | 78.47 | +5.85 (3.44) |
+| thief | 88.29 | 93.53 | +5.24 (3.77) | 91.35 | +3.06 (4.58) |
+| evoker | 76.90 | 84.37 | +7.48 (5.32) | 90.73 | +13.83 (4.78) |
+| conjurer | 78.94 | 87.42 | +8.48 (4.24) | 86.28 | +7.34 (5.29) |
+| healer | 69.31 | 77.47 | +8.16 (3.67) | 83.53 | +14.22 (5.08) |
+| warlock | 65.82 | 75.76 | +9.94 (5.62) | 84.15 | +18.33 (5.79) |
+| melee-off | 76.78 | 83.60 | +6.83 (4.99) | 88.06 | +11.29 (3.99) |
+| ranged-off | 75.97 | 85.61 | +9.63 (3.80) | 88.86 | +12.89 (4.51) |
+| mage-off | 74.79 | 85.79 | +11.00 (5.78) | 88.53 | +13.74 (6.33) |
+
+The oracle is stronger for 12 of 15 cells although it lost options (the flee of five classes, the forbidden postures, the guard without a rest). The thief and the conjurer are lower by less than one se. The knight is level. The gain is not from more streams (14.2). It is from deciding at every decision point and from seeing every candidate.
+
+### 14.6 Where the remaining gap sits, per class, and what a tune cannot reach
+
+From the subject's divergence clusters of the same fights (`--gap-dump`, classified by `tune_driver.py classify`). Share = that class of divergence in the oracle's summed per-decision advantage. It orders the causes. It is not an additive split of the gap.
+
+- (a) a curve or a weight: IAUS had the oracle's pick and ranked it lower. **A tune can close it.**
+- (b) IAUS generated the oracle's pick and scored it under the floor or vetoed it. A gate, a veto or a missing input. **A tune cannot move it.**
+- (c) the oracle's action has no candidate IAUS ever generates for this class. **A tune cannot reach it.**
+- (d) the oracle's version of the action is better than the game's (the bash on demand, the guard with no row cooldown). A modelling limit of the oracle, not a goal.
+
+| Class | (a) | (b) | (c) | (d) | The largest (a) clusters: IAUS pick to oracle pick |
+|---|---|---|---|---|---|
+| melee | 55 % | 12 % | 20 % | 13 % | attack to attack on another target 39 %, attack to his own AI 10 % |
+| ranged | 62 % | 10 % | 25 % | 3 % | attack to a weapon swap 42 %, attack retarget 18 % |
+| mage | 67 % | 16 % | 16 % | 0 | cast_control to attack 36 % |
+| knight | 77 % | 7 % | 4 % | 11 % | taunt to attack 16 %, power attack to attack 15 %, attack retarget 14 %, drink_health to attack 13 % |
+| warrior | 68 % | 14 % | 2 % | 16 % | attack retarget 41 %, power attack to attack 21 % |
+| mercenary | 62 % | 21 % | 12 % | 5 % | attack retarget 47 % |
+| archer | 61 % | 16 % | 20 % | 3 % | attack retarget 33 %, attack to a weapon swap 24 % |
+| thief | 31 % | 42 % | 27 % | 0 | attack retarget 22 % |
+| evoker | 42 % | 30 % | 28 % | 0 | cast_offense to attack 11 %, drink_health to his own AI 8 % |
+| conjurer | 55 % | 34 % | 11 % | 0 | cast_control to attack 32 %, cast_control to cast_offense 6 %, to cast_heal 5 % |
+| healer | 51 % | 35 % | 14 % | 0 | cast_control to attack 26 %, cast_heal to his own AI 8 % |
+| warlock | 43 % | 43 % | 14 % | 0 | cast_control to attack 13 %, cast_control to cast_heal 6 %, to a weapon swap 5 % |
+| melee-off | 63 % | 15 % | 15 % | 7 % | cast_offense to attack 12 %, taunt to attack 12 %, power attack to attack 9 % |
+| ranged-off | 71 % | 12 % | 16 % | 0 | cast_offense to attack 40 % |
+| mage-off | 39 % | 41 % | 21 % | 0 | cast_control to attack 12 %, cast_control to cast_offense 7 % |
+
+Two patterns carry most of the tunable gap. On the weapon classes it is WHICH foe the attack is on (the attack family's target considerations). On every caster it is cast_control chosen where the oracle lets the plain attack order run (the control family's weight against attack).
+
+**Structural limits. A tune cannot close these. Each is a native follow-up, listed so the tuner does not fail on it:**
+
+| Class | Limit (share of his divergence cost) | Kind | What it needs |
+|---|---|---|---|
+| warlock | cast_control where the oracle flees: 17 % | (b) | the flee candidate exists and is scored under the floor or vetoed. The Disengage flee is held to its 30 percent health line and its "threatened" read. Needs the line as a tunable input, or a consideration that reads the pressure the oracle reacts to |
+| healer | the same flee: 14 % | (b) | as the warlock |
+| conjurer | the same flee: 8 %. A sprint back the BackOff gate did not offer: 7 % | (b) | as the warlock. BackOff is only offered inside the minimum range of his equipped spell |
+| mage-off | cast_heal or cast_control where the oracle flees: 16 % | (b) | as the warlock |
+| ranged-off | flee: 7 % | (b) | as the warlock |
+| thief | attack where the oracle holds the sneak row: 25 % | (b) | the sneak candidate is generated and scored under the floor. Needs a consideration for "hold still and stay hidden" that can outscore the attack |
+| evoker, healer | cast_control where the oracle summons: 9 % and 6 % | (b) | cast_summon is generated and vetoed or under the floor at that moment. Needs a look at the summon family's veto for a class whose rows do not name a summon |
+| conjurer, mage, evoker | cast_control where the oracle casts offense: 13 %, 5 %, 4 % | (b) | the offense candidate is under the floor or vetoed (will-work, line of fire or the range veto). Needs the veto's reason logged per candidate to split it |
+| every class | a health, stamina or magicka potion the oracle drinks and IAUS scored under the floor: 3 to 9 % | (b) | partly real (the drink line). The magicka potion of a class that cannot cast is an artefact of Utility's "magicka left" term and should not be chased. See the backlog |
+| melee, mercenary, archer, evoker, ranged-off | a step back from a foe: 5 to 14 % | (c) | no road today (section 25 of the v2 note: needs a Harbinger combat area centred on a point). GiveGround is lab-only |
+| melee, ranged, archer, melee-off | a sprint back: 5 to 8 % | (c) | the BackOff family is never generated for these classes. Its gate is the Mage line and the Mercenary |
+| thief, warlock, healer, mage-off, archer, ranged, ranged-off | close on the player: 4 to 22 % | (c) | the road exists (Harbinger ch.24 CombatApproach). The Regroup family is built and never generated. Needs its MFO client (`Snapshot::regroupRoad`) |
+| mage, conjurer | a side step to a clear line of fire: 5 % and 7 % | (c) | no IAUS family. The game only holds a cast through a friend |
+| ranged | a step to get sight of his target: 9 % | (c) | the road exists for casts only. No IAUS family |
+| warrior, melee, knight | the bash on demand 4 to 10 %, the warrior's guard 5 % | (d) | the oracle's bash has no cooldown and the guard no row cooldown. Not a target. Binding them is a backlog item |
+
+A curve shape that cannot express the oracle's choice was not found by this method. The classification sees whether a candidate was ranked, not which response curve would rank it first. The gap stage's (a) search is what finds that: a family whose knobs it sweeps without closing its clusters is the candidate for a new consideration.
+
+### 14.7 The tuning follows the oracle
+
+Checked: every place the driver reads an oracle result runs the new one. The driver never names a K, a horizon or an option limit, so it gets the default.
+
+| Stage | What it reads | Status |
+|---|---|---|
+| `gap_order` | the per-class gap of a small report run (`class_gaps` of the results file), to tune the furthest class first | the new oracle |
+| `stage_gap` | `GAPFIGHT`, `GAPSIT`, `GAPGEN`, `GAPDEC` of `--class-oracle --gap-dump --oracle-subject-only`. The (a) clusters pick the families of its extra search | the new oracle. The dump format is unchanged. `ORCSTOP` and `ORCREFUSED` are new lines the parser ignores |
+| `emit_run` | the dashboard's small results file after each sweep (2 natural fights and 1 scenario per class) | the new oracle. It costs more now, one to two minutes of two threads per class |
+| The class bands (`load_cards`) | the oracle-relative survival bounds of `Playstyles.h` | re-measured, 14.8 |
+| The edge, joint, globals, consts, floor and rating stages | IAUS's own J and the class bands. No oracle | unchanged |
+
+The driver's result cache is keyed by the binary's hash, so no result of the old oracle can be replayed. `EXT_FAMILY` and `EXT_ROAD` now name `ext:clear_line` (it was classified by the generic rule), and a unit test holds both tables to the names in `Oracle.h`.
+
+### 14.8 The survival bounds, re-measured

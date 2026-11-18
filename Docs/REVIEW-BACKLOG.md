@@ -3594,3 +3594,15 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **F4 (SEV-3, FIXED):** the entry foe is behind `--engage-on-sight` / `FightSpec::engageOnSight`, OFF by default.
 - **F5 (marth ruling "Oracle downs", DONE):** the caster survival bands are oracle-relative (`downs/f`, `selfHealLow%`), measured with the gap pass's `ORCSURV` line. OPEN SEV-4: the bounds are static numbers from one 160-fight oracle run and must be re-measured when the world or the oracle changes. OPEN SEV-4: a tiny `downs/f` bound costs almost no persona credit (the credit's scale has a floor of 5).
 - The earlier entry "the survival band numbers (0.35 downs a fight, 25 to 75 percent) are judgement" is superseded by F5.
+
+
+## feat/oracle-unbounded (Fable author, 2026-11-17, tools/iaus_sim only; record: Docs/research/2026-11/iaus-sim-v3.md section 14)
+
+marth's standing tuning rule of 11-17: the oracle scores every candidate at every decision point, races its streams to a statistical separation (safety ceiling 128), and is held to the class's abilities and rulings.
+
+- **OPEN (SEV-3, method):** the safety ceiling ends 34 to 88 percent of the oracle's decisions, because two rollouts stop being paired once they diverge (one random stream for the whole world). More streams gave no measurable gain from 32 to 128 to 512 on 16 fights per class (section 14.2), so 128 is a judgement. Fix: one random stream per actor inside a rollout (24 draw sites in `World.h`), its own batch with its own baselines.
+- **OPEN (SEV-3, model):** `ext:bash` has no cooldown and `ext:block` no row cooldown (the guard's 1.5 s rest binds since this batch). `tune_driver.py FIDELITY` classifies both as (d). Binding them to the class's row cooldown would make the oracle fully class-bound on the melee line.
+- **OPEN (SEV-4, model):** `Utility` pays for magicka left on every follower, so the oracle drinks a magicka potion with a class that cannot cast (a (b) cluster of 3 to 6 percent on the melee line). Not a target for a tune.
+- **OPEN (SEV-4, model):** a rollout holds an option for 2.5 s (`OracleCfg::commit`) and the search is one step deep over IAUS. Both are the rollout model, not a budget.
+- **OPEN (SEV-4, cost):** a gap stage pass is hours, not minutes (section 14.4). `--oracle-ceiling 32` is the lever.
+- **NATIVE FOLLOW-UPS (a tune cannot close them, section 14.6):** the flee candidate under its fixed health line (warlock, healer, conjurer, mage-off), the thief's sneak hold under the floor, the vetoed summon and offense candidates of the casters, no Regroup client (`Snapshot::regroupRoad`), no step back road, BackOff only for the Mage line and the Mercenary, no "clear line of fire" family.
