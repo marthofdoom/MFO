@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "classes/Classes.h"   // card C8: the equipped class's per-stance CSTY (Want, worker side)
 #include "Forms.h"
+#include "Followers.h"   // GetBaseClass: ClassRestingStyle (worker)
 #include "apmf/APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
                              // T2a CheckShouldEquip hook now owns it (Phase 2)
 #include "cast/Actuation.h"       // ForcedHoldFor -- client mode: a ledger hold's ch.15 claim is
@@ -147,19 +148,38 @@ namespace MFO::CombatStyle {
     bool        AnyActive()  { return g_count.load(std::memory_order_relaxed) != 0; }
     std::size_t OwnedCount() { return g_count.load(std::memory_order_relaxed); }
 
+    // THE class-style reader (card C8): the equipped TIER 2+ class's CSTY for a_stance / a_dual, nullptr = no class package (classes OFF,
+    // the add-on inactive, bClassStyles = 0, a stance the class has no style for). a_tag = the class's display name. Worker (Classes::PackageClass).
+    // Want and ClassRestingStyle both read through it: one reader.
+    static RE::TESCombatStyle* ClassStyleFor(RE::FormID a_follower, Stance a_stance, bool a_dual, std::string_view& a_tag) {
+        if (!Config::g_classStyles.load(std::memory_order_relaxed) || !Classes::Active()) return nullptr;
+        const std::uint8_t cls = Classes::PackageClass(a_follower);
+        if (cls == Classes::kNoClass) return nullptr;
+        const auto id = static_cast<Classes::Id>(cls);
+        RE::TESCombatStyle* style = Classes::PackageStyle(id, static_cast<std::uint8_t>(a_stance), a_dual);
+        if (style) a_tag = Classes::Get(id).name;
+        return style;
+    }
+
+    RE::FormID ClassRestingStyle(RE::FormID a_follower, std::string_view* a_outTag) {
+        // The RESTING stance, the same pick CombatScan's step 3 makes (the #65 class override; with classes ON that is his class's
+        // root T1, Followers::GetBaseClass), behind the same kill-switches. An equip gambit or cast latch decides later, in the fight.
+        const auto forced = static_cast<Stance>(Followers::GetBaseClass(a_follower));
+        if (forced != Stance::Melee && forced != Stance::Ranged && forced != Stance::Cast) return 0;
+        if (forced == Stance::Cast ? Config::g_castControl.load() <= 0 : !Config::g_weaponStyleControl.load()) return 0;
+        std::string_view tag{};
+        RE::TESCombatStyle* style = ClassStyleFor(a_follower, forced, false, tag);   // single-weapon flavour: a perk-voted dual wielder is re-pointed by the fight's own Want
+        if (!style) return 0;
+        if (a_outTag) *a_outTag = tag;
+        return style->GetFormID();
+    }
+
     void Want(RE::FormID a_follower, Stance a_stance, bool a_equipOrder, bool a_allowDual) {
         if (a_stance == Stance::None) return;
         // Card C8 (worker, BEFORE g_mx): the equipped class's CSTY for this stance. Tier 1, classes OFF, the add-on inactive,
         // bClassStyles = 0 and a stance the class has no style for all leave it nullptr = today's MFO_*Style.
-        RE::TESCombatStyle* classStyle = nullptr;
         std::string_view    classTag{};
-        if (Config::g_classStyles.load(std::memory_order_relaxed) && Classes::Active()) {
-            if (const std::uint8_t cls = Classes::PackageClass(a_follower); cls != Classes::kNoClass) {
-                const auto id = static_cast<Classes::Id>(cls);
-                classStyle = Classes::PackageStyle(id, static_cast<std::uint8_t>(a_stance), a_allowDual && a_stance == Stance::Melee);
-                if (classStyle) classTag = Classes::Get(id).name;
-            }
-        }
+        RE::TESCombatStyle* classStyle = ClassStyleFor(a_follower, a_stance, a_allowDual && a_stance == Stance::Melee, classTag);
         // NOTE: the FEATURE gate lives at the call site now, not here -- weapon
         // stances (Melee/Ranged) are gated by bWeaponStyleControl, the Cast
         // stance by iCastControl. Want only records intent.

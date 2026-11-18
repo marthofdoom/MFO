@@ -125,6 +125,9 @@ namespace MFO::EngageOnSight {
             float chosenAggression    = 0.0f;
             bool  chosenUnaggressiveFighting = false;
             bool  inFight = false;   // the in-fight probe (party-fighting foes only), not the party-OOC one
+            // OTHERS JOIN VIA THE FIGHTER (marth 2026-11-17): the chosen foe was admitted on a TEAMMATE's sense of it (he is
+            // fighting it and senses it), not his own. 0 = his own sense. Set only by the in-fight probe.
+            RE::FormID throughMate = 0;
         };
         std::mutex                                   g_probeMx;
         std::unordered_map<RE::FormID, ProbeResult>  g_probes;   // guarded by g_probeMx
@@ -477,6 +480,34 @@ namespace MFO::EngageOnSight {
             return Sightline::MeasureNow(a_viewer, a_target) == Sightline::Verdict::Visible;
         }
 
+        // OTHERS JOIN VIA THE FIGHTER (marth 2026-11-17: a follower in a fight "calls" the others). In-fight probe only,
+        // MAIN THREAD. A teammate (not him, not the player) inside the leash of the PLAYER whose combat target IS a_foe
+        // and who SENSES it (Harbinger SenseActor, or MFO's own ray below ABI 18) lends the joiner that sense. Returns
+        // the teammate's FormID with a_out filled (the teammate's reading), 0 = none.
+        RE::FormID TeammateSensing(RE::ProcessLists* a_pl, RE::Actor* a_foe, RE::Actor* a_self, RE::Actor* a_pc, float a_leash,
+                                   bool a_v18, APMFBridge::SenseReading& a_out) {
+            for (auto& hh : a_pl->highActorHandles) {
+                auto  ptr = hh.get();          // HOLD the NiPointer
+                auto* m   = ptr.get();
+                if (!m || m == a_self || m == a_foe || m->IsPlayerRef() || !m->IsPlayerTeammate()) continue;
+                if (m->IsDead() || m->IsDisabled() || !m->Is3DLoaded()) continue;
+                if (m->GetPosition().GetDistance(a_pc->GetPosition()) > a_leash) continue;
+                auto  tp = m->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+                if (tp.get() != a_foe) continue;   // "in combat with it": HIS combat target is this foe
+                if (a_v18 && APMFBridge::SenseOf(m->GetFormID(), a_foe->GetFormID(), a_pc->GetFormID(), 0.0f, a_out)) {
+                    if (a_out.senses != 0) return m->GetFormID();
+                    continue;
+                }
+                NoteSenseFallback(a_v18);
+                if (Sightline::MeasureNow(m->GetFormID(), a_foe->GetFormID()) == Sightline::Verdict::Visible) {
+                    a_out = {};
+                    a_out.senses = APMF_API::kSense_Sight;
+                    return m->GetFormID();
+                }
+            }
+            return 0;
+        }
+
         // MAIN THREAD ONLY (posted). The highActorHandles walk (resized by the main
         // thread, §0.30) and the sightline measurement (a physics query, §0.30) both
         // run here. Everything crosses back as FormIDs.
@@ -505,6 +536,7 @@ namespace MFO::EngageOnSight {
             r.civilStandDown = !a_inFight && !pcFighting && IsCivilised(pc->GetCurrentLocation());
 
             std::vector<std::pair<float, RE::FormID>> found;
+            std::unordered_set<RE::FormID> mateOnly;   // in-fight candidates beyond his own reaction distance
             for (auto& hh : pl->highActorHandles) {
                 if (r.civilStandDown) break;
                 auto  ptr = hh.get();          // HOLD the NiPointer
@@ -514,7 +546,10 @@ namespace MFO::EngageOnSight {
                 if (a->IsPlayerRef() || a->IsPlayerTeammate()) continue;
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
-                if (a->GetPosition().GetDistance(selfPos) > r.range) continue;  // the reaction distance is from HIM
+                // the reaction distance is from HIM; the in-fight road keeps a farther foe as a candidate that only a TEAMMATE's
+                // sense can admit (below: others join via the fighter), still inside the leash from the player (above)
+                const bool beyondHim = a->GetPosition().GetDistance(selfPos) > r.range;
+                if (beyondHim && !a_inFight) continue;
                 const char* why = "";
                 if (a_inFight && !FightingParty(a)) continue;   // the in-fight road admits ONLY foes fighting the party
                 // ...and only HOSTILE ones: a brawl partner, or a townsperson / ally who turned on the player after a
@@ -525,6 +560,7 @@ namespace MFO::EngageOnSight {
                 if (!IsEnemy(a, self, pc, why)) { NoteSkip(a, why); continue; }
                 if (!a_inFight && !pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
+                if (beyondHim) mateOnly.insert(a->GetFormID());
             }
             std::sort(found.begin(), found.end());
 
@@ -540,18 +576,32 @@ namespace MFO::EngageOnSight {
                 if (std::find(a_givenUp.begin(), a_givenUp.end(), fid) != a_givenUp.end()) continue;
                 ++r.measured;
                 APMFBridge::SenseReading sr;
-                if (v18 && APMFBridge::SenseOf(a_id, fid, pc->GetFormID(), r.range, sr)) {
-                    if (sr.senses == 0) {
-                        // Deferred sight (the frame's sync cap spent, no fresh verdict) is not "no
-                        // sense": count it apart; the next probe asks again.
-                        if (sr.detail & APMF_API::kAwareDetail_SightDeferred) ++r.deferred; else ++r.occluded;
-                        continue;
+                RE::FormID mate = 0;        // in-fight: the teammate whose sense admitted this foe (his own did not)
+                bool ownSensed = false, viaSense = false, deferred = false;
+                if (!mateOnly.contains(fid)) {   // a foe beyond his reaction distance is admitted on a teammate's sense alone
+                    if (v18 && APMFBridge::SenseOf(a_id, fid, pc->GetFormID(), r.range, sr)) {
+                        viaSense = true;
+                        ownSensed = sr.senses != 0;
+                        // Deferred sight (the frame's sync cap spent, no fresh verdict) is not "no sense": counted apart; the next probe asks again.
+                        deferred = !ownSensed && (sr.detail & APMF_API::kAwareDetail_SightDeferred);
+                    } else {
+                        NoteSenseFallback(v18);
+                        ownSensed = Sightline::MeasureNow(a_id, fid) == Sightline::Verdict::Visible;
                     }
+                }
+                auto* t = RE::TESForm::LookupByID<RE::Actor>(fid);
+                if (!ownSensed && a_inFight && t) {
+                    APMFBridge::SenseReading mr;
+                    if ((mate = TeammateSensing(pl, t, self, pc, a_leash, v18, mr)) != 0) { sr = mr; ownSensed = true; viaSense = v18; deferred = false; }
+                }
+                if (!ownSensed) { if (deferred) ++r.deferred; else ++r.occluded; continue; }
+                if (viaSense) {
                     r.sensed = true;
                     r.senses = sr.senses;
                     r.detail = sr.detail;
-                } else if (NoteSenseFallback(v18), Sightline::MeasureNow(a_id, fid) != Sightline::Verdict::Visible) { ++r.occluded; continue; }
-                auto* t = RE::TESForm::LookupByID<RE::Actor>(fid);
+                }
+                r.throughMate = mate;
+                if (mate) r.range = a_leash;   // admitted on a teammate's sense: the leash is his reach (the edge-band test and the entry's range drop read r.range)
                 r.chosen  = fid;
                 r.dSelf   = d;
                 r.dPlayer = t ? t->GetPosition().GetDistance(pcPos) : 0.0f;
@@ -831,6 +881,10 @@ namespace MFO::EngageOnSight {
                                        a_minConfidence));
                 } else if (r.dSelf > r.range * kStartRangeMargin) {
                     Status(note, a_f, a_id, "armed: nearest enemy is in the edge band (beyond 0.9 x range)", now);
+                } else if (t && !t->IsDead() && !t->IsDisabled() && !APMFBridge::FileStyleBeforeEntry(a_id)) {
+                    // His class style claim goes in BEFORE the entry (the new controller reads it when built); a heavy-armor read
+                    // is outstanding: the entry waits this lap, the next probe asks again.
+                    Status(note, a_f, a_id, "armed: waiting for his armor read before filing the entry's combat style", now);
                 } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;
                     switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h, r.range, a_inFight)) {
@@ -853,11 +907,19 @@ namespace MFO::EngageOnSight {
                         const std::string basis = r.sensed
                             ? fmt::format("senses={} (detail {:#x})", SenseText(r.senses, r.detail), r.detail)
                             : std::string("sightline=VISIBLE");
-                        if (a_inFight)
+                        if (a_inFight) {
+                            // Others join via the fighter (marth 2026-11-17): said once, with the entry.
+                            std::string via;
+                            if (r.throughMate) {
+                                auto* m = RE::TESForm::LookupByID<RE::Actor>(r.throughMate);
+                                via = fmt::format("; JOINS THROUGH TEAMMATE {} ({:08X}), who fights it and senses it (his own sense found none "
+                                                  "or it is past his reaction distance; reach = the leash)", NameOf(m), r.throughMate);
+                            }
                             spdlog::info("[engage-on-sight] {} ({:08X}) joins the party's fight: {} ({:08X}) {:.0f}u from him "
-                                         "(range {:.0f}u), {}, {} candidate(s); ch.21 entry h={}; ch.20 pin: {}",
+                                         "(range {:.0f}u), {}, {} candidate(s); ch.21 entry h={}; ch.20 pin: {}{}",
                                          NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.range, basis,
-                                         r.candidates.size(), h, pin);
+                                         r.candidates.size(), h, pin, via);
+                        }
                         else
                         spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest {} enemy, "
                                      "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), {} "
