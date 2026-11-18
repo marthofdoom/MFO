@@ -3594,3 +3594,10 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **F4 (SEV-3, FIXED):** the entry foe is behind `--engage-on-sight` / `FightSpec::engageOnSight`, OFF by default.
 - **F5 (marth ruling "Oracle downs", DONE):** the caster survival bands are oracle-relative (`downs/f`, `selfHealLow%`), measured with the gap pass's `ORCSURV` line. OPEN SEV-4: the bounds are static numbers from one 160-fight oracle run and must be re-measured when the world or the oracle changes. OPEN SEV-4: a tiny `downs/f` bound costs almost no persona credit (the credit's scale has a floor of 5).
 - The earlier entry "the survival band numbers (0.35 downs a fight, 25 to 75 percent) are judgement" is superseded by F5.
+
+### fix/loot-1117c (author notes, not a review round)
+
+- **OPEN (SEV-4, not done):** `kTeamDispatchSpreadU` (spread teammates' dispatches) was NOT built: a distance-to-teammate-target skip would starve clustered loot (a museum shelf is dozens of items inside 100 u). It needs a sort tier (like the actor-block tiers), not a filter.
+- **OPEN (SEV-4):** the museum deposit's root cause for the four unmoved items (Honed Falmer Sword, Silver Greatsword, Deathbrand, Bonemold Helmet, 11-17e) is NOT proven from the log: every silent skip now logs, and a RemoveItem that moves nothing names the item (worn plan, unequip asked). Read the next run's `[lotd] ... transfer SKIPPED / MOVED NOTHING` lines before changing the unequip order.
+- **OPEN (SEV-4):** not equipping museum-bound weapons as the off-class fallback is not changed here (the fallback pick is `cast/Equip.cpp IsMuseumRelic` / the hold, not `OffClassTick`).
+- **OPEN (SEV-5):** `gateReadmitMoveU` default 1024 and `batchHoldMinSec` 3 are placeholders for the sim / field.

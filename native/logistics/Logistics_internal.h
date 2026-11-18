@@ -14,6 +14,7 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Scheduler.h"   // LootPartyInCombat: Scheduler::PartyCombat
+#include "iaus/LootNeed.h"   // LootTuning: the guard / gate / batch-hold rows the loot code reads
 #include "Config.h"
 #include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
