@@ -811,6 +811,59 @@ marth's rulings, verbatim: ceiling "128 + fix the noise". "Bash/block cooldowns 
 - F8 (stated): with `--oracle-every` (a diagnostic throttle) a sneak hold lasts until his next decision. Two options with the same outcome on every stream are treated as one (the later is dropped). `edge_search.py:99` writes the same small oracle report run as the driver's `emit_run` and so also runs the new oracle.
 - `tune_driver.py FIDELITY` is empty now: no extended action is better than the game's any more, so no divergence is classified (d). A bash the Bash family did not offer is (b) or (c) by the generic rule.
 
+**The final oracle, measured (2026-11-18).** All numbers below are the fix-round oracle on the world WITH the field's hit-size spread (15.5). Built-in world, v3, shipped tunings, seed 1.
+
+*How often the race is decided.* The same 16 natural fights per class, subject only, one shared stream against the streams per actor. Share of decisions the ceiling ended with more than one option standing:
+
+| Class | One shared stream | Streams per actor |
+|---|---|---|
+| knight | 76 % | 21 % |
+| warrior | 75 % | 48 % |
+| thief | 78 % | 57 % |
+| evoker | 77 % | 67 % |
+| healer | 84 % | 28 % |
+
+On the 32 fights per class of the gap table below the ceiling ends 27 to 82 % of decisions (it was 34 to 88 % in the first round with fewer options a decision). The melee line and the healer separate most of the time now. A caster with 15 to 18 options a decision still has 10 of them standing at the ceiling on two decisions in three, with a mean unresolved lead of 0.55 to 0.88 U: many of his options are the same spell on another foe and do differ by less than the noise.
+
+*Gap per class.* 32 natural fights, subject only. IAUS U differs from 14.5 because the world changed (hit sizes) and Utility changed (F3):
+
+| Class | IAUS U | Oracle U | Gap (se) | Ceiling ended | Tunable share (a) | Largest clusters |
+|---|---|---|---|---|---|---|
+| melee | 78.79 | 89.56 | +10.77 (4.10) | 50 % | 45 % | attack retarget 32 %. A step back, no road (c) 30 % |
+| ranged | 73.18 | 73.64 | +0.46 (0.68) | 77 % | 55 % | attack retarget 47 %. A step back (c) 22 % |
+| mage | 72.73 | 78.94 | +6.21 (5.21) | 78 % | 72 % | cast_control to attack 34 %, cast_heal to attack 18 % |
+| knight | 82.37 | 90.44 | +8.08 (3.70) | 27 % | 85 % | taunt to attack 36 %, attack retarget 33 %, power attack to attack 11 % |
+| warrior | 75.80 | 81.43 | +5.62 (2.80) | 50 % | 85 % | attack retarget 60 %, power attack to attack 19 % |
+| mercenary | 85.35 | 90.41 | +5.06 (2.94) | 75 % | 43 % | attack retarget 18 %, power attack to attack 15 %. A bash (c) 11 % |
+| archer | 70.64 | 77.87 | +7.22 (4.31) | 82 % | 56 % | attack retarget 33 %, attack to a weapon swap 23 %. Close on the player (c) 15 % |
+| thief | 88.43 | 89.07 | +0.64 (5.42) | 68 % | 87 % | sneak to a weapon swap 34 %, attack retarget 25 % |
+| evoker | 67.08 | 82.37 | +15.29 (6.87) | 68 % | 36 % | a side step to a clear line (c) 10 %, a vetoed summon (b) 10 %, cast_control to attack 8 % |
+| conjurer | 78.93 | 84.87 | +5.94 (5.62) | 73 % | 89 % | attack retarget 40 %, cast_control to attack 22 %, to cast_summon 11 % |
+| healer | 71.81 | 81.14 | +9.33 (4.35) | 37 % | 57 % | cast_heal to his own AI 18 %, cast_control to attack 17 %, a vetoed summon (b) 12 % |
+| warlock | 58.88 | 74.70 | +15.82 (7.78) | 47 % | 60 % | cast_control to cast_heal 18 %, attack retarget 15 %. Close on the player (c) 9 % |
+| melee-off | 79.94 | 84.36 | +4.42 (4.41) | 43 % | 69 % | cast_heal to attack 15 %, taunt to attack 14 % |
+| ranged-off | 69.18 | 87.71 | +18.54 (5.87) | 69 % | 81 % | cast_offense to attack 33 %, cast_buff to attack 16 % |
+| mage-off | 74.20 | 79.36 | +5.16 (5.90) | 69 % | 66 % | cast_control to attack 16 %, to cast_summon 12 % |
+
+The ledger now holds only divergences the race decided (F1), so its shares are firmer and its totals smaller than in 14.6. No (d) class is left.
+
+*Structural limits after the rulings (a tune cannot close them, native follow-ups):*
+
+- No step back road: melee 30 %, ranged 22 %, ranged-off 6 %. The largest single untunable item of the melee cell.
+- No Regroup client (close on the player): archer 15 %, healer 11 %, warlock 9 %, evoker 7 %, mage 6 %.
+- A bash the Bash family did not offer or has no road for: mercenary 11 %, archer 12 %, melee 8 %, and warrior 10 % and knight 6 % over two clusters.
+- A summon generated and vetoed or under the floor: healer 12 %, evoker 10 %.
+- No "clear line of fire" family: evoker 10 %.
+- A potion scored under the floor: mercenary 21 % in two clusters, melee 9 %, ranged 8 %, mage 7 %, warlock 5 %. The magicka potion of a non-caster no longer pays the oracle (F3), so what is left here is real.
+- A scroll with the scroll road off: mage-off 9 %.
+- GONE from the list: the flee of the warlock, the healer, the conjurer and the tree-OFF cells (14 to 17 % in 14.6). The oracle no longer has a flee the game does not have, so that was the oracle's own artefact. The thief's sneak hold is gone from the top rows too.
+
+*Refused option offers* (the same 480 fights, subject only): 0 `cat:` refusals. `ext:block` without a Block row: every decision of melee, warrior, mercenary and melee-off, and a few of the ranged cells (it is offered whenever a blade is in hand, and refused for anyone but the Knight line). `ext:sprint_back` without the disengage flag: melee 2820, knight 3379, warrior 1763, mercenary 1257, mage 593, archer 405, ranged 392. Rulings: knight 3705 and warrior 2141 never-retreats, healer 1014 near-player, splash 254 to 891 and forbidden posture 444 to 1064 on each Mage-line cell, no-melee 3 to 79.
+
+*Run time.* Subject only: 51.2 CPU seconds a natural fight over the 15 cells (35.8 in the first round, 3.05 before). Every follower planned, Mage line: 114 CPU seconds a fight (92). The cost went up because every target of an extended action is an option now. A gap stage first pass is about 54 CPU hours, about 3.4 hours on 16 cores per world. `--oracle-ceiling 32` remains the lever.
+
+*Checks on the final tree.* CLI-CHECKS PASS (three new ones: the stop line and the class filter, the stream diagnostic and `--gap-bracket`, the damage report). 26 unit tests pass. A gap run prints the same `GAP*` and `ORC*` lines with one thread and with 16. `--world v2` compares to its baseline with 0 metrics changed and runs the class oracle.
+
 ## 15. Incoming damage on followers: the field against the lab (2026-11-17)
 
 marth, verbatim: "Healing seems to come too late ... If it's the same timing a restoration class would have, it's way too late" and "Which tells me the sim is wrong with incoming damage rates or something".
@@ -919,3 +972,47 @@ Before and after, Tuxborn world, strong1 bracket (the field's pressure), 288 fig
 The burst now exists in the lab (a follower can go from full to down in one second, which it could not), and the share of downs that come out of calm went from 12 to 18 %. It is still about a third of the field's share, on six field downs. The step is small because the mean is held at 1 and because a down in the lab's strong fights is mostly the melee follower worn down, not the mage burst. The capped loss numbers did not move toward the field. They cannot: the game's reader caps a window's loss at 25 %, so it does not see hit size.
 
 What the built-in world's tuning baseline does with it (`baseline_v3_builtin.txt`, regenerated, 8 fights a cell, so each row is noisy): U over the 90 class and bracket rows moved by -4.56 on average (from -15.91 to +4.11), and by -2.76 over the 15 natural rows. The player model dies more often when a hard hit lands on him, and a fight the player loses scores low. The v2 world is untouched (0 metrics changed against `baseline_builtin.txt`). Every J of the v3 world is a new number after this, so the retune starts from the new baseline.
+
+### 15.6 Survival, heal timing and ally survival with the final oracle on the calibrated world
+
+160 natural fights per class, built-in world, v3 with the hit-size spread, every follower planned by the class oracle (review F7: the subject is beside oracle-planned companions here, so he is better protected than beside IAUS ones). The run took 139 minutes on 16 cores. Bound = the oracle's value plus the same margins (0.05 downs a fight, 5 points). `Playstyles.h` carries these numbers.
+
+| Class | Oracle downs / fight | Bound | IAUS | Oracle self heals begun under 25 % | Bound | IAUS |
+|---|---|---|---|---|---|---|
+| mage | 0.019 | 0.07 | 0.031 | 5.4 % | 10 % | 13.7 % |
+| evoker | 0.019 | 0.07 | 0.019 | 2.6 % | 8 % | 7.5 % |
+| conjurer | 0.031 | 0.08 | 0.006 | 2.4 % | 7 % | 13.7 % |
+| healer | 0.000 | 0.05 | 0.019 | 2.2 % | 7 % | 9.5 % |
+| warlock | 0.025 | 0.08 | 0.037 | 4.9 % | 10 % | 15.1 % |
+
+With harder single hits the oracle goes down a little more often than in 14.8 (0.019 to 0.031 a fight against 0.000 to 0.013), so the downs bounds are 0.01 to 0.03 looser. Every class is inside its downs band. The mage, the conjurer, the healer and the warlock are outside the self-heal band with the shipped tunings: they begin a self heal under a quarter of their health two to six times as often as the oracle.
+
+**Heal timing, re-derived (the Healer's and the Priest's `healAt% <= 60`).** The old band capped the MEAN health of the recipient at the heal from above: a healer who healed earlier than 60 % failed it. The oracle heals at a mean of 67 to 75 % of the recipient's health on every caster cell. So that band asked for later heals than the best play. It is replaced on those two rows by `healLate%`: the share of his heals on another that BEGIN with the recipient under 30 % of his health. 30 % is one hard field hit (the 90th percentile of the hit windows of 15.5), and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis, 1.0 to 2.9 s), so a heal begun under that line can lose the race with the next hit. The bound is the oracle's share plus 5 points.
+
+| Class | Oracle heals begun under 30 % | Bound | IAUS | Oracle mean health at the heal | IAUS |
+|---|---|---|---|---|---|
+| healer | 2.9 % | 8 % | 1.9 % | 70.9 % | 68.2 % |
+| priest | 1.2 % | 6 % | 2.4 % | 70.6 % | 71.8 % |
+| mage (no band) | 1.8 % | | 7.4 % | 69.8 % | 64.1 % |
+| evoker (no band) | 1.7 % | | 7.7 % | 74.7 % | 57.9 % |
+| conjurer (no band) | 2.3 % | | 7.2 % | 73.1 % | 55.5 % |
+| warlock (no band) | 4.9 % | | 2.8 % | 66.7 % | 66.2 % |
+
+On natural fights the Healer and the Priest are inside the new band. The classes that heal late are the mage, the evoker and the conjurer: three to four times the oracle's late share, and a mean 6 to 18 points lower. That matches the diagnosis (the Evoker's heals carry a 0.37 school weight). The five other rows that hold `healAt% <= 75` were not asked for and are unchanged. The same argument applies to them.
+
+**The Evoker's ally-survival band.** New on his row: `dwh/f` (an ally goes down while he holds a heal he could cast) at most the oracle's 0.069 a fight plus 0.05, so 0.12. IAUS is at 0.106, inside. The Healer and the Priest keep their card value of 0.1 (oracle 0.069 and 0.056, IAUS 0.106 and 0.106: both are just outside their own band).
+
+**Under field pressure** (`--gap-bracket strong2`, 32 fights per class, every follower planned. The record, not a band):
+
+| Class | IAUS U | Oracle U | Gap (se) | Allies down while he held a heal, IAUS / oracle | Heals begun under 30 %, IAUS / oracle | Mean health at the heal, IAUS / oracle |
+|---|---|---|---|---|---|---|
+| mage | 33.02 | 59.97 | +26.95 (6.89) | 0.344 / 0.219 | 3.4 % / 3.4 % | 60.3 % / 66.5 % |
+| evoker | 35.48 | 57.15 | +21.67 (9.22) | 0.312 / 0.094 | 17.9 % / 11.7 % | 50.4 % / 60.8 % |
+| conjurer | 47.21 | 68.45 | +21.24 (5.96) | 0.250 / 0.156 | 15.3 % / 3.3 % | 49.9 % / 68.6 % |
+| healer | 27.45 | 53.30 | +25.85 (7.66) | 0.219 / 0.188 | 3.4 % / 6.5 % | 64.5 % / 67.2 % |
+| warlock | 33.56 | 51.29 | +17.73 (6.99) | 0.219 / 0.250 | 2.4 % / 3.8 % | 66.9 % / 63.5 % |
+| priest | 45.41 | 66.17 | +20.75 (8.09) | 0.156 / 0.094 | 6.1 % / 1.5 % | 59.3 % / 68.6 % |
+
+This is where marth's observation shows. Under the field's pressure the gap to the oracle is 18 to 27 U (10 to 19 on natural fights), the Evoker lets an ally go down while holding a heal three times as often as the oracle (0.31 against 0.09), and the Evoker and the Conjurer begin 15 to 18 % of their heals on an ally who is one hit from down. 32 fights a class, so each number is rough. The direction is the same on most rows. The warlock and the healer's late share go the other way.
+
+Open after this batch: whether the bands should gate under pressure as well (a ruling), the native heal-timing fix to mirror, and the potion-worth tables to re-measure after F3 and the hit sizes.
