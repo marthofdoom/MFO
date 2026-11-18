@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests of tune_driver.py's pure helpers (no simulator needed). Run: python3 -I tools/iaus_sim/test_tune_driver.py"""
+import re
 import os
 import sys
 import tempfile
@@ -102,6 +103,17 @@ class Gap(unittest.TestCase):
         c, _, fams = T.classify("attack", "taunt", "ranked", {})
         self.assertEqual((c, fams), ("a", ["attack", "taunt"]))
         self.assertEqual(T.classify("power_attack", "idle", "idle", {})[2], ["power_attack"])
+
+    def test_every_extended_action_of_the_oracle_has_a_family_and_a_road(self):
+        # the oracle's extended set (Oracle.h Name(Ext)) and the driver's two tables must name the same actions, so no divergence is classified by a missing row
+        src = open(os.path.join(os.path.dirname(os.path.abspath(T.__file__)), "Oracle.h")).read()
+        names = set(re.findall(r'"(ext:[a-z_]+)"', src[src.index("inline const char* Name(Ext e)"):src.index("struct Opt {")]))
+        self.assertGreaterEqual(len(names), 11)
+        self.assertEqual(names, set(T.EXT_FAMILY))
+        self.assertEqual(names, set(T.EXT_ROAD))
+        c, why, _ = T.classify("cast_offense", "ext:clear_line", "ext", {})
+        self.assertEqual(c, "c")
+        self.assertNotIn("not in the road table", why)
 
     def test_parse_refuses_a_missing_dump(self):
         T.CFG = dict(T.SMOKE)

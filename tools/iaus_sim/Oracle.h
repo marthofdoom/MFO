@@ -13,7 +13,7 @@
 //   NO QUALITY CAP   every candidate the generator offers is an option (no option limit); he decides at every decision
 //                    point the game has (each time the pump serves him and his body is free: OracleCfg::every = 0);
 //                    a rollout runs to the fight's end (H = Fight::maxSec); the streams per option are not a fixed K:
-//                    they run until the best option is STATISTICALLY SEPARATED from every other (Race below) or the
+//                    they run until the best option is STATISTICALLY SEPARATED from every other (the race in OraclePolicy::Serve) or the
 //                    safety ceiling is hit (OracleCfg::ceiling, reported with how often it binds).
 //   CLASS-BOUND      every option, the extended set included, must be an ability of HIS CLASS (ClassRefuses: the ONE
 //                    reader of that rule) and may not break a written ruling of the class (RulingRefuses, Playstyles.h).
@@ -239,16 +239,18 @@ namespace Sim {
     //            every second lap; with one or two it skipped more.) A value > 0 is a DIAGNOSTIC throttle.
     //   H        how long a rollout runs past the decision. 150 = Fight::maxSec: every fight is over by then, so a rollout always runs to the
     //            fight's END (RunFor reads H >= maxSec as "to the end" whatever maxSec is). --oracle-h below maxSec is a DIAGNOSTIC cut.
-    //   nMin, ceiling, pOne   the stopping rule of Race: every option gets nMin shared streams, then the streams double (8, 16, 32, ...) and
+    //   nMin, ceiling, pOne   the stopping rule of the race in OraclePolicy::Serve: every option gets nMin shared streams, then the streams double (8, 16, 32, ...) and
     //            after each round an option is dropped once the best option's PAIRED lead over it (the same streams, so the fight's luck
     //            cancels) is above the one-sided Student-t bound at pOne (0.001) for that many streams; he stops when one option is left, or
-    //            at the safety ceiling. At the ceiling the options still standing are within noise of each other at 512 paired fights each
-    //            (OracleStats::unresolved is their mean lead: what a wrong pick there could cost); the best mean is taken.
+    //            at the safety ceiling (128 streams an option: iaus-sim-v3.md 14.2 has the measurement behind the number). At the ceiling the
+    //            options still standing are within noise of each other over that many paired fights (OracleStats::unresolved is the best's
+    //            mean lead there: what a wrong pick could cost); the best mean is taken. MEASURED: the ceiling ends most races, because most
+    //            options of a decision differ by less than a fight's luck (the shared seed stops pairing two rollouts once they diverge).
     //   K        0 = the stopping rule. K > 0 (--oracle-k) is a DIAGNOSTIC fixed ceiling of K streams (the CLI checks' one-stream smoke runs,
     //            and the rule before 11-17 was K = 8): never a tuning setting; the results file records it.
     //   commit   how long a rollout HOLDS the option before the base policy takes over again (an attack order, a retreat, his own AI). It is
     //            part of the rollout MODEL, not a budget: the oracle itself is asked again at his next decision point.
-    struct OracleCfg { int K = 0, nMin = 8, ceiling = 512; double pOne = 0.001; double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true; };
+    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true; };
 
     // One-sided Student-t critical value at p for n paired samples (df = n - 1): the Cornish-Fisher expansion about the normal quantile
     // (4.76 at n = 8 against the table's 4.785, 3.73 at 16, 3.37 at 32, 3.12 at 256 for p = 0.001). n < 2 has no variance: +infinity.
