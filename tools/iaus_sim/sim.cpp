@@ -386,6 +386,77 @@ namespace {
     //   and two lines read off the curve: NO-WASTE (1 - potion / max health: above it part of the potion is lost) and LAST-SAFE (the
     //   lowest tenth in which under 10% of the pressed seconds were lethal-in-2-s: under it a potion comes too late too often).
     // The best line itself is SEARCHED (tools/iaus_sim/edge_search.py over --curve <class>:drink_health.32.b): this report says where to look.
+    // ── --damage-report N: INCOMING DAMAGE ON FOLLOWERS, in the field logs' own terms (calib_damage.py; iaus-sim-v3.md 15) ──────────────
+    // The game logs no per-hit damage. What the Deck logs hold is the [sense] line (Confidence::HpLossRate per follower about every 3.3 s:
+    // the NET health fraction lost over the last 5 s, the loss capped at 25 % of his maximum, over max(span, 5 s)) and the [bleed] DOWN line.
+    // This report computes the SAME numbers for every follower of N natural fights per class, so the lab and the field compare like for
+    // like: SENSE per foes bucket, DOWNS per follower-minute, BURST (from his last no-loss sample to the down). It adds what only the lab
+    // can see: the seconds from his last moment above 75 % health to the down, and his worst loss inside one second.
+    int g_gapBracket = 0;      // --gap-bracket <name>: the strength bracket of the gap pass's "natural" fights (default natural). strong1 is the FIELD-PRESSURE read: the bracket whose downs per follower-minute match the Deck logs (iaus-sim-v3.md 15)
+    int g_damageBracket = 0;   // --damage-bracket <name>: which strength bracket the report's fights are drawn in (default natural)
+    int DamageReport(const Data& D, const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
+        const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
+        std::vector<int> cls; for (std::size_t i = 0; i < all.size(); ++i) if (only.empty() || ("," + only + ",").find("," + all[i].name + ",") != std::string::npos) cls.push_back(static_cast<int>(i));
+        struct DA { long n[3]{}, losing[3]{}, cap[3]{}; double sum[3]{}; long downs = 0, downB[3]{}, calmDown = 0; double minutes = 0, foeSec = 0, pileSec = 0; std::vector<double> burst, from75, peak; long fights = 0; double dur = 0;
+            double fHp[3]{}, fAr[3]{}, fLvl[3]{}; long fN[3]{}, fDowns[3]{}, fFast[3]{}; double foeLvl = 0, foeHp = 0; long foeN = 0; };   // per follower line (melee, ranged, mage): his health, physical mitigation (0..1), level; his downs and those under 3 s from above 75 %
+        std::vector<DA> agg(cls.size()); std::atomic<int> next{ 0 }; std::mutex mx; const int perClass = n * static_cast<int>(seeds.size()), jobs = perClass * static_cast<int>(cls.size());
+        constexpr double kStep = 3.3, kWindow = 5.0, kMinStep = 0.25, kMinSpan = 1.0; constexpr float kCap = 0.25f;   // CombatScan.cpp's throttle as logged (median spacing 3.3 s); Confidence.h kTrendWindow / kTrendMinStep / kTrendMinSpan / kTrendBurstCap
+        auto bucket = [](int foes) { return foes <= 2 ? 0 : foes <= 4 ? 1 : 2; };
+        auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int ci = job / perClass, k = job % perClass, si = k / n, f = k % n; const std::uint64_t seed = seeds[static_cast<std::size_t>(si)];
+            const int gi = cls[static_cast<std::size_t>(ci)]; const SimClass& sc = all[static_cast<std::size_t>(gi)]; Rng R;
+            R.g.seed(seed * 1000003ULL + std::uint64_t(gi) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL);   // the natural fights of the gap pass
+            Fight F = RandomFight(D, sc, g_forceRank ? g_forceRank : 1 + f % 5, kBrackets[g_damageBracket], R, t1); F.estimates = estimates; F.scrollRoad = scrollRoad;
+            struct FS { std::vector<std::pair<double, float>> ring; double nextSense = 0, lastCalm = -1, last75 = 0, lastSenseLoss = -1; int lastFoes = 0; bool up = true; std::vector<std::pair<double, float>> sec; float peak = 0; };
+            std::vector<FS> fs(F.ctl.size()); for (std::size_t i = 0; i < fs.size(); ++i) fs[i].nextSense = 1.1 * double(i);
+            DA a; IausPolicy P; F.SetArena();
+            for (const Ctl& c : F.ctl) { const Body& x = F.b[static_cast<std::size_t>(c.body)]; const int fm = static_cast<int>(c.fam); a.fHp[fm] += x.c.hpMax; a.fAr[fm] += ArmorMitigation(D.rules, x.spec->ar, x.spec->pieces); a.fLvl[fm] += x.c.level; ++a.fN[fm]; }
+            for (const Body& o : F.b) if (o.role == Sim::Role::Foe) { a.foeLvl += o.c.level; a.foeHp += o.c.hpMax; ++a.foeN; }
+            while (!F.over) {
+                if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; const int c = F.rr; P.Serve(F, c); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size());
+                    FS& q = fs[static_cast<std::size_t>(c)]; const Body& x = F.b[static_cast<std::size_t>(F.ctl[static_cast<std::size_t>(c)].body)]; const float hp = std::max(0.0f, x.c.hp) / std::max(1.0f, x.c.hpMax);
+                    if (q.ring.empty() || F.now - q.ring.back().first >= kMinStep) { q.ring.push_back({ F.now, hp }); if (q.ring.size() > 32) q.ring.erase(q.ring.begin()); }   // Confidence::NoteHealth: once per own service
+                    if (F.now >= q.nextSense) { q.nextSense += kStep; int foes = 0, onHim = 0; for (const Body& o : F.b) if (o.role == Sim::Role::Foe && Fight::Up(o) && o.airUntil >= 0) { ++foes; onHim += o.c.targetId == x.c.id; }
+                        float rate = 0;   // Confidence::HpLossRate
+                        if (q.ring.size() >= 2) { const auto& nw = q.ring.back(); const auto& nw1 = q.ring[q.ring.size() - 2]; const double window = std::max(kWindow, 2.5 * (nw.first - nw1.first)); const std::pair<double, float>* old = &nw1;
+                            for (std::size_t kk = 3; kk <= q.ring.size(); ++kk) { const auto& c2 = q.ring[q.ring.size() - kk]; if (nw.first - c2.first > window) break; old = &c2; }
+                            const double span = nw.first - old->first; if (span >= kMinSpan) rate = std::max(0.0f, std::min(kCap, old->second - nw.second) / static_cast<float>(std::max(span, kWindow))); }
+                        if (foes > 0) { const int b = bucket(foes); ++a.n[b]; a.losing[b] += rate > 0.0f; a.sum[b] += 100.0 * rate; a.cap[b] += 100.0f * rate >= 4.9f; a.minutes += kStep / 60.0; a.foeSec += foes; a.pileSec += onHim; }
+                        if (rate <= 0.0f) q.lastCalm = F.now; q.lastSenseLoss = rate; q.lastFoes = foes; } }
+                F.StepWorld();
+                for (std::size_t i = 0; i < fs.size(); ++i) { FS& q = fs[i]; const Body& x = F.b[static_cast<std::size_t>(F.ctl[i].body)]; const float hp = std::max(0.0f, x.c.hp) / std::max(1.0f, x.c.hpMax); const bool up = Fight::Up(x);
+                    q.sec.push_back({ F.now, hp }); while (q.sec.size() > 1 && F.now - q.sec.front().first > 1.0) q.sec.erase(q.sec.begin()); q.peak = std::max(q.peak, q.sec.front().second - hp);
+                    if (q.up && !up) { ++a.downs; ++a.downB[bucket(std::max(1, q.lastFoes))]; if (q.lastCalm >= 0) a.burst.push_back(F.now - q.lastCalm); a.calmDown += q.lastSenseLoss == 0.0; a.from75.push_back(F.now - q.last75); const int fm = static_cast<int>(F.ctl[i].fam); ++a.fDowns[fm]; a.fFast[fm] += F.now - q.last75 < 3.0; }
+                    if (up && hp > 0.75f) q.last75 = F.now; q.up = up; }
+            }
+            for (const FS& q : fs) a.peak.push_back(100.0 * q.peak);
+            a.fights = 1; a.dur = F.now;
+            std::scoped_lock lk(mx); DA& g = agg[static_cast<std::size_t>(ci)];
+            for (int b = 0; b < 3; ++b) { g.n[b] += a.n[b]; g.losing[b] += a.losing[b]; g.cap[b] += a.cap[b]; g.sum[b] += a.sum[b]; g.downB[b] += a.downB[b]; }
+            g.downs += a.downs; g.calmDown += a.calmDown; g.minutes += a.minutes; g.foeSec += a.foeSec; g.pileSec += a.pileSec; g.fights += 1; g.dur += a.dur;
+            for (int b = 0; b < 3; ++b) { g.fHp[b] += a.fHp[b]; g.fAr[b] += a.fAr[b]; g.fLvl[b] += a.fLvl[b]; g.fN[b] += a.fN[b]; g.fDowns[b] += a.fDowns[b]; g.fFast[b] += a.fFast[b]; } g.foeLvl += a.foeLvl; g.foeHp += a.foeHp; g.foeN += a.foeN;
+            g.burst.insert(g.burst.end(), a.burst.begin(), a.burst.end()); g.from75.insert(g.from75.end(), a.from75.begin(), a.from75.end()); g.peak.insert(g.peak.end(), a.peak.begin(), a.peak.end()); } };
+        { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
+        std::printf("INCOMING DAMAGE ON FOLLOWERS (every follower of the fight, IAUS)  list=%s  seeds=%zu  %d %s fights per class and seed  world=%s\n", D.name.c_str(), seeds.size(), n, kBrackets[g_damageBracket].name, g_v3.Any() ? "v3" : "v2");
+        auto pct = [](std::vector<double> v, double p) { if (v.empty()) return -1.0; std::sort(v.begin(), v.end()); return v[std::min(v.size() - 1, static_cast<std::size_t>(p * double(v.size())))]; };
+        auto under = [](const std::vector<double>& v, double x) { long c = 0; for (double q : v) c += q < x; return c; };
+        DA tot; std::vector<std::pair<std::string, const DA*>> rows; for (std::size_t i = 0; i < cls.size(); ++i) { const DA& g = agg[i]; rows.push_back({ all[static_cast<std::size_t>(cls[i])].name, &g });
+            for (int b = 0; b < 3; ++b) { tot.n[b] += g.n[b]; tot.losing[b] += g.losing[b]; tot.cap[b] += g.cap[b]; tot.sum[b] += g.sum[b]; tot.downB[b] += g.downB[b]; }
+            tot.downs += g.downs; tot.calmDown += g.calmDown; tot.minutes += g.minutes; tot.foeSec += g.foeSec; tot.pileSec += g.pileSec; tot.fights += g.fights; tot.dur += g.dur;
+            for (int b = 0; b < 3; ++b) { tot.fHp[b] += g.fHp[b]; tot.fAr[b] += g.fAr[b]; tot.fLvl[b] += g.fLvl[b]; tot.fN[b] += g.fN[b]; tot.fDowns[b] += g.fDowns[b]; tot.fFast[b] += g.fFast[b]; } tot.foeLvl += g.foeLvl; tot.foeHp += g.foeHp; tot.foeN += g.foeN;
+            tot.burst.insert(tot.burst.end(), g.burst.begin(), g.burst.end()); tot.from75.insert(tot.from75.end(), g.from75.begin(), g.from75.end()); tot.peak.insert(tot.peak.end(), g.peak.begin(), g.peak.end()); }
+        rows.push_back({ "ALL", &tot }); static const char* bn[3] = { "1-2", "3-4", "5+" };
+        for (const auto& [name, gp] : rows) { const DA& g = *gp; long N = 0, L = 0, C = 0; double S = 0;
+            for (int b = 0; b < 3; ++b) { N += g.n[b]; L += g.losing[b]; C += g.cap[b]; S += g.sum[b];
+                if (g.n[b]) std::printf("SIM SENSE %-10s foes %-3s n=%-6ld losing %5.1f%%  mean %.2f %%/s  at-cap %5.1f%%  mean-when-losing %.2f %%/s\n", name.c_str(), bn[b], g.n[b], 100.0 * double(g.losing[b]) / double(g.n[b]), g.sum[b] / double(g.n[b]), 100.0 * double(g.cap[b]) / double(g.n[b]), g.losing[b] ? g.sum[b] / double(g.losing[b]) : 0.0); }
+            if (N) std::printf("SIM SENSE %-10s foes all n=%-6ld losing %5.1f%%  mean %.2f %%/s  at-cap %5.1f%%  mean-when-losing %.2f %%/s   (foes a sample %.1f, of them on him %.2f)\n", name.c_str(), N, 100.0 * double(L) / double(N), S / double(N), 100.0 * double(C) / double(N), L ? S / double(L) : 0.0, g.foeSec / double(N), g.pileSec / double(N));
+            std::printf("SIM DOWNS %-10s %ld in %.1f follower-minutes of combat = %.3f per follower-minute; by foes on the last sample: 1-2:%ld 3-4:%ld 5+:%ld   (%ld fights, mean %.0f s)\n", name.c_str(), g.downs, g.minutes, g.minutes > 0 ? double(g.downs) / g.minutes : 0.0, g.downB[0], g.downB[1], g.downB[2], g.fights, g.fights ? g.dur / double(g.fights) : 0.0);
+            std::printf("SIM BURST %-10s n=%zu  median %.1f s  under 3.5 s: %ld  under 7 s: %ld  (a down whose LAST sample read no loss: %ld)  |  from above 75%% health to the down: median %.1f s, p25 %.1f s, under 1 s: %ld, under 3 s: %ld  |  worst loss inside one second, per follower and fight: median %.0f%%, p90 %.0f%%, max %.0f%%\n", name.c_str(), g.burst.size(), pct(g.burst, 0.5), under(g.burst, 3.5), under(g.burst, 7.0), g.calmDown, pct(g.from75, 0.5), pct(g.from75, 0.25), under(g.from75, 1.0), under(g.from75, 3.0), pct(g.peak, 0.5), pct(g.peak, 0.9), pct(g.peak, 0.999));
+            static const char* fn[3] = { "melee", "ranged", "mage" }; std::printf("SIM WHO   %-10s", name.c_str());
+            for (int b = 0; b < 3; ++b) if (g.fN[b]) std::printf("  %s: level %.0f health %.0f armor %.2f, %ld downs (%ld under 3 s from above 75%%)", fn[b], g.fLvl[b] / double(g.fN[b]), g.fHp[b] / double(g.fN[b]), g.fAr[b] / double(g.fN[b]), g.fDowns[b], g.fFast[b]);
+            std::printf("  | foes: level %.0f health %.0f\n", g.foeN ? g.foeLvl / double(g.foeN) : 0.0, g.foeN ? g.foeHp / double(g.foeN) : 0.0); }
+        return 0;
+    }
+
     int DeclineReport(const Data& D, const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
         const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
         std::vector<int> cls; for (std::size_t i = 0; i < all.size(); ++i) if (only.empty() || ("," + only + ",").find("," + all[i].name + ",") != std::string::npos) cls.push_back(static_cast<int>(i));
@@ -631,7 +702,7 @@ static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -755,6 +826,9 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); }   // DIAGNOSTIC: a fixed ceiling of K streams instead of the stopping rule
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); }   // DIAGNOSTIC below Fight::maxSec: a rollout is cut there
         else if (!std::strcmp(argv[i], "--oracle-ceiling") && i + 1 < argc) oc.ceiling = std::max(1, std::atoi(argv[++i]));   // the stopping rule's safety ceiling (Oracle.h OracleCfg)
+        else if (!std::strcmp(argv[i], "--damage-report") && i + 1 < argc) damageN = std::max(1, std::atoi(argv[++i]));   // incoming damage on followers in the field logs' terms (DamageReport; calib_damage.py reads the field side)
+        else if (!std::strcmp(argv[i], "--gap-bracket") && i + 1 < argc) { const char* v = argv[++i]; bool ok = false; for (std::size_t b = 0; b < std::size(kBrackets); ++b) if (!std::strcmp(v, kBrackets[b].name)) { g_gapBracket = static_cast<int>(b); ok = true; } if (!ok) { std::fprintf(stderr, "unknown --gap-bracket '%s'\n", v); return 2; } }
+        else if (!std::strcmp(argv[i], "--damage-bracket") && i + 1 < argc) { const char* v = argv[++i]; bool ok = false; for (std::size_t b = 0; b < std::size(kBrackets); ++b) if (!std::strcmp(v, kBrackets[b].name)) { g_damageBracket = static_cast<int>(b); ok = true; } if (!ok) { std::fprintf(stderr, "unknown --damage-bracket '%s'\n", v); return 2; } }
         else if (!std::strcmp(argv[i], "--oracle-shared-stream")) oc.split = false;   // DIAGNOSTIC: the rollouts draw from ONE stream in world order, as before the per-actor streams (World.h Fight::split)
         else if (!std::strcmp(argv[i], "--oracle-every") && i + 1 < argc) oc.every = std::atof(argv[++i]);   // DIAGNOSTIC: a throttle on his decisions (0 = every decision point)
         else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--curve <class>:<family>.<cons>.<param>=<v>] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--class-oracle N] [--gap-scenarios N] [--rating N] [--rating-only] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
@@ -820,6 +894,7 @@ static int RealMain(int argc, char** argv) {
     if (ratingN < 0) ratingN = !scenario.empty() ? 0 : 3;
     if (declineN > 0 && oracle) { g_oracleMode = true; g_oc = oc; if (!noClassRulings) g_classRulings = true; std::printf("PLAYED BY THE CLASS ORACLE (%s): where the oracle drinks is a second reading of the drink line\n", OracleDesc(oc).c_str()); }
     if (potCalibN > 0) return PotionCalib(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, potCalibN, threads, estimates, scrollRoad);
+    if (damageN > 0) return DamageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, damageN, threads, estimates, scrollRoad);
     if (declineN > 0) return DeclineReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, declineN, threads, estimates, scrollRoad);
     if (ratingOnly) { std::vector<int> ci; for (std::size_t i = 0; i < allClasses.size(); ++i) if (only.empty() || ("," + only + ",").find("," + allClasses[i].name + ",") != std::string::npos) ci.push_back(static_cast<int>(i));
         std::vector<RatingRow> rr; const long bad = RatingPass(D, allClasses, ci, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, std::max(1, ratingN), threads, estimates, scrollRoad, rr);
@@ -896,7 +971,7 @@ static int RealMain(int argc, char** argv) {
         auto w2 = [&]() { for (;;) { const int job = nx.fetch_add(1); if (job >= jobs) return; Rng R; Fight F; int c = 0, sidx = -1;
             if (job < natJobs) { c = job / classOracle; const int f = job % classOracle;   // seeded by the class's index in the FULL table, so a class's gap fights do not depend on what else --classes named
                 R.g.seed(seed * 1000003ULL + std::uint64_t(gidx[static_cast<std::size_t>(c)]) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL);
-                F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); }
+                F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[g_gapBracket], R, t1); }
             else { sidx = (job - natJobs) / gapScen; const int f = (job - natJobs) % gapScen, si = sj[static_cast<std::size_t>(sidx)].first; c = sj[static_cast<std::size_t>(sidx)].second;
                 R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919); FightSpec fs = hs[static_cast<std::size_t>(si)].make(D, allClasses, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; F = BuildFight(D, fs, t1); }
             F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight Gf = F;
@@ -908,6 +983,7 @@ static int RealMain(int argc, char** argv) {
             if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); r.iaus.uSum += uI; r.iaus.Add(F.t, false); }
             else { r.sI += uI; r.sO += uO; ++r.sN; SO& q = so[static_cast<std::size_t>(sidx)]; q.uI += uI; q.uO += uO; q.iaus.uSum += uI; q.iaus.Add(F.t, false); q.orc.uSum += uO; q.orc.Add(Gf.t, false); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(w2); for (auto& x : th) x.join(); }
+        if (g_gapBracket != 0) std::printf("\nGAP BRACKET %s: the fights below called natural are drawn in the %s strength bracket\n", kBrackets[g_gapBracket].name, kBrackets[g_gapBracket].name);
         std::printf("\nCLASS ORACLE GAP (%d natural fights per class + %d of each of its own scenarios, class rulings %s; %s)\n%-17s %7s %7s %7s  %7s %7s  %7s %5s %6s   (gap = oracle U - IAUS U over all of the class's gap fights; persona: the oracle's own play against the class signature)\n", classOracle, gapScen, g_classRulings ? "IN FORCE" : "off", OracleDesc(oc).c_str(), "class", "IAUS U", "orc U", "nat gap", "pers.I", "pers.O", "GAP", "se", "fights");
         R.oracleKind = std::string("rollout over IAUS, class-bound extended action set") + (g_classRulings ? ", class rulings in force" : "") + (g_oracleSubjectOnly ? ", subject only" : "") + "; " + OracleDesc(oc); R.oracleK = OracleKOf(oc); R.oracleH = oc.H;
         for (int c = 0; c < nc; ++c) { const SimClass& sc = classes[static_cast<std::size_t>(c)]; const CO& r = co[static_cast<std::size_t>(c)]; const double n = classOracle;
