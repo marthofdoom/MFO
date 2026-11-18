@@ -274,6 +274,7 @@ namespace MFO::Iaus::TuningFile {
                 LogLoaded(e.name, n, Fnv1a(text), a_firstLoad && n.applied + n.rejected == 0);
             } else if (!a_firstLoad) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
             LiveLootTuning() = t;
+            PublishGuardTimers(t);   // the main-thread guard cache reads the atomic mirror
             return true;
         }
 

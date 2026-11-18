@@ -865,11 +865,12 @@ namespace MFO::Lotd {
         //     him; never leave him without the launcher his ammo is for).
         // IsPlayerPick / stock gear / quest are filtered by Shippable itself. Worker.
         bool WornRelicShippable(RE::Actor* a_follower, RE::TESBoundObject* a_base,
-                                const InvSnap::View& a_inv) {
+                                const InvSnap::View& a_inv, const char** a_why = nullptr) {
             const RE::FormID fid = a_follower->GetFormID();
             const RE::FormID bid = a_base->GetFormID();
+            const char* sink = ""; if (!a_why) a_why = &sink;
             if (KeptOffRoleWorn(fid, bid, a_inv)) return true;
-            if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(fid, bid)) return false;
+            if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(fid, bid)) { *a_why = "worn, and the player gave or dressed it (or PlayerGiven is absent)"; return false; }
             std::int32_t carried = 0;
             for (const auto& [obj, data] : a_inv)
                 if (obj == a_base) carried = static_cast<std::int32_t>(data.first);
@@ -878,9 +879,9 @@ namespace MFO::Lotd {
                                      if (it == g_relicSeenUnworn.end()) return false;
                                      const auto b = it->second.find(bid);
                                      return b != it->second.end() && carried > 0 && carried <= b->second; }();
-            if (!proof) return false;
+            if (!proof) { *a_why = "worn, with no proof his own AI put it on (not seen unworn this session)"; return false; }
             const auto [holdR, holdL] = Actuation::ForcedHoldFor(fid);
-            if (holdR == bid || holdL == bid) return false;
+            if (holdR == bid || holdL == bid) { *a_why = "worn: a gambit hold names it (his weapon of that category)"; return false; }
             auto* rw = a_base->As<RE::TESObjectWEAP>();
             if (!rw) return true;   // armor / shield / other: ships
             const int kind = WeaponKindOf(rw);
@@ -892,7 +893,39 @@ namespace MFO::Lotd {
                 if (HoldFromSale(fid, obj)) continue;   // another relic is no alternative
                 return true;
             }
+            *a_why = "worn: his only weapon of its kind (never disarmed)";
             return false;
+        }
+
+        // One line per (follower, item, reason) per session: the planner asks every few seconds, so a standing refusal is said once, not forever.
+        void LogDepositSkipOnce(RE::FormID a_follower, RE::TESBoundObject* a_obj, const char* a_why, const char* a_what) {
+            static std::unordered_set<std::uint64_t> s_said;   // worker-only (the planner), like g_relicSeenUnworn
+            const std::uint64_t key = (static_cast<std::uint64_t>(a_follower) << 32) ^ (static_cast<std::uint64_t>(a_obj->GetFormID()) * 2654435761u)
+                                      ^ std::hash<std::string_view>{}(a_why ? a_why : "");
+            if (s_said.size() > 512) s_said.clear();
+            if (!s_said.insert(key).second) return;
+            spdlog::info("[lotd] {:08X}: museum item '{}' ({:08X}) {} -- {}", a_follower, NameOf(a_obj), a_obj->GetFormID(), a_what, a_why ? a_why : "?");
+        }
+
+        // ONE ELIGIBILITY READER for a deposit item (field 11-17e: four planned items were silently skipped by the transfer, trip after trip,
+        // because the planner and the transfer judged an item by different rules). The planner (Shippable, worker, snapshot, CACHED gem read)
+        // and the transfer (TransferOnMain, main, live, LIVE gem read) both ask THIS, so an item is either planned-and-moved or never planned.
+        // a_have = copies carried, a_e = his inventory entry for the base (may be null), a_plannedWorn = the plan ships a WORN copy.
+        // movable = the copies that may leave this pass (a worn plan moves its worn copies too; an unworn plan moves only the unworn ones).
+        struct ShipJudge { bool ok = false; std::int32_t movable = 0; const char* why = ""; };
+        ShipJudge JudgeShip(RE::Actor* a_follower, RE::TESBoundObject* a_obj, const InvSnap::Entry* a_e, std::int32_t a_have,
+                            bool a_plannedWorn, bool a_onMain) {
+            ShipJudge j;
+            if (a_have <= 0)                                                      { j.why = "not carried"; return j; }
+            if (PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), a_obj->GetFormID())) { j.why = "player-given (never shipped)"; return j; }
+            if (a_e && a_e->IsQuestObject())                                      { j.why = "quest-flagged"; return j; }
+            const auto gem = a_onMain ? Logistics::GemRules::CheckRemovalLive(a_follower, a_obj, "museum donation", Logistics::GemRules::Reason::Museum)
+                                      : Logistics::GemRules::CheckRemovalCached(a_follower, a_obj, "museum donation", Logistics::GemRules::Reason::Museum);
+            if (gem == Logistics::GemRules::Verdict::Held)                        { j.why = "socketed gems (MEO strip pending)"; return j; }
+            j.movable = a_plannedWorn ? a_have : a_have - WornCopies(a_e);
+            if (j.movable <= 0)                                                   { j.why = "every copy is worn and the plan was for an unworn one"; return j; }
+            j.ok = true; j.why = "ok";
+            return j;
         }
 
         // The relics this follower carries that the museum needs FROM HIM: a WORN one
@@ -922,9 +955,18 @@ namespace MFO::Lotd {
                 const std::int32_t wornN  = std::min<std::int32_t>(WornCopies(e), static_cast<std::int32_t>(data.first));
                 const std::int32_t unworn = static_cast<std::int32_t>(data.first) - wornN;
                 const std::int32_t first  = std::min(unworn, need);
-                if (first > 0) out.push_back({ obj->GetFormID(), first, false });
+                auto plan = [&](std::int32_t a_n, bool a_worn) {
+                    const auto j = JudgeShip(a_follower, obj, e, static_cast<std::int32_t>(data.first), a_worn, /*a_onMain*/ false);
+                    if (j.ok) { out.push_back({ obj->GetFormID(), a_n, a_worn }); return; }
+                    LogDepositSkipOnce(fid, obj, j.why, "not planned");
+                };
+                if (first > 0) plan(first, false);
                 const std::int32_t rest = std::min(need - first, wornN);
-                if (rest > 0 && WornRelicShippable(a_follower, obj, inv)) out.push_back({ obj->GetFormID(), rest, true });
+                if (rest > 0) {
+                    const char* keepWhy = "";
+                    if (WornRelicShippable(a_follower, obj, inv, &keepWhy)) plan(rest, true);
+                    else LogDepositSkipOnce(fid, obj, keepWhy, "kept worn, not planned");
+                }
             }
             return out;
         }
@@ -1273,41 +1315,37 @@ namespace MFO::Lotd {
             for (const auto& it : a_items) {
                 auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(it.base);
                 if (!obj) continue;
-                // The player-given record is mutex-guarded (PlayerGiven.cpp): re-checked here.
-                if (PlayerGiven::IsPlayerGiven(a_follower, it.base)) continue;
                 std::int32_t have = 0;
-                bool hold = false;
                 // The HANDS a planned WORN ship (MFO-B126) is worn in: unequipped below,
                 // before the RemoveItem, per hand with a nullptr extraList and that hand's
                 // slot -- the same shape as every other UnequipObject in the tree (review
                 // round 3: never hand a live ExtraDataList to a QUEUED unequip that the
                 // RemoveItem right after may free).
                 bool wornRight = false, wornLeft = false;
-                std::int32_t wornCopies = 0;   // review R2-4: an unworn item moves only unworn copies
+                const InvSnap::Entry* ent = nullptr;
                 for (auto& [o, d] : InvSnap::Items(f)) {   // main thread: read live, in place
                     if (!o || o->GetFormID() != it.base) continue;
                     have += d.first;
                     auto* e = d.second.get();
                     if (!e) continue;
-                    if (e->IsQuestObject()) hold = true;
-                    wornCopies += WornCopies(e);
+                    ent = e;
                     if (it.worn)
-                        for (const auto& c : e->copies) {
-                            if (c.wornLeft) wornLeft = true;
-                            if (c.worn) wornRight = true;
+                        for (const auto& cp : e->copies) {
+                            if (cp.wornLeft) wornLeft = true;
+                            if (cp.worn) wornRight = true;
                         }
                 }
                 // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
                 // map (EquipAuthority.cpp); Shippable filtered it on the worker.
-                if (hold || have <= 0) continue;
-                // MEO-aware: a socketed relic is stripped first and donated once it reads gem-free
-                // (GemRules); until then it is skipped (a scan that moves nothing retries behind the
-                // crate cooldown, so the gems are never lost).
-                if (Logistics::GemRules::CheckRemovalLive(f, obj, "museum donation", Logistics::GemRules::Reason::Museum) == Logistics::GemRules::Verdict::Held) continue;
-                // A NOT-worn item moves only the unworn copies (no unequip); plain copies
-                // carry no extra list, so RemoveItem with a null list takes them first.
-                const std::int32_t movable = it.worn ? have : have - wornCopies;
-                if (movable <= 0) continue;
+                // THE SAME READER THE PLANNER USES (JudgeShip): held gems (MEO strips first and a scan that moves nothing retries behind the
+                // crate cooldown, so the gems are never lost), quest, player-given, and a NOT-worn plan moves only the unworn copies.
+                const auto judge = JudgeShip(f, obj, ent, have, it.worn, /*a_onMain*/ true);
+                if (!judge.ok) {
+                    spdlog::info("[lotd] {:08X}: transfer SKIPPED '{}' x{} -- {} (the planner and this read share one eligibility reader: the world changed since the plan)",
+                                 a_follower, NameOf(obj), it.count, judge.why);
+                    continue;
+                }
+                const std::int32_t movable = judge.movable;
                 if (wornRight || wornLeft) {
                     if (auto* eq = RE::ActorEquipManager::GetSingleton()) {
                         if (wornRight) eq->UnequipObject(f, obj, nullptr, 1, nullptr);
@@ -1317,7 +1355,11 @@ namespace MFO::Lotd {
                 const std::int32_t before = countIn(c, it.base, false);
                 f->RemoveItem(obj, std::min(it.count, movable), RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, c);
                 const std::int32_t delta = countIn(c, it.base, false) - before;
-                if (delta <= 0) continue;
+                if (delta <= 0) {
+                    spdlog::warn("[lotd] {:08X}: transfer of '{}' x{} MOVED NOTHING -- RemoveItem into the crate did not take it (planned {}, carried {}, unequip asked {}); still in his pack",
+                                 a_follower, NameOf(obj), std::min(it.count, movable), it.worn ? "worn" : "unworn", have, (wornRight || wornLeft) ? "yes" : "no");
+                    continue;
+                }
                 moved += delta;
                 names += std::format("{}'{}' x{}", names.empty() ? "" : ", ", NameOf(obj), delta);
                 std::scoped_lock lock(g_ledgerMx);

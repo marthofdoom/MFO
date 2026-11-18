@@ -39,6 +39,9 @@ namespace MFO::Logistics::TheftGate {
     struct GuardRefusal { std::uint32_t n = 0; GuardState state = GuardState::Clear; RE::FormID guard = 0; bool landing = false; bool notYet = false; };
     GuardRefusal GuardRefusalInfo();
 
+    // Keep a follower's follower-level (src = 0) answer warm: the service lap's peek-post (see TheftGate.cpp). Worker. No log, no stamp.
+    void GuardKeepWarm(RE::Actor* a_follower);
+
     // INTERIM GUARD GATE. TRUE = refuse (a guard sees the follower or a_src, or the answer is not back yet).
     // a_src may be null (a follower-only check, the scan's). Logs `[theft-gate] ... BARRED:guard` rate-limited.
     bool GuardInterim(RE::Actor* a_follower, RE::TESObjectREFR* a_src, Road a_road);

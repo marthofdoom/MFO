@@ -70,6 +70,8 @@ namespace MFO::Logistics {
             tr.legEngaged        = false;
             tr.legStart          = a_now;
             tr.nextLegPkgDiag    = {};   // -> first Walking tick reports
+            tr.emptySince        = {};   // a fresh leg: the batch is not empty, and no guard hold is running
+            tr.guardHoldSince    = {};
             return true;
         }
 
@@ -89,10 +91,15 @@ namespace MFO::Logistics {
             // INTERIM GUARD GATE (marth 2026-11-11, ClickUp 1dfcuabczbg): no looting while a guard can see him. TheftGate.cpp.
             // Inside a town the bar is follower-level for every category. Outside one it moves into the candidate filter (below), so an
             // unowned corpse (marth 2026-11-13: guard check skipped outside towns) is not barred by it; Pending still bars (fail closed).
-            const bool guardSeen = TheftGate::GuardInterim(a_follower, nullptr, TheftGate::Road::Guard);
+            const auto guardAns = TheftGate::GuardCheck(a_follower, nullptr, TheftGate::Road::Guard, false);   // == GuardInterim(...) != Clear
+            const bool guardSeen = guardAns != TheftGate::GuardState::Clear;
+            const bool guardPending = guardAns == TheftGate::GuardState::Pending;   // no answer yet: NOT a verdict (field 11-17c F1)
             // A town stays barred at the follower level unless a hostile-to-the-player body is known (L1, 2026-11-17: its guard check is waived,
             // so the per-candidate filter below decides); with none known the early exit is the old one.
-            if (guardSeen && TheftGate::PlayerInTown() && !TheftGate::HostileDeathsKnown()) return false;
+            if (guardSeen && TheftGate::PlayerInTown() && !TheftGate::HostileDeathsKnown()) {
+                if (guardPending && a_mode == LootMode::kExcursion) g_scanGuardPending = true;   // hold the batch, never read as "nothing left"
+                return false;
+            }
             // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
             // immediately cancel a loot excursion and pull followers back").
             // A follower must never BEGIN or CONTINUE a loot action while the
@@ -114,7 +121,7 @@ namespace MFO::Logistics {
             // tick. No blacklist, no state left behind: when combat ends the
             // very next service tick re-evaluates from a clean slate and can
             // resume the SAME corpse immediately.
-            if (auto* pcCombat = RE::PlayerCharacter::GetSingleton(); pcCombat && pcCombat->IsInCombat())
+            if (LootPartyInCombat())   // the player OR any party member (marth 2026-11-17); the service backstop ends the live trip, once
                 return false;
             // BEHAVIOUR LAYER: hold looting while the player is ACTIVELY stealthing,
             // not merely crouched. A stealth build spends most of the dungeon in
@@ -155,6 +162,7 @@ namespace MFO::Logistics {
             // still zero TES/worldspace derefs). The target's cell is the one that
             // makes an excursion loot a table OUT: once he walks at pile 1, pile 2
             // beside it becomes visible even from another cell.
+            GateReadmitSweep(a_now);   // field 11-17c F2: the timer / moved-away re-admit of GATED records (both off-able in looting.txt)
             auto* cell = a_follower->GetParentCell();
             if (!cell || !cell->IsAttached()) return false;
             const auto origin = a_follower->GetPosition();
@@ -196,7 +204,7 @@ namespace MFO::Logistics {
 
             // DIAGNOSTIC counters (marth: "nothing looted" -- find WHICH stage
             // drops the corpse). Logged rate-limited below.
-            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0, dEmpty = 0;
+            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0, dEmpty = 0, dGuard = 0;
 
             // TOWN RUN 5 (marth R2): in an errand town (the player's location sits under a TownAnchor while town errands run) container-loot excursions are
             // suppressed, EXCEPT LOTD museum loot (Category::Museum): a town's chests and barrels are other people's stock and the errand owns his time there.
@@ -616,7 +624,10 @@ namespace MFO::Logistics {
                     // scan drives it exactly as the inline version did.
                     if (TierReleased(a_cat, ref, playerPos, a_now)) {
                         // Outside a town the guard bar applies per candidate: only a waived (unowned) corpse passes it.
-                        if (guardSeen && !(ref->As<RE::Actor>() && ref->IsDead() && TheftGate::CorpseGuardWaived(a_follower, ref))) return RE::BSContainer::ForEachResult::kContinue;
+                        if (guardSeen && !(ref->As<RE::Actor>() && ref->IsDead() && TheftGate::CorpseGuardWaived(a_follower, ref))) {
+                            ++dGuard;   // counted, never silent (field 11-17c F1: 1200+ candidates vanished here in a guardless fort)
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
                         candidates.push_back(ref->GetHandle());
                     }
                     else ++dNotYet;
@@ -687,10 +698,10 @@ namespace MFO::Logistics {
                     // nothing if it simply does not hold the thing the winning
                     // rule wants (arrows, or the specific potion).
                     spdlog::info("[loot] {:08X} cat={} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
-                                 "(dropped owned={} offlimits={} locked={} waiting={} farleash={} empty={} busy={}) | self arrows={} bolts={} "
+                                 "(dropped owned={} offlimits={} locked={} waiting={} farleash={} empty={} busy={} guard={}{}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
                                  a_follower->GetFormID(), CatName(a_cat), kLootRadius, leash, dRefs, dLootable,
-                                 (int)candidates.size(), dOwned, dOffLimits, dLocked, dNotYet, dLeash, dEmpty, busy,
+                                 (int)candidates.size(), dOwned, dOffLimits, dLocked, dNotYet, dLeash, dEmpty, busy, dGuard, guardPending ? "(pending)" : "",
                                  ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),
@@ -853,7 +864,7 @@ namespace MFO::Logistics {
                     // (NotePathFail), so the usual cure is a later-tick hoover,
                     // not a retry of the walk.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
-                        MarkTravelFailed(rid, a_now);   // off-navmesh -> transient only
+                        MarkTravelFailed(rid, a_now, "off-navmesh (no mesh near it)");   // off-navmesh -> transient only
                         NotePathFail(rid);              // -> widen its grab radius
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
@@ -863,7 +874,7 @@ namespace MFO::Logistics {
                     // follower. Island = proven disconnected in the decoded navmesh graph (LootReach.cpp);
                     // skipped like the gate above (transient + grown grab), logged ONCE per ref.
                     if (NavConnected(a_follower, ref) == NavConn::Island) {
-                        MarkTravelFailed(rid, a_now);
+                        MarkTravelFailed(rid, a_now, "navmesh island (no connected path)");
                         NotePathFail(rid);
                         if (NoteUnreachableOnce(rid))
                             spdlog::info("[loot] {:08X}: {:08X} UNREACHABLE (navmesh island, no connected path) -- skipped",
@@ -872,7 +883,7 @@ namespace MFO::Logistics {
                     }
                     // TOWN DOOR RULE (marth 2026-11-02): no walk into an interior cell whose doors are all locked (the trespass is the player's bounty).
                     bool doorPending = false;   // the exterior door read was just posted: skip the candidate this tick, not a failure
-                    if (Errand::Rest::TownWalkBarredByLock(a_follower, ref, "loot target", &doorPending)) { if (!doorPending) MarkTravelFailed(rid, a_now); continue; }
+                    if (Errand::Rest::TownWalkBarredByLock(a_follower, ref, "loot target", &doorPending)) { if (!doorPending) MarkTravelFailed(rid, a_now, "town door rule (every door locked)"); continue; }
                     // ROAD CHOICE, LEG BOUNDARY (A/B). A leg in flight FINISHES ON THE
                     // ROAD IT STARTED: the decision is the live ch.19 leg itself
                     // (APMF-side truth, one record per slot), never the switch, so a
@@ -926,7 +937,7 @@ namespace MFO::Logistics {
                     // sticky strike (see the excursion-path note); it GROWS the
                     // ref's from-range grab radius instead.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
-                        MarkTravelFailed(rid, a_now);   // off-navmesh -> transient only
+                        MarkTravelFailed(rid, a_now, "off-navmesh (no mesh near it)");   // off-navmesh -> transient only
                         NotePathFail(rid);              // -> widen its grab radius
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
@@ -936,7 +947,7 @@ namespace MFO::Logistics {
                     // follower. Island = proven disconnected in the decoded navmesh graph (LootReach.cpp);
                     // skipped like the gate above (transient + grown grab), logged ONCE per ref.
                     if (NavConnected(a_follower, ref) == NavConn::Island) {
-                        MarkTravelFailed(rid, a_now);
+                        MarkTravelFailed(rid, a_now, "navmesh island (no connected path)");
                         NotePathFail(rid);
                         if (NoteUnreachableOnce(rid))
                             spdlog::info("[loot] {:08X}: {:08X} UNREACHABLE (navmesh island, no connected path) -- skipped",
@@ -945,7 +956,7 @@ namespace MFO::Logistics {
                     }
                     // TOWN DOOR RULE (marth 2026-11-02): see the leg-boundary note above.
                     bool doorPending = false;   // the exterior door read was just posted: skip the candidate this tick, not a failure
-                    if (Errand::Rest::TownWalkBarredByLock(a_follower, ref, "loot target", &doorPending)) { if (!doorPending) MarkTravelFailed(rid, a_now); continue; }
+                    if (Errand::Rest::TownWalkBarredByLock(a_follower, ref, "loot target", &doorPending)) { if (!doorPending) MarkTravelFailed(rid, a_now, "town door rule (every door locked)"); continue; }
                     // ROAD CHOICE, EXCURSION START (A/B). The switch is read ONCE,
                     // here, at the only edge that starts an excursion; everything after
                     // follows the road that took. ROAD 2 claims ch.19 kIntent_Travel
@@ -1064,6 +1075,8 @@ namespace MFO::Logistics {
             // Excursion Hold decision needs to know if loot is still WAITING on
             // the player's dibs (vs genuinely nothing left).
             if (a_mode == LootMode::kExcursion && dNotYet > 0) g_scanSawWaiting = true;
+            // A PENDING guard answer dropped candidates unjudged: the batch is not empty (Service.cpp's Holding block keeps it, bounded).
+            if (a_mode == LootMode::kExcursion && dGuard > 0 && guardPending) { g_scanSawWaiting = true; g_scanGuardPending = true; }
             return false;
         }
 
@@ -1191,6 +1204,7 @@ namespace MFO::Logistics {
         bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
                               Clock::time_point a_now) {
             g_scanSawWaiting = false;
+            g_scanGuardPending = false;
             const bool iausLoot = IausLootOn(a_state);
             bool iausDone[2] = { false, false };   // per pass, like the rows: pass 0 = the plan minus the dibs-tier categories, pass 1 = whole
             const auto runIausExcursion = [&](bool a_restrictFree) {

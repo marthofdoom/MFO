@@ -1060,7 +1060,7 @@ namespace MFO::Logistics::Lockpick {
             // fix/mfo-lifestate: a stale abandon of a job that still targets its lock is a
             // FAILED attempt: the same transient retry cooldown as the idle-ended path
             // (MarkTravelFailed, never sticky), or the slot re-enters on the next tick.
-            if (j.ref && tr && slotRef == j.ref) MarkTravelFailed(j.ref, a_now);
+            if (j.ref && tr && slotRef == j.ref) MarkTravelFailed(j.ref, a_now, "lockpick job ended on the slot's target");
             EndJob(fid, why);
         }
     }

@@ -13,6 +13,8 @@
 #include "Logistics.h"
 #include "Evaluator.h"
 #include "Vocabulary.h"
+#include "Scheduler.h"   // LootPartyInCombat: Scheduler::PartyCombat
+#include "iaus/LootNeed.h"   // LootTuning: the guard / gate / batch-hold rows the loot code reads
 #include "Config.h"
 #include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
@@ -656,7 +658,8 @@ namespace MFO::Logistics {
             return a_cat == Category::Arrows || a_cat == Category::Bolts ||
                    a_cat == Category::Potions || a_cat == Category::Lockpicks ||
                    a_cat == Category::Ingredients || a_cat == Category::SmithMats ||
-                   a_cat == Category::Steal || a_cat == Category::PickLocks;   // batch L: owned things are nobody's dibs; the witness pre-check is their gate
+                   a_cat == Category::Steal || a_cat == Category::PickLocks ||   // batch L: owned things are nobody's dibs; the witness pre-check is their gate
+                   a_cat == Category::Museum;   // marth 2026-11-17 (F3): a museum-needed item skips the player-dibs wait
         }
 
         // Same ordering test at the OPCODE level, for the two gambit-table
@@ -666,14 +669,14 @@ namespace MFO::Logistics {
         inline bool IsDibsTierLootOp(const std::string& a_op) {
             return a_op == Vocab::kActLootEquipment || a_op == Vocab::kActLootGold  ||
                    a_op == Vocab::kActLootJewelry   || a_op == Vocab::kActLootSoulGems ||
-                   a_op == Vocab::kActLootValuables || a_op == Vocab::kActLootMuseum;
+                   a_op == Vocab::kActLootValuables;   // Museum is free-tier since 2026-11-17 (F3): pass 0 takes it
         }
 
         // The Category twin of IsDibsTierLootOp, for the IAUS passes (they walk Categories, not opcodes): the one predicate that decides which
-        // categories pass 0 of the loot run ordering defers. Museum is a dibs-tier category (its row is excluded from the IAUS plan anyway).
+        // categories pass 0 of the loot run ordering defers. Museum is FREE tier since 2026-11-17 (F3), so pass 0 runs it.
         inline bool IsDibsTierCat(Category a_cat) {
             return a_cat == Category::Equipment || a_cat == Category::Gold || a_cat == Category::Jewelry ||
-                   a_cat == Category::SoulGems || a_cat == Category::Valuables || a_cat == Category::Museum;
+                   a_cat == Category::SoulGems || a_cat == Category::Valuables;
         }
 
         // Every opcode that names a LOOT action (as opposed to drink/torch/cast,

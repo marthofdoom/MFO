@@ -338,7 +338,9 @@ namespace MFO::SelfTest {
                 const bool lifted = !Tg::CorpseBarred(c.follower, c.follower, now);
                 const bool unseen = !Tg::WasHostileToPlayer(0x0DEADBEEu);
                 Iaus::LootTuning lt; std::string why;
-                const bool knob = Iaus::SetLootKnob(lt, "guardBarFloorSec", 20.0f) && !Iaus::SetLootKnob(lt, "guardBarFloorSec", -1.0f, &why);
+                const bool knob = Iaus::SetLootKnob(lt, "guardBarFloorSec", 20.0f) && !Iaus::SetLootKnob(lt, "guardBarFloorSec", -1.0f, &why)
+                    && Iaus::SetLootKnob(lt, "batchHoldMinSec", 3.0f) && Iaus::SetLootKnob(lt, "guardFreshSec", 2.0f) && !Iaus::SetLootKnob(lt, "guardFreshSec", 0.0f, &why)
+                    && Iaus::SetLootKnob(lt, "gateReadmitMoveU", 1024.0f) && !Iaus::SetLootKnob(lt, "gateConeDeg", 120.0f, &why);
                 r.text += std::format("; e: bar held={} lifted={} unseenNotHostile={} knob={}", held, lifted, unseen, knob);
                 if (!(held && lifted && unseen && knob)) r.fail = true;
             }
