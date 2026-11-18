@@ -657,7 +657,7 @@ CPU seconds per natural fight (IAUS arm and oracle arm together), 32 fights per 
 
 The search inside one fight is serial on purpose. Every caller already runs one fight per core (the gap pass's worker threads, the driver's process pool), so threads inside a decision would add nothing to a tune round, and a fight's result cannot depend on the thread count. Nothing is cached, because no two decisions share a state.
 
-What a tune round pays. Only the gap stage, the gap order and the dashboard's small report runs use the oracle. The search stages judge on IAUS's own J and are untouched. The gap stage's first pass is 15 cells times 12 seeds times about 5 fights times 2 tables, subject only, plus 900 fights with every follower planned: about 2,700 fights, about 30 CPU hours, about 2 hours on 16 cores per world. Cells that grow to 48 seeds and the re-measures after an accepted value add to that. It was about 10 minutes. Levers if a round must be shorter: `--oracle-ceiling 32` costs about a third and lost nothing measurable in 14.2.
+What a tune round pays. Only the gap stage, the gap order and the dashboard's small report runs use the oracle. The search stages judge on IAUS's own J and are untouched. The gap stage's first pass is 15 cells times 12 seeds times about 5 fights times 2 tables, subject only, plus 900 fights with every follower planned: about 2,700 fights, about 41 CPU hours, about 2.6 hours on 16 cores per world (a fight with every follower planned costs 92 CPU seconds on the Mage line, measured on the 800 fights of 14.8). Cells that grow to 48 seeds and the re-measures after an accepted value add to that. It was about 10 minutes. Levers if a round must be shorter: `--oracle-ceiling 32` costs about a third and lost nothing measurable in 14.2.
 
 A single run with few fights uses the cores badly (its wall time is its longest fight). The 32-fight runs of this section took 22 to 750 s of wall time each.
 
@@ -751,3 +751,25 @@ Checked: every place the driver reads an oracle result runs the new one. The dri
 The driver's result cache is keyed by the binary's hash, so no result of the old oracle can be replayed. `EXT_FAMILY` and `EXT_ROAD` now name `ext:clear_line` (it was classified by the generic rule), and a unit test holds both tables to the names in `Oracle.h`.
 
 ### 14.8 The survival bounds, re-measured
+
+160 natural fights per class, built-in world, v3, every follower planned by the class oracle, seed 1 (`--class-oracle 160 --gap-scenarios 0`, the `ORCSURV` lines). The run took 97 minutes on 16 cores (an estimated 4 minutes before, from 4.5 CPU seconds a fight). Bound = the oracle's value plus the same margins as before (0.05 downs a fight, 5 points):
+
+| Class | Oracle downs / fight, before | now | Bound before | Bound now | IAUS | Oracle self heals begun under 25 % health, before | now | Bound before | Bound now | IAUS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mage | 0.044 | 0.006 | 0.09 | 0.06 | 0.031 | 5.3 % | 4.8 % | 10 % | 10 % | 10.6 % |
+| evoker | 0.000 | 0.006 | 0.05 | 0.06 | 0.013 | 1.0 % | 3.3 % | 6 % | 8 % | 15.0 % |
+| conjurer | 0.000 | 0.000 | 0.05 | 0.05 | 0.000 | 0.0 % | 1.3 % | 5 % | 6 % | 4.7 % |
+| healer | 0.006 | 0.000 | 0.06 | 0.05 | 0.025 | 0.9 % | 2.6 % | 6 % | 8 % | 6.2 % |
+| warlock | 0.013 | 0.013 | 0.06 | 0.06 | 0.019 | 1.5 % | 3.2 % | 7 % | 8 % | 13.0 % |
+
+The downs bound is tighter for the mage and the healer and one down in a hundred fights looser for the evoker. The self-heal bound is looser by one or two points for four classes: the stronger oracle heals late a little more often, because it can afford to. With the shipped tunings the evoker and the warlock are still outside the self-heal band and the mage is just outside it. The healer is inside now. All five are inside the downs band.
+
+Gap on these fights (every follower planned, 160 fights): mage +11.22 (se 2.17), evoker +13.22 (2.07), conjurer +9.41 (2.11), healer +9.23 (1.88), warlock +13.23 (2.56).
+
+### 14.9 Checks
+
+- `SIM_CLITEST=1 tools/iaus_sim/run.sh`: CLI-CHECKS PASS. That includes the v2 world against `baseline_builtin.txt` and the v3 world against `baseline_v3_builtin.txt` with 0 metrics changed, so IAUS and both worlds are untouched.
+- `test_tune_driver.py`: 26 tests pass (one new: the extended set's names in `Oracle.h` and the driver's two tables agree).
+- Determinism: a gap run with `--threads 1` and with 16 prints the same `GAPFIGHT`, `GAPSIT`, `GAPGEN`, `GAPDEC`, `ORCSURV`, `ORCSTOP` and `ORCREFUSED` lines. Only the wall-clock `decide_us` column of the class table differs, as it does on main.
+- `--world v2` with the class oracle runs and passes its fact checks.
+- No `cat:` refusal on any of the 1,280 measured fights: the generator leaks no candidate past the class gate.
