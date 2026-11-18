@@ -42,6 +42,7 @@ Each mechanism is one switch of `Sim::V3` (`Data.h`), `--v3 <name>=on|off[,...]`
 | `blockdir` | a guard has an arc, blows are tallied by direction for every fight | 5 |
 | `areas` | an active area lives in the world: moves with the caster, or fixed at the cast point | 6 |
 | `perks` | `Snapshot::perks` spell group | 7 |
+| `hittail` | a foe's physical hit on the party is drawn from the field's hit-size spread, mean 1 (2026-11-17) | 15.5 |
 
 A v3 switch never draws from the fight's stream `R` when it is off. Draws that v3 adds (flight path, stream
 length, slot angles) come from a second stream `Fight::V` seeded from the fight seed, so one v3 switch does not
@@ -538,3 +539,480 @@ Shipped tunings, 8 seeds, J (se). "v3 before" is the build before this batch (f5
 Natural bracket, how often the repeat table is drawn (`dl.repeat%` of his cast picks): mage 29 %, evoker 21 %, conjurer 27 %, healer 33 %, warlock 27 %. Unfired: mage 12.6 %, evoker 18.2 %, conjurer 9.6 %, healer 13.6 %, warlock 7.8 %.
 
 Both baselines are regenerated (`baseline_builtin.txt`, `baseline_v3_builtin.txt`). v2 moved because the game's generator and the reach book moved: with `--reach off` the build before this batch and the build after it agreed draw for draw on v2 until the 1117b merge.
+
+## 14. The oracle under the standing tuning rule (feat/oracle-unbounded, 2026-11-17)
+
+**Read 14.10 first.** Sections 14.1 to 14.9 are the first round (d8b686a7) and keep its numbers as the record. 14.10 is the fix round after the Opus review and marth's rulings of the same day. It changes the oracle (random streams per actor, cooldowns, hide and flee, the sprint away) and re-measures everything. Where 14.10 and an earlier subsection disagree, 14.10 is the oracle that ships.
+
+marth, 2026-11-17, verbatim: "as a standing tuning rule the Oracle gets as many tries as it wants for the best class based decisions. The tuning then follows the Oracle as its guide. The Oracle only has the classes abilities at its disposal". And the goal: "The goal is that a classes tune will be the actual best possible class behavior".
+
+Code: `tools/iaus_sim/Oracle.h` (the search, the class filter), `sim.cpp` (the gap pass prints), `tune_driver.py` (the tables of the extended set), `Playstyles.h` (the survival bounds). No native change.
+
+### 14.1 What changed in the search
+
+| | Before | Now |
+|---|---|---|
+| Options per decision | at most 14 (IAUS's ranked list, then one to four per family) | every candidate the generator offers, every posture, the extended set, his own AI. No limit |
+| Decision points | at most one every 0.4 s. With three followers a lap is 0.399 s, so every second lap was skipped | every time the pump serves him with his body free (`every = 0`). That is every decision point the game has: `kPumpMs` 133 ms times the followers |
+| Rollout length | 150 s | to the fight's end. 150 s is `Fight::maxSec`, so this was already true. It is now stated and `RunFor` no longer depends on the number |
+| Streams per option | 8, fixed | 8, then 16, 32, 64, 128. After each round an option is dropped once the best option's paired lead over it passes a one-sided Student-t bound at p = 0.001. The race ends when one option stands or at the safety ceiling of 128 |
+| Random streams | shared by all options | first round: unchanged. Fix round (14.10): one stream per actor and draw site inside a rollout |
+| Class rulings | off unless `--class-oracle` | on for every oracle. `--no-class-rulings` is a labelled diagnostic |
+| Automatic gap pass of a results file | a cut oracle (K = 6, 90 s) | the same oracle as everywhere |
+| What IAUS's pick costs (the ledger's dU) | difference of two means | the paired lead on the streams both options ran |
+
+`--oracle-k N` and `--oracle-h S` still exist as labelled diagnostics (the CLI checks use one stream and 5 s for speed). `--oracle-ceiling N` moves the ceiling. `--oracle-every S` brings a throttle back. The results file and every oracle print say which setting ran.
+
+One part of the rollout is a model and not a budget: an option is held for 2.5 s inside a rollout (an attack order, a retreat, his own AI) before the base policy takes over. The oracle itself is asked again at his next decision point. The search is still one step deep over IAUS as the base policy. It is not an exhaustive plan, and no feasible search is.
+
+### 14.2 The stopping rule, the ceiling, and how often it binds
+
+The honest finding: **the ceiling ends most races.** Most options of a decision differ by less than a fight's luck. The shared seed stops pairing two rollouts as soon as they diverge, because the world draws from one stream. So the paired difference of two options has a deviation of about 5 U, and a lead of half a U cannot be separated at any stream count we can pay for.
+
+Measured on 16 natural fights per class, subject only, the same fights at every ceiling. Oracle U, then the paired change against the next lower ceiling (se):
+
+| Class | ceiling 8 | 32 | 128 | 512 | 8 to 32 | 32 to 128 | 128 to 512 |
+|---|---|---|---|---|---|---|---|
+| knight | 79.65 | 84.06 | 82.60 | 87.59 | +4.41 (4.27) | -1.47 (5.03) | +5.00 (4.54) |
+| warrior | 92.36 | 91.80 | 92.45 | 92.39 | -0.55 (0.67) | +0.65 (0.65) | -0.06 (0.41) |
+| evoker | 88.29 | 94.28 | 94.17 | 94.27 | +6.00 (5.90) | -0.12 (0.69) | +0.10 (0.55) |
+| thief | 94.98 | 94.43 | 94.29 | 94.47 | -0.56 (0.35) | -0.14 (0.44) | +0.18 (0.44) |
+| healer | 93.12 | 92.64 | 92.68 | 93.66 | -0.48 (0.74) | +0.05 (0.62) | +0.98 (0.51) |
+
+How the race ended at each ceiling (share of decisions the ceiling ended with more than one option standing, and the best option's mean lead over the best other one standing):
+
+| Class | 8 | 32 | 128 | 512 |
+|---|---|---|---|---|
+| knight | 72 %, 0.90 U | 46 %, 0.97 U | 39 %, 0.69 U | 64 %, 0.40 U |
+| warrior | 89 %, 1.30 U | 76 %, 0.73 U | 72 %, 0.40 U | 67 %, 0.32 U |
+| evoker | 88 %, 1.02 U | 91 %, 0.72 U | 77 %, 0.40 U | 64 %, 0.28 U |
+| thief | 87 %, 0.88 U | 80 %, 0.62 U | 78 %, 0.33 U | 77 %, 0.18 U |
+| healer | 76 %, 2.51 U | 36 %, 1.00 U | 75 %, 0.51 U | 63 %, 0.15 U |
+
+Reading. No step from 32 to 128 or from 128 to 512 is outside two standard errors for the warrior, the evoker and the thief. The healer's last step is +0.98 (0.51), which is 1.9 se. The knight is too noisy on 16 fights to say anything. Ceiling 128 was chosen because it is four times past the last ceiling at which any class moved, and 512 costs four times more for a gain this data cannot show. The ceiling is one number (`OracleCfg::ceiling`, `--oracle-ceiling`). This is the first thing the reviewer should weigh. If marth wants the larger number, 512 is a flag away and the cost is in 14.4.
+
+What would sharpen the race itself, and is not done here: one random stream per actor inside a rollout, so two options stay paired on everything the changed action does not touch. That is a change of the world's draw order (24 draw sites in `World.h`), so it belongs in its own batch with its own baselines.
+
+On the 32 natural fights per class of 14.5, at ceiling 128: the ceiling ended 34 to 88 percent of the decisions, with 3.4 to 9.1 options standing and a mean unresolved lead of 0.28 to 0.88 U. The gap pass prints this per class (`ORCSTOP`).
+
+### 14.3 The class-bound action set
+
+`Oracle.h ClassRefuses` is the one reader of "is this option an ability of his class". It returns the reason an option is refused. `RulingRefuses` (the old `ClassAllows`) is the written rulings of `Playstyles.h`. Every refusal is counted by reason and printed per class (`ORCREFUSED`), and a trace run prints each one.
+
+| Option | Rule |
+|---|---|
+| A catalogue candidate | the generator already holds it to the class gate (`ClassGate`, built by `RealClasses.cpp` from `native/classes/ClassTable.cpp`). The filter checks the same bit again per family: power attack, taunt, block, retreat and disengage, the weapon of a posture, a spell by its source (class spell, scroll, staff). A refusal here would be a generator leak. Reasons start with `cat:`. Measured: 0 |
+| `ext:block`, `ext:bash` | only with the shield, or a melee weapon of the class's weapon set, in hand. The guard also honours the game's rest now (no new guard for 1.5 s after a hold, `apmf/BlockClaims.cpp kRest`) |
+| `ext:scroll` | only a scroll user (ruling Q36) and only a scroll he carries |
+| `ext:hide` | only a sneak class that has the disengage flag. Before: anyone who was in stealth |
+| `ext:flee` | only a class with the disengage flag. Before: anyone under 60 percent health with a foe on him |
+| Potions | the game has no class gate for a potion, so there is none here |
+| Repositioning (`ext:step_back`, `sprint_back`, `to_player`, `to_healer`, `get_sight`, `clear_line`, and the Regroup, GiveGround, BackOff and Step families) | always allowed by the class filter. Movement is not an ability. The written rulings can still forbid a move (never retreats, backs off only, stays near the player) |
+| A posture the game forbids | new ruling line: a posture candidate whose `classAllowsWeapon` fact is false is refused. That is the strict weapon gate, or "spells stay on spells" for the Mage line. The old oracle could draw the dagger there |
+
+The oracle stays free of the generator's situation gates (the 30 percent flee line, "a foe has found him"). Those are decisions, not abilities, and what the oracle gains by ignoring them is their cost.
+
+A class's spell book in the lab is what `Load.h BuildFollower` gives a follower of that class, plus the spells its own default rows name. The game's class table has no school list per class, so there is no school filter to mirror.
+
+Refused option offers on the 32 natural fights per class of 14.5 (subject only). An offer is one option at one decision:
+
+| Class | By the ability filter | By a written ruling |
+|---|---|---|
+| melee | 109 flee (no disengage) | 0 |
+| ranged | 14 flee | 0 |
+| mage | 19 flee | 306 splash, 555 forbidden posture, 5 no-melee |
+| knight | 183 flee | 1859 never retreats |
+| warrior | 131 flee | 2065 never retreats |
+| mercenary | 47 flee | 885 backs off only |
+| archer | 3 flee | 0 |
+| thief | 0 | 0 |
+| evoker | 0 | 409 splash, 522 forbidden posture, 6 no-melee |
+| conjurer | 0 | 354 splash, 558 forbidden posture, 3 no-melee |
+| healer | 0 | 1722 splash, 1198 forbidden posture, 948 near the player, 75 no-melee |
+| warlock | 0 | 763 splash, 592 forbidden posture, 32 no-melee |
+| melee-off, ranged-off | 0 | 0 |
+| mage-off | 0 | 181 splash, 628 forbidden posture |
+
+No `cat:` refusal, no scroll, block or bash refusal: the kit of a lab follower is built from his class's weapon set, so those rules guard against a future kit change. The only ability the old oracle used outside a class was the flee run of a class without the disengage flag.
+
+### 14.4 Run time
+
+CPU seconds per natural fight (IAUS arm and oracle arm together), 32 fights per class, subject only, which is the gap stage's shape. One CPU of a 16-core host:
+
+| Class | Before | Now | x |
+|---|---|---|---|
+| melee | 3.8 | 32.6 | 8.5 |
+| ranged | 0.5 | 6.0 | 12 |
+| mage | 4.2 | 43.5 | 10 |
+| knight | 3.7 | 30.7 | 8.4 |
+| warrior | 1.8 | 22.2 | 12 |
+| mercenary | 1.4 | 30.2 | 22 |
+| archer | 0.7 | 9.6 | 14 |
+| thief | 0.4 | 4.4 | 11 |
+| evoker | 6.2 | 57.4 | 9.2 |
+| conjurer | 4.0 | 41.1 | 10 |
+| healer | 2.7 | 36.6 | 14 |
+| warlock | 8.3 | 80.6 | 9.7 |
+| melee-off | 3.9 | 66.5 | 17 |
+| ranged-off | 1.1 | 22.9 | 21 |
+| mage-off | 2.9 | 51.8 | 18 |
+| all 15 | 3.05 | 35.8 | 11.7 |
+
+The search inside one fight is serial on purpose. Every caller already runs one fight per core (the gap pass's worker threads, the driver's process pool), so threads inside a decision would add nothing to a tune round, and a fight's result cannot depend on the thread count. Nothing is cached, because no two decisions share a state.
+
+What a tune round pays. Only the gap stage, the gap order and the dashboard's small report runs use the oracle. The search stages judge on IAUS's own J and are untouched. The gap stage's first pass is 15 cells times 12 seeds times about 5 fights times 2 tables, subject only, plus 900 fights with every follower planned: about 2,700 fights, about 41 CPU hours, about 2.6 hours on 16 cores per world (a fight with every follower planned costs 92 CPU seconds on the Mage line, measured on the 800 fights of 14.8). Cells that grow to 48 seeds and the re-measures after an accepted value add to that. It was about 10 minutes. Levers if a round must be shorter: `--oracle-ceiling 32` costs about a third and lost nothing measurable in 14.2.
+
+A single run with few fights uses the cores badly (its wall time is its longest fight). The 32-fight runs of this section took 22 to 750 s of wall time each.
+
+### 14.5 The gap per class, before and after
+
+Natural bracket, built-in world, v3, shipped tunings, seed 1, 32 fights per class, subject only (his companions play IAUS in both arms). IAUS U is the same number in both columns, because IAUS did not change:
+
+| Class | IAUS U | Oracle U before | Gap before (se) | Oracle U now | Gap now (se) |
+|---|---|---|---|---|---|
+| melee | 84.28 | 85.62 | +1.34 (3.65) | 89.38 | +5.11 (2.63) |
+| ranged | 72.84 | 75.78 | +2.94 (2.40) | 76.33 | +3.49 (2.54) |
+| mage | 75.22 | 82.46 | +7.24 (3.64) | 85.30 | +10.09 (4.48) |
+| knight | 84.49 | 88.02 | +3.54 (1.45) | 87.99 | +3.50 (3.01) |
+| warrior | 82.39 | 88.10 | +5.71 (3.17) | 89.80 | +7.42 (3.48) |
+| mercenary | 88.55 | 89.58 | +1.02 (2.75) | 92.62 | +4.06 (1.49) |
+| archer | 72.63 | 73.43 | +0.80 (3.57) | 78.47 | +5.85 (3.44) |
+| thief | 88.29 | 93.53 | +5.24 (3.77) | 91.35 | +3.06 (4.58) |
+| evoker | 76.90 | 84.37 | +7.48 (5.32) | 90.73 | +13.83 (4.78) |
+| conjurer | 78.94 | 87.42 | +8.48 (4.24) | 86.28 | +7.34 (5.29) |
+| healer | 69.31 | 77.47 | +8.16 (3.67) | 83.53 | +14.22 (5.08) |
+| warlock | 65.82 | 75.76 | +9.94 (5.62) | 84.15 | +18.33 (5.79) |
+| melee-off | 76.78 | 83.60 | +6.83 (4.99) | 88.06 | +11.29 (3.99) |
+| ranged-off | 75.97 | 85.61 | +9.63 (3.80) | 88.86 | +12.89 (4.51) |
+| mage-off | 74.79 | 85.79 | +11.00 (5.78) | 88.53 | +13.74 (6.33) |
+
+The oracle is stronger for 12 of 15 cells although it lost options (the flee of five classes, the forbidden postures, the guard without a rest). The thief and the conjurer are lower by less than one se. The knight is level. The gain is not from more streams (14.2). It is from deciding at every decision point and from seeing every candidate.
+
+### 14.6 Where the remaining gap sits, per class, and what a tune cannot reach
+
+From the subject's divergence clusters of the same fights (`--gap-dump`, classified by `tune_driver.py classify`). Share = that class of divergence in the oracle's summed per-decision advantage. It orders the causes. It is not an additive split of the gap.
+
+- (a) a curve or a weight: IAUS had the oracle's pick and ranked it lower. **A tune can close it.**
+- (b) IAUS generated the oracle's pick and scored it under the floor or vetoed it. A gate, a veto or a missing input. **A tune cannot move it.**
+- (c) the oracle's action has no candidate IAUS ever generates for this class. **A tune cannot reach it.**
+- (d) the oracle's version of the action is better than the game's (the bash on demand, the guard with no row cooldown). A modelling limit of the oracle, not a goal.
+
+| Class | (a) | (b) | (c) | (d) | The largest (a) clusters: IAUS pick to oracle pick |
+|---|---|---|---|---|---|
+| melee | 55 % | 12 % | 20 % | 13 % | attack to attack on another target 39 %, attack to his own AI 10 % |
+| ranged | 62 % | 10 % | 25 % | 3 % | attack to a weapon swap 42 %, attack retarget 18 % |
+| mage | 67 % | 16 % | 16 % | 0 | cast_control to attack 36 % |
+| knight | 77 % | 7 % | 4 % | 11 % | taunt to attack 16 %, power attack to attack 15 %, attack retarget 14 %, drink_health to attack 13 % |
+| warrior | 68 % | 14 % | 2 % | 16 % | attack retarget 41 %, power attack to attack 21 % |
+| mercenary | 62 % | 21 % | 12 % | 5 % | attack retarget 47 % |
+| archer | 61 % | 16 % | 20 % | 3 % | attack retarget 33 %, attack to a weapon swap 24 % |
+| thief | 31 % | 42 % | 27 % | 0 | attack retarget 22 % |
+| evoker | 42 % | 30 % | 28 % | 0 | cast_offense to attack 11 %, drink_health to his own AI 8 % |
+| conjurer | 55 % | 34 % | 11 % | 0 | cast_control to attack 32 %, cast_control to cast_offense 6 %, to cast_heal 5 % |
+| healer | 51 % | 35 % | 14 % | 0 | cast_control to attack 26 %, cast_heal to his own AI 8 % |
+| warlock | 43 % | 43 % | 14 % | 0 | cast_control to attack 13 %, cast_control to cast_heal 6 %, to a weapon swap 5 % |
+| melee-off | 63 % | 15 % | 15 % | 7 % | cast_offense to attack 12 %, taunt to attack 12 %, power attack to attack 9 % |
+| ranged-off | 71 % | 12 % | 16 % | 0 | cast_offense to attack 40 % |
+| mage-off | 39 % | 41 % | 21 % | 0 | cast_control to attack 12 %, cast_control to cast_offense 7 % |
+
+Two patterns carry most of the tunable gap. On the weapon classes it is WHICH foe the attack is on (the attack family's target considerations). On every caster it is cast_control chosen where the oracle lets the plain attack order run (the control family's weight against attack).
+
+**Structural limits. A tune cannot close these. Each is a native follow-up, listed so the tuner does not fail on it:**
+
+| Class | Limit (share of his divergence cost) | Kind | What it needs |
+|---|---|---|---|
+| warlock | cast_control where the oracle flees: 17 % | (b) | the flee candidate exists and is scored under the floor or vetoed. The Disengage flee is held to its 30 percent health line and its "threatened" read. Needs the line as a tunable input, or a consideration that reads the pressure the oracle reacts to |
+| healer | the same flee: 14 % | (b) | as the warlock |
+| conjurer | the same flee: 8 %. A sprint back the BackOff gate did not offer: 7 % | (b) | as the warlock. BackOff is only offered inside the minimum range of his equipped spell |
+| mage-off | cast_heal or cast_control where the oracle flees: 16 % | (b) | as the warlock |
+| ranged-off | flee: 7 % | (b) | as the warlock |
+| thief | attack where the oracle holds the sneak row: 25 % | (b) | the sneak candidate is generated and scored under the floor. Needs a consideration for "hold still and stay hidden" that can outscore the attack |
+| evoker, healer | cast_control where the oracle summons: 9 % and 6 % | (b) | cast_summon is generated and vetoed or under the floor at that moment. Needs a look at the summon family's veto for a class whose rows do not name a summon |
+| conjurer, mage, evoker | cast_control where the oracle casts offense: 13 %, 5 %, 4 % | (b) | the offense candidate is under the floor or vetoed (will-work, line of fire or the range veto). Needs the veto's reason logged per candidate to split it |
+| every class | a health, stamina or magicka potion the oracle drinks and IAUS scored under the floor: 3 to 9 % | (b) | partly real (the drink line). The magicka potion of a class that cannot cast is an artefact of Utility's "magicka left" term and should not be chased. See the backlog |
+| melee, mercenary, archer, evoker, ranged-off | a step back from a foe: 5 to 14 % | (c) | no road today (section 25 of the v2 note: needs a Harbinger combat area centred on a point). GiveGround is lab-only |
+| melee, ranged, archer, melee-off | a sprint back: 5 to 8 % | (c) | the BackOff family is never generated for these classes. Its gate is the Mage line and the Mercenary |
+| thief, warlock, healer, mage-off, archer, ranged, ranged-off | close on the player: 4 to 22 % | (c) | the road exists (Harbinger ch.24 CombatApproach). The Regroup family is built and never generated. Needs its MFO client (`Snapshot::regroupRoad`) |
+| mage, conjurer | a side step to a clear line of fire: 5 % and 7 % | (c) | no IAUS family. The game only holds a cast through a friend |
+| ranged | a step to get sight of his target: 9 % | (c) | the road exists for casts only. No IAUS family |
+| warrior, melee, knight | the bash on demand 4 to 10 %, the warrior's guard 5 % | (d) | the oracle's bash has no cooldown and the guard no row cooldown. Not a target. Binding them is a backlog item |
+
+A curve shape that cannot express the oracle's choice was not found by this method. The classification sees whether a candidate was ranked, not which response curve would rank it first. The gap stage's (a) search is what finds that: a family whose knobs it sweeps without closing its clusters is the candidate for a new consideration.
+
+### 14.7 The tuning follows the oracle
+
+Checked: every place the driver reads an oracle result runs the new one. The driver never names a K, a horizon or an option limit, so it gets the default.
+
+| Stage | What it reads | Status |
+|---|---|---|
+| `gap_order` | the per-class gap of a small report run (`class_gaps` of the results file), to tune the furthest class first | the new oracle |
+| `stage_gap` | `GAPFIGHT`, `GAPSIT`, `GAPGEN`, `GAPDEC` of `--class-oracle --gap-dump --oracle-subject-only`. The (a) clusters pick the families of its extra search | the new oracle. The dump format is unchanged. `ORCSTOP` and `ORCREFUSED` are new lines the parser ignores |
+| `emit_run` | the dashboard's small results file after each sweep (2 natural fights and 1 scenario per class) | the new oracle. It costs more now, one to two minutes of two threads per class |
+| The class bands (`load_cards`) | the oracle-relative survival bounds of `Playstyles.h` | re-measured, 14.8 |
+| The edge, joint, globals, consts, floor and rating stages | IAUS's own J and the class bands. No oracle | unchanged |
+
+The driver's result cache is keyed by the binary's hash, so no result of the old oracle can be replayed. `EXT_FAMILY` and `EXT_ROAD` now name `ext:clear_line` (it was classified by the generic rule), and a unit test holds both tables to the names in `Oracle.h`.
+
+### 14.8 The survival bounds, re-measured
+
+160 natural fights per class, built-in world, v3, every follower planned by the class oracle, seed 1 (`--class-oracle 160 --gap-scenarios 0`, the `ORCSURV` lines). The run took 97 minutes on 16 cores (an estimated 4 minutes before, from 4.5 CPU seconds a fight). Bound = the oracle's value plus the same margins as before (0.05 downs a fight, 5 points):
+
+| Class | Oracle downs / fight, before | now | Bound before | Bound now | IAUS | Oracle self heals begun under 25 % health, before | now | Bound before | Bound now | IAUS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mage | 0.044 | 0.006 | 0.09 | 0.06 | 0.031 | 5.3 % | 4.8 % | 10 % | 10 % | 10.6 % |
+| evoker | 0.000 | 0.006 | 0.05 | 0.06 | 0.013 | 1.0 % | 3.3 % | 6 % | 8 % | 15.0 % |
+| conjurer | 0.000 | 0.000 | 0.05 | 0.05 | 0.000 | 0.0 % | 1.3 % | 5 % | 6 % | 4.7 % |
+| healer | 0.006 | 0.000 | 0.06 | 0.05 | 0.025 | 0.9 % | 2.6 % | 6 % | 8 % | 6.2 % |
+| warlock | 0.013 | 0.013 | 0.06 | 0.06 | 0.019 | 1.5 % | 3.2 % | 7 % | 8 % | 13.0 % |
+
+The downs bound is tighter for the mage and the healer and one down in a hundred fights looser for the evoker. The self-heal bound is looser by one or two points for four classes: the stronger oracle heals late a little more often, because it can afford to. With the shipped tunings the evoker and the warlock are still outside the self-heal band and the mage is just outside it. The healer is inside now. All five are inside the downs band.
+
+Gap on these fights (every follower planned, 160 fights): mage +11.22 (se 2.17), evoker +13.22 (2.07), conjurer +9.41 (2.11), healer +9.23 (1.88), warlock +13.23 (2.56).
+
+### 14.9 Checks
+
+- `SIM_CLITEST=1 tools/iaus_sim/run.sh`: CLI-CHECKS PASS. That includes the v2 world against `baseline_builtin.txt` and the v3 world against `baseline_v3_builtin.txt` with 0 metrics changed, so IAUS and both worlds are untouched.
+- `test_tune_driver.py`: 26 tests pass (one new: the extended set's names in `Oracle.h` and the driver's two tables agree).
+- Determinism: a gap run with `--threads 1` and with 16 prints the same `GAPFIGHT`, `GAPSIT`, `GAPGEN`, `GAPDEC`, `ORCSURV`, `ORCSTOP` and `ORCREFUSED` lines. Only the wall-clock `decide_us` column of the class table differs, as it does on main.
+- `--world v2` with the class oracle runs and passes its fact checks.
+- No `cat:` refusal on any of the 1,280 measured fights: the generator leaks no candidate past the class gate.
+
+### 14.10 The fix round (Opus review of d8b686a7, marth's rulings of 11-17)
+
+marth's rulings, verbatim: ceiling "128 + fix the noise". "Bash/block cooldowns bind". "Hide/flee gates bind". "It may disengage whenever it wants. That's not flee for its purposes".
+
+**Random streams per actor (the noise fix).** `World.h Fight::split`. A real fight draws from its two streams in world order, exactly as before, so no fight and no baseline moves (the regenerated baselines differ in U lines only, see F3). Inside an oracle rollout every draw comes from a stream of its own per (actor, draw site): the n-th draw of that actor at that site is the same number in every option's rollout of one stream index. There are 36 draw sites (24 of the base world, 12 of v3), each with a fixed number. The actor is the body the draw belongs to: the one who dodges, blocks, thinks, aims, picks a target. What an option does not touch therefore plays out the same in both rollouts, and the paired test compares the options on their own consequences. The streams are 8 bytes of state each (a splitmix counter), created on first use. `--oracle-shared-stream` brings the single stream back as a labelled diagnostic.
+
+**What changed in the action set.**
+
+| Item | Before (d8b686a7) | Now |
+|---|---|---|
+| `ext:block` (review F2, "cooldowns bind") | any blade, the lab's own 1.5 s guard, the rest only | only a class with a Block default row (`ClassGate::block`, as `Generate.cpp:291`). It IS that row's guard: `Fire` of the Block family (the Harbinger hold of 2.5 s, its renewal, its 1.5 s rest), under the row's cooldown (`blockCooldownSec`, else the tuning's), written to the same cooldown slot the catalogue's Block candidate uses. What the oracle keeps: it may raise the guard when it wants. The generator offers it only against a coming swing or on the guard line |
+| `ext:bash` ("cooldowns bind") | no cooldown | `Tuning::bashCooldownSec`, in the Bash family's own slot, and 20 stamina as `Fire` asks |
+| `ext:hide`, `ext:flee` ("gates bind", review F4) | the oracle's own ungated runs (anyone in stealth and detected, anyone under 60 % with a foe on him) | not offered. The game's runs are the catalogue's Disengage candidates behind the game's own gates (a sneak class a foe has found. 30 % health and threatened, tree ON, no sneak class) and the oracle takes those. The two names stay in the tables for old logs |
+| `ext:sprint_back` ("it may disengage whenever it wants") | movement, anyone | only a class with the disengage flag. No situation gate |
+| Targets of an extended action (review F5) | one or two picked for him: the nearest foe to step away from, the strongest foe and the foe on the player for a scroll, a heal scroll only under 70 %, the first healer, a guard only against the foe on him, a bash only at a caster or the foe on him | every target: a step and a sprint away from each foe within 900 units, a scroll at every foe it can work on that he sees and at every hurt friend, every healer, a bash at every foe in reach, a guard with no target |
+
+**What is still part of the model, declared (review F5):**
+
+- The catalogue's candidates are the game's: the generator works on the game's own foe list, which keeps the top five foes (`Prune::kTopFoes`). The oracle sees what the game's snapshot gives.
+- A step or a sprint away needs a foe within 900 units to move away from. A move to the player or a healer needs him to be 350 or 300 units from them. These are "there is something to do" conditions, not choices.
+- `ext:get_sight` and `ext:clear_line` act on the foe he is fighting. They move him to a line on his target. Another target is the Attack candidate's job.
+- A rollout holds an option for 2.5 s and the search is one step deep (14.1).
+- The incumbent rule: the action he is on wins when the race has not dropped it and it is within 0.3 U of the best mean.
+
+**Review fixes.**
+
+- F1: a divergence is logged in the gap ledger only when the race DROPPED IAUS's pick. Before, a pick still standing (not told apart from the oracle's) was logged too. The reviewer measured 45 of 194 logged disagreements and 20 % of their cost in that state.
+- F2, F4, F5: the table above.
+- F3: `Utility` paid every follower for magicka left, so a Knight was paid for a pool he cannot use and his magicka potion (worth 0 in `PotionWorth.h`) was free utility. The term is now 1 for a follower with no class spell he may cast (`Oracle.h Casts`). This touches J. Both baselines are regenerated: only U lines changed, 88 of 17,176 lines in v2 and 89 of 17,178 in v3, by +0.01 to +0.13 U (the largest: archer and thief +0.13 and +0.12 in one bracket. Per class mean +0.01 to +0.07). The three exact pins of the CLI checks run with the legacy potion rate, which keeps its own raw term, and did not move. Open: the potion-worth tables were measured with the old term, so a non-caster's magicka row should be re-measured by the driver's prep stage before the retune reads it.
+- F6 (not fixed, stated): an option can be dropped after 8 streams by a test that assumes a roughly normal paired difference, and the looks at 8, 16, 32, 64 and 128 are not corrected for multiplicity. Utility differences have a heavy tail (a down, a player death). So a small share of early drops are wrong. The bound is p = 0.001 per look to keep that share small. No measurement of it exists.
+- F7 (stated): the survival bounds of 14.8 and below are measured with EVERY follower planned by the oracle, not the subject only. The companions are oracle-planned too, so the subject is better protected than he would be beside IAUS companions. The gap stage's own runs are subject only.
+- F8 (stated): with `--oracle-every` (a diagnostic throttle) a sneak hold lasts until his next decision. Two options with the same outcome on every stream are treated as one (the later is dropped). `edge_search.py:99` writes the same small oracle report run as the driver's `emit_run` and so also runs the new oracle.
+- `tune_driver.py FIDELITY` is empty now: no extended action is better than the game's any more, so no divergence is classified (d). A bash the Bash family did not offer is (b) or (c) by the generic rule.
+
+**The final oracle, measured (2026-11-18).** All numbers below are the fix-round oracle on the world WITH the field's hit-size spread (15.5). Built-in world, v3, shipped tunings, seed 1.
+
+*How often the race is decided.* The same 16 natural fights per class, subject only, one shared stream against the streams per actor. Share of decisions the ceiling ended with more than one option standing:
+
+| Class | One shared stream | Streams per actor |
+|---|---|---|
+| knight | 76 % | 21 % |
+| warrior | 75 % | 48 % |
+| thief | 78 % | 57 % |
+| evoker | 77 % | 67 % |
+| healer | 84 % | 28 % |
+
+On the 32 fights per class of the gap table below the ceiling ends 27 to 82 % of decisions (it was 34 to 88 % in the first round with fewer options a decision). The melee line and the healer separate most of the time now. A caster with 15 to 18 options a decision still has 10 of them standing at the ceiling on two decisions in three, with a mean unresolved lead of 0.55 to 0.88 U: many of his options are the same spell on another foe and do differ by less than the noise.
+
+*Gap per class.* 32 natural fights, subject only. IAUS U differs from 14.5 because the world changed (hit sizes) and Utility changed (F3):
+
+| Class | IAUS U | Oracle U | Gap (se) | Ceiling ended | Tunable share (a) | Largest clusters |
+|---|---|---|---|---|---|---|
+| melee | 78.79 | 89.56 | +10.77 (4.10) | 50 % | 45 % | attack retarget 32 %. A step back, no road (c) 30 % |
+| ranged | 73.18 | 73.64 | +0.46 (0.68) | 77 % | 55 % | attack retarget 47 %. A step back (c) 22 % |
+| mage | 72.73 | 78.94 | +6.21 (5.21) | 78 % | 72 % | cast_control to attack 34 %, cast_heal to attack 18 % |
+| knight | 82.37 | 90.44 | +8.08 (3.70) | 27 % | 85 % | taunt to attack 36 %, attack retarget 33 %, power attack to attack 11 % |
+| warrior | 75.80 | 81.43 | +5.62 (2.80) | 50 % | 85 % | attack retarget 60 %, power attack to attack 19 % |
+| mercenary | 85.35 | 90.41 | +5.06 (2.94) | 75 % | 43 % | attack retarget 18 %, power attack to attack 15 %. A bash (c) 11 % |
+| archer | 70.64 | 77.87 | +7.22 (4.31) | 82 % | 56 % | attack retarget 33 %, attack to a weapon swap 23 %. Close on the player (c) 15 % |
+| thief | 88.43 | 89.07 | +0.64 (5.42) | 68 % | 87 % | sneak to a weapon swap 34 %, attack retarget 25 % |
+| evoker | 67.08 | 82.37 | +15.29 (6.87) | 68 % | 36 % | a side step to a clear line (c) 10 %, a vetoed summon (b) 10 %, cast_control to attack 8 % |
+| conjurer | 78.93 | 84.87 | +5.94 (5.62) | 73 % | 89 % | attack retarget 40 %, cast_control to attack 22 %, to cast_summon 11 % |
+| healer | 71.81 | 81.14 | +9.33 (4.35) | 37 % | 57 % | cast_heal to his own AI 18 %, cast_control to attack 17 %, a vetoed summon (b) 12 % |
+| warlock | 58.88 | 74.70 | +15.82 (7.78) | 47 % | 60 % | cast_control to cast_heal 18 %, attack retarget 15 %. Close on the player (c) 9 % |
+| melee-off | 79.94 | 84.36 | +4.42 (4.41) | 43 % | 69 % | cast_heal to attack 15 %, taunt to attack 14 % |
+| ranged-off | 69.18 | 87.71 | +18.54 (5.87) | 69 % | 81 % | cast_offense to attack 33 %, cast_buff to attack 16 % |
+| mage-off | 74.20 | 79.36 | +5.16 (5.90) | 69 % | 66 % | cast_control to attack 16 %, to cast_summon 12 % |
+
+The ledger now holds only divergences the race decided (F1), so its shares are firmer and its totals smaller than in 14.6. No (d) class is left.
+
+*Structural limits after the rulings (a tune cannot close them, native follow-ups):*
+
+- No step back road: melee 30 %, ranged 22 %, ranged-off 6 %. The largest single untunable item of the melee cell.
+- No Regroup client (close on the player): archer 15 %, healer 11 %, warlock 9 %, evoker 7 %, mage 6 %.
+- A bash the Bash family did not offer or has no road for: mercenary 11 %, archer 12 %, melee 8 %, and warrior 10 % and knight 6 % over two clusters.
+- A summon generated and vetoed or under the floor: healer 12 %, evoker 10 %.
+- No "clear line of fire" family: evoker 10 %.
+- A potion scored under the floor: mercenary 21 % in two clusters, melee 9 %, ranged 8 %, mage 7 %, warlock 5 %. The magicka potion of a non-caster no longer pays the oracle (F3), so what is left here is real.
+- A scroll with the scroll road off: mage-off 9 %.
+- GONE from the list: the flee of the warlock, the healer, the conjurer and the tree-OFF cells (14 to 17 % in 14.6). The oracle no longer has a flee the game does not have, so that was the oracle's own artefact. The thief's sneak hold is gone from the top rows too.
+
+*Refused option offers* (the same 480 fights, subject only): 0 `cat:` refusals. `ext:block` without a Block row: every decision of melee, warrior, mercenary and melee-off, and a few of the ranged cells (it is offered whenever a blade is in hand, and refused for anyone but the Knight line). `ext:sprint_back` without the disengage flag: melee 2820, knight 3379, warrior 1763, mercenary 1257, mage 593, archer 405, ranged 392. Rulings: knight 3705 and warrior 2141 never-retreats, healer 1014 near-player, splash 254 to 891 and forbidden posture 444 to 1064 on each Mage-line cell, no-melee 3 to 79.
+
+*Run time.* Subject only: 51.2 CPU seconds a natural fight over the 15 cells (35.8 in the first round, 3.05 before). Every follower planned, Mage line: 114 CPU seconds a fight (92). The cost went up because every target of an extended action is an option now. A gap stage first pass is about 54 CPU hours, about 3.4 hours on 16 cores per world. `--oracle-ceiling 32` remains the lever.
+
+*Checks on the final tree.* CLI-CHECKS PASS (three new ones: the stop line and the class filter, the stream diagnostic and `--gap-bracket`, the damage report). 26 unit tests pass. A gap run prints the same `GAP*` and `ORC*` lines with one thread and with 16. `--world v2` compares to its baseline with 0 metrics changed and runs the class oracle.
+
+## 15. Incoming damage on followers: the field against the lab (2026-11-17)
+
+marth, verbatim: "Healing seems to come too late ... If it's the same timing a restoration class would have, it's way too late" and "Which tells me the sim is wrong with incoming damage rates or something".
+
+Tools: `tools/iaus_sim/calib_damage.py <run-dir> ...` reads the field side. `sim --damage-report N [--damage-bracket <name>] [--list <world>]` computes the same numbers in the lab. Sources: `_evidence/deck-run-1117/part4`, `deck-run-1117b-full`, `deck-run-1117f` (three Deck sessions of 11-17, the same three followers: Cicero melee, Adelinda ranged, Jesper mage, level 45 and 46).
+
+### 15.1 What the logs hold
+
+No per-hit damage line exists in two of the three sessions. What every session has:
+
+- `[sense]`, one line per follower about every 3.3 s: `hpLoss` is `Confidence::HpLossRate`, the NET health fraction lost over the last 5 s, the loss CAPPED at 25 % of his maximum. It tops out at 5.0 %/s. A one-hit kill reads 5.0. The lab computes the same capped number, so the columns compare.
+- `[bleed] DOWN (essential down ...)`. Four lines that read `DOWN (?(9); ...) hp 100%` are life state 9, which the log itself says is not a down. They are not counted.
+- Health points of heal recipients (`[heal-obs]`, the `recipient_hp` fact).
+
+Only `deck-run-1117f` has the fill probe's hit lines (`[iaus-fill] hit`, `bIausFillProbe`): 140 lines, 39 of them a foe's hit on a follower, one fight.
+
+Not in any log: a foe's level, who a foe is attacking, a follower's maximum health. So incoming damage per foe class and level, which the brief asked for, cannot be measured from these sessions. What can be measured is below.
+
+### 15.2 Field numbers
+
+| | n | |
+|---|---|---|
+| In-combat samples (own combat flag, foes > 0) | 749 | 40.0 follower-minutes |
+| Share of samples losing health, all | 749 | 10.1 % |
+| at 1 to 2 foes | 371 | 4.9 %, mean 0.11 %/s |
+| at 3 to 4 foes | 252 | 10.3 %, mean 0.17 %/s |
+| at 5 or more foes | 126 | 25.4 %, mean 0.91 %/s, 14.3 % of samples at the 5.0 cap |
+| Mean capped loss while losing | 76 | 2.60 %/s (13 % of his health in the window) |
+| Downs | 9 | 6 first downs, 3 re-downs within 60 s of getting up at 1 to 3 % health. 0.225 per follower-minute (first downs 0.150). With 9 events the 95 % range is 0.10 to 0.43 |
+| First downs by foes count | 6 | all six at 5 or more foes |
+| Downs within 12 s of another follower's | 9 | 5 |
+| From his last no-loss sample to the down, first downs | 6 | Jesper (cloth, mage) 0.4 s, 1.2 s, 3.2 s. Cicero 5.9 s and 8.3 s. Adelinda 9.1 s |
+| Loss between two health points of a heal recipient | 19 | median 15 %/s, p90 57 %/s |
+
+Per-hit lines of 1117f: Jesper (armor 0) went from 172.0 to 5.6 health inside one 0.13 s window, five hit events of a Conqueror Archer with four other hits on him in it, and was down 0.4 s later. Arrows on Cicero (armor 0.51 to 0.63): 18 to 20 a shot most times, 34 to 41 twice, 70 once, about 1.9 s between shots of one archer. One melee blow of a Conqueror Berserker took 92.6 from Adelinda (armor 0.75). Field followers: Cicero at least 426 health, Adelinda 308, Jesper at least 172 (the only value seen for him, so not known to be his maximum).
+
+### 15.3 The lab on the same statistics, before the calibration of 15.5
+
+Tuxborn world (the Deck's list), IAUS, the three T1 cells with their companions, 288 fights per bracket. A bracket is a window of the lab's party-against-foes strength ratio:
+
+| | Field | natural | balanced | strong1 | strong2 |
+|---|---|---|---|---|---|
+| Downs per follower-minute | 0.225 (0.10 to 0.43) | 0.008 | 0.071 | 0.214 | 0.301 |
+| Losing share at 1 to 2 foes | 4.9 % | 12.8 % | 21.7 % | 29.9 % | 25.4 % |
+| at 3 to 4 foes | 10.3 % | 17.5 % | 29.0 % | 40.4 % | 33.9 % |
+| at 5 or more | 25.4 % | 17.4 % | 24.7 % | 28.1 % | 27.6 % |
+| Mean capped loss at 5 or more, %/s | 0.91 | 0.34 | 0.55 | 0.78 | 0.81 |
+| At the cap, at 5 or more | 14.3 % | 2.9 % | 3.2 % | 7.5 % | 8.1 % |
+| Mean capped loss while losing, %/s | 2.60 | 1.92 | 2.15 | 2.49 | 2.67 |
+| Downs under 3.5 s after a no-loss sample | 3 of 6 first downs | 0 of 1 | 4 of 13 | 4 of 34 | 4 of 44 |
+| Foes a sample | 1-2: 50 %, 3-4: 34 %, 5+: 17 % | 2.4 mean | 3.7 | 4.7 | 4.6 |
+
+Built-in world, downs per follower-minute: natural 0.021, balanced 0.027, strong1 0.107, strong2 0.170. Its fixture groups never reach five foes.
+
+The lab's followers on Tuxborn: level 29 to 30 (drawn 12 to 45), melee 380 health and armor 0.41, ranged 332 and 0.30, mage 292 and 0.00. Foes level 15 in the natural bracket, 23 in strong1.
+
+### 15.4 What this says
+
+1. **The lab's damage rate is not off by a constant.** In the brackets where the lab's followers go down as often as the field's (strong1 and strong2 on Tuxborn: 0.21 and 0.30 a minute against 0.225), the capped loss at five or more foes is 0.78 to 0.81 %/s against the field's 0.91, and the loss while losing 2.5 to 2.7 against 2.6. Those agree.
+2. **The natural bracket is far gentler than the field day.** 0.008 downs a follower-minute on Tuxborn and 0.021 on the built-in world against 0.225. The field is 11 to 28 times that. Every survival band, the heal timing and the oracle-relative bounds are measured on natural fights. So they are measured where almost nobody goes down, and "healing comes too late" cannot show there. This is what the field data supports as the answer to marth's question. Caveat: the field day is three sessions in one hard place (Ash Spawn groups and reavers on Solstheim). It is not a sample of all play. The natural bracket draws any encounter of the list at a random level, wolves included.
+3. **The lab's damage arrives too evenly.** At one to four foes a field follower is losing health in 5 to 10 % of the samples. The lab's is in 13 to 40 %. And three of the six field first downs came within 3.5 s of a sample that read no loss, all three the cloth mage. The lab does that for 9 to 12 % of its downs in the strong brackets. The field's shape is quiet, then a burst.
+4. **What cannot be decided from these logs.** Point 3 rests on 623 samples for the quiet part, which is solid, and on six downs for the burst part, which is not. The burst has at least three possible causes the logs cannot separate: who the foes pick as a group grows (no log line says who a foe attacks), several hits landing at once (one 0.13 s window, once), and the followers' own health and armor (the field mage has at most 172 health seen once, the lab's 292 at a lower level. The field's ranged follower has armor 0.75, the lab's 0.30). Each would be a different constant. Fitting one of them to six downs would be a guess that reads as a calibration.
+
+The one lever the solid part points at, the foes' preference for the player (`World.h PickTarget`, the 1.25 on a foe's score for the player, a model value), was not moved: raising it makes followers safer in small fights, which the field supports, and safer in large ones too, which the field contradicts.
+
+What was changed is in 15.5: how a hit's size is drawn. That one the hit lines of 1117f do measure.
+
+**What it needs to go further (asks, not done):**
+
+- Run every field session with `bIausFillProbe = 1`. Only one of three had it. Its hit lines give damage per hit, the attacker and the target's health before and after. A dozen fights of that would decide between the three causes above.
+- One passive line per foe per few seconds with its current target would settle who the foes pick.
+- A ruling on whether the survival bands should also gate under pressure (a second band row per caster on the strong bracket). That is a change of what the tune optimises and was not made here. The gap pass takes `--gap-bracket <name>` so the oracle and IAUS can be read under field pressure. The bracket whose downs match the field: strong1 on Tuxborn (0.214 a follower-minute), strong2 on the built-in world (0.170, the nearest it has).
+- Not mirrored: the native heal-timing fix (branch `fix/heal-timing`: a burst-aware dying boost by hits to down, the gross incoming rate, the ally dying fallback). The branch was not on origin when this batch closed. Mirror it when it lands, then re-measure 15.6.
+
+### 15.5 The calibration: the size of a hit (`hittail`)
+
+Input from the Opus heal-timing diagnosis of the same day: single hits take 30 to 97 % of a follower's health in the field, and the game's own per-hit estimates are 4 to 6 times under what was taken.
+
+The hit lines of `deck-run-1117f` give 16 hit windows with damage that foes landed on followers (19:44:45 to 19:45:51, one fight). As a share of the target's health: median 4.7 %, 75th percentile 9.7 %, 90th percentile 30.1 %, the largest 96.7 %. Two of the 16 took 30 % or more. So the usual hit is small and a few are very large. Before armor (the line prints the target's armor share), and over the median of the same attacker kind:
+
+| Attacker | n | Health before armor, over the kind's median |
+|---|---|---|
+| Arrows of the Conqueror and Ravager Archers (median 53) | 11 | 1.32, 3.13, 0.91, 1.74, 1, 3.55, 1, 1, 1, 2.08, 1 |
+| Blows of one Conqueror Berserker (median 54) | 5 | 0.67, 6.76, 1, 1, 0.5 |
+
+Mean 1.73, median 1. Four of sixteen are twice the median or more, three are three times or more.
+
+The lab's foes hit with one size per weapon (a power attack apart). The change: a foe's physical hit on a member of the party is multiplied by one of those sixteen values, drawn evenly, each divided by their mean so the mean multiplier is 1 (`World.h kFieldHit`, the v3 switch `hittail`, its draw from the v3 stream). The mean is 1 on purpose. The lab's damage per second already agrees with the field at matched pressure (15.4, point 1). What differed is how it arrives. So a usual hit is now 0.58 of what it was, and one hit in four is 1.2 to 3.9 times it.
+
+It applies to the player model too, since he is hit by the same foes. It does not apply to spells (no field hit line of a spell on a follower exists) or to the party's own hits.
+
+**Honest size of the evidence:** sixteen hits, one fight, two archer kinds and one melee foe, three followers. The spread is real in that fight. Whether it holds for other foes is not known. `--v3 hittail=off` gives the lab before it, and the comment at `kFieldHit` names the lines to re-derive it from.
+
+Before and after, Tuxborn world, strong1 bracket (the field's pressure), 288 fights, IAUS:
+
+| | Field | Before | After |
+|---|---|---|---|
+| Downs per follower-minute | 0.225 | 0.214 | 0.217 |
+| Mean capped loss at 5 or more foes, %/s | 0.91 | 0.78 | 0.78 |
+| At the cap, at 5 or more | 14.3 % | 7.5 % | 7.0 % |
+| Losing share, all samples | 10.1 % | 31.2 % | 29.4 % |
+| Downs within 3.5 s of a no-loss sample | 3 of 6 | 4 of 34 (12 %) | 6 of 33 (18 %) |
+| From above 75 % health to the down, under 1 s | Jesper, 0.4 s | 0 of 34 | 2 of 33 |
+| Worst loss inside one second, per follower and fight: 90th percentile, largest | 30 %, 97 % (hit windows) | 26 %, 62 % | 28 %, 100 % |
+
+The burst now exists in the lab (a follower can go from full to down in one second, which it could not), and the share of downs that come out of calm went from 12 to 18 %. It is still about a third of the field's share, on six field downs. The step is small because the mean is held at 1 and because a down in the lab's strong fights is mostly the melee follower worn down, not the mage burst. The capped loss numbers did not move toward the field. They cannot: the game's reader caps a window's loss at 25 %, so it does not see hit size.
+
+What the built-in world's tuning baseline does with it (`baseline_v3_builtin.txt`, regenerated, 8 fights a cell, so each row is noisy): U over the 90 class and bracket rows moved by -4.56 on average (from -15.91 to +4.11), and by -2.76 over the 15 natural rows. The player model dies more often when a hard hit lands on him, and a fight the player loses scores low. The v2 world is untouched (0 metrics changed against `baseline_builtin.txt`). Every J of the v3 world is a new number after this, so the retune starts from the new baseline.
+
+### 15.6 Survival, heal timing and ally survival with the final oracle on the calibrated world
+
+160 natural fights per class, built-in world, v3 with the hit-size spread, every follower planned by the class oracle (review F7: the subject is beside oracle-planned companions here, so he is better protected than beside IAUS ones). The run took 139 minutes on 16 cores. Bound = the oracle's value plus the same margins (0.05 downs a fight, 5 points). `Playstyles.h` carries these numbers.
+
+| Class | Oracle downs / fight | Bound | IAUS | Oracle self heals begun under 25 % | Bound | IAUS |
+|---|---|---|---|---|---|---|
+| mage | 0.019 | 0.07 | 0.031 | 5.4 % | 10 % | 13.7 % |
+| evoker | 0.019 | 0.07 | 0.019 | 2.6 % | 8 % | 7.5 % |
+| conjurer | 0.031 | 0.08 | 0.006 | 2.4 % | 7 % | 13.7 % |
+| healer | 0.000 | 0.05 | 0.019 | 2.2 % | 7 % | 9.5 % |
+| warlock | 0.025 | 0.08 | 0.037 | 4.9 % | 10 % | 15.1 % |
+
+With harder single hits the oracle goes down a little more often than in 14.8 (0.019 to 0.031 a fight against 0.000 to 0.013), so the downs bounds are 0.01 to 0.03 looser. Every class is inside its downs band. The mage, the conjurer, the healer and the warlock are outside the self-heal band with the shipped tunings: they begin a self heal under a quarter of their health two to six times as often as the oracle.
+
+**Heal timing, re-derived (the Healer's and the Priest's `healAt% <= 60`).** The old band capped the MEAN health of the recipient at the heal from above: a healer who healed earlier than 60 % failed it. The oracle heals at a mean of 67 to 75 % of the recipient's health on every caster cell. So that band asked for later heals than the best play. It is replaced on those two rows by `healLate%`: the share of his heals on another that BEGIN with the recipient under 30 % of his health. 30 % is one hard field hit (the 90th percentile of the hit windows of 15.5), and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis, 1.0 to 2.9 s), so a heal begun under that line can lose the race with the next hit. The bound is the oracle's share plus 5 points.
+
+| Class | Oracle heals begun under 30 % | Bound | IAUS | Oracle mean health at the heal | IAUS |
+|---|---|---|---|---|---|
+| healer | 2.9 % | 8 % | 1.9 % | 70.9 % | 68.2 % |
+| priest | 1.2 % | 6 % | 2.4 % | 70.6 % | 71.8 % |
+| mage (no band) | 1.8 % | | 7.4 % | 69.8 % | 64.1 % |
+| evoker (no band) | 1.7 % | | 7.7 % | 74.7 % | 57.9 % |
+| conjurer (no band) | 2.3 % | | 7.2 % | 73.1 % | 55.5 % |
+| warlock (no band) | 4.9 % | | 2.8 % | 66.7 % | 66.2 % |
+
+On natural fights the Healer and the Priest are inside the new band. The classes that heal late are the mage, the evoker and the conjurer: three to four times the oracle's late share, and a mean 6 to 18 points lower. That matches the diagnosis (the Evoker's heals carry a 0.37 school weight). The five other rows that hold `healAt% <= 75` were not asked for and are unchanged. The same argument applies to them.
+
+**The Evoker's ally-survival band.** New on his row: `dwh/f` (an ally goes down while he holds a heal he could cast) at most the oracle's 0.069 a fight plus 0.05, so 0.12. IAUS is at 0.106, inside. The Healer and the Priest keep their card value of 0.1 (oracle 0.069 and 0.056, IAUS 0.106 and 0.106: both are just outside their own band).
+
+**Under field pressure** (`--gap-bracket strong2`, 32 fights per class, every follower planned. The record, not a band):
+
+| Class | IAUS U | Oracle U | Gap (se) | Allies down while he held a heal, IAUS / oracle | Heals begun under 30 %, IAUS / oracle | Mean health at the heal, IAUS / oracle |
+|---|---|---|---|---|---|---|
+| mage | 33.02 | 59.97 | +26.95 (6.89) | 0.344 / 0.219 | 3.4 % / 3.4 % | 60.3 % / 66.5 % |
+| evoker | 35.48 | 57.15 | +21.67 (9.22) | 0.312 / 0.094 | 17.9 % / 11.7 % | 50.4 % / 60.8 % |
+| conjurer | 47.21 | 68.45 | +21.24 (5.96) | 0.250 / 0.156 | 15.3 % / 3.3 % | 49.9 % / 68.6 % |
+| healer | 27.45 | 53.30 | +25.85 (7.66) | 0.219 / 0.188 | 3.4 % / 6.5 % | 64.5 % / 67.2 % |
+| warlock | 33.56 | 51.29 | +17.73 (6.99) | 0.219 / 0.250 | 2.4 % / 3.8 % | 66.9 % / 63.5 % |
+| priest | 45.41 | 66.17 | +20.75 (8.09) | 0.156 / 0.094 | 6.1 % / 1.5 % | 59.3 % / 68.6 % |
+
+This is where marth's observation shows. Under the field's pressure the gap to the oracle is 18 to 27 U (10 to 19 on natural fights), the Evoker lets an ally go down while holding a heal three times as often as the oracle (0.31 against 0.09), and the Evoker and the Conjurer begin 15 to 18 % of their heals on an ally who is one hit from down. 32 fights a class, so each number is rough. The direction is the same on most rows. The warlock and the healer's late share go the other way.
+
+Open after this batch: whether the bands should gate under pressure as well (a ruling), the native heal-timing fix to mirror, and the potion-worth tables to re-measure after F3 and the hit sizes.

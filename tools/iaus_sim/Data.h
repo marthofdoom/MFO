@@ -63,7 +63,8 @@ namespace Sim {
         bool blockdir = true;    // a guard stops a blow only inside its arc; every blow on the subject is tallied by direction
         bool areas = true;       // an ACTIVE area (cloak = moves with the caster, circle / rune / wall = fixed at the cast point) lives in the world while it lasts
         bool perks = true;       // Snapshot::perks spell group (spellsRead, spellCost / spellMagnitude / spellCount per school), perk-effects.md section 9
-        void AllOff() { height = chase = lof = delivery = hands = stance = sidestep = casterhold = blockdir = areas = perks = false; }
+        bool hittail = true;     // a foe's physical hit on the party is drawn from the FIELD's hit-size spread (World.h kFieldHit; iaus-sim-v3.md 15.5), mean 1: the same damage a minute, in fewer and harder hits
+        void AllOff() { height = chase = lof = delivery = hands = stance = sidestep = casterhold = blockdir = areas = perks = hittail = false; }
         [[nodiscard]] bool Any() const { return height || chase || lof || delivery || hands || stance || sidestep || casterhold || blockdir || areas || perks; }
     };
     inline V3 g_v3;

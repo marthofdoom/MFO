@@ -62,6 +62,11 @@ namespace Sim {
     inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) { return PreparePickKind(F, c, self, flee ? 1 : 0); }
 
     // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
+    // ONE HARD HIT FROM DOWN (CALIBRATED, iaus-sim-v3.md 15.5): the 90th percentile of the field's hit windows on followers took 30.1 % of the
+    // target's health (_evidence/deck-run-1117f, 16 windows with damage; the largest 96.7 %). A recipient under this share of his health
+    // can be downed by the next such hit, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17,
+    // 1.0 to 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this, not by the mean health at the heal.
+    inline constexpr float kOneHitLine = 0.30f;
     inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
 
     // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
@@ -424,7 +429,7 @@ namespace Sim {
                 if (fam == Family::CastOffense) { ++t.offPickN; t.offPickDmg += s.dmg + s.dot * s.dotDur; t.offPickCost += e.cost; }
                 if (fam == Family::CastHeal) { ++t.healPickN; t.healPickSize += s.heal + s.hot * s.hotDur; if (s.e.concentration) ++t.healPickConc; if (target == x.c.id) ++t.healPickSelf; }
                 if (fam == Family::CastHeal && target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
-                if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; }
+                if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; if (r->c.hp < kOneHitLine * r->c.hpMax) ++t.healLateN; }
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
                     (void)r; }
             }

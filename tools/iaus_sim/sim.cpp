@@ -60,7 +60,7 @@ namespace {
             // sim v3
             S(castPick); S(castFired); S(castNoLos); S(castLofHeld); S(castLofExpired); S(castNotBuilt); S(castDirect); S(castThrash); S(castLost); S(beats); S(beatLof); S(beatNoLos); S(streams); S(castLofSec); S(claimSec); S(streamSec);
             S(capLaps); S(capDropLaps); S(capStarveLaps); S(capWaived); S(capSum); S(inc); S(incGuard); S(incArc); S(incDown); S(handLostSec); S(handLostDmg); S(reDraws);
-            S(castUnfired); S(castRepeat); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealLowN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
+            S(castUnfired); S(castRepeat); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealLowN); S(healLateN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
@@ -124,7 +124,7 @@ namespace {
               m["pr.spoiled/f"] = double(s.drawSpoiled) / n; m["pr.pointBlank%"] = pct(double(s.pointBlankShots), double(s.arrowsShot)); }
           m["tgtDist"] = s.tgtDistN ? s.tgtDistSum / double(s.tgtDistN) : -1; m["pDist"] = s.posN ? s.playerDistSum / double(s.posN) : -1; m["contact%"] = 100.0 * s.contactSec / up;
           m["miss%"] = s.arrowsShot >= 5 ? 100.0 * double(s.arrowsShot - s.arrowsHit) / double(s.arrowsShot) : -1; m["powShare%"] = s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)] > 1.0 ? 100.0 * s.bodySec[static_cast<std::size_t>(Act::Power)] / (s.bodySec[static_cast<std::size_t>(Act::Swing)] + s.bodySec[static_cast<std::size_t>(Act::Power)]) : -1;
-          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["selfHealAt%"] = s.selfHealN ? 100.0 * s.selfHealAtSum / double(s.selfHealN) : -1; m["selfHealLow%"] = s.selfHealN ? 100.0 * double(s.selfHealLowN) / double(s.selfHealN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
+          m["goInBad%"] = 100.0 * s.goInBadSec / up; m["summonUp%"] = 100.0 * s.summonSec / up; m["healAt%"] = s.healAtN ? 100.0 * s.healAtSum / double(s.healAtN) : -1; m["healLate%"] = s.healAtN ? 100.0 * double(s.healLateN) / double(s.healAtN) : -1; m["selfHealAt%"] = s.selfHealN ? 100.0 * s.selfHealAtSum / double(s.selfHealN) : -1; m["selfHealLow%"] = s.selfHealN ? 100.0 * double(s.selfHealLowN) / double(s.selfHealN) : -1; m["undeadDmg%"] = pct(s.undeadDmg, s.dmgDone); }
         // sim batch (section 32): the drink record (the full decline curve is the --decline report)
         m["drinkH/f"] = double(s.drinksH) / n; m["drinkAt%"] = s.drinksH ? 100.0 * s.drinkAtSum / double(s.drinksH) : -1; m["potWaste%"] = pct(s.potWaste, s.potHeal); m["dnPot/f"] = double(s.downsWithPotH) / n; m["dnMidDrink/f"] = double(s.downsMidDrink) / n;
         // SIM V3 (iaus-sim-v3.md): what became of the casts his decisions fired, the chase cap, the guard by direction, the weapon hand, the areas.
@@ -150,13 +150,28 @@ namespace {
         return m;
     }
 
+    // The oracle's setting in words (Oracle.h OracleCfg): the stopping rule, or the labelled diagnostic cuts. Printed and recorded wherever an oracle ran.
+    std::string OracleDesc(const OracleCfg& oc) {
+        char b[300]; if (oc.K > 0) std::snprintf(b, sizeof b, "DIAGNOSTIC fixed K=%d", oc.K); else std::snprintf(b, sizeof b, "streams until separated at p=%g, from %d, ceiling %d", oc.pOne, oc.nMin, oc.ceiling);
+        std::string d = b; if (oc.H >= 150.0) d += ", rollouts to the fight's end"; else { std::snprintf(b, sizeof b, ", DIAGNOSTIC rollouts cut at %.0f s", oc.H); d += b; }
+        if (oc.every > 0.0) { std::snprintf(b, sizeof b, ", DIAGNOSTIC a decision every %.2f s", oc.every); d += b; } else d += ", every decision point";
+        d += ", every candidate"; if (!oc.split) d += ", DIAGNOSTIC one shared random stream"; if (!g_classRulings) d += ", DIAGNOSTIC class rulings OFF"; return d; }
+    int OracleKOf(const OracleCfg& oc) { return oc.K > 0 ? oc.K : oc.ceiling; }   // the results file's "k": the most streams an option can get
+
+    // What the oracle's search did (Oracle.h OracleStats), one line: sizes per decision, and how often the safety ceiling ended a race.
+    std::string StopLine(const OracleStats& s) {
+        const double d = std::max<double>(1, double(s.decisions)); char b[400];
+        std::snprintf(b, sizeof b, "decisions %ld  options/dec %.1f  streams/dec %.1f  rollouts/dec %.0f  ceiling bound %ld (%.2f%%)  standing there %.1f  unresolved lead mean %.3f max %.3f U", s.decisions, double(s.options) / d, double(s.streams) / d, double(s.rollouts) / d,
+                      s.bound, 100.0 * double(s.bound) / d, s.bound ? double(s.standing) / double(s.bound) : 0.0, s.bound ? s.unresolved / double(s.bound) : 0.0, s.unresolvedMax);
+        return b; }
+
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
         const std::vector<Scenario> all = AllScenarios(true, true, true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "field" = sim v3's field failures; "all,stealth" = both
         for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.field && std::strncmp(s.name, "dive-", 5) != 0 && (!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || (s.field && ("," + which + ",").find(",field,") != std::string::npos) || (!std::strncmp(s.name, "dive-", 5) && ("," + which + ",").find(",pressure,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
-        struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; };
+        struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; OracleStats st; };
         std::vector<Res> res(pick.size()); std::atomic<int> next{ 0 }; std::mutex mx; const int jobs = static_cast<int>(pick.size()) * fights;
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int si = job / fights, f = job % fights;
             Rng R; R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919);
@@ -170,7 +185,7 @@ namespace {
             double uO = 0; OraclePolicy O; std::map<std::string, Disagreement> dl;
             if (oracle) { O.cfg = oc; O.log = &dl; RunFight(G, O); uO = Utility(G); }
             std::scoped_lock lk(mx); Res& r = res[static_cast<std::size_t>(si)]; r.iaus.uSum += uI; r.iaus.Add(F.t, false);
-            if (oracle) { r.orc.uSum += uO; r.orc.Add(G.t, false); r.dec += O.decisions; r.disagreed += O.disagreed; r.dU += O.dUSum;
+            if (oracle) { r.orc.uSum += uO; r.orc.Add(G.t, false); r.dec += O.decisions; r.disagreed += O.disagreed; r.dU += O.dUSum; r.st.Merge(O.st);
                 for (auto& kv : dl) { Disagreement& g = r.dis[kv.first]; const Disagreement& a = kv.second; g.n += a.n; g.dU += a.dU; g.iFoeHp += a.iFoeHp; g.oFoeHp += a.oFoeHp; g.iOnPlayer += a.iOnPlayer; g.oOnPlayer += a.oOnPlayer; g.iCaster += a.iCaster; g.oCaster += a.oCaster;
                     g.iResist += a.iResist; g.oResist += a.oResist; g.iRecHp += a.iRecHp; g.oRecHp += a.oRecHp; g.selfHp += a.selfHp; g.selfMp += a.selfMp; g.foes += a.foes; g.sameTarget += a.sameTarget; g.iDist += a.iDist; g.oDist += a.oDist; g.playerHp += a.playerHp; g.nearDist += a.nearDist; } } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
@@ -191,7 +206,8 @@ namespace {
                 for (std::size_t k = 0; k < top.size() && k < 7; ++k) { const Disagreement& g = res[i].dis[top[k].second]; const double n = double(g.n);
                     std::printf("\n    %-34s n=%-5ld sum dU=%7.1f  foeHp %.2f>%.2f onPlayer %.2f>%.2f caster %.2f>%.2f resist %.0f>%.0f recipHp %.2f>%.2f dist %.0f>%.0f  selfHp %.2f mp %.2f playerHp %.2f nearFoe %.0f foes %.1f sameTgt %.2f", top[k].second.c_str(), g.n, g.dU,
                                 g.iFoeHp / n, g.oFoeHp / n, g.iOnPlayer / n, g.oOnPlayer / n, g.iCaster / n, g.oCaster / n, g.iResist / n, g.oResist / n, g.iRecHp / n, g.oRecHp / n, g.iDist / n, g.oDist / n, g.selfHp / n, g.selfMp / n, g.playerHp / n, g.nearDist / n, g.foes / n, g.sameTarget / n); }
-                std::printf("\n    oracle used: %.2f extended actions per fight, %.2f scrolls per fight, %.1f%% of the time on a move order", mo.at("ext/f"), mo.at("scroll/f"), mo.at("move%")); }
+                std::printf("\n    oracle used: %.2f extended actions per fight, %.2f scrolls per fight, %.1f%% of the time on a move order", mo.at("ext/f"), mo.at("scroll/f"), mo.at("move%"));
+                std::printf("\n    %s", StopLine(res[i].st).c_str()); for (const auto& kv : res[i].st.refused) std::printf("\n    refused by the class filter: %ld x %s", kv.second, kv.first.c_str()); }
             std::printf("\n");
         }
         if (oracle) std::printf("\nMEAN U GAP over %zu scenario(s): %+.2f\n", pick.size(), gapSum / double(pick.size()));
@@ -215,7 +231,7 @@ namespace {
     // else " world=v3" plus what differs from the v3 defaults.
     struct V3Flag { const char* name; bool V3::* m; };
     inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance }, { "sidestep", &V3::sidestep },
-                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks } };
+                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks }, { "hittail", &V3::hittail } };
     std::string WorldTag(const char* lead) {
         if (!g_v3.Any()) return "";
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
@@ -370,6 +386,77 @@ namespace {
     //   and two lines read off the curve: NO-WASTE (1 - potion / max health: above it part of the potion is lost) and LAST-SAFE (the
     //   lowest tenth in which under 10% of the pressed seconds were lethal-in-2-s: under it a potion comes too late too often).
     // The best line itself is SEARCHED (tools/iaus_sim/edge_search.py over --curve <class>:drink_health.32.b): this report says where to look.
+    // ── --damage-report N: INCOMING DAMAGE ON FOLLOWERS, in the field logs' own terms (calib_damage.py; iaus-sim-v3.md 15) ──────────────
+    // The game logs no per-hit damage. What the Deck logs hold is the [sense] line (Confidence::HpLossRate per follower about every 3.3 s:
+    // the NET health fraction lost over the last 5 s, the loss capped at 25 % of his maximum, over max(span, 5 s)) and the [bleed] DOWN line.
+    // This report computes the SAME numbers for every follower of N natural fights per class, so the lab and the field compare like for
+    // like: SENSE per foes bucket, DOWNS per follower-minute, BURST (from his last no-loss sample to the down). It adds what only the lab
+    // can see: the seconds from his last moment above 75 % health to the down, and his worst loss inside one second.
+    int g_gapBracket = 0;      // --gap-bracket <name>: the strength bracket of the gap pass's "natural" fights (default natural). strong1 is the FIELD-PRESSURE read: the bracket whose downs per follower-minute match the Deck logs (iaus-sim-v3.md 15)
+    int g_damageBracket = 0;   // --damage-bracket <name>: which strength bracket the report's fights are drawn in (default natural)
+    int DamageReport(const Data& D, const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
+        const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
+        std::vector<int> cls; for (std::size_t i = 0; i < all.size(); ++i) if (only.empty() || ("," + only + ",").find("," + all[i].name + ",") != std::string::npos) cls.push_back(static_cast<int>(i));
+        struct DA { long n[3]{}, losing[3]{}, cap[3]{}; double sum[3]{}; long downs = 0, downB[3]{}, calmDown = 0; double minutes = 0, foeSec = 0, pileSec = 0; std::vector<double> burst, from75, peak; long fights = 0; double dur = 0;
+            double fHp[3]{}, fAr[3]{}, fLvl[3]{}; long fN[3]{}, fDowns[3]{}, fFast[3]{}; double foeLvl = 0, foeHp = 0; long foeN = 0; };   // per follower line (melee, ranged, mage): his health, physical mitigation (0..1), level; his downs and those under 3 s from above 75 %
+        std::vector<DA> agg(cls.size()); std::atomic<int> next{ 0 }; std::mutex mx; const int perClass = n * static_cast<int>(seeds.size()), jobs = perClass * static_cast<int>(cls.size());
+        constexpr double kStep = 3.3, kWindow = 5.0, kMinStep = 0.25, kMinSpan = 1.0; constexpr float kCap = 0.25f;   // CombatScan.cpp's throttle as logged (median spacing 3.3 s); Confidence.h kTrendWindow / kTrendMinStep / kTrendMinSpan / kTrendBurstCap
+        auto bucket = [](int foes) { return foes <= 2 ? 0 : foes <= 4 ? 1 : 2; };
+        auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int ci = job / perClass, k = job % perClass, si = k / n, f = k % n; const std::uint64_t seed = seeds[static_cast<std::size_t>(si)];
+            const int gi = cls[static_cast<std::size_t>(ci)]; const SimClass& sc = all[static_cast<std::size_t>(gi)]; Rng R;
+            R.g.seed(seed * 1000003ULL + std::uint64_t(gi) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL);   // the natural fights of the gap pass
+            Fight F = RandomFight(D, sc, g_forceRank ? g_forceRank : 1 + f % 5, kBrackets[g_damageBracket], R, t1); F.estimates = estimates; F.scrollRoad = scrollRoad;
+            struct FS { std::vector<std::pair<double, float>> ring; double nextSense = 0, lastCalm = -1, last75 = 0, lastSenseLoss = -1; int lastFoes = 0; bool up = true; std::vector<std::pair<double, float>> sec; float peak = 0; };
+            std::vector<FS> fs(F.ctl.size()); for (std::size_t i = 0; i < fs.size(); ++i) fs[i].nextSense = 1.1 * double(i);
+            DA a; IausPolicy P; F.SetArena();
+            for (const Ctl& c : F.ctl) { const Body& x = F.b[static_cast<std::size_t>(c.body)]; const int fm = static_cast<int>(c.fam); a.fHp[fm] += x.c.hpMax; a.fAr[fm] += ArmorMitigation(D.rules, x.spec->ar, x.spec->pieces); a.fLvl[fm] += x.c.level; ++a.fN[fm]; }
+            for (const Body& o : F.b) if (o.role == Sim::Role::Foe) { a.foeLvl += o.c.level; a.foeHp += o.c.hpMax; ++a.foeN; }
+            while (!F.over) {
+                if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; const int c = F.rr; P.Serve(F, c); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size());
+                    FS& q = fs[static_cast<std::size_t>(c)]; const Body& x = F.b[static_cast<std::size_t>(F.ctl[static_cast<std::size_t>(c)].body)]; const float hp = std::max(0.0f, x.c.hp) / std::max(1.0f, x.c.hpMax);
+                    if (q.ring.empty() || F.now - q.ring.back().first >= kMinStep) { q.ring.push_back({ F.now, hp }); if (q.ring.size() > 32) q.ring.erase(q.ring.begin()); }   // Confidence::NoteHealth: once per own service
+                    if (F.now >= q.nextSense) { q.nextSense += kStep; int foes = 0, onHim = 0; for (const Body& o : F.b) if (o.role == Sim::Role::Foe && Fight::Up(o) && o.airUntil >= 0) { ++foes; onHim += o.c.targetId == x.c.id; }
+                        float rate = 0;   // Confidence::HpLossRate
+                        if (q.ring.size() >= 2) { const auto& nw = q.ring.back(); const auto& nw1 = q.ring[q.ring.size() - 2]; const double window = std::max(kWindow, 2.5 * (nw.first - nw1.first)); const std::pair<double, float>* old = &nw1;
+                            for (std::size_t kk = 3; kk <= q.ring.size(); ++kk) { const auto& c2 = q.ring[q.ring.size() - kk]; if (nw.first - c2.first > window) break; old = &c2; }
+                            const double span = nw.first - old->first; if (span >= kMinSpan) rate = std::max(0.0f, std::min(kCap, old->second - nw.second) / static_cast<float>(std::max(span, kWindow))); }
+                        if (foes > 0) { const int b = bucket(foes); ++a.n[b]; a.losing[b] += rate > 0.0f; a.sum[b] += 100.0 * rate; a.cap[b] += 100.0f * rate >= 4.9f; a.minutes += kStep / 60.0; a.foeSec += foes; a.pileSec += onHim; }
+                        if (rate <= 0.0f) q.lastCalm = F.now; q.lastSenseLoss = rate; q.lastFoes = foes; } }
+                F.StepWorld();
+                for (std::size_t i = 0; i < fs.size(); ++i) { FS& q = fs[i]; const Body& x = F.b[static_cast<std::size_t>(F.ctl[i].body)]; const float hp = std::max(0.0f, x.c.hp) / std::max(1.0f, x.c.hpMax); const bool up = Fight::Up(x);
+                    q.sec.push_back({ F.now, hp }); while (q.sec.size() > 1 && F.now - q.sec.front().first > 1.0) q.sec.erase(q.sec.begin()); q.peak = std::max(q.peak, q.sec.front().second - hp);
+                    if (q.up && !up) { ++a.downs; ++a.downB[bucket(std::max(1, q.lastFoes))]; if (q.lastCalm >= 0) a.burst.push_back(F.now - q.lastCalm); a.calmDown += q.lastSenseLoss == 0.0; a.from75.push_back(F.now - q.last75); const int fm = static_cast<int>(F.ctl[i].fam); ++a.fDowns[fm]; a.fFast[fm] += F.now - q.last75 < 3.0; }
+                    if (up && hp > 0.75f) q.last75 = F.now; q.up = up; }
+            }
+            for (const FS& q : fs) a.peak.push_back(100.0 * q.peak);
+            a.fights = 1; a.dur = F.now;
+            std::scoped_lock lk(mx); DA& g = agg[static_cast<std::size_t>(ci)];
+            for (int b = 0; b < 3; ++b) { g.n[b] += a.n[b]; g.losing[b] += a.losing[b]; g.cap[b] += a.cap[b]; g.sum[b] += a.sum[b]; g.downB[b] += a.downB[b]; }
+            g.downs += a.downs; g.calmDown += a.calmDown; g.minutes += a.minutes; g.foeSec += a.foeSec; g.pileSec += a.pileSec; g.fights += 1; g.dur += a.dur;
+            for (int b = 0; b < 3; ++b) { g.fHp[b] += a.fHp[b]; g.fAr[b] += a.fAr[b]; g.fLvl[b] += a.fLvl[b]; g.fN[b] += a.fN[b]; g.fDowns[b] += a.fDowns[b]; g.fFast[b] += a.fFast[b]; } g.foeLvl += a.foeLvl; g.foeHp += a.foeHp; g.foeN += a.foeN;
+            g.burst.insert(g.burst.end(), a.burst.begin(), a.burst.end()); g.from75.insert(g.from75.end(), a.from75.begin(), a.from75.end()); g.peak.insert(g.peak.end(), a.peak.begin(), a.peak.end()); } };
+        { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
+        std::printf("INCOMING DAMAGE ON FOLLOWERS (every follower of the fight, IAUS)  list=%s  seeds=%zu  %d %s fights per class and seed  world=%s\n", D.name.c_str(), seeds.size(), n, kBrackets[g_damageBracket].name, g_v3.Any() ? "v3" : "v2");
+        auto pct = [](std::vector<double> v, double p) { if (v.empty()) return -1.0; std::sort(v.begin(), v.end()); return v[std::min(v.size() - 1, static_cast<std::size_t>(p * double(v.size())))]; };
+        auto under = [](const std::vector<double>& v, double x) { long c = 0; for (double q : v) c += q < x; return c; };
+        DA tot; std::vector<std::pair<std::string, const DA*>> rows; for (std::size_t i = 0; i < cls.size(); ++i) { const DA& g = agg[i]; rows.push_back({ all[static_cast<std::size_t>(cls[i])].name, &g });
+            for (int b = 0; b < 3; ++b) { tot.n[b] += g.n[b]; tot.losing[b] += g.losing[b]; tot.cap[b] += g.cap[b]; tot.sum[b] += g.sum[b]; tot.downB[b] += g.downB[b]; }
+            tot.downs += g.downs; tot.calmDown += g.calmDown; tot.minutes += g.minutes; tot.foeSec += g.foeSec; tot.pileSec += g.pileSec; tot.fights += g.fights; tot.dur += g.dur;
+            for (int b = 0; b < 3; ++b) { tot.fHp[b] += g.fHp[b]; tot.fAr[b] += g.fAr[b]; tot.fLvl[b] += g.fLvl[b]; tot.fN[b] += g.fN[b]; tot.fDowns[b] += g.fDowns[b]; tot.fFast[b] += g.fFast[b]; } tot.foeLvl += g.foeLvl; tot.foeHp += g.foeHp; tot.foeN += g.foeN;
+            tot.burst.insert(tot.burst.end(), g.burst.begin(), g.burst.end()); tot.from75.insert(tot.from75.end(), g.from75.begin(), g.from75.end()); tot.peak.insert(tot.peak.end(), g.peak.begin(), g.peak.end()); }
+        rows.push_back({ "ALL", &tot }); static const char* bn[3] = { "1-2", "3-4", "5+" };
+        for (const auto& [name, gp] : rows) { const DA& g = *gp; long N = 0, L = 0, C = 0; double S = 0;
+            for (int b = 0; b < 3; ++b) { N += g.n[b]; L += g.losing[b]; C += g.cap[b]; S += g.sum[b];
+                if (g.n[b]) std::printf("SIM SENSE %-10s foes %-3s n=%-6ld losing %5.1f%%  mean %.2f %%/s  at-cap %5.1f%%  mean-when-losing %.2f %%/s\n", name.c_str(), bn[b], g.n[b], 100.0 * double(g.losing[b]) / double(g.n[b]), g.sum[b] / double(g.n[b]), 100.0 * double(g.cap[b]) / double(g.n[b]), g.losing[b] ? g.sum[b] / double(g.losing[b]) : 0.0); }
+            if (N) std::printf("SIM SENSE %-10s foes all n=%-6ld losing %5.1f%%  mean %.2f %%/s  at-cap %5.1f%%  mean-when-losing %.2f %%/s   (foes a sample %.1f, of them on him %.2f)\n", name.c_str(), N, 100.0 * double(L) / double(N), S / double(N), 100.0 * double(C) / double(N), L ? S / double(L) : 0.0, g.foeSec / double(N), g.pileSec / double(N));
+            std::printf("SIM DOWNS %-10s %ld in %.1f follower-minutes of combat = %.3f per follower-minute; by foes on the last sample: 1-2:%ld 3-4:%ld 5+:%ld   (%ld fights, mean %.0f s)\n", name.c_str(), g.downs, g.minutes, g.minutes > 0 ? double(g.downs) / g.minutes : 0.0, g.downB[0], g.downB[1], g.downB[2], g.fights, g.fights ? g.dur / double(g.fights) : 0.0);
+            std::printf("SIM BURST %-10s n=%zu  median %.1f s  under 3.5 s: %ld  under 7 s: %ld  (a down whose LAST sample read no loss: %ld)  |  from above 75%% health to the down: median %.1f s, p25 %.1f s, under 1 s: %ld, under 3 s: %ld  |  worst loss inside one second, per follower and fight: median %.0f%%, p90 %.0f%%, max %.0f%%\n", name.c_str(), g.burst.size(), pct(g.burst, 0.5), under(g.burst, 3.5), under(g.burst, 7.0), g.calmDown, pct(g.from75, 0.5), pct(g.from75, 0.25), under(g.from75, 1.0), under(g.from75, 3.0), pct(g.peak, 0.5), pct(g.peak, 0.9), pct(g.peak, 0.999));
+            static const char* fn[3] = { "melee", "ranged", "mage" }; std::printf("SIM WHO   %-10s", name.c_str());
+            for (int b = 0; b < 3; ++b) if (g.fN[b]) std::printf("  %s: level %.0f health %.0f armor %.2f, %ld downs (%ld under 3 s from above 75%%)", fn[b], g.fLvl[b] / double(g.fN[b]), g.fHp[b] / double(g.fN[b]), g.fAr[b] / double(g.fN[b]), g.fDowns[b], g.fFast[b]);
+            std::printf("  | foes: level %.0f health %.0f\n", g.foeN ? g.foeLvl / double(g.foeN) : 0.0, g.foeN ? g.foeHp / double(g.foeN) : 0.0); }
+        return 0;
+    }
+
     int DeclineReport(const Data& D, const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
         const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
         std::vector<int> cls; for (std::size_t i = 0; i < all.size(); ++i) if (only.empty() || ("," + only + ",").find("," + all[i].name + ",") != std::string::npos) cls.push_back(static_cast<int>(i));
@@ -615,7 +702,7 @@ static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, ocGiven = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -668,8 +755,8 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--sneak-profile") && i + 1 < argc) sneakProfile = argv[++i];   // vanilla | steep (lorerim-like) | list: synthetic sneak data laid over the loaded world (Detect.h ApplyProfile)
         else if (!std::strcmp(argv[i], "--light-scale") && i + 1 < argc) g_lightScale = static_cast<float>(std::atof(argv[++i]));   // the light level of full daylight (World.h g_lightScale, MODEL 100)
         else if (!std::strcmp(argv[i], "--blow-stands")) g_blowStands = true;         // the blow from stealth is struck standing (World.h g_blowStands)
-        else if (!std::strcmp(argv[i], "--class-rulings")) g_classRulings = true;      // the oracle is held to the class playstyles (Playstyles.h); OFF by default, --class-oracle turns it on
-        else if (!std::strcmp(argv[i], "--no-class-rulings")) { g_classRulings = false; noClassRulings = true; }   // ... and stays unconstrained even with --class-oracle
+        else if (!std::strcmp(argv[i], "--class-rulings")) g_classRulings = true;      // the oracle is held to the class playstyles (Playstyles.h): the default since the standing rule of 11-17 (kept as a no-op)
+        else if (!std::strcmp(argv[i], "--no-class-rulings")) { g_classRulings = false; noClassRulings = true; }   // DIAGNOSTIC: the written rulings are not applied (the class-bound ability filter of Oracle.h ClassRefuses still is)
         else if (!std::strcmp(argv[i], "--parked")) g_parked = true;                  // the PARKED rows (T3+ playstyles, passives, stealth scenarios) take effect; Beta 1 = T1 + T2 only without it
         else if (!std::strcmp(argv[i], "--class-kit")) g_classKit = true;              // the subject knows the spells his class's default rows name
         else if (!std::strcmp(argv[i], "--logistics") && i + 1 < argc) logiN = std::max(1, std::atoi(argv[++i]));   // THE LOGISTICS WORLD (Logistics.h): N episodes per seed and class, baseline vs the loot oracle
@@ -736,8 +823,14 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--list-uses")) listUses = true;
         else if (!std::strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
-        else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); ocGiven = true; }
-        else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); ocGiven = true; }
+        else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); }   // DIAGNOSTIC: a fixed ceiling of K streams instead of the stopping rule
+        else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); }   // DIAGNOSTIC below Fight::maxSec: a rollout is cut there
+        else if (!std::strcmp(argv[i], "--oracle-ceiling") && i + 1 < argc) oc.ceiling = std::max(1, std::atoi(argv[++i]));   // the stopping rule's safety ceiling (Oracle.h OracleCfg)
+        else if (!std::strcmp(argv[i], "--damage-report") && i + 1 < argc) damageN = std::max(1, std::atoi(argv[++i]));   // incoming damage on followers in the field logs' terms (DamageReport; calib_damage.py reads the field side)
+        else if (!std::strcmp(argv[i], "--gap-bracket") && i + 1 < argc) { const char* v = argv[++i]; bool ok = false; for (std::size_t b = 0; b < std::size(kBrackets); ++b) if (!std::strcmp(v, kBrackets[b].name)) { g_gapBracket = static_cast<int>(b); ok = true; } if (!ok) { std::fprintf(stderr, "unknown --gap-bracket '%s'\n", v); return 2; } }
+        else if (!std::strcmp(argv[i], "--damage-bracket") && i + 1 < argc) { const char* v = argv[++i]; bool ok = false; for (std::size_t b = 0; b < std::size(kBrackets); ++b) if (!std::strcmp(v, kBrackets[b].name)) { g_damageBracket = static_cast<int>(b); ok = true; } if (!ok) { std::fprintf(stderr, "unknown --damage-bracket '%s'\n", v); return 2; } }
+        else if (!std::strcmp(argv[i], "--oracle-shared-stream")) oc.split = false;   // DIAGNOSTIC: the rollouts draw from ONE stream in world order, as before the per-actor streams (World.h Fight::split)
+        else if (!std::strcmp(argv[i], "--oracle-every") && i + 1 < argc) oc.every = std::atof(argv[++i]);   // DIAGNOSTIC: a throttle on his decisions (0 = every decision point)
         else { std::fprintf(stderr, "usage: run.sh [--list sim.json] [--curve <class>:<family>.<cons>.<param>=<v>] [--seed N] [--fights N] [--threads N] [--compare baseline] [--baseline out] [--taunt-visible] [--no-engine-casts] [--g10-sticky] [--classes legacy|real|slug,slug] [--profiles mech] [--print-classes] [--scenario all|name,name [--oracle [--oracle-k N] [--oracle-h S] [--no-ext]] [--trace N]] [--json path|--no-json] [--label text] [--class-oracle N] [--gap-scenarios N] [--rating N] [--rating-only] [--seeds a,b,c] [--opt p,q [--opt-passes N] [--opt-fights N] [--opt-class slug]]\n"); return 2; } }
     if (listParams) { ListParams(); return 0; }
     if (listUses) {   // one line per (family, consideration) the catalogue scores: what a per-class curve override can reach (tools/iaus_sim/edge_search.py wide)
@@ -796,13 +889,12 @@ static int RealMain(int argc, char** argv) {
     // 4 natural fights per class and 2 of each of its own scenarios under the oracle, and 3 fights per rating cell. --no-json runs
     // (searches, baselines) skip the gap pass unless --class-oracle asks for it; --class-oracle 0 / --rating 0 turn a pass off.
     bool autoGap = false; if (classOracle < 0) { classOracle = noJson || !scenario.empty() ? 0 : 4; autoGap = classOracle > 0; }
-    // PRICE of the automatic gap pass: the oracle is ~2 CPU s per fight at its full setting (K=8, 150 s). The automatic pass runs it at
-    // K=6, 90 s unless --oracle-k / --oracle-h say otherwise (the results file records the setting): about 25 s of wall time for the 15
-    // Beta 1 cells on 8 threads, 2 s for a one-class probe. An explicit --class-oracle N keeps the full setting, as before.
-    if (autoGap && !ocGiven) { oc.K = 6; oc.H = 90.0; }
+    // The automatic gap pass runs THE oracle (marth 11-17: no reduced setting; it ran a cut K = 6, 90 s oracle before). Its price is the
+    // oracle's (iaus-sim-v3.md 14.4); --class-oracle 0 turns the pass off, --oracle-k / --oracle-h give a labelled diagnostic oracle.
     if (ratingN < 0) ratingN = !scenario.empty() ? 0 : 3;
-    if (declineN > 0 && oracle) { g_oracleMode = true; g_oc = oc; if (!noClassRulings) g_classRulings = true; std::printf("PLAYED BY THE CLASS ORACLE (K=%d, %.0f s): where the oracle drinks is a second reading of the drink line\n", oc.K, oc.H); }
+    if (declineN > 0 && oracle) { g_oracleMode = true; g_oc = oc; if (!noClassRulings) g_classRulings = true; std::printf("PLAYED BY THE CLASS ORACLE (%s): where the oracle drinks is a second reading of the drink line\n", OracleDesc(oc).c_str()); }
     if (potCalibN > 0) return PotionCalib(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, potCalibN, threads, estimates, scrollRoad);
+    if (damageN > 0) return DamageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, damageN, threads, estimates, scrollRoad);
     if (declineN > 0) return DeclineReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, declineN, threads, estimates, scrollRoad);
     if (ratingOnly) { std::vector<int> ci; for (std::size_t i = 0; i < allClasses.size(); ++i) if (only.empty() || ("," + only + ",").find("," + allClasses[i].name + ",") != std::string::npos) ci.push_back(static_cast<int>(i));
         std::vector<RatingRow> rr; const long bad = RatingPass(D, allClasses, ci, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, std::max(1, ratingN), threads, estimates, scrollRoad, rr);
@@ -821,12 +913,12 @@ static int RealMain(int argc, char** argv) {
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (!noJson && opt.empty() && headlineOracle > 0) {   // the oracle on the first fights of the same seeds
         g_oracleMode = true; g_oc = oc; R.oracleJ = Objective(D, allClasses, seed, headlineOracle, threads, &R.oracleJScen, &R.oracleJNat); g_oracleMode = false; R.hasOracleJ = true; R.oracleFights = headlineOracle; R.oracleCovers = ObjectiveCovers();
-        R.oracleOver = std::string("rollout oracle (K=") + std::to_string(oc.K) + ", " + std::to_string(int(oc.H)) + " s, " + (oc.ext ? "extended" : "catalogue") + " actions) planning over " + (g_tableMode ? "IAUS (table mode is not planned over)" : estimates ? "IAUS with estimates" : "IAUS as on main") + (sets.empty() ? "" : " + --set");
+        R.oracleOver = std::string("rollout oracle (") + OracleDesc(oc) + ", " + (oc.ext ? "extended" : "catalogue") + " actions) planning over " + (g_tableMode ? "IAUS (table mode is not planned over)" : estimates ? "IAUS with estimates" : "IAUS as on main") + (sets.empty() ? "" : " + --set");
         std::printf("HEADLINE  ORACLE J=%.2f (scenarios %.2f, natural %.2f)  %d fights per scenario, %d per class natural  covers=%s  [%s]\n", R.oracleJ, R.oracleJScen, R.oracleJNat, headlineOracle, std::max(1, headlineOracle / 2), ObjectiveCovers().c_str(), R.oracleOver.c_str()); }
     if (!noJson && opt.empty()) { R.jVal = Objective(D, allClasses, seed, hf, threads, &R.jScen, &R.jNat); R.hasJ = true; R.jFights = hf; R.jCovers = ObjectiveCovers(); std::printf("HEADLINE  J=%.2f (scenarios %.2f, natural %.2f)  fights=%d per scenario  mode=%s  covers=%s  stealth=%s\n", R.jVal, R.jScen, R.jNat, hf, R.mode.c_str(), R.jCovers.c_str(), StealthName()); } R.label = sets.empty() ? label : label + " [--set " + sets + "]";
     if (!scenario.empty()) {
-        std::printf("IAUS SIM %s  list=%s  seed=%llu  scenario=%s  oracle=%d (K=%d H=%.0fs)\n", g_v3.Any() ? "v3" : "v2", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), oc.K, oc.H);
-        if (oracle) { R.oracleKind = oc.ext ? "rollout over IAUS, extended action set" : "rollout over IAUS, catalogue actions"; R.oracleK = oc.K; R.oracleH = oc.H; }
+        std::printf("IAUS SIM %s  list=%s  seed=%llu  scenario=%s  oracle=%d (%s)\n", g_v3.Any() ? "v3" : "v2", D.name.c_str(), (unsigned long long)seed, scenario.c_str(), int(oracle), OracleDesc(oc).c_str());
+        if (oracle) { R.oracleKind = std::string(oc.ext ? "rollout over IAUS, class-bound extended action set" : "rollout over IAUS, catalogue actions") + "; " + OracleDesc(oc); R.oracleK = OracleKOf(oc); R.oracleH = oc.H; }
         const int rc = RunScenarios(D, allClasses, scenario, seed, fights, trace >= 0 ? 1 : threads, oracle, oc, g10Sticky, trace, R, estimates, scrollRoad); if (!noJson) R.Write(jsonPath); return rc; }
     std::vector<SimClass> classes;   // --classes a,b,c narrows the cells (slugs)
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
@@ -872,27 +964,28 @@ static int RealMain(int argc, char** argv) {
     if (classOracle > 0) {   // THE GAP PASS: per class, the SAME fights played by IAUS and by the oracle held to the class's rulings: its natural fights and its own named scenarios
         const std::vector<Scenario> hs = HeadlineScenarios(); std::vector<std::pair<int, int>> sj;   // (headline scenario index, class index in `classes`)
         if (gapScen > 0) { Rng R0; R0.g.seed(1); for (std::size_t i = 0; i < hs.size(); ++i) { FightSpec fs = hs[i].make(D, allClasses, R0); for (int c = 0; c < nc; ++c) if (classes[static_cast<std::size_t>(c)].name == fs.cls->name) sj.push_back({ static_cast<int>(i), c }); } }
-        struct CO { double uI = 0, uO = 0; Agg orc, iaus; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; std::map<std::string, SitRec> sit; std::array<long, kFamilies> gen{}; long dec = 0; }; std::vector<CO> co(static_cast<std::size_t>(nc));
+        struct CO { double uI = 0, uO = 0; Agg orc, iaus; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; std::map<std::string, SitRec> sit; std::array<long, kFamilies> gen{}; long dec = 0; OracleStats st; }; std::vector<CO> co(static_cast<std::size_t>(nc));
         struct SO { double uI = 0, uO = 0; Agg iaus, orc; }; std::vector<SO> so(sj.size());
         std::vector<int> gidx(static_cast<std::size_t>(nc), 0); for (int c = 0; c < nc; ++c) for (std::size_t i = 0; i < allClasses.size(); ++i) if (allClasses[i].name == classes[static_cast<std::size_t>(c)].name) gidx[static_cast<std::size_t>(c)] = static_cast<int>(i);
         std::atomic<int> nx{ 0 }; const int natJobs = nc * classOracle, jobs = natJobs + static_cast<int>(sj.size()) * gapScen;
         auto w2 = [&]() { for (;;) { const int job = nx.fetch_add(1); if (job >= jobs) return; Rng R; Fight F; int c = 0, sidx = -1;
             if (job < natJobs) { c = job / classOracle; const int f = job % classOracle;   // seeded by the class's index in the FULL table, so a class's gap fights do not depend on what else --classes named
                 R.g.seed(seed * 1000003ULL + std::uint64_t(gidx[static_cast<std::size_t>(c)]) * 7919 + 15485863ULL * std::uint64_t(1 + f % 5) + std::uint64_t(f) * 32452843ULL);
-                F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[0], R, t1); }
+                F = RandomFight(D, classes[static_cast<std::size_t>(c)], 1 + f % 5, kBrackets[g_gapBracket], R, t1); }
             else { sidx = (job - natJobs) / gapScen; const int f = (job - natJobs) % gapScen, si = sj[static_cast<std::size_t>(sidx)].first; c = sj[static_cast<std::size_t>(sidx)].second;
                 R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919); FightSpec fs = hs[static_cast<std::size_t>(si)].make(D, allClasses, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; F = BuildFight(D, fs, t1); }
             F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight Gf = F;
             RunMode(F); OraclePolicy O; O.cfg = oc; O.cfg.allFollowers = !g_oracleSubjectOnly; std::map<std::string, SitRec> sl; std::array<long, kFamilies> gn{}; if (gapDump) { O.sit = &sl; O.gen = &gn; }
             RunFight(Gf, O); const double uI = Utility(F), uO = Utility(Gf);
-            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI);
+            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI); r.st.Merge(O.st);
             if (gapDump) { std::printf("GAPFIGHT %s %s %d %.4f %.4f\n", classes[static_cast<std::size_t>(c)].name.c_str(), sidx < 0 ? "nat" : hs[static_cast<std::size_t>(sj[static_cast<std::size_t>(sidx)].first)].name, job, uI, uO);
                 for (const auto& kv : sl) { SitRec& q = r.sit[kv.first]; q.n += kv.second.n; q.dU += kv.second.dU; } for (std::size_t f = 0; f < kFamilies; ++f) r.gen[f] += gn[f]; r.dec += O.subjDec; }
             if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); r.iaus.uSum += uI; r.iaus.Add(F.t, false); }
             else { r.sI += uI; r.sO += uO; ++r.sN; SO& q = so[static_cast<std::size_t>(sidx)]; q.uI += uI; q.uO += uO; q.iaus.uSum += uI; q.iaus.Add(F.t, false); q.orc.uSum += uO; q.orc.Add(Gf.t, false); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(w2); for (auto& x : th) x.join(); }
-        std::printf("\nCLASS ORACLE GAP (%d natural fights per class + %d of each of its own scenarios, class rulings %s, K=%d H=%.0fs)\n%-17s %7s %7s %7s  %7s %7s  %7s %5s %6s   (gap = oracle U - IAUS U over all of the class's gap fights; persona: the oracle's own play against the class signature)\n", classOracle, gapScen, g_classRulings ? "IN FORCE" : "off", oc.K, oc.H, "class", "IAUS U", "orc U", "nat gap", "pers.I", "pers.O", "GAP", "se", "fights");
-        R.oracleKind = std::string("rollout over IAUS, extended action set") + (g_classRulings ? ", class rulings in force" : "") + (g_oracleSubjectOnly ? ", subject only" : ""); R.oracleK = oc.K; R.oracleH = oc.H;
+        if (g_gapBracket != 0) std::printf("\nGAP BRACKET %s: the fights below called natural are drawn in the %s strength bracket\n", kBrackets[g_gapBracket].name, kBrackets[g_gapBracket].name);
+        std::printf("\nCLASS ORACLE GAP (%d natural fights per class + %d of each of its own scenarios, class rulings %s; %s)\n%-17s %7s %7s %7s  %7s %7s  %7s %5s %6s   (gap = oracle U - IAUS U over all of the class's gap fights; persona: the oracle's own play against the class signature)\n", classOracle, gapScen, g_classRulings ? "IN FORCE" : "off", OracleDesc(oc).c_str(), "class", "IAUS U", "orc U", "nat gap", "pers.I", "pers.O", "GAP", "se", "fights");
+        R.oracleKind = std::string("rollout over IAUS, class-bound extended action set") + (g_classRulings ? ", class rulings in force" : "") + (g_oracleSubjectOnly ? ", subject only" : "") + "; " + OracleDesc(oc); R.oracleK = OracleKOf(oc); R.oracleH = oc.H;
         for (int c = 0; c < nc; ++c) { const SimClass& sc = classes[static_cast<std::size_t>(c)]; const CO& r = co[static_cast<std::size_t>(c)]; const double n = classOracle;
             ScenarioRow sr; sr.name = "class:" + sc.name; sr.cls = sc.name; sr.iausU = r.uI / n; sr.oracleU = r.uO / n; sr.gap = sr.oracleU - sr.iausU; sr.hasOracle = true; sr.oracleMetrics = Metrics(r.orc);
             const double pO = Persona(sc.name, SchemaMetrics(sr.oracleMetrics)); sr.oracleMetrics["persona"] = pO; double pI = -1;
@@ -900,7 +993,10 @@ static int RealMain(int argc, char** argv) {
             { double m = 0; for (double x : r.d) m += x; m /= std::max<double>(1, double(r.d.size())); double v = 0; for (double x : r.d) v += (x - m) * (x - m); cg.gap = m; cg.se = r.d.size() > 1 ? std::sqrt(v / double(r.d.size() - 1) / double(r.d.size())) : 0.0; }
             for (ResultRow& rr : R.rows) if (rr.cls == sc.name && rr.bracket == "natural") { rr.hasGap = true; rr.mainGap = cg.gap; pI = rr.metrics["persona"]; sr.metrics = rr.metrics; }
             { auto mi = Metrics(r.iaus); auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? -1.0 : i->second; };   // THE ORACLE-RELATIVE SURVIVAL READ (marth 11-17 "Oracle downs"; Playstyles.h): the same natural fights, IAUS and the class oracle
-              std::printf("ORCSURV %s %d  iaus downs/f %.3f selfHealLow%% %.1f  |  oracle downs/f %.3f selfHealLow%% %.1f\n", sc.name.c_str(), classOracle, G(mi, "downs/f"), G(mi, "selfHealLow%"), G(sr.oracleMetrics, "downs/f"), G(sr.oracleMetrics, "selfHealLow%")); }
+              std::printf("ORCSURV %s %d  iaus downs/f %.3f selfHealLow%% %.1f  |  oracle downs/f %.3f selfHealLow%% %.1f\n", sc.name.c_str(), classOracle, G(mi, "downs/f"), G(mi, "selfHealLow%"), G(sr.oracleMetrics, "downs/f"), G(sr.oracleMetrics, "selfHealLow%"));
+              std::printf("ORCHEAL %s %d  iaus healLate%% %.1f healAt%% %.1f dwh/f %.3f  |  oracle healLate%% %.1f healAt%% %.1f dwh/f %.3f\n", sc.name.c_str(), classOracle, G(mi, "healLate%"), G(mi, "healAt%"), G(mi, "dwh/f"), G(sr.oracleMetrics, "healLate%"), G(sr.oracleMetrics, "healAt%"), G(sr.oracleMetrics, "dwh/f"));   // the heal-timing and ally-survival bands (Playstyles.h): his heals on another begun under Policy.h kOneHitLine, allies down while he held a heal
+              std::printf("ORCSTOP %s %s\n", sc.name.c_str(), StopLine(r.st).c_str());   // the search's stopping rule at work (Oracle.h OracleCfg), over ALL the class's gap fights
+              for (const auto& kv : r.st.refused) std::printf("ORCREFUSED %s %ld %s\n", sc.name.c_str(), kv.second, kv.first.c_str()); }   // options the class filter refused, by reason
             std::printf("%-17s %7.2f %7.2f %+7.2f  %7.1f %7.1f  %+7.2f %5.2f %6ld\n", sc.name.c_str(), sr.iausU, sr.oracleU, sr.gap, pI, pO, cg.gap, cg.se, cg.fights); R.scen.push_back(std::move(sr)); R.classGaps.push_back(std::move(cg)); }
         for (std::size_t i = 0; i < sj.size(); ++i) { const Scenario& scn = hs[static_cast<std::size_t>(sj[i].first)]; const SO& q = so[i]; const double n = gapScen;
             ScenarioRow sr; sr.name = scn.name; sr.cls = classes[static_cast<std::size_t>(sj[i].second)].name; sr.iausU = q.uI / n; sr.oracleU = q.uO / n; sr.gap = sr.oracleU - sr.iausU; sr.hasOracle = true; sr.metrics = Metrics(q.iaus); sr.oracleMetrics = Metrics(q.orc);
