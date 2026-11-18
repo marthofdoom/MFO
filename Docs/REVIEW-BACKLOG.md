@@ -3619,3 +3619,9 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - OPEN (sim): `tools/iaus_sim` mirror not done for `t.occClaimRelease`, `t.offApproachBackoff`, `t.sharedRadiusMargin`, `t.preemptSettle`.
 - OPEN (Harbinger): self Frost Cloak never charges; OOC substrate Candlelight closed-unfired 15/16 (ClickUp 1dfcuabdb2u?).
 
+**fix/cast-stutter review round 1 (Opus, 3c325324): SEV-2 F1/F2 and SEV-3 F3-F6 fixed in the next commit. Deferred (SEV-4/5):**
+- OPEN (SEV-4): `g_healOccludedBlock` and `g_unsightedCharge` hold one entry per follower (a second released target overwrites the first; the first may re-claim once and be released again).
+- OPEN (SEV-4): `WithinSharedRadius` is the reader of the heal-claim picker and MaintainCompanion only; the buff series (Auto.cpp), Hands.cpp `IncumbentTargetLost` and Evaluator `PickAlly` still read plain `g_sharedRadius`.
+- OPEN (SEV-5): `CanPreemptHand`'s `s_settleLog` throttle map is not cleared on revert (a throttle only).
+- NOTE (principle 9): Sightline's 1 s freshness vs a service lap over 1 s with 8+ followers makes the occluded-claim bound fail safe (it does not fire); noted at `Tuning::occludedClaimReleaseSec`.
+

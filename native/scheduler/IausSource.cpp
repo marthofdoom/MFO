@@ -601,6 +601,11 @@ namespace MFO::Scheduler {
             if (!(Iaus::KeyOf(m_set.gen.actions[r.idx]) == m.running)) continue;
             const int rank = Iaus::RankOf(m.epoch);
             a_castSeen = true;
+            // A RUNNING HEAL IS NOT "ASKED FOR" BY BEING RANKED (field 11-17f, review F4): the candidate appearing anywhere in the ranked list does not
+            // mean the walk reached it this lap, and HealSustainLap reads a rank in matchedCast as "the owning rule is asking" and skips its replay --
+            // so a heal the walk never reached was never refreshed and the FacetExpiry sweep ate it (h=182, h=165). castSeen still keeps the loan; the
+            // rank is withheld so the sustain replay refreshes the claim (it skips by itself when CastOn's own lap asked: g_healAsked).
+            if (m.running.family == Family::CastHeal) break;
             if (std::find(a_matchedCast.begin(), a_matchedCast.end(), rank) == a_matchedCast.end())
                 a_matchedCast.push_back(rank);
             break;

@@ -681,15 +681,16 @@ namespace MFO::Actuation {
             if (a_lock.waiterRule == g_firingRule) a_lock.waitLast = now;
             if (a_lock.waiterRule != g_firingRule) return false;   // a higher rule is already waiting
             const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(now - a_lock.waitSince);
-            // 11-17f (field Jesper, buff churn): a NON-HEAL asker does not take the hand at the charge boundary from a NON-HEAL incumbent whose caster is
-            // Charging or Charged (CastInFlightOnHand, true here: the idle case returned above). The boundary exists for the heal starved behind a back-to-back
-            // offense (field 2026-09-29); a buff or offense over a buff or offense only throws the next charge away. The WAIT CAP below stays the floor.
+            // 11-17f (field Jesper, buff churn; narrowed in review F5): a NON-HEAL asker does not take the hand at the charge boundary from a BUFF incumbent
+            // whose caster is Charging or Charged (CastInFlightOnHand, true here: the idle case returned above). The field complaint was cloaks trading the
+            // hand; an offense / control incumbent keeps the old boundary take, so a higher-ranked non-heal is not shut out for a full WAIT CAP. The WAIT CAP
+            // below stays the floor, and the same-frame-as-a-fire settle above applies to every incumbent.
             bool nonHealPair = false;
             {
                 auto* askSp = RE::TESForm::LookupByID<RE::SpellItem>(a_askerSpell);
                 auto* incSp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
                 nonHealPair = askSp && incSp && CasterConsent::ClassifySpell(askSp) != CasterConsent::SpellKind::Heal &&
-                              CasterConsent::ClassifySpell(incSp) != CasterConsent::SpellKind::Heal;
+                              CasterConsent::ClassifySpell(incSp) == CasterConsent::SpellKind::Buff;
             }
             if (waited.count() > 0 && !nonHealPair) {
                 const std::int32_t apmfHand = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft

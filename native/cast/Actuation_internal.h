@@ -99,7 +99,7 @@ namespace MFO::Actuation {
         // because that run does not reset on a new claim. NeverFiredRelease only.
         inline constexpr long long kHealLosReleaseMs = 8 * 250;
 
-        // THE ONE SHARED-RADIUS REACH TEST of a heal / buff recipient (field 11-17f, Jesper: five heal claims, no fire, in 3 s on an ally at the radius
+        // THE SHARED-RADIUS REACH TEST of a STANDING heal claim's recipient (the heal-claim picker and MaintainCompanion; the buff series, Hands.cpp's IncumbentTargetLost and PickAlly still read plain fSharedRadius) (field 11-17f, Jesper: five heal claims, no fire, in 3 s on an ally at the radius
         // edge: the picker named him inside fSharedRadius and MaintainCompanion released him at the same line, one lap apart). Both read it: a NEW recipient
         // is named only inside fSharedRadius (a_standing = false); the recipient of a STANDING claim is kept out to fSharedRadius +
         // Tuning::sharedRadiusMarginUnits (`t.sharedRadiusMargin`, placeholder). Origin = the caster's position, metric = the 3-D distance, for both.

@@ -2491,6 +2491,7 @@ void CastStutterRows() {
     Check(SetTuningScalar(t, "t.offApproachBackoff", 9.0f, &why) && t.offenseApproachBackoffSec == 9.0f, "t.offApproachBackoff sets offenseApproachBackoffSec");
     Check(SetTuningScalar(t, "t.sharedRadiusMargin", 150.0f, &why) && t.sharedRadiusMarginUnits == 150.0f, "t.sharedRadiusMargin sets sharedRadiusMarginUnits");
     Check(SetTuningScalar(t, "t.preemptSettle", 0.0f, &why) && t.preemptFireSettleSec == 0.0f, "t.preemptSettle 0 = off");
+    Check(SetTuningScalar(t, "t.offApproachDropCap", 2.0f, &why) && t.offenseApproachDropCap == 2.0f, "t.offApproachDropCap sets offenseApproachDropCap");
     Check(!SetTuningScalar(t, "t.occClaimRelease", -1.0f, &why), "a negative bound is refused");
 }
 

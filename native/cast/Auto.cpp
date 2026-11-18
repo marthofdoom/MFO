@@ -472,9 +472,7 @@ namespace MFO::Actuation {
                 ComposedCast::ChooseHealRoad(a_follower, spell, nullptr) ==
                     ComposedCast::HealRoad::Claim) {
                 NoteArchetypeRoad(a_follower, spell, ArchRoad::HealClaim);   // [archetype] probe (passive)
-                const float radius  = Config::g_sharedRadius.load();
                 const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
-                const auto  selfPos = a_follower->GetPosition();
                 // the caster is a candidate for EVERY delivery: a non-Self heal at him is a claim too (substrate S1 R2)
                 // ... unless its self-flip claim FIRED but NEVER LANDED this fight (HealSelfFlipBarred): then his road is the
                 // direct stream, which re-pins the pick on him, so he is left out

@@ -1129,6 +1129,8 @@ namespace MFO::Actuation {
         const auto standing = HealOnHand(fid, a_hand);
         const auto stamp    = CastLockClaimStamp(fid, a_hand, a_hh.spell);
         if (!standing.found || standing.spell != a_hh.spell || stamp == Clock::time_point{}) { g_healOccRun.erase(key); return false; }
+        // A LIVE ch.24 heal approach is bringing sight back (the existing D release exempts it the same way, MFO-B234 / B238): not bounded here (review F3).
+        if (APMFBridge::HealApproachStands(fid)) { g_healOccRun.erase(key); return false; }
         Sightline::Want(fid, { a_hh.recipient }, Sightline::Basis::Own);
         const auto v   = Sightline::CheckWithin(fid, a_hh.recipient, kHealLosTrustSec, Sightline::Basis::Own);
         const auto now = Clock::now();

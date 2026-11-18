@@ -25,7 +25,8 @@ CURVE_PARAMS = ("a", "b", "floor", "zeroAbove", "zeroBelow")
 T_SCALARS = ("t.momentum", "t.postureMomentum", "t.preempt", "t.actFloor", "t.softCd", "t.occHold", "t.kite", "t.blockBase", "t.tauntCd", "t.powerCd",
              "t.disengageCd", "t.noHealDrink", "t.noHealRetreat", "t.emergencyHpHigh", "t.emergencyHpLow", "t.offClassBase", "t.groundCd", "t.blockCd",
              "t.bashCd", "t.backOffCd", "t.stepCd", "t.regroupCd", "t.perkArmor", "t.perkWeapon",
-             "t.concChannelSec", "t.handRedrawSec")
+             "t.concChannelSec", "t.handRedrawSec", "t.spellCastSec", "t.fireLineKeepSec",
+             "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle")
 T_UNIT = ("t.emergencyHpHigh", "t.emergencyHpLow")
 INF = 3.0e38
 # worth.* (ConsumableWorth.h SetWorthKnob): name -> (lo, lo is open, hi)
