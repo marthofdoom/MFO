@@ -3625,3 +3625,8 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - OPEN (SEV-5): `CanPreemptHand`'s `s_settleLog` throttle map is not cleared on revert (a throttle only).
 - NOTE (principle 9): Sightline's 1 s freshness vs a service lap over 1 s with 8+ followers makes the occluded-claim bound fail safe (it does not fire); noted at `Tuning::occludedClaimReleaseSec`.
 
+
+### fix/cast-stutter (Opus 5.5 re-review, 2026-11-17, against 1569f497): MERGE
+- **(SEV-4):** OffenseApproach.cpp:413 `static_cast<int>(offenseApproachDropCap)` is UB above INT_MAX (SetTuningScalar only rejects negative / non-finite): clamp before the cast or bound the scalar.
+- **(SEV-4):** CastOn.cpp:719-735 the Sightline-timed fallback also runs for IAUS followers whenever OwnOccludedAgeSec returns 0 (incl. a fresh not-occluded record): two readers of the bound (fails safe via the stamp min).
+- **Note:** with 8+ followers the occluded bound may never fire (Sightline 1 s freshness vs the lap): watch in the field.
