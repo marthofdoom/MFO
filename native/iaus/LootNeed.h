@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 // iaus/LootNeed.h -- IAUS LOOTING: WHAT a follower takes from what LootScan found, scored by his CURRENT INVENTORY (ClickUp 1dfcuabd18f,
 // branch feat/iaus-loot).
 //
@@ -128,13 +129,26 @@ namespace MFO::Iaus {
         // COMMITMENT (field 2026-11-17c: "stops and restarts more than the old system"). After a leg boundary scan finds "no valid item left" the
         // batch holds in place this long and rescans ONCE before it releases to follow. PLACEHOLDER. 0 = release at once (the old behaviour).
         float batchHoldMinSec = 3.0f;
+        // OFF-CLASS WEAPON DWELL (EquipAuthority.cpp OffClassTick): an off-class weapon counts as the fallback (flag, penalty, notice) only after it has
+        // been held this long (the engine briefly equips a hauled relic at 3D load). PLACEHOLDER.
+        float offClassDwellSec = 3.0f;
         // GATED SKIP (loot M1): the "behind the same block" cone. PLACEHOLDERS, never widened without a field reason (82 GATED-BEHIND vs 18 GATED in
         // 11-17c): the half-angle of the cone around block->target (degrees) and how far past the target an item still counts (units).
         float gateConeDeg = 45.0f, gateBeyondU = 1024.0f;
         // GATED RE-ADMIT (besides the door / lever / cell events): a record is lifted after gateReadmitSec (0 = no timer, marth 2026-09-24 "no
-        // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point (0 = off). PLACEHOLDERS.
-        float gateReadmitSec = 0.0f, gateReadmitMoveU = 1024.0f;
+        // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point. BOTH DEFAULT OFF (marth's standing GATED rule is door / lever / cell events only); the rows stay for later. PLACEHOLDERS.
+        float gateReadmitSec = 0.0f, gateReadmitMoveU = 0.0f;
     };
+    // THREAD MIRROR of the three guard-cache timers (review 11-17c): TheftGate::GuardCheck also runs on the MAIN thread (a_onMain callers), while
+    // the worker rewrites LiveLootTuning() when looting.txt is applied (TuningFile.cpp). The cache reads these atomics, never the table.
+    struct GuardTimerMirror { std::atomic<float> fresh{ 2.0f }, unreadMax{ 10.0f }, repost{ 0.5f }; };
+    [[nodiscard]] inline GuardTimerMirror& GuardTimers() { static GuardTimerMirror m; return m; }
+    inline void PublishGuardTimers(const LootTuning& a_t) {
+        auto& m = GuardTimers();
+        m.fresh.store(a_t.guardFreshSec, std::memory_order_relaxed);
+        m.unreadMax.store(a_t.guardUnreadMaxSec, std::memory_order_relaxed);
+        m.repost.store(a_t.guardRepostSec, std::memory_order_relaxed);
+    }
     // DefaultLootTuning() is the LIVE table: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/looting.txt) swaps edited ones in on the worker between
     // ticks. ShippedLootTuning() is never edited (a reload starts from it); LiveLootTuning() is the editable object (TuningFile only).
     [[nodiscard]] inline const LootTuning& ShippedLootTuning() { static const LootTuning t; return t; }
@@ -157,7 +171,7 @@ namespace MFO::Iaus {
             { "stealBountyPerGold", &LootTuning::stealBountyPerGold, false, kInf }, { "stealBountyRef", &LootTuning::stealBountyRef, true, kInf },
             { "guardBarFloorSec", &LootTuning::guardBarFloorSec, false, kInf },
             { "guardFreshSec", &LootTuning::guardFreshSec, true, kInf }, { "guardUnreadMaxSec", &LootTuning::guardUnreadMaxSec, true, kInf },
-            { "guardRepostSec", &LootTuning::guardRepostSec, true, kInf }, { "batchHoldMinSec", &LootTuning::batchHoldMinSec, false, kInf },
+            { "guardRepostSec", &LootTuning::guardRepostSec, true, kInf }, { "batchHoldMinSec", &LootTuning::batchHoldMinSec, false, kInf }, { "offClassDwellSec", &LootTuning::offClassDwellSec, false, kInf },
             { "gateConeDeg", &LootTuning::gateConeDeg, true, 90.0f }, { "gateBeyondU", &LootTuning::gateBeyondU, false, kInf },
             { "gateReadmitSec", &LootTuning::gateReadmitSec, false, kInf }, { "gateReadmitMoveU", &LootTuning::gateReadmitMoveU, false, kInf },
         };

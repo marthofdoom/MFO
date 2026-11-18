@@ -3600,4 +3600,9 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **OPEN (SEV-4, not done):** `kTeamDispatchSpreadU` (spread teammates' dispatches) was NOT built: a distance-to-teammate-target skip would starve clustered loot (a museum shelf is dozens of items inside 100 u). It needs a sort tier (like the actor-block tiers), not a filter.
 - **OPEN (SEV-4):** the museum deposit's root cause for the four unmoved items (Honed Falmer Sword, Silver Greatsword, Deathbrand, Bonemold Helmet, 11-17e) is NOT proven from the log: every silent skip now logs, and a RemoveItem that moves nothing names the item (worn plan, unequip asked). Read the next run's `[lotd] ... transfer SKIPPED / MOVED NOTHING` lines before changing the unequip order.
 - **OPEN (SEV-4):** not equipping museum-bound weapons as the off-class fallback is not changed here (the fallback pick is `cast/Equip.cpp IsMuseumRelic` / the hold, not `OffClassTick`).
-- **OPEN (SEV-5):** `gateReadmitMoveU` default 1024 and `batchHoldMinSec` 3 are placeholders for the sim / field.
+- **OPEN (SEV-5):** `batchHoldMinSec` 3 (marth 11-17: "Keep 3 s") and `offClassDwellSec` 3 are placeholders for the sim / field; `gateReadmitMoveU` / `gateReadmitSec` default 0 (off).
+- **OPEN (SEV-4, review):** books such as 'Boethiah's Glory' also fail every trip, so the cause is not gems or worn copies: suspect the `delta <= 0` RemoveItem path in `TransferOnMain`; the new `MOVED NOTHING` / `SKIPPED` lines will say.
+- **OPEN (SEV-5, review):** `SetLootKnob` range message text for non-unit caps (`gateConeDeg` <= 90) says "> 0 and <= 1".
+- **OPEN (SEV-5, review):** `LootPartyInCombat` comment: the [sense] foe term is implied (foes are tallied only for followers already in combat).
+- **OPEN (SEV-5, review):** `GuardKeepWarm` doc says "stamps nothing"; it does set `e.posted`.
+- **OPEN (SEV-5, review):** the transfer SKIPPED line's "the world changed since the plan" also covers a cached-vs-live gem verdict disagreement.

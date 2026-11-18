@@ -430,18 +430,21 @@ namespace MFO::Logistics {
             }
             // FIELD 11-17d: an off-class weapon is a FALLBACK only when he carries no weapon of his class, and only once it has been held a
             // moment (the engine briefly equips a hauled museum sword at 3D load before equip authority enforces). Otherwise it is a transient:
-            // no flag, no penalty, no notice, one debug line per weapon.
+            // no flag, no penalty, no notice; one WARN per weapon if it is still held past the dwell (LootTuning::offClassDwellSec).
+            static std::unordered_set<std::uint64_t> s_warned;   // (follower, weapon) pairs already warned about
             static std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> s_since;   // follower -> (weapon, first seen)
-            constexpr auto kOffClassDwell = std::chrono::seconds(3);   // PLACEHOLDER: how long an off-class weapon must stay in hand before it counts
+            const auto kOffClassDwell = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<float>(Iaus::DefaultLootTuning().offClassDwellSec));   // LootTuning::offClassDwellSec
             if (held) {
                 if (CarriesOnClass(a_follower, set)) {
                     auto& sn = s_since[id];
                     const bool first = sn.first != held->GetFormID();
-                    sn = { held->GetFormID(), std::chrono::steady_clock::now() };   // the dwell restarts while an on-class weapon is carried
-                    if (first) {
-                        spdlog::debug("[equip-auth] {:08X}: off-class weapon '{}' in hand but he carries one of his class -- transient, no penalty", id,
-                                      held->GetName() ? held->GetName() : "?");
-                    }
+                    const auto t0 = std::chrono::steady_clock::now();
+                    if (first) sn = { held->GetFormID(), t0 };
+                    // Held PAST the dwell although an on-class weapon is carried: no penalty, no notice, but said (once per weapon), not hidden.
+                    if (first || t0 - sn.second < kOffClassDwell) {}
+                    else if (s_warned.insert((static_cast<std::uint64_t>(id) << 32) | held->GetFormID()).second)
+                        spdlog::warn("[equip-auth] {:08X}: off-class weapon '{}' still held past {:.1f}s although he carries one of his class -- no penalty, no notice",
+                                     id, held->GetName() ? held->GetName() : "?", Iaus::DefaultLootTuning().offClassDwellSec);
                     held = nullptr;
                 } else {
                     auto& sn = s_since[id];

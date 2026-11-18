@@ -22,13 +22,13 @@ namespace MFO::Logistics::TheftGate {
         // past the distance at which a guard in a street or a hall notices a sneaking player in the base game's detection
         // formula, and well inside the high-process list the scan walks. Inside it the line of sight decides.
         constexpr float kGuardRadius   = 3500.0f;
-        // The three guard-cache timers are LootTuning rows (guardFreshSec / guardUnreadMaxSec / guardRepostSec, looting.txt; field 11-17c F1).
+        // The three guard-cache timers are LootTuning rows (guardFreshSec / guardUnreadMaxSec / guardRepostSec, looting.txt; field 11-17c F1), read through the ATOMIC mirror Iaus::GuardTimers() because GuardCheck also runs on the main thread.
         // kGuardFresh: a cached guard verdict is trusted this long; kGuardUnreadMax: an answer nobody has read yet is usable once up to this
         // age; kGuardRepost: and re-asked no faster than this per (follower, src).
         SClock::duration GuardSecs(float a_s) { return std::chrono::duration_cast<SClock::duration>(std::chrono::duration<float>(a_s)); }
-        SClock::duration GuardFreshD()     { return GuardSecs(Iaus::DefaultLootTuning().guardFreshSec); }
-        SClock::duration GuardUnreadMaxD() { return GuardSecs(Iaus::DefaultLootTuning().guardUnreadMaxSec); }
-        SClock::duration GuardRepostD()    { return GuardSecs(Iaus::DefaultLootTuning().guardRepostSec); }
+        SClock::duration GuardFreshD()     { return GuardSecs(Iaus::GuardTimers().fresh.load(std::memory_order_relaxed)); }
+        SClock::duration GuardUnreadMaxD() { return GuardSecs(Iaus::GuardTimers().unreadMax.load(std::memory_order_relaxed)); }
+        SClock::duration GuardRepostD()    { return GuardSecs(Iaus::GuardTimers().repost.load(std::memory_order_relaxed)); }
         constexpr auto  kLogEvery      = std::chrono::seconds(30);          // [theft-gate] per (follower, src, verdict)
         constexpr RE::FormID kPlayerBaseNpc = 0x00000007;
         constexpr RE::FormID kPlayerFaction = 0x00000DB1;

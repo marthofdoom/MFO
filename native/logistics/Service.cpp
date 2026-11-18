@@ -1539,8 +1539,11 @@ namespace MFO::Logistics {
             // and return to the player. marth's "no pauses" loot-ordering spec:
             // a category that's still under the player's dibs (g_scanSawWaiting)
             // no longer earns a linger-and-re-scan hold here -- that WAS a real,
-            // if short (fBatchLinger-bounded), stall-in-place. Release at once
-            // instead; the dibs-waiting item re-enters naturally (TierReleased
+            // if short (fBatchLinger-bounded), stall-in-place. That "release at
+            // once" was SUPERSEDED by marth's 2026-11-17 ruling ("Keep 3 s"): a
+            // leg-boundary scan that finds nothing holds LootTuning::batchHoldMinSec
+            // (3 s) in place, rescans ONCE, then releases (see below); the
+            // dibs-waiting item re-enters naturally (TierReleased
             // flips, normal-mode loot picks it up) once it clears -- ordering
             // (free-tier swept first, see the pass-0/pass-1 split above) is what
             // keeps the follower busy in the meantime, not holding position.
@@ -1586,19 +1589,9 @@ namespace MFO::Logistics {
                     }
                     spdlog::warn("[loot] {:08X} guard answer still PENDING after {:.1f}s of holding the batch -- releasing it", id, lt.guardUnreadMaxSec);
                 } else tr.guardHoldSince = {};
-                // The dwell has run and the rescan found nothing. An ACTOR-BLOCKED item kept by the reorder is the fallback next item
-                // (the blocker was the reason it was skipped, not the item): re-dispatch it before releasing, unless a teammate has it.
-                if (tr.emptySince.time_since_epoch().count() != 0) {
-                    if (auto dit = g_actorDefer.find(id); dit != g_actorDefer.end()) {
-                        auto* fb = RE::TESForm::LookupByID<RE::TESObjectREFR>(dit->second.item);
-                        if (fb && !fb->IsDisabled() && !fb->IsMarkedForDeletion() && !TravelFailedRecently(fb->GetFormID(), now) &&
-                            !TargetedByOtherSlot(fb->GetFormID(), id) &&
-                            RetargetExcursionLeg(a_follower, slot, fb, tr.cat, tr.want, a_follower->GetPosition().GetDistance(fb->GetPosition()), now)) {
-                            spdlog::info("[loot] {:08X} rescan found nothing: the ACTOR-BLOCKED item {:08X} is the fallback next item", id, fb->GetFormID());
-                            return;
-                        }
-                    }
-                } else if (lt.batchHoldMinSec > 0.0f) {
+                // The dwell has run and the rescan found nothing: release below. (An actor-blocked item needs no fallback here: SortLootCandidates
+                // keeps it as tier 2, so the scan already offered it if it was eligible.)
+                if (tr.emptySince.time_since_epoch().count() == 0 && lt.batchHoldMinSec > 0.0f) {
                     tr.emptySince = now;
                     noteNext("none -- holding the minimum batch dwell before the rescan");
                     return;
