@@ -6,11 +6,11 @@
 // BLOCKED at the same place. The fault was never the targets, it was where HE stood.
 //
 // THE DETECTOR. Three or more consecutive static-block (GATED) ends, across DISTINCT targets, whose block points
-// all lie within kStuckRadius of the newest one, with no other kind of end between them (a pickup, a teleport, an
+// all lie within StuckRadius() of the newest one, with no other kind of end between them (a pickup, a teleport, an
 // emptied target, an actor block, a lockpick door leg: Service.cpp calls StuckAtOriginResetRun): he is stuck
 // himself OR behind a gate he cannot pass. The caller ends the excursion, releases the ch.19 road
 // (Packages::LootTravelClear) and sends him back to follow. This opens an EPISODE: loot excursions by him are
-// SUPPRESSED until he is more than kStuckRadius from where he stood (or leaves the cell). No timer.
+// SUPPRESSED until he is more than StuckRadius() from where he stood (or leaves the cell). No timer.
 //
 // THE EVIDENCE WINDOW STARTS AT DETECTION (review of fb883fe3: the loot run's own samples cannot prove "stuck",
 // because a blocked leg stands still by definition and a follower behind a closed gate walks off fine on follow).
@@ -57,7 +57,8 @@ namespace MFO::Logistics {
         // A run is "consecutive" while the ends keep coming: one BLOCKED end lasts ~3 s of Movement Blocked
         // plus a re-dispatch, so the field's 13 ends in ~2 min were ~9 s apart. 90 s is ten of those gaps.
         constexpr auto  kRunGap       = std::chrono::seconds(90);
-        constexpr float kStuckRadius  = 300.0f;   // "about 300 u of one point" (marth's spec)
+        // "about 300 u of one point" (marth's spec): ONE value, the LootTuning row gateRepeatU, shared with StuckAtOriginRepeatsBlock (review F2).
+        inline float StuckRadius() { return Iaus::DefaultLootTuning().gateRepeatU; }
         constexpr int   kStuckTargets = 2;        // consecutive blocked ends within ~300 u (field 11-17g: was 3 distinct targets; a repeat block no longer gates, so the repeat is the evidence)
         constexpr float kStuckSecs    = 20.0f;
         constexpr float kMovedMax     = 150.0f;
@@ -212,7 +213,7 @@ namespace MFO::Logistics {
     }
 
     bool StuckAtOriginRepeatsBlock(RE::FormID a_follower, const RE::NiPoint3& a_blockPos, Clock::time_point a_now) {
-        const float radius = Iaus::DefaultLootTuning().gateRepeatU;
+        const float radius = StuckRadius();
         std::lock_guard lk(g_mx);
         auto it = g_runs.find(a_follower);
         if (it == g_runs.end()) return false;
@@ -234,7 +235,7 @@ namespace MFO::Logistics {
         auto& run = g_runs[id];
         // Keep only the trailing ends that are recent AND near the new point; anything else breaks the run.
         std::erase_if(run, [&](const Hit& h) {
-            return a_now - h.at > kRunGap || h.pos.GetDistance(a_blockPos) > kStuckRadius;
+            return a_now - h.at > kRunGap || h.pos.GetDistance(a_blockPos) > StuckRadius();
         });
         // 11-17g: the same target blocked again near the same point counts too (a repeat is no longer gated, so it is the evidence).
         run.push_back(Hit{ a_target, a_blockPos, a_now });
@@ -252,7 +253,7 @@ namespace MFO::Logistics {
                       id, a_blockPos.x, a_blockPos.y, a_blockPos.z, n, here.x, here.y, here.z,
                       (st && st->IsSwimming()) ? "yes" : "no",
                       cell ? cell->GetFormID() : 0u, cell && cell->GetFullName() ? cell->GetFullName() : "?",
-                      kStuckRadius, kStuckSecs);
+                      StuckRadius(), kStuckSecs);
         Episode e;
         e.cell     = CellOf(a_follower);
         e.pos      = here;
@@ -288,7 +289,7 @@ namespace MFO::Logistics {
             const auto fpos = a_follower->GetPosition();
             // The episode ends (loot allowed again) when he is far from the stuck point or in another cell.
             const bool cellChanged = c.cell != CellOf(a_follower);
-            if (cellChanged || c.pos.GetDistance(fpos) > kStuckRadius) {
+            if (cellChanged || c.pos.GetDistance(fpos) > StuckRadius()) {
                 spdlog::info("[loot] {:08X} left the stuck point ({:.0f} u, cell {}) -- loot excursions allowed again",
                              id, c.pos.GetDistance(fpos), cellChanged ? "changed" : "same");
                 g_eps.erase(it);

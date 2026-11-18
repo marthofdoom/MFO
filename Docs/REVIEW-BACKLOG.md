@@ -3631,3 +3631,5 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** CastOn.cpp:719-735 the Sightline-timed fallback also runs for IAUS followers whenever OwnOccludedAgeSec returns 0 (incl. a fresh not-occluded record): two readers of the bound (fails safe via the stamp min).
 - **Note:** with 8+ followers the occluded bound may never fire (Sightline 1 s freshness vs the lap): watch in the field.
 - **OPEN (SEV-5):** (fix/loot-gated, 11-17g) `gateRepeatU / gateShortU / gateNearU` (300 / 300 / 200) and the new `gateReadmitMoveU` default 500 are placeholders for the field; `kStuckTargets` is now 2 consecutive blocked ends within 300 u (the same target counts again).
+- **OPEN (SEV-4, pre-existing):** `GuardHeldAt` is not stamped on the loose-item arrival-Pending path (only the corpse path stamps it). Raised against bdf1923a.
+- **OPEN (SEV-5):** `FindGateObstacle` counts ANY enabled activator on the way (outdoor trigger boxes / critter spawners can still gate); only the lane/reach test narrows it. Raised against bdf1923a.

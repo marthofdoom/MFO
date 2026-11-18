@@ -924,8 +924,13 @@ namespace MFO::Logistics {
                 // scan re-picks the same ref and ClaimLootTravel re-points the ended same-ref leg (sameEnded) -- he stays until the answer lands.
                 // No new timeout: the guard timers (guardFresh / guardUnreadMax) and the excursion cap bound it.
                 auto RepointEndedLegForGuard = [&](RE::FormID a_ref) {
-                    spdlog::info("[loot] {:08X}: arrived at {:08X}, guard answer still pending and Harbinger's leg has ended -- holding, "
-                                 "re-pointing the leg at the same ref (no blocklist, no strike)", id, a_ref);
+                    static std::unordered_map<RE::FormID, Clock::time_point> s_nextRepointLog;   // throttled like the guard-hold log (3 s)
+                    auto& nxtR = s_nextRepointLog[id];
+                    if (nxtR.time_since_epoch().count() == 0 || now >= nxtR) {
+                        nxtR = now + std::chrono::seconds(3);
+                        spdlog::info("[loot] {:08X}: arrived at {:08X}, guard answer still pending and Harbinger's leg has ended -- holding, "
+                                     "re-pointing the leg at the same ref (no blocklist, no strike)", id, a_ref);
+                    }
                     tr.phase       = TravelPhase::Holding;
                     tr.lingerUntil = now + BatchLingerDur();
                 };
@@ -1321,6 +1326,7 @@ namespace MFO::Logistics {
                     // of him is a jam, not a gate -> REORDER his list (the item stays
                     // valid, goes later, the way away from the blocker first); no
                     // GATED verdict, no cone, nothing shared with other followers.
+                    bool feedStuck = true;   // false: he closed ground since his previous block (F3), not stuck evidence
                     if (ab.id) {
                         g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
                         spdlog::info("[loot] {:08X} target {:08X} ACTOR-BLOCKED -- Movement Blocked {:.1f}s, "
@@ -1329,17 +1335,47 @@ namespace MFO::Logistics {
                                      held, ab.id, ab.dist);
                         skipWhy = "ACTOR-BLOCKED (reordered, not dropped)";
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
-                    } else if (StuckAtOriginRepeatsBlock(id, blockPos ? *blockPos : a_follower->GetPosition(), now)) {
-                        // 11-17g: blocked again within gateRepeatU of his previous block point -- HE is stuck, not the target. No gate
-                        // (a gate here froze all outdoor loot until unload); the block feeds the stuck-at-origin record below.
-                        spdlog::info("[loot] {:08X} target {:08X} blocked again within {:.0f} u of his previous block point after "
-                                     "{:.1f}s Movement Blocked -- stuck evidence, NOT gated", id, tref->GetFormID(),
-                                     Iaus::DefaultLootTuning().gateRepeatU, held);
-                        skipWhy = "BLOCKED again at the same point (stuck evidence, not gated)";
                     } else {
-                        skipWhy = MarkGated(a_follower, tref, held, now, blockPos)
-                            ? "GATED (Movement Blocked, no actor in front)"
-                            : "BLOCKED with no door/activator named (bump / repath: not gated, stuck evidence)";
+                        // 11-17g (marth: "most loot was never blocked at all"): a 3 s Movement Blocked is a GATE only when a REAL obstacle stands
+                        // on the way (FindGateObstacle: locked door / activator, the reader the door rescue also uses). Otherwise it is a bump /
+                        // repath: nothing recorded against the target or its cone, and stuck evidence only when he closed no ground since his
+                        // previous block (NoteBlockGround); no ground across two blocks defers the target like an actor block (a reorder).
+                        const RE::NiPoint3 bp = blockPos ? *blockPos : a_follower->GetPosition();
+                        const bool real = FindGateObstacle(a_follower, tref, bp).Any();
+                        const BlockGround ground = NoteBlockGround(id, tref->GetFormID(), bp, tref->GetPosition(), now);
+                        if (real) {
+                            if (StuckAtOriginRepeatsBlock(id, bp, now)) {
+                                // blocked again within gateRepeatU of his previous block point: HE is stuck, not the target. No gate (it froze
+                                // all outdoor loot until unload); the block feeds the stuck-at-origin record below.
+                                spdlog::info("[loot] {:08X} target {:08X} blocked again within {:.0f} u of his previous block point after "
+                                             "{:.1f}s Movement Blocked -- stuck evidence, NOT gated", id, tref->GetFormID(),
+                                             Iaus::DefaultLootTuning().gateRepeatU, held);
+                                skipWhy = "BLOCKED again at the same point (stuck evidence, not gated)";
+                            } else {
+                                skipWhy = MarkGated(a_follower, tref, held, now, blockPos)
+                                    ? "GATED (Movement Blocked, a real obstacle on the way)"
+                                    : "BLOCKED, obstacle probe empty (not gated)";
+                            }
+                        } else if (ground == BlockGround::Closed) {
+                            spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and he closed ground "
+                                         "on it since his previous block: a bump / repath -- not gated, not stuck evidence, the leg retries",
+                                         id, tref->GetFormID(), held);
+                            skipWhy   = "BLOCKED, no obstacle, ground closed (bump / repath)";
+                            feedStuck = false;
+                            StuckAtOriginResetRun(id);   // progress breaks the 'consecutive' run
+                        } else {
+                            if (ground == BlockGround::NoGround) {
+                                g_actorDefer[id] = ActorDefer{ tref->GetFormID(), 0u, bp };
+                                spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and NO ground closed "
+                                             "since his previous block: REORDER (item kept, later in his list), stuck evidence, not gated",
+                                             id, tref->GetFormID(), held);
+                                skipWhy = "BLOCKED, no obstacle, no ground closed (reordered, stuck evidence)";
+                            } else {
+                                spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way: a bump / repath, "
+                                             "not gated (first block, stuck evidence only)", id, tref->GetFormID(), held);
+                                skipWhy = "BLOCKED, no obstacle (bump / repath, not gated)";
+                            }
+                        }
                     }
                     skippedRef      = tref->GetFormID();
                     tr.blockedSince = {};
@@ -1357,7 +1393,7 @@ namespace MFO::Logistics {
                     // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one point
                     // (StuckAtOrigin.cpp). Only when no pickable locked door at the block took the lap (a door leg
                     // is not "stuck"). End the excursion, release the road, back to follow.
-                    else if (!ab.id && StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
+                    else if (!ab.id && feedStuck && StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
                                                               blockPos ? *blockPos : a_follower->GetPosition(), now)) {
                         Packages::LootTravelClear("stuck at his own origin", a_follower, slot);
                         tr = TravelIntent{};

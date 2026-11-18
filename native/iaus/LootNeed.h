@@ -165,24 +165,24 @@ namespace MFO::Iaus {
         auto why = [&](const char* a_m) { if (a_why) *a_why = a_m; return false; };
         if (!std::isfinite(a_v)) return why("not a finite number");
         struct F { const char* name; float LootTuning::* m; bool open; float hi; };   // valid: >= 0 (> 0 when open) .. hi
-        constexpr float kInf = 3.0e38f;
+        constexpr float kNoMax = 3.0e38f;
         static constexpr F kFloats[] = {
-            { "takeThreshold", &LootTuning::takeThreshold, false, 1.0f }, { "needBase", &LootTuning::needBase, false, kInf }, { "needSlope", &LootTuning::needSlope, false, kInf },
-            { "roomKnee", &LootTuning::roomKnee, true, 1.0f }, { "saleGoldPerWeight", &LootTuning::saleGoldPerWeight, true, kInf }, { "saleWeight", &LootTuning::saleWeight, false, kInf },
-            { "gold", &LootTuning::gold, false, kInf }, { "equipment", &LootTuning::equipment, false, kInf }, { "valuables", &LootTuning::valuables, false, kInf },
-            { "jewelry", &LootTuning::jewelry, false, kInf }, { "gemChargeTrigger", &LootTuning::gemChargeTrigger, false, 1.0f }, { "buffScale", &LootTuning::buffScale, false, kInf },
-            { "foodScale", &LootTuning::foodScale, false, kInf }, { "poisonPowerRef", &LootTuning::poisonPowerRef, true, kInf }, { "poisonWeakScale", &LootTuning::poisonWeakScale, false, kInf },
-            { "stealNeedMin", &LootTuning::stealNeedMin, false, 1.0f }, { "stealRiskWeight", &LootTuning::stealRiskWeight, false, kInf },
-            { "stealBountyPerGold", &LootTuning::stealBountyPerGold, false, kInf }, { "stealBountyRef", &LootTuning::stealBountyRef, true, kInf },
-            { "guardBarFloorSec", &LootTuning::guardBarFloorSec, false, kInf },
-            { "guardFreshSec", &LootTuning::guardFreshSec, true, kInf }, { "guardUnreadMaxSec", &LootTuning::guardUnreadMaxSec, true, kInf },
-            { "guardRepostSec", &LootTuning::guardRepostSec, true, kInf }, { "batchHoldMinSec", &LootTuning::batchHoldMinSec, false, kInf }, { "offClassDwellSec", &LootTuning::offClassDwellSec, false, kInf },
-            { "gateConeDeg", &LootTuning::gateConeDeg, true, 90.0f }, { "gateBeyondU", &LootTuning::gateBeyondU, false, kInf },
-            { "gateReadmitSec", &LootTuning::gateReadmitSec, false, kInf }, { "gateReadmitMoveU", &LootTuning::gateReadmitMoveU, false, kInf },
-            { "gateRepeatU", &LootTuning::gateRepeatU, false, kInf }, { "gateShortU", &LootTuning::gateShortU, false, kInf }, { "gateNearU", &LootTuning::gateNearU, false, kInf },
+            { "takeThreshold", &LootTuning::takeThreshold, false, 1.0f }, { "needBase", &LootTuning::needBase, false, kNoMax }, { "needSlope", &LootTuning::needSlope, false, kNoMax },
+            { "roomKnee", &LootTuning::roomKnee, true, 1.0f }, { "saleGoldPerWeight", &LootTuning::saleGoldPerWeight, true, kNoMax }, { "saleWeight", &LootTuning::saleWeight, false, kNoMax },
+            { "gold", &LootTuning::gold, false, kNoMax }, { "equipment", &LootTuning::equipment, false, kNoMax }, { "valuables", &LootTuning::valuables, false, kNoMax },
+            { "jewelry", &LootTuning::jewelry, false, kNoMax }, { "gemChargeTrigger", &LootTuning::gemChargeTrigger, false, 1.0f }, { "buffScale", &LootTuning::buffScale, false, kNoMax },
+            { "foodScale", &LootTuning::foodScale, false, kNoMax }, { "poisonPowerRef", &LootTuning::poisonPowerRef, true, kNoMax }, { "poisonWeakScale", &LootTuning::poisonWeakScale, false, kNoMax },
+            { "stealNeedMin", &LootTuning::stealNeedMin, false, 1.0f }, { "stealRiskWeight", &LootTuning::stealRiskWeight, false, kNoMax },
+            { "stealBountyPerGold", &LootTuning::stealBountyPerGold, false, kNoMax }, { "stealBountyRef", &LootTuning::stealBountyRef, true, kNoMax },
+            { "guardBarFloorSec", &LootTuning::guardBarFloorSec, false, kNoMax },
+            { "guardFreshSec", &LootTuning::guardFreshSec, true, kNoMax }, { "guardUnreadMaxSec", &LootTuning::guardUnreadMaxSec, true, kNoMax },
+            { "guardRepostSec", &LootTuning::guardRepostSec, true, kNoMax }, { "batchHoldMinSec", &LootTuning::batchHoldMinSec, false, kNoMax }, { "offClassDwellSec", &LootTuning::offClassDwellSec, false, kNoMax },
+            { "gateConeDeg", &LootTuning::gateConeDeg, true, 90.0f }, { "gateBeyondU", &LootTuning::gateBeyondU, false, kNoMax },
+            { "gateReadmitSec", &LootTuning::gateReadmitSec, false, kNoMax }, { "gateReadmitMoveU", &LootTuning::gateReadmitMoveU, false, kNoMax },
+            { "gateRepeatU", &LootTuning::gateRepeatU, false, kNoMax }, { "gateShortU", &LootTuning::gateShortU, false, kNoMax }, { "gateNearU", &LootTuning::gateNearU, false, kNoMax },
         };
         for (const F& k : kFloats) if (a_name == k.name) {
-            if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kInf ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kInf ? "out of range: must be 0..1" : "out of range: must be >= 0"));
+            if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kNoMax ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kNoMax ? "out of range: must be 0..1" : "out of range: must be >= 0"));
             a_t.*(k.m) = a_v; return true;
         }
         struct I { const char* name; int LootTuning::* m; };
