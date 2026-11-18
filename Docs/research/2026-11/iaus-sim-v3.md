@@ -42,6 +42,7 @@ Each mechanism is one switch of `Sim::V3` (`Data.h`), `--v3 <name>=on|off[,...]`
 | `blockdir` | a guard has an arc, blows are tallied by direction for every fight | 5 |
 | `areas` | an active area lives in the world: moves with the caster, or fixed at the cast point | 6 |
 | `perks` | `Snapshot::perks` spell group | 7 |
+| `hittail` | a foe's physical hit on the party is drawn from the field's hit-size spread, mean 1 (2026-11-17) | 15.5 |
 
 A v3 switch never draws from the fight's stream `R` when it is off. Draws that v3 adds (flight path, stream
 length, slot angles) come from a second stream `Fight::V` seeded from the fight seed, so one v3 switch does not
@@ -846,7 +847,7 @@ Not in any log: a foe's level, who a foe is attacking, a follower's maximum heal
 
 Per-hit lines of 1117f: Jesper (armor 0) went from 172.0 to 5.6 health inside one 0.13 s window, five hit events of a Conqueror Archer with four other hits on him in it, and was down 0.4 s later. Arrows on Cicero (armor 0.51 to 0.63): 18 to 20 a shot most times, 34 to 41 twice, 70 once, about 1.9 s between shots of one archer. One melee blow of a Conqueror Berserker took 92.6 from Adelinda (armor 0.75). Field followers: Cicero at least 426 health, Adelinda 308, Jesper at least 172 (the only value seen for him, so not known to be his maximum).
 
-### 15.3 The lab on the same statistics (before any change; no change was made, see 15.4)
+### 15.3 The lab on the same statistics, before the calibration of 15.5
 
 Tuxborn world (the Deck's list), IAUS, the three T1 cells with their companions, 288 fights per bracket. A bracket is a window of the lab's party-against-foes strength ratio:
 
@@ -866,23 +867,55 @@ Built-in world, downs per follower-minute: natural 0.021, balanced 0.027, strong
 
 The lab's followers on Tuxborn: level 29 to 30 (drawn 12 to 45), melee 380 health and armor 0.41, ranged 332 and 0.30, mage 292 and 0.00. Foes level 15 in the natural bracket, 23 in strong1.
 
-### 15.4 What this says, and why no damage constant was changed
+### 15.4 What this says
 
 1. **The lab's damage rate is not off by a constant.** In the brackets where the lab's followers go down as often as the field's (strong1 and strong2 on Tuxborn: 0.21 and 0.30 a minute against 0.225), the capped loss at five or more foes is 0.78 to 0.81 %/s against the field's 0.91, and the loss while losing 2.5 to 2.7 against 2.6. Those agree.
 2. **The natural bracket is far gentler than the field day.** 0.008 downs a follower-minute on Tuxborn and 0.021 on the built-in world against 0.225. The field is 11 to 28 times that. Every survival band, the heal timing and the oracle-relative bounds are measured on natural fights. So they are measured where almost nobody goes down, and "healing comes too late" cannot show there. This is what the field data supports as the answer to marth's question. Caveat: the field day is three sessions in one hard place (Ash Spawn groups and reavers on Solstheim). It is not a sample of all play. The natural bracket draws any encounter of the list at a random level, wolves included.
 3. **The lab's damage arrives too evenly.** At one to four foes a field follower is losing health in 5 to 10 % of the samples. The lab's is in 13 to 40 %. And three of the six field first downs came within 3.5 s of a sample that read no loss, all three the cloth mage. The lab does that for 9 to 12 % of its downs in the strong brackets. The field's shape is quiet, then a burst.
 4. **What cannot be decided from these logs.** Point 3 rests on 623 samples for the quiet part, which is solid, and on six downs for the burst part, which is not. The burst has at least three possible causes the logs cannot separate: who the foes pick as a group grows (no log line says who a foe attacks), several hits landing at once (one 0.13 s window, once), and the followers' own health and armor (the field mage has at most 172 health seen once, the lab's 292 at a lower level. The field's ranged follower has armor 0.75, the lab's 0.30). Each would be a different constant. Fitting one of them to six downs would be a guess that reads as a calibration.
 
-So no world constant was changed in this batch. The one lever the solid part points at, the foes' preference for the player (`World.h PickTarget`, the 1.25 on a foe's score for the player, a model value), was not moved either: raising it makes followers safer in small fights, which the field supports, and safer in large ones too, which the field contradicts.
+The one lever the solid part points at, the foes' preference for the player (`World.h PickTarget`, the 1.25 on a foe's score for the player, a model value), was not moved: raising it makes followers safer in small fights, which the field supports, and safer in large ones too, which the field contradicts.
 
-**What was done instead:**
-
-- The like-for-like read exists on both sides and is in the CLI checks, so a later session can be compared in one command.
-- The gap pass takes `--gap-bracket <name>`, so the oracle and IAUS can be read under field pressure. The bracket whose downs match the field: strong1 on Tuxborn (0.214), strong2 on the built-in world (0.170, the nearest it has).
-- The survival bounds are re-measured on natural fights as before (the bands the driver gates on are natural-row bands), and once under pressure for the record (14.10, 15.5).
+What was changed is in 15.5: how a hit's size is drawn. That one the hit lines of 1117f do measure.
 
 **What it needs to go further (asks, not done):**
 
 - Run every field session with `bIausFillProbe = 1`. Only one of three had it. Its hit lines give damage per hit, the attacker and the target's health before and after. A dozen fights of that would decide between the three causes above.
 - One passive line per foe per few seconds with its current target would settle who the foes pick.
-- A ruling on whether the survival bands should also gate under pressure (a second band row per caster on the strong bracket). That is a change of what the tune optimises and was not made here.
+- A ruling on whether the survival bands should also gate under pressure (a second band row per caster on the strong bracket). That is a change of what the tune optimises and was not made here. The gap pass takes `--gap-bracket <name>` so the oracle and IAUS can be read under field pressure. The bracket whose downs match the field: strong1 on Tuxborn (0.214 a follower-minute), strong2 on the built-in world (0.170, the nearest it has).
+- Not mirrored: the native heal-timing fix (branch `fix/heal-timing`: a burst-aware dying boost by hits to down, the gross incoming rate, the ally dying fallback). The branch was not on origin when this batch closed. Mirror it when it lands, then re-measure 15.6.
+
+### 15.5 The calibration: the size of a hit (`hittail`)
+
+Input from the Opus heal-timing diagnosis of the same day: single hits take 30 to 97 % of a follower's health in the field, and the game's own per-hit estimates are 4 to 6 times under what was taken.
+
+The hit lines of `deck-run-1117f` give 16 hit windows with damage that foes landed on followers (19:44:45 to 19:45:51, one fight). As a share of the target's health: median 4.7 %, 75th percentile 9.7 %, 90th percentile 30.1 %, the largest 96.7 %. Two of the 16 took 30 % or more. So the usual hit is small and a few are very large. Before armor (the line prints the target's armor share), and over the median of the same attacker kind:
+
+| Attacker | n | Health before armor, over the kind's median |
+|---|---|---|
+| Arrows of the Conqueror and Ravager Archers (median 53) | 10 | 1.32, 3.13, 0.91, 1.74, 1, 3.55, 1, 1, 2.08, 1 |
+| Blows of one Conqueror Berserker (median 54) | 5 | 0.67, 6.76, 1, 1, 0.5 |
+
+Mean 1.78, median 1. Four of fifteen are twice the median or more, three are three times or more. The sixteenth window has no attacker kind to compare with and is left out.
+
+The lab's foes hit with one size per weapon (a power attack apart). The change: a foe's physical hit on a member of the party is multiplied by one of those fifteen values, drawn evenly, each divided by their mean so the mean multiplier is 1 (`World.h kFieldHit`, the v3 switch `hittail`, its draw from the v3 stream). The mean is 1 on purpose. The lab's damage per second already agrees with the field at matched pressure (15.4, point 1). What differed is how it arrives. So a usual hit is now 0.56 of what it was, and one hit in five is 1.8 to 3.8 times it.
+
+It applies to the player model too, since he is hit by the same foes. It does not apply to spells (no field hit line of a spell on a follower exists) or to the party's own hits.
+
+**Honest size of the evidence:** fifteen hits, one fight, two archer kinds and one melee foe, three followers. The spread is real in that fight. Whether it holds for other foes is not known. `--v3 hittail=off` gives the lab before it, and the comment at `kFieldHit` names the lines to re-derive it from.
+
+Before and after, Tuxborn world, strong1 bracket (the field's pressure), 288 fights, IAUS:
+
+| | Field | Before | After |
+|---|---|---|---|
+| Downs per follower-minute | 0.225 | 0.214 | 0.223 |
+| Mean capped loss at 5 or more foes, %/s | 0.91 | 0.78 | 0.73 |
+| At the cap, at 5 or more | 14.3 % | 7.5 % | 6.5 % |
+| Losing share, all samples | 10.1 % | 31.2 % | 27.1 % |
+| Downs within 3.5 s of a no-loss sample | 3 of 6 | 4 of 34 (12 %) | 8 of 35 (23 %) |
+| From above 75 % health to the down, under 1 s | Jesper, 0.4 s | 0 of 34 | 3 of 35 |
+| Worst loss inside one second, per follower and fight: 90th percentile, largest | 30 %, 97 % (hit windows) | 26 %, 62 % | 29 %, 100 % |
+
+The burst now exists in the lab (a follower can go from full to down in one second, which it could not), and the share of downs that come out of calm doubled. It is still half the field's share, on six field downs. The capped loss numbers did not move toward the field. They cannot: the game's reader caps a window's loss at 25 %, so it does not see hit size.
+
+What the built-in world's tuning baseline does with it (`baseline_v3_builtin.txt`, regenerated, 8 fights a cell, so each row is noisy): U over the 90 class and bracket rows moved by -4.24 on average (from -19.06 to +6.80). The player model dies more often when a hard hit lands on him, and a fight the player loses scores low. The v2 world is untouched (0 metrics changed against `baseline_builtin.txt`). Every J of the v3 world is a new number after this, so the retune starts from the new baseline.
