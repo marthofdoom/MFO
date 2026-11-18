@@ -9,6 +9,7 @@
 #include "CostParity.h"   // ClickUp 1dfcuabcr0c: the direct deduct charges the player-curve cost
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "iaus/Candidates.h"   // OwnOccludedAgeSec: the occluded-claim bound reads the picker's own record
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
@@ -431,17 +432,23 @@ namespace MFO::Actuation {
             // (see the in-flight refresh below): refuse the same (spell, foe) while the
             // measured verdict stays Occluded, so the release is not a four second churn.
             // Transparent, so the rules below run. Logged when it stops applying.
+            // 11-17f review F1: the hold is on the FOE, not the pair. IAUS next picks ANOTHER spell at the same unseen foe, and a pair-only hold
+            // let each new spell claim, be released after the bound and WARN again every lap. Any offense spell at the held foe is refused while he
+            // reads Occluded; the entry is dropped when he reads non-Occluded or is gone. A block on ANOTHER foe stays (one slot per follower).
             if (offenseSpell && a_target) {
                 if (auto blk = g_unsightedCharge.find(id); blk != g_unsightedCharge.end()) {
-                    if (blk->second.spell == a_spellID && blk->second.target == a_target->GetFormID()) {
+                    if (blk->second.target == a_target->GetFormID()) {
                         Sightline::Want(id, { a_target->GetFormID() }, Sightline::Basis::Own);
                         if (Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==
                             Sightline::Verdict::Occluded)
                             return { Result::FailedOther,
-                                     "offense cast held: its target is still unsighted after a charge that never fired",
+                                     "offense cast held: its foe is still unsighted after a claim released for it",
                                      true };
+                        g_unsightedCharge.erase(blk);
+                    } else if (auto* held = RE::TESForm::LookupByID<RE::Actor>(blk->second.target);
+                               !held || held->IsDead() || held->IsDisabled()) {
+                        g_unsightedCharge.erase(blk);
                     }
-                    g_unsightedCharge.erase(blk);
                 }
             }
             // A PURE-SCRIPT OFFENSE CLAIM THAT NEVER FIRED was released (the bound in the in-flight refresh below):
@@ -693,6 +700,76 @@ namespace MFO::Actuation {
                             }
                             return { Result::FailedOther,
                                      "pure-Script offense claim never fired: released, held off this fight", true };
+                        }
+                    }
+                }
+                // ── AN OFFENSE CLAIM ON A FOE HE CANNOT SEE IS BOUNDED (field 11-17f, Jesper "spell stuttering") ──────────────────────────
+                // The refresh below renews a standing claim in place WITHOUT asking whether its target is in sight, so Ice Spike + Elemental Flare on
+                // an occluded foe were renewed for ~75 s, both hands locked, the seat's CheckStartCast answering NO every ~1.6 s, while visible foes,
+                // a buff and a reposition were never reached. The one reader of how long his OWN ray to the foe has read Occluded without a break is
+                // the picker's (Candidates::OwnOccludedAgeSec); past Tuning::occludedClaimReleaseSec the claim is RELEASED, loudly, and the pair is held
+                // off while he still reads Occluded (g_unsightedCharge, the twin of the charged bound above), so the next lap picks another foe, a buff or a
+                // reposition. Skipped while a fire was observed within the same window (a cast that is landing is not stuck). Never a direct cast.
+                if (offenseSpell && a_target && a_target != a_follower && (handPlan.left || handPlan.right)) {
+                    const float limit = Iaus::DefaultTuning().occludedClaimReleaseSec;
+                    float age = 0.0f;
+                    if (limit > 0.0f) {
+                        const RE::FormID tid = a_target->GetFormID();
+                        // The picker's record (ONE reader). A gambit-table follower has none (Gather feeds it): fall back to a Sightline-timed run
+                        // (review F6), the way HealOccludedBound times a heal recipient. Unknown neither starts nor ends a run.
+                        age = Iaus::Candidates::OwnOccludedAgeSec(id, tid);
+                        if (age <= 0.0f) {
+                            struct Run { std::chrono::steady_clock::time_point since{}, last{}; };
+                            static std::unordered_map<std::uint64_t, Run> s_run;   // worker-serial (#4)
+                            const std::uint64_t k = (static_cast<std::uint64_t>(id) << 32) | tid;
+                            Sightline::Want(id, { tid }, Sightline::Basis::Own);
+                            const auto v = Sightline::CheckWithin(id, tid, kHealLosTrustSec, Sightline::Basis::Own);
+                            const auto nowT = std::chrono::steady_clock::now();
+                            if (v == Sightline::Verdict::Visible) s_run.erase(k);
+                            else if (v == Sightline::Verdict::Occluded) {
+                                if (s_run.size() > 256) s_run.clear();
+                                auto& r = s_run[k];
+                                if (r.since == std::chrono::steady_clock::time_point{} || nowT - r.last > std::chrono::seconds(3)) r.since = nowT;
+                                r.last = nowT;
+                                age = std::chrono::duration<float>(nowT - r.since).count();
+                            }
+                        }
+                        // F1: the time counted is since THIS claim's stamp as well, so a new claim on an already-unseen foe gets its own window.
+                        std::chrono::steady_clock::time_point stampNew{};
+                        for (const std::size_t h : { kHandLeft, kHandRight }) {
+                            if (!(h == kHandLeft ? handPlan.left : handPlan.right)) continue;
+                            const auto st = CastLockClaimStamp(id, h, a_spellID);
+                            if (st > stampNew) stampNew = st;
+                        }
+                        if (stampNew == std::chrono::steady_clock::time_point{}) age = 0.0f;   // no stamp, no claim age to bound
+                        else age = (std::min)(age, std::chrono::duration<float>(std::chrono::steady_clock::now() - stampNew).count());
+                    }
+                    if (limit > 0.0f && age >= limit) {
+                        const std::size_t hands[2]  = { kHandLeft, kHandRight };
+                        const bool        planned[2] = { handPlan.left, handPlan.right };
+                        bool fired = false;
+                        for (int i = 0; i < 2 && !fired; ++i)
+                            if (planned[i])
+                                fired = ComposedCast::ObservedFiring(id, hands[i] == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                                                : APMFBridge::kApmfHandRight,
+                                                                     a_spellID, static_cast<std::uint32_t>(limit * 1000.0f));
+                        if (!fired) {
+                            spdlog::warn("[cast] {:08X} offense cast {:08X} at {:08X} RELEASED: his own ray to the foe has read OCCLUDED for {:.1f} s "
+                                         "without a break (bound {:.1f} s, Tuning::occludedClaimReleaseSec) and nothing fired -- the claim would be "
+                                         "renewed forever; the foe is held off until he reads visible so the next lap picks another foe, a buff or a "
+                                         "reposition (rule {})",
+                                         id, a_spellID, a_target->GetFormID(), age, limit, g_firingRule);
+                            APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
+                            for (int i = 0; i < 2; ++i) {
+                                if (!planned[i]) continue;
+                                ClearCastLockHand(id, hands[i]);
+                                ComposedCast::ClearWatchHand(id, i == 0 ? APMFBridge::kApmfHandLeft
+                                                                        : APMFBridge::kApmfHandRight);
+                            }
+                            g_unsightedCharge[id] = { a_spellID, a_target->GetFormID() };
+                            return { Result::FailedOther,
+                                     "offense claim released: its foe has been out of sight past the occluded-claim bound",
+                                     true };
                         }
                     }
                 }

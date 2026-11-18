@@ -273,6 +273,14 @@ namespace MFO::Actuation {
         struct OccludedBlock { RE::FormID spell = 0; RE::FormID recipient = 0; bool logged = false; };
         std::unordered_map<RE::FormID, OccludedBlock> g_healOccludedBlock;
 
+        // THE SIGHT BOUND ON A STANDING HEAL, OWNED BY THE SUSTAIN LAP (field 11-17f, Jesper: two heals sat Charged on a recipient behind a STAT for
+        // 9.8 s and 4.4 s, the left hand blocked for every offense rule, until the FacetExpiry sweep ate them -- nothing refreshed them and nothing said why).
+        // The own-ray verdict to the recipient is timed here, per (follower, hand): `since` = the first Occluded read of a run (a Visible read ends the
+        // run, Unknown leaves it), `stamp` = the lock claim stamp it belongs to (a new claim = a new run). Past Tuning::occludedClaimReleaseSec the
+        // claim is released with a WARN and g_healOccludedBlock keeps the pair from re-claiming until he reads non-Occluded. Worker-serial (#4).
+        struct HealOccRun { Clock::time_point since{}; Clock::time_point stamp{}; };
+        std::unordered_map<std::uint64_t, HealOccRun> g_healOccRun;   // key (follower << 1) | hand
+
         // THE NEVER-OBSERVED BOUND ON A RENEWAL (review F2 on 9895a53, SEV-2). A claim this
         // file renews without the rule re-asking for it (the companion, and the RIGHT hand's
         // in-flight refresh, which has no Prepare repair behind it) must not be renewed
@@ -512,8 +520,7 @@ namespace MFO::Actuation {
             const char* gone = nullptr;
             if (rid != 0 && rcp && rcp != RE::PlayerCharacter::GetSingleton() && !Followers::IsTrackedFast(rid))
                 gone = "the recipient left the party";
-            else if (rid != 0 && rcp &&
-                     a_follower->GetPosition().GetDistance(rcp->GetPosition()) > Config::g_sharedRadius.load())
+            else if (rid != 0 && rcp && !WithinSharedRadius(a_follower, rcp, /*a_standing=*/true))   // the picker's reader (Auto.cpp), margin included
                 gone = "the recipient left the shared radius";
             if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand)) {
                 ReleaseWithExit(a_follower, a_hand, hs, lost, gone ? "gone" : LostToken(lost));
@@ -1111,6 +1118,38 @@ namespace MFO::Actuation {
         return std::nullopt;
     }
 
+    // THE SIGHT BOUND (see g_healOccRun): true when the standing heal on a_hand was released here. Only a claim that STANDS (a live claim naming
+    // this spell, with a lock) and aims at someone else is timed; self-heals have no line. Called every sustain lap, whether or not the rule is asking,
+    // because the failure it bounds is a claim nobody refreshes.
+    bool HealOccludedBound(RE::Actor* a_follower, std::size_t a_hand, const HealHand& a_hh) {
+        const auto fid = a_follower->GetFormID();
+        const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 1) | a_hand;
+        const float limit = Iaus::DefaultTuning().occludedClaimReleaseSec;
+        if (a_hh.recipient == 0 || !(limit > 0.0f)) { g_healOccRun.erase(key); return false; }
+        const auto standing = HealOnHand(fid, a_hand);
+        const auto stamp    = CastLockClaimStamp(fid, a_hand, a_hh.spell);
+        if (!standing.found || standing.spell != a_hh.spell || stamp == Clock::time_point{}) { g_healOccRun.erase(key); return false; }
+        // A LIVE ch.24 heal approach is bringing sight back (the existing D release exempts it the same way, MFO-B234 / B238): not bounded here (review F3).
+        if (APMFBridge::HealApproachStands(fid)) { g_healOccRun.erase(key); return false; }
+        Sightline::Want(fid, { a_hh.recipient }, Sightline::Basis::Own);
+        const auto v   = Sightline::CheckWithin(fid, a_hh.recipient, kHealLosTrustSec, Sightline::Basis::Own);
+        const auto now = Clock::now();
+        if (v == Sightline::Verdict::Visible) { g_healOccRun.erase(key); return false; }
+        if (v != Sightline::Verdict::Occluded) return false;   // Unknown: the run neither starts nor ends
+        auto& run = g_healOccRun[key];
+        if (run.stamp != stamp || run.since == Clock::time_point{}) run = HealOccRun{ now, stamp };
+        const float sec = std::chrono::duration<float>(now - run.since).count();
+        if (sec < limit) return false;
+        spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {:08X}: the own-ray verdict to him has read OCCLUDED for {:.1f} s without a break "
+                     "(bound {:.1f} s, Tuning::occludedClaimReleaseSec) -- RELEASED so the hand can serve a visible target (occluded); "
+                     "re-claimed only once he reads non-Occluded (rule {})",
+                     fid, HandWord(a_hand), a_hh.spell, a_hh.recipient, sec, limit, g_firingRule);
+        g_healOccludedBlock[fid] = { a_hh.spell, a_hh.recipient, false };
+        g_healOccRun.erase(key);
+        ReleaseWithExit(a_follower, a_hand, a_hh.spell, "the recipient has been out of sight past the occluded-claim bound", "occluded");
+        return true;
+    }
+
     // THE SUSTAIN LAP (marth 2026-10-06, ClickUp 86e3m36qr): a heal claim the rule is NO LONGER asking for
     // (its condition stopped holding, AUTO named nobody, a different rule won the lap) is kept and driven
     // to the recipient's full health by replaying CastOn's own lap for it, as the owning rule (g_firingRule
@@ -1136,6 +1175,7 @@ namespace MFO::Actuation {
             if (it == g_healHands.end()) break;
             const HealHand hh = it->second.hand[h];   // a copy: the replay below may erase the record
             if (!hh.active) continue;
+            if (HealOccludedBound(a_follower, h, hh)) continue;   // released for sustained lost sight (asked or not)
             if (std::find(asked.begin(), asked.end(), hh.spell) != asked.end()) continue;   // the rule is asking
             // A live claim, OR the lock in its re-stream gap (a stream-cap or un-taught-proxy release keeps
             // the lock; the replay below re-claims it): HealOnHand answers both.
@@ -1334,6 +1374,7 @@ namespace MFO::Actuation {
         g_healStillLog.clear();
         g_neverFiredLatch.clear();
         g_healOccludedBlock.clear();
+        g_healOccRun.clear();
         g_handFireAttach.clear();
         g_launcherSeen.clear();
         {

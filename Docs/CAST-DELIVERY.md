@@ -1609,3 +1609,13 @@ it on 1.7.104 yet)" (review SEV-4 (c)). That is the declared degrade, never sile
 **Threading.** The OOC table and the sweep (`APMFBridge::Tick`) run on the AddTask job worker; the summon's file runs on the main
 thread (a self recipient: no reach read). The cast side's maps clear on revert (`ResetSubstrateRoad`, from `ClearCastLocks`). The pair table has its own leaf mutex (`g_subMx`, order g_mx -> g_subMx at `ClearTransientState`); the APMF calls under it are
 enqueues or lock-free reads. No co-save change: Harbinger forgets every substrate on a load, and `ClearTransientState` forgets MFO's.
+
+## CLAIM BOUNDS FOR AN UNSEEN TARGET AND A CONTESTED HAND (fix/cast-stutter, 2026-11-17, field 1117f)
+
+A standing claim is renewed in place every lap it is asked for, so a claim that can never fire (the target is behind geometry) held both hands for ~75 s in the field. The
+rule now: a claim whose target his OWN ray has read Occluded without a break for `Tuning::occludedClaimReleaseSec` is released with a WARN and the (spell, target) pair is held off
+until he reads non-Occluded (offense: `CastOn.cpp` + `g_unsightedCharge`; heal: `HealRoad.cpp` `HealOccludedBound` + `g_healOccludedBlock`). Offense reads the picker's own
+record (`Iaus::Candidates::OwnOccludedAgeSec`), so the claim and the pick agree. A fire seen inside the window keeps an offense claim. An approach ended ENGINE DROPPED is a
+timed backoff (`offenseApproachBackoffSec`), not a fight-long block. A heal recipient at the shared-radius edge keeps his claim out to radius + `sharedRadiusMarginUnits` (picker and
+maintainer share `WithinSharedRadius`). `CanPreemptHand` takes no hand within `preemptFireSettleSec` of a fire on it, and a non-heal asker waits out a non-heal incumbent's charge
+instead of taking it at the boundary. All four numbers are placeholders (`t.occClaimRelease`, `t.offApproachBackoff`, `t.sharedRadiusMargin`, `t.preemptSettle`).

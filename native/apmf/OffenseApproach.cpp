@@ -17,7 +17,7 @@
 // BOUNDS (the held-heal approach's, verbatim): X = the pinned foe, R = TightRadius (fHealApproachRadius, tightened
 // toward kApproachMinRadius while Holding and still occluded), Repointed every kTightenGap; Harbinger's ch.23 leash
 // clamp ends the claim as Leashed (logged, never fought, foe blocked this fight); at the floor with sight still lost
-// for kFloorGiveUp the approach is BLOCKED (released, foe not re-filed this fight).
+// for kFloorGiveUp the approach is BLOCKED (released, foe not re-filed this fight). EXCEPT ENGINE DROPPED (11-17f): a timed backoff, Tuning::offenseApproachBackoffSec.
 // 11-17 field fixes: (b) the tightening floor is kMinRadius, not the standoff: while Holding and still occluded INSIDE the standoff the
 // claim keeps tightening and stops at the first point with sight (the sight dwell releases it); the 15 s regular-movement release is the
 // true floor only. (c) A block (g_offBlocked) is scoped: it lapses when the follower's leash radius has grown, or he has moved more than
@@ -30,12 +30,14 @@
 #include "APMF_API.h"
 #include "Config.h"
 #include "Confidence.h"   // LeashRadius: the block is scoped to the radius it was given up at
+#include "iaus/Core.h"    // DefaultTuning: the engine-dropped backoff (offenseApproachBackoffSec)
 #include "Packages.h"   // IsRetreating
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <format>
 #include <mutex>
 #include <string>
 #include <tuple>
@@ -98,6 +100,7 @@ namespace MFO::APMFBridge {
         struct Blk { bool armed = false, leashed = false; float x = 0, y = 0, z = 0, leash = 0, px = 0, py = 0, pz = 0, fx = 0, fy = 0, fz = 0; };
         std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, Blk>> g_offBlocked;   // follower -> foes given up on this fight
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_offRefileAfter;
+        std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, int>> g_offDropCount;   // follower -> foe -> ENGINE DROPPED endings this fight (g_offMx)
         struct Regular { RE::FormID foe = 0; std::chrono::steady_clock::time_point until{}; };
         std::unordered_map<RE::FormID, Regular> g_offRegular;   // follower -> foe whose re-claim is suppressed; g_offMx
         // Dwell clocks (g_offMx): `since` = first sample of the current run of that verdict, `last` = the most recent one;
@@ -212,7 +215,12 @@ namespace MFO::APMFBridge {
 
     bool OffenseApproachCannotFile(RE::FormID a_follower, RE::FormID a_foe) {
         if (!OffApi() || g_offSeatRefused.load(std::memory_order_relaxed)) return true;
-        return BlockStands(a_follower, a_foe);
+        if (BlockStands(a_follower, a_foe)) return true;
+        // A pending refile gap (the ENGINE DROPPED backoff, combat ended, sight returned) means ServiceOffenseApproach returns early, so nothing would move
+        // him if H4's range close were released for it: H4 keeps the channel until the gap is over (review F2).
+        std::scoped_lock lock(g_offMx);
+        const auto rit = g_offRefileAfter.find(a_follower);
+        return rit != g_offRefileAfter.end() && std::chrono::steady_clock::now() < rit->second;
     }
 
     void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe, bool a_touchSpell) {
@@ -333,7 +341,7 @@ namespace MFO::APMFBridge {
             std::scoped_lock lock(g_offMx);
             g_offOccDwell.erase(a_follower);
             g_offVisDwell.erase(a_follower);
-            if (a_fightOver) { g_offBlocked.erase(a_follower); g_offRefileAfter.erase(a_follower); g_offRegular.erase(a_follower); }
+            if (a_fightOver) { g_offBlocked.erase(a_follower); g_offRefileAfter.erase(a_follower); g_offRegular.erase(a_follower); g_offDropCount.erase(a_follower); }
             const auto it = g_off.find(a_follower);
             if (it == g_off.end()) return;
             h = it->second.handle;
@@ -395,11 +403,25 @@ namespace MFO::APMFBridge {
                                  "released; not re-filed for him this fight", fid, c.foe, c.handle, c.unpausedSweeps);
                     g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe, false);
                 } else {
-                    const bool block = ours && Blocks(info.state);
+                    // ENGINE DROPPED (its own path to X failed) is a BACKOFF, not a whole-fight block (field 11-17f, Jesper: one failed path
+                    // ended his approach for the rest of a 50 s fight while the claim on the occluded foe held both hands). A path that fails
+                    // from here may succeed from another spot or once the foe moves, so the foe is filed again after
+                    // Tuning::offenseApproachBackoffSec (`t.offApproachBackoff`, placeholder). The other ended states keep their block.
+                    // The backoff repeats at most Tuning::offenseApproachDropCap times per (follower, foe) per fight (review F2): past it the ending is a
+                    // block as before, so a foe the engine can never path to does not cycle forever.
+                    bool engineDropped = ours && info.state == APMF_API::kApproachState_EngineDropped;
+                    if (engineDropped && ++g_offDropCount[fid][c.foe] > static_cast<int>(Iaus::DefaultTuning().offenseApproachDropCap)) engineDropped = false;
+                    const bool block = ours && Blocks(info.state) && !engineDropped;
+                    const float backoffSec = Iaus::DefaultTuning().offenseApproachBackoffSec;
                     if (ours && info.state == APMF_API::kApproachState_CombatEnded) g_offRefileAfter[fid] = now + kRefileGap;
+                    if (engineDropped)
+                        g_offRefileAfter[fid] = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                          std::chrono::duration<float>((std::max)(0.0f, backoffSec)));
                     spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} ENDED BY HARBINGER: {} (distance {:.0f} / R {:.0f}, "
                                  "h={}){}", fid, c.foe, Word(info.state), info.distance, info.radius, c.handle,
-                                 block ? " -- not re-filed for him this fight" : "");
+                                 block ? " -- not re-filed for him this fight"
+                                       : engineDropped ? std::format(" -- backoff: filed again after {:.0f} s if it still waits on sight", backoffSec).c_str()
+                                                       : "");
                     if (block) { g_offBlocked[fid].try_emplace(c.foe); stamp.emplace_back(fid, c.foe, info.state == APMF_API::kApproachState_Leashed); }
                 }
                 api->Release(c.handle);
@@ -435,6 +457,7 @@ namespace MFO::APMFBridge {
         g_off.clear();
         g_offBlocked.clear();
         g_offRefileAfter.clear();
+        g_offDropCount.clear();
         g_offRegular.clear();
         g_offOccDwell.clear();
         g_offVisDwell.clear();
