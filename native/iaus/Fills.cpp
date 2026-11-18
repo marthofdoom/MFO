@@ -560,7 +560,7 @@ namespace MFO::Iaus::Fills {
         const double grossWin = lt.grossWindowSec > 0.0f ? lt.grossWindowSec : 4.0, maxWin = lt.maxHitWindowSec > 0.0f ? lt.maxHitWindowSec : 8.0;
         std::erase_if(tr.samples, [&](const Sample& s) { return m_now - s.t > (std::max)(grossWin, maxWin); });
         e.loss = tr.loss;
-        Estimate::BurstReads(tr.samples, m_now, grossWin, maxWin, e.gross, e.maxHit);
+        Estimate::BurstReads(tr.samples, m_now, grossWin, maxWin, lt.burstWindowSec > 0.0f ? lt.burstWindowSec : 0.5, e.gross, e.maxHit);
 
         if (m_probe && a_role == Role::Foe) {
             if (e.casting && !tr.casting) {

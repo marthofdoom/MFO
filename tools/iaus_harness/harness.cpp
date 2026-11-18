@@ -2035,7 +2035,7 @@ namespace {
             Check(volley == 166.0f, "lap gross: a volley of 5 events that took 166 is a lap of 166 (the drop wins over the attackers' estimates 135)");
             Estimate::BurstSample a{ 10.0, volley };
             float gross = 0.0f, mx = 0.0f;
-            Estimate::BurstReads({ a }, 10.5, 4.0, 8.0, gross, mx);
+            Estimate::BurstReads({ a }, 10.5, 4.0, 8.0, 0.5, gross, mx);
             Check(mx == 166.0f && gross == 166.0f / 4.0f, "lap gross: the largest recent burst is the whole lap (166), not the per-event split; the rate is over the 4 s window");
             Combatant jes = Actor("Jesper", 5, 172, 172, 0, 0); jes.maxHit = mx;
             Check(Estimate::HitsToDown(172.0f, jes) > 1.0f && Estimate::HitsToDown(100.0f, jes) < 1.0f, "lap gross: 172 health is ~1.04 bursts of 166, 100 health is under one");
@@ -2043,13 +2043,18 @@ namespace {
             Check(Estimate::LapGross(0.0f, 1, 27.0f) == 27.0f, "lap gross: a heal that cancels the net drop cannot cancel a lap with a hit event below the attackers' estimate");
             // no event this lap (it landed in the neighbouring lap): the drop is still recorded as a burst
             Check(Estimate::LapGross(120.0f, 0, 0.0f) == 120.0f, "lap gross: a drop-only lap records the burst (no event count needed)");
-            Estimate::BurstReads({ Estimate::BurstSample{ 10.0, Estimate::LapGross(120.0f, 0, 0.0f) } }, 10.2, 4.0, 8.0, gross, mx);
+            Estimate::BurstReads({ Estimate::BurstSample{ 10.0, Estimate::LapGross(120.0f, 0, 0.0f) } }, 10.2, 4.0, 8.0, 0.5, gross, mx);
             Check(mx == 120.0f, "lap gross: a drop-only lap reaches maxHit");
             // windows: a burst 6 s old is out of the rate (4 s) but in the maximum (8 s); 9 s old is out of both
-            Estimate::BurstReads({ Estimate::BurstSample{ 4.0, 100.0f } }, 10.0, 4.0, 8.0, gross, mx);
+            Estimate::BurstReads({ Estimate::BurstSample{ 4.0, 100.0f } }, 10.0, 4.0, 8.0, 0.5, gross, mx);
             Check(gross == 0.0f && mx == 100.0f, "lap gross: 6 s old = out of the 4 s rate, still the 8 s maximum");
-            Estimate::BurstReads({ Estimate::BurstSample{ 1.0, 100.0f } }, 10.0, 4.0, 8.0, gross, mx);
+            Estimate::BurstReads({ Estimate::BurstSample{ 1.0, 100.0f } }, 10.0, 4.0, 8.0, 0.5, gross, mx);
             Check(gross == 0.0f && mx == 0.0f, "lap gross: 9 s old = out of both");
+            // 0.3 s volley split over 3 samples = ONE burst; two bursts 2 s apart read as the larger, not the sum
+            Estimate::BurstReads({ Estimate::BurstSample{ 10.0, 60.0f }, Estimate::BurstSample{ 10.15, 60.0f }, Estimate::BurstSample{ 10.3, 46.0f } }, 10.4, 4.0, 8.0, 0.5, gross, mx);
+            Check(mx == 166.0f, "lap gross: a 0.3 s volley split over 3 samples reads as ONE burst of 166");
+            Estimate::BurstReads({ Estimate::BurstSample{ 8.0, 90.0f }, Estimate::BurstSample{ 10.0, 120.0f } }, 10.1, 4.0, 8.0, 0.5, gross, mx);
+            Check(mx == 120.0f, "lap gross: two bursts 2 s apart read as the larger (120), not the sum (210)");
             // a friendly heal event adds nothing: the sink drops party-caused events (Fills.cpp), so no events and no floor: net drop only (0 here)
             Check(Estimate::LapGross(0.0f, 0, 0.0f) == 0.0f, "lap gross: a party heal event (dropped by the sink) adds nothing");
         }

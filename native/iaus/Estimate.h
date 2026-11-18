@@ -89,13 +89,20 @@ namespace MFO::Iaus::Estimate {
         return a_events > 0 ? (std::max)(lost, Pos(a_floor)) : lost;
     }
     struct BurstSample { double t = 0.0; float gross = 0.0f; };   // one lap's gross damage
-    // grossPerSec = the gross of the laps inside a_grossWinSec / that window; maxHit = the LARGEST single lap's gross inside a_maxWinSec. A volley (five events from
-    // one archer in one lap) is ONE burst: the event count is never used to split it (Jesper: 166 health in 5 events, a per-event split read 33).
-    inline void BurstReads(const std::vector<BurstSample>& a_s, double a_now, double a_grossWinSec, double a_maxWinSec, float& a_gross, float& a_maxHit) {
+    // grossPerSec = the gross of the samples inside a_grossWinSec / that window; maxHit = the LARGEST BURST inside a_maxWinSec: the biggest SUM of samples that
+    // start within a_burstWinSec of each other (a sample is one sampling interval, 100-133 ms, so a volley spread over 0.2-0.4 s lands in 2-3 of them and one
+    // sample would read half of it). Two bursts further apart than the burst window read as the LARGER, never their sum. The event count is never used (Jesper:
+    // 166 health in 5 events, a per-event split read 33).
+    inline void BurstReads(const std::vector<BurstSample>& a_s, double a_now, double a_grossWinSec, double a_maxWinSec, double a_burstWinSec,
+                           float& a_gross, float& a_maxHit) {
         float sum = 0.0f, mx = 0.0f;
         for (const BurstSample& s : a_s) {
             if (a_now - s.t <= a_grossWinSec) sum += s.gross;
-            if (a_now - s.t <= a_maxWinSec) mx = (std::max)(mx, s.gross);
+            if (a_now - s.t > a_maxWinSec) continue;
+            float burst = 0.0f;
+            for (const BurstSample& o : a_s)
+                if (o.t >= s.t && o.t - s.t < a_burstWinSec + 1.0e-9 && a_now - o.t <= a_maxWinSec) burst += o.gross;
+            mx = (std::max)(mx, (std::max)(burst, s.gross));
         }
         a_gross = a_grossWinSec > 0.0 ? sum / static_cast<float>(a_grossWinSec) : 0.0f;
         a_maxHit = mx;

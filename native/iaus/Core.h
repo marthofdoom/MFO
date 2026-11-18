@@ -285,14 +285,18 @@ namespace MFO::Iaus {
         // with the flag off). PLACEHOLDER, not searched: `t.dyingAllyHp`.
         float dyingAllyHp = 0.25f;
         // 11-17g: bursts (single hits of 30 to 97 % of the maximum) defeat a rate-based time-to-live. The dying boost also fires when the recipient has
-        // this many of his largest recent hit left (1 = the next such hit downs him), and the heal urgency is the lower of ttl / 10 and hitsToDown / the divisor.
+        // this many of his largest recent burst left (1 = the next such burst downs him; 1.2 so a burst that nearly downs him at full health counts, Jesper 172 vs 166 =
+        // 1.036), and the heal urgency is the lower of ttl / 10 and hitsToDown / the divisor.
         // PLACEHOLDERS, not searched: `t.dyingHitsToDown`, `t.urgencyHitsDiv`.
-        float dyingHitsToDown = 1.0f;
+        float dyingHitsToDown = 1.2f;
         // 11-17g: the windows of the gross reads (Fills.cpp, Estimate::BurstReads). Sized from the cadence (principle 9): a lap is 133 ms x party (about 1.3 s for
         // ten), so 4 s holds three laps of a party of ten and the largest burst is held 8 s (still counted when the next heal lands). PLACEHOLDERS:
-        // `t.grossWindowSec`, `t.maxHitWindowSec`. Read from LiveTuning() by the worker (a stale float is one lap old, never corrupt).
+        // `t.grossWindowSec`, `t.maxHitWindowSec`. Read from LiveTuning() on the same (worker) thread that writes it. A "lap" for an ally is one SAMPLE interval
+        // (Fills kLossMinDtSec 0.10 s: every follower's snapshot samples every ally), so a volley spread over 0.2-0.4 s lands in 2-3 samples: maxHit is the largest
+        // SUM of samples inside `burstWindowSec` (PLACEHOLDER, `t.burstWindowSec`).
         float grossWindowSec = 4.0f;
         float maxHitWindowSec = 8.0f;
+        float burstWindowSec = 0.5f;
         float urgencyHitsDiv = 3.0f;
         // 11-17b: how long a (spell, foe) pair whose line of fire had a party member in it stays refused after the line cleared (a friendly stepping across the
         // line would otherwise flip the pick every lap). PLACEHOLDER: `t.fireLineKeepSec`.
