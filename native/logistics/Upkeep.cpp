@@ -796,6 +796,7 @@ namespace MFO::Logistics {
         ClearGates();         // loot M1: GATED records are per-session skips
         ClearStuckAtOrigin(); // stuck-at-origin evidence + cooldown are per-session
         g_actorDefer.clear(); // loot M1: actor-block reorder records
+        g_lastBlock.clear();  // 11-17g: previous-block ground memory is per-session
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
         TheftGate::ClearCorpseBars();   // L1: party-wide guard bars are per-session verdicts

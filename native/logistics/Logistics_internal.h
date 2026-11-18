@@ -947,6 +947,7 @@ namespace MFO::Logistics {
     // logs the ERROR + opens the episode); Cooldown gates new loot excursions; Tick runs the strict 'really stuck' check + the door rescue; Clear is the revert path.
     bool StuckAtOriginNoteBlock(RE::Actor* a_follower, RE::FormID a_target, const RE::NiPoint3& a_blockPos,
                                 Clock::time_point a_now);
+    bool StuckAtOriginRepeatsBlock(RE::FormID a_follower, const RE::NiPoint3& a_blockPos, Clock::time_point a_now);   // pure: a recent end of his within LootTuning::gateRepeatU of this point?
     void StuckAtOriginResetRun(RE::FormID a_follower);   // a pickup / non-GATED end breaks the "consecutive" run
     void StuckAtOriginTick(RE::Actor* a_follower, Clock::time_point a_now);   // every logistics service: the strict check + rescue
     bool StuckAtOriginCooldown(RE::Actor* a_follower, Clock::time_point a_now);   // pure query: loot suppressed?

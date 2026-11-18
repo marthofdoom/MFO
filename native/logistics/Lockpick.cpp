@@ -1083,12 +1083,12 @@ namespace MFO::Logistics::Lockpick {
     }
 
     // ── LP-M2: a locked DOOR at a GATED block (see the declaration) ─────────────────
-    // Which door: a LOCKED, enabled DOOR ref within kGateDoorReach of the block point S, ON THE
-    // WAY from S to the target T: its xy distance to the S->T line is at most kGateDoorLane
+    // Which door: a LOCKED, enabled DOOR ref within kGateObstacleReach of the block point S, ON THE
+    // WAY from S to the target T: its xy distance to the S->T line is at most kGateObstacleLane
     // (about one door width) and it is not behind S (its projection on S->T is at least
-    // -kGateDoorAtS). Nearest to S first. Searched in the follower's and the target's ATTACHED
+    // -kGateObstacleAtS). Nearest to S first. Searched in the follower's and the target's ATTACHED
     // parent cells (#72: the cell's own locked walk, read-only; the judge runs after the walk).
-    // kGateDoorReach: he stalls pressing into the door, so its reference (at the door's center)
+    // kGateObstacleReach: he stalls pressing into the door, so its reference (at the door's center)
     // sits within a door's width of S; 256 u is about two door widths.
     // THE LEG AIMS AT A POINT, NOT AT THE DOOR (F-L3, tier-A review of c6fc73d): kDoorStandOff
     // back from the door toward S, at S's floor height, so the path never enters the door's
@@ -1097,9 +1097,6 @@ namespace MFO::Logistics::Lockpick {
     // MFO-package road, logged here); the arrival step still targets the DOOR ref.
     bool DispatchGateDoor(RE::Actor* a_follower, int a_slot, RE::TESObjectREFR* a_target,
                           const RE::NiPoint3& a_blockPos, Clock::time_point a_now) {
-        constexpr float kGateDoorReach = 256.0f;
-        constexpr float kGateDoorAtS   = 64.0f;
-        constexpr float kGateDoorLane  = 128.0f;   // ~one door width off the S->T line
         constexpr float kDoorStandOff  = 96.0f;
         if (!a_follower || !a_target || IsDoor(a_target)) return false;   // no door-behind-a-door chains
         if (a_slot < 0 || a_slot >= Packages::kMaxLootSlots) return false;
@@ -1112,37 +1109,16 @@ namespace MFO::Logistics::Lockpick {
         if (lt < 1.0f) return false;   // no direction to judge "on the way" by
         tx /= lt;
         ty /= lt;
-        RE::ObjectRefHandle best;
-        float bestD = kGateDoorReach + 1.0f;
-        RE::TESObjectCELL* cells[2] = { a_follower->GetParentCell(), a_target->GetParentCell() };
-        if (cells[1] == cells[0]) cells[1] = nullptr;
-        for (auto* c : cells) {
-            if (!c || !c->IsAttached()) continue;
-            c->ForEachReferenceInRange(S, kGateDoorReach, [&](RE::TESObjectREFR* r_p) {
-                RE::TESObjectREFR& r = *r_p;  // upstream sync: ForEach callbacks take a pointer
-                auto* base = r.GetBaseObject();
-                if (!base || !base->Is(RE::FormType::Door) || r.IsDisabled() || r.IsMarkedForDeletion())
-                    return RE::BSContainer::ForEachResult::kContinue;
-                if (!r.IsLocked()) return RE::BSContainer::ForEachResult::kContinue;
-                const RE::NiPoint3 P = r.GetPosition();
-                const float d = P.GetDistance(S);
-                if (d > kGateDoorReach || d >= bestD) return RE::BSContainer::ForEachResult::kContinue;
-                const float px = P.x - S.x, py = P.y - S.y;
-                const float along = px * tx + py * ty;                  // projection on S->T
-                const float perp  = std::fabs(px * ty - py * tx);       // distance off the S->T line
-                if (along < -kGateDoorAtS || perp > kGateDoorLane)
-                    return RE::BSContainer::ForEachResult::kContinue;   // behind him, or off the way
-                bestD = d;
-                best  = r.GetHandle();
-                return RE::BSContainer::ForEachResult::kContinue;
-            });
-        }
+        // ONE reader with the GATED probe (LootTravel_internal.h FindGateObstacle, field 11-17g review F4): reach, both cells, lane, locked flag.
+        const GateObstacle obstacle = FindGateObstacle(a_follower, a_target, S);
+        const RE::ObjectRefHandle best = obstacle.door;
+        const float bestD = obstacle.doorD;
         auto  dptr = best.get();
         auto* door = dptr.get();
         if (!door) {
             spdlog::info("[lockpick] {:08X}: GATED on the way to {:08X} with no locked door within {:.0f} u of the "
                          "block and {:.0f} u of the way -- a gate, not a lock (M1's re-admit applies)", fid,
-                         a_target->GetFormID(), kGateDoorReach, kGateDoorLane);
+                         a_target->GetFormID(), kGateObstacleReach, kGateObstacleLane);
             return false;
         }
         // Batch L: this door IS the gate (M1's record) -- whether or not he may pick it -- so only
