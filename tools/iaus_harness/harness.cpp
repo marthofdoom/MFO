@@ -2003,18 +2003,19 @@ namespace {
             // urgency: x = min(ttl / 10, hitsToDown / 3). 50/60 over 3 = 0.28 is the lower read; infinite ttl alone would be Off
             Candidate lowH = c60; lowH.f.recipientHitsToDown = 1.5f; Candidate highH = c60; highH.f.recipientHitsToDown = 9.0f;
             lowH.f.recipientTtl = highH.f.recipientTtl = kInf;
-            Check(sc(lowH) != sc(highH), "burst: the heal urgency reads hits-to-down when the time-to-live is unknown");
+            Check(sc(lowH) > sc(highH), "burst: the heal urgency is higher the fewer hits he has left (hits-to-down 1.5 vs 9, time-to-live unknown)");
             Candidate ttlOnly = c60; ttlOnly.f.recipientHitsToDown = kInf; ttlOnly.f.recipientTtl = 20.0f;
             Candidate both = ttlOnly; both.f.recipientHitsToDown = 1.5f;
-            Check(sc(both) > sc(ttlOnly) || sc(both) == sc(ttlOnly), "burst: a close hits-to-down never lowers the heal below the time-to-live read alone");
+            Check(sc(both) > sc(ttlOnly), "burst: a close hits-to-down raises the heal above the time-to-live read alone (min of the two)");
             // the ally fallback: under t.dyingAllyHp the boost fires with nothing known
             Snapshot low = MageFight(); for (auto& a : low.allies) if (a.isPlayer) a.hp = 20.0f;
             Snapshot mid = MageFight(); for (auto& a : mid.allies) if (a.isPlayer) a.hp = 40.0f;
             const Candidate cl = healOnPlayer(low), cm = healOnPlayer(mid);
-            Candidate cl2 = cl; cl2.f.recipientHp = 0.40f;
-            Check(cl.form == 0x12FD2 && !cl.f.recipientSelf && sc(cl) > sc(cl2) * 0.0f && cm.f.recipientHp > t.dyingAllyHp, "burst: the ally fallback reads recipientHp, not recipientSelf");
-            Candidate hiA = cl; hiA.f.recipientHp = 0.30f;
-            Check(sc(cl) != sc(hiA), "burst: an ally under t.dyingAllyHp (20%) scores differently from one at 30% (the dying boost, he is not recipientSelf)");
+            Tuning tNoAlly = t; tNoAlly.dyingAllyHp = 0.0f;
+            Check(cl.form == 0x12FD2 && !cl.f.recipientSelf && cm.f.recipientHp > t.dyingAllyHp, "burst: the ally fallback reads recipientHp, not recipientSelf");
+            Check(ScoreOne(cl, Mind{}, Profile{}, t, 3, 0.0f, nullptr) > ScoreOne(cl, Mind{}, Profile{}, tNoAlly, 3, 0.0f, nullptr) * 1.3f,
+                  "burst: an ally at 20% (under t.dyingAllyHp) scores x1.4 with the dying boost, ttl unknown (off with t.dyingAllyHp = 0)");
+            Check(ScoreOne(cm, Mind{}, Profile{}, t, 3, 0.0f, nullptr) == ScoreOne(cm, Mind{}, Profile{}, tNoAlly, 3, 0.0f, nullptr), "burst: an ally at 40% has no fallback boost");
             // gross vs net: a heal stream cancels the observed loss; the gross rate does not
             Snapshot gross = MageFight();
             for (auto& a : gross.allies) if (a.isPlayer) { a.lossPerSec = 0.0f; a.grossPerSec = 25.0f; }
@@ -2026,6 +2027,31 @@ namespace {
             Check(pcn && !std::isfinite(Estimate::Ttl(pcn->hp, Estimate::IncomingOn(netOnly, *pcn))), "gross rate: nothing measured stays unknown");
             const Candidate cg = healOnPlayer(gross);
             Check(cg.form == 0x12FD2 && cg.f.recipientTtl < 5.0f, "gross rate: the recipient's time-to-live comes from the gross rate (dying under 5 s)");
+        }
+        // 3c. 11-17g review F2: the lap maths (Estimate::LapGross / BurstReads, the very code Fills.cpp runs).
+        {
+            // Jesper: 166 health in FIVE events from one archer in one lap = ONE burst of 166, not five of 33
+            const float volley = Estimate::LapGross(166.0f, 5, 5 * 27.0f);
+            Check(volley == 166.0f, "lap gross: a volley of 5 events that took 166 is a lap of 166 (the drop wins over the attackers' estimates 135)");
+            Estimate::BurstSample a{ 10.0, volley };
+            float gross = 0.0f, mx = 0.0f;
+            Estimate::BurstReads({ a }, 10.5, 4.0, 8.0, gross, mx);
+            Check(mx == 166.0f && gross == 166.0f / 4.0f, "lap gross: the largest recent burst is the whole lap (166), not the per-event split; the rate is over the 4 s window");
+            Combatant jes = Actor("Jesper", 5, 172, 172, 0, 0); jes.maxHit = mx;
+            Check(Estimate::HitsToDown(172.0f, jes) > 1.0f && Estimate::HitsToDown(100.0f, jes) < 1.0f, "lap gross: 172 health is ~1.04 bursts of 166, 100 health is under one");
+            // a heal lands in the same lap as a hit: net drop 0, one event of 27: the floor stands
+            Check(Estimate::LapGross(0.0f, 1, 27.0f) == 27.0f, "lap gross: a heal that cancels the net drop cannot cancel a lap with a hit event below the attackers' estimate");
+            // no event this lap (it landed in the neighbouring lap): the drop is still recorded as a burst
+            Check(Estimate::LapGross(120.0f, 0, 0.0f) == 120.0f, "lap gross: a drop-only lap records the burst (no event count needed)");
+            Estimate::BurstReads({ Estimate::BurstSample{ 10.0, Estimate::LapGross(120.0f, 0, 0.0f) } }, 10.2, 4.0, 8.0, gross, mx);
+            Check(mx == 120.0f, "lap gross: a drop-only lap reaches maxHit");
+            // windows: a burst 6 s old is out of the rate (4 s) but in the maximum (8 s); 9 s old is out of both
+            Estimate::BurstReads({ Estimate::BurstSample{ 4.0, 100.0f } }, 10.0, 4.0, 8.0, gross, mx);
+            Check(gross == 0.0f && mx == 100.0f, "lap gross: 6 s old = out of the 4 s rate, still the 8 s maximum");
+            Estimate::BurstReads({ Estimate::BurstSample{ 1.0, 100.0f } }, 10.0, 4.0, 8.0, gross, mx);
+            Check(gross == 0.0f && mx == 0.0f, "lap gross: 9 s old = out of both");
+            // a friendly heal event adds nothing: the sink drops party-caused events (Fills.cpp), so no events and no floor: net drop only (0 here)
+            Check(Estimate::LapGross(0.0f, 0, 0.0f) == 0.0f, "lap gross: a party heal event (dropped by the sink) adds nothing");
         }
         // 4. The line of fire.
         {

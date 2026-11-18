@@ -5,6 +5,8 @@
 #include "Followers.h"
 #include "MainThread.h"
 #include "Runtime.h"
+#include "iaus/Core.h"
+#include "iaus/Estimate.h"
 #include "iaus/Reach.h"
 #include "iaus/ReachBook.h"
 #include "iaus/SwingSeq.h"
@@ -70,12 +72,9 @@ namespace MFO::Iaus::Fills {
         constexpr double kHitKeepSec   = 10.0;   // a recorded hit whose target no lap sampled for this long is dropped (counted)
 
         // 11-17g (field heal-timing): the GROSS damage an actor takes, from the hit sink's own record that he was hit. The net drop above cancels under a heal
-        // stream and a burst is one hit of 30 to 97 % of his maximum. Sized from the cadence (principle 9): a lap is 133 ms x party (about 1.3 s for ten), so
-        // 4 s holds three laps of a party of ten and the largest hit is held 8 s (long enough to still count when the next heal lands). PLACEHOLDERS, not searched.
-        constexpr double kGrossWindowSec  = 4.0;   // Combatant::grossPerSec = hits over this window / this window
-        constexpr double kMaxHitWindowSec = 8.0;   // Combatant::maxHit = the largest single hit inside this window
+        // stream and a burst is a volley of 30 to 97 % of his maximum in one lap. The windows are Tuning::grossWindowSec / maxHitWindowSec (Core.h).
         constexpr std::size_t kTakenCap   = 32;    // hits remembered per target between two samples (the sink side)
-        struct Sample { double t = 0.0; float gross = 0.0f; float perHit = 0.0f; };   // one lap's gross damage; perHit 0 = no hit event in it
+        using Sample = Estimate::BurstSample;      // one lap's gross damage (the maths is Estimate::LapGross / BurstReads: pure, run by the harness)
 
         struct Track {
             double t = 0.0;            // when hp was sampled (0 = never)
@@ -188,7 +187,10 @@ namespace MFO::Iaus::Fills {
                 // A follower hit something or was hit (the any-thread FormID mirror, #74; never the live lists).
                 const bool byFollower = r.cause != 0 && Followers::IsTrackedFast(r.cause);
                 const bool targetMine = Followers::IsTrackedFast(r.target);
-                const bool taken = loss && (targetMine || target->IsPlayerRef());   // 11-17g: the player is a heal recipient too
+                // 11-17g: the player is a heal recipient too. NOT a hit a party member or the player caused (review F1): party heals and buffs raise TESHitEvent on allies
+                // (Close Wounds, Frost Cloak ...) and would floor with the healer's own attack estimate; real friendly fire still shows through the net drop.
+                const bool partyCause = byFollower || (a_ev->cause && a_ev->cause->IsPlayerRef());
+                const bool taken = loss && !partyCause && (targetMine || target->IsPlayerRef());
                 if (!byFollower && !targetMine && !taken) return RE::BSEventNotifyControl::kContinue;
                 r.t          = NowSec();
                 r.source     = a_ev->source;
@@ -452,7 +454,7 @@ namespace MFO::Iaus::Fills {
     void RegisterHitSink() {
         if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
-            spdlog::info("[iaus-fill] hit sink registered (live only while bIausFillProbe = 1 or bIausReachLearn = 1)");
+            spdlog::info("[iaus-fill] hit sink registered (live only while bIausFillProbe = 1, bIausFillLoss = 1 or bIausReachLearn = 1)");
         }
     }
 
@@ -548,22 +550,17 @@ namespace MFO::Iaus::Fills {
                 tr.loss += (lost / static_cast<float>(dt) - tr.loss) * k;
                 if (!std::isfinite(tr.loss) || tr.loss < 0.0f) tr.loss = 0.0f;
                 // GROSS: a lap with a hit event did at least what the attackers' estimates say (a heal landing in the same lap cannot cancel it below that)
-                const float gross = tr.pendN > 0 ? (std::max)(lost, tr.pendFloor) : lost;
-                if (std::isfinite(gross) && gross > 0.0f)
-                    tr.samples.push_back(Sample{ m_now, gross, tr.pendN > 0 ? gross / static_cast<float>(tr.pendN) : 0.0f });
+                const float gross = Estimate::LapGross(lost, tr.pendN, tr.pendFloor);
+                if (std::isfinite(gross) && gross > 0.0f) tr.samples.push_back(Sample{ m_now, gross });
                 tr.pendN = 0; tr.pendFloor = 0.0f;
                 tr.t = m_now; tr.hp = a_u.hp;
             }
         }
-        std::erase_if(tr.samples, [&](const Sample& s) { return m_now - s.t > kMaxHitWindowSec; });
-        float grossSum = 0.0f, maxHit = 0.0f;
-        for (const Sample& s : tr.samples) {
-            if (m_now - s.t <= kGrossWindowSec) grossSum += s.gross;
-            maxHit = (std::max)(maxHit, s.perHit);
-        }
+        const Tuning& lt = LiveTuning();
+        const double grossWin = lt.grossWindowSec > 0.0f ? lt.grossWindowSec : 4.0, maxWin = lt.maxHitWindowSec > 0.0f ? lt.maxHitWindowSec : 8.0;
+        std::erase_if(tr.samples, [&](const Sample& s) { return m_now - s.t > (std::max)(grossWin, maxWin); });
         e.loss = tr.loss;
-        e.gross = grossSum / static_cast<float>(kGrossWindowSec);
-        e.maxHit = maxHit;
+        Estimate::BurstReads(tr.samples, m_now, grossWin, maxWin, e.gross, e.maxHit);
 
         if (m_probe && a_role == Role::Foe) {
             if (e.casting && !tr.casting) {

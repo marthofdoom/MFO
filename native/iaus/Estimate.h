@@ -15,7 +15,7 @@
 //   Combatant::magicResist  kResistMagic, points
 //   Combatant::lossPerSec   health it has been LOSING per second, net of heals (observed: Fills.cpp)
 //   Combatant::grossPerSec  health it has been HIT for per second, heals not subtracted (Fills.cpp, from the hit sink)
-//   Combatant::maxHit       the largest single hit it took lately (Fills.cpp)
+//   Combatant::maxHit       the largest burst (one lap's gross damage) it took lately (Fills.cpp)
 //   SpellEntry::damage/heal expected health damage / healing of one cast on an unresisting target, after perks
 // The formulas are the engine's (Docs/research/2026-11/iaus-i8-damage-research.md 2.1 - 2.4).
 //
@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace MFO::Iaus::Estimate {
 
@@ -78,7 +79,29 @@ namespace MFO::Iaus::Estimate {
         return (std::max)(sum, (std::max)(Pos(a_who.lossPerSec), Pos(a_who.grossPerSec)));
     }
 
-    // 11-17g (field Jesper: 172 -> 5.6 health in 0.13 s, the per-hit estimate 6x under): how many of the largest recent hit the recipient has health
+    // 11-17g, review F2: one sampled lap's GROSS damage and the window reads over those laps. PURE, so the harness runs the very code the game does (Fills.cpp calls these).
+    //   a_lost       the net health drop since the previous sample (heals already subtracted)
+    //   a_events     hit events the sink recorded on him since then;  a_floor the least they did (their attackers' own estimates, summed)
+    // A lap with hit events did at least what the attackers' estimates say (a heal landing in the same lap cannot cancel it below that); a lap with none (a
+    // poison tick, or an event that landed in the neighbouring lap: the sink runs off the worker) is its net drop.
+    [[nodiscard]] inline float LapGross(float a_lost, unsigned a_events, float a_floor) {
+        const float lost = Pos(a_lost);
+        return a_events > 0 ? (std::max)(lost, Pos(a_floor)) : lost;
+    }
+    struct BurstSample { double t = 0.0; float gross = 0.0f; };   // one lap's gross damage
+    // grossPerSec = the gross of the laps inside a_grossWinSec / that window; maxHit = the LARGEST single lap's gross inside a_maxWinSec. A volley (five events from
+    // one archer in one lap) is ONE burst: the event count is never used to split it (Jesper: 166 health in 5 events, a per-event split read 33).
+    inline void BurstReads(const std::vector<BurstSample>& a_s, double a_now, double a_grossWinSec, double a_maxWinSec, float& a_gross, float& a_maxHit) {
+        float sum = 0.0f, mx = 0.0f;
+        for (const BurstSample& s : a_s) {
+            if (a_now - s.t <= a_grossWinSec) sum += s.gross;
+            if (a_now - s.t <= a_maxWinSec) mx = (std::max)(mx, s.gross);
+        }
+        a_gross = a_grossWinSec > 0.0 ? sum / static_cast<float>(a_grossWinSec) : 0.0f;
+        a_maxHit = mx;
+    }
+
+    // 11-17g (field Jesper: 172 -> 5.6 health in 0.13 s, the per-hit estimate 6x under): how many of the largest recent BURST (one lap's gross damage) the recipient has health
     // for. 1 = the next such hit downs him. kUnknown when no hit has been seen (the time-to-live is then the only fact). ONE reader: the dying boost and
     // the heal urgency (Catalogue.cpp) both read it through Facts::recipientHitsToDown.
     [[nodiscard]] inline float HitsToDown(float a_health, const Combatant& a_who) {

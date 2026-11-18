@@ -288,6 +288,11 @@ namespace MFO::Iaus {
         // this many of his largest recent hit left (1 = the next such hit downs him), and the heal urgency is the lower of ttl / 10 and hitsToDown / the divisor.
         // PLACEHOLDERS, not searched: `t.dyingHitsToDown`, `t.urgencyHitsDiv`.
         float dyingHitsToDown = 1.0f;
+        // 11-17g: the windows of the gross reads (Fills.cpp, Estimate::BurstReads). Sized from the cadence (principle 9): a lap is 133 ms x party (about 1.3 s for
+        // ten), so 4 s holds three laps of a party of ten and the largest burst is held 8 s (still counted when the next heal lands). PLACEHOLDERS:
+        // `t.grossWindowSec`, `t.maxHitWindowSec`. Read from LiveTuning() by the worker (a stale float is one lap old, never corrupt).
+        float grossWindowSec = 4.0f;
+        float maxHitWindowSec = 8.0f;
         float urgencyHitsDiv = 3.0f;
         // 11-17b: how long a (spell, foe) pair whose line of fire had a party member in it stays refused after the line cleared (a friendly stepping across the
         // line would otherwise flip the pick every lap). PLACEHOLDER: `t.fireLineKeepSec`.
@@ -480,7 +485,7 @@ namespace MFO::Iaus {
         float tauntTtl = kInf;            // ... with this foe on him as well (taunt)
         float playerTtl = kInf;           // the player's
         float recipientTtl = kInf;        // the heal recipient's
-        float recipientHitsToDown = kInf; // 11-17g: his health / the largest hit he took lately (Estimate::HitsToDown); +inf = no hit seen
+        float recipientHitsToDown = kInf; // 11-17g: his health / the largest burst (one lap) he took lately (Estimate::HitsToDown); +inf = no hit seen
         float chase = 0.0f;               // melee attack: how far he may chase (Snapshot::chaseCap); 0 = not a chase
         float tauntChance = -1.0f;        // taunt: the chance it works on this foe (Estimate::TauntChance); < 0 = unknown
         bool  recipientBeingHealed = false;   // another party member's heal is in flight on the recipient
