@@ -94,7 +94,14 @@ class CheckWorld(unittest.TestCase):   # review F8
 
 class Gap(unittest.TestCase):
     def test_classify(self):
-        self.assertEqual(T.classify("attack", "ext:bash", "ext", {"bash": 5})[0], "d")          # FIDELITY wins
+        self.assertEqual(T.FIDELITY, {})                                                          # 11-17: the oracle's bash and guard run under the game's cooldowns
+        self.assertEqual(T.classify("attack", "ext:bash", "ext", {"bash": 5})[0], "b")          # the family exists, its gate did not offer it
+        self.assertEqual(T.classify("attack", "ext:bash", "ext", {})[0], "c")
+        T.FIDELITY["ext:bash"] = "x"
+        try:
+            self.assertEqual(T.classify("attack", "ext:bash", "ext", {"bash": 5})[0], "d")      # a FIDELITY row wins
+        finally:
+            T.FIDELITY.clear()
         self.assertEqual(T.classify("attack", "ext:to_player", "ext", {"regroup": 0})[0], "c")  # a family never offered
         self.assertEqual(T.classify("attack", "ext:hide", "ext", {"disengage": 3})[0], "b")     # offered elsewhere, gated here
         self.assertEqual(T.classify("attack", "ext:get_sight", "ext", {})[0], "c")              # no family at all

@@ -54,6 +54,14 @@ namespace Sim {
         for (int t = 0; t < 3; ++t) best = std::max(best, double(w->m[static_cast<std::size_t>(t)][0]) / buy[t]);
         return best;
     }
+    // Can he spend magicka at all: a class spell in his book that his gate lets him cast (Generate.cpp: on-class or from a mastered class;
+    // an unresolved gate gates nothing). A scroll and a staff cost none. Utility's "magicka left" term is 1 (full) for anyone else: before
+    // review F3 of 11-17 it paid a Knight for a full pool he cannot use, and his magicka potion (worth 0 in PotionWorth.h) was free utility.
+    [[nodiscard]] inline bool Casts(const Ctl& c) {
+        if (c.gate.resolved && !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return false;
+        for (const SpellEntry& e : c.book.entries) if (e.source == SpellSource::Spell && e.cost > 0.0f) return true;
+        return false;
+    }
     inline double Utility(const Fight& F, bool chargePotions = true) {
         double foeHp = 0; for (const Body& x : F.b) if (x.role == Role::Foe && x.alive && x.airUntil >= 0) foeHp += std::max(0.0f, x.c.hp);
         for (const Spawn& s : F.late) foeHp += s.spec->hp;
@@ -65,8 +73,8 @@ namespace Sim {
         for (const Ctl& c : F.ctl) { const Body& x = F.b[static_cast<std::size_t>(c.body)];
             partyHp += Fight::Up(x) ? x.c.hp / std::max(1.0f, x.c.hpMax) : 0.0;
             const int pots = c.book.kit.potionsHealth + c.book.kit.potionsMagicka + c.book.kit.potionsStamina;
-            const double mpf = x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0; mp += mpf; if (chargePotions) { cost += PotionCost(c); if (g_consumables) cost += GoldJOf(c.worth) * c.consumedGold; }
-            res += 0.5 * mpf + 0.5 * (c.potions0 > 0 ? double(pots) / c.potions0 : 1.0); }
+            const double mpf = x.c.mpMax > 0 && Casts(c) ? x.c.mp / x.c.mpMax : 1.0; mp += mpf; /* review F3 (11-17): magicka left is a resource only for a follower who can spend it */ if (chargePotions) { cost += PotionCost(c); if (g_consumables) cost += GoldJOf(c.worth) * c.consumedGold; }
+            res += 0.5 * (x.c.mpMax > 0 ? x.c.mp / x.c.mpMax : 1.0) + 0.5 * (c.potions0 > 0 ? double(pots) / c.potions0 : 1.0); }   // the legacy rate keeps its own (raw) magicka term: it exists for comparisons with old numbers only
         const double resTerm = !g_utilResources ? 5.0 : g_potLegacy ? 5.0 * res / nf : 2.5 * mp / nf + 2.5 - cost;
         return 50.0 * removed + (win ? 15.0 * (1.0 - std::min(1.0, F.now / F.maxSec)) : 0.0) + 15.0 * pl.c.hp / std::max(1.0f, pl.c.hpMax)
              + 10.0 * (1.0 - std::min(1.0, double(F.t.partyDowns) / nf)) + 5.0 * partyHp / nf + resTerm;
@@ -96,46 +104,48 @@ namespace Sim {
         return true;
     }
 
-    // What the extended set offers this follower right now.
+    // A family's own cooldown slot (Core.h CooldownId: family, posture, form; never the target), and whether it has run out. The extended
+    // block and bash write and read the SAME slot as the catalogue's Block and Bash candidates (marth 11-17: "Bash/block cooldowns bind").
+    [[nodiscard]] inline Key FamilyKey(Family f) { Candidate k; k.family = f; return KeyOf(k); }
+    [[nodiscard]] inline bool Cooled(const Fight& F, const Ctl& c, Family f, float sec) {
+        const auto it = c.firedAt.find(CooldownId(FamilyKey(f))); return it == c.firedAt.end() || F.now - it->second >= static_cast<double>(sec); }
+    [[nodiscard]] inline float BlockCooldown(const Ctl& c) { return c.gate.blockCooldownSec > 0.0f ? c.gate.blockCooldownSec : std::max(0.0f, ActiveTuning()->blockCooldownSec); }   // Generate.cpp: the row's, else the tuning's
+
+    // What the extended set offers this follower right now. EVERY target an action can take is offered (review F5 of 11-17: no
+    // "nearest foe only", no "strongest foe only", no "first healer only"). What remains here is physics, never a choice made for him:
+    //   a step or a sprint away needs a foe within 900 units to step away from; a move to the player or a healer needs him to be away from
+    //   them (350 / 300 units); a guard or a bash needs the blade in hand, a bash a foe inside his reach and 20 stamina (Policy.h Fire);
+    //   a scroll needs a target it can work on that he sees, a heal scroll someone who is hurt; get_sight / clear_line act on the foe he
+    //   is fighting (they move HIM to a line on HIS target; another target is the Attack candidate's job).
+    // THE GAME'S OWN RUNS ARE NOT HERE (marth 11-17: "Hide/flee gates bind"): card G3's hide run and flee are the catalogue's Disengage
+    // candidates, generated behind the game's own gates (a sneak class a foe has found; 30% health and threatened). Until 11-17 the oracle
+    // had its own ungated copies (Ext::Hide, Ext::Flee: kept in the enum and in Apply for old logs, offered by nothing).
+    // DISENGAGING IS HIS TO CHOOSE (marth 11-17: "It may disengage whenever it wants. That's not flee for its purposes"): the sprint away
+    // (Ext::SprintBack) has no situation gate. It is still an ability of a class with Flag::kDisengage only (ClassRefuses).
     inline void ExtOptions(const Fight& F, int ci, std::vector<Opt>& out) {
         const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)];
-        const Body* near = nullptr; float nd = 1e9f; const Body* onMe = nullptr; const Body* casting = nullptr;
-        for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o)) continue; const float d = Fight::Dist(x, o); if (d < nd) { nd = d; near = &o; }
-            if (o.c.targetId == x.c.id && d < F.Reach(o) * 1.6f) onMe = &o; if (o.act == Act::Cast && o.hitAt >= 0 && d < F.Reach(x)) casting = &o; }
-        if (!near) return;
-        // Card G3's two runs as a PERSON would use them, free of the generator's SITUATION gates ("a foe has found him", the 30% health
-        // line): a hide run for anyone who sneaks and is detected, a flee for anyone with a foe on him and under 60% health. The road
-        // and the hard cooldown still bind (a cooldown binds a person too). What the oracle gains with them is those gates' cost.
-        // WHO may run is the class's own flag: ClassRefuses drops a hide of a class that is no sneak class and any run of a class
-        // without Flag::kDisengage (marth 11-17: the oracle only has the class's abilities).
-        if (g_stealth >= 3 && c.runPhase == 0) {
-            const auto it = c.firedAt.find(CooldownId(DisengageKey())); const bool cool = it == c.firedAt.end() || F.now - it->second >= static_cast<double>(ActiveTuning()->disengageCooldownSec);
-            float gx = 0, gy = 0;
-            if (cool && x.stealthy && !c.stanceHeld && F.GroupDetects(x) && F.ConcealPick(x, c, false, gx, gy)) out.push_back({ nullptr, Ext::Hide, -1, 0 });
-            if (cool && !x.stealthy && onMe && x.c.hp < 0.6f * x.c.hpMax && F.ConcealPick(x, c, true, gx, gy)) out.push_back({ nullptr, Ext::Flee, -1, 0 });
-        }
-        if (nd < 900.0f) { out.push_back({ nullptr, Ext::StepBack, -1, near->c.id }); if (x.c.sp > 20.0f) out.push_back({ nullptr, Ext::SprintBack, -1, near->c.id }); }
+        bool anyFoe = false; for (const Body& o : F.b) anyFoe |= o.role == Role::Foe && Fight::Up(o);
+        if (!anyFoe) return;
+        for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o) || Fight::Dist(x, o) >= 900.0f) continue;
+            out.push_back({ nullptr, Ext::StepBack, -1, o.c.id }); if (x.c.sp > 20.0f) out.push_back({ nullptr, Ext::SprintBack, -1, o.c.id }); }
         if (Fight::Dist(x, F.b[0]) > 350.0f && F.b[0].alive) out.push_back({ nullptr, Ext::ToPlayer, -1, 0 });
         for (const Ctl& o : F.ctl) { if (&o == &c) continue; const Body& ob = F.b[static_cast<std::size_t>(o.body)]; if (!Fight::Up(ob) || Fight::Dist(x, ob) < 300.0f) continue;
-            bool heals = false; for (const SimSpell& s : o.build->spells) heals |= s.healOther; if (heals && o.gate.spellsOnClass) { out.push_back({ nullptr, Ext::ToHealer, -1, ob.c.id }); break; } }
+            bool heals = false; for (const SimSpell& s : o.build->spells) heals |= s.healOther; if (heals && o.gate.spellsOnClass) out.push_back({ nullptr, Ext::ToHealer, -1, ob.c.id }); }
         const Body* tg = F.Find(c.steer ? c.steer : x.c.targetId);
         if (tg && Fight::Up(*tg) && !F.Sees(x, *tg) && (c.drawn == PostureKind::Bow || c.drawn == PostureKind::Staff || c.gate.spellsOnClass)) out.push_back({ nullptr, Ext::GetSight, -1, tg->c.id });
         // SIM V3 (lof): a friend stands in his line to the target and his hands are on spells: a short side step to a clear line (the catalogue has no family for it: design note N4)
         if (g_v3.lof && tg && Fight::Up(*tg) && F.Sees(x, *tg) && c.gate.spellsOnClass && (c.drawn == PostureKind::None || c.drawn == PostureKind::Staff) && F.LofBlocker(x, *tg, 0.0f)) out.push_back({ nullptr, Ext::ClearLine, -1, tg->c.id });
         const bool blade = c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver;
-        if (onMe && blade) out.push_back({ nullptr, Ext::Block, -1, onMe->c.id });
-        if (blade && x.c.sp >= 20.0f) { if (casting) out.push_back({ nullptr, Ext::Bash, -1, casting->c.id }); else if (onMe && nd < F.Reach(x)) out.push_back({ nullptr, Ext::Bash, -1, onMe->c.id }); }
-        if (c.gate.scrollUser) for (std::size_t i = 0; i < c.book.entries.size(); ++i) {   // a scroll: on the strongest foe, the foe on the player, or the most hurt friend
+        if (blade && F.now >= c.blockRestUntil && Cooled(F, c, Family::Block, BlockCooldown(c))) out.push_back({ nullptr, Ext::Block, -1, 0 });   // the guard has no target
+        if (blade && x.c.sp >= 20.0f && Cooled(F, c, Family::Bash, std::max(0.0f, ActiveTuning()->bashCooldownSec)))
+            for (const Body& o : F.b) if (o.role == Role::Foe && Fight::Up(o) && Fight::Dist(x, o) <= F.Reach(x) * 1.1f) out.push_back({ nullptr, Ext::Bash, -1, o.c.id });
+        if (c.gate.scrollUser) for (std::size_t i = 0; i < c.book.entries.size(); ++i) {   // a scroll: on every foe it can work on, every hurt friend, or himself
             const SpellEntry& e = c.book.entries[i]; if (e.source != SpellSource::Scroll || e.count <= 0) continue;
             const SimSpell& s = c.build->spells[i];
             if (s.e.nature == Prune::Nature::Offense || s.ctrl) {
-                const Body* big = nullptr; const Body* onP = nullptr;
-                for (const Body& o : F.b) { if (o.role != Role::Foe || !Fight::Up(o) || !F.Sees(x, o) || F.WillWork(s, o) == Tri::No) continue; if (!big || o.c.hp > big->c.hp) big = &o; if (o.c.targetId == F.b[0].c.id) onP = &o; }
-                if (big) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), big->c.id });
-                if (onP && onP != big) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), onP->c.id });
+                for (const Body& o : F.b) if (o.role == Role::Foe && Fight::Up(o) && F.Sees(x, o) && F.WillWork(s, o) != Tri::No) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), o.c.id });
             } else if (s.e.nature == Prune::Nature::Heal) {
-                const Body* hurt = nullptr; for (const Body& o : F.b) if (o.Party() && o.role != Role::Summon && o.alive && (s.healOther || &o == &x) && (!hurt || o.c.hp / o.c.hpMax < hurt->c.hp / hurt->c.hpMax)) hurt = &o;
-                if (hurt && hurt->c.hp < 0.7f * hurt->c.hpMax) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), hurt->c.id });
+                for (const Body& o : F.b) if (o.Party() && o.role != Role::Summon && o.alive && (s.healOther || &o == &x) && o.c.hp < o.c.hpMax) out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), o.c.id });
             } else out.push_back({ nullptr, Ext::Scroll, static_cast<int>(i), x.c.id });
         }
     }
@@ -147,12 +157,16 @@ namespace Sim {
     // class's weapon set (KitChoice). An unresolved gate (no class known) gates nothing, as in the game (Snapshot.h ClassGate::resolved).
     //   catalogue candidate   the generator already holds every family to the gate (Generate.cpp); each line below RE-CHECKS the same bit, so
     //                         a refusal here is a generator leak and is counted, never silently dropped ("cat:" reasons, expected 0)
-    //   Ext::Block / Bash     only with the shield or a melee weapon of the class's weapon set in hand
+    //   Ext::Block            only a class with a Block default row (ClassGate::block: Generate.cpp raises a guard for no one else; review F2).
+    //                         It IS that row's guard (Policy.h Fire, Family::Block: the Harbinger hold and its rest) under that row's cooldown
+    //   Ext::Bash             only with the shield or a melee weapon of the class's weapon set in hand, under Tuning::bashCooldownSec
+    //   Ext::SprintBack       only a class with Flag::kDisengage (marth 11-17: he may disengage whenever he wants, as a class that can)
     //   Ext::Scroll           only a scroll user (ruling Q36: ClassGate::scrollUser) and only a scroll he carries
-    //   Ext::Hide             only a sneak class with Flag::kDisengage (card G3's hide run is theirs: Generate.cpp `hide`)
-    //   Ext::Flee             only a class with Flag::kDisengage (the Retreat / Disengage families' own gate)
+    //   Ext::Hide / Flee      not offered since 11-17 (the catalogue's Disengage candidates are the game's runs behind the game's gates). The
+    //                         lines below state who they belong to all the same: hide a sneak class with Flag::kDisengage; flee a class with
+    //                         the flag that is no sneak class, tree ON (Generate.cpp `hide` / `flee`; review F4)
     //   potions               no class gate exists in the game (ClassGate has none: every follower drinks what he carries), so none here
-    //   REPOSITIONING         Ext::StepBack / SprintBack / ToPlayer / ToHealer / GetSight / ClearLine, and the catalogue's Regroup / GiveGround /
+    //   REPOSITIONING         Ext::StepBack / ToPlayer / ToHealer / GetSight / ClearLine, and the catalogue's Regroup / GiveGround /
     //                         BackOff / Step: ALWAYS a class ability. Movement is not an ability (coordinator brief 11-17). The class's written
     //                         rulings may still forbid a move (RulingRefuses: kPsNoRetreat, kPsBackOnly, kPsNearPlayer).
     // To add an ability rule: one line here. To add an Ext action: its enum, its ExtOptions offer, its Apply case and its line here.
@@ -162,11 +176,12 @@ namespace Sim {
         const bool blade = x.spec->shield || (g.weaponMelee && x.spec->melee.Has());   // the shield, or a melee weapon of the class set
         switch (o.ext) {
         case Ext::None: break;
-        case Ext::Block: return blade ? nullptr : "ext:block:no shield or class melee weapon";
+        case Ext::Block: return !g.block ? "ext:block:class has no Block row" : blade ? nullptr : "ext:block:no shield or class melee weapon";
+        case Ext::SprintBack: return g.disengage ? nullptr : "ext:sprint_back:class has no disengage";
         case Ext::Bash:  return blade ? nullptr : "ext:bash:no shield or class melee weapon";
         case Ext::Scroll: return !g.scrollUser ? "ext:scroll:not a scroll user" : (o.idx < 0 || static_cast<std::size_t>(o.idx) >= c.book.entries.size() || c.book.entries[static_cast<std::size_t>(o.idx)].source != SpellSource::Scroll) ? "ext:scroll:not a scroll he carries" : nullptr;
         case Ext::Hide: return !g.disengage ? "ext:hide:class has no disengage" : !(c.sneakClass || g.sneakClass) ? "ext:hide:not a sneak class" : nullptr;
-        case Ext::Flee: return g.disengage ? nullptr : "ext:flee:class has no disengage";
+        case Ext::Flee: return !g.disengage ? "ext:flee:class has no disengage" : (!g.treeOn || c.sneakClass || g.sneakClass) ? "ext:flee:the game's flee is a tree-ON class that is no sneak class" : nullptr;
         default: return nullptr;   // repositioning: movement is not an ability
         }
         const Candidate* k = o.k; if (!k) return nullptr;   // idle: his own AI
@@ -250,7 +265,7 @@ namespace Sim {
     //            and the rule before 11-17 was K = 8): never a tuning setting; the results file records it.
     //   commit   how long a rollout HOLDS the option before the base policy takes over again (an attack order, a retreat, his own AI). It is
     //            part of the rollout MODEL, not a budget: the oracle itself is asked again at his next decision point.
-    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true; };
+    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true, split = true; };
 
     // One-sided Student-t critical value at p for n paired samples (df = n - 1): the Cornish-Fisher expansion about the normal quantile
     // (4.76 at n = 8 against the table's 4.785, 3.73 at 16, 3.37 at 32, 3.12 at 256 for p = 0.001). n < 2 has no variance: +infinity.
@@ -322,9 +337,12 @@ namespace Sim {
                 return false; }
             case Ext::Hide: case Ext::Flee: { const bool fl = o.ext == Ext::Flee; float gx = 0, gy = 0; if (c.runPhase != 0 || !G.ConcealPick(x, c, fl, gx, gy)) return false;
                 c.pick.valid = true; c.pick.flee = fl; c.pick.kind = fl ? 1 : 0; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl, true)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }
-            case Ext::Block: if (held || G.now < c.blockRestUntil) return false;   // the guard's rest binds a person too (apmf/BlockClaims.cpp kRest: no new guard for 1.5 s after any hold ends; Policy.h Family::Block)
-                x.act = Act::Block; x.blockUntil = G.now + 1.5; x.actEnd = x.blockUntil; x.hitAt = -1; x.actIaus = true; x.c.blocking = true; c.blockRestUntil = x.blockUntil + 1.5; c.commitUntil = x.actEnd; return true;
-            case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f) return false; G.StartSwing(x, *tg, Act::Bash, true); c.commitUntil = x.actEnd; return true; }
+            case Ext::Block: {   // the class's own guard, raised when HE wants it (the generator offers it only against a coming swing or on the guard line). Fire is the game's hold: its length, its rest (Policy.h Family::Block)
+                if (held || !Cooled(G, c, Family::Block, BlockCooldown(c))) return false;
+                Candidate bk; bk.family = Family::Block; if (Fire(G, ci, bk) != Fired::Yes) return false;
+                c.firedAt[CooldownId(KeyOf(bk))] = G.now; c.commitUntil = x.actEnd; return true; }
+            case Ext::Bash: { Body* tg = G.Find(o.target); if (held || !tg || !Fight::Up(*tg) || x.c.sp < 20.0f || Fight::Dist(x, *tg) > G.Reach(x) * 1.1f || !Cooled(G, c, Family::Bash, std::max(0.0f, ActiveTuning()->bashCooldownSec))) return false;
+                G.StartSwing(x, *tg, Act::Bash, true); c.firedAt[CooldownId(FamilyKey(Family::Bash))] = G.now; c.commitUntil = x.actEnd; return true; }
             case Ext::Scroll: { if (held || o.idx < 0 || c.book.entries[static_cast<std::size_t>(o.idx)].count <= 0) return false;
                 G.StartCast(x, o.idx, c.build->spells[static_cast<std::size_t>(o.idx)], o.target, 0.0f, true); c.commitUntil = x.actEnd; return true; }
             default: return false;
@@ -382,7 +400,7 @@ namespace Sim {
             std::size_t best = N - 1, live = N; int n = 0;
             for (int next = nmin;;) {
                 for (int k = n; k < next; ++k) for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue;
-                    Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k));
+                    Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k)); if (cfg.split) { G.split = true; G.splitSeed = s0 + 7919ULL * static_cast<std::uint64_t>(k); G.xs.clear(); }
                     if (!Apply(G, ci, opt[i], cfg.commit, cfg.every)) { alive[i] = 0; continue; }   // it cannot be done now
                     RolloutPolicy rp; RunFor(G, rp, until); U[i].push_back(Utility(G)); ++st.rollouts; }
                 n = next; bool any = false;
@@ -407,7 +425,7 @@ namespace Sim {
                 ++subjDec;
                 if (gen) for (const Candidate& k : acts) ++(*gen)[static_cast<std::size_t>(k.family)];
                 const double dU = cost(ii);
-                if (sit && ii != best && dU >= cfg.minDU) {
+                if (sit && ii != best && !alive[ii] && dU >= cfg.minDU) {   // review F1: only a pick the race DROPPED is a divergence; one still standing was not told apart from the oracle's
                     const bool iFound = !iausPick || ii != opt.size() - 1;   // IAUS's pick is among the options (idle is last and has no candidate)
                     const Opt& ob = opt[best]; bool ranked = false;
                     if (ob.k) for (const Scored& r : sv.d.ranked) if (r.idx < acts.size() && &acts[r.idx] == ob.k) { ranked = true; break; }
@@ -418,7 +436,7 @@ namespace Sim {
             }
             if (log) {
                 const double dU = cost(ii);
-                if (ii != best && dU >= cfg.minDU) {
+                if (ii != best && !alive[ii] && dU >= cfg.minDU) {   // review F1, as above
                     ++disagreed; dUSum += dU;
                     const Candidate* a = opt[ii].k; const Candidate* b = opt[best].k;
                     Disagreement& g = (*log)[opt[ii].Label() + " -> " + opt[best].Label()]; ++g.n; g.dU += dU;
