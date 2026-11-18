@@ -1952,6 +1952,12 @@ namespace MFO::APMFBridge {
     // thread's ApplyTick asks it and then writes nothing). ReleaseStyleClaim: the dismissal / MFO-off road. Own mutex.
     bool StyleRoadSupported();
     void ReleaseStyleClaim(RE::FormID a_follower, const char* a_why);
+    // fix/style-before-entry: file the follower's CLASS style claim (CombatStyle::ClassRestingStyle) BEFORE his ch.21 entry is requested,
+    // so the controller the entry builds reads it (CombatScan's Want only runs once he is in combat, ~5 s later: a late claim missed the
+    // whole fight). WORKER, EngageOnSight's lap. True = the entry may go ahead (filed, nothing to file, Harbinger absent / older than v45,
+    // or refused: said); false = wait one lap (a heavy-armor read is outstanding, so a heavy follower never starts out dodging). Held past
+    // the sweep's "nobody wants it" while his entry stands, until the fight's own desire takes over (own table g_entryHolds, g_styleMx).
+    bool FileStyleBeforeEntry(RE::FormID a_follower);
     // ── GIVE GROUND (Harbinger ch.24 on a POINT, ABI v39, kApproach_Point) -- apmf/GroundApproach.cpp ─────────────────
     // A short ch.24 claim whose centre is a point 400 units straight away from a_foe: the engine's own return-to-area
     // movement walks the follower there while he keeps fighting. GroundStepSupported: APMF present AND abiVersion >= 39.

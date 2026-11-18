@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <string_view>
 
 // COMBAT-STYLE OWNERSHIP -- the weapon twin of CasterConsent's cast control.
 //
@@ -130,6 +131,11 @@ namespace MFO::CombatStyle {
     // tableWide = that style is the equipped CLASS's own CSTY (actor-wide, strict class style), false = an MFO_*Style
     // (the equipment choice only, the reach the direct write had); substrateStyle = MFO_CastStyle while an OOC substrate
     // cast pair owns its bit (applied only while his combat is substrate-only).
+    // ENTRY STYLE (fix/style-before-entry): the style the equipped CLASS wants at rest, BEFORE a fight exists (so Harbinger has
+    // the ch.33 claim when its ch.21 entry builds the controller). The same class reader Want uses, for the resting stance
+    // (the #65 pick, with classes ON his class's root); 0 = no class style. WORKER only (g_followers, Classes::PackageClass).
+    RE::FormID ClassRestingStyle(RE::FormID a_follower, std::string_view* a_outTag = nullptr);
+
     struct StyleDesire {
         RE::FormID follower       = 0;
         RE::FormID tableStyle     = 0;

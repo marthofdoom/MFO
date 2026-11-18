@@ -3606,3 +3606,10 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **OPEN (SEV-5, review):** `LootPartyInCombat` comment: the [sense] foe term is implied (foes are tallied only for followers already in combat).
 - **OPEN (SEV-5, review):** `GuardKeepWarm` doc says "stamps nothing"; it does set `e.posted`.
 - **OPEN (SEV-5, review):** the transfer SKIPPED line's "the world changed since the plan" also covers a cached-vs-live gem verdict disagreement.
+
+### fix/style-before-entry (author notes, not a review round)
+
+- **OPEN (SEV-4):** the pre-entry style is the RESTING stance only (class override / his class's root T1). A follower whose stance in the fight comes from an equip gambit or a cast latch (not the class root) gets the resting class style at entry and a Repoint when the fight's own Want lands (~seconds later), i.e. the old gap for him. Evaluating the combat table pre-entry was not done.
+- **OPEN (SEV-5):** a perk-voted dual wielder's pre-entry melee style is the single-weapon flavour (EngageOnSight has no FollowerState for `CombatStyleFor`); the fight's Want re-points it.
+- **OPEN (SEV-4):** a through-teammate join sets the entry's engage range to the LEASH; Harbinger's range drop is then the leash, so a foe the teammate fights far from the joiner can pull him a long way (marth ruling 11-17: within the leash). Tune the reach if the field shows over-chasing.
+

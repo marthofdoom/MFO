@@ -56,6 +56,16 @@ namespace MFO::APMFBridge {
         };
         std::mutex                                 g_styleMx;
         std::unordered_map<RE::FormID, StyleClaim> g_styles;   // guarded by g_styleMx
+        // ENTRY HOLDS (fix/style-before-entry): followers whose class style claim was filed BEFORE their ch.21 entry (so the
+        // controller the entry builds reads it). The value = sweeps held without the entry standing. A hold keeps the claim past
+        // step 1 ("nobody wants it": CombatScan has not Wanted anything yet, he is not in combat) until the fight's own desire takes
+        // it over, or the entry is gone (ended, forgotten) for kEntryHoldGrace sweeps. Guarded by g_styleMx.
+        constexpr std::uint32_t kEntryHoldGrace = 30;   // ~4 s of 133 ms sweeps: a hold whose claim is filed (the entry is requested in the same call)
+        // A hold with NO claim yet is a deferral (the first armor read outstanding): the caller's next lap is one service period away
+        // (roster x 133 ms, so it grows with the party), and a hold that aged out between laps would lose the read (step 1b) and defer
+        // forever. Sized well past any roster's period instead of from a guess; it only bounds the leak when no entry is ever requested.
+        constexpr std::uint32_t kEntryHoldPendingGrace = 600;   // ~80 s
+        std::unordered_map<RE::FormID, std::uint32_t> g_entryHolds;
 
         const APMF_API::APMF_API_v6* StyleApi() {
             auto* api = g_apmf.load(std::memory_order_relaxed);
@@ -140,6 +150,7 @@ namespace MFO::APMFBridge {
         APMF_API::Handle h = APMF_API::kInvalidHandle;
         {
             std::scoped_lock lock(g_styleMx);
+            g_entryHolds.erase(a_follower);
             const auto it = g_styles.find(a_follower);
             if (it == g_styles.end()) return;
             h = it->second.handle;
@@ -152,7 +163,62 @@ namespace MFO::APMFBridge {
     void ClearStyleClaims() {
         std::scoped_lock lock(g_styleMx);
         { std::scoped_lock hl(g_heavyMx); g_heavy.clear(); }   // a posted read is dropped by MainThread::Clear on the same boundary
+        g_entryHolds.clear();
         g_styles.clear();   // Harbinger drops every claim at its own load boundary; a stale Release would be a no-op
+    }
+
+    // The class style claim BEFORE his ch.21 entry (declared in APMFBridge.h). Worker (EngageOnSight's lap). The entry builds a NEW
+    // CombatController whose style Harbinger answers at the engine's own read: a claim filed after (CombatScan's Want only runs once
+    // he is IN combat) was missed for the whole fight. "Which style" = CombatStyle::ClassRestingStyle, the class reader Want uses.
+    bool FileStyleBeforeEntry(RE::FormID a_follower) {
+        const auto* api = StyleApi();
+        if (!api) return true;   // absent / older than v45: ApplyTick writes the field itself on the live controller (the degrade)
+        std::string_view tag{};
+        RE::FormID style = CombatStyle::ClassRestingStyle(a_follower, &tag);
+        if (style == 0) return true;   // no class style at rest: nothing to file, the entry goes ahead as before
+        // The sweep stays the ONLY owner of a style the fight / the OOC substrate cast pair already wants: a standing substrate cast
+        // claim (EquipChoiceOnly MFO_CastStyle) must not be repointed to the class style and back (the two owners never mix).
+        if (SubstrateOnly(a_follower)) return true;
+        {
+            std::vector<CombatStyle::StyleDesire> held;
+            CombatStyle::SnapshotStyleDesires(held);   // CombatStyle's own mutex, taken and dropped before g_styleMx
+            for (const auto& d : held) if (d.follower == a_follower) return true;
+        }
+        { std::scoped_lock lock(g_styleMx); g_entryHolds[a_follower] = 0; }   // before the heavy read: keeps its state alive (step 1b)
+        bool heavy = false;
+        if (!HeavyKnown(a_follower, heavy)) return false;   // first armor read outstanding: the entry waits one lap (never a dodging heavy)
+        if (heavy) style = Classes::NoDodgeTwin(style);
+        std::scoped_lock lock(g_styleMx);
+        g_entryHolds[a_follower] = 0;
+        auto& c = g_styles[a_follower];
+        APMF_API::APMF_Param prm{};
+        prm.form = style;
+        prm.ival = 0;   // actor-wide: a class style
+        if (c.handle != APMF_API::kInvalidHandle) {
+            if (c.style == style && c.flags == 0) return true;
+            api->Repoint(c.handle, &prm);
+            spdlog::info("[wstyle] {:08X}: ch.33 combat style HANDOFF {:08X} -> {:08X} ({}, h={}) before his ch.21 entry", a_follower, c.style,
+                         style, ScopeName(0), c.handle);
+            c.style = style;
+            c.flags = 0;
+            return true;
+        }
+        if (c.retryIn > 0) return true;   // refused a moment ago (said): the entry is not held for it
+        const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_CombatStyle, kOwnBasis, &prm);
+        if (h == APMF_API::kInvalidHandle) {
+            c.retryIn = kRetrySweeps;
+            spdlog::warn("[wstyle] {:08X}: Harbinger REFUSED the ch.33 combat style claim before his ch.21 entry (style {:08X}): its seats "
+                         "are not installed or the request is malformed. The entry goes ahead without it.", a_follower, style);
+            return true;
+        }
+        c.handle         = h;
+        c.style          = style;
+        c.flags          = 0;
+        c.everLive       = false;
+        c.unpausedSweeps = 0;
+        spdlog::info("[wstyle] {:08X}: ch.33 combat style claim FILED BEFORE his ch.21 entry (h={}, style {:08X}, {}, class {})", a_follower, h,
+                     style, ScopeName(0), tag);
+        return true;
     }
 
     // Tick()'s pass (declared in APMFBridge_internal.h). Takes g_styleMx itself; g_mx NOT held.
@@ -184,12 +250,30 @@ namespace MFO::APMFBridge {
         }
         const bool paused = StyleGamePaused();
 
+        // Entry holds (see g_entryHolds): which still have a ch.21 entry standing. Read BEFORE g_styleMx (the bridge's g_mx is taken
+        // inside CombatEntryStateOf, and nothing here may hold g_styleMx across it).
+        std::vector<RE::FormID> holdIds, holdStanding;
+        { std::scoped_lock hl(g_styleMx); for (const auto& [f, age] : g_entryHolds) holdIds.push_back(f); }
+        for (const RE::FormID f : holdIds)
+            if (CombatEntryStateOf(f, nullptr, nullptr) == EntryState::Standing) holdStanding.push_back(f);
+
         std::scoped_lock lock(g_styleMx);
+        // 0. Entry holds end when the fight's own desire owns his style, or his entry has been gone for the grace.
+        for (auto it = g_entryHolds.begin(); it != g_entryHolds.end();) {
+            bool owned = false, standing = false;
+            for (const Want& w : wants) owned = owned || w.fid == it->first;
+            for (const RE::FormID f : holdStanding) standing = standing || f == it->first;
+            const auto sc = g_styles.find(it->first);
+            const bool claimed = sc != g_styles.end() && sc->second.handle != APMF_API::kInvalidHandle;
+            if (owned || (!standing && ++it->second > (claimed ? kEntryHoldGrace : kEntryHoldPendingGrace))) it = g_entryHolds.erase(it);
+            else ++it;
+        }
         // 1. Claims nobody wants any more (the stance was cleared: combat end, dismissal, the cast pair closed).
         for (auto it = g_styles.begin(); it != g_styles.end();) {
             bool wanted = false;
             for (const Want& w : wants) wanted = wanted || w.fid == it->first;
             for (const RE::FormID f : heavyPending) wanted = wanted || f == it->first;
+            wanted = wanted || g_entryHolds.contains(it->first);
             if (!wanted) {
                 if (it->second.handle != APMF_API::kInvalidHandle) ReleaseLocked(api, it->first, it->second, "no stance owns his style");
                 it = g_styles.erase(it);
@@ -203,6 +287,7 @@ namespace MFO::APMFBridge {
                 bool live = false;
                 for (const Want& w : wants) live = live || w.fid == fid;
                 for (const RE::FormID f : heavyPending) live = live || f == fid;
+                live = live || g_entryHolds.contains(fid);
                 if (!live) { h.known = false; h.wait = 0; }
             }
         }
