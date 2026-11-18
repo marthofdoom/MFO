@@ -761,16 +761,16 @@ namespace Sim {
         }
         // one physical hit that has connected in time and space
         // THE FIELD'S HIT-SIZE SPREAD (SIM V3 `hittail`; CALIBRATED, iaus-sim-v3.md 15.5). A foe's physical hit on the party is multiplied by one
-        // of these, drawn evenly. They are the 15 hit windows with damage that foes landed on followers in _evidence/deck-run-1117f/MFO.log
+        // of these, drawn evenly. They are the 16 hit windows with damage that foes landed on followers in _evidence/deck-run-1117f/MFO.log
         // ([iaus-fill] hit, 19:44:45 to 19:45:51, one fight), each as the health it took before armor (took / (1 - the target's armor share,
-        // both printed on the line)) over the MEDIAN of its own attacker kind (ten arrows of the Conqueror and Ravager Archers, median 53; five
-        // blows of one Conqueror Berserker, median 54), then divided by their mean (1.777) so the mean is 1. Arrows: 1.32 3.13 0.91 1.74 1 3.55
-        // 1 1 2.08 1. Blows: 0.67 6.76 1 1 0.5. MEAN 1 ON PURPOSE: at matched pressure the lab's damage per second already agrees with the
-        // field (15.4), what differed is how it arrives. So a usual hit is 0.56 of the lab's old one and one hit in five is 1.8 to 3.8 times it.
-        // n = 15, one fight, three followers: re-derive with calib_damage.py when more sessions carry the probe (bIausFillProbe).
-        static constexpr float kFieldHit[15] = { 0.74f, 1.76f, 0.51f, 0.98f, 0.56f, 2.00f, 0.56f, 0.56f, 1.17f, 0.56f, 0.38f, 3.80f, 0.56f, 0.56f, 0.28f };
+        // both printed on the line)) over the MEDIAN of its own attacker kind (eleven arrows of the Conqueror and Ravager Archers, median 53; five
+        // blows of one Conqueror Berserker, median 54), then divided by their mean (1.729) so the mean is 1. Arrows: 1.32 3.13 0.91 1.74 1 3.55
+        // 1 1 1 2.08 1. Blows: 0.67 6.76 1 1 0.5. MEAN 1 ON PURPOSE: at matched pressure the lab's damage per second already agrees with the
+        // field (15.4), what differed is how it arrives. So a usual hit is 0.58 of the lab's old one and one hit in four is 1.2 to 3.9 times it.
+        // n = 16, one fight, three followers: re-derive with calib_damage.py when more sessions carry the probe (bIausFillProbe).
+        static constexpr float kFieldHit[16] = { 0.76f, 1.81f, 0.53f, 1.01f, 0.58f, 2.05f, 0.58f, 0.58f, 0.58f, 1.20f, 0.58f, 0.39f, 3.91f, 0.58f, 0.58f, 0.29f };
         float Physical(Body& a, Body& d, float dmg, bool power, bool ranged, bool fromIaus) {
-            if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(14, static_cast<int>(VU(a, 37, 0.0f, 15.0f)))];
+            if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(15, static_cast<int>(VU(a, 37, 0.0f, 16.0f)))];
             const Rules& r = D->rules; bool blocked = false; float blockedFrac = 0.0f; const float rawDmg = dmg;
             if (a.role == Role::Follower) dmg *= FollowerScale();
             bool sneakAtk = false, flankAtk = false;

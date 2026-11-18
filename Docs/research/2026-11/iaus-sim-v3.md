@@ -893,29 +893,29 @@ The hit lines of `deck-run-1117f` give 16 hit windows with damage that foes land
 
 | Attacker | n | Health before armor, over the kind's median |
 |---|---|---|
-| Arrows of the Conqueror and Ravager Archers (median 53) | 10 | 1.32, 3.13, 0.91, 1.74, 1, 3.55, 1, 1, 2.08, 1 |
+| Arrows of the Conqueror and Ravager Archers (median 53) | 11 | 1.32, 3.13, 0.91, 1.74, 1, 3.55, 1, 1, 1, 2.08, 1 |
 | Blows of one Conqueror Berserker (median 54) | 5 | 0.67, 6.76, 1, 1, 0.5 |
 
-Mean 1.78, median 1. Four of fifteen are twice the median or more, three are three times or more. The sixteenth window has no attacker kind to compare with and is left out.
+Mean 1.73, median 1. Four of sixteen are twice the median or more, three are three times or more.
 
-The lab's foes hit with one size per weapon (a power attack apart). The change: a foe's physical hit on a member of the party is multiplied by one of those fifteen values, drawn evenly, each divided by their mean so the mean multiplier is 1 (`World.h kFieldHit`, the v3 switch `hittail`, its draw from the v3 stream). The mean is 1 on purpose. The lab's damage per second already agrees with the field at matched pressure (15.4, point 1). What differed is how it arrives. So a usual hit is now 0.56 of what it was, and one hit in five is 1.8 to 3.8 times it.
+The lab's foes hit with one size per weapon (a power attack apart). The change: a foe's physical hit on a member of the party is multiplied by one of those sixteen values, drawn evenly, each divided by their mean so the mean multiplier is 1 (`World.h kFieldHit`, the v3 switch `hittail`, its draw from the v3 stream). The mean is 1 on purpose. The lab's damage per second already agrees with the field at matched pressure (15.4, point 1). What differed is how it arrives. So a usual hit is now 0.58 of what it was, and one hit in four is 1.2 to 3.9 times it.
 
 It applies to the player model too, since he is hit by the same foes. It does not apply to spells (no field hit line of a spell on a follower exists) or to the party's own hits.
 
-**Honest size of the evidence:** fifteen hits, one fight, two archer kinds and one melee foe, three followers. The spread is real in that fight. Whether it holds for other foes is not known. `--v3 hittail=off` gives the lab before it, and the comment at `kFieldHit` names the lines to re-derive it from.
+**Honest size of the evidence:** sixteen hits, one fight, two archer kinds and one melee foe, three followers. The spread is real in that fight. Whether it holds for other foes is not known. `--v3 hittail=off` gives the lab before it, and the comment at `kFieldHit` names the lines to re-derive it from.
 
 Before and after, Tuxborn world, strong1 bracket (the field's pressure), 288 fights, IAUS:
 
 | | Field | Before | After |
 |---|---|---|---|
-| Downs per follower-minute | 0.225 | 0.214 | 0.223 |
-| Mean capped loss at 5 or more foes, %/s | 0.91 | 0.78 | 0.73 |
-| At the cap, at 5 or more | 14.3 % | 7.5 % | 6.5 % |
-| Losing share, all samples | 10.1 % | 31.2 % | 27.1 % |
-| Downs within 3.5 s of a no-loss sample | 3 of 6 | 4 of 34 (12 %) | 8 of 35 (23 %) |
-| From above 75 % health to the down, under 1 s | Jesper, 0.4 s | 0 of 34 | 3 of 35 |
-| Worst loss inside one second, per follower and fight: 90th percentile, largest | 30 %, 97 % (hit windows) | 26 %, 62 % | 29 %, 100 % |
+| Downs per follower-minute | 0.225 | 0.214 | 0.217 |
+| Mean capped loss at 5 or more foes, %/s | 0.91 | 0.78 | 0.78 |
+| At the cap, at 5 or more | 14.3 % | 7.5 % | 7.0 % |
+| Losing share, all samples | 10.1 % | 31.2 % | 29.4 % |
+| Downs within 3.5 s of a no-loss sample | 3 of 6 | 4 of 34 (12 %) | 6 of 33 (18 %) |
+| From above 75 % health to the down, under 1 s | Jesper, 0.4 s | 0 of 34 | 2 of 33 |
+| Worst loss inside one second, per follower and fight: 90th percentile, largest | 30 %, 97 % (hit windows) | 26 %, 62 % | 28 %, 100 % |
 
-The burst now exists in the lab (a follower can go from full to down in one second, which it could not), and the share of downs that come out of calm doubled. It is still half the field's share, on six field downs. The capped loss numbers did not move toward the field. They cannot: the game's reader caps a window's loss at 25 %, so it does not see hit size.
+The burst now exists in the lab (a follower can go from full to down in one second, which it could not), and the share of downs that come out of calm went from 12 to 18 %. It is still about a third of the field's share, on six field downs. The step is small because the mean is held at 1 and because a down in the lab's strong fights is mostly the melee follower worn down, not the mage burst. The capped loss numbers did not move toward the field. They cannot: the game's reader caps a window's loss at 25 %, so it does not see hit size.
 
-What the built-in world's tuning baseline does with it (`baseline_v3_builtin.txt`, regenerated, 8 fights a cell, so each row is noisy): U over the 90 class and bracket rows moved by -4.24 on average (from -19.06 to +6.80). The player model dies more often when a hard hit lands on him, and a fight the player loses scores low. The v2 world is untouched (0 metrics changed against `baseline_builtin.txt`). Every J of the v3 world is a new number after this, so the retune starts from the new baseline.
+What the built-in world's tuning baseline does with it (`baseline_v3_builtin.txt`, regenerated, 8 fights a cell, so each row is noisy): U over the 90 class and bracket rows moved by -4.56 on average (from -15.91 to +4.11), and by -2.76 over the 15 natural rows. The player model dies more often when a hard hit lands on him, and a fight the player loses scores low. The v2 world is untouched (0 metrics changed against `baseline_builtin.txt`). Every J of the v3 world is a new number after this, so the retune starts from the new baseline.
