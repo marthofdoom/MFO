@@ -913,6 +913,7 @@ namespace MFO::Iaus {
                             c.f.recipientSelf = self;
                             c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
                             c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
+                            c.f.recipientHitsToDown = Estimate::HitsToDown(self ? s.self.hp : r->hp, self ? s.self : *r);   // 11-17g
                             c.f.recipientBeingHealed = r->beingHealed;
                         }
                         if (heal) {

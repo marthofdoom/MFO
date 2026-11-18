@@ -5,6 +5,8 @@
 #include "Followers.h"
 #include "MainThread.h"
 #include "Runtime.h"
+#include "iaus/Core.h"
+#include "iaus/Estimate.h"
 #include "iaus/Reach.h"
 #include "iaus/ReachBook.h"
 #include "iaus/SwingSeq.h"
@@ -69,10 +71,20 @@ namespace MFO::Iaus::Fills {
         constexpr double kUnitLogSec   = 10.0;   // one `[iaus-fill] unit` line per actor per this long
         constexpr double kHitKeepSec   = 10.0;   // a recorded hit whose target no lap sampled for this long is dropped (counted)
 
+        // 11-17g (field heal-timing): the GROSS damage an actor takes, from the hit sink's own record that he was hit. The net drop above cancels under a heal
+        // stream and a burst is a volley of 30 to 97 % of his maximum in one lap. The windows are Tuning::grossWindowSec / maxHitWindowSec (Core.h).
+        constexpr std::size_t kTakenCap   = 32;    // hits remembered per target between two samples (the sink side)
+        using Sample = Estimate::BurstSample;      // one lap's gross damage (the maths is Estimate::LapGross / BurstReads: pure, run by the harness)
+
         struct Track {
             double t = 0.0;            // when hp was sampled (0 = never)
             float  hp = 0.0f;
             float  loss = 0.0f;        // health per second, exponentially weighted over kLossTauSec
+            std::vector<Sample> samples;   // gross damage per sampled lap, newest last (11-17g)
+            unsigned pendN = 0;            // hit events seen since the last sample, and the least they did (the attackers' estimates)
+            float    pendFloor = 0.0f;
+            float    estHit = 0.0f;        // THIS actor as an attacker: his raw hit estimate of the last lap (the floor for the hits he lands)
+            bool     estMagic = false;
             double unitLogged = 0.0;
             bool   swinging = false, casting = false;
             double swingStart = 0.0, castStart = 0.0;   // the last rising edge (the measured cadence in the edge lines)
@@ -108,6 +120,10 @@ namespace MFO::Iaus::Fills {
         std::vector<HitRec>   g_hits;
         std::uint32_t         g_hitOverflow = 0;   // under g_hitMx
         std::uint32_t         g_hitAged = 0;       // WORKER
+
+        // 11-17g: the hits a party member (or the player) TOOK, per target: when and by whom. Written by the sink under g_hitMx, drained by the worker in Pass::Unit.
+        struct Taken { RE::FormID cause = 0; };
+        std::unordered_map<RE::FormID, std::vector<Taken>> g_taken;
 
         // ── ruling Q68: the hits a FOLLOWER caused, as a LATCH per follower (review F2b; was a ring of 64 shared by every follower
         // and every cloak / spell tick, which evicted a chain's early hit inside an 8 s window and filed a false MISS). The swing
@@ -161,7 +177,8 @@ namespace MFO::Iaus::Fills {
             static HitSink* GetSingleton() { static HitSink s; return &s; }
             RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_ev, RE::BSTEventSource<RE::TESHitEvent>*) override {
                 const bool probe = On(Config::g_iausFillProbe);
-                if ((!probe && !On(Config::g_iausReachLearn)) || !a_ev || !a_ev->target) return RE::BSEventNotifyControl::kContinue;
+                const bool loss  = On(Config::g_iausFillLoss);
+                if ((!probe && !loss && !On(Config::g_iausReachLearn)) || !a_ev || !a_ev->target) return RE::BSEventNotifyControl::kContinue;
                 auto* target = a_ev->target->As<RE::Actor>();
                 if (!target) return RE::BSEventNotifyControl::kContinue;
                 HitRec r;
@@ -169,7 +186,12 @@ namespace MFO::Iaus::Fills {
                 r.cause  = a_ev->cause ? a_ev->cause->GetFormID() : 0;
                 // A follower hit something or was hit (the any-thread FormID mirror, #74; never the live lists).
                 const bool byFollower = r.cause != 0 && Followers::IsTrackedFast(r.cause);
-                if (!byFollower && !Followers::IsTrackedFast(r.target)) return RE::BSEventNotifyControl::kContinue;
+                const bool targetMine = Followers::IsTrackedFast(r.target);
+                // 11-17g: the player is a heal recipient too. NOT a hit a party member or the player caused (review F1): party heals and buffs raise TESHitEvent on allies
+                // (Close Wounds, Frost Cloak ...) and would floor with the healer's own attack estimate; real friendly fire still shows through the net drop.
+                const bool partyCause = byFollower || (a_ev->cause && a_ev->cause->IsPlayerRef());
+                const bool taken = loss && !partyCause && (targetMine || target->IsPlayerRef());
+                if (!byFollower && !targetMine && !taken) return RE::BSEventNotifyControl::kContinue;
                 r.t          = NowSec();
                 r.source     = a_ev->source;
                 r.projectile = a_ev->projectile;
@@ -189,6 +211,11 @@ namespace MFO::Iaus::Fills {
                         if (l.t < slot->t) slot = &l;   // else the oldest (an empty row is t = 0)
                     }
                     *slot = Latch{ r.target, r.source, r.t, r.flags };
+                }
+                if (taken) {
+                    if (g_taken.size() > 64 && g_taken.find(r.target) == g_taken.end()) g_taken.clear();   // a bound, never reached by a real party
+                    auto& v = g_taken[r.target];
+                    if (v.size() < kTakenCap) v.push_back(Taken{ r.cause });
                 }
                 if (!probe) return RE::BSEventNotifyControl::kContinue;   // the probe's list is drained only by the probe
                 if (g_hits.size() >= kHitCap) { ++g_hitOverflow; return RE::BSEventNotifyControl::kContinue; }
@@ -427,7 +454,7 @@ namespace MFO::Iaus::Fills {
     void RegisterHitSink() {
         if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
-            spdlog::info("[iaus-fill] hit sink registered (live only while bIausFillProbe = 1 or bIausReachLearn = 1)");
+            spdlog::info("[iaus-fill] hit sink registered (live only while bIausFillProbe = 1, bIausFillLoss = 1 or bIausReachLearn = 1)");
         }
     }
 
@@ -494,19 +521,46 @@ namespace MFO::Iaus::Fills {
         Track& tr = g_track[e.id];
         e.prevT  = tr.t;
         e.prevHp = tr.hp;
+        tr.estHit = e.hit; tr.estMagic = e.magic;   // as an attacker (read by the next lap of whoever he hits)
+        // 11-17g: the hits he took since the last drain, each with at least what its attacker's estimate says it did (the attacker's own track: one lap old)
+        if (m_loss) {
+            std::vector<Taken> got;
+            {
+                std::scoped_lock lk(g_hitMx);
+                if (const auto it = g_taken.find(e.id); it != g_taken.end()) { got = std::move(it->second); g_taken.erase(it); }
+            }
+            for (const Taken& h : got) {
+                float est = 0.0f;
+                if (h.cause != 0) {
+                    if (const auto at = g_track.find(h.cause); at != g_track.end() && at->second.estHit > 0.0f)
+                        est = at->second.estMagic ? at->second.estHit * (std::max)(0.0f, 1.0f - e.magicResist / 100.0f) : at->second.estHit * (1.0f - e.armor);
+                }
+                ++tr.pendN;
+                if (std::isfinite(est) && est > 0.0f) tr.pendFloor += est;
+            }
+        }
         if (std::isfinite(a_u.hpMax) && a_u.hpMax > 0.0f) {
             const double dt = m_now - tr.t;
             if (tr.t == 0.0 || dt > kLossResetSec) {
                 tr.loss = 0.0f; tr.t = m_now; tr.hp = a_u.hp;
+                tr.samples.clear(); tr.pendN = 0; tr.pendFloor = 0.0f;
             } else if (dt >= kLossMinDtSec) {
                 const float lost = (std::max)(0.0f, tr.hp - a_u.hp);
                 const float k = static_cast<float>(1.0 - std::exp(-dt / kLossTauSec));
                 tr.loss += (lost / static_cast<float>(dt) - tr.loss) * k;
                 if (!std::isfinite(tr.loss) || tr.loss < 0.0f) tr.loss = 0.0f;
+                // GROSS: a lap with a hit event did at least what the attackers' estimates say (a heal landing in the same lap cannot cancel it below that)
+                const float gross = Estimate::LapGross(lost, tr.pendN, tr.pendFloor);
+                if (std::isfinite(gross) && gross > 0.0f) tr.samples.push_back(Sample{ m_now, gross });
+                tr.pendN = 0; tr.pendFloor = 0.0f;
                 tr.t = m_now; tr.hp = a_u.hp;
             }
         }
+        const Tuning& lt = LiveTuning();
+        const double grossWin = lt.grossWindowSec > 0.0f ? lt.grossWindowSec : 4.0, maxWin = lt.maxHitWindowSec > 0.0f ? lt.maxHitWindowSec : 8.0;
+        std::erase_if(tr.samples, [&](const Sample& s) { return m_now - s.t > (std::max)(grossWin, maxWin); });
         e.loss = tr.loss;
+        Estimate::BurstReads(tr.samples, m_now, grossWin, maxWin, lt.burstWindowSec > 0.0f ? lt.burstWindowSec : 0.5, e.gross, e.maxHit);
 
         if (m_probe && a_role == Role::Foe) {
             if (e.casting && !tr.casting) {
@@ -530,7 +584,7 @@ namespace MFO::Iaus::Fills {
         // ── write what is switched on ────────────────────────────────────────────────────────────────────────────
         if (m_armor) { a_u.armor = e.armor; a_u.magicResist = e.magicResist; }
         if (m_hit) { a_u.hit = e.hit; a_u.hitsPerSec = e.rate; a_u.hitIsMagic = e.magic; a_u.rangedWeapon = e.ranged; a_u.weaponLeftShare = e.leftShare; }
-        if (m_loss) a_u.lossPerSec = e.loss;
+        if (m_loss) { a_u.lossPerSec = e.loss; a_u.grossPerSec = e.gross; a_u.maxHit = e.maxHit; }
         if (m_swing) a_u.swinging = e.swinging;
         if (m_casting) a_u.casting = e.casting;
         m_est.push_back(e);
@@ -888,6 +942,7 @@ namespace MFO::Iaus::Fills {
         g_hits.clear();
         g_hitOverflow = 0;
         g_latch.clear();
+        g_taken.clear();
     }
 
 }

@@ -13,7 +13,9 @@
 //   Combatant::hitIsMagic   the hit is a spell (armor does not apply)
 //   Combatant::armor        its physical mitigation, 0..1
 //   Combatant::magicResist  kResistMagic, points
-//   Combatant::lossPerSec   health it has been LOSING per second (observed: CombatSense)
+//   Combatant::lossPerSec   health it has been LOSING per second, net of heals (observed: Fills.cpp)
+//   Combatant::grossPerSec  health it has been HIT for per second, heals not subtracted (Fills.cpp, from the hit sink)
+//   Combatant::maxHit       the largest burst (one lap's gross damage) it took lately (Fills.cpp)
 //   SpellEntry::damage/heal expected health damage / healing of one cast on an unresisting target, after perks
 // The formulas are the engine's (Docs/research/2026-11/iaus-i8-damage-research.md 2.1 - 2.4).
 //
@@ -24,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace MFO::Iaus::Estimate {
 
@@ -71,7 +74,47 @@ namespace MFO::Iaus::Estimate {
             if (MustClose(f) && Apart(f, a_who) > strike) continue;
             sum += Dps(f, a_who);
         }
-        return (std::max)(sum, Pos(a_who.lossPerSec));
+        // 11-17g (field heal-timing): GROSS, not net. A stream of heals cancels lossPerSec (a drop of 30 after a heal of 30 reads 0), so the time-to-live of
+        // a recipient that was still being hit read "unknown" or far too long. grossPerSec is what the hits did before the heals.
+        return (std::max)(sum, (std::max)(Pos(a_who.lossPerSec), Pos(a_who.grossPerSec)));
+    }
+
+    // 11-17g, review F2: one sampled lap's GROSS damage and the window reads over those laps. PURE, so the harness runs the very code the game does (Fills.cpp calls these).
+    //   a_lost       the net health drop since the previous sample (heals already subtracted)
+    //   a_events     hit events the sink recorded on him since then;  a_floor the least they did (their attackers' own estimates, summed)
+    // A lap with hit events did at least what the attackers' estimates say (a heal landing in the same lap cannot cancel it below that); a lap with none (a
+    // poison tick, or an event that landed in the neighbouring lap: the sink runs off the worker) is its net drop.
+    [[nodiscard]] inline float LapGross(float a_lost, unsigned a_events, float a_floor) {
+        const float lost = Pos(a_lost);
+        return a_events > 0 ? (std::max)(lost, Pos(a_floor)) : lost;
+    }
+    struct BurstSample { double t = 0.0; float gross = 0.0f; };   // one lap's gross damage
+    // grossPerSec = the gross of the samples inside a_grossWinSec / that window; maxHit = the LARGEST BURST inside a_maxWinSec: the biggest SUM of samples that
+    // start within a_burstWinSec of each other (a sample is one sampling interval, 100-133 ms, so a volley spread over 0.2-0.4 s lands in 2-3 of them and one
+    // sample would read half of it). Two bursts further apart than the burst window read as the LARGER, never their sum. The event count is never used (Jesper:
+    // 166 health in 5 events, a per-event split read 33).
+    inline void BurstReads(const std::vector<BurstSample>& a_s, double a_now, double a_grossWinSec, double a_maxWinSec, double a_burstWinSec,
+                           float& a_gross, float& a_maxHit) {
+        float sum = 0.0f, mx = 0.0f;
+        for (const BurstSample& s : a_s) {
+            if (a_now - s.t <= a_grossWinSec) sum += s.gross;
+            if (a_now - s.t > a_maxWinSec) continue;
+            float burst = 0.0f;
+            for (const BurstSample& o : a_s)
+                if (o.t >= s.t && o.t - s.t < a_burstWinSec + 1.0e-9 && a_now - o.t <= a_maxWinSec) burst += o.gross;
+            mx = (std::max)(mx, (std::max)(burst, s.gross));
+        }
+        a_gross = a_grossWinSec > 0.0 ? sum / static_cast<float>(a_grossWinSec) : 0.0f;
+        a_maxHit = mx;
+    }
+
+    // 11-17g (field Jesper: 172 -> 5.6 health in 0.13 s, the per-hit estimate 6x under): how many of the largest recent BURST (one lap's gross damage) the recipient has health
+    // for. 1 = the next such hit downs him. kUnknown when no hit has been seen (the time-to-live is then the only fact). ONE reader: the dying boost and
+    // the heal urgency (Catalogue.cpp) both read it through Facts::recipientHitsToDown.
+    [[nodiscard]] inline float HitsToDown(float a_health, const Combatant& a_who) {
+        const float h = Pos(a_health), m = Pos(a_who.maxHit);
+        if (!(m > 0.0f)) return kUnknown;
+        return h / m;
     }
 
     // Seconds until a_health is gone at a_incoming per second. kUnknown when nothing is coming in.

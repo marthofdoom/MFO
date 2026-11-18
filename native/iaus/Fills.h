@@ -84,6 +84,7 @@ namespace MFO::Iaus::Fills {
             bool  magic = false, ranged = false, swinging = false, casting = false;
             float leftShare = 0.0f;     // Combatant::weaponLeftShare
             float dr = 0.0f, armor = 0.0f, magicResist = 0.0f, loss = 0.0f;
+            float gross = 0.0f, maxHit = 0.0f;   // 11-17g: Combatant::grossPerSec / maxHit
             float resFire = 0.0f, resFrost = 0.0f, resShock = 0.0f;   // 11-17b probe: the raw element resist AVs (the exploit term's input), logged only
             std::uint32_t src = 0;      // the weapon / spell / staff the hit estimate is for
             std::uint32_t srcLeft = 0;  // a second melee weapon in the left hand (0 = none)
