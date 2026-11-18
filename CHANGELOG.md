@@ -5,13 +5,15 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## v2.11.7 -- Heals land in time and casters stop stuttering
+## v2.11.7 -- Looting fixed, heals land in time and casters stop stuttering
 
 This is a real release on top of 2.11.6. It needs Harbinger v0.20.5 (unchanged). The saves are unchanged: no new co-save record and no new layout.
 
 - **Heals see bursts coming.** A single hit can take a third of a follower's health or more, and the old danger read could not see it. A follower now tracks the biggest burst he took lately and how many more like it would put him down. One more burst from down counts as dying, so the heal comes before the hit, not after it.
 - **Real incoming damage.** The danger read now counts the damage actually taken, so a heal running on someone no longer hides that he is still being hit. Party heals and buffs are not counted as damage.
 - **Allies get the dying fallback too.** An ally under 25% health is treated as dying for heal choice, the same as the healer himself.
+- **Looting works again.** Loot was being marked as blocked whenever a follower stalled for a moment on the way (a bump into a teammate or the player, or a path re-plan), and a whole cone of loot behind that spot went with it, until the area unloaded. Now only a real obstacle on the way (a locked door or a gate) blocks loot, and only that item. A stall with nothing in the way is a retry, and a follower who truly cannot make ground gets the stuck rescue. Blocks also lift when something real changes. Coin, museum items and potions on bodies are taken again.
+- **A follower waits for the guard check on the spot** instead of wandering off with the item still on the floor. The check is asked when he sets off.
 - **No more spell stuttering.** A cast claimed on a foe he can't see is released after 4 seconds, and he keeps moving to get a line on the foe. Heal claims stay fresh while they run and no longer flap at the edge of the heal radius. A buff no longer steals the hand of a buff that is charging.
 - **Approaches the engine drops are retried closer,** and stop after three drops instead of looping.
 - An Evoker still heals later than a healer class. That is his school, by design.
