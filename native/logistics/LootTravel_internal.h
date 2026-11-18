@@ -555,11 +555,12 @@ namespace MFO::Logistics {
 
         // GATED PROBE (field 11-17c F2): the nearest DOOR, ACTIVATOR and MOVABLE STATIC (a collision-bearing prop: portcullis, barricade, rubble)
         // within 512 u of the block point, so the next field run says WHAT blocked him. Reads only, on the worker, one ranged walk of the
-        // follower's attached cell (the FindActorBlocker precedent). Logs once per GATED verdict.
-        inline void LogGateNeighbours(RE::Actor* a_follower, RE::FormID a_target, const RE::NiPoint3& a_block) {
+        // follower's attached cell (the FindActorBlocker precedent). Logs once per GATED verdict. Returns true when a DOOR or ACTIVATOR is named
+        // (field 11-17g: with neither, the 3 s Movement Blocked is a bump / repath, NOT evidence the loot is unreachable -- MarkGated records nothing).
+        inline bool LogGateNeighbours(RE::Actor* a_follower, RE::FormID a_target, const RE::NiPoint3& a_block) {
             constexpr float kReach = 512.0f;
             auto* cell = a_follower ? a_follower->GetParentCell() : nullptr;
-            if (!cell || !cell->IsAttached()) { spdlog::info("[loot] GATED {:08X}: probe -- no attached cell to read", a_target); return; }
+            if (!cell || !cell->IsAttached()) { spdlog::info("[loot] GATED {:08X}: probe -- no attached cell to read", a_target); return false; }
             struct Hit { RE::FormID ref = 0, base = 0; float d = kReach + 1.0f; bool locked = false; };
             Hit door, acti, mstt;
             cell->ForEachReferenceInRange(a_block, kReach, [&](RE::TESObjectREFR* r) {
@@ -577,15 +578,17 @@ namespace MFO::Logistics {
             };
             spdlog::info("[loot] GATED {:08X}: probe, within {:.0f} u of the block -- {} {} {}", a_target, kReach,
                          fmtHit("door", door), fmtHit("activator", acti), fmtHit("movable-static", mstt));
+            return door.ref != 0 || acti.ref != 0;   // a real obstacle is named only by a door or an activator (marth 11-17g)
         }
 
         // a_blockPos (loot M2): where the block happened when it is known better than
         // "where he stands now" -- Harbinger's BLOCKED end reports the stall point, and
         // by the next logistics tick the ended leg may already have let him drift back
         // toward the player. Null = his current position (MFO's own MB timer, M1).
-        inline void MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
+        // Returns false (and records NOTHING) when the probe names no door or activator at the block: the caller treats it as a stuck / repath event.
+        inline bool MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
                               Clock::time_point a_now, const RE::NiPoint3* a_blockPos = nullptr) {
-            if (!a_follower || !a_target) return;
+            if (!a_follower || !a_target) return false;
             GateRecord g;
             g.target    = a_target->GetFormID();
             g.follower  = a_follower->GetFormID();
@@ -594,6 +597,12 @@ namespace MFO::Logistics {
             g.targetPos = a_target->GetPosition();
             g.since     = a_now;
             g.targetOnly = g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
+            if (!LogGateNeighbours(a_follower, g.target, g.blockPos)) {
+                spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), {:.0f} u short: the probe names NO door or "
+                             "activator -- a bump / repath, NOT a gate. Nothing recorded against the target or its cone; stuck evidence, the leg retries",
+                             g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z, g.blockPos.GetDistance(g.targetPos));
+                return false;
+            }
             spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
                          "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree cone past "
                          "the block, <= +{:.0f} u, same floor) until a door/gate/lever event near it, its "
@@ -602,7 +611,6 @@ namespace MFO::Logistics {
                          g.blockPos.GetDistance(g.targetPos), Iaus::DefaultLootTuning().gateConeDeg, Iaus::DefaultLootTuning().gateBeyondU,
                          Iaus::DefaultLootTuning().gateReadmitSec, Iaus::DefaultLootTuning().gateReadmitMoveU,
                          g.targetOnly ? " TARGET ONLY: the block is far short of it, so he was stuck, not at an opening -- no cone." : "");
-            LogGateNeighbours(a_follower, g.target, g.blockPos);
             std::lock_guard lk(g_gateMx);
             std::erase_if(g_gates, [&](const GateRecord& o) { return o.target == g.target; });
             if (g_gates.size() >= kGateMax) {   // oldest first, and said out loud
@@ -612,6 +620,7 @@ namespace MFO::Logistics {
             }
             g_gates.push_back(std::move(g));
             g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
+            return true;
         }
 
         // ── ACTOR BLOCK -> REORDER, not a gate (review R2, marth 2026-09-24: "During

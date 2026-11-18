@@ -1337,8 +1337,9 @@ namespace MFO::Logistics {
                                      Iaus::DefaultLootTuning().gateRepeatU, held);
                         skipWhy = "BLOCKED again at the same point (stuck evidence, not gated)";
                     } else {
-                        MarkGated(a_follower, tref, held, now, blockPos);
-                        skipWhy = "GATED (Movement Blocked, no actor in front)";
+                        skipWhy = MarkGated(a_follower, tref, held, now, blockPos)
+                            ? "GATED (Movement Blocked, no actor in front)"
+                            : "BLOCKED with no door/activator named (bump / repath: not gated, stuck evidence)";
                     }
                     skippedRef      = tref->GetFormID();
                     tr.blockedSince = {};
