@@ -3630,3 +3630,4 @@ F1 (SEV-3, landing-hold retry cadence), F2 (SEV-4, "logic honesty only" doc), F3
 - **(SEV-4):** OffenseApproach.cpp:413 `static_cast<int>(offenseApproachDropCap)` is UB above INT_MAX (SetTuningScalar only rejects negative / non-finite): clamp before the cast or bound the scalar.
 - **(SEV-4):** CastOn.cpp:719-735 the Sightline-timed fallback also runs for IAUS followers whenever OwnOccludedAgeSec returns 0 (incl. a fresh not-occluded record): two readers of the bound (fails safe via the stamp min).
 - **Note:** with 8+ followers the occluded bound may never fire (Sightline 1 s freshness vs the lap): watch in the field.
+- **OPEN (SEV-5):** (fix/loot-gated, 11-17g) `gateRepeatU / gateShortU / gateNearU` (300 / 300 / 200) and the new `gateReadmitMoveU` default 500 are placeholders for the field; `kStuckTargets` is now 2 consecutive blocked ends within 300 u (the same target counts again).

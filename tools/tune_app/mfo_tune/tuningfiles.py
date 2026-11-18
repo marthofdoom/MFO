@@ -40,7 +40,8 @@ LOOT_F = {"takeThreshold": (False, 1), "needBase": (False, INF), "needSlope": (F
           "gemChargeTrigger": (False, 1), "buffScale": (False, INF), "foodScale": (False, INF), "poisonPowerRef": (True, INF), "poisonWeakScale": (False, INF),
           "stealNeedMin": (False, 1), "stealRiskWeight": (False, INF), "stealBountyPerGold": (False, INF), "stealBountyRef": (True, INF), "guardBarFloorSec": (False, INF),
           "guardFreshSec": (True, INF), "guardUnreadMaxSec": (True, INF), "guardRepostSec": (True, INF), "batchHoldMinSec": (False, INF),
-          "gateConeDeg": (True, 90), "gateBeyondU": (False, INF), "gateReadmitSec": (False, INF), "gateReadmitMoveU": (False, INF)}
+          "gateConeDeg": (True, 90), "gateBeyondU": (False, INF), "gateReadmitSec": (False, INF), "gateReadmitMoveU": (False, INF),
+          "gateRepeatU": (False, INF), "gateShortU": (False, INF), "gateNearU": (False, INF)}
 LOOT_I = ("soulGemTarget", "healthTarget", "staminaTarget", "staminaTargetNoWeapon", "magickaTarget", "resistTarget", "fortifyTarget", "regenTarget",
           "invisTarget", "lockpickTarget", "poisonTarget")
 KNOWN_STEMS = set(names.CLASS_SLUGS) | set(names.BASE_OFF_SLUGS) | {"shared", "potions", "looting"}

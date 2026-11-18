@@ -58,7 +58,7 @@ namespace MFO::Logistics {
         // plus a re-dispatch, so the field's 13 ends in ~2 min were ~9 s apart. 90 s is ten of those gaps.
         constexpr auto  kRunGap       = std::chrono::seconds(90);
         constexpr float kStuckRadius  = 300.0f;   // "about 300 u of one point" (marth's spec)
-        constexpr int   kStuckTargets = 3;        // distinct targets
+        constexpr int   kStuckTargets = 2;        // consecutive blocked ends within ~300 u (field 11-17g: was 3 distinct targets; a repeat block no longer gates, so the repeat is the evidence)
         constexpr float kStuckSecs    = 20.0f;
         constexpr float kMovedMax     = 150.0f;
         constexpr float kPlayerNear   = 800.0f;   // past any follow-package radius (review F1 of ff286d0: 300 u could sit inside a satisfied follow)
@@ -211,6 +211,16 @@ namespace MFO::Logistics {
         }
     }
 
+    bool StuckAtOriginRepeatsBlock(RE::FormID a_follower, const RE::NiPoint3& a_blockPos, Clock::time_point a_now) {
+        const float radius = Iaus::DefaultLootTuning().gateRepeatU;
+        std::lock_guard lk(g_mx);
+        auto it = g_runs.find(a_follower);
+        if (it == g_runs.end()) return false;
+        for (const Hit& h : it->second)
+            if (a_now - h.at <= kRunGap && h.pos.GetDistance(a_blockPos) <= radius) return true;
+        return false;
+    }
+
     void StuckAtOriginResetRun(RE::FormID a_follower) {
         std::lock_guard lk(g_mx);
         if (auto it = g_runs.find(a_follower); it != g_runs.end()) it->second.clear();
@@ -226,7 +236,7 @@ namespace MFO::Logistics {
         std::erase_if(run, [&](const Hit& h) {
             return a_now - h.at > kRunGap || h.pos.GetDistance(a_blockPos) > kStuckRadius;
         });
-        std::erase_if(run, [&](const Hit& h) { return h.target == a_target; });   // distinct targets only
+        // 11-17g: the same target blocked again near the same point counts too (a repeat is no longer gated, so it is the evidence).
         run.push_back(Hit{ a_target, a_blockPos, a_now });
         if (static_cast<int>(run.size()) < kStuckTargets) return false;
 
@@ -235,7 +245,7 @@ namespace MFO::Logistics {
         auto* cell = a_follower->GetParentCell();
         auto* pc = RE::PlayerCharacter::GetSingleton();
         const auto* st = a_follower->AsActorState();
-        spdlog::error("[loot] {:08X} is stuck himself at ({:.0f},{:.0f},{:.0f}) -- {} different targets blocked at "
+        spdlog::error("[loot] {:08X} is stuck himself at ({:.0f},{:.0f},{:.0f}) -- {} consecutive blocked ends at "
                       "the same spot; ending the excursion. He stands at ({:.0f},{:.0f},{:.0f}), swimming={}, cell "
                       "{:08X} '{}'. No further loot excursions by him until he is more than {:.0f} u from that point; "
                       "the 'really stuck' check starts now ({:.0f} s of follow, then the door rescue if every criterion holds)",

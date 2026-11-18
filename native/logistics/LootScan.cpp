@@ -56,6 +56,8 @@ namespace MFO::Logistics {
                              "radius={:.0f} handle=-",
                              a_follower->GetFormID(), rid, a_slot, 128.0f);
             if (!legTook) return false;
+            // 11-17g: ask the guard question at the retarget (PEEK: posts the scan, stamps nothing) so the answer is cached before he arrives.
+            (void)TheftGate::GuardCheck(a_follower, a_ref, LooseRef(a_ref) ? TheftGate::Road::Loose : TheftGate::Road::Corpse, false, /*a_peek*/ true);
             tr.target   = a_ref->GetHandle();
             tr.cat      = a_cat;
             tr.want     = a_want;
@@ -988,6 +990,8 @@ namespace MFO::Logistics {
                                          "radius={:.0f} handle=-",
                                          a_follower->GetFormID(), rid, s, 128.0f);
                     }
+                    if (travelTook)   // 11-17g: guard answer prefetched at dispatch (PEEK), cached before he arrives
+                        (void)TheftGate::GuardCheck(a_follower, ref, LooseRef(ref) ? TheftGate::Road::Loose : TheftGate::Road::Corpse, false, /*a_peek*/ true);
                     if (travelTook) {
                         g_travelSlots[s].active    = true;
                         g_travelSlots[s].follower  = a_follower->GetFormID();

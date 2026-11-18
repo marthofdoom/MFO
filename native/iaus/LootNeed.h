@@ -137,7 +137,12 @@ namespace MFO::Iaus {
         float gateConeDeg = 45.0f, gateBeyondU = 1024.0f;
         // GATED RE-ADMIT (besides the door / lever / cell events): a record is lifted after gateReadmitSec (0 = no timer, marth 2026-09-24 "no
         // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point. BOTH DEFAULT OFF (marth's standing GATED rule is door / lever / cell events only); the rows stay for later. PLACEHOLDERS.
-        float gateReadmitSec = 0.0f, gateReadmitMoveU = 0.0f;
+        float gateReadmitSec = 0.0f, gateReadmitMoveU = 500.0f;
+        // GATED IS A FACT, NOT A FREEZE (field 11-17g: a follower STUCK at one point gated the targets and a cone past them, outdoors loot froze).
+        // gateRepeatU: a block within this of the same follower's previous block point is stuck-at-origin evidence, NOT a gate (the stuck rescue
+        // fires instead). gateShortU: a block farther than this short of the target gates only that target, no cone. gateNearU: a record is lifted
+        // when any follower or the player stands within this of the gated item (0 = off). gateReadmitMoveU above now defaults to 500. PLACEHOLDERS.
+        float gateRepeatU = 300.0f, gateShortU = 300.0f, gateNearU = 200.0f;
     };
     // THREAD MIRROR of the three guard-cache timers (review 11-17c): TheftGate::GuardCheck also runs on the MAIN thread (a_onMain callers), while
     // the worker rewrites LiveLootTuning() when looting.txt is applied (TuningFile.cpp). The cache reads these atomics, never the table.
@@ -174,6 +179,7 @@ namespace MFO::Iaus {
             { "guardRepostSec", &LootTuning::guardRepostSec, true, kInf }, { "batchHoldMinSec", &LootTuning::batchHoldMinSec, false, kInf }, { "offClassDwellSec", &LootTuning::offClassDwellSec, false, kInf },
             { "gateConeDeg", &LootTuning::gateConeDeg, true, 90.0f }, { "gateBeyondU", &LootTuning::gateBeyondU, false, kInf },
             { "gateReadmitSec", &LootTuning::gateReadmitSec, false, kInf }, { "gateReadmitMoveU", &LootTuning::gateReadmitMoveU, false, kInf },
+            { "gateRepeatU", &LootTuning::gateRepeatU, false, kInf }, { "gateShortU", &LootTuning::gateShortU, false, kInf }, { "gateNearU", &LootTuning::gateNearU, false, kInf },
         };
         for (const F& k : kFloats) if (a_name == k.name) {
             if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kInf ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kInf ? "out of range: must be 0..1" : "out of range: must be >= 0"));

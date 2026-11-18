@@ -405,6 +405,9 @@ namespace MFO::Logistics {
             // The ref known to be the gate, when one is (batch L: LP-M2's locked door at the
             // block, RecordGateRef). 0 = unknown: a Movement Blocked stall names no object.
             RE::FormID        gate = 0;
+            // The block was more than LootTuning::gateShortU short of the target: the follower was stuck, not at an opening, so the record
+            // names ONLY the target (no "behind the same block" cone; field 11-17g).
+            bool              targetOnly = false;
         };
         inline std::mutex              g_gateMx;
         inline std::vector<GateRecord> g_gates;   // guarded by g_gateMx
@@ -490,6 +493,16 @@ namespace MFO::Logistics {
                              a_target, a_gate);
             }
         }
+        // The idle reassess (Service.cpp "cleared N blocklisted bodies") also lifts the gates THIS follower made (field 11-17g).
+        inline std::size_t ClearGatesBy(RE::FormID a_follower) {
+            std::lock_guard lk(g_gateMx);
+            const std::size_t n = std::erase_if(g_gates, [&](const GateRecord& g) { return g.follower == a_follower; });
+            if (n) {
+                g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
+                spdlog::info("[loot] {:08X} idle reassess -- lifted {} GATED record(s) he made", a_follower, n);
+            }
+            return n;
+        }
         inline void ClearGates() {
             std::lock_guard lk(g_gateMx);
             g_gates.clear();
@@ -501,11 +514,22 @@ namespace MFO::Logistics {
         inline void GateReadmitSweep(Clock::time_point a_now) {
             if (g_gateCount.load(std::memory_order_relaxed) <= 0) return;
             const auto& tu = Iaus::DefaultLootTuning();
-            if (tu.gateReadmitSec <= 0.0f && tu.gateReadmitMoveU <= 0.0f) return;
+            if (tu.gateReadmitSec <= 0.0f && tu.gateReadmitMoveU <= 0.0f && tu.gateNearU <= 0.0f) return;
+            // FACT re-admit (field 11-17g): any party member or the player within gateNearU of the gated item. Actors are looked up before
+            // the lock; the active list is the thread-safe snapshot.
+            std::vector<RE::Actor*> nearActors;
+            if (tu.gateNearU > 0.0f) {
+                if (auto* pc = RE::PlayerCharacter::GetSingleton()) nearActors.push_back(pc);
+                if (auto snap = Followers::ActiveSnapshot())
+                    for (RE::FormID fid : *snap)
+                        if (auto* fa = RE::TESForm::LookupByID<RE::Actor>(fid)) nearActors.push_back(fa);
+            }
             const auto lim = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(tu.gateReadmitSec));
             std::lock_guard lk(g_gateMx);
-            EraseGatesIf("re-admit sweep (timer or the follower moved away)", 0, [&](const GateRecord& g) {
+            EraseGatesIf("re-admit sweep (timer, the follower moved away, or someone stands at the item)", 0, [&](const GateRecord& g) {
                 if (tu.gateReadmitSec > 0.0f && a_now - g.since >= lim) return true;
+                for (auto* a : nearActors)
+                    if (a->GetParentCell() && SpaceKey(a) == g.space && a->GetPosition().GetDistance(g.targetPos) <= tu.gateNearU) return true;
                 if (tu.gateReadmitMoveU <= 0.0f) return false;
                 auto* f = RE::TESForm::LookupByID<RE::Actor>(g.follower);
                 return f && f->GetParentCell() && SpaceKey(f) == g.space && f->GetPosition().GetDistance(g.blockPos) > tu.gateReadmitMoveU;
@@ -520,7 +544,7 @@ namespace MFO::Logistics {
             std::lock_guard lk(g_gateMx);
             for (auto& g : g_gates) {
                 if (g.target == a_id) return true;
-                if (!ref || !space || space != g.space || !BehindBlock(g, pos)) continue;
+                if (g.targetOnly || !ref || !space || space != g.space || !BehindBlock(g, pos)) continue;
                 if (g.logged.size() < 64 && g.logged.insert(a_id).second)
                     spdlog::info("[loot] {:08X} GATED-BEHIND the block {:08X} ran into on the way to "
                                  "{:08X} -- skipped (a skip, not a failure)", a_id, g.follower, g.target);
@@ -569,13 +593,15 @@ namespace MFO::Logistics {
             g.blockPos  = a_blockPos ? *a_blockPos : a_follower->GetPosition();
             g.targetPos = a_target->GetPosition();
             g.since     = a_now;
+            g.targetOnly = g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
             spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
                          "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree cone past "
                          "the block, <= +{:.0f} u, same floor) until a door/gate/lever event near it, its "
-                         "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off). No actor in front of him. No strike, not sticky.",
+                         "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off). No actor in front of him. No strike, not sticky.{}",
                          g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,
                          g.blockPos.GetDistance(g.targetPos), Iaus::DefaultLootTuning().gateConeDeg, Iaus::DefaultLootTuning().gateBeyondU,
-                         Iaus::DefaultLootTuning().gateReadmitSec, Iaus::DefaultLootTuning().gateReadmitMoveU);
+                         Iaus::DefaultLootTuning().gateReadmitSec, Iaus::DefaultLootTuning().gateReadmitMoveU,
+                         g.targetOnly ? " TARGET ONLY: the block is far short of it, so he was stuck, not at an opening -- no cone." : "");
             LogGateNeighbours(a_follower, g.target, g.blockPos);
             std::lock_guard lk(g_gateMx);
             std::erase_if(g_gates, [&](const GateRecord& o) { return o.target == g.target; });

@@ -919,6 +919,16 @@ namespace MFO::Logistics {
                 // ARRIVED radius (128 u) sits inside kArrivalDist (200 u), so a genuine
                 // ARRIVED passes this same tick; an ARRIVED he has since drifted away
                 // from is restarted below (ch19FarArrival), never looted remotely.
+                // 11-17g: the guard answer was still Pending at the arrival take and Harbinger's leg has ENDED (ARRIVED): the follow package
+                // resumes and drifts him off (the museum book: 659 u, later GATED). Drop to Holding with no blocklist and no strike so the
+                // scan re-picks the same ref and ClaimLootTravel re-points the ended same-ref leg (sameEnded) -- he stays until the answer lands.
+                // No new timeout: the guard timers (guardFresh / guardUnreadMax) and the excursion cap bound it.
+                auto RepointEndedLegForGuard = [&](RE::FormID a_ref) {
+                    spdlog::info("[loot] {:08X}: arrived at {:08X}, guard answer still pending and Harbinger's leg has ended -- holding, "
+                                 "re-pointing the leg at the same ref (no blocklist, no strike)", id, a_ref);
+                    tr.phase       = TravelPhase::Holding;
+                    tr.lingerUntil = now + BatchLingerDur();
+                };
                 if (!gone && (dist <= arrivalDist || faceReach)) {
                     // REACHED it -> this body is provably reachable: clear any stall
                     // strike so a merely-transient earlier block (boxed in by an actor,
@@ -958,7 +968,10 @@ namespace MFO::Logistics {
                             : TheftGate::LooseBarred(a_follower, tref, flora ? TheftGate::Road::Flora : TheftGate::Road::Loose, /*a_arrival*/ true, &guardPending);
                         // THEFT GATE: the guard answer is not back yet (the scan runs on main, one frame): a retry next tick, NOT a verdict. No
                         // blocklist, no travel-fail, the phase is untouched so this arrival is re-entered.
-                        if (guardPending) return;
+                        if (guardPending) {
+                            if (ch19Arrived) RepointEndedLegForGuard(tref->GetFormID());
+                            return;
+                        }
                         if (!arrivalBar && flora &&
                             (tref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0)
                             arrivalBar = "already harvested on arrival";
@@ -1125,6 +1138,7 @@ namespace MFO::Logistics {
                     }
                     if (guardHeld) {
                         GuardHeldAt()[tref->GetFormID()] = now;
+                        if (guardAfter.state == TheftGate::GuardState::Pending && ch19Arrived) RepointEndedLegForGuard(tref->GetFormID());
                         if (guardAfter.landing) RearmForLanding(id, now);   // a landing lands next frame: retry soon, not in 1 s
                         static std::unordered_map<RE::FormID, Clock::time_point> s_nextGuardHoldLog;
                         auto& nxtG = s_nextGuardHoldLog[id];
@@ -1315,6 +1329,13 @@ namespace MFO::Logistics {
                                      held, ab.id, ab.dist);
                         skipWhy = "ACTOR-BLOCKED (reordered, not dropped)";
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
+                    } else if (StuckAtOriginRepeatsBlock(id, blockPos ? *blockPos : a_follower->GetPosition(), now)) {
+                        // 11-17g: blocked again within gateRepeatU of his previous block point -- HE is stuck, not the target. No gate
+                        // (a gate here froze all outdoor loot until unload); the block feeds the stuck-at-origin record below.
+                        spdlog::info("[loot] {:08X} target {:08X} blocked again within {:.0f} u of his previous block point after "
+                                     "{:.1f}s Movement Blocked -- stuck evidence, NOT gated", id, tref->GetFormID(),
+                                     Iaus::DefaultLootTuning().gateRepeatU, held);
+                        skipWhy = "BLOCKED again at the same point (stuck evidence, not gated)";
                     } else {
                         MarkGated(a_follower, tref, held, now, blockPos);
                         skipWhy = "GATED (Movement Blocked, no actor in front)";
@@ -2320,6 +2341,8 @@ namespace MFO::Logistics {
             // genuinely-unreachable body can't drive a re-attempt loop.
             if (!AnyTravelActive()) {
                 const int ic = ++g_idleCycles[id];
+                // 11-17g: the idle reassess also lifts the GATED records HE made (they are not in g_travelFailed, so this is independent of it).
+                if (ic >= kIdleReassessCycles && g_gateCount.load(std::memory_order_relaxed) > 0) ClearGatesBy(id);
                 if (ic >= kIdleReassessCycles && !g_travelFailed.empty() &&
                     (g_lastBlocklistReassess.time_since_epoch().count() == 0 ||
                      now - g_lastBlocklistReassess >= kReassessCooldown)) {
