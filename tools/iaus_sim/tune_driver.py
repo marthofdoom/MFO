@@ -98,7 +98,7 @@ CELLS15 = list(CELLS)
 POOLED = {}   # {"beta1": "<comma list>"} under --cells all: the sim's `beta1` pool is the 15 cells only, so the pooled runs name the 38 explicitly
 T1 = {"melee", "ranged", "mage"}                 # also the companions in every other class's fights
 KNIGHTS = ["knight", "great-knight", "ebony-warrior"]
-TIGHT = {"thief", "mercenary"}
+TIGHT = {"thief", "mercenary", "master-thief", "nightingale", "nightblade", "listener"}   # marth 11-19: the thief line T3+ classes are held as strict as Thief ("Strict of course.")
 CACHE_DIR = os.path.expanduser("~/.cache/mfo-list-balance/")
 HERE = os.path.dirname(os.path.abspath(__file__))
 

@@ -3675,6 +3675,6 @@ value's final table). No wrong value ships; the report only misleads. Fix: clear
 recalib left (or compare the table hash the joint passed on with the final one).
 
 ### feat/tune-24-classes (Opus review 2026-11-19, against f26dac4a)
-- SEV-4, tools/iaus_sim/tune_driver.py:94 / :326: "TIGHT = {"thief","mercenary"} is not extended. master-thief, nightingale, nightblade and listener get the 0.5 J hard band instead of 0.25." Needs marth's ruling.
+- SEV-4, tools/iaus_sim/tune_driver.py:94 / :326: "TIGHT = {"thief","mercenary"} is not extended. master-thief, nightingale, nightblade and listener get the 0.5 J hard band instead of 0.25." Needs marth's ruling. RESOLVED 11-19: marth "Strict of course." -> TIGHT extended.
 - SEV-5: --parked under --cells all also turns on parked scenarios, so the 15 old cells' numbers in an all-run are on a different fight set; do not compare directly.
 - SEV-5: "15 cells" text left in docstrings / summary.md (:27, :54-55, :1054-1057, :1086/1092, :1598, :1694-1709, :386, :2001-2002); SUMMARY["config"] does not record cells.
