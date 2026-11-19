@@ -89,6 +89,13 @@ CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off"
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
 BASE = ["melee-off", "ranged-off", "mage-off"]
 CELLS = BETA1_TREE + BASE
+# --cells all (marth 11-19): the 23 parked T3 / T4 / T5 classes the sim's class table models (--print-classes: 35 + 3 tree-OFF base cells = 38, all
+# present). Every one has a Playstyles.h card row (dragonborn's row has NO bands: its identity is not gated). They are tuned under the sim's
+# --parked switch (the T3+ playstyles take effect only with it), which --cells all adds to every run. The default (15) is unchanged.
+NEW_CELLS = ("great-knight,champion,blademaster,ranger,master-thief,wizard,necromancer,priest,spellsword,sorcerer,templar,nightblade,witchhunter,scout,"
+             "arch-mage,living-legend,nightingale,listener,ebony-warrior,grand-battlemage,jaqspur,saint,dragonborn").split(",")
+CELLS15 = list(CELLS)
+POOLED = {}   # {"beta1": "<comma list>"} under --cells all: the sim's `beta1` pool is the 15 cells only, so the pooled runs name the 38 explicitly
 T1 = {"melee", "ranged", "mage"}                 # also the companions in every other class's fights
 KNIGHTS = ["knight", "great-knight", "ebony-warrior"]
 TIGHT = {"thief", "mercenary"}
@@ -171,7 +178,13 @@ def world_args(world):
     return ["--list", CACHE_DIR + world + ".sim.json", "--potion-worth", os.path.join(A.out, "potworth-%s.txt" % world)]
 
 
+def pooled(classes):
+    """The classes argument the simulator is given: the driver's pool name `beta1` is the 38 cells under --cells all (the sim's own beta1 is 15)."""
+    return POOLED.get(classes, classes)
+
+
 def key_of(world, classes, cfg, curves, sets, binary):
+    classes = pooled(classes)
     extra = ["uses:" + sha(uses_path())] if classes.startswith("logi:") else []   # a loot run also depends on the combat world's use counts
     return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)] + extra, separators=(",", ":"))
 
@@ -193,7 +206,7 @@ def sim_cmd(world, classes, cfg, curves, sets, binary):
         cmd = [binary or A.bin, "--no-json", "--logistics", str(CFG["logi_eps"]), "--logi-policy", "iaus", "--logi-score", "--logi-consumables",
                "--logi-uses", uses_path(), "--classes", classes[5:]]
         return cmd + (["--set", sets] if sets else [])
-    cmd = [binary or A.bin, "--no-json", "--threads", "1", "--print-switch", "--classes", classes, "--fights", "48"] + world_args(world) + CONFIGS[cfg]
+    cmd = [binary or A.bin, "--no-json", "--threads", "1", "--print-switch", "--classes", pooled(classes), "--fights", "48"] + world_args(world) + CONFIGS[cfg]
     for c in curves:
         cmd += ["--curve", c]
     if sets:
@@ -345,7 +358,7 @@ def emit_run(classes, label, curves=(), sets=None):
         return
     if A.smoke:
         label = "SMOKE TEST, NOT A RESULT: " + label
-    cmd = [A.bin, "--threads", "2", "--classes", classes, "--fights", "4", "--class-oracle", "2", "--gap-scenarios", "1", "--label", label]
+    cmd = [A.bin, "--threads", "2", "--classes", pooled(classes), "--fights", "4", "--class-oracle", "2", "--gap-scenarios", "1", "--label", label]
     for c in curves:
         cmd += ["--curve", c]
     if sets:
@@ -995,7 +1008,7 @@ def gap_order():
     try:
         path = os.path.join(A.out, "gap-run.json")
         if not os.path.exists(path):
-            subprocess.run([A.bin, "--threads", str(A.jobs), "--classes", "beta1", "--fights", "4", "--class-oracle", "4", "--gap-scenarios", "2", "--label", "tune_driver gap order", "--json", path], capture_output=True, text=True)
+            subprocess.run([A.bin, "--threads", str(A.jobs), "--classes", pooled("beta1"), "--fights", "4", "--class-oracle", "4", "--gap-scenarios", "2", "--label", "tune_driver gap order", "--json", path], capture_output=True, text=True)
         gaps = {g["class"]: g["gap"] for g in json.load(open(path)).get("class_gaps", []) if g.get("class") in CELLS}
         order = sorted(CELLS, key=lambda c: -gaps.get(c, 0.0))
         SUMMARY["stages"]["gap_order"] = [[c, gaps.get(c)] for c in order]
@@ -1879,7 +1892,7 @@ def stage_rating():
     curves = final_curves()
     out = {}
     for w in A.worlds:
-        cmd = [A.bin, "--no-json", "--threads", str(A.jobs), "--rating-only", "--rating", "3" if not CFG["force"] else "1", "--classes", "beta1", "--seeds", ",".join(str(s) for s in range(1, CFG["rating_seeds"] + 1))] + world_args(w)
+        cmd = [A.bin, "--no-json", "--threads", str(A.jobs), "--rating-only", "--rating", "3" if not CFG["force"] else "1", "--classes", pooled("beta1"), "--seeds", ",".join(str(s) for s in range(1, CFG["rating_seeds"] + 1))] + world_args(w)
         for c in curves:
             cmd += ["--curve", c]
         if final_sets():
@@ -2114,6 +2127,7 @@ def main():
     ap.add_argument("--out", required=True, help="the run's directory: cache.jsonl, progress.log, summary.json, summary.md")
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
     ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,gap,floor,summary")
+    ap.add_argument("--cells", choices=("15", "all"), default="15", help="15 (default): the Beta 1 cells. all: + the 23 parked T3 / T4 / T5 classes (38 cells; adds the sim's --parked to every run; the pooled stages, rating and logistics cover all 38)")
     ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
     ap.add_argument("--stages", default=DEFAULT_STAGES)
@@ -2136,6 +2150,12 @@ def main():
             raise SystemExit("--for-class sets --classes and --stages itself: give neither")
         A.classes, A.stages = A.for_class, FOR_CLASS_STAGES
     A.worlds = A.worlds.split(",")
+    if A.cells == "all":
+        global CELLS
+        CELLS = CELLS15 + NEW_CELLS
+        POOLED["beta1"] = ",".join(CELLS)
+        if "--parked" not in A.sim_flags.split():
+            A.sim_flags = (A.sim_flags + " --parked").strip()
     A.bin = os.path.abspath(A.bin)
     CFG = SMOKE if A.smoke else FULL
     os.makedirs(A.out, exist_ok=True)

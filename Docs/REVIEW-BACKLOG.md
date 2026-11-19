@@ -3666,3 +3666,10 @@ marth's standing tuning rule of 11-17: the oracle scores every candidate at ever
 - SEV-4 F-B, Data.h:68: V3::Any() omits hittail (a v2 run with hittail=on is tagged v2).
 - SEV-4 F-C, sim.cpp:998-999: ORCSTOP / ORCREFUSED merge companions under the subject's class label; the tree-ON warrior CLI check can be satisfied by a companion; bands measured beside oracle companions.
 - SEV-4 F-D: the healer healLate band does not bind on the natural bracket (IAUS 1.9 vs bound 8); needs marth's ruling on a pressure-bracket band row. Ext::Scroll heals and engine-AI heals not counted in healAt/healLate.
+
+## 2026-11-19: tune_driver ship.needs_joint_rerun stays set after a passing joint rerun (SEV-4, stage-order bookkeeping)
+Raised against 77c607a6 (run 11-18). When the recalib stage withholds a value (11-18: `mercenary:0.7.a=0.931` withheld) the driver sets
+`ship.needs_joint_rerun`. The joint rerun then PASSED twice, but the flag stayed set: the summary kept saying the joint check was owed.
+It is bookkeeping across stage order (recalib runs after joint; nothing clears the flag when a later joint pass covers the withheld
+value's final table). No wrong value ships; the report only misleads. Fix: clear the flag when a joint stage passes on the table that
+recalib left (or compare the table hash the joint passed on with the final one).
