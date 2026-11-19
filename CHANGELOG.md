@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.11.8 -- Retuned against the new oracle
+
+This is a real release on top of 2.11.7. It needs Harbinger v0.20.5 (unchanged). The saves are unchanged. Only the tuning files change: no code changes since 2.11.7.
+
+- **Every tuned class is retuned** in the sim against the new oracle, which may try as many plans as it likes but only with the class's own abilities. The fifteen tuned cells (melee, ranged, mage and their off-class rows, knight, warrior, mercenary, archer, thief, evoker, conjurer, healer, warlock) ship their new values as defaults.
+- **The sim's damage now comes in bursts like the field's,** and the survival targets for each class are set from what the oracle achieves, not from fixed numbers. The healer's old "heal at 60%" target is gone: the oracle heals at about 70%.
+- The other classes still run on the shared defaults. They get their own tuning round next.
+
 ## v2.11.7 -- Looting fixed, heals land in time and casters stop stuttering
 
 This is a real release on top of 2.11.6. It needs Harbinger v0.20.5 (unchanged). The saves are unchanged: no new co-save record and no new layout.
