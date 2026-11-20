@@ -920,6 +920,17 @@ namespace MFO::Actuation {
     const char* BuffSelfRuneWhy(RE::SpellItem* a_spell, bool a_explicitSelf);
     const char* ShapeName(SpellShape a_shape);
     const char* EngineRowName(EngineRow a_row);
+    // THE ONE READER of "does Harbinger seat a caster for this spell's predicted engine row" (marth 2026-11-19, Jesper:
+    // casts "never get going"). Harbinger's 0x06 / 0x07 / 0x0A / 0x0D seats never sit on Stagger, Disarm, TargetEffect,
+    // Paralyze (and Reanimate below ABI 19: Harbinger STATUS.md 2026-10-05); a claim on such a spell is never asked
+    // CheckStartCast and holds its hand until the TTL. The row is the predicted one, exact OR approx (Turn Lesser Undead keys
+    // TargetEffect(approx)). TO SEAT A ROW LATER, edit kUnseatedRows in Archetype.cpp (one row). NoRow / Unknown / Script
+    // are NOT unseated: Harbinger serves those as Script (Longstride, Detect Life, Circle of Strength fired in the field).
+    // Pure form data (plus the ABI read for Reanimate): any thread.
+    bool HarbingerSeatsRow(EngineRow a_row);
+    // The spell-level question. false = unservable; *a_row (optional) gets the row. a_road (static literal) is named in
+    // the once-per-spell `[iaus]` line this logs the first time it answers false (a_log). A null spell answers true.
+    bool HarbingerSeatsSpell(RE::SpellItem* a_spell, const char* a_road, bool a_log = true, EngineRow* a_row = nullptr);
     // "<name> (<id>) shape=<s> predicted=<row>[...]" -- the [cfc] enrichment.
     std::string DescribeArchetype(RE::SpellItem* a_spell);
 

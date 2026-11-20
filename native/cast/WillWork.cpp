@@ -108,25 +108,35 @@ namespace MFO::Actuation {
             out.verdict = WillWorkVerdict::Yes;
             bool        anyEffect = false;
             std::string firstBlock;
+            // LEVEL CAP FIRST, ORDER-INDEPENDENT (Opus review 2026-11-19 F1): a level-capped effect is the one that keys the
+            // spell's caster row (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate are control effects). When ANY of
+            // them cannot land the spell does not work, even though an uncapped companion effect (Turn Lesser Undead's second
+            // effect, 0004D3F9, field 1119: Jesper at a level-30 Deathlord) would, and wherever the engine lists it.
+            for (const auto* e : a_spell->effects) {
+                if (!e || !e->baseEffect) continue;
+                const auto* base = e->baseEffect;
+                if (!LevelCapped(base->GetArchetype())) continue;
+                float cap = e->effectItem.magnitude;
+                // ARITY IS PER ENTRY POINT: EP 0x1D (kModSpellMagnitude) is (owner, spell, TARGET REF, &value);
+                // cast/Summon.cpp's EP 0x44 is (owner, spell, &value). Disassembly: 1.6.1170 0x5abe68 / 0x5ac400 /
+                // 0x5ac414 pass r8=spell, r9=target, [rsp+0x20]=&magnitude (1.5.97 0x53dfa0 the same).
+                RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellMagnitude,
+                                                    a_caster, static_cast<RE::MagicItem*>(a_spell),
+                                                    static_cast<RE::TESObjectREFR*>(a_target), &cap);
+                cap += WillWorkClassLevelBonus(a_caster, a_spell, e);
+                const auto lvl = a_target->GetLevel();
+                if (static_cast<float>(lvl) > cap) {
+                    out.verdict = WillWorkVerdict::No;
+                    out.reason  = std::format("'{}' affects up to level {:.0f}, target is level {}",
+                                              base->GetName() ? base->GetName() : "effect", cap, lvl);
+                    return out;
+                }
+            }
             for (const auto* e : a_spell->effects) {
                 if (!e || !e->baseEffect) continue;
                 anyEffect = true;
                 const auto* base = e->baseEffect;
                 std::string blocked;
-                if (LevelCapped(base->GetArchetype())) {
-                    float cap = e->effectItem.magnitude;
-                    // ARITY IS PER ENTRY POINT: EP 0x1D (kModSpellMagnitude) is (owner, spell, TARGET REF, &value);
-                    // cast/Summon.cpp's EP 0x44 is (owner, spell, &value). Disassembly: 1.6.1170 0x5abe68 / 0x5ac400 /
-                    // 0x5ac414 pass r8=spell, r9=target, [rsp+0x20]=&magnitude (1.5.97 0x53dfa0 the same).
-                    RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellMagnitude,
-                                                        a_caster, static_cast<RE::MagicItem*>(a_spell),
-                                                        static_cast<RE::TESObjectREFR*>(a_target), &cap);
-                    cap += WillWorkClassLevelBonus(a_caster, a_spell, e);
-                    const auto lvl = a_target->GetLevel();
-                    if (static_cast<float>(lvl) > cap)
-                        blocked = std::format("'{}' affects up to level {:.0f}, target is level {}",
-                                              base->GetName() ? base->GetName() : "effect", cap, lvl);
-                }
                 if (blocked.empty()) {
                     // Subject = the one the effect lands on, the other party = the caster.
                     if (e->conditions && !e->conditions.IsTrue(a_target, a_caster))
