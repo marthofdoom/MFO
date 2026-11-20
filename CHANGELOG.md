@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.11.9 -- Casters get their spells off
+
+This is a real release on top of 2.11.8. It needs Harbinger v0.20.5 (unchanged). The saves are unchanged.
+
+- **A spell that never starts no longer holds the caster.** Some spells were picked and claimed, and then the game never began the cast, while every other spell waited behind them. A cast that has not started is now released: after 4 seconds for a spell the game can't start through Harbinger yet, which is then left out for the rest of the fight, and after 6.5 seconds for any other spell, which is left out for the fight on that foe only after it fails twice in a row.
+- **Control spells are judged on the effect that counts.** Turn Undead, Calm, Fear, Frenzy and Rally spells are not picked against a foe whose level is too high for them, even when another effect on the spell would still land. Turn Lesser Undead is no longer aimed at a Draugr Deathlord.
+- Turn Undead, Banish, Command, Stagger, Disarm and Paralyze spells still can't be started through Harbinger. They get one try a fight and then step aside. Harbinger support for them is planned.
+
 ## v2.11.8 -- Retuned against the new oracle
 
 This is a real release on top of 2.11.7. It needs Harbinger v0.20.5 (unchanged). The saves are unchanged. Only the tuning files change: no code changes since 2.11.7.
