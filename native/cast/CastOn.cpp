@@ -36,6 +36,22 @@ namespace MFO::Actuation {
     }
 
     namespace {
+        // THE ONE READER of how a never-started offense claim is bounded (Opus review 2026-11-19 F2 / F3). A row Harbinger seats no caster
+        // for (HarbingerSeatsRow false) or serves as Script / NoRow can never "start slowly": its claim is released after the short
+        // window and the spell held off for the fight on EVERY target after ONE failure (key spell << 32 | 0). A SEATED row has a real
+        // AI behind it (deciding, a hybrid choosing melee, an approach, a Harbinger refusal for a while: field Candlelight 4.67 / 5.73 s),
+        // so it gets the buff road's longer window and needs TWO consecutive failures on the (spell, target) before the hold lasts the fight.
+        bool OffenseNeverStartedFightLong(EngineRow a_row) {
+            return !HarbingerSeatsRow(a_row) || a_row == EngineRow::Script || a_row == EngineRow::NoRow;
+        }
+        long long OffenseNeverStartedWindowMs(EngineRow a_row) {
+            return OffenseNeverStartedFightLong(a_row) ? static_cast<long long>(APMFBridge::kHealClaimNeverObservedCapMs)
+                                                       : static_cast<long long>(APMFBridge::kHoldLastSeenCapMs);
+        }
+        constexpr std::uint64_t OffenseKey(RE::FormID a_spell, RE::FormID a_target) {
+            return (static_cast<std::uint64_t>(a_spell) << 32) | a_target;
+        }
+
 
         // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
         // marth 2026-09-07 (verbatim): "without APMF, it needs to just work,
@@ -451,13 +467,14 @@ namespace MFO::Actuation {
                     }
                 }
             }
-            // A PURE-SCRIPT OFFENSE CLAIM THAT NEVER FIRED was released (the bound in the in-flight refresh below):
-            // held off for the rest of the fight, transparent, so the rules below run. Never a direct cast.
+            // AN OFFENSE CLAIM THAT NEVER STARTED WAS RELEASED (the bound in the in-flight refresh below): held off for the
+            // fight (every target for an unseated / Script / NoRow row, the one (spell, target) for a seated row), transparent, so
+            // the rules below run. Never a direct cast.
             if (offenseSpell)
-                if (const auto nf = g_scriptOffenseNeverFired.find(id);
-                    nf != g_scriptOffenseNeverFired.end() && a_target &&
-                    nf->second.count((static_cast<std::uint64_t>(a_spellID) << 32) | a_target->GetFormID()))
-                    return { Result::FailedOther, "offense claim never fired this fight: held off", true };
+                if (const auto nf = g_scriptOffenseNeverFired.find(id); nf != g_scriptOffenseNeverFired.end() &&
+                    (nf->second.count(OffenseKey(a_spellID, 0)) ||
+                     (a_target && nf->second.count(OffenseKey(a_spellID, a_target->GetFormID())))))
+                    return { Result::FailedOther, "offense claim never started this fight: held off", true };
             // P1 (field 2026-10-01): a higher-ranked heal claim that is PENDING (not yet
             // fired) owns the lap's other hand too. Transparent, so rules below still run.
             if (offenseSpell && HealPendingHoldsOffense(a_follower, g_firingRule, a_spellID))
@@ -658,15 +675,18 @@ namespace MFO::Actuation {
                 // long as the rule wins). BuffRoad's never-fired release shape (cast/BuffRoad.cpp, the NEVER FIRED block of
                 // BuffRefreshGate, g_neverFired): the claim's lock stamp older than kHealClaimNeverObservedCapMs, no fire
                 // observed since the stamp on any planned hand, nothing charging or casting. Released ONCE with a WARN and
-                // the (follower, spell) held off for this fight (g_scriptOffenseNeverFired). It marks a failure, never a
-                // masked one: no direct fallback. The hold-off is per (spell, target); heals keep
+                // the hold-off per OffenseNeverStartedFightLong / ...WindowMs above (g_scriptOffenseNeverFired). It marks a failure, never a
+                // masked one: no direct fallback. Heals keep
                 // HealRefreshGate and never reach here. An Arch-Mage releases per planned hand: only the planned hands' locks clear.
                 if (offenseSpell && a_target && (handPlan.left || handPlan.right)) {
                     const auto arch = ClassifyArchetype(spell);
+                    const bool fightLong = OffenseNeverStartedFightLong(arch.row);
+                    const auto windowMs  = OffenseNeverStartedWindowMs(arch.row);
                     {   // every offense claim (was: pure Script / NoRow only), 2026-11-19
                         const std::size_t hands[2] = { kHandLeft, kHandRight };
                         const bool        planned[2] = { handPlan.left, handPlan.right };
                         bool              stale = true;
+                        bool              fired = false;
                         long long         oldestMs = 0;
                         for (int i = 0; i < 2 && stale; ++i) {
                             if (!planned[i]) continue;
@@ -675,26 +695,39 @@ namespace MFO::Actuation {
                             if (stamp == std::chrono::steady_clock::time_point{}) { stale = false; break; }
                             const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - stamp);
-                            if (ageMs < std::chrono::milliseconds(APMFBridge::kHealClaimNeverObservedCapMs) ||
-                                ComposedCast::ObservedFiring(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
+                            if (ComposedCast::ObservedFiring(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
                                                                                 : APMFBridge::kApmfHandRight,
                                                              a_spellID,
-                                                             static_cast<std::uint32_t>(ageMs.count() + 1)) ||
+                                                             static_cast<std::uint32_t>(ageMs.count() + 1))) {
+                                fired = true; stale = false;
+                                break;
+                            }
+                            if (ageMs < std::chrono::milliseconds(windowMs) ||
                                 CastInFlightOnHand(a_follower, h, a_spellID, CastProxyOnHand(id, h))) {
                                 stale = false;
                                 break;
                             }
                             oldestMs = std::max<long long>(oldestMs, ageMs.count());
                         }
+                        if (fired) {   // it started: the consecutive-failure count of the pair ends
+                            if (const auto cn = g_offenseNeverStartedCount.find(id); cn != g_offenseNeverStartedCount.end())
+                                cn->second.erase(OffenseKey(a_spellID, a_target->GetFormID()));
+                        }
                         if (stale) {
-                            spdlog::warn("[cast] {:08X} offense cast {:08X} \"{}\" at {:08X} NEVER FIRED: "
-                                         "claimed {} ms ago, nothing charging, predicted row {}{} -- claim RELEASED and the "
-                                         "(spell, target) held off this fight (no direct fallback; Harbinger may seat no "
-                                         "caster for the row, or refused the explained-zero lift: see its [ctcensus] "
-                                         "verdict; rule {})",
+                            const std::uint64_t pairKey = OffenseKey(a_spellID, a_target->GetFormID());
+                            const int failures = fightLong ? 2 : ++g_offenseNeverStartedCount[id][pairKey];
+                            const bool holdFight = fightLong || failures >= 2; {:08X} \"{}\" at {:08X} NEVER FIRED: "
+                                         "claimed {} ms ago, nothing charging, predicted row {}{} -- claim RELEASED, {} (no direct "
+                                         "fallback; Harbinger may seat no caster for the row, or refused the explained-zero "
+                                         "lift: see its [ctcensus] verdict; rule {})",
                                          id, a_spellID, spell->GetName() ? spell->GetName() : "?", a_target->GetFormID(),
-                                         oldestMs, EngineRowName(arch.row), arch.rowApprox ? "(approx)" : "", g_firingRule);
-                            g_scriptOffenseNeverFired[id].insert((static_cast<std::uint64_t>(a_spellID) << 32) | a_target->GetFormID());
+                                         oldestMs, EngineRowName(arch.row), arch.rowApprox ? "(approx)" : "",
+                                         fightLong ? "the spell held off this fight on every target (a row no seat starts)"
+                                         : holdFight ? "failure 2 in a row: the (spell, target) held off this fight"
+                                                     : "failure 1 of 2: it may claim again, a second one holds it off this fight",
+                                         g_firingRule);
+                            if (holdFight)
+                                g_scriptOffenseNeverFired[id].insert(OffenseKey(a_spellID, fightLong ? 0 : a_target->GetFormID()));
                             APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
                             for (int i = 0; i < 2; ++i) {
                                 if (!planned[i]) continue;
@@ -703,7 +736,7 @@ namespace MFO::Actuation {
                                                                         : APMFBridge::kApmfHandRight);
                             }
                             return { Result::FailedOther,
-                                     "offense claim never fired: released, held off this fight", true };
+                                     "offense claim never started: released", true };
                         }
                     }
                 }
@@ -2043,7 +2076,8 @@ namespace MFO::Actuation {
         g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
         ResetBuffFollower(a_follower);   // feat/mfo-remaining-cast-kinds: the never-fired hold-off ends with the fight
-        g_scriptOffenseNeverFired.erase(a_follower);   // the pure-Script offense claim's twin hold-off
+        g_scriptOffenseNeverFired.erase(a_follower);   // the never-started offense claim's twin hold-off
+        g_offenseNeverStartedCount.erase(a_follower);
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
         // really do share a release point instead of only claiming to.
@@ -2069,6 +2103,7 @@ namespace MFO::Actuation {
         g_healHoldLog.clear();
         g_unsightedCharge.clear();
         g_scriptOffenseNeverFired.clear();
+        g_offenseNeverStartedCount.clear();
         ResetBuffRoad();             // feat/mfo-remaining-cast-kinds: cast/BuffRoad.cpp
         ResetHealRoad();             // feat/mfo-perhand-heal: the per-hand heal records (cast/HealRoad.cpp)
         ResetSubstrateRoad();        // slice S3: the substrate road's pacing + log dedup (cast/SubstrateRoad.cpp)

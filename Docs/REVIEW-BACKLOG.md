@@ -3682,3 +3682,5 @@ recalib left (or compare the table hash the joint passed on with the final one).
 ## 2026-11-19: fix/unservable-claims (author notes, SEV-4)
 - SEV-4: Blur (FE13282A), a concentration Self buff predicted NoRow, was never classified by Harbinger in field 1119 while Longstride / Detect Life (same shape) were served as Script. Cause unexplained (Harbinger side); only the never-fired release bounds it (BuffRoad's own).
 - SEV-4: unseated rows (TargetEffect / Stagger / Disarm / Paralyze) have no road; needs a Harbinger tier-A brief (seat them, or force the key for a hostile claim). Reader: `HarbingerSeatsSpell`, no caller.
+- SEV-4: Blur stalls ~6.5 s per reset (BuffRoad never-fired release); cause Harbinger-side.
+- SEV-5: IAUS target switches re-stamp lastSeen, so the offense never-started window may not be reached (watch in field).

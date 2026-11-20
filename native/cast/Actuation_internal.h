@@ -412,6 +412,9 @@ namespace MFO::Actuation {
         // BuffRoad's g_neverFired (cast/BuffRoad.cpp), and it ends the same way: ClearCastLock(follower) at combat end,
         // ClearCastLocks on a revert. Worker-serial (#4).
         inline std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_scriptOffenseNeverFired;   // (spell << 32 | target)
+        // Consecutive never-started failures per (follower, spell << 32 | target) on a SEATED row (0 / absent = none): the second one
+        // makes g_scriptOffenseNeverFired fight-long; a fire observed on the pair erases it. Same lifetime as the hold-off.
+        inline std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::uint8_t>> g_offenseNeverStartedCount;
 
         // Which hand(s) a (spell,target) request would occupy if it proceeds.
         // Both false never happens on a non-held return (ResolveCastHand always

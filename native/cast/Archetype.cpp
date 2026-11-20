@@ -537,7 +537,7 @@ namespace MFO::Actuation {
             }
             if (first)
                 spdlog::warn("[iaus] \"{}\" ({:08X}) has NO Harbinger caster seat for its predicted engine row {}{} -- "
-                             "vetoed on the {} (a claim would never be asked CheckStartCast and would hold its hand); no "
+                             "named on the {} (a claim would never be asked CheckStartCast and would hold its hand); no "
                              "direct fallback (animation required). Seating the row is a Harbinger brief; the table is "
                              "kUnseatedRows (cast/Archetype.cpp)",
                              a_spell->GetName() ? a_spell->GetName() : "?", a_spell->GetFormID(), EngineRowName(a.row),

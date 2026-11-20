@@ -923,7 +923,7 @@ per concern:
   `CastSpellImmediate` sites in those files plus `SummonOnMain` (`Probe.cpp:224` is a probe and is not
   crumbed). **What breaks:** nothing reads these results, so a wrong prediction only misleads a log read;
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
-  **UNSEATED ROWS (2026-11-19, `fix/unservable-claims`):** `HarbingerSeatsRow` / `HarbingerSeatsSpell` (Archetype.cpp, declared Actuation.h) are the ONE reader of "does Harbinger seat a caster for this spell's predicted row (exact or approx)". **To seat a row later, edit `kUnseatedRows` in Archetype.cpp.** NO CALLER YET: marth ruled "no veto, run every spell"; the road for an unseated row (a proxy) is blocked on Harbinger (see STATUS 2026-11-19). The never-fired bound in `CastOn.cpp` now covers every offense claim (per (spell, target) hold-off, `g_scriptOffenseNeverFired`), and `WillWork` judges a level-capped effect on its own.
+  **UNSEATED ROWS (2026-11-19, `fix/unservable-claims`):** `HarbingerSeatsRow` / `HarbingerSeatsSpell` (Archetype.cpp, declared Actuation.h) are the ONE reader of "does Harbinger seat a caster for this spell's predicted row (exact or approx)". **To seat a row later, edit `kUnseatedRows` in Archetype.cpp.** NO CALLER YET: marth ruled "no veto, run every spell"; the road for an unseated row (a proxy) is blocked on Harbinger (see STATUS 2026-11-19). The never-started bound in `CastOn.cpp` now covers every offense claim: an unseated / Script / NoRow row = 4 s window, held off for the fight on every target after one failure; a seated row = 6.5 s (`kHoldLastSeenCapMs`) and two consecutive failures on the (spell, target) (`g_scriptOffenseNeverFired`, `g_offenseNeverStartedCount`; one reader `OffenseNeverStartedFightLong`), and `WillWork` judges a level-capped effect on its own.
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
   **SHAPE CENSUS (C0, LOG-ONLY):** `RunSpellShapeCensus()` (Archetype.cpp end) is called ONCE from `plugin.cpp` kDataLoaded (SKSE main
@@ -938,8 +938,8 @@ per concern:
   **ROW ALIAS (fix/spell-row-alias-shape-census, C1):** `LookupAv` also matches every ValueModifier `kRows` entry for archetypes
   4 / 5 / 32 / 34 (`IsVmAlias`; Harbinger `CastClassify.cpp:91-98`), so Oakflesh / Stoneflesh / Dragonhide / wards (archetype 34)
   predict Armor / Ward / Restore instead of NoRow. NOTE the predicted row IS read: `ChooseBuffRoad` (`BuffRoad.cpp:359` switch,
-  `BuffAmbiguousRowWhy`), `CastOn.cpp:628` Script/NoRow never-fired bound. An Absorb (4) Health spell now predicts Offensive, no longer
-  NoRow, so it leaves the `CastOn.cpp:628` bound.
+  `BuffAmbiguousRowWhy`), `CastOn.cpp` never-started offense bound (`OffenseNeverStartedFightLong`). An Absorb (4) Health spell now predicts Offensive, no longer
+  NoRow, so it takes the seated-row bound (6.5 s, two failures).
 - `cast/HealRoad.cpp` (~1170; 569 at feat/mfo-perhand-heal 2026-10-05, line numbers below are from then; the 2026-10-12 archer dual-cast block `ArcherHealPlan` sits just above `HealRoadLap`) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
   below: `HealRoadLap` (`:429`), `HealHandClaimed` (`:396`), `HealHandEnded` (`:361`), `HealHandsReconcile` (`:384`),
   `HealRefreshGate` (`:529`), `RightHealRule` (`:539`, the equip side's right-hand rank read, honours the re-stream gap),
