@@ -716,7 +716,8 @@ namespace MFO::Actuation {
                         if (stale) {
                             const std::uint64_t pairKey = OffenseKey(a_spellID, a_target->GetFormID());
                             const int failures = fightLong ? 2 : ++g_offenseNeverStartedCount[id][pairKey];
-                            const bool holdFight = fightLong || failures >= 2; {:08X} \"{}\" at {:08X} NEVER FIRED: "
+                            const bool holdFight = fightLong || failures >= 2;
+                            spdlog::warn("[cast] {:08X} offense cast {:08X} \"{}\" at {:08X} NEVER FIRED: "
                                          "claimed {} ms ago, nothing charging, predicted row {}{} -- claim RELEASED, {} (no direct "
                                          "fallback; Harbinger may seat no caster for the row, or refused the explained-zero "
                                          "lift: see its [ctcensus] verdict; rule {})",
