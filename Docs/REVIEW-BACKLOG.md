@@ -3678,3 +3678,7 @@ recalib left (or compare the table hash the joint passed on with the final one).
 - SEV-4, tools/iaus_sim/tune_driver.py:94 / :326: "TIGHT = {"thief","mercenary"} is not extended. master-thief, nightingale, nightblade and listener get the 0.5 J hard band instead of 0.25." Needs marth's ruling. RESOLVED 11-19: marth "Strict of course." -> TIGHT extended.
 - SEV-5: --parked under --cells all also turns on parked scenarios, so the 15 old cells' numbers in an all-run are on a different fight set; do not compare directly.
 - SEV-5: "15 cells" text left in docstrings / summary.md (:27, :54-55, :1054-1057, :1086/1092, :1598, :1694-1709, :386, :2001-2002); SUMMARY["config"] does not record cells.
+
+## 2026-11-19: fix/unservable-claims (author notes, SEV-4)
+- SEV-4: Blur (FE13282A), a concentration Self buff predicted NoRow, was never classified by Harbinger in field 1119 while Longstride / Detect Life (same shape) were served as Script. Cause unexplained (Harbinger side); only the never-fired release bounds it (BuffRoad's own).
+- SEV-4: unseated rows (TargetEffect / Stagger / Disarm / Paralyze) have no road; needs a Harbinger tier-A brief (seat them, or force the key for a hostile claim). Reader: `HarbingerSeatsSpell`, no caller.

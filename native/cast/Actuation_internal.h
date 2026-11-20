@@ -407,11 +407,11 @@ namespace MFO::Actuation {
         struct UnsightedChargeBlock { RE::FormID spell = 0; RE::FormID target = 0; };
         inline std::unordered_map<RE::FormID, UnsightedChargeBlock> g_unsightedCharge;
 
-        // A pure-Script OFFENSE claim (Arcane Pull) that never fired was released by CastOn's never-fired bound and the
-        // (follower, spell) is held off for the rest of the fight: follower -> spell FormIDs. The same per-fight latch as
+        // An OFFENSE claim (Arcane Pull, Turn Lesser Undead ...; any row since 2026-11-19) that never fired was released by CastOn's never-fired bound and the
+        // (follower, spell, target) is held off for the rest of the fight: follower -> (spell << 32 | target). The same per-fight latch as
         // BuffRoad's g_neverFired (cast/BuffRoad.cpp), and it ends the same way: ClearCastLock(follower) at combat end,
         // ClearCastLocks on a revert. Worker-serial (#4).
-        inline std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_scriptOffenseNeverFired;
+        inline std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_scriptOffenseNeverFired;   // (spell << 32 | target)
 
         // Which hand(s) a (spell,target) request would occupy if it proceeds.
         // Both false never happens on a non-held return (ResolveCastHand always

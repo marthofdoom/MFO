@@ -36,6 +36,7 @@
 #include "Actuation.h"
 #include "CasterConsent.h"
 #include "Config.h"
+#include "apmf/APMFBridge.h"
 
 #include <algorithm>
 #include <map>
@@ -504,6 +505,47 @@ namespace MFO::Actuation {
         }
     }
 
+    namespace {
+        // The rows Harbinger seats NO caster for (its STATUS.md 2026-10-05: "never Stagger, Disarm, TargetEffect, Paralyze,
+        // Reanimate"). Edit HERE when Harbinger seats one. Reanimate is handled in HarbingerSeatsRow (BuffRoad's placement
+        // claim serves it from ABI 19).
+        constexpr EngineRow kUnseatedRows[] = { EngineRow::Stagger, EngineRow::Disarm, EngineRow::TargetEffect,
+                                                EngineRow::Paralyze, EngineRow::Reanimate };
+        std::mutex                          g_unseatedMx;   // leaf lock
+        std::unordered_set<RE::FormID>      g_unseatedLogged;
+    }
+
+    bool HarbingerSeatsRow(EngineRow a_row) {
+        for (const auto r : kUnseatedRows) {
+            if (r != a_row) continue;
+            if (a_row == EngineRow::Reanimate) return APMFBridge::CastSeatsSupported();
+            return false;
+        }
+        return true;
+    }
+
+    bool HarbingerSeatsSpell(RE::SpellItem* a_spell, const char* a_road, bool a_log, EngineRow* a_row) {
+        if (!a_spell) return true;
+        const auto a = ClassifyArchetype(a_spell);
+        if (a_row) *a_row = a.row;
+        if (HarbingerSeatsRow(a.row)) return true;
+        if (a_log) {
+            bool first = false;
+            {
+                std::lock_guard lk(g_unseatedMx);
+                first = g_unseatedLogged.insert(a_spell->GetFormID()).second;
+            }
+            if (first)
+                spdlog::warn("[iaus] \"{}\" ({:08X}) has NO Harbinger caster seat for its predicted engine row {}{} -- "
+                             "vetoed on the {} (a claim would never be asked CheckStartCast and would hold its hand); no "
+                             "direct fallback (animation required). Seating the row is a Harbinger brief; the table is "
+                             "kUnseatedRows (cast/Archetype.cpp)",
+                             a_spell->GetName() ? a_spell->GetName() : "?", a_spell->GetFormID(), EngineRowName(a.row),
+                             a.rowApprox ? "(approx)" : "", a_road ? a_road : "?");
+        }
+        return false;
+    }
+
     void CastBreadcrumb(const char* a_road, RE::Actor* a_caster, RE::SpellItem* a_spell, RE::FormID a_targetId) {
         // Info level: plugin.cpp's log->flush_on(info) already flushes every info line. The explicit
         // flush below keeps the contract if that policy is ever relaxed to flush_on(warn): THIS line
@@ -525,6 +567,7 @@ namespace MFO::Actuation {
             g_warned.clear();
             g_settled.clear();
         }
+        { std::lock_guard lk(g_unseatedMx); g_unseatedLogged.clear(); }
         std::lock_guard lk(g_cacheMx);   // renumbered dynamic forms and any edited records start clean
         g_cache.clear();
     }

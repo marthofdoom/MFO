@@ -127,6 +127,15 @@ namespace MFO::Actuation {
                         blocked = std::format("'{}' affects up to level {:.0f}, target is level {}",
                                               base->GetName() ? base->GetName() : "effect", cap, lvl);
                 }
+                // A LEVEL-CAPPED effect is the one that keys the spell's caster row (Calm / Frenzy / Demoralize / Rally / Turn
+                // Undead / Reanimate are control effects): when it cannot land, the spell does not work, even though an uncapped
+                // companion effect (Turn Lesser Undead's second effect, 0004D3F9, field 1119: Jesper at a level-30 Deathlord)
+                // would. Judged on the capped effect, not "any effect works".
+                if (!blocked.empty()) {
+                    out.verdict = WillWorkVerdict::No;
+                    out.reason  = std::move(blocked);
+                    return out;
+                }
                 if (blocked.empty()) {
                     // Subject = the one the effect lands on, the other party = the caster.
                     if (e->conditions && !e->conditions.IsTrue(a_target, a_caster))

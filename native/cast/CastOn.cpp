@@ -455,8 +455,9 @@ namespace MFO::Actuation {
             // held off for the rest of the fight, transparent, so the rules below run. Never a direct cast.
             if (offenseSpell)
                 if (const auto nf = g_scriptOffenseNeverFired.find(id);
-                    nf != g_scriptOffenseNeverFired.end() && nf->second.count(a_spellID))
-                    return { Result::FailedOther, "pure-Script offense claim never fired this fight: held off", true };
+                    nf != g_scriptOffenseNeverFired.end() && a_target &&
+                    nf->second.count((static_cast<std::uint64_t>(a_spellID) << 32) | a_target->GetFormID()))
+                    return { Result::FailedOther, "offense claim never fired this fight: held off", true };
             // P1 (field 2026-10-01): a higher-ranked heal claim that is PENDING (not yet
             // fired) owns the lap's other hand too. Transparent, so rules below still run.
             if (offenseSpell && HealPendingHoldsOffense(a_follower, g_firingRule, a_spellID))
@@ -650,17 +651,19 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
-                // A PURE-SCRIPT OFFENSE CLAIM THAT NEVER FIRES is bounded (Arcane Pull: Harbinger may refuse the
+                // AN OFFENSE CLAIM THAT NEVER FIRES IS BOUNDED, WHATEVER ITS ROW (2026-11-19, Jesper: Turn Lesser Undead keyed the
+                // TargetEffect row, no seat served it, 8 claims in 48 s held the spell-gambit lock; widened from the pure Script row
+                // alone, which is where it began: Arcane Pull: Harbinger may refuse the
                 // explained-zero lift, D5 may outrank it, or APMF.dll may be old, and the claim would hold its hand for as
                 // long as the rule wins). BuffRoad's never-fired release shape (cast/BuffRoad.cpp, the NEVER FIRED block of
                 // BuffRefreshGate, g_neverFired): the claim's lock stamp older than kHealClaimNeverObservedCapMs, no fire
                 // observed since the stamp on any planned hand, nothing charging or casting. Released ONCE with a WARN and
                 // the (follower, spell) held off for this fight (g_scriptOffenseNeverFired). It marks a failure, never a
-                // masked one: no direct fallback. Only the pure Script row (not rowApprox) is bounded; every other
-                // offense claim keeps its own bounds.
+                // masked one: no direct fallback. The hold-off is per (spell, target); heals keep
+                // HealRefreshGate and never reach here. An Arch-Mage releases per planned hand: only the planned hands' locks clear.
                 if (offenseSpell && a_target && (handPlan.left || handPlan.right)) {
                     const auto arch = ClassifyArchetype(spell);
-                    if ((arch.row == EngineRow::Script || arch.row == EngineRow::NoRow) && !arch.rowApprox) {
+                    {   // every offense claim (was: pure Script / NoRow only), 2026-11-19
                         const std::size_t hands[2] = { kHandLeft, kHandRight };
                         const bool        planned[2] = { handPlan.left, handPlan.right };
                         bool              stale = true;
@@ -684,13 +687,14 @@ namespace MFO::Actuation {
                             oldestMs = std::max<long long>(oldestMs, ageMs.count());
                         }
                         if (stale) {
-                            spdlog::warn("[cast] {:08X} pure-Script offense cast {:08X} \"{}\" at {:08X} NEVER FIRED: "
-                                         "claimed {} ms ago, nothing charging -- claim RELEASED and the spell held off "
-                                         "this fight (no direct fallback; Harbinger refused the explained-zero lift, "
-                                         "or APMF.dll lacks it: see its [ctcensus] verdict; rule {})",
+                            spdlog::warn("[cast] {:08X} offense cast {:08X} \"{}\" at {:08X} NEVER FIRED: "
+                                         "claimed {} ms ago, nothing charging, predicted row {}{} -- claim RELEASED and the "
+                                         "(spell, target) held off this fight (no direct fallback; Harbinger may seat no "
+                                         "caster for the row, or refused the explained-zero lift: see its [ctcensus] "
+                                         "verdict; rule {})",
                                          id, a_spellID, spell->GetName() ? spell->GetName() : "?", a_target->GetFormID(),
-                                         oldestMs, g_firingRule);
-                            g_scriptOffenseNeverFired[id].insert(a_spellID);
+                                         oldestMs, EngineRowName(arch.row), arch.rowApprox ? "(approx)" : "", g_firingRule);
+                            g_scriptOffenseNeverFired[id].insert((static_cast<std::uint64_t>(a_spellID) << 32) | a_target->GetFormID());
                             APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
                             for (int i = 0; i < 2; ++i) {
                                 if (!planned[i]) continue;
@@ -699,7 +703,7 @@ namespace MFO::Actuation {
                                                                         : APMFBridge::kApmfHandRight);
                             }
                             return { Result::FailedOther,
-                                     "pure-Script offense claim never fired: released, held off this fight", true };
+                                     "offense claim never fired: released, held off this fight", true };
                         }
                     }
                 }

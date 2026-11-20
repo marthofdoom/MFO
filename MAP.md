@@ -923,6 +923,7 @@ per concern:
   `CastSpellImmediate` sites in those files plus `SummonOnMain` (`Probe.cpp:224` is a probe and is not
   crumbed). **What breaks:** nothing reads these results, so a wrong prediction only misleads a log read;
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
+  **UNSEATED ROWS (2026-11-19, `fix/unservable-claims`):** `HarbingerSeatsRow` / `HarbingerSeatsSpell` (Archetype.cpp, declared Actuation.h) are the ONE reader of "does Harbinger seat a caster for this spell's predicted row (exact or approx)". **To seat a row later, edit `kUnseatedRows` in Archetype.cpp.** NO CALLER YET: marth ruled "no veto, run every spell"; the road for an unseated row (a proxy) is blocked on Harbinger (see STATUS 2026-11-19). The never-fired bound in `CastOn.cpp` now covers every offense claim (per (spell, target) hold-off, `g_scriptOffenseNeverFired`), and `WillWork` judges a level-capped effect on its own.
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
   **SHAPE CENSUS (C0, LOG-ONLY):** `RunSpellShapeCensus()` (Archetype.cpp end) is called ONCE from `plugin.cpp` kDataLoaded (SKSE main
