@@ -9,10 +9,14 @@ CONF_FILE = os.path.join(CONF_DIR, "settings.json")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 
+# marth 2026-11-23: runs belong on a disk that survives a reboot. The shared tuning root when it exists, else the old per-user directory.
+_TUNING_ROOT = "/mnt/gaming/modlists/Projects/_tuning"
+_DEFAULT_RUNS_ROOT = _TUNING_ROOT if os.path.isdir(_TUNING_ROOT) else os.path.expanduser("~/mfo-tune-runs")
+
 DEFAULTS = {
     "repo": _REPO,
     "sim_bin": "",               # empty: the Launch / Sim run tabs prompt for it (Browse… or Build…)
-    "runs_root": os.path.expanduser("~/mfo-tune-runs"),
+    "runs_root": _DEFAULT_RUNS_ROOT,   # a saved value in settings.json wins
     "extra_run_roots": ["/tmp/claude-1000/-mnt-gaming-modlists-Projects-marth-follower-overhaul/a935cdde-4a9b-4a50-983f-339ce7b41062/scratchpad/tune"],   # more directories scanned for run dirs (each dir with progress.log or summary.json)
     "lorerim_tuning": "/mnt/gaming/modlists/LoreRim/mods/MFO/SKSE/Plugins/MFO_Tuning",
     "lorerim_log": "/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log",

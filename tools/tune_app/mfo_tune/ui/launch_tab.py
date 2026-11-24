@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
-from .. import catalog, commands
+from .. import catalog, commands, prio
 from . import bg, widgets
 
 
@@ -78,10 +78,19 @@ class LaunchTab(QWidget):
         self.taskset = QLineEdit(s.get("taskset", ""))
         self.taskset.setPlaceholderText("CPU core set for taskset -c, e.g. 0-7 (empty = any)")
         f.addRow("CPU cores (taskset)", self.taskset)
-        self.nice = QSpinBox()
-        self.nice.setRange(-20, 19)
-        self.nice.setValue(int(s.get("nice", 10)))
-        f.addRow("Nice", self.nice)
+        self.prio = QComboBox()                      # live/priority.py ORDER; idle is the default (marth 2026-11-23)
+        self._prio_default = "idle"
+        self._prio_reason = ""
+        try:
+            pm = prio.load(s)
+            self.prio.addItems(list(pm.ORDER))
+            self._prio_default = pm.DEFAULT
+        except (ImportError, OSError, SyntaxError) as e:
+            self._prio_reason = "priority table not loaded: %s" % e
+            self.prio.setEnabled(False)
+        self.prio.setCurrentIndex(max(0, self.prio.findText(self._prio_default)))
+        self.prio.setToolTip("The round runs in one systemd user scope at this level; change it live on the Current runs tab. A resumed run keeps its remembered level until you change this.")
+        f.addRow("Priority", self.prio)
         self.extra = QLineEdit()
         self.extra.setPlaceholderText("extra driver arguments, appended verbatim")
         f.addRow("Extra args", self.extra)
@@ -115,7 +124,7 @@ class LaunchTab(QWidget):
             w.itemChanged.connect(self.update_preview)
         self.for_class.currentIndexChanged.connect(self.update_preview)
         self.jobs.valueChanged.connect(self.update_preview)
-        self.nice.valueChanged.connect(self.update_preview)
+        self.prio.currentIndexChanged.connect(self.update_preview)
         self.name.textChanged.connect(self._autoout)
         ctx.settings_changed.connect(self.reload_catalog)
         self.reload_catalog()
@@ -169,7 +178,7 @@ class LaunchTab(QWidget):
             "worlds": widgets.checked(self.worlds) if len(widgets.checked(self.worlds)) != len(catalog.WORLDS) else [],
             "knobs": self.knobs.text().strip(), "no_race": self.no_race.isChecked() and self.no_race.isEnabled(), "no_emit_runs": self.no_emit.isChecked(),
             "rejudge": self.rej.text().strip(), "rejudge_set": self.rej_on.isChecked(), "sim_flags": self.sim_flags.text().strip(),
-            "builtin_worth": self.bworth.text().strip(), "jobs": self.jobs.value(), "taskset": self.taskset.text().strip(), "nice": self.nice.value(),
+            "builtin_worth": self.bworth.text().strip(), "jobs": self.jobs.value(), "taskset": self.taskset.text().strip(), "priority": self.prio.currentText(),
             "extra": self.extra.text().strip(),
         }
 
@@ -179,7 +188,20 @@ class LaunchTab(QWidget):
     def argv(self):
         return commands.driver_argv(self.options(), self.ctx.s)
 
+    def _follow_remembered(self):
+        """A run dir that already has a remembered level shows it (a resume keeps it); the user may then change it."""
+        try:
+            lv = open(os.path.join(self.out.text().strip(), "priority")).read().strip()
+        except OSError:
+            lv = ""
+        if self.prio.isEnabled() and self.prio.findText(lv) >= 0 and self.prio.currentText() != lv:
+            self.prio.blockSignals(True)
+            self.prio.setCurrentIndex(self.prio.findText(lv))
+            self.prio.blockSignals(False)
+
     def update_preview(self, *_):
+        if self.sender() is self.out or self.sender() is self.name or self.sender() is None:
+            self._follow_remembered()
         o = self.options()
         self.stages.setEnabled(not o["for_class"])
         self.classes.setEnabled(not o["for_class"])
@@ -189,12 +211,18 @@ class LaunchTab(QWidget):
             w.append("Set the simulator binary first (Browse… to an existing one, or Build…).")
         elif not os.path.isfile(o["bin"]):
             w.append("The simulator binary does not exist (use Build…).")
+        if not os.path.isfile(prio.run_round_path(self.ctx.s)):
+            w.append("This checkout has no tools/iaus_sim/live/run_round.py: rounds cannot start (Settings: point the repo at a worktree that has it).")
+        if self._prio_reason:
+            w.append(self._prio_reason)
+        if os.path.abspath(os.path.expanduser(o["out"] or "/")).startswith("/tmp/") or os.path.abspath(os.path.expanduser(o["out"] or "/")) == "/tmp":
+            w.append("WARNING: the out directory is under /tmp, which is wiped on reboot. A round's cache and results belong on a disk that survives one.")
         if self.ctx.is_running(o["out"]):
             w.append("A driver is already running on this out directory.")
         elif os.path.exists(os.path.join(o["out"], "cache.jsonl")):
             w.append("The out directory holds an earlier run: the driver RESUMES it (finished work replays from cache.jsonl).")
         self.warn.setText("\n".join(w))
-        self.go.setEnabled(bool(o["out"]) and os.path.isfile(o["bin"]) and not self.ctx.is_running(o["out"]))
+        self.go.setEnabled(bool(o["out"]) and os.path.isfile(o["bin"]) and os.path.isfile(prio.run_round_path(self.ctx.s)) and not self._prio_reason and not self.ctx.is_running(o["out"]))
 
     def build(self):
         out = self.bin.text().strip()

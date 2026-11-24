@@ -26,7 +26,8 @@ T_SCALARS = ("t.momentum", "t.postureMomentum", "t.preempt", "t.actFloor", "t.so
              "t.disengageCd", "t.noHealDrink", "t.noHealRetreat", "t.emergencyHpHigh", "t.emergencyHpLow", "t.offClassBase", "t.groundCd", "t.blockCd",
              "t.bashCd", "t.backOffCd", "t.stepCd", "t.regroupCd", "t.perkArmor", "t.perkWeapon",
              "t.concChannelSec", "t.handRedrawSec", "t.spellCastSec", "t.fireLineKeepSec",
-             "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle")
+             "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle",
+             "t.dyingSelfHp", "t.dyingAllyHp", "t.dyingHitsToDown", "t.urgencyHitsDiv", "t.burstWindowSec", "t.grossWindowSec", "t.maxHitWindowSec")
 T_UNIT = ("t.emergencyHpHigh", "t.emergencyHpLow")
 INF = 3.0e38
 # worth.* (ConsumableWorth.h SetWorthKnob): name -> (lo, lo is open, hi)
@@ -39,7 +40,7 @@ LOOT_F = {"takeThreshold": (False, 1), "needBase": (False, INF), "needSlope": (F
           "saleWeight": (False, INF), "gold": (False, INF), "equipment": (False, INF), "valuables": (False, INF), "jewelry": (False, INF),
           "gemChargeTrigger": (False, 1), "buffScale": (False, INF), "foodScale": (False, INF), "poisonPowerRef": (True, INF), "poisonWeakScale": (False, INF),
           "stealNeedMin": (False, 1), "stealRiskWeight": (False, INF), "stealBountyPerGold": (False, INF), "stealBountyRef": (True, INF), "guardBarFloorSec": (False, INF),
-          "guardFreshSec": (True, INF), "guardUnreadMaxSec": (True, INF), "guardRepostSec": (True, INF), "batchHoldMinSec": (False, INF),
+          "guardFreshSec": (True, INF), "guardUnreadMaxSec": (True, INF), "guardRepostSec": (True, INF), "batchHoldMinSec": (False, INF), "offClassDwellSec": (False, INF),
           "gateConeDeg": (True, 90), "gateBeyondU": (False, INF), "gateReadmitSec": (False, INF), "gateReadmitMoveU": (False, INF),
           "gateRepeatU": (False, INF), "gateShortU": (False, INF), "gateNearU": (False, INF)}
 LOOT_I = ("soulGemTarget", "healthTarget", "staminaTarget", "staminaTargetNoWeapon", "magickaTarget", "resistTarget", "fortifyTarget", "regenTarget",

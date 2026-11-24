@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
                                QVBoxLayout, QWidget)
 
-from .. import procs, runreader
+from .. import prio, procs, runreader
 from . import widgets
 
 
@@ -29,6 +29,13 @@ class CurrentTab(QWidget):
         self.head = QLabel("Select a run")
         self.head.setWordWrap(True)
         top.addWidget(self.head, 1)
+        top.addWidget(QLabel("Priority"))
+        self.prio = QComboBox()                      # the levels of live/priority.py ORDER, filled by _prio_levels()
+        self.prio.activated.connect(self.change_priority)   # `activated` = the user picked one; a refresh setting the box does not fire it
+        top.addWidget(self.prio)
+        self.prio_note = QLabel("")
+        self.prio_note.setWordWrap(True)
+        top.addWidget(self.prio_note, 1)
         self.stop = QPushButton("Stop run…")
         self.stop.clicked.connect(self.stop_run)
         top.addWidget(self.stop)
@@ -152,12 +159,64 @@ class CurrentTab(QWidget):
         self.head.setText("<b>%s</b>  %s<br>%s" % (os.path.basename(d), "RUNNING (pid %s)" % ",".join(str(p["pid"]) for p in running) if running else "not running",
                                                     "ETA %s (%s)" % (widgets.age(e), note) if running and e else (st["msg"][:200] if st else "")))
         self.stop.setEnabled(bool(running))
+        self.show_priority(d)
         hist = runreader.stage_timings(ents)
         rows = [[s, (v, str(v)), ""] for s, v in hist.items()]
         for name, rc, secs in runreader.parse_phases(os.path.join(d, "phases.txt")):
             rows.append(["phase " + name, (secs, str(secs)), "rc=%d" % rc])
         widgets.fill(self.stages, rows)
         self.render_log()
+
+    def _prio_levels(self):
+        """-> priority module (its ORDER fills the drop-down), or None with the reason in prio_note."""
+        try:
+            m = prio.load(self.ctx.s)
+        except (ImportError, OSError, SyntaxError) as e:
+            self.prio.clear()
+            self.prio.setEnabled(False)
+            self.prio_note.setText("priority table not loaded: %s" % e)
+            return None
+        if [self.prio.itemText(i) for i in range(self.prio.count())] != list(m.ORDER):
+            self.prio.clear()
+            self.prio.addItems(list(m.ORDER))
+        return m
+
+    def show_priority(self, d):
+        """The selected run's current level in the drop-down (read from <out>/priority and the unit each refresh, so a change made elsewhere shows).
+        Disabled, with the plain reason beside it, when the run has no unit or is not running."""
+        if self.prio.view().isVisible():
+            return                                   # the user is choosing: do not pull the list from under the pointer
+        m = self._prio_levels()
+        if not m:
+            return
+        try:
+            st = m.get(d)
+        except Exception as e:                       # systemctl missing / hung: shown, not swallowed
+            self.prio.setEnabled(False)
+            self.prio_note.setText("priority not read: %s" % e)
+            return
+        ok, why = prio.can_change(st)
+        self.prio.blockSignals(True)
+        self.prio.setCurrentIndex(max(0, self.prio.findText(st["level"])))
+        self.prio.blockSignals(False)
+        self.prio.setEnabled(ok)
+        self.prio_note.setText("" if ok else why)
+
+    def change_priority(self, *_):
+        d = self.sel
+        m = self._prio_levels() if d else None
+        if not m:
+            return
+        level = self.prio.currentText()
+        try:
+            st = m.set_level(d, level)
+        except (ValueError, RuntimeError, OSError) as e:
+            QMessageBox.critical(self, "Priority not changed", str(e))
+            self.show_priority(d)
+            return
+        if not st.get("applied"):
+            QMessageBox.warning(self, "Priority remembered only", "The run is not running, so nothing was changed live. The level %s is remembered for its next start." % level)
+        self.show_priority(d)
 
     def render_log(self, *_):
         d = self.sel
