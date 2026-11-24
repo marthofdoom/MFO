@@ -4,8 +4,8 @@
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
-#include "iaus/Reposition.h"
-#include "iaus/SpellWorth.h"   // S11b: the spell-worth reader (read only while Tuning::spellWorth.live > 0)   // batch I: the spell range, the back-off need, the hidden step
+#include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step
+#include "iaus/SpellWorth.h"   // S11b: the spell-worth reader (read only while Tuning::spellWorth.live > 0)
 
 #include <algorithm>
 #include <cmath>
