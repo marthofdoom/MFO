@@ -566,7 +566,11 @@ namespace MFO::Actuation {
     // that (spell, target) is held off for the fight (WillWork answers No). NoEffectNoteFired is called from the offense claim's
     // refresh lap when a fire is observed (worker, idempotent per claim); the settle check runs on the main thread. NoEffectHeld is
     // the reader (any thread). NoEffectClear(follower) ends with the fight (ClearCastLock), NoEffectClearAll on revert / load.
-    void NoEffectNoteFired(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target);
+    void NoEffectNoteFired(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target, std::int64_t a_fireAgeMs);
+    // The Disarm need, ONE reader (WillWork's need and NoEffect's reading): the FormID of the weapon in the target's RIGHT hand when the
+    // engine's Disarm could take it (a TESObjectWEAP, not bare hands, kCantDrop clear, the target not essential: engine AE 0x678BD0), else 0.
+    // MAIN THREAD.
+    RE::FormID DisarmableRightWeapon(RE::Actor* a_target);
     bool NoEffectHeld(RE::FormID a_caster, RE::FormID a_spell, RE::FormID a_target);
     void NoEffectClear(RE::FormID a_caster);
     void NoEffectClearAll();
@@ -942,9 +946,6 @@ namespace MFO::Actuation {
     // (cast/CastOn.cpp OffenseNeverStartedFightLong); NOTHING here vetoes a spell, every spell stays a candidate (marth).
     // Pure form data plus the cached coverage read: any thread.
     bool HarbingerSeatsRow(EngineRow a_row);
-    // ABI v46 adoption (cast/SeatRows.h, cast/NoEffect.cpp). The engine's distance for a Stagger / Disarm / Paralyze row (its GMST,
-    // read live; 0 = the row has none): a RANGE NEED on the candidate (iaus/SpellBook.cpp caps the entry's reach with it), never a refusal.
-    float RowReachLimit(EngineRow a_row);
     // The spell-level question. false = unservable; *a_row (optional) gets the row. a_road (static literal) is named in
     // the once-per-spell `[iaus]` line this logs the first time it answers false (a_log). A null spell answers true.
     bool HarbingerSeatsSpell(RE::SpellItem* a_spell, const char* a_road, bool a_log = true, EngineRow* a_row = nullptr);

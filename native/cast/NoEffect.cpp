@@ -1,22 +1,22 @@
 // cast/NoEffect.cpp -- THE ZERO-EFFECT HOLD (adopt-seats, Harbinger ABI v46).
 //
 // Harbinger v46 admits a claim on a Stagger / Disarm / TargetEffect / Paralyze row without asking the engine "does the effect apply
-// to this target" (APMF_API.h CastSeatCoverage). cast/WillWork.cpp now judges that before the claim; this file is the net under it
-// for what no record can say (an immunity the engine keeps in code, a target the conditions did not describe): after a cast of such
-// a spell FIRED and left no effect on that target, the (spell, target) pair is held off for the fight, with a loud line, so the
-// follower does not cast it again and again (Turn Lesser Undead at a Deathlord, field 11-23: cast and wasted). Never a mask: the
-// failure is logged, the pair is refused, nothing routes around it.
+// to this target" (APMF_API.h CastSeatCoverage). cast/WillWork.cpp judges that before the claim; this file is the net under it for
+// what no record can say: after TWO casts of such a spell (two distinct observed fires, in a row) left no effect on that target, the
+// (spell, target) pair is held off for the fight, with a loud line, so the follower does not cast it again and again (Turn Lesser
+// Undead at a Deathlord, field 11-23). One miss, ward, absorb or resist is never "never works" (review F3): a Landed reading resets
+// the count. Never a mask: the failure is logged, the pair is refused, nothing routes around it.
 //
-// THE OBSERVATION (what "no effect" means here, one reader, one place):
-//   * a spell with a LASTING effect (an effect with a duration: Turn Undead's fear, Paralysis, Command): the effect's magic effect
-//     is not on the target after the settle time (MagicTarget::HasMagicEffect);
-//   * Disarm: the weapon the target held when the fire was first seen is still in the same hand after the settle time;
-//   * an instant effect with nothing to read afterwards (Stagger, Banish): INCONCLUSIVE, never held. Listed in the report.
+// THE OBSERVATION: the rules are the pure SeatRows::Judge (harness rows). One cast is read ONCE, 2 to 6 s after its OBSERVED fire
+// (ComposedCast::ObservedAgeMs, the real fire time, review F2): the KEYED effect of the row on the target (MagicTarget::
+// HasMagicEffect) for a lasting effect, or for Disarm the right-hand weapon he held at the fire. Inconclusive, never counted: an
+// instant effect, a duration that may already have ended, a concentration spell, a spell that also carries another hostile instant
+// effect, a reading too early or too late.
 //
 // THREADING. NoEffectNoteFired / NoEffectHeld run on the worker (the offense claim's refresh lap, WillWork); the readings run on the
-// MAIN thread, one MainThread::Post (INVARIANTS #83: no engine read off the main thread). The ledger is behind g_mx (a leaf lock,
-// never held across a post or a log). The settle check is driven by the callers themselves (every refresh lap of the claim and
-// every WillWork ask of the pair); if neither comes after the settle time nothing is held, the hold is never invented.
+// MAIN thread, one MainThread::Post (INVARIANTS #83). The ledger is behind g_mx (a leaf lock, never held across a post or a log).
+// A reading is applied only if its fire is still the pending one (a newer fire discards it). The settle reading is driven by the
+// callers (every refresh lap of the claim and every WillWork ask of the pair); if neither comes in the window nothing is counted.
 #include "Actuation_internal.h"
 #include "MainThread.h"
 #include "cast/SeatRows.h"
@@ -31,11 +31,9 @@ namespace MFO::Actuation {
 
         using Clock = std::chrono::steady_clock;
 
-        // Sized from the real cadence (principle 9): a bolt or a ray at the row's reach (256 to 384 units) lands inside a second, the
-        // cast animation already ran before a fire is observed; an effect the engine applies shows on the target in the same frame.
-        constexpr double      kSettleSec   = 2.0;   // fire seen -> the reading
-        constexpr double      kRenoteSec   = 8.0;   // a checked pair is read again only for a NEW cast cycle after this long
-        constexpr std::size_t kMaxPending  = 128;
+        constexpr double      kNewFireSec   = 1.5;   // a fire this much newer than the judged one is a NEW cast (one cast = one observed fire)
+        constexpr double      kAskRetrySec  = 1.5;   // a settle post with no answer this long is re-asked (a lost post, review F8)
+        constexpr std::size_t kMaxPending   = 128;
 
         struct Key {
             RE::FormID caster, spell, target;
@@ -50,11 +48,11 @@ namespace MFO::Actuation {
             }
         };
         struct Pending {
-            Clock::time_point firedAt{};
-            Clock::time_point doneAt{};       // epoch = still open
-            bool              snapped   = false;   // the main-thread "before" snapshot was taken
-            bool              asked     = false;   // the settle reading is posted
-            RE::FormID        weapon[2]{ 0, 0 };   // the target's equipped weapon, right then left, when the fire was first seen
+            Clock::time_point firedAt{};     // the OBSERVED time of the fire being judged
+            Clock::time_point askedAt{};     // the settle post in flight (epoch = none)
+            bool              judged = false;   // this fire has been read (any reading)
+            RE::FormID        weapon = 0;       // Disarm: the right-hand weapon seen at the fire
+            int               zeros  = 0;       // consecutive Zero readings from distinct fires
         };
         std::mutex                                  g_mx;
         std::unordered_map<Key, Pending, KeyHash>   g_pending;
@@ -70,57 +68,55 @@ namespace MFO::Actuation {
                    a_row == EngineRow::Paralyze;
         }
 
-        RE::FormID EquippedWeapon(RE::Actor* a_target, bool a_left) {
-            auto* o = a_target->GetEquippedObject(a_left);
-            auto* w = o ? o->As<RE::TESObjectWEAP>() : nullptr;
-            return w ? w->GetFormID() : 0u;
+        RE::FormID RightWeaponId(RE::Actor* a_target) {
+            auto* o = a_target->GetEquippedObject(false);
+            return o ? o->GetFormID() : 0u;
         }
 
-        // MAIN THREAD. The "before" snapshot (Disarm's weapon), taken as soon as the fire is seen: the effect has had at most the
-        // projectile's flight, so the weapon is still in the hand unless the cast already landed (then it reads as landed, a fail-safe).
-        void PostSnapshot(Key a_key) {
-            MainThread::Post([a_key]() {
+        // MAIN THREAD. The Disarm snapshot taken as soon as the fire is seen. A reading that finds it for a different fire is dropped.
+        void PostSnapshot(Key a_key, Clock::time_point a_firedAt) {
+            MainThread::Post([a_key, a_firedAt]() {
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(a_key.target);
+                const RE::FormID w = target ? DisarmableRightWeapon(target) : 0u;
                 std::scoped_lock lk(g_mx);
                 const auto it = g_pending.find(a_key);
-                if (it == g_pending.end() || it->second.snapped) return;
-                it->second.snapped = true;
-                if (target) { it->second.weapon[0] = EquippedWeapon(target, false); it->second.weapon[1] = EquippedWeapon(target, true); }
+                if (it != g_pending.end() && it->second.firedAt == a_firedAt) it->second.weapon = w;
             });
         }
 
-        // MAIN THREAD. The settle reading. Returns true = HOLD (the cast left no effect), with a_why the evidence.
-        bool NoEffectOnTarget(RE::SpellItem* a_spell, RE::Actor* a_target, const Pending& a_p, std::string& a_why) {
+        // MAIN THREAD. The reading of one fire (SeatRows::Judge).
+        SeatRows::Reading Read(RE::SpellItem* a_spell, RE::Actor* a_target, const Pending& a_p, double a_ageSec, std::string& a_what) {
             const auto arch = ClassifyArchetype(a_spell);
-            // Disarm: the weapon he held is still in that hand.
-            if (arch.row == EngineRow::Disarm) {
-                bool had = false, still = false;
-                for (int hand = 0; hand < 2; ++hand) {
-                    if (a_p.weapon[hand] == 0) continue;
-                    had = true;
-                    if (EquippedWeapon(a_target, hand == 1) == a_p.weapon[hand]) still = true;
-                }
-                if (!had) return false;   // nothing was held when the fire was seen: nothing to read (WillWork's need keeps this case out)
-                if (!still) return false;
-                a_why = "the weapon he held when the cast fired is still in his hand";
-                return true;
+            SeatRows::ReadInput in;
+            in.ageSec        = static_cast<float>(a_ageSec);
+            in.concentration = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+            in.disarm        = arch.row == EngineRow::Disarm;
+            if (arch.keyedEffect < 0 || static_cast<std::size_t>(arch.keyedEffect) >= a_spell->effects.size())
+                return SeatRows::Reading::Inconclusive;
+            for (std::int32_t i = 0; i < static_cast<std::int32_t>(a_spell->effects.size()); ++i) {
+                if (i == arch.keyedEffect) continue;
+                const auto* oe = a_spell->effects[static_cast<std::uint32_t>(i)];
+                const auto* ob = oe ? oe->baseEffect : nullptr;
+                if (ob && (ob->IsHostile() || ob->IsDetrimental()) && oe->GetDuration() == 0) in.otherHostileInstant = true;
             }
-            // A lasting effect: its magic effect is on the target, or it did not land.
-            bool lasting = false;
-            auto* mt = a_target->AsMagicTarget();
-            for (auto* e : a_spell->effects) {
-                auto* base = e ? e->baseEffect : nullptr;
-                if (!base || e->GetDuration() == 0) continue;
-                lasting = true;
-                if (mt && mt->HasMagicEffect(base)) return false;
+            const auto* ke = a_spell->effects[static_cast<std::uint32_t>(arch.keyedEffect)];
+            auto*       kb = ke ? ke->baseEffect : nullptr;
+            if (!kb) return SeatRows::Reading::Inconclusive;
+            in.keyedDurationSec = static_cast<float>(ke->GetDuration());
+            if (in.disarm) {
+                in.hadSubject = a_p.weapon != 0;
+                in.landed     = RightWeaponId(a_target) != a_p.weapon;   // the weapon he held is no longer in that hand
+                a_what        = "the right-hand weapon he held when the cast fired is still in his hand";
+            } else {
+                auto* mt  = a_target->AsMagicTarget();
+                in.landed = mt && mt->HasMagicEffect(kb);
+                a_what    = std::format("the keyed effect '{}' is not on the target", kb->GetName() ? kb->GetName() : "effect");
             }
-            if (!lasting) return false;   // instant (Stagger, Banish): nothing readable afterwards, inconclusive, never held
-            a_why = "none of the spell's lasting effects is on the target";
-            return true;
+            return SeatRows::Judge(in);
         }
 
-        void PostSettle(Key a_key) {
-            MainThread::Post([a_key]() {
+        void PostSettle(Key a_key, Clock::time_point a_firedAt) {
+            MainThread::Post([a_key, a_firedAt]() {
                 auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_key.caster);
                 auto* spell  = RE::TESForm::LookupByID<RE::SpellItem>(a_key.spell);
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(a_key.target);
@@ -128,78 +124,94 @@ namespace MFO::Actuation {
                 {
                     std::scoped_lock lk(g_mx);
                     const auto it = g_pending.find(a_key);
-                    if (it == g_pending.end()) return;
+                    if (it == g_pending.end() || it->second.firedAt != a_firedAt) return;   // a newer fire took over
                     snap = it->second;
                 }
-                std::string why;
-                bool hold = false;
+                std::string what;
+                auto reading = SeatRows::Reading::Inconclusive;
                 // A pair gone from the world (dead, unloaded) is not read: it is the end of the pair, not a zero effect.
                 if (caster && spell && target && !target->IsDead() && target->Is3DLoaded())
-                    hold = NoEffectOnTarget(spell, target, snap, why);
+                    reading = Read(spell, target, snap, Age(a_firedAt, Clock::now()), what);
+                int  zeros = 0;
                 bool fresh = false;
                 {
                     std::scoped_lock lk(g_mx);
-                    if (auto it = g_pending.find(a_key); it != g_pending.end()) {
-                        it->second.doneAt = Clock::now();
-                        it->second.asked  = false;
-                    }
-                    if (hold) fresh = g_held.Hold(a_key.caster, a_key.spell, a_key.target);
+                    const auto it = g_pending.find(a_key);
+                    if (it == g_pending.end() || it->second.firedAt != a_firedAt) return;   // checked again under the lock (review F7)
+                    it->second.judged  = true;
+                    it->second.askedAt = Clock::time_point{};
+                    it->second.zeros   = SeatRows::Tally(it->second.zeros, reading);
+                    zeros = it->second.zeros;
+                    if (zeros >= SeatRows::kZerosToHold) fresh = g_held.Hold(a_key.caster, a_key.spell, a_key.target);   // inside the found branch
                 }
-                if (fresh)
-                    spdlog::warn("[noeffect] caster {:08X} spell {:08X} \"{}\" at {:08X}: the cast FIRED and left no effect on this target "
-                                 "({}) -- the (spell, target) is held off for the rest of the fight (WillWork answers No; no direct "
-                                 "fallback). The effect is not on the target and nothing changed: check the effect's conditions and "
-                                 "any immunity the record does not state (cast/NoEffect.cpp)",
-                                 a_key.caster, a_key.spell, spell && spell->GetName() ? spell->GetName() : "?", a_key.target, why);
+                if (reading == SeatRows::Reading::Zero)
+                    spdlog::warn("[noeffect] caster {:08X} spell {:08X} \"{}\" at {:08X}: a cast FIRED and left no effect on this target "
+                                 "({}); zero reading {} of {}{}", a_key.caster, a_key.spell, spell && spell->GetName() ? spell->GetName() : "?",
+                                 a_key.target, what, zeros, SeatRows::kZerosToHold,
+                                 fresh ? " -- the (spell, target) is HELD OFF for the rest of the fight (WillWork answers No; no direct fallback). "
+                                         "Check the effect's conditions and any immunity the record does not state (cast/NoEffect.cpp)"
+                                       : " (one more from a separate cast holds it off; a landed cast resets the count)");
             });
         }
 
     }
 
-    void NoEffectNoteFired(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target) {
-        if (!a_caster || !a_spell || !a_target || a_target == a_caster) return;
+    void NoEffectNoteFired(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target, std::int64_t a_fireAgeMs) {
+        if (!a_caster || !a_spell || !a_target || a_target == a_caster || a_fireAgeMs < 0) return;
         if (!MainThread::IsInstalled()) return;   // VR: no pump, no read (documented degrade, as WillWork)
         if (!HostileRow(ClassifyArchetype(a_spell).row)) return;
         const Key  key{ a_caster->GetFormID(), a_spell->GetFormID(), a_target->GetFormID() };
-        const auto now = Clock::now();
+        const auto now     = Clock::now();
+        const auto firedAt = now - std::chrono::milliseconds(a_fireAgeMs);
         bool snapshot = false, settle = false;
+        Clock::time_point settleFire{};
         {
             std::scoped_lock lk(g_mx);
             if (g_held.Held(key.caster, key.spell, key.target)) return;
-            if (g_pending.size() >= kMaxPending) {   // a bound; a cleared ledger only forgets open readings, never a hold
+            if (g_pending.size() >= kMaxPending) {   // a bound: forget the readings with no count first, then everything
                 for (auto it = g_pending.begin(); it != g_pending.end();)
-                    it = (Set(it->second.doneAt) && Age(it->second.doneAt, now) > kRenoteSec) ? g_pending.erase(it) : std::next(it);
+                    it = (it->second.judged && it->second.zeros == 0) ? g_pending.erase(it) : std::next(it);
                 if (g_pending.size() >= kMaxPending) g_pending.clear();
             }
             auto [it, isNew] = g_pending.try_emplace(key);
             Pending& p = it->second;
-            if (isNew || (Set(p.doneAt) && Age(p.doneAt, now) >= kRenoteSec)) {
+            // A real NEW fire: the observed time is newer than the judged one (the latch outlives a claim, so the time is the identity).
+            if (isNew || Age(p.firedAt, firedAt) > kNewFireSec) {
+                const int zeros = p.zeros;
                 p = Pending{};
-                p.firedAt = now;   // a new cast cycle of the pair
+                p.zeros   = zeros;
+                p.firedAt = firedAt;
                 snapshot  = true;
-            } else if (!Set(p.doneAt) && !p.asked && Age(p.firedAt, now) >= kSettleSec) {
-                p.asked = true;
-                settle  = true;
+            } else if (!p.judged && (!Set(p.askedAt) || Age(p.askedAt, now) >= kAskRetrySec)) {
+                const double age = Age(p.firedAt, now);
+                if (age > static_cast<double>(SeatRows::kMaxAgeSec)) p.judged = true;   // too late to read this one: counted as nothing
+                else if (age >= static_cast<double>(SeatRows::kSettleSec)) { p.askedAt = now; settle = true; }
             }
+            settleFire = p.firedAt;
         }
-        if (snapshot) PostSnapshot(key);   // outside the mutex: Post takes its own queue lock
-        if (settle) PostSettle(key);
+        if (snapshot) PostSnapshot(key, settleFire);   // outside the mutex: Post takes its own queue lock
+        if (settle) PostSettle(key, settleFire);
     }
 
     bool NoEffectHeld(RE::FormID a_caster, RE::FormID a_spell, RE::FormID a_target) {
         const auto now = Clock::now();
         Key        key{ a_caster, a_spell, a_target };
         bool       settle = false;
+        Clock::time_point fire{};
         {
             std::scoped_lock lk(g_mx);
             if (g_held.Held(a_caster, a_spell, a_target)) return true;
             // The other driver of the settle reading: the picker keeps asking WillWork about the pair after the claim is gone.
             if (const auto it = g_pending.find(key); it != g_pending.end()) {
                 Pending& p = it->second;
-                if (!Set(p.doneAt) && !p.asked && Age(p.firedAt, now) >= kSettleSec) { p.asked = true; settle = true; }
+                if (!p.judged && Set(p.firedAt) && (!Set(p.askedAt) || Age(p.askedAt, now) >= kAskRetrySec)) {
+                    const double age = Age(p.firedAt, now);
+                    if (age > static_cast<double>(SeatRows::kMaxAgeSec)) p.judged = true;
+                    else if (age >= static_cast<double>(SeatRows::kSettleSec)) { p.askedAt = now; settle = true; fire = p.firedAt; }
+                }
             }
         }
-        if (settle) PostSettle(key);
+        if (settle) PostSettle(key, fire);
         return false;
     }
 

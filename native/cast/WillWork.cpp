@@ -20,7 +20,7 @@
 //       engine's equip condition is admitted, APMF_API.h CastSeatCoverage "THE CLIENT'S PART"), so MFO decides it alone:
 //       the KEYED effect (SpellArchetype::keyedEffect, the one the engine keys the row by) must itself be unblocked (its
 //       effect and MGEF conditions, which carry any keyword test, against the target), beside every level-capped effect
-//       (check (a)); Disarm needs a target holding a droppable weapon; Banish / Command need a summoned (commanded) target.
+//       (check (a)); Disarm needs a droppable right-hand weapon on a non-essential target; Command needs a summoned (commanded) target (Banish: conditions only). A No needs no other unblocked hostile damage effect, never on an approximate row, random conditions read as pass.
 //       The needs are the table kRows in cast/SeatRows.h (read here through NeedOf). Stagger / Paralyze IMMUNITY is not
 //       exposed by the engine as a readable bit (a race's kNoKnockdowns is knockdown, not stagger; there is no paralysis
 //       resist flag), so it is only what the MGEF conditions say; the zero-effect hold (cast/NoEffect.cpp) catches the rest.
@@ -47,7 +47,6 @@
 #include "MainThread.h"
 #include "cast/SeatRows.h"
 
-#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
@@ -119,22 +118,20 @@ namespace MFO::Actuation {
         SeatRows::Need NeedOf(Arch a) {
             switch (a) {
             case Arch::kDisarm:                          return SeatRows::Need::Weapon;
-            case Arch::kBanish: case Arch::kCommandSummoned: return SeatRows::Need::Summoned;
+            case Arch::kCommandSummoned:                 return SeatRows::Need::Summoned;   // Banish: conditions only (review F6)
             default:                                     return SeatRows::Need::None;
             }
         }
 
-        // MAIN THREAD. An equipped weapon in either hand that is not flagged cannot-drop and is not bare hands.
-        bool HoldsDroppableWeapon(RE::Actor* a_target) {
-            for (const bool left : { false, true }) {
-                auto* o = a_target->GetEquippedObject(left);
-                auto* w = o ? o->As<RE::TESObjectWEAP>() : nullptr;
-                if (!w) continue;
-                if (w->weaponData.animationType.get() == RE::WEAPON_TYPE::kHandToHandMelee) continue;
-                if (w->weaponData.flags.all(RE::TESObjectWEAP::Data::Flag::kCantDrop)) continue;
-                return true;
-            }
+        // True when any item of the list tests GetRandomPercent: a random condition must never flip an answer (review F4), so a list
+        // that carries one is read as PASS for the keyed check (the engine rolls it per cast).
+        bool HasRandomCondition(const RE::TESCondition& a_cond) {
+            for (auto* it = a_cond.head; it; it = it->next)
+                if (it->data.functionData.function.get() == RE::FUNCTION_DATA::FunctionID::kGetRandomPercent) return true;
             return false;
+        }
+        bool CondFalse(const RE::TESCondition& a_cond, RE::Actor* a_target, RE::Actor* a_caster) {
+            return a_cond && !HasRandomCondition(a_cond) && !a_cond.IsTrue(a_target, a_caster);
         }
 
         // FORM DATA ONLY (worker-safe): does this spell carry anything the check could block on?
@@ -179,37 +176,49 @@ namespace MFO::Actuation {
                     return out;
                 }
             }
-            // (c) THE v46 HOSTILE ROWS: the keyed effect alone must be unblocked, and the target must meet its need.
+            // (c) THE v46 HOSTILE ROWS: the keyed effect must be unblocked and the target must meet its need. Review F4: this is a No ONLY
+            // when nothing else in the spell can hurt him: never on an approximate row (several rows compete, the keyed effect is a guess),
+            // never while another hostile damage effect is unblocked (the cast still does something), random conditions read as pass. The
+            // level-capped rule above stays first (Turn Lesser Undead at a Deathlord is still No).
             {
                 const auto arch = ClassifyArchetype(a_spell);
                 SeatRows::Row hostile{};
-                if (HostileRowOf(arch.row, hostile) && arch.keyedEffect >= 0 &&
+                if (!arch.rowApprox && HostileRowOf(arch.row, hostile) && arch.keyedEffect >= 0 &&
                     static_cast<std::size_t>(arch.keyedEffect) < a_spell->effects.size()) {
                     const auto* ke   = a_spell->effects[static_cast<std::uint32_t>(arch.keyedEffect)];
                     const auto* kb   = ke ? ke->baseEffect : nullptr;
                     const char* kn   = kb && kb->GetName() ? kb->GetName() : "effect";
+                    std::string why;
                     if (kb) {
-                        if (ke->conditions && !ke->conditions.IsTrue(a_target, a_caster)) {
-                            out.verdict = WillWorkVerdict::No;
-                            out.reason  = std::format("the {} row's keyed effect '{}': the spell's effect conditions are false for the target",
-                                                      SeatRows::Info(hostile).name, kn);
-                            return out;
+                        if (CondFalse(ke->conditions, a_target, a_caster))
+                            why = std::format("the {} row's keyed effect '{}': the spell's effect conditions are false for the target", SeatRows::Info(hostile).name, kn);
+                        else if (CondFalse(kb->conditions, a_target, a_caster))
+                            why = std::format("the {} row's keyed effect '{}': the magic effect's conditions (keywords included) are false for the target", SeatRows::Info(hostile).name, kn);
+                        else {
+                            const auto need = NeedOf(kb->GetArchetype());
+                            if (need == SeatRows::Need::Weapon && DisarmableRightWeapon(a_target) == 0)
+                                why = std::format("'{}': the target holds no weapon in his right hand that can be disarmed", kn);
+                            else if (need == SeatRows::Need::Summoned && !(a_target->IsSummoned() || a_target->IsCommandedActor()))
+                                why = std::format("'{}': the target is not a summoned (commanded) creature", kn);
                         }
-                        if (kb->conditions && !kb->conditions.IsTrue(a_target, a_caster)) {
-                            out.verdict = WillWorkVerdict::No;
-                            out.reason  = std::format("the {} row's keyed effect '{}': the magic effect's conditions (keywords included) are false for the target",
-                                                      SeatRows::Info(hostile).name, kn);
-                            return out;
+                    }
+                    if (!why.empty()) {
+                        // Another unblocked hostile damage effect keeps the spell a working one.
+                        bool otherWorks = false;
+                        for (std::int32_t i = 0; i < static_cast<std::int32_t>(a_spell->effects.size()) && !otherWorks; ++i) {
+                            if (i == arch.keyedEffect) continue;
+                            const auto* oe = a_spell->effects[static_cast<std::uint32_t>(i)];
+                            const auto* ob = oe ? oe->baseEffect : nullptr;
+                            if (!ob || !ob->IsHostile()) continue;
+                            const auto oa = ob->GetArchetype();
+                            const bool damage = (oa == Arch::kValueModifier || oa == Arch::kPeakValueModifier || oa == Arch::kDualValueModifier ||
+                                                 oa == Arch::kAbsorb) &&
+                                                (ob->data.primaryAV == RE::ActorValue::kHealth || ob->data.primaryAV == RE::ActorValue::kMagicka ||
+                                                 ob->data.primaryAV == RE::ActorValue::kStamina);
+                            if (damage && !CondFalse(oe->conditions, a_target, a_caster) && !CondFalse(ob->conditions, a_target, a_caster))
+                                otherWorks = true;
                         }
-                        const auto need = NeedOf(kb->GetArchetype());
-                        if (!SeatRows::NeedMet(need, need == SeatRows::Need::Weapon && HoldsDroppableWeapon(a_target),
-                                               a_target->IsSummoned() || a_target->IsCommandedActor())) {
-                            out.verdict = WillWorkVerdict::No;
-                            out.reason  = std::format("'{}': {}", kn,
-                                                      need == SeatRows::Need::Weapon ? "the target holds no weapon that can be disarmed"
-                                                                                     : "the target is not a summoned (commanded) creature");
-                            return out;
-                        }
+                        if (!otherWorks) { out.verdict = WillWorkVerdict::No; out.reason = std::move(why); return out; }
                     }
                 }
             }
@@ -266,27 +275,16 @@ namespace MFO::Actuation {
     // Returns the levels to ADD to the effect's cap. Deliberately 0 here: G10 does not implement passives.
     float WillWorkClassLevelBonus(RE::Actor*, RE::SpellItem*, const RE::Effect*) { return 0.0f; }
 
-    // The engine's own distance for a v46 hostile row (cast/SeatRows.h kRows), 0 = none. The GMST is read live by name (a list may
-    // change it) and kept once read; unreadable -> the vanilla default, not kept. MAIN THREAD or after kDataLoaded (the setting
-    // collection is static data then).
-    float RowReachLimit(EngineRow a_row) {
-        SeatRows::Row row{};
-        if (!HostileRowOf(a_row, row)) return 0.0f;
-        const auto& info = SeatRows::Info(row);
-        if (!info.reachGmst) return 0.0f;
-        static std::atomic<float> s_kept[static_cast<std::size_t>(SeatRows::Row::kCount)];   // 0 = not read yet
-        auto& kept = s_kept[static_cast<std::size_t>(row)];
-        if (const float k = kept.load(std::memory_order_relaxed); k > 0.0f) return k;
-        float live = 0.0f;
-        if (auto* gsc = RE::GameSettingCollection::GetSingleton())
-            if (auto* st = gsc->GetSetting(info.reachGmst)) live = st->GetFloat();
-        const float r = SeatRows::RowReach(row, live);
-        if (live > 0.0f) {
-            kept.store(r, std::memory_order_relaxed);
-            spdlog::info("[willwork] the {} row's reach, from {}: {:.0f} units{}", info.name, info.reachGmst, r,
-                         r != info.reachDefault ? " (not the vanilla value)" : "");
-        }
-        return r;
+    // See Actuation.h. The same test the NoEffect reading uses. A right-hand weapon only (the engine's Disarm takes the right hand),
+    // not bare hands, not cannot-drop, and an essential target is refused (review F5; AE 0x678BD0 is the engine's gate).
+    RE::FormID DisarmableRightWeapon(RE::Actor* a_target) {
+        if (!a_target || a_target->IsEssential()) return 0;
+        auto* o = a_target->GetEquippedObject(false);
+        auto* w = o ? o->As<RE::TESObjectWEAP>() : nullptr;
+        if (!w) return 0;
+        if (w->weaponData.animationType.get() == RE::WEAPON_TYPE::kHandToHandMelee) return 0;
+        if (w->weaponData.flags.all(RE::TESObjectWEAP::Data::Flag::kCantDrop)) return 0;
+        return w->GetFormID();
     }
 
     void WillWorkClear() {

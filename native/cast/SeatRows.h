@@ -4,10 +4,10 @@
 //
 // WHAT THIS HOLDS (the one table and the small readers; "to add or change a row, edit kRows"):
 //   * kRows: the four engine caster rows Harbinger v46 can seat, each with its CastSeatCoverage bit (APMF_API.h, mirrored
-//     here as literals and static_assert-ed against the header in cast/Archetype.cpp), the engine's reach GMST (name + the
-//     vanilla default) and what the engine used to ask of the target (the "need"). Harbinger no longer asks the engine
+//     here as literals and static_assert-ed against the header in cast/Archetype.cpp). Harbinger no longer asks the engine
 //     "does this work on this target" for a claim on these rows (APMF_API.h CastSeatCoverage: "THE CLIENT'S PART"), so MFO
-//     asks it: cast/WillWork.cpp reads `need`, cast/SpellBook (iaus) reads `reachGmst` as a RANGE NEED on the candidate.
+//     asks it (cast/WillWork.cpp). NO reach cap: the engine's fCombatMagic*Distance settings are margins added to other
+//     distances, not spell ranges (review F1), so the spell keeps its own reach.
 //   * RowSeated: the v46 rule, a row is served when its own bit AND kTypeEquip are set. Below ABI 46 the answer is the old
 //     static one (not served).
 //   * HoldLedger: the (spell, target) pairs held off for the fight after a cast that fired with no effect (cast/NoEffect.cpp).
@@ -23,28 +23,25 @@ namespace MFO::SeatRows {
     // What the engine's equip condition asked of the target before v46 (and the client now asks itself).
     enum class Need : std::uint8_t {
         None,
-        Weapon,     // Disarm: the target holds a weapon (drawn or equipped) that can be dropped
-        Summoned    // Banish / Command: the target is a summoned (commanded) creature
+        Weapon,     // Disarm: the target's right hand holds a weapon the engine's Disarm can take (WillWork DisarmableRightWeapon)
+        Summoned    // Command (CommandSummoned): the target is a summoned (commanded) creature. Banish: conditions only
     };
 
     struct RowInfo {
         Row           row;
         const char*   name;
         std::uint32_t coverageBit;   // APMF_API::CastSeatCoverage (v46): kCastSeat_Stagger .. kCastSeat_Paralyze
-        const char*   reachGmst;     // the engine's distance setting (nullptr = the engine asks no distance)
-        float         reachDefault;  // vanilla value of that setting, used when the setting cannot be read
     };
 
     inline constexpr std::uint32_t kTypeEquipBit = 1u << 16;   // APMF_API::kCastSeat_TypeEquip (v46)
     inline constexpr std::uint32_t kMinAbiCoverage = 46;       // castSeats is valid from this abiVersion
 
-    // THE TABLE. Sources: Harbinger Docs/FACETS.md ch.8b "The client's part" (256 / 256 / 384, the GMST names) and
-    // APMF_API.h CastSeatCoverage. The GMST is read live (a list may change it); the default is only the fallback.
+    // THE TABLE. Source: APMF_API.h CastSeatCoverage.
     inline constexpr RowInfo kRows[] = {
-        { Row::Stagger,      "Stagger",      1u << 10, "fCombatMagicStaggerDistance",  256.0f },
-        { Row::Disarm,       "Disarm",       1u << 11, "fCombatMagicDisarmDistance",   256.0f },
-        { Row::TargetEffect, "TargetEffect", 1u << 12, nullptr,                          0.0f },
-        { Row::Paralyze,     "Paralyze",     1u << 13, "fCombatMagicParalyzeDistance", 384.0f },
+        { Row::Stagger,      "Stagger",      1u << 10 },
+        { Row::Disarm,       "Disarm",       1u << 11 },
+        { Row::TargetEffect, "TargetEffect", 1u << 12 },
+        { Row::Paralyze,     "Paralyze",     1u << 13 },
     };
 
     [[nodiscard]] constexpr const RowInfo& Info(Row a_row) { return kRows[static_cast<std::size_t>(a_row)]; }
@@ -55,23 +52,6 @@ namespace MFO::SeatRows {
         return a_abi >= kMinAbiCoverage && (a_coverage & Info(a_row).coverageBit) != 0 && (a_coverage & kTypeEquipBit) != 0;
     }
 
-    // The reach the engine accepts for a row, from the live setting (a_gmst, <= 0 or not finite = unreadable) or the default.
-    // 0 = the row has no distance of its own.
-    [[nodiscard]] constexpr float RowReach(Row a_row, float a_gmst) {
-        const RowInfo& i = Info(a_row);
-        if (i.reachGmst == nullptr) return 0.0f;
-        return (a_gmst > 0.0f && a_gmst < 1.0e8f) ? a_gmst : i.reachDefault;
-    }
-
-    // A RANGE NEED, not a refusal: the candidate's reach is its own, capped to the row's (0 = no reach known stays 0 unless the
-    // row has one, then the row's: a spell with no range of its own is still bound by the row's). Reposition::SpellRange then
-    // turns the capped reach into the distance he closes to.
-    [[nodiscard]] constexpr float CapReach(float a_reach, float a_rowReach) {
-        if (!(a_rowReach > 0.0f)) return a_reach;
-        if (!(a_reach > 0.0f)) return a_rowReach;
-        return a_reach < a_rowReach ? a_reach : a_rowReach;
-    }
-
     // The target-side test of a Need. a_holdsDroppableWeapon: an equipped weapon in either hand that is not flagged cannot-drop.
     [[nodiscard]] constexpr bool NeedMet(Need a_need, bool a_holdsDroppableWeapon, bool a_summoned) {
         switch (a_need) {
@@ -79,6 +59,42 @@ namespace MFO::SeatRows {
         case Need::Summoned: return a_summoned;
         default:             return true;
         }
+    }
+
+    // THE ZERO-EFFECT READING (cast/NoEffect.cpp; review F2 / F3). One cast that fired is READ once, a_ageSec after that fire.
+    //   Inconclusive: read too early or too late (the settle window is [kSettleSec, kMaxAgeSec]; later, a slow re-equip or a
+    //     re-cast muddies it), a concentration spell, a spell that also carries another hostile instant effect (that one may have
+    //     landed), or a lasting keyed effect whose whole duration is not longer than the age plus kMargin (it may simply have ended).
+    //   Landed / Zero: the effect is on the target (or Disarm's weapon is gone) / is not.
+    // Two ZERO readings from two distinct fires in a row hold the (spell, target) for the fight (kZerosToHold); a Landed reading
+    // resets the count, an Inconclusive one leaves it. One miss, ward, absorb or resist is never "never works".
+    enum class Reading : std::uint8_t { Inconclusive, Landed, Zero };
+    inline constexpr float kSettleSec = 2.0f;
+    inline constexpr float kMaxAgeSec = 6.0f;
+    inline constexpr float kMarginSec = 1.0f;
+    inline constexpr int   kZerosToHold = 2;
+    struct ReadInput {
+        bool  disarm = false;             // read the right-hand weapon instead of an effect
+        bool  concentration = false;
+        bool  otherHostileInstant = false;
+        bool  hadSubject = true;          // Disarm: a disarmable weapon was seen in the right hand at the fire; else nothing to read
+        float keyedDurationSec = 0.0f;    // the keyed effect's duration (0 = instant)
+        float ageSec = 0.0f;              // now minus the fire's observed time
+        bool  landed = false;             // the keyed effect is on the target / the weapon is no longer in his right hand
+    };
+    [[nodiscard]] constexpr Reading Judge(const ReadInput& a) {
+        if (a.ageSec < kSettleSec || a.ageSec > kMaxAgeSec) return Reading::Inconclusive;
+        if (a.concentration || a.otherHostileInstant) return Reading::Inconclusive;
+        if (a.disarm) {
+            if (!a.hadSubject) return Reading::Inconclusive;
+        } else if (!(a.keyedDurationSec > a.ageSec + kMarginSec)) {
+            return Reading::Inconclusive;
+        }
+        return a.landed ? Reading::Landed : Reading::Zero;
+    }
+    // The running count of consecutive Zero readings after one more reading.
+    [[nodiscard]] constexpr int Tally(int a_zeros, Reading a_r) {
+        return a_r == Reading::Zero ? a_zeros + 1 : a_r == Reading::Landed ? 0 : a_zeros;
     }
 
     // THE ZERO-EFFECT HOLD (cast/NoEffect.cpp): a cast of a hostile-row spell fired and left no effect on that target. Held off

@@ -1017,6 +1017,14 @@ namespace MFO::ComposedCast {
         return Clock::now() - w.lastObservedAt < std::chrono::milliseconds(a_withinMs);
     }
 
+    std::int64_t ObservedAgeMs(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell) {
+        const auto it = g_watch.find(a_follower);
+        if (it == g_watch.end() || a_spell == 0) return -1;
+        const auto& w = it->second.hand[WatchSlot(a_hand)];
+        if (w.spell != a_spell || !w.observed) return -1;
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - w.lastObservedAt).count();
+    }
+
     namespace {
         // The hand the LAST observed fire of a form was attributed to (worker-serial, like
         // g_watch): HealObsNoteClaimFire reads it right after NoteObservedCast on the same task.

@@ -687,6 +687,7 @@ namespace MFO::Actuation {
                         const bool        planned[2] = { handPlan.left, handPlan.right };
                         bool              stale = true;
                         bool              fired = false;
+                        std::int64_t      fireAgeMs = -1;   // how long ago the observed fire was (NoEffect tells one fire from the next)
                         long long         oldestMs = 0;
                         for (int i = 0; i < 2 && stale; ++i) {
                             if (!planned[i]) continue;
@@ -700,6 +701,8 @@ namespace MFO::Actuation {
                                                              a_spellID,
                                                              static_cast<std::uint32_t>(ageMs.count() + 1))) {
                                 fired = true; stale = false;
+                                fireAgeMs = ComposedCast::ObservedAgeMs(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                                           : APMFBridge::kApmfHandRight, a_spellID);
                                 break;
                             }
                             if (ageMs < std::chrono::milliseconds(windowMs) ||
@@ -709,7 +712,7 @@ namespace MFO::Actuation {
                             }
                             oldestMs = std::max<long long>(oldestMs, ageMs.count());
                         }
-                        if (fired) NoEffectNoteFired(a_follower, spell, a_target);   // v46 hostile rows: did it leave an effect? (cast/NoEffect.cpp)
+                        if (fired) NoEffectNoteFired(a_follower, spell, a_target, fireAgeMs);   // v46 hostile rows: did it leave an effect? (cast/NoEffect.cpp)
                         if (fired) {   // it started: the consecutive-failure count of the pair ends
                             if (const auto cn = g_offenseNeverStartedCount.find(id); cn != g_offenseNeverStartedCount.end())
                                 cn->second.erase(OffenseKey(a_spellID, a_target->GetFormID()));

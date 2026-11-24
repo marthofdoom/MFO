@@ -14,7 +14,7 @@
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
-#include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the reach need, the zero-effect ledger
+#include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the need of a target, the zero-effect reading rules
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
 #include <limits>
@@ -2574,8 +2574,8 @@ void CastStutterRows() {
 }
 
 
-// ABI v46 adoption (cast/SeatRows.h): the pure parts. A row is seated on its own bit AND TypeEquip, only from ABI 46; the engine's
-// reach is a range need on the candidate; the need of a target; the zero-effect ledger.
+// ABI v46 adoption (cast/SeatRows.h): the pure parts. A row is seated on its own bit AND TypeEquip, only from ABI 46; the need of a
+// target; the zero-effect reading rules.
 static void SeatRowRules() {
     using namespace MFO::SeatRows;
     const std::uint32_t all = (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13) | kTypeEquipBit;
@@ -2586,20 +2586,40 @@ static void SeatRowRules() {
     Check(!RowSeated(46, all & ~kTypeEquipBit, Row::Paralyze), "v46: the row bit without TypeEquip is not served");
     Check(!RowSeated(46, (1u << 11) | kTypeEquipBit, Row::Stagger) && RowSeated(46, (1u << 11) | kTypeEquipBit, Row::Disarm),
           "v46: a row is seated by its OWN bit only");
-    Check(RowReach(Row::Stagger, 0.0f) == 256.0f && RowReach(Row::Disarm, 0.0f) == 256.0f && RowReach(Row::Paralyze, 0.0f) == 384.0f,
-          "v46: the vanilla reach defaults 256 / 256 / 384 when the setting is unreadable");
-    Check(RowReach(Row::Paralyze, 500.0f) == 500.0f && RowReach(Row::Paralyze, -1.0f) == 384.0f, "v46: a readable setting wins, a nonsense one does not");
-    Check(RowReach(Row::TargetEffect, 300.0f) == 0.0f, "v46: TargetEffect has no distance of its own");
-    Check(CapReach(2000.0f, 256.0f) == 256.0f && CapReach(100.0f, 256.0f) == 100.0f, "v46: the candidate's reach is capped to the row's, never raised");
-    Check(CapReach(0.0f, 384.0f) == 384.0f && CapReach(2000.0f, 0.0f) == 2000.0f && CapReach(0.0f, 0.0f) == 0.0f,
-          "v46: no reach of its own takes the row's; a row without one leaves it");
-    Reposition::Range r;   // the cap feeds the H4 range: he closes to 0.9 x the row's reach
-    SpellEntry st = Spell("Stagger", 0x40001, Prune::Nature::Control, 30, CapReach(2000.0f, 256.0f), Prune::kAvResistFire);
-    r = Reposition::SpellRange(st, 200.0f);
-    Check(std::fabs(r.desired - 0.9f * 256.0f) < 0.01f, "v46: a capped Stagger spell keeps 0.9 x 256, so he closes in instead of being refused");
-    Check(NeedMet(Need::Weapon, true, false) && !NeedMet(Need::Weapon, false, true), "v46: Disarm needs a droppable weapon");
-    Check(NeedMet(Need::Summoned, false, true) && !NeedMet(Need::Summoned, true, false), "v46: Banish / Command need a summoned target");
+    Check(NeedMet(Need::Weapon, true, false) && !NeedMet(Need::Weapon, false, true), "v46: Disarm needs a droppable right-hand weapon");
+    Check(NeedMet(Need::Summoned, false, true) && !NeedMet(Need::Summoned, true, false), "v46: Command needs a summoned target");
     Check(NeedMet(Need::None, false, false), "v46: a row with no need always passes");
+    {   // the zero-effect reading (review F2 / F3)
+        ReadInput w; w.keyedDurationSec = 20.0f; w.ageSec = 3.0f;
+        Check(Judge(w) == Reading::Zero, "zero-effect: a lasting keyed effect absent after the settle time reads Zero");
+        w.landed = true;
+        Check(Judge(w) == Reading::Landed, "zero-effect: the effect on the target reads Landed");
+        w.landed = false; w.ageSec = 1.0f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: read before the settle time is inconclusive");
+        w.ageSec = 7.0f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: read after the upper age is inconclusive");
+        w.ageSec = 3.0f; w.keyedDurationSec = 3.5f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: a duration that may already have ended (age + margin) is inconclusive");
+        w.keyedDurationSec = 0.0f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: an instant keyed effect is never judged");
+        w.keyedDurationSec = 20.0f; w.concentration = true;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: a concentration spell is never judged");
+        w.concentration = false; w.otherHostileInstant = true;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: a spell with another hostile instant effect is never judged");
+        ReadInput d; d.disarm = true; d.ageSec = 3.0f; d.landed = false;
+        Check(Judge(d) == Reading::Zero, "zero-effect: Disarm with the weapon still in the right hand reads Zero (instant is fine for Disarm)");
+        d.hadSubject = false;
+        Check(Judge(d) == Reading::Inconclusive, "zero-effect: Disarm with no weapon seen at the fire reads nothing");
+        int z = 0;
+        z = Tally(z, Reading::Zero);
+        Check(z < kZerosToHold, "zero-effect: one zero reading holds nothing (a miss or one resist)");
+        z = Tally(z, Reading::Inconclusive);
+        Check(z == 1, "zero-effect: an inconclusive reading leaves the count");
+        z = Tally(z, Reading::Landed);
+        Check(z == 0, "zero-effect: a landed reading resets the count");
+        z = Tally(Tally(z, Reading::Zero), Reading::Zero);
+        Check(z >= kZerosToHold, "zero-effect: two consecutive zero readings hold the pair");
+    }
     HoldLedger h;
     Check(!h.Held(1, 2, 3), "zero-effect: nothing held at the start");
     Check(h.Hold(1, 2, 3) && !h.Hold(1, 2, 3), "zero-effect: the first hold is new (logged once), the repeat is not");
