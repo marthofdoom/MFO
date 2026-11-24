@@ -102,11 +102,11 @@ namespace Sim {
         std::int32_t goalTri = -1; EQ::Vec3 goal; std::uint32_t goalBody = 0;   // what his corners lead to, and who stands there
         std::array<EQ::PathPoint, 6> pts; std::uint8_t n = 0, i = 0; bool reach = false, blocked = false, cut = false;
         double pathAt = -1e9, holdUntil = 0; std::uint64_t stamp = ~0ull;
-        double wantAt = -1e9, progAt = 0; float px = 0, py = 0; bool stuckNoted = false; double stuckSince = -1;   // the stuck window
+        double wantAt = -1e9, progAt = 0; float px = 0, py = 0; bool stuckNoted = false; double stuckSince = -1; float stuckWant = 0.0f /* stuck seconds since his last STUCK end */;   // the stuck window
         double blockSince = -1, passUntil = 0; std::uint32_t blocker = 0;                                          // a body in his way
         std::int32_t door = -1; double doorAt = 0;                                                               // the door he is opening
         double dropUntil = 0; EQ::Vec3 dropTo; std::int32_t dropTri = -1;                                          // a drop in flight
-        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0; double awayUntil = 0, exactUntil = 0;
+        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0, legDrift = 0 /* how far the leg's GOAL has moved since it began (a chase) */, legGx1 = 0, legGy1 = 0; double awayUntil = 0, exactUntil = 0;
         float endX[3] = {}, endY[3] = {}; bool hadEnd[3] = {};   // where his last leg of each kind ended (LegEnd: BLOCKED, UNREACHABLE, STUCK): an end beside it is a repeat
     };
 

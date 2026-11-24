@@ -176,11 +176,13 @@ namespace Sim {
     }
 
     // A leg is over. Its detour sample (2.5) is taken when he ARRIVED: what he walked over the length of the route he was given (FindPath's, or the
-    // straight line of a direct walk), so a route round a wall is not a detour and a walk that wandered off its route is.
+    // straight line of a direct walk), so a route round a wall is not a detour and a walk that wandered off its route is. The route is measured
+    // FROM WHERE HE STOOD (EnvPlan), and what the goal itself moved while he walked (Nav::legDrift: a foe he chases) is added to it: nobody can
+    // walk less than that, so following a moving foe step for step reads 1 and not 3 (review F8: a route of 100 and a foe who walked 150 read 2.5).
     inline void EnvLegClose(Fight& F, Body& x, bool arrived) {
         Nav& n = x.nav;
         if (arrived) n.exact = false;
-        if (arrived && n.legOpen && n.legReach && x.ctl == 0 && n.walked > 200.0f && n.legLen > 1.0f) { const double r = static_cast<double>(n.walked / std::max(50.0f, n.legLen));
+        if (arrived && n.legOpen && n.legReach && x.ctl == 0 && n.walked > 200.0f && n.legLen > 1.0f) { const double r = static_cast<double>(n.walked / std::max(50.0f, n.legLen + n.legDrift));
             F.t.detourSum += r; ++F.t.detourN; ++F.t.detourHist[std::clamp(static_cast<int>((r - 1.0) * 4.0), 0, 15)];
             if (F.trace && r > 2.0) std::fprintf(F.trace, "%7.2f  DETOUR %s: walked %.0f on a route of %.0f, from (%.0f, %.0f) toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), static_cast<double>(n.walked), static_cast<double>(n.legLen), n.legSx, n.legSy, n.legG0x, n.legG0y); }
         n.legOpen = false; n.walked = 0.0f;
@@ -193,7 +195,7 @@ namespace Sim {
             if (subj && longLeg && n.legLong && F.now - n.legAt < static_cast<double>(T.oscSec) && fx * n.legDx + fy * n.legDy < -0.5f) { ++F.t.pathOsc;
                 if (F.trace) std::fprintf(F.trace, "%7.2f  REVERSAL %s: a new leg to (%.0f, %.0f) heads back %.1f s after the last began toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), gx, gy, F.now - n.legAt, n.legG0x, n.legG0y); }
             n.legDx = fx; n.legDy = fy; }
-        n.legLong = longLeg; n.legAt = F.now; n.legSx = x.c.x; n.legSy = x.c.y; n.legG0x = gx; n.legG0y = gy; n.walked = 0.0f; n.legOpen = true; n.legLen = len; n.legReach = reach;
+        n.legLong = longLeg; n.legAt = F.now; n.legSx = x.c.x; n.legSy = x.c.y; n.legG0x = gx; n.legG0y = gy; n.walked = 0.0f; n.legOpen = true; n.legLen = len; n.legReach = reach; n.legDrift = 0.0f; n.legGx1 = gx; n.legGy1 = gy;
         if (subj) { ++F.t.pathLegs; if (!reach) ++F.t.pathUnreach; }
     }
 
@@ -247,7 +249,7 @@ namespace Sim {
         const float step = speed * TM::dt; const bool idleBefore = F.now - n.wantAt > 0.5;
         // THE STUCK WINDOW COUNTS WANTED SECONDS (review F8). A gap in the asking (a swing, a stagger, a turn spent on a cast) is taken out of the window
         // and does not clear it, so a body that asks, fails, swings and asks again is stuck. Only a gap past wantGapSec is standing by choice.
-        if (const double gap = F.now - n.wantAt - static_cast<double>(TM::dt); gap > static_cast<double>(T.wantGapSec)) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; n.stuckSince = -1; n.stuckNoted = false; }
+        if (const double gap = F.now - n.wantAt - static_cast<double>(TM::dt); gap > static_cast<double>(T.wantGapSec)) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; n.stuckSince = -1; n.stuckNoted = false; n.stuckWant = 0.0f; }
         else if (gap > 0.5 * static_cast<double>(TM::dt)) { n.progAt += gap; if (n.stuckSince >= 0) n.stuckSince += gap; }
         n.wantAt = F.now; bool arrived = false, cornered = false, held = false;
         if (!g_v4.path) EnvTryStep(F, x, tx, ty, step);
@@ -264,6 +266,7 @@ namespace Sim {
         }
         else {
             EQ::Vec3 gp; const std::int32_t gt = EnvGoal(F, x, tx, ty, to, point, gp); n.goalBody = to ? to->c.id : 0;
+            if (n.legOpen && !n.away) { n.legDrift += std::hypot(gp.x - n.legGx1, gp.y - n.legGy1); n.legGx1 = gp.x; n.legGy1 = gp.y; }
             if (F.now >= n.holdUntil) {
                 const bool spent = n.n == 0 || n.i >= n.n || n.away, stale = n.stamp != F.doorStamp;
                 if (spent || stale || (gt != n.goalTri && F.now - n.pathAt >= static_cast<double>(T.repathSec))) EnvPlan(F, x, gt, gp, idleBefore);
@@ -290,11 +293,14 @@ namespace Sim {
         if (arrived) EnvLegClose(F, x, true);
         // stuck (2.5): under stuckU of ground in stuckSec while a leg wants him to move. Standing cornered is his choice and is counted apart.
         if (arrived || cornered || F.now < n.dropUntil) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; }
-        if (std::hypot(x.c.x - n.px, x.c.y - n.py) > T.stuckU) { n.px = x.c.x; n.py = x.c.y; n.progAt = F.now; n.stuckNoted = false; n.stuckSince = -1; }
+        if (std::hypot(x.c.x - n.px, x.c.y - n.py) > T.stuckU) { n.px = x.c.x; n.py = x.c.y; n.progAt = F.now; n.stuckNoted = false; n.stuckSince = -1; n.stuckWant = 0.0f; }
         else if (F.now - n.progAt > static_cast<double>(T.stuckSec)) {
             if (subj) F.t.pathStuckSec += TM::dt;
             if (n.stuckSince < 0) n.stuckSince = F.now;
-            if (!n.stuckNoted) { n.stuckNoted = true; if (F.now >= n.holdUntil) EnvLegEnd(F, x, LegEnd::Stuck); }
+            // The leg ends STUCK when the window fills, and AGAIN every stuckSec he stays stuck: each end asks for a route from where he stands
+            // (Nav::exact) and each one beside the last is a repeat. One end per stuck spell left him on the shared route for good once exactUntil ran out.
+            n.stuckWant += TM::dt;
+            if (!n.stuckNoted || n.stuckWant >= T.stuckSec) { n.stuckNoted = true; n.stuckWant = 0.0f; EnvLegEnd(F, x, LegEnd::Stuck); }
             if (x.ctl >= 0 && F.now - n.stuckSince > 30.0) { ++F.t.envStuckForever; n.stuckSince = F.now; }
         }
     }

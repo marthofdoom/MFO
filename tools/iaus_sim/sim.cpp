@@ -430,7 +430,7 @@ namespace {
         { "reblock/f",       0.25, 0.10, "BLOCKED endings beside his previous block, per fight" },
         { "osc/min",         8.0, 1.5, "legs that turn back within 3 s, per minute" },
         { "unreach%",        5.0, 2.0, "legs begun toward a goal no route reaches" },
-        { "detour.p90",      3.0, 0.5, "walked over straight line, the 90th percentile leg" },
+        { "detour.p90",      3.0, 0.5, "walked over the route he was given plus what his goal moved, the 90th percentile leg" },
         { "holdUnreach.s/f", 1.0, 0.5, "seconds per fight with his attack on a foe he can neither reach nor shoot" },
         { "hold%",           5.0, 1.0, "share of his fight time asked to walk while a hold ran (the retry wait, the approach backoff, a foe past the drop cap)" },
         { "repeat/f",        1.0, 0.5, "UNREACHABLE or STUCK endings beside his previous ending of that kind, per fight" },

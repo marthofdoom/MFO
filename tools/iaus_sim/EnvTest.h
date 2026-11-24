@@ -181,8 +181,10 @@ namespace Sim {
             auto burst = [&](Fight& H, Body& s, int on, int off, double sec) { const EQ::View v = H.env->View(H.doors, 0); const EnvPoint g{ b, EQ::TriAt(v, b), 0, 0 }; int k = 0; for (const double end = H.now + sec; H.now < end; ++k) { if (k % (on + off) < on) H.Move(s, b.x, b.y, 0.0f, false, nullptr, &g); EnvStep(H); H.now += TM::dt; } };
             Fight J = solo(O); Body& sj = place(J, a); burst(J, sj, 3, 10, 15.0);
             ok(J.t.pathStuckSec > 0.5 && J.t.pathStuckLegs == 1 && J.t.pathRepeat == 0, "stuck: asking in bursts with a third of a second between them is stuck all the same (the window counts wanted seconds; a gap of three steps used to clear it)");
-            for (int k = 0; k < 150; ++k) { EnvStep(J); J.now += TM::dt; } burst(J, sj, 1, 0, 4.0);
+            for (int k = 0; k < 150; ++k) { EnvStep(J); J.now += TM::dt; } burst(J, sj, 1, 0, 3.5);
             ok(J.t.pathStuckLegs == 2 && J.t.pathRepeat == 1, "stuck: after standing five seconds by choice the window begins again, and sticking at the same spot again is a REPEAT");
+            burst(J, sj, 1, 0, 4.2);
+            ok(J.t.pathStuckLegs == 4 && J.t.pathRepeat == 3, "stuck: while he stays stuck the leg ends STUCK again every stuckSec (a route from where he stands each time), each one a repeat");
             Fight K = solo(O); Body& sk = place(K, a); burst(K, sk, 3, 100, 60.0);
             ok(K.t.pathStuckSec == 0.0 && K.t.pathStuckLegs == 0, "stuck: three steps of asking every 3.4 s is standing by choice (past wantGapSec), never stuck");
             const SimEnv& I = env("island"); const EQ::Vec3 ia = at(I, 128, 6, 2, 2), ib = at(I, 128, 6, 15, 2); Fight L = solo(I); Body& sl = place(L, ia); const EQ::View lv = L.env->View(L.doors, 0); const EnvPoint lg{ ib, EQ::TriAt(lv, ib), 0, 0 };
