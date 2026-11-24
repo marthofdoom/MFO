@@ -497,7 +497,7 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         self.assertEqual(names, self.fields("LootNeed.h", "LootTuning"))
         self.assertFalse({n for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS} & set(T.LOOT_NOT_SEARCHED))
         self.assertEqual([n for n, _, _ in T.LOOT_EPISODE_KNOBS], ["loot.batchHoldMinSec"])   # review of 9689734b (S2, S6): the guard timers, the bar floor and the gate rows are NOT searched
-        for n in ("guardFreshSec", "guardUnreadMaxSec", "guardRepostSec", "guardBarFloorSec", "gateReadmitSec", "gateConeDeg", "gateBeyondU", "gateReadmitMoveU", "gateRepeatU", "gateShortU", "gateNearU"):
+        for n in ("guardFreshSec", "guardUnreadMaxSec", "guardRepostSec", "guardBarFloorSec", "gateReadmitSec", "gateConeDeg", "gateBeyondU", "gateReadmitMoveU", "gateRepeatU", "gateShortU", "gateNearU", "gatePassU", "gatePassRunU"):
             self.assertIn("loot." + n, T.LOOT_NOT_SEARCHED)
         tune_h = open(os.path.join(os.path.dirname(os.path.abspath(T.__file__)), "Tune.h"), encoding="utf-8").read()
         for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS:

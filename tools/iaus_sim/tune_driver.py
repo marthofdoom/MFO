@@ -2165,6 +2165,7 @@ LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.nee
 LOOT_EPISODE_KNOBS = [("loot.batchHoldMinSec", 3.0, [0.0, 1.5, 6.0])]
 _GUARD_WHY = "a guard rule's timer: a safety rule, not a value trade. A value search would only ever shorten the caution (review S2). The loot world reads it (scenarios guard-bar-1117, pending-1117c); marth sets it"
 _GATE_WHY = "read by the loot world, NOT searched yet: the field blocks 2 to 5 times as often as the lab (the lab's world is the navmesh alone), so a value found here says nothing about the game (review S6). Searchable once the lab's block rate matches a field log"
+_PASS_WHY = "marth's ruling 2026-11-24 (a gate lifts on real events or the player moving through), a rule and not a value trade: gatePassU is the geometric tolerance of \"through the block point\" and gatePassRunU the physical bound that tells a walk from a teleport. Neither is a number a loot value can price"
 LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot world (scenario `thief`), but an ordinary episode holds no owned loose item a Thief needs: no signal to search on. PLACEHOLDER",
                      "loot.stealRiskWeight": "as stealNeedMin: PLACEHOLDER", "loot.stealBountyPerGold": "as stealNeedMin: PLACEHOLDER",
                      "loot.stealBountyRef": "as stealNeedMin: PLACEHOLDER",
@@ -2178,7 +2179,7 @@ LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot wor
                      "loot.saleWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
                      "loot.guardFreshSec": _GUARD_WHY, "loot.guardUnreadMaxSec": _GUARD_WHY, "loot.guardRepostSec": _GUARD_WHY, "loot.guardBarFloorSec": _GUARD_WHY,
                      "loot.gateReadmitSec": "marth 2026-09-24: 'no timer'. A ruling, not a knob: ships 0 and is never searched",
-                     "loot.gateConeDeg": _GATE_WHY, "loot.gateBeyondU": _GATE_WHY, "loot.gateReadmitMoveU": _GATE_WHY, "loot.gateRepeatU": _GATE_WHY, "loot.gateShortU": _GATE_WHY, "loot.gateNearU": _GATE_WHY,
+                     "loot.gateConeDeg": _GATE_WHY, "loot.gateBeyondU": _GATE_WHY, "loot.gateReadmitMoveU": _GATE_WHY, "loot.gateRepeatU": _GATE_WHY, "loot.gateShortU": _GATE_WHY, "loot.gateNearU": _GATE_WHY, "loot.gatePassU": _PASS_WHY, "loot.gatePassRunU": _PASS_WHY,
                      "loot.offClassDwellSec": "an equip notice's dwell (EquipAuthority.cpp OffClassTick): no loot rule reads it, in the game or in the lab"}
 
 
