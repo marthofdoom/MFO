@@ -17,7 +17,11 @@ CONS = (
     "player_dying", "recipient_dying", "chase", "helpless", "taunt_chance", "heal_claimed", "heal_urgency", "control_worth",
     "magicka_buys", "range", "mortal", "mortal_danger", "trade", "need", "far", "need", "need", "need", "strike", "hold", "need",
     "flee_heal", "need", "guard_line", "buff_threat", "buff_stealth", "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",
+    "spot_path", "spot_sight", "spot_exposure", "spot_fire_line", "spot_range", "spot_path_exposed", "spot_exits", "spot_ally_dist", "spot_hostile_area",
+    "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane", "spot_portal_busy", "spot_serves", "spot_cover",
 )
+# native/iaus/Spots.h kSpotKinds, in order (class files: spot.<kind>=<v>)
+SPOT_KINDS = ("stay", "firing", "cover", "high_ground", "chokepoint", "flank", "heal_reach", "peel", "kite", "regroup", "loot_route", "retreat", "reach")
 CLASS_SLUGS = (
     "melee", "ranged", "mage", "knight", "warrior", "mercenary", "archer", "thief", "evoker", "conjurer", "healer", "warlock",
     "great-knight", "champion", "blademaster", "ranger", "master-thief", "wizard", "necromancer", "priest", "spellsword",

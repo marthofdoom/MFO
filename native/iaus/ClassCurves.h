@@ -59,6 +59,7 @@ namespace MFO::Iaus::ClassCurves {
         std::vector<Profile::WeightOverride> weights;   // a (family, consideration) exponent that REPLACES the catalogue's w for this class (Profile::weights)
         std::vector<FamilyWeight> families;             // a family multiplier for this class (Profile::family)
         Scalars scalars;
+        std::array<float, kSpotKindCount> spot = [] { std::array<float, kSpotKindCount> a{}; a.fill(1.0f); return a; }();   // MOVEMENT (S1): a multiplier per spot kind. 1 = the shared value
     };
     using Table = std::array<Row, kRows>;
 
@@ -96,4 +97,5 @@ namespace MFO::Iaus::ClassCurves {
     bool SetScalar(Row& a_row, std::string_view a_name, float a_v);
     bool SetWeight(Row& a_row, Family a_f, Cons a_c, float a_w);
     bool SetFamilyWeight(Row& a_row, Family a_f, float a_w);
+    bool SetSpotWeight(Row& a_row, SpotKind a_k, float a_w);   // > 0, finite (a kind is switched off by the class mask or a road cap, never by a weight)
 }

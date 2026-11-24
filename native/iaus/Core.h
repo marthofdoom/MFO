@@ -158,6 +158,26 @@ namespace MFO::Iaus {
         HealRate,           // (APPENDED, field 11-17b Jesper "when he does choose to heal it's a weak spell"): a heal by what it MENDS PER SECOND of cast against his BEST castable
                             // heal on that recipient (Facts::healRate / Facts::bestHealRate, the bestDamage pattern): heals are ranked among themselves and healing as a family is never
                             // penalised. HealSize stays the overheal brake (a heal bigger than the missing health). NOT APPLICABLE while the heal is unmeasured
+        // MOVEMENT (S1, movement-plan.md): considerations over a (action, SPOT) pair, scored by Spots.cpp ScoreSpot from SpotFacts, in no
+        // action family's own set. Every curve is linear / piecewise / boolean (no exp, no pow): gcc and MSVC must rank alike.
+        SpotPath,           // seconds of walking to the spot
+        SpotSight,          // the target sees the spot (an engine ray's answer). Unknown = NOT APPLICABLE, never clear
+        SpotExposure,       // the share of his threats (those answered) that see the spot
+        SpotFireLine,       // no ally's body in the lane from the spot to the target
+        SpotRange,          // the action's range band at the spot
+        SpotPathExposed,    // seconds of the walk a threat can see
+        SpotExits,          // routes out that do not lead through a foe
+        SpotAllyDist,       // distance to the nearest ally's chosen place
+        SpotHostileArea,    // the spot lies in an active hostile area
+        SpotLeash,          // distance to the anchor / the leash. Past 1: veto
+        SpotClimb, SpotDrop,   // height gained / lost on the way
+        SpotDetected,       // how detected he would be there (S4 fills it: not applicable until then)
+        SpotLight,          // how lit the spot is, for a member who wants the dark (input hook: PartyPicture::light)
+        SpotFoeReach,       // melee: can he walk to the target at all
+        SpotLane,           // his body or lane crosses another member's chosen lane
+        SpotPortalBusy,     // the walk goes through a doorway another member's chosen place stands in
+        SpotServes,         // a movement action (retreat, regroup ...) served by a spot (1) or by standing still (0)
+        BoostSpotCover,     // multiplier: from the spot he sees a foe that threatens an ally who has his place (cover each other)
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -218,6 +238,12 @@ namespace MFO::Iaus {
     // Per-taunter act.taunt cooldown, seconds, from the ATTEMPT (marth Q69: "a 30s cool down"). The ONE constant: Taunt::Fire
     // and Tuning::rowlessTauntCooldownSec both use it. (Declared here, before Tuning, which needs it; SharedCooldownId is below.)
     inline constexpr float kTauntCooldownSec = 30.0f;
+
+    // MOVEMENT (S1): what kind of place a spot is. The rows (name, generator, families, needs) are iaus/Spots.h kSpotKinds. APPEND ONLY:
+    // per-class weights, the class masks and iIausSpotKinds index it.
+    enum class SpotKind : std::uint8_t { Stay = 0, Firing, Cover, HighGround, Chokepoint, Flank, HealReach, Peel, Kite, Regroup, LootRoute, RetreatExit, ReachUnreach, kCount };
+    inline constexpr std::size_t kSpotKindCount = static_cast<std::size_t>(SpotKind::kCount);
+    inline constexpr float kMoveDecisionFloorSec = 0.5f;   // marth: no movement decision faster than 500 ms. The reader (MoveDecisionSec) clamps
 
     struct Tuning {
         std::array<Curve, kCons> curve{};
@@ -341,8 +367,27 @@ namespace MFO::Iaus {
         // fix/spell-worth C2 (PLACEHOLDER, not searched; the sim mirror is open): what an offense spell whose damage could NOT be measured is worth, as a
         // share of his best MEASURED castable option on that foe (Estimate::UnmeasuredWorth: held strictly below it). `t.unmeasuredDamage` in shared.txt.
         float unmeasuredDamage = 0.5f;
+        // MOVEMENT (S1). Every value is a PLACEHOLDER the `spots` stage searches (S5) or a probe replaces. Read only by Spots.cpp / MovePass.cpp.
+        float moveDecisionSec = 0.5f;            // read ONLY through MoveDecisionSec(): the 0.5 floor
+        float spotPinKinds = 0.0f;               // >= 1: kinds that need a pin (cover, chokepoint hold, flank) may be offered, and then only when RoadCaps::pin holds
+        float spotMomentum = 1.25f;              // the spot he is walking to
+        float spotPreempt = 0.15f;               // a new spot must beat where he is (or is going) by this share
+        float spotRadius = 1500.0f;              // how far (walked) from a member spots are looked for
+        float spotSplitArea = 160000.0f;         // a triangle larger than this offers three more points than its centre
+        float spotEyeU = 110.0f;                 // the eye over the floor, geometry rays only
+        float spotHighU = 96.0f;                 // high ground stands this far over the target
+        float spotPortalU = 180.0f;              // a walk edge between two walls narrower than this is a doorway: one body
+        float spotPortalStandU = 60.0f;          // a point this near to it stands in it
+        float spotExitU = 500.0f;                // a route out must lead this far
+        float spotPeelU = 250.0f;                // a peel spot lies this near to the middle between attacker and ally
+        float spotArriveU = 90.0f;               // inside this of a committed spot he has arrived
+        float spotFactMoveU = 128.0f;            // a sight fact or a path is reused until an end moved this far (or left its triangle)
+        float spotFactMaxAgeSec = 5.0f;          // ... or got this old
+        float spotKeptAgeSec = 1.0f;             // a committed spot's own sight is asked again once its answer is this old (kMarkSightLost)
+        float spotUnknownExposure = 0.75f;       // the share an UNANSWERED threat counts as in spot_exposure: neither hidden nor surely seen. It keeps the ray budget from deciding the place
         WorthTable worth{};
     };
+    [[nodiscard]] inline constexpr float MoveDecisionSec(const Tuning& a_t) { return a_t.moveDecisionSec >= kMoveDecisionFloorSec ? a_t.moveDecisionSec : kMoveDecisionFloorSec; }   // a NaN reads as the floor
 
     // DefaultTuning() is the LIVE tuning: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/shared.txt, potions.txt) swaps edited ones in on the
     // worker between ticks. ShippedTuning() is the compiled table, never edited; a reload always starts from it. LiveTuning() is the editable live object
@@ -382,7 +427,8 @@ namespace MFO::Iaus {
         // School affinity (ruling Q-school-affinity, marth 11-12): a score MULTIPLIER per magic school (School identity order),
         // a smooth wave over the school circle built from a ClassCurves row (School identity order). 1.0 everywhere = flat = bit-identical. Never a veto.
         std::array<float, kSchools> school{};
-        Profile() { family.fill(1.0f); role.fill(1.0f); school.fill(1.0f); }
+        std::array<float, kSpotKindCount> spot{};   // MOVEMENT (S1): a multiplier per spot kind (ClassCurves Row::spot)
+        Profile() { family.fill(1.0f); role.fill(1.0f); school.fill(1.0f); spot.fill(1.0f); }
     };
 
     // I8's mechanical derivation, one call per applied DefaultGambit[] row: adds 0.5 x (rows - index) / rows to
@@ -519,6 +565,27 @@ namespace MFO::Iaus {
                                           // pulled followers after him (review of 303c14d, F2)
     };
 
+    // MOVEMENT (S1): the facts of one (member, action, spot) triple, filled in ONE place (MovePass.cpp) and read by Spots.cpp ScoreSpot.
+    // A negative float, a Tri::Unknown = NOT APPLICABLE.
+    struct SpotFacts {
+        float pathSec = -1.0f, pathExposedSec = -1.0f, climb = -1.0f, drop = -1.0f;
+        Tri   sees = Tri::Unknown, fireLineClear = Tri::Unknown, inHostileArea = Tri::Unknown, foeReachable = Tri::Unknown;
+        Tri   laneCrossed = Tri::Unknown, portalBusy = Tri::Unknown, serves = Tri::Unknown;
+        float exposure = -1.0f, rangeX = -1.0f, exits = -1.0f, allyDist = -1.0f, leashX = -1.0f;
+        float detected = -1.0f, light = -1.0f;   // S4 hooks
+        bool  coversAlly = false;
+        bool operator==(const SpotFacts&) const = default;
+    };
+    // MOVEMENT (S1): one of a member's ranked actions, exported from a Decision (TopRanked) for the movement pass to pair with spots.
+    struct RankedAction {
+        Family family = Family::kCount; Family scrollOf = Family::CastOffense;
+        std::uint32_t form = 0, target = 0;
+        float score = 0.0f, reach = 0.0f;   // reach <= 0: range not applicable
+        bool  melee = false;
+        Sight sight = Sight::None;          // from where he stands, as the action facet read it. None = not a sighted action
+        Family Kind() const { return family == Family::Scroll ? scrollOf : family; }
+    };
+
     struct Candidate {
         Family      family = Family::Attack;
         Family      scrollOf = Family::CastOffense;  // Scroll only: whose consideration set the spell uses
@@ -647,6 +714,9 @@ namespace MFO::Iaus {
     // The action layer (every family except Posture). Pure: a_m is read, never written.
     [[nodiscard]] Decision Decide(const Mind& a_m, std::span<const Candidate> a_cands, const Profile& a_p,
                                   const Tuning& a_t, const TickIn& a_in);
+
+    // MOVEMENT (S1): the action he holds (the running decision, when it is ranked) and the best of the rest, at most three. Returns the count.
+    std::size_t TopRanked(const Decision& a_d, std::span<const Candidate> a_cands, std::array<RankedAction, 3>& a_out);
 
     // The posture layer (Posture candidates only): deterministic best with postureMomentum on the drawn
     // category. No rapport roll (a weapon swap is animated and expensive: dithering is never wanted). Returns
