@@ -250,12 +250,15 @@ namespace MFO::Iaus::SpellBook {
                               : a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
             // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
             st.roadUnsupported = a_source == Source::Spell && Actuation::CastRoadUnsupported(a_sp);
-            st.targetLocation  = delivery == RE::MagicSystem::Delivery::kTargetLocation ||
-                                 a_arch.shape == Actuation::SpellShape::Rune ||
-                                 a_arch.shape == Actuation::SpellShape::Wall ||
-                                 a_arch.shape == Actuation::SpellShape::TLBurst ||
-                                 Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
-                                                             out.nature == Prune::Nature::Offense, a_arch.impactHazard);   // interim, see Prune.h
+            Prune::PlacementIn pl;
+            pl.targetLocationDelivery = delivery == RE::MagicSystem::Delivery::kTargetLocation;
+            pl.rune      = a_arch.shape == Actuation::SpellShape::Rune;
+            pl.wall      = a_arch.shape == Actuation::SpellShape::Wall;
+            pl.tlBurst   = a_arch.shape == Actuation::SpellShape::TLBurst;
+            pl.selfBlast = Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
+                                                       out.nature == Prune::Nature::Offense, a_arch.impactHazard);   // interim, see Prune.h
+            pl.summon    = in.summon;
+            st.targetLocation = Prune::IsPlacement(pl);
             st.nature    = out.nature;
             st.weighable = Prune::WeighableSpell(archetypes);
             out.drop     = Prune::StaticDrop(st);

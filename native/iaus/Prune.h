@@ -60,6 +60,21 @@ namespace MFO::Iaus::Prune {
         return a_selfDelivery && !a_concentration && a_offense && a_impactHazard;
     }
 
+    // ── Placed spells (placed-spells-plan.md L1) ─────────────────────────────────────────────────────────
+    // "Is this a placed spell IAUS does not offer?" THE ONE RULE: iaus/SpellBook.cpp fills the input from the engine's records, the lab
+    // (tools/iaus_sim/Data.h Classify) from the extracted ones. To keep a placed kind (a wall, a rune, a burst): edit IsPlacement.
+    struct PlacementIn {
+        bool targetLocationDelivery = false;   // Delivery::kTargetLocation
+        bool rune = false;                     // SpellShape::Rune (target location with an effect projectile)
+        bool wall = false;                     // SpellShape::Wall (IsWallShape, and no shape that outranks it in cast/Archetype.cpp)
+        bool tlBurst = false;                  // SpellShape::TLBurst
+        bool selfBlast = false;                // IsSelfBlastPlacement (interim)
+        bool summon = false;                   // any Summon Creature effect
+    };
+    [[nodiscard]] inline bool IsPlacement(const PlacementIn& a_in) {
+        return a_in.targetLocationDelivery || a_in.rune || a_in.wall || a_in.tlBurst || a_in.selfBlast;
+    }
+
     // Order matters: a summon / ward is its own family whatever ClassifySpell calls it; a control archetype is
     // Control even when the record also flags it hostile; a self cloak harms whoever stands near but is CAST on
     // himself, so it is a (melee) buff; an Offense or Heal kind is a nature the RECORD states
@@ -81,7 +96,7 @@ namespace MFO::Iaus::Prune {
     struct StaticIn {
         bool castable = true;            // Vocab::IsCastableSpell (kSpell, not constant effect)
         bool roadUnsupported = false;    // Actuation::CastRoadUnsupported (the animation rule)
-        bool targetLocation = false;     // Delivery::kTargetLocation, or a Rune / Wall / TLBurst shape
+        bool targetLocation = false;     // IsPlacement's answer
         Nature nature = Nature::Unknown;
         bool weighable = true;           // WeighableSpell: at least one effect IAUS can value
     };

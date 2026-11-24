@@ -295,6 +295,18 @@ namespace Sim {
             run(6.0); const float after = in.c.hp; run(3.0); ok(F.hazards.empty() && in.c.hp == after, "hazards: nothing after its lifetime"); }
           { const std::string js = "{\"edid\":\"T\",\"delivery\":\"Aimed\",\"castType\":\"Concentration\",\"cost\":10,\"effects\":[{\"mag\":8,\"area\":0,\"dur\":0,\"hostile\":true,\"detrimental\":true,\"archetype\":0,\"av\":24,\"resist\":41,\"baseCost\":1,\"skill\":\"Destruction\",\"hazard\":{\"edid\":\"H\",\"via\":\"impact\",\"limit\":10,\"radius\":3,\"lifetime\":30,\"interval\":0.3,\"flags\":20,\"spell\":{\"edid\":\"HS\",\"delivery\":\"Aimed\",\"castType\":\"FireAndForget\",\"cost\":0,\"effects\":[{\"mag\":20,\"area\":0,\"dur\":1,\"hostile\":true,\"detrimental\":true,\"archetype\":0,\"av\":24,\"resist\":41,\"baseCost\":0,\"skill\":\"Destruction\"}]}}}]}";
             JP jp{ js }; const J j = jp.val(); SimSpell s; Classify(j, s); ok(s.hazard && s.hazard->limit == 10 && std::fabs(s.hazard->radius - Prune::BlastUnits(3.0f, 0.0f, false)) < 1e-3f && std::fabs(s.hazard->spell->dmg - 6.0f) < 1e-3f && s.dmg == 16.0f && Fight::LaysHazard(s), "hazards: the reader (radius in feet, 20 a second at 0.3 s is 6 a tick, the spell's own damage untouched)"); }
+          {   // PLACED SPELLS (L1 / M1 / the self-blast block): Classify answers with the game's own Prune rules from the extracted "placed" bits
+            const auto V = [](const char* delivery, const char* cast, const char* placed, const char* fx) {
+                const std::string js = std::string("{\"edid\":\"P\",\"delivery\":\"") + delivery + "\",\"castType\":\"" + cast + "\",\"cost\":10,\"placed\":{" + placed + "},\"effects\":[{\"mag\":8,\"dur\":0,\"baseCost\":1,\"resist\":41,\"skill\":\"Destruction\"," + fx + "}]}";
+                JP jp{ js }; const J j = jp.val(); SimSpell s; Classify(j, s); return s; };
+            const char* hurt = "\"hostile\":true,\"detrimental\":true,\"archetype\":0,\"av\":24,\"area\":0";
+            const char* hurtArea = "\"hostile\":true,\"detrimental\":true,\"archetype\":0,\"av\":24,\"area\":15";
+            using D = Prune::Drop;
+            { const SimSpell s = V("Aimed", "FireAndForget", "\"proj\":true,\"impact\":true", hurt); ok(s.e.drop == D::Keep, "placed: a bolt with an impact hazard is kept"); }
+            { const SimSpell s = V("Aimed", "Concentration", "\"proj\":true,\"impact\":true,\"drops\":true", hurt); ok(s.e.drop == D::Placement && s.foeDrop == D::Keep, "placed: a wall is no IAUS candidate, a foe keeps it"); }
+            { const SimSpell s = V("TargetLocation", "FireAndForget", "\"proj\":true", hurt); ok(s.e.drop == D::Placement && s.foeDrop == D::Placement, "placed: a rune is dropped"); }
+            { const SimSpell s = V("Self", "FireAndForget", "\"impact\":true", hurtArea); ok(s.e.drop != D::Keep && s.foeDrop == D::Keep, "placed: a self blast with an impact hazard is blocked, a foe keeps it"); }
+          }
           g_v4 = keep; }
         std::printf("ENV-TESTS %s: %d checks, %d failed  (fixtures %zu loaded, %zu skipped)\n", fail ? "FAIL" : "PASS", n, fail, g_envPool.all.size(), g_envPool.skipped.size());
         return fail ? 1 : 0;

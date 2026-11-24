@@ -1745,6 +1745,17 @@ namespace {
             in.targetLocation = Prune::IsSelfBlastPlacement(true, false, true, true);
             Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865 F1: the Self blast is dropped as Placement");
         }
+        {   // placed-spells L1: the one placement rule, today's answers
+            using P = Prune::PlacementIn;
+            Check(!Prune::IsPlacement(P{}), "placed L1: nothing set = not a placement (an aimed bolt)");
+            { P p; p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: target location delivery is a placement"); }
+            { P p; p.rune = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a rune is a placement"); }
+            { P p; p.wall = true; Check(Prune::IsPlacement(p), "placed L1: a wall is a placement"); }
+            { P p; p.tlBurst = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a location burst is a placement"); }
+            { P p; p.selfBlast = true; Check(Prune::IsPlacement(p), "placed L1: a self blast is a placement (interim)"); }
+            { P p; p.summon = true; Check(!Prune::IsPlacement(p), "placed L1: a Self summon is not a placement"); }
+            { P p; p.summon = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: Conjure Familiar (target location summon) is a placement until M1"); }
+        }
         // ---- item 4: the block family ----
         ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;
         ClassGate warrior; warrior.resolved = true; warrior.treeOn = true;

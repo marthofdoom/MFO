@@ -162,7 +162,7 @@ namespace Sim {
     // MGEF archetypes (RE::EffectArchetypes).
     inline constexpr int kArValueMod = 0, kArScript = 1, kArAbsorb = 4, kArDualValueMod = 5, kArCalm = 6, kArDemoralize = 7,
                          kArFrenzy = 8, kArSummon = 18, kArParalysis = 21, kArReanimate = 22, kArTurnUndead = 24,
-                         kArStagger = 33, kArPeakValueMod = 34, kArCloak = 35;
+                         kArStagger = 33, kArPeakValueMod = 34, kArCloak = 35, kArLight = 12, kArBoundWeapon = 17;
     // The effect archetypes whose damage is not in the spell's own effect list (native iaus/Fills.cpp MeasureSpell: kScript 1, kCloak 35, kEnhanceWeapon 39,
     // kSpawnHazard 40; the numbers are RE::EffectArchetypes::ArchetypeID's, the fork's EffectArchetypes.h). To add one: this row, after native's switch.
     inline constexpr int kArEnhanceWeapon = 39, kArSpawnHazard = 40;
@@ -211,6 +211,7 @@ namespace Sim {
     // Prune::ClassifyNature's precedence, as sim v1 did).
     struct SimSpell {
         SpellEntry e;
+        Prune::Drop foeDrop = Prune::Drop::Keep;   // a FOE's verdict: e.drop without the rules that are IAUS's alone (Classify, placed-spells L1)
         int   school = -1;          // skill AV of the costliest effect
         int   skillReq = 0;         // that effect's minimum skill (the spell's tier)
         float cost0 = 0;            // record cost before the caster's skill
@@ -330,7 +331,7 @@ namespace Sim {
         std::vector<SimSpell> spells;   // the castable pool a follower's book is drawn from (taught by a BOOK)
         std::vector<SimSpell> scrolls;  // SCRL records (the list's scrolls a follower may carry)
         std::vector<SimSpell> reanimSpells;   // card G7: the list's Reanimate spells (table rows only; AddPoolSpell)
-        int keptReanim = 0, dropUnweighted = 0;
+        int keptReanim = 0, dropUnweighted = 0, dropUnanimated = 0;
         std::vector<FRace> races;
         FClass cls[3];                  // melee, ranged, mage
         std::vector<Weapon> wOneHand, wDagger, wTwoHand, wBow, wCrossbow;
@@ -440,10 +441,12 @@ namespace Sim {
         return kRowNone;
     }
 
+    inline bool g_bookCensus = false;   // --book-census: one line per taught spell, its nature and IAUS verdict (tools/list_balance/book_census.py reads them)
     // ── spell classification (one reader for the follower pool and the foes' spells) ────────────────────
     inline void Classify(const J& sp, SimSpell& out) {
         const auto& fx = sp["effects"].a; SpellEntry& e = out.e;
-        bool summon = false, reanimate = false, ward = false, control = false, cloak = false, hostileAny = false, heal = false, weighable = false;
+        const auto archs = [&](int a) { return std::any_of(fx.begin(), fx.end(), [a](const J& x) { return static_cast<int>(x["archetype"].num()) == a; }); };
+        bool summon = false, reanimate = false, ward = false, control = false, cloak = false, hostileAny = false, heal = false, weighable = false, anyLight = false, healthAv = false;
         double autoCost = 0, topCost = -1, topHostCost = -1, rowCost = -1; int topArch = -1, resist = -1;
         const std::string& dl = sp["delivery"].s; const bool self = dl == "Self";
         const bool conc = sp["castType"].s == "Concentration";
@@ -469,7 +472,7 @@ namespace Sim {
                 hs->e.name = h["edid"].s; hs->e.areaUnits = 0; z.spell = std::move(hs);
                 if (z.radius > 0) out.hazard = std::move(z); }
             if (arch == kArReanimate) { reanimate = true; out.ctrlMaxLevel = static_cast<float>(mag); out.summonDur = static_cast<float>(d > 0 ? d : 60); }   // card G7: the magnitude is the highest level it raises
-            weighable |= Prune::EffectWeighable(arch);
+            weighable |= Prune::EffectWeighable(arch); anyLight |= arch == kArLight; healthAv |= av == kAvHealth;
             if (arch == kArCalm || arch == kArDemoralize || arch == kArFrenzy || arch == kArParalysis || arch == kArTurnUndead) {
                 control = true; out.ctrlDur = std::max(out.ctrlDur, static_cast<float>(d));
                 if (arch == kArParalysis) out.ctrlPar = true; else out.ctrlMaxLevel = static_cast<float>(mag);
@@ -499,15 +502,22 @@ namespace Sim {
             e.areaUnits = std::max(e.areaUnits, Prune::BlastUnits(static_cast<float>(x["area"].num()), 0.0f, false));
             out.buffDur = std::max(out.buffDur, static_cast<float>(d));
         }
-        if (reanimate) { e.drop = Prune::Drop::UnknownNature; out.reanimate = true; }
-        else if (summon) e.nature = Prune::Nature::Summon;
-        else if (ward) e.nature = Prune::Nature::Ward;
-        else if (control) e.nature = Prune::Nature::Control;
-        else if (cloak) { e.nature = Prune::Nature::Buff; e.meleeBuff = true; }
-        else if (hostileAny) e.nature = Prune::Nature::Offense;
-        else if (heal) e.nature = Prune::Nature::Heal;
-        else if (topArch == kArScript || fx.empty()) e.drop = Prune::Drop::UnknownNature;
-        else e.nature = Prune::Nature::Buff;
+        // THE GAME'S OWN NATURE RULE (placed-spells L1): Prune::ClassifyNature, fed as SpellBook.cpp StaticOf feeds it. The shape precedence is cast/Archetype.cpp's.
+        const bool anyScript = archs(kArScript), anyBound = archs(kArBoundWeapon), anyCloak = archs(kArCloak);
+        const bool spellShape = !summon && !reanimate;
+        const bool buffKind = !hostileAny && !control && !healthAv;      // CasterConsent::ClassifySpell
+        Prune::NatureIn ni;
+        ni.kind = (hostileAny || control) ? Prune::Kind::Offense : healthAv ? Prune::Kind::Heal : Prune::Kind::Buff;
+        ni.summon = summon; ni.reanimate = reanimate && !summon;
+        ni.ward = spellShape && !anyScript && !anyBound && !anyCloak && ward;
+        ni.selfCloak = spellShape && !anyScript && !anyBound && anyCloak && self;
+        ni.control = control;
+        ni.scriptCostliest = spellShape && anyScript && topArch == kArScript;
+        ni.natureUndeclared = buffKind && spellShape && !self && std::all_of(fx.begin(), fx.end(), [](const J& x) { return static_cast<int>(x["archetype"].num()) == kArScript; });
+        e.nature = Prune::ClassifyNature(ni);
+        if (e.nature == Prune::Nature::Unknown || fx.empty()) { e.nature = Prune::Nature::Unknown; e.drop = Prune::Drop::UnknownNature; }
+        if (ni.reanimate) out.reanimate = true;
+        if (cloak && ni.selfCloak) e.meleeBuff = true;
         out.summon = e.nature == Prune::Nature::Summon;
         out.ctrl = e.nature == Prune::Nature::Control;
         e.resistAv = (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control) ? resist : -1;
@@ -518,10 +528,28 @@ namespace Sim {
         // Actuation::AimedReachOf (cast/CanAct.cpp): the record's range counts only from kMinSaneReach (300) up, else the projectile's
         // (not extracted: 4096 stands in). Requiem's target heals carry range 30, which the game does not read as a reach.
         e.reach = (e.selfDelivery || e.touch) ? 0.0f : static_cast<float>(sp["range"].num()) >= 300.0f ? static_cast<float>(sp["range"].num()) : 4096.0f;
-        if (dl == "TargetLocation") e.drop = Prune::Drop::Placement;
-        if (sp["castType"].s == "ConstantEffect") e.drop = Prune::Drop::NotCastable;
+        // THE GAME'S OWN PLACEMENT RULE (placed-spells L1): the same Prune::IsPlacement SpellBook.cpp calls, fed with what the extractor read off the records
+        // ("placed", list_balance/extract_world.py placed_row). A spell row without "placed" is a hand-written one (EnvTest): no impact hazard, no projectile.
+        {
+            const J& pl = sp["placed"];
+            const bool ff = !conc;
+            const bool outranked = !spellShape || anyScript || anyBound || anyCloak || ward || anyLight || (self && archs(kArSpawnHazard));   // cast/Archetype.cpp: the shapes tested before Wall
+            Prune::PlacementIn in;
+            in.targetLocationDelivery = dl == "TargetLocation";
+            in.wall      = !outranked && Prune::IsWallShape(pl["drops"].yes(), conc, self);
+            in.rune      = !outranked && !in.wall && in.targetLocationDelivery && pl["proj"].yes();
+            in.tlBurst   = !outranked && !in.wall && in.targetLocationDelivery && !pl["proj"].yes();
+            in.summon    = summon;
+            // A FOE's spells are the engine AI's, not IAUS's: the two kinds only IAUS's book leaves out (a wall, a self blast) stay castable for a foe (Load.h reads foeDrop).
+            { Prune::PlacementIn foe = in; foe.wall = false; out.foeDrop = e.drop; if (Prune::IsPlacement(foe)) out.foeDrop = Prune::Drop::Placement; }
+            in.selfBlast = Prune::IsSelfBlastPlacement(self, !ff, e.nature == Prune::Nature::Offense, pl["impact"].yes());
+            if (Prune::IsPlacement(in)) e.drop = Prune::Drop::Placement;
+            // cast/SpellSupport.cpp CastRoadUnsupported (Drop::Unanimated, tested before Placement as in StaticDrop): a Buff-kind Light aimed or at a location (Magelight).
+            if (buffKind && !(conc && !self) && spellShape && anyLight && (dl == "Aimed" || in.targetLocationDelivery)) e.drop = Prune::Drop::Unanimated;
+        }
+        if (sp["castType"].s == "ConstantEffect") e.drop = out.foeDrop = Prune::Drop::NotCastable;
         // Q91 (batch I item 6, Prune::WeighableSpell): no effect IAUS can value (Script, a scripted spawn, kNone, an unknown id) = hidden from IAUS
-        if (g_t2.unweighted && e.drop == Prune::Drop::Keep && !fx.empty() && !weighable) e.drop = Prune::Drop::Unweighted;
+        if (g_t2.unweighted && !fx.empty() && !weighable) for (Prune::Drop* d : { &e.drop, &out.foeDrop }) if (*d == Prune::Drop::Keep) *d = Prune::Drop::Unweighted;
         out.healOther = heal && !self;
         out.cost0 = static_cast<float>(sp["cost"].num());
         if (out.cost0 <= 0 && sp["autoCalc"].yes()) out.cost0 = static_cast<float>(autoCost);   // APPROXIMATION, only when the record stores 0 and does not override
@@ -569,7 +597,7 @@ namespace Sim {
         // its book entry stays dropped for IAUS; a table row with cond.corpse_within casts it at a corpse. It enters a book only by name
         // (a class row's Reanimate role, --teach reanimate), never by the random draw, so no other class's book changes.
         else if (s.reanimate && g_t2.reanimate && s.e.drop == Prune::Drop::UnknownNature) { ++b.keptReanim; b.reanimSpells.push_back(std::move(s)); }
-        else { ++b.natures[0]; switch (s.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; case Prune::Drop::Unweighted: ++b.dropUnweighted; break; default: ++(s.reanimate ? b.dropReanim : b.dropUnknown); } }
+        else { ++b.natures[0]; switch (s.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; case Prune::Drop::Unweighted: ++b.dropUnweighted; break; case Prune::Drop::Unanimated: ++b.dropUnanimated; break; default: ++(s.reanimate ? b.dropReanim : b.dropUnknown); } }
     }
 
     inline void TagRoles(Data& d) {

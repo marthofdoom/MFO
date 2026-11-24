@@ -578,6 +578,13 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
             open(p, "w").write(text)
             self.assertEqual(T.stale_spawns(p), want, name)
 
+    def test_list_without_placed_rows_is_refused(self):   # placed-spells L1
+        d = tempfile.mkdtemp()
+        for name, text, want in (("old", '{"archetype":0}', True), ("new", '{"archetype":0,"placedSchema":1}', False), ("none", '{}', False)):
+            p = os.path.join(d, name)
+            open(p, "w").write(text)
+            self.assertEqual(T.stale_placed(p), want, name)
+
     def test_loot_gate_constants_mirror_native(self):
         # three numbers the lab cannot include (they sit in engine-typed code): Loot.h Rules against native
         here = os.path.dirname(os.path.abspath(T.__file__))
