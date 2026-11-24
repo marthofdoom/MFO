@@ -191,7 +191,7 @@ namespace MFO::Iaus::Estimate {
     }
 
     // fix/spell-worth C3: does the spell's DAMAGE already carry the foe's resist (SpellOn read it)? Then the exploit consideration must not read it
-    // again. Exploit is for the resist the damage does NOT carry: a spell whose damage is unmeasured (the placeholder below has no foe in it), and a
+    // again. Exploit is for the resist the damage does NOT carry: a spell whose damage is unmeasured (the placeholder below is a share of ANOTHER spell's damage: it carries none of this spell's element), and a
     // control spell (no damage number at all).
     [[nodiscard]] inline bool ResistCarriedByDamage(bool a_offense, bool a_measured, float a_damage) {
         return a_offense && a_measured && Pos(a_damage) > 0.0f;

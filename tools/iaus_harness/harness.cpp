@@ -1403,7 +1403,6 @@ namespace {
             return s;
         };
         std::string orders[2];
-        float bestScore[2] = { 0.0f, 0.0f };
         for (int measured = 0; measured < 2; ++measured) {
             const Snapshot s = book(measured != 0);
             const Generated g = Generate(s, mage, t);
@@ -1413,7 +1412,6 @@ namespace {
                 const Candidate& c = g.actions[sc.idx];
                 if (c.family != Family::CastOffense) continue;
                 orders[measured] += std::format("{}{} {:.3f}", first ? "" : " > ", c.formName, sc.score);
-                if (first) bestScore[measured] = sc.score;
                 first = false;
             }
             std::printf("  %s: %s\n", measured ? "AFTER  (measured by direct damage)" : "BEFORE (no damage number)         ", orders[measured].c_str());
