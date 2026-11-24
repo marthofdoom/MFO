@@ -53,17 +53,31 @@ namespace MFO::Iaus::Prune {
         return a_hazardDropsToGround && a_concentration && !a_selfDelivery;
     }
 
-    // INTERIM BLOCK (marth 2026-11-24 "Block them for now", decision D2): the sentient AI casts no Self, fire-and-forget, hostile AREA spell (Frost Nova,
-    // Fire Storm, Blizzard). Their only road is the unanimated self-stream (CastSelfDirect) and nothing yet counts the townsfolk in the area. Gambit rules are
-    // unchanged. DELETE this rule when packages M2 (area census) and M4 (animated self-blast road) have landed (placed-spells-plan.md).
-    //   offense        nature Offense OR Control: a hostile spell by CasterConsent::ClassifySpell that is not a self cloak, ward, heal, buff or summon.
-    //                  Control counts: Fire Storm and Frost Nova carry a Demoralize / Paralysis rider, so their nature is Control.
-    //   area           Prune::BlastUnits > 0 (an EFIT area, or an explosion that carries a payload)
-    //   impactHazard   the older trigger of this rule (MFO-B865 review F1), kept: such a spell is an area whatever its EFIT area says
-    //   hostileHazard  it spawns a caster-centred hazard whose spell is hostile (SpellArchetype::hazardHostile; Blizzard), whatever kind its own flags give
-    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_offense, bool a_area, bool a_impactHazard,
-                                                   bool a_hostileHazard) {
-        return a_selfDelivery && !a_concentration && ((a_offense && (a_area || a_impactHazard)) || a_hostileHazard);
+    // INTERIM BLOCK (marth 2026-11-24 "Block them for now", decision D2; review F4 narrowed it to his words, "caster-centered hostile area spell"): the sentient
+    // AI casts no Self, fire-and-forget spell whose AREA is HOSTILE by the engine (Frost Nova, Fire Storm, Blizzard). Their only road is the unanimated
+    // self-stream (CastSelfDirect) and nothing yet counts the townsfolk in the area. Gambit rules are unchanged. DELETE this rule when packages M2 (area
+    // census) and M4 (animated self-blast road) have landed (placed-spells-plan.md). PURE and shared: iaus/SpellBook.cpp and the lab (Data.h) both call these.
+    //   HostileAreaEffect  ONE effect: the kHostile flag (not kDetrimental) AND an area of ITS OWN: EFIT area, impact hazard, or an explosion with a payload
+    //                      (its own or its projectile's). A hostile effect with no area, or an area effect without the flag (Vanish, Hallowed Weapon, a Calm
+    //                      the record leaves unflagged), is not one.
+    //   harms              nature Offense or Control (a self cloak, ward, heal, buff stays whatever its flags). Control counts: Fire Storm and Frost Nova
+    //                      carry a Demoralize / Paralysis rider.
+    //   hostileHazard      it spawns a caster-centred hazard whose SPELL has a hostile effect (SpellArchetype::hazardHostile), whatever its own flags say.
+    //                      That holds for Blizzard and, by record, for every damage circle (Circle of Strength drains stamina, Talons of Nirn harms it).
+    // Conditions are NOT read: an undead-only hostile area (Bane of the Undead, Turn, Circle of Protection's slow) stays blocked.
+    [[nodiscard]] inline bool HostileAreaEffect(bool a_hostileFlag, bool a_efitArea, bool a_impactHazard, bool a_payloadExplosion) {
+        return a_hostileFlag && (a_efitArea || a_impactHazard || a_payloadExplosion);
+    }
+    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_harms, bool a_hostileArea, bool a_hostileHazard) {
+        return a_selfDelivery && !a_concentration && ((a_harms && a_hostileArea) || a_hostileHazard);
+    }
+
+    // THE ROAD OF A PICKED SUMMON (placed-spells review F1; cast/Fire.cpp). An IAUS pick is never cast unanimated: no claim = transparent, asked again every
+    // lap. Only Harbinger absent / too old (the documented degrade) keeps the one-shot. A gambit rule is unchanged: the claim, else the one-shot.
+    enum class SummonGo : std::uint8_t { Claim, OneShot, Defer };
+    [[nodiscard]] inline SummonGo SummonRoadFor(bool a_iausPick, bool a_claim, bool a_degrade, bool a_selfCasts) {
+        if (a_claim && a_selfCasts) return SummonGo::Claim;
+        return (!a_iausPick || a_degrade) ? SummonGo::OneShot : SummonGo::Defer;
     }
 
     // ── Placed spells (placed-spells-plan.md L1) ─────────────────────────────────────────────────────────

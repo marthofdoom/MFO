@@ -42,7 +42,7 @@ namespace Sim {
             std::stringstream ss; ss << f.rdbuf(); const std::string txt = ss.str(); JP p{ txt }; parsed = p.val(); }
         const J& root = pre != PreloadedJson().end() ? pre->second : parsed;
         b.name = root["list"].s;
-        if (!root["spells"].a.empty() && root["placedSchema"].num(0) < 1) { std::fprintf(stderr, "%s was compiled before placed-spells L1: no spell row says what native's book reads (impact hazard, projectile, explosion), so the lab's books would not be the game's. Run extract.py, extract_world.py and compile_world.py again\n", path); std::exit(2); }
+        if (!root["spells"].a.empty() && root["placedSchema"].num(0) < 2) { std::fprintf(stderr, "%s was compiled before placed-spells L1 (placedSchema 2): no spell row says what native's book reads (impact hazard, projectile, explosion), so the lab's books would not be the game's. Run extract.py, extract_world.py and compile_world.py again\n", path); std::exit(2); }
         for (const auto& kv : root["gmst"].o) b.gmst[kv.first] = kv.second.num();
         ApplyRules(b);
         for (const J& s : root["foeSpells"].a) { SimSpell x; Classify(s, x); b.foeSpells.push_back(std::move(x)); }

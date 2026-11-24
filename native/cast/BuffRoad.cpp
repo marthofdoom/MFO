@@ -309,6 +309,22 @@ namespace MFO::Actuation {
         return nf != g_neverFired.end() && nf->second.count(SK(a_corpse, a_spell)) != 0;
     }
 
+    // The caster rows the buff claim serves. a_needCap: the kinds that exist only with Harbinger's buff / summon / rowless seats (ABI 19).
+    static constexpr const char* kBuffRowElsewhere = "its row belongs to another road (Offensive / Restore / Stagger / Disarm / TargetEffect / Paralyze)";
+    static bool BuffRowServed(EngineRow a_row, bool* a_needCap = nullptr) {
+        switch (a_row) {
+        case EngineRow::Armor: case EngineRow::Cloak: case EngineRow::Invisibility:
+        case EngineRow::BoundItem: case EngineRow::Ward:
+            return true;
+        case EngineRow::Light: case EngineRow::Summon: case EngineRow::Reanimate:
+        case EngineRow::NoRow: case EngineRow::Unknown: case EngineRow::Script:
+            if (a_needCap) *a_needCap = true;   // Light / placement / rowless (Harbinger serves a rowless spell as Script)
+            return true;
+        default:
+            return false;
+        }
+    }
+
     // The static (spell-record-only) fallbacks of ChooseBuffRoad, shared with the board's spell picker
     // (cast/SpellSupport.cpp) so the two can never disagree. Declared in Actuation.h.
     // A SELF cast of a NON-kSelf, non-placement buff (marth 2026-10-05: "a self cast is valid if its needed, just
@@ -347,6 +363,14 @@ namespace MFO::Actuation {
             return "an ambiguous row with a candidate Harbinger does not bound (outside Light / Script / Armor / Cloak / "
                    "Ward / Invisibility / Summon / BoundItem / Reanimate: a wrong caster could re-cast)";
         return nullptr;
+    }
+
+    const char* SummonClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
+        if (!a_spell) return nullptr;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff)
+            return "a summon whose other effects make it an offense or a heal: no claim road";
+        if (const char* why = BuffAmbiguousRowWhy(a_arch)) return why;
+        return BuffRowServed(a_arch.row) ? nullptr : kBuffRowElsewhere;
     }
 
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
@@ -479,18 +503,10 @@ namespace MFO::Actuation {
         // needCap: the kinds that exist only with Harbinger's buff / summon / rowless seats. The native-row
         // self buffs (Armor / Cloak / Invisibility / BoundItem / Ward at self) need none.
         bool needCap = other || explicitSelf;
-        switch (arch.row) {
-        case EngineRow::Armor: case EngineRow::Cloak: case EngineRow::Invisibility:
-        case EngineRow::BoundItem: case EngineRow::Ward:
-            break;
-        case EngineRow::Light: case EngineRow::Summon: case EngineRow::Reanimate:
-        case EngineRow::NoRow: case EngineRow::Unknown: case EngineRow::Script:
-            needCap = true;   // Light / placement / rowless (Harbinger serves a rowless spell as Script)
-            break;
-        default:
-            return say(BuffRoad::DirectNoRow, "its row belongs to another road (Offensive / Restore / Stagger / "
-                                              "Disarm / TargetEffect / Paralyze)");
-        }
+        bool rowNeedsCap = false;
+        if (!BuffRowServed(arch.row, &rowNeedsCap))
+            return say(BuffRoad::DirectNoRow, kBuffRowElsewhere);
+        needCap |= rowNeedsCap;
         if (needCap && !APMFBridge::CastSeatsSupported())
             return say(BuffRoad::DirectNoCap, "Harbinger lacks the buff / summon / rowless seats (ABI < 19): this "
                                               "kind stays direct until Harbinger is updated (an older Harbinger "

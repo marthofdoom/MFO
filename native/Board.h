@@ -145,7 +145,7 @@ namespace MFO::Board {
                            // batch I item 7: the Classes tab's Teach Spells page lists only a spell IAUS would weigh for his class
                            // (iaus/SpellBook.h WouldWeigh: class fit + an effect list it can weight). The gambit picker lists all.
                            bool iausWeighed = false;
-                           // placed-spells D2: not weighed only because of the interim self-blast block (Prune::Drop::SelfBlast): the page lists it greyed with the reason.
+                           // placed-spells D2: the interim self-blast block is the reason it is not weighed (Prune::Drop::SelfBlast; it comes before the nature and weight tests, so a script-only one shows too): the page lists it greyed with the reason.
                            bool iausSelfBlast = false; };
         std::vector<Teachable> teachableSpells;
         // #68: the cast-target picker's option list -- the PLAYER's live

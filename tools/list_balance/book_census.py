@@ -16,6 +16,17 @@ CONTROL = (6, 7, 8, 21, 24); HEALTH, WARD = 24, 63
 NATURE = ['Unknown', 'Offense', 'Control', 'Heal', 'Buff', 'Summon', 'Ward']
 
 
+def rows_ok(fx, self_):   # a summon's caster rows: one, or all bounded by Harbinger
+    vm = {24: 'Restore', 25: 'Restore', 39: 'Armor', 63: 'Ward'}
+    def row(a, av):
+        if a == SUMMON: return 'Summon'
+        if not self_: return 'Reanimate' if a == REANIM else None
+        if a in (0, 4, 5, 32, 34): return vm.get(av)
+        return {SCRIPT: 'Script', CLOAK: 'Cloak', LIGHT: 'Light', BOUND: 'Bound'}.get(a) or ('Invis' if (a, av) == (11, 54) else None)
+    r = {row(e['archetype'], e['av']) for e in fx}
+    return len(r - {None}) <= 1 or not r & {None, 'Restore'}
+
+
 def verdict(s):
     fx = s['effects']; p = s['placed']; ar = [e['archetype'] for e in fx]
     self_ = s['delivery'] == 'Self'; tl = s['delivery'] == 'TargetLocation'; conc = s['castType'] == 'Concentration'
@@ -44,11 +55,12 @@ def verdict(s):
     elif kind == 'heal': n = 3
     elif shape == 'script' or (kind == 'buff' and not self_ and all(a == SCRIPT for a in ar)): n = 0
     else: n = 4
-    area = any(e['area'] > 0 for e in fx) or p['payload'] > 0
-    blast = self_ and not conc and SUMMON not in ar and ((n in (1, 2) and (area or p['impact'])) or p['hazHostile'])
+    area = any(e['area'] > 0 and e['hostile'] for e in fx) or p['hostImpact'] or p['hostPayload']
+    blast = self_ and not conc and SUMMON not in ar and ((n in (1, 2) and area) or p['hazHostile'])
     placed = (tl or shape == 'wall') and SUMMON not in ar   # M1: a summon is kept
     if s['castType'] == 'ConstantEffect': d = 'not castable'
     elif kind == 'buff' and not (conc and not self_) and shape not in ('summon', 'reanimate') and LIGHT in ar and s['delivery'] in ('Aimed', 'TargetLocation'): d = 'unanimated road only'
+    elif SUMMON in ar and (kind != 'buff' or not rows_ok(fx, self_)): d = 'unanimated road only'
     elif placed: d = 'target location'
     elif blast: d = 'hostile area around himself: blocked for now (no animated road, no bystander check)'
     elif n == 0: d = 'nature unknown'

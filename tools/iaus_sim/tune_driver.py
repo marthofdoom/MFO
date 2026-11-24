@@ -191,7 +191,7 @@ def stale_placed(path):
     k = (path, os.stat(path).st_mtime_ns)
     if k not in _PLACED:
         t = open(path, encoding="utf-8").read()
-        _PLACED[k] = '"archetype":' in t and '"placedSchema":' not in t
+        _PLACED[k] = '"archetype":' in t and '"placedSchema":2' not in t
     return _PLACED[k]
 
 

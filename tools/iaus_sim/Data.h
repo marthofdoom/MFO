@@ -442,6 +442,24 @@ namespace Sim {
     }
 
     inline bool g_bookCensus = false;   // --book-census: one line per taught spell, its nature and IAUS verdict (tools/list_balance/book_census.py reads them)
+    // cast/BuffRoad.cpp BuffAmbiguousRowWhy for a SUMMON with no hostile effect (the only kind that gets here): its effects' caster rows
+    // (cast/Archetype.cpp kRows). One row = served. Several rows: every one must be a row Harbinger bounds (so no Restore and no "no row").
+    // The secondary AV is not extracted.
+    inline bool SummonRowsServed(const std::vector<J>& fx, bool self) {
+        std::vector<int> casters; bool open = false;   // a row = the archetype (value modifiers: 100 + AV)
+        for (const J& x : fx) {
+            const int a = static_cast<int>(x["archetype"].num()), av = static_cast<int>(x["av"].num());
+            const bool vm = a == kArValueMod || a == kArAbsorb || a == kArDualValueMod || a == 32 || a == kArPeakValueMod;
+            int row = -1;
+            if (a == kArSummon || (self && (a == kArScript || a == kArCloak || a == kArLight || a == kArBoundWeapon || (a == 11 && av == 54))) || (!self && a == kArReanimate)) row = a;
+            else if (vm && self && (av == 24 || av == 25)) { row = 124; open = true; }   // Restore
+            else if (vm && self && (av == 39 || av == 63)) row = 100 + av;               // Armor, Ward
+            if (row < 0) open = true;
+            else if (std::find(casters.begin(), casters.end(), row) == casters.end()) casters.push_back(row);
+        }
+        return casters.size() <= 1 || !open;
+    }
+
     // ── spell classification (one reader for the follower pool and the foes' spells) ────────────────────
     inline void Classify(const J& sp, SimSpell& out) {
         const auto& fx = sp["effects"].a; SpellEntry& e = out.e;
@@ -541,11 +559,13 @@ namespace Sim {
             in.summon    = summon;
             // A FOE's spells are the engine AI's, not IAUS's: the two kinds only IAUS's book leaves out (a wall, a self blast) stay castable for a foe (Load.h reads foeDrop).
             { Prune::PlacementIn foe = in; foe.wall = false; out.foeDrop = e.drop; if (Prune::IsPlacement(foe)) out.foeDrop = Prune::Drop::Placement; }
-            in.selfBlast = Prune::IsSelfBlastPlacement(self, conc, e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control,
-                                                       e.areaUnits > 0.0f || pl["payload"].num() > 0.0, pl["impact"].yes(), pl["hazHostile"].yes());
+            bool hostileArea = Prune::HostileAreaEffect(true, false, pl["hostImpact"].yes(), pl["hostPayload"].yes());
+            for (const J& x : fx) hostileArea |= Prune::HostileAreaEffect(x["hostile"].yes(), x["area"].num() > 0, false, false);
+            in.selfBlast = Prune::IsSelfBlastPlacement(self, conc, e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control, hostileArea, pl["hazHostile"].yes());
             if (Prune::IsPlacement(in)) { Prune::StaticIn st; st.nature = Prune::Nature::Buff; st.targetLocation = true; st.selfBlast = in.selfBlast; e.drop = Prune::StaticDrop(st); }
             // cast/SpellSupport.cpp CastRoadUnsupported (Drop::Unanimated, tested before Placement as in StaticDrop): a Buff-kind Light aimed or at a location (Magelight).
             if (buffKind && !(conc && !self) && spellShape && anyLight && (dl == "Aimed" || in.targetLocationDelivery)) e.drop = Prune::Drop::Unanimated;
+            if (summon && (!buffKind || !SummonRowsServed(fx, self))) e.drop = Prune::Drop::Unanimated;   // cast/BuffRoad.cpp SummonClaimUnservedWhy
         }
         if (sp["castType"].s == "ConstantEffect") e.drop = out.foeDrop = Prune::Drop::NotCastable;
         // Q91 (batch I item 6, Prune::WeighableSpell): no effect IAUS can value (Script, a scripted spawn, kNone, an unknown id) = hidden from IAUS

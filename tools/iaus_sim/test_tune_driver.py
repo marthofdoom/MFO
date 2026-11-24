@@ -580,7 +580,7 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
 
     def test_list_without_placed_rows_is_refused(self):   # placed-spells L1
         d = tempfile.mkdtemp()
-        for name, text, want in (("old", '{"archetype":0}', True), ("new", '{"archetype":0,"placedSchema":1}', False), ("none", '{}', False)):
+        for name, text, want in (("old", '{"archetype":0}', True), ("new", '{"archetype":0,"placedSchema":2}', False), ("schema1", '{"archetype":0,"placedSchema":1}', True), ("none", '{}', False)):
             p = os.path.join(d, name)
             open(p, "w").write(text)
             self.assertEqual(T.stale_placed(p), want, name)

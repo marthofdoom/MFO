@@ -170,6 +170,7 @@ def main():
     # WHAT NATIVE'S BOOK READS PER SPELL (placed-spells-plan.md L1), computed as native computes it (the sim feeds Prune::IsPlacement and BlastUnits with it):
     #   proj: any effect projectile (Archetype.cpp hasProjectile). impact / drops: HasImpactHazard, ANY IPCT of the effect's IPDS with a NAM2 hazard (a hazard with
     #   no spell counts: hazard_row below does not export those) / any of them with HAZD flag 16. hazHostile: archetype 40 whose hazard's spell has a hostile effect.
+    #   hostImpact / hostPayload: an impact hazard / a payload explosion on an effect whose OWN hostile flag is set (Prune::HostileAreaEffect).
     #   expl / payload: SpellBook.cpp noteExplosion, the largest radius of the effects' and their projectiles' explosions, all / those with damage > 0 or an enchantment.
     # PROJ DATA: explosion @36. EXPL DATA: damage f32 @28, radius f32 @32; EITM = the enchantment (fork BGSProjectile.h / BGSExplosion.h).
     impact_bits = {}   # IPDS key -> (any hazard, any that drops to the ground)
@@ -193,7 +194,7 @@ def main():
         return f32(d, 32), f32(d, 28) > 0 or bool(ench and len(ench) >= 4 and u32(ench, 0))
 
     def placed_row(key, subs):
-        r = dict(proj=False, impact=False, drops=False, hazHostile=False, expl=0.0, payload=0.0)
+        r = dict(proj=False, impact=False, drops=False, hazHostile=False, hostImpact=False, hostPayload=False, expl=0.0, payload=0.0)
         for t, d in subs:
             m = mgef.get(key(u32(d, 0))) if t == 'EFID' else None
             if not m: continue
@@ -204,7 +205,8 @@ def main():
             for rad, pay in ex:
                 r['expl'] = max(r['expl'], rad)
                 if pay: r['payload'] = max(r['payload'], rad)
-            i, dr = impact_bits.get(m['impacts'], (False, False)); r['impact'] |= i; r['drops'] |= dr
+                r['hostPayload'] |= pay and bool(m['fl'] & 1)
+            i, dr = impact_bits.get(m['impacts'], (False, False)); r['impact'] |= i; r['drops'] |= dr; r['hostImpact'] |= i and bool(m['fl'] & 1)
             if m['arch'] == 40 and m['assoc'] in by.get('HAZD', {}):
                 hk, hf, hs = by['HAZD'][m['assoc']]; hd = sub(hs, 'DATA') or b''
                 sk = hk(u32(hd, 24)) if len(hd) >= 28 and u32(hd, 24) else None

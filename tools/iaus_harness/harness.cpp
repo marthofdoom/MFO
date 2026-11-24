@@ -1737,16 +1737,46 @@ namespace {
             Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "B865: a bolt with an impact hazard is kept");
             in.targetLocation = true;   // a rune: delivery TargetLocation, not read from the impact hazard
             Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a rune is unchanged");
-            // the interim self-blast block (marth 11-24, D2): self, concentration, offense (Offense or Control), area, impact hazard, hostile hazard
-            const auto blast = [](bool s, bool c, bool o, bool ar, bool im, bool hz) { return Prune::IsSelfBlastPlacement(s, c, o, ar, im, hz); };
-            Check(blast(true, false, true, true, true, false), "D2: Fire Storm (self FF hostile, area, impact hazard) is blocked");
-            Check(blast(true, false, true, true, false, false), "D2: Frost Nova (self FF hostile, area, no impact hazard) is blocked");
-            Check(blast(true, false, true, false, true, false), "D2: a self FF hostile spell with an impact hazard and no stated area stays blocked (B865 F1)");
-            Check(blast(true, false, false, false, false, true), "D2: a self FF spell whose hazard's spell is hostile (Blizzard) is blocked whatever its own flags say");
-            Check(!blast(true, false, true, false, false, false), "D2: a self hostile spell with no area at all is not covered");
-            Check(!blast(true, true, true, true, true, true), "D2: a Self concentration spell is not covered");
-            Check(!blast(true, false, false, true, true, false), "D2: a self buff / cloak / ward / heal with an area is not covered");
-            Check(!blast(false, false, true, true, true, true), "D2: an aimed blast (Fireball) is kept");
+            // the interim self-blast block (marth 11-24, D2; review F4: hostile by the engine, per effect). One effect = { hostile flag, EFIT area, impact hazard, payload }.
+            struct Fx { bool h, area, impact, payload; };
+            const auto blast = [](bool self, bool conc, Prune::Nature n, std::initializer_list<Fx> fx, bool hostileHazard) {
+                bool hot = false;
+                for (const Fx& e : fx) hot |= Prune::HostileAreaEffect(e.h, e.area, e.impact, e.payload);
+                return Prune::IsSelfBlastPlacement(self, conc, n == Prune::Nature::Offense || n == Prune::Nature::Control, hot, hostileHazard);
+            };
+            using N = Prune::Nature;
+            const Fx hurtArea{ true, true, false, false }, plainArea{ false, true, false, false }, hurtNoArea{ true, false, false, false }, plain{ false, false, false, false };
+            // blocked: the record says hostile
+            Check(blast(true, false, N::Control, { { true, true, true, true }, hurtArea }, false), "D2: Fire Storm is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea }, false), "D2: Frost Nova is blocked");
+            Check(blast(true, false, N::Control, { plain, hurtArea }, true), "D2: Blizzard is blocked");
+            Check(blast(true, false, N::Buff, { plain, plain, plain }, true), "D2: MAG_Blizzard (its own effects unflagged, the hazard's spell is hostile) is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea, plainArea }, false), "D2: Mass Paralysis / Hysteria / Mayhem (hostile flagged) are blocked");
+            Check(blast(true, false, N::Offense, { hurtArea, hurtArea, plain }, false), "D2: REQ_Illusion5_Calm (hostile flagged) is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea, hurtArea }, false), "D2: Bane of the Undead / Turn ritual (hostile area, undead-only conditions are not read) is blocked");
+            Check(blast(true, false, N::Offense, { plain, plain, hurtArea }, false), "D2: MAG_CircleofProtection (a hostile flagged area slow, conditions are not read) is blocked");
+            Check(blast(true, false, N::Offense, { { true, false, true, false } }, false), "D2: a hostile effect with an impact hazard and no EFIT area is blocked (B865 F1)");
+            Check(blast(true, false, N::Offense, { { true, false, false, true } }, false), "D2: a hostile effect with a payload explosion is blocked");
+            // the circles (review F9): their own effect is a benign Spawn Hazard, the hazard's SPELL is hostile by record (absorb or damage), so the one rule blocks them
+            Check(blast(true, false, N::Buff, { plain }, true), "D2: Circle of Strength / Glory / the Moons, Talons of Nirn, Sanctuary, Consecrated Ground: blocked by their hazard's hostile spell");
+            Check(!blast(true, false, N::Buff, { plain }, false), "D2: a circle whose hazard's spell is not hostile is a candidate");
+            // candidates: not hostile by the engine
+            Check(!blast(true, false, N::Control, { plainArea, plainArea }, false), "D2: Harmony (unflagged mass calm) is a candidate");
+            Check(!blast(true, false, N::Control, { plainArea, plainArea, { false, false, true, false } }, false), "D2: MAG_Harmony (an impact hazard on an unflagged effect) is a candidate");
+            Check(!blast(true, false, N::Offense, { plainArea, plain }, false), "D2: Vanish / Hallowed Weapon / Dispel Magic (detrimental, not hostile, area) are candidates");
+            Check(!blast(true, false, N::Offense, { plainArea, hurtNoArea }, false), "D2: LoreRim Dispel Magic (the hostile effect has no area) is a candidate");
+            Check(!blast(true, false, N::Offense, { hurtNoArea }, false), "D2: a self hostile spell with no area at all is not covered");
+            Check(!blast(true, true, N::Offense, { hurtArea }, true), "D2: a Self concentration spell is not covered");
+            Check(!blast(true, false, N::Buff, { hurtArea }, false), "D2: a self cloak (nature Buff) is kept whatever its flags");
+            Check(!blast(true, false, N::Ward, { hurtArea }, false) && !blast(true, false, N::Heal, { plainArea }, false), "D2: a ward and an area heal are kept");
+            Check(!blast(false, false, N::Offense, { hurtArea }, true), "D2: an aimed blast (Fireball) is kept");
+            // review F1: the road of a picked summon (IAUS pick, claim, degrade, bCastSelf)
+            using G = Prune::SummonGo;
+            Check(Prune::SummonRoadFor(true, true, false, true) == G::Claim && Prune::SummonRoadFor(false, true, false, true) == G::Claim, "summon road: a served claim is the claim for both");
+            Check(Prune::SummonRoadFor(true, false, false, true) == G::Defer, "summon road: an IAUS summon with no combat controller is deferred, never the one-shot");
+            Check(Prune::SummonRoadFor(true, true, false, false) == G::Defer, "summon road: an IAUS summon with self casts off is deferred");
+            Check(Prune::SummonRoadFor(true, false, true, true) == G::OneShot, "summon road: Harbinger absent keeps the documented direct degrade");
+            Check(Prune::SummonRoadFor(false, false, false, true) == G::OneShot && Prune::SummonRoadFor(false, true, false, false) == G::OneShot, "summon road: a gambit rule is unchanged (no claim = the one-shot)");
             in.selfBlast = in.targetLocation = true;
             Check(Prune::StaticDrop(in) == Prune::Drop::SelfBlast, "D2: the block names its own reason");
             in.targetLocation = false;

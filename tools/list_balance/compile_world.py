@@ -360,7 +360,7 @@ def main():
     pb = W.get('spellPlaced')
     if not pb: sys.exit('%s.world.json holds no spellPlaced: it was extracted before placed-spells L1, run extract_world.py again' % a.name)
     for s in pool + out['scrolls']: s['placed'] = pb[s['key']]   # a taught spell and a scroll: by the record's key (every one has an EFID, or extract.py left it out)
-    out['placedSchema'] = 1
+    out['placedSchema'] = 2   # 2 = hostImpact / hostPayload (review F4)
     ss_ix = {}; sspecs = []; memo = {}
 
     def summon_specs(ref):

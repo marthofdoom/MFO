@@ -216,20 +216,23 @@ namespace MFO::Iaus::SpellBook {
             float payloadUnits = 0.0f;            // the largest radius of an explosion that carries a payload
             const char* explosionSrc = "none";
             float units = 0.0f;                   // Prune::BlastUnits: the radius IAUS uses, 0 = no area
+            bool  hostileArea = false;            // an effect that is hostile by its own flag AND has an area of its own (Prune::HostileAreaEffect)
         };
         Blast BlastOf(RE::SpellItem* a_sp, const Actuation::SpellArchetype& a_arch) {
             Blast b;
-            const auto note = [&](const RE::BGSExplosion* ex, const char* a_src) {
-                if (!ex || !std::isfinite(ex->data.radius) || !(ex->data.radius > 0.0f)) return;
+            const auto note = [&](const RE::BGSExplosion* ex, const char* a_src) {   // true = it carries a payload
+                if (!ex || !std::isfinite(ex->data.radius) || !(ex->data.radius > 0.0f)) return false;
                 const bool payload = (std::isfinite(ex->data.damage) && ex->data.damage > 0.0f) || ex->formEnchanting != nullptr;
                 if (payload && ex->data.radius > b.payloadUnits) b.payloadUnits = ex->data.radius;
                 if (ex->data.radius > b.explosionUnits) { b.explosionUnits = ex->data.radius; b.explosionSrc = a_src; }
+                return payload;
             };
             for (auto* eff : a_sp->effects) {
                 auto* base = eff ? eff->baseEffect : nullptr;
                 if (!base) continue;
-                note(base->data.explosion, "effect");
-                if (const auto* proj = base->data.projectileBase) note(proj->data.explosionType, "projectile");
+                bool payload = note(base->data.explosion, "effect");
+                if (const auto* proj = base->data.projectileBase) payload |= note(proj->data.explosionType, "projectile");
+                b.hostileArea |= Prune::HostileAreaEffect(base->IsHostile(), eff->effectItem.area > 0, false, payload);   // the impact hazard: SpellArchetype::hostileImpact
             }
             // With an EFIT area any explosion may enlarge it (the larger radius is the safe one for the never-splash
             // rule); without one only a payload explosion counts (MFO-B661).
@@ -282,7 +285,9 @@ namespace MFO::Iaus::SpellBook {
                               ? Vocab::IsCastableSpell(a_sp)
                               : a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
             // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
-            st.roadUnsupported = a_source == Source::Spell && Actuation::CastRoadUnsupported(a_sp);
+            // A summon the claim road can never serve (review F1) is out for IAUS alone: its only road is the unanimated one-shot.
+            st.roadUnsupported = a_source == Source::Spell &&
+                                 (Actuation::CastRoadUnsupported(a_sp) || (in.summon && Actuation::SummonClaimUnservedWhy(a_sp, a_arch)));
             Prune::PlacementIn pl;
             pl.targetLocationDelivery = delivery == RE::MagicSystem::Delivery::kTargetLocation;
             pl.rune      = a_arch.shape == Actuation::SpellShape::Rune;
@@ -290,7 +295,7 @@ namespace MFO::Iaus::SpellBook {
             pl.tlBurst   = a_arch.shape == Actuation::SpellShape::TLBurst;
             pl.selfBlast = Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
                                                        out.nature == Prune::Nature::Offense || out.nature == Prune::Nature::Control,
-                                                       BlastOf(a_sp, a_arch).units > 0.0f, a_arch.impactHazard, a_arch.hazardHostile);   // interim, see Prune.h
+                                                       BlastOf(a_sp, a_arch).hostileArea || a_arch.hostileImpact, a_arch.hazardHostile);   // interim, see Prune.h
             pl.summon    = in.summon;
             st.targetLocation = Prune::IsPlacement(pl);
             st.selfBlast = pl.selfBlast;
