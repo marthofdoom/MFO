@@ -597,6 +597,7 @@ namespace MFO::SelfTest {
             g_perk.clear();
         }
         ClearDrivenState();
+        ClearHoldState();
         ClearT2State();
         std::lock_guard lk(g_hmsMx);
         g_hms.clear();
@@ -630,6 +631,7 @@ namespace MFO::SelfTest {
     }
 
     void RegisterAll() {
+        RegisterHold();   // TestsHold.cpp: g0b.* first, so a session starts with them
         Register({ "b1.heal_left_offense_right", "MFO-B1",
                    "(self-setup) a caster loadout (no one-hander in the right hand); temp heal + offense rules and a spawned fight",
                    120.0f, B1Pre, B1Fix, B1Step, B1Timeout });

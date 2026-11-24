@@ -65,6 +65,7 @@ namespace MFO::SelfTest {
         bool        on = false;
         RE::FormID  baseLocal = 0x000E4010;   // Skyrim.esm NPC_ EncMudcrabMedium (verified in the master, 2026-11-10)
         float       hurtPct = 0.0f;
+        float       health = 0.0f;            // > 0: the SPAWNED hostile gets this base Health (it must outlive a timed test; it is deleted at the end)
         int         respawns = 3;             // re-spawned when the hostile dies while the test still runs
     };
     // Log-only probe flags switched on IN MEMORY for the run (never the INI file) and put back.
@@ -139,6 +140,11 @@ namespace MFO::SelfTest {
     void                         RegisterBuffPotion(); // TestsBuffPotion.cpp: the buff-potion scoring test (feat/buff-potions; called from RegisterAll, after RegisterT2)
     void                         RegisterStorage();    // TestsStorage.cpp: the off-class storage tests (feat/offclass-storage; called from RegisterAll, after RegisterBuffPotion)
     void                         RegisterPerkEffects();// TestsPerkEffects.cpp: the perk-effect table test (1dfcuabd2pk; called from RegisterAll, after RegisterStorage)
+    void                         RegisterHold();       // TestsHold.cpp: the G0b hold exerciser (movement-plan.md; called FIRST from RegisterAll)
+    void                         HoldTick(float a_dt); // TestsHold.cpp, WORKER, every unpaused pump tick: sample the standing dev holds
+    void                         HoldEnd(RE::FormID a_follower);   // WORKER, every way a run ends (Runner Finish): release his dev claims
+    void                         ClearHoldState();     // TestsHold.cpp: forget every hold run and release its claims (ClearAll)
+    void                         LightTick(float a_dt);// LightProbe.cpp, WORKER: [probe-light]
     void                         ClearT2State();       // TestsT2.cpp: their main-thread result cache (called by ClearTestState)
     const std::vector<ManualItem>& T2ManualItems();    // TestsT2.cpp: the T2 steps a human must judge (appended to ManualItems())
 

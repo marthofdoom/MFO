@@ -56,6 +56,8 @@ namespace MFO::SelfTest {
                                      static_cast<std::int32_t>(baseId) });   // `before` = the BASE form id: cleanup only deletes an actor that still has it
                 g_spawnRef[a_token] = foe->GetFormID();
             }
+            if (a_spec.health > 0.0f)
+                if (auto* avo = foe->AsActorValueOwner()) avo->SetBaseActorValue(RE::ActorValue::kHealth, a_spec.health);
             auto pos = a_follower->GetPosition();
             const float ang = a_follower->GetAngleZ();
             pos.x += std::sin(ang) * 700.0f;

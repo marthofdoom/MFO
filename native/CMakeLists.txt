@@ -232,6 +232,9 @@ if(MFO_DEV_SELFTEST)
         selftest/TestsPerkEffects.cpp
         selftest/TestsStorage.cpp
         selftest/Setup.cpp
+        selftest/TestsHold.cpp
+        selftest/LightProbe.cpp
+        apmf/DevHold.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE MFO_DEV_SELFTEST=1)
     message(STATUS "MFO: DEV SELF-TEST BUILD (MFO_DEV_SELFTEST=ON) -- not a release DLL")

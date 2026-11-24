@@ -387,6 +387,7 @@ namespace MFO::SelfTest {
         // EVERY end tears the run's setup down first (rows, class state, probes), then removes its fixtures / spawn / damage.
         void Finish(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error = false,
                     std::chrono::seconds a_backoff = std::chrono::seconds(30)) {
+            HoldEnd(a_id);   // G0b: his dev claims (ch.24 hold, ch.33 quiet style) never outlive the run
             const auto* d    = a_run.def;
             const bool  done = a_step.v == Verdict::Pass || a_step.v == Verdict::Fail || a_step.v == Verdict::Info;
             auto*       a    = RE::TESForm::LookupByID<RE::Actor>(a_id);
@@ -666,7 +667,9 @@ namespace MFO::SelfTest {
 
         DevClassEquipTick(dt);   // card C5c
 
+        HoldTick(dt);    // G0b: before the followers are served, so step() reads this tick's sample
         std::unordered_set<RE::FormID> live;
+        bool anyRule = false;
         for (const auto& h : Followers::g_active) {
             auto  ptr = h.get();
             auto* a   = ptr.get();
@@ -677,8 +680,10 @@ namespace MFO::SelfTest {
             auto rec = g_followers.find(id);
             if (rec == g_followers.end() || !rec->second.mfoEnabled || !HasRunnerRule(rec->second)) continue;
             live.insert(id);
+            anyRule = true;
             ServiceFollower(a, id, rec->second, dt, orphans);
         }
+        if (anyRule) LightTick(dt);
         for (auto it = g_runs.begin(); it != g_runs.end();) {
             if (live.contains(it->first)) { ++it; continue; }
             Finish(it->first, it->second,

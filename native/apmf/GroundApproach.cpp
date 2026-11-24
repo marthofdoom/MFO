@@ -60,6 +60,13 @@ namespace MFO::APMFBridge {
 
     bool GroundStepSupported() { return GroundApi() != nullptr; }
 
+#ifdef MFO_DEV_SELFTEST
+    bool DevGroundStepStands(RE::FormID a_follower) {   // DEV BUILDS ONLY (the G0b hold exerciser reads it)
+        std::scoped_lock lk(g_groundMx);
+        return g_steps.contains(a_follower);
+    }
+#endif
+
     bool RequestGroundStep(RE::Actor* a_follower, RE::Actor* a_foe) {
         const auto* api = GroundApi();
         if (!api || !a_follower || !a_foe) return false;

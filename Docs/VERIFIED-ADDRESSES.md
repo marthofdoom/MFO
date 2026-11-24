@@ -10,13 +10,13 @@ nothing when one does not. At startup `REL::SelfCheck::Run` repeats the comparis
 game actually loaded. A row that fails refuses THAT seat by name in the log; the expected RVA is never
 used in place of the library's answer.
 
-Offline result of this generation: 1.6.1170.0 66/66 verified, 0 refused, 1.5.97.0 66/66 verified, 0 refused.
+Offline result of this generation: 1.6.1170.0 67/67 verified, 0 refused, 1.5.97.0 67/67 verified, 0 refused.
 
 1.7.104.0 has NO Address Library. Its column is OUR OWN id map: the MIT id table of the CommonLibSSE-NG fork
 (`data/mit-idtable-v1-1-7-104-0.bin`, revision 5, 17792 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
 what SelfCheck queries at runtime; authoritative) with the evidence CSVs beside it, keyed by
 the 1.6.1170 id, re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script
-docstring). Offline result: 1.7.104.0 66/68 verified, 2 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
+docstring). Offline result: 1.7.104.0 66/69 verified, 3 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
 so `IsVerifiedAddress` is false and the seat is refused by name. The table of `Not verified on 1.7.104` is below.
 
 These rows prove the ADDRESSES. That each hooked slot holds the same function body on 1.7.104, and that every
@@ -92,6 +92,7 @@ CommonLib layout MFO reads is the same there, is proven separately in `Docs/ENGI
 | TradePerks.TESQuest.CreateRefHandleByAliasID | function | 25066 | 0x3D14D0 | 24537 | 0x378760 | 25066 | 0x3D8590 | signature (19 bytes, unique in .text) |  | native/logistics/TradePerks.cpp AliasRefHandle (callers native/Packages.cpp) | ObjectRefHandle&(TESQuest* (rcx), ObjectRefHandle& out (rdx), u32 aliasID (r8d)): LockForRead(quest+0xD0 aliasAccessLock; 68233 / 66976), out = the invalid handle, refAliasMap lookup (quest+0x70 on 1.6.1170, +0x78 on 1.5.97) writing out, UnlockForRead (68239 / 66982), returns &out. The 1.5.97 ForceRefTo body calls it (Packages.cpp ForceRefTo note) |
 | Steal.ExtraDataList.Destroy | function | 11572 | 0x1513D0 | 11438 | 0x1076D0 | - | - | signature (67 bytes, unique in .text) |  | native/logistics/Steal.cpp ListSeat / DestroyList (owned-chest steal road, main thread) | the engine's ExtraDataList destructor body, void(ExtraDataList* rcx), frees nothing of the object itself. 1.6.1170: id 11572 @0x1513D0 (ExtraDataList::~ExtraDataList id 11584 @0x151EE0 is a bare jmp to it): restores the vtable at +0x00, clears this thread's extra-lookup cache when it holds this list (TLS +0x18, memset 0x5B0 at +0x20), deletes every BSExtraData of the chain at +0x08 through its vtable slot 0 with edx=1, MemoryManager::Deallocate (68117) of the presence bitfield at +0x10. 1.5.97: id 11438 @0x1076D0 = mov dl,1 + call 11427 @0x106D60 (same cache clear, chain at +0x00 deleted the same way, Deallocate 66861 of the presence at +0x08). The engine frees a list as this destructor then its sized free (109588 -> 36098 / 102158 -> 11233 = MemoryManager::Deallocate(ptr, false), CommonLib RE::free): 41 such pairs with edx=0x20 on 1.6.1170, 34 with edx=0x18 on 1.5.97. WHO FREES A LIST HANDED TO InventoryChanges' add WHEN IT MERGES: on 1.6.1170 (16053 @0x226A20) and 1.7.104 (@0x22C310, instruction-identical) nobody, the engine skips a caller-made list (cmp rsi,[rsp+0xF0] at 0x227189 / 0x22CA79), so Steal.cpp destroys it; on 1.5.97 (15815 @0x1D9E10) THE ENGINE destroys and frees the caller's list itself (0x1DA491: call 11438, mov edx,0x18, call 102158; skipped only while BarterMenu is open, 0x1DA46F), so Steal.cpp never touches it after the add there. On 1.5.97 this row is called only for a list that was built and never handed to the engine. 1.7.104: id 11572 is not in the id table; the raw row Steal.ExtraDataList.Destroy.1_7_104 carries it |
 | Steal.ExtraDataList.Construct | function | 11583 | 0x151E90 | 11437 | 0x107690 | 11583 | 0x157420 | signature (38 bytes, unique in .text) |  | native/logistics/Steal.cpp ListSeat / NewList (owned-chest steal road, main thread) | the engine's ExtraDataList constructor, ExtraDataList*(ExtraDataList* rcx), returns this. 1.6.1170 id 11583 @0x151E90 and 1.7.104 @0x157420 (same body): vtable at +0x00, zero +0x08 / +0x10, BSReadWriteLock ctor at +0x18. 1.5.97 id 11437 @0x107690: zero +0x00 / +0x08, lock ctor at +0x10. Steal.cpp allocates the engine's size for the exact build (layout fact 'ExtraDataList allocation size') with RE::malloc and calls this, instead of the fork's `new ExtraDataList()`, whose GetRuntimeSize is a named fatal error on 1.7.104 |
+| Light.AIProcess.CachedLightLevel | function | 39509 | 0x6EC8B0 | 38499 | 0x659CF0 | - | - | signature (22 bytes, unique in .text) |  | native/selftest/LightProbe.cpp LayoutVerified (dev builds only; never called, the row proves the layout) | movement-plan.md 3.1: the cached light getter, AIProcess+0x10 (high) +0x3A8 |
 | PickupSound.Actor.PlayPickUpSound.1_7_104 | raw rva | - | - | - | - | - | 0x6728B0 | raw RVA: 1.6.1170 0x65FE90 signature (30 bytes) unique at the idmap RVA |  | native/logistics/PickupSound.cpp Install (1.7.104 only: Actor::PlayPickUpSound read from Character vtable slot 0xA3; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv) |  |
 | Steal.ExtraDataList.Destroy.1_7_104 | raw rva | - | - | - | - | - | 0x156960 | raw RVA: 1.6.1170 0x1513D0 signature (67 bytes) unique at the idmap RVA |  | native/logistics/Steal.cpp ListSeat (1.7.104 only: the ExtraDataList destructor body at base + 0x156960; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv) |  |
 
@@ -104,6 +105,7 @@ for them and the seat is refused. Nothing here is a failure on 1.6.1170 or 1.5.9
 |---|---|---|
 | PickupSound.Actor.PlayPickUpSound | 37196 | id 37196 is not in the idmap |
 | Steal.ExtraDataList.Destroy | 11572 | id 11572 is not in the idmap |
+| Light.AIProcess.CachedLightLevel | 39509 | id 39509 is not in the idmap |
 
 ## Slots and offsets that are not Address Library ids
 

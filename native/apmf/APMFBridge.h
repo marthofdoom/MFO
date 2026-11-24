@@ -2174,5 +2174,23 @@ namespace MFO::APMFBridge {
     std::uint32_t    DevAbi();
     DevAversionInfo  DevReadAversion(RE::FormID a_follower);
     DevServeInfo     DevCanServeIntent(RE::FormID a_actor, std::uint32_t a_intent, float a_fval, RE::FormID a_form = 0);
+
+    // DEV BUILDS ONLY (apmf/DevHold.cpp; native/selftest/TestsHold.cpp): the G0b hold exerciser's claims. Worker. nullptr = filed, else why not.
+    //   DevHoldFile / DevHoldRepoint: ONE ch.24 point + hold claim per follower (kOwnBasis, no deny).
+    //   DevQuietFile: a ch.33 actor-wide style claim over MFO's own (the quiet-circling rows only).
+    //   DevHoldRelease: both claims of the follower. DevHoldReleaseAll: every one (load boundary, ClearTransientState).
+    //   DevGroundStepStands (apmf/GroundApproach.cpp): a give-ground step is filed for him (read only).
+    struct DevHoldInfo {
+        bool          stands = false, ours = false, waiting = false, ended = false, dropped = false, combatEnded = false, styleLive = false;
+        std::uint32_t applied = 0, engineInside = 0;
+        const char*   state = "none";
+    };
+    const char* DevHoldFile(RE::FormID a_follower, const RE::NiPoint3& a_point, float a_radius);
+    bool        DevHoldRepoint(RE::FormID a_follower, const RE::NiPoint3& a_point, float a_radius);
+    const char* DevQuietFile(RE::FormID a_follower, RE::FormID a_style);
+    DevHoldInfo DevHoldRead(RE::FormID a_follower);
+    void        DevHoldRelease(RE::FormID a_follower);
+    void        DevHoldReleaseAll();
+    bool        DevGroundStepStands(RE::FormID a_follower);
 #endif
 }

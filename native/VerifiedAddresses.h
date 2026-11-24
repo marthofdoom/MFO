@@ -19,7 +19,7 @@
 
 namespace MFO::VerifiedAddresses
 {
-	// 1.6.1170.0: 66 rows
+	// 1.6.1170.0: 67 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_6_1170[] = {
 		{ 207886, 0x18A5558, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x18AB9C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -87,9 +87,10 @@ namespace MFO::VerifiedAddresses
 		{ 25066, 0x3D14D0, 0x0, 0, {  }, "TradePerks.TESQuest.CreateRefHandleByAliasID" },
 		{ 11572, 0x1513D0, 0x0, 0, {  }, "Steal.ExtraDataList.Destroy" },
 		{ 11583, 0x151E90, 0x0, 0, {  }, "Steal.ExtraDataList.Construct" },
+		{ 39509, 0x6EC8B0, 0x0, 0, {  }, "Light.AIProcess.CachedLightLevel" },
 	};
 
-	// 1.5.97.0: 66 rows
+	// 1.5.97.0: 67 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_5_97[] = {
 		{ 261397, 0x165DA40, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 261916, 0x16635E0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -157,12 +158,14 @@ namespace MFO::VerifiedAddresses
 		{ 24537, 0x378760, 0x0, 0, {  }, "TradePerks.TESQuest.CreateRefHandleByAliasID" },
 		{ 11438, 0x1076D0, 0x0, 0, {  }, "Steal.ExtraDataList.Destroy" },
 		{ 11437, 0x107690, 0x0, 0, {  }, "Steal.ExtraDataList.Construct" },
+		{ 38499, 0x659CF0, 0x0, 0, {  }, "Light.AIProcess.CachedLightLevel" },
 	};
 
 	// 1.7.104.0: 66 rows
-	// 2 NOT VERIFIED on 1.7.104.0, deliberately absent from this table (the seat is refused):
+	// 3 NOT VERIFIED on 1.7.104.0, deliberately absent from this table (the seat is refused):
 	//   PickupSound.Actor.PlayPickUpSound (1.6.1170 id 37196): id 37196 is not in the idmap
 	//   Steal.ExtraDataList.Destroy (1.6.1170 id 11572): id 11572 is not in the idmap
+	//   Light.AIProcess.CachedLightLevel (1.6.1170 id 39509): id 39509 is not in the idmap
 	inline constexpr REL::SelfCheck::Row kRows_1_7_104[] = {
 		{ 207886, 0x1923258, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x19296C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
