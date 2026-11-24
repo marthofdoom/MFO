@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """iaus_sim/live/gen_class_files.py -- a finished tune round's per-class MFO_Tuning files (the game's hot-swap tuning text, native/iaus/TuningFile.h).
 
-usage: gen_class_files.py --out <round dir> [--dest <dir>] [--label <text>] [--unshipped] [--accept-log-mismatch]
+usage: gen_class_files.py --out <round dir> [--dest <dir>] [--label <text>] [--unshipped] [--accept-log-mismatch] [--smoke-ok]
 
   --out    the round's directory (tune_driver.py --out): summary.json, progress.log
   --dest   where the files go (default <out>/MFO_Tuning). One <class>.txt per class the round SEARCHED, plus MANIFEST.json. A searched class
@@ -18,11 +18,18 @@ WHAT THIS TOOL REFUSES (it writes nothing and exits 2), each one a way an earlie
      likely cause (unverified, the old generator was lost with /tmp) was a summary seeded from an earlier round whose recalib rows covered 15
      classes only and were taken as the value list. Here the recalib stage may only WITHHOLD, and only when it judged exactly the accepted
      values of this summary (stages.recalib.accepted == final_curves(with_withheld=True)). Otherwise its withheld list is stale.
-  2. THE JOINT GATE DID NOT PASS ON THIS TABLE (summary.json ship.needs_joint_rerun), unless --unshipped, which marks every file NOT JOINT-GATED.
-  3. THE LOG AND THE SUMMARY DISAGREE: progress.log shows accepted values for a class in its last search and the summary holds none for it,
-     with no withheld value and no recorded rejection that explains it. --accept-log-mismatch writes anyway and records the mismatch.
-  4. A value names a class that is not a cell of the run, or two values set the same knob of one class.
+  2. THE JOINT GATE DID NOT PASS ON THIS TABLE, or NEVER RAN in this round (summary.json ship.needs_joint_rerun, or no joint stage at all:
+     a round stopped or scoped before it), unless --unshipped, which marks every file NOT JOINT-GATED.
+  3. THE LOG AND THE SUMMARY DISAGREE. For each class, the knobs progress.log shows ACCEPTED in the class's last search, with their values,
+     are compared with the summary's own rows for that class (stages.classes.<cls>.rows: knob, best, accepted). A knob the log accepted
+     that the summary does not hold as accepted, or holds with another value, is a mismatch, for one knob as for all of them.
+     --accept-log-mismatch writes anyway and records the mismatch.
+  4. A value names a class that is not a cell of the run. (Two accepted values for one knob cannot reach here: final_curves() keeps one.)
   5. A class's search did not finish (the round was stopped inside it): resume the round first.
+  6. A SMOKE ROUND (tune_driver.py --smoke: a few seeds, every stage exercised, "its numbers are NOT results"). --smoke-ok is for the tests
+     of this directory: every file then says SMOKE in its header.
+  7. A CELL IN THE ROUND'S SCOPE WAS NEVER SEARCHED (the scope is --classes when the round named classes, else every cell of --cells):
+     the round is partial. --unshipped writes the searched ones and lists the others.
 After writing, every file is read back and compared with what was meant to be in it.
 
 Exit codes: 0 written, 2 refused (nothing written), 1 a write or read-back error.
@@ -88,29 +95,47 @@ def cells_of(S, full):
     return cells
 
 
-def log_accepted(out):
-    """{class: accepted lines in the class's LAST search in progress.log}. A class's search starts at its `classes <cls>: N knobs` line."""
+def log_accepted_knobs(out):
+    """{class: {knob: value}}: the knobs ACCEPTED in the class's LAST search in progress.log, with the value of the line."""
     p = os.path.join(out, "progress.log")
-    acc = {}
     if not os.path.exists(p):
         return None
+    acc = {}
     for line in open(p, errors="replace"):
         m = re.search(r"  classes (\S+): \d+ knobs", line)
         if m:
-            acc[m.group(1)] = 0
+            acc[m.group(1)] = {}
             continue
-        m = re.search(r"  classes (\S+) pass \d+ .*  ACCEPTED", line)
+        m = re.search(r"  classes (\S+) pass \d+\s+(\S+)\s+\S+\s+->\s+(\S+)\s+train .*  ACCEPTED", line)
         if m:
-            acc[m.group(1)] = acc.get(m.group(1), 0) + 1
+            try:
+                acc.setdefault(m.group(1), {})[m.group(2)] = float(m.group(3))
+            except ValueError:
+                acc.setdefault(m.group(1), {})[m.group(2)] = None
     return acc
 
 
-def plan(out, unshipped=False, accept_log_mismatch=False):
+def shared_not_written(S):
+    """Accepted SHARED values the round holds that no class file carries (worth / loot tables, Tuning globals): named in the manifest."""
+    st, out = S.get("stages", {}), []
+    for stage in ("worth", "loot"):
+        v = st.get(stage, {})
+        out += ["%s: %s" % (stage, k) for k in (v.get("kept", []) if isinstance(v, dict) else [])]
+    for r in st.get("globals", []) if isinstance(st.get("globals"), list) else []:
+        if str(r.get("verdict", "")).startswith(("PASSES RULE", "PASS", "ACCEPT")) or r.get("accepted"):
+            out.append("globals: %s" % r.get("set"))
+    return out
+
+
+def plan(out, unshipped=False, accept_log_mismatch=False, smoke_ok=False):
     """Everything decided before a byte is written. -> dict(cells, per_class, withheld, notes, ...). Raises Refused."""
     S, sha, src = load_summary(out)
     final, full, withheld, ship = table_of(S)
     stages = S.get("stages", {})
     notes = []
+    smoke = bool(S.get("config", {}).get("smoke"))
+    if smoke and not smoke_ok:
+        raise Refused("this is a SMOKE round (tune_driver.py --smoke): its numbers are not results and no tuning file is written from it")
     # 1. the recalib stage may only withhold, and only for THIS table
     rec = stages.get("recalib")
     if rec is not None and set(rec.get("accepted", [])) != set(full):
@@ -127,10 +152,16 @@ def plan(out, unshipped=False, accept_log_mismatch=False):
         notes.append("withheld values that are not in the accepted table (ignored): %s" % " ".join(stale))
     # 2. the joint gate
     joint = ship["joint"]
-    if ship["needs_joint_rerun"] and final:
+    if "joint" not in stages:
+        if not unshipped:
+            raise Refused("the joint stage never ran in this round (stopped or scoped before it). Run it (--stages joint,summary with the round's other arguments), or pass --unshipped to write files marked NOT JOINT-GATED.")
+        joint = "NOT JOINT-GATED (the joint stage never ran)"
+    elif ship["needs_joint_rerun"] and final:
         if not unshipped:
             raise Refused("the joint gate did not pass on this table (%s). Re-run the joint stage, or pass --unshipped to write files marked NOT JOINT-GATED." % ship["needs_joint_rerun"])
         joint = "NOT JOINT-GATED (%s)" % ship["needs_joint_rerun"]
+    if smoke:
+        joint = "SMOKE ROUND, NOT RESULTS; " + joint
     # 4. shape: one class per value, a cell of the run, one value per knob
     cells = cells_of(S, full)
     per = {c: [] for c in cells}
@@ -141,7 +172,7 @@ def plan(out, unshipped=False, accept_log_mismatch=False):
         if m.group(1) not in per:
             raise Refused("accepted value %s names a class that is not a cell of this run (%d cells)" % (spec, len(cells)))
         if any(k.split("=")[0] == spec.split("=")[0] for k in per[m.group(1)]):
-            raise Refused("two accepted values set the same knob: %s" % spec.split("=")[0])
+            raise Refused("internal: two accepted values set the same knob (final_curves() keeps one per knob): %s" % spec.split("=")[0])
         per[m.group(1)].append(spec)
     done = stages.get("classes", {})
     running = [c for c, r in done.items() if not r.get("complete")]
@@ -149,27 +180,42 @@ def plan(out, unshipped=False, accept_log_mismatch=False):
         raise Refused("the search of %s did not finish (the round was stopped inside it): resume the round, then generate" % ", ".join(running))
     searched = [c for c in cells if c in done or per[c]]
     unsearched = [c for c in cells if c not in searched]
+    scoped = S.get("config", {}).get("classes")
+    scope = [c for c in scoped.split(",") if c] if scoped else list(S.get("config", {}).get("cell_list") or cells)
+    partial = [c for c in scope if c not in done]
+    if partial:
+        if not unshipped:
+            raise Refused("the round is PARTIAL: %d cell(s) of its scope were never searched (%s). Resume it, or pass --unshipped to write the searched ones marked NOT JOINT-GATED."
+                          % (len(partial), ", ".join(partial)))
+        notes.append("PARTIAL ROUND: never searched, no file: %s" % ", ".join(partial))
+        if not joint.startswith("NOT JOINT-GATED") and "NOT JOINT-GATED" not in joint:
+            joint = "NOT JOINT-GATED (partial round); " + joint
     if sum(len(v) for v in per.values()) != len(final):
         raise Refused("internal: %d values planned for %d accepted" % (sum(len(v) for v in per.values()), len(final)))
-    # 3. the log against the summary
-    acc = log_accepted(out)
+    # 3. the log against the summary: per class, every knob the log accepted in its last search against the summary's own row for it
+    acc = log_accepted_knobs(out)
     mismatch = []
     if acc is not None:
-        decided = [d for d in S.get("auto_decisions", []) + S.get("open_decisions", []) if d.get("verdict") == "rejected" or d.get("kind") in ("class card", "withheld", "joint")]
-        for c, n in sorted(acc.items()):
-            if n > 0 and c in per and not per[c]:
-                explained = any(w.startswith(c + ":") for w in withheld) or any(d.get("cls") == c or (c + ":") in (d.get("what", "") + d.get("evidence", "")) for d in decided)
-                if not explained:
-                    mismatch.append("%s (%d accepted line(s) in its last search, no value in the summary)" % (c, n))
+        for c, knobs in sorted(acc.items()):
+            rows = {r.get("knob"): r for r in done.get(c, {}).get("rows", []) if r.get("accepted")}
+            for knob, v in sorted(knobs.items()):
+                r = rows.get(knob)
+                if r is None:
+                    mismatch.append("%s %s (accepted in the log, not an accepted row of the summary)" % (c, knob))
+                elif v is not None and abs(float(r.get("best", v)) - v) > 1e-4 * max(1.0, abs(v)):
+                    mismatch.append("%s %s (the log accepted %g, the summary holds %g)" % (c, knob, v, float(r["best"])))
     else:
         notes.append("no progress.log in the round's directory: the log check did not run")
     if mismatch:
         if not accept_log_mismatch:
-            raise Refused("progress.log and summary.json disagree: %s. The summary is not the round the log describes (a seeded or overwritten summary?). "
-                          "Resume the round so the summary is rebuilt from its cache, or pass --accept-log-mismatch." % "; ".join(mismatch))
+            raise Refused("progress.log and summary.json disagree on %d accepted value(s): %s. The summary is not the round the log describes (a seeded or overwritten summary?). "
+                          "Resume the round so the summary is rebuilt from its cache, or pass --accept-log-mismatch." % (len(mismatch), "; ".join(mismatch[:12]) + (" ..." if len(mismatch) > 12 else "")))
         notes.append("LOG MISMATCH ACCEPTED: " + "; ".join(mismatch))
+    shared = shared_not_written(S)
+    if shared:
+        notes.append("SHARED VALUES NOT IN ANY FILE (this tool writes class files only; shared.txt / potions.txt / looting.txt are the coordinator's): " + "; ".join(shared))
     return {"cells": searched, "unsearched": unsearched, "per_class": per, "withheld": [w for w in withheld if w in full], "notes": notes, "joint": joint, "sha": sha, "src": src,
-            "values": len(final), "log_accepted": acc or {}, "config": {k: S.get("config", {}).get(k) for k in ("cells", "smoke", "world", "sim_flags", "worlds")}}
+            "values": len(final), "log_accepted": {c: len(v) for c, v in (acc or {}).items()}, "shared_not_written": shared, "smoke": smoke, "config": {k: S.get("config", {}).get(k) for k in ("cells", "smoke", "world", "sim_flags", "worlds")}}
 
 
 def parse_file(path):
@@ -191,7 +237,7 @@ def write(pl, dest, label):
         os.replace(tmp, os.path.join(dest, cls + ".txt"))   # the game reads a file only once its stamp is stable; a rename is one step
     man = {"generated": time.strftime("%Y-%m-%d %H:%M:%S"), "label": label, "summary": pl["src"], "summary_sha256_16": pl["sha"], "joint": pl["joint"], "values": pl["values"],
            "classes": {c: pl["per_class"][c] for c in pl["cells"]}, "withheld": pl["withheld"], "notes": pl["notes"], "config": pl["config"],
-           "classes_with_values": sum(1 for c in pl["cells"] if pl["per_class"][c]), "not_searched_no_file": pl["unsearched"]}
+           "classes_with_values": sum(1 for c in pl["cells"] if pl["per_class"][c]), "not_searched_no_file": pl["unsearched"], "shared_values_not_written": pl["shared_not_written"], "smoke": pl["smoke"]}
     with open(os.path.join(dest, "MANIFEST.json"), "w") as f:
         json.dump(man, f, indent=1)
     # read back: what is on disk is what was meant
@@ -209,9 +255,10 @@ def main(argv=None):
     ap.add_argument("--label", default="")
     ap.add_argument("--unshipped", action="store_true")
     ap.add_argument("--accept-log-mismatch", action="store_true")
+    ap.add_argument("--smoke-ok", action="store_true")
     a = ap.parse_args(argv)
     try:
-        pl = plan(a.out, a.unshipped, a.accept_log_mismatch)
+        pl = plan(a.out, a.unshipped, a.accept_log_mismatch, a.smoke_ok)
     except Refused as e:
         print("gen_class_files: REFUSED, nothing written: %s" % e, file=sys.stderr)
         return 2

@@ -354,6 +354,117 @@ class ShipState(unittest.TestCase):   # backlog 2026-11-19: needs_joint_rerun st
         self.assertIn("different table", T.ship_state()["needs_joint_rerun"])
 
 
+class OneValuePerKnob(unittest.TestCase):   # Opus review of 1874f81e: the default rejudge spec (warrior:6.32.b) is also a classes knob
+    def setUp(self):
+        self.saved = dict(T.SUMMARY)
+
+    def tearDown(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update(self.saved)
+
+    def test_the_classes_value_replaces_the_rejudged_one(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update({"stages": {"rejudge": [{"spec": "warrior:6.32.b=0.15", "accepted": True}, {"spec": "knight:0.8.a=1.1", "accepted": True}, {"spec": "mage:1.2.a=3", "accepted": False}],
+                                     "classes": {"warrior": {"kept": ["warrior:6.32.b=0.2", "warrior:family.0=1.33"]}},
+                                     "gap": {"kept": {"warrior": ["warrior:family.0=1.5", "warrior:0.9.floor=0.6"]}}}})
+        self.assertEqual(T.final_curves(), ["warrior:6.32.b=0.2", "warrior:family.0=1.33", "knight:0.8.a=1.1", "warrior:0.9.floor=0.6"])
+        self.assertEqual(len({k.split("=")[0] for k in T.final_curves()}), len(T.final_curves()))
+
+
+class RerunAfter(unittest.TestCase):   # the joint gate runs again, in the same run, when recalib withheld a value after it
+    def setUp(self):
+        self.saved = dict(T.SUMMARY)
+        T.SUMMARY.clear()
+        T.SUMMARY.update({"stages": {}, "withheld": []})
+
+    def tearDown(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update(self.saved)
+
+    def test_joint_again_after_a_withheld_value(self):
+        self.assertEqual(T.rerun_after("recalib", ["classes", "joint", "recalib"], ["logistics", "summary"])[0], [])   # nothing withheld
+        T.SUMMARY["withheld"] = ["mercenary:0.7.a=0.931"]
+        self.assertEqual(T.rerun_after("recalib", ["classes", "joint", "recalib"], ["logistics", "summary"])[0], ["joint"])
+        self.assertEqual(T.rerun_after("recalib", ["classes", "recalib"], ["joint", "summary"])[0], [])                # joint is still to come
+        self.assertEqual(T.rerun_after("recalib", ["classes", "recalib"], ["summary"])[0], [])                         # a run without the joint stage
+        self.assertEqual(T.rerun_after("joint", ["classes", "joint", "recalib", "joint"], ["summary"])[0], [])          # and it does not loop
+
+    def test_gap_rule_unchanged(self):
+        T.SUMMARY["stages"]["gap"] = {"search_changed": True}
+        self.assertEqual(T.rerun_after("gap", ["floor", "rating", "gap"], ["summary"])[0], ["floor", "rating"])
+
+
+class CarryOverBinary(unittest.TestCase):   # a summary made by another simulator binary is not carried over
+    def setUp(self):
+        self.saved = dict(T.SUMMARY)
+
+    def tearDown(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update(self.saved)
+
+    def old(self, sha):
+        cfg = {"cells": "15"}
+        if sha:
+            cfg["bin_sha"] = sha
+        return {"config": cfg, "stages": {"classes": {"knight": {"kept": ["knight:0.8.a=1.1"]}}, "joint": {"verdict": "PASS", "table": ["knight:0.8.a=1.1"]}}, "withheld": []}
+
+    def test_another_binary_carries_nothing(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update({"stages": {}, "open_decisions": [], "auto_decisions": []})
+        lines = T.carry_over(self.old("aaaaaaaaaaaaaaaa"), "15", "bbbbbbbbbbbbbbbb")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("another simulator binary", lines[0])
+        self.assertEqual(T.SUMMARY["stages"], {})
+
+    def test_the_same_binary_carries_everything_and_an_unrecorded_one_warns(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update({"stages": {}, "open_decisions": [], "auto_decisions": []})
+        self.assertEqual(T.carry_over(self.old("aaaaaaaaaaaaaaaa"), "15", "aaaaaaaaaaaaaaaa"), [])
+        self.assertIn("joint", T.SUMMARY["stages"])
+        lines = T.carry_over(self.old(None), "15", "aaaaaaaaaaaaaaaa")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("UNCHECKED", lines[0])
+        self.assertIn("classes", T.SUMMARY["stages"])
+
+
+class FieldHits(unittest.TestCase):   # calib_damage.py HITS: the line's own counts are read, a window is classified by what it holds
+    def test_line_counts_and_kinds(self):
+        import calib_damage as C
+        d = tempfile.mkdtemp()
+        L = ("[19:44:%s] [info] [iaus-fill] hit %s (%s) -> Cicero (0009BCB0) source %s projectile 00000000 power=%s bash=false blocked=false sneak=false | health before %s at-event nan "
+             "after %s: took %s in 0.13 s, %d other hit(s) on him in it | estimate 10.0 (hit 20.0 for weapon 00013841, armor 0.500, magic resist 0) ratio 1.0 | attacker attack state 0 | sink thread 1 | lines skipped %d hits aged out 0 overflow 0")
+        rows = ["[19:44:00.000] [info] [sense] 0009BCB0: own=1 foes=2 load=1.0 hpLoss=0.0%/s",
+                L % ("01.000", "Archer", "00091447", "00013841", "false", "400.0", "380.0", "20.0", 0, 0),      # plain: 20 over an estimate of 10
+                L % ("01.000", "Archer", "00091447", "00013841", "false", "400.0", "380.0", "20.0", 0, 3),      # the engine's second event of the same blow
+                L % ("02.000", "Archer", "00091447", "00013841", "false", "380.0", "340.0", "40.0", 0, 0),      # plain: 40 over 10
+                L % ("03.000", "Archer", "00091447", "00013841", "true", "340.0", "300.0", "40.0", 0, 0),       # a power attack
+                L % ("04.000", "Archer", "00091447", "00013841", "false", "300.0", "250.0", "50.0", 1, 0),      # a blow ...
+                L % ("04.000", "Archer", "00091447", "FE000841", "false", "300.0", "250.0", "50.0", 1, 0),      # ... with a rider
+                L % ("05.000", "Archer", "00091447", "00013841", "false", "250.0", "249.0", "1.0", 4, 0)]       # late: 1 is under a quarter of 10
+        open(os.path.join(d, "MFO.log"), "w").write("\n".join(rows) + "\n")
+        evs, fol, key = C.parse_hits(os.path.join(d, "MFO.log"))
+        self.assertEqual(len(evs), 6)                                           # the duplicate is one event
+        self.assertEqual(sum(e["skipped"] for e in evs), 3)                     # the duplicate line's "lines skipped" still counts
+        self.assertEqual(sorted(e["other"] for e in evs), [0, 0, 0, 1, 1, 4])
+        kinds = []
+        by = {}
+        for e in evs:
+            by.setdefault((e["before"], e["after"]), []).append(e)
+        for es in by.values():
+            kinds.append(C.classify_window(es, es[0]["took"])[0])
+        self.assertEqual(sorted(kinds), ["late", "plain", "plain", "power", "rider"])
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            C.hits_report([d])
+        out = buf.getvalue()
+        self.assertIn("kFieldHit[2] = { 0.67f, 1.33f };", out)                   # 2.0 and 4.0 times the estimate, over their mean 3.0
+        self.assertIn("FIELD HIT KIND multi     n=0", out)
+        self.assertIn("FIELD HIT KIND rider     n=1", out)
+        self.assertIn("1 window(s) say they hold more events than the log has lines for", out)   # the late one: 4 others, one line (the rider window: 1 other, two lines)
+
+
 class CellsText(unittest.TestCase):   # review of f26dac4a: "15 cells" text under --cells all
     def test_the_rule_does_not_say_15_cells(self):
         self.assertIsNone(re.search(r"15 cells|15-cell|15-at-once", T.SUMMARY["rule"]))
