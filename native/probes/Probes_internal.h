@@ -14,6 +14,8 @@ namespace MFO::Probes {
     struct Tuning {
         std::int64_t sampleMs        = 120;     // a follower is sampled at most this often (the pump runs every ~133 ms)
         float        dropMinZ        = 150.0f;   // height lost (units) before a drop / fall is reported
+        float        fallMinSpeed    = 450.0f;   // a FALL needs this per-sample fall speed (u/s) at some point of the descent (a run down a stair is ~260-350)
+        float        steepSlope      = 1.7f;     // a STEEP descent (no fall speed, but height >= dropMinZ) is still logged when height / across is at least this
         std::int64_t dropWindowMs    = 2500;     // the peak height must lie this recent
         float        landedDz        = 4.0f;     // |dz| between two samples under this = landed
         std::int64_t dropEventSlackMs = 1500;    // a graph event this close before the peak (or after) belongs to the drop
@@ -24,7 +26,6 @@ namespace MFO::Probes {
         std::int64_t moveWatchdogMs  = 6000;     // a traversal start with no stop this long is reported NO-STOP (the mod's own watchdog is 4 s)
         std::int64_t attachMs        = 2000;     // re-post the (deduped) sink attach this often: a graph is rebuilt on a 3D reload
         std::int64_t idleFreeMs      = 60000;    // a sink slot not serviced this long is freed (dismissed follower)
-        std::int64_t pointSampleMs   = 250;      // a watched point claim samples him this often
         std::int64_t pointLineMs     = 2000;     // and prints a progress line this often while it stands
         std::int64_t raySummaryMs    = 30000;    // [probe-ray] summary period
         std::int64_t minuteMs        = 60000;    // the per-probe line budget window
@@ -37,6 +38,7 @@ namespace MFO::Probes {
         std::int64_t  ms = 0;
         float         x = 0, y = 0, z = 0;
         std::uint32_t cell = 0;
+        std::uint32_t space = 0;                  // interior cell FormID, else worldspace FormID: the ring resets on a change of THIS, not of the 4096-unit exterior cell
     };
 
     // Worker-only per-follower track (Probes.cpp owns the table).
@@ -45,6 +47,7 @@ namespace MFO::Probes {
         std::size_t  n = 0;                       // samples ever pushed; the newest is ring[(n - 1) % kRing]
         std::int64_t lastEventMs = 0;             // the last traversal graph event seen for him (Traversal.cpp)
         bool         falling = false;
+        float        maxVz = 0;                   // the largest per-sample fall speed (u/s) since the peak
         Sample       peak{};
         std::string  name;
     };
@@ -57,7 +60,7 @@ namespace MFO::Probes {
     bool Enabled(Kind a_kind);
 
     const Sample* Newest(const Track& a_t);
-    // The newest sample at or before a_ms (or the oldest held); nullptr when the track is empty.
+    // The newest sample at or before a_ms; nullptr when none is (the track is empty or every sample is AFTER the event).
     const Sample* AtOrBefore(const Track& a_t, std::int64_t a_ms);
     Track* TrackOf(RE::FormID a_fid);
     // The "what MFO had in flight for him" word: leg, offense, heal, range, disengage, point, cast, pin, sneak, leash, or "none". WORKER.

@@ -11,7 +11,7 @@ Output JSON (the shape the lab's --traversal-file loads; UNVERIFIED until a sess
   { "source": [...logs], "actors": { "<fid>": { "name", "moves": n, "up": {n, max, median}, "down": {...}, "moveSec": {n, median, p90, max},
       "failed": n, "noStop": n, "livedDuringMove": n } },
     "abilities": { "maxUp": ..., "maxDown": ..., "moveSec": ..., "n": ... },     # party-wide, from the clean stops only
-    "dropLinks": { "noEventDrops": n, "maxDown": ..., "actors": [...] },        # a follower losing height with NO graph event
+    "dropLinks": { "noEventDrops": n, "maxDown": ..., "actors": [...] },        # a follower FALLING (fall speed class) with NO graph event
     "pointRoad": [ one row per closed claim: kind, R, inside seconds, walked inside, u/s, closest, verdict hint ],
     "rayCost": { site: { "meanUs": ..., "p95UpperUs": ..., "maxUs": ..., "n": ... } },
     "trust": { sign: count } }
@@ -21,16 +21,16 @@ link kind under him needs the N1 snapshot). It becomes a proof once a dump of th
 import argparse, json, re, statistics, sys
 from collections import Counter, defaultdict
 
-TRAV = re.compile(r"\[probe-trav\] (?P<fid>[0-9A-Fa-f]{8}) '(?P<name>[^']*)': (?P<how>[A-Z-]+(?: \([^)]*\))?) \((?P<ev>[^)]*)\) dur=(?P<dur>-?[0-9.]+)s "
+TRAV = re.compile(r"\[probe-trav\] (?P<fid>[0-9A-Fa-f]{8}) '(?P<name>.*?)': (?P<how>[A-Z-]+(?: \([^)]*\))?) \((?P<ev>[^)]*)\) dur=(?P<dur>-?[0-9.]+)s "
                   r"start=(?P<start>\([^)]*\)|unknown[^|]*?) stop=(?P<stop>\([^)]*\)|\?) dz=(?P<dz>[-+0-9.]+) \| player (?P<player>\([^)]*\)|\?) \| in flight: (?P<fl>[^|]*)"
                   r"\| others mid-move: (?P<oth>\d+) \| lived signs during the move: (?P<lived>\d+)")
-DROP = re.compile(r"\[probe-drop\] (?P<fid>[0-9A-Fa-f]{8}) '(?P<name>[^']*)': lost (?P<dz>[0-9.]+) height in (?P<sec>[0-9.]+)s, ran (?P<run>[0-9.]+) across, "
-                  r"from (?P<a>\([^)]*\)) to (?P<b>\([^)]*\)) \| graph traversal event=(?P<ev>YES|NONE)")
-POINT_CLOSE = re.compile(r"\[probe-point\] (?P<fid>[0-9A-Fa-f]{8}): (?P<kind>\S+) claim CLOSED \((?P<why>[^)]*)\) after (?P<total>[0-9.]+)s, R (?P<r>[0-9.]+): start dist (?P<sd>-?[0-9.]+), "
+DROP = re.compile(r"\[probe-drop\] (?P<fid>[0-9A-Fa-f]{8}) '(?P<name>.*?)': lost (?P<dz>[0-9.]+) height in (?P<sec>[0-9.]+)s, ran (?P<run>[0-9.]+) across, "
+                  r"max fall speed (?P<vz>[0-9.]+) u/s \((?P<cls>fall|steep)\), from (?P<a>\([^)]*\)) to (?P<b>\([^)]*\)) \| graph traversal event=(?P<ev>YES|NONE)")
+POINT_CLOSE = re.compile(r"\[probe-point\] (?P<fid>[0-9A-Fa-f]{8}): (?P<kind>\S+) claim CLOSED \((?P<why>.*?)\) after (?P<total>[0-9.]+)s, R (?P<r>[0-9.]+): start dist (?P<sd>-?[0-9.]+), "
                          r"closest (?P<min>-?[0-9.]+), last (?P<last>-?[0-9.]+), first inside after (?P<arr>-?[0-9.]+)s, inside (?P<ins>[0-9.]+)s walking (?P<path>[0-9.]+) units "
                          r"\((?P<spd>[0-9.]+) u/s, farthest (?P<far>[0-9.]+) from the point\)")
 RAY = re.compile(r"\[probe-ray\] (?P<site>\S+): (?P<n>\d+) rays in (?P<s>[0-9]+)s .*? \| mean (?P<mean>[0-9.]+) us, p50 <= (?P<p50>[0-9.]+) us, p95 <= (?P<p95>[0-9.]+) us, max (?P<max>[0-9.]+) us")
-TRUST = re.compile(r"\[probe-trust\] (?P<fid>[0-9A-Fa-f]{8}) '(?P<name>[^']*)': sign=(?P<sign>\S+)")
+TRUST = re.compile(r"\[probe-trust\] (?P<fid>[0-9A-Fa-f]{8}) '(?P<name>.*?)': sign=(?P<sign>\S+)")
 
 
 def pct(xs, q):
@@ -73,7 +73,7 @@ def main():
                         r["noStop"] += 1
                 elif m := DROP.search(line):
                     drops.append({"fid": m["fid"], "name": m["name"], "dz": float(m["dz"]), "sec": float(m["sec"]), "run": float(m["run"]),
-                                  "from": m["a"], "to": m["b"], "graphEvent": m["ev"] == "YES"})
+                                  "from": m["a"], "to": m["b"], "graphEvent": m["ev"] == "YES", "vz": float(m["vz"]), "cls": m["cls"]})
                 elif m := POINT_CLOSE.search(line):
                     ins, path, spd, r_ = float(m["ins"]), float(m["path"]), float(m["spd"]), float(m["r"])
                     hint = ("never inside" if ins == 0 else "pinned (barely moved inside)" if path < 0.25 * r_ else "moves tactically inside (walked >= R)" if path >= r_ else "in between")
@@ -95,10 +95,11 @@ def main():
                         "maxUp": max(ups) if ups else None, "maxDown": max(downs) if downs else None,
                         "moveSec": statistics.median(secs) if secs else None,
                         "note": "from clean STOPs only; UNVERIFIED below --min-obs"}
-    no_ev = [d for d in drops if not d["graphEvent"]]
+    no_ev = [d for d in drops if not d["graphEvent"] and d["cls"] == "fall"]   # a STEEP walk-down is not a drop-link candidate
     out["dropLinks"] = {"noEventDrops": len(no_ev), "maxDown": max((d["dz"] for d in no_ev), default=None),
                         "actors": sorted({d["fid"] for d in no_ev}), "samples": no_ev[:20],
-                        "withEventDrops": len(drops) - len(no_ev)}
+                        "withEventDrops": sum(1 for d in drops if d["graphEvent"]),
+                        "steepNoEvent": sum(1 for d in drops if not d["graphEvent"] and d["cls"] == "steep")}
     for site, rows in rays.items():
         tot = sum(r[0] for r in rows)
         out["rayCost"][site] = {"n": tot, "meanUs": sum(r[0] * r[1] for r in rows) / tot if tot else None,
@@ -106,7 +107,7 @@ def main():
 
     print(f"traversal moves: {sum(r['moves'] for r in actors.values())} by {len(actors)} actor(s); clean stops {n}; "
           f"maxUp {out['abilities']['maxUp']}, maxDown {out['abilities']['maxDown']}, median {out['abilities']['moveSec']} s")
-    print(f"drops with NO graph event (drop-link candidates): {len(no_ev)}; with an event: {len(drops) - len(no_ev)}"
+    print(f"drops with NO graph event (drop-link candidates): {len(no_ev)}; with an event: {out['dropLinks']['withEventDrops']}; steep walk-downs: {out['dropLinks']['steepNoEvent']}"
           + ("  -> followers DO lose height with no parkour event: check them against a navmesh dump" if no_ev else "  -> none seen: nothing may rely on drop links yet (9a)"))
     for p in points:
         print(f"point claim {p['kind']} R {p['R']:.0f}: inside {p['insideSec']:.1f}s walked {p['walkedInside']:.0f} ({p['uPerSec']:.0f} u/s) -> {p['hint']}")

@@ -46,6 +46,13 @@ namespace MFO::Probes {
             const auto* c = a_actor->GetParentCell();
             return c ? c->GetFormID() : 0u;
         }
+        // The key a sample ring lives under: an interior is one space, the exterior world is one space (its 4096-unit cells are not).
+        std::uint32_t SpaceOf(RE::Actor* a_actor) {
+            const auto* c = a_actor->GetParentCell();
+            if (c && c->IsInteriorCell()) return c->GetFormID();
+            const auto* ws = a_actor->GetWorldspace();
+            return ws ? ws->GetFormID() : (c ? c->GetFormID() : 0u);
+        }
 
         void Push(Track& a_t, const Sample& a_s) { a_t.ring[a_t.n % kRing] = a_s; ++a_t.n; }
 
@@ -53,24 +60,37 @@ namespace MFO::Probes {
 
         // The drop / fall watch (8.8 "a drop link taken with no graph event"). Reports when he LANDS, so a graph event that closes the move
         // is already in. The navmesh link kind under him needs the N1 snapshot; until then the line carries the heights and the positions.
+        // A drop is a DESCENT run: the peak is the top of the unbroken run of descending samples ending at him now (not the highest sample of the
+        // last 2.5 s, which on flat ground is noise). Two classes are logged: FALL (the largest per-sample fall speed reached kTuning.fallMinSpeed,
+        // so a stair or hill walked down at ~370 u/s is not one) and STEEP (no fall speed, but height >= dropMinZ at a slope >= steepSlope: a
+        // drop link walked down, kept visible and named apart). Only a FALL with no graph event files the lived sign `falling`.
         void DropWatch(RE::Actor* a_actor, Track& a_t, const Sample& a_prev, const Sample& a_cur) {
             if (!Enabled(Kind::Drop) && !Enabled(Kind::Trust)) return;
             if (!a_t.falling) {
-                const Sample* peak = nullptr;
-                for (std::size_t i = 0; i < std::min(a_t.n, kRing); ++i) {
+                const Sample* later = &a_cur;   // a_cur is the ring's newest (Push ran first)
+                float vz = 0.0f;
+                for (std::size_t i = 1; i < std::min(a_t.n, kRing); ++i) {
                     const Sample& s = a_t.ring[(a_t.n - 1 - i) % kRing];
                     if (a_cur.ms - s.ms > kTuning.dropWindowMs) break;
-                    if (!peak || s.z > peak->z) peak = &s;
+                    const auto dt = later->ms - s.ms;
+                    if (dt <= 0 || s.z - later->z < kTuning.landedDz) break;   // level or rising: the descent starts at `later`
+                    vz = std::max(vz, (s.z - later->z) * 1000.0f / static_cast<float>(dt));
+                    later = &s;
                 }
-                if (peak && peak->z - a_cur.z >= kTuning.dropMinZ) { a_t.falling = true; a_t.peak = *peak; }
+                if (later->z - a_cur.z >= kTuning.dropMinZ) { a_t.falling = true; a_t.peak = *later; a_t.maxVz = vz; }
                 return;
             }
+            if (const auto dt = a_cur.ms - a_prev.ms; dt > 0) a_t.maxVz = std::max(a_t.maxVz, (a_prev.z - a_cur.z) * 1000.0f / static_cast<float>(dt));
             const bool landed = std::fabs(a_cur.z - a_prev.z) < kTuning.landedDz;
             const bool stale  = a_cur.ms - a_t.peak.ms > kTuning.dropWindowMs + 1500;
             if (!landed && !stale) return;
             a_t.falling = false;
             const float dz = a_t.peak.z - a_cur.z;
             if (dz < kTuning.dropMinZ) return;   // he climbed back up: not a drop
+            const float across = Dist2D(a_t.peak, a_cur);
+            const bool fall = a_t.maxVz >= kTuning.fallMinSpeed;
+            const bool steep = !fall && dz / std::max(across, 1.0f) >= kTuning.steepSlope;
+            if (!fall && !steep) return;   // a gentle descent: not a drop
             const bool ev = a_t.lastEventMs != 0 && a_t.lastEventMs >= a_t.peak.ms - kTuning.dropEventSlackMs;
             if (Enabled(Kind::Drop) && LineAllowed(Kind::Drop)) {
                 std::string player = "?";
@@ -78,24 +98,26 @@ namespace MFO::Probes {
                     const auto p = pc->GetPosition();
                     player = PosWord(p.x, p.y, p.z);
                 }
-                spdlog::info("[probe-drop] {:08X} '{}': lost {:.0f} height in {:.1f}s, ran {:.0f} across, from {} to {} | graph traversal event={} | player {} | in flight: {} "
+                spdlog::info("[probe-drop] {:08X} '{}': lost {:.0f} height in {:.1f}s, ran {:.0f} across, max fall speed {:.0f} u/s ({}), from {} to {} | graph traversal event={} | player {} | in flight: {} "
                              "| (navmesh link kind under him: unknown until the N1 snapshot)",
-                             a_actor->GetFormID(), a_t.name, dz, (a_cur.ms - a_t.peak.ms) / 1000.0f, Dist2D(a_t.peak, a_cur),
+                             a_actor->GetFormID(), a_t.name, dz, (a_cur.ms - a_t.peak.ms) / 1000.0f, across, a_t.maxVz, fall ? "fall" : "steep",
                              PosWord(a_t.peak.x, a_t.peak.y, a_t.peak.z), PosWord(a_cur.x, a_cur.y, a_cur.z),
                              ev ? "YES" : "NONE", player, InFlight(a_actor));
             }
-            if (!ev) NoteLived(Lived::Falling, a_actor->GetFormID(), fmt::format("lost {:.0f} height, no graph event", dz).c_str());
+            if (fall && !ev) NoteLived(Lived::Falling, a_actor->GetFormID(), fmt::format("lost {:.0f} height, no graph event", dz).c_str());
         }
 
-        void JumpWatch(RE::Actor* a_actor, Track& a_t, const Sample& a_prev, const Sample& a_cur) {
+        // True when it reported a jump: the caller then drops the pre-warp samples (a warp down 150+ is not a fall).
+        bool JumpWatch(RE::Actor* a_actor, Track& a_t, const Sample& a_prev, const Sample& a_cur) {
             const auto dt = a_cur.ms - a_prev.ms;
-            if (dt <= 0 || dt > kTuning.jumpMaxDtMs) return;
+            if (dt <= 0 || dt > kTuning.jumpMaxDtMs) return false;
             const float d = Dist2D(a_prev, a_cur);
-            if (d < kTuning.jumpMinDist || d * 1000.0f / static_cast<float>(dt) < kTuning.jumpMinSpeed) return;
+            if (d < kTuning.jumpMinDist || d * 1000.0f / static_cast<float>(dt) < kTuning.jumpMinSpeed) return false;
             a_t.falling = false;
             NoteLived(Lived::Jump, a_actor->GetFormID(),
                       fmt::format("moved {:.0f} in {} ms ({:.0f} u/s) from {} to {}", d, dt, d * 1000.0f / static_cast<float>(dt),
                                   PosWord(a_prev.x, a_prev.y, a_prev.z), PosWord(a_cur.x, a_cur.y, a_cur.z)).c_str());
+            return true;
         }
     }
 
@@ -135,13 +157,11 @@ namespace MFO::Probes {
     const Sample* Newest(const Track& a_t) { return a_t.n ? &a_t.ring[(a_t.n - 1) % kRing] : nullptr; }
 
     const Sample* AtOrBefore(const Track& a_t, std::int64_t a_ms) {
-        const Sample* oldest = nullptr;
         for (std::size_t i = 0; i < std::min(a_t.n, kRing); ++i) {
             const Sample& s = a_t.ring[(a_t.n - 1 - i) % kRing];
             if (s.ms <= a_ms) return &s;
-            oldest = &s;
         }
-        return oldest;
+        return nullptr;   // every held sample is AFTER the event: the caller must not take one as the start
     }
 
     Track* TrackOf(RE::FormID a_fid) {
@@ -216,13 +236,13 @@ namespace MFO::Probes {
             const Sample* prev = Newest(t);
             if (prev && now - prev->ms < kTuning.sampleMs) continue;
             const auto p = actor->GetPosition();
-            Sample cur{ now, p.x, p.y, p.z, CellOf(actor) };
-            if (prev && prev->cell != cur.cell) { t.n = 0; t.falling = false; prev = nullptr; }   // a cell change is not a move
+            Sample cur{ now, p.x, p.y, p.z, CellOf(actor), SpaceOf(actor) };
+            if (prev && prev->space != cur.space) { t.n = 0; t.falling = false; prev = nullptr; }   // a change of SPACE (interior, or worldspace) is not a move; a 4096-unit exterior cell edge is
             if (prev) {
                 const Sample before = *prev;
                 Push(t, cur);
-                JumpWatch(actor, t, before, cur);
-                DropWatch(actor, t, before, cur);
+                if (JumpWatch(actor, t, before, cur)) { t.n = 0; Push(t, cur); }   // a warp: the pre-warp samples are not a descent
+                else DropWatch(actor, t, before, cur);
             } else {
                 Push(t, cur);
             }
