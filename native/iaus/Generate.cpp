@@ -4,7 +4,8 @@
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
-#include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step
+#include "iaus/Reposition.h"
+#include "iaus/SpellWorth.h"   // S11b: the spell-worth reader (read only while Tuning::spellWorth.live > 0)   // batch I: the spell range, the back-off need, the hidden step
 
 #include <algorithm>
 #include <cmath>
@@ -593,6 +594,30 @@ namespace MFO::Iaus {
             return sec > 0.0f ? v / sec : v;
         }
 
+        // S11b (iaus/SpellWorth.h): what ONE cast of e on a_target is worth in the reader's unit. known = false whenever Tuning::spellWorth.live is 0 (SHIPPED), so every
+        // call below keeps today's number bit for bit; a cast the reader does not know keeps today's number at any `live`.
+        Estimate::Worth WorthOf(const Ctx& x, const SpellEntry& e, const Combatant& a_target, const std::vector<const Combatant*>& a_foes) {
+            if (!(x.t.spellWorth.live > 0.0f)) return {};
+            float foes = -1.0f, friends = -1.0f;
+            if (e.nature == Prune::Nature::Offense && e.areaUnits > 0.0f) {   // the same area test the candidate's foesInArea / splashSafe make
+                const Combatant& centre = e.selfDelivery ? x.s.self : a_target;
+                int inArea = 0;
+                for (const Combatant* o : a_foes) if (Between(*o, centre) <= e.areaUnits) ++inArea;
+                int hurt = 0;
+                const float reachOut = e.areaUnits + (e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
+                for (const auto& a : x.s.allies) if (Between(a, centre) <= reachOut) ++hurt;
+                foes = static_cast<float>(inArea); friends = static_cast<float>(hurt);
+            }
+            const Estimate::SpellIn in = Estimate::MakeSpellIn(e, a_target, x.s, x.t.spellWorth, foes, friends);
+            return Estimate::SpellWorthOn(e, a_target, x.s, x.t.spellWorth, in, x.t.concChannelSec);
+        }
+        // today + live x (worth - today): live 0 returns a_today untouched, 1 the reader's answer; a_worth < 0 = not known = today.
+        float LiveBlend(const Ctx& x, float a_today, float a_worth) {
+            const float live = (std::clamp)(x.t.spellWorth.live, 0.0f, 1.0f);
+            if (!(live > 0.0f) || !(a_worth >= 0.0f)) return a_today;
+            return a_today + live * (a_worth - a_today);
+        }
+
         // THE HEAL SAFETY RULE (field 11-17b, Jesper stood channelling a concentration heal on a recipient a foe was already on, and died holding the hand): the
         // close-spell rule's shape (CloseRefused) applied to a heal. A CONCENTRATION or TOUCH heal holds the healer on the spot for its whole channel / until he is
         // beside the recipient, so it is refused while a foe can hurt the RECIPIENT here and the recipient would not survive (Reposition::SurvivesNear), as long as the book
@@ -624,7 +649,11 @@ namespace MFO::Iaus {
         float BestHealRateOn(const Ctx& x, const Combatant& a_recipient, bool a_self) {
             float best = 0.0f;
             for (const SpellEntry& o : x.s.book.entries)
-                if (HealCastableOn(x, o, a_recipient, a_self, false)) best = (std::max)(best, EffectRate(x, o, o.heal));
+                if (HealCastableOn(x, o, a_recipient, a_self, false)) {
+                    float rate = EffectRate(x, o, o.heal);
+                    if (const Estimate::Worth w = WorthOf(x, o, a_recipient, {}); w.known) rate = LiveBlend(x, rate, w.PerSecond());   // S11b: the same blend as the candidate's healRate
+                    best = (std::max)(best, rate);
+                }
             return best;
         }
         // A concentration / touch heal holds the HEALER where he stands (the channel, or the walk to touch range): refused when the recipient is in a foe's reach and would not
@@ -774,7 +803,9 @@ namespace MFO::Iaus {
                     if (oReach > 0.0f && Finite(foe.dist, 0.0f) > oReach * kRangeVeto) continue;
                     const float raw = Estimate::SpellOn(o, foe);
                     bestRaw[ti] = (std::max)(bestRaw[ti], raw);
-                    bestOn[ti]  = (std::max)(bestOn[ti], EffectRate(x, o, raw));
+                    float rate = EffectRate(x, o, raw);
+                    if (const Estimate::Worth w = WorthOf(x, o, foe, a_foes); w.known) rate = LiveBlend(x, rate, w.PerSecond());   // S11b: the yardstick in the candidate's unit
+                    bestOn[ti]  = (std::max)(bestOn[ti], rate);
                 }
             }
             for (const SpellEntry& e : s.book.entries) {
@@ -856,7 +887,11 @@ namespace MFO::Iaus {
                         c.f.concentration = e.concentration;
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
-                        if (e.nature == Prune::Nature::Control && e.measured) c.f.controlSec = Estimate::Pos(e.controlSec);
+                        if (e.nature == Prune::Nature::Control && e.measured) {
+                            c.f.controlSec = Estimate::Pos(e.controlSec);
+                            if (x.t.spellWorth.live > 0.0f)   // S11b: the held seconds never run past the foe's expected life (the reader's own term)
+                                c.f.controlSec = LiveBlend(x, c.f.controlSec, Estimate::ControlHeldSec(x.t.spellWorth, c.f.controlSec, Estimate::FoeLifeSec(s, *foe)));
+                        }
                         // EXPLOIT (the resist consideration) is for the resist the damage does NOT carry (fix/spell-worth C3): a measured offense spell's
                         // SpellOn already read this foe's resists, so exploit reads none for it (0 = neutral); an unmeasured one and a control spell keep it.
                         if (e.resistAv >= 0 && !Estimate::ResistCarriedByDamage(e.nature == Prune::Nature::Offense, e.measured, e.damage))
@@ -889,6 +924,13 @@ namespace MFO::Iaus {
                             c.f.hasArea = true;
                             c.f.foesInArea = static_cast<float>(inArea);
                             c.f.splashSafe = safe;
+                        }
+                        if (e.nature == Prune::Nature::Offense) {   // S11b: the reader's answer, blended in where it KNOWS the cast (live 0: this block changes nothing)
+                            if (const Estimate::Worth w = WorthOf(x, e, *foe, a_foes); w.known) {
+                                c.f.expDamage = LiveBlend(x, c.f.expDamage, w.effect);
+                                c.f.expRate = LiveBlend(x, c.f.expRate, w.PerSecond());
+                                c.f.effectRate = LiveBlend(x, c.f.effectRate, w.PerSecond());
+                            }
                         }
                         // 11-17b THE LINE OF FIRE (field Jesper): the ch.25 cast guard refuses a cast with a party member in the corridor (80 u) or the blast, and the
                         // claim then sat 3-8.5 s unfired. The same test, ONE reader (Estimate::InLineOfFire), vetoes the candidate through splash_safe (a gate), and the
@@ -938,6 +980,10 @@ namespace MFO::Iaus {
                             c.f.expHeal = e.measured ? Estimate::Pos(e.heal) : 0.0f;
                             c.f.concentration = e.concentration;
                             c.f.healRate = EffectRate(x, e, e.heal);
+                            if (const Estimate::Worth w = WorthOf(x, e, *r, a_foes); w.known) {   // S11b: never more than is missing, per cast second (live 0: unchanged)
+                                c.f.expHeal = LiveBlend(x, c.f.expHeal, w.effect);
+                                c.f.healRate = LiveBlend(x, c.f.healRate, w.PerSecond());
+                            }
                             c.f.effectRate = c.f.healRate;
                             c.f.bestHealRate = BestHealRateOn(x, *r, self);
                             c.f.recipientSelf = self;

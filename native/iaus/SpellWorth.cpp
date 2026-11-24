@@ -110,6 +110,11 @@ namespace MFO::Iaus {
             return a_dotPerSec * (std::min)(a_dotSec, life);
         }
 
+        float ControlHeldSec(const SpellWorth& a_t, float a_controlSec, float a_foeLifeSec) {
+            if (!(a_controlSec >= 0.0f)) return -1.0f;
+            return a_foeLifeSec >= 0.0f ? (std::min)(a_controlSec, (std::max)(a_t.foeLifeFloorSec, a_foeLifeSec)) : a_controlSec;
+        }
+
         float ControlEffect(const SpellWorth& a_t, float a_controlSec, const Combatant& a_foe) {
             const float hit = Pos(a_foe.hit), rate = Pos(a_foe.hitsPerSec);
             if (!(a_controlSec >= 0.0f) || !(hit > 0.0f) || !(rate > 0.0f)) return -1.0f;   // a foe whose damage was not measured: NOT KNOWN
@@ -237,7 +242,7 @@ namespace MFO::Iaus {
             }
             case Prune::Nature::Control: {
                 if (!a_e.measured || !(Pos(a_e.controlSec) > 0.0f)) return w;
-                const float held = a_in.foeLifeSec >= 0.0f ? (std::min)(a_e.controlSec, (std::max)(a_t.foeLifeFloorSec, a_in.foeLifeSec)) : a_e.controlSec;
+                const float held = ControlHeldSec(a_t, a_e.controlSec, a_in.foeLifeSec);
                 effect = ControlEffect(a_t, held, a_target);
                 break;
             }

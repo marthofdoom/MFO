@@ -80,6 +80,7 @@ namespace MFO::Iaus {
         [[nodiscard]] float ChannelSeconds(const SpellWorth& a_t, float a_concChannelSec);                                             // a stream's held seconds
         [[nodiscard]] float AreaFactor(const SpellWorth& a_t, float a_foesInArea, float a_friendsInArea);                              // x the one-foe effect
         [[nodiscard]] float DotOverLife(const SpellWorth& a_t, float a_dotPerSec, float a_dotSec, float a_foeLifeSec);                  // a DoT's damage over the foe's expected life
+        [[nodiscard]] float ControlHeldSec(const SpellWorth& a_t, float a_controlSec, float a_foeLifeSec);                              // the seconds a hold counts: never past the foe's expected life
         [[nodiscard]] float ControlEffect(const SpellWorth& a_t, float a_controlSec, const Combatant& a_foe);                           // held seconds x the foe's damage rate
         [[nodiscard]] float BuffEffect(const SpellWorth& a_t, const SpellIn& a_in);                                                     // prevented or added damage while it is up
         [[nodiscard]] float WardEffect(const SpellWorth& a_t, const SpellIn& a_in, float a_wardSec);

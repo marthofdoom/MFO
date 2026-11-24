@@ -4,7 +4,7 @@ The validator here MIRRORS the in-game loader (native/iaus/TuningFile.cpp): it a
   <class>.txt   one spec per line, '#' starts a comment:  [<class>:]<path>=<v>   (a different class prefix is rejected)
                 path = <family>.<cons>.<a|b|floor|zeroAbove|zeroBelow|w|px0-5|py0-5> | family.<family> | scalar.<name> | equip.crossover
                 family / cons = an index or a Name() (names.py)
-  shared.txt    comma list of  t.<scalar> | w.<family idx>.<cons idx> | aw.<family idx> | c.<cons idx>.a|b|floor  = <v>; one bad entry rejects the line
+  shared.txt    comma list of  t.<scalar> | sw.<spell-worth knob> | w.<family idx>.<cons idx> | aw.<family idx> | c.<cons idx>.a|b|floor  = <v>; one bad entry rejects the line
   potions.txt   worth.<knob>=<v>        looting.txt   loot.<knob>=<v>
 Around a line: spaces around = and : are trimmed, a leading --set / --curve token (optionally quoted) is stripped, a leading '+' on a value is accepted.
 """
@@ -28,6 +28,12 @@ T_SCALARS = ("t.momentum", "t.postureMomentum", "t.preempt", "t.actFloor", "t.so
              "t.concChannelSec", "t.handRedrawSec", "t.spellCastSec", "t.fireLineKeepSec",
              "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle",
              "t.dyingSelfHp", "t.dyingAllyHp", "t.dyingHitsToDown", "t.urgencyHitsDiv", "t.burstWindowSec", "t.grossWindowSec", "t.maxHitWindowSec")
+# sw.* (iaus/SpellWorthTable.h; names in SpellWorth.cpp kKnobs, routed by Catalogue.cpp SetTuningScalar): all >= 0; sw.live 0 = the reader is off
+SW_NAMES = ("sw.live", "sw.armorPctPerPoint", "sw.armorMitigationCap", "sw.landSecBase", "sw.landSecOffense", "sw.landSecControl", "sw.landSecHeal",
+            "sw.landSecBuff", "sw.landSecSummon", "sw.landSecWard", "sw.recoverSec", "sw.channelUptime", "sw.channelMinSec", "sw.areaFoesIntoDamage",
+            "sw.areaFriendPenalty", "sw.dotLifeShare", "sw.foeLifeFloorSec", "sw.controlDpsScale", "sw.buffDpsScale", "sw.wardDpsScale",
+            "sw.summonDpsScale", "sw.summonLifeSec", "sw.redundantEffectScale", "sw.killConfirmBonus", "sw.magickaHorizonSec", "sw.magickaDryPenalty",
+            "sw.failedStartSec")
 T_UNIT = ("t.emergencyHpHigh", "t.emergencyHpLow")
 INF = 3.0e38
 # worth.* (ConsumableWorth.h SetWorthKnob): name -> (lo, lo is open, hi)
@@ -174,11 +180,13 @@ def _shared_entry(name, v):
         return "belongs in potions.txt"
     if name.startswith("loot."):
         return "belongs in looting.txt"
+    if name in SW_NAMES:
+        return None if v >= 0 else "out of range: must be >= 0"
     if name in T_SCALARS:
         if v < 0 or (name in T_UNIT and v > 1):
             return "out of range: must be 0..1" if name in T_UNIT else "out of range: must be >= 0"
         return None
-    return "unknown t.<name> scalar" if name.startswith("t.") else "unknown name"
+    return "unknown t.<name> scalar" if name.startswith("t.") else "unknown sw.<name> knob" if name.startswith("sw.") else "unknown name"
 
 
 def _shared_line(v):
