@@ -1041,6 +1041,11 @@ namespace MFO::APMFBridge {
 
     }
 
+    namespace {
+        std::atomic<std::uint32_t> g_castSeats{ 0 };        // ABI v46 coverage cache (CastSeatCoverage below)
+        std::atomic<long long>     g_castSeatsAskedMs{ 0 };   // steady ms of the last 0 answer (0 = never asked)
+    }
+
     void Acquire() {
         g_apmf.store(nullptr, std::memory_order_relaxed);
         g_castSeats.store(0, std::memory_order_relaxed);
@@ -1096,8 +1101,6 @@ namespace MFO::APMFBridge {
     namespace {
         constexpr std::uint32_t kCastSeatsMinAbi = 46;
         constexpr long long     kSeatsRetryMs    = 5000;
-        std::atomic<std::uint32_t> g_castSeats{ 0 };
-        std::atomic<long long>     g_castSeatsAskedMs{ 0 };   // steady ms of the last 0 answer (0 = never asked)
         long long NowMsSteady() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         }
@@ -1127,7 +1130,7 @@ namespace MFO::APMFBridge {
                          api->abiVersion, info.castSeats,
                          (info.castSeats & APMF_API::kCastSeat_Stagger) != 0, (info.castSeats & APMF_API::kCastSeat_Disarm) != 0,
                          (info.castSeats & APMF_API::kCastSeat_TargetEffect) != 0, (info.castSeats & APMF_API::kCastSeat_Paralyze) != 0,
-                         APMF_API::kCastSeat_TypeEquip, (info.castSeats & APMF_API::kCastSeat_SkillGate) != 0,
+                         static_cast<std::uint32_t>(APMF_API::kCastSeat_TypeEquip), (info.castSeats & APMF_API::kCastSeat_SkillGate) != 0,
                          (info.castSeats & APMF_API::kCastSeat_Reanimate) != 0);
         return info.castSeats;
     }
