@@ -68,11 +68,11 @@ regressions here; the ripple notes are why the map exists.
   for a died agent is pointed at that log, never re-briefed from zero.
 - **Control the token/agent burn (marth 2026-09-02).** ONE complete brief per
   agent, run to completion — never drip-feed sequential refinements (each resume
-  re-orients it into a fresh 100+-tool pass; resume only to fix a real error, not
+  re-orients it into a fresh 100+-tool pass; never resume a finished one (rule 5), not
   to add scope). Do small greps/reads/edits/ssh-checks INLINE; spawn an agent only
   for genuinely bulk work. Never resume an agent that self-spins on follow-ups it
   invented (background notifications are never user input); TaskStop a looping one.
-  No redundant/overlapping agents; reuse via SendMessage over respawn; one agent
+  No redundant/overlapping agents; fresh agent + handoff over resume (rule 5); one agent
   per build tree. **MODEL POLICY (marth 2026-09-06 — SUPERSEDES the older "cheap
   workers" rule, which said Sonnet should do the build grind):**
   - **SONNET 5.5 WRITES MOST CODE (marth 2026-09-30; supersedes the 2026-09-06 "Opus agent writes
@@ -392,12 +392,12 @@ before it was minted; a config problem that was a code problem). Also pass Opus 
 has already given — e.g. do NOT argue from loot arrival counts or travel/arrival ratios; a follower walking
 past loot during an ordinary follow produces arrival-shaped lines that prove nothing.
 
-**5. REVIEW FINDINGS GO BACK TO THE AGENT THAT WROTE THE PATCH, via SendMessage — never a fresh agent.**
-marth: *"If the same patch has more issues it would make sense to reuse the same agent for the iterations."*
-The author already holds the file context, the symbol verifications and the reasoning; a fresh agent
-re-orients from zero over the same files (measured cost of getting this wrong: 173k / 224k / 108k subagent
-tokens re-deriving what the author already knew). This IS the sanctioned resume case under the anti-drip-feed
-rule above — applying review findings is "fixing a real error", not adding scope. A resumed agent does NOT
-re-read its original brief, so the message must still carry the hard rules (verify symbols, CI-green on your
-own SHA, no merge/tag/force-push, the file boundary). Spawn a NEW agent only for a genuinely different patch,
-a different repo/tree, or work the author was never briefed on — and never two agents in one build tree.
+**5. FIX ROUNDS AND RE-CHECKS GO TO A FRESH AGENT WITH A HANDOFF (marth 2026-11-11, confirmed 2026-11-24: "Are you
+reusing authors again? Didn't we discuss that wasting tokens?"; supersedes the 2026-09-06 rule that findings go back to
+the author).** Never resume an agent that has reported or sat idle: its whole history (often 250k to 600k tokens) is paid
+again. Brief a fresh agent with the branch and SHA, the disk log (tail only), and the findings file, and name exactly what
+remains. SendMessage is only for an agent that is STILL RUNNING and needs a correction or an answer. To make this work:
+authors end their disk log with a short HANDOFF (state, what remains, where), and reviewers write their FULL findings to
+their review log file, not only to the hand-back. Still one agent per build tree, and the fresh brief carries the hard
+rules (verify symbols, local build green on the final SHA, no merge / tag / force-push, the file boundary). Agent logs live
+under /mnt/gaming/modlists/Projects/_agentlogs/, never in /tmp (wiped on reboot).
