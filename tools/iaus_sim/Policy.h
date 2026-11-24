@@ -48,10 +48,8 @@ namespace Sim {
             k.hitsPerSec = (w.Has() ? w.speed : 1.0f) * static_cast<float>(ranged ? F.D->G("fCombatDPSBowSpeedMult", 0.2) : F.D->G("fCombatDPSMeleeSpeedMult", 1.0));
         }
         k.armor = ArmorMitigation(r, F.ArmorOf(o), sp.pieces); k.magicResist = F.ResistOf(o, kAvResistMagic); k.lossPerSec = o.recentDmg / 2.0f;
-        // SIM V3 `burst` (iaus/Fills.cpp:560-587, written with lossPerSec): the gross rate and the largest burst over the LIVE tuning's windows.
-        if (g_v3.burst) { const Tuning& lt = *ActiveTuning();
-            const double gw = std::min(kBurstKeepSec, lt.grossWindowSec > 0.0f ? double(lt.grossWindowSec) : 4.0), mw = std::min(kBurstKeepSec, lt.maxHitWindowSec > 0.0f ? double(lt.maxHitWindowSec) : 8.0);
-            Estimate::BurstReads(o.burst, F.now, gw, mw, lt.burstWindowSec > 0.0f ? lt.burstWindowSec : 0.5, k.grossPerSec, k.maxHit); }
+        // SIM V3 `burst` (iaus/Fills.cpp:587, written with lossPerSec): the gross rate and the largest burst, read at his last sample (World.h SampleBursts).
+        if (g_v3.burst) { k.grossPerSec = o.burstGross; k.maxHit = o.burstMax; }
     }
 
     // Concealment::Prepare: true when a FRESH point is known (younger than 3 s, of the kind asked). At most one pick per 1.5 s;

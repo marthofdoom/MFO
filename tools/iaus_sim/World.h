@@ -121,6 +121,7 @@ namespace Sim {
         float    burstHp = -1.0f;        // his health at the last sample (< 0 = never sampled)
         unsigned burstN = 0;             // hit events on him since the last sample (the sink's g_taken; a hit the party caused is not one, review F1 of b98052f0)
         float    burstFloor = 0.0f;      // the least those hits did: each attacker's own hit estimate after HIS armor / resistance estimate
+        float    burstGross = 0.0f, burstMax = 0.0f;   // Combatant::grossPerSec / maxHit as of his last sample (the game reads them on the lap that samples, Fills.cpp:560-563)
         float dmgDealt = 0;
         int   arrows = 60, potions = 0;
         bool  rangedMode = false, casterMode = false;
@@ -346,7 +347,8 @@ namespace Sim {
     struct Policy;   // decides for one follower when he is served (Policy.h)
     struct Fight; struct Body;
     inline void FillEstimate(const Fight& F, const Body& o, Combatant& k);   // Policy.h: the estimate inputs of one actor, as the game's gather reads them
-    inline constexpr double kBurstKeepSec = 30.0;   // Body::burst keeps its samples this long: past the longer of Tuning::grossWindowSec / maxHitWindowSec at any searched value (4 and 8 s shipped)
+    inline const Tuning*& ActiveTuning();           // Policy.h: the tuning under search (the game's LiveTuning())
+    inline constexpr double kBurstKeepSec = 30.0;   // the longest window the lab honours for Tuning::grossWindowSec / maxHitWindowSec (4 and 8 s shipped; a larger --set value is read as this)
     // ONE HARD BURST FROM DOWN (CALIBRATED, iaus-sim-v4.md 9.2; was 0.30 from the 16 windows of one fight, iaus-sim-v3.md 15.5). The 90th
     // percentile of the field's health-loss WINDOWS on followers (a window = the drop between two worker samples around a foe's hit, 0.12 to
     // 0.55 s: one burst, whatever it holds: several events, riders, a power attack, a spell) is 34.5 % of the target's health: 139 windows of
@@ -715,6 +717,9 @@ namespace Sim {
             ++x.burstN; if (std::isfinite(est) && est > 0.0f) x.burstFloor += est;
         }
         void SampleBursts() {
+            const Tuning& lt = *ActiveTuning();
+            const double gw = std::min(kBurstKeepSec, lt.grossWindowSec > 0.0f ? double(lt.grossWindowSec) : 4.0), mw = std::min(kBurstKeepSec, lt.maxHitWindowSec > 0.0f ? double(lt.maxHitWindowSec) : 8.0);
+            const double bw = lt.burstWindowSec > 0.0f ? double(lt.burstWindowSec) : 0.5;
             for (Body& x : b) {
                 if (!x.alive) continue;
                 if (x.burstHp >= 0.0f) {
@@ -722,7 +727,11 @@ namespace Sim {
                     if (std::isfinite(gross) && gross > 0.0f) x.burst.push_back({ now, gross });
                 }
                 x.burstN = 0; x.burstFloor = 0.0f; x.burstHp = x.c.hp;
-                std::erase_if(x.burst, [&](const MFO::Iaus::Estimate::BurstSample& s) { return now - s.t > kBurstKeepSec; });
+                if (x.burst.empty()) { x.burstGross = x.burstMax = 0.0f; continue; }
+                // the reads, once per sample (Fills.cpp:560-563: pruned past the longer window, then BurstReads at the sample's own time). Done HERE and not
+                // per snapshot: an oracle rollout builds a snapshot per follower lap, and BurstReads is quadratic in the samples it holds.
+                std::erase_if(x.burst, [&](const MFO::Iaus::Estimate::BurstSample& s) { return now - s.t > (std::max)(gw, mw); });
+                MFO::Iaus::Estimate::BurstReads(x.burst, now, gw, mw, bw, x.burstGross, x.burstMax);
             }
         }
         // returns the health actually removed

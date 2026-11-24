@@ -677,14 +677,14 @@ Mirror, behind the new v3 switch `burst` (`Data.h`):
 
 - `World.h Body::burst`: his gross damage per sampled lap. One sample every `TM::pump` (the game samples every actor on each follower's lap, at least `kLossMinDtSec` 0.10 s apart, and a lap is served every 133 ms). The lap maths is the game's own `Estimate::LapGross`: a lap with a hit event did at least what the attackers' estimates say, a lap with none is its net drop.
 - `NoteHit` is the hit sink: a foe's weapon blow, spell impact or bash on a follower or the player. A hit the party caused is not an event (native review F1). The floor is the attacker's own hit estimate after the target's armor or resistance estimate, as `Fills.cpp:530-539` computes it.
-- `Policy.h FillEstimate` fills `grossPerSec` and `maxHit` through `Estimate::BurstReads` over the live tuning's windows.
+- `grossPerSec` and `maxHit` are read through `Estimate::BurstReads` over the live tuning's windows ONCE PER SAMPLE (`World.h SampleBursts`), as the game reads them on the lap that samples (`Fills.cpp:560-563`), and `Policy.h FillEstimate` copies them into the snapshot. The first cut read them per snapshot, which cost an oracle fight 60 percent more (`BurstReads` is quadratic in the samples and a rollout builds a snapshot per lap). The follow-up commit moved the read: the mirror now costs about 10 percent on an IAUS run and 2 percent on an oracle fight (measured, one core, healer).
 - `Tune.h`: the six scalars by the game's own names, so a found value ships. The driver's `GLOBALS` searches `t.dyingAllyHp`, `t.dyingHitsToDown`, `t.urgencyHitsDiv`. The three windows are sized from the game's lap cadence and are not searched: the lab samples every 133 ms whatever the party size, the game every 133 ms times the party, so a window found in the lab would be wrong for a party of ten (principle 9).
 
 No other `native/iaus` Fact was added in `a46d1893..main`. Not mirrored: the five 11-17f cast-layer scalars (5.2) and the twelve loot rows (3.1).
 
-Proof the knobs are live (healer and evoker, seed 1): baseline 75.18, `t.dyingHitsToDown=3` 75.49, `t.urgencyHitsDiv=8` 75.12, `t.grossWindowSec=1` 74.91. With `--v3 burst=off`: 73.62 with and without the knobs, which is the binary before the change. A CLI check holds all of that.
+Proof the knobs are live (healer and evoker, seed 1, on the first commit): baseline 75.18, `t.dyingHitsToDown=3` 75.49, `t.urgencyHitsDiv=8` 75.12, `t.grossWindowSec=1` 74.91. With `--v3 burst=off`: 73.62 with and without the knobs, which is the binary before the change. On the branch head (after the hit table changed the world): 78.71, with both knobs moved 78.78, and 78.67 with the switch off whatever the knobs say. A CLI check holds that.
 
-Baseline: 4,099 of 17,269 metrics move. U +0.18 mean over the 90 class and bracket rows (-2.24 to +5.93), +0.09 over the 15 natural rows. Evoker +1.14, mage-off +1.09. Thief and ranged 0.00 (no healer in their fights changes a pick). The v2 baseline: 0 changed.
+Baseline: 4,099 of 17,269 metrics move. U +0.18 mean over the 90 class and bracket rows (-2.24 to +5.93), +0.09 over the 15 natural rows. Evoker +1.14, mage-off +1.09. Thief and ranged 0.00 (no healer in their fights changes a pick). The v2 baseline: 0 changed. The follow-up (reads at the sample instead of at the snapshot, so a read is up to 133 ms older) moves 1,415 metrics by small amounts: U 0.00 mean over the 90 rows (-1.66 to +1.78).
 
 A modelling limit to know: the lab's attacker estimates are much closer to the real hit than the game's (the game's read 2 to 6 times under, 9.2), so the lab's floor binds more often than the game's. The burst reads agree in shape, not to the point.
 
@@ -735,7 +735,7 @@ The generator, runner and watcher of rounds 1 and 2 lived in `/tmp` and are gone
 
 ### 9.6 Checks, and what was not run
 
-Run on the head commit: the sim builds. `SIM_CLITEST=1 run.sh`: see the report for the final line. `test_tune_driver.py`: 30 pass. `live/test_live.py`: 17 pass with `SIM_BIN`. Determinism: the v3 baseline is byte-identical at 1 and 16 threads, and a gap dump's `GAP*` and `ORC*` lines are identical at 1 and 16 threads. Both baselines regenerated where they moved, with the diff explained in 9.1 and 9.2. The v2 baseline never moved.
+Run on the head commit: the sim builds. `SIM_CLITEST=1 run.sh` with `SIM_EVIDENCE` set: CLI-CHECKS PASS, no check failed or skipped. The suite takes about 18 minutes on 8 cores now, against under 4 before: three of its checks write a results file, which runs the automatic gap pass with the full oracle on six mage fights, and with the lighter hit table those fights are longer. `test_tune_driver.py`: 30 pass. `live/test_live.py`: 17 pass with `SIM_BIN`. Determinism: the v3 baseline is byte-identical at 1 and 16 threads, and a gap dump's `GAP*` and `ORC*` lines are identical at 1 and 16 threads. Both baselines regenerated where they moved, with the diff explained in 9.1 and 9.2. The v2 baseline never moved.
 
 NOT run, each a listed pre-tune step with its command:
 
