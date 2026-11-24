@@ -571,6 +571,17 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS:
             self.assertIn('"%s"' % n, tune_h, n)   # every searched row is one `--set` reaches (Tune.h kLootKnobsF / kLootKnobsI)
 
+    def test_loot_gate_constants_mirror_native(self):
+        # three numbers the lab cannot include (they sit in engine-typed code): Loot.h Rules against native
+        here = os.path.dirname(os.path.abspath(T.__file__))
+        native = open(os.path.join(here, "..", "..", "native", "logistics", "LootTravel_internal.h"), encoding="utf-8").read()
+        lab = open(os.path.join(here, "Loot.h"), encoding="utf-8").read()
+        for nat, mine in (("kPassMaxGapSec", "passMaxGapSec"), ("kPassSlackU", "passSlackU"), ("kGateFloorBand", "gateFloorU")):
+            a = re.findall(r"constexpr float\s+%s\s*=\s*([0-9.]+)f;" % nat, native)
+            b = re.findall(r"\b%s = ([0-9.]+)f" % mine, lab)
+            self.assertEqual((len(a), len(b)), (1, 1), nat)
+            self.assertEqual(float(a[0]), float(b[0]), nat)
+
     def test_loot_episode_command_and_key(self):
         d = tempfile.mkdtemp()
         T.A = types.SimpleNamespace(bin=os.path.join(d, "sim"), out=d, builtin_worth=None, loot_places="")

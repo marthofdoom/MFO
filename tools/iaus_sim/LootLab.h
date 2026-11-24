@@ -33,12 +33,13 @@ namespace Sim::Loot {
         int pstage = 0; double pAt = 0, lootStart = 0, phaseStart = 0, quietSince = -1, combatStart = -1, tWave = -1; EnvPoint pGoal; int pSrc = -1; bool waved = false;
         std::vector<std::uint32_t> corpsed; double downs0 = 0; int fights = 0; bool stopAfterFight = false, lostFight = false; double doorOpenAt = -1;   // doorOpenAt: the player unlocks and opens every locked door then (a scenario)
         std::vector<signed char> forced; int decisions = 0;   // the loot oracle's forced options, by decision number (beyond the list: the game decides)
+        std::function<void(Episode&, double)> playerScript;   // a SCENARIO's own player (Scenarios(): the pass rows). It sets his place each step with PutPlayer, whatever the mesh says, and replaces the plan. Never set by an ordinary episode
         std::vector<std::pair<int, int>> skipSrc;             // (follower, source) the oracle told him not to walk to
 
         Episode() = default;
         Episode(const Episode& o) { *this = o; }
         Episode& operator=(const Episode& o) { F = o.F; W = o.W; sp = o.sp; R = o.R; pstage = o.pstage; pAt = o.pAt; lootStart = o.lootStart; phaseStart = o.phaseStart; quietSince = o.quietSince; combatStart = o.combatStart; tWave = o.tWave; pGoal = o.pGoal; pSrc = o.pSrc; waved = o.waved;
-            corpsed = o.corpsed; downs0 = o.downs0; fights = o.fights; stopAfterFight = o.stopAfterFight; lostFight = o.lostFight; doorOpenAt = o.doorOpenAt; forced = o.forced; decisions = o.decisions; skipSrc = o.skipSrc; Fix(); return *this; }
+            corpsed = o.corpsed; downs0 = o.downs0; fights = o.fights; stopAfterFight = o.stopAfterFight; lostFight = o.lostFight; doorOpenAt = o.doorOpenAt; forced = o.forced; decisions = o.decisions; skipSrc = o.skipSrc; playerScript = o.playerScript; Fix(); return *this; }
         void Fix() { W.Fp = &F; W.force = nullptr; if (sp.wide) W.force = [this](int fi, int si, Cat c) { (void)fi; (void)si; (void)c; const int n = decisions++; return n < static_cast<int>(forced.size()) ? static_cast<int>(forced[Z(n)]) : -1; }; }
 
         [[nodiscard]] const SimEnv& E() const { return *F.env; }
@@ -116,8 +117,10 @@ namespace Sim::Loot {
             W.Log("[wave] %zu foes arrive", specs.size());
         }
 
+        void PutPlayer(const EQ::Vec3& p) { Body& pl = F.b[0]; pl.c.x = p.x; pl.c.y = p.y; pl.c.z = p.z; EQ::Vec3 on; if (const auto tri = EQ::NearestTri(View(), p, 300.0f, on); tri >= 0) pl.nav.tri = tri; }
         // ── the player's script (MODEL: what marth's complaints name. He stands, walks on, opens a container, loots too, or stands with his back to it) ──
         void PlayerStep() {
+            if (playerScript) { playerScript(*this, F.now - lootStart); return; }
             Body& pl = F.b[0]; const double t = F.now - lootStart; const float walk = 0.45f * pl.spec->run;
             if (doorOpenAt >= 0 && t >= doorOpenAt) { doorOpenAt = -1; const EQ::View v = View(); for (std::size_t i = 0; i < F.doors.size(); ++i) if (F.doors[i].state == EQ::DoorState::Locked) { const EQ::Vec3 at = EQ::Centroid(v, F.doors[i].tri); F.OpenDoor(static_cast<std::int32_t>(i)); W.DoorEvent(at); W.Ev("player opened a locked door"); } }
             auto go = [&](const EnvPoint& g, float speed) { Fight::Face(pl, g.p.x, g.p.y); F.Move(pl, g.p.x, g.p.y, speed, false, nullptr, &g); return std::hypot(pl.c.x - g.p.x, pl.c.y - g.p.y) < 60.0f; };
@@ -225,6 +228,7 @@ namespace Sim::Loot {
             static const MFO::Iaus::LootTuning kShipped; const MFO::Iaus::LootTuning* liveT = W.T; const bool liveWide = W.oracleWide; W.T = &kShipped; W.oracleWide = false;
             std::vector<FState> ref; for (const FState& f : W.fs) { FState g; g.ci = f.ci; g.who = f.who; g.thief = f.thief; g.inv = f.inv0; g.inv0 = f.inv0; ref.push_back(std::move(g)); }
             std::vector<std::vector<Cat>> plans, wide; for (const FState& f : ref) plans.push_back(W.Plan(f, 1)); W.oracleWide = true; for (const FState& f : ref) wide.push_back(W.Plan(f, 1)); W.oracleWide = false;
+            for (const Src& s : W.src) t.maxSrcLegs = std::max<long>(t.maxSrcLegs, s.dispatches);
             t.roadTaken += t.taken;
             for (std::size_t i = 0; i < W.src.size(); ++i) { const Src& s = W.src[i]; const int si = static_cast<int>(i);
                 for (const Stack& st : s.items) { if (st.count <= 0) continue; const ItemDef& d = Items()[Z(st.item)]; const std::vector<Stack> one{ st }; Cat via = Cat::kCount; bool carry = false;
