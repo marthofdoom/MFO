@@ -1328,7 +1328,7 @@ namespace MFO::Logistics {
                     // GATED verdict, no cone, nothing shared with other followers.
                     bool feedStuck = true;   // false: he closed ground since his previous block (F3), not stuck evidence
                     if (ab.id) {
-                        g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
+                        g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos, now };
                         spdlog::info("[loot] {:08X} target {:08X} ACTOR-BLOCKED -- Movement Blocked {:.1f}s, "
                                      "actor {:08X} {:.0f} u in front: REORDER (item kept, later in his list, "
                                      "items away from the blocker first), not a gate", id, tref->GetFormID(),
@@ -1339,7 +1339,7 @@ namespace MFO::Logistics {
                         // 11-17g (marth: "most loot was never blocked at all"): a 3 s Movement Blocked is a GATE only when a REAL obstacle stands
                         // on the way (FindGateObstacle: locked door / activator, the reader the door rescue also uses). Otherwise it is a bump /
                         // repath: nothing recorded against the target or its cone, and stuck evidence only when he closed no ground since his
-                        // previous block (NoteBlockGround); no ground across two blocks defers the target like an actor block (a reorder).
+                        // previous block (NoteBlockGround); no ground across two blocks defers the target like an actor block (a reorder); the SAME target twice is a stall strike (N2).
                         const RE::NiPoint3 bp = blockPos ? *blockPos : a_follower->GetPosition();
                         const bool real = FindGateObstacle(a_follower, tref, bp).Any();
                         const BlockGround ground = NoteBlockGround(id, tref->GetFormID(), bp, tref->GetPosition(), now);
@@ -1372,8 +1372,17 @@ namespace MFO::Logistics {
                             feedStuck = false;
                             StuckAtOriginResetRun(id);   // progress breaks the 'consecutive' run
                         } else {
-                            if (ground == BlockGround::NoGround) {
-                                g_actorDefer[id] = ActorDefer{ tref->GetFormID(), 0u, bp };
+                            if (ground == BlockGround::NoGroundSame) {
+                                // N2: the SAME item blocked again with no ground closed: a reorder only moves it later in a list it may be alone
+                                // in (it was re-dispatched at once, 27 legs for one potion, lab freeze-1117g). That is a stall on it: a strike
+                                // (blocklist; the 2nd is sticky), and stuck evidence still.
+                                MarkTravelStalled(tref->GetFormID(), now);
+                                spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and NO ground closed "
+                                             "on the SAME item since his previous block: stall strike (blocklisted), stuck evidence, not gated",
+                                             id, tref->GetFormID(), held);
+                                skipWhy = "BLOCKED, no obstacle, no ground closed on the same item (stall strike)";
+                            } else if (ground == BlockGround::NoGround) {
+                                g_actorDefer[id] = ActorDefer{ tref->GetFormID(), 0u, bp, now };
                                 spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and NO ground closed "
                                              "since his previous block: REORDER (item kept, later in his list), stuck evidence, not gated",
                                              id, tref->GetFormID(), held);

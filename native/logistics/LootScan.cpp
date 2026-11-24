@@ -846,6 +846,9 @@ namespace MFO::Logistics {
                     // keeps the ref IN THE RUNNING: it sorts to the back, and the
                     // in-range grown-grab path above never consults this list.
                     if (TravelFailedRecently(rid, a_now))                          continue;
+                    // N2: an item an ACTOR / no-ground block deferred THIS tick is not re-dispatched this tick (a lone candidate was retargeted at
+                    // once, so the reorder reordered nothing). Next tick it is his again, tier 2.
+                    if (auto dd = g_actorDefer.find(a_follower->GetFormID()); dd != g_actorDefer.end() && dd->second.item == rid && dd->second.at == a_now) continue;
                     // ONE FOLLOWER PER TARGET: another follower's slot is already walking to it (no blocklist; it frees when that leg ends).
                     if (df > kArrivalDist && TargetedByOtherSlot(rid, a_follower->GetFormID())) continue;
                     // Clutter is exempt from the bubble (IsClutterCat, above).

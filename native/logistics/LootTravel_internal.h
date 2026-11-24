@@ -606,7 +606,8 @@ namespace MFO::Logistics {
         // Same target: his block point is no more than kFarArrivalProgress nearer to it than last time. Another target: the block point
         // barely moved (within LootTuning::gateRepeatU). No previous block (or one older than kBlockMemory) = First. No timer: the memory only
         // bounds a stale record.
-        enum class BlockGround { First, Closed, NoGround };
+        // NoGroundSame (N2): no ground closed and it is the SAME target as the previous block -- a stall on that item, not a reorder candidate.
+        enum class BlockGround { First, Closed, NoGround, NoGroundSame };
         struct LastBlock { RE::FormID target = 0; RE::NiPoint3 pos{}; float short_ = 0.0f; Clock::time_point at{}; };
         constexpr auto kBlockMemory = std::chrono::seconds(90);
         inline std::unordered_map<RE::FormID, LastBlock> g_lastBlock;
@@ -618,7 +619,7 @@ namespace MFO::Logistics {
                 const LastBlock& p = it->second;
                 const bool closed = p.target == a_target ? cur.short_ < p.short_ - kFarArrivalProgress
                                                          : p.pos.GetDistance(a_blockPos) > Iaus::DefaultLootTuning().gateRepeatU;
-                r = closed ? BlockGround::Closed : BlockGround::NoGround;
+                r = closed ? BlockGround::Closed : p.target == a_target ? BlockGround::NoGroundSame : BlockGround::NoGround;
             }
             g_lastBlock[a_follower] = cur;
             return r;
@@ -772,7 +773,7 @@ namespace MFO::Logistics {
         // sort after the ones leading away, so two jammed followers each turn
         // around. Erased when the deferred item's turn comes (it is dispatched
         // again), when he has no excursion, and on revert. Worker-only, no lock.
-        struct ActorDefer { RE::FormID item = 0; RE::FormID blocker = 0; RE::NiPoint3 blockerPos{}; };
+        struct ActorDefer { RE::FormID item = 0; RE::FormID blocker = 0; RE::NiPoint3 blockerPos{}; Clock::time_point at{}; };   // at (N2): the tick that set it
         inline std::unordered_map<RE::FormID, ActorDefer> g_actorDefer;
 
         // THE candidate order (review R1). Every key -- failed/gated, the actor-
