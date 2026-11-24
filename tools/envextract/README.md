@@ -177,6 +177,10 @@ Vanilla masters (Skyrim, Update, Dawnguard, HearthFires, Dragonborn), run on the
   links left by an override of the neighbour). Geometry: the linked edge is within 4 units of the target
   triangle for 76 percent and within 32 units for 97.5 percent (cell-border meshes are not vertex-snapped; the
   rest are kind 1/2 mesh-to-mesh links inside a cell, which need not be geometrically adjacent).
+* LoreRim (3501 plugins, profile Ultra): 41319 NAVM records, 59 deleted, 41258 decoded, 0 failures; internal
+  neighbours 99.992 percent reciprocal; external links 335,899 with the target present 100 percent and a reverse
+  link 99.68 percent; door flag versus door rows 6843 agree, 17 flag-only; water bit 98.5 percent of flagged
+  triangles below the water height.
 * No independent NVNM reader is installed on this machine (no xEdit for Skyrim, no pyffi, no Mutagen), so the
   cross-check is the data's own redundancy: size consumed to the byte, door bit versus door rows, link bits versus
   link rows, reciprocal neighbours with matching geometry, water bit versus water height. Layout from the
