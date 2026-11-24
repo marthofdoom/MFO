@@ -244,6 +244,18 @@ namespace MFO::Iaus {
         return d;
     }
 
+    std::size_t TopRanked(const Decision& d, std::span<const Candidate> cands, std::array<RankedAction, 3>& out) {
+        std::size_t n = 0;
+        const auto put = [&](const Scored& s) {
+            if (n >= out.size() || s.idx >= cands.size()) return;
+            const Candidate& c = cands[s.idx];
+            out[n++] = RankedAction{ c.family, c.scrollOf, c.form, c.target, s.score, c.f.reach, c.f.meleeRange, c.f.sight };
+        };
+        for (const Scored& s : d.ranked) if (s.running) { put(s); break; }
+        for (const Scored& s : d.ranked) if (!s.running) put(s);
+        return n;
+    }
+
     int DecidePosture(const Mind& m, std::span<const Candidate> cands, const Profile& p, const Tuning& t,
                       std::uint8_t rank, float* outScore) {
         int bestIdx = -1;

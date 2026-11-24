@@ -26,6 +26,8 @@
 #include <string>
 #include <vector>
 
+int MoveRows(const char* a_golden, bool a_write);   // move_rows.cpp: the movement pass (S1)
+
 using namespace MFO::Iaus;
 
 namespace {
@@ -2897,6 +2899,7 @@ int main() {
     ConsumablesWorth();
     LootNeedScores();
     SeatRowRules();
+    g_failed += MoveRows(MOVE_GOLDEN, false);
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }
