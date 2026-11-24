@@ -1,0 +1,17 @@
+# One room cut into two navmeshes down the middle, a portal that is closed, water and a preferred path. (the loader's link kinds)
+nopool
+class fixture_open
+map
+################
+#P.....~~......#
+#......~~......#
+#==============#
+#......~~....F.#
+#......~~......#
+#####p##########
+#####q##########
+#......#########
+################
+end
+seam 8
+portal p q

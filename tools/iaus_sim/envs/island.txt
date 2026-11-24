@@ -1,0 +1,11 @@
+# Two floors that nothing joins: the second is an island. (island refusal)
+nopool
+class fixture_island
+map
+#####################
+#P.......###........#
+#........###........#
+#........###...F....#
+#........###........#
+#####################
+end

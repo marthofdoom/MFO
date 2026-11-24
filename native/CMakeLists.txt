@@ -107,6 +107,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Fills.cpp
     iaus/SwingSeq.cpp
     iaus/Hide.cpp
+    iaus/EnvQuery.cpp
+    iaus/PathSearch.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/PotionFx.cpp

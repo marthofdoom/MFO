@@ -13,6 +13,7 @@
 #include "iaus/Generate.h"
 #include "iaus_sim/Load.h"
 #include "iaus_sim/Detect.h"
+#include "iaus_sim/Env.h"       // SIM V4: the environment under a fight (null in v2 / v3: nothing below reads it)
 
 #include "iaus/Reach.h"
 #include "iaus/Estimate.h"    // SIM V3 `burst`: LapGross / BurstReads, the game's own pure lap maths
@@ -21,6 +22,16 @@
 #include "iaus_sim/Playstyles.h"
 
 namespace Sim {
+
+    // SIM V4 (iaus_sim/EnvWorld.h, included at the end of this file): what a fight with an environment calls instead of the plane.
+    struct Fight; struct Body;
+    inline void EnvMove(Fight& F, Body& x, float tx, float ty, float speed, bool away);
+    inline bool EnvSees(const Fight& F, const Body& a, const Body& o);
+    inline bool EnvSeesFrom(const Fight& F, const Body& who, float px, float py, const Body& o);
+    inline bool EnvStandable(const Fight& F, const Body& who, float px, float py);
+    inline void EnvAdopt(Fight& F, Body& x);
+    inline void EnvShove(Fight& F, Body& x, float dx, float dy);
+    inline void EnvStep(Fight& F);
 
     // ── timing (seconds). MODEL values unless a source is named; every row is in the doc's model table ──
     struct TM {
@@ -147,13 +158,14 @@ namespace Sim {
         // ── SIM V3 (iaus-sim-v3.md). All of it is inert while its switch is off ──
         bool   perchPath = false; double climbAt = -1e9;             // height: his ledge has a way up / a follower: the last step he was on that way (the climb MODEL, Brain)
         bool   airborne = false, perch = false;                      // height: on the wing (a dragon's circuit) / standing on a ledge (c.z holds the height)
-        float  fcx = 0, fcy = 0, fr0 = 0, frFar = 0, fAlt = 0, fTh0 = 0, fDir = 1; double fT0 = 0, fT = 12;   // the circuit: centre, start radius, far radius, altitude, start bearing, turn sense, take-off time, air time
+        float  fcx = 0, fcy = 0, fr0 = 0, frFar = 0, fAlt = 0, fTh0 = 0, fDir = 1, fZ0 = 0; double fT0 = 0, fT = 12;   // the circuit: centre, start radius, far radius, altitude, start bearing, turn sense, take-off time, air time
         double claimAt = 0, claimUntil = 0;                          // delivery: the cast's claim was made at / its charge begins at (the wait between is the claim-to-fire latency)
         bool   ctrlLive = false;                                     // delivery: his combat controller is active (the engine's detection has seen a foe)
         bool   lofWaited = false, castStarted = false;               // lof: this cast has been held at least once (one count per cast) / its 0x06 start test has passed
         double strafeUntil = 0; float sgx = 0, sgy = 0;              // stance: a held caster's side step goal
         struct Stream { bool live = false; int spell = -1; std::uint32_t target = 0; double end = 0, nextBeat = 0; bool iaus = false, beats = false; } stream;   // hands: a concentration stream on his left hand
         double reDrawUntil = 0;                                      // hands: his two-handed weapon / bow is being drawn again until then
+        Nav    nav;                                                  // SIM V4: his triangle and his route (Env.h). Untouched without an environment
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
     };
 
@@ -249,6 +261,16 @@ namespace Sim {
         // AREAS: seconds an area of his was up, foe-seconds inside his hostile area, ally-seconds inside it, seconds he stood outside his own protective one, casts of an area spell while one of his was still up.
         double areaUpSec = 0, areaFoeSec = 0, areaAllySec = 0, areaOutSec = 0; long areaRecast = 0, areaOwnCasts = 0;
         double minTgtDist = 1e9; long strafes = 0;   // the nearest he came to his target (the last fight's value is kept by Agg as a sum)
+        // ── SIM V4: the odd-pathing tallies of the subject (iaus-sim-v4.md 2.5; EnvWorld.h counts them). All 0 without an environment ──
+        // legs begun / of those with no route to the goal at the pick / ended BLOCKED / of those within reblockU of his previous block / ended STUCK /
+        // reversals (a new leg heading back within oscSec) / drops taken / doors opened / routes asked. Seconds stuck, seconds with his attack on a foe he
+        // can neither reach nor see, units walked. detour = walked over straight line, per leg that had a route (sum, n, and a histogram in quarters for p90).
+        long   pathLegs = 0, pathUnreach = 0, pathBlocked = 0, pathReblock = 0, pathStuckLegs = 0, pathOsc = 0, pathDrops = 0, pathDoors = 0, pathPlans = 0, detourN = 0, detourHist[16] = {};
+        double pathStuckSec = 0, pathHoldUnreachSec = 0, pathWalked = 0, detourSum = 0;
+        long   envBad = 0, envStuckForever = 0;   // EVERY body: steps with a NaN or off-mesh position (a bug, must be 0) / a follower stuck 30 s on end
+        // SIM V4 cast starts (iaus-sim-v4.md 5): claims on a row no seat starts, never-started releases (short / long window), spells held off for the fight, casts a stagger or a control effect ended
+        long   castUnseated = 0, castNeverShort = 0, castNeverLong = 0, castHeldOff = 0, castInterrupted = 0, foeCastInterrupted = 0, castOccRelease = 0; double neverSec = 0;
+        long   apprDrops = 0, apprBlocked = 0;    // offense approach: ENGINE DROPPED endings (a timed backoff each) / foes blocked for the fight past the drop cap
         std::vector<std::string> killOrder;
     };
 
@@ -366,6 +388,10 @@ namespace Sim {
         std::vector<Body> b;
         std::vector<Ctl> ctl;
         std::vector<Occluder> occ;
+        // SIM V4: the environment (null = the plane of v2 / v3), this fight's door states and their stamp (every route cache keys on it)
+        const SimEnv* env = nullptr; std::vector<EQ::Door> doors; std::uint64_t doorStamp = 0; double sanityAt = 0;
+        void OpenDoor(std::int32_t i) { const std::uint32_t id = doors[static_cast<std::size_t>(i)].id; std::uint64_t h = 0x9E3779B97F4A7C15ULL;
+            for (EQ::Door& d : doors) { if (d.id == id) d.state = EQ::DoorState::Open; h = SimEnv::Mix(h ^ static_cast<std::uint64_t>(d.state)); } doorStamp = h; }
         std::vector<Shot> shots;
         std::vector<Area> areas;                   // SIM V3: the live areas
         Rng V;                                     // SIM V3: the draws v3 adds (flight path, stream length), never R
@@ -415,6 +441,7 @@ namespace Sim {
         // iaus/Candidates.cpp:344). With every z at 0 (v2, or a fight with nobody in the air) it is the 2D value of v2, bit for bit.
         [[nodiscard]] static float Dist(const Body& a, const Body& o) { return a.c.z == 0.0f && o.c.z == 0.0f ? std::hypot(a.c.x - o.c.x, a.c.y - o.c.y) : std::hypot(a.c.x - o.c.x, a.c.y - o.c.y, a.c.z - o.c.z); }
         [[nodiscard]] bool Sees(const Body& a, const Body& o) const {
+            if (env) return EnvSees(*this, a, o);   // SIM V4: three rays against the place's geometry
             for (const Occluder& oc : occ) {   // segment / circle
                 const float dx = o.c.x - a.c.x, dy = o.c.y - a.c.y, l2 = dx * dx + dy * dy; if (l2 < 1) continue;
                 const float tt = std::clamp(((oc.x - a.c.x) * dx + (oc.y - a.c.y) * dy) / l2, 0.0f, 1.0f);
@@ -513,12 +540,13 @@ namespace Sim {
         // a straight walk from him that stops at the first solid thing; never beside a foe, never a walk shorter than 160, inside the
         // leash. HIDE: every listed foe's line to the point is cut by geometry, the nearest such point wins. FLEE: at least 150 units
         // farther from the nearest foe than he is now, the farthest from the foes wins.
-        [[nodiscard]] bool PointHidden(float px, float py, const Body& o) const {
+        [[nodiscard]] bool PointHidden(float px, float py, const Body& o, const Body* who = nullptr) const {
+            if (env) return who && !EnvSeesFrom(*this, *who, px, py, o);   // SIM V4: the same rays, from the point
             for (const Occluder& oc : occ) { const float dx = px - o.c.x, dy = py - o.c.y, l2 = dx * dx + dy * dy; if (l2 < 1) continue;
                 const float tt = std::clamp(((oc.x - o.c.x) * dx + (oc.y - o.c.y) * dy) / l2, 0.0f, 1.0f); if (std::hypot(o.c.x + tt * dx - oc.x, o.c.y + tt * dy - oc.y) < oc.r) return true; }
             return false;
         }
-        [[nodiscard]] bool Standable(float px, float py) const { for (const Occluder& oc : occ) if (std::hypot(px - oc.x, py - oc.y) < oc.r + 40.0f) return false; return true; }
+        [[nodiscard]] bool Standable(float px, float py, const Body* who = nullptr) const { if (env) return who && EnvStandable(*this, *who, px, py); for (const Occluder& oc : occ) if (std::hypot(px - oc.x, py - oc.y) < oc.r + 40.0f) return false; return true; }
         [[nodiscard]] bool ConcealPick(const Body& x, const Ctl& c, bool flee, float& gx, float& gy) const {
             std::vector<const Body*> foes; float nearestNow = 1e9f;
             for (const Body& o : b) if (o.role == Role::Foe && Up(o) && foes.size() < 6) { foes.push_back(&o); nearestNow = std::min(nearestNow, Dist(o, x)); }
@@ -526,12 +554,12 @@ namespace Sim {
             bool have = false; float bestCost = 0, bestFoe = 0;
             for (int i = 0; i < 24; ++i) {
                 const float ang = static_cast<float>(i % 12) * (6.2831853f / 12.0f), want = i < 12 ? 320.0f : 600.0f, ux = std::cos(ang), uy = std::sin(ang);
-                float cost = 0; while (cost + 20.0f <= want && Standable(x.c.x + ux * (cost + 20.0f), x.c.y + uy * (cost + 20.0f))) cost += 20.0f;   // FindEmptySpace: the walk stops at the wall
+                float cost = 0; while (cost + 20.0f <= want && Standable(x.c.x + ux * (cost + 20.0f), x.c.y + uy * (cost + 20.0f), &x)) cost += 20.0f;   // FindEmptySpace: the walk stops at the wall
                 if (cost < 160.0f) continue;
                 const float px = x.c.x + ux * cost, py = x.c.y + uy * cost;
                 if (c.leash > 0.0f && std::hypot(px - b[0].c.x, py - b[0].c.y) > c.leash - 200.0f) continue;
                 float nearest = 1e9f; bool seen = false;
-                for (const Body* o : foes) { nearest = std::min(nearest, std::hypot(o->c.x - px, o->c.y - py)); if (!flee && !PointHidden(px, py, *o)) seen = true; }
+                for (const Body* o : foes) { nearest = std::min(nearest, std::hypot(o->c.x - px, o->c.y - py)); if (!flee && !PointHidden(px, py, *o, &x)) seen = true; }
                 if (nearest < 250.0f) continue;
                 if (flee) { if (nearest < nearestNow + 150.0f) continue; if (!have || nearest > bestFoe) { have = true; gx = px; gy = py; bestFoe = nearest; } }
                 else { if (seen) continue; if (!have || cost < bestCost) { have = true; gx = px; gy = py; bestCost = cost; } }
@@ -550,7 +578,7 @@ namespace Sim {
             bool have = false; float bestCost = 0, bestFoe = 0;
             for (int i = 0; i < 10; ++i) {
                 const float ang = base + kOff[i % 5], want = i < 5 ? 200.0f : 420.0f, ux = std::cos(ang), uy = std::sin(ang);
-                float cost = 0; while (cost + 20.0f <= want && Standable(x.c.x + ux * (cost + 20.0f), x.c.y + uy * (cost + 20.0f))) cost += 20.0f;
+                float cost = 0; while (cost + 20.0f <= want && Standable(x.c.x + ux * (cost + 20.0f), x.c.y + uy * (cost + 20.0f), &x)) cost += 20.0f;
                 if (cost < 160.0f) continue;
                 const float px = x.c.x + ux * cost, py = x.c.y + uy * cost;
                 if (c.leash > 0.0f && std::hypot(px - b[0].c.x, py - b[0].c.y) > c.leash - 200.0f) continue;
@@ -558,7 +586,7 @@ namespace Sim {
                 if (toTarget > targetNow - 100.0f) continue;
                 bool beside = false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && &o != tf && std::hypot(o.c.x - px, o.c.y - py) < 250.0f) { beside = true; break; }
                 if (beside) continue;
-                if (bow) { if (PointHidden(px, py, *tf)) continue; if (!have || cost < bestCost) { have = true; gx = px; gy = py; bestCost = cost; bestFoe = toTarget; } }
+                if (bow) { if (PointHidden(px, py, *tf, &x)) continue; if (!have || cost < bestCost) { have = true; gx = px; gy = py; bestCost = cost; bestFoe = toTarget; } }
                 else if (!have || toTarget < bestFoe) { have = true; gx = px; gy = py; bestCost = cost; bestFoe = toTarget; }
             }
             return have;
@@ -655,7 +683,7 @@ namespace Sim {
             if (n) { cx /= static_cast<float>(n); cy /= static_cast<float>(n); }
             x.airborne = true; x.fcx = cx; x.fcy = cy; x.fr0 = std::max(200.0f, std::hypot(x.c.x - cx, x.c.y - cy)); x.fTh0 = std::atan2(x.c.y - cy, x.c.x - cx);
             x.frFar = std::max(x.fr0 + 500.0f, VU(x, 3, 4000.0f, 11000.0f)); x.fAlt = VU(x, 4, 900.0f, 2400.0f); x.fDir = VP(x, 5, 0.5f) ? 1.0f : -1.0f;
-            x.fT = static_cast<double>(VU(x, 6, 12.0f, 20.0f)); x.fT0 = now; x.airUntil = now + x.fT;
+            x.fT = static_cast<double>(VU(x, 6, 12.0f, 20.0f)); x.fT0 = now; x.airUntil = now + x.fT; x.fZ0 = env ? x.c.z : 0.0f;
         }
         void FlightStep(Body& x) {
             const float u = std::clamp(static_cast<float>((now - x.fT0) / x.fT), 0.0f, 1.0f), sn = std::sin(3.14159265f * u);
@@ -663,6 +691,7 @@ namespace Sim {
             const float nx = x.fcx + r * std::cos(th), ny = x.fcy + r * std::sin(th);
             Face(x, nx + (nx - x.c.x), ny + (ny - x.c.y)); x.c.x = nx; x.c.y = ny; x.movedAt = now; x.ranLast = true;
             x.c.z = x.fAlt * std::clamp(std::min(u, 1.0f - u) * static_cast<float>(x.fT) / 1.5f, 0.0f, 1.0f);
+            if (env) { x.c.outOfMeleeReach = x.c.z > 120.0f + 200.0f; x.c.z += x.fZ0; return; }   // SIM V4: over the ground he took off from
             x.c.outOfMeleeReach = x.c.z > 120.0f + 200.0f;   // CombatSense::OutOfMeleeReach: airborne and |dz| > body height (kNominalBodyHeight 120) + fMeleeReach 200
         }
         // ATTACK SLOTS (ASSUMPTION, iaus-sim-v3.md 3.3): two or more melee attackers on one target stand 50 degrees apart on a ring
@@ -688,7 +717,8 @@ namespace Sim {
                 const PoiseRules& p = D->poise; const auto ri = p.races.find(n.spec->race);
                 n.poiseMax = std::max(0.0f, (ri != p.races.end() ? ri->second : n.spec->mass) * p.baseMult + static_cast<float>(n.spec->pieces) * 6.0f * p.armorMult); n.poise = n.poiseMax;
             }
-            b.push_back(std::move(n)); return b.back();
+            b.push_back(std::move(n)); if (env) EnvAdopt(*this, b.back());   // SIM V4: a body that joins a fight in a place stands on its mesh
+            return b.back();
         }
 
         // ── damage and healing ──
@@ -911,11 +941,12 @@ namespace Sim {
         }
 
         // ── the engine's combat AI (MODEL from the combat style) ──
-        void Move(Body& x, float tx, float ty, float speed) {
+        void Move(Body& x, float tx, float ty, float speed, bool away = false) {   // away: a backpedal or a flight, straight from what he leaves (SIM V4 reads it; the plane does not)
             const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f) return;
             if (x.airborne || x.perch) return;   // SIM V3: on the wing he flies his circuit (FlightStep), on a ledge he stays on it; nothing walks him
             x.ranLast = speed >= 0.9f * x.spec->run;   // MODEL: combat movement is at the engine's RUN speed and a crouched run is still IsRunning (probe P1 logs it); a backpedal is not
             if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait (the crouched run)
+            if (env) { EnvMove(*this, x, tx, ty, speed, away); return; }   // SIM V4: along the mesh (EnvWorld.h)
             const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
             if (arenaR > 0.0f) { const float ax = x.c.x - arenaX, ay = x.c.y - arenaY, ad = std::hypot(ax, ay);   // --space: a wall stops him (backpedal, kite, flee)
                 if (ad > arenaR) { x.c.x = arenaX + ax * arenaR / ad; x.c.y = arenaY + ay * arenaR / ad; } }
@@ -1009,7 +1040,8 @@ namespace Sim {
             sh.dodged = true; if (d->ctl == 0) ++t.dodges;
             const Body* a = Find(sh.src); float ux = 0, uy = 1; if (a) { const float dx = d->c.x - a->c.x, dy = d->c.y - a->c.y, l = std::max(1.0f, std::hypot(dx, dy)); ux = -dy / l; uy = dx / l; }
             if (RP(*d, 12, 0.5f)) { ux = -ux; uy = -uy; }
-            if (Standable(d->c.x + ux * 90.0f, d->c.y + uy * 90.0f)) { d->c.x += ux * 90.0f; d->c.y += uy * 90.0f; IntoRoom(*d, arenaR); d->movedAt = now; d->ranLast = true; }
+            if (env) { EnvShove(*this, *d, ux * 90.0f, uy * 90.0f); d->movedAt = now; d->ranLast = true; }
+            else if (Standable(d->c.x + ux * 90.0f, d->c.y + uy * 90.0f)) { d->c.x += ux * 90.0f; d->c.y += uy * 90.0f; IntoRoom(*d, arenaR); d->movedAt = now; d->ranLast = true; }
             d->act = Act::None; d->hitAt = -1; d->actEnd = now + 0.4;
             if (trace) std::fprintf(trace, "%7.2f  DODGE %s side steps a projectile (avoid threat %.2f)\n", now, d->c.name.c_str(), p);
         }
@@ -1373,7 +1405,7 @@ namespace Sim {
             if (x.spec->dragon) {   // MODEL: 12 s on the wing, 15 s on the ground
                 if (x.airUntil == 0 && x.groundUntil == 0) x.groundUntil = now + RU(x, 25, 6, 14);
                 const bool inAir = g_v3.height ? x.airborne : x.c.outOfMeleeReach;
-                if (inAir && now >= x.airUntil) { x.c.outOfMeleeReach = false; x.airborne = false; x.c.z = 0.0f; x.groundUntil = now + 15; }
+                if (inAir && now >= x.airUntil) { x.c.outOfMeleeReach = false; x.airborne = false; x.c.z = 0.0f; x.groundUntil = now + 15; if (env) { x.c.z = x.fZ0; EnvAdopt(*this, x); } }
                 else if (!inAir && now >= x.groundUntil) { if (g_v3.height) TakeOff(x); else { x.c.outOfMeleeReach = true; x.airUntil = now + 12; } }
             }
             Ctl* c = x.ctl >= 0 ? &ctl[static_cast<std::size_t>(x.ctl)] : nullptr;
@@ -1384,7 +1416,7 @@ namespace Sim {
             if (!threat) return;
             if (now < x.fleeUntil || (x.c.hp < FleeBelow(x) * x.c.hpMax && now >= x.think) || now < x.retreatUntil) {
                 if (now >= x.fleeUntil && now >= x.retreatUntil) { x.fleeUntil = now + RU(x, 26, 4, 7); x.c.fleeing = true; }
-                Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
+                Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run, true); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
                 if (now < x.retreatUntil && x.ctl == 0) t.retreatSec += TM::dt;
                 return;
             }
@@ -1446,7 +1478,7 @@ namespace Sim {
                     float far = want * 1.4f;   // the lab's standoff before card H4
                     if (g_t2.range && c) { const float des = HandRange(x, *c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
                     if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
-                    else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
+                    else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
                     return;
                 }
                 x.casterMode = false;
@@ -1458,7 +1490,7 @@ namespace Sim {
                 const bool far = g_v3.chase && c && c->steerNoApproach && c->steer == tg->c.id;
                 if (far && !los) return;
                 if (!far && (!los || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
-                if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); }
+                if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + RU(x, 30, TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
                     // --point-blank (GMST: the hold time has a minimum DISTANCE, 256, and an absolute minimum, 0.1 s; how the engine blends
@@ -1471,7 +1503,7 @@ namespace Sim {
             }
             if (!hasMelee) return;
             // --foe-styles (Part C): a foe stepping back after its blow (CSCR Fallback Mult) moves away at the back-pedal speed, then re-engages
-            if ((g_foeStyles || g_v3.stance) && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f); return; }
+            if ((g_foeStyles || g_v3.stance) && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); return; }
             // melee
             const float reach = Reach(x);
             if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash
@@ -1479,9 +1511,9 @@ namespace Sim {
             // touch standoff 128 on the foe's reference and the ENGINE paths it, "which is what climbs a tower"). MODEL: a ledge with a way up
             // (FightSpec::perchPath) is climbed once he is within 128 units of the point under it, along a path three times its height (ASSUMPTION: a
             // stair / ramp), at his run speed; he comes down the same way when he turns to another foe (StepWorld). A ledge with no way up stays out of reach.
-            if (c && g_v3.height && g_mirror && tg->perch && tg->perchPath && c->steer == tg->c.id && std::hypot(tg->c.x - x.c.x, tg->c.y - x.c.y) <= 128.0f && x.c.z < tg->c.z) {
+            if (c && !env && g_v3.height && g_mirror && tg->perch && tg->perchPath && c->steer == tg->c.id && std::hypot(tg->c.x - x.c.x, tg->c.y - x.c.y) <= 128.0f && x.c.z < tg->c.z) {
                 x.c.z = std::min(tg->c.z, x.c.z + x.spec->run * TM::dt / 3.0f); x.climbAt = now; x.movedAt = now; if (x.c.z < tg->c.z) return; }
-            else if (c && x.c.z > 0.0f && tg->perch && c->steer == tg->c.id) x.climbAt = now;   // on the ledge with him: he stays up
+            else if (c && !env && x.c.z > 0.0f && tg->perch && c->steer == tg->c.id) x.climbAt = now;   // on the ledge with him: he stays up
             float slotX = tg->c.x, slotY = tg->c.y; if (g_v3.stance) SlotPoint(x, *tg, reach * 0.8f, slotX, slotY);   // SIM V3: attackers spread around their target
             if (d > reach * 0.9f || tg->c.outOfMeleeReach) { if (!tg->c.outOfMeleeReach) Move(x, slotX, slotY, x.spec->run); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f); return; }
             if (now < x.think) { if ((slotX != tg->c.x || slotY != tg->c.y) && std::hypot(slotX - x.c.x, slotY - x.c.y) > 60.0f) Move(x, slotX, slotY, x.spec->run * 0.55f); return; }
@@ -1515,7 +1547,7 @@ namespace Sim {
             const Body* threat = nullptr; { float bd = 1e9f; for (const Body& o : b) if (Up(o) && o.Party() != x.Party()) { const float d = Dist(x, o); if (d < bd) { bd = d; threat = &o; } } }
             if (!threat) return;
             if (now < x.fleeUntil || now < x.retreatUntil) {
-                Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
+                Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run, true); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
                 if (now < x.retreatUntil && x.ctl == 0) t.retreatSec += TM::dt;
                 return;
             }
@@ -1530,10 +1562,10 @@ namespace Sim {
             if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
                 float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
                 if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
-                else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
+                else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
             } else if (c.drawn == PostureKind::Bow) {
                 if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
-                else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f);
+                else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
             } else if (c.drawn != PostureKind::Staff) {   // Melee, Silver, or bare hands (Brain's hasMelee)
                 const float reach = Reach(x);
                 if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }
@@ -1593,6 +1625,7 @@ namespace Sim {
         // --space R: the enclosed fight's disc, set ONCE before the first decision (review F1 of ca46a3e2: it was set in the first StepWorld,
         // after the first Serve at now = 0, so the first decision saw open-space distances). RunFight calls it before its loop.
         void SetArena() {
+            if (!arenaSet && env) arenaSet = true;   // SIM V4: the place is the room
             if (!arenaSet) { arenaSet = true;   // --space R (Part C, MODEL): an enclosed fight is a disc of radius R around the start centroid; whoever starts
                 // outside it starts at its edge (a room: the line of fire is no longer than 2R, backpedal / kiting / flight stop at the wall)
                 const bool enclosed = g_spaceForce >= 0 ? g_spaceForce == 1 : interior;
@@ -1612,7 +1645,7 @@ namespace Sim {
                 if (x.role == Role::Summon && x.airUntil < 0 && now >= -x.airUntil) { x.alive = false; continue; }
                 Regen(x); if (!Up(x)) continue;
                 if (x.airborne) FlightStep(x);   // SIM V3 (height): the circuit, in 3D
-                if (x.ctl >= 0 && x.c.z > 0.0f && now - x.climbAt > 0.25) x.c.z = std::max(0.0f, x.c.z - x.spec->run * TM::dt / 3.0f);   // the climb MODEL: off the way up, he walks down
+                if (!env && x.ctl >= 0 && x.c.z > 0.0f && now - x.climbAt > 0.25) x.c.z = std::max(0.0f, x.c.z - x.spec->run * TM::dt / 3.0f);   // the climb MODEL: off the way up, he walks down
                 if (g_v3.delivery && x.ctl >= 0 && !x.ctrlLive) {   // ASSUMPTION (iaus-sim-v3.md 4.2): the engine's detection activates his controller when a foe stands within 2000 units in his sight, or he is hit
                     if (x.lastAttacker) x.ctrlLive = true; else for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Dist(x, o) < 2000.0f && Sees(x, o)) { x.ctrlLive = true; break; } }
                 if (x.role == Role::Foe && now < x.fleeUntil && Dist(x, b[0]) > 4096.0f) { x.alive = false; ++t.escaped; if (trace) std::fprintf(trace, "%7.2f  ESCAPED %s (%u)\n", now, x.c.name.c_str(), x.c.id); continue; }   // a routed foe past the chase cap has left the fight
@@ -1650,6 +1683,7 @@ namespace Sim {
                     if (x.ctl == 0 && x.act == Act::Block && x.actIaus) t.guardSec += TM::dt;
                     continue; }
                 if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
+            if (env) EnvStep(*this);
             // tallies that integrate over time
             Body& pl = Player(); bool pressed = false; bool anyFoe = false, anyParty = false;
             for (auto& x : b) { if (!Up(x)) continue; if (x.role == Role::Foe) { anyFoe = true; if (x.c.targetId == pl.c.id && Dist(x, pl) < 1500) pressed = true; } else if (x.role == Role::Player || x.role == Role::Follower) anyParty = true; }
@@ -1679,3 +1713,5 @@ namespace Sim {
     };
 
 }
+
+#include "iaus_sim/EnvWorld.h"   // SIM V4: the definitions of the Env* functions declared at the top

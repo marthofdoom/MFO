@@ -95,7 +95,8 @@ namespace Sim {
         [[nodiscard]] bool Same(const Opt& o) const { return ext == o.ext && idx == o.idx && target == o.target && ((!k && !o.k) || (k && o.k && KeyOf(*k) == KeyOf(*o.k))); }
     };
 
-    [[nodiscard]] inline bool SeesFrom(const Fight& F, float ax, float ay, const Body& o) {
+    [[nodiscard]] inline bool SeesFrom(const Fight& F, float ax, float ay, const Body& o, const Body* who = nullptr) {
+        if (F.env) return who && EnvSeesFrom(F, *who, ax, ay, o);   // SIM V4
         for (const Occluder& oc : F.occ) {
             const float dx = o.c.x - ax, dy = o.c.y - ay, l2 = dx * dx + dy * dy; if (l2 < 1) continue;
             const float tt = std::clamp(((oc.x - ax) * dx + (oc.y - ay) * dy) / l2, 0.0f, 1.0f);
@@ -331,11 +332,11 @@ namespace Sim {
             case Ext::ToHealer: { const Body* h = G.Find(o.target); if (!h) return false; return move(h->c.x - 100.0f, h->c.y, 3.0, false); }
             case Ext::GetSight: { const Body* tg = G.Find(o.target); if (!tg) return false;
                 for (float r : { 250.0f, 450.0f, 700.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
-                    if (SeesFrom(G, gx, gy, *tg)) return move(gx, gy, 2.5, false); }
+                    if (SeesFrom(G, gx, gy, *tg, &x)) return move(gx, gy, 2.5, false); }
                 return false; }
             case Ext::ClearLine: { const Body* tg = G.Find(o.target); if (!tg) return false;   // the nearest point that sees him with no friend in the corridor
                 for (float r : { 120.0f, 200.0f, 320.0f }) for (int a = 0; a < 12; ++a) { const float ang = 0.5236f * static_cast<float>(a), gx = x.c.x + r * std::cos(ang), gy = x.c.y + r * std::sin(ang);
-                    if (G.Standable(gx, gy) && SeesFrom(G, gx, gy, *tg) && G.LofClearFrom(x, gx, gy, *tg)) return move(gx, gy, 1.2, false); }
+                    if (G.Standable(gx, gy, &x) && SeesFrom(G, gx, gy, *tg, &x) && G.LofClearFrom(x, gx, gy, *tg)) return move(gx, gy, 1.2, false); }
                 return false; }
             case Ext::Hide: case Ext::Flee: { const bool fl = o.ext == Ext::Flee; float gx = 0, gy = 0; if (c.runPhase != 0 || !G.ConcealPick(x, c, fl, gx, gy)) return false;
                 c.pick.valid = true; c.pick.flee = fl; c.pick.kind = fl ? 1 : 0; c.pick.x = gx; c.pick.y = gy; if (!BeginRun(G, ci, fl, true)) return false; c.commitUntil = G.now + (fl ? 2.0 : 0.3); return true; }

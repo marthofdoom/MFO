@@ -11,6 +11,7 @@
 #include "iaus_sim/StealLab.h"
 #include "iaus_sim/PotionWorth.h"
 #include "iaus_sim/Logistics.h"
+#include "iaus_sim/EnvTest.h"     // SIM V4: --env-test
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
@@ -63,6 +64,10 @@ namespace {
             S(castUnfired); S(castRepeat); S(castDeferred); S(healFullExit); S(unfiredSec); S(capKept); S(selfHealN); S(selfHealLowN); S(healLateN); S(selfHealAtSum); S(healYield); S(firstHitN); S(firstHitSum); S(offPickN); S(offPickDmg); S(offPickCost); S(healPickN); S(healPickSize); S(healPickConc); S(healPickSelf);   // sim mirror batch 11-17
             S(areaUpSec); S(areaFoeSec); S(areaAllySec); S(areaOutSec); S(areaRecast); S(areaOwnCasts); S(strafes);
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
+            // sim v4
+            S(pathLegs); S(pathUnreach); S(pathBlocked); S(pathReblock); S(pathStuckLegs); S(pathOsc); S(pathDrops); S(pathDoors); S(pathPlans); S(detourN); for (int k = 0; k < 16; ++k) S(detourHist[k]);
+            S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever);
+            S(castUnseated); S(castNeverShort); S(castNeverLong); S(castHeldOff); S(castInterrupted); S(foeCastInterrupted); S(castOccRelease); S(neverSec); S(apprDrops); S(apprBlocked);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -146,6 +151,15 @@ namespace {
           m["area.up%"] = 100.0 * s.areaUpSec / up; m["area.foe.s/f"] = s.areaFoeSec / n; m["area.ally.s/f"] = s.areaAllySec / n; m["area.out%"] = pct(s.areaOutSec, s.areaUpSec); m["area.recast%"] = pct(double(s.areaRecast), double(s.areaOwnCasts));
           m["drawnMelee%"] = 100.0 * s.drawnSec[1] / up;
           m["minTgt"] = a.minTgtN ? a.minTgtSum / double(a.minTgtN) : -1; m["strafe/f"] = double(s.strafes) / n; }
+        // SIM V4 (iaus-sim-v4.md 2.5, 5): the six odd-pathing numbers and their parts, the cast starts. Only in a world with a v4 switch on,
+        // so a v2 / v3 run's metric set (and every baseline of it) is what it was.
+        if (g_v4.Any()) { const double up = std::max(1e-9, s.upSec);
+          m["stuck%"] = 100.0 * s.pathStuckSec / up; m["reblock/f"] = double(s.pathReblock) / n; m["osc/min"] = double(s.pathOsc) / mins; m["unreach%"] = pct(double(s.pathUnreach), double(s.pathLegs));
+          m["detour"] = s.detourN ? s.detourSum / double(s.detourN) : -1; { long acc = 0; double p90 = -1; for (int k = 0; k < 16 && s.detourN; ++k) { acc += s.detourHist[k]; if (double(acc) >= 0.9 * double(s.detourN)) { p90 = 1.0 + 0.25 * double(k + 1); break; } } m["detour.p90"] = p90; }
+          m["holdUnreach.s/f"] = s.pathHoldUnreachSec / n; m["blocked/f"] = double(s.pathBlocked) / n; m["stuckLegs/f"] = double(s.pathStuckLegs) / n; m["legs/f"] = double(s.pathLegs) / n; m["plans/f"] = double(s.pathPlans) / n;
+          m["doors/f"] = double(s.pathDoors) / n; m["drops/f"] = double(s.pathDrops) / n; m["walked/f"] = s.pathWalked / n; m["env.bad"] = double(s.envBad); m["env.stuckForever"] = double(s.envStuckForever);
+          m["cs.unseated/f"] = double(s.castUnseated) / n; m["cs.neverShort/f"] = double(s.castNeverShort) / n; m["cs.neverLong/f"] = double(s.castNeverLong) / n; m["cs.heldOff/f"] = double(s.castHeldOff) / n; m["cs.never.s/f"] = s.neverSec / n;
+          m["cs.intr/f"] = double(s.castInterrupted) / n; m["cs.foeIntr/f"] = double(s.foeCastInterrupted) / n; m["cs.occRel/f"] = double(s.castOccRelease) / n; m["appr.drop/f"] = double(s.apprDrops) / n; m["appr.block/f"] = double(s.apprBlocked) / n; }
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
     }
@@ -232,9 +246,16 @@ namespace {
     struct V3Flag { const char* name; bool V3::* m; };
     inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance }, { "sidestep", &V3::sidestep },
                                            { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks }, { "hittail", &V3::hittail }, { "burst", &V3::burst } };
+    // SIM V4: the world's v4 part. " world=v4" when every default switch is on, plus what differs and where the places come from.
+    struct V4Flag { const char* name; bool V4::* m; bool def; };
+    inline constexpr V4Flag kV4Flags[] = { { "env", &V4::env, true }, { "path", &V4::path, true }, { "bodies", &V4::bodies, true }, { "los", &V4::los, true }, { "caststart", &V4::caststart, true }, { "interrupt", &V4::interrupt, true },
+                                           { "drops", &V4::drops, false }, { "foedrops", &V4::foedrops, false } };
+    std::string g_envLabel = "fixtures", g_seats = "today", g_sightTag;
     std::string WorldTag(const char* lead) {
-        if (!g_v3.Any()) return "";
-        std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
+        if (!g_v3.Any() && !g_v4.Any()) return "";
+        std::string o = std::string(lead) + (g_v4.Any() ? "world=v4" : "world=v3");
+        if (g_v4.Any()) { std::string d; for (const V4Flag& f : kV4Flags) if ((g_v4.*(f.m)) != f.def) d += std::string(d.empty() ? "" : ",") + f.name + (f.def ? "=off" : "=on");
+            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) o += "+env=" + g_envLabel; if (g_seats != "today") o += "+seats=" + g_seats; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
         if (!g_mirror) o += "+mirror=off"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
@@ -700,6 +721,7 @@ int main(int argc, char** argv) {
 }
 static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
+    std::string envFile, envSet, envClass; bool envTest = false, envList = false; int pathReport = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
@@ -709,7 +731,24 @@ static int RealMain(int argc, char** argv) {
         for (const T2Flag& f : kT2Flags) if (!std::strcmp(argv[i] + (argv[i][0] == '-' && argv[i][1] == '-' ? 2 : 0), f.name) && argv[i][0] == '-' && i + 1 < argc && (!std::strcmp(argv[i + 1], "off") || !std::strcmp(argv[i + 1], "on"))) { g_t2.*(f.m) = !std::strcmp(argv[++i], "on"); t2Arg = true; break; }
         if (t2Arg) continue;
         // SIM V3 (iaus-sim-v3.md section 2): --world v2|v3, --v3 <name>=on|off[,...], --waiver, --delivery, --deliver-sec, --block-arc
-        if (!std::strcmp(argv[i], "--world") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "v2")) g_v3.AllOff(); else if (!std::strcmp(v, "v3")) g_v3 = V3{}; else { std::fprintf(stderr, "--world v2|v3\n"); return 2; } }
+        if (!std::strcmp(argv[i], "--world") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "v2")) { g_v3.AllOff(); g_v4.AllOff(); } else if (!std::strcmp(v, "v3")) { g_v3 = V3{}; g_v4.AllOff(); } else if (!std::strcmp(v, "v4")) { g_v3 = V3{}; g_v4.Defaults(); } else { std::fprintf(stderr, "--world v2|v3|v4\n"); return 2; } }
+        // SIM V4 (iaus-sim-v4.md 1.4): --v4 <name>=on|off[,...], the places (--env <file> | --env-set <set>|all [--env-class <class>]), --sight, --seats, --env-test, --path-report
+        else if (!std::strcmp(argv[i], "--v4") && i + 1 < argc) { std::string v = argv[++i]; std::size_t p0 = 0;
+            while (p0 <= v.size()) { const std::size_t q = v.find(',', p0); const std::string tok = v.substr(p0, q == std::string::npos ? std::string::npos : q - p0); const std::size_t eq = tok.find('=');
+                const std::string nm = tok.substr(0, eq), val = eq == std::string::npos ? "on" : tok.substr(eq + 1); bool known = false;
+                if (val != "on" && val != "off") { std::fprintf(stderr, "--v4 %s: on|off\n", tok.c_str()); return 2; }
+                for (const V4Flag& f : kV4Flags) if (nm == f.name) { g_v4.*(f.m) = val == "on"; known = true; }
+                if (!known) { std::fprintf(stderr, "unknown --v4 switch '%s'. Known:", nm.c_str()); for (const V4Flag& f : kV4Flags) std::fprintf(stderr, " %s", f.name); std::fprintf(stderr, "\n"); return 2; }
+                if (q == std::string::npos) break; p0 = q + 1; } }
+        else if (!std::strcmp(argv[i], "--env") && i + 1 < argc) envFile = argv[++i];
+        else if (!std::strcmp(argv[i], "--env-set") && i + 1 < argc) envSet = argv[++i];
+        else if (!std::strcmp(argv[i], "--env-class") && i + 1 < argc) envClass = argv[++i];
+        else if (!std::strcmp(argv[i], "--env-test")) envTest = true;
+        else if (!std::strcmp(argv[i], "--env-list")) envList = true;
+        else if (!std::strcmp(argv[i], "--path-report") && i + 1 < argc) pathReport = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--sight") && i + 1 < argc) { const std::string v = argv[++i]; g_sightTag = "+sight=" + v;   // one sight layer at a time (2.4): walls=off | terrain=off | gap=<units>
+            if (v == "walls=off") g_sightT.walls = false; else if (v == "terrain=off") g_sightT.terrain = false; else if (!v.compare(0, 4, "gap=")) g_sightT.gapU = g_sightT.gapExteriorU = static_cast<float>(std::atof(v.c_str() + 4)); else { std::fprintf(stderr, "--sight walls=off|terrain=off|gap=<units>\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--seats") && i + 1 < argc) { g_seats = argv[++i]; if (g_seats != "today" && g_seats != "all") { std::fprintf(stderr, "--seats today|all\n"); return 2; } g_seatsAll = g_seats == "all"; }
         else if (!std::strcmp(argv[i], "--v3") && i + 1 < argc) { std::string v = argv[++i]; std::size_t p0 = 0;
             while (p0 <= v.size()) { const std::size_t q = v.find(',', p0); const std::string tok = v.substr(p0, q == std::string::npos ? std::string::npos : q - p0); const std::size_t eq = tok.find('=');
                 const std::string nm = tok.substr(0, eq), val = eq == std::string::npos ? "on" : tok.substr(eq + 1); bool known = false;
@@ -872,6 +911,19 @@ static int RealMain(int argc, char** argv) {
     if (!printRows.empty()) { for (const SimClass& c : allClasses) if (c.name == printRows) { std::vector<GRow> cur; bool any = false; for (const GRow& r : c.rows) any |= r.applied; for (const GRow& r : c.rows) if (r.applied || !any) cur.push_back(r); std::printf("%s\n", RowsText(cur).c_str()); } return 0; }
     const std::vector<SimClass> t1(allClasses.begin(), allClasses.begin() + 3);
     if (printClasses) { PrintClassTable(allClasses); return 0; }
+    // SIM V4: the places of this run. The fixtures are always loaded (the scenarios name them). --env / --env-set replace what an ordinary fight draws from.
+    if (g_v4.env || envTest || envList || pathReport) {
+        if (!LoadFixtures(g_envPool)) { std::fprintf(stderr, "cannot load the fixture environments from %s:", g_envDir.c_str()); for (const EnvSkip& k : g_envPool.skipped) std::fprintf(stderr, " %s (%s)", k.file.c_str(), k.why.c_str()); std::fprintf(stderr, "\n(python3 tools/iaus_sim/envs/make_fixtures.py writes them; SIM_ENV_DIR points elsewhere)\n"); return 2; }
+        if (!envFile.empty() || !envSet.empty()) { g_envPool.draw.clear(); const std::size_t sk0 = g_envPool.skipped.size();
+            if (!envFile.empty()) { if (!g_envPool.Add(envFile, true)) { std::fprintf(stderr, "--env %s: %s\n", envFile.c_str(), g_envPool.skipped.back().why.c_str()); return 2; } if (g_envPool.draw.empty()) g_envPool.draw.push_back(g_envPool.all.back().get()); g_envLabel = g_envPool.all.back()->name; }
+            else { const int n = LoadSet(g_envPool, envSet, envClass); if (n <= 0) { std::fprintf(stderr, "--env-set %s%s%s: no environment loaded (the library is ~/.cache/mfo-env, built by tools/envextract; MFO_ENV_CACHE points elsewhere)\n", envSet.c_str(), envClass.empty() ? "" : " --env-class ", envClass.c_str()); return 2; }
+                g_envLabel = envSet + (envClass.empty() ? "" : ":" + envClass); }
+            if (g_envPool.skipped.size() > sk0) { std::fprintf(stderr, "ENV SKIPPED %zu anomalous place(s):", g_envPool.skipped.size() - sk0); for (std::size_t k = sk0; k < g_envPool.skipped.size(); ++k) std::fprintf(stderr, " %s (%s)", g_envPool.skipped[k].file.c_str(), g_envPool.skipped[k].why.c_str()); std::fprintf(stderr, "\n"); } }
+        if (envList) { for (const auto& e : g_envPool.all) { std::size_t solid = 0, face = 0; for (const EQ::Wall& w : e->walls) (w.kind == EQ::WallKind::Solid ? solid : face)++; std::uint32_t comps = 0; for (std::uint32_t c : e->walk) comps = std::max(comps, c + 1);
+                std::printf("ENV %-44s %-28s %s tris %6zu comps %4u comp0 %5.1f%% doors %3zu entries %3zu spawns %3zu walls %6zu faces %5zu%s%s\n", e->name.c_str(), e->cls.c_str(), e->interior ? "int" : "ext", e->tris.size(), comps, 100.0 * double(e->tris0) / double(e->tris.size()), e->doors0.size(), e->entries.size(), e->spawns.size(), solid, face, e->defects ? " DEFECTS" : "", e->pool ? "" : " scenario-only"); }
+            return 0; }
+        if (envTest) return RunEnvTests(D, allClasses);
+    }
     {   // B711: a class name that matches nothing is an error, never a silently empty scope
         const auto known = [&](const std::string& n) { for (const SimClass& c : allClasses) if (c.name == n) return true; return false; };
         std::vector<std::string> bad; std::size_t p = 0; while (!only.empty() && p <= only.size()) { const auto q = only.find(',', p); const std::string t = only.substr(p, q == std::string::npos ? std::string::npos : q - p); if (!t.empty() && !known(t)) bad.push_back(t); if (q == std::string::npos) break; p = q + 1; }
