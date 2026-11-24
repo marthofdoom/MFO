@@ -562,6 +562,11 @@ namespace MFO::Actuation {
     struct WillWorkResult { WillWorkVerdict verdict = WillWorkVerdict::Unknown; std::string reason; };
     WillWorkResult WillWork(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target);
     float WillWorkClassLevelBonus(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect);
+    // The level cap of ONE effect of a level-capped archetype (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate): its magnitude through
+    // EP 0x1D (a_target = the target the perks are asked about; null = not called, the record magnitude) plus the class bonus. WillWork's own
+    // reader; iaus/Fills.cpp reads it too, so generation and the gate agree. MAIN THREAD. LevelCappedEffect: is a_effect one of those (form data only)?
+    bool  LevelCappedEffect(const RE::Effect* a_effect);
+    float WillWorkLevelCap(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect, RE::Actor* a_target);
     // THE ZERO-EFFECT HOLD. A cast of a Stagger / Disarm / TargetEffect / Paralyze spell fired and left no effect on the target:
     // that (spell, target) is held off for the fight (WillWork answers No). NoEffectNoteFired is called from the offense claim's
     // refresh lap when a fire is observed (worker, idempotent per claim); the settle check runs on the main thread. NoEffectHeld is

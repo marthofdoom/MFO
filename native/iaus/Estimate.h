@@ -161,15 +161,53 @@ namespace MFO::Iaus::Estimate {
         return (std::clamp)(0.5f + 0.05f * static_cast<float>(a_taunterLevel - a_foeLevel), 0.1f, 0.9f);
     }
 
-    // What one cast of a_e does to a_to's health: damage x (1 - element resist) x (1 - magic resist); 0 at 100 points
-    // of either (the engine's own rule). 0 = the spell's damage was not measured.
+    // The two resist actor values the engine's magic formula reads first (RE::ActorValue kPoisonResist 40 / kResistMagic 44, CommonLib ActorValues.h;
+    // iaus-i8-damage-research.md 2.3: p = a poison-type spell ? kPoisonResist : kResistMagic, then s = the effect's own resistVariable, skipped when
+    // it is the same AV as p). PURE code names the numbers, never the RE:: enum.
+    inline constexpr int kAvPoisonResist = 40;
+    inline constexpr int kAvResistMagic  = 44;
+    [[nodiscard]] inline int PrimaryResistAv(const SpellEntry& a_e) { return a_e.poisonType ? kAvPoisonResist : kAvResistMagic; }
+
+    // What one cast of a_e does to a_to's health: damage x (1 - primary resist) x (1 - the effect's own element resist); 0 at 100 points
+    // of either (the engine's own rule). The element term is SKIPPED when it is the primary AV itself (a spell whose element IS magic resist, or a
+    // poison-type spell keyed on poison resist): the engine reads that AV once (fix/spell-worth C3, the field "ResistMagic counted twice").
+    // 0 = the spell's damage was not measured.
     [[nodiscard]] inline float SpellOn(const SpellEntry& a_e, const Combatant& a_to) {
         const float dmg = a_e.measured ? Pos(a_e.damage) : 0.0f;
         if (!(dmg > 0.0f)) return 0.0f;
-        const float el = a_e.resistAv >= 0 ? a_to.Resist(a_e.resistAv) : 0.0f;
-        const float mr = std::isfinite(a_to.magicResist) ? a_to.magicResist : 0.0f;
-        if (!std::isfinite(el) || el >= 100.0f || mr >= 100.0f) return 0.0f;
-        return dmg * (1.0f - el / 100.0f) * (1.0f - mr / 100.0f);
+        const int   prim = PrimaryResistAv(a_e);
+        const float pr   = prim == kAvResistMagic ? a_to.magicResist : a_to.Resist(prim);
+        const float p    = std::isfinite(pr) ? pr : 0.0f;
+        const float el   = (a_e.resistAv >= 0 && a_e.resistAv != prim) ? a_to.Resist(a_e.resistAv) : 0.0f;
+        if (!std::isfinite(el) || el >= 100.0f || p >= 100.0f) return 0.0f;
+        return dmg * (1.0f - el / 100.0f) * (1.0f - p / 100.0f);
+    }
+
+    // fix/spell-worth C1: is an OFFENSE spell's damage unmeasurable? Only when it has an effect whose damage lives elsewhere (a hazard it spawns, a
+    // cloak's second spell, a script, an enchantment it puts on the weapon) AND its own effects carry NO direct damage: Wall of Flames stays unmeasured
+    // (MFO-B684), while a bolt with a rider (Tuxborn puts one on nearly every Destruction spell) keeps its direct damage, a LOWER BOUND of what it does.
+    [[nodiscard]] inline bool DamageUnmeasurable(bool a_offense, bool a_hasIndirectEffect, float a_directDamage) {
+        return a_offense && a_hasIndirectEffect && !(Pos(a_directDamage) > 0.0f);
+    }
+
+    // fix/spell-worth C3: does the spell's DAMAGE already carry the foe's resist (SpellOn read it)? Then the exploit consideration must not read it
+    // again. Exploit is for the resist the damage does NOT carry: a spell whose damage is unmeasured (the placeholder below is a share of ANOTHER spell's damage: it carries none of this spell's element), and a
+    // control spell (no damage number at all).
+    [[nodiscard]] inline bool ResistCarriedByDamage(bool a_offense, bool a_measured, float a_damage) {
+        return a_offense && a_measured && Pos(a_damage) > 0.0f;
+    }
+
+    // fix/spell-worth C2: what an UNMEASURED offense spell is worth against a foe whose best measured castable option does a_bestOn: a_frac of it, held
+    // strictly below it (an unknown spell never outranks a measured best). < 0 = nothing measured on this foe (no yardstick: the damage considerations
+    // stay not applicable, MFO-B684's old answer).
+    [[nodiscard]] inline float UnmeasuredWorth(float a_bestOn, float a_frac) {
+        if (!(Pos(a_bestOn) > 0.0f)) return -1.0f;
+        return a_bestOn * std::clamp(std::isfinite(a_frac) ? a_frac : 0.0f, 0.0f, 0.99f);
+    }
+
+    // fix/spell-worth C5: does a spell's level cap rule a foe out? (cast/WillWork.cpp's own comparison: target level > cap.) a_cap 0 = no cap.
+    [[nodiscard]] inline bool LevelCapBars(float a_cap, int a_foeLevel) {
+        return std::isfinite(a_cap) && a_cap > 0.0f && static_cast<float>(a_foeLevel) > a_cap;
     }
 
 }

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
 
 namespace MFO::Iaus {
@@ -92,6 +93,10 @@ namespace MFO::Iaus {
             const auto o = detail::Score(c, m, p, t, in.rapportRank, bestHeal, mom, cutoff, nullptr);
             if (o.vetoed) {
                 ++d.vetoed;
+                if (o.vetoBy != Cons::kCount) {
+                    auto& n = d.vetoByCons[static_cast<std::size_t>(o.vetoBy)];
+                    if (n < (std::numeric_limits<std::uint16_t>::max)()) ++n;
+                }
                 if (o.badFact) { ++d.badFacts; if (d.firstBadFact < 0) d.firstBadFact = static_cast<int>(i); }
                 return;
             }

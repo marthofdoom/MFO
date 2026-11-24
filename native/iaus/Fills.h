@@ -107,8 +107,8 @@ namespace MFO::Iaus::Fills {
 
     // MAIN THREAD. One spell or scroll: its health damage, healing and control seconds from the effect records, the
     // magnitude through EP 0x1D (kModSpellMagnitude) when the row verified and a target exists. Writes a_e.damage /
-    // heal / controlSec / measured only with bIausFillSpells = 1. a_probe gets the `[iaus-fill] spell` line while the
-    // probe is on (empty otherwise), a_probeKey a value that changes when the line is worth printing again.
+    // heal / controlSec / measured / levelCap / poisonType only with bIausFillSpells = 1. a_probe gets the `[iaus-fill] spell` line while the
+    // probe or the write is on (one line per spell and follower per session, fix/spell-worth), a_probeKey a value that changes when the line is worth printing again.
     void MeasureSpell(RE::Actor* a_caster, RE::SpellItem* a_spell, SpellEntry& a_e, std::string& a_probe,
                       std::uint32_t& a_probeKey);
 
