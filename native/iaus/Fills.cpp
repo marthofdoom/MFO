@@ -890,9 +890,41 @@ namespace MFO::Iaus::Fills {
         // C5: the lowest level cap of the spell's capped effects, through WillWork's own reader (0 = none).
         float levelCap = 0.0f;
         float condRaw = 0.0f, condDamage = 0.0f;   // the largest conditional damage effect (above)
+        // S11b (iaus/SpellWorth.h): the inputs the spell-worth reader needs, read in this same pass over the effects (FORM DATA: no engine call beyond the
+        // magnitude entry point this function already makes). dotRate / dotTotal = the unconditional damage effects with a duration (a fire-and-forget
+        // spell: a stream counts for one second, so it has no DoT part); the rest are what a buff / ward / summon adds and for how long.
+        float dotRate = 0.0f, dotTotal = 0.0f;
+        float buffArmor = 0.0f, buffResist = 0.0f, wardPower = 0.0f, summonHit = 0.0f, benefitSec = 0.0f;
+        int buffResistAv = -1;
+        bool readArmor = false, readResist = false, readWard = false, readSummon = false;
         for (const auto* e : a_spell->effects) {
             if (!e || !e->baseEffect) continue;
             const auto arch = e->baseEffect->GetArchetype();
+            if (!e->baseEffect->IsHostile() && !e->baseEffect->IsDetrimental()) {   // what a beneficial effect adds, by the nature the book gave the spell
+                const float m = e->GetMagnitude();
+                const float dur = static_cast<float>(e->GetDuration());
+                const AV pav = e->baseEffect->data.primaryAV;
+                const bool valueMod = arch == RE::EffectArchetypes::ArchetypeID::kValueModifier || arch == RE::EffectArchetypes::ArchetypeID::kPeakValueModifier;
+                if (a_e.nature == Prune::Nature::Buff && valueMod && std::isfinite(m) && m > 0.0f) {
+                    if (pav == AV::kDamageResist) { buffArmor += m; readArmor = true; benefitSec = (std::max)(benefitSec, dur); }
+                    else if (pav == AV::kPoisonResist || pav == AV::kResistFire || pav == AV::kResistShock || pav == AV::kResistFrost ||
+                             pav == AV::kResistMagic || pav == AV::kResistDisease) {
+                        if (m > buffResist) { buffResist = m; buffResistAv = static_cast<int>(pav); }
+                        readResist = true; benefitSec = (std::max)(benefitSec, dur);
+                    }
+                }
+                if (a_e.nature == Prune::Nature::Ward && valueMod && pav == AV::kWardPower && std::isfinite(m) && m > 0.0f) {
+                    wardPower = (std::max)(wardPower, m); readWard = true; benefitSec = (std::max)(benefitSec, dur);
+                }
+                if (a_e.nature == Prune::Nature::Summon && arch == RE::EffectArchetypes::ArchetypeID::kSummonCreature) {
+                    benefitSec = (std::max)(benefitSec, dur);
+                    // the summoned body's base (the effect's associated form): its race's unarmed damage is all this reads (its hit RATE and health are not read)
+                    if (const auto* npc = e->baseEffect->data.associatedForm ? e->baseEffect->data.associatedForm->As<RE::TESNPC>() : nullptr; npc && npc->race) {
+                        const float u = npc->race->data.unarmedDamage;
+                        if (std::isfinite(u) && u >= 0.0f) { summonHit = (std::max)(summonHit, u); readSummon = true; }
+                    }
+                }
+            }
             switch (arch) {
             case RE::EffectArchetypes::ArchetypeID::kSpawnHazard:
             case RE::EffectArchetypes::ArchetypeID::kCloak:
@@ -929,6 +961,10 @@ namespace MFO::Iaus::Fills {
                 condDamage = (std::max)(condDamage, Total(e, mag, conc));
                 continue;
             }
+            if (fx == Fx::Damage && !conc && e->GetDuration() > 0 && std::isfinite(mag) && mag > 0.0f) {
+                dotRate += mag;
+                dotTotal += Total(e, mag, conc);
+            }
             (fx == Fx::Damage ? rawDamage : rawHeal) += Total(e, mag0, conc);
             (fx == Fx::Damage ? damage : heal) += Total(e, mag, conc);
         }
@@ -947,6 +983,19 @@ namespace MFO::Iaus::Fills {
                 a_e.controlSec = static_cast<float>(controlSec);
                 a_e.measured   = true;
             }
+            // S11b: the spell-worth reader's inputs (iaus/Snapshot.h SpellEntry; each stays < 0 = not read when this spell has no such part)
+            a_e.chargeSec = (std::isfinite(a_spell->data.chargeTime) && a_spell->data.chargeTime >= 0.0f) ? a_spell->data.chargeTime : -1.0f;
+            if (!conc && !indirect) {
+                a_e.dotPerSec = dotRate;
+                a_e.dotSec = dotRate > 0.0f ? dotTotal / dotRate : 0.0f;
+                a_e.directDamage = (std::max)(0.0f, damage - dotTotal);
+            }
+            a_e.engineRow = static_cast<std::int8_t>(Actuation::ClassifyArchetype(a_spell).row);
+            if (readArmor) a_e.buffArmor = buffArmor;
+            if (readResist) { a_e.buffResist = buffResist; a_e.buffResistAv = buffResistAv; }
+            if (readWard) a_e.wardPower = wardPower;
+            if (readSummon) a_e.summonHit = summonHit;   // the rate and the health stay < 0: the summon term is NOT KNOWN in the game until they are read
+            if (readArmor || readResist || readWard || readSummon) a_e.buffSec = benefitSec;
             a_e.levelCap   = levelCap;   // form data + the perk entry point: read whether or not the damage was measurable
             a_e.poisonType = a_spell->data.spellType == RE::MagicSystem::SpellType::kPoison;
         }

@@ -21,6 +21,7 @@
 // THREADING: none of its own. Every function is reentrant over its arguments. A Mind is per follower and is owned
 // by whoever holds it (Engine.cpp keeps them in the g_followers worker domain, #4).
 #include "iaus/ConsumableWorth.h"
+#include "iaus/SpellWorthTable.h"
 
 #include <array>
 #include <cstddef>
@@ -342,6 +343,8 @@ namespace MFO::Iaus {
         // share of his best MEASURED castable option on that foe (Estimate::UnmeasuredWorth: held strictly below it). `t.unmeasuredDamage` in shared.txt.
         float unmeasuredDamage = 0.5f;
         WorthTable worth{};
+        // S11b (iaus/SpellWorth.h): what one cast of a spell is worth in one unit for every family. SHIPPED INERT (`sw.live` = 0): `sw.<field>` in shared.txt.
+        SpellWorth spellWorth{};
     };
 
     // DefaultTuning() is the LIVE tuning: the compiled values until iaus/TuningFile.cpp (MFO_Tuning/shared.txt, potions.txt) swaps edited ones in on the
