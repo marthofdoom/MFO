@@ -3815,12 +3815,12 @@ Verbatim, choice review, raised on the batch C branch:
 
 ### MFO-B864 (OPEN, author's own list for `feat/sim-v4-pretune`, 2026-11-24; tools/iaus_sim only; MAP "SIM BUNDLE A")
 1. (SEV-4) A rune's damage lives in its own effect behind Target Location: no hazard road, so runes stay worth nothing in the lab and are dropped in the game.
-2. (SEV-4) The lab keeps Vanilla's Wall-shaped bolts that native drops (MFO-B865): the lab's Vanilla books are not the game's.
+2. **CLOSED on `feat/placed-l1m1` (L1).** (SEV-4) The lab keeps Vanilla's Wall-shaped bolts that native drops (MFO-B865): the lab's Vanilla books are not the game's.
 3. (SEV-5) Hazards hurt only the owner's enemies and nobody avoids them (the engine's can hit anyone). A summon appears at once (no Landing state).
 4. (SEV-5) The spell names the oracle picks are not printed, so "a wall among the picks" cannot be counted.
 
 ### MFO-B865 (OPEN, found by `feat/sim-v4-pretune`, 2026-11-24; NATIVE, not touched; needs marth's ruling on 1; iaus-sim-v4.md 16.6)
-1. `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
+1. **CLOSED 2026-11-24 on `feat/placed-l1m1` (M1).** Was: `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
 2. **CLOSED 2026-11-24 on `fix/impact-hazard-shape` (item 2 only; item 1 and the real-wall note stay OPEN).** Was: `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim). Now: Wall = `Prune::IsWallShape` (concentration, non-Self, impact hazard with kDropToGround). Checked on Skyrim.esm: Firebolt / Flames / Frostbite impact hazards have flag 16 clear; only the Barrier* MGEFs (Fire, Frost, Shock walls) reach a flag-16 hazard.
 
 ## feat/sim-v4-pretune review (Opus 5.5, 2026-11-24, raised against 28c805e6; verbatim file)
@@ -3863,3 +3863,11 @@ Answers
 ## fix/impact-hazard-shape (MFO-B865), Opus review @753b93e5
 SEV-4 FF Aimed/Touch spells with a kDropToGround impact hazard are kept (LoreRim 6 Aimed + 6 Touch, Tuxborn 29 + 9; mostly enemy spells; REQ_Destruction2_Arcane_AimedHazard, _BL_OppressiveBarrier). Many EFIT area 0, so splash_safe has no radius for the ground hazard they leave at the foe: a melee ally beside the foe may stand in it. BlastUnits could include the dropped hazard's radius. Ordinary bolt hazards (flag clear: FireLg/FireSm 4, IceHazard 0) are the engine's normal impact effects, same as a gambit cast or an enemy's. Not shown to hurt allies (not verified in engine).
 SEV-5 harness rows for MFO-B865 test the pure rule and the drop only; nothing tests the record reader (impactHazardDrops in cast/Archetype.cpp).
+
+## feat/placed-l1m1 (Opus 5.5 author, 2026-11-24), author's own open list
+1. (SEV-4, pre-existing) A SELF buff claim, and so now every IAUS summon, is filed without the `HarbingerWouldRefuse` dry run its ally sibling makes (`cast/CastOn.cpp` self fork; the ally fork has it). A refused summon claim is transparent (the next IAUS pick runs) and logged once per throttle, but the incumbent was already displaced and `Loadout::Prepare` already put the spell in LEFT, every lap it is picked. A NEVER-FIRED claim does have its hold-off (`g_neverFired`, the rest of the fight) and is transparent before the preempt.
+2. (SEV-4, pre-existing) An IAUS summon picked while the follower has NO combat controller, or whose row is ambiguous, takes the unanimated one-shot (`cast/Fire.cpp` summon fork runs before A6's defer of self buffs). Loud (`UNANIMATED road`). A6's rule ("defer, never direct") does not cover summons; M1 makes it reachable for every conjurer.
+3. (SEV-4) Both-hands summons (thralls) are candidates; the claim prepares LEFT only and no both-hands cast under a claim was ever seen (S9 / C3).
+4. (SEV-4, lab) `Data.h` areaUnits still reads the EFIT area alone; native takes the larger of it and the explosion radius (`BlastOf`). The radius is now extracted (`placed.expl`); using it moves splash results, so it is its own change.
+5. (SEV-5) A Self hazard whose hazard spell has a hostile effect is blocked whatever the rest of the record says: list circles of the "harm foes inside, help friends" kind are blocked too (Tuxborn / LoreRim names in plan section 11).
+6. (SEV-5) `feat/placed-l1m1`: foes in the lab now cast Target Location summons they were denied before (same predicate, `foeDrop`); `BrainCast` never picks a Summon nature, so no fight changes today.

@@ -1517,5 +1517,7 @@ Conjurations are nearly all `TargetLocation`, and native and the lab both drop t
 
 ### 16.6 Found, not fixed (native questions)
 
+**2026-11-24 `feat/placed-l1m1`: both answered.** Summons are IAUS candidates (M1), bolts are no walls (`fix/impact-hazard-shape`), and the lab's books are the game's: `Classify` calls native's own `Prune` rules from the extracted `placed` bits (count test `book_census.py`; `placed-spells-plan.md` section 11). The text below is the state before it.
+
 - **Conjurations never reach IAUS** (`iaus/Prune.h:93`, filled at `iaus/SpellBook.cpp:253`). By data: Vanilla 14 of 14 taught, Tuxborn 307 of 311, LoreRim 204 dropped. The design rule (iaus-design.md section 2) names "runes and other Target Location spells", and a summon is caught by the delivery. It has its own cast road, so the reason for the rule (where to put it) does not hold.
 - **`HasImpactHazard` (`cast/Archetype.cpp:214`) calls a missed bolt's burn mark a wall.** In Vanilla: Firebolt, Flames, Frostbite, Fireball, Ice Spike, Ice Storm, Incinerate, the Icy Spear, Expel / Banish / Command Daedra read shape Wall, and IAUS drops Wall as Placement. In lists whose spells carry a Script effect (Tuxborn and most of LoreRim) the shape is ScriptRider, tested first, so they are kept. The lab does not model this: it drops `TargetLocation` only, so its VANILLA world offers spells the game's IAUS would drop.
