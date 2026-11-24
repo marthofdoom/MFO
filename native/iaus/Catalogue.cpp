@@ -933,6 +933,11 @@ namespace MFO::Iaus {
                 return B((std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f) || (f.recipientSelf && f.recipientHp < t.dyingSelfHp) ||
                          (!f.recipientSelf && f.recipientHp < t.dyingAllyHp) ||
                          (std::isfinite(f.recipientHitsToDown) && f.recipientHitsToDown <= t.dyingHitsToDown));
+            // MOVEMENT (S1): read from SpotFacts by Spots.cpp, in no action family's set
+            case Cons::SpotPath: case Cons::SpotSight: case Cons::SpotExposure: case Cons::SpotFireLine: case Cons::SpotRange: case Cons::SpotPathExposed:
+            case Cons::SpotExits: case Cons::SpotAllyDist: case Cons::SpotHostileArea: case Cons::SpotLeash: case Cons::SpotClimb: case Cons::SpotDrop:
+            case Cons::SpotDetected: case Cons::SpotLight: case Cons::SpotFoeReach: case Cons::SpotLane: case Cons::SpotPortalBusy: case Cons::SpotServes:
+            case Cons::BoostSpotCover: return In::Off();
             case Cons::kCount:        break;
             }
             return In::Off();

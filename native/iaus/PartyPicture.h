@@ -55,6 +55,7 @@ namespace MFO::Iaus::Move {
         bool on = false;
         SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; std::uint32_t kinds = 0;
         RankedAction act;                              // the action the spot was chosen for
+        RankedAction held;                             // the action he held when it was chosen (top[0]): a change of it is an event
         double at = 0.0;
     };
     struct Member {
@@ -90,12 +91,12 @@ namespace MFO::Iaus::Move {
         int   gatherTris = 192;      // triangles a flood closes
         int   foeFloods = 8;         // foes whose own walk is flooded (kite)
         int   perGen = 3;            // spots a kind keeps for one member and action
-        int   geomPerGen = 12;       // ... of which this many may be tested with geometry rays
+        int   geomPerGen = 64;       // ... of which this many may be tested with geometry rays
         int   pathSamples = 4;       // points of a walk tested for exposure
     };
     inline constexpr MoveBudget kMoveBudget{};
     // What a budget cost this window. The pass counts, the holder logs (once per fight).
-    struct MoveCounts { std::uint32_t spotsDropped = 0, pathsSkipped = 0, asksShort = 0, asksCarried = 0, triplesDropped = 0, generated = 0, paths = 0, triples = 0; };
+    struct MoveCounts { std::uint32_t spotsDropped = 0, pathsSkipped = 0, asksShort = 0, asksCarried = 0, triplesDropped = 0, generated = 0, paths = 0, triples = 0, unfinished = 0; };   // unfinished: Phase3 ran before Phase1 was done
 
     struct PathFact {
         bool reachable = false; float length = 0.0f, climb = 0.0f, drop = 0.0f;
