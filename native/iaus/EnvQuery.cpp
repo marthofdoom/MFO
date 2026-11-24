@@ -150,6 +150,14 @@ namespace MFO::Iaus::Env {
         return { (a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f };
     }
 
+    float OutsideBy(const View& a_v, std::int32_t a_tri, float a_x, float a_y) {
+        const Tri& t = a_v.tris[static_cast<std::size_t>(a_tri)]; const Vec3& a = a_v.verts[t.v[0]]; const Vec3& b = a_v.verts[t.v[1]]; const Vec3& c = a_v.verts[t.v[2]];
+        if (InTri2(a, b, c, a_x, a_y)) return 0.0f;
+        const Vec3* q[4] = { &a, &b, &c, &a }; float bb = 1e30f;
+        for (int k = 0; k < 3; ++k) { float ox, oy; ClosestOnSeg(*q[k], *q[k + 1], a_x, a_y, ox, oy); bb = std::min(bb, (ox - a_x) * (ox - a_x) + (oy - a_y) * (oy - a_y)); }
+        return std::sqrt(bb);
+    }
+
     std::int32_t TriAt(const View& a_v, Vec3 a_p) {
         if (!a_v.grid) return -1;
         const Grid& g = *a_v.grid; const int c = g.CellOf(a_p.x, a_p.y); if (c < 0) return -1;
@@ -191,12 +199,25 @@ namespace MFO::Iaus::Env {
         return best;
     }
 
+    namespace {
+        // Two meshes joined by a link need not meet exactly (the extractor's validator: 2.5 percent of links lie more than 32 units from their
+        // target triangle). A walk that crossed such a seam can end a little outside the triangle it is in. Put it on that triangle.
+        void OntoTri(const View& v, Walk& w) {
+            const Tri& T = v.tris[static_cast<std::size_t>(w.tri)]; const Vec3& a = v.verts[T.v[0]]; const Vec3& b = v.verts[T.v[1]]; const Vec3& c = v.verts[T.v[2]];
+            if (InTri2(a, b, c, w.end.x, w.end.y)) return;
+            const Vec3* q[4] = { &a, &b, &c, &a }; float bb = 1e30f, bx = w.end.x, by = w.end.y;
+            for (int k = 0; k < 3; ++k) { float ox, oy; ClosestOnSeg(*q[k], *q[k + 1], w.end.x, w.end.y, ox, oy); const float d2 = (ox - w.end.x) * (ox - w.end.x) + (oy - w.end.y) * (oy - w.end.y); if (d2 < bb) { bb = d2; bx = ox; by = oy; } }
+            const float gx = (a.x + b.x + c.x) / 3.0f, gy = (a.y + b.y + c.y) / 3.0f, gl = std::max(1.0f, std::hypot(gx - bx, gy - by)), in = std::min(0.5f, gl);
+            w.end.x = bx + (gx - bx) / gl * in; w.end.y = by + (gy - by) / gl * in; w.end.z = PlaneZ(a, b, c, w.end.x, w.end.y);
+        }
+    }
+
     Walk WalkLine(const View& a_v, std::int32_t a_tri, Vec3 a_from, Vec3 a_to, const Walker& a_who) {
         Walk w; w.tri = a_tri; w.end = a_from;
         if (a_tri < 0) return w;
         const float dx = a_to.x - a_from.x, dy = a_to.y - a_from.y, len = std::hypot(dx, dy);
         if (len < 1e-4f) { w.reached = true; return w; }
-        std::int32_t cur = a_tri; float tcur = 0.0f; const float back = std::min(0.5f / len, 0.5f);
+        std::int32_t cur = a_tri; float tcur = 0.0f; const float back = std::min(0.5f / len, 0.5f); bool seam = false;
         for (int iter = 0; iter < 512; ++iter) {
             const Tri& T = a_v.tris[static_cast<std::size_t>(cur)];
             const Vec3* p[4] = { &a_v.verts[T.v[0]], &a_v.verts[T.v[1]], &a_v.verts[T.v[2]], &a_v.verts[T.v[0]] };
@@ -208,7 +229,7 @@ namespace MFO::Iaus::Env {
                 const float t = ((p[k]->x - a_from.x) * nx + (p[k]->y - a_from.y) * ny) / den;
                 if (t < bt) { bt = t; bk = k; }
             }
-            if (bk < 0 || bt >= 1.0f) { w.reached = true; w.tri = cur; w.end = { a_to.x, a_to.y, HeightAt(a_v, cur, a_to.x, a_to.y) }; return w; }
+            if (bk < 0 || bt >= 1.0f) { w.reached = true; w.tri = cur; w.end = { a_to.x, a_to.y, HeightAt(a_v, cur, a_to.x, a_to.y) }; if (seam) OntoTri(a_v, w); return w; }
             bt = std::max(bt, tcur);
             const Edge kind = T.kind[bk]; const std::int32_t n = T.nb[bk];
             bool cross = kind == Edge::Walk && n >= 0;
@@ -216,10 +237,10 @@ namespace MFO::Iaus::Env {
                 if (a_who.large && (N.flags & kTriNoLarge)) cross = false;
                 else if (N.door >= 0 && a_v.doors[static_cast<std::size_t>(N.door)].state != DoorState::Open) { cross = false; w.door = N.door; } }
             if (!cross) { const float te = std::max(tcur, bt - back); w.tri = cur; w.hit = kind; w.hitTri = cur; w.hitEdge = static_cast<std::int8_t>(bk);
-                w.end.x = a_from.x + dx * te; w.end.y = a_from.y + dy * te; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); return w; }
-            cur = n; tcur = bt;
+                w.end.x = a_from.x + dx * te; w.end.y = a_from.y + dy * te; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); if (seam) OntoTri(a_v, w); return w; }
+            cur = n; tcur = bt; seam = true;
         }
-        w.tri = cur; w.end.x = a_from.x + dx * tcur; w.end.y = a_from.y + dy * tcur; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y);
+        w.tri = cur; w.end.x = a_from.x + dx * tcur; w.end.y = a_from.y + dy * tcur; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); OntoTri(a_v, w);
         return w;
     }
 
@@ -231,6 +252,10 @@ namespace MFO::Iaus::Env {
         auto block = [&](Blocker by, float t) { if (out.clear || t < out.t) { out.clear = false; out.by = by; out.t = t; } };
         // closed doors: the door stands on its triangle, wallH high
         for (const Door& d : a_v.doors) { if (d.state == DoorState::Open || d.tri < 0) continue;
+            if (d.leaf) { const float ex = d.bx - d.ax, ey = d.by - d.ay, den = Cross2(dx, dy, ex, ey); if (std::fabs(den) < 1e-9f) continue;
+                const float t = Cross2(d.ax - a_from.x, d.ay - a_from.y, ex, ey) / den, u = Cross2(d.ax - a_from.x, d.ay - a_from.y, dx, dy) / den;
+                if (t > 0.0f && t < 1.0f && u >= 0.0f && u <= 1.0f) { const float rz = a_from.z + t * dz; if (rz >= d.z0 - a_t.wallBelow && rz <= d.z1) block(Blocker::Door, t); }
+                continue; }
             const Tri& T = a_v.tris[static_cast<std::size_t>(d.tri)]; const Vec3* p[4] = { &a_v.verts[T.v[0]], &a_v.verts[T.v[1]], &a_v.verts[T.v[2]], &a_v.verts[T.v[0]] };
             for (int k = 0; k < 3; ++k) { const float ex = p[k + 1]->x - p[k]->x, ey = p[k + 1]->y - p[k]->y, den = Cross2(dx, dy, ex, ey); if (std::fabs(den) < 1e-9f) continue;
                 const float t = Cross2(p[k]->x - a_from.x, p[k]->y - a_from.y, ex, ey) / den, u = Cross2(p[k]->x - a_from.x, p[k]->y - a_from.y, dx, dy) / den;

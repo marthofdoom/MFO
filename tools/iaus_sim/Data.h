@@ -192,6 +192,9 @@ namespace Sim {
         bool  ctrl = false, ctrlPar = false, ctrlCalm = false, ctrlFlee = false, ctrlFrenzy = false, turnUndead = false;
         float ctrlDur = 0, ctrlMaxLevel = 1e9f;   // illusion: the magnitude is the highest level affected
         bool  stagger = false;
+        // SIM V4 `caststart` (iaus-sim-v4.md 5): the engine row his claim would key, as native cast/Archetype.cpp predicts it: the row of the spell's
+        // costliest effect that has one. Data.h SimRow is the lab's copy of that table's rows (run.sh stops the build when native's unseated list moves).
+        int   row = 0;
         bool  reanimate = false, summon = false;
         float summonDur = 60;
         float recovery = 0;         // shout recovery (its cooldown)
@@ -356,11 +359,35 @@ namespace Sim {
     }
     [[nodiscard]] inline float PowerStamina(const Rules& r, const Weapon& w) { return (r.powStaBase + w.weight * r.powStaMult) * r.powStaPenalty; }
 
+    // SIM V4: THE ENGINE ROWS THE LAB TELLS APART (native cast/Actuation.h EngineRow, cast/Archetype.cpp kRows). Seated = any row Harbinger seats a
+    // caster for. kSimUnseated mirrors cast/Archetype.cpp kUnseatedRows; Script is not unseated but no seat STARTS it (cast/CastOn.cpp
+    // OffenseNeverStartedFightLong). To add a row: a value here, its key in SimRowOf, and (when no seat starts it) kSimNeverStarts.
+    enum SimRow : int { kRowNone = 0, kRowSeated, kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowScript, kRowReanimate };
+    inline constexpr const char* kSimRowName[] = { "none", "seated", "Stagger", "Disarm", "TargetEffect", "Paralyze", "Script", "Reanimate" };
+    inline constexpr int kSimNeverStarts[] = { kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowScript, kRowReanimate };
+    [[nodiscard]] inline bool RowNeverStarts(int row) { for (int r : kSimNeverStarts) if (r == row) return true; return false; }
+    // cast/CastOn.cpp OffenseNeverStartedFightLong, by name: the SHORT window and a fight-long hold after ONE failure (also for a spell with no row).
+    [[nodiscard]] inline bool RowFightLong(int row) { return row == kRowNone || RowNeverStarts(row); }
+    inline constexpr float kNeverShortSec = 4.0f, kNeverLongSec = 6.5f;   // apmf/APMFBridge.h kHealClaimNeverObservedCapMs 4000 / kHoldLastSeenCapMs 6500
+    // One effect's row (kRows, the keys the lab's extract can tell: archetype, AV, self delivered, hostile).
+    [[nodiscard]] inline int SimRowOf(int arch, int av, bool self, bool hostile) {
+        const bool vm = arch == 0 || arch == 4 || arch == 5 || arch == 34;   // ValueModifier and its aliases
+        if (arch == 33 && hostile && !self) return kRowStagger;
+        if (arch == 21 && hostile && !self) return kRowParalyze;
+        if (arch == 24 && hostile && !self) return kRowTargetEffect;   // TurnUndead (Banish and CommandSummoned key the same row)
+        if (arch == 1) return kRowScript;
+        if (arch == 22 && !self && !hostile) return kRowReanimate;
+        if (vm && hostile && !self) return av == 24 ? kRowSeated : kRowNone;   // health: Offensive. Magicka / stamina: no caster
+        if (vm && !hostile && self && (av == 24 || av == 25)) return kRowSeated;   // Restore
+        if (arch == 18 || arch == 35) return kRowSeated;   // Summon, Cloak
+        return kRowNone;
+    }
+
     // ── spell classification (one reader for the follower pool and the foes' spells) ────────────────────
     inline void Classify(const J& sp, SimSpell& out) {
         const auto& fx = sp["effects"].a; SpellEntry& e = out.e;
         bool summon = false, reanimate = false, ward = false, control = false, cloak = false, hostileAny = false, heal = false, weighable = false;
-        double autoCost = 0, topCost = -1, topHostCost = -1; int topArch = -1, resist = -1;
+        double autoCost = 0, topCost = -1, topHostCost = -1, rowCost = -1; int topArch = -1, resist = -1;
         const std::string& dl = sp["delivery"].s; const bool self = dl == "Self";
         const bool conc = sp["castType"].s == "Concentration";
         static const std::map<std::string, int> kSchool = { {"Alteration", 18}, {"Conjuration", 19}, {"Destruction", 20}, {"Illusion", 21}, {"Restoration", 22} };
@@ -372,6 +399,7 @@ namespace Sim {
             const bool host = x["hostile"].yes(), detr = x["detrimental"].yes();
             if (ec > topCost) { topCost = ec; topArch = arch; out.skillReq = static_cast<int>(x["minSkill"].num());
                 auto si = kSchool.find(x["skill"].s); out.school = si == kSchool.end() ? -1 : si->second; }
+            if (const int er = SimRowOf(arch, av, self, x["hostile"].yes()); er != kRowNone && ec > rowCost) { rowCost = ec; out.row = er; }
             if (arch == kArSummon) { summon = true; out.summonDur = static_cast<float>(d > 0 ? d : 60); }
             if (arch == kArReanimate) { reanimate = true; out.ctrlMaxLevel = static_cast<float>(mag); out.summonDur = static_cast<float>(d > 0 ? d : 60); }   // card G7: the magnitude is the highest level it raises
             weighable |= Prune::EffectWeighable(arch);

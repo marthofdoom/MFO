@@ -882,3 +882,47 @@ Reported, not made.
 - **Native, heal timing**: the three windows are sized for a party of ten sampling every 1.3 s, while each follower's snapshot samples every ally every lap (0.133 s). The comment in `Core.h` says both. A window per party size is not a tunable the lab can find (9.1).
 - **Field probe**: the hit lines would support per-event sizes directly with two more fields that the sink already has in hand: the event's own damage is not available to it, but the health AT the event is (`at-event`, main thread only) and it is NaN on 90 percent of lines. A main-thread read posted for every probed hit would turn windows into events.
 - **`_evidence`**: `deck-run-1117c`, `1117d` and `1117e` hold the same session's log. `calib_damage.py` counts it once and says so.
+
+## 13. Batch W as built (branch `feat/sim-v4-world`, 2026-11-23)
+
+Slices S2 to S6 in one batch. The flat world is untouched: `--world v3` (still the default) and `--world v2` compare with 0 metrics changed against their baselines. The new world is `--world v4`, with its own baseline `tools/iaus_sim/baseline_v4_builtin.txt` on the hand-made fixtures.
+
+### 13.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| The pure geometry the game will share: `View`, `FindPath`, `WalkLine`, `CastRay`, `BuildGrid`, `BuildWalls`, `LabelComponents` | `native/iaus/EnvQuery.h`, `EnvQuery.cpp`, `PathSearch.cpp`. In `native/CMakeLists.txt` so MSVC compiles them. NO caller in the DLL | a link kind: `kLinkKinds`. A path cost: `PathTuning`. A sight rule: `SightTuning`. One table each |
+| The loader, the route cache, the pool of places | `tools/iaus_sim/Env.h` | body and following numbers: `EnvTuning`. The v4 switches: `V4` |
+| Bodies on the mesh: movement, doors, body circles, leg ends, sight, the six tallies | `tools/iaus_sim/EnvWorld.h` | |
+| Placement of a fight in a place | `tools/iaus_sim/Setup.h EnvPlace` | |
+| Hand-made fixtures | `tools/iaus_sim/envs/<name>.txt` and the `.mfoenv` each becomes (`make_fixtures.py`, `--check` in the CLI suite) | draw a map, run the script, add the name to `Env.h kFixtureNames` |
+| Known-answer checks (52) | `tools/iaus_sim/EnvTest.h`, `sim --env-test` | |
+| Environment scenarios | `Scenarios.h` `envScen(...)`, `--scenario env` or by name | |
+| The pathing gate | `sim.cpp PathReport`, `kPathBounds`, `--path-report N [--path-oracle K] [--path-gate]` | a bound: `kPathBounds` |
+| Cast starts | `Data.h SimRow`, `World.h StartCast`, `Policy.h` | a row no seat starts: `kSimNeverStarts` (run.sh stops the build when native's `kUnseatedRows` moves) |
+| Field rates for the gate's numbers | `tools/iaus_sim/calib_path.py <run-dir>` | a log line: one row of `ROWS` |
+
+CLI: `--world v4`, `--v4 env|path|bodies|los|caststart|interrupt|drops|foedrops=on|off`, `--env <file>`, `--env-set <set>|all [--env-class <class>]`, `--env-list`, `--env-test`, `--sight walls=off|terrain=off|gap=<u>`, `--seats today|all`, `--path-report`, `--path-oracle`, `--path-gate`. Diagnostics by environment variable: `SIM_PATHTRACE=<job> [SIM_PATHTRACE_ENV=<class>]` traces one fight of a path report, `SIM_ENVBAD=1` prints every off-mesh body.
+
+### 13.2 What differs from the design above, and why
+
+- **A route is asked centroid to centroid.** The cache of 2.7 is keyed by (triangle, triangle, door stamp, walker). A value that depended on the exact start point would depend on which thread asked first. So the cached route runs between the two triangles' centres, the mover swaps the last corner for his own goal, and a straight walk is tried first with the exact points. Runs are the same at 1 and at 16 threads (checked on the baseline).
+- **The corridor A* picks need not hold the straight line**, so `FindPath` drops every corner a straight walk makes needless, after the funnel.
+- **In-cell doors have no DOOR row.** Measured on the 11-23 library: 165 DOOR rows, all load doors. The 132 plain doors (30 locked) are REFS rows only. The loader joins each to the triangles its leaf crosses (the long side of its box, turned by the ref's rotation). MODEL: a plain door starts closed. This belongs in the extractor.
+- **Walls have a height range.** A boundary edge is a wall, the face under a ledge, the foot of a cliff, or nothing (a balcony over more floor), found by probing for the next floor past the edge. A ledge can be seen over. A closed door blocks sight at its leaf.
+- **The leash.** The plane's rule (walk back when past the radius, walk out again when inside) steps in and out of the radius three times a second. On the plane nobody could see it. Here it was 14 to 20 reversals a minute for a Knight. In the v4 world he stands within 150 units past the radius (`World.h kLeashStandU`, MODEL: the engine does not pursue past it). v3 is unchanged.
+- **No blow through a wall or a closed door** (`EnvMeleeClear`): on the plane reach was distance alone.
+- **Water** is a cost (the extractor's README), not closed as 2.2 first said.
+- **The environment scenarios measure today's behaviour.** The pass rules of 8.5 need the movement decision (M1). Until then each scenario prints its numbers and three of them are pinned in the CLI suite as what the lab reproduces: the tower is climbed by its ramp, a blade under a floor nothing joins stands pinned the whole fight, and a blade pushes at a wall the mesh does not know.
+
+### 13.3 Not built, or built smaller than the section says
+
+- The gate's bounds are PLACEHOLDERS (`kPathBounds`). `--path-oracle K` measures oracle-relative bounds on the same fights and prints `ORCPATH` lines. It was not run at size: that is the pre-tune measurement of 10.3 item 3.
+- `t.sharedRadiusMargin` and `t.preemptSettle` are still not mirrored. `t.occClaimRelease`, `t.offApproachBackoff` and `t.offApproachDropCap` are.
+- A plain hit does not interrupt a charge (the assumption of 5.3, off). A stagger, a paralysis and a calm already did. A fear now does, and all are counted (`cs.intr/f`, `cs.foeIntr/f`).
+- The engine row of a spell is the lab's reading of `cast/Archetype.cpp kRows` from the fields the extract has (`Data.h SimRowOf`). The shared pure classifier of 5.3 is still a native refactor nobody made.
+- `calib_cast_delay.py` did not get its per-row read.
+- Trust scenarios: `trust-ignored-wall` and `trust-one-way` only. `trust-buried-patch` and `trust-missing-link` (a link removed mid fight) need a mesh that changes during a fight.
+- Terrain is the navmesh's own triangles. LAND heights are not in the file yet, so a hill with no navmesh on its crest does not block.
+- Drops: built and tested, OFF (`--v4 drops=on`, `foedrops=on`). Parkour abilities are batch M2.
+- The v3 perch (a foe on a ledge by flag) does not exist in a place. A foe is high only where the mesh is.

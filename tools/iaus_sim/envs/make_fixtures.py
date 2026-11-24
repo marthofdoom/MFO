@@ -14,6 +14,7 @@ THE .txt FORMAT
         '#' or ' '  nothing walkable          '.'  floor
         'P'  floor + a load door (an entry)   'F'  floor + an actor spawn point
         'D'  floor + a closed door            'L'  floor + a locked door
+        '1'  floor + a plain closed door that has NO door row (as the extractor writes in-cell doors): the loader joins it by its box
         '~'  floor under water                '='  floor on the preferred path
         'a'-'z' floor, named (for the lines below)
     end
@@ -142,6 +143,9 @@ def build(name, f):
             r = ref(0, 1, x, y, flags=(8 if ch == 'L' else 0) | (16 if ch == 'P' else 0), lock=(50 if ch == 'L' else 0))
             for k, tt in enumerate((t, t2)): tt['door'] = True; doors[m].append((m, tid[(x, y)] + k, 0, 0, refs[r][0], r))
         elif ch == 'F': ref(5, 15, x, y)
+        elif ch == '1':   # a plain door: a thin box across the passage, no DOOR row, no door flag on the triangle
+            r = ref(0, 1, x, y); along_x = floor(x - 1, y) and floor(x + 1, y); px = (x + 0.5) * C; py = (H - y - 0.5) * C; row = list(refs[r])
+            row[13:19] = [px - 10, py - C / 2, row[8], px + 10, py + C / 2, row[8] + 300] if along_x else [px - C / 2, py - 10, row[8], px + C / 2, py + 10, row[8] + 300]; refs[r] = tuple(row)
         if ch == '~': t['water'] = t2['water'] = True
         if ch == '=': t['pref'] = t2['pref'] = True
     meshes = []; allv = []; allt = []; alll = []; alld = []

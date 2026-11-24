@@ -58,7 +58,10 @@ namespace MFO::Iaus::Env {
     };
 
     enum class DoorState : std::uint8_t { Open = 0, Closed, Locked };
-    struct Door { std::int32_t tri = -1; DoorState state = DoorState::Closed; std::uint32_t key = 0; std::uint32_t id = 0; };   // id: the door's own reference. Triangles that share it open together
+    // One row per triangle a door stands on. id: the door's own reference, triangles that share it open together. leaf: the builder knows where
+    // the door's leaf stands (a to b, floor z0 to top z1), and sight is tested against that instead of against the whole triangle.
+    struct Door { std::int32_t tri = -1; DoorState state = DoorState::Closed; std::uint32_t key = 0; std::uint32_t id = 0;
+                  bool leaf = false; float ax = 0, ay = 0, bx = 0, by = 0, z0 = 0, z1 = 0; };
 
     // A sight blocker raised on a mesh edge. The interior of the mesh is on the LEFT of a -> b. At a point of the edge
     // whose height is ez the wall stands from ez + lo to ez + hi.
@@ -164,6 +167,8 @@ namespace MFO::Iaus::Env {
     // The nearest point of the mesh within a_maxDist (height counts double). Returns the triangle, -1 = none.
     [[nodiscard]] std::int32_t NearestTri(const View& a_v, Vec3 a_p, float a_maxDist, Vec3& a_on);
     [[nodiscard]] Vec3 Centroid(const View& a_v, std::int32_t a_tri);
+    // How far (x, y) lies outside the triangle, in x, y. 0 = inside.
+    [[nodiscard]] float OutsideBy(const View& a_v, std::int32_t a_tri, float a_x, float a_y);
 
     // ── a straight walk ──
     struct Walk { Vec3 end; std::int32_t tri = -1; bool reached = false; Edge hit = Edge::Wall; std::int32_t hitTri = -1; std::int8_t hitEdge = -1; std::int32_t door = -1; };

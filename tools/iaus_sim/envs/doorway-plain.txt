@@ -1,0 +1,15 @@
+# The two rooms again, with a PLAIN door: a reference with a box and no door row on the navmesh, which is how the extractor writes every
+# in-cell door (its DOOR rows are load doors only). The loader joins it to the triangles its leaf crosses.
+nopool
+class fixture_doorway
+map
+#######################
+#P........#...........#
+#.........#...........#
+#.........#...........#
+#.........1.......F...#
+#.........#...........#
+#.........#...........#
+#.........#...........#
+#######################
+end

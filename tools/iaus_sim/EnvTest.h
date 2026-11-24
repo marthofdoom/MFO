@@ -34,6 +34,10 @@ namespace Sim {
           ok(!ray(E, E.doors0, a, b).clear && ray(E, E.doors0, a, b).by == EQ::Blocker::Door, "door: closed, it blocks sight");
           std::vector<EQ::Door> open = E.doors0; for (EQ::Door& d : open) d.state = EQ::DoorState::Open;
           ok(ray(E, open, a, b).clear && route(E, open, a, b, beast) && path.reachable, "door: open, sight and the beast pass"); }
+        { const SimEnv& E = env("doorway-plain"); const EQ::Vec3 a = at(E, 128, 9, 5, 4), b = at(E, 128, 9, 16, 4);   // A PLAIN DOOR: no DOOR row in the file, joined by its box
+          ok(E.plainDoors == 2 && E.doors0.size() == 2 && E.doors0[0].leaf && E.doors0[0].id == E.doors0[1].id, "plain door: the loader joins the reference to the two triangles its leaf crosses");
+          ok(route(E, E.doors0, a, b, beast) && !path.reachable && path.blocked && route(E, E.doors0, a, b, man) && path.reachable, "plain door: a block for a beast, a cost for a man");
+          ok(!ray(E, E.doors0, a, b).clear && ray(E, E.doors0, a, b).by == EQ::Blocker::Door && ray(E, E.doors0, at(E, 128, 9, 5, 4), at(E, 128, 9, 9.2f, 4.3f)).clear, "plain door: the leaf blocks sight, and only the leaf (a ray that stops short of it on the door's own triangle is clear)"); }
         { const SimEnv& E = env("locked-door"); ok(E.doors0.size() == 2 && E.doors0[0].state == EQ::DoorState::Locked && route(E, E.doors0, E.entries[0].p, E.spawns[0].p, man) && !path.reachable && path.blocked, "locked door: blocked for a man without the key"); }
         { const SimEnv& E = env("ledge"); const EQ::Vec3 up = E.spawns[0].p, down = E.entries[0].p;   // DROP ONE-WAY
           ok(up.z > 290.0f && down.z < 1.0f, "ledge: the spawn stands on the platform, the entry on the floor");
@@ -94,6 +98,15 @@ namespace Sim {
           const std::uint64_t st0 = G.doorStamp; Body& w = G.b[0]; const EQ::Vec3 g2 = at(*G.env, 128, 9, 17, 4); double openedAt = -1;
           for (int tick = 0; tick < 30 * 30; ++tick) { if (std::hypot(g2.x - w.c.x, g2.y - w.c.y) > 60.0f) G.Move(w, g2.x, g2.y, w.spec->run); if (openedAt < 0 && G.doors[0].state == EQ::DoorState::Open) openedAt = G.now; EnvStep(G); G.now += TM::dt; }
           ok(openedAt > 0 && G.doors[1].state == EQ::DoorState::Open && G.doorStamp != st0 && std::hypot(g2.x - w.c.x, g2.y - w.c.y) <= 61.0f, "closed door: he opens it (both triangles), the stamp changes, he arrives");
+          // CAST STARTS (section 5): a claim on a row no seat starts holds his hand for the short window, never fires, and the spell is held off for the fight.
+          { Fight C = BuildFight(D, fs, t1); Body& x = C.b[static_cast<std::size_t>(C.ctl[0].body)]; x.ctrlLive = true; std::uint32_t foe = 0; for (const Body& o : C.b) if (o.role == Role::Foe) foe = o.c.id;
+            SimSpell par = Fx("TestParalyze", Prune::Nature::Control, kAvAlteration, -1, 10, 0, 0, 0); par.ctrlPar = true; par.row = kRowParalyze; par.e.form = 0x7E57; par.e.source = SpellSource::Spell;
+            C.StartCast(x, 0, par, foe, 10.0f, true);
+            ok(x.hitAt < 0 && std::fabs(x.actEnd - (C.now + 4.0)) < 1e-6 && C.t.castUnseated == 1 && C.t.castHeldOff == 1 && C.ctl[0].CastHeld(0x7E57, foe) && C.ctl[0].CastHeld(0x7E57, 12345u), "cast start: a Paralyze claim never fires, stands 4 s (the short window) and is held off on every target");
+            Fight C2 = BuildFight(D, fs, t1); Body& y = C2.b[static_cast<std::size_t>(C2.ctl[0].body)]; y.ctrlLive = true; g_seatsAll = true; C2.StartCast(y, 0, par, foe, 10.0f, true); g_seatsAll = false;
+            ok(C2.t.castUnseated == 0 && !C2.ctl[0].CastHeld(0x7E57, 12345u), "cast start: --seats all, the same claim goes down the measured road like any other");
+            SimSpell bolt = Fx("TestBolt", Prune::Nature::Offense, kAvDestruction, kAvResistFire, 10, 20, 0, 0); Fight C3 = BuildFight(D, fs, t1); Body& z = C3.b[static_cast<std::size_t>(C3.ctl[0].body)]; z.ctrlLive = true; C3.StartCast(z, 0, bolt, foe, 10.0f, true);
+            ok(C3.t.castUnseated == 0 && RowFightLong(kRowNone) && !RowFightLong(kRowSeated) && RowNeverStarts(kRowScript) && !RowNeverStarts(kRowNone), "cast start: a seated row is not refused, and the two readers say what cast/CastOn.cpp's say"); }
           g_v4 = keep; }
         std::printf("ENV-TESTS %s: %d checks, %d failed  (fixtures %zu loaded, %zu skipped)\n", fail ? "FAIL" : "PASS", n, fail, g_envPool.all.size(), g_envPool.skipped.size());
         return fail ? 1 : 0;

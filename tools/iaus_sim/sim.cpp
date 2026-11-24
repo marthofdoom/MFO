@@ -15,6 +15,7 @@
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
+#include <chrono>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstring>
@@ -182,8 +183,9 @@ namespace {
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
         const std::vector<Scenario> all = AllScenarios(true, true, true); std::vector<const Scenario*> pick;   // "all" = the 17 of the headline; "stealth" = the stealth lab's; "field" = sim v3's field failures; "all,stealth" = both
-        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.field && std::strncmp(s.name, "dive-", 5) != 0 && (!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || (s.field && ("," + which + ",").find(",field,") != std::string::npos) || (!std::strncmp(s.name, "dive-", 5) && ("," + which + ",").find(",pressure,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
+        for (const Scenario& s : all) if (!(s.parked && !g_parked) && ((!s.field && std::strncmp(s.name, "dive-", 5) != 0 && (!s.stealth || g_stealth > 0) && ("," + which + ",").find(",all,") != std::string::npos) || (s.stealth && ("," + which + ",").find(",stealth,") != std::string::npos) || (s.field && !s.env && ("," + which + ",").find(",field,") != std::string::npos) || (s.env && ("," + which + ",").find(",env,") != std::string::npos) || (!std::strncmp(s.name, "dive-", 5) && ("," + which + ",").find(",pressure,") != std::string::npos) || ("," + which + ",").find(std::string(",") + s.name + ",") != std::string::npos)) pick.push_back(&s);
         if (pick.empty()) { std::fprintf(stderr, "unknown scenario '%s'. Known:", which.c_str()); for (const Scenario& s : all) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
+        for (const Scenario* s : pick) if (s->env && !g_v4.env) { std::fprintf(stderr, "scenario '%s' needs an environment: --world v4 (or --v4 env=on)\n", s->name); return 2; }
         const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3);
         struct Res { Agg iaus, orc; std::map<std::string, Disagreement> dis; long dec = 0, disagreed = 0; double dU = 0; std::string cls; OracleStats st; };
         std::vector<Res> res(pick.size()); std::atomic<int> next{ 0 }; std::mutex mx; const int jobs = static_cast<int>(pick.size()) * fights;
@@ -415,6 +417,53 @@ namespace {
     // can see: the seconds from his last moment above 75 % health to the down, and his worst loss inside one second.
     int g_gapBracket = 0;      // --gap-bracket <name>: the strength bracket of the gap pass's "natural" fights (default natural). strong1 is the FIELD-PRESSURE read: the bracket whose downs per follower-minute match the Deck logs (iaus-sim-v3.md 15)
     int g_damageBracket = 0;   // --damage-bracket <name>: which strength bracket the report's fights are drawn in (default natural)
+    // ── SIM V4: THE PATHING GATE (iaus-sim-v4.md 2.5, 8.5). `--path-report N`: N natural fights per class and per ENVIRONMENT CLASS of the run's
+    // pool, the six odd-pathing numbers, each against its bound. A bound is the ORACLE's value on the same fights plus the row's margin when
+    // `--path-oracle K` plays the first K fights of each cell with the class oracle too (the ORCPATH lines, the ORCSURV pattern of Playstyles.h).
+    // Without it the bound is the row's own value. THOSE VALUES ARE PLACEHOLDERS: no oracle pass has measured them on this world yet (that is one of
+    // the pre-tune measurements, iaus-sim-v4.md 10.3 item 3). To change a gate: edit kPathBounds, nothing else. `--path-gate` makes a FAIL the exit code.
+    struct PathBound { const char* metric; double bound, margin; const char* why; };
+    inline constexpr PathBound kPathBounds[] = {
+        { "stuck%",          3.0, 1.0, "share of his fight time in a leg that makes no progress" },
+        { "reblock/f",       0.25, 0.10, "BLOCKED endings beside his previous block, per fight" },
+        { "osc/min",         8.0, 1.5, "legs that turn back within 3 s, per minute" },
+        { "unreach%",        5.0, 2.0, "legs begun toward a goal no route reaches" },
+        { "detour.p90",      3.0, 0.5, "walked over straight line, the 90th percentile leg" },
+        { "holdUnreach.s/f", 1.0, 0.5, "seconds per fight with his attack on a foe he can neither reach nor shoot" },
+    };
+    int PathReport(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& scope, std::uint64_t seed, int n, int oracleN, const OracleCfg& oc, int threads, bool estimates, bool scrollRoad, bool gate) {
+        const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
+        std::vector<std::string> ecs; for (const SimEnv* e : g_envPool.draw) if (std::find(ecs.begin(), ecs.end(), e->cls) == ecs.end()) ecs.push_back(e->cls);
+        std::sort(ecs.begin(), ecs.end());
+        std::printf("PATHING GATE  %d natural fights per class and environment class  seed=%llu  places=%s (%zu, %zu classes)  bounds=%s%s\n", n, static_cast<unsigned long long>(seed), g_envLabel.c_str(), g_envPool.draw.size(), ecs.size(),
+                    oracleN > 0 ? "the class oracle on the same fights + margin" : "kPathBounds (PLACEHOLDERS, not oracle-measured)", WorldTag("  ").c_str());
+        int fails = 0, cells = 0; long bad = 0, forever = 0; double cpu = 0; long fightsRun = 0;
+        for (const std::string& ec : ecs) {
+            std::vector<const SimEnv*> sub; for (const SimEnv* e : g_envPool.draw) if (e->cls == ec) sub.push_back(e);
+            struct Cell { Agg iaus, orc; }; std::vector<Cell> cell(scope.size()); std::mutex mx; std::atomic<int> next{ 0 }; const int jobs = static_cast<int>(scope.size()) * n;
+            auto work = [&]() { tl_envDraw = &sub; for (;;) { const int job = next.fetch_add(1); if (job >= jobs) break; const int ci = job / n, f = job % n; int gi = 0; for (std::size_t i = 0; i < all.size(); ++i) if (all[i].name == scope[static_cast<std::size_t>(ci)].name) gi = static_cast<int>(i);
+                    Rng R; R.g.seed(seed * 1000003ULL + std::uint64_t(gi) * 7919 + std::uint64_t(f) * 32452843ULL + 0x9A7A11ULL);
+                    Fight F = RandomFight(D, scope[static_cast<std::size_t>(ci)], 1 + f % 5, kBrackets[0], R, t1); F.estimates = estimates; F.scrollRoad = scrollRoad; Fight G = F;
+                    if (const char* tr = std::getenv("SIM_PATHTRACE"); tr && std::atoi(tr) == job && ec == (std::getenv("SIM_PATHTRACE_ENV") ? std::getenv("SIM_PATHTRACE_ENV") : ec)) F.trace = stdout;   // diagnostic: one fight's event trace (use --threads 1)
+                    const auto t0 = std::chrono::steady_clock::now(); RunMode(F); const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); const double u = Utility(F);
+                    double uO = 0; const bool orc = f < oracleN; if (orc) { OraclePolicy O; O.cfg = oc; O.cfg.allFollowers = false; RunFight(G, O); uO = Utility(G); }
+                    std::scoped_lock lk(mx); Cell& c = cell[static_cast<std::size_t>(ci)]; c.iaus.uSum += u; c.iaus.Add(F.t, false); cpu += sec; ++fightsRun; if (orc) { c.orc.uSum += uO; c.orc.Add(G.t, false); } }
+                tl_envDraw = nullptr; };
+            { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
+            std::printf("\n%-28s (%zu place%s)  %9s %9s %9s %9s %9s %9s %9s %7s\n", ec.c_str(), sub.size(), sub.size() == 1 ? "" : "s", "stuck%", "reblock/f", "osc/min", "unreach%", "detour90", "holdUnr.s", "U", "gate");
+            for (std::size_t ci = 0; ci < scope.size(); ++ci) { const auto m = Metrics(cell[ci].iaus); std::map<std::string, double> mo; if (oracleN > 0) mo = Metrics(cell[ci].orc);
+                bad += static_cast<long>(m.at("env.bad")); forever += static_cast<long>(m.at("env.stuckForever")); std::string why; ++cells;
+                for (const PathBound& b : kPathBounds) { const double v = m.at(b.metric), lim = oracleN > 0 ? std::max(0.0, mo.at(b.metric)) + b.margin : b.bound;
+                    if (oracleN > 0) std::printf("ORCPATH %s %s %s  iaus %.3f  oracle %.3f  bound %.3f\n", scope[ci].name.c_str(), ec.c_str(), b.metric, v, mo.at(b.metric), lim);
+                    if (v > lim) { char t[96]; std::snprintf(t, sizeof t, "%s%s %.2f > %.2f", why.empty() ? "" : ", ", b.metric, v, lim); why += t; } }
+                if (m.at("env.bad") > 0) why += std::string(why.empty() ? "" : ", ") + "env.bad"; if (m.at("env.stuckForever") > 0) why += std::string(why.empty() ? "" : ", ") + "stuck forever";
+                std::printf("  %-26s %12s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %7s%s%s\n", scope[ci].name.c_str(), "", m.at("stuck%"), m.at("reblock/f"), m.at("osc/min"), m.at("unreach%"), m.at("detour.p90"), m.at("holdUnreach.s/f"), m.at("U"), why.empty() ? "PASS" : "FAIL", why.empty() ? "" : "  ", why.c_str());
+                if (!why.empty()) { ++fails; std::printf("PATHGATE FAIL %s %s: %s\n", scope[ci].name.c_str(), ec.c_str(), why.c_str()); } }
+        }
+        std::printf("\nPATH GATES: %d cell(s), %d FAIL  |  env.bad %ld (must be 0)  stuck forever %ld (must be 0)  |  %.2f ms CPU per IAUS fight (%ld fights)  => %s\n", cells, fails, bad, forever, fightsRun ? 1000.0 * cpu / double(fightsRun) : 0.0, fightsRun, fails == 0 && bad == 0 && forever == 0 ? "PASS" : "FAIL");
+        return gate && (fails || bad || forever) ? 1 : 0;
+    }
+
     int DamageReport(const Data& D, const std::vector<SimClass>& all, const std::string& only, const std::vector<std::uint64_t>& seeds, int n, int threads, bool estimates, bool scrollRoad) {
         const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
         std::vector<int> cls; for (std::size_t i = 0; i < all.size(); ++i) if (only.empty() || ("," + only + ",").find("," + all[i].name + ",") != std::string::npos) cls.push_back(static_cast<int>(i));
@@ -721,7 +770,7 @@ int main(int argc, char** argv) {
 }
 static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
-    std::string envFile, envSet, envClass; bool envTest = false, envList = false; int pathReport = 0;   // SIM V4
+    std::string envFile, envSet, envClass; bool envTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
@@ -746,6 +795,8 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--env-test")) envTest = true;
         else if (!std::strcmp(argv[i], "--env-list")) envList = true;
         else if (!std::strcmp(argv[i], "--path-report") && i + 1 < argc) pathReport = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--path-oracle") && i + 1 < argc) pathOracle = std::max(0, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--path-gate")) pathGate = true;
         else if (!std::strcmp(argv[i], "--sight") && i + 1 < argc) { const std::string v = argv[++i]; g_sightTag = "+sight=" + v;   // one sight layer at a time (2.4): walls=off | terrain=off | gap=<units>
             if (v == "walls=off") g_sightT.walls = false; else if (v == "terrain=off") g_sightT.terrain = false; else if (!v.compare(0, 4, "gap=")) g_sightT.gapU = g_sightT.gapExteriorU = static_cast<float>(std::atof(v.c_str() + 4)); else { std::fprintf(stderr, "--sight walls=off|terrain=off|gap=<units>\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--seats") && i + 1 < argc) { g_seats = argv[++i]; if (g_seats != "today" && g_seats != "all") { std::fprintf(stderr, "--seats today|all\n"); return 2; } g_seatsAll = g_seats == "all"; }
@@ -946,6 +997,10 @@ static int RealMain(int argc, char** argv) {
     if (ratingN < 0) ratingN = !scenario.empty() ? 0 : 3;
     if (declineN > 0 && oracle) { g_oracleMode = true; g_oc = oc; if (!noClassRulings) g_classRulings = true; std::printf("PLAYED BY THE CLASS ORACLE (%s): where the oracle drinks is a second reading of the drink line\n", OracleDesc(oc).c_str()); }
     if (potCalibN > 0) return PotionCalib(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, potCalibN, threads, estimates, scrollRoad);
+    if (pathReport > 0) { if (!g_v4.env) { std::fprintf(stderr, "--path-report needs an environment: --world v4\n"); return 2; }
+        std::vector<SimClass> sc; for (const SimClass& c : allClasses) if (("," + (only.empty() ? std::string(kBeta1Classes) : only) + ",").find("," + c.name + ",") != std::string::npos) sc.push_back(c);
+        if (pathOracle > 0 && !noClassRulings) g_classRulings = true;
+        return PathReport(D, allClasses, sc, seed, pathReport, std::min(pathOracle, pathReport), oc, threads, estimates, scrollRoad, pathGate); }
     if (damageN > 0) return DamageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, damageN, threads, estimates, scrollRoad);
     if (declineN > 0) return DeclineReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, declineN, threads, estimates, scrollRoad);
     if (ratingOnly) { std::vector<int> ci; for (std::size_t i = 0; i < allClasses.size(); ++i) if (only.empty() || ("," + only + ",").find("," + allClasses[i].name + ",") != std::string::npos) ci.push_back(static_cast<int>(i));

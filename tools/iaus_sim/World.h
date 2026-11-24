@@ -32,6 +32,7 @@ namespace Sim {
     inline void EnvAdopt(Fight& F, Body& x);
     inline void EnvShove(Fight& F, Body& x, float dx, float dy);
     inline void EnvStep(Fight& F);
+    inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o);
 
     // ── timing (seconds). MODEL values unless a source is named; every row is in the doc's model table ──
     struct TM {
@@ -65,6 +66,7 @@ namespace Sim {
     // outcome is a chain of one swing: the sequence learner of key 1 and the weapon's learner see the same outcomes and the two reads
     // (Snapshot::weaponEdge, comboEdge) agree. The lab's foes carry no body radius (Combatant::bodyRadius 0 = the humanoid kRefRadius).
     inline int g_learnReach = 2;
+    inline constexpr float kLeashStandU = 150.0f;   // SIM V4 (MODEL): within this past his leash radius a follower stands instead of walking back
     inline constexpr std::uint32_t kReachWeapon = 1;   // the book's weapon key: one melee weapon per follower in the lab
     inline constexpr float kReachSeedEdge = 200.0f - MFO::Iaus::ReachBook::kRefRadius;   // Fills.cpp LearnReach: fMeleeReach (200) less a humanoid radius
     // MODEL, UNPROVEN: a calmed foe that the party damages fights again (the common in-game reading: one free blow, then he is
@@ -355,6 +357,10 @@ namespace Sim {
         // sim mirror batch 11-17. His last RELEASED decision cast (the claim that stands: a re-pick of it draws the repeat table, Data.h Delivery),
         // and whether the foe his act.attack names was kept past the chase cap without a waiver (Combatant::noApproach: he shoots, he does not walk to it).
         std::uint32_t lastFireForm = 0, lastFireTarget = 0; double lastFireAt = -1e9;
+        // SIM V4 `caststart` (cast/CastOn.cpp g_scriptOffenseNeverFired / g_offenseNeverStartedCount): (spell << 32 | target, 0 = every target) held off for
+        // the fight / pairs with one never-started failure. apprDrops: (foe, ENGINE DROPPED endings of his approach on it). apprBlocked: foes past the drop cap.
+        std::vector<std::uint64_t> csHeld, csOnce; std::vector<std::pair<std::uint32_t, int>> apprDrops; std::vector<std::uint32_t> apprBlocked;
+        [[nodiscard]] bool CastHeld(std::uint32_t form, std::uint32_t target) const { const std::uint64_t k = static_cast<std::uint64_t>(form) << 32; for (std::uint64_t h : csHeld) if (h == k || h == (k | target)) return true; return false; }
         bool   steerNoApproach = false;
         // fix/field-1117b-choice (iaus/Candidates.cpp g_fireRefused, cast/Hands.cpp g_healerThreat): the (spell, foe) pairs his generator refused for a party
         // member in the line of fire, with when (fed back as will-not-work notes for Tuning::fireLineKeepSec), and whether a foe is hurting him now.
@@ -922,6 +928,8 @@ namespace Sim {
                 const bool works = CtrlWorks(s, d);
                 if (a.ctl == 0) { ++t.ctrlCasts; if (!works) ++t.ctrlFails; if (Controlled(d)) ++t.ctrlOnControlled; }
                 if (works) { const double until = now + std::clamp<double>(s.ctrlDur, 1.0, 60.0);
+                    if (g_v4.interrupt && d.act == Act::Cast && d.hitAt >= 0) { if (d.role == Role::Foe) ++t.foeCastInterrupted; else if (d.ctl == 0 && d.actIaus) ++t.castInterrupted;   // SIM V4: a control effect ends a charge in flight (5.3). Counted
+                        if (!s.ctrlPar && !s.ctrlCalm) { d.act = Act::None; d.hitAt = -1; d.actEnd = now; } }   // ... and a fear ends it too (it ran on to its release before)
                     if (s.ctrlPar) { d.ctrlUntil = until; d.c.paralysed = true; d.act = Act::None; d.hitAt = -1; }
                     else if (s.ctrlCalm) { d.ctrlUntil = until; d.calmed = true; d.act = Act::None; d.hitAt = -1; }
                     else if (s.ctrlFrenzy) d.frenzyUntil = until;
@@ -1011,6 +1019,7 @@ namespace Sim {
         // his target: he walks back toward the player instead of closing.
         [[nodiscard]] bool LeashTurn(Body& x, const Ctl* c, const Body& tg) {
             if (!c || !(c->leash > 0.0f) || Dist(x, b[0]) <= c->leash || Dist(tg, b[0]) <= c->leash) return false;
+            if (env && Dist(x, b[0]) <= c->leash + kLeashStandU) return true;   // SIM V4: just past the radius he STANDS (the engine does not pursue past it). The plane's rule steps in and out of it every third of a second
             Move(x, b[0].c.x, b[0].c.y, x.spec->run); if (x.ctl == 0) ++t.leashTurns; return true;
         }
         // Card H4 (native/iaus/Reposition.h SpellRange, the game's own function): the distance the spell in his hand is fought at. 0 = none
@@ -1078,7 +1087,7 @@ namespace Sim {
             const Act kind = x.act; x.hitAt = -1;
             Body* tg = Find(x.actTarget);
             if (kind == Act::Swing || kind == Act::Power || kind == Act::Bash) {
-                const bool whiff = tg && Up(*tg) && (Dist(x, *tg) > Reach(x) * 1.2f || tg->c.outOfMeleeReach);
+                const bool whiff = tg && Up(*tg) && (Dist(x, *tg) > Reach(x) * 1.2f || tg->c.outOfMeleeReach || (env && !EnvMeleeClear(*this, x, *tg)));   // SIM V4: no blow lands through a wall or a closed door
                 if (tg && Up(*tg) && x.ctl >= 0 && kind != Act::Bash && g_learnReach) ctl[static_cast<std::size_t>(x.ctl)].reach.Observe(x.c.id, kReachWeapon, kReachSeedEdge, 1u, std::max(0.0f, x.swingDist - (tg->c.bodyRadius > 0.0f ? tg->c.bodyRadius : MFO::Iaus::ReachBook::kRefRadius)), !whiff);   // Fills.cpp LearnReach: one outcome, a chain of one swing, the EDGE distance at its start
                 if (whiff && x.ctl == 0 && kind == Act::Power && x.actIaus) ++t.powerWhiffs;
                 if (!tg || !Up(*tg) || whiff) return;   // whiff
@@ -1224,6 +1233,7 @@ namespace Sim {
         void ReleaseCast(Body& x, Body* tg) {
             const SimSpell* s = SpellOf(x, x.actSpell); if (!s) return;
             if (x.ctl == 0 && x.actIaus) { ++t.castFired; t.claimSec += now - x.claimAt; }
+            if (g_v4.caststart && x.ctl >= 0 && x.actIaus) { Ctl& rc = ctl[static_cast<std::size_t>(x.ctl)]; std::erase(rc.csOnce, (static_cast<std::uint64_t>(s->e.form) << 32) | x.actTarget); }   // it started: the pair's failure count ends
             if (x.ctl >= 0 && x.actIaus) { Ctl& rc = ctl[static_cast<std::size_t>(x.ctl)]; rc.lastFireForm = s->e.form; rc.lastFireTarget = x.actTarget; rc.lastFireAt = now; }   // the claim that stands (Data.h Delivery: repeat)
             const bool stream = g_v3.hands && x.ctl >= 0 && s->e.concentration && s->e.source == SpellSource::Spell && !s->reanimate;
             if (stream && (s->e.nature == Prune::Nature::Offense || s->e.nature == Prune::Nature::Control || s->e.nature == Prune::Nature::Heal)) {
@@ -1338,6 +1348,14 @@ namespace Sim {
                         if (trace) std::fprintf(trace, "%7.2f  NOT BUILT %s: %s claimed on an inactive controller, no cast for 6 s\n", now, x.c.name.c_str(), s.e.name.c_str());
                         return; }
                     const int nat = s.e.nature == Prune::Nature::Heal ? 1 : (s.e.nature == Prune::Nature::Offense || s.e.nature == Prune::Nature::Control) ? 0 : 2;
+                    // SIM V4 `caststart` (iaus-sim-v4.md 5; cast/CastOn.cpp OffenseNeverStartedFightLong / ...WindowMs): an offense claim on a row no seat
+                    // starts NEVER fires. It holds his hand for the short window, is released, and the spell is held off for the fight on every
+                    // target. --seats all = the lab as if Harbinger seated every row.
+                    if (g_v4.caststart && nat == 0 && x.ctrlLive && !g_seatsAll && RowNeverStarts(s.row) && s.e.source == SpellSource::Spell) { Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
+                        x.hitAt = -1; x.actEnd = now + static_cast<double>(kNeverShortSec); x.claimUntil = x.actEnd; dc.csHeld.push_back(static_cast<std::uint64_t>(s.e.form) << 32);
+                        if (x.ctl == 0) { ++t.castUnseated; ++t.castNeverShort; ++t.castHeldOff; t.neverSec += kNeverShortSec; }
+                        if (trace) std::fprintf(trace, "%7.2f  NEVER STARTED %s: %s keys the %s row, no seat starts it. Released after %.1f s, held off this fight\n", now, x.c.name.c_str(), s.e.name.c_str(), kSimRowName[s.row], static_cast<double>(kNeverShortSec));
+                        return; }
                     if (!x.ctrlLive) { lat = std::max(charge, 1.0f); if (x.ctl == 0) ++t.castDirect; }   // main: the DIRECT road (ComposedCast.cpp:785; MODEL 1 s)
                     else if (g_deliverSec[0] >= 0.0f) { if (!direct) lat = std::max(charge, g_deliverSec[nat == 1 ? 1 : 0]); }   // --deliver-sec: the fixed figures of sim v3's first cut (a stream had no claim to wait for there)
                     else {
@@ -1347,7 +1365,12 @@ namespace Sim {
                         if (again && x.ctl == 0) ++t.castRepeat;
                         if (again) lat = std::max(charge, static_cast<float>(dc.lastFireAt - now) + Delivery::At(row.repeat, VU(x, 20, 0.0f, 1.0f)));   // the claim stands and has fired: the engine casts again on its own beat
                         else if (VP(x, 21, std::clamp(row.unfired * g_deliverUnfired, 0.0f, 1.0f))) {   // the claim closes with no fire: his body is the claim's for as long as it stood
-                            const float stood = Delivery::At(row.stood, VU(x, 22, 0.0f, 1.0f));
+                            float stood = Delivery::At(row.stood, VU(x, 22, 0.0f, 1.0f));
+                            if (g_v4.caststart && nat == 0) {   // the never-started release bounds how long it stands, and counts the failure (two in a row on the pair hold it off; a row with no seat, one)
+                                const bool fl = RowFightLong(s.row); stood = std::min(stood, fl ? kNeverShortSec : kNeverLongSec); const std::uint64_t pk = (static_cast<std::uint64_t>(s.e.form) << 32) | target;
+                                const bool second = !fl && std::find(dc.csOnce.begin(), dc.csOnce.end(), pk) != dc.csOnce.end();
+                                if (fl) dc.csHeld.push_back(static_cast<std::uint64_t>(s.e.form) << 32); else if (second) { dc.csHeld.push_back(pk); std::erase(dc.csOnce, pk); } else dc.csOnce.push_back(pk);
+                                if (x.ctl == 0) { ++(fl ? t.castNeverShort : t.castNeverLong); if (fl || second) ++t.castHeldOff; t.neverSec += stood; } }
                             x.hitAt = -1; x.actEnd = now + static_cast<double>(stood); x.claimUntil = x.actEnd; if (x.ctl == 0) { ++t.castUnfired; t.unfiredSec += stood; }
                             if (trace) std::fprintf(trace, "%7.2f  UNFIRED %s: the claim for %s stands %.1f s and closes with no cast\n", now, x.c.name.c_str(), s.e.name.c_str(), stood);
                             return; }
@@ -1506,7 +1529,7 @@ namespace Sim {
             if ((g_foeStyles || g_v3.stance) && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); return; }
             // melee
             const float reach = Reach(x);
-            if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash
+            if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { if (!(env && Dist(x, b[0]) <= c->leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash (SIM V4: just past it he stands)
             // THE 128 APPROACH UP A LEDGE (field 11-17, scheduler/IausSource.cpp: when every foe is out of the blade's reach the offense approach is filed at the
             // touch standoff 128 on the foe's reference and the ENGINE paths it, "which is what climbs a tower"). MODEL: a ledge with a way up
             // (FightSpec::perchPath) is climbed once he is within 128 units of the point under it, along a path three times its height (ASSUMPTION: a
@@ -1515,7 +1538,7 @@ namespace Sim {
                 x.c.z = std::min(tg->c.z, x.c.z + x.spec->run * TM::dt / 3.0f); x.climbAt = now; x.movedAt = now; if (x.c.z < tg->c.z) return; }
             else if (c && !env && x.c.z > 0.0f && tg->perch && c->steer == tg->c.id) x.climbAt = now;   // on the ledge with him: he stays up
             float slotX = tg->c.x, slotY = tg->c.y; if (g_v3.stance) SlotPoint(x, *tg, reach * 0.8f, slotX, slotY);   // SIM V3: attackers spread around their target
-            if (d > reach * 0.9f || tg->c.outOfMeleeReach) { if (!tg->c.outOfMeleeReach) Move(x, slotX, slotY, x.spec->run); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f); return; }
+            if (d > reach * 0.9f || tg->c.outOfMeleeReach || (env && !EnvMeleeClear(*this, x, *tg))) { if (!tg->c.outOfMeleeReach) Move(x, slotX, slotY, x.spec->run); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f); return; }
             if (now < x.think) { if ((slotX != tg->c.x || slotY != tg->c.y) && std::hypot(slotX - x.c.x, slotY - x.c.y) > 60.0f) Move(x, slotX, slotY, x.spec->run * 0.55f); return; }
             const bool tgBlocking = now < tg->blockUntil, tgStag = now < tg->staggerUntil, tgCasting = tg->act == Act::Cast && tg->hitAt >= 0;
             const Weapon& w = x.spec->melee;
@@ -1568,7 +1591,7 @@ namespace Sim {
                 else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
             } else if (c.drawn != PostureKind::Staff) {   // Melee, Silver, or bare hands (Brain's hasMelee)
                 const float reach = Reach(x);
-                if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }
+                if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { if (!(env && Dist(x, b[0]) <= c.leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }
                 if (d > reach * 0.9f && !tg->c.outOfMeleeReach) Move(x, tg->c.x, tg->c.y, x.spec->run);
             }
         }
@@ -1660,6 +1683,13 @@ namespace Sim {
                     const SimSpell* hs = SpellOf(x, x.actSpell); const Body* hr = hs && hs->e.nature == Prune::Nature::Heal ? Find(x.actTarget) : nullptr;
                     if (hr && hr->c.hp >= 0.9995f * hr->c.hpMax) { x.hitAt = -1; x.actEnd = now; if (x.ctl == 0) ++t.healFullExit;
                         if (trace) std::fprintf(trace, "%7.2f  HEAL RELEASED %s: %s is at full health before the cast began\n", now, x.c.name.c_str(), hr->c.name.c_str()); } }
+                // SIM V4 `caststart` (cast/CastOn.cpp:748, Tuning::occludedClaimReleaseSec `t.occClaimRelease`): an offense claim whose target his own ray
+                // has read occluded for that long is RELEASED so the hand can serve a target he sees. The age is the picker's own (Ctl::occSince, his laps).
+                if (g_v4.caststart && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && !x.castStarted && x.actTarget != x.c.id) { const Ctl& oc = ctl[static_cast<std::size_t>(x.ctl)];
+                    const SimSpell* os = SpellOf(x, x.actSpell); const auto it = oc.occSince.find(x.actTarget); const float lim = ActiveTuning()->occludedClaimReleaseSec;
+                    if (os && lim > 0.0f && (os->e.nature == Prune::Nature::Offense || os->e.nature == Prune::Nature::Control) && it != oc.occSince.end() && now - it->second >= static_cast<double>(lim)) {
+                        x.hitAt = -1; x.actEnd = now; if (x.ctl == 0) ++t.castOccRelease;
+                        if (trace) std::fprintf(trace, "%7.2f  OCCLUDED RELEASE %s: %s on a target out of his sight for %.1f s\n", now, x.c.name.c_str(), os->e.name.c_str(), now - it->second); } }
                 if (g_v3.lof && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && !x.castStarted && now >= x.claimUntil && now >= x.staggerUntil && now >= x.ctrlUntil) StartTest(b[i]);   // SIM V3: the guard's 0x06 answer for a claimed cast
                 if (x.hitAt >= 0 && now >= x.hitAt && now >= x.staggerUntil && now >= x.ctrlUntil) Resolve(b[i]);
             }

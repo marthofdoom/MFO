@@ -14,6 +14,7 @@ namespace Sim {
         bool lowerBetter;       // for the primary metric
         bool stealth = false;   // a scenario of the stealth / disengage lab (G1, G2, G3): part of the headline J and of "--scenario all" only while a stealth road is modelled (--stealth g1|hide|g3); by name or --scenario stealth always
         bool parked = false;    // a PARKED class's scenario (T3 / T4): excluded unless --parked
+        bool env = false;       // SIM V4: an ENVIRONMENT scenario on a hand-made fixture (iaus-sim-v4.md 8.5, 8.9): by name or --scenario env only, and only in a world with V4::env
         bool field = false;     // SIM V3: a FIELD FAILURE reproduction (iaus-sim-v3.md 8): by name or --scenario field only, never part of "all" or of the headline J
         std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> make;
         Scenario(const char* n, const char* w, const char* m, bool lb, std::function<FightSpec(const Data&, const std::vector<SimClass>&, Rng&)> mk, bool st = false, bool pk = false, bool fd = false) : name(n), what(w), metrics(m), lowerBetter(lb), stealth(st), parked(pk), field(fd), make(std::move(mk)) {}
@@ -189,6 +190,55 @@ namespace Sim {
         v.push_back({ "cap-archer", "two archers shoot a hurt bow follower from past his chase cap: he shoots back from where he stands (or retreats), he never stands idle under fire",
             "idle%,nocand%,tfh.s,nohit%,b.shoot,cap.kept/f,cap.starve%,retreat%,downs/f,U", true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "archer", 26, Cls::Melee);
                 for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 25, R)); f.foeTags = { "archer", "archer" }; f.onSubject = true; f.subjectHp = 0.45f; f.subjectPotionsH = 0; f.foeDist = 2300; f.targetRatio = 0.80f; return f; }, false, false, true });
+        // ── SIM V4: the environment scenarios (iaus-sim-v4.md 8.5 and 8.9), each on its hand-made fixture (tools/iaus_sim/envs/<name>.txt: the party at the
+        // load door, the foes at the spawn point). They MEASURE today's behaviour (the engine's movement, no position choice yet): the pass rules of 8.5
+        // belong to the movement decision (batch M1). Until then each prints its odd-pathing numbers, and the gate of `--path-report` reads them. ──
+        auto envScen = [&](const char* name, const char* fixture, const char* what, const char* metrics, std::function<FS(const Data&, const std::vector<SimClass>&, Rng&)> mk) {
+            v.push_back({ name, what, metrics, true, [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = mk(D, c, R); f.env = g_envPool.ByName(fixture); f.envExact = true; f.occluders = 0; return f; }, false, false, true }); v.back().env = true; };
+        envScen("env-lost-sight", "corridor-l", "a caster whose foes stand round a corner: he walks to where he can see them, he does not stand and wait with a claim on a wall",
+            "holdUnreach.s/f,stuck%,osc/min,dl.fired%,dl.noLos%,tfh.s,nohit%,detour,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt" }; f.ensure = { "fire", "shock" }; f.targetRatio = 0.80f; return f; });
+        envScen("env-ridge", "ridge", "an archer and foes on the far side of a ridge: a spot behind the crest hides the foe from HIMSELF (Adelinda, 11-18), so he goes where he sees",
+            "holdUnreach.s/f,stuck%,tfh.s,nohit%,dl.noLos%,osc/min,detour,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "archer", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R)); f.foeTags = { "archer", "archer" }; f.targetRatio = 0.80f; return f; });
+        envScen("env-tower-stairs", "stair-tower", "an archer shoots from a tower top that has a ramp: the warrior takes the real way up, nobody stands at the foot looking up",
+            "tfh.s,nohit%,holdUnreach.s/f,stuck%,detour,hits/f,win%,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Ranged);
+                f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R, 1.5f)); f.foeTags = { "archer" }; f.targetRatio = 0.60f; return f; });
+        envScen("env-tower-archer", "stair-tower", "the same tower, a bow follower: he shoots from a spot that sees the top, he does not climb into the blade",
+            "tfh.s,nohit%,holdUnreach.s/f,stuck%,contact%,walked/f,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "archer", 25, Cls::Melee);
+                f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R, 1.5f)); f.foeTags = { "archer" }; f.targetRatio = 0.60f; return f; });
+        envScen("env-above-wall", "ledge", "a foe on a floor above with no stair in reach (Cicero swinging at one above him through a wall): take another foe, or a spot that reaches him, never a pin on the unreachable one",
+            "holdUnreach.s/f,stuck%,unreach%,nohit%,tfh.s,osc/min,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "thief", 25, Cls::Melee);
+                f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R)); f.foeTags = { "archer" }; f.targetRatio = 0.50f; return f; });
+        envScen("env-doorway-block", "doorway-open", "two blades and a melee player, the foes in the next room, one gap a body wide: one goes through at a time, the second does not push at his back",
+            "blocked/f,reblock/f,osc/min,stuck%,tfh.s,nohit%,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "knight", 25, Cls::Melee); f.others.push_back(ClassBySlug(c, "warrior"));
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt", "grunt" }; f.targetRatio = 0.90f; return f; });
+        envScen("env-closed-door", "doorway", "the same rooms with a closed door: the party opens it and goes through, a beast on the far side cannot",
+            "doors/f,blocked/f,stuck%,tfh.s,nohit%,osc/min,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "wolf", "animal", "bandit" }, 22, R)); f.foeTags = { "grunt", "grunt" }; f.targetRatio = 0.80f; return f; });
+        envScen("env-heal-corner", "u-corridor", "a healer whose patients fight round a corner: he walks to where he reaches them (the heal claim's occluded bound releases it), nobody goes down while he holds a heal on a wall",
+            "healLate%,dwh/f,dl.noLos%,dl.fired%,stuck%,holdUnreach.s/f,pDist,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "healer", 25, Cls::Melee); f.others.push_back(ClassBySlug(c, "knight"));
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt", "grunt" }; f.ensure = { "heal" }; f.ensureOthers = {}; f.foesOnPlayer = true; f.targetRatio = 1.00f; return f; });
+        envScen("env-dead-end", "dead-end", "a hurt caster with two blades on him in a hall with a pocket room: a retreat goes where a way on exists, never into the pocket",
+            "retreat%,downs/f,stuck%,osc/min,blocked/f,taken/s,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "evoker", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt" }; f.ensure = { "fire", "heal" }; f.onSubject = true; f.subjectHp = 0.5f; f.targetRatio = 0.90f; return f; });
+        envScen("env-narrow", "narrow", "a corridor one body wide between the party and the foes: a queue, not a scrum",
+            "blocked/f,reblock/f,stuck%,osc/min,tfh.s,nohit%,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Melee); f.others.push_back(ClassBySlug(c, "knight"));
+                for (int i = 0; i < 3; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt", "grunt" }; f.targetRatio = 0.90f; return f; });
+        envScen("env-island", "island", "an archer on a floor nothing joins: a blade cannot reach him by any road. He must not stand pinned on him",
+            "holdUnreach.s/f,stuck%,unreach%,nohit%,env.stuckForever,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Ranged);
+                f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R)); f.foeTags = { "archer" }; f.targetRatio = 0.50f; return f; });
+        envScen("env-locked-door", "locked-door", "foes behind a locked door nobody has the key for: the leg ends BLOCKED at the door, once, and he does not walk at it again and again",
+            "blocked/f,reblock/f,stuck%,holdUnreach.s/f,unreach%,nohit%,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit", "draugr" }, 24, R)); f.foeTags = { "grunt", "grunt" }; f.targetRatio = 0.60f; return f; });
+        // INJECTED DEFECTS (8.9): the planner's mesh has an edge the truth lacks. The body walks the truth. No trust reader exists yet (batch M1), so these
+        // show what the defect costs TODAY, and the numbers a trust reader has to bring inside the bounds.
+        envScen("trust-ignored-wall", "trust-wall", "the mesh walks through a wall that is really there: he must stop pushing at it and take the long way round",
+            "stuck%,stuckLegs/f,env.stuckForever,tfh.s,nohit%,osc/min,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R)); f.foeTags = { "archer", "archer" }; f.targetRatio = 0.60f; return f; });
+        envScen("trust-one-way", "trust-one-way", "an edge that is walkable one way only: going out works, coming back by the same edge does not",
+            "stuck%,stuckLegs/f,env.stuckForever,tfh.s,nohit%,osc/min,U", [=](const Data& D, const std::vector<SimClass>& c, Rng& R) { FS f = base(c, "warrior", 25, Cls::Melee);
+                for (int i = 0; i < 2; ++i) f.customFoes.push_back(Foe(D, { "bandit_archer", "draugr_archer", "bandit" }, 24, R)); f.foeTags = { "archer", "archer" }; f.targetRatio = 0.60f; return f; });
         return v;
     }
 

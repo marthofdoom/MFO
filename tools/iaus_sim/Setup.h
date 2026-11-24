@@ -273,7 +273,7 @@ namespace Sim {
     // offset from the centre in a straight line that stops at a wall (so nobody starts in the next room). Every draw is a hash of the
     // fight's seed: the fight's own random stream is not touched, and its builds and foes are the plane's for the same seed.
     inline void EnvPlace(Fight& F, const FightSpec& fs, float cx, float cy, float ang) {
-        const SimEnv* E = fs.env; if (!E) { if (g_envPool.draw.empty()) return; E = g_envPool.draw[SimEnv::Mix(fs.seed ^ 0x7F4A7C15D1B54A32ULL) % g_envPool.draw.size()]; }
+        const SimEnv* E = fs.env; if (!E) { const std::vector<const SimEnv*>& pool = tl_envDraw ? *tl_envDraw : g_envPool.draw; if (pool.empty()) return; E = pool[SimEnv::Mix(fs.seed ^ 0x7F4A7C15D1B54A32ULL) % pool.size()]; }
         std::uint64_t hs = fs.seed * 0xC2B2AE3D27D4EB4FULL + 0x165667B19E3779F9ULL; auto next = [&]() { hs = SimEnv::Mix(hs); return hs; };
         F.env = E; F.doors = E->doors0; F.doorStamp = 0; F.occ.clear(); F.interior = E->interior;
         const EQ::View v = E->View(F.doors, 0); const std::size_t nt = E->tris.size();

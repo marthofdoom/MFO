@@ -24,6 +24,7 @@
 #include "envextract/envfile.h"
 #include "iaus_sim/Json.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -56,6 +57,7 @@ namespace Sim {
         float stuckSec = 2.0f, stuckU = 30.0f;       // moved under stuckU in stuckSec while a leg wants him to move = stuck (iaus-sim-v4.md 2.5)
         float legGoalU = 200.0f;                     // a goal that moved farther than this starts a new leg
         float oscSec = 3.0f;                         // a new leg heading back within this of the last leg's start is a reversal
+        float legMinU = 150.0f;                      // ... when both legs go farther than this (footwork around a foe in reach is not a leg)
         float reblockU = 300.0f;                     // LootTuning::gateRepeatU: a block this near his previous block is a re-block
         float dropSec = 0.6f;                        // ASSUMPTION: the time a drop takes
         float maxDrop = 600.0f;                      // the deepest drop a walker with the ability takes (the README's p95)
@@ -88,14 +90,14 @@ namespace Sim {
     // A body's place on the mesh and the route he is on (World.h Body::nav). Plain values: a Fight copy copies it.
     struct Nav {
         std::int32_t tri = -1;                                   // the triangle he stands on
-        std::int32_t goalTri = -1; EQ::Vec3 goal;                // what his corners lead to
+        std::int32_t goalTri = -1; EQ::Vec3 goal; std::uint32_t goalBody = 0;   // what his corners lead to, and who stands there
         std::array<EQ::PathPoint, 6> pts; std::uint8_t n = 0, i = 0; bool reach = false, blocked = false, cut = false;
         double pathAt = -1e9, holdUntil = 0; std::uint64_t stamp = ~0ull;
         double wantAt = -1e9, progAt = 0; float px = 0, py = 0; bool stuckNoted = false; double stuckSince = -1;   // the stuck window
         double blockSince = -1, passUntil = 0; std::uint32_t blocker = 0;                                          // a body in his way
         std::int32_t door = -1; double doorAt = 0;                                                               // the door he is opening
         double dropUntil = 0; EQ::Vec3 dropTo; std::int32_t dropTri = -1;                                          // a drop in flight
-        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, walked = 0; bool legOpen = false, legReach = false;
+        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false;
         float blockX = 0, blockY = 0; bool hadBlock = false;
     };
 
@@ -111,7 +113,7 @@ namespace Sim {
         std::vector<std::uint32_t> walk, weak;
         std::vector<EnvPoint> entries, spawns, refs;   // load doors on the mesh / actor spawn points / containers and loose items (batch L)
         std::vector<float> triArea; float area0 = 0.0f; std::uint32_t tris0 = 0;   // walk component 0
-        int defects = 0;
+        int defects = 0, plainDoors = 0;   // plainDoors: door triangles joined from REFS by geometry (no DOOR row)
 
         [[nodiscard]] EQ::View View(const std::vector<EQ::Door>& doors, std::uint64_t stamp, bool plan = false) const {
             EQ::View v; v.verts = verts; v.tris = plan && !planTris.empty() ? std::span<const EQ::Tri>(planTris) : std::span<const EQ::Tri>(tris); v.doors = doors; v.walls = walls;
@@ -152,7 +154,8 @@ namespace Sim {
             const EQ::View v = View(doors0, 0); (*d)[static_cast<std::size_t>(from)] = 0.0f; at[static_cast<std::size_t>(from)] = EQ::Centroid(v, from); pq.push({ 0.0f, from });
             while (!pq.empty()) { const N n = pq.top(); pq.pop(); const std::size_t ti = static_cast<std::size_t>(n.second); if (n.first > (*d)[ti]) continue;
                 const EQ::Tri& T = tris[ti];
-                for (int k = 0; k < 3; ++k) { if (T.kind[k] != EQ::Edge::Walk || T.nb[k] < 0) continue; const EQ::Vec3& a = verts[T.v[k]]; const EQ::Vec3& b = verts[T.v[(k + 1) % 3]];
+                for (int k = 0; k < 3; ++k) { if (T.kind[k] != EQ::Edge::Walk || T.nb[k] < 0) continue; if (const std::int32_t dr = tris[static_cast<std::size_t>(T.nb[k])].door; dr >= 0 && doors0[static_cast<std::size_t>(dr)].state == EQ::DoorState::Locked) continue;   // a locked door is a wall for placement
+                    const EQ::Vec3& a = verts[T.v[k]]; const EQ::Vec3& b = verts[T.v[(k + 1) % 3]];
                     const EQ::Vec3 mid{ 0.5f * (a.x + b.x), 0.5f * (a.y + b.y), 0.5f * (a.z + b.z) }; const float g = n.first + std::hypot(mid.x - at[ti].x, mid.y - at[ti].y, mid.z - at[ti].z);
                     const std::size_t ni = static_cast<std::size_t>(T.nb[k]); if (g < (*d)[ni]) { (*d)[ni] = g; at[ni] = mid; pq.push({ g, T.nb[k] }); } } }
             std::lock_guard<std::mutex> lk(fieldM); if (fields.size() > 64) fields.clear(); return fields[from] = d;
@@ -197,6 +200,30 @@ namespace Sim {
                   for (std::uint32_t k = 0; k < cnt; ++k) { std::uint32_t mi; std::uint16_t tri; std::uint8_t edge; std::memcpy(&mi, &b[off + 8 * k], 4); std::memcpy(&tri, &b[off + 8 * k + 4], 2); edge = static_cast<std::uint8_t>(b[off + 8 * k + 6]);
                       if (mi >= f.meshCount() || tri >= f.mesh(mi).triCount || edge > 2) continue; EQ::Tri& T = E->tris[f.mesh(mi).triBase + tri]; T.kind[edge] = EQ::Edge::Wall; T.nb[edge] = -1; ++E->defects; } } } }
         EQ::BuildGrid(E->grid, E->verts, E->tris);
+        // IN-CELL DOORS. The file's DOOR rows join only load doors to triangles (measured on the 11-23 library: 165 rows, all teleport). A plain door is
+        // a REFS row with no triangle, so it is joined here by geometry: the leaf is the long side of its box through the box's middle, turned by
+        // the ref's z rotation, and every floor triangle that leaf crosses is a door triangle. MODEL: a plain door starts CLOSED (the plugin does not
+        // say otherwise in what the extractor exports), locked when its ref says so.
+        { std::vector<std::uint32_t> have; for (const EQ::Door& d : E->doors0) have.push_back(d.id);
+          for (std::uint32_t i = 0; i < f.refCount(); ++i) { const mfoenv::Ref& r = f.ref(i);
+            if (r.kind != mfoenv::kDoorRef || (r.flags & (mfoenv::kTeleport | mfoenv::kStartsDisabled)) || std::find(have.begin(), have.end(), r.id) != have.end()) continue;
+            const float bx = r.boundsMax[0] - r.boundsMin[0], by = r.boundsMax[1] - r.boundsMin[1]; if (!(bx > 1.0f) || !(by > 1.0f)) continue;
+            const float cxm = 0.5f * (r.boundsMin[0] + r.boundsMax[0]), cym = 0.5f * (r.boundsMin[1] + r.boundsMax[1]);
+            float ux = std::cos(r.rot[2]), uy = -std::sin(r.rot[2]); if ((bx >= by) != (std::fabs(ux) >= std::fabs(uy))) { const float t = ux; ux = -uy; uy = t; }   // the leaf lies along the box's long side
+            const float h = std::min(std::fabs(ux) > 1e-3f ? 0.5f * bx / std::fabs(ux) : 1e9f, std::fabs(uy) > 1e-3f ? 0.5f * by / std::fabs(uy) : 1e9f);
+            EQ::Door nd; nd.state = (r.flags & mfoenv::kLocked) ? EQ::DoorState::Locked : EQ::DoorState::Closed; nd.key = r.key; nd.id = r.id; nd.leaf = true;
+            nd.ax = cxm - ux * h; nd.ay = cym - uy * h; nd.bx = cxm + ux * h; nd.by = cym + uy * h; nd.z0 = r.boundsMin[2]; nd.z1 = std::max(r.boundsMax[2], r.boundsMin[2] + 120.0f);
+            const EQ::Grid& g = E->grid; const int x0 = std::clamp(static_cast<int>((std::min(nd.ax, nd.bx) - g.x0) / g.cell), 0, g.nx - 1), x1 = std::clamp(static_cast<int>((std::max(nd.ax, nd.bx) - g.x0) / g.cell), 0, g.nx - 1);
+            const int y0 = std::clamp(static_cast<int>((std::min(nd.ay, nd.by) - g.y0) / g.cell), 0, g.ny - 1), y1 = std::clamp(static_cast<int>((std::max(nd.ay, nd.by) - g.y0) / g.cell), 0, g.ny - 1);
+            auto cr = [](float ax, float ay, float bx2, float by2) { return ax * by2 - ay * bx2; };
+            for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x) { const std::size_t c = static_cast<std::size_t>(y) * g.nx + x;
+                for (std::uint32_t k = g.triStart[c]; k < g.triStart[c + 1]; ++k) { EQ::Tri& T = E->tris[g.triItems[k]]; if (T.door >= 0) continue;
+                    const EQ::Vec3* p[4] = { &E->verts[T.v[0]], &E->verts[T.v[1]], &E->verts[T.v[2]], &E->verts[T.v[0]] }; const float tz = (p[0]->z + p[1]->z + p[2]->z) / 3.0f;
+                    if (tz < nd.z0 - 96.0f || tz > nd.z0 + 96.0f) continue; bool hit = false;
+                    for (int e = 0; e < 3 && !hit; ++e) { const float ex = p[e + 1]->x - p[e]->x, ey = p[e + 1]->y - p[e]->y, dxl = nd.bx - nd.ax, dyl = nd.by - nd.ay, den = cr(dxl, dyl, ex, ey); if (std::fabs(den) < 1e-9f) continue;
+                        const float t = cr(p[e]->x - nd.ax, p[e]->y - nd.ay, ex, ey) / den, u = cr(p[e]->x - nd.ax, p[e]->y - nd.ay, dxl, dyl) / den; hit = t >= 0.0f && t <= 1.0f && u >= 0.0f && u <= 1.0f; }
+                    if (!hit) { const float s = cr(p[1]->x - p[0]->x, p[1]->y - p[0]->y, p[2]->x - p[0]->x, p[2]->y - p[0]->y) >= 0 ? 1.0f : -1.0f; hit = true; for (int e = 0; e < 3; ++e) if (s * cr(p[e + 1]->x - p[e]->x, p[e + 1]->y - p[e]->y, cxm - p[e]->x, cym - p[e]->y) < 0) hit = false; }   // the whole leaf inside one triangle
+                    if (hit) { nd.tri = static_cast<std::int32_t>(g.triItems[k]); T.door = static_cast<std::int32_t>(E->doors0.size()); E->doors0.push_back(nd); ++E->plainDoors; } } } } }
         // components over what a PLANNER could ever join (the plan mesh when there are defects, so a defect never looks like an island)
         EQ::LabelComponents(E->planTris.empty() ? E->tris : E->planTris, E->walk, E->weak);
         { const EQ::View v = E->View(E->doors0, 0); EQ::BuildWalls(E->walls, v); EQ::IndexWalls(E->grid, E->walls); }
@@ -229,13 +256,14 @@ namespace Sim {
             all.push_back(E); if (toDraw && E->pool) draw.push_back(E.get()); return true; }
     };
     inline EnvPool g_envPool;
+    inline thread_local const std::vector<const SimEnv*>* tl_envDraw = nullptr;   // --path-report: the places of ONE environment class, for the fights this thread builds
     inline std::string g_envDir =
 #ifdef SIM_ENV_DIR
         SIM_ENV_DIR;
 #else
         "tools/iaus_sim/envs";
 #endif
-    inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way" };
+    inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way" };
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // index.json of the library: every environment of a set (optionally one class). Returns the number loaded.
     inline int LoadSet(EnvPool& P, const std::string& set, const std::string& cls) {
