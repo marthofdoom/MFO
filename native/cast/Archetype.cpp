@@ -38,6 +38,7 @@
 #include "Config.h"
 #include "apmf/APMFBridge.h"
 #include "cast/SeatRows.h"
+#include "iaus/Prune.h"
 
 #include <algorithm>
 #include <map>
@@ -208,15 +209,20 @@ namespace MFO::Actuation {
             }
         }
 
-        // Wall (C0): the effect's impactDataSet (EffectSetting +0x90) holds an impact-data entry whose
-        // BGSImpactData::hazard (+0x80) is set. Fork: EffectSetting.h:97, BGSImpactDataSet.h:36 (impactMap, +0x28),
-        // BGSImpactData.h:70. Pure reads of loaded records.
-        bool HasImpactHazard(const RE::EffectSetting* b) {
+        // The effect's impactDataSet (EffectSetting +0x90) holds an impact-data entry whose BGSImpactData::hazard (+0x80) is set;
+        // a_drops is set when such a hazard also has BGSHazardData flag kDropToGround (data +0x14, bit 16). Fork: EffectSetting.h:97,
+        // BGSImpactDataSet.h:36 (impactMap, +0x28), BGSImpactData.h:70, BGSHazard.h:11-36. Pure reads of loaded records.
+        bool HasImpactHazard(const RE::EffectSetting* b, bool& a_drops) {
+            a_drops = false;
             auto* set = b->data.impactDataSet;
             if (!set) return false;
-            for (const auto& kv : set->impactMap)
-                if (kv.second && kv.second->hazard) return true;
-            return false;
+            bool any = false;
+            for (const auto& kv : set->impactMap) {
+                if (!kv.second || !kv.second->hazard) continue;
+                any = true;
+                if (kv.second->hazard->data.flags.all(RE::BGSHazardData::BGSHazardFlags::kDropToGround)) a_drops = true;
+            }
+            return any;
         }
 
         // SelfHazard (C0): the hazard a kSpawnHazard effect spawns (EffectSetting::associatedForm, +0x08) has a spell
@@ -299,7 +305,9 @@ namespace MFO::Actuation {
                 rows.push_back(r);
                 archs.push_back(a);
                 effIdx.push_back(effNo);
-                if (HasImpactHazard(b)) o.impactHazard = true;
+                bool drops = false;
+                if (HasImpactHazard(b, drops)) o.impactHazard = true;
+                if (drops) o.impactHazardDrops = true;
                 if (a == Arch::kSpawnHazard) {
                     o.spawnHazard = true;
                     if (HazardSpellHostile(b)) o.hazardHostile = true;
@@ -359,7 +367,8 @@ namespace MFO::Actuation {
             else if (anyWard)      o.shape = SpellShape::Ward;
             else if (anyLight)     o.shape = SpellShape::Light;
             else if (o.spawnHazard && self)   o.shape = SpellShape::SelfHazard;   // caster-centred hazard (C0 label)
-            else if (o.impactHazard)          o.shape = SpellShape::Wall;         // C0: impact-data hazard, not "TL + concentration"
+            else if (Iaus::Prune::IsWallShape(o.impactHazardDrops, o.casting == RE::MagicSystem::CastingType::kConcentration, o.delivery == D::kSelf))
+                o.shape = SpellShape::Wall;   // MFO-B865: a concentration stream whose impact hazard drops to the ground; a bolt's is not a wall
             else if (o.delivery == D::kTargetLocation) {
                 if (o.hasProjectile) o.shape = SpellShape::Rune;
                 else                 o.shape = SpellShape::TLBurst;
@@ -497,12 +506,12 @@ namespace MFO::Actuation {
             const char* fname = a_follower->GetName() ? a_follower->GetName() : "?";
             spdlog::info("[archetype] {:08X} {} cast \"{}\" ({:08X}): road={} shape={} predicted={} delivery={} "
                          "casting={} kind={} restoration={} twoHanded={} noDualMods={} charge={:.2f}s range={:.0f} "
-                         "area={} projectile={}{} explosion={} snapNav={} effects={} impactHazard={} spawnHazard={}{}",
+                         "area={} projectile={}{} explosion={} snapNav={} effects={} impactHazard={} impactDrops={} spawnHazard={}{}",
                          fid, fname, sname, sid, RoadName(a_road), ShapeName(a.shape), RowText(a),
                          DeliveryName(a.delivery), CastingName(a.casting), a.kindName, a.restoration,
                          a.twoHanded, a.noDualMods, a.chargeTime, a.range, a.area, a.hasProjectile,
                          a.hasBarrier ? "(barrier)" : "", a.hasExplosion, a.snapToNavMesh, a.effectCount,
-                         a.impactHazard, a.spawnHazard, a.spawnHazard ? (a.hazardHostile ? "(hostile)" : "(benign)") : "");
+                         a.impactHazard, a.impactHazardDrops, a.spawnHazard, a.spawnHazard ? (a.hazardHostile ? "(hostile)" : "(benign)") : "");
         }
         if (IsClaimRoad(a_road)) {
             std::lock_guard lk(g_noteMx);
