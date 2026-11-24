@@ -1,14 +1,14 @@
-# Batch L, field 11-17 L1 (Raven Rock): bodies that were not hostile at death in a town, a guard walking past, an owned chest, an owned potion.
+# Batch L, field 11-17 L1 (Raven Rock): bodies that were not hostile at death in a town street, a guard walking the far end of it (he sees the
+# street, never the side room the party stands in), an owned chest, an owned potion.
 nopool
-exterior
 class fixture_loot
 map
 #########################
-#P......................#
-#....a....b....c........#
+#P.....#................#
+#......#...a...b...c....#
+#......#................#
 #.......................#
-#g.....................h#
-#....d.........e........#
+#......#...d...e....g..h#
 #########################
 end
 town

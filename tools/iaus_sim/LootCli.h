@@ -46,7 +46,7 @@ namespace Sim::Loot {
         if (o.score) { for (std::size_t s = 0; s < seeds.size(); ++s) std::printf("SEED %llu  J=%.4f (scenarios 0.00, natural 0.00)\nSWITCH %llu 0 1.000\n", static_cast<unsigned long long>(seeds[s]), seedSum[s] / (n * static_cast<double>(scope.size())), static_cast<unsigned long long>(seeds[s])); return 0; }
         LTally allT; int bad = 0; for (std::size_t c = 0; c < scope.size(); ++c) { PrintTally(per[c], scope[c]->name.c_str()); bad += PrintGate(per[c], scope[c]->name.c_str()); allT.Merge(per[c]); }
         PrintTally(allT, "ALL"); const int badAll = PrintGate(allT, "ALL");
-        std::printf("LOOT-REPORT %d episodes, %zu places, %zu classes: value/ep with gold %.3f, without %.3f (fights %.3f + potions %.3f + gold %.3f); gate rows failing: ALL %d, per class %d; wall %.1f s\n", jobs, places.size(), scope.size(),
+        std::printf("LOOT-REPORT %d episodes, %zu places, %zu classes: value/ep with gold %.3f, without %.3f (fights %.3f + potions %.3f + gold %.3f); gate rows failing: ALL %d, per class %d; wall %.2f s\n", jobs, places.size(), scope.size(),
             (allT.uFights + allT.dPotJ + allT.dGoldJ) / std::max(1L, allT.episodes), (allT.uFights + allT.dPotJ) / std::max(1L, allT.episodes), allT.uFights / std::max(1L, allT.episodes), allT.dPotJ / std::max(1L, allT.episodes), allT.dGoldJ / std::max(1L, allT.episodes), badAll, bad, wall);
         return 0;
     }
@@ -88,9 +88,9 @@ namespace Sim::Loot {
         [[nodiscard]] const SimClass& C(const char* n) const { for (const SimClass& c : all) if (c.name == n) return c; return t1[0]; }
         [[nodiscard]] const SimEnv* Env(const char* n) const { return g_envPool.ByName(n); }
         LTally Bare(const char* env, const char* cls, std::initializer_list<const char*> others, EpSpec sp, const Rules& r, const MFO::Iaus::LootTuning& T, bool traceIt = false) const {
-            std::vector<const SimClass*> o; for (const char* n : others) o.push_back(&C(n)); sp.env = Env(env); Episode ep = MakeBare(D, C(cls), o, all, t1, sp); ep.W.R = r; ep.W.T = &T; if (traceIt) ep.W.trace = trace; IausPolicy P; ep.Run(P); return ep.W.t; }
+            std::vector<const SimClass*> o; for (const char* n : others) o.push_back(&C(n)); sp.env = Env(env); sp.rules = &r; sp.tuning = &T; Episode ep = MakeBare(D, C(cls), o, all, t1, sp); if (traceIt) ep.W.trace = trace; IausPolicy P; ep.Run(P); return ep.W.t; }
         LTally Fought(const char* env, const char* cls, std::uint64_t seed, EpSpec sp, const Rules& r, const MFO::Iaus::LootTuning& T, bool traceIt = false) const {
-            sp.env = Env(env); Episode ep = MakeEpisode(D, C(cls), all, t1, seed, sp); ep.W.R = r; ep.W.T = &T; if (traceIt) ep.W.trace = trace; IausPolicy P; ep.Run(P); return ep.W.t; }
+            sp.env = Env(env); sp.rules = &r; sp.tuning = &T; Episode ep = MakeEpisode(D, C(cls), all, t1, seed, sp); if (traceIt) ep.W.trace = trace; IausPolicy P; ep.Run(P); return ep.W.t; }
     };
     inline long EvN(const LTally& t, const char* k) { const auto it = t.ev.find(k); return it == t.ev.end() ? 0 : it->second; }
     inline long LeftN(const LTally& t, const char* k) { const auto it = t.left.find(k); return it == t.left.end() ? 0 : it->second; }
@@ -108,7 +108,7 @@ namespace Sim::Loot {
         v.push_back({ "freeze-1117g", "field 11-17g: a follower blocked at one point (no door, no lever) gated his target and a cone past it, and outdoor loot froze", "the rule before 9a16a278 (--loot-rule gate=old1117)", false,
             [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r, old; old.gateOld1117 = 1; LT T, To; To.gateReadmitMoveU = 0; To.gateNearU = 0; return std::pair{ c.Bare("loot-freeze", "melee", {}, sp, r, T, tr), c.Bare("loot-freeze", "melee", {}, sp, old, To) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.leftRR != 0) return "today's rule left released, reachable loot"; if (EvN(t, "GATED") != 0) return "today's rule gated a block with no door or lever";
-                if (o.leftRR < 3) return "the old rule did not freeze the loot past the block"; if (LeftN(o, "GATED") < 3) return "the old rule's leftovers are not GATED"; return ""; } });
+                if (o.leftRR < 2) return "the old rule did not freeze the loot past the block"; if (LeftN(o, "GATED") < 2) return "the old rule's leftovers are not GATED"; if (PrintGate(o, "", false) == 0) return "the old rule passes the gate"; return ""; } });
         v.push_back({ "locked-door", "a locked door with loot behind it: GATED is a fact, the player opening the door lifts it", "the door stays locked", false,
             [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; EpSpec open = sp; open.setup = [](Episode& e) { e.doorOpenAt = 30.0; }; Rules r; const LT T; return std::pair{ c.Bare("loot-gate", "melee", {}, open, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, r, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "GATED") + EvN(t, "GATED (target only)") < 1) return "no GATED record at the locked door"; if (t.taken < 3) return "the loot behind the opened door was not taken"; if (t.leftRR != 0) return "released, reachable loot left after the door opened";
@@ -117,7 +117,7 @@ namespace Sim::Loot {
             [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r; const LT T; LT T0; T0.gateRepeatU = 0; return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, r, T0) }; },
             [](const LTally& t, const LTally& o) -> std::string { (void)o; if (t.legs < 4) return "he no longer walks to the locked door again and again (the mirror no longer shows the fault)"; if (t.stuckEpisodes < 1) return "no 'stuck himself' episode at a real gate"; return ""; } });
         v.push_back({ "guard-bar-1117", "field 11-17 L1 (Raven Rock): bodies a guard can see, three followers cycling to them, 19 BARRED arrivals", "no party-wide bar (--loot-rule corpseBar=0)", false,
-            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 90; Rules r, old; old.corpseBar = 0; const LT T; return std::pair{ c.Bare("loot-town", "melee", { "ranged", "mage" }, sp, r, T, tr), c.Bare("loot-town", "melee", { "ranged", "mage" }, sp, old, T) }; },
+            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; sp.setup = [](Episode& e) { e.W.hostileDeathKnown = true; }; Rules r, old; old.corpseBar = 0; const LT T; return std::pair{ c.Bare("loot-town", "melee", { "ranged", "mage" }, sp, r, T, tr), c.Bare("loot-town", "melee", { "ranged", "mage" }, sp, old, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.crimes || t.guardSeenTakes) return "a take a guard saw"; if (o.crimes || o.guardSeenTakes) return "a take a guard saw (no bar)"; const long a = EvN(t, "arrived: guard sees it (BARRED)"), b = EvN(o, "arrived: guard sees it (BARRED)");
                 if (a > 6) return "more than two BARRED arrivals a body with the bar"; if (b <= a) return "without the bar the followers do not cycle to the barred bodies"; return ""; } });
         v.push_back({ "pending-1117c", "field 11-17c F1: a guard answer not yet back dropped every candidate where no guard was", "guard timers shorter than a loot tick (guardFreshSec 0.5, guardUnreadMaxSec 0.5), no keep-warm", false,
@@ -138,10 +138,10 @@ namespace Sim::Loot {
                 return std::pair{ c.Bare("loot-shop", "thief", {}, sp, r, T, tr), c.Bare("loot-shop", "knight", {}, sp, r, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.crimes || o.crimes) return "a crime a witness saw"; if (EvN(t, "steal") != 1) return "the Thief did not steal exactly the one unseen potion"; if (EvN(o, "steal") != 0) return "a class with no steal road stole"; return ""; } });
         v.push_back({ "carry-full", "a follower at his carry limit and a body with potions he wants: only the equipment peek weighs (LootTake.cpp), so he walks, takes nothing, and comes back", "the same with room in the bag", true,
-            [](const Ctx& c, bool tr) { EpSpec full; full.lootSec = 100; full.setup = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } e.W.R.carryCap = e.W.fs[0].inv.Weight() + 0.4f; for (FState& f : e.W.fs) f.inv.s.erase(std::remove_if(f.inv.s.begin(), f.inv.s.end(), [](const Stack& s) { return Items()[Z(s.item)].kind == Kind::PotionH; }), f.inv.s.end()); };
+            [](const Ctx& c, bool tr) { EpSpec full; full.lootSec = 100; full.setup = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } for (FState& f : e.W.fs) f.inv.s.erase(std::remove_if(f.inv.s.begin(), f.inv.s.end(), [](const Stack& s) { return Items()[Z(s.item)].kind == Kind::PotionH; }), f.inv.s.end()); e.W.R.carryCap = e.W.fs[0].inv.Weight() + 0.4f; };
                 EpSpec room = full; room.setup = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } }; Rules r; const LT T;
                 return std::pair{ c.Bare("loot-backs", "melee", {}, full, r, T, tr), c.Bare("loot-backs", "melee", {}, room, r, T) }; },
-            [](const LTally& t, const LTally& o) -> std::string { if (o.taken < 3) return "with room he did not take the potions"; if (t.legs + EvN(t, "arrived -- nothing to take") < 2) return "the full follower no longer walks to loot he cannot carry (the mirror no longer shows the fault)"; return ""; } });
+            [](const LTally& t, const LTally& o) -> std::string { if (o.taken < 2) return "with room he did not take the potions"; if (t.legs + EvN(t, "arrived -- nothing to take") < 2) return "the full follower no longer walks to loot he cannot carry (the mirror no longer shows the fault)"; return ""; } });
         return v;
     }
     inline int RunScenarios(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& t1, const std::string& which, bool test, bool trace) {

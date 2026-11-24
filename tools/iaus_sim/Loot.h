@@ -65,6 +65,7 @@ namespace Sim::Loot {
         float maxSlots = 4.0f, candCap = 48.0f, stuckHits = 2.0f, idleTicks = 4.0f, stallStrikes = 2.0f;
         // MODEL (header)
         float followU = 400.0f;        // the follow package: past this from the player he walks back
+        float driftShare = 0.28f;      // CALIBRATED (field 11-17c, d, g, 11-18: 12 'ARRIVED but he is N u away' of 43 ARRIVED ends): after a leg ended ARRIVED the follow package takes him back this often before MFO's tick reads the arrival. Otherwise the claim holds him there
         float carryCap = Logi::kCarryCap;
         // THE RULES OF OLDER BUILDS, for the scenarios that must fail on them:
         float corpseBar = 1.0f;        // 0 = before the party-wide guard bar on a corpse (field 11-17 L1)
@@ -78,7 +79,7 @@ namespace Sim::Loot {
             { "departRadius", &Rules::departRadius }, { "lotd", &Rules::lotd }, { "releaseMul", &Rules::releaseMul }, { "departRelease", &Rules::departRelease }, { "grab", &Rules::grab }, { "arriveRadius", &Rules::arriveRadius },
             { "noProgressSec", &Rules::noProgressSec }, { "blockedGateSec", &Rules::blockedGateSec }, { "transientSec", &Rules::transientSec }, { "stickySec", &Rules::stickySec }, { "deadlineMax", &Rules::deadlineMax },
             { "deadlineSpeed", &Rules::deadlineSpeed }, { "stuckWindowSec", &Rules::stuckWindowSec }, { "stuckHits", &Rules::stuckHits }, { "guardRangeU", &Rules::guardRangeU }, { "maxSlots", &Rules::maxSlots },
-            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "guardWarmSec", &Rules::guardWarmSec } };
+            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
         for (const F& f : k) if (name == f.n) { r.*(f.m) = v; return true; }
         return false;
     }
@@ -211,9 +212,9 @@ namespace Sim::Loot {
     enum class LegState : std::uint8_t { None, Walking, Arrived, Blocked };   // Harbinger ch.19 (APMF_API.h): the states MFO reacts to
     struct Slot {            // LootTravel_internal.h TravelIntent
         bool active = false; Phase phase = Phase::Holding; Cat cat = Cat::Gold; int target = -1; double start = 0, deadline = 0, emptySince = -1, guardHoldSince = -1, progressAt = 0; float lx = 0, ly = 0;
-        LegState leg = LegState::None; double legAt = 0, mbSince = -1, sampleAt = 0; float sx = 0, sy = 0, bx = 0, by = 0, bz = 0, moved = 0; std::uint32_t blocker = 0; bool everMoved = false;
+        bool drift = false; LegState leg = LegState::None; double legAt = 0, mbSince = -1, sampleAt = 0; float sx = 0, sy = 0, bx = 0, by = 0, bz = 0, moved = 0; std::uint32_t blocker = 0; bool everMoved = false;
     };
-    struct GuardAns { int verdict = 0; double at = -1e9, readAt = -1, postAt = -1e9, usedAt = -1e9; };   // 0 clear, 1 seen
+    struct GuardAns { int verdict = 0; double at = -1e9, readAt = -1, postAt = -1e9, usedAt = -1e9; bool has = false, pend = false; int pv = 0; double pat = 0; };   // 0 clear, 1 seen. pend: a posted scan whose answer lands at pat (the cached one stands until then)
     struct Gate { int target = -1, fi = -1; EQ::Vec3 block, tpos; double since = 0; bool targetOnly = false; std::vector<int> told; };   // LootTravel_internal.h GateRecord
     struct Hit { EQ::Vec3 p; double at = 0; int target = -1; };
     struct FState {
@@ -238,7 +239,7 @@ namespace Sim::Loot {
         std::map<std::string, long> left;                                         // wanted and left, by reason
         long leftRR = 0;                                                          // ... of those: RELEASED and REACHABLE and in range (the failure marth names)
         long goldLeft = 0, goldLeftRR = 0, museumLeft = 0, museumLeftRR = 0;      // coin and museum pieces left (all, and released + reachable)
-        double waitSum = 0; long waitN = 0; std::vector<float> waits;             // release (the party left combat with it lying there) to taken
+        double waitSum = 0; long waitN = 0; std::vector<float> waits, waitsDibs;   // release (the party left combat with it lying there) to taken: the free tier, and the tier the player has first dibs on
         long legs = 0, legsArrived = 0, legsAborted = 0, legsRestarted = 0, reversals = 0, revisits = 0;
         long srcTaken = 0;                                                        // sources something was taken from (trips per item = legs / srcTaken)
         double twoOnOneSec = 0; long twoOnOne = 0;                                // two followers walking to one source
@@ -252,7 +253,7 @@ namespace Sim::Loot {
         void Merge(const LTally& o) {
             episodes += o.episodes; lootSec += o.lootSec; followerSec += o.followerSec; for (const auto& kv : o.ev) ev[kv.first] += kv.second; stacks0 += o.stacks0; taken += o.taken; wanted += o.wanted;
             for (const auto& kv : o.left) left[kv.first] += kv.second; leftRR += o.leftRR; goldLeft += o.goldLeft; goldLeftRR += o.goldLeftRR; museumLeft += o.museumLeft; museumLeftRR += o.museumLeftRR;
-            waitSum += o.waitSum; waitN += o.waitN; waits.insert(waits.end(), o.waits.begin(), o.waits.end()); legs += o.legs; legsArrived += o.legsArrived; legsAborted += o.legsAborted; legsRestarted += o.legsRestarted;
+            waitSum += o.waitSum; waitN += o.waitN; waits.insert(waits.end(), o.waits.begin(), o.waits.end()); waitsDibs.insert(waitsDibs.end(), o.waitsDibs.begin(), o.waitsDibs.end()); legs += o.legs; legsArrived += o.legsArrived; legsAborted += o.legsAborted; legsRestarted += o.legsRestarted;
             reversals += o.reversals; revisits += o.revisits; srcTaken += o.srcTaken; twoOnOneSec += o.twoOnOneSec; twoOnOne += o.twoOnOne; combatLootSec += o.combatLootSec; combatTakes += o.combatTakes;
             guardSeenTakes += o.guardSeenTakes; crimes += o.crimes; awaySec += o.awaySec; awayMax = std::max(awayMax, o.awayMax); lateU += o.lateU; lateN += o.lateN; walkedPast += o.walkedPast;
             waves += o.waves; stuckEpisodes += o.stuckEpisodes; stuckOffSec += o.stuckOffSec; uFights += o.uFights; dPotJ += o.dPotJ; dGoldJ += o.dGoldJ; goldTaken += o.goldTaken;
@@ -297,14 +298,17 @@ namespace Sim::Loot {
         // TheftGate.cpp GuardCheck: a cached verdict is trusted guardFreshSec, an answer nobody has read is usable once up to guardUnreadMaxSec, one verdict
         // per visit (a verdict first used under guardFreshSec ago stands), a (follower, source) is asked again no faster than guardRepostSec. The answer
         // of a post lands on the next frame, so the FIRST ask is always pending. Returns 0 clear, 1 seen, 2 pending.
+        void GuardPost(GuardAns& e, int fi, int si) { e.pv = GuardSeesTruth(fi, si) ? 1 : 0; e.pat = Now() + static_cast<double>(TM::dt); e.pend = true; e.postAt = Now(); Ev("guard.post"); }
         int GuardCheck(int fi, int si, bool peek = false) {
-            GuardAns& e = fs[Z(fi)].guard[si]; const double now = Now(); const bool landed = now >= e.at;
-            if (!peek && landed && (now - e.at < T->guardFreshSec || (e.readAt < 0 && now - e.at < T->guardUnreadMaxSec) || (e.readAt >= 0 && now - e.readAt < T->guardFreshSec))) { if (e.readAt < 0) e.readAt = now; e.usedAt = now; return e.verdict; }
-            if (peek && landed && now - e.at < T->guardFreshSec) return e.verdict;
-            if (now - e.postAt >= T->guardRepostSec) { e.verdict = GuardSeesTruth(fi, si) ? 1 : 0; e.postAt = now; e.at = now + static_cast<double>(TM::dt); e.readAt = -1; Ev("guard.post"); }
+            GuardAns& e = fs[Z(fi)].guard[si]; const double now = Now();
+            if (e.pend && now >= e.pat) { e.verdict = e.pv; e.at = e.pat; e.readAt = -1; e.pend = false; e.has = true; }
+            if (e.has && !peek && (now - e.at < T->guardFreshSec || (e.readAt < 0 && now - e.at < T->guardUnreadMaxSec) || (e.readAt >= 0 && now - e.readAt < T->guardFreshSec))) { if (e.readAt < 0) e.readAt = now; e.usedAt = now; return e.verdict; }
+            if (e.has && peek && now - e.at < T->guardFreshSec) return e.verdict;
+            if (!e.pend && now - e.postAt >= T->guardRepostSec) GuardPost(e, fi, si);
             return 2;
         }
-        void GuardKeepWarm(int fi) { GuardAns& e = fs[Z(fi)].guard[-1]; const double now = Now(); if (now - e.usedAt < R.guardWarmSec && now - e.at > 0.5 * T->guardFreshSec && now >= e.at) { const double used = e.usedAt; e.verdict = GuardSeesTruth(fi, -1) ? 1 : 0; e.postAt = now; e.at = now + static_cast<double>(TM::dt); e.readAt = -1; e.usedAt = used; } }
+        // TheftGate.cpp KeepWarm: the follower-level answer, used within 15 s and older than half its freshness, is asked again (the cached one stands meanwhile).
+        void GuardKeepWarm(int fi) { GuardAns& e = fs[Z(fi)].guard[-1]; const double now = Now(); if (e.has && !e.pend && now - e.usedAt < R.guardWarmSec && now - e.at > 0.5 * T->guardFreshSec) GuardPost(e, fi, -1); }
         [[nodiscard]] bool CorpseWaived(const Src& s) const { return s.kind == SrcKind::Corpse && (!town || s.hostileDeath) && !s.owned; }   // TheftGate.cpp CorpseGuardWaived
         // TheftGate.cpp CorpseBarred: a corpse a guard barred is skipped by everybody for guardBarFloorSec, then while a guard still sees it (asked every 3 s).
         bool CorpseBarred(int fi, int si) {
@@ -426,9 +430,9 @@ namespace Sim::Loot {
         }
         [[nodiscard]] bool HasLoot(const FState& f, const Src& s, Cat c) const { if (c == Cat::Steal) return StealWants(f, s); return !Picks(f, s.items, c, c == Cat::Equipment).empty(); }
 
-        void NoteTake(int fi, int si, const ItemDef& d, int n, bool owned) {
+        void NoteTake(int fi, int si, const ItemDef& d, int n, bool owned, bool freeTier) {
             Src& s = src[Z(si)]; ++t.taken; ++s.takes; if (s.takes == 1) ++t.srcTaken; Ev("take"); ++t.ev[std::string("take ") + Logi::Name(d.kind)];
-            const double w = Now() - std::max(s.born, lastCombatEnd); t.waitSum += w; ++t.waitN; t.waits.push_back(static_cast<float>(w));
+            const double w = Now() - std::max(s.born, lastCombatEnd); t.waitSum += w; ++t.waitN; (freeTier ? t.waits : t.waitsDibs).push_back(static_cast<float>(w));
             if (d.kind == Kind::Gold) t.goldTaken += n;
             if (combat) ++t.combatTakes;
             if (!CorpseWaived(s) && GuardSeesTruth(fi, si)) ++t.guardSeenTakes;
@@ -447,7 +451,7 @@ namespace Sim::Loot {
                     const int k = c == Cat::Potions ? std::min(n, s.items[Z(i)].count) : n; if (!Fits(f, d, k)) { Ev("carry: stack does not fit"); continue; }
                     const bool up = Logi::IsUpgrade(f.inv, f.who, d); f.inv.Add(s.items[Z(i)].item, k); if (up) Logi::Equip(f.inv, s.items[Z(i)].item); s.items[Z(i)].count -= k;
                     if (c == Cat::Museum) { auto [it, fresh] = museumNeed.try_emplace(s.items[Z(i)].item, 1); (void)fresh; it->second -= k; }
-                    SyncKit(fi, d, k); NoteTake(fi, si, d, k, false); moved = any = true; }
+                    SyncKit(fi, d, k); NoteTake(fi, si, d, k, false, FreeTier(c)); moved = any = true; }
                 formBusy |= [&] { std::uint32_t m = 0; for (const auto& [i, n] : picks) { (void)n; m |= 1u << FormType(I[Z(s.items[Z(i)].item)].kind); } return m; }();
                 if (!any || c != Cat::Equipment) break; formBusy = 0;   // Equipment: one piece a call, the next call is the next 150 ms revisit in native; the lab lets the ten calls run (MODEL: no time cost)
             }
@@ -651,7 +655,7 @@ namespace Sim::Loot {
                         if (fa.first >= 2) MarkStalled(si); skip = "ARRIVED per Harbinger but drifted away"; f.run.clear();
                     }
                     else if (sl.leg == LegState::Blocked) {
-                        const EQ::Vec3 bp{ sl.bx, sl.by, sl.bz }; Ev("leg ended BLOCKED");
+                        const EQ::Vec3 bp{ sl.bx, sl.by, sl.bz }; Ev("leg ended BLOCKED"); ++t.legsAborted;
                         if (sl.blocker) { f.hasDefer = true; f.deferItem = si; f.deferBlocker = sl.blocker; f.deferPos = bp; f.run.clear(); Ev("ACTOR-BLOCKED (REORDER)"); Log("[loot] F%d target %u ACTOR-BLOCKED: REORDER", fi, s.id); skip = "ACTOR-BLOCKED"; }
                         else { if (StaticBlock(fi, si, bp)) return false; skip = "BLOCKED (static)"; }
                     }
@@ -680,7 +684,7 @@ namespace Sim::Loot {
             } else if (!CorpseWaived(s)) { const int g = GuardCheck(fi, si); if (g == 2) { Ev("arrived: pending (guard or landing)"); return false; } if (g == 1) { MarkFailed(si, "loose ref skipped at ARRIVAL -- guard"); sl.phase = Phase::Holding; return false; } }
             if (!s.items.empty() && s.items[0].count > 0) { const ItemDef& d = I[Z(s.items[0].item)]; int n = s.items[0].count;
                 if (sl.cat == Cat::Museum) { auto [it, fresh] = museumNeed.try_emplace(s.items[0].item, 1); (void)fresh; n = std::min(n, std::max(1, it->second)); it->second -= n; }
-                const bool up = Logi::IsUpgrade(f.inv, f.who, d); f.inv.Add(s.items[0].item, n); if (up) Logi::Equip(f.inv, s.items[0].item); s.items[0].count -= n; SyncKit(fi, d, n); NoteTake(fi, si, d, n, s.owned); if (s.owned) Ev("steal"); }
+                const bool up = Logi::IsUpgrade(f.inv, f.who, d); f.inv.Add(s.items[0].item, n); if (up) Logi::Equip(f.inv, s.items[0].item); s.items[0].count -= n; SyncKit(fi, d, n); NoteTake(fi, si, d, n, s.owned, FreeTier(sl.cat)); if (s.owned) Ev("steal"); }
             MarkFailed(si, "acquire readback: leg done"); sl.phase = Phase::Holding; return false;
         }
     };

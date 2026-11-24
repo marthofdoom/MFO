@@ -21,8 +21,9 @@ namespace Sim::Loot {
     struct EpSpec {
         const SimEnv* env = nullptr; std::uint64_t seed = 1; Plan plan = Plan::Stand; double standSec = 6.0;
         double waveAt = -1.0;          // seconds into the looting at which a second group arrives (< 0: none)
-        double lootSec = 90.0;         // the looting ends here at the latest, or 12 s after the last slot went quiet
+        double lootSec = 90.0;         // the looting ends here at the latest, or once nobody has had a slot for 12 s and 60 s have passed (the abandon clock of the player's dibs is 45 s)
         bool looting = true, wide = false; int libGuards = 0;
+        const Rules* rules = nullptr; const MFO::Iaus::LootTuning* tuning = nullptr;   // a scenario's own (default: the run's g_rules and Tune().loot)
         std::function<void(struct Episode&)> setup;   // a scenario's hand-made start (after the sources are made)
     };
 
@@ -80,7 +81,7 @@ namespace Sim::Loot {
 
         // ── the start ──
         void Begin(const std::vector<SimClass>& all) {
-            Fix(); W.R = g_rules; W.T = &Tune().loot; W.oracleWide = sp.wide; R.g.seed(sp.seed * 0x9E3779B97F4A7C15ULL + 0xB5297A4D3F84D5B5ULL);
+            Fix(); W.R = sp.rules ? *sp.rules : g_rules; W.T = sp.tuning ? sp.tuning : &Tune().loot; W.oracleWide = sp.wide; R.g.seed(sp.seed * 0x9E3779B97F4A7C15ULL + 0xB5297A4D3F84D5B5ULL);
             for (std::size_t ci = 0; ci < F.ctl.size(); ++ci) { FState f; f.ci = static_cast<int>(ci); const Ctl& c = F.ctl[ci]; const Body& x = F.b[Z(c.body)];
                 const SimClass* sc = nullptr; for (const SimClass& s : all) if (s.fam == c.fam && (!sc || s.name == x.c.name)) sc = &s;
                 f.who.fam = c.fam; f.who.cls = sc ? sc->name : "?"; f.who.worth = c.worth; f.thief = x.stealthy;
@@ -149,7 +150,7 @@ namespace Sim::Loot {
             if (sl.active && sl.phase == Phase::Walking && sl.leg == LegState::Walking) {
                 const Src& s = W.src[Z(sl.target)]; if (s.tri < 0) return; const EnvPoint g{ s.on, s.tri };
                 F.Move(x, s.on.x, s.on.y, x.spec->run, false, nullptr, &g);
-                if (World::D3(World::P(x), s.on) <= W.R.arriveRadius) { sl.leg = LegState::Arrived; sl.legAt = F.now; return; }
+                if (World::D3(World::P(x), s.on) <= W.R.arriveRadius) { sl.leg = LegState::Arrived; sl.legAt = F.now; sl.drift = static_cast<float>(SimEnv::Mix(sp.seed * 31 + static_cast<std::uint64_t>(W.t.legs) * 977 + static_cast<std::uint64_t>(fi)) >> 40) * (1.0f / 16777216.0f) < W.R.driftShare; return; }
                 if (F.now - sl.sampleAt >= 0.5) { const float m = std::hypot(x.c.x - sl.sx, x.c.y - sl.sy);
                     if (m < 15.0f) { if (sl.mbSince < 0) sl.mbSince = sl.sampleAt; } else { sl.mbSince = -1; sl.everMoved = true; }
                     sl.sampleAt = F.now; sl.sx = x.c.x; sl.sy = x.c.y; }
@@ -160,7 +161,7 @@ namespace Sim::Loot {
                     const float tx = s.p.x - x.c.x, ty = s.p.y - x.c.y, tl = std::max(1.0f, std::hypot(tx, ty));   // LootTravel_internal.h FindActorBlocker: a living actor within 200, 128 of his height, within 45 degrees of the way to the target
                     for (const Body& o : F.b) { if (&o == &x || !Fight::Up(o)) continue; const float ox = o.c.x - x.c.x, oy = o.c.y - x.c.y, ol = std::hypot(ox, oy); if (ol > W.R.actorBlockU || ol < 1.0f || std::fabs(o.c.z - x.c.z) > W.R.actorBlockDz) continue; if ((ox * tx + oy * ty) / (ol * tl) >= 0.7071f) { sl.blocker = o.c.id; break; } } }
                 return; }
-            if (sl.active && sl.leg == LegState::Blocked) return;   // he stands at the block until MFO's tick reads it
+            if (sl.active && (sl.leg == LegState::Blocked || (sl.leg == LegState::Arrived && !sl.drift))) return;   // he stands at the block, or at the ref (the claim holds him), until MFO's tick reads it
             if (World::D3(World::P(x), World::P(pl)) > W.R.followU) F.Move(x, pl.c.x, pl.c.y, x.spec->run, false, &pl);   // the follow package (also after a leg ended ARRIVED: this is the drift)
         }
 
@@ -203,7 +204,7 @@ namespace Sim::Loot {
                     QuietStep();
                     if (F.now - phaseStart >= sp.lootSec) break;
                     if (W.ActiveSlots() > 0 || pstage == 1 || pstage == 2) quietSince = -1; else if (quietSince < 0) quietSince = F.now;
-                    if (quietSince >= 0 && F.now - quietSince >= 12.0 && F.now - phaseStart >= 20.0 && (waved || sp.waveAt < 0)) break;
+                    if (quietSince >= 0 && F.now - quietSince >= 12.0 && F.now - phaseStart >= 60.0 && (waved || sp.waveAt < 0)) break;
                 }
                 if (sp.looting && !W.fs.empty() && F.now >= W.nextPump) { W.nextPump += static_cast<double>(W.R.pumpSec); const double was = W.fs[Z(W.rr)].nextLogi; W.Service(W.rr); if (W.fs[Z(W.rr)].nextLogi != was) PastCheck(W.rr); W.rr = (W.rr + 1) % static_cast<int>(W.fs.size()); }
                 Tallies();
@@ -235,7 +236,9 @@ namespace Sim::Loot {
                     else if (F.now < s.stickyUntil || F.now < s.transientUntil) { why = "blocklisted"; rr = true; }
                     else if (anyStuck) { why = "follower stuck at his origin"; rr = true; }
                     else if (W.ActiveSlots() > 0 || F.now - phaseStart >= sp.lootSec) { why = "the episode ended first"; rr = true; }
-                    else { why = "ignored"; rr = true; }
+                    else if (!Clutter(via) && World::D3(World::P(pl), s.p) <= W.R.bubble) { why = "player bubble (he stands on it)"; rr = true; }
+                    else if (s.island >= 2) { why = "island verdict"; rr = true; }
+                    else { bool inScan = false; for (std::size_t f = 0; f < W.fs.size(); ++f) inScan = inScan || World::D3(World::P(W.BodyOf(static_cast<int>(f))), s.p) <= W.R.lootRadius; why = inScan ? "ignored" : "beyond every follower's scan radius"; rr = true; }
                     ++t.left[why]; if (rr) ++t.leftRR; if (gold) { ++t.goldLeft; if (rr) ++t.goldLeftRR; } if (museum) { ++t.museumLeft; if (rr) ++t.museumLeftRR; }
                     W.Log("[left] %s x%d in %s %u: %s", d.edid, st.count, SrcName(s.kind), s.id, why); } }
             Values();
@@ -296,7 +299,8 @@ namespace Sim::Loot {
         { "combatTakes", 0.0, "takes while the party fights" },
         { "walkedPast/ep", 0.5, "he came within reach of wanted, released loot and left it" },
         { "stuckOff s/ep", 5.0, "seconds a follower's looting was off because he was 'stuck himself'" },
-        { "wait p90 s", 45.0, "release to taken, 90th percentile" },
+        { "wait free p90 s", 25.0, "release to taken, 90th percentile, what nobody has dibs on (potions, ammo, picks, museum pieces)" },
+        { "wait dibs p90 s", 60.0, "release to taken, 90th percentile, what the player has first dibs on (the abandon clock alone is 45 s)" },
     };
     inline std::map<std::string, double> GateValues(const LTally& t) {
         std::map<std::string, double> v; const double ep = std::max<double>(1, static_cast<double>(t.episodes)), min = std::max(1e-9, t.followerSec / 60.0);
@@ -304,7 +308,8 @@ namespace Sim::Loot {
         v["legs/src"] = t.srcTaken ? double(t.legs) / t.srcTaken : 0.0; v["restart%"] = t.legs ? 100.0 * t.legsRestarted / t.legs : 0.0; v["aborted%"] = t.legs ? 100.0 * t.legsAborted / t.legs : 0.0;
         v["reversals/min"] = t.reversals / min; v["twoOnOne/ep"] = t.twoOnOne / ep; v["combatLoot s/fight"] = t.combatLootSec / std::max<double>(1, static_cast<double>(t.waves)); v["combatTakes"] = static_cast<double>(t.combatTakes);
         v["walkedPast/ep"] = t.walkedPast / ep; v["stuckOff s/ep"] = t.stuckOffSec / ep;
-        { std::vector<float> w = t.waits; double p90 = 0; if (!w.empty()) { std::sort(w.begin(), w.end()); p90 = w[std::min(w.size() - 1, static_cast<std::size_t>(0.9 * static_cast<double>(w.size())))]; } v["wait p90 s"] = p90; }
+        auto p90 = [](std::vector<float> w) { if (w.empty()) return 0.0; std::sort(w.begin(), w.end()); return static_cast<double>(w[std::min(w.size() - 1, static_cast<std::size_t>(0.9 * static_cast<double>(w.size())))]); };
+        v["wait free p90 s"] = p90(t.waits); v["wait dibs p90 s"] = p90(t.waitsDibs);
         return v;
     }
     inline int PrintGate(const LTally& t, const char* tag, bool lines = true) {
