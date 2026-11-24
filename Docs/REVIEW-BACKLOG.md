@@ -3891,3 +3891,10 @@ R1 SEV-4 (S2/S3) a 10 member party, pins on, ~16k tris needs about 8 pump slices
 R2 SEV-4 "first filing counts" also for a re-ask answered promptly with t < 0: the fresh ray is stamped with the OLD viewer place and dropped as Stale when he moved, so that question costs one more window. Fix: answer inside the window with t<0 and `now` found: use *now if the holder is synchronous, or make S2 always send t. Documented in the header, hence SEV-4.
 R3 SEV-5 ExitsAt and every foe flood allocate best(v.tris) (63 KB at 16k tris) per call, 60 to 80 a window; hold it in Scratch.
 R4 merge note: conflicts with feat/spellworth in tools/iaus_harness/run.sh (both edit the source list: keep both); then the MOVE_STANDALONE line in run.sh needs iaus/SpellWorth.cpp (Catalogue.cpp calls SetSpellWorthKnob).
+
+## feat/spellworth (Opus review @b3fa8ae1, 2026-11-24, verbatim; S1 to S6, the INERT row, the 0<live<1 pins, bestRaw, the sim's chargeSec and engineRow are fixed on the branch)
+Everything below matters only at `sw.live` > 0 (shipped 0).
+- SEV-4 AreaValue consideration already rewards foesInArea; AreaFactor at 1.0 counts it again in the rate; SplashSafe vetoes what areaFriendPenalty charges (penalty can never matter for a live candidate). AreaFactor(0 foes) = 1 (self blast with nobody in it).
+- SEV-4 MagickaShare is a step (x0.5 at one magicka) and assumes back to back casting for the whole fight (FightSec = sum of lives); regen counted 0 -> nearly every spell x0.5 in a long fight; on top of MpReserve.
+- SEV-5 conditional damage with a duration is put in directDamage. FoeLifeSec counts weapon Dps of all allies whomever they target. FightSec recomputed per (spell, foe): cache.
+- Author's note, SEV-5: buff / ward / summon worth has no Generate call site (S2: the readers run now, the families are not ranked by it); the sim does not fill ward power or the summoned body.

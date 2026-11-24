@@ -2,6 +2,7 @@
 // iaus/SpellWorthTable.h -- THE NAMED TABLE of the spell-worth reader (iaus/SpellWorth.h). Split out of SpellWorth.h only because iaus/Core.h's Tuning holds
 // it by value and SpellWorth.h includes iaus/Snapshot.h (which includes Core.h). Standard headers only. Every number is a labelled PLACEHOLDER; the sim's
 // `spells` stage searches them (tools/iaus_sim/tune_driver.py SW_KNOBS). SHIPPED INERT: `live` = 0 keeps every decision on today's estimate.
+#include <cstddef>
 #include <string_view>
 
 namespace MFO::Iaus {
@@ -9,13 +10,13 @@ namespace MFO::Iaus {
     // THE NAMED TABLE. One struct, one name per field (`sw.<field>` in shared.txt, the tuner and the sim). PLACEHOLDERS, not searched yet.
     struct SpellWorth {
         // ── how far the reader is LIVE ───────────────────────────────────────────────────────────────────────────────────────────────
-        // 0 (SHIPPED) = every Facts::expDamage / expRate / bestDamage / effectRate / healRate / controlSec / expHeal stays today's estimate, bit for bit, and the
+        // 0 (SHIPPED) = every Facts::expDamage / expRate / bestDamage / effectRate / healRate / bestHealRate / controlSec / expHeal stays today's estimate, bit for bit, and the
         // reader is never called. 1 = the reader's answer where it KNOWS the cast; between = the blend. A cast the reader does not know keeps today's estimate
         // at any value (never a 0 that reads as "worthless"). Values become live through the tuning round, not here.
         float live = 0.0f;
         // ── seconds a cast costs ─────────────────────────────────────────────────────────────────────────────────────────────────────
         // claim to fire: from the decision to the moment the engine's caster starts the spell. Base, then what each cast family adds (the field's
-        // claim-to-fire tables differ by family: iaus-sim-v3.md 13.2; the per-ROW split waits for SpellEntry::engineRow).
+        // claim-to-fire tables differ by family: iaus-sim-v3.md 13.2; a per-ROW split needs the engine row on SpellEntry, which nothing reads yet).
         float landSecBase = 0.9f;
         float landSecOffense = 0.0f;
         float landSecControl = 0.0f;
@@ -56,5 +57,6 @@ namespace MFO::Iaus {
     // `sw.<field>` by name (the WorthTable / LootTuning pattern). false = unknown name or not a finite number.
     [[nodiscard]] bool SetSpellWorthKnob(SpellWorth& a_t, std::string_view a_name, float a_v);
     [[nodiscard]] bool GetSpellWorthKnob(const SpellWorth& a_t, std::string_view a_name, float& a_out);
+    [[nodiscard]] std::string_view SpellWorthKnobName(std::size_t a_i);   // the names one by one ("" past the end): a list that cannot drift from Set / Get
 
 }

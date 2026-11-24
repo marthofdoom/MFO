@@ -7,6 +7,7 @@
 //       aw.<family>           the family's action weight
 //       c.<cons>.a | .b | .floor     the consideration's curve parameters (Core.h Curve)
 //       t.<name>              a Tuning scalar (kTuneScalars below: momentum, preempt, actFloor, the cooldowns and holds, the heal lines; --list-params prints them)
+//       sw.<field>            the spell-worth table (native/iaus/SpellWorthTable.h); read only while sw.live > 0
 //     <family> / <cons> are INDEXES (--list-params prints them: several considerations share a display name).
 //   --opt <param>[,<param>...] [--opt-passes N] [--opt-fights N]
 //       coordinate search: each parameter in turn is tried at x0.5, x0.75, x1.33, x2 of its value (and +-0.15 for a
@@ -99,6 +100,7 @@ namespace Sim {
         if (name == "const.kRangeVeto") { SimKnob_kRangeVeto = f; return true; }
         if (name == "const.kPostureDist") { SimKnob_kPostureDist = f; return true; }
 #endif
+        if (name.rfind("sw.", 0) == 0) return f >= 0.0f && MFO::Iaus::SetSpellWorthKnob(s.t.spellWorth, name, f);   // S11b: native's own name table (SetTuningScalar's range)
         for (const WorthKnob& k : kWorthKnobs) if (name == k.name) { s.t.worth.*(k.m) = f;
             if (k.m == &MFO::Iaus::WorthTable::floor) s.t.curve[static_cast<std::size_t>(Cons::ConsumableWorth)].zeroBelow = f;   // Catalogue.cpp builds the veto from the same member
             return true; }
@@ -115,6 +117,7 @@ namespace Sim {
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); const Curve& c = s.t.curve[idx(2) % kCons]; const std::string fld = dot == std::string::npos ? "" : name.substr(dot + 1); return fld == "a" ? c.a : fld == "b" ? c.b : c.floor; }
         if (name.rfind("st.", 0) == 0 || name.rfind("pk.", 0) == 0 || name.rfind("row.", 0) == 0) { auto i = s.pkg.find(name); return i == s.pkg.end() ? unset : i->second; }
         for (const TuneScalar& k : kTuneScalars) if (name == k.name) return s.t.*(k.m);
+        if (float v = 0.0f; name.rfind("sw.", 0) == 0) return MFO::Iaus::GetSpellWorthKnob(s.t.spellWorth, name, v) ? static_cast<double>(v) : unset;
         for (const WorthKnob& k : kWorthKnobs) if (name == k.name) return s.t.worth.*(k.m);
         for (const LootKnobF& k : kLootKnobsF) if (name == k.name) return s.loot.*(k.m);
         for (const LootKnobI& k : kLootKnobsI) if (name == k.name) return s.loot.*(k.m);
@@ -141,6 +144,7 @@ namespace Sim {
         std::printf("families:"); for (std::size_t i = 0; i < kFamilies; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Family>(i))).c_str());
         std::printf("\nconsiderations:"); for (std::size_t i = 0; i < kCons; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Cons>(i))).c_str());
         std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor "); for (const TuneScalar& k : kTuneScalars) std::printf(" %s", k.name);
+        for (std::size_t i = 0; !MFO::Iaus::SpellWorthKnobName(i).empty(); ++i) std::printf(" %s", std::string(MFO::Iaus::SpellWorthKnobName(i)).c_str());
         for (const WorthKnob& k : kWorthKnobs) std::printf(" %s", k.name); for (const LootKnobF& k : kLootKnobsF) std::printf(" %s", k.name); for (const LootKnobI& k : kLootKnobsI) std::printf(" %s", k.name); std::printf("\n");
     }
 

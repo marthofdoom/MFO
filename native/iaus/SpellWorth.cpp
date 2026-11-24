@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace MFO::Iaus {
 
@@ -36,6 +37,8 @@ namespace MFO::Iaus {
         return false;
     }
 
+    std::string_view SpellWorthKnobName(std::size_t a_i) { return a_i < std::size(kKnobs) ? kKnobs[a_i].name : std::string_view{}; }
+
     namespace Estimate {
 
         namespace {
@@ -43,19 +46,37 @@ namespace MFO::Iaus {
 
             [[nodiscard]] float Fin(float a_v, float a_or) { return std::isfinite(a_v) ? a_v : a_or; }
 
-            // Incoming health per second on a_who from the foes that target him and can reach him (IncomingOn's own filter), split by kind: a_magic = the spells
-            // in their hands, else the weapons; a_av >= 0 keeps only the foes whose element's resist is that actor value (Combatant::incomingAv).
-            [[nodiscard]] float IncomingKind(const Snapshot& a_s, const Combatant& a_who, bool a_magic, int a_av) {
-                float sum = 0.0f;
+            // The foes whose damage is coming in on a_who NOW: they target him and can reach him (IncomingOn's own filter). a_magic = a spell in the hand, else a weapon.
+            template <class Fn>
+            void ForIncoming(const Snapshot& a_s, const Combatant& a_who, bool a_magic, Fn a_fn) {
                 const float strike = StrikeDistance(a_s);
                 for (const Combatant& f : a_s.foes) {
                     if (f.targetId == 0 || f.targetId != a_who.id || f.paralysed || f.fleeing) continue;
                     if (MustClose(f) && Apart(f, a_who) > strike) continue;
-                    if (f.hitIsMagic != a_magic) continue;
-                    if (a_av >= 0 && f.incomingAv != a_av) continue;
-                    sum += Dps(f, a_who);
+                    if (f.hitIsMagic == a_magic) a_fn(f);
                 }
+            }
+            [[nodiscard]] float IncomingKind(const Snapshot& a_s, const Combatant& a_who, bool a_magic) {
+                float sum = 0.0f;
+                ForIncoming(a_s, a_who, a_magic, [&](const Combatant& f) { sum += Dps(f, a_who); });
                 return sum;
+            }
+
+            // The magic damage per second a resist buff stops. Dps carries NO resist for a magic hit, so each foe's is taken through the engine's two terms
+            // (SpellOn's rule: the primary resist, kPoisonResist for a poison hit and else kResistMagic, then the element) before and after the buff.
+            [[nodiscard]] float ResistPrevented(const Snapshot& a_s, const Combatant& a_who, const SpellEntry& a_e) {
+                const auto added = [&](int av) { float m = 0.0f; for (const auto& r : a_e.buffResists) if (r.first == av) m = (std::max)(m, Pos(r.second)); return m; };
+                const auto keep = [](float points) { return 1.0f - (std::min)(kResistCapPoints, Fin(points, 0.0f)) / 100.0f; };
+                float per = 0.0f;
+                ForIncoming(a_s, a_who, true, [&](const Combatant& f) {
+                    const int   prim = f.incomingAv == kAvPoisonResist ? kAvPoisonResist : kAvResistMagic;
+                    const float p = prim == kAvResistMagic ? a_who.magicResist : a_who.Resist(prim);
+                    const bool  el = f.incomingAv >= 0 && f.incomingAv != prim;
+                    const float e = el ? a_who.Resist(f.incomingAv) : 0.0f;
+                    const float before = keep(p) * keep(e), after = keep(Fin(p, 0.0f) + added(prim)) * keep(Fin(e, 0.0f) + (el ? added(f.incomingAv) : 0.0f));
+                    per += Dps(f, a_who) * (std::max)(0.0f, before - after);
+                });
+                return per;
             }
 
             [[nodiscard]] bool Concentrates(const SpellEntry& a_e) { return a_e.concentration; }
@@ -83,11 +104,32 @@ namespace MFO::Iaus {
             return (std::max)(a_t.channelMinSec, a_concChannelSec * a_t.channelUptime);
         }
 
-        float CastSeconds(const SpellEntry& a_e, const SpellWorth& a_t, const SpellIn& a_in, float a_concChannelSec) {
+        float HeldSeconds(const SpellEntry& a_e, const Combatant& a_target, const SpellWorth& a_t, const SpellIn& a_in, float a_concChannelSec) {
+            float sec = ChannelSeconds(a_t, a_concChannelSec);
+            if (sec < 0.0f) return sec;
+            if ((a_e.nature == Prune::Nature::Offense || a_e.nature == Prune::Nature::Control) && a_in.foeLifeSec >= 0.0f)
+                sec = (std::min)(sec, (std::max)(a_t.foeLifeFloorSec, a_in.foeLifeSec));   // the foe is dead: the stream is let go
+            if (a_e.nature == Prune::Nature::Heal && Pos(a_e.heal) > 0.0f && Pos(a_target.hpMax) > 0.0f)
+                sec = (std::min)(sec, (std::max)(a_t.channelMinSec, (std::max)(0.0f, a_target.hpMax - Fin(a_target.hp, 0.0f)) / a_e.heal));   // he is full
+            return sec;
+        }
+
+        float OffenseOnTarget(const SpellEntry& a_e, const Combatant& a_foe, const SpellWorth& a_t, const SpellIn& a_in, float a_heldSec) {
+            if (!a_e.measured || !(Pos(a_e.damage) > 0.0f)) return -1.0f;
+            const float resisted = SpellOn(a_e, a_foe) / Pos(a_e.damage);   // the foe's resists, the one rule (Estimate::SpellOn), as a share
+            if (Concentrates(a_e)) return Pos(a_e.damage) * (std::max)(0.0f, a_heldSec) * resisted;
+            if (a_in.dotPerSec >= 0.0f && a_in.dotSec >= 0.0f) {   // the DoT part apart from the direct part
+                const float direct = a_in.directDamage >= 0.0f ? a_in.directDamage : (std::max)(0.0f, Pos(a_e.damage) - a_in.dotPerSec * a_in.dotSec);
+                return (direct + DotOverLife(a_t, a_in.dotPerSec, a_in.dotSec, a_in.foeLifeSec)) * resisted;
+            }
+            return Pos(a_e.damage) * resisted;
+        }
+
+        float CastSeconds(const SpellEntry& a_e, const SpellWorth& a_t, const SpellIn& a_in, float a_heldSec) {
             float body = 0.0f;
             if (Concentrates(a_e)) {
-                body = ChannelSeconds(a_t, a_concChannelSec);
-                if (body < 0.0f) return -1.0f;
+                body = a_heldSec;
+                if (!(body >= 0.0f)) return -1.0f;
             } else {
                 if (!(a_in.chargeSec >= 0.0f)) return -1.0f;   // the charge time was not read: NOT KNOWN
                 body = a_in.chargeSec;
@@ -129,7 +171,8 @@ namespace MFO::Iaus {
 
         float WardEffect(const SpellWorth& a_t, const SpellIn& a_in, float a_wardSec) {
             if (!(a_in.wardPerSec >= 0.0f) || !(a_wardSec >= 0.0f)) return -1.0f;
-            return a_in.wardPerSec * a_wardSec * a_t.wardDpsScale;
+            const float taken = a_in.wardPerSec * a_wardSec;
+            return (a_in.wardPower >= 0.0f ? (std::min)(taken, a_in.wardPower) : taken) * a_t.wardDpsScale;   // a ward breaks at its power
         }
 
         float SummonEffect(const SpellWorth& a_t, const SpellIn& a_in, float a_summonSec) {
@@ -168,7 +211,7 @@ namespace MFO::Iaus {
                             float a_foesInArea, float a_friendsInArea) {
             SpellIn in;
             in.chargeSec = a_e.chargeSec;
-            if (!a_e.concentration) {   // a stream's measured damage is per second already (Fills.cpp counts it for 1 s): no DoT split
+            if (!Concentrates(a_e)) {   // a stream's measured damage is per second already (Fills.cpp counts it for 1 s): no DoT split
                 in.dotPerSec = a_e.dotPerSec;
                 in.dotSec = a_e.dotSec;
                 in.directDamage = a_e.directDamage;
@@ -179,22 +222,20 @@ namespace MFO::Iaus {
             in.buffSec = a_e.buffSec;
             const bool foeSide = a_e.nature == Prune::Nature::Offense || a_e.nature == Prune::Nature::Control;
             if (foeSide) in.foeLifeSec = FoeLifeSec(a_s, a_target);
-            if (a_e.nature == Prune::Nature::Buff && (a_e.buffArmor >= 0.0f || a_e.buffResist >= 0.0f)) {
+            if (a_e.nature == Prune::Nature::Buff && (a_e.buffArmor >= 0.0f || !a_e.buffResists.empty())) {
                 float per = 0.0f;
                 if (a_e.buffArmor >= 0.0f) {   // armor: the share of the physical damage coming in that the added rating stops, within the engine's cap
                     const float cur = (std::clamp)(Fin(a_target.armor, 0.0f), 0.0f, 1.0f);
                     const float add = (std::min)((std::max)(0.0f, a_t.armorMitigationCap - cur), a_e.buffArmor * a_t.armorPctPerPoint / 100.0f);
-                    per += IncomingKind(a_s, a_target, false, -1) * add / (std::max)(0.05f, 1.0f - cur);
+                    per += IncomingKind(a_s, a_target, false) * add / (std::max)(0.05f, 1.0f - cur);
                 }
-                if (a_e.buffResist >= 0.0f) {  // resist: the added points on the element's AV (below the engine's cap) against the magic coming in of that element
-                    const float cur = (std::min)(kResistCapPoints, Pos(a_target.Resist(a_e.buffResistAv)));
-                    const float add = (std::min)(kResistCapPoints - cur, a_e.buffResist) / 100.0f;
-                    per += IncomingKind(a_s, a_target, true, a_e.buffResistAv) * add / (std::max)(0.15f, 1.0f - cur / 100.0f);
-                }
+                if (!a_e.buffResists.empty()) per += ResistPrevented(a_s, a_target, a_e);
                 in.buffPerSec = per;
             }
-            if (a_e.nature == Prune::Nature::Ward && a_e.wardPower >= 0.0f && a_e.buffSec > 0.0f)
-                in.wardPerSec = (std::min)(IncomingKind(a_s, a_target, true, -1), a_e.wardPower / a_e.buffSec);   // a ward absorbs up to its power
+            if (a_e.nature == Prune::Nature::Ward && a_e.wardPower >= 0.0f) {
+                in.wardPerSec = IncomingKind(a_s, a_target, true);
+                in.wardPower = a_e.wardPower;
+            }
             if (a_e.nature == Prune::Nature::Summon && a_e.summonHit >= 0.0f && a_e.summonHitsPerSec >= 0.0f && a_e.summonHp >= 0.0f && a_e.buffSec > 0.0f) {
                 const float life = (std::min)(a_e.buffSec, a_t.summonLifeSec);
                 const float draw = life > 0.0f ? (std::min)(a_e.summonHp / life, IncomingOn(a_s, a_target)) : 0.0f;   // the damage it takes off him
@@ -206,29 +247,27 @@ namespace MFO::Iaus {
         Worth SpellWorthOn(const SpellEntry& a_e, const Combatant& a_target, const Snapshot& a_s, const SpellWorth& a_t, const SpellIn& a_in,
                            float a_concChannelSec) {
             Worth w;
-            const float secs = CastSeconds(a_e, a_t, a_in, a_concChannelSec);
-            if (!(secs >= 0.0f)) return w;
             const bool conc = Concentrates(a_e);
-            const float channel = conc ? ChannelSeconds(a_t, a_concChannelSec) : 1.0f;   // a stream's measured effect is per second: x the seconds it is held
+            const float held = conc ? HeldSeconds(a_e, a_target, a_t, a_in, a_concChannelSec) : 1.0f;   // a stream's measured effect is per second: x the seconds it is held
+            const float secs = CastSeconds(a_e, a_t, a_in, held);
+            if (!(secs >= 0.0f)) return w;
             float effect = -1.0f;
             switch (a_e.nature) {
             case Prune::Nature::Offense: {
-                if (!a_e.measured || !(Pos(a_e.damage) > 0.0f)) return w;
-                float raw = -1.0f;
-                if (!conc && a_in.dotPerSec >= 0.0f && a_in.dotSec >= 0.0f) {   // the DoT part apart from the direct part
-                    const float direct = a_in.directDamage >= 0.0f ? a_in.directDamage : (std::max)(0.0f, Pos(a_e.damage) - a_in.dotPerSec * a_in.dotSec);
-                    raw = direct + DotOverLife(a_t, a_in.dotPerSec, a_in.dotSec, a_in.foeLifeSec);
-                } else {
-                    raw = Pos(a_e.damage) * channel;
-                }
-                const float resisted = SpellOn(a_e, a_target) / Pos(a_e.damage);   // the foe's resists, the one rule (Estimate::SpellOn), as a share
-                effect = raw * resisted * AreaFactor(a_t, a_in.foesInArea, a_in.friendsInArea);
+                const float one = OffenseOnTarget(a_e, a_target, a_t, a_in, held);   // ONE foe: no area, no bonus, no magicka
+                if (!(one >= 0.0f)) return w;
+                // a stream is let go when the foe drops: it overkills by at most its own second
+                w.onTarget = conc ? (std::min)(one, (std::max)(Pos(a_target.hp), SpellOn(a_e, a_target))) : one;
+                effect = one * AreaFactor(a_t, a_in.foesInArea, a_in.friendsInArea);
                 if (a_in.redundant) effect *= a_t.redundantEffectScale;
-                if (a_t.killConfirmBonus > 0.0f && Pos(a_target.hp) > 0.0f && effect >= a_target.hp) {   // the cheapest known spell that finishes the foe gets the bonus
+                if (a_t.killConfirmBonus > 0.0f && Pos(a_target.hp) > 0.0f && one >= a_target.hp) {   // the cheapest known spell that finishes the foe gets the bonus
                     bool cheaper = false;
                     for (const SpellEntry& o : a_s.book.entries) {
-                        if (&o == &a_e || o.nature != Prune::Nature::Offense || !o.measured || !(o.cost < a_e.cost)) continue;
-                        if (SpellOn(o, a_target) >= a_target.hp) { cheaper = true; break; }
+                        if (&o == &a_e || o.form == a_e.form || o.nature != Prune::Nature::Offense || !o.measured || !(o.cost < a_e.cost)) continue;
+                        SpellIn oin;   // the same one-foe figure, from the entry's own parts
+                        oin.foeLifeSec = a_in.foeLifeSec;
+                        if (!Concentrates(o)) { oin.dotPerSec = o.dotPerSec; oin.dotSec = o.dotSec; oin.directDamage = o.directDamage; }
+                        if (OffenseOnTarget(o, a_target, a_t, oin, Concentrates(o) ? HeldSeconds(o, a_target, a_t, oin, a_concChannelSec) : 1.0f) >= a_target.hp) { cheaper = true; break; }
                     }
                     if (!cheaper) effect *= 1.0f + a_t.killConfirmBonus;
                 }
@@ -237,23 +276,23 @@ namespace MFO::Iaus {
             case Prune::Nature::Heal: {
                 if (!a_e.measured || !(Pos(a_e.heal) > 0.0f) || !(Pos(a_target.hpMax) > 0.0f)) return w;
                 const float missing = (std::max)(0.0f, a_target.hpMax - Fin(a_target.hp, 0.0f));
-                effect = (std::min)(Pos(a_e.heal) * channel, missing);   // never more than is missing
+                w.onTarget = conc ? (std::min)(Pos(a_e.heal) * held, (std::max)(missing, Pos(a_e.heal))) : Pos(a_e.heal);   // UNCAPPED (a stream is let go when he is full)
+                effect = (std::min)(Pos(a_e.heal) * held, missing);   // never more than is missing
                 break;
             }
             case Prune::Nature::Control: {
                 if (!a_e.measured || !(Pos(a_e.controlSec) > 0.0f)) return w;
-                const float held = ControlHeldSec(a_t, a_e.controlSec, a_in.foeLifeSec);
-                effect = ControlEffect(a_t, held, a_target);
+                effect = ControlEffect(a_t, ControlHeldSec(a_t, a_e.controlSec, a_in.foeLifeSec), a_target);
                 break;
             }
             case Prune::Nature::Buff:   effect = BuffEffect(a_t, a_in); break;
-            case Prune::Nature::Ward:   effect = WardEffect(a_t, a_in, a_in.buffSec); break;
+            case Prune::Nature::Ward:   effect = WardEffect(a_t, a_in, conc ? held : a_in.buffSec); break;
             case Prune::Nature::Summon: effect = SummonEffect(a_t, a_in, a_in.buffSec); break;
             default: return w;
             }
             if (!(effect >= 0.0f)) return w;
             w.seconds = secs;
-            w.magicka = a_e.cost > 0.0f ? a_e.cost * channel : 0.0f;   // a stream's cost is per second
+            w.magicka = a_e.cost > 0.0f ? a_e.cost * held : 0.0f;   // a stream's cost is per second
             effect *= MagickaShare(a_t, w.magicka, secs, a_s.self.mp, (std::max)(0.0f, a_in.magickaRegenPerSec), a_in.fightSec);
             w.effect = effect;
             w.known = true;

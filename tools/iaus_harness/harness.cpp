@@ -1399,7 +1399,7 @@ namespace {
           Check(Estimate::CastSeconds(e, d, none, 11.5f) < 0.0f, "cast seconds: charge time not read = NOT KNOWN");
           e.concentration = true;
           Check(near(Estimate::ChannelSeconds(d, 11.5f), 11.5f * 0.7f), "channel: concChannelSec x channelUptime");
-          Check(near(Estimate::CastSeconds(e, d, none, 11.5f), 0.9f + 8.05f + 0.5f), "cast seconds: a stream = land + channel + recover, no charge needed");
+          Check(near(Estimate::CastSeconds(e, d, none, Estimate::ChannelSeconds(d, 11.5f)), 0.9f + 8.05f + 0.5f), "cast seconds: a stream = land + channel + recover, no charge needed");
           Check(near(Estimate::ChannelSeconds(d, 0.1f), 0.5f), "channel: never shorter than channelMinSec"); }
         // area: one foe = 1; each extra foe x areaFoesIntoDamage; each party member in it takes areaFriendPenalty off
         Check(near(Estimate::AreaFactor(d, -1.0f, -1.0f), 1.0f) && near(Estimate::AreaFactor(d, 1.0f, 0.0f), 1.0f), "area: no area / one foe = 1");
@@ -1448,10 +1448,27 @@ namespace {
           const Estimate::SpellIn in = Estimate::MakeSpellIn(dot, foe, s, d, -1.0f, -1.0f);
           const Estimate::Worth w = Estimate::SpellWorthOn(dot, foe, s, d, in, 11.5f);
           Check(w.known && near(w.effect, 10.0f + 10.0f * 2.0f) && near(w.seconds, 1.9f) && near(w.magicka, 40.0f), "offense: direct 10 + a DoT counted over the foe's 2 s life = 30 (today 90), 1.9 s, 40 magicka");
+          Check(near(w.onTarget, 30.0f), "offense: onTarget = one foe, the DoT over his life (what Overkill reads)");
           Check(near(w.PerSecond(), 30.0f / 1.9f) && near(w.PerMagicka(), 0.75f), "offense: per second and per magicka");
           SpellEntry st = Spell("Stream", 3, Prune::Nature::Offense, 10); st.measured = true; st.damage = 20.0f; st.concentration = true;
           const Estimate::Worth ws = Estimate::SpellWorthOn(st, foe, s, d, Estimate::MakeSpellIn(st, foe, s, d, -1.0f, -1.0f), 11.5f);
-          Check(ws.known && near(ws.effect, 20.0f * 8.05f) && near(ws.magicka, 10.0f * 8.05f), "offense: a stream = its per-second effect x the held seconds, its cost x the same");
+          Check(ws.known && near(ws.effect, 20.0f * 2.0f) && near(ws.magicka, 10.0f * 2.0f) && near(ws.seconds, 0.9f + 2.0f + 0.5f), "offense: a stream CUT SHORT: the foe lives 2 s, so 2 s of effect, magicka and cast time (not the whole 8.05)");
+          Check(near(ws.onTarget, 20.0f), "offense: a stream stops when the foe drops: onTarget 20 on a 20 hp foe, no overkill");
+          Combatant big = foe; big.hp = big.hpMax = 1000.0f;   // lives 100 s
+          const Estimate::Worth wb = Estimate::SpellWorthOn(st, big, s, d, Estimate::MakeSpellIn(st, big, s, d, -1.0f, -1.0f), 11.5f);
+          Check(near(wb.effect, 20.0f * 8.05f) && near(wb.magicka, 10.0f * 8.05f) && near(wb.onTarget, 161.0f), "offense: a stream on a foe that outlives it = its per-second effect x the whole channel");
+          SpellEntry nuke = Spell("Nuke", 9, Prune::Nature::Offense, 40); nuke.measured = true; nuke.damage = 50.0f; nuke.chargeSec = 0.5f; nuke.areaUnits = 300.0f;
+          Combatant hundred = foe; hundred.hp = hundred.hpMax = 100.0f;
+          SpellWorth kc = d; kc.killConfirmBonus = 1.0f;
+          const Estimate::Worth w3 = Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 3.0f, 0.0f), 11.5f);
+          Check(near(w3.effect, 150.0f) && near(w3.onTarget, 50.0f), "offense: a 50 blast on 3 foes = 150 effect, 50 on the target, and no kill bonus on a 100 hp foe");
+          hundred.hp = 50.0f;
+          Check(near(Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 1.0f, 0.0f), 11.5f).effect, 100.0f), "offense: the kill bonus on a foe this ONE cast finishes");
+          SpellEntry cheap = nuke; cheap.form = 10; cheap.cost = 10.0f; cheap.damage = 90.0f; cheap.dotPerSec = 10.0f; cheap.dotSec = 8.0f; cheap.directDamage = 10.0f;
+          s.book.entries = { cheap };   // 90 on paper, 10 + 10 x 5 s of the foe's life = 60
+          hundred.hp = 50.0f; Check(near(Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 1.0f, 0.0f), 11.5f).effect, 50.0f), "offense: a cheaper spell that finishes him takes the bonus");
+          s.book.entries[0].dotPerSec = 80.0f / 60.0f; s.book.entries[0].dotSec = 60.0f;   // the same 90 on paper, 10 + 1.33 x 5 = 16.7 in his life
+          Check(near(Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 1.0f, 0.0f), 11.5f).effect, 100.0f), "offense: a cheaper DoT that outlasts the foe does not finish him");
           SpellEntry un = Spell("Unmeasured", 4, Prune::Nature::Offense, 10); un.chargeSec = 0.5f;
           Check(!Estimate::SpellWorthOn(un, foe, s, d, Estimate::MakeSpellIn(un, foe, s, d, -1.0f, -1.0f), 11.5f).known, "offense: an unmeasured spell is NOT KNOWN (the caller keeps today's, never a 0)");
           SpellEntry nocharge = Spell("NoCharge", 5, Prune::Nature::Offense, 10); nocharge.measured = true; nocharge.damage = 20.0f;
@@ -1465,7 +1482,11 @@ namespace {
           Combatant hurt = Actor("Hurt", 0x14F01, 70, 100, 0, 0);
           SpellEntry h = Spell("Heal", 6, Prune::Nature::Heal, 20); h.measured = true; h.heal = 100.0f; h.chargeSec = 0.4f;
           const Estimate::Worth w = Estimate::SpellWorthOn(h, hurt, s, d, Estimate::MakeSpellIn(h, hurt, s, d, -1.0f, -1.0f), 11.5f);
-          Check(w.known && near(w.effect, 30.0f), "heal: a 100 heal on a recipient missing 30 is worth 30"); }
+          Check(w.known && near(w.effect, 30.0f), "heal: a 100 heal on a recipient missing 30 is worth 30");
+          Check(near(w.onTarget, 100.0f) && near(w.PerSecond(), 30.0f / 1.8f), "heal: onTarget keeps the UNCAPPED 100 (HealFit 0.3 = overheal), the rate reads the 30");
+          SpellEntry hs = Spell("HealStream", 11, Prune::Nature::Heal, 10); hs.measured = true; hs.heal = 15.0f; hs.concentration = true;
+          const Estimate::Worth wh = Estimate::SpellWorthOn(hs, hurt, s, d, Estimate::MakeSpellIn(hs, hurt, s, d, -1.0f, -1.0f), 11.5f);
+          Check(near(wh.effect, 30.0f) && near(wh.seconds, 0.9f + 2.0f + 0.5f) && near(wh.magicka, 20.0f) && near(wh.onTarget, 30.0f), "heal: a stream stops when he is full: 2 s for 30 missing at 15/s, in effect, seconds and magicka"); }
         // control and buff through the one reader
         { Snapshot s; s.self = Actor("Me", 0x14F00, 100, 100, 0, 0); s.self.mp = 500; s.self.mpMax = 500; s.self.hit = 10.0f; s.self.hitsPerSec = 1.0f;
           Combatant foe = Actor("Foe", 0x3B1, 100, 100, 300, 0); foe.hit = 20.0f; foe.hitsPerSec = 1.0f; s.foes = { foe };   // lives 10 s
@@ -1476,9 +1497,31 @@ namespace {
           SpellEntry b = Spell("Armor", 8, Prune::Nature::Buff, 20); b.measured = true; b.chargeSec = 0.5f; b.buffArmor = 100.0f; b.buffSec = 60.0f;
           const Estimate::SpellIn bin = Estimate::MakeSpellIn(b, me, s, d, -1.0f, -1.0f);
           Check(bin.buffPerSec >= 0.0f && near(bin.buffPerSec, 30.0f * 0.12f), "buff: 100 armor points x 0.12 percent = 12 percent of the 30/s coming in");
-          Check(Estimate::SpellWorthOn(b, me, s, d, bin, 11.5f).known, "buff: known once armor and duration were read"); }
-        // INERT: sw.live = 0 (the shipped table) leaves every Facts field of a mixed book exactly as without the reader
-        { Tuning off = DefaultTuning(); Tuning on = DefaultTuning(); on.spellWorth.live = 1.0f;
+          Check(Estimate::SpellWorthOn(b, me, s, d, bin, 11.5f).known, "buff: known once armor and duration were read");
+          // resist: Dps carries no resist for a magic hit, so each foe goes through the two resist terms before and after the buff
+          Combatant fire = hitter; fire.hitIsMagic = true; fire.incomingAv = 41; fire.hit = 20.0f; Combatant plain = fire; plain.incomingAv = -1; plain.hit = 10.0f;
+          s.foes = { fire, plain };
+          const auto perSec = [&](std::vector<std::pair<int, float>> res, const Combatant& who) { SpellEntry rb = Spell("Resist", 12, Prune::Nature::Buff, 20); rb.chargeSec = 0.5f; rb.buffSec = 60.0f; rb.buffResists = std::move(res);
+              return Estimate::MakeSpellIn(rb, who, s, d, -1.0f, -1.0f).buffPerSec; };
+          Check(near(perSec({ { 41, 50.0f } }, me), 10.0f), "buff: 50 fire resist stops half of the 20/s of fire and none of the other foe's 10/s");
+          Check(near(perSec({ { 44, 50.0f } }, me), 15.0f), "buff: 50 magic resist stops half of ALL the magic (30/s)");
+          Check(near(perSec({ { 41, 50.0f }, { 44, 50.0f } }, me), 20.0f), "buff: both elements of one spell count: 20 x 0.75 + 10 x 0.5");
+          Combatant warm = me; warm.resists = { { 41, 75.0f } };
+          Check(near(perSec({ { 41, 50.0f } }, warm), 2.0f), "buff: 75 fire resist already: only the 10 points below the cap count, of the raw 20/s");
+          Combatant proof = me; proof.magicResist = 50.0f;
+          Check(near(perSec({ { 44, 20.0f } }, proof), 6.0f), "buff: the magic resist he has is Combatant::magicResist: 20 points of the raw 30/s = 6, not divided by what he resists already");
+          SpellEntry wd = Spell("Ward", 13, Prune::Nature::Ward, 10); wd.concentration = true; wd.wardPower = 100.0f; wd.buffSec = 1.0f;
+          const Estimate::Worth ww = Estimate::SpellWorthOn(wd, me, s, d, Estimate::MakeSpellIn(wd, me, s, d, -1.0f, -1.0f), 11.5f);
+          Check(ww.known && near(ww.effect, 100.0f), "ward: a stream is up for its channel (8.05 s x 30/s), and breaks at its power (100)");
+          SpellEntry sm = Spell("Atronach", 14, Prune::Nature::Summon, 10); sm.chargeSec = 0.5f; sm.buffSec = 60.0f; sm.summonHit = 10.0f;
+          Check(!Estimate::SpellWorthOn(sm, me, s, d, Estimate::MakeSpellIn(sm, me, s, d, -1.0f, -1.0f), 11.5f).known, "summon: the body's rate not read (the game) = NOT KNOWN");
+          sm.summonHitsPerSec = 1.0f; sm.summonHp = 200.0f;
+          Check(near(Estimate::MakeSpellIn(sm, me, s, d, -1.0f, -1.0f).summonDps, 10.0f + 10.0f), "summon: its 10/s + the damage it draws (200 hp over 20 s = 10/s of the 30/s coming in)"); }
+        // INERT: at sw.live = 0 no other row of the table moves a Facts field, and the numbers are the plain estimates. LIVE: the call sites blend linearly.
+        { const Tuning off = DefaultTuning(); Tuning on = DefaultTuning(); on.spellWorth.live = 1.0f; Tuning half = on; half.spellWorth.live = 0.5f;
+          Tuning odd = DefaultTuning(); std::size_t knobs = 0;
+          for (std::size_t i = 0; !SpellWorthKnobName(i).empty(); ++i) { ++knobs; if (SpellWorthKnobName(i) != "sw.live") { float v = 0.0f; if (!GetSpellWorthKnob(odd.spellWorth, SpellWorthKnobName(i), v) || !SetSpellWorthKnob(odd.spellWorth, SpellWorthKnobName(i), v * 3.0f + 7.0f)) Check(false, "names: a listed knob sets and reads"); } }
+          Check(knobs == 27, "names: 27 knobs, listed one by one");
           Snapshot s; s.self = Actor("Jesper", 0x14F00, 180, 200, 0, 0); s.self.mp = 400; s.self.mpMax = 400; s.self.hit = 10.0f; s.self.hitsPerSec = 1.0f;
           s.playerId = 0x14; s.currentTargetId = 0x3B600; s.hasBook = true; s.combatSec = 3.0f;
           s.foes = { Actor("Bandit", 0x3B600, 100, 100, 600, 0) };
@@ -1488,16 +1531,27 @@ namespace {
           add("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 25.0f, 0.0f, 0.0f); add("Flare", 0x2FF01, Prune::Nature::Offense, 60, 69.0f, 0.0f, 0.0f);
           add("Heal", 0x12FCC, Prune::Nature::Heal, 30, 0.0f, 80.0f, 0.0f); add("Calm", 0x12FC0, Prune::Nature::Control, 30, 0.0f, 0.0f, 30.0f);
           ClassGate mage; mage.resolved = true; mage.spellsOnClass = true;
-          const Generated g0 = Generate(s, mage, off), g1 = Generate(s, mage, DefaultTuning()), gl = Generate(s, mage, on);
+          const Generated g0 = Generate(s, mage, off), g1 = Generate(s, mage, odd), gl = Generate(s, mage, on);
           bool same = g0.actions.size() == g1.actions.size();
           for (std::size_t i = 0; same && i < g0.actions.size(); ++i) {
               const Facts& a = g0.actions[i].f; const Facts& b = g1.actions[i].f;
               same = a.expDamage == b.expDamage && a.expRate == b.expRate && a.bestDamage == b.bestDamage && a.effectRate == b.effectRate && a.healRate == b.healRate && a.controlSec == b.controlSec && a.expHeal == b.expHeal && a.bestHealRate == b.bestHealRate;
           }
-          Check(same && !g0.actions.empty(), "INERT: sw.live = 0 leaves every Facts field the reader touches bit for bit as it is");
-          bool moved = false;
-          for (std::size_t i = 0; i < gl.actions.size() && i < g0.actions.size(); ++i) { const Facts& a = g0.actions[i].f; const Facts& b = gl.actions[i].f; moved = moved || a.expRate != b.expRate || a.healRate != b.healRate || a.controlSec != b.controlSec || a.expHeal != b.expHeal; }
-          Check(moved, "LIVE: sw.live = 1 moves the Facts of a book the reader knows (the call sites are wired)"); }
+          Check(same && !g0.actions.empty(), "INERT: at sw.live = 0 every other sw.* changed leaves every Facts field the reader touches bit for bit");
+          const Generated gh = Generate(s, mage, half);
+          const auto find = [](const Generated& g, std::uint32_t form) -> const Facts* { for (const auto& a : g.actions) if (a.form == form) return &a.f; return nullptr; };
+          const auto mid = [&](float lo, float v, float hi) { return std::fabs(v - (lo + hi) * 0.5f) < 1e-3f; };
+          const Facts *b0 = find(g0, 0x2FF01), *bh = find(gh, 0x2FF01), *b1 = find(gl, 0x2FF01), *h0 = find(g0, 0x12FCC), *hh = find(gh, 0x12FCC), *h1 = find(gl, 0x12FCC), *c0 = find(g0, 0x12FC0), *ch = find(gh, 0x12FC0), *c1 = find(gl, 0x12FC0);
+          const bool all = b0 && bh && b1 && h0 && hh && h1 && c0 && ch && c1;
+          Check(all, "LIVE: the bolt, the heal and the control spell are candidates at 0, 0.5 and 1");
+          if (all) {
+              const float sec = off.spellCastSec;
+              Check(near(b0->expDamage, 69.0f) && near(b0->expRate, 69.0f / sec) && near(b0->bestDamage, 69.0f / sec) && near(b0->effectRate, 69.0f / sec) && near(h0->expHeal, 80.0f) && near(h0->healRate, 80.0f / sec) && near(c0->controlSec, 30.0f), "INERT: the plain numbers at 0 (69 damage, 80 heal, over spellCastSec, 30 s)");
+              Check(near(b1->expDamage, 69.0f) && near(b1->expRate, 69.0f / 1.9f) && near(b1->effectRate, 69.0f / 1.9f) && near(b1->bestDamage, 69.0f / 1.9f), "LIVE 1: the bolt = its damage over its own 1.9 s, one foe's damage for Overkill, the yardstick in the same unit");
+              Check(near(h1->expHeal, 80.0f) && near(h1->recipientMissing, 20.0f) && near(h1->healRate, 20.0f / 1.9f) && near(h1->bestHealRate, 20.0f / 1.9f), "LIVE 1: his own heal = the 20 missing over 1.9 s, and HealFit still sees the whole 80");
+              Check(near(c1->controlSec, 10.0f), "LIVE 1: the 30 s hold counts the foe's 10 s");
+              Check(mid(b0->expRate, bh->expRate, b1->expRate) && mid(b0->bestDamage, bh->bestDamage, b1->bestDamage) && mid(h0->healRate, hh->healRate, h1->healRate) && mid(h0->bestHealRate, hh->bestHealRate, h1->bestHealRate) && mid(c0->controlSec, ch->controlSec, c1->controlSec), "LIVE 0.5: every number stands halfway");
+          } }
     }
 }
 

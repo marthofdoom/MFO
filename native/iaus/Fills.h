@@ -105,6 +105,10 @@ namespace MFO::Iaus::Fills {
         void LearnReach(Snapshot& a_s, RE::Actor* a_self);
     };
 
+    // S11b (iaus/SpellWorth.h). One spell's FORM DATA for the spell-worth reader, any nature: charge time, what a buff / ward / summon adds and for how long.
+    // No engine call, no actor. Writes only with bIausFillSpells = 1, and only fields no other consumer reads (never `measured`).
+    void ReadSpellForm(RE::SpellItem* a_spell, SpellEntry& a_e);
+
     // MAIN THREAD. One spell or scroll: its health damage, healing and control seconds from the effect records, the
     // magnitude through EP 0x1D (kModSpellMagnitude) when the row verified and a target exists. Writes a_e.damage /
     // heal / controlSec / measured / levelCap / poisonType only with bIausFillSpells = 1. a_probe gets the `[iaus-fill] spell` line while the

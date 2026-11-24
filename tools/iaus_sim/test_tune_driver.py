@@ -279,11 +279,12 @@ class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): th
             T.gapi_parse("", "evoker", 6001)
 
     def test_spell_worth_rows_cover_the_native_table(self):   # one knob = one native member (the NewTables rule), searched or listed with its reason
-        fields = NewTables.fields(None, "SpellWorth.h", "SpellWorth")
+        fields = NewTables.fields(None, "SpellWorthTable.h", "SpellWorth")
         self.assertEqual({n.split(".", 1)[1] for n, _, _ in T.SW_KNOBS} | {n.split(".", 1)[1] for n in T.SW_NOT_SEARCHED}, fields)
         self.assertFalse({n for n, _, _ in T.SW_KNOBS} & set(T.SW_NOT_SEARCHED))
         cpp = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../native/iaus/SpellWorth.cpp")).read()
         self.assertEqual(set(re.findall(r'"sw\.(\w+)"', cpp)), fields)                # Set / Get name every field
+        self.assertIn("SetSpellWorthKnob", open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tune.h")).read())   # --set sw.* reaches native's names
         self.assertIn("t.unmeasuredDamage", open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tune.h")).read())
 
     def test_the_fence_asks_j_not_to_fall_where_the_rule_asks_it_to_rise(self):

@@ -801,10 +801,13 @@ namespace MFO::Iaus {
                     if (o.undeadOnly && !foe.undead) continue;
                     if (Note(s.willWork, o.form, foe.id) == Tri::No) continue;   // F3 (and the level cap, F2): a pair WillWork refused is no option on that foe
                     if (oReach > 0.0f && Finite(foe.dist, 0.0f) > oReach * kRangeVeto) continue;
-                    const float raw = Estimate::SpellOn(o, foe);
-                    bestRaw[ti] = (std::max)(bestRaw[ti], raw);
+                    float raw = Estimate::SpellOn(o, foe);
                     float rate = EffectRate(x, o, raw);
-                    if (const Estimate::Worth w = WorthOf(x, o, foe, a_foes); w.known) rate = LiveBlend(x, rate, w.PerSecond());   // S11b: the yardstick in the candidate's unit
+                    if (const Estimate::Worth w = WorthOf(x, o, foe, a_foes); w.known) {   // S11b: both yardsticks in the candidate's units
+                        raw = LiveBlend(x, raw, w.onTarget);
+                        rate = LiveBlend(x, rate, w.PerSecond());
+                    }
+                    bestRaw[ti] = (std::max)(bestRaw[ti], raw);
                     bestOn[ti]  = (std::max)(bestOn[ti], rate);
                 }
             }
@@ -927,7 +930,7 @@ namespace MFO::Iaus {
                         }
                         if (e.nature == Prune::Nature::Offense) {   // S11b: the reader's answer, blended in where it KNOWS the cast (live 0: this block changes nothing)
                             if (const Estimate::Worth w = WorthOf(x, e, *foe, a_foes); w.known) {
-                                c.f.expDamage = LiveBlend(x, c.f.expDamage, w.effect);
+                                c.f.expDamage = LiveBlend(x, c.f.expDamage, w.onTarget);   // ONE foe: Overkill compares it with his health
                                 c.f.expRate = LiveBlend(x, c.f.expRate, w.PerSecond());
                                 c.f.effectRate = LiveBlend(x, c.f.effectRate, w.PerSecond());
                             }
@@ -980,8 +983,8 @@ namespace MFO::Iaus {
                             c.f.expHeal = e.measured ? Estimate::Pos(e.heal) : 0.0f;
                             c.f.concentration = e.concentration;
                             c.f.healRate = EffectRate(x, e, e.heal);
-                            if (const Estimate::Worth w = WorthOf(x, e, *r, a_foes); w.known) {   // S11b: never more than is missing, per cast second (live 0: unchanged)
-                                c.f.expHeal = LiveBlend(x, c.f.expHeal, w.effect);
+                            if (const Estimate::Worth w = WorthOf(x, e, *r, a_foes); w.known) {   // S11b: the rate never counts more than is missing (live 0: unchanged)
+                                c.f.expHeal = LiveBlend(x, c.f.expHeal, w.onTarget);   // uncapped: HealFit is the overheal brake
                                 c.f.healRate = LiveBlend(x, c.f.healRate, w.PerSecond());
                             }
                             c.f.effectRate = c.f.healRate;

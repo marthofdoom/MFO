@@ -28,7 +28,9 @@
 //
 // WHERE EACH INPUT COMES FROM (S11b as built; Docs/research/2026-11/iaus-sim-v4.md 15.6):
 //   the table                  iaus/SpellWorthTable.h, Tuning::spellWorth, `sw.<field>` through Catalogue.cpp SetTuningScalar
-//   SpellEntry::chargeSec ... wardPower, engineRow    iaus/Fills.cpp MeasureSpell (the one effect reader), form data only
+//   SpellEntry::chargeSec, buff*, wardPower, summonHit    iaus/Fills.cpp ReadSpellForm, every kept spell of any nature (SpellBook.cpp), form data only
+//   SpellEntry::dotPerSec, dotSec, directDamage           iaus/Fills.cpp MeasureSpell (offense, control, heal: the one effect reader)
+//   The Buff / Ward / Summon branches of SpellWorthOn have NO Generate.cpp caller yet (offense, control seconds and heal do).
 //   Combatant life, fightSec   Estimate::FoeLifeSec / FightSec below (pure, from the party's weapon damage on the foe: no new engine read, no new thread)
 //   SpellIn                    Estimate::MakeSpellIn (ONE builder: the generator and the harness call it)
 //   NOT READ (left < 0, the term does not apply): the summoned body's hit RATE and health, failShare, a weapon buff's added damage, `redundant`,
@@ -57,6 +59,7 @@ namespace MFO::Iaus {
             float buffPerSec = -1.0f;       // a buff: damage prevented or added per second while it is up
             float buffSec = -1.0f;          // ... for this long
             float wardPerSec = -1.0f;       // a ward: incoming magic damage per second it would absorb
+            float wardPower = -1.0f;        // ... and the power it breaks at (< 0 = not known: no cap)
             bool  redundant = false;        // its effect archetype is already live on the target from another spell
             float magickaRegenPerSec = -1.0f;   // < 0 = not known (counted 0 by MagickaShare)
         };
@@ -64,6 +67,10 @@ namespace MFO::Iaus {
         struct Worth {
             bool  known = false;            // false: the reader could not value this cast (the caller keeps today's estimate; never a 0 that reads as "worthless")
             float effect = 0.0f;            // the unit above, per cast
+            // What the cast does to THIS ONE target, the number Cons::Overkill / HealFit compare with his health (Facts::expDamage / expHeal): offense = the foe's
+            // resists and the DoT over his life, no area, no bonus, no magicka share; a heal = its whole heal, NOT capped at what is missing. A stream is let go
+            // when the foe drops / the recipient is full, so it passes the health by at most one second of itself. 0 for the other natures.
+            float onTarget = 0.0f;
             float seconds = 0.0f;           // claim to fire + charge or channel + recover
             float magicka = 0.0f;           // what the cast costs him
             [[nodiscard]] float PerSecond() const { return known && seconds > 0.0f ? effect / seconds : 0.0f; }
@@ -76,8 +83,10 @@ namespace MFO::Iaus {
                                          const SpellIn& a_in, float a_concChannelSec);   // a_concChannelSec = Tuning::concChannelSec
 
         // The terms, one function each so the harness can pin them. Each returns < 0 when its input is not known.
-        [[nodiscard]] float CastSeconds(const SpellEntry& a_e, const SpellWorth& a_t, const SpellIn& a_in, float a_concChannelSec);   // claim to fire + charge / channel + recover (+ failShare x failedStartSec)
+        [[nodiscard]] float CastSeconds(const SpellEntry& a_e, const SpellWorth& a_t, const SpellIn& a_in, float a_heldSec);   // a_heldSec = HeldSeconds (a stream only). Claim to fire + charge / channel + recover (+ failShare x failedStartSec)
         [[nodiscard]] float ChannelSeconds(const SpellWorth& a_t, float a_concChannelSec);                                             // a stream's held seconds
+        [[nodiscard]] float HeldSeconds(const SpellEntry& a_e, const Combatant& a_target, const SpellWorth& a_t, const SpellIn& a_in, float a_concChannelSec);   // ChannelSeconds, let go when the foe's expected life is over / the recipient is full
+        [[nodiscard]] float OffenseOnTarget(const SpellEntry& a_e, const Combatant& a_foe, const SpellWorth& a_t, const SpellIn& a_in, float a_heldSec);         // the health ONE foe loses: resists + the DoT over its life
         [[nodiscard]] float AreaFactor(const SpellWorth& a_t, float a_foesInArea, float a_friendsInArea);                              // x the one-foe effect
         [[nodiscard]] float DotOverLife(const SpellWorth& a_t, float a_dotPerSec, float a_dotSec, float a_foeLifeSec);                  // a DoT's damage over the foe's expected life
         [[nodiscard]] float ControlHeldSec(const SpellWorth& a_t, float a_controlSec, float a_foeLifeSec);                              // the seconds a hold counts: never past the foe's expected life

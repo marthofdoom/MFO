@@ -105,21 +105,19 @@ struct SpellEntry {
         // fix/spell-worth C3: a poison-TYPE spell (SPIT spellType kPoison). The engine's resist rule reads the foe's kPoisonResist for it where every
         // other spell reads kResistMagic (iaus-i8-damage-research.md 2.3), so Estimate::SpellOn must too.
         bool          poisonType = false;
-        // S11b (iaus/SpellWorth.h): the inputs the spell-worth reader needs beside the three estimates above. FORM DATA only (Fills.cpp MeasureSpell, the
-        // one effect reader). < 0 = NOT READ: the matching term of Estimate::SpellWorthOn does not apply (never a made-up number).
+        // S11b (iaus/SpellWorth.h): the inputs the spell-worth reader needs beside the three estimates above. FORM DATA only (Fills.cpp ReadSpellForm for
+        // every nature, MeasureSpell for the DoT split). < 0 = NOT READ: the matching term of Estimate::SpellWorthOn does not apply (never a made-up number).
         float         chargeSec = -1.0f;        // SPIT charge time (fire-and-forget; a concentration spell holds, it does not charge)
         float         dotPerSec = -1.0f;        // health damage over time, per second (every damage effect with a duration, magnitude after his perks)
         float         dotSec = -1.0f;           // ... for this long (the total over the per-second rate, so the total is kept)
         float         directDamage = -1.0f;     // the instant part of `damage` (damage = directDamage + dotPerSec x dotSec for a fire-and-forget spell)
-        std::int8_t   engineRow = -1;           // cast::EngineRow the claim is predicted to key (cast/Archetype.cpp); -1 = not read
         float         summonHit = -1.0f;        // Summon: the summoned body's unarmed damage (its race); the rate and health are NOT read (left < 0)
         float         summonHitsPerSec = -1.0f;
         float         summonHp = -1.0f;
         float         buffArmor = -1.0f;        // Buff: armor rating points the spell adds (kDamageResist value modifiers, summed)
-        float         buffResist = -1.0f;       // Buff: resist points it adds on buffResistAv (the largest)
-        int           buffResistAv = -1;
+        std::vector<std::pair<int, float>> buffResists;   // Buff: (resist actor value, points), one row per AV, the largest of several on one AV. Empty = none read
         float         buffSec = -1.0f;          // Buff / Ward / Summon: how long its beneficial effect lasts (the longest duration)
-        float         wardPower = -1.0f;        // Ward: the ward's magnitude (kWardPower value modifier)
+        float         wardPower = -1.0f;        // Ward: the ward's magnitude (Actuation::IsWardEffect)
         std::string   name;
     };
 
