@@ -86,7 +86,7 @@ namespace Sim {
         const float per = s.e.concentration ? 0.5f : 1.0f;   // Data.h Classify doubled a stream's per-second numbers for its 2 s
         e.measured = SpellMeasured(s);
         e.damage = e.measured ? (s.dmg + s.dot * s.dotDur) * per : 0.0f; e.heal = (s.heal + s.hot * s.hotDur) * per; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f;
-        e.levelCap = (g_spellRules == 0 && s.ctrl && !s.ctrlPar && s.ctrlMaxLevel < 1e8f) ? (std::max)(1.0f, s.ctrlMaxLevel) : 0.0f;
+        e.levelCap = (g_spellRules == 0 && s.ctrl && !s.ctrlPar && s.ctrlMaxLevel < 1e8f && s.dmg + s.dot * s.dotDur <= 0.0f) ? (std::max)(1.0f, s.ctrlMaxLevel) : 0.0f;   // native iaus/Fills.cpp "if (damage > 0.0f) levelCap = 0.0f": a spell with a working health damage effect carries no cap (choice review, SEV-4)
     }
     // Generate, and under `--spell-rules old` the facts as the game of the 11-23 field run filled them: an unmeasured offense spell's damage did not apply
     // (expDamage < 0: DamageValue and Overkill off, so every such spell TIED), and the exploit term read the foe's resist for every spell (a measured one's
@@ -435,6 +435,7 @@ namespace Sim {
             if (si < 0) return Fired::Invalid;
             const SpellEntry& e = c.book.entries[static_cast<std::size_t>(si)]; const SimSpell& s = c.build->spells[static_cast<std::size_t>(si)];
             if (fam == Family::Scroll) { if (e.source != SpellSource::Scroll || e.count <= 0 || !c.gate.scrollUser) return Fired::Invalid; }
+            else if (fam == Family::CastSummon && g_v4.summons && F.SummonGate(x, si) != Fight::kSummonClear) return Fired::Declined;   // native's gate at the cast (cast/Summon.cpp SummonGate)
             else if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
             // field 1117 A6 / the disengage ruling (cast/CastOn.cpp): with NO combat controller a combat-table SELF buff / ward is DEFERRED (transparent,
             // asked again every lap; never the unanimated direct cast), and so is a heal while a disengage runs. Other casts keep the direct road.

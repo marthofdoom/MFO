@@ -84,11 +84,13 @@ namespace Sim {
         bool los = false;        // sight and the line of fire by geometry (walls, terrain, closed doors)
         bool caststart = false;  // rows Harbinger does not seat never start, the never-started release, the hold-off (section 5)
         bool interrupt = false;  // a stagger or a control effect on a charging caster ends the cast
+        bool summons = false;    // a summon is its own actor (the list's NPC record), the engine's summon limit, eviction, the native gate (World.h LandSummon, SummonGate)
+        bool hazards = false;    // what a spell's hazard does to who stands in it (World.h SpawnHazard, HazardStep)
         bool drops = false;      // followers take the navmesh's drop links (NOT observed in game: off)
         bool foedrops = false;   // foes take them
         void AllOff() { *this = V4{}; }
-        void Defaults() { env = path = bodies = los = caststart = interrupt = true; drops = foedrops = false; }
-        [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || drops || foedrops; }
+        void Defaults() { env = path = bodies = los = caststart = interrupt = summons = hazards = true; drops = foedrops = false; }
+        [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || summons || hazards || drops || foedrops; }
     };
     inline V4 g_v4;
     // --seat-immunity seen|unseen: does the game's will-work SEE that a foe is immune to paralysis? native cast/WillWork.cpp (c): "Stagger / Paralyze

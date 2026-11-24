@@ -21,6 +21,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace Sim {
@@ -185,6 +186,27 @@ namespace Sim {
         [[nodiscard]] bool Ranged() const { return anim == 7 || anim == 9; }
     };
 
+    // SUMMONS AND HAZARDS, sim bundle A (iaus-sim-v4.md 16). Every number is a MODEL or a placeholder.
+    // To change how a summon spawns or its cap: kSummon. A new summon kind: nothing, it is the list's NPC record.
+    struct SummonModel {
+        float limitBase = 1;                                            // iMaxSummonedCreatures' code default (cast/Summon.cpp SummonLimit), when the list's gmst has none
+        float spawnAheadU = 150;                                        // MODEL: the caster aims this far before him, towards his target
+        float deadListedSec = 3;                                        // MODEL: a dead creature stays in the engine's commanded list this long (it counts against the limit)
+        float genericHpBase = 60, genericHpPerLevel = 12, genericUnarmedBase = 8, genericUnarmedPerLevel = 0.8f, genericRun = 400;   // MODEL: the generic creature (a world with no actor for the spell)
+    };
+    inline constexpr SummonModel kSummon;
+    // To change how a spawned hazard is placed or ticked: kHazard. A new hazard kind: nothing, it is the list's record (tools/list_balance/extract_world.py hazard_row).
+    struct HazardModel {
+        float wallStepSec = 0.5f;                                       // MODEL: a stream lays one hazard this often
+        float floorBandU = 128;                                         // MODEL: it reaches this far up and down
+        float minInterval = 0.25f;                                      // a record's interval 0 is not "every step"
+        float maxLifeSec = 60;                                          // MODEL: a record with lifetime 0 (stands until removed) stands this long
+        int   maxLive = 64;                                             // memory bound of one fight
+    };
+    inline constexpr HazardModel kHazard;
+    struct SimSpell;
+    struct HazardSpec { float radius = 0, lifetime = 0, interval = 1; int limit = 0; bool viaImpact = false, drops = false, pcOnly = false; std::shared_ptr<const SimSpell> spell; };   // radius in units. drops: it falls to the ground (flag 16). spell: per TICK (Classify)
+
     // One spell as the world resolves it. `e` is the SpellBook entry IAUS sees (the classification mirrors
     // Prune::ClassifyNature's precedence, as sim v1 did).
     struct SimSpell {
@@ -207,6 +229,8 @@ namespace Sim {
         int   row = 0;
         bool  reanimate = false, summon = false;
         float summonDur = 60;
+        std::vector<int> summonIdx;             // per Data::buckets: the actor it summons (Data::summonSpecs). Empty = no list data: the generic creature
+        std::optional<HazardSpec> hazard;       // what it leaves lying (the first hazard of its effects)
         float recovery = 0;         // shout recovery (its cooldown)
         // SIM V4 batch C (the fix/spell-worth mirror, native iaus/Fills.cpp MeasureSpell): the spell has an effect whose damage lives ELSEWHERE than in its own
         // effect list: a hazard it spawns, a cloak's second spell, a script, an enchantment it puts on the weapon (kIndirectArch). Read from the record's
@@ -297,6 +321,8 @@ namespace Sim {
         std::map<std::string, double> gmst;
         Rules rules;
         std::vector<ActorSpec> specs;
+        std::vector<ActorSpec> summonSpecs;                                  // the actors the list's summon spells summon (their own table: the foes' role picks never read them)
+        std::vector<std::array<float, 3>> summonLimitRows;                   // ModCommandedActorLimit perks: Conjuration threshold, value, function (1 set, 2 add, 3 multiply)
         std::map<std::string, std::vector<std::pair<int, int>>> named;   // batch 3 sanity cells (compile_world.py named): label -> (level, spec index); TEST INPUT
         std::vector<SimSpell> foeSpells;
         std::vector<Encounter> encounters;
@@ -431,7 +457,17 @@ namespace Sim {
             if (ec > topCost) { topCost = ec; topArch = arch; out.skillReq = static_cast<int>(x["minSkill"].num());
                 auto si = kSchool.find(x["skill"].s); out.school = si == kSchool.end() ? -1 : si->second; }
             if (const int er = SimRowOf(arch, av, self, x["hostile"].yes()); er != kRowNone && ec > rowCost) { rowCost = ec; out.row = er; }
-            if (arch == kArSummon) { summon = true; out.summonDur = static_cast<float>(d > 0 ? d : 60); }
+            if (arch == kArSummon) { summon = true; out.summonDur = static_cast<float>(d > 0 ? d : 60); if (out.summonIdx.empty()) for (const J& si : x["summon"].a) out.summonIdx.push_back(static_cast<int>(si.num(-1))); }
+            if (const J& h = x["hazard"]; h.has() && !out.hazard) {   // its spell goes through this same classifier, then becomes what ONE TICK does: the engine does not stack one spell of one caster on one victim, so a tick adds its interval's share
+                HazardSpec z; const int fl = static_cast<int>(h["flags"].num()); z.viaImpact = h["via"].s == "impact"; z.drops = fl & 16; z.pcOnly = fl & 1; z.limit = static_cast<int>(h["limit"].num());
+                z.interval = std::max(kHazard.minInterval, static_cast<float>(h["interval"].num())); const double area = x["area"].num();
+                z.radius = Prune::BlastUnits(static_cast<float>((fl & 8) && area > 0 ? area : h["radius"].num()), 0.0f, false);   // MODEL: the record's radius is in feet, as an effect's area is
+                z.lifetime = static_cast<float>((fl & 2) && d > 0 ? d : h["lifetime"].num()); z.lifetime = z.lifetime > 0 ? z.lifetime : kHazard.maxLifeSec;
+                auto hs = std::make_shared<SimSpell>(); Classify(h["spell"], *hs);
+                const float conc2 = h["spell"]["castType"].s == "Concentration" ? 0.5f : 1.0f;   // Classify made a stream a 2 s lump
+                hs->dmg *= z.interval * conc2; hs->mpDmg *= z.interval * conc2; hs->spDmg *= z.interval * conc2; if (hs->dotDur > 0) hs->dot *= z.interval / hs->dotDur;
+                hs->e.name = h["edid"].s; hs->e.areaUnits = 0; z.spell = std::move(hs);
+                if (z.radius > 0) out.hazard = std::move(z); }
             if (arch == kArReanimate) { reanimate = true; out.ctrlMaxLevel = static_cast<float>(mag); out.summonDur = static_cast<float>(d > 0 ? d : 60); }   // card G7: the magnitude is the highest level it raises
             weighable |= Prune::EffectWeighable(arch);
             if (arch == kArCalm || arch == kArDemoralize || arch == kArFrenzy || arch == kArParalysis || arch == kArTurnUndead) {

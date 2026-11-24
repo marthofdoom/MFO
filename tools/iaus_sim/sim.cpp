@@ -253,7 +253,7 @@ namespace {
                                            { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks }, { "hittail", &V3::hittail }, { "burst", &V3::burst } };
     // SIM V4: the world's v4 part. " world=v4" when every default switch is on, plus what differs and where the places come from.
     struct V4Flag { const char* name; bool V4::* m; bool def; };
-    inline constexpr V4Flag kV4Flags[] = { { "env", &V4::env, true }, { "path", &V4::path, true }, { "bodies", &V4::bodies, true }, { "los", &V4::los, true }, { "caststart", &V4::caststart, true }, { "interrupt", &V4::interrupt, true },
+    inline constexpr V4Flag kV4Flags[] = { { "env", &V4::env, true }, { "path", &V4::path, true }, { "bodies", &V4::bodies, true }, { "los", &V4::los, true }, { "caststart", &V4::caststart, true }, { "interrupt", &V4::interrupt, true }, { "summons", &V4::summons, true }, { "hazards", &V4::hazards, true },
                                            { "drops", &V4::drops, false }, { "foedrops", &V4::foedrops, false } };
     std::string g_envLabel = "fixtures", g_seats = "today", g_sightTag;
     std::string WorldTag(const char* lead) {
@@ -765,6 +765,7 @@ template <class GetLog, class GetFights> static void SpellRegretReport(const std
                 "class", "fights", "cast/f", "regU/f", "any%", "within", "cross", "fact", "weight", "gate", "hand", "sight", "epsW%", "epsX%", "epm%", "pruned/f");
     for (std::size_t c = 0; c < classes.size(); ++c) { const RegretLog& r = log(static_cast<int>(c)); const double nf = static_cast<double>(std::max(1L, fights(static_cast<int>(c)))); const char* cn = classes[c].name.c_str();
         std::printf("SPELLDEC %s %ld %ld %ld\n", cn, r.decisions, r.castDecisions, r.pruned);
+        for (std::size_t i = 0; i < r.altMiss.size(); ++i) if (r.altMiss[i] > 0) std::printf("SPELLALTMISS %s %zu %ld\n", cn, i, r.altMiss[i]);   // decisions where alternate table i picked an action that was not among the options (charged as idle; choice review R4)
         double within = 0, cross = 0, by[5] = { 0, 0, 0, 0, 0 }, ew = 0, ex = 0, em = 0; long nReg = 0, nEps = 0;
         for (const auto& kv : r.rows) { const RegRec& q = kv.second; const auto p1 = kv.first.find('|'), p2 = kv.first.find('|', p1 + 1); std::string fi = kv.first.substr(0, p1); const std::string fo = kv.first.substr(p1 + 1, p2 - p1 - 1), cause = kv.first.substr(p2 + 1);
             std::printf("SPELLREG %s %s %s %s %ld %ld %.4f %ld %.4f %.4f %.4f\n", cn, fi.c_str(), fo.c_str(), cause.c_str(), q.n, q.nReg, q.regU, q.nEps, q.epsW, q.epsX, q.epm);
@@ -1101,8 +1102,8 @@ static int RealMain(int argc, char** argv) {
     for (const SimClass& c : allClasses) if (only.empty() || ("," + only + ",").find("," + c.name + ",") != std::string::npos) classes.push_back(c);
     if (classes.empty()) { std::fprintf(stderr, "no class matches --classes %s\n", only.c_str()); return 2; }
     std::printf("IAUS SIM %s  list=%s  seed=%llu  fights/cell=%d (x5 rapport ranks)  taunted-visible=%d  engine-casts=%d  classes=%s  profiles=%s  mode=%s\n", g_v3.Any() ? "v3" : "v2", D.name.c_str(), (unsigned long long)seed, fights, int(tauntVisible), int(engineCasts), legacy ? "legacy" : "real", mech ? "mech" : "default", g_tableMode ? "table" : "iaus");
-    std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d unweighted=%d  kept for table rows: reanimate=%d\n",
-                D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown, D.dropUnweighted, D.keptReanim);
+    std::printf("world: specs=%zu encounters=%zu foeSpells=%zu  spell pool: raw=%d taught/kept=%d  natures: offense=%d control=%d heal=%d buff=%d summon=%d ward=%d  dropped: placement=%d notCastable=%d reanimate=%d unknown(script)=%d unweighted=%d  kept for table rows: reanimate=%d  summons=%s (%d of %zu pool summons resolve)  hazards=%d\n",
+                D.specs.size(), D.encounters.size(), D.foeSpells.size(), D.rawSpells, D.taughtSpells, D.natures[1], D.natures[2], D.natures[3], D.natures[4], D.natures[5], D.natures[6], D.dropPlace, D.dropNotCast, D.dropReanim, D.dropUnknown, D.dropUnweighted, D.keptReanim, D.summonSpecs.empty() ? "generic" : "list", [&] { int n = 0; for (const SimSpell& s : D.spells) n += s.summon && !s.summonIdx.empty(); return n; }(), static_cast<std::size_t>(D.natures[5]), [&] { int n = 0; for (const SimSpell& s : D.spells) n += s.hazard.has_value(); return n; }());
     const Rules& r = D.rules;
     std::printf("rules: dmgSkill %.2f..%.2f  armor %.3f/pt max %.0f%% +%.1f%%/piece  armorSkill %.2f..%.2f  power x%.2f  regen(combat) mp %.2f sp %.2f  cost(base %.4f mult %.2f scale %.2f)  hp/level %.1f  toPC x%.2f byPC x%.2f\n",
                 r.dmgSkillMin, r.dmgSkillMax, r.armorScale, r.armorMax, r.armorBasePiece * 100, r.armorSkillLo, r.armorSkillHi, 1 + r.powBonus, r.combatMp, r.combatSp, r.costBase, r.costMult, r.costScale, r.hpPerLevel, r.diffToPC, r.diffByPC);

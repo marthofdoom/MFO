@@ -904,7 +904,8 @@ namespace MFO::Actuation {
         bool         hasBarrier   = false;   // ...and it is a barrier type
         bool         hasExplosion = false;
         bool         snapToNavMesh = false;  // any effect kSnapToNavMesh
-        bool         impactHazard = false;   // any effect: impactDataSet (+0x90) has an entry whose BGSImpactData::hazard (+0x80) is set (the Wall label)
+        bool         impactHazard = false;   // any effect: impactDataSet (+0x90) has an entry whose BGSImpactData::hazard (+0x80) is set (log only since MFO-B865)
+        bool         impactHazardDrops = false;   // ...and that hazard (BGSHazardData flags +0x14) has kDropToGround (16); the Wall shape needs it (Prune::IsWallShape)
         bool         spawnHazard  = false;   // any effect archetype kSpawnHazard (40)
         bool         hazardHostile = false;  // ...and the spawned hazard's spell has a hostile effect (read off associatedForm)
         std::uint32_t effectCount = 0;

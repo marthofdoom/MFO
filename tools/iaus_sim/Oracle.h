@@ -276,7 +276,11 @@ namespace Sim {
         const double q = std::sqrt(-2.0 * std::log(std::clamp(p, 1e-12, 0.5)));
         const double z = q - (2.515517 + 0.802853 * q + 0.010328 * q * q) / (1.0 + 1.432788 * q + 0.189269 * q * q + 0.001308 * q * q * q);   // Abramowitz-Stegun 26.2.23, |error| < 4.5e-4
         const double d = n - 1, z3 = z * z * z, z5 = z3 * z * z, z7 = z5 * z * z;
-        return z + (z3 + z) / (4 * d) + (5 * z5 + 16 * z3 + 3 * z) / (96 * d * d) + (3 * z7 + 19 * z5 + 17 * z3 - 15 * z) / (384 * d * d * d);
+        double t = z + (z3 + z) / (4 * d) + (5 * z5 + 16 * z3 + 3 * z) / (96 * d * d) + (3 * z7 + 19 * z5 + 17 * z3 - 15 * z) / (384 * d * d * d);
+        // UNDER 8 STREAMS (`--oracle-nmin 4`, choice review SEV-5) the four terms fall short (9.3 at 3 degrees of freedom against the table's 10.21 for p 0.001):
+        // the fifth term of the same expansion brings it to 9.9. From 8 streams on the value is the one every earlier result was made with, bit for bit.
+        if (n < 8) t += (79 * z7 * z * z + 776 * z7 + 1482 * z5 - 1920 * z3 - 945 * z) / (92160 * d * d * d * d);
+        return t;
     }
 
     // What the search did (summed over an oracle's decisions; sim.cpp prints it per class: the ORCSTOP and ORCREFUSED lines).
@@ -395,6 +399,7 @@ namespace Sim {
         // The class filter (the abilities, then the written rulings), counted by reason; then the caller's own constraint.
         [[nodiscard]] bool Ok(const Fight& F, const Ctl& c, const Opt& o) {
             const char* why = ClassRefuses(F, c, o); if (!why && g_classRulings) why = RulingRefuses(F, c, o);
+            if (!why && g_v4.summons && o.k && o.k->family == Family::CastSummon) for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == o.k->form) { if (F.SummonGate(F.b[static_cast<std::size_t>(c.body)], static_cast<int>(i)) != Fight::kSummonClear) why = "engine:the summon limit"; break; }   // bundle A: he cannot cast what the game refuses
             if (why) { ++st.refused[why]; if (&c == &F.ctl[0]) ++stSubj.refused[why]; if (F.trace) std::fprintf(F.trace, "%7.2f  ORACLE REFUSED %s: %s (%s)\n", F.now, F.b[static_cast<std::size_t>(c.body)].c.name.c_str(), o.Label().c_str(), why); return false; }
             return !allowed || allowed(F, c, o); }
         std::map<std::string, Disagreement>* log = nullptr;
@@ -485,13 +490,13 @@ namespace Sim {
             for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { Opt o; o.k = &k; if (Ok(F, c, o)) opt.push_back(o); }
             if (cfg.ext) { std::vector<Opt> ex; ExtOptions(F, ci, ex); for (const Opt& o : ex) if (Ok(F, c, o)) opt.push_back(o); }
             // (batch C) what each alternate table would pick on this snapshot; then the exact pruning, which never drops IAUS's pick or an alternate's
-            std::vector<Key> altKey; std::vector<char> altHas;
+            std::vector<Key> altKey; std::vector<char> altHas, altCast;
             if (wantAlt) for (const AltTable& a : Alts()) {
                 Generated ga = SimGenerate(sv.sn, c.gate, a.t); FillCooldowns(c, ga.actions, F.now, a.t);
                 Profile pf = c.profile; for (const auto& w : a.w) SetWeight(pf, w.family, w.cons, w.w);
                 Mind m = mind0; const Decision da = Decide(m, ga.actions, pf, a.t, in);
                 const bool has = da.verdict != Verdict::Idle && !da.order.empty() && da.order[0].idx < ga.actions.size();
-                altKey.push_back(has ? KeyOf(ga.actions[da.order[0].idx]) : Key{}); altHas.push_back(has ? 1 : 0); }
+                altKey.push_back(has ? KeyOf(ga.actions[da.order[0].idx]) : Key{}); altHas.push_back(has ? 1 : 0); altCast.push_back(has && CastFamily(ga.actions[da.order[0].idx].family) ? 1 : 0); }
             std::vector<char> guard;   // options the pair rule never retires: IAUS's pick, an alternate's pick, the action he is on (filled below; the best is the race's own)
             if (g_oraclePrune) { std::vector<int> bi(opt.size(), -1); std::vector<char> dead(opt.size(), 0), keep(opt.size(), 0); std::vector<float> kf(opt.size(), 1.0f); long np = 0; const bool onFoe = g_oraclePrune == 2;
                 for (std::size_t i = 0; i < opt.size(); ++i) { const Candidate* k = opt[i].k; if (!k || opt[i].ext != Ext::None || k->family != Family::CastOffense) continue;
@@ -530,7 +535,7 @@ namespace Sim {
                 const double tc = TCrit(n, cfg.pOne), rn = std::sqrt(double(n)); live = 0;
                 for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; if (i == best) { ++live; continue; }
                     double sd = 0; const double d = lead(best, i, &sd);
-                    if (n >= 2 && (sd <= 0.0 ? d >= 0.0 : d > tc * sd / rn)) alive[i] = 0; else ++live; }   // sd 0: the same outcome on every stream (a duplicate of the best, or beaten on every one)
+                    if (n >= 2 && (sd <= 0.0 ? (d > 0.0 || (d >= 0.0 && (cfg.pair < 0.0 || n >= kTwinMin))) : d > tc * sd / rn)) alive[i] = 0; else ++live; }   // with the cuts on, a duplicate of the best is a twin like any other: not retired under kTwinMin streams (choice review SEV-4: at 4 or 8 streams half of the twins still differ later)   // sd 0: the same outcome on every stream (a duplicate of the best, or beaten on every one)
                 // PAIRWISE INDIFFERENCE (OracleCfg::pair, the block comment above g_oraclePrune): from the last option to the first, so of two twins the earlier stands
                 if (cfg.pair >= 0.0 && n >= 2 && live > 1) for (std::size_t i = N; i-- > 0;) { if (!alive[i] || i == best || guard[i]) continue;
                     for (std::size_t j = 0; j < N; ++j) { if (j == i || !alive[j]) continue;
@@ -587,8 +592,8 @@ namespace Sim {
                 if (reg->alt.size() < altKey.size()) { reg->alt.resize(altKey.size(), 0.0); reg->altMiss.resize(altKey.size(), 0); }
                 for (std::size_t a = 0; a < altKey.size(); ++a) {   // the same rule for an alternate table's pick
                     std::size_t ia = N - 1; bool found = !altHas[a]; if (altHas[a]) for (std::size_t i = 0; i < N; ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == altKey[a]) { ia = i; found = true; break; }
-                    if (!found) { ++reg->altMiss[a]; continue; }
-                    if (bc != N && (isCast(ia) || isCast(best))) reg->alt[a] += regretOf(ia); }
+                    if (!found) ++reg->altMiss[a];   // a pick that is not among the options (the class filter, a hard cooldown) does not happen: he idles, and is charged idle's loss exactly as the base table's missing pick is (ia stays N - 1; choice review R4. It was charged nothing, so a table that ranked refused casts higher looked better)
+                    if (bc != N && ((found ? isCast(ia) : altCast[a] != 0) || isCast(best))) reg->alt[a] += regretOf(ia); }
                 if (bc != N && (iCast || isCast(best))) {
                     ++reg->castDecisions; const double r = regretOf(ii); reg->regU += r;
                     const Candidate* ob = opt[bc].k; const bool iFound = !iausPick || ii != N - 1;

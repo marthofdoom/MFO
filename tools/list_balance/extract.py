@@ -167,7 +167,7 @@ def main():
             if d is None or len(d) < 36 or (sig == 'SPEL' and u32(d, 8) != 0): continue   # spells only (not powers/abilities)
             e = fx(names, light, pl, subs)
             if not e: continue
-            row = dict(edid=edid, cost=u32(d, 0), castType=CASTTYPE[min(u32(d, 16), 3)],
+            row = dict(key='%s:%x' % (owner, loc), edid=edid, cost=u32(d, 0), castType=CASTTYPE[min(u32(d, 16), 3)],
                        delivery=DELIVERY[min(u32(d, 20), 4)], chargeTime=f32(d, 12), castDuration=f32(d, 24), range=f32(d, 28),
                        autoCalc=not (u32(d, 4) & 1), taught=(owner, loc) in taught, effects=e)
             (spells if sig == 'SPEL' else scrolls).append(row)

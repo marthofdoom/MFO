@@ -46,6 +46,20 @@ namespace MFO::Iaus::Prune {
         bool natureUndeclared = false;   // Actuation::SpellNatureUndeclared
     };
 
+    // The Wall shape (MFO-B865): the ONE rule for "this spell lays a hazard on the ground". An effect whose impact data set holds an IPCT
+    // with a hazard (NAM2) whose BGSHazardData flag kDropToGround (16) is set, on a CONCENTRATION spell that is not Self. A bolt's impact
+    // hazard (Firebolt, Flames, Fireball, Ice Spike ...) is not a wall: it burns what the bolt MISSED into. Lab mirror: iaus_sim World.h LaysHazard.
+    [[nodiscard]] inline bool IsWallShape(bool a_hazardDropsToGround, bool a_concentration, bool a_selfDelivery) {
+        return a_hazardDropsToGround && a_concentration && !a_selfDelivery;
+    }
+
+    // INTERIM (MFO-B865 review F1): a Self, non-concentration OFFENSE spell with an impact hazard (Fire Storm) was Wall -> Placement before the shape
+    // change; as SelfAoE it would be IAUS-kept and cast on the unanimated self-stream road (CastSelfDirect). Keep dropping exactly that set until the
+    // animated self-blast road exists (Docs/REVIEW-BACKLOG.md "self-delivered AoE OFFENSE spell", Frost Nova). Delete this rule when that road lands.
+    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_offense, bool a_impactHazard) {
+        return a_selfDelivery && !a_concentration && a_offense && a_impactHazard;
+    }
+
     // Order matters: a summon / ward is its own family whatever ClassifySpell calls it; a control archetype is
     // Control even when the record also flags it hostile; a self cloak harms whoever stands near but is CAST on
     // himself, so it is a (melee) buff; an Offense or Heal kind is a nature the RECORD states

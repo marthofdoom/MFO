@@ -167,7 +167,7 @@ namespace Sim {
         bool   lofWaited = false, castStarted = false;               // lof: this cast has been held at least once (one count per cast) / its 0x06 start test has passed
         double strafeUntil = 0; float sgx = 0, sgy = 0;              // stance: a held caster's side step goal
         std::uint32_t swFoe = 0; bool swWalk = false, backing = false; double swSince = -1;   // SIM V4: the sight dwell of his walk-in on swFoe (Fight::SightWalk) and the back-off's hysteresis (Fight::BackOff)
-        struct Stream { bool live = false; int spell = -1; std::uint32_t target = 0; double end = 0, nextBeat = 0; bool iaus = false, beats = false; } stream;   // hands: a concentration stream on his left hand
+        struct Stream { bool live = false; int spell = -1; std::uint32_t target = 0; double end = 0, nextBeat = 0, hazardAt = 0; bool iaus = false, beats = false; } stream;   // hands: a concentration stream on his left hand
         double reDrawUntil = 0;                                      // hands: his two-handed weapon / bow is being drawn again until then
         Nav    nav;                                                  // SIM V4: his triangle and his route (Env.h). Untouched without an environment
         [[nodiscard]] bool Party() const { return role != Role::Foe; }
@@ -176,6 +176,10 @@ namespace Sim {
     struct Occluder { float x, y, r; };
     // SIM V3: an ACTIVE area (ClickUp 1dfcuabd246). follows = it moves with its owner (a cloak); else it stays at the cast point.
     struct Area { float x = 0, y = 0, r = 0; double until = 0; std::uint32_t src = 0; bool follows = false, hostile = false; float perSec = 0, armor = 0; int av = -1; int spell = -1; float z = 0; };   // z: SIM V4, the height of its centre
+    // Bundle A. A hazard lying in the place (World.h SpawnHazard / HazardStep); ids, never pointers (the oracle copies fights). Hazard avoidance is a spot-scoring input (the movement bundle).
+    struct Hazard { float x = 0, y = 0, z = 0, r = 0; double until = 0, nextTick = 0; float interval = 1; std::uint32_t owner = 0; bool party = false, pcOnly = false; std::shared_ptr<const SimSpell> spell; };
+    struct HazardHit { std::uint32_t victim = 0, owner = 0; const SimSpell* spell = nullptr; double at = 0; };   // one spell of one caster does not stack on one victim
+    struct Commanded { std::uint32_t owner = 0, body = 0; int ctl = -1, spell = -1; double until = 0, deadAt = -1; };   // the engine's commanded actors, in cast order: summons and raised thralls, the dead until removed
     struct Spawn { double at = 0; std::shared_ptr<const ActorSpec> spec; float x = 0, y = 0; std::string tag; float dmgScale = 1; };   // a foe that joins later (waves)
 
     // Per-fight counters. `subject` = follower 0 unless stated.
@@ -409,6 +413,7 @@ namespace Sim {
         void OpenDoor(std::int32_t i) { const std::uint32_t id = doors[static_cast<std::size_t>(i)].id; std::uint64_t h = 0x9E3779B97F4A7C15ULL;
             for (EQ::Door& d : doors) { if (d.id == id) d.state = EQ::DoorState::Open; h = SimEnv::Mix(h ^ static_cast<std::uint64_t>(d.state)); } doorStamp = h; }
         std::vector<Shot> shots;
+        std::vector<Hazard> hazards; std::vector<HazardHit> hazardHits; std::vector<Commanded> commanded;   // bundle A
         std::vector<Area> areas;                   // SIM V3: the live areas
         Rng V;                                     // SIM V3: the draws v3 adds (flight path, stream length), never R
         // PER-ACTOR RANDOM STREAMS, ROLLOUT ONLY (marth 11-17: "128 + fix the noise"; iaus-sim-v3.md 14.2). A real fight draws from R and V in
@@ -1246,7 +1251,7 @@ namespace Sim {
         // (offense 2..6 s, heal and utility 8..15 s). beats = its effect and its cost come per 1 s beat (kConcApplyPeriod).
         void StartStream(Body& x, std::uint32_t target, int idx, bool iaus, bool beats, bool offense) {
             x.stream.live = true; x.stream.spell = idx; x.stream.target = target; x.stream.iaus = iaus; x.stream.beats = beats;
-            x.stream.end = now + static_cast<double>(offense ? VU(x, 15, 2.0f, 6.0f) : VU(x, 16, 8.0f, 15.0f)); x.stream.nextBeat = now;
+            x.stream.hazardAt = now; x.stream.end = now + static_cast<double>(offense ? VU(x, 15, 2.0f, 6.0f) : VU(x, 16, 8.0f, 15.0f)); x.stream.nextBeat = now;
             x.actEnd = now; if (x.ctl == 0 && iaus) ++t.streams;
             if (trace) std::fprintf(trace, "%7.2f  STREAM %s: %s on his left hand for up to %.1f s\n", now, x.c.name.c_str(), SpellOf(x, idx)->e.name.c_str(), x.stream.end - now);
         }
@@ -1254,6 +1259,8 @@ namespace Sim {
             if (!Up(x)) { x.stream.live = false; return; }
             if (x.ctl == 0) t.streamSec += TM::dt;
             if (now >= x.stream.end) { EndStream(x, false); return; }
+            if (g_v4.hazards && now >= x.stream.hazardAt) { const SimSpell* hs = SpellOf(x, x.stream.spell); const Body* ht = hs && LaysHazard(*hs) ? Find(x.stream.target) : nullptr;   // a wall: laid on the ground at the stream's aim point (MODEL: under the target)
+                if (ht && ht != &x && Up(*ht) && Sees(x, *ht) && !(hs->e.reach > 0.0f && Dist(x, *ht) > hs->e.reach * 1.15f)) { x.stream.hazardAt = now + static_cast<double>(kHazard.wallStepSec); SpawnHazard(x, *hs, ht->c.x, ht->c.y, ht->c.z); } }
             if (!x.stream.beats || now < x.stream.nextBeat) return;
             x.stream.nextBeat += 1.0;
             const SimSpell* s = SpellOf(x, x.stream.spell); Ctl& c = ctl[static_cast<std::size_t>(x.ctl)]; if (!s) { EndStream(x, false); return; }
@@ -1275,6 +1282,69 @@ namespace Sim {
             x.c.mp -= cost; x.regenAt[1] = now + D->rules.delayMp; if (subj) ++t.beats;
             SpellHit(x, *s, *tg, x.stream.iaus, 0.5f);
         }
+        // ── BUNDLE A: HAZARDS (iaus-sim-v4.md 16.3) ── placed by a spell that spawns one, ticked on whoever is hostile to its owner's side inside it (MODEL: the engine's hit anyone).
+        [[nodiscard]] static bool LaysHazard(const SimSpell& s) { return s.hazard && (!s.hazard->viaImpact || (s.hazard->drops && s.e.concentration && !s.e.selfDelivery)); }   // the impact road: only a stream whose hazard drops to the ground (a wall). A bolt's impact hazard burns what it MISSED into
+        void SpawnHazard(const Body& x, const SimSpell& s, float px, float py, float pz) {
+            const HazardSpec& z = *s.hazard; int n = 0; std::size_t first = hazards.size();
+            for (std::size_t i = 0; i < hazards.size(); ++i) if (hazards[i].owner == x.c.id && hazards[i].spell == z.spell) { ++n; first = std::min(first, i); }
+            if (z.limit > 0 && n >= z.limit) hazards.erase(hazards.begin() + static_cast<std::ptrdiff_t>(first));   // the record's limit: the oldest goes
+            else if (static_cast<int>(hazards.size()) >= kHazard.maxLive) hazards.erase(hazards.begin());
+            hazards.push_back({ px, py, pz, z.radius, now + static_cast<double>(z.lifetime), now, z.interval, x.c.id, x.Party(), z.pcOnly, z.spell });
+            if (trace) std::fprintf(trace, "%7.2f  HAZARD %s: %s, %.0f units, %.0f s\n", now, x.c.name.c_str(), z.spell->e.name.c_str(), z.radius, z.lifetime);
+        }
+        void HazardStep() {
+            std::erase_if(hazards, [&](const Hazard& h) { return now >= h.until; }); std::erase_if(hazardHits, [&](const HazardHit& h) { return now - h.at > 5.0; });
+            for (std::size_t i = 0; i < hazards.size(); ++i) { if (now < hazards[i].nextTick) continue; hazards[i].nextTick += static_cast<double>(hazards[i].interval); const Hazard h = hazards[i];
+                Body* o = Find(h.owner); if (!o) continue;
+                for (Body& q : b) { if (!Up(q) || q.Party() == h.party || (h.pcOnly && q.role != Role::Player) || std::fabs(q.c.z - h.z) > kHazard.floorBandU) continue;
+                    if (env ? !EnvInBlast(*this, h.x, h.y, h.z, h.r, q) : std::hypot(q.c.x - h.x, q.c.y - h.y) > h.r) continue;
+                    HazardHit* last = nullptr; for (HazardHit& e : hazardHits) if (e.victim == q.c.id && e.owner == h.owner && e.spell == h.spell.get()) last = &e;
+                    if (last && now - last->at < static_cast<double>(h.interval) - 1e-6) continue;
+                    if (last) last->at = now; else hazardHits.push_back({ q.c.id, h.owner, h.spell.get(), now });
+                    SpellHit(*o, *h.spell, q, false); } }
+        }
+        // ── BUNDLE A: SUMMONS (16.2) ── the engine's commanded list, native's gate (cast/Summon.cpp SummonGate: Live, Landing, Limit; nothing appears late here, so no Landing), eviction at landing.
+        [[nodiscard]] int SummonLimit(const Body& x) const {   // cast/Summon.cpp SummonLimit: the GMST through entry point 0x44, rounded half up. MODEL: he holds a perk his skill qualifies for (as the other perk rows), the best one
+            float lim = static_cast<float>(D->G("iMaxSummonedCreatures", kSummon.limitBase));
+            if (x.ctl >= 0) { float best = lim; for (const auto& r : D->summonLimitRows) if (x.spec->Skill(kAvConjuration) >= r[0]) best = std::max(best, r[2] < 1.5f ? r[1] : r[2] < 2.5f ? lim + r[1] : lim * r[1]); lim = best; }
+            const int t0 = static_cast<int>(lim); return t0 + (lim - static_cast<float>(t0) >= 0.5f ? 1 : 0);
+        }
+        [[nodiscard]] int CommandedBy(std::uint32_t id) const { int n = 0; for (const Commanded& e : commanded) n += e.owner == id; return n; }   // the raw count, dead and thralls included, as the engine compares
+        enum : int { kSummonClear = 0, kSummonLive, kSummonAtLimit };
+        [[nodiscard]] int SummonGate(const Body& x, int spell) const {
+            for (const Commanded& e : commanded) if (e.owner == x.c.id && e.spell == spell) { const Body* q = Find(e.body); if (q && q->alive) return kSummonLive; }
+            return CommandedBy(x.c.id) >= SummonLimit(x) ? kSummonAtLimit : kSummonClear;
+        }
+        void EndSummon(Commanded& e, const char* why) { if (Body* q = Find(e.body); q && q->alive) { q->alive = false; if (trace) std::fprintf(trace, "%7.2f  UNSUMMON %s (%u): %s\n", now, q->c.name.c_str(), q->c.id, why); }
+            if (e.ctl >= 0) ctl[static_cast<std::size_t>(e.ctl)].summonUntil[static_cast<std::size_t>(e.spell)] = now; }
+        void CommandedStep() {
+            for (std::size_t i = 0; i < commanded.size();) { Commanded& e = commanded[i]; const Body* q = Find(e.body); const Body* o = Find(e.owner);
+                if (!q) { commanded.erase(commanded.begin() + static_cast<std::ptrdiff_t>(i)); continue; }
+                if (q->alive && (now >= e.until || !o || !o->alive)) { EndSummon(e, now >= e.until ? "its time is over" : "its caster is dead"); commanded.erase(commanded.begin() + static_cast<std::ptrdiff_t>(i)); continue; }   // MODEL: it goes with its caster
+                if (!q->alive) { if (e.deadAt < 0) { e.deadAt = now; if (e.ctl >= 0) ctl[static_cast<std::size_t>(e.ctl)].summonUntil[static_cast<std::size_t>(e.spell)] = now; }   // not live any more: native's read is liveness
+                    if (now - e.deadAt >= static_cast<double>(kSummon.deadListedSec)) { commanded.erase(commanded.begin() + static_cast<std::ptrdiff_t>(i)); continue; } }
+                ++i; }
+        }
+        // Puts a commanded body into the fight; at the limit the engine removes the OLDEST first. `x` is stale after it (Add).
+        void LandCommanded(const Body& x, std::shared_ptr<const ActorSpec> sp, float px, float py, double until) {
+            const std::uint32_t me = x.c.id; const int ci = x.ctl, si = x.actSpell; const bool party = x.Party(); const int lim = std::max(1, SummonLimit(x));
+            for (std::size_t i = 0; i < commanded.size() && CommandedBy(me) >= lim;) { if (commanded[i].owner != me) { ++i; continue; } EndSummon(commanded[i], "the summon limit, the oldest goes"); commanded.erase(commanded.begin() + static_cast<std::ptrdiff_t>(i)); }
+            if (ci >= 0) ctl[static_cast<std::size_t>(ci)].summonUntil[static_cast<std::size_t>(si)] = until;
+            Body& n = Add(party ? Role::Summon : Role::Foe, std::move(sp), px, py); n.downUntil = 0; n.airUntil = -until;   // airUntil < 0 = a summon's expiry
+            commanded.push_back({ me, n.c.id, ci, si, until, -1 });
+            if (trace) std::fprintf(trace, "%7.2f  SUMMON %u: %s (%u), level %d, hp %.0f, %d of %d\n", now, me, n.c.name.c_str(), n.c.id, n.c.level, n.c.hp, CommandedBy(me), lim);
+        }
+        [[nodiscard]] static std::shared_ptr<ActorSpec> GenericSummonSpec(int level) {   // MODEL: a level-scaled atronach (a spell with no actor record)
+            auto sp = std::make_shared<ActorSpec>(); sp->name = "Summon"; sp->race = "AtronachFlameRace"; sp->level = level; sp->creature = sp->daedra = true;
+            sp->hp = kSummon.genericHpBase + kSummon.genericHpPerLevel * static_cast<float>(level); sp->unarmed = kSummon.genericUnarmedBase + kSummon.genericUnarmedPerLevel * static_cast<float>(level); sp->hpR = 0; sp->mp = 0; sp->run = kSummon.genericRun;
+            return sp;
+        }
+        [[nodiscard]] std::shared_ptr<const ActorSpec> SummonSpecFor(const SimSpell& s, int level) const {   // the bucket nearest the CASTER's level (a PC level mult actor levels with him)
+            std::size_t k = 0; for (std::size_t i = 1; i < D->buckets.size(); ++i) if (std::abs(D->buckets[i] - level) < std::abs(D->buckets[k] - level)) k = i;
+            if (k < s.summonIdx.size()) { const int i = s.summonIdx[k]; if (i >= 0 && static_cast<std::size_t>(i) < D->summonSpecs.size()) return std::make_shared<ActorSpec>(D->summonSpecs[static_cast<std::size_t>(i)]); }
+            return GenericSummonSpec(level);
+        }
+        [[nodiscard]] static bool OwnAi(const Body& x) { return x.role == Role::Foe || (g_v4.summons && x.role == Role::Summon); }   // who fights by the actor's own combat style: a summon runs the AI a foe of its spec runs
         // SIM V3 (areas): every live area, once per step. A cloak follows its owner; the rest stay where they were cast.
         void AreaStep() {
             for (std::size_t i = 0; i < areas.size();) {
@@ -1311,6 +1381,7 @@ namespace Sim {
             const bool iaus = x.actIaus; const Prune::Nature na = s->e.nature;
             if (stream) StartStream(x, x.c.id, x.actSpell, iaus, false, false);   // a concentration buff / utility: its effect below, then the hand is held for the stream (field 11-12, Auri)
             else if (g_v3.hands && TwoHandWeapon(x)) { x.reDrawUntil = x.actEnd + 0.65; if (x.ctl == 0) ++t.reDraws; }   // the bow / two-hander comes back after the cast (ASSUMPTION 0.65 s)
+            if (g_v4.hazards && s->hazard && !s->hazard->viaImpact && !s->e.concentration && LaysHazard(*s)) { const Body& at = (!s->e.selfDelivery && tg) ? *tg : x; SpawnHazard(x, *s, at.c.x, at.c.y, at.c.z); }   // a spawned hazard: round the caster, or where he aims
             if (g_v3.areas && s->areaKind != 0) {   // an ACTIVE area: a cloak moves with him, a circle / rune / wall stays at the cast point
                 const std::uint32_t me = x.c.id; const int si = x.actSpell;
                 if (x.ctl == 0 && iaus) { ++t.areaOwnCasts; for (const Area& a : areas) if (a.src == me) { ++t.areaRecast; break; } }
@@ -1327,6 +1398,7 @@ namespace Sim {
                 if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].summonUntil[static_cast<std::size_t>(x.actSpell)] = until;
                 if (x.ctl == 0) ++t.raises;
                 if (trace) std::fprintf(trace, "%7.2f  RAISE %s raises %s (level %d) for %.0f s\n", now, x.c.name.c_str(), sp->name.c_str(), sp->level, s->summonDur);
+                if (g_v4.summons) { LandCommanded(x, sp, cx, cy, until); return; }
                 Body& n = Add(party ? Role::Summon : Role::Foe, sp, cx, cy); n.downUntil = 0; n.airUntil = -until;   // `x`, `tg` are stale after Add
                 return;
             }
@@ -1345,6 +1417,10 @@ namespace Sim {
                 if (s->resistBuffAv >= 0) r->fx.push_back({ 3, s->resistBuff, s->resistBuffAv, now + up, x.c.id });
                 if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(x.actSpell)].push_back({ r->c.id, now + (g_buffDurReal ? static_cast<double>(up) : std::max(30.0, static_cast<double>(s->buffDur))) });
                 return;
+            }
+            if (na == Prune::Nature::Summon && g_v4.summons) {   // spot choice for a summon (where to put it) is the movement bundle's: his aim point then comes from Spots
+                const float tx = tg && tg != &x ? tg->c.x - x.c.x : x.hx, ty = tg && tg != &x ? tg->c.y - x.c.y : x.hy, l = std::max(1e-3f, std::hypot(tx, ty));
+                LandCommanded(x, SummonSpecFor(*s, x.c.level), x.c.x + tx / l * kSummon.spawnAheadU, x.c.y + ty / l * kSummon.spawnAheadU, now + s->summonDur); return;
             }
             if (na == Prune::Nature::Summon) {
                 if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].summonUntil[static_cast<std::size_t>(x.actSpell)] = now + s->summonDur;
@@ -1378,6 +1454,7 @@ namespace Sim {
             if (!d) return;
             if (!s->e.concentration && !s->e.touch && (!Sees(*a, *d))) return;   // the bolt hit the pillar
             if (sh.dodged) return;   // he stepped out of it (TryDodge)
+            if (g_v4.hazards && s->e.concentration && Up(*d) && LaysHazard(*s)) SpawnHazard(*a, *s, d->c.x, d->c.y, d->c.z);   // a foe's stream (the lab's 2 s lump) lays one
             const bool aimedMiss = !s->e.concentration && s->e.areaUnits <= 0 && Up(*d) && std::hypot(d->c.x - sh.x, d->c.y - sh.y) > 40.0f && RP(*a, 19, TM::aimMiss);
             if (s->e.areaUnits > 0) {   // everyone inside the blast, friend or foe (marth: never splash the party)
                 if (a->ctl == 0 && sh.fromIaus) ++t.areaCasts;
@@ -1458,7 +1535,7 @@ namespace Sim {
                 if (x.ctl >= 0) { const SpellEntry& e = ctl[static_cast<std::size_t>(x.ctl)].book.entries[i]; if (e.source != SpellSource::Spell) continue; if (!ctl[static_cast<std::size_t>(x.ctl)].gate.spellsOnClass) continue; cost = e.cost; }
                 if (cost > x.c.mp) continue;
                 float w = 0; std::uint32_t tid = 0;
-                if (s->e.nature == Prune::Nature::Heal && x.role == Role::Foe) {   // foes heal themselves and each other; a follower's heals are IAUS's to cast
+                if (s->e.nature == Prune::Nature::Heal && OwnAi(x)) {   // foes heal themselves and each other; a follower's heals are IAUS's to cast
                     Body* r = nullptr; float worst = 0.5f;
                     for (auto& o : b) if (Up(o) && o.Party() == x.Party() && (&o == &x || s->healOther) && o.c.hp / o.c.hpMax < worst && Dist(x, o) < 2000) { worst = o.c.hp / o.c.hpMax; r = &o; }
                     if (r) { w = 60.0f * (1.0f - worst) * 4.0f; tid = r->c.id; }
@@ -1589,7 +1666,7 @@ namespace Sim {
             }
             if (!hasMelee) return;
             // --foe-styles (Part C): a foe stepping back after its blow (CSCR Fallback Mult) moves away at the back-pedal speed, then re-engages
-            if ((g_foeStyles || g_v3.stance) && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); return; }
+            if ((g_foeStyles || g_v3.stance) && OwnAi(x) && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); return; }
             // melee
             const float reach = Reach(x);
             if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { if (!(env && Dist(x, b[0]) <= c->leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run, false, &b[0]); return; }   // ch.23: no pursuit past the leash (SIM V4: just past it he stands)
@@ -1619,7 +1696,7 @@ namespace Sim {
             // --foe-styles (Part C, MODEL mapping of a record value): after the blow a foe backpedals with chance = its combat style's close-range
             // Fallback Mult (CSCR[1], read from the world extract: Load.h Style::fallback), for U(0.5, 1.5) s; an aggressive style (low fallback,
             // high offensive mult: the think pause above) presses on. Followers keep their own package movement.
-            if ((g_foeStyles || g_v3.stance) && x.role == Role::Foe && RP(x, 35, std::clamp(st.fallback, 0.0f, 0.9f))) x.backUntil = x.actEnd + RU(x, 36, 0.5f, 1.5f);
+            if ((g_foeStyles || g_v3.stance) && OwnAi(x) && RP(x, 35, std::clamp(st.fallback, 0.0f, 0.9f))) x.backUntil = x.actEnd + RU(x, 36, 0.5f, 1.5f);
         }
         // Q-SIM-5 (marth 11-11: "why wouldnt a follower be able to move and do an action. I believe he should"): what his FEET do while
         // his hands are busy with a weapon swap, a potion or a cast. Every deliberate movement Brain() would make, and nothing else: no
@@ -1724,6 +1801,7 @@ namespace Sim {
         void IntoRoom(Body& o, float r) { if (!(arenaR > 0.0f)) return; const float ox = o.c.x - arenaX, oy = o.c.y - arenaY, od = std::hypot(ox, oy); if (od > r) { o.c.x = arenaX + ox * r / od; o.c.y = arenaY + oy * r / od; } }
         void StepWorld() {
             SetArena();
+            if (!commanded.empty()) CommandedStep();
             if (g_v3.burst && estimates && now >= burstAt) { burstAt += TM::pump; SampleBursts(); }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
@@ -1765,6 +1843,7 @@ namespace Sim {
             for (std::size_t i = 0; i < shots.size();) { if (shots[i].at <= now) { const Shot s = shots[i]; shots[i] = shots.back(); shots.pop_back(); Land(s); } else ++i; }
             if (g_v3.hands) for (std::size_t i = 0; i < b.size(); ++i) if (b[i].stream.live) StreamStep(b[i]);
             if (g_v3.areas && !areas.empty()) AreaStep();
+            if (!hazards.empty()) HazardStep();
             for (std::size_t i = 0; i < b.size(); ++i) { Body& x = b[i]; if (!Up(x)) continue;
                 if (Busy(x)) {
                     if (g_v3.blockdir && x.act == Act::Block && now < x.blockUntil) { const Ctl* bc = x.ctl >= 0 ? &ctl[static_cast<std::size_t>(x.ctl)] : nullptr;   // SIM V3: behind his guard he keeps facing his combat target (MODEL)

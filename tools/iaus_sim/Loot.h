@@ -70,9 +70,13 @@ namespace Sim::Loot {
         // THE RULES OF OLDER BUILDS, for the scenarios that must fail on them:
         float museumGold = 250.0f;     // ASSUMPTION (review S5): what a museum piece taken is worth, in gold, whatever it sells for (a display has no price; the errand never sells it). One knob, reported apart (dMuseumJ)
         float stealRecheck = 1.0f;     // Steal.cpp: the witness check is run AGAIN at the write (Service.cpp:1019). 0 = the cached verdict alone (scenario thief-no-recheck: must commit a crime)
-        // MARTH'S RULINGS OF 11-24, NOT IN NATIVE YET. The default is what native WILL become; 0 = today's shipped rule (--loot-rule dibsNear=0 / gateEvents=0):
-        float dibsNearEnough = 1.0f;   // coin dibs "Near is enough": the fair chance accrues while the player is within chanceRadius, facing or not (6 s near releases). 0 = today's native (near AND facing, finding N1)
-        float gateEventsOnly = 1.0f;   // a gate lifts on REAL EVENTS only: door, lever, cell, somebody else reaching the item (gateNearU). The blocked follower's own walk of gateReadmitMoveU (500) off his block no longer lifts his record (finding N6). 0 = today's native. A route-based lift comes later with native's active navmesh
+        // MARTH'S RULINGS OF 11-24, IN NATIVE SINCE efd097dc. The default is native; 0 = the builds before it (--loot-rule dibsNear=0 / gateEvents=0):
+        float dibsNearEnough = 1.0f;   // coin dibs "Near is enough": the fair chance accrues while the player is within chanceRadius, facing or not (6 s near releases; LootTake.cpp TierReleased). 0 = the builds before efd097dc (near AND facing, finding N1)
+        float gateEventsOnly = 1.0f;   // a gate lifts on REAL EVENTS only (door, lever, cell, somebody else at the item, the player moving through). Native says it with gateReadmitMoveU 0; 0 here together with LootTuning::gateReadmitMoveU 500 = the builds before efd097dc (the recorder's own walk off his block lifts his record, finding N6)
+        float native1124 = 1.0f;       // the looting fixes of efd097dc (N2, N3, N4, N6). 0 = the build before it: the idle lift, the sweep only inside a scan, no pass lift, a gate feeds the stuck run, no live-gate rule, no same-item stall strike, an equipment-only carry peek. ONE switch, for the scenarios that must reproduce the old faults
+        float gateIdleLift = 0.0f;     // 1 = four idle ticks lift the follower's own records (builds before efd097dc; native1124=0 has it too)
+        // MIRRORS of constants inside a native function body (LootTravel_internal.h GateReadmitSweep kPassMaxGapSec / kPassSlackU). test_tune_driver.py compares them, and gateFloorU with kGateFloorBand
+        float passMaxGapSec = 3.0f, passSlackU = 64.0f;
         float corpseBar = 1.0f;        // 0 = before the party-wide guard bar on a corpse (field 11-17 L1)
         float gateOld1117 = 0.0f;      // 1 = before 9a16a278 (11-17): every static block gates the target and its cone, no repeat / short test, no move / near / idle re-admit, stuck needs 3 distinct targets
     };
@@ -84,7 +88,7 @@ namespace Sim::Loot {
             { "departRadius", &Rules::departRadius }, { "lotd", &Rules::lotd }, { "releaseMul", &Rules::releaseMul }, { "departRelease", &Rules::departRelease }, { "grab", &Rules::grab }, { "arriveRadius", &Rules::arriveRadius },
             { "noProgressSec", &Rules::noProgressSec }, { "blockedGateSec", &Rules::blockedGateSec }, { "transientSec", &Rules::transientSec }, { "stickySec", &Rules::stickySec }, { "deadlineMax", &Rules::deadlineMax },
             { "deadlineSpeed", &Rules::deadlineSpeed }, { "stuckWindowSec", &Rules::stuckWindowSec }, { "stuckHits", &Rules::stuckHits }, { "guardRangeU", &Rules::guardRangeU }, { "maxSlots", &Rules::maxSlots },
-            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "dibsNear", &Rules::dibsNearEnough }, { "gateEvents", &Rules::gateEventsOnly }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
+            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "dibsNear", &Rules::dibsNearEnough }, { "gateEvents", &Rules::gateEventsOnly }, { "native1124", &Rules::native1124 }, { "gateIdle", &Rules::gateIdleLift }, { "passMaxGapSec", &Rules::passMaxGapSec }, { "passSlackU", &Rules::passSlackU }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
         for (const F& f : k) if (name == f.n) { r.*(f.m) = v; return true; }
         return false;
     }
@@ -225,7 +229,7 @@ namespace Sim::Loot {
     struct FState {
         int ci = -1; Inv inv, inv0; Who who; Slot slot; double nextLogi = 0; bool thief = false;
         std::map<int, GuardAns> guard;                      // key: source index, -1 = the follower-level answer
-        int deferItem = -1; std::uint32_t deferBlocker = 0; EQ::Vec3 deferPos; bool hasDefer = false;   // g_actorDefer
+        int deferItem = -1; std::uint32_t deferBlocker = 0; EQ::Vec3 deferPos; bool hasDefer = false; double deferAt = -1e9;   // g_actorDefer
         std::vector<Hit> run; bool stuck = false; EQ::Vec3 stuckAt;   // StuckAtOrigin.cpp: the run of blocked ends, the open episode
         bool hasLast = false; EQ::Vec3 lastBlock; int lastTarget = -1; float lastShort = 0; double lastBlockAt = -1e9;   // NoteBlockGround
         std::map<int, std::pair<int, float>> farArr;        // target -> (count, last distance)
@@ -247,6 +251,7 @@ namespace Sim::Loot {
         long goldLeft = 0, goldLeftRR = 0, goldDibsNear = 0, museumLeft = 0, museumLeftRR = 0;      // coin and museum pieces left (all, and released + reachable)
         double waitSum = 0; long waitN = 0; std::vector<float> waits, waitsDibs;   // release (the party left combat with it lying there) to taken: the free tier, and the tier the player has first dibs on
         long legs = 0, legsArrived = 0, legsAborted = 0, legsRestarted = 0, reversals = 0, revisits = 0;
+        long maxSrcLegs = 0;                                                      // the most legs any one source got
         long srcTaken = 0;                                                        // sources something was taken from (trips per item = legs / srcTaken)
         double twoOnOneSec = 0; long twoOnOne = 0;                                // two followers walking to one source
         double combatLootSec = 0; long combatTakes = 0;                           // a loot leg alive, or a take, while the party fights
@@ -262,7 +267,7 @@ namespace Sim::Loot {
             episodes += o.episodes; lostFights += o.lostFights; lootSec += o.lootSec; followerSec += o.followerSec; for (const auto& kv : o.ev) ev[kv.first] += kv.second; stacks0 += o.stacks0; taken += o.taken; wanted += o.wanted;
             for (const auto& kv : o.left) left[kv.first] += kv.second; for (const auto& kv : o.noRoad) { noRoad[kv.first].first += kv.second.first; noRoad[kv.first].second += kv.second.second; } leftRR += o.leftRR; goldLeft += o.goldLeft; goldLeftRR += o.goldLeftRR; goldDibsNear += o.goldDibsNear; museumLeft += o.museumLeft; museumLeftRR += o.museumLeftRR;
             waitSum += o.waitSum; waitN += o.waitN; waits.insert(waits.end(), o.waits.begin(), o.waits.end()); waitsDibs.insert(waitsDibs.end(), o.waitsDibs.begin(), o.waitsDibs.end()); legs += o.legs; legsArrived += o.legsArrived; legsAborted += o.legsAborted; legsRestarted += o.legsRestarted;
-            reversals += o.reversals; revisits += o.revisits; srcTaken += o.srcTaken; twoOnOneSec += o.twoOnOneSec; twoOnOne += o.twoOnOne; combatLootSec += o.combatLootSec; combatTakes += o.combatTakes;
+            reversals += o.reversals; revisits += o.revisits; srcTaken += o.srcTaken; maxSrcLegs = std::max(maxSrcLegs, o.maxSrcLegs); twoOnOneSec += o.twoOnOneSec; twoOnOne += o.twoOnOne; combatLootSec += o.combatLootSec; combatTakes += o.combatTakes;
             guardSeenTakes += o.guardSeenTakes; crimes += o.crimes; awaySec += o.awaySec; awayMax = std::max(awayMax, o.awayMax); lateU += o.lateU; lateN += o.lateN; walkedPast += o.walkedPast;
             waves += o.waves; stuckEpisodes += o.stuckEpisodes; stuckOffSec += o.stuckOffSec; uFights += o.uFights; dPotJ += o.dPotJ; dGoldJ += o.dGoldJ; dMuseumJ += o.dMuseumJ; goldTaken += o.goldTaken; roadTaken += o.roadTaken; roadLeft += o.roadLeft; dibsNear += o.dibsNear;
         }
@@ -272,6 +277,8 @@ namespace Sim::Loot {
     struct World {
         Fight* Fp = nullptr; Rules R; const MFO::Iaus::LootTuning* T = nullptr;
         std::vector<Src> src; std::vector<FState> fs; std::vector<Guard> guards; std::vector<Gate> gates; std::vector<EQ::Vec3> activators;
+        // GateReadmitSweep's last sample of the player (native g_passSample). One per world: an episode is one space. A lab world of several spaces would key it as native does (SpaceKey).
+        struct PassSample { bool valid = false; EQ::Vec3 pos; double at = 0; } pass;
         std::map<int, int> museumNeed;                      // item -> how many the museum still wants (Lotd.cpp uncoveredAll)
         bool town = false, hostileDeathKnown = false, playerMenu = false; int playerOpenSrc = -1;
         bool oracleWide = false;                            // the loot oracle's world (LootLab.h): the plan is every category with a road, a consumable is offered whatever its score
@@ -380,13 +387,24 @@ namespace Sim::Loot {
             Gate& G = gates[Z(g)]; if (G.target != si && std::find(G.told.begin(), G.told.end(), si) == G.told.end()) { G.told.push_back(si); Ev("GATED-BEHIND"); Log("[loot] %u GATED-BEHIND the block on the way to %u -- skipped", s.id, src[Z(G.target)].id); } return true; }
         [[nodiscard]] bool FailedPeek(const Src& s, int si) const { return Now() < s.stickyUntil || Now() < s.transientUntil || GatedBy(si) >= 0; }
         void Readmit(std::size_t g, const char* why) { ++t.ev[std::string("GATED re-admitted: ") + why]; Log("[loot] GATED %u re-admitted -- %s", src[Z(gates[g].target)].id, why); gates.erase(gates.begin() + static_cast<std::ptrdiff_t>(g)); }
-        // LootTravel_internal.h GateReadmitSweep (today's rules): the timer, somebody else near the gated item, the recorder far from his block.
+        // LootTravel_internal.h GateReadmitSweep, rules in native's order: the timer, somebody else near the gated item, the player moving through the block
+        // point (native's own pure geometry, iaus/LootNeed.h), the recorder far from his block (off). Once per service lap and per party-combat lap: Service()
+        // is served in a fight too, so it calls this first.
         void GateSweep() {
             if (R.gateOld1117 > 0.0f) return;
+            const bool now1124 = R.native1124 > 0.0f;
+            if (gates.empty()) { pass.valid = false; return; }
+            bool havePass = false; EQ::Vec3 pa, pb;
+            if (now1124 && T->gatePassU > 0.0f) {
+                const EQ::Vec3 pos = P(Fp->b[0]);
+                if (pass.valid) { const float dt = static_cast<float>(Now() - pass.at);
+                    if (dt <= R.passMaxGapSec && MFO::Iaus::GatePassStepPlausible(D3(pos, pass.pos), dt, T->gatePassRunU, R.passSlackU)) { havePass = true; pa = pass.pos; pb = pos; } }
+                pass = { true, pos, Now() }; }
             for (std::size_t g = 0; g < gates.size();) { const Gate& G = gates[g]; bool lift = false; const char* why = "";
                 if (T->gateReadmitSec > 0.0f && Now() - G.since >= T->gateReadmitSec) { lift = true; why = "timer"; }
                 if (!lift && T->gateNearU > 0.0f) { if (D3(P(Fp->b[0]), G.tpos) <= T->gateNearU) { lift = true; why = "the player stands at it"; }
-                    for (std::size_t f = 0; f < fs.size() && !lift; ++f) if (static_cast<int>(f) != G.fi && fs[f].slot.active && D3(P(BodyOf(static_cast<int>(f))), G.tpos) <= T->gateNearU) { lift = true; why = "a follower stands at it"; } }
+                    for (std::size_t f = 0; f < fs.size() && !lift; ++f) if (static_cast<int>(f) != G.fi && (now1124 || fs[f].slot.active) && D3(P(BodyOf(static_cast<int>(f))), G.tpos) <= T->gateNearU) { lift = true; why = "a follower stands at it"; } }   // native: any other active party member. (The slot test was the lab's own, kept for the old arm's numbers)
+                if (!lift && havePass && MFO::Iaus::GatePassCrossed({ G.block.x, G.block.y, G.block.z }, { G.tpos.x, G.tpos.y, G.tpos.z }, { pa.x, pa.y, pa.z }, { pb.x, pb.y, pb.z }, T->gatePassU, R.gateFloorU)) { lift = true; why = "the player walked through the block point"; }   // native's log words, so calib_loot.py's key is the same
                 if (!lift && R.gateEventsOnly <= 0.0f && T->gateReadmitMoveU > 0.0f && D3(P(BodyOf(G.fi)), G.block) > T->gateReadmitMoveU) { lift = true; why = "its follower left the block"; }
                 if (lift) Readmit(g, why); else ++g; }
         }
@@ -396,7 +414,7 @@ namespace Sim::Loot {
         // ── what a category would take from a source now (the peek, LootTake.cpp HasLoot), and the take (LootHere) ──
         [[nodiscard]] MFO::Iaus::LootInv InvOf(const FState& f) const { MFO::Iaus::LootInv v = Logi::LootInvOf(f.inv, f.who); v.capacity = R.carryCap; v.lockpicks = f.inv.Count(Kind::Lockpick); v.sneaks = f.thief; return v; }
         [[nodiscard]] bool Fits(const FState& f, const ItemDef& d, int n) const { return d.kind == Kind::Gold || d.kind == Kind::Lockpick || f.inv.Weight() + d.weight * float(n) <= R.carryCap; }   // LootTake.cpp FitsCarryWeight: the whole stack. Coin and picks are not weighed
-        // The stacks category c would move from these items, best first: (index, count). weigh: apply the carry check (native's PEEK does so only for Equipment).
+        // The stacks category c would move from these items, best first: (index, count). weigh: apply the carry check (peek and take both weigh the planned stack: N4, WeighPeek below).
         std::vector<std::pair<int, int>> Picks(const FState& f, const std::vector<Stack>& items, Cat c, bool weigh) const {
             std::vector<std::pair<int, int>> out; const auto& I = Items();
             if (!f.left.empty() && !src.empty() && &items >= &src.front().items && &items <= &src.back().items) { const int si = static_cast<int>((reinterpret_cast<const char*>(&items) - reinterpret_cast<const char*>(&src.front().items)) / static_cast<std::ptrdiff_t>(sizeof(Src))); if (f.left.count({ si, static_cast<int>(c) })) return out; }
@@ -449,7 +467,9 @@ namespace Sim::Loot {
             if (Logi::IsAlch(d.kind)) need = ScoreConsumable(Logi::ConsOf(d), s.items[0].count, inv, *T); else if (d.kind == Kind::Lockpick) need = ScoreLootKind(LootKind::Lockpicks, inv, *T); else if (d.kind == Kind::SoulGem) need = ScoreLootKind(LootKind::SoulGems, inv, *T); else return false;
             return ScoreStealNeed(need, static_cast<float>(d.value), *T).take;
         }
-        [[nodiscard]] bool HasLoot(const FState& f, const Src& s, Cat c) const { if (c == Cat::Steal) return StealWants(f, s); return !Picks(f, s.items, c, c == Cat::Equipment).empty(); }
+        // N4: every category's peek weighs the planned stack like the take (one reader: Picks, weigh). A loose ref's predicate does not (its road has no carry check, spec B15). Before efd097dc: equipment alone.
+        [[nodiscard]] bool WeighPeek(const Src& s, Cat c) const { return c == Cat::Equipment || (R.native1124 > 0.0f && s.kind != SrcKind::Loose && s.kind != SrcKind::Flora); }
+        [[nodiscard]] bool HasLoot(const FState& f, const Src& s, Cat c) const { if (c == Cat::Steal) return StealWants(f, s); return !Picks(f, s.items, c, WeighPeek(s, c)).empty(); }
 
         void NoteTake(int fi, int si, const ItemDef& d, int n, bool owned, bool freeTier) {
             Src& s = src[Z(si)]; ++t.taken; ++s.takes; if (s.takes == 1) ++t.srcTaken; Ev("take"); ++t.ev[std::string("take ") + Logi::Name(d.kind)];
@@ -487,7 +507,7 @@ namespace Sim::Loot {
             FState& f = fs[Z(fi)]; Src& s = src[Z(si)]; dibsLeft = false;
             if (!CorpseWaived(s)) { const int g = GuardCheck(fi, si); if (g == 1) return 2; if (g == 2) return 3; }
             bool moved = false, landing = false; std::uint32_t busy = 0;
-            for (Cat c : Plan(f, 1)) { if (c == Cat::Steal) continue; if (Picks(f, s.items, c, false).empty()) continue; if (!TierReleased(c, si)) { dibsLeft = true; continue; }
+            for (Cat c : Plan(f, 1)) { if (c == Cat::Steal) continue; if (Picks(f, s.items, c, R.native1124 > 0.0f).empty()) continue; if (!TierReleased(c, si)) { dibsLeft = true; continue; }
                 moved = TakeCat(fi, si, c, busy, landing) || moved; if (landing) break; }
             f.run.clear();   // Service.cpp:1129: EVERY strip attempt resets the stuck run, whatever it took (spec B1)
             if (landing) { f.nextLogi = Now() + static_cast<double>(R.landingSec); Ev("landing hold"); return 3; }
@@ -525,10 +545,18 @@ namespace Sim::Loot {
         }
         // LootTravel_internal.h MarkGated
         void MarkGated(int fi, int si, const EQ::Vec3& bp, bool cone) {
-            Src& s = src[Z(si)]; for (std::size_t g = 0; g < gates.size(); ++g) if (gates[g].target == si) { gates.erase(gates.begin() + static_cast<std::ptrdiff_t>(g)); break; }
+            Src& s = src[Z(si)]; if (!cone && R.native1124 > 0.0f) for (const Gate& g : gates) if (g.target == si && !g.targetOnly) return;   // a repeat never downgrades a cone record (native R4)
+            for (std::size_t g = 0; g < gates.size(); ++g) if (gates[g].target == si) { gates.erase(gates.begin() + static_cast<std::ptrdiff_t>(g)); break; }
             if (gates.size() >= 64) gates.erase(gates.begin());
             Gate G; G.target = si; G.fi = fi; G.block = bp; G.tpos = s.p; G.since = Now(); G.targetOnly = !cone; gates.push_back(G);
             Ev(cone ? "GATED" : "GATED (target only)"); Log("[loot] F%d target %u GATED -- Movement Blocked at (%.0f,%.0f,%.0f), %.0f u short%s", fi, s.id, bp.x, bp.y, bp.z, D3(bp, s.p), cone ? "; skipping it and the items behind the same block" : " TARGET ONLY");
+        }
+        // LootTravel_internal.h LiveGateAtPoint (N3): 0 no live gate's block point within gateRepeatU of bp, 1 Same (the new target is on that record's far side), 2 Jammed (it is not). Same wins.
+        [[nodiscard]] int LiveGateAt(int si, const EQ::Vec3& bp) const {
+            int res = 0; const EQ::Vec3& tp = src[Z(si)].p;
+            for (const Gate& G : gates) { if (D3(G.block, bp) > T->gateRepeatU) continue;
+                if ((G.tpos.x - G.block.x) * (tp.x - G.block.x) + (G.tpos.y - G.block.y) * (tp.y - G.block.y) > 0.0f) return 1; res = 2; }
+            return res;
         }
         // StuckAtOrigin.cpp StuckAtOriginNoteBlock: true = he is stuck himself (the run reached Rules::stuckHits; the old build wanted 3 DISTINCT targets).
         bool StuckNote(int fi, int si, const EQ::Vec3& bp) {
@@ -548,10 +576,17 @@ namespace Sim::Loot {
             else {
                 const bool real = GateObstacle(bp, s.p); const float short_ = D3(bp, s.p); int ground = 0;   // NoteBlockGround: 0 first, 1 closed, 2 no ground
                 if (f.hasLast && now - f.lastBlockAt <= R.stuckWindowSec) ground = f.lastTarget == si ? (short_ < f.lastShort - 25.0f ? 1 : 2) : (D3(bp, f.lastBlock) > T->gateRepeatU ? 1 : 2);
+                const bool n24 = R.native1124 > 0.0f, sameItem = f.hasLast && f.lastTarget == si;
                 f.hasLast = true; f.lastBlock = bp; f.lastTarget = si; f.lastShort = short_; f.lastBlockAt = now;
-                if (real) { if (StuckRepeats(fi, bp)) { Ev("blocked again at the same point (stuck evidence, not gated)"); } else MarkGated(fi, si, bp, short_ <= T->gateShortU); }
+                if (real && n24) {
+                    const int live = LiveGateAt(si, bp);
+                    if (live == 1) { MarkGated(fi, si, bp, false); feed = false; }   // the same locked door with another item behind it: a gate fact about this target only
+                    else if (live == 2 || StuckRepeats(fi, bp)) { Ev("blocked again at the same point (stuck evidence, not gated)"); }
+                    else { MarkGated(fi, si, bp, short_ <= T->gateShortU); feed = false; } }   // a real gate is a fact about the door, not stuck evidence
+                else if (real) { if (StuckRepeats(fi, bp)) { Ev("blocked again at the same point (stuck evidence, not gated)"); } else MarkGated(fi, si, bp, short_ <= T->gateShortU); }
                 else if (ground == 1) { Ev("bump (ground closed)"); feed = false; f.run.clear(); }
-                else if (ground == 2) { f.hasDefer = true; f.deferItem = si; f.deferBlocker = 0; f.deferPos = bp; Ev("REORDER (no ground closed, stuck evidence)"); Log("[loot] F%d target %u Movement Blocked, no door/activator, NO ground closed: REORDER", fi, s.id); }
+                else if (ground == 2 && n24 && sameItem) { MarkStalled(si); f.hasLast = false; Ev("stall strike (no ground closed on the same item)"); Log("[loot] F%d target %u Movement Blocked, no door/activator, NO ground closed on the SAME item: stall strike", fi, s.id); }   // N2: the strike is the verdict (a retry from another side starts fresh), and stuck evidence still
+                else if (ground == 2) { f.hasDefer = true; f.deferItem = si; f.deferBlocker = 0; f.deferPos = bp; f.deferAt = now; Ev("REORDER (no ground closed, stuck evidence)"); Log("[loot] F%d target %u Movement Blocked, no door/activator, NO ground closed: REORDER", fi, s.id); }
                 else { Ev("bump (first block, stuck evidence only)"); Log("[loot] F%d target %u Movement Blocked, no door/activator on the way: a bump / repath, not gated", fi, s.id); }
             }
             if (feed && StuckNote(fi, si, bp)) { Release(fi, "stuck at his own origin"); return true; }
@@ -568,7 +603,7 @@ namespace Sim::Loot {
             if (guardSeen && town && !hostileDeathKnown) return false;
             if (ga == 2 && excursion) scanGuardPending = true;
             if (combat) return false;
-            GateSweep();
+            if (R.native1124 <= 0.0f) GateSweep();   // before efd097dc: only inside a scan
             const float leash = Leash(fi), walkLimit = std::min(leash, R.travelRadius); const bool beyond = D3(fp, pp) > leash * R.releaseMul;
             struct Cand { int si; int tier; float d; }; std::vector<Cand> cs; int seen = 0;
             for (std::size_t i = 0; i < src.size(); ++i) { Src& s = src[i]; const int si = static_cast<int>(i); const float df = D3(fp, s.p);
@@ -600,6 +635,7 @@ namespace Sim::Loot {
                 auto walkable = [&]() {
                     if (df > walkLimit) { ++t.ev["skip: past the walk limit"]; return false; }
                     if (FailedRecently(si)) return false;
+                    if (R.native1124 > 0.0f && f.hasDefer && f.deferItem == si && f.deferAt == now) { ++t.ev["skip: deferred this tick"]; return false; }   // N2, LootScan.cpp: an item deferred THIS tick is not re-dispatched this tick
                     if (df > R.grab && TargetedByOther(si, fi)) { ++t.ev["skip: another follower walks to it"]; return false; }
                     if (!Clutter(c) && pd <= R.bubble && df > R.grab) { ++t.ev["skip: player bubble"]; return false; }
                     if (s.tri < 0 || s.navDist > R.navGate) { MarkFailed(si, "off-navmesh (no mesh near it)"); s.pathFails = std::min(s.pathFails + 1, 8); return false; }
@@ -631,6 +667,7 @@ namespace Sim::Loot {
         // ── a follower's loot tick (Service.cpp ServiceFollower, the loot part) ──
         void Service(int fi) {
             FState& f = fs[Z(fi)]; Slot& sl = f.slot; const double now = Now(); const Body& x = BodyOf(fi);
+            if (R.native1124 > 0.0f) GateSweep();   // Service.cpp:217 (every lap, ahead of every return) and Upkeep.cpp NoteInCombat (party-combat laps)
             if (!Fight::Up(x)) { if (sl.active) Release(fi, "combat"); return; }
             // every service: the global slot sweep (Service.cpp:258-307), by whoever is served
             for (std::size_t o = 0; o < fs.size(); ++o) { Slot& so = fs[o].slot; if (!so.active) continue;
@@ -644,9 +681,9 @@ namespace Sim::Loot {
             if (sl.active) { Drive(fi); return; }
             f.hasDefer = false;   // Service.cpp:467,479: g_actorDefer is erased on every tick he has no slot (review S4)
             if (ScanAll(fi, false)) { f.idle = 0; return; }
-            // idle (Service.cpp:2379-2417): nothing acted and no slot is active anywhere
+            // idle (Service.cpp:2399-2430): nothing acted and no slot is active anywhere. It lifts no gate (marth 11-24)
             if (ActiveSlots() == 0 && ++f.idle >= static_cast<int>(R.idleTicks)) {
-                if (R.gateOld1117 <= 0.0f) for (std::size_t g = 0; g < gates.size();) if (gates[g].fi == fi) Readmit(g, "idle (his own record lifted)"); else ++g;
+                if (R.gateOld1117 <= 0.0f && (R.native1124 <= 0.0f || R.gateIdleLift > 0.0f)) for (std::size_t g = 0; g < gates.size();) if (gates[g].fi == fi) Readmit(g, "idle (his own record lifted)"); else ++g;
                 if (now - lastGlobalReassess >= R.idleReassessSec) { int n = 0; for (Src& s : src) if (s.transientUntil > now && now - (s.transientUntil - static_cast<double>(R.transientSec)) >= R.idleAgeSec) { s.transientUntil = -1; ++n; }
                     if (n) { lastGlobalReassess = now; f.idle = 0; Ev("idle: cleared blocklisted bodies"); Log("[loot] F%d idle -- cleared %d blocklisted bodies to reassess", fi, n); } } }
         }
@@ -679,7 +716,7 @@ namespace Sim::Loot {
                     }
                     else if (sl.leg == LegState::Blocked) {
                         const EQ::Vec3 bp{ sl.bx, sl.by, sl.bz }; Ev("leg ended BLOCKED"); ++t.legsAborted;
-                        if (sl.blocker) { f.hasDefer = true; f.deferItem = si; f.deferBlocker = sl.blocker; f.deferPos = bp; f.run.clear(); Ev("ACTOR-BLOCKED (REORDER)"); Log("[loot] F%d target %u ACTOR-BLOCKED: REORDER", fi, s.id); skip = "ACTOR-BLOCKED"; }
+                        if (sl.blocker) { f.hasDefer = true; f.deferItem = si; f.deferBlocker = sl.blocker; f.deferPos = bp; f.deferAt = now; f.run.clear(); Ev("ACTOR-BLOCKED (REORDER)"); Log("[loot] F%d target %u ACTOR-BLOCKED: REORDER", fi, s.id); skip = "ACTOR-BLOCKED"; }
                         else { if (StaticBlock(fi, si, bp)) return; skip = "BLOCKED (static)"; }
                     }
                     else if (now - sl.progressAt > R.noProgressSec) { ++t.legsAborted; Ev("unreachable (no progress)"); if (loose) MarkSticky(si, "STICKY (loose/unacquirable)"); else MarkStalled(si); skip = "stalled"; if (s.island == 0) NoteIsland(fi, si); }
