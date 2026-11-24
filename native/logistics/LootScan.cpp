@@ -164,7 +164,6 @@ namespace MFO::Logistics {
             // still zero TES/worldspace derefs). The target's cell is the one that
             // makes an excursion loot a table OUT: once he walks at pile 1, pile 2
             // beside it becomes visible even from another cell.
-            GateReadmitSweep(a_now);   // field 11-17c F2: the timer / moved-away re-admit of GATED records (both off-able in looting.txt)
             auto* cell = a_follower->GetParentCell();
             if (!cell || !cell->IsAttached()) return false;
             const auto origin = a_follower->GetPosition();
@@ -620,7 +619,7 @@ namespace MFO::Logistics {
                     // CLAIM-AND-RELEASE (dibs redesign) -- factored into TierReleased
                     // so the arm's-reach StripCorpse honours the SAME per-tier grace
                     // (#2). Eligibility is per value-tier and releases on EVIDENCE
-                    // ABOUT THE PLAYER (near/facing/departed/abandon), not a wall
+                    // ABOUT THE PLAYER (near/departed/abandon), not a wall
                     // clock; Free tiers (ammo/potions/lockpicks) release at once. The
                     // accrual it runs is idempotent-per-tick (a_now dedupe), so this
                     // scan drives it exactly as the inline version did.
@@ -846,6 +845,9 @@ namespace MFO::Logistics {
                     // keeps the ref IN THE RUNNING: it sorts to the back, and the
                     // in-range grown-grab path above never consults this list.
                     if (TravelFailedRecently(rid, a_now))                          continue;
+                    // N2: an item an ACTOR / no-ground block deferred THIS tick is not re-dispatched this tick (a lone candidate was retargeted at
+                    // once, so the reorder reordered nothing). Next tick it is his again, tier 2.
+                    if (auto dd = g_actorDefer.find(a_follower->GetFormID()); dd != g_actorDefer.end() && dd->second.item == rid && dd->second.at == a_now) continue;
                     // ONE FOLLOWER PER TARGET: another follower's slot is already walking to it (no blocklist; it frees when that leg ends).
                     if (df > kArrivalDist && TargetedByOtherSlot(rid, a_follower->GetFormID())) continue;
                     // Clutter is exempt from the bubble (IsClutterCat, above).

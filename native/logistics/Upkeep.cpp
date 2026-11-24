@@ -760,6 +760,7 @@ namespace MFO::Logistics {
     // g_lastCombatSeen needs no lock (#4). Cheap: one map write.
     void NoteInCombat(RE::FormID a_id) {
         g_lastCombatSeen[a_id] = Clock::now();
+        GateReadmitSweep(g_lastCombatSeen[a_id]);   // R1: the gate sweep's player-pass sample is fed on every party-combat lap too (same worker; cheap with no gates)
     }
 
     void ClearTransientState() {

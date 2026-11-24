@@ -28,7 +28,7 @@ namespace MFO::Logistics {
             bool                active = false;
             TravelPhase         phase = TravelPhase::Walking;
             Clock::time_point   startTime{};      // excursion start -> fExcursionMax cap
-            Clock::time_point   lingerUntil{};    // Hold bound -> fBatchLinger
+            Clock::time_point   lingerUntil{};    // written, never read (fBatchLinger is dead; the hold is batchHoldMinSec)
             // NO-PROGRESS detection: an UNREACHABLE target (no navmesh path) sits
             // at a flat distance -- the follower is on the travel package but
             // FROZEN in place (deck: dist=1449 unchanged for 13 s). We track his
@@ -286,8 +286,12 @@ namespace MFO::Logistics {
         // never a verdict: no strike, never sticky, not in g_travelFailed (so
         // the idle reassess neither clears nor feeds it). Re-admitted by a door/
         // lever near it (TESOpenCloseEvent / ACTI|DOOR TESActivateEvent), by the
-        // gated item's own cell attaching again -- ONLY when the block may
-        // actually have cleared (marth 2026-09-24: "no timer"). An ACTOR in
+        // gated item's own cell attaching again, any party member or the player
+        // within gateNearU of the item (GateReadmitSweep), or the player walking
+        // through the block point from the near side (gatePassU, GateReadmitSweep)
+        // -- no timer by default (marth 2026-09-24), no idle lift (marth 2026-11-24),
+        // and the follower's own walk off the block lifts
+        // nothing by default (gateReadmitMoveU 0, marth 2026-11-24). An ACTOR in
         // front of him is not a gate: that is a REORDER (FindActorBlocker /
         // g_actorDefer below), never a GATED verdict.
         // The records live below under a mutex (GateSink erases on the
@@ -489,32 +493,54 @@ namespace MFO::Logistics {
                 if (g.target != a_target || g.gate == a_gate) continue;
                 g.gate = a_gate;
                 spdlog::info("[loot] GATED {:08X}: its gate is {:08X} -- only that ref's open/close/activate "
-                             "re-admits it (plus a door unlocking near it, or its cell re-attaching)",
+                             "re-admits it (plus a door unlocking near it, its cell re-attaching, someone at the item, or the player walking through the block point)",
                              a_target, a_gate);
             }
         }
-        // The idle reassess (Service.cpp "cleared N blocklisted bodies") also lifts the gates THIS follower made (field 11-17g).
-        inline std::size_t ClearGatesBy(RE::FormID a_follower) {
-            std::lock_guard lk(g_gateMx);
-            const std::size_t n = std::erase_if(g_gates, [&](const GateRecord& g) { return g.follower == a_follower; });
-            if (n) {
-                g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
-                spdlog::info("[loot] {:08X} idle reassess -- lifted {} GATED record(s) he made", a_follower, n);
-            }
-            return n;
-        }
+        // The player's last sweep sample for the "moved through" lift (GateReadmitSweep). Worker-only. Reset on a space change, a teleport-sized step,
+        // no gates, or ClearGates (load), so a jump never lifts.
+        struct PassSample { bool valid = false; RE::FormID space = 0; RE::NiPoint3 pos{}; Clock::time_point at{}; };
+        inline PassSample g_passSample;
         inline void ClearGates() {
+            g_passSample.valid = false;
             std::lock_guard lk(g_gateMx);
             g_gates.clear();
             g_gateCount.store(0, std::memory_order_relaxed);
         }
 
-        // RE-ADMIT SWEEP (field 11-17c F2), worker, once per scan: a record is lifted after LootTuning::gateReadmitSec (0 = no timer, marth
+        // RE-ADMIT SWEEP (field 11-17c F2), worker, once per follower service lap and per party-combat lap (R1): a record is lifted after LootTuning::gateReadmitSec (0 = no timer, marth
         // 2026-09-24) or once the follower that made it stands more than gateReadmitMoveU from the block point (0 = off). Logged like every re-admit.
         inline void GateReadmitSweep(Clock::time_point a_now) {
-            if (g_gateCount.load(std::memory_order_relaxed) <= 0) return;
             const auto& tu = Iaus::DefaultLootTuning();
-            if (tu.gateReadmitSec <= 0.0f && tu.gateReadmitMoveU <= 0.0f && tu.gateNearU <= 0.0f) return;
+            if (g_gateCount.load(std::memory_order_relaxed) <= 0 ||
+                (tu.gateReadmitSec <= 0.0f && tu.gateReadmitMoveU <= 0.0f && tu.gateNearU <= 0.0f && tu.gatePassU <= 0.0f)) {
+                g_passSample.valid = false;
+                return;
+            }
+            // MOVED THROUGH (marth 2026-11-24): the player's step since the last sample (this sweep runs every follower service lap and party-combat lap, so the period is the
+            // real elapsed time, never assumed) is tested as a SEGMENT against each record, so a sprint between two samples cannot skip the block point.
+            // A space change, a step longer than the fastest run allows for that period (teleport), or a gap over kPassMaxGapSec drops the sample.
+            bool         havePass = false;
+            RE::NiPoint3 passA{}, passB{};
+            RE::FormID   passSpace = 0;
+            if (tu.gatePassU > 0.0f) {
+                constexpr float kPassMaxGapSec = 3.0f;    // a longer gap cannot be bounded by a run speed: resample
+                constexpr float kPassSlackU    = 64.0f;   // position jitter
+                auto* pc = RE::PlayerCharacter::GetSingleton();
+                const RE::FormID sp = pc ? SpaceKey(pc) : 0;
+                if (!sp) { g_passSample.valid = false; }
+                else {
+                    const RE::NiPoint3 pos = pc->GetPosition();
+                    if (g_passSample.valid && g_passSample.space == sp) {
+                        const float dt = std::chrono::duration<float>(a_now - g_passSample.at).count();
+                        if (dt <= kPassMaxGapSec &&
+                            Iaus::GatePassStepPlausible(pos.GetDistance(g_passSample.pos), dt, tu.gatePassRunU, kPassSlackU)) {
+                            havePass = true; passA = g_passSample.pos; passB = pos; passSpace = sp;
+                        }
+                    }
+                    g_passSample = { true, sp, pos, a_now };
+                }
+            }
             // FACT re-admit (field 11-17g): any party member or the player within gateNearU of the gated item. Actors are looked up before
             // the lock; the active list is the thread-safe snapshot.
             std::vector<RE::Actor*> nearActors;
@@ -526,11 +552,22 @@ namespace MFO::Logistics {
             }
             const auto lim = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(tu.gateReadmitSec));
             std::lock_guard lk(g_gateMx);
-            EraseGatesIf("re-admit sweep (timer, the follower moved away, or someone stands at the item)", 0, [&](const GateRecord& g) {
+            EraseGatesIf("re-admit sweep (timer, the follower moved away, someone stands at the item, or the player walked through the block point)", 0, [&](const GateRecord& g) {
                 if (tu.gateReadmitSec > 0.0f && a_now - g.since >= lim) return true;
                 for (auto* a : nearActors)
                     if (a->GetFormID() != g.follower &&   // the gating follower's own position is gateReadmitMoveU's job (a real gate sits < gateNearU from the item)
                         a->GetParentCell() && SpaceKey(a) == g.space && a->GetPosition().GetDistance(g.targetPos) <= tu.gateNearU) return true;
+                if (havePass && g.space == passSpace &&
+                    Iaus::GatePassCrossed({ g.blockPos.x, g.blockPos.y, g.blockPos.z }, { g.targetPos.x, g.targetPos.y, g.targetPos.z },
+                                          { passA.x, passA.y, passA.z }, { passB.x, passB.y, passB.z }, tu.gatePassU, kGateFloorBand)) {
+                    static Clock::time_point s_nextPassLog;   // worker-only
+                    if (a_now >= s_nextPassLog) {
+                        s_nextPassLog = a_now + std::chrono::seconds(10);
+                        spdlog::info("[loot] GATED {:08X}: the player walked through the block point ({:.0f},{:.0f}) from the near side (tolerance {:.0f}u)",
+                                     g.target, g.blockPos.x, g.blockPos.y, tu.gatePassU);
+                    }
+                    return true;
+                }
                 if (tu.gateReadmitMoveU <= 0.0f) return false;
                 auto* f = RE::TESForm::LookupByID<RE::Actor>(g.follower);
                 return f && f->GetParentCell() && SpaceKey(f) == g.space && f->GetPosition().GetDistance(g.blockPos) > tu.gateReadmitMoveU;
@@ -606,7 +643,8 @@ namespace MFO::Logistics {
         // Same target: his block point is no more than kFarArrivalProgress nearer to it than last time. Another target: the block point
         // barely moved (within LootTuning::gateRepeatU). No previous block (or one older than kBlockMemory) = First. No timer: the memory only
         // bounds a stale record.
-        enum class BlockGround { First, Closed, NoGround };
+        // NoGroundSame (N2): no ground closed and it is the SAME target as the previous block -- a stall on that item, not a reorder candidate.
+        enum class BlockGround { First, Closed, NoGround, NoGroundSame };
         struct LastBlock { RE::FormID target = 0; RE::NiPoint3 pos{}; float short_ = 0.0f; Clock::time_point at{}; };
         constexpr auto kBlockMemory = std::chrono::seconds(90);
         inline std::unordered_map<RE::FormID, LastBlock> g_lastBlock;
@@ -618,7 +656,7 @@ namespace MFO::Logistics {
                 const LastBlock& p = it->second;
                 const bool closed = p.target == a_target ? cur.short_ < p.short_ - kFarArrivalProgress
                                                          : p.pos.GetDistance(a_blockPos) > Iaus::DefaultLootTuning().gateRepeatU;
-                r = closed ? BlockGround::Closed : BlockGround::NoGround;
+                r = closed ? BlockGround::Closed : p.target == a_target ? BlockGround::NoGroundSame : BlockGround::NoGround;
             }
             g_lastBlock[a_follower] = cur;
             return r;
@@ -663,8 +701,30 @@ namespace MFO::Logistics {
         // by the next logistics tick the ended leg may already have let him drift back
         // toward the player. Null = his current position (MFO's own MB timer, M1).
         // Returns false (and records NOTHING) when the probe names no door or activator at the block: the caller treats it as a stuck / repath event.
+        // LiveGateAtPoint (N3): is a GATED record live whose block point lies within gateRepeatU of a_pos, in a_target's space? A second block there
+        // is the SAME obstacle: it gates the new target only (no cone), and is no stuck evidence. Worker; takes g_gateMx.
+        // Same = a live gate's block point is within gateRepeatU AND the new target lies on that record's far side (dot2D(record target - block,
+        // new target - block) > 0): the same obstacle with another item behind it. Jammed = a live gate's point is near but the new target is NOT
+        // on its far side: he is jammed there himself, which is stuck evidence, never a gate. None = no live gate at the point. Same wins over Jammed.
+        enum class LiveGate { None, Same, Jammed };
+        inline LiveGate LiveGateAtPoint(RE::TESObjectREFR* a_target, const RE::NiPoint3& a_pos) {
+            if (!a_target || g_gateCount.load(std::memory_order_relaxed) <= 0) return LiveGate::None;
+            const RE::FormID   space = SpaceKey(a_target);
+            const float        r     = Iaus::DefaultLootTuning().gateRepeatU;
+            const RE::NiPoint3 tp    = a_target->GetPosition();
+            LiveGate           res   = LiveGate::None;
+            std::lock_guard lk(g_gateMx);
+            for (const GateRecord& g : g_gates) {
+                if (g.space != space || g.blockPos.GetDistance(a_pos) > r) continue;
+                const float dot = (g.targetPos.x - g.blockPos.x) * (tp.x - g.blockPos.x) + (g.targetPos.y - g.blockPos.y) * (tp.y - g.blockPos.y);
+                if (dot > 0.0f) return LiveGate::Same;
+                res = LiveGate::Jammed;
+            }
+            return res;
+        }
+        // a_targetOnly (N3): record this target alone, never the cone past it (a repeat at a live gate's point).
         inline bool MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
-                              Clock::time_point a_now, const RE::NiPoint3* a_blockPos = nullptr) {
+                              Clock::time_point a_now, const RE::NiPoint3* a_blockPos = nullptr, bool a_targetOnly = false) {
             if (!a_follower || !a_target) return false;
             GateRecord g;
             g.target    = a_target->GetFormID();
@@ -673,7 +733,11 @@ namespace MFO::Logistics {
             g.blockPos  = a_blockPos ? *a_blockPos : a_follower->GetPosition();
             g.targetPos = a_target->GetPosition();
             g.since     = a_now;
-            g.targetOnly = g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
+            g.targetOnly = a_targetOnly || g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
+            if (a_targetOnly) {   // R4: a second follower in flight to the SAME item must not downgrade its cone record to a target-only one.
+                std::lock_guard lk0(g_gateMx);
+                if (std::any_of(g_gates.begin(), g_gates.end(), [&](const GateRecord& o) { return o.target == g.target && !o.targetOnly; })) return true;
+            }
             if (!LogGateNeighbours(a_follower, a_target, g.blockPos)) {
                 spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), {:.0f} u short: the probe names NO door or "
                              "activator -- a bump / repath, NOT a gate. Nothing recorded against the target or its cone; stuck evidence, the leg retries",
@@ -681,13 +745,14 @@ namespace MFO::Logistics {
                 return false;
             }
             spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
-                         "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree cone past "
+                         "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree half-angle cone past "
                          "the block, <= +{:.0f} u, same floor) until a door/gate/lever event near it, its "
-                         "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off). No actor in front of him. No strike, not sticky.{}",
+                         "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off), or the player walking through the block point. No actor in front of him. No strike, not sticky.{}",
                          g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,
                          g.blockPos.GetDistance(g.targetPos), Iaus::DefaultLootTuning().gateConeDeg, Iaus::DefaultLootTuning().gateBeyondU,
                          Iaus::DefaultLootTuning().gateReadmitSec, Iaus::DefaultLootTuning().gateReadmitMoveU,
-                         g.targetOnly ? " TARGET ONLY: the block is far short of it, so he was stuck, not at an opening -- no cone." : "");
+                         a_targetOnly ? " TARGET ONLY: a gate is already live at this point (the same obstacle), so only this item is added -- no cone."
+                         : g.targetOnly ? " TARGET ONLY: the block is far short of it, so he was stuck, not at an opening -- no cone." : "");
             std::lock_guard lk(g_gateMx);
             std::erase_if(g_gates, [&](const GateRecord& o) { return o.target == g.target; });
             if (g_gates.size() >= kGateMax) {   // oldest first, and said out loud
@@ -759,7 +824,7 @@ namespace MFO::Logistics {
         // sort after the ones leading away, so two jammed followers each turn
         // around. Erased when the deferred item's turn comes (it is dispatched
         // again), when he has no excursion, and on revert. Worker-only, no lock.
-        struct ActorDefer { RE::FormID item = 0; RE::FormID blocker = 0; RE::NiPoint3 blockerPos{}; };
+        struct ActorDefer { RE::FormID item = 0; RE::FormID blocker = 0; RE::NiPoint3 blockerPos{}; Clock::time_point at{}; };   // at (N2): the tick that set it
         inline std::unordered_map<RE::FormID, ActorDefer> g_actorDefer;
 
         // THE candidate order (review R1). Every key -- failed/gated, the actor-

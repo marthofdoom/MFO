@@ -1045,7 +1045,7 @@
           "id": "fFairChance:General",
           "text": "Fair-chance time (s)",
           "type": "slider",
-          "help": "Seconds you spend near AND facing a source (3x while looting it) before its valuables release.",
+          "help": "Seconds you spend near a source (3x while looting it) before its valuables release.",
           "valueOptions": {
             "min": 0.0,
             "max": 30.0,

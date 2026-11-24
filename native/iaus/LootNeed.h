@@ -136,14 +136,46 @@ namespace MFO::Iaus {
         // 11-17c): the half-angle of the cone around block->target (degrees) and how far past the target an item still counts (units).
         float gateConeDeg = 45.0f, gateBeyondU = 1024.0f;
         // GATED RE-ADMIT (besides the door / lever / cell events): a record is lifted after gateReadmitSec (0 = no timer, marth 2026-09-24 "no
-        // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point. BOTH DEFAULT OFF (marth's standing GATED rule is door / lever / cell events only); the rows stay for later. PLACEHOLDERS.
-        float gateReadmitSec = 0.0f, gateReadmitMoveU = 500.0f;
+        // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point. BOTH DEFAULT OFF (marth 2026-11-24: a gate lifts
+        // on REAL events only -- door, lever, cell, somebody else at the item -- until native has an active navmesh to lift on a route; the follower's own walk off
+        // the block point looped, field 11-18 item 000EA786). The rows stay for later. PLACEHOLDERS.
+        float gateReadmitSec = 0.0f, gateReadmitMoveU = 0.0f;
         // GATED IS A FACT, NOT A FREEZE (field 11-17g: a follower STUCK at one point gated the targets and a cone past them, outdoors loot froze).
         // gateRepeatU: a block within this of the same follower's previous block point is stuck-at-origin evidence, NOT a gate (the stuck rescue
         // fires instead). gateShortU: a block farther than this short of the target gates only that target, no cone. gateNearU: a record is lifted
-        // when any follower or the player stands within this of the gated item (0 = off). gateReadmitMoveU above now defaults to 500. PLACEHOLDERS.
+        // when any follower or the player stands within this of the gated item (0 = off). gateReadmitMoveU above defaults to 0 (off). PLACEHOLDERS.
         float gateRepeatU = 300.0f, gateShortU = 300.0f, gateNearU = 200.0f;
+        // GATED LIFT BY THE PLAYER MOVING THROUGH (marth 2026-11-24: "real events or the player moving through"): the player's step between two
+        // consecutive sweep samples crosses the block point's far-side plane (the plane through the block point, normal block->target) from the near
+        // side, within gatePassU of the block point (0 = off). gatePassRunU is the fastest the player can really cover per second (a horse); a step
+        // longer than that times the real period is a teleport and never lifts. PLACEHOLDERS.
+        float gatePassU = 150.0f, gatePassRunU = 1000.0f;
     };
+    // The geometry of the "moved through" lift, pure (self-test row t2.theft e). Points are (x, y, z) game units. True when the segment a->b goes from the
+    // NEAR side of the block point B (behind it, opposite the target T: signed distance along B->T below the plane, which sits min(96, len/2) toward T from B) to the FAR side (>= 0), crossing that plane
+    // within a_tolU of B sideways and within a_zBand of B in height. Far to near, a pass beside the point, a start on the far side and a segment that stays
+    // on one side are all false. The caller owns the space and teleport checks.
+    struct GatePt { float x = 0.0f, y = 0.0f, z = 0.0f; };
+    [[nodiscard]] inline bool GatePassCrossed(const GatePt& a_block, const GatePt& a_target, const GatePt& a_a, const GatePt& a_b, float a_tolU, float a_zBand) {
+        const float dx = a_target.x - a_block.x, dy = a_target.y - a_block.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1.0f || a_tolU <= 0.0f) return false;
+        const auto along = [&](const GatePt& p) { return ((p.x - a_block.x) * dx + (p.y - a_block.y) * dy) / len; };
+        const auto side  = [&](const GatePt& p) { return ((p.x - a_block.x) * -dy + (p.y - a_block.y) * dx) / len; };
+        // The plane sits shifted toward T by min(96, len/2): the stall point is up to 256u IN FRONT of the door, so the unshifted plane let a player
+        // walking up to the shut door (or jittering there) cross it. The shift puts it past the door.
+        const float shift = std::min(96.0f, len * 0.5f);
+        const float sa = along(a_a) - shift, sb = along(a_b) - shift;
+        if (!(sa < 0.0f && sb >= 0.0f)) return false;
+        const float t  = sa / (sa - sb);
+        const float lc = side(a_a) + t * (side(a_b) - side(a_a));
+        const float zc = a_a.z + t * (a_b.z - a_a.z);
+        return std::fabs(lc) <= a_tolU && std::fabs(zc - a_block.z) <= a_zBand;
+    }
+    // The teleport test, pure: a step of a_dist units over a_dtSec real seconds is a run only when it fits the fastest run plus a_slack.
+    [[nodiscard]] inline bool GatePassStepPlausible(float a_dist, float a_dtSec, float a_runU, float a_slack) {
+        return a_dtSec >= 0.0f && a_dist <= a_runU * a_dtSec + a_slack;
+    }
     // THREAD MIRROR of the three guard-cache timers (review 11-17c): TheftGate::GuardCheck also runs on the MAIN thread (a_onMain callers), while
     // the worker rewrites LiveLootTuning() when looting.txt is applied (TuningFile.cpp). The cache reads these atomics, never the table.
     struct GuardTimerMirror { std::atomic<float> fresh{ 2.0f }, unreadMax{ 10.0f }, repost{ 0.5f }; };
@@ -180,6 +212,7 @@ namespace MFO::Iaus {
             { "gateConeDeg", &LootTuning::gateConeDeg, true, 90.0f }, { "gateBeyondU", &LootTuning::gateBeyondU, false, kNoMax },
             { "gateReadmitSec", &LootTuning::gateReadmitSec, false, kNoMax }, { "gateReadmitMoveU", &LootTuning::gateReadmitMoveU, false, kNoMax },
             { "gateRepeatU", &LootTuning::gateRepeatU, false, kNoMax }, { "gateShortU", &LootTuning::gateShortU, false, kNoMax }, { "gateNearU", &LootTuning::gateNearU, false, kNoMax },
+            { "gatePassU", &LootTuning::gatePassU, false, kNoMax }, { "gatePassRunU", &LootTuning::gatePassRunU, false, kNoMax },
         };
         for (const F& k : kFloats) if (a_name == k.name) {
             if (a_v < 0.0f || (k.open && a_v <= 0.0f) || a_v > k.hi) return why(k.open ? (k.hi < kNoMax ? "out of range: must be > 0 and <= 1" : "out of range: must be > 0") : (k.hi < kNoMax ? "out of range: must be 0..1" : "out of range: must be >= 0"));

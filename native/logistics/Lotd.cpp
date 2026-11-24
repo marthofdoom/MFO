@@ -1985,7 +1985,7 @@ namespace MFO::Logistics {
             if (IsQuestObjectInstance(data.second.get())) continue;
             if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
             if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-            if (a_peek) return true;
+            if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(std::min<std::int32_t>(data.first, it->second)))) return true; continue; }   // N4
             takes.push_back({ obj, std::min<std::int32_t>(data.first, it->second) });
         }
         if (a_peek) return false;

@@ -67,9 +67,10 @@ namespace MFO::Logistics {
         // best-first under the carry weight. What changed is the TRADE: the old
         // count-neutral "give back one worst arrow per better arrow taken" (marth
         // #35) is now the rule's shed -- once he holds his keep target, every stack
-        // strictly below the cutoff tier goes back into the body, lowest first
-        // (marth 2026-09-24: "lower arrows are worthless when better ones are
-        // available, lowest removed first"), and a body stack the rule would call
+        // strictly below the cutoff tier is OBSOLETE, lowest first (marth 2026-09-24:
+        // "lower arrows are worthless when better ones are available, lowest removed
+        // first"). Nothing is dropped back into the body any more (marth 2026-10-18):
+        // the obsolete stacks wait in his pack for the vendor's sale. A body stack the rule would call
         // obsolete on landing is never taken (the peek agrees with the take, so he
         // never walks back to the junk he shed). The kind is judged ONLY when he
         // actually uses it (UsesAmmoKind -- review round 1 on 4f23c30: the seeded
@@ -127,7 +128,11 @@ namespace MFO::Logistics {
             std::sort(takes.begin(), takes.end(),
                       [](const Take& a, const Take& b) { return a.mag > b.mag; });
 
-            if (a_peek) return !takes.empty();
+            if (a_peek) {   // N4: the peek weighs like the take
+                for (const auto& t : takes)
+                    if (FitsCarryWeight(a_follower, t.obj->GetWeight() * static_cast<float>(t.count))) return true;
+                return false;
+            }
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
@@ -297,7 +302,7 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kGold001 && !IsCoinLoot(obj)) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) return true;   // no carry-weight gate on coin (above), so the peek weighs nothing either
                 takes.push_back({ obj, data.first });
             }
             if (a_peek || takes.empty()) return false;
@@ -375,7 +380,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -414,7 +419,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -442,7 +447,7 @@ namespace MFO::Logistics {
                 if (want <= 0) continue;
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(std::min(data.first, want)))) return true; continue; }   // N4
                 takes.push_back({ obj, std::min(data.first, want) });
             }
             if (a_peek) return false;
@@ -483,7 +488,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -548,7 +553,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -781,8 +786,7 @@ namespace MFO::Logistics {
             return false;
         }
         // Is the player facing a_srcPos (a forward view-cone, ~±60deg, no raycast)?
-        // "Had a chance to SEE it" for fair-chance -- proximity alone is not enough
-        // (a player facing away has not been shown it). Skyrim heading: 0 = +Y,
+        // Log text only since N1 (marth 11-24 "near is enough"): the fair-chance clock no longer reads it. Skyrim heading: 0 = +Y,
         // clockwise, so forward = (sin h, cos h). Cheap: one angle read + a dot.
         bool PlayerFacing(RE::Actor* a_player, const RE::NiPoint3& a_srcPos) {
             if (!a_player) return false;
@@ -816,7 +820,7 @@ namespace MFO::Logistics {
         // CLAIM-AND-RELEASE, factored out of LootNearby's scan so BOTH the scan and
         // the arm's-reach StripCorpse honour the SAME dibs (a free-tier arrival strip
         // must not snatch a fresh kill's enchanted sword + gold ahead of the player's
-        // grace -- the #2 bug). Accrues the player's "chance" (near/facing/departed)
+        // grace -- the #2 bug). Accrues the player's "chance" (near/departed)
         // on g_claim exactly as the inline scan did, then applies the per-tier rule:
         //   Free (arrows/bolts/potions/lockpicks): released at once -- the follower's
         //     own restock, nobody competes.
@@ -849,8 +853,9 @@ namespace MFO::Logistics {
                 if (dt > 0.0f && pdist <= Config::g_chanceRadius.load()) {
                     cl.everNear = true;
                     cl.farSince = {};
-                    if (PlayerIsConsidering(srcId))    cl.nearSecs += dt * 3.0f;
-                    else if (PlayerFacing(pc, srcPos)) cl.nearSecs += dt;
+                    // marth 2026-11-24 "Near is enough" (N1): near accrues the fair chance, facing or not (facing away left coin on bodies
+                    // for the whole episode when he stood among them). Looking at it (menu / QuickLoot crosshair) still counts triple.
+                    cl.nearSecs += PlayerIsConsidering(srcId) ? dt * 3.0f : dt;
                 } else if (pdist > Config::g_departRadius.load() &&
                            cl.farSince.time_since_epoch().count() == 0) {
                     cl.farSince = a_now;
@@ -858,10 +863,23 @@ namespace MFO::Logistics {
             }
 
             const bool rejected = ClaimRejected(srcId, srcPos, a_playerPos, a_now);
+            // WAITING REASON (N1): why this source is still the player's, once per source per 10 s, so "coin left on bodies" names its clock.
+            auto sayWaiting = [&](const char* a_why) {
+                static std::unordered_map<std::uint64_t, Clock::time_point> s_next;   // source + category: the Gear grace line must not hide a Valuables line
+                auto& nx = s_next[(std::uint64_t(srcId) << 8) | std::uint64_t(a_cat)];
+                if (nx.time_since_epoch().count() != 0 && a_now < nx) return;
+                nx = a_now + std::chrono::seconds(10);
+                if (s_next.size() > 128) s_next.clear();
+                spdlog::info("[loot] dibs: {:08X} cat={} still the player's -- {} (player {:.0f} u away, facing={}, seen {:.1f}s ago)",
+                             srcId, CatName(a_cat), a_why, a_playerPos.GetDistance(srcPos), PlayerFacing(pc, srcPos) ? "yes" : "no",
+                             std::chrono::duration<float>(a_now - cl.seen).count());
+            };
             if (a_cat == Category::Equipment) {          // Gear tier
-                return rejected ||
+                const bool rel = rejected ||
                        std::chrono::duration<float>(a_now - cl.seen).count()
                            >= Config::g_firstDibsDelay.load();
+                if (!rel) sayWaiting(std::format("anti-snatch grace {:.0f}s", Config::g_firstDibsDelay.load()).c_str());
+                return rel;
             }
             // Gold / Jewelry / SoulGems / Valuables (Category::Valuables, the
             // MISC sell-tier scan) -> Valuables tier. Falls through here by
@@ -870,11 +888,15 @@ namespace MFO::Logistics {
             const bool departed = cl.everNear &&
                 cl.farSince.time_since_epoch().count() != 0 &&
                 std::chrono::duration<float>(a_now - cl.farSince).count() >= kDepartRelease;
-            return rejected || departed ||
+            const bool rel = rejected || departed ||
                    cl.nearSecs >= Config::g_fairChance.load() ||
                    (!cl.everNear &&
                     std::chrono::duration<float>(a_now - cl.seen).count()
                         >= Config::g_abandonDelay.load());
+            if (!rel)
+                sayWaiting(std::format("near {:.1f}/{:.1f}s, ever near={}, abandon {:.0f}s",
+                                       cl.nearSecs, Config::g_fairChance.load(), cl.everNear ? "yes" : "no", Config::g_abandonDelay.load()).c_str());
+            return rel;
         }
 
         // Walk nearby refs, gate them, and perform ONE transfer. Returns true if

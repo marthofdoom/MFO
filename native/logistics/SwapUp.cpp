@@ -31,8 +31,8 @@
 //     his stacks best-first, the stack where the running count reaches the target
 //     is the CUTOFF tier; every stack STRICTLY below the cutoff tier is OBSOLETE.
 //     Obsolete ammo leaves lowest-damage first: slated for sale at a vendor
-//     (EconomyProbe), dropped back into the body when looting better
-//     (SwapUpAmmoFrom), and the shop buys the upgrade that makes it obsolete
+//     (EconomyProbe); looting better (SwapUpAmmoFrom) drops NOTHING back into the
+//     body (marth 2026-10-18, below), and the shop buys the upgrade that makes it obsolete
 //     (AmmoUpgradeBar -> TradeBridge::PlanBuy's AMMO SWAP-UP pass).
 //
 // NEVER SUPERSEDED, whatever the ranking says: worn items, the follower's own
@@ -599,7 +599,11 @@ namespace MFO::Logistics {
             if (body.empty()) return false;
 
             std::vector<AmmoStack> take = SwapUpAmmoTakeSet(a_follower, a_wantBolt, a_target, a_upgradeOnly, body);
-            if (a_peek) return !take.empty();
+            if (a_peek) {   // N4: the peek weighs like the take below
+                for (const auto& b : take)
+                    if (FitsCarryWeight(a_follower, b.obj->GetWeight() * b.count)) return true;
+                return false;
+            }
             if (take.empty()) return false;
 
             // TAKE best-first, so the carry-weight gate drops iron, never ebony.

@@ -211,6 +211,11 @@ namespace MFO::Logistics {
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
 
+        // R1: the gate re-admit sweep (timer / near / player-moved-through) runs EVERY service lap, ahead of every early return below, so the
+        // player's pass sample is never starved by a walking leg, a stuck cooldown, a sneak hold or a party fight (NoteInCombat feeds it there). Worker,
+        // like LootNearby; one atomic load when no gate exists.
+        GateReadmitSweep(now);
+
         // STUCK AT HIS OWN ORIGIN (StuckAtOrigin.cpp): the episode's evidence window and the door rescue tick on every
         // service, independent of whether any loot rule dispatches (the loot suppression would otherwise starve them).
         StuckAtOriginTick(a_follower, now);
@@ -693,7 +698,7 @@ namespace MFO::Logistics {
                            skippedRef = r->GetFormID();
                            return true;
                        }()) {
-                skipWhy        = "EMPTIED before arrival";
+                skipWhy        = "NOTHING LEFT to take before arrival (emptied or no longer fits)";
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 tr.phase       = TravelPhase::Holding;
                 tr.lingerUntil = now + BatchLingerDur();
@@ -867,7 +872,7 @@ namespace MFO::Logistics {
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 }
 
-                // THEFT GATE PREFETCH: within ~600 u of the target, ask the guard question every tick (the 500 ms repost limit throttles the
+                // THEFT GATE PREFETCH: within ~600 u of the target, ask the guard question every logistics tick (~1 s, not the 133 ms pump; the 500 ms repost limit throttles the
                 // main-thread scan) so the answer is already cached when he arrives, instead of the first read being at arrival. PEEK: it only posts
                 // the scan and stamps nothing (readAt / unread / log untouched), so the arrival gates decide and start the visit.
                 if (!gone && tref && dist <= 600.0f)
@@ -1328,7 +1333,7 @@ namespace MFO::Logistics {
                     // GATED verdict, no cone, nothing shared with other followers.
                     bool feedStuck = true;   // false: he closed ground since his previous block (F3), not stuck evidence
                     if (ab.id) {
-                        g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
+                        g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos, now };
                         spdlog::info("[loot] {:08X} target {:08X} ACTOR-BLOCKED -- Movement Blocked {:.1f}s, "
                                      "actor {:08X} {:.0f} u in front: REORDER (item kept, later in his list, "
                                      "items away from the blocker first), not a gate", id, tref->GetFormID(),
@@ -1339,12 +1344,20 @@ namespace MFO::Logistics {
                         // 11-17g (marth: "most loot was never blocked at all"): a 3 s Movement Blocked is a GATE only when a REAL obstacle stands
                         // on the way (FindGateObstacle: locked door / activator, the reader the door rescue also uses). Otherwise it is a bump /
                         // repath: nothing recorded against the target or its cone, and stuck evidence only when he closed no ground since his
-                        // previous block (NoteBlockGround); no ground across two blocks defers the target like an actor block (a reorder).
+                        // previous block (NoteBlockGround); no ground across two blocks defers the target like an actor block (a reorder); the SAME target twice is a stall strike (N2).
                         const RE::NiPoint3 bp = blockPos ? *blockPos : a_follower->GetPosition();
                         const bool real = FindGateObstacle(a_follower, tref, bp).Any();
                         const BlockGround ground = NoteBlockGround(id, tref->GetFormID(), bp, tref->GetPosition(), now);
                         if (real) {
-                            if (StuckAtOriginRepeatsBlock(id, bp, now)) {
+                            const LiveGate liveGate = LiveGateAtPoint(tref, bp);
+                            if (liveGate == LiveGate::Same) {
+                                // N3: blocked again at a LIVE gate's point: the same locked door with another item behind it. That is a gate
+                                // fact, not stuck evidence: gate the new target only (no second cone) and keep it out of the stuck run.
+                                skipWhy = MarkGated(a_follower, tref, held, now, blockPos, /*a_targetOnly*/ true)
+                                    ? "GATED (a live gate stands at this point; this target only)"
+                                    : "BLOCKED, obstacle probe empty (not gated)";
+                                feedStuck = false;
+                            } else if (liveGate == LiveGate::Jammed || StuckAtOriginRepeatsBlock(id, bp, now)) {   // R2: a live gate here but the target is NOT behind it = he is jammed himself
                                 // blocked again within gateRepeatU of his previous block point: HE is stuck, not the target. No gate (it froze
                                 // all outdoor loot until unload); the block feeds the stuck-at-origin record below.
                                 spdlog::info("[loot] {:08X} target {:08X} blocked again within {:.0f} u of his previous block point after "
@@ -1352,9 +1365,10 @@ namespace MFO::Logistics {
                                              Iaus::DefaultLootTuning().gateRepeatU, held);
                                 skipWhy = "BLOCKED again at the same point (stuck evidence, not gated)";
                             } else {
-                                skipWhy = MarkGated(a_follower, tref, held, now, blockPos)
-                                    ? "GATED (Movement Blocked, a real obstacle on the way)"
-                                    : "BLOCKED, obstacle probe empty (not gated)";
+                                const bool gated = MarkGated(a_follower, tref, held, now, blockPos);
+                                skipWhy = gated ? "GATED (Movement Blocked, a real obstacle on the way)"
+                                                : "BLOCKED, obstacle probe empty (not gated)";
+                                if (gated) feedStuck = false;   // N3: a real GATE is a fact about the door, not stuck evidence (the next item at it was "stuck himself")
                             }
                         } else if (ground == BlockGround::Closed) {
                             spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and he closed ground "
@@ -1364,8 +1378,18 @@ namespace MFO::Logistics {
                             feedStuck = false;
                             StuckAtOriginResetRun(id);   // progress breaks the 'consecutive' run
                         } else {
-                            if (ground == BlockGround::NoGround) {
-                                g_actorDefer[id] = ActorDefer{ tref->GetFormID(), 0u, bp };
+                            if (ground == BlockGround::NoGroundSame) {
+                                // N2: the SAME item blocked again with no ground closed: a reorder only moves it later in a list it may be alone
+                                // in (it was re-dispatched at once, 27 legs for one potion, lab freeze-1117g). That is a stall on it: a strike
+                                // (blocklist; the 2nd is sticky), and stuck evidence still.
+                                MarkTravelStalled(tref->GetFormID(), now);
+                                g_lastBlock.erase(id);   // the strike is the verdict: a retry from another side starts fresh, not a 2nd strike
+                                spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and NO ground closed "
+                                             "on the SAME item since his previous block: stall strike (blocklisted), stuck evidence, not gated",
+                                             id, tref->GetFormID(), held);
+                                skipWhy = "BLOCKED, no obstacle, no ground closed on the same item (stall strike)";
+                            } else if (ground == BlockGround::NoGround) {
+                                g_actorDefer[id] = ActorDefer{ tref->GetFormID(), 0u, bp, now };
                                 spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and NO ground closed "
                                              "since his previous block: REORDER (item kept, later in his list), stuck evidence, not gated",
                                              id, tref->GetFormID(), held);
@@ -1390,7 +1414,7 @@ namespace MFO::Logistics {
                         skipWhy = "GATED by a LOCKED DOOR (door leg dispatched)";
                         StuckAtOriginResetRun(id);   // a door leg is the way on, not "stuck"
                     }
-                    // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one point
+                    // Stuck at his OWN origin: kStuckTargets (2) blocked ends (the same target counts) within ~300 u of one point
                     // (StuckAtOrigin.cpp). Only when no pickable locked door at the block took the lap (a door leg
                     // is not "stuck"). End the excursion, release the road, back to follow.
                     else if (!ab.id && feedStuck && StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
@@ -2378,8 +2402,7 @@ namespace MFO::Logistics {
             // genuinely-unreachable body can't drive a re-attempt loop.
             if (!AnyTravelActive()) {
                 const int ic = ++g_idleCycles[id];
-                // 11-17g: the idle reassess also lifts the GATED records HE made (they are not in g_travelFailed, so this is independent of it).
-                if (ic >= kIdleReassessCycles && g_gateCount.load(std::memory_order_relaxed) > 0) ClearGatesBy(id);
+                // GATED records are NOT lifted here (marth 2026-11-24: real events or the player moving through only; GateReadmitSweep).
                 if (ic >= kIdleReassessCycles && !g_travelFailed.empty() &&
                     (g_lastBlocklistReassess.time_since_epoch().count() == 0 ||
                      now - g_lastBlocklistReassess >= kReassessCooldown)) {
