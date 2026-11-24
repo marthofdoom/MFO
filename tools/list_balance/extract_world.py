@@ -22,7 +22,7 @@ import esp_inspect as ei
 from extract import find_plugins, Blob, f32, u32, i32
 
 FLAT = {b'GMST', b'KYWD', b'FACT', b'RACE', b'CLAS', b'CSTY', b'MOVT', b'WEAP', b'ARMO', b'AMMO', b'OTFT', b'LVLI',
-        b'LVLN', b'NPC_', b'SPEL', b'SHOU', b'MGEF', b'ALCH', b'PERK', b'ECZN', b'LCTN', b'ENCH'}
+        b'LVLN', b'NPC_', b'SPEL', b'SHOU', b'MGEF', b'ALCH', b'PERK', b'ECZN', b'LCTN', b'ENCH', b'HAZD', b'IPDS', b'IPCT'}
 u16 = lambda b, o: struct.unpack_from('<H', b, o)[0]
 i16 = lambda b, o: struct.unpack_from('<h', b, o)[0]
 PLAYER_FACTION = ('skyrim.esm', 0xDB1)
@@ -145,9 +145,44 @@ def main():
         if d is None or len(d) < 88: continue
         mgef[k] = dict(fl=u32(d, 0), baseCost=f32(d, 4), school=i32(d, 12), resist=i32(d, 16), minSkill=u32(d, 40),
                        arch=u32(d, 64), av=i32(d, 68), castType=u32(d, 80), delivery=u32(d, 84), av2=i32(d, 88) if len(d) >= 92 else -1,
-                       kw=[x for x in kwlist(key, subs) if x], edid=edid(subs))
+                       kw=[x for x in kwlist(key, subs) if x], edid=edid(subs), assoc=key(u32(d, 8)), impacts=key(u32(d, 100)) if len(d) >= 104 and u32(d, 100) else None)
 
-    def effects(key, subs):
+    # WHAT AN EFFECT SPAWNS (sim bundle A). One reader, for a foe's spell and for a taught spell alike (spawned() below).
+    #   summon: archetype 18, MGEF DATA +8 (associated form) = the NPC. hazard: native's two roads in native's order (cast/Archetype.cpp): archetype 40,
+    #   DATA +8 = the HAZD; else DATA +100 = an impact data set whose IPDS PNAM pair (material, impact) names an IPCT with NAM2 (its hazard).
+    # HAZD DATA (40 bytes, checked on Skyrim.esm): limit u32 @0, radius f32 @4, lifetime f32 @8, image space radius f32 @12, target interval f32 @16,
+    # flags u32 @20 (fork BGSHazard.h: 1 player only, 2 inherits the duration, 4 aligned, 8 inherits the radius, 16 dropped to the ground), spell @24.
+    # A set's IPCTs differ by material. The one whose hazard DROPS TO THE GROUND (flag 16) is taken, else the first with a hazard: it is what tells a wall (laid on the
+    # ground under the stream) from a bolt that only burns the wall it misses into (native's HasImpactHazard is true for both).
+    impact_hazard = {}
+    for k, (key, fl, subs) in by.get('IPDS', {}).items():
+        for d in subsall(subs, 'PNAM'):
+            ik = key(u32(d, 4)) if len(d) >= 8 and u32(d, 4) else None
+            if ik not in by.get('IPCT', {}): continue
+            k2, f2, s2 = by['IPCT'][ik]; n2 = sub(s2, 'NAM2')
+            hk = k2(u32(n2, 0)) if n2 and len(n2) >= 4 and u32(n2, 0) else None
+            if hk not in by.get('HAZD', {}): continue
+            hd = sub(by['HAZD'][hk][2], 'DATA') or b''
+            if k not in impact_hazard: impact_hazard[k] = hk
+            if len(hd) >= 24 and u32(hd, 20) & 16: impact_hazard[k] = hk; break
+
+    def hazard_row(hk, via):
+        key, fl, subs = by['HAZD'][hk]; d = sub(subs, 'DATA')
+        if d is None or len(d) < 40: return None
+        sk = key(u32(d, 24)) if u32(d, 24) else None
+        if sk not in by.get('SPEL', {}): return None   # an empty hazard (a light, a look): nothing it does to a body
+        return dict(edid=edid(subs), via=via, limit=u32(d, 0), radius=f32(d, 4), lifetime=f32(d, 8), interval=f32(d, 16), flags=u32(d, 20), spell=b_spel(sk, False))
+
+    def spawned(m, deep=True):   # -> {} or {summon: [kind, index]} / {hazard: row}
+        if m['arch'] == 18:
+            r = actor_ref(m['assoc']); return dict(summon=r) if r else {}
+        if not deep: return {}   # a hazard spell's own hazards are dropped (depth 1)
+        hk = m['assoc'] if m['arch'] == 40 and m['assoc'] in by.get('HAZD', {}) else None; via = 'spawn'
+        if hk is None and m['arch'] != 40 and m['impacts'] in impact_hazard: hk = impact_hazard[m['impacts']]; via = 'impact'
+        h = hazard_row(hk, via) if hk else None
+        return dict(hazard=h) if h else {}
+
+    def effects(key, subs, deep=True):
         out = []; cur = None
         for t, d in subs:
             if t == 'EFID':
@@ -155,7 +190,7 @@ def main():
                 if m:
                     cur = dict(mag=0.0, area=0, dur=0, hostile=bool(m['fl'] & 1), detrimental=bool(m['fl'] & 4), recover=bool(m['fl'] & 2),
                                school=m['school'], resist=m['resist'], minSkill=m['minSkill'], archetype=m['arch'], av=m['av'],
-                               baseCost=m['baseCost'], kw=m['kw'], ed=m['edid'], conds=0)
+                               baseCost=m['baseCost'], kw=m['kw'], ed=m['edid'], conds=0, **spawned(m, deep))
                     out.append(cur)
             elif t == 'EFIT' and cur is not None and len(d) >= 12: cur['mag'], cur['area'], cur['dur'] = f32(d, 0), u32(d, 4), u32(d, 8)
             elif t == 'CTDA' and cur is not None: cur['conds'] += 1
@@ -175,7 +210,7 @@ def main():
         rows[tab][t[k]] = r
         return t[k]
 
-    def b_spel(k):
+    def b_spel(k, deep=True):
         if k in by.get('SHOU', {}):   # a shout: its strongest word's spell, the recovery as its cooldown
             key, fl, subs = by['SHOU'][k]; words = [d for d in subsall(subs, 'SNAM') if len(d) >= 12]
             if not words: return None
@@ -187,7 +222,7 @@ def main():
         key, fl, subs = by['SPEL'][k]; d = sub(subs, 'SPIT')
         if d is None or len(d) < 36: return None
         return dict(edid=edid(subs), cost=u32(d, 0), flags=u32(d, 4), type=u32(d, 8), chargeTime=f32(d, 12), castType=u32(d, 16),
-                    delivery=u32(d, 20), castDuration=f32(d, 24), range=f32(d, 28), effects=effects(key, subs))
+                    delivery=u32(d, 20), castDuration=f32(d, 24), range=f32(d, 28), effects=effects(key, subs, deep))
 
     def spel_ref(k): return idx('spel', k, b_spel) if (k in by.get('SPEL', {}) or k in by.get('SHOU', {})) else -1
 
@@ -529,6 +564,22 @@ def main():
         if e and en and len(en) >= 8 and not (u32(en, 4) & 0x2) and not (u32(en, 4) & 0x20000):   # not food, not poison
             potions.append(dict(edid=edid(subs), value=i32(en, 0), effects=[{x: v for x, v in ef.items() if x in ('mag', 'dur', 'av', 'archetype', 'hostile', 'detrimental')} for ef in e]))
 
+    # THE TAUGHT POOL'S SPELLS (extract.py holds them, this file holds the actor tables): what their effects spawn, by the spell's key and the effect's place in
+    # its list (both scripts skip an effect whose MGEF is not in the list, so the places agree). compile_world.py joins them.
+    spell_fx = {}; road = dict(summon=0, spawn=0, impact=0, hostileHazard=0)
+    for sg in ('SPEL',):
+        for k, (key, fl, subs) in by.get(sg, {}).items():
+            d = sub(subs, 'SPIT')
+            if d is None or len(d) < 36 or u32(d, 8) != 0: continue
+            fx = effects(key, subs); rowx = {str(i): {q: e[q] for q in ('summon', 'hazard') if q in e} for i, e in enumerate(fx) if 'summon' in e or 'hazard' in e}
+            if not rowx: continue
+            spell_fx['%s:%x' % k] = rowx
+            road['summon'] += any('summon' in r for r in rowx.values())
+            for v in {r['hazard']['via'] for r in rowx.values() if 'hazard' in r}: road[v] += 1
+            road['hostileHazard'] += any(r['hazard']['spell'] and any(e['hostile'] for e in r['hazard']['spell']['effects']) for r in rowx.values() if 'hazard' in r)
+    nsum = sum(1 for k, (key, fl, subs) in by.get('SPEL', {}).items() if any(m and m['arch'] == 18 for m in (mgef.get(key(u32(d, 0))) for t, d in subs if t == 'EFID')))
+    print('spells that spawn something (castable SPEL): %r; SPEL records with a Summon effect: %d' % (road, nsum))
+
     selfcheck = []
 
     def ck(what, got, want):
@@ -552,10 +603,15 @@ def main():
     cs = sk('CSTY', 0x3BE1B)   # csHumanMeleeLvl1? (only checks the size contract)
     if cs: ck('CSTY CSGD is 10 floats', len(sub(cs[2], 'CSGD') or b'') >= 32, True)
 
+    fa = mgef.get(('skyrim.esm', 0x1CEAA)); fr = fa and resolve(fa['assoc']) if fa and fa['arch'] == 18 and fa['assoc'] in by.get('NPC_', {}) else None
+    if fa: ck('MGEF SummonFlameAtronach resolves to an actor of a flame atronach race', bool(fr and fr['traits']['race'] in by.get('RACE', {}) and 'AtronachFlame' in edid(by['RACE'][fr['traits']['race']][2])), True)
+    hz = by.get('HAZD', {}).get(('skyrim.esm', 0x8F3EE))
+    if hz: hd = sub(hz[2], 'DATA'); ck('HAZD FireBarrierHazard DATA is 40 bytes', len(hd), 40); ck('HAZD FireBarrierHazard vanilla lifetime 30', f32(hd, 8), 30.0); ck('HAZD FireBarrierHazard vanilla interval 0.3', f32(hd, 16), 0.3); ck('HAZD FireBarrierHazard spell is a SPEL', hz[0](u32(hd, 24)) in by.get('SPEL', {}), True)
+
     out = dict(list=name, profile=a.profile, plugins=len(order), pluginsMissing=missing, gmst=dict(sorted(gmst.items())),
                races=rows['race'], classes=rows['clas'], cstyles=rows['csty'], weapons=rows['weap'], armors=rows['armo'], ammo=rows['ammo'],
                lvli=rows['lvli'], lvln=rows['lvln'], npcs=rows['npc'], spells=rows['spel'], perks=rows['perk'], potions=potions,
-               encounters=encounters, selfcheck=selfcheck, named=named)
+               encounters=encounters, selfcheck=selfcheck, named=named, spellFx=spell_fx)
     path = a.out or os.path.expanduser('~/.cache/mfo-list-balance/%s.world.json' % name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f: json.dump(out, f, separators=(',', ':'))

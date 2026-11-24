@@ -399,6 +399,7 @@ namespace Sim {
         // The class filter (the abilities, then the written rulings), counted by reason; then the caller's own constraint.
         [[nodiscard]] bool Ok(const Fight& F, const Ctl& c, const Opt& o) {
             const char* why = ClassRefuses(F, c, o); if (!why && g_classRulings) why = RulingRefuses(F, c, o);
+            if (!why && g_v4.summons && o.k && o.k->family == Family::CastSummon) for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == o.k->form) { if (F.SummonGate(F.b[static_cast<std::size_t>(c.body)], static_cast<int>(i)) != Fight::kSummonClear) why = "engine:the summon limit"; break; }   // bundle A: he cannot cast what the game refuses
             if (why) { ++st.refused[why]; if (&c == &F.ctl[0]) ++stSubj.refused[why]; if (F.trace) std::fprintf(F.trace, "%7.2f  ORACLE REFUSED %s: %s (%s)\n", F.now, F.b[static_cast<std::size_t>(c.body)].c.name.c_str(), o.Label().c_str(), why); return false; }
             return !allowed || allowed(F, c, o); }
         std::map<std::string, Disagreement>* log = nullptr;

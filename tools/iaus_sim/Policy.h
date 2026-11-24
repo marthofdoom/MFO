@@ -435,6 +435,7 @@ namespace Sim {
             if (si < 0) return Fired::Invalid;
             const SpellEntry& e = c.book.entries[static_cast<std::size_t>(si)]; const SimSpell& s = c.build->spells[static_cast<std::size_t>(si)];
             if (fam == Family::Scroll) { if (e.source != SpellSource::Scroll || e.count <= 0 || !c.gate.scrollUser) return Fired::Invalid; }
+            else if (fam == Family::CastSummon && g_v4.summons && F.SummonGate(x, si) != Fight::kSummonClear) return Fired::Declined;   // native's gate at the cast (cast/Summon.cpp SummonGate)
             else if (e.cost > x.c.mp + 0.5f || !(c.gate.spellsOnClass || c.gate.spellsFromMastered)) return Fired::Invalid;
             // field 1117 A6 / the disengage ruling (cast/CastOn.cpp): with NO combat controller a combat-table SELF buff / ward is DEFERRED (transparent,
             // asked again every lap; never the unanimated direct cast), and so is a heal while a disengage runs. Other casts keep the direct road.

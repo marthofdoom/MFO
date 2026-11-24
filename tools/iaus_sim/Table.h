@@ -95,7 +95,7 @@ namespace Sim {
                 case kRoleShock: if (e.nature == Prune::Nature::Offense && s.element == "shock") v = dmg; break;
                 case kRoleArea: if (e.nature == Prune::Nature::Offense && e.areaUnits > 0) v = dmg; break;
                 case kRoleHeal: if (e.nature == Prune::Nature::Heal && (selfOnly ? true : s.healOther)) v = s.heal + s.hot * s.hotDur; break;
-                case kRoleSummon: case kRoleReanimate: if (e.nature == Prune::Nature::Summon && c.summonUntil[i] <= F.now) v = 1; break;
+                case kRoleSummon: case kRoleReanimate: if (e.nature == Prune::Nature::Summon && c.summonUntil[i] <= F.now && (!g_v4.summons || F.SummonGate(x, static_cast<int>(i)) == Fight::kSummonClear)) v = 1; break;
                 case kRoleWard: if (e.nature == Prune::Nature::Ward) v = 1; break;
                 case kRoleArmor: if (s.armor > 0) { bool on = false; for (const auto& pr : c.active[i]) if (pr.second > F.now) on = true; if (!on) v = s.armor; } break;
                 case kRoleParalyze: if (s.ctrlPar) v = s.ctrlDur; break;
