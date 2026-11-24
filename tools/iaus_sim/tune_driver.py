@@ -171,6 +171,18 @@ def ident(world, binary=None):
     return "|".join(out)
 
 
+_SPAWNS = {}
+
+
+def stale_spawns(path):
+    """Bundle A: a compiled list with Summon effects (archetype 18) and no actor for any of them. Read as text (the file is 12 MB), once per file version."""
+    k = (path, os.stat(path).st_mtime_ns)
+    if k not in _SPAWNS:
+        t = open(path, encoding="utf-8").read()
+        _SPAWNS[k] = bool(re.search(r'"archetype":\s*18\b', t)) and not re.search(r'"summon":\s*\[\s*\d', t)
+    return _SPAWNS[k]
+
+
 def check_world(world, need_worth=True):
     """Review F8: EVERY stage that reads a list checks its companion files here (world_args and ident call it), not only stage_prep.
     The simulator reads <list>.combatmods.json BESIDE the .sim.json and takes "absent" for "no such mod", so a missing file would
@@ -180,6 +192,8 @@ def check_world(world, need_worth=True):
     for f in (CACHE_DIR + world + ".sim.json", CACHE_DIR + world + ".combatmods.json"):
         if not os.path.exists(f):
             raise SystemExit("missing %s (tools/list_balance/compile_world.py / extract_combat_mods.py): a list is never run without its companion files" % f)
+    if stale_spawns(CACHE_DIR + world + ".sim.json"):
+        raise SystemExit("%s was compiled before sim bundle A: no Summon effect names its actor, every summon would silently be the generic creature. Run extract.py, extract_world.py and compile_world.py again" % (CACHE_DIR + world + ".sim.json"))
     if need_worth and not os.path.exists(os.path.join(A.out, "potworth-%s.txt" % world)):
         raise SystemExit("missing %s: run the prep stage on this --out first (it measures each list's potion worth)" % os.path.join(A.out, "potworth-%s.txt" % world))
 

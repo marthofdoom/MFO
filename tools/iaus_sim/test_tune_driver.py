@@ -571,6 +571,13 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS:
             self.assertIn('"%s"' % n, tune_h, n)   # every searched row is one `--set` reaches (Tune.h kLootKnobsF / kLootKnobsI)
 
+    def test_stale_list_is_refused(self):
+        d = tempfile.mkdtemp()
+        for name, text, want in (("old", '{"archetype":18,"av":-1}', True), ("new", '{"archetype":18,"summon":[3,4]}', False), ("none", '{"archetype":0}', False)):
+            p = os.path.join(d, name)
+            open(p, "w").write(text)
+            self.assertEqual(T.stale_spawns(p), want, name)
+
     def test_loot_gate_constants_mirror_native(self):
         # three numbers the lab cannot include (they sit in engine-typed code): Loot.h Rules against native
         here = os.path.dirname(os.path.abspath(T.__file__))
