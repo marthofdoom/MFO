@@ -64,6 +64,11 @@ namespace Sim {
         { "loot.saleGoldPerWeight", &LT::saleGoldPerWeight }, { "loot.saleWeight", &LT::saleWeight }, { "loot.gold", &LT::gold }, { "loot.equipment", &LT::equipment },
         { "loot.valuables", &LT::valuables }, { "loot.jewelry", &LT::jewelry }, { "loot.gemChargeTrigger", &LT::gemChargeTrigger }, { "loot.buffScale", &LT::buffScale },
         { "loot.foodScale", &LT::foodScale }, { "loot.poisonPowerRef", &LT::poisonPowerRef }, { "loot.poisonWeakScale", &LT::poisonWeakScale },
+        // sim v4 batch L: the rows the loot world reads (Loot.h): the thief's steal-by-need, the guard answer cache, the batch hold, the gate rows
+        { "loot.stealNeedMin", &LT::stealNeedMin }, { "loot.stealRiskWeight", &LT::stealRiskWeight }, { "loot.stealBountyPerGold", &LT::stealBountyPerGold }, { "loot.stealBountyRef", &LT::stealBountyRef },
+        { "loot.guardBarFloorSec", &LT::guardBarFloorSec }, { "loot.guardFreshSec", &LT::guardFreshSec }, { "loot.guardUnreadMaxSec", &LT::guardUnreadMaxSec }, { "loot.guardRepostSec", &LT::guardRepostSec },
+        { "loot.batchHoldMinSec", &LT::batchHoldMinSec }, { "loot.offClassDwellSec", &LT::offClassDwellSec }, { "loot.gateConeDeg", &LT::gateConeDeg }, { "loot.gateBeyondU", &LT::gateBeyondU },
+        { "loot.gateReadmitSec", &LT::gateReadmitSec }, { "loot.gateReadmitMoveU", &LT::gateReadmitMoveU }, { "loot.gateRepeatU", &LT::gateRepeatU }, { "loot.gateShortU", &LT::gateShortU }, { "loot.gateNearU", &LT::gateNearU },
     };
     inline constexpr LootKnobI kLootKnobsI[] = {
         { "loot.soulGemTarget", &LT::soulGemTarget }, { "loot.healthTarget", &LT::healthTarget }, { "loot.staminaTarget", &LT::staminaTarget },

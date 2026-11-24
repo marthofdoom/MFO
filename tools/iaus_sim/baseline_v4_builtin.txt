@@ -1,4 +1,4 @@
-#meta fights=8 seed=1 stealth=g3 profile=vanilla classes=melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock,melee-off,ranged-off,mage-off world=v4+env=fixtures#85d7c2c8 t2=all
+#meta fights=8 seed=1 stealth=g3 profile=vanilla classes=melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock,melee-off,ranged-off,mage-off world=v4+env=fixtures#64b360f8 t2=all
 archer|balanced|U=86.0534
 archer|balanced|a.attack=100
 archer|balanced|aimFix%=0

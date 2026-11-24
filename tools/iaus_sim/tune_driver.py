@@ -107,10 +107,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
-            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, card_seeds=3, card_fights=48)
+            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, loot_eps=6, card_seeds=3, card_fights=48)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
-             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, card_seeds=1, card_fights=8)
+             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, loot_eps=1, card_seeds=1, card_fights=8)
 
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
@@ -189,6 +189,8 @@ def pooled(classes):
 def key_of(world, classes, cfg, curves, sets, binary):
     classes = pooled(classes)
     extra = ["uses:" + sha(uses_path())] if classes.startswith("logi:") else []   # a loot run also depends on the combat world's use counts
+    if classes.startswith("epi:"):
+        extra = ["loot-places:" + (getattr(A, "loot_places", "") or "fixtures"), "eps:%d" % CFG["loot_eps"]]   # sim v4 batch L: an episode run depends on where it is played
     return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)] + extra, separators=(",", ":"))
 
 
@@ -204,7 +206,19 @@ def uses_path():
     return os.path.join(A.out, "uses.txt")
 
 
+def loot_world_args(heldout=False):
+    """Where the loot world's episodes are played (sim v4 batch L): the hand-made loot fixtures (default), or with --loot-places <set> the
+    extracted places of that set with the set's own loot tables (tools/list_balance/extract_loot.py). heldout: the set's held-out places."""
+    s = getattr(A, "loot_places", "") or ""
+    if not s:
+        return []
+    return ["--env-set", s + ("/heldout" if heldout else ""), "--loot-list", CACHE_DIR + s + ".loot.json"]
+
+
 def sim_cmd(world, classes, cfg, curves, sets, binary):
+    if classes.startswith("epi:"):   # sim v4 batch L: the loot world (Loot.h): the mean episode value per seed (fights + potion worth + GoldJ x gold), mean over the classes
+        cmd = [binary or A.bin, "--no-json", "--threads", "1", "--loot-report", str(CFG["loot_eps"]), "--loot-score", "--classes", classes[4:]] + loot_world_args()
+        return cmd + (["--set", sets] if sets else [])
     if classes.startswith("logi:"):   # tune 2.11.1: the logistics world's IAUS arm, J_log per seed (Logistics.h Run, --logi-score), mean over the classes
         cmd = [binary or A.bin, "--no-json", "--logistics", str(CFG["logi_eps"]), "--logi-policy", "iaus", "--logi-score", "--logi-consumables",
                "--logi-uses", uses_path(), "--classes", classes[5:]]
@@ -1675,29 +1689,27 @@ LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.nee
 # NOT searched, each an open decision with its reason: the lab prices their items at 0 because MFO has no road that uses them, so any
 # value found would only say "carry less weight" (soul gems: no recharge road, ClickUp 1dfcuabd356; poisons: no apply road; invisibility,
 # regen and lockpicks: not in the fixture; the sale scale: inert while consumableSellRoad is false, no ALCH sell road).
-LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "no theft road in the lab (thief steal-by-need, feat/iaus-loot-paths): PLACEHOLDER",
-                     "loot.stealRiskWeight": "no theft road in the lab: PLACEHOLDER", "loot.stealBountyPerGold": "no theft road in the lab: PLACEHOLDER",
-                     "loot.stealBountyRef": "no theft road in the lab: PLACEHOLDER",
-                     "loot.guardBarFloorSec": "no guards in the lab (a guard-barred corpse is a town witness rule): PLACEHOLDER",
+# sim v4 batch L: the rule rows the loot world reads (Loot.h) and the stops lab could not see. After the review of 9689734b ONE of them is searched: the
+# batch hold. The others stay out, each for its reason (LOOT_NOT_SEARCHED): a guard timer is a safety rule and not a value trade, gateReadmitSec is marth's
+# "no timer" ruling, and the gate rows wait until the lab blocks as often as the field does. Searched on EPISODES only.
+LOOT_EPISODE_KNOBS = [("loot.batchHoldMinSec", 3.0, [0.0, 1.5, 6.0])]
+_GUARD_WHY = "a guard rule's timer: a safety rule, not a value trade. A value search would only ever shorten the caution (review S2). The loot world reads it (scenarios guard-bar-1117, pending-1117c); marth sets it"
+_GATE_WHY = "read by the loot world, NOT searched yet: the field blocks 2 to 5 times as often as the lab (the lab's world is the navmesh alone), so a value found here says nothing about the game (review S6). Searchable once the lab's block rate matches a field log"
+LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot world (scenario `thief`), but an ordinary episode holds no owned loose item a Thief needs: no signal to search on. PLACEHOLDER",
+                     "loot.stealRiskWeight": "as stealNeedMin: PLACEHOLDER", "loot.stealBountyPerGold": "as stealNeedMin: PLACEHOLDER",
+                     "loot.stealBountyRef": "as stealNeedMin: PLACEHOLDER",
                      "loot.gemChargeTrigger": "no weapon-recharge road (ClickUp 1dfcuabd356): a carried gem is worth 0 in the lab",
                      "loot.soulGemTarget": "no weapon-recharge road: a carried gem is worth 0 in the lab",
                      "loot.poisonTarget": "no poison-apply road: a carried poison is worth 0 in the lab",
                      "loot.poisonPowerRef": "no poison-apply road", "loot.poisonWeakScale": "no poison-apply road",
-                     "loot.invisTarget": "no invisibility potion in the fixture (a sneak road the logistics world does not model)",
-                     "loot.regenTarget": "no regen potion in the fixture", "loot.lockpickTarget": "no lockpick in the fixture",
+                     "loot.invisTarget": "an invisibility potion is worth 0 in the lab (a sneak road the value does not model)",
+                     "loot.regenTarget": "a regen potion is worth 0 in the lab", "loot.lockpickTarget": "no lock-picking road in the lab: a carried pick is worth 0",
                      "loot.saleGoldPerWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
                      "loot.saleWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
-                     # native 8f39de61..78a9831d (field 11-17c / 11-17g). The lab's logistics world has no guards, no service lap, no travel legs and no
-                     # blocked legs, so none of these moves a number there. Each becomes searchable with sim v4's loot slice (iaus-sim-v4.md section 3).
-                     "loot.guardFreshSec": "no guard answer cache in the lab (TheftGate.cpp timer): PLACEHOLDER until sim v4 loot",
-                     "loot.guardUnreadMaxSec": "no guard answer cache in the lab: PLACEHOLDER until sim v4 loot",
-                     "loot.guardRepostSec": "no guard answer cache in the lab: PLACEHOLDER until sim v4 loot",
-                     "loot.batchHoldMinSec": "no batch hold in the lab (a loot episode is one plan, no leg boundary rescans): PLACEHOLDER until sim v4 loot",
-                     "loot.offClassDwellSec": "no off-class weapon dwell in the lab (EquipAuthority OffClassTick): PLACEHOLDER until sim v4 loot",
-                     "loot.gateConeDeg": "no blocked legs in the lab (GATED needs pathing, sim v4 navmesh): PLACEHOLDER",
-                     "loot.gateBeyondU": "no blocked legs in the lab: PLACEHOLDER", "loot.gateReadmitSec": "no blocked legs in the lab; ships 0 (marth 2026-09-24 'no timer')",
-                     "loot.gateReadmitMoveU": "no blocked legs in the lab: PLACEHOLDER", "loot.gateRepeatU": "no blocked legs in the lab: PLACEHOLDER",
-                     "loot.gateShortU": "no blocked legs in the lab: PLACEHOLDER", "loot.gateNearU": "no blocked legs in the lab: PLACEHOLDER"}
+                     "loot.guardFreshSec": _GUARD_WHY, "loot.guardUnreadMaxSec": _GUARD_WHY, "loot.guardRepostSec": _GUARD_WHY, "loot.guardBarFloorSec": _GUARD_WHY,
+                     "loot.gateReadmitSec": "marth 2026-09-24: 'no timer'. A ruling, not a knob: ships 0 and is never searched",
+                     "loot.gateConeDeg": _GATE_WHY, "loot.gateBeyondU": _GATE_WHY, "loot.gateReadmitMoveU": _GATE_WHY, "loot.gateRepeatU": _GATE_WHY, "loot.gateShortU": _GATE_WHY, "loot.gateNearU": _GATE_WHY,
+                     "loot.offClassDwellSec": "an equip notice's dwell (EquipAuthority.cpp OffClassTick): no loot rule reads it, in the game or in the lab"}
 
 
 def final_sets():
@@ -1777,6 +1789,9 @@ def stage_worth():
             open_decision("worth %s accepted at the edge of the range tried (%s)" % (r["knob"], r["best"]), "the best value may lie past it (runbook 7); written only after a look")
 
 
+LOOT_PREFIX = "logi:"   # stage_loot sets it: "epi:" = the loot world's episodes (sim v4 batch L, the default), "logi:" = the stops lab (--loot-world stops)
+
+
 def loot_judge(bs, ns, forced):
     """The loot table's RULE (the combat RULE carried over, 33.3, with what the logistics world can and cannot measure): holdout on seeds
     8001.. (d > 1.5 se, pooled cells); gates on the 128 train + holdout seeds per cell (no cell worse at the all-cells-at-once bar, none out of
@@ -1784,7 +1799,7 @@ def loot_judge(bs, ns, forced):
     world (34.6: the extracts hold no containers); no Knight floor (a loot value does not change a fight in the lab)."""
     row = {"steps": {}, "accepted": False}
     fails = []
-    pooled = "logi:" + ",".join(CELLS)
+    pooled = LOOT_PREFIX + ",".join(CELLS)
     hold = range(8001, 8001 + CFG["hold"])
     b, v = jmany([req("builtin", pooled, "g3", [], hold, bs), req("builtin", pooled, "g3", [], hold, ns)])
     hd, hse = paired(b, v)
@@ -1793,7 +1808,7 @@ def loot_judge(bs, ns, forced):
         fails.append("holdout: not confirmed")
     if not fails or forced:
         seeds = list(range(7001, 7001 + CFG["train"])) + list(hold)
-        res = jmany([req("builtin", "logi:" + c, "g3", [], seeds, x) for c in CELLS for x in (bs, ns)])
+        res = jmany([req("builtin", LOOT_PREFIX + c, "g3", [], seeds, x) for c in CELLS for x in (bs, ns)])
         gate = {}
         for i, c in enumerate(CELLS):
             d, se = paired(res[2 * i], res[2 * i + 1])
@@ -1818,6 +1833,10 @@ def stage_loot():
     with the stops' buff potions, food, poisons, soul gems and bolts (--logi-consumables). What a carried buff potion or food is worth
     there comes from the COMBAT world: its uses per fight per class (--consumables on --print-consume, with the final table and the
     accepted worth values), written to <out>/uses.txt first."""
+    global LOOT_PREFIX
+    if getattr(A, "loot_world", "episodes") == "episodes":
+        return stage_loot_episodes()
+    LOOT_PREFIX = "logi:"
     curves = final_curves()
     def one(c):
         cmd = [A.bin, "--no-json", "--threads", "1", "--classes", c, "--fights", "48", "--print-consume", "--seeds", ",".join(str(x) for x in range(1, 1 + max(2, CFG["calib_seeds"])))] + world_args("builtin")
@@ -1840,8 +1859,69 @@ def stage_loot():
     st = {"uses": lines}
     SUMMARY["stages"]["loot_uses"] = st
     kept, rows = shared_search("loot", LOOT_KNOBS, "logi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
+    for n, why in list(LOOT_NOT_SEARCHED.items()) + [(n, "read only by the loot world's episodes (run without --loot-world stops)") for n, _, _ in LOOT_EPISODE_KNOBS]:
+        open_decision("loot %s not searched" % n, why + "; the placeholder stays")
+
+
+def loot_report(sets, heldout):
+    """One --loot-report run of every cell on the loot world's places (or the set's held-out places): the value per episode and the gate rows that fail."""
+    cmd = [A.bin, "--no-json", "--threads", str(max(1, min(8, os.cpu_count() or 1))), "--loot-report", str(CFG["loot_eps"]), "--classes", ",".join(CELLS),
+           "--seeds", ",".join(str(x) for x in range(9501, 9501 + max(2, CFG["hold"] // 8)))] + loot_world_args(heldout) + (["--set", sets] if sets else [])
+    def chk(t):
+        if "LOOT-REPORT" not in t:
+            raise RuntimeError("no LOOT-REPORT line:\n%s" % t[-400:])
+    t = text_run("lootrep:" + json.dumps(cmd[1:]), cmd, "builtin", check=chk)
+    m = re.search(r"value/ep with gold ([-0-9.]+), without ([-0-9.]+) .*gate rows failing: ALL (\d+)", t)
+    rows = {r.group(1): [float(r.group(2)), r.group(3) == "FAIL"] for r in re.finditer(r"^LOOTGATE ALL\s+(.+?)\s+([-0-9.]+)\s+<=\s+[-0-9.]+\s+(ok|FAIL)$", t, re.M)}
+    return {"value": float(m.group(1)), "value_no_gold": float(m.group(2)), "gate": rows, "gate_failing": sorted(k for k, v in rows.items() if v[1])}
+
+
+LOOT_HARD_ROWS = ("crimes", "guardSeenTakes")   # more of either rejects the table outright (followers never commit detected crimes)
+
+
+def loot_gate_check(name, shipped, kept_rep):
+    """EVERY gate row is a number that must not get worse (every row of kLootBounds is 'at most'): a row the kept table makes worse than the shipped one is an
+    open decision whether or not it crosses its bound, and more crimes or guard-seen takes rejects the table (returns the reason)."""
+    worse = ["%s %.3f -> %.3f" % (k, shipped["gate"][k][0], v[0]) for k, v in sorted(kept_rep["gate"].items()) if k in shipped["gate"] and v[0] > shipped["gate"][k][0] + 1e-9]
+    if worse:
+        open_decision("loot table makes gate rows worse than the shipped table (%s places)" % name, "; ".join(worse))
+    hard = [w for w in worse if w.split(" ")[0] in LOOT_HARD_ROWS]
+    return ("%s places: %s" % (name, "; ".join(hard))) if hard else None
+
+
+def stage_loot_episodes():
+    """THE IAUS LOOT TABLE in the loot world (sim v4 batch L, Loot.h: looting in the fight's own place, on the fight's own clock). The 16 score rows
+    of LOOT_KNOBS and the batch hold (LOOT_EPISODE_KNOBS) are searched on the mean episode value (LootLab.h Score: fights + potion worth + GoldJ x
+    gold + the museum term, less 1000 per crime or guard-seen take, so no step can buy value with one). Then the kept table is CHECKED on the gate
+    (LootLab.h kLootBounds) and, with --loot-places, on that set's HELD-OUT places: ANY gate row worse than the shipped table's is an open decision,
+    more crimes or guard-seen takes REJECTS the table (kept is emptied, the reason recorded), and a table that loses value held-out is an open decision.
+    What is "wanted" in those rows is the shipped table's verdict on the starting bag, and roadLeft% counts what any road could take: a table that takes
+    less cannot read better.
+    KNOWN TIE (review): loot.gold and loot.valuables are not independent. native's Valuables road takes coin too (LootTake.cpp), so with valuables in
+    the plan the gold row decides only the order."""
+    global LOOT_PREFIX
+    LOOT_PREFIX = "epi:"
+    kept, rows = shared_search("loot", LOOT_KNOBS + LOOT_EPISODE_KNOBS, "epi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
     for n, why in LOOT_NOT_SEARCHED.items():
         open_decision("loot %s not searched" % n, why + "; the placeholder stays")
+    st = {"places": getattr(A, "loot_places", "") or "fixtures", "kept": kept}
+    for name, held in (("train", False),) + ((("heldout", True),) if getattr(A, "loot_places", "") else ()):
+        b, k = loot_report(None, held), loot_report(",".join(kept) or None, held)
+        st[name] = {"shipped": b, "kept": k}
+        why = loot_gate_check(name, b, k)
+        if why:
+            st["rejected"] = why
+        if held and kept and k["value"] < b["value"]:
+            open_decision("loot table loses value on the held-out places", "%.3f against %.3f shipped: the kept values are not confirmed off the places they were searched on" % (k["value"], b["value"]))
+    if not getattr(A, "loot_places", ""):
+        open_decision("loot table not checked on held-out places", "the episodes ran on the hand-made fixtures; run with --loot-places <set> (needs ~/.cache/mfo-env and <set>.loot.json)")
+    if st.get("rejected"):
+        open_decision("loot table REJECTED: more crimes or guard-seen takes than the shipped table", st["rejected"])
+        SUMMARY["stages"]["loot"]["kept_before_reject"] = list(kept)
+        SUMMARY["stages"]["loot"]["kept"] = []
+        SUMMARY["stages"]["loot"]["rejected"] = st["rejected"]
+    open_decision("loot.gold is tied with loot.valuables", "native's Valuables road takes coin too, so the two rows are not independent: read a kept loot.gold with that in mind")
+    SUMMARY["stages"]["loot_world"] = st
 
 
 def stage_globals():
@@ -2257,6 +2337,8 @@ def main():
     ap.add_argument("--builtin-worth", help="a potion-worth table for the built-in world instead of PotionWorth.h")
     ap.add_argument("--no-worker", action="store_true", help="one simulator process per chunk instead of the persistent `sim --serve` workers")
     ap.add_argument("--no-race", action="store_true", help="measure every candidate of a sweep on every train seed (the pre-2.11.1 driver; the racing proof's reference)")
+    ap.add_argument("--loot-world", choices=("episodes", "stops"), default="episodes", help="the loot stage's world: episodes = looting in the fight world (sim v4 batch L, Loot.h); stops = the older 8-stop lab (Logistics.h)")
+    ap.add_argument("--loot-places", default="", help="the extracted set the loot episodes are played in (Vanilla, LoreRim, Tuxborn: ~/.cache/mfo-env/<set> and ~/.cache/mfo-list-balance/<set>.loot.json); default: the hand-made loot fixtures. The kept table is then checked on <set>/heldout")
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
     ap.add_argument("--world", choices=("v2", "v3"), default="v3", help="the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v3 (the default since the sim mirror batch of 11-17, marth 11-16 'v3 default after data': the field cast delay and the chase-waiver fix are in), the positional world; v2 = the lab every tuning up to 2.11.5 was searched in, kept working. Passed to the simulator as --world, through the same wrapper as --sim-flags")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")

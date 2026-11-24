@@ -1,0 +1,15 @@
+# Batch L: loot behind a locked door. (locked-door: GATED, the cone, re-admit when the player opens it)
+nopool
+class fixture_loot
+map
+#######################
+#P........#...........#
+#.........#..a....b...#
+#.........L...........#
+#.........#..c........#
+#.........#...........#
+#######################
+end
+loot a item RestoreHealth02 1
+loot b container
+loot c item RestoreHealth03 1

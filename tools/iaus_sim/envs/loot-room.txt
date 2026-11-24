@@ -1,0 +1,18 @@
+# Batch L: one room, a spawn group in the middle, and loot of every kind around it. (room-basic, party-combat, two-followers, museum)
+nopool
+class fixture_loot
+map
+#########################
+#P......................#
+#.......a.....b....m....#
+#...........F...........#
+#.......c.....d.....e...#
+#.......................#
+#########################
+end
+loot a container
+loot b item RestoreHealth02 2
+loot c coinpurse
+loot d item Gold001 30
+loot e item IronArrow 12
+loot m item DwemerCog 1
