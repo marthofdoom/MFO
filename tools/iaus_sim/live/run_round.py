@@ -4,7 +4,7 @@
 usage: run_round.py --out <round dir> [--priority idle|low|normal|high] [--bin <sim>] [--dest <dir>] [--label <text>] [--no-generate]
                     [--unshipped] [--accept-log-mismatch] [--smoke-ok] [--new-args] [--new-bin] [--] <tune_driver.py arguments, without --bin and --out>
 
-  example   run_round.py --out /mnt/.../tune-rounds/r3 -- --cells all --worlds builtin,LoreRim,Tuxborn,Vanilla
+  example   run_round.py --out /mnt/.../tune-rounds/r3 -- --cells 15 --worlds builtin,LoreRim,Tuxborn,Vanilla
   STOP      SIGTERM or Ctrl-C to this process (or `systemctl --user stop $(cat <out>/unit)`): the whole round stops, the simulators too.
   RESUME    run THE SAME COMMAND again. Every simulator result the stopped round finished is in <out>/cache.jsonl and is not run again;
             the result is the one an uninterrupted round gives (test_live.py proves it on a small round).

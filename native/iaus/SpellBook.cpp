@@ -253,7 +253,9 @@ namespace MFO::Iaus::SpellBook {
             st.targetLocation  = delivery == RE::MagicSystem::Delivery::kTargetLocation ||
                                  a_arch.shape == Actuation::SpellShape::Rune ||
                                  a_arch.shape == Actuation::SpellShape::Wall ||
-                                 a_arch.shape == Actuation::SpellShape::TLBurst;
+                                 a_arch.shape == Actuation::SpellShape::TLBurst ||
+                                 Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
+                                                             out.nature == Prune::Nature::Offense, a_arch.impactHazard);   // interim, see Prune.h
             st.nature    = out.nature;
             st.weighable = Prune::WeighableSpell(archetypes);
             out.drop     = Prune::StaticDrop(st);
