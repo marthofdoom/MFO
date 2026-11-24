@@ -16,6 +16,7 @@ namespace MFO::Iaus::Engine {
         std::unordered_set<RE::FormID>       g_badFactWarned;
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_budgetWarnedAt;
         std::unordered_map<RE::FormID, std::string> g_lastWalk;   // the last logged fall-past chain (dedupe)
+        std::unordered_set<RE::FormID>       g_fightProfileLogged;   // fix/spell-worth: the class / school weights line was logged this fight
         std::unordered_map<RE::FormID, bool> g_source;            // card I6: true = IAUS served his last lap
         std::unordered_map<std::uint64_t, double> g_paced;        // card I6: (actor, channel) -> last logged (seconds)
         // The decision epoch never goes back (review round 1, backlog item 1, fixed here): a Mind created after
@@ -182,7 +183,10 @@ namespace MFO::Iaus::Engine {
         return true;
     }
 
+    bool NoteFightProfile(RE::FormID a_actor) { return g_fightProfileLogged.insert(a_actor).second; }
+
     void EndDecision(RE::FormID a_actor) {
+        g_fightProfileLogged.erase(a_actor);   // the fight ended: the next one logs its weights again
         if (const auto it = g_minds.find(a_actor); it != g_minds.end()) Iaus::EndDecision(it->second);
     }
 
@@ -193,6 +197,7 @@ namespace MFO::Iaus::Engine {
         }
         g_budgetWarnedAt.erase(a_actor);
         g_lastWalk.erase(a_actor);
+        g_fightProfileLogged.erase(a_actor);
         std::scoped_lock lk(g_readoutMx);
         g_readouts.erase(a_actor);
     }
@@ -234,6 +239,7 @@ namespace MFO::Iaus::Engine {
         g_badFactWarned.clear();
         g_budgetWarnedAt.clear();
         g_lastWalk.clear();
+        g_fightProfileLogged.clear();
         std::scoped_lock lk(g_readoutMx);
         g_readouts.clear();
     }

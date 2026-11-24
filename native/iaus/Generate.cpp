@@ -768,6 +768,7 @@ namespace MFO::Iaus {
                 for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                     const Combatant& foe = *x.top[ti];
                     if (o.undeadOnly && !foe.undead) continue;
+                    if (Estimate::LevelCapBars(o.levelCap, foe.level)) continue;   // C5: a capped spell on a foe above its cap is no option there
                     if (oReach > 0.0f && Finite(foe.dist, 0.0f) > oReach * kRangeVeto) continue;
                     bestOn[ti] = (std::max)(bestOn[ti], Estimate::SpellOn(o, foe));
                 }
@@ -831,6 +832,10 @@ namespace MFO::Iaus {
                         // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
                         // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
                         if (FxAllReplaced(e.lingerFx, foe->liveFx)) { ++x.out.droppedTarget; continue; }
+                        // fix/spell-worth C5: a level-capped effect (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate) cannot land on a foe above its cap
+                        // (cast/WillWork.cpp's own comparison, the cap read by its own reader at the book). The spell is not vetoed: it is simply no candidate on
+                        // THIS foe, so three capped Turns do not fill the top three while a foe they cannot work on stands there.
+                        if (Estimate::LevelCapBars(e.levelCap, foe->level)) { ++x.out.droppedTarget; continue; }
                         Candidate c = base(foe);
                         x.Foe(c.f, *foe, true);
                         c.f.meleeRange = false;
@@ -839,9 +844,15 @@ namespace MFO::Iaus {
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
                         if (e.nature == Prune::Nature::Control && e.measured) c.f.controlSec = Estimate::Pos(e.controlSec);
-                        if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
+                        // EXPLOIT (the resist consideration) is for the resist the damage does NOT carry (fix/spell-worth C3): a measured offense spell's
+                        // SpellOn already read this foe's resists, so exploit reads none for it (0 = neutral); an unmeasured one and a control spell keep it.
+                        if (e.resistAv >= 0 && !Estimate::ResistCarriedByDamage(e.nature == Prune::Nature::Offense, e.measured, e.damage))
+                            c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
                         if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
-                            c.f.expDamage = e.measured ? Estimate::SpellOn(e, *foe) : -1.0f;   // < 0: not measured (MFO-B684)
+                            // fix/spell-worth C2: an UNMEASURED spell is worth a labelled placeholder share of his best measured option on this foe (Tuning::unmeasuredDamage,
+                            // strictly below it), never a free pass: DamageValue and Overkill read a number instead of standing "not applicable". < 0 only when nothing
+                            // is measured on this foe (MFO-B684's old answer).
+                            c.f.expDamage = e.measured ? Estimate::SpellOn(e, *foe) : Estimate::UnmeasuredWorth(bestOn[ti], x.t.unmeasuredDamage);
                             c.f.effectRate = EffectRate(x, e, c.f.expDamage);   // 11-17b: the tie-break's first read
                             c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
                             c.f.bestDamage = bestOn[ti];

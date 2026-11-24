@@ -383,6 +383,18 @@ namespace MFO::Scheduler {
         // (INI-only, card I7) adds the [iaus-why] per-candidate lines.
         Iaus::Engine::Log(m_id, name, m_d, m_set.gen.actions, ProfileOf(m_set.gate), T, m_tick, m_pickedStep, m_notes, m_ms,
                           /*a_explain=*/Config::g_iausExplain.load());
+        // fix/spell-worth: the class and the school weights this follower fights with, ONCE per fight (his first logged lap after the last one ended).
+        if (Iaus::Engine::NoteFightProfile(m_id)) {
+            const Iaus::Profile& prof = ProfileOf(m_set.gate);
+            constexpr const char* kSchoolName[Iaus::kSchools] = { "destruction", "alteration", "restoration", "illusion", "conjuration" };   // the School identity order (Core.h)
+            std::string sw;
+            for (std::size_t i = 0; i < Iaus::kSchools; ++i)
+                sw += std::format("{}{} {:.2f}{}", i ? ", " : "", kSchoolName[i], prof.school[i],
+                                  m_set.gate.schoolBump[i] > 0.0f ? std::format(" (+{:.2f} mastered)", m_set.gate.schoolBump[i]) : std::string{});
+            spdlog::info("[iaus-gen] {} ({:08X}) fight weights: curve class {} resolved={} | school weights {} | spells onClass={} fromMastered={}",
+                         name, m_id, m_set.gate.curveClass, m_set.gate.resolved ? 1 : 0, sw, m_set.gate.spellsOnClass ? 1 : 0,
+                         m_set.gate.spellsFromMastered ? 1 : 0);
+        }
         // What was generated: the only view of the candidate set, rate-limited.
         if (Iaus::Engine::Paced(m_id, kChanDescribe, kDescribeSec, m_tick)) {
             std::string posture = "none wanted";

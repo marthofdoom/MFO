@@ -99,6 +99,12 @@ struct SpellEntry {
         // the zeros mean "not known" and no damage consideration applies to this spell. true = a 0 is a real 0 (a spell
         // that does no health damage scores 0 against his best measured one).
         bool          measured = false;
+        // fix/spell-worth C5: the LOWEST level cap of the spell's level-capped effects (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate:
+        // cast/WillWork.cpp's own reader, perks included), judged at generation against each foe's level. 0 = no capped effect (or not read).
+        float         levelCap = 0.0f;
+        // fix/spell-worth C3: a poison-TYPE spell (SPIT spellType kPoison). The engine's resist rule reads the foe's kPoisonResist for it where every
+        // other spell reads kResistMagic (iaus-i8-damage-research.md 2.3), so Estimate::SpellOn must too.
+        bool          poisonType = false;
         std::string   name;
     };
 

@@ -5,6 +5,8 @@
 #include "Followers.h"
 #include "MainThread.h"
 #include "Runtime.h"
+#include "cast/Actuation.h"
+#include "iaus/SpellBook.h"
 #include "iaus/Core.h"
 #include "iaus/Estimate.h"
 #include "iaus/Reach.h"
@@ -875,20 +877,35 @@ namespace MFO::Iaus::Fills {
         float damage = 0.0f, heal = 0.0f, rawDamage = 0.0f, rawHeal = 0.0f;
         std::uint32_t controlSec = 0;
         bool epRan = false;
-        // Review F2: an OFFENSE spell whose damage is not in its own effect list (a hazard it spawns, a cloak's second
-        // spell, a script, an enchantment it puts on the weapon) has no readable damage here. Writing a measured 0
-        // would score a Wall of Flames 0 against his best (MFO-B684), so such a spell stays UNMEASURED.
-        bool indirect = false;
+        // Review F2 + fix/spell-worth C1: an OFFENSE spell whose damage is not (only) in its own effect list (a hazard it spawns, a
+        // cloak's second spell, a script, an enchantment it puts on the weapon) has damage that is not readable here. With NO direct damage at all
+        // writing a measured 0 would score a Wall of Flames 0 against his best (MFO-B684), so it stays UNMEASURED. With direct damage (a bolt that
+        // carries a rider: Tuxborn gives nearly every Destruction spell one) the direct damage is a LOWER BOUND of the cast and is written as measured.
+        // A conditional direct effect (a CTDA on the effect or its MGEF) is counted: this reader has no target, and the per-foe gate (WillWork,
+        // which reads those conditions for the pair) already drops the pair it cannot hit.
+        bool hasIndirect = false;
+        std::string indirectBy;   // the effects that carry damage elsewhere: MGEF name + archetype (the log)
+        // C5: the lowest level cap of the spell's capped effects, through WillWork's own reader (0 = none).
+        float levelCap = 0.0f;
         for (const auto* e : a_spell->effects) {
             if (!e || !e->baseEffect) continue;
-            switch (e->baseEffect->GetArchetype()) {
+            const auto arch = e->baseEffect->GetArchetype();
+            switch (arch) {
             case RE::EffectArchetypes::ArchetypeID::kSpawnHazard:
             case RE::EffectArchetypes::ArchetypeID::kCloak:
             case RE::EffectArchetypes::ArchetypeID::kScript:
             case RE::EffectArchetypes::ArchetypeID::kEnhanceWeapon:
-                if (a_e.nature == Prune::Nature::Offense) indirect = true;
+                if (a_e.nature == Prune::Nature::Offense) {
+                    hasIndirect = true;
+                    indirectBy += std::format("{}{} (archetype {})", indirectBy.empty() ? "" : ", ",
+                                              e->baseEffect->GetName() ? e->baseEffect->GetName() : "?", static_cast<int>(arch));
+                }
                 break;
             default: break;
+            }
+            if (Actuation::LevelCappedEffect(e)) {
+                const float cap = Actuation::WillWorkLevelCap(a_caster, a_spell, e, foe.get());
+                if (std::isfinite(cap)) levelCap = levelCap > 0.0f ? (std::min)(levelCap, (std::max)(cap, 1.0f)) : (std::max)(cap, 1.0f);
             }
             const Fx fx = Classify(e->baseEffect);
             if (fx == Fx::None) continue;
@@ -906,25 +923,38 @@ namespace MFO::Iaus::Fills {
             (fx == Fx::Damage ? rawDamage : rawHeal) += Total(e, mag0, conc);
             (fx == Fx::Damage ? damage : heal) += Total(e, mag, conc);
         }
+        const bool offense = a_e.nature == Prune::Nature::Offense;
+        const bool indirect = Estimate::DamageUnmeasurable(offense, hasIndirect, damage);   // C1: only when the direct damage is 0
 
-        if (write && !indirect) {
-            a_e.damage     = damage;
-            a_e.heal       = heal;
-            a_e.controlSec = static_cast<float>(controlSec);
-            a_e.measured   = true;
+        if (write) {
+            if (!indirect) {
+                a_e.damage     = damage;
+                a_e.heal       = heal;
+                a_e.controlSec = static_cast<float>(controlSec);
+                a_e.measured   = true;
+            }
+            a_e.levelCap   = levelCap;   // form data + the perk entry point: read whether or not the damage was measurable
+            a_e.poisonType = a_spell->data.spellType == RE::MagicSystem::SpellType::kPoison;
         }
-        if (probe) {
+        if (probe || write) {
+            // ONE LINE PER SPELL when the book is built (fix/spell-worth): what the scorer will read, and why a damage is missing. The ledger key
+            // (SpellBook.cpp) makes each print once per follower and spell per session.
             a_probeKey = (epRan ? 0x46494C31u : 0x46494C30u) ^ (indirect ? 0x100u : 0u);
-            a_probe = std::format("[iaus-fill] spell {} ({:08X}) of {} ({:08X}): damage {:.1f} (record {:.1f}) heal {:.1f} (record {:.1f}) "
-                                  "control {} s | concentration={} (counted for 1 s) cost {:.1f} | magnitude perks: {} | written: {} | "
+            a_probe = std::format("[iaus-fill] spell {} ({:08X}) of {} ({:08X}): school {} nature {} reach {:.0f} area {:.0f} resistAv {} charge {:.2f} s{}{} | "
+                                  "damage {:.1f} (record {:.1f}) heal {:.1f} (record {:.1f}) control {} s | concentration={} (counted for 1 s) cost {:.1f} | "
+                                  "level cap {} | magnitude perks: {} | written: {} | "
                                   "left out: duration perks, dual cast, the target's resist (applied per foe: magic resist and the "
-                                  "element, NOT the poison-resist swap of a poison-type spell){}",
+                                  "element, the poison-resist swap for a poison-type spell){}",
                                   a_e.name, a_e.form, a_caster->GetName() ? a_caster->GetName() : "?", a_caster->GetFormID(),
+                                  static_cast<int>(a_e.school), SpellBook::NatureName(a_e.nature), a_e.reach, a_e.areaUnits, a_e.resistAv,
+                                  a_spell->data.chargeTime, a_spell->data.spellType == RE::MagicSystem::SpellType::kPoison ? " POISON-TYPE" : "",
+                                  hasIndirect ? std::format(" | carries an indirect effect: {}", indirectBy) : std::string{},
                                   damage, rawDamage, heal, rawHeal, controlSec, conc, a_e.cost,
+                                  levelCap > 0.0f ? std::format("{:.0f}", levelCap) : std::string("none"),
                                   epRan ? std::format("ran against {:08X}", (rawDamage > 0.0f && foe) ? foe->GetFormID() : a_caster->GetFormID())
                                         : (epOk ? "not run (no combat target)" : "REFUSED (row not verified)"),
-                                  indirect ? "indirect damage (hazard / cloak / script / weapon carrier): NOT measured"
-                                           : (write ? "yes" : "no (bIausFillSpells=0)"),
+                                  indirect ? "NO direct damage and an indirect effect: UNMEASURED"
+                                           : (write ? (hasIndirect ? "yes (direct damage only: a lower bound)" : "yes") : "no (bIausFillSpells=0)"),
                                   indirect ? " | its damage is not in its own effects" : "");
         }
     }

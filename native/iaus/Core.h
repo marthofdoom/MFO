@@ -338,6 +338,9 @@ namespace MFO::Iaus {
         // multiplier is what the ENGINE says his perks do to that armor type's rating / that weapon kind's damage. 0 = the perks are not weighed (the old pick).
         float perkArmorWeight = 0.0f;            // SHIPPED INERT (marth 11-16 "Ship 0 plan tune soon"): armor pick (logistics/Gear.cpp ArmorPrefFor): light / heavy by the engine's ModArmorRating answer
         float perkWeaponWeight = 0.0f;           // SHIPPED INERT (marth 11-16): weapon pick (Logistics_internal.h WeaponScore): the weapon kind by the engine's ModAttackDamage answer
+        // fix/spell-worth C2 (PLACEHOLDER, not searched; the sim mirror is open): what an offense spell whose damage could NOT be measured is worth, as a
+        // share of his best MEASURED castable option on that foe (Estimate::UnmeasuredWorth: held strictly below it). `t.unmeasuredDamage` in shared.txt.
+        float unmeasuredDamage = 0.5f;
         WorthTable worth{};
     };
 
@@ -626,6 +629,7 @@ namespace MFO::Iaus {
         std::size_t   pruned = 0;        // P5 early-out
         bool          overCap = false;   // more than maxCandidates offered (only the first maxCandidates scored)
         std::size_t   buffCapped = 0;    // damage-class buffs held at the best viable offense score (Decide, marth 2026-11-13)
+        std::array<std::uint16_t, kCons> vetoByCons{};   // fix/spell-worth: candidates vetoed, by the consideration that vetoed them (Cons::kCount's own bucket excluded: a zero weight / a bad fact)
         std::size_t   badFacts = 0;      // candidates VETOED because a fact was NaN / inf (a reader bug: never masked)
         int           firstBadFact = -1; // the first such candidate's index, for the adapter's WARN
         float         bestHeal = 0.0f;   // best CastHeal / heal-scroll score over its action weight (Retreat and the health drink read it)

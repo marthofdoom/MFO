@@ -24,7 +24,7 @@ CURVE_PARAMS = ("a", "b", "floor", "zeroAbove", "zeroBelow")
 # t.* scalars (Catalogue.cpp SetTuningScalar): all >= 0, the two HP lines 0..1
 T_SCALARS = ("t.momentum", "t.postureMomentum", "t.preempt", "t.actFloor", "t.softCd", "t.occHold", "t.kite", "t.blockBase", "t.tauntCd", "t.powerCd",
              "t.disengageCd", "t.noHealDrink", "t.noHealRetreat", "t.emergencyHpHigh", "t.emergencyHpLow", "t.offClassBase", "t.groundCd", "t.blockCd",
-             "t.bashCd", "t.backOffCd", "t.stepCd", "t.regroupCd", "t.perkArmor", "t.perkWeapon",
+             "t.bashCd", "t.backOffCd", "t.stepCd", "t.regroupCd", "t.perkArmor", "t.perkWeapon", "t.unmeasuredDamage",
              "t.concChannelSec", "t.handRedrawSec", "t.spellCastSec", "t.fireLineKeepSec",
              "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle",
              "t.dyingSelfHp", "t.dyingAllyHp", "t.dyingHitsToDown", "t.urgencyHitsDiv", "t.burstWindowSec", "t.grossWindowSec", "t.maxHitWindowSec")

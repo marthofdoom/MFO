@@ -312,9 +312,13 @@ namespace MFO::Iaus::Candidates {
 
         // The resist actor values the book's offense spells key on (the exploit consideration's read).
         std::vector<int> resistAvs;
-        for (const auto& e : s.book.entries)
+        for (const auto& e : s.book.entries) {
             if (e.resistAv >= 0 && std::find(resistAvs.begin(), resistAvs.end(), e.resistAv) == resistAvs.end())
                 resistAvs.push_back(e.resistAv);
+            // fix/spell-worth C3: a poison-TYPE spell's first resist term is the foe's poison resist (Estimate::SpellOn), so it is read too.
+            if (e.poisonType && std::find(resistAvs.begin(), resistAvs.end(), Estimate::kAvPoisonResist) == resistAvs.end())
+                resistAvs.push_back(Estimate::kAvPoisonResist);
+        }
 
         // ── targets ──────────────────────────────────────────────────────────────────────────────────────
         if (auto cur = Targeting::Current(selfID).get(); cur) s.currentTargetId = cur->GetFormID();
