@@ -136,12 +136,14 @@ namespace MFO::Iaus {
         // 11-17c): the half-angle of the cone around block->target (degrees) and how far past the target an item still counts (units).
         float gateConeDeg = 45.0f, gateBeyondU = 1024.0f;
         // GATED RE-ADMIT (besides the door / lever / cell events): a record is lifted after gateReadmitSec (0 = no timer, marth 2026-09-24 "no
-        // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point. BOTH DEFAULT OFF (marth's standing GATED rule is door / lever / cell events only); the rows stay for later. PLACEHOLDERS.
-        float gateReadmitSec = 0.0f, gateReadmitMoveU = 500.0f;
+        // timer") or once the follower that made it stands more than gateReadmitMoveU from the block point. BOTH DEFAULT OFF (marth 2026-11-24: a gate lifts
+        // on REAL events only -- door, lever, cell, somebody else at the item -- until native has an active navmesh to lift on a route; the follower's own walk off
+        // the block point looped, field 11-18 item 000EA786). The rows stay for later. PLACEHOLDERS.
+        float gateReadmitSec = 0.0f, gateReadmitMoveU = 0.0f;
         // GATED IS A FACT, NOT A FREEZE (field 11-17g: a follower STUCK at one point gated the targets and a cone past them, outdoors loot froze).
         // gateRepeatU: a block within this of the same follower's previous block point is stuck-at-origin evidence, NOT a gate (the stuck rescue
         // fires instead). gateShortU: a block farther than this short of the target gates only that target, no cone. gateNearU: a record is lifted
-        // when any follower or the player stands within this of the gated item (0 = off). gateReadmitMoveU above now defaults to 500. PLACEHOLDERS.
+        // when any follower or the player stands within this of the gated item (0 = off). gateReadmitMoveU above defaults to 0 (off). PLACEHOLDERS.
         float gateRepeatU = 300.0f, gateShortU = 300.0f, gateNearU = 200.0f;
     };
     // THREAD MIRROR of the three guard-cache timers (review 11-17c): TheftGate::GuardCheck also runs on the MAIN thread (a_onMain callers), while
