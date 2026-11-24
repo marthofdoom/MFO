@@ -3759,3 +3759,11 @@ R1 and R2 are FIXED on the branch, with the coordinator's small items (net goal 
 - SEV-5: the poison swap reads the foe's poison resist only when `Candidates.cpp` lists it (a poison-type spell is in the book); the engine's player cap on resist (`fPlayerMaxResistance`) is not modelled (foes only).
 - SEV-5: `[iaus-fill] spell` is now logged whenever the spell fill is on (it was probe-only); the ledger prints each (follower, spell) once per session, about 74 lines per follower on a big book.
 - (review round of 9f9734e2, author) SEV-4: DoT damage is still counted over its whole duration (no foe time-to-live reader exists to cap it at the foe's expected life). SEV-4: the mutually-exclusive-conditional-effect rule (sum unconditional, take the largest conditional) was NOT verified against the Elemental Bolt / Flare records (the logs carry no per-effect conditions): check them in xEdit-free form via a record dump before trusting the lower bound. SEV-5: the damage-spell cap exemption keys on a hostile Health value-modifier effect; Turn Lesser Undead's uncapped companion effect (0004D3F9 family) must not be one, unverified here. SEV-5: `Facts::bestDamage` changed unit (per cast second): the sim mirror reads it through Generate, so its DamageValue moves.
+
+### fix/spell-worth re-check (Opus 2026-11-24, against 2b504275)
+- SEV-3: a spell whose only damage is conditional, plus an unconditional rider, still counts in full against a foe the condition fails for (WillWork answers Yes there).
+- SEV-4: SpellOn uses one element for the whole spell, a mixed-element spell with its keyed element at 100 is dropped.
+- SEV-4: capQueued pairs go ahead of kept refusals; with about 18+ unanswered capped pairs live refusals are evicted (append them after).
+- SEV-4: WillWork HasWorkingHealthDamage accepts PeakValueModifier and excludes Absorb, Fills::Classify the reverse: align.
+- Settled: Turn Lesser Undead 0004D3F9 is Stagger, not hostile, not Health (Skyrim.esm, MysticismMagic.esp); Adamant's third effect is gated on HasMagicEffect 0004B145, so the cap exemption cannot fire above the cap.
+- Open: DoT is counted over its whole duration (no foe time-to-live reader).
