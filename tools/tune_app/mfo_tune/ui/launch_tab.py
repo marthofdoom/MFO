@@ -2,11 +2,11 @@
 import os
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
-from .. import catalog, commands
+from .. import catalog, commands, prio
 from . import bg, widgets
 
 
@@ -78,10 +78,19 @@ class LaunchTab(QWidget):
         self.taskset = QLineEdit(s.get("taskset", ""))
         self.taskset.setPlaceholderText("CPU core set for taskset -c, e.g. 0-7 (empty = any)")
         f.addRow("CPU cores (taskset)", self.taskset)
-        self.nice = QSpinBox()
-        self.nice.setRange(-20, 19)
-        self.nice.setValue(int(s.get("nice", 10)))
-        f.addRow("Nice", self.nice)
+        self.prio = widgets.FocusCombo()             # live/priority.py ORDER; idle is the default (marth 2026-11-23)
+        self._prio_default = "idle"
+        self._prio_reason = ""
+        self._prio_touched = None                    # (out dir, level) the user picked (only then is --priority sent, only for that dir)
+        self._load_levels()
+        self.prio.activated.connect(self._prio_picked)   # `activated` = the user chose; a programmatic set does not fire it
+        self.prio.setToolTip("The round runs in one systemd user scope at this level (idle unless you pick another). A new run dir always starts at idle; "
+                             "a resumed run dir shows its remembered level. The level is sent to run_round.py only when you pick one here. Change it live on the Current runs tab.")
+        f.addRow("Priority", self.prio)
+        self.new_args = QCheckBox("New arguments (--new-args): this resume changes the driver arguments on purpose")
+        self.new_bin = QCheckBox("New binary (--new-bin): this resume uses another simulator binary; nothing of the earlier run is reused")
+        f.addRow("", self.new_args)
+        f.addRow("", self.new_bin)
         self.extra = QLineEdit()
         self.extra.setPlaceholderText("extra driver arguments, appended verbatim")
         f.addRow("Extra args", self.extra)
@@ -109,13 +118,15 @@ class LaunchTab(QWidget):
 
         for w in (self.name, self.out, self.bin, self.knobs, self.rej, self.sim_flags, self.bworth, self.taskset, self.extra):
             w.textChanged.connect(self.update_preview)
-        for w in (self.smoke, self.no_race, self.no_emit, self.rej_on):
+        for w in (self.smoke, self.no_race, self.no_emit, self.rej_on, self.new_args, self.new_bin):
             w.toggled.connect(self.update_preview)
         for w in (self.classes, self.stages, self.worlds):
             w.itemChanged.connect(self.update_preview)
         self.for_class.currentIndexChanged.connect(self.update_preview)
         self.jobs.valueChanged.connect(self.update_preview)
-        self.nice.valueChanged.connect(self.update_preview)
+        self._procs = {}                             # out dir -> (Popen, size of driver.out before launch): watched for an early exit
+        self._watch = QTimer(self)
+        self._watch.timeout.connect(self._poll_children)
         self.name.textChanged.connect(self._autoout)
         ctx.settings_changed.connect(self.reload_catalog)
         self.reload_catalog()
@@ -135,7 +146,48 @@ class LaunchTab(QWidget):
         v.addLayout(h)
         return box
 
+    def _load_levels(self):
+        """Fill the drop-down from priority.py (the one table). Called at start and whenever Settings change the repo."""
+        self._prio_reason = ""
+        keep = self.prio.currentText()
+        self.prio.blockSignals(True)
+        self.prio.clear()
+        try:
+            pm = prio.load(self.ctx.s)
+            self.prio.addItems(list(pm.ORDER))
+            self._prio_default = pm.DEFAULT
+            self.prio.setEnabled(True)
+        except (ImportError, OSError, SyntaxError) as e:
+            self._prio_reason = "priority table not loaded: %s" % e
+            self.prio.setEnabled(False)
+        self.prio.setCurrentIndex(max(0, self.prio.findText(keep if keep else self._prio_default)))
+        self.prio.blockSignals(False)
+
+    def _out_abs(self):
+        o = self.out.text().strip()
+        return os.path.abspath(os.path.expanduser(o)) if o else ""
+
+    def _prio_picked(self, *_):
+        self._prio_touched = (self._out_abs(), self.prio.currentText())
+        self.update_preview()
+
+    def _sync_prio(self):
+        """The drop-down for the current out dir: the user's pick for THIS dir stays; otherwise the dir's remembered level (a resume), otherwise idle
+        (a new dir never inherits the last dir's level)."""
+        out = self._out_abs()
+        if not self.prio.isEnabled():
+            return
+        lv = prio.read_file_level(out) if out else ""
+        want = lv if self.prio.findText(lv) >= 0 else self._prio_default
+        if self._prio_touched and self._prio_touched[0] == out and self.prio.findText(self._prio_touched[1]) >= 0:
+            want = self._prio_touched[1]
+        if self.prio.currentText() != want:
+            self.prio.blockSignals(True)
+            self.prio.setCurrentIndex(max(0, self.prio.findText(want)))
+            self.prio.blockSignals(False)
+
     def reload_catalog(self):
+        self._load_levels()
         cs = self.ctx.classes()
         old = set(widgets.checked(self.classes))
         self.classes.clear()
@@ -169,7 +221,9 @@ class LaunchTab(QWidget):
             "worlds": widgets.checked(self.worlds) if len(widgets.checked(self.worlds)) != len(catalog.WORLDS) else [],
             "knobs": self.knobs.text().strip(), "no_race": self.no_race.isChecked() and self.no_race.isEnabled(), "no_emit_runs": self.no_emit.isChecked(),
             "rejudge": self.rej.text().strip(), "rejudge_set": self.rej_on.isChecked(), "sim_flags": self.sim_flags.text().strip(),
-            "builtin_worth": self.bworth.text().strip(), "jobs": self.jobs.value(), "taskset": self.taskset.text().strip(), "nice": self.nice.value(),
+            "builtin_worth": self.bworth.text().strip(), "jobs": self.jobs.value(), "taskset": self.taskset.text().strip(),
+            "priority": self.prio.currentText() if (self.prio.isEnabled() and self._prio_touched and self._prio_touched[0] == self._out_abs()) else "",
+            "new_args": self.new_args.isChecked(), "new_bin": self.new_bin.isChecked(), "no_generate": self.smoke.isChecked(),
             "extra": self.extra.text().strip(),
         }
 
@@ -180,6 +234,7 @@ class LaunchTab(QWidget):
         return commands.driver_argv(self.options(), self.ctx.s)
 
     def update_preview(self, *_):
+        self._sync_prio()
         o = self.options()
         self.stages.setEnabled(not o["for_class"])
         self.classes.setEnabled(not o["for_class"])
@@ -189,12 +244,34 @@ class LaunchTab(QWidget):
             w.append("Set the simulator binary first (Browse… to an existing one, or Build…).")
         elif not os.path.isfile(o["bin"]):
             w.append("The simulator binary does not exist (use Build…).")
-        if self.ctx.is_running(o["out"]):
-            w.append("A driver is already running on this out directory.")
+        if not os.path.isfile(prio.run_round_path(self.ctx.s)):
+            w.append("This checkout has no tools/iaus_sim/live/run_round.py: rounds cannot start (Settings: point the repo at a worktree that has it).")
+        if self._prio_reason:
+            w.append(self._prio_reason)
+        if os.path.abspath(os.path.expanduser(o["out"] or "/")).startswith("/tmp/") or os.path.abspath(os.path.expanduser(o["out"] or "/")) == "/tmp":
+            w.append("WARNING: the out directory is under /tmp, which is wiped on reboot. A round's cache and results belong on a disk that survives one.")
+        if self._running(o["out"]):
+            w.append("A round is already running on this out directory.")
         elif os.path.exists(os.path.join(o["out"], "cache.jsonl")):
             w.append("The out directory holds an earlier run: the driver RESUMES it (finished work replays from cache.jsonl).")
+        if o["out"] and os.path.exists(os.path.join(o["out"], "round.json")):
+            am, _ = prio.resume_conflicts(os.path.abspath(os.path.expanduser(o["out"])), self._drv_args(), "")
+            if am and not o["new_args"]:
+                w.append("run_round.py will REFUSE this resume: " + am + "\nTick 'New arguments' if the change is meant, or use a new run name.")
         self.warn.setText("\n".join(w))
-        self.go.setEnabled(bool(o["out"]) and os.path.isfile(o["bin"]) and not self.ctx.is_running(o["out"]))
+        self.go.setEnabled(bool(o["out"]) and os.path.isfile(o["bin"]) and os.path.isfile(prio.run_round_path(self.ctx.s)) and not self._prio_reason and not self._running(o["out"]))
+
+    def _running(self, out):
+        """A round is on this out dir: its driver or run_round.py process, its round.lock held, or a child this tab just started and has not yet seen end."""
+        if not out:
+            return False
+        a = os.path.abspath(os.path.expanduser(out))
+        p = self._procs.get(a)
+        return bool(self.ctx.is_running(a) or (p and p[0].poll() is None))
+
+    def _drv_args(self):
+        a = self.argv()
+        return a[a.index("--") + 1:]
 
     def build(self):
         out = self.bin.text().strip()
@@ -215,17 +292,60 @@ class LaunchTab(QWidget):
         o = self.options()
         o["out"] = os.path.abspath(os.path.expanduser(o["out"]))   # a relative out would resolve against cwd=repo for the driver but not for the launch files
         argv = commands.driver_argv(o, self.ctx.s)
+        # run_round.py refuses a resume that changes the driver arguments or the binary unless told it is meant: say so HERE, not in driver.out
+        try:
+            am, bm = prio.resume_conflicts(o["out"], argv[argv.index("--") + 1:], o["bin"])
+        except OSError as e:
+            QMessageBox.critical(self, "Launch refused", "The simulator binary could not be read for the resume check: %s" % e)
+            return
+        why = []
+        if am and not o["new_args"]:
+            why.append(am + "\nTick 'New arguments' if this change is meant, or give the run a new name.")
+        if bm and not o["new_bin"]:
+            why.append(bm + "\nTick 'New binary' if this change is meant, or give the run a new name.")
+        if why:
+            QMessageBox.critical(self, "run_round.py would refuse this resume", "Nothing was started.\n\n" + "\n\n".join(why))
+            return
         if QMessageBox.question(self, "Launch run", "Launch this run detached?\n\n" + commands.shell(argv)) != QMessageBox.Yes:
             return
+        log = os.path.join(o["out"], "driver.out")
         try:
             os.makedirs(o["out"], exist_ok=True)
             with open(os.path.join(o["out"], "launch-command.txt"), "w") as fh:
                 fh.write(commands.shell(argv) + "\n")
-            pid = commands.launch_detached(argv, os.path.join(o["out"], "driver.out"), cwd=self.ctx.s["repo"])
+            before = os.path.getsize(log) if os.path.exists(log) else 0
+            proc = commands.launch_detached_proc(argv, log, cwd=self.ctx.s["repo"])
         except OSError as e:
             QMessageBox.critical(self, "Launch failed", str(e))
             return
         with open(os.path.join(o["out"], "pid"), "w") as fh:
-            fh.write(str(pid) + "\n")
+            fh.write(str(proc.pid) + "\n")
+        self._procs[o["out"]] = (proc, before)
+        self._watch.start(1000)
+        self._prio_touched = None                    # the level now lives in <out>/priority; the next resume follows the file again
         self.ctx.refresh()
         self.on_launched(o["out"])
+
+    def _poll_children(self):
+        """A launched run_round.py that ends is reaped here. A nonzero exit (1 = refused or failed, 2 = bad usage, 3 = another runner holds the round)
+        shows what it printed (the part of driver.out written by THIS launch). A stop (128+signal) is not an error."""
+        for out, (proc, before) in list(self._procs.items()):
+            rc = proc.poll()
+            if rc is None:
+                continue
+            del self._procs[out]
+            if rc in (1, 2, 3):
+                self._show_failure(out, rc, before)
+        if not self._procs:
+            self._watch.stop()
+        self.update_preview()
+
+    def _show_failure(self, out, rc, before):
+        try:
+            with open(os.path.join(out, "driver.out"), "rb") as f:
+                f.seek(before)
+                tail = f.read().decode(errors="replace")[-3000:]
+        except OSError as e:
+            tail = "(driver.out could not be read: %s)" % e
+        meaning = {1: "the round was refused or the driver failed", 2: "run_round.py was called wrongly", 3: "another run_round.py already holds this round"}[rc]
+        QMessageBox.critical(self, "The run ended with exit %d" % rc, "%s\n\nrun_round.py exited %d: %s.\n\nWhat it printed:\n\n%s" % (out, rc, meaning, tail.strip() or "(nothing)"))

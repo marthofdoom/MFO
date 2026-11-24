@@ -50,6 +50,8 @@ def _classify(args):
         return "driver"
     if os.path.basename(args[0]).startswith("sim") and ("--serve" in args or "--classes" in args or "--fights" in args or "--seeds" in args):
         return "sim"
+    if "python" in args[0] and any(a.endswith("run_round.py") for a in args[:3]):
+        return "wrapper"   # live/run_round.py: the round's own process, the group leader; SIGTERM to it stops the whole round
     if os.path.basename(args[0]) in ("bash", "sh") and len(args) > 1 and args[1].endswith(".sh") and "tune" in args[1]:
         return "wrapper"
     return None

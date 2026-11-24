@@ -10,9 +10,18 @@ def shell(argv):
 
 def driver_argv(o, settings):
     """o keys: out, bin, smoke, for_class, classes[], stages[], worlds[], knobs, no_race, no_emit_runs, rejudge, sim_flags, jobs, builtin_worth,
-    extra (free text), taskset (str or ''), nice (int or None)."""
-    py = os.path.join(settings["repo"], "tools", "iaus_sim", "tune_driver.py")
-    a = ["python3", py, "--bin", o["bin"], "--out", o["out"]]
+    extra (free text), taskset (str or ''), priority (a priority.py level, or '' = the round's remembered one), new_args / new_bin (run_round's
+    "this resume changes it on purpose"), no_generate (a smoke round writes no tuning files). No nice."""
+    # Rounds start through live/run_round.py (one systemd user scope per round, a live-changeable priority level, tuning files at the end).
+    # run_round owns --bin and --out; everything after `--` is tune_driver.py's. Without o["priority"] the round's remembered level (else idle) applies.
+    rr = os.path.join(settings["repo"], "tools", "iaus_sim", "live", "run_round.py")
+    a = ["python3", rr, "--out", o["out"], "--bin", o["bin"]]
+    if o.get("priority"):
+        a += ["--priority", o["priority"]]   # only when the user picked a level for this out dir; otherwise the file's (else idle) applies
+    for key, flag in (("new_args", "--new-args"), ("new_bin", "--new-bin"), ("no_generate", "--no-generate")):
+        if o.get(key):
+            a.append(flag)
+    a.append("--")
     if o.get("smoke"):
         a.append("--smoke")
     if o.get("for_class"):
@@ -40,7 +49,7 @@ def driver_argv(o, settings):
         a.append("--no-emit-runs")
     if o.get("extra"):
         a += shlex.split(o["extra"])
-    return wrap(a, o)
+    return wrap(a, dict(o, nice=None))   # the round's priority is a cgroup level, never nice
 
 
 def wrap(a, o):
@@ -97,13 +106,17 @@ def sim_argv(o, settings):
     return wrap(a, o)
 
 
-def launch_detached(argv, log_path, cwd=None):
-    """setsid + nohup semantics: the child is its own session/process group, stdout+stderr to log_path, and survives the app. -> pid (the
-    session leader, equal to its pgid)."""
+def launch_detached_proc(argv, log_path, cwd=None):
+    """setsid + nohup semantics: the child is its own session/process group, stdout+stderr to log_path, and survives the app. -> the Popen
+    (pid = the session leader = its pgid; poll() it to learn an early exit)."""
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "ab") as lf:
-        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True, close_fds=True)
-    return p.pid
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True, close_fds=True)
+
+
+def launch_detached(argv, log_path, cwd=None):
+    """-> pid of launch_detached_proc."""
+    return launch_detached_proc(argv, log_path, cwd).pid
 
 
 def build_sim(settings, out_bin):
