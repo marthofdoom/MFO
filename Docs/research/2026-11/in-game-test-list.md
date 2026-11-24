@@ -1,3 +1,13 @@
+## G0b hold exerciser (movement plan), play this first, about 12 minutes
+DEV `MFO.dll` (artifact `MFO-dll-DEV-SELFTEST`) and the current `APMF.dll`. Nothing to set in an INI. Save first.
+1. Take two followers, one who fights in melee and one with a bow, staff or spells in hand, and give BOTH the Combat row DO "DEV: run self-tests". Any other follower: leave at home if you can.
+2. Go to a wild, open place with a few rocks or a ruin wall, away from any town, inn or friendly NPC (the test refuses to spawn a foe there), with no enemies around. Stand still and do not fight. One sturdy skeleton or mage is spawned per test, set on the follower and deleted after it. It hits back, so keep your distance.
+3. Watch the corner text: one line per leg (`MFO g0b.shooter_vs_mage 2/4 hold R150: PASS (97% inside, 4 atk, 2 cast)`) and `finished, N hold test(s) left`. Look at: does he stand or dance inside the spot, does he still swing, shoot and cast from it, does he ever run away from it, do the CALM legs look calmer or broken.
+4. `g0b.cover` waits for a pillar, rock or wall corner nearby and `g0b.doorway` for an ordinary door (not a loading door): when the other ten are done, walk both followers into a cleared dungeon room with a door and stand there.
+5. Quit and send `MFO.log` and `APMF.log`. `[hold] RESULT` is one line per leg, `[probe-light]` the light levels. For light: walk outdoors from day shade into the sun, and from a dark room past a torch, with the followers near. `python3 tools/field/calib_point.py MFO.log` prints the tables.
+To run it all again: raise `iResetGeneration` in `Data/SKSE/Plugins/MFO_SelfTest.ini` with `sResetOnly=` the g0b ids (Docs/SELFTEST.md).
+Reads as: PASS = arrived and inside R at least 90% of the time. FAIL = the hold did not do that (an answer, not a crash). SKIP = not measurable here. `g0b.hold_idle` is expected to say ch.24 waits out of combat: Harbinger's point hold is an in-combat facet. Out-of-combat holding needs another road.
+
 ## T2 field session (Classes Beta 1 + IAUS field fixes)
 Collected 2026-11-11 from class-build-plan.md cards C4, C8, C10, C11, C12, G2 and the Movement batch (branch `feat/g3-disengage`, its
 `in-game-test-list.md`), plus the IAUS field-fix log lines. One play session. `MFO.log` / `APMF.log` are the files named below.

@@ -513,6 +513,15 @@ namespace MFO::SelfTest {
                 spdlog::info("[hold] RESULT {} {:08X}: {}", t.id, a_id, line);
                 r.summary = line + " | " + r.summary;
             }
+            if (r.measured) {
+                std::size_t left = 0;
+                {
+                    std::lock_guard lk(g_mx);
+                    for (const auto& x : Tests())
+                        if (&x != &t && !g_results.contains(x.id)) ++left;
+                }
+                Toast(std::format("MFO {} finished, {} hold test(s) left", t.id, left));
+            }
             if (r.summary.size() > 900) r.summary.resize(900);   // 'MFST' evidence is bounded
             if (r.measured == 0) return Step::Retry("nothing measured: " + r.summary);
             if (r.refusedLegs > 0 && r.refusedLegs == r.measured) return Step::Fail("the hold was never carried: " + r.summary);
