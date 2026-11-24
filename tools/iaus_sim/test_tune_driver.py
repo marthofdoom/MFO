@@ -314,5 +314,51 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         self.assertNotIn("uses:", T.key_of("builtin", "melee", "g3", [], None, None))
 
 
+class ShipState(unittest.TestCase):   # backlog 2026-11-19: needs_joint_rerun stayed set after a passing joint on the reduced table
+    def setUp(self):
+        self.saved = dict(T.SUMMARY)
+        T.SUMMARY.clear()
+        T.SUMMARY.update({"stages": {"classes": {"mercenary": {"kept": ["mercenary:0.7.a=0.931", "mercenary:family.0=1.2"]}, "knight": {"kept": ["knight:0.8.a=1.0"]}}}, "open_decisions": [], "auto_decisions": []})
+        self.full = ["mercenary:0.7.a=0.931", "mercenary:family.0=1.2", "knight:0.8.a=1.0"]
+
+    def tearDown(self):
+        T.SUMMARY.clear()
+        T.SUMMARY.update(self.saved)
+
+    def test_joint_passed_on_the_full_table_ships_it(self):
+        T.SUMMARY["stages"]["joint"] = {"verdict": "PASS", "table": T.final_curves()}
+        self.assertEqual(T.final_curves(), self.full)
+        self.assertEqual(T.ship_state()["needs_joint_rerun"], "")
+        self.assertEqual(T.ship_state()["table"], self.full)
+
+    def test_a_withheld_value_asks_for_the_joint_once_and_a_passing_rerun_clears_it(self):
+        T.SUMMARY["stages"]["joint"] = {"verdict": "PASS", "table": list(self.full)}
+        T.SUMMARY["withheld"] = ["mercenary:0.7.a=0.931"]              # recalib ran after the joint and withheld one value
+        reduced = [k for k in self.full if k != "mercenary:0.7.a=0.931"]
+        self.assertEqual(T.final_curves(), reduced)                     # every reader of the final table sees the reduced one
+        self.assertEqual(T.final_curves(with_withheld=True), self.full)
+        sh = T.ship_state()
+        self.assertIn("recalib withheld 1 value(s)", sh["needs_joint_rerun"])
+        self.assertEqual(sh["table"], [])
+        T.SUMMARY["stages"]["joint"] = {"verdict": "PASS", "table": T.final_curves()}   # the joint stage run again grades final_curves()
+        sh = T.ship_state()
+        self.assertEqual(sh["needs_joint_rerun"], "")                   # ... and the flag clears, with the value still withheld
+        self.assertEqual(sh["table"], reduced)
+        self.assertEqual(sh["withheld"], ["mercenary:0.7.a=0.931"])
+
+    def test_a_failed_or_missing_joint_ships_nothing(self):
+        self.assertIn("not run", T.ship_state()["needs_joint_rerun"])
+        T.SUMMARY["stages"]["joint"] = {"verdict": "FAIL: x", "table": list(self.full)}
+        self.assertEqual(T.ship_state()["table"], [])
+        T.SUMMARY["stages"]["joint"] = {"verdict": "PASS", "table": self.full[:1]}   # the gap search moved the table after the joint
+        self.assertIn("different table", T.ship_state()["needs_joint_rerun"])
+
+
+class CellsText(unittest.TestCase):   # review of f26dac4a: "15 cells" text under --cells all
+    def test_the_rule_does_not_say_15_cells(self):
+        self.assertIsNone(re.search(r"15 cells|15-cell|15-at-once", T.SUMMARY["rule"]))
+        self.assertIn("38 under --cells all", T.__doc__)
+
+
 if __name__ == "__main__":
     unittest.main()
