@@ -231,7 +231,7 @@ namespace Sim {
         long   castUnfired = 0, castDeferred = 0, healFullExit = 0, castRepeat = 0; double unfiredSec = 0;   // castRepeat: picks that drew the repeat table (the claim stood and had fired)
         // THE SELF-HEAL POINT (the caster survival band, Playstyles.h): his health share each time a decision of his began to mend HIMSELF (a heal cast at himself, a health potion).
         long   selfHealLowN = 0;   // ... and how many of those began under a quarter of his health (the oracle-relative survival band)
-        long   healLateN = 0;      // his heals on ANOTHER that began with the recipient within one hard hit of down (Policy.h kOneHitLine): the heal-timing band of the healers (healLate%)
+        long   healLateN = 0;      // his heals on ANOTHER that began with the recipient within one hard hit of down (World.h kOneHitLine): the heal-timing band of the healers (healLate%)
         long   selfHealN = 0; double selfHealAtSum = 0; long healYield = 0;   // healYield: his channelled heal gave its hand to a non-heal pick under threat (11-17b)
         // THE FIELD SCENARIOS' READS (11-17): his first damage on a foe (per fight: N is 0 or 1) and what his cast decisions picked: offense (the spell's own
         // damage and cost) and heals (the heal's size, how many were channelled, how many were for himself).
@@ -347,6 +347,15 @@ namespace Sim {
     struct Fight; struct Body;
     inline void FillEstimate(const Fight& F, const Body& o, Combatant& k);   // Policy.h: the estimate inputs of one actor, as the game's gather reads them
     inline constexpr double kBurstKeepSec = 30.0;   // Body::burst keeps its samples this long: past the longer of Tuning::grossWindowSec / maxHitWindowSec at any searched value (4 and 8 s shipped)
+    // ONE HARD BURST FROM DOWN (CALIBRATED, iaus-sim-v4.md 9.2; was 0.30 from the 16 windows of one fight, iaus-sim-v3.md 15.5). The 90th
+    // percentile of the field's health-loss WINDOWS on followers (a window = the drop between two worker samples around a foe's hit, 0.12 to
+    // 0.55 s: one burst, whatever it holds: several events, riders, a power attack, a spell) is 34.5 % of the target's health: 139 windows of
+    // five sessions, `calib_damage.py` FIELD HIT WINDOWS, the largest 100 %. It is a WINDOW statistic on purpose: the game's own read
+    // (Estimate::HitsToDown) is the largest burst inside Tuning::burstWindowSec, not one event. A recipient under this share of his health can
+    // be downed by the next such burst, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17, 1.0 to
+    // 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this (healLate%), not by the mean health at the heal.
+    // ASSUMPTION inside it: the target's maximum health is the largest health the session's hit lines show for him (no line prints it).
+    inline constexpr float kOneHitLine = 0.35f;
 
     struct Fight {
         const Data* D = nullptr;
@@ -1270,6 +1279,13 @@ namespace Sim {
             x.hitAt = now + s.castSec; x.actEnd = x.hitAt + TM::castRecover; x.c.caster = true; Action(x, dg.soundNormal);
             x.claimAt = now; x.claimUntil = now; x.lofWaited = false; x.reDrawUntil = 0; x.castStarted = false;
             if (x.ctl == 0 && fromIaus) ++t.castPick;
+            // THE HEALTH AT WHICH A HEAL BEGINS (healAt%, healLate%, selfHealLow%), for EVERY heal the subject begins: his decision layer's cast_heal, a
+            // healing scroll (the Scroll family, the oracle's ext:scroll) and his own combat AI's heal (review F-D of 610e2952: the last two were
+            // not counted, so an oracle that healed by scroll, or a follower whose AI healed for him, read better heal timing than he had).
+            if (x.ctl == 0 && s.e.nature == Prune::Nature::Heal) {
+                if (target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
+                else if (const Body* r = Find(target)) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; if (r->c.hp < kOneHitLine * r->c.hpMax) ++t.healLateN; }
+            }
             if (x.ctl >= 0) {   // SIM V3: a follower's cast is a claim that Harbinger builds and the engine fires (iaus-sim-v3.md 4.2, 4.3)
                 // hands: a stream has no charge of its own (the lab's 2 s is the lump of v2); MODEL 0.25 s to raise the hand
                 const bool direct = g_v3.hands && s.e.concentration && s.e.source == SpellSource::Spell;   // a stream goes down the DIRECT road (CastTargetDirect / CastSelfDirect, Docs/CAST-DELIVERY.md): no claim to wait for

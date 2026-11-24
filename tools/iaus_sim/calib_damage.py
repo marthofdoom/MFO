@@ -34,7 +34,7 @@ WHAT IS REPORTED:
              - lines are rate limited ("lines skipped"), and an event can land one sample late, so a window can read 0 or a sliver.
            WINDOWS  every distinct window with a loss that a foe's hit on a follower sits in: its share of the target's health (the
                     largest health the session shows for him stands in for his maximum, which no line prints). This is what a BURST is,
-                    and what the one-hit line (Policy.h kOneHitLine) is read from: p90.
+                    and what the one-hit line (World.h kOneHitLine) is read from: p90.
            EVENTS   the per-blow sizes the lab's hit-size spread (World.h kFieldHit) is drawn from. A window counts only when it holds
                     ONE blow of ONE foe, the attacker's weapon was sampled (kind "weapon"), every source of the blow is that weapon (no
                     rider), it is not a power attack, a sneak attack, a bash or blocked, and the loss is at least MIN_SHARE of the

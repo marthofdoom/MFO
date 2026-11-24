@@ -69,15 +69,6 @@ namespace Sim {
     inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) { return PreparePickKind(F, c, self, flee ? 1 : 0); }
 
     // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
-    // ONE HARD BURST FROM DOWN (CALIBRATED, iaus-sim-v4.md 9.2; was 0.30 from the 16 windows of one fight, iaus-sim-v3.md 15.5). The 90th
-    // percentile of the field's health-loss WINDOWS on followers (a window = the drop between two worker samples around a foe's hit, 0.12 to
-    // 0.55 s: one burst, whatever it holds: several events, riders, a power attack, a spell) is 34.5 % of the target's health: 139 windows of
-    // five sessions, `calib_damage.py` FIELD HIT WINDOWS, the largest 100 %. It is a WINDOW statistic on purpose: the game's own read
-    // (Estimate::HitsToDown) is the largest burst inside Tuning::burstWindowSec, not one event. A recipient under this share of his health can
-    // be downed by the next such burst, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17, 1.0 to
-    // 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this (healLate%), not by the mean health at the heal.
-    // ASSUMPTION inside it: the target's maximum health is the largest health the session's hit lines show for him (no line prints it).
-    inline constexpr float kOneHitLine = 0.35f;
 
     // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
     // `t.bowRange` moves the gather and the generator together).
@@ -438,10 +429,10 @@ namespace Sim {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
                 if (fam == Family::CastOffense) { ++t.offPickN; t.offPickDmg += s.dmg + s.dot * s.dotDur; t.offPickCost += e.cost; }
                 if (fam == Family::CastHeal) { ++t.healPickN; t.healPickSize += s.heal + s.hot * s.hotDur; if (s.e.concentration) ++t.healPickConc; if (target == x.c.id) ++t.healPickSelf; }
-                if (fam == Family::CastHeal && target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
-                if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; if (r->c.hp < kOneHitLine * r->c.hpMax) ++t.healLateN; }
+                // (the health at which a heal BEGINS, healAt% / healLate% / selfHealLow%, is tallied in World.h StartCast since sim v4 slice 1: every heal he begins)
+                if (fam == Family::CastHeal) {
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
-                    (void)r; }
+                }
             }
             if (thrashed && subj) ++t.castThrash;   // the waiting claim is dropped; the new one starts its own wait
             F.StartCast(x, si, s, target, e.source == SpellSource::Staff ? 0.0f : e.cost, true); if (hostile) { c.lastTarget = tg->c.id; peel(); }
