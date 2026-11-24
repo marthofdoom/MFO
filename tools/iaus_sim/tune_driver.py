@@ -1796,7 +1796,8 @@ def stage_follow():
       then     the other candidates are measured again on the new table. At most follow_knobs values per class.
       closable the gap times the (a) share of his divergence cost is reported as an ESTIMATE of what a tune can close ((b) to (d) need
                code); it is a report, not a bound.
-    Sight-driven knobs stay skipped (all_knobs). The joint gate after this stage judges the whole table as before."""
+    Sight-driven knobs stay skipped (all_knobs). The joint gate after this stage judges the whole table as before.
+    SET CHECK (added with sim bundle A): what was accepted is then played as one set on held-out places and books (held_out_check), and dropped whole when worse."""
     old = SUMMARY["stages"].pop("follow", {})
     order0 = scope() or cells()
     order = [c for c in sorted(T1) if c in order0] + [c for c in order0 if c not in T1]
@@ -1975,7 +1976,8 @@ def stage_spells():
                the new table. One value per round, at most spell_rounds rounds.
       report   per cell and world, on the base table (and on the final one when a value was accepted): regret U per fight, the share of
                cast decisions with a regret, within / cross family, the cause split (fact, weight, gate, hand, sight) and the world's
-               effect per cast second / per magicka shortfalls. A report row is never a gate."""
+               effect per cast second / per magicka shortfalls. A report row is never a gate.
+    SET CHECK (added with sim bundle A): what was accepted is then played as one set on held-out places and books (held_out_check), and dropped whole when worse."""
     worlds = [w for w in A.worlds if w != "builtin"] or ["builtin"]
     seeds = list(range(GAP_SEEDS0, GAP_SEEDS0 + CFG["spell_seeds"]))
     fresh = list(range(FOLLOW_FRESH0, FOLLOW_FRESH0 + CFG["spell_seeds"]))

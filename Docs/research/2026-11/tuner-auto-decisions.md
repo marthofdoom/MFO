@@ -91,6 +91,8 @@ Facts used (all existing sim metrics, `--baseline` names): `a.drink_health`, `a.
 | `oracle gap <cls>: divergences of class b/c/d` (8) | Report-only ledger row (`gap-ledger.md`): classes b, c, d are missing considerations, missing behaviours and modelling suspects, none a tunable number. Never a blocker. | note |
 | `JOINT GATE FAILED` | The whole table is withheld: `summary.json ship.table` is empty (`ship.joint` says why). The joint stage now also runs the card + potion gates per cell. | rejected |
 | `accepted value ... loses with the re-measured potion worth` | The value is withheld from `ship.table` (`ship.withheld`). | rejected |
+| `held-out set` | An accepted set (a class's follow values, the spells stage's values, the whole table at the joint gate) is played start against final on the held-out places and books, on seeds nothing else read; a set worse beyond HOLD_SET_SE se, or with one cell worse beyond the many-comparisons bar, is dropped whole. | rejected |
+| `loot gate` | A kept loot table is rejected whole when it commits one more crime or guard-seen take than the shipped table, or when leftRR, goldLeftRR, roadLeft% or dibsNear is worse beyond noise, paired per seed (LOOT_ROW_SE). | rejected |
 | worth at the edge, loot not searched, global, constant, Knight floor under 60%, rating under tier, logistics | Report-only notes. The driver never writes these tables, so nothing needs a decision before shipping; they stay visible in `auto_decisions`. | note |
 
 `summary.json` also gets `ship`: `{table, withheld, joint, note}`. `ship.table` is the accepted values minus anything withheld, and is empty when the

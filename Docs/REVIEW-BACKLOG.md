@@ -3804,3 +3804,21 @@ SEV-4 R6 (pre-existing, confirmed). Five red baseline checks come from main. Bot
   tools/iaus_sim/run.sh:79 J=79.31 (82.34, 76.28) -> measured here J=79.47 (scenarios 82.14, natural 76.80); run.sh:81 J=80.10 (75.52, 84.69) -> J=80.07 (75.45, 84.69). These are main-at-2d617b7d values; re-measure after the choice batch. run.sh:78 (J=69.13) still matches.
 SEV-5 R7. LOOT_NOT_SEARCHED _GATE_WHY "2 to 5 times". Tuxborn 480 eps beta1: BLOCKED 0.192 per follower-min under today's native (the field ran that: 0.20-0.68 = 1.0 to 3.5x), 0.119 under the lab's default rules (1.7 to 5.7x, not like for like). Say "1 to 3.5 times under today's rules". Also in doc 14.5 (same sentence). The "no signal" reason holds: gate0 (cone 180, beyondU 100000, readmitSec 600) is inert or within noise on all sets.
 Note: the batch hold at 600 s (out of grid) lowers value on every set and worsens 6 to 11 rows: flagged. "Abandoning legs" has no table knob; not tested as a rule.
+
+### MFO-B863 (OPEN, deferred from the sim reviews, 2026-11-24; tools/iaus_sim only; MAP "SIM BUNDLE A")
+Verbatim, raised at 59d0a63d (loot review r2):
+1. SEV-3 R3. "So no row gets better because a table wants less" (doc 14.3) is not true. All four free categories at 0 (loot.gold/equipment/valuables/jewelry=0): leftRR not worse on any of the 7 sets; wait dibs 0 on all 7 sets (60..90 shipped); over-bound rows LOWER on Vanilla (7 vs 8) and Vanilla held-out (5 vs 7), equal on Tuxborn, LoreRim and LoreRim held-out, higher on fixtures and Tuxborn held-out. Cause: the claim clock (Loot.h TierReleased) only runs for categories in the LIVE plan; an ignored dibs stack is "player dibs (never scanned)", which is not rr, so neither leftRR nor the censored wait (LootLab.h:257) sees it. Still caught: value falls 4.7 to 30.8 on every set, dibsNear and roadLeft% worse on every set. Zero is outside the search grid (grid minima gold .5, equipment .4, valuables/jewelry .375), so it is a claim/robustness defect. FIX: run the claim clock for the shipped plan in the ledger, or count never-scanned in-reach stacks as rr; correct the sentence. (The sentence is corrected and `loot_gate_check` rejects on `dibsNear` and `roadLeft%`; the ledger part is what stays open.)
+2. SEV-4 R4. Censored waits: sound as an anti-cheat idea but the rows saturate. Shipped, 480 eps, free/dibs: 90 free on Tuxborn, LoreRim and Vanilla and their held-outs except Vanilla held-out (67); dibs 87 on Tuxborn, 90 on the other library sets; fixtures 19/60. On library sets the free row reads its cap for nearly every table, dibs near it. Cannot mis-tune: no wait row is in the objective or a hard row. But at 1920 eps the dibs row is 84 on Tuxborn and LoreRim and 60..90 under other tables, so it is not fully dead. FIX: add "p90 of taken" beside it (already backlog) or a left-share row.
+
+Verbatim, choice review, raised on the batch C branch:
+3. SEV-4 proof coverage: the replay is 74 decisions, Tuxborn mage-line only; no LoreRim, conjurer, Knight, scenario fights.
+
+### MFO-B864 (OPEN, author's own list for `feat/sim-v4-pretune`, 2026-11-24; tools/iaus_sim only; MAP "SIM BUNDLE A")
+1. (SEV-4) A rune's damage lives in its own effect behind Target Location: no hazard road, so runes stay worth nothing in the lab and are dropped in the game.
+2. (SEV-4) The lab keeps Vanilla's Wall-shaped bolts that native drops (MFO-B865): the lab's Vanilla books are not the game's.
+3. (SEV-5) Hazards hurt only the owner's enemies and nobody avoids them (the engine's can hit anyone). A summon appears at once (no Landing state).
+4. (SEV-5) The spell names the oracle picks are not printed, so "a wall among the picks" cannot be counted.
+
+### MFO-B865 (OPEN, found by `feat/sim-v4-pretune`, 2026-11-24; NATIVE, not touched; needs marth's ruling on 1; iaus-sim-v4.md 16.6)
+1. `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
+2. `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim).
