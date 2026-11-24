@@ -3709,3 +3709,7 @@ Author's notes, open after the slice (none above SEV-3 known to the author):
 ### feat/adopt-seats re-check (Opus 2026-11-23, against a2104555)
 - SEV-5 B: the engine's Disarm test also needs the weapon DRAWN (AE 0x678C2D, weapon state >= 3) and a 0x2235A0 test not identified; MFO accepts a sheathed weapon, an early Disarm may be spent.
 - SEV-5 D: SeatRows::NeedMet has no game caller (WillWork inlines it), its harness rows prove nothing; HoldLedger and Actuation.h comments still describe the one-reading hold.
+
+### feat/tune-app-priority (author note 2026-11-24, b179c001)
+- SEV-4, tools/iaus_sim/live/run_round.py: driver_args is written once and compared on every resume even after --new-args was accepted (driver_args_now is kept apart), so every later resume needs --new-args again.
+- SEV-5: a real Stop of a wrapper-led round from the app was not re-run end to end after the fix round.

@@ -86,7 +86,7 @@ class LaunchTab(QWidget):
         self.prio.activated.connect(self._prio_picked)   # `activated` = the user chose; a programmatic set does not fire it
         self.prio.setToolTip("The round runs in one systemd user scope at this level (idle unless you pick another). A new run dir always starts at idle; "
                              "a resumed run dir shows its remembered level. The level is sent to run_round.py only when you pick one here. Change it live on the Current runs tab.")
-        f.addRow("Priority", self.prio)
+        f.insertRow(3, "Priority", self.prio)   # near the top: visible without scrolling
         self.new_args = QCheckBox("New arguments (--new-args): this resume changes the driver arguments on purpose")
         self.new_bin = QCheckBox("New binary (--new-bin): this resume uses another simulator binary; nothing of the earlier run is reused")
         f.addRow("", self.new_args)
