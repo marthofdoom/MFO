@@ -32,6 +32,7 @@
 #include "Concealment.h"  // card G3: the blow-from-stealth hit sink registration
 #include "iaus/Fills.h"   // [iaus-fill]: the passive hit sink registration
 #include "StealthProbe.h"   // [stealth-probe]: the passive hit sink registration (bStealthProbe)
+#include "probes/Probes.h"   // N0 passive field probes: the worker tick
 
 // Two Win32 symbols, declared by hand. <windows.h> is BANNED outside Board.cpp
 // (it #defines GetObject and hijacks BGSDefaultObjectManager::GetObject<T>,
@@ -1247,6 +1248,7 @@ namespace MFO::Diagnostics {
                         MFO_TICK_STAGE("Classes::MaybeNoticeNotStarted",     Classes::MaybeNoticeNotStarted());
                         MFO_TICK_STAGE("Loadout::Tick",                      Loadout::Tick());   // hand back stowed two-handers
                         MFO_TICK_STAGE("AtkObserveTick",                     AtkObserveTick());  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
+                        MFO_TICK_STAGE("Probes::Tick",                       Probes::Tick());    // N0 passive field probes ([Probes] INI): traversal, drop, ray cost, trust, point road; log only
 
                         if (diagTurn) MFO_TICK_STAGE("Probe::Tick", Probe::Tick());
                         // THE BOARD TOGGLE (the hotkey, the Field Orders power): served here, inside the tick (see

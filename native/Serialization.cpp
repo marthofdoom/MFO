@@ -30,6 +30,7 @@
 #include "iaus/SpellBook.h"   // ... the spell-book mirror ...
 #include "iaus/Candidates.h"  // ... and the gather's per-fight state
 #include "Probe.h"
+#include "probes/Probes.h"       // N0 passive probes: ResetAllState drops their tables
 #include "Board.h"
 #include "progression/ProgAllocator.h"
 #include "classes/Classes.h"         // class update C3: the 'MCLS' class add-on record
@@ -1271,6 +1272,7 @@ namespace MFO {
                                             // being replaced, no engine call
         Sightline::ClearTransientState();   // LoS cache keys are this-session
                                             // FormID pairs -- same rule as the latch
+        Probes::Clear();                    // N0 passive probes: this-session FormID tables, log only
         Board::ClearPendingEdits();
         // The alias fill is the one piece of MFO state the ENGINE persists for
         // us whether we want it or not, so revert cannot just forget it the way

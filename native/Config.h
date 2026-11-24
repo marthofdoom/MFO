@@ -514,6 +514,26 @@ namespace MFO::Config {
     // hands, touches no roster from the sink. bAttackObserve = 1 in
     // Data/SKSE/Plugins/MFO.ini arms the sink and the tick. See Diagnostics.cpp.
     inline std::atomic<bool>  g_attackObserve{ false };
+    // [probe-*] N0 PASSIVE FIELD PROBES for the movement AI (Docs/research/2026-11/iaus-sim-v4.md 10.2 row N0; native/probes/).
+    // ONE INI section, [Probes], INI-only (no MCM face). DEFAULT ON only in a MFO_DEV_SELFTEST (dev) DLL, OFF in a release DLL. Every
+    // probe is LOG-ONLY and rate limited: it sends nothing, holds nothing, adds no hook, thread or engine query on the worker.
+    //   bProbeTraversal  [probe-trav]  graph traversal events (the SkyParkour family) of followers, start to stop, with positions + heights
+    //   bProbeDrop       [probe-drop]  a follower who loses height with no graph event (a navmesh drop link, or a fall)
+    //   bProbeRayCost    [probe-ray]   the cost of the engine rays the DLL already casts (Sightline, main thread)
+    //   bProbeTrust      [probe-trust] the lived trust signs (8.9): blocked / dropped / stuck ends, position jumps, falls
+    //   bProbePoint      [probe-point] the ch.24 POINT claims already filed (give ground, disengage) watched as a general mover
+    //   iProbeLinesPerMin  cap on lines per probe per minute (the rest are counted and said once a minute)
+#ifdef MFO_DEV_SELFTEST
+    inline constexpr bool kProbesDefaultOn = true;
+#else
+    inline constexpr bool kProbesDefaultOn = false;
+#endif
+    inline std::atomic<bool>  g_probeTraversal{ kProbesDefaultOn };
+    inline std::atomic<bool>  g_probeDrop{ kProbesDefaultOn };
+    inline std::atomic<bool>  g_probeRayCost{ kProbesDefaultOn };
+    inline std::atomic<bool>  g_probeTrust{ kProbesDefaultOn };
+    inline std::atomic<bool>  g_probePoint{ kProbesDefaultOn };
+    inline std::atomic<int>   g_probeLinesPerMin{ 60 };
     // [crime-probe] PASSIVE BOUNTY PROBE (ClickUp 1dfcuabc4dp) -- DEFAULT OFF, INI-only (no MCM face). Once a second
     // on the main thread it reads the player's violent / non-violent crime gold per faction and, on any
     // increase, logs the cell, location, faction and every managed follower's state. Read-only: changes
