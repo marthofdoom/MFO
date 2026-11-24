@@ -8,6 +8,7 @@
 #include "iaus/ClassCurves.h"
 #include "iaus/LootNeed.h"
 #include "iaus/PerkEffects.h"
+#include "iaus/Spots.h"
 
 #include <algorithm>
 #include <cctype>
@@ -111,6 +112,11 @@ namespace MFO::Iaus::TuningFile {
                 if (ff < 0 || !CC::SetFamilyWeight(a_row, static_cast<Family>(ff), a_v)) { a_err = "unknown family or bad weight (family.<family>=<v>, v > 0)"; return false; }
                 return true;
             }
+            if (a_path.rfind("spot.", 0) == 0) {   // MOVEMENT (S1): spot.<kind>=<v>, the kind's name in iaus/Spots.h kSpotKinds
+                const long k = IndexOf(a_path.substr(5), kSpotKindCount, [](std::size_t i) { return std::string(Move::kSpotKinds[i].name); });
+                if (k < 0 || !CC::SetSpotWeight(a_row, static_cast<SpotKind>(k), a_v)) { a_err = "unknown spot kind or bad weight (spot.<kind>=<v>, v > 0)"; return false; }
+                return true;
+            }
             if (a_path == "equip.crossover") {   // the posture EDGE: both distance curves' midpoint b at once (sim: the same two lines)
                 for (const Cons k : { Cons::PostureRanged, Cons::PostureMelee })
                     if (!CC::SetCurveParam(a_row, Family::Posture, k, a_shared.curve[static_cast<std::size_t>(k)], "b", a_v)) { a_err = "bad value for equip.crossover"; return false; }
@@ -118,7 +124,7 @@ namespace MFO::Iaus::TuningFile {
             }
             const auto d1 = a_path.find('.');
             const auto d2 = d1 == std::string_view::npos ? d1 : a_path.find('.', d1 + 1);
-            if (d2 == std::string_view::npos) { a_err = "bad path (<family>.<cons>.<param> | scalar.<name> | family.<family> | equip.crossover)"; return false; }
+            if (d2 == std::string_view::npos) { a_err = "bad path (<family>.<cons>.<param> | scalar.<name> | family.<family> | equip.crossover | spot.<kind>)"; return false; }
             const long fi = FamilyOf(a_path.substr(0, d1));
             const long ki = ConsOf(a_path.substr(d1 + 1, d2 - d1 - 1));
             if (fi < 0 || ki < 0) { a_err = "unknown family or consideration"; return false; }
@@ -304,6 +310,10 @@ namespace MFO::Iaus::TuningFile {
                     return true; }, false);
                 LogLoaded(e.name, n, Fnv1a(text), a_firstLoad && n.applied + n.rejected == 0);
             } else if (!a_firstLoad) spdlog::info("[tuning] MFO_Tuning/{}.txt not present: shipped values", e.name);
+            if (!(t.moveDecisionSec >= kMoveDecisionFloorSec)) {
+                spdlog::warn("[tuning] MFO_Tuning/shared.txt: t.moveDecisionSec={} is under the floor, {} s is used", t.moveDecisionSec, MoveDecisionSec(t));
+                t.moveDecisionSec = MoveDecisionSec(t);
+            }
             t.worth = g.worth;   // potions.txt owns the worth table
             LiveTuning() = t;
             PerkEffects::SetWeights(t.perkArmorWeight, t.perkWeaponWeight);   // 1dfcuabd2pk: the gear picks read these on either thread (atomics)

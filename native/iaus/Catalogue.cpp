@@ -82,7 +82,10 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
-            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
+            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",
+            "spot_path", "spot_sight", "spot_exposure", "spot_fire_line", "spot_range", "spot_path_exposed", "spot_exits", "spot_ally_dist",
+            "spot_hostile_area", "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane",
+            "spot_portal_busy", "spot_serves", "spot_cover",     // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -101,7 +104,7 @@ namespace MFO::Iaus {
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
         case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
-        case Cons::BoostBuffThreat: case Cons::BoostPosturePerks: case Cons::BoostSpellPerks:
+        case Cons::BoostBuffThreat: case Cons::BoostPosturePerks: case Cons::BoostSpellPerks: case Cons::BoostSpotCover:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -406,6 +409,37 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 3> p{ { { 0.0f, 0.2f }, { 0.5f, 0.65f }, { 1.0f, 1.0f } } };
                 at(Cons::HealRate) = Piece(p);
             }
+            // MOVEMENT (S1, movement-plan.md): the spot considerations. ALL PLACEHOLDERS (S5's `spots` stage searches them). Never Logi or Pow (see Cons).
+            {
+                static constexpr std::array<std::array<float, 2>, 5> path{ { { 0.0f, 1.0f }, { 1.0f, 0.95f }, { 3.0f, 0.7f }, { 8.0f, 0.3f }, { 15.0f, 0.1f } } };
+                at(Cons::SpotPath) = Piece(path);
+                at(Cons::SpotSight) = Bin(0.15f, 1.0f);
+                at(Cons::SpotExposure) = Lin(-0.4f, 1.0f);
+                at(Cons::SpotFireLine) = Bin(0.2f, 1.0f);
+                static constexpr std::array<std::array<float, 2>, 4> range{ { { 0.9f, 1.0f }, { 1.0f, 0.8f }, { 1.3f, 0.25f }, { 2.0f, 0.1f } } };
+                at(Cons::SpotRange) = Piece(range);
+                static constexpr std::array<std::array<float, 2>, 3> seen{ { { 0.0f, 1.0f }, { 2.0f, 0.8f }, { 6.0f, 0.4f } } };
+                at(Cons::SpotPathExposed) = Piece(seen);
+                static constexpr std::array<std::array<float, 2>, 4> exits{ { { 0.0f, 0.4f }, { 1.0f, 0.8f }, { 2.0f, 0.95f }, { 4.0f, 1.0f } } };
+                at(Cons::SpotExits) = Piece(exits);
+                static constexpr std::array<std::array<float, 2>, 2> ally{ { { 40.0f, 0.3f }, { 160.0f, 1.0f } } };
+                at(Cons::SpotAllyDist) = Piece(ally);
+                at(Cons::SpotHostileArea) = Bin(1.0f, 0.25f);
+                static constexpr std::array<std::array<float, 2>, 2> leash{ { { 0.8f, 1.0f }, { 1.0f, 0.4f } } };
+                at(Cons::SpotLeash) = VetoAbove(Piece(leash), 1.0f);
+                static constexpr std::array<std::array<float, 2>, 2> climb{ { { 64.0f, 1.0f }, { 600.0f, 0.8f } } };
+                at(Cons::SpotClimb) = Piece(climb);
+                static constexpr std::array<std::array<float, 2>, 2> drop{ { { 64.0f, 1.0f }, { 400.0f, 0.7f } } };
+                at(Cons::SpotDrop) = Piece(drop);
+                at(Cons::SpotDetected) = Lin(-0.7f, 1.0f);
+                static constexpr std::array<std::array<float, 2>, 2> light{ { { 20.0f, 1.0f }, { 100.0f, 0.5f } } };
+                at(Cons::SpotLight) = Piece(light);
+                at(Cons::SpotFoeReach) = Bin(0.2f, 1.0f);
+                at(Cons::SpotLane) = Bin(1.0f, 0.4f);
+                at(Cons::SpotPortalBusy) = Bin(1.0f, 0.2f);
+                at(Cons::SpotServes) = Bin(0.4f, 1.0f);
+                at(Cons::BoostSpotCover) = Bin(1.0f, 1.1f);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -482,6 +516,10 @@ namespace MFO::Iaus {
              { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // 11-17b: game only until the sim mirror   // 1dfcuabd22x: game only until the sim mirror (Fable sim batch)
             { "t.occClaimRelease", &Tuning::occludedClaimReleaseSec }, { "t.offApproachBackoff", &Tuning::offenseApproachBackoffSec }, { "t.sharedRadiusMargin", &Tuning::sharedRadiusMarginUnits }, { "t.preemptSettle", &Tuning::preemptFireSettleSec }, { "t.offApproachDropCap", &Tuning::offenseApproachDropCap },   // 11-17f: game only until the sim mirror
             { "t.perkArmor", &Tuning::perkArmorWeight }, { "t.perkWeapon", &Tuning::perkWeaponWeight },   // 1dfcuabd2pk: game only (the sim has no gear pick)
+            { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },   // MOVEMENT (S1): the sim's list gains them with S2
+            { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotEyeU", &Tuning::spotEyeU }, { "t.spotHighU", &Tuning::spotHighU },
+            { "t.spotPortalU", &Tuning::spotPortalU }, { "t.spotPortalStandU", &Tuning::spotPortalStandU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
+            { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec },
             { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },   // fix/spell-worth C2: game only until the sim mirror (PLACEHOLDER)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
