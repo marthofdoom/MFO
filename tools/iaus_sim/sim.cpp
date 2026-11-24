@@ -765,6 +765,7 @@ template <class GetLog, class GetFights> static void SpellRegretReport(const std
                 "class", "fights", "cast/f", "regU/f", "any%", "within", "cross", "fact", "weight", "gate", "hand", "sight", "epsW%", "epsX%", "epm%", "pruned/f");
     for (std::size_t c = 0; c < classes.size(); ++c) { const RegretLog& r = log(static_cast<int>(c)); const double nf = static_cast<double>(std::max(1L, fights(static_cast<int>(c)))); const char* cn = classes[c].name.c_str();
         std::printf("SPELLDEC %s %ld %ld %ld\n", cn, r.decisions, r.castDecisions, r.pruned);
+        for (std::size_t i = 0; i < r.altMiss.size(); ++i) if (r.altMiss[i] > 0) std::printf("SPELLALTMISS %s %zu %ld\n", cn, i, r.altMiss[i]);   // decisions where alternate table i picked an action that was not among the options (charged as idle; choice review R4)
         double within = 0, cross = 0, by[5] = { 0, 0, 0, 0, 0 }, ew = 0, ex = 0, em = 0; long nReg = 0, nEps = 0;
         for (const auto& kv : r.rows) { const RegRec& q = kv.second; const auto p1 = kv.first.find('|'), p2 = kv.first.find('|', p1 + 1); std::string fi = kv.first.substr(0, p1); const std::string fo = kv.first.substr(p1 + 1, p2 - p1 - 1), cause = kv.first.substr(p2 + 1);
             std::printf("SPELLREG %s %s %s %s %ld %ld %.4f %ld %.4f %.4f %.4f\n", cn, fi.c_str(), fo.c_str(), cause.c_str(), q.n, q.nReg, q.regU, q.nEps, q.epsW, q.epsX, q.epm);

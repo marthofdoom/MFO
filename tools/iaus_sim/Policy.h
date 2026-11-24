@@ -86,7 +86,7 @@ namespace Sim {
         const float per = s.e.concentration ? 0.5f : 1.0f;   // Data.h Classify doubled a stream's per-second numbers for its 2 s
         e.measured = SpellMeasured(s);
         e.damage = e.measured ? (s.dmg + s.dot * s.dotDur) * per : 0.0f; e.heal = (s.heal + s.hot * s.hotDur) * per; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f;
-        e.levelCap = (g_spellRules == 0 && s.ctrl && !s.ctrlPar && s.ctrlMaxLevel < 1e8f) ? (std::max)(1.0f, s.ctrlMaxLevel) : 0.0f;
+        e.levelCap = (g_spellRules == 0 && s.ctrl && !s.ctrlPar && s.ctrlMaxLevel < 1e8f && s.dmg + s.dot * s.dotDur <= 0.0f) ? (std::max)(1.0f, s.ctrlMaxLevel) : 0.0f;   // native iaus/Fills.cpp "if (damage > 0.0f) levelCap = 0.0f": a spell with a working health damage effect carries no cap (choice review, SEV-4)
     }
     // Generate, and under `--spell-rules old` the facts as the game of the 11-23 field run filled them: an unmeasured offense spell's damage did not apply
     // (expDamage < 0: DamageValue and Overkill off, so every such spell TIED), and the exploit term read the foe's resist for every spell (a measured one's

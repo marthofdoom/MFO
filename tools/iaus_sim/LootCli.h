@@ -34,19 +34,25 @@ namespace Sim::Loot {
     inline int RunReport(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& t1, const std::string& only, const std::vector<std::uint64_t>& seeds, int threads, const Opts& o) {
         const auto places = Places(); const auto scope = Scope(all, only); if (places.empty() || scope.empty()) { std::fprintf(stderr, "--loot-report: no place with loot (--world v4, or --env-set) or no class\n"); return 2; }
         (void)Logi::PotionFloor();   // computed once, before the threads
-        const int n = o.report, jobs = static_cast<int>(scope.size() * seeds.size()) * n; std::vector<LTally> per(scope.size()); std::vector<double> seedSum(seeds.size(), 0.0); std::atomic<int> next{ 0 }; std::mutex mx;
+        const int n = o.report, jobs = static_cast<int>(scope.size() * seeds.size()) * n; std::vector<LTally> per(scope.size()), perSeed(seeds.size()); std::vector<double> seedSum(seeds.size(), 0.0); std::atomic<int> next{ 0 }; std::mutex mx;
+        // --loot-score (loot review R1): the same episode once more under the SHIPPED table, when the table under search is another one, for ScoreOver. The shipped table scores itself with no charge.
+        static const MFO::Iaus::LootTuning kShipped{}; const MFO::Iaus::LootTuning liveT = Tune().loot; const bool pairShipped = o.score && std::memcmp(&liveT, &kShipped, sizeof kShipped) != 0;
         const auto t0 = std::chrono::steady_clock::now();
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int k = job % n, si = (job / n) % static_cast<int>(seeds.size()), ci = job / n / static_cast<int>(seeds.size());
                 const std::uint64_t h = SimEnv::Mix(seeds[Z(si)] * 1000003ULL + static_cast<std::uint64_t>(ci) * 7919 + static_cast<std::uint64_t>(k) * 104729);
                 Episode ep = MakeEpisode(D, *scope[Z(ci)], all, t1, h, SpecFor(o, h, places[h % places.size()]));
                 if (o.trace == job) ep.W.trace = stdout;
                 IausPolicy P; ep.Run(P);
-                std::scoped_lock lk(mx); per[Z(ci)].Merge(ep.W.t); seedSum[Z(si)] += ep.Score(true); } };
+                long shippedHard = ep.Hard();
+                if (pairShipped) { EpSpec sp = SpecFor(o, h, places[h % places.size()]); sp.tuning = &kShipped; Episode es = MakeEpisode(D, *scope[Z(ci)], all, t1, h, sp); IausPolicy Ps; es.Run(Ps); shippedHard = es.Hard(); }
+                std::scoped_lock lk(mx); per[Z(ci)].Merge(ep.W.t); perSeed[Z(si)].Merge(ep.W.t); seedSum[Z(si)] += o.score ? ep.ScoreOver(shippedHard) : ep.Score(true); } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (o.score) { for (std::size_t s = 0; s < seeds.size(); ++s) std::printf("SEED %llu  J=%.4f (scenarios 0.00, natural 0.00)\nSWITCH %llu 0 1.000\n", static_cast<unsigned long long>(seeds[s]), seedSum[s] / (n * static_cast<double>(scope.size())), static_cast<unsigned long long>(seeds[s])); return 0; }
         LTally allT; int bad = 0; for (std::size_t c = 0; c < scope.size(); ++c) { PrintTally(per[c], scope[c]->name.c_str()); bad += PrintGate(per[c], scope[c]->name.c_str()); allT.Merge(per[c]); }
         PrintTally(allT, "ALL"); const int badAll = PrintGate(allT, "ALL");
+        // per seed, every gate row and the two hard counts: the driver's paired test of a kept table against the shipped one (loot review R2). `LOOTSEED <seed> <value> <row>`
+        for (std::size_t s = 0; s < seeds.size(); ++s) for (const auto& kv : GateValues(perSeed[s])) std::printf("LOOTSEED %llu %.6f %s\n", static_cast<unsigned long long>(seeds[s]), kv.second, kv.first.c_str());
         std::printf("LOOT-REPORT %d episodes, %zu places, %zu classes: value/ep with gold %.3f, without %.3f (fights %.3f + potions %.3f + gold %.3f + museum %.3f, crimes and guard-seen takes charged apart); gate rows failing: ALL %d, per class %d; wall %.2f s\n", jobs, places.size(), scope.size(),
             (allT.uFights + allT.dPotJ + allT.dGoldJ + allT.dMuseumJ) / std::max(1L, allT.episodes), (allT.uFights + allT.dPotJ) / std::max(1L, allT.episodes), allT.uFights / std::max(1L, allT.episodes), allT.dPotJ / std::max(1L, allT.episodes), allT.dGoldJ / std::max(1L, allT.episodes), allT.dMuseumJ / std::max(1L, allT.episodes), badAll, bad, wall);
         return 0;

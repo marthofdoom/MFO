@@ -267,7 +267,11 @@ namespace Sim::Loot {
         }
         // A crime, or a take a guard saw, is not a trade-off (review S2: a hard reject): each costs kCrimeJ, more than any episode is worth, so no search step can buy value with one.
         static constexpr double kCrimeJ = 1000.0;
-        [[nodiscard]] double Score(bool withGold = true) const { return W.t.uFights + W.t.dPotJ + (withGold ? W.t.dGoldJ + W.t.dMuseumJ : 0.0) - kCrimeJ * static_cast<double>(W.t.crimes + W.t.guardSeenTakes); }
+        [[nodiscard]] long Hard() const { return W.t.crimes + W.t.guardSeenTakes; }
+        [[nodiscard]] double Score(bool withGold = true) const { return W.t.uFights + W.t.dPotJ + (withGold ? W.t.dGoldJ + W.t.dMuseumJ : 0.0) - kCrimeJ * static_cast<double>(Hard()); }
+        // THE SEARCH'S SCORE (loot review R1): only the EXCESS over what the shipped table does in this very episode is charged. Charging the shipped table's own
+        // guard-seen takes (finding N5) paid a table for taking less: the fine came back as "value". shippedHard = Hard() of the same episode under the shipped LootTuning.
+        [[nodiscard]] double ScoreOver(long shippedHard) const { return Score(true) + kCrimeJ * static_cast<double>((std::min)(Hard(), shippedHard)); }
     };
 
     // ── building an episode ──

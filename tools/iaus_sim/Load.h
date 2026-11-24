@@ -321,7 +321,8 @@ namespace Sim {
                 for (std::size_t i = 0; want > 0 && i < cnd.size(); ++i, --want) { std::swap(cnd[i], cnd[static_cast<std::size_t>(R.I(static_cast<int>(i), static_cast<int>(cnd.size()) - 1))]); fb.spells.push_back(*cnd[i]); }
             }
             bool heal = false; for (const SimSpell& s : fb.spells) heal |= s.e.nature == Prune::Nature::Heal && costOf(s) <= a.mp;   // as the lab's draw: one heal he can pay for, when the list has one
-            if (!heal) { std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == Prune::Nature::Heal) cnd.push_back(s); if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]); }
+            if (!heal) { std::vector<const SimSpell*> cnd; const int half = g_books == 2 ? 1 : 0;   // from the book's OWN half of the records (choice review: the fallback leaked one heal across train / held out). A half with no heal he can pay for gives none
+                for (auto* s : afford) if (s->e.nature == Prune::Nature::Heal && BookHalf(s->e.name) == half) cnd.push_back(s); if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]); }
         } else if (fam == Cls::Mage && casts) {
             for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control, Prune::Nature::Ward }) {   // a ward too when the list has one (card I6)
                 std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == nat) cnd.push_back(s);

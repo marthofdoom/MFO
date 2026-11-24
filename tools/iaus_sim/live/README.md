@@ -16,7 +16,7 @@ A round's directory belongs on a disk that survives a reboot. Never under `/tmp`
 ## Start, stop, resume
 
 ```
-tools/iaus_sim/live/run_round.py --out /mnt/.../tune-rounds/r3 -- --cells all --worlds builtin,LoreRim,Tuxborn,Vanilla
+tools/iaus_sim/live/run_round.py --out /mnt/.../tune-rounds/r3 -- --cells 15 --worlds builtin,LoreRim,Tuxborn,Vanilla
 ```
 
 Everything after `--` goes to `tune_driver.py` unchanged. `--bin` and `--out` are the runner's own.
