@@ -236,7 +236,7 @@ namespace MFO::Logistics::TheftGate {
         return GuardState::Seen;   // a guard bar is a verdict, not a world action: it never enters the ring
     }
 
-    // KEEP THE FOLLOWER-LEVEL ANSWER WARM (field 11-17c F1): the service lap calls this once per follower. A follower-only (src = 0) answer that
+    // KEEP THE FOLLOWER-LEVEL ANSWER WARM (field 11-17c F1): the service lap (his logistics tick, ~1 s) calls this once per follower. A follower-only (src = 0) answer that
     // a gate has READ lately and that is now older than half its freshness is re-asked (the approach-prefetch peek pattern: posts the main-thread
     // scan, stamps nothing, logs nothing, repost-limited), so the loot scan's follower-level check never meets a lapsed answer in a guardless
     // place. Never asks for a follower nothing has read in 15 s (no scans for a follower that is not looting).

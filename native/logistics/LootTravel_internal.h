@@ -28,7 +28,7 @@ namespace MFO::Logistics {
             bool                active = false;
             TravelPhase         phase = TravelPhase::Walking;
             Clock::time_point   startTime{};      // excursion start -> fExcursionMax cap
-            Clock::time_point   lingerUntil{};    // Hold bound -> fBatchLinger
+            Clock::time_point   lingerUntil{};    // written, never read (fBatchLinger is dead; the hold is batchHoldMinSec)
             // NO-PROGRESS detection: an UNREACHABLE target (no navmesh path) sits
             // at a flat distance -- the follower is on the travel package but
             // FROZEN in place (deck: dist=1449 unchanged for 13 s). We track his
@@ -286,8 +286,11 @@ namespace MFO::Logistics {
         // never a verdict: no strike, never sticky, not in g_travelFailed (so
         // the idle reassess neither clears nor feeds it). Re-admitted by a door/
         // lever near it (TESOpenCloseEvent / ACTI|DOOR TESActivateEvent), by the
-        // gated item's own cell attaching again -- ONLY when the block may
-        // actually have cleared (marth 2026-09-24: "no timer"). An ACTOR in
+        // gated item's own cell attaching again, any party member or the player
+        // within gateNearU of the item (GateReadmitSweep), or the follower's own
+        // idle reassess (ClearGatesBy, ~4 idle ticks) -- no timer by default
+        // (marth 2026-09-24), and the follower's own walk off the block lifts
+        // nothing by default (gateReadmitMoveU 0, marth 2026-11-24). An ACTOR in
         // front of him is not a gate: that is a REORDER (FindActorBlocker /
         // g_actorDefer below), never a GATED verdict.
         // The records live below under a mutex (GateSink erases on the
@@ -694,7 +697,7 @@ namespace MFO::Logistics {
                 return false;
             }
             spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
-                         "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree cone past "
+                         "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree half-angle cone past "
                          "the block, <= +{:.0f} u, same floor) until a door/gate/lever event near it, its "
                          "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off). No actor in front of him. No strike, not sticky.{}",
                          g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,

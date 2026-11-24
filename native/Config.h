@@ -780,11 +780,11 @@ namespace MFO::Config {
     inline std::atomic<float> g_abandonDelay{ 45.0f };        // never-approached backstop before valuables release
     inline std::atomic<float> g_departRadius{ 700.0f };       // player must leave this far for "moved on"
     // 150 (was 256, marth field-test): clutter (arrows/bolts/lockpicks) is
-    // exempt from this gate entirely (IsClutterCat, Logistics_Loot.cpp) --
+    // exempt from this gate entirely (IsClutterCat, logistics/Logistics_internal.h) --
     // only non-clutter loot defers this close to the player.
     inline std::atomic<float> g_playerBubble{ 150.0f };       // convergence yield: defer within this of a target
 
-    // VALUABLES eligibility (kActLootValuables, Logistics_Loot.cpp): a MISC
+    // VALUABLES eligibility (kActLootValuables, logistics/LootTake.cpp): a MISC
     // item qualifies when its gold-value / weight ratio clears this. 20 puts
     // raw gemstones and similar high-density loot in; ordinary clutter (most
     // MISC is well under 5/unit) stays out. fValuablesRatio.
@@ -820,7 +820,7 @@ namespace MFO::Config {
     // LOOT ARTIFACTS + SELL SOCKETED GEAR. Default ON (permissive, marth:
     // "never hoard"). This ONE toggle lifts TWO protections at once:
     //   1. Catalog::IsExcluded artifact/unique-item loot-ACQUISITION exclusion
-    //      (Logistics_Loot.cpp) -- never touches the "don't strip a worn
+    //      (logistics/LootTake.cpp) -- never touches the "don't strip a worn
     //      artifact off a follower" site, which stays unconditional.
     //   2. The vendor SELL path's socketed-gear guard (gemHold,
     //      Logistics_Economy.cpp): MEO v3 (can unsocket) already never hoards
@@ -1177,10 +1177,9 @@ namespace MFO::Config {
     // BATCH EXCURSION (walk-to-loot batching). A follower stays CLAIMED (loot
     // quest at priority 60) across multiple corpses instead of returning to the
     // player between each, retargeting closest-first. Two bounds:
-    //  - fBatchLinger: when no walkable loot remains but some is still under the
-    //    player's dibs, HOLD in place this long (re-scanning) before giving up
-    //    and returning -- lets a just-released corpse extend the batch. 0 = no
-    //    hold (pure exhaust-and-return). fBatchLinger.
+    //  - fBatchLinger: DEAD since 11-17c -- TravelIntent::lingerUntil is still written but
+    //    nothing reads it; the hold before a release is LootTuning::batchHoldMinSec (one
+    //    rescan after the minimum dwell, Service.cpp Holding block). The key stays for the INI.
     //  - fExcursionMax: whole-excursion hard cap (seconds). The follower returns
     //    to the player after this no matter what, so a batch can't run away.
     // (No batch-size/leg count and no separate "zone" radius: the confidence

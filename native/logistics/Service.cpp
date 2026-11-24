@@ -867,7 +867,7 @@ namespace MFO::Logistics {
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 }
 
-                // THEFT GATE PREFETCH: within ~600 u of the target, ask the guard question every tick (the 500 ms repost limit throttles the
+                // THEFT GATE PREFETCH: within ~600 u of the target, ask the guard question every logistics tick (~1 s, not the 133 ms pump; the 500 ms repost limit throttles the
                 // main-thread scan) so the answer is already cached when he arrives, instead of the first read being at arrival. PEEK: it only posts
                 // the scan and stamps nothing (readAt / unread / log untouched), so the arrival gates decide and start the visit.
                 if (!gone && tref && dist <= 600.0f)
@@ -1407,7 +1407,7 @@ namespace MFO::Logistics {
                         skipWhy = "GATED by a LOCKED DOOR (door leg dispatched)";
                         StuckAtOriginResetRun(id);   // a door leg is the way on, not "stuck"
                     }
-                    // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one point
+                    // Stuck at his OWN origin: kStuckTargets (2) blocked ends (the same target counts) within ~300 u of one point
                     // (StuckAtOrigin.cpp). Only when no pickable locked door at the block took the lap (a door leg
                     // is not "stuck"). End the excursion, release the road, back to follow.
                     else if (!ab.id && feedStuck && StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),

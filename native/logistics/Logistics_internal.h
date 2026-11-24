@@ -943,7 +943,7 @@ namespace MFO::Logistics {
     bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
                           Clock::time_point a_now);
     // logistics/StuckAtOrigin.cpp: a follower whose loot targets all BLOCK within ~300 u of one point is stuck
-    // himself. NoteBlock (a static-block end, WORKER) returns true when the run reaches 3 distinct targets (and
+    // himself. NoteBlock (a static-block end, WORKER) returns true when the run reaches kStuckTargets (2) ends, the same target counting again (and
     // logs the ERROR + opens the episode); Cooldown gates new loot excursions; Tick runs the strict 'really stuck' check + the door rescue; Clear is the revert path.
     bool StuckAtOriginNoteBlock(RE::Actor* a_follower, RE::FormID a_target, const RE::NiPoint3& a_blockPos,
                                 Clock::time_point a_now);

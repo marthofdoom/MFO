@@ -5,7 +5,7 @@
 // z 10436..10527)). Each end was judged on its own: the target was GATED, the next one was tried, and it ended
 // BLOCKED at the same place. The fault was never the targets, it was where HE stood.
 //
-// THE DETECTOR. Three or more consecutive static-block (GATED) ends, across DISTINCT targets, whose block points
+// THE DETECTOR. kStuckTargets (2) consecutive static-block ends (the SAME target counts again since 11-17g), whose block points
 // all lie within StuckRadius() of the newest one, with no other kind of end between them (a pickup, a teleport, an
 // emptied target, an actor block, a lockpick door leg: Service.cpp calls StuckAtOriginResetRun): he is stuck
 // himself OR behind a gate he cannot pass. The caller ends the excursion, releases the ch.19 road
